@@ -15,13 +15,8 @@ vi.mock("../src/gateway/services/CloudSyncService.js", () => ({
   getCloudSyncService: vi.fn(),
 }));
 
-vi.mock("../src/gateway/services/jobs/jobRuntimeOffGit.js", () => ({
-  isJobRuntimeOffGit: vi.fn().mockReturnValue(false),
-}));
-
 import { cloudApiFetch } from "../src/gateway/utils/cloudApiClient.js";
 import { getCloudSyncService } from "../src/gateway/services/CloudSyncService.js";
-import { isJobRuntimeOffGit } from "../src/gateway/services/jobs/jobRuntimeOffGit.js";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const tmpRoots: string[] = [];
@@ -61,7 +56,6 @@ afterEach(async () => {
 });
 
 describe("runJobInCloud", () => {
-  // Keeps fixtures out of the developer's real ~/Papr workspace.
   useIsolatedPaprWorkspace("cloud-job-run");
 
   beforeEach(async () => {
@@ -71,14 +65,22 @@ describe("runJobInCloud", () => {
 
     vi.mocked(getCloudSyncService).mockReturnValue({
       pushNow: vi.fn().mockResolvedValue(undefined),
-      pullNow: vi.fn().mockResolvedValue(undefined),
     } as unknown as ReturnType<typeof getCloudSyncService>);
-    vi.mocked(isJobRuntimeOffGit).mockReturnValue(false);
   });
 
-  it("pushes git, calls memory job-run API, appends logs, and reloads job", async () => {
+  it("pushes git, calls memory job-run API, applies runtime patch, and appends logs", async () => {
     const job = makeJob();
-    const service = makeJobsService(job);
+    const applyCloudRunPatch = vi.fn().mockResolvedValue({
+      ...job,
+      status: "completed",
+    });
+    const service = makeJobsService(job, {
+      applyCloudRunPatch,
+      getJob: vi
+        .fn()
+        .mockResolvedValueOnce(job)
+        .mockResolvedValueOnce({ ...job, status: "completed" }),
+    });
 
     vi.mocked(cloudApiFetch).mockResolvedValue(
       new Response(
@@ -110,41 +112,6 @@ describe("runJobInCloud", () => {
 
     const cloudSync = getCloudSyncService();
     expect(cloudSync?.pushNow).toHaveBeenCalled();
-    expect(cloudSync?.pullNow).toHaveBeenCalled();
-    expect(service.reloadJobs).toHaveBeenCalled();
-
-    const logPath = path.join(getPaprRoot(), "Jobs", job.id, "logs", "run.log");
-    const logs = await fs.readFile(logPath, "utf8");
-    expect(logs).toContain("Cloud run");
-    expect(logs).toContain("cloud output");
-    expect(updated).toEqual(job);
-  });
-
-  it("applies cloud patch instead of git pull when JOB_RUNTIME_OFF_GIT", async () => {
-    vi.mocked(isJobRuntimeOffGit).mockReturnValue(true);
-
-    const job = makeJob();
-    const applyCloudRunPatch = vi.fn().mockResolvedValue({
-      ...job,
-      status: "completed",
-    });
-    const service = makeJobsService(job, { applyCloudRunPatch });
-
-    vi.mocked(cloudApiFetch).mockResolvedValue(
-      new Response(
-        JSON.stringify({
-          jobId: job.id,
-          status: "completed",
-          exitCode: 0,
-          stdout: "cloud output\n",
-          stderr: "",
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      ),
-    );
-
-    await runJobInCloud(service, job.id);
-
     expect(applyCloudRunPatch).toHaveBeenCalledWith(
       expect.objectContaining({
         jobId: job.id,
@@ -153,9 +120,12 @@ describe("runJobInCloud", () => {
         source: "cloud_manual",
       }),
     );
-    const cloudSync = getCloudSyncService();
-    expect(cloudSync?.pullNow).not.toHaveBeenCalled();
-    expect(service.reloadJobs).not.toHaveBeenCalled();
+
+    const logPath = path.join(getPaprRoot(), "Jobs", job.id, "logs", "run.log");
+    const logs = await fs.readFile(logPath, "utf8");
+    expect(logs).toContain("Cloud run");
+    expect(logs).toContain("cloud output");
+    expect(updated.status).toBe("completed");
   });
 
   it("uses longer timeout for agent jobs", async () => {

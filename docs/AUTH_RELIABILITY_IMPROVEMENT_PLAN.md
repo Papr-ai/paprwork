@@ -85,11 +85,11 @@ async function isPortAvailable(port: number): Promise<boolean> {
 <div class="card">
   <div class="check">✓</div>
   <h1>You're signed in</h1>
-  <p>Return to Papr Work — your app will open automatically.</p>
+  <p>Go back to Papr Work on your computer. We'll connect your account automatically.</p>
   
   <!-- Fallback code for manual entry -->
   <div class="fallback-code">
-    <p class="hint">If the app doesn't detect your login, enter this code:</p>
+    <p class="hint">If Papr Work still doesn't show you as signed in, enter this code there:</p>
     <div class="code-display">AB3-K9F</div>
   </div>
 </div>

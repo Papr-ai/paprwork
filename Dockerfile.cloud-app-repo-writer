@@ -1,0 +1,34 @@
+# app-repo-writer — sole pusher for Sync V3 per-app repos
+# Build: docker build -f Dockerfile.cloud-app-repo-writer -t app-repo-writer .
+# Deploy: node scripts/deploy-cloud-app-repo-writer.mjs --project=YOUR_PROJECT
+
+FROM node:24-alpine AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN node -e "\
+  const fs=require('fs');\
+  const drop=(o)=>{ if(!o) return; delete o['@esbuild/darwin-arm64']; delete o['@esbuild/darwin-x64']; };\
+  const pkg=JSON.parse(fs.readFileSync('package.json','utf8'));\
+  drop(pkg.dependencies); drop(pkg.devDependencies);\
+  delete pkg.scripts?.postinstall;\
+  fs.writeFileSync('package.json', JSON.stringify(pkg,null,2));\
+  const lock=JSON.parse(fs.readFileSync('package-lock.json','utf8'));\
+  drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
+  fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
+" && npm install --omit=optional --no-audit --no-fund
+COPY tsconfig.gateway.json tsconfig.json ./
+COPY src ./src
+RUN npm run build:gateway && npm prune --omit=dev
+
+FROM node:24-bookworm-slim
+WORKDIR /app
+ENV NODE_ENV=production
+# Reuse pruned prod node_modules from build — skip a second npm install (~1–2 min saved).
+COPY --from=build /app/package.json ./package.json
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/dist ./dist
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends git ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+EXPOSE 8080
+CMD ["node", "dist/gateway/app-repo-writer.js"]

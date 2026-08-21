@@ -81,6 +81,7 @@ import {
   buildDailyBriefDataSource,
   DEFAULT_HOME_APP_ID,
   findHomeDailyBriefJobIdInRegistry,
+  readHomeDailyBriefJobIdFromAppDir,
   resolveOrAllocateHomeDailyBriefJobId,
   type BundledDefaultJobDef,
 } from "./defaultHomeBundle.js";
@@ -575,6 +576,9 @@ export class AppService {
       const jobsService = getJobsService();
       const allJobs = await jobsService.listJobs();
 
+      const homeAppDir = path.join(this.appsDir, DEFAULT_HOME_APP_ID);
+      const preferJobId = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
+
       const { repairDefaultHomeAppLinkedSources } = await import(
         "./defaultHomeAppRepair.js"
       );
@@ -585,7 +589,7 @@ export class AppService {
         resolveJobDbPath: (jobId) =>
           path.join(jobsService.getJobsRootPath(), jobId, "data", "data.db"),
         findLinkedDailyBriefJobId: () =>
-          findHomeDailyBriefJobIdInRegistry(allJobs),
+          findHomeDailyBriefJobIdInRegistry(allJobs, { preferJobId }),
       });
 
       const totalRepairs =
@@ -2690,19 +2694,31 @@ export class AppService {
       await this.buildApp(appId);
       await this.runValidation(appId);
       this.scheduleReloadBroadcast(appId, filename);
-
-      const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
-      const coordinator = getSyncCoordinator();
-      if (coordinator) {
-        coordinator.markGitDirty(path.join("apps", appId));
-      } else {
-        const { getCloudSyncService } = await import("./CloudSyncService.js");
-        getCloudSyncService()?.enqueueRelativePath(path.join("apps", appId));
-      }
     } catch (error) {
       console.error(`[AppService] Build/validation error for app ${appId}:`, error);
       // Still broadcast on error so UI shows the latest source/build state
       this.scheduleReloadBroadcast(appId, filename);
+    } finally {
+      try {
+        const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+        const { notifyAppSaveForWriterOps } = await import("./syncV3/AppSaveWatcher.js");
+        const coordinator = getSyncCoordinator();
+        if (coordinator) {
+          await notifyAppSaveForWriterOps(appId, (id) =>
+            coordinator.scheduleAutoFlush(id),
+          );
+        } else if (process.env.GATEWAY_MODE === "cloud_agent") {
+          const { notifyCloudSandboxAppSave } = await import(
+            "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+          );
+          notifyCloudSandboxAppSave(appId);
+        }
+      } catch (syncError) {
+        console.warn(
+          `[AppService] Writer sync notify failed for ${appId}:`,
+          syncError,
+        );
+      }
     }
   }
 
@@ -2895,12 +2911,28 @@ export class AppService {
       console.warn("[AppService] Emoji lint failed:", lintError);
     }
     try {
+      const { checkMiniAppCssCoverageAndShrink } = await import(
+        "../utils/miniAppCssCoverageLint.js"
+      );
+      issues.push(...checkMiniAppCssCoverageAndShrink(appId, fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] CSS coverage lint failed:", lintError);
+    }
+    try {
       const { checkFrontendSqlOveruse } = await import(
         "../utils/miniAppFrontendSqlLint.js"
       );
       issues.push(...checkFrontendSqlOveruse(fileContents));
     } catch (lintError) {
       console.warn("[AppService] Frontend SQL lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppCloudReadPatterns } = await import(
+        "../utils/miniAppCloudReadLint.js"
+      );
+      issues.push(...checkMiniAppCloudReadPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Cloud read lint failed:", lintError);
     }
     try {
       const {
@@ -3805,6 +3837,7 @@ export class AppService {
     const record = await registry.ensureForPath(dbPath, {
       label: source.alias,
       ownerJobId: source.jobId,
+      schemaOwnerAppId: appId,
     });
 
     const linked: AppDataSource = {

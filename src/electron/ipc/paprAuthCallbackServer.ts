@@ -157,13 +157,13 @@ export function buildPaprAuthSuccessHtml(verificationCode?: string): string {
     <div class="card">
       <div class="check" aria-hidden="true">✓</div>
       <h1>You&apos;re signed in</h1>
-      <p>Return to Papr Work — your app will open automatically.</p>
-      <p class="hint">You can close this browser tab.</p>
+      <p>Go back to Papr Work on your computer. We&apos;ll connect your account automatically.</p>
+      <p class="hint">You can close this browser tab once Papr Work shows you&apos;re signed in.</p>
       ${formattedCode ? `
       <div class="code-section">
-        <p class="code-label">If the app doesn't open, enter this code:</p>
+        <p class="code-label">If Papr Work still doesn&apos;t show you as signed in, enter this code there:</p>
         <p class="code-display" title="Click to copy">${formattedCode}</p>
-        <p class="code-hint">Type this code in Papr Work to complete sign-in</p>
+        <p class="code-hint">Enter this code in Papr Work to finish signing in.</p>
       </div>
       ` : ""}
     </div>

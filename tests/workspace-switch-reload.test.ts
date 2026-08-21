@@ -7,7 +7,12 @@ import {
   resetWorkspaceReloadForTests,
   attachWorkspaceSwitchBroadcastListener,
   isWorkspaceSwitchReloading,
+  prepareWorkspaceSwitchReload,
 } from "../ui/lib/workspaceSwitchReload";
+import {
+  getWorkspaceSwitchOverlaySnapshot,
+  resetWorkspaceSwitchOverlayForTests,
+} from "../ui/lib/workspaceSwitchOverlay";
 
 const gatewaySendMock = vi.fn(async (type: string) => {
   if (type === "chat:list") {
@@ -84,7 +89,9 @@ function stubWindowForReload(): void {
 describe("reloadUiForWorkspaceSwitch", () => {
   beforeEach(() => {
     resetWorkspaceReloadForTests();
+    resetWorkspaceSwitchOverlayForTests();
     gatewaySendMock.mockClear();
+    vi.stubGlobal("fetch", vi.fn());
     useTabStore.setState({
       tabs: [],
       activeTabId: null,
@@ -334,5 +341,66 @@ describe("reloadUiForWorkspaceSwitch", () => {
     expect(
       useTabStore.getState().tabs.some((tab) => tab.title === "Old org app"),
     ).toBe(false);
+  });
+
+  it("prepareWorkspaceSwitchReload shows overlay before gateway switch completes", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: true, phase: "core" }),
+    } as Response);
+
+    const reloadPromise = prepareWorkspaceSwitchReload({
+      organizationName: "Acme",
+      namespaceName: "Production",
+    });
+    await reloadPromise;
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(true);
+    expect(getWorkspaceSwitchOverlaySnapshot().organizationName).toBe("Acme");
+  });
+
+  it("catch-up completes reload when gateway switch-status is already complete", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: false, phase: "complete" }),
+    } as Response);
+
+    const reloadPromise = reloadUiForWorkspaceSwitch({ waitForGateway: true });
+    await reloadPromise;
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(false);
+    expect(isWorkspaceSwitchReloading()).toBe(false);
+  });
+
+  it("fallback timeout finishes reload and dismisses overlay", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: true, phase: "services" }),
+    } as Response);
+
+    const reloadPromise = reloadUiForWorkspaceSwitch({ waitForGateway: true });
+    await reloadPromise;
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    await Promise.resolve();
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(false);
+    expect(isWorkspaceSwitchReloading()).toBe(false);
   });
 });

@@ -5,7 +5,7 @@
  * with one click. Sessions are automatically refreshed in the background.
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
 import "./ConnectedPlatformsTab.css";
 

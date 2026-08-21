@@ -1,70 +1,92 @@
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
-import { SyncStateManager } from "../src/gateway/services/cloudSync/syncState.js";
+import { describe, expect, it, vi } from "vitest";
+import type { CloudSyncService } from "../src/gateway/services/CloudSyncService.js";
 import {
-  appHasPendingLocalUpload,
-  formatPendingUploadDeferReason,
-  hasPendingLocalUploads,
-  listPendingUploadRelativePaths,
-  readAppHasPendingLocalUpload,
+  appNeedsOrderedFlush,
+  appNeedsOrderedFlushAsync,
 } from "../src/gateway/services/cloudSync/pendingLocalUploads.js";
 
-function makeTmpDir(): string {
-  return fs.mkdtempSync(
-    path.join(os.tmpdir(), `pending-upload-test-${Date.now()}-`),
-  );
+vi.mock("../src/gateway/services/tursoSyncStatus.js", () => ({
+  buildTursoSyncItemsReport: vi.fn(async () => ({
+    enabled: true,
+    databaseMode: "per-job" as const,
+    lastCheckedAt: new Date().toISOString(),
+    error: null,
+    sources: [],
+    summary: {
+      synced: 0,
+      pending: 0,
+      empty: 0,
+      unavailable: 0,
+      quarantined: 0,
+      total: 0,
+    },
+  })),
+}));
+
+vi.mock("../src/gateway/services/tursoLinkedSources.js", () => ({
+  listAppLinkedSyncKeys: vi.fn(() => []),
+}));
+
+vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
+  listDbDirtySyncKeysForApp: vi.fn(() => []),
+}));
+
+function mockSync(
+  overrides: Partial<Pick<CloudSyncService, "getPaprDir" | "hasRelativePathChanged">> = {},
+): Pick<CloudSyncService, "getPaprDir" | "hasRelativePathChanged"> {
+  return {
+    getPaprDir: () => "/tmp/papr-test",
+    hasRelativePathChanged: () => false,
+    ...overrides,
+  };
 }
 
-describe("pendingLocalUploads", () => {
-  let tmpDir: string;
-  let mgr: SyncStateManager;
-
-  beforeEach(() => {
-    tmpDir = makeTmpDir();
-    mgr = new SyncStateManager(tmpDir);
-    mgr.load();
+describe("appNeedsOrderedFlushAsync", () => {
+  it("returns true when git folder is dirty", async () => {
+    const sync = mockSync({
+      hasRelativePathChanged: (rel) => rel === "apps/app-a",
+    });
+    expect(appNeedsOrderedFlush(sync, "app-a")).toBe(true);
+    await expect(appNeedsOrderedFlushAsync(sync, "app-a")).resolves.toBe(true);
   });
 
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+  it("returns true when linked schema drift exists even if git/db flags are clean", async () => {
+    const { buildTursoSyncItemsReport } = await import(
+      "../src/gateway/services/tursoSyncStatus.js"
+    );
+    vi.mocked(buildTursoSyncItemsReport).mockResolvedValueOnce({
+      enabled: true,
+      databaseMode: "per-job",
+      lastCheckedAt: new Date().toISOString(),
+      error: null,
+      sources: [
+        {
+          appId: "app-a",
+          jobId: "db-1",
+          alias: "provenance",
+          role: "linked",
+          dbPath: "/tmp/data.db",
+          tursoDatabase: "d-1",
+          status: "pending",
+          localTableCount: 3,
+          remoteTableCount: 3,
+          schemaDrift: true,
+          quarantinedAt: null,
+          quarantineReason: null,
+        },
+      ],
+      summary: {
+        synced: 0,
+        pending: 1,
+        empty: 0,
+        unavailable: 0,
+        quarantined: 0,
+        total: 1,
+      },
+    });
 
-  it("returns no pending paths when everything is synced", () => {
-    const appDir = path.join(tmpDir, "apps", "app-1");
-    fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(path.join(appDir, "index.html"), "<p>v1</p>");
-    mgr.markSynced("apps/app-1");
-
-    expect(listPendingUploadRelativePaths(tmpDir, mgr)).toEqual([]);
-    expect(hasPendingLocalUploads(tmpDir, mgr)).toBe(false);
-  });
-
-  it("detects changed app folders awaiting upload", () => {
-    const appId = "65b7eb05-5ec0-47da-918a-c63e64916f1e";
-    const appDir = path.join(tmpDir, "apps", appId);
-    fs.mkdirSync(appDir, { recursive: true });
-    fs.writeFileSync(path.join(appDir, "builder-view.ts"), "// v1");
-    mgr.markSynced(`apps/${appId}`);
-
-    fs.writeFileSync(path.join(appDir, "builder-view.ts"), "// v2 agent edit");
-
-    expect(listPendingUploadRelativePaths(tmpDir, mgr)).toEqual([
-      `apps/${appId}`,
-    ]);
-    expect(appHasPendingLocalUpload(appId, mgr)).toBe(true);
-    expect(readAppHasPendingLocalUpload(appId, tmpDir)).toBe(true);
-  });
-
-  it("formats defer reason with preview paths", () => {
-    expect(
-      formatPendingUploadDeferReason([
-        "apps/a",
-        "apps/b",
-        "apps/c",
-        "apps/d",
-      ]),
-    ).toBe("pending local upload(s): apps/a, apps/b, apps/c (+1 more)");
+    const sync = mockSync();
+    expect(appNeedsOrderedFlush(sync, "app-a")).toBe(false);
+    await expect(appNeedsOrderedFlushAsync(sync, "app-a")).resolves.toBe(true);
   });
 });

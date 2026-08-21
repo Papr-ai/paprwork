@@ -63,6 +63,7 @@ export type TursoPushTrigger =
   | "post_git"
   | "startup"
   | "completion"
+  | "api_write"
   | "max_wait"
   | "unknown";
 
@@ -237,13 +238,7 @@ function recordSuccessfulPush(
   dbPath: string,
   result: PushResult,
 ): void {
-  recordTursoPushSuccess(
-    stateKey,
-    dbPath,
-    undefined,
-    result.tableFingerprints,
-    result.lastPushedLogId,
-  );
+  recordTursoPushSuccess(stateKey, dbPath, undefined, result.lastPushedLogId);
 }
 
 function armMaxWaitTimer(syncKey: string): void {
@@ -357,17 +352,17 @@ async function executePushForJob(
       return;
     }
 
-    if (result.reason === "all_tables_unchanged" && result.tableFingerprints) {
+    if (
+      result.reason === "all_tables_unchanged" &&
+      result.lastPushedLogId !== undefined
+    ) {
       recordSuccessfulPush(resolvedSyncKey, linked.dbPath, result);
       clearDirtyTracking(syncKey);
       return;
     }
 
     if (isPermanentPushSkip(result)) {
-      recordSuccessfulPush(resolvedSyncKey, linked.dbPath, {
-        ...result,
-        tableFingerprints: result.tableFingerprints ?? {},
-      });
+      recordSuccessfulPush(resolvedSyncKey, linked.dbPath, result);
       clearPushSchedulerJob(syncKey, linked.dbPath, resolvedSyncKey);
       return;
     }

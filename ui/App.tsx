@@ -246,9 +246,11 @@ export function App() {
         namespaceName,
       });
     };
+    window.addEventListener("papr-workspace-switch-starting", onWorkspaceChanged);
     window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
     window.addEventListener("papr-organization-changed", onWorkspaceChanged);
     return () => {
+      window.removeEventListener("papr-workspace-switch-starting", onWorkspaceChanged);
       window.removeEventListener("papr-namespace-changed", onWorkspaceChanged);
       window.removeEventListener("papr-organization-changed", onWorkspaceChanged);
     };

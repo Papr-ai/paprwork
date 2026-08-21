@@ -101,6 +101,9 @@ export const AmplitudeEvents = {
   SLOW_OPERATION: "paprwork_slow_operation",
   DATABASE_QUERY_SLOW: "paprwork_database_query_slow",
   WEBSOCKET_LATENCY: "paprwork_websocket_latency",
+
+  // Sync V3 cutover metrics (Phase 0 — auto-rollback triggers)
+  SYNC_V3_METRIC: "paprwork_sync_v3_metric",
 } as const;
 
 // ============================================
@@ -342,6 +345,12 @@ export interface DatabaseQuerySlowProperties extends BaseEventProperties {
 export interface WebsocketLatencyProperties extends BaseEventProperties {
   latency_ms: number;
   event_type: string;
+}
+
+export interface SyncV3MetricProperties extends BaseEventProperties {
+  metric_name: string;
+  metric_value: number;
+  sync_protocol?: "v2" | "v3";
 }
 
 // ============================================

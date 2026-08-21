@@ -15,6 +15,7 @@ import {
   resolveEffectiveAutoUpload,
   usesGlobalUploadDefault,
 } from "../../utils/appUploadMode";
+import { audienceModelNeedsInitialCodeUpload } from "../../utils/cloudPublishRouting";
 import {
   isCodePermission,
   isPermissionAvailable,
@@ -291,6 +292,7 @@ export function MiniAppPublishBar({
     error: webSyncError,
     globalAutoUploadEnabled,
     pushNow: webSyncPushNow,
+    bumpQueue: webSyncBumpQueue,
     pullUpdates: webSyncPullUpdates,
     applyRemoteUpdates: webSyncApplyRemoteUpdates,
   } = useAppCloudSyncStatus(appId, { enabled: workspaceMode === "preview" });
@@ -486,28 +488,32 @@ export function MiniAppPublishBar({
     ) {
       setPerUserIsolation(nextPerUserIsolation);
     }
-    const model = buildShareModel(
-      nextAudience,
-      nextPermission,
-      nextRequireSignIn,
-      nextPerUserIsolation,
-    );
-    if (!isPermissionAvailable(nextAudience, nextPermission)) {
+    const model =
+      nextAudience === "private"
+        ? buildShareModel("private", "read", nextRequireSignIn, nextPerUserIsolation)
+        : buildShareModel(
+            nextAudience,
+            nextPermission,
+            nextRequireSignIn,
+            nextPerUserIsolation,
+          );
+    if (
+      model.audience !== "private" &&
+      !isPermissionAvailable(model.audience, model.permission)
+    ) {
       return { published: false };
     }
-
-    const needsCloudPublish =
-      model.permission !== "edit" || model.audience !== "private";
 
     applyingSharingRef.current = true;
     setShareSyncNotice("Saving sharing settings…");
     try {
       await cloud.updateSharing(model);
-      if (needsCloudPublish) {
+      const needsCodeUpload = audienceModelNeedsInitialCodeUpload(model, cloud.live);
+      if (needsCodeUpload) {
         setShareSyncNotice("Uploading app code and databases to the web…");
         await webSyncPushNow();
       }
-      return { published: needsCloudPublish };
+      return { published: needsCodeUpload };
     } finally {
       applyingSharingRef.current = false;
       setShareSyncNotice(null);
@@ -531,7 +537,9 @@ export function MiniAppPublishBar({
 
   const pickAudience = (nextAudience: ShareAudience) => {
     let nextPermission = permission;
-    if (!isPermissionAvailable(nextAudience, nextPermission)) {
+    if (nextAudience === "private") {
+      nextPermission = "read";
+    } else if (!isPermissionAvailable(nextAudience, nextPermission)) {
       nextPermission = "write";
     }
     setAudience(nextAudience);
@@ -590,9 +598,6 @@ export function MiniAppPublishBar({
     window.dispatchEvent(new CustomEvent("papr-open-community-apps"));
   };
 
-  const gatewayHost = import.meta.env.VITE_GATEWAY_HOST || "localhost";
-  const gatewayPort = import.meta.env.VITE_GATEWAY_PORT || "18789";
-  const localPreviewUrl = `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
   const isTrackCollaborator = cloudLineage?.mode === "track";
   const upstreamWebUrl =
     isTrackCollaborator && cloudLineage
@@ -612,15 +617,15 @@ export function MiniAppPublishBar({
   const webDisplayUrl = isTrackCollaborator
     ? upstreamWebUrl
     : cloud.publishedWebUrl ?? cloud.shareUrl;
-  const previewDisplayUrl =
-    viewMode === "published"
-      ? isTrackCollaborator
-        ? upstreamWebUrl
-        : webDisplayUrl
-      : localPreviewUrl;
   const copyUrl = isTrackCollaborator
     ? upstreamWebUrl
     : cloud.externalLinkUrl ?? cloud.loginUrl ?? webDisplayUrl;
+  /** Shareable web URL only — never localhost (misleading when previewing locally). */
+  const previewDisplayUrl = isTrackCollaborator
+    ? upstreamWebUrl
+    : cloud.live
+      ? (copyUrl ?? webDisplayUrl)
+      : null;
   const showWebPanel = isWebLinkPermission(permission);
   const showCodePanel = isCodePermission(permission);
   const listsInCommunity = shouldListInCommunity(audience, cloud.live);
@@ -663,7 +668,6 @@ export function MiniAppPublishBar({
     webSyncPulling ||
     webSyncApplyingUpdates ||
     (webSyncLoading && !webSyncStatus) ||
-    (webSyncRefreshing && webSyncStatus?.overall !== "uploading") ||
     webSyncState === "syncing";
   const publishBarStatus = resolvePublishBarStatus({
     live: cloud.live,
@@ -679,6 +683,9 @@ export function MiniAppPublishBar({
   const shareLinkReady =
     cloud.live &&
     webSyncStatus?.overall === "synced" &&
+    webSyncStatus?.publishStatus !== "not_web_ready" &&
+    webSyncStatus?.publishStatus !== "drift" &&
+    webSyncStatus?.publishStatus !== "error" &&
     !webSyncPushing &&
     !shareSyncNotice;
 
@@ -701,10 +708,15 @@ export function MiniAppPublishBar({
         message: "Uploading app code and databases to the web…",
       };
     }
-    if (cloud.live && webSyncStatus?.overall === "needs_sync") {
+    if (
+      cloud.live &&
+      (webSyncStatus?.overall === "needs_sync" ||
+        webSyncStatus?.publishStatus === "not_web_ready")
+    ) {
       return {
         tone: "warn" as const,
         message:
+          webSyncStatus?.publishDetail?.trim() ??
           "Sharing is saved, but the live link won't work until upload finishes.",
       };
     }
@@ -894,6 +906,7 @@ export function MiniAppPublishBar({
                     autoUploadSaving={cloud.autoUploadSaving}
                     onAutoUploadChange={(enabled) => void cloud.setAutoUploadEnabled(enabled)}
                     onPushNow={() => void webSyncPushNow()}
+                    onBumpQueue={() => void webSyncBumpQueue()}
                     onPullUpdates={() => void webSyncPullUpdates()}
                     onApplyRemoteUpdates={() => void webSyncApplyRemoteUpdates()}
                   />,
@@ -1028,7 +1041,10 @@ export function MiniAppPublishBar({
               <div className="share-sheet__link-section">
                 {!shareLinkReady ? (
                   <p className="share-sheet__link-hint">
-                    The link below may show &quot;not found&quot; until upload completes.
+                    {cloud.externalLink !== "off" &&
+                    !(copyUrl ?? "").includes("?t=")
+                      ? "Invite link token will appear after upload and publish finish."
+                      : "The link below may show \"not found\" until upload completes."}
                   </p>
                 ) : null}
                 <div className="share-sheet__url-field">
@@ -1037,6 +1053,9 @@ export function MiniAppPublishBar({
                     readOnly
                     value={copyUrl ?? webDisplayUrl ?? ""}
                     aria-label="Share link"
+                    title={copyUrl ?? webDisplayUrl ?? ""}
+                    onFocus={(event) => event.currentTarget.select()}
+                    onClick={(event) => event.currentTarget.select()}
                   />
                   <button
                     type="button"
@@ -1052,7 +1071,7 @@ export function MiniAppPublishBar({
                     className="share-sheet__icon-btn"
                     title="Open in browser"
                     aria-label="Open in browser"
-                    onClick={() => void cloud.openInBrowser(webDisplayUrl)}
+                    onClick={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
                   >
                     <OpenExternalIcon />
                   </button>

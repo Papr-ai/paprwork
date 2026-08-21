@@ -1,3 +1,5 @@
+import type { JobExecutionCapability } from "./executionCapability.js";
+
 export type JobType =
   | "shell"
   | "bash"
@@ -57,6 +59,11 @@ export interface JobRecord {
   provider?: string;
   /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
   model?: string;
+  /**
+   * Scheduled execution placement when cloud sync is on.
+   * Default (unset): local-preferred — desktop when awake, cloud when asleep.
+   */
+  executionCapability?: JobExecutionCapability;
   /** Execution recipe configuration — enables quality evaluation of runs */
   recipe?: RecipeConfig;
   createdAt: string;
@@ -111,10 +118,13 @@ export interface CreateJobInput {
   provider?: string;
   /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
   model?: string;
+  executionCapability?: JobExecutionCapability;
   /** Execution recipe configuration — enables quality evaluation of runs */
   recipe?: RecipeConfig;
   useCheckpointTemplate?: boolean;
 }
+
+export type { JobExecutionCapability } from "./executionCapability.js";
 
 // ─── Job Graph ────────────────────────────────────────────────────────────────
 

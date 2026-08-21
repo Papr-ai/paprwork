@@ -7,6 +7,15 @@ import {
   isScheduleDue,
   msUntilSoonestNextRun,
 } from "./jobs/scheduleEngine.js";
+import {
+  isCloudSchedulerAuthoritative,
+  isJobDeferredToCloudScheduler,
+  shouldDesktopSchedulerRunJob,
+} from "../utils/cloudSchedulerAuthority.js";
+import {
+  releaseSchedulerRunLease,
+  tryAcquireSchedulerRunLease,
+} from "./jobs/jobSchedulerRunLease.js";
 
 let jobsSchedulerInstance: JobsScheduler | null = null;
 
@@ -108,13 +117,21 @@ export class JobsScheduler {
     }
   }
 
-  private queueWake(jobs: JobRecord[]): void {
+  private queueWake(
+    jobs: JobRecord[],
+    cloudSchedulerAuthoritative: boolean,
+  ): void {
     if (this.wakeTimer) {
       clearTimeout(this.wakeTimer);
       this.wakeTimer = null;
     }
     const nowMs = Date.now();
-    const ms = msUntilSoonestNextRun(jobs, nowMs, this.runningLeases);
+    const ms = msUntilSoonestNextRun(
+      jobs,
+      nowMs,
+      this.runningLeases,
+      (job) => isJobDeferredToCloudScheduler(job, cloudSchedulerAuthoritative),
+    );
     if (ms === null) {
       return;
     }
@@ -145,7 +162,10 @@ export class JobsScheduler {
     let enabledCount = 0;
     let dueCount = 0;
     let skippedRunning = 0;
-    
+    let skippedCloudPreferred = 0;
+    let skippedRunLease = 0;
+    const cloudSchedulerAuthoritative = await isCloudSchedulerAuthoritative();
+
     for (const job of jobs) {
       if (!job.schedule?.enabled) {
         continue;
@@ -156,7 +176,12 @@ export class JobsScheduler {
         continue;
       }
       dueCount++;
-      
+
+      if (!shouldDesktopSchedulerRunJob(job, cloudSchedulerAuthoritative)) {
+        skippedCloudPreferred++;
+        continue;
+      }
+
       if (job.status === "running" || job.status === "waiting_permission") {
         //console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - status: ${job.status}`);
         skippedRunning++;
@@ -171,6 +196,12 @@ export class JobsScheduler {
       const leaseKey = this.getLeaseKey(job.id);
       if (this.runningLeases.has(leaseKey)) {
         //console.log(`[JobsScheduler] Skipping job ${job.id} (${job.name}) - already has lease`);
+        continue;
+      }
+
+      const runLease = await tryAcquireSchedulerRunLease(job.id, dueAt);
+      if (!runLease.acquired) {
+        skippedRunLease++;
         continue;
       }
       
@@ -256,6 +287,9 @@ export class JobsScheduler {
           }
         } finally {
           this.runningLeases.delete(leaseKey);
+          if (runLease.runId) {
+            await releaseSchedulerRunLease(job.id, dueAt, runLease.runId);
+          }
         }
       })();
       launches.push(launch);
@@ -263,13 +297,13 @@ export class JobsScheduler {
     await Promise.all(launches);
 
     jobs = await jobsService.listJobs();
-    this.queueWake(jobs);
+    this.queueWake(jobs, cloudSchedulerAuthoritative);
 
     const elapsed = Date.now() - tickStart;
     console.log(
       `[JobsScheduler] Tick completed in ${elapsed}ms - ` +
       `enabled: ${enabledCount}, due: ${dueCount}, launched: ${launchedCount.value}, ` +
-      `skipped: ${skippedRunning}`
+      `skipped: ${skippedRunning}, cloud_deferred: ${skippedCloudPreferred}, lease_contention: ${skippedRunLease}`
     );
 
     // Note: Removed paprwork_scheduler_tick telemetry - too noisy for Amplitude

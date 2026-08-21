@@ -6,6 +6,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import type { CloudSyncService } from "../CloudSyncService.js";
+import { listAppLinkedSyncKeys } from "../tursoLinkedSources.js";
+import { listDbDirtySyncKeysForApp } from "../tursoSyncState.js";
 import { SyncStateManager } from "./syncState.js";
 
 const QUEUED_DIRS = ["apps", "Jobs"] as const;
@@ -45,6 +48,43 @@ export function appHasPendingLocalUpload(
   stateManager: SyncStateManager,
 ): boolean {
   return stateManager.hasItemChanged(`apps/${appId}`);
+}
+
+/** True when ordered flush (migrations → Turso → writer → publish) has work for this app. */
+export function appNeedsOrderedFlush(
+  sync: Pick<CloudSyncService, "getPaprDir" | "hasRelativePathChanged">,
+  appId: string,
+): boolean {
+  const paprDir = sync.getPaprDir();
+  if (sync.hasRelativePathChanged(`apps/${appId}`)) {
+    return true;
+  }
+  const syncKeys = listAppLinkedSyncKeys(appId, paprDir);
+  return listDbDirtySyncKeysForApp(syncKeys, paprDir).length > 0;
+}
+
+/** True when any linked Turso source for this app has local/remote schema drift. */
+export async function appHasLinkedSchemaDrift(
+  appId: string,
+  paprDir: string,
+): Promise<boolean> {
+  const appsRoot = path.join(paprDir, "apps");
+  const { buildTursoSyncItemsReport } = await import("../tursoSyncStatus.js");
+  const report = await buildTursoSyncItemsReport(appsRoot, appId);
+  return report.sources.some(
+    (source) => source.appId === appId && source.schemaDrift === true,
+  );
+}
+
+/** Git/db dirty flags plus Turso schema drift (async — needs remote schema check). */
+export async function appNeedsOrderedFlushAsync(
+  sync: Pick<CloudSyncService, "getPaprDir" | "hasRelativePathChanged">,
+  appId: string,
+): Promise<boolean> {
+  if (appNeedsOrderedFlush(sync, appId)) {
+    return true;
+  }
+  return appHasLinkedSchemaDrift(appId, sync.getPaprDir());
 }
 
 /** Load sync state from disk and check whether a mini-app still has unpushed git work. */

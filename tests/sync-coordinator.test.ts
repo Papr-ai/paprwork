@@ -27,9 +27,11 @@ describe("SyncCoordinator", () => {
   const mockSync = {
     getPaprDir: () => "/tmp/papr-test",
     enqueueRelativePath: vi.fn(),
-    hasRelativePathChanged: vi.fn(() => false),
+    hasRelativePathChanged: vi.fn(() => true),
+    getManualFlushError: vi.fn(() => null),
     recordManualFlushError: vi.fn(),
     clearManualFlushError: vi.fn(),
+    markRelativePathSynced: vi.fn(),
   } as unknown as CloudSyncService;
 
   beforeEach(() => {
@@ -213,5 +215,64 @@ describe("SyncCoordinator", () => {
     expect(scheduleTursoPushForJob).not.toHaveBeenCalled();
 
     vi.restoreAllMocks();
+  });
+
+  it("clears active flush and busy file when upload is skipped as up to date", async () => {
+    vi.mocked(mockSync.hasRelativePathChanged).mockReturnValueOnce(false);
+    const pending = await import(
+      "../src/gateway/services/cloudSync/pendingLocalUploads.js"
+    );
+    const webReadyMod = await import(
+      "../src/gateway/services/cloudSync/webReady.js"
+    );
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+    const { readGatewaySyncBusyState } = await import(
+      "../src/gateway/services/cloudSync/syncBusyState.js"
+    );
+
+    const asyncSpy = vi
+      .spyOn(pending, "appNeedsOrderedFlushAsync")
+      .mockResolvedValueOnce(false);
+    const webSpy = vi
+      .spyOn(webReadyMod, "webReady")
+      .mockResolvedValueOnce({ ready: true });
+
+    const coordinator = getSyncCoordinator()!;
+    const result = await coordinator.flushNow("skip-app", { trigger: "manual" });
+
+    expect(result.webReady).toBe(true);
+    expect(flushAppNow).not.toHaveBeenCalled();
+    expect(coordinator.getStatus().activeFlush).toBeNull();
+    expect(readGatewaySyncBusyState("/tmp/papr-test")).toBeNull();
+
+    asyncSpy.mockRestore();
+    webSpy.mockRestore();
+  });
+
+  it("runs flush when schema drift exists even if git/db flags are clean", async () => {
+    vi.mocked(mockSync.hasRelativePathChanged).mockReturnValueOnce(false);
+    const pending = await import(
+      "../src/gateway/services/cloudSync/pendingLocalUploads.js"
+    );
+    const { flushAppNow } = await import(
+      "../src/gateway/services/cloudSync/flushAppNow.js"
+    );
+
+    const asyncSpy = vi
+      .spyOn(pending, "appNeedsOrderedFlushAsync")
+      .mockResolvedValueOnce(true);
+
+    const coordinator = getSyncCoordinator()!;
+    await coordinator.flushNow("drift-app", { trigger: "manual" });
+
+    expect(flushAppNow).toHaveBeenCalledWith(
+      mockSync,
+      "drift-app",
+      expect.objectContaining({ skipTursoReschedule: true }),
+    );
+
+    asyncSpy.mockRestore();
   });
 });

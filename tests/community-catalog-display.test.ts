@@ -29,4 +29,20 @@ describe("communityCatalogDisplay", () => {
     expect(getCatalogByline(entry)).toBe("By Dale Zwizinski");
     expect(getCatalogShareBadge(entry)).toBe("Team app");
   });
+
+  it("does not show a share badge for public community apps", () => {
+    const entry: CommunityCatalogEntry = {
+      catalogId: "cloud:2",
+      source: "cloud",
+      name: "App",
+      description: "",
+      version: "cloud",
+      author: "Author",
+      tags: [],
+      visibility: "public_read",
+      codeInstallable: true,
+      liveViewable: true,
+    };
+    expect(getCatalogShareBadge(entry)).toBeNull();
+  });
 });

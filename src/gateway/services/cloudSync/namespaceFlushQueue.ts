@@ -43,11 +43,25 @@ export function boostFlushQueueItemToManual(
   items: NamespaceFlushQueueItem[],
   appId: string,
 ): boolean {
-  const item = items.find((entry) => entry.appId === appId);
-  if (!item || item.trigger === "manual") {
+  return moveFlushQueueItemToFront(items, appId);
+}
+
+/** Manual priority and earliest slot — next upload after the one in progress. */
+export function moveFlushQueueItemToFront(
+  items: NamespaceFlushQueueItem[],
+  appId: string,
+): boolean {
+  const index = items.findIndex((entry) => entry.appId === appId);
+  if (index < 0) {
+    return false;
+  }
+  const item = items[index];
+  if (!item) {
     return false;
   }
   item.trigger = "manual";
+  const minEnqueued = Math.min(...items.map((entry) => entry.enqueuedAt));
+  item.enqueuedAt = minEnqueued - 1;
   sortFlushQueue(items);
   return true;
 }

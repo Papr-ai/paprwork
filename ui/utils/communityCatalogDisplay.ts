@@ -30,9 +30,6 @@ export function getCatalogShareBadge(entry: CommunityCatalogEntry): string | nul
   ) {
     return "Invite link";
   }
-  if (entry.visibility === "public_read") {
-    return "Public app";
-  }
   return null;
 }
 

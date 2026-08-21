@@ -8,7 +8,9 @@ import {
   accessModeToSharingSettings,
   sharingSettingsToPublishFields,
   type CloudSharingSettings,
+  type MemoryPublishSharingFields,
 } from "./cloudSharingSettings.js";
+import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
 
 export { formatShareLink, accessModeRequiresShareToken } from "../../core/utils/cloudShareLink.js";
 export {
@@ -57,6 +59,12 @@ export interface MemoryPublishResponseFields {
   shareToken?: string;
   publishedAt?: string;
   catalogRequirements?: MemoryCatalogRequirementFields[];
+  catalogTitle?: string;
+  catalogDescription?: string;
+  catalogIcon?: string;
+  catalogTags?: string[];
+  catalogPlatform?: string[];
+  catalogRequiresDesktop?: boolean;
 }
 
 const ACCESS_MODES: readonly CloudAccessMode[] = [
@@ -84,6 +92,29 @@ export function visibilityToAccessMode(visibility: string | undefined): CloudAcc
     return visibility as CloudAccessMode;
   }
   return "private";
+}
+
+export function memoryPublishResponseToSharingSettings(
+  memory: MemoryPublishResponseFields,
+): CloudSharingSettings {
+  return accessModeToSharingSettings(visibilityToAccessMode(memory.visibility));
+}
+
+/** ACL fields currently live on the memory server — for code-only republish. */
+export function resolvePublishFieldsFromMemory(
+  memory: MemoryPublishResponseFields,
+): MemoryPublishSharingFields & { codeAccess: CodeAccess } {
+  const sharing = memoryPublishResponseToSharingSettings(memory);
+  const fields = sharingSettingsToPublishFields(sharing);
+  return {
+    ...fields,
+    codeAccess: memory.codeAccess ?? "off",
+    ...(memory.requireSignIn === true && fields.visibility === "public_read"
+      ? { requireSignIn: true }
+      : memory.requireSignIn === false
+        ? { requireSignIn: false }
+        : {}),
+  };
 }
 
 export function memoryPublishResponseToConfig(

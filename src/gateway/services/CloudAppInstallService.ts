@@ -2,11 +2,9 @@
  * Install cloud mini-app source into local Paprwork (fork or track).
  */
 
-import { spawn } from "node:child_process";
 import { getPaprRoot, getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -28,7 +26,7 @@ import {
   type AppFile,
   type MiniApp,
 } from "./AppService.js";
-import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
+import { cloneCloudAppSource } from "./cloudSync/cloudGitClone.js";
 
 interface MemoryInstallResponse {
   mode: CloudAppInstallMode;
@@ -67,54 +65,6 @@ export interface CloudAppInstallResult {
   copiedJobIds: string[];
 }
 
-async function runCommand(
-  command: string,
-  args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? 120_000;
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: opts.cwd,
-      env: opts.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`${command} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} failed (${code ?? "unknown"}): ${stderr.trim()}`,
-        ),
-      );
-    });
-  });
-}
-
-function authCloneUrl(cloneUrl: string, token: string): string {
-  const normalized = cloneUrl.replace(/^https:\/\//, "");
-  return `https://x-access-token:${token}@${normalized}`;
-}
-
 async function collectAppFiles(
   rootDir: string,
   baseDir: string = rootDir,
@@ -143,30 +93,14 @@ async function collectAppFiles(
 async function cloneAppSource(
   prepare: MemoryInstallResponse,
 ): Promise<{ sourceDir: string; repoDir: string; cleanup: () => Promise<void> }> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-cloud-install-"));
-  const repoDir = path.join(tempRoot, "repo");
-
-  const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
-  const env = ephemeralGitEnv();
-
-  await runCommand(
-    "git",
-    ["clone", "--filter=blob:none", "--sparse", cloneUrl, repoDir],
-    { env, timeoutMs: 180_000 },
-  );
-  await runCommand(
-    "git",
-    ["sparse-checkout", "set", prepare.repoPath.replace(/\\/g, "/")],
-    { cwd: repoDir, env },
-  );
-
-  return {
-    sourceDir: path.join(repoDir, prepare.repoPath),
-    repoDir,
-    cleanup: async () => {
-      await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+  return cloneCloudAppSource(
+    {
+      cloneUrl: prepare.cloneUrl,
+      token: prepare.token,
+      repoPath: prepare.repoPath,
     },
-  };
+    "papr-cloud-install-",
+  );
 }
 
 function resolveTitle(files: AppFile[], slug: string): string {

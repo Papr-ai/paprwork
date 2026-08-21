@@ -23,11 +23,6 @@ import {
 } from "./defaultHomeBundle.js";
 import type { JobRecord } from "./jobs/types.js";
 import {
-  loadConvergenceState,
-  saveConvergenceState,
-  type ConvergenceStateFile,
-} from "./cloudSync/convergenceChecker.js";
-import {
   loadTursoSyncState,
   saveTursoSyncState,
   type TursoSyncStateFile,
@@ -65,7 +60,7 @@ function markerPath(paprDir: string): string {
   return path.join(paprDir, "data", LEGACY_HOME_JOB_MIGRATION_MARKER);
 }
 
-async function readMigrationMarker(
+export async function readMigrationMarker(
   paprDir: string,
 ): Promise<LegacyHomeJobMigrationMarker | null> {
   try {
@@ -111,20 +106,6 @@ function remapTursoJobState(
   }
   delete state.jobs[fromKey];
   state.jobs[toKey] = { ...entry, dbPath: newDbPath };
-  return true;
-}
-
-function remapConvergenceSource(
-  state: ConvergenceStateFile,
-  fromKey: string,
-  toKey: string,
-): boolean {
-  const entry = state.sources[fromKey];
-  if (!entry) {
-    return false;
-  }
-  delete state.sources[fromKey];
-  state.sources[toKey] = { ...entry, syncKey: toKey };
   return true;
 }
 
@@ -427,11 +408,6 @@ export async function migrateLegacyHomeDailyBriefJobIfNeeded(
     saveTursoSyncState(tursoState, deps.paprDir);
   }
 
-  const convergenceState = loadConvergenceState(deps.paprDir);
-  if (remapConvergenceSource(convergenceState, legacyId, toJobId)) {
-    saveConvergenceState(convergenceState, deps.paprDir);
-  }
-
   await migrateDatabasesRegistry(deps.paprDir, legacyId, toJobId, newDbPath);
   await migrateJobRunHistory(deps.paprDir, legacyId, toJobId);
 
@@ -444,4 +420,117 @@ export async function migrateLegacyHomeDailyBriefJobIfNeeded(
   });
 
   return { migrated: true, fromJobId: legacyId, toJobId };
+}
+
+export interface ReconcileDuplicateHomeDailyBriefResult {
+  reconciled: boolean;
+  canonicalJobId?: string;
+  removedJobIds: string[];
+  archivedFolders: string[];
+  reason?: string;
+}
+
+/**
+ * After legacy migration (or cloud/git re-sync), remove duplicate Daily Brief
+ * registry entries and archive stray legacy job folders on disk.
+ */
+export async function reconcileDuplicateHomeDailyBriefJobs(
+  deps: LegacyHomeJobMigrationDeps,
+): Promise<ReconcileDuplicateHomeDailyBriefResult> {
+  const result: ReconcileDuplicateHomeDailyBriefResult = {
+    reconciled: false,
+    removedJobIds: [],
+    archivedFolders: [],
+  };
+
+  const homeAppDir = path.join(deps.appsDir, DEFAULT_HOME_APP_ID);
+  const marker = await readMigrationMarker(deps.paprDir);
+  const jobIdFromFile = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
+
+  const canonicalJobId =
+    (jobIdFromFile && deps.jobs.has(jobIdFromFile) ? jobIdFromFile : undefined) ??
+    (marker?.toJobId && deps.jobs.has(marker.toJobId) ? marker.toJobId : undefined);
+
+  if (!canonicalJobId) {
+    result.reason = "no_canonical_job";
+    return result;
+  }
+
+  if (canonicalJobId === LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID) {
+    result.reason = "legacy_only";
+    result.canonicalJobId = canonicalJobId;
+    return result;
+  }
+
+  const idsToRemove: string[] = [];
+  for (const [id, job] of deps.jobs.entries()) {
+    if (id === canonicalJobId) {
+      continue;
+    }
+    if (id.endsWith(".migrated")) {
+      idsToRemove.push(id);
+      continue;
+    }
+    if (id === LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID) {
+      idsToRemove.push(id);
+      continue;
+    }
+    if (
+      job.name === DEFAULT_HOME_DAILY_BRIEF_JOB_NAME &&
+      job.appIds?.includes(DEFAULT_HOME_APP_ID)
+    ) {
+      idsToRemove.push(id);
+    }
+  }
+
+  const legacyDir = path.join(deps.jobsRoot, LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+  if (marker && existsSync(legacyDir)) {
+    await archiveLegacyJobFolder(deps.jobsRoot, LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+    result.archivedFolders.push(LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+  }
+
+  if (idsToRemove.length === 0) {
+    result.reason = "already_clean";
+    result.canonicalJobId = canonicalJobId;
+    return result;
+  }
+
+  for (const id of idsToRemove) {
+    deps.jobs.delete(id);
+    result.removedJobIds.push(id);
+  }
+
+  await deps.saveJobs();
+
+  const newDbPath = resolveDailyBriefDbPath(deps.jobsRoot, canonicalJobId);
+  if (existsSync(homeAppDir)) {
+    await updateHomeAppDataSources(
+      homeAppDir,
+      LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+      canonicalJobId,
+      newDbPath,
+    );
+    await writeHomeDailyBriefJobIdToAppDir(homeAppDir, canonicalJobId);
+  }
+
+  result.reconciled = true;
+  result.canonicalJobId = canonicalJobId;
+  return result;
+}
+
+/** Skip re-indexing archived or post-migration legacy Daily Brief folders. */
+export function shouldSkipDailyBriefJobDirRecovery(
+  jobDirName: string,
+  marker: LegacyHomeJobMigrationMarker | null,
+): boolean {
+  if (jobDirName.endsWith(".migrated")) {
+    return true;
+  }
+  if (!marker) {
+    return false;
+  }
+  if (jobDirName === marker.fromJobId) {
+    return true;
+  }
+  return false;
 }

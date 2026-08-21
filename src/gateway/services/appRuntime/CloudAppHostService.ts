@@ -33,6 +33,7 @@ import { resolveDbEventTarget } from "../../utils/resolveDbEventTarget.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
   fetchRuntimeDbToken,
+  getCloudAppHostKey,
   getRuntimeJobStatus,
   listRuntimeJobs,
   recordRuntimeTursoDbChanged,
@@ -49,6 +50,7 @@ import {
   fetchCachedRuntimeRepoFile,
   getCachedTranspiledTypeScript,
   invalidateRepoCacheForPublishedApp,
+  invalidateRepoCacheForNamespace,
   validateCachedAccess,
 } from "./cloudAppHostCache.js";
 import { shouldBypassRepoFileCache } from "./cloudAppHostRequestCache.js";
@@ -269,6 +271,10 @@ export class CloudAppHostService {
       void this.handleInternalAppRevisionUpdated(req, res),
     );
 
+    app.post("/internal/app-repo-committed", (req, res) =>
+      void this.handleInternalAppRepoCommitted(req, res),
+    );
+
     app.post("/internal/db-changed", (req, res) =>
       void this.handleInternalDbChanged(req, res),
     );
@@ -279,6 +285,7 @@ export class CloudAppHostService {
     app.post("/api/db/query", (req, res) => this.handleQuery(req, res));
     app.post("/api/db/batch", (req, res) => this.handleBatchQuery(req, res));
     app.post("/api/db/write", (req, res) => this.handleWrite(req, res));
+    app.post("/api/db/write-batch", (req, res) => this.handleWriteBatch(req, res));
     app.post("/api/db/exec", (req, res) => this.handleExec(req, res));
     app.post("/api/bash/run", (req, res) => void this.handleBashRun(req, res));
     app.post("/api/app/backend/:action", (req, res) =>
@@ -473,7 +480,7 @@ export class CloudAppHostService {
       namespaceId: runtimeAuth.namespaceId,
       slug: runtimeAuth.slug,
     });
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     if (!resolved || visibilityRequiresPaprLogin(resolved.visibility, resolved.requireSignIn)) {
       if (options.html) {
@@ -721,6 +728,24 @@ export class CloudAppHostService {
     const config = parseDataSourcesFile(file.content);
     await hydrateCloudDatabaseRegistry(runtimeAuth, config);
     return config;
+  }
+
+  /** Fire-and-forget Turso client warm on app open (reads + legacy write paths). */
+  private async warmLinkedTursoSources(
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext,
+  ): Promise<void> {
+    const config = await this.loadDataSources(runtimeAuth);
+    if (config.sources.length === 0) {
+      return;
+    }
+    await this.turso.warmLinkedSources({
+      orgId: access.orgId,
+      namespaceId: access.namespaceId,
+      userId: access.userId,
+      runtimeAuth,
+      config,
+    });
   }
 
   private publishDbChangedForSource(
@@ -1027,6 +1052,11 @@ export class CloudAppHostService {
   }
 
   private async handleWrite(req: Request, res: Response): Promise<void> {
+    const writeStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoWriteMs = 0;
+
     try {
       const { appId: requestedAppId, sourceId, sql, params } = req.body as {
         appId?: string;
@@ -1043,7 +1073,9 @@ export class CloudAppHostService {
 
       if (!this.enforceDbRateLimit(req, res, "write")) return;
 
+      const ctxStarted = performance.now();
       const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      accessMs = performance.now() - ctxStarted;
       if (!ctx) return;
       const { runtimeAuth, access, appId } = ctx;
 
@@ -1056,17 +1088,24 @@ export class CloudAppHostService {
         return;
       }
 
+      const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
+      configMs = performance.now() - configStarted;
+
+      const writeStartedMs = performance.now();
       const result = await this.turso.write({
         orgId: access.orgId,
         namespaceId: access.namespaceId,
         userId: access.userId,
         runtimeAuth,
         config,
+        appId,
         sourceId,
         sql,
         params,
       });
+      tursoWriteMs = performance.now() - writeStartedMs;
+
       // Bust read micro-cache and emit db-changed so UIs refresh
       invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
       this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
@@ -1074,6 +1113,104 @@ export class CloudAppHostService {
     } catch (err) {
       const e = err as Error & { status?: number };
       res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - writeStarted);
+      if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/write timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
+            `totalMs=${totalMs}`,
+        );
+      }
+    }
+  }
+
+  private async handleWriteBatch(req: Request, res: Response): Promise<void> {
+    const writeStarted = performance.now();
+    let accessMs = 0;
+    let configMs = 0;
+    let tursoWriteMs = 0;
+
+    try {
+      const { appId: requestedAppId, statements } = req.body as {
+        appId?: string;
+        statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+      };
+      if (!Array.isArray(statements) || statements.length === 0) {
+        res.status(400).json({ error: "non-empty statements[] is required" });
+        return;
+      }
+      if (statements.length > TursoDbAdapter.MAX_WRITE_BATCH) {
+        res
+          .status(400)
+          .json({ error: `Batch limited to ${TursoDbAdapter.MAX_WRITE_BATCH} statements` });
+        return;
+      }
+      for (const stmt of statements) {
+        if (!stmt?.sql) {
+          res.status(400).json({ error: "Every statement requires sql" });
+          return;
+        }
+        assertWriteSql(stmt.sql);
+      }
+
+      if (!this.enforceDbRateLimit(req, res, "write", statements.length)) return;
+
+      const ctxStarted = performance.now();
+      const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+      accessMs = performance.now() - ctxStarted;
+      if (!ctx) return;
+      const { runtimeAuth, access, appId } = ctx;
+
+      if (!access.canWrite) {
+        if (!access.canRead) {
+          await this.respondAccessDenied(req, res, runtimeAuth);
+        } else {
+          res.status(403).json({ error: "Write not allowed for this link" });
+        }
+        return;
+      }
+
+      const configStarted = performance.now();
+      const config = await this.loadDataSources(runtimeAuth);
+      configMs = performance.now() - configStarted;
+
+      const writeStartedMs = performance.now();
+      const batchResult = await this.turso.writeBatch({
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        userId: access.userId,
+        runtimeAuth,
+        config,
+        appId,
+        statements: statements.map((stmt) => ({
+          sourceId: stmt.sourceId,
+          sql: stmt.sql as string,
+          params: stmt.params,
+        })),
+      });
+      tursoWriteMs = performance.now() - writeStartedMs;
+
+      invalidateDbCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
+      const distinctSourceIds = [
+        ...new Set(statements.map((stmt) => stmt.sourceId)),
+      ];
+      for (const sourceId of distinctSourceIds) {
+        this.publishDbChangedForSource(config, sourceId, appId, runtimeAuth);
+      }
+      res.json(batchResult);
+    } catch (err) {
+      const e = err as Error & { status?: number };
+      res.status(e.status ?? 500).json({ error: e.message });
+    } finally {
+      const totalMs = Math.round(performance.now() - writeStarted);
+      if (process.env.CLOUD_DB_WRITE_TIMING !== "0") {
+        console.log(
+          `[CloudAppHost] /api/db/write-batch timing accessMs=${Math.round(accessMs)} ` +
+            `configMs=${Math.round(configMs)} tursoWriteMs=${Math.round(tursoWriteMs)} ` +
+            `totalMs=${totalMs}`,
+        );
+      }
     }
   }
 
@@ -1113,6 +1250,7 @@ export class CloudAppHostService {
         userId: access.userId,
         runtimeAuth,
         config,
+        appId,
         sourceId,
         sql,
       });
@@ -1325,7 +1463,7 @@ export class CloudAppHostService {
       error:
         "Sign in to Papr to run agent jobs from this app. Invite links can use the app UI and backend actions, but AI jobs require a Papr account.",
       code: "job_run_sign_in_required",
-      loginUrl: `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`,
+      loginUrl: `/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
     });
   }
 
@@ -1464,6 +1602,68 @@ export class CloudAppHostService {
     }
   }
 
+  private async handleInternalAppRepoCommitted(
+    req: Request,
+    res: Response,
+  ): Promise<void> {
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
+      return;
+    }
+
+    const { parseAppRepoCommittedPayload } = await import(
+      "../syncV3/appRepoCommittedInbound.js"
+    );
+    const event = parseAppRepoCommittedPayload(req.body);
+    if (!event) {
+      res.status(400).json({ error: "Invalid app-repo-committed payload" });
+      return;
+    }
+
+    try {
+      const { receiveAppRepoCommittedEvent } = await import(
+        "../syncV3/appRepoRevisionSubscriber.js"
+      );
+      await receiveAppRepoCommittedEvent(event);
+
+      const slug = await this.resolvePublishSlugForApp(event.appId);
+      if (slug) {
+        invalidateRepoCacheForPublishedApp(event.namespaceId, slug);
+        res.json({ ok: true, appId: event.appId, cacheInvalidated: true });
+        return;
+      }
+
+      invalidateRepoCacheForNamespace(event.namespaceId);
+      res.json({ ok: true, appId: event.appId, cacheInvalidated: true });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  private async resolvePublishSlugForApp(appId: string): Promise<string | null> {
+    try {
+      const resp = await runtimeFetch(
+        `${getMemoryServerBaseUrl()}/v1/cloud/apps/publish/${encodeURIComponent(appId)}`,
+        {
+          method: "GET",
+          headers: {
+            "X-Cloud-App-Host-Key": getCloudAppHostKey(),
+          },
+        },
+      );
+      if (!resp.ok) {
+        return null;
+      }
+      const payload = (await resp.json()) as { slug?: string; enabled?: boolean };
+      if (payload.enabled === false) {
+        return null;
+      }
+      const slug = payload.slug?.trim();
+      return slug && slug.length > 0 ? slug : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async handleInternalAppRevisionUpdated(
     req: Request,
     res: Response,
@@ -1480,18 +1680,8 @@ export class CloudAppHostService {
       return;
     }
 
-    try {
-      invalidateRepoCacheForPublishedApp(namespaceId, slug);
-
-      const runtimeAuth: AppRuntimeRouteAuth = { namespaceId, slug };
-      const revision = await resolvePublishedAppRevision(runtimeAuth, {
-        bypassFresh: true,
-      });
-
-      res.json({ ok: true, revision: revision ?? null });
-    } catch (err) {
-      res.status(500).json({ error: (err as Error).message });
-    }
+    invalidateRepoCacheForPublishedApp(namespaceId, slug);
+    res.json({ ok: true, cacheInvalidated: true });
   }
 
   private verifyCloudAppHostInternalKey(req: Request, res: Response): boolean {
@@ -1658,7 +1848,7 @@ export class CloudAppHostService {
       namespaceId: runtimeAuth.namespaceId,
       slug: runtimeAuth.slug,
     });
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
     const hasSession = Boolean(runtimeAuth.sessionToken);
     const published = await resolvePublishedApp(
       runtimeAuth.namespaceId,
@@ -1854,6 +2044,8 @@ export class CloudAppHostService {
         await this.respondAccessDenied(req, res, runtimeAuth, { html: true });
         return;
       }
+
+      void this.warmLinkedTursoSources(runtimeAuth, access).catch(() => {});
 
       await this.sendAppFile(req, res, runtimeAuth, requestedPath, access);
     } catch (err) {

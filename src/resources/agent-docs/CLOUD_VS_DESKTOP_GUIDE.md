@@ -19,7 +19,8 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 
 | Lane | What moves | Cloud writes | Desktop reads (on wake) |
 |------|------------|--------------|-------------------------|
-| **Git** | Apps, `Jobs/`, `data/jobs.json`, `workspace/` | Memory server git writeback after runs | `CloudSync.pullNow()` via heartbeat |
+| **Git (app code)** | Apps, linked job code at `jobs/{id}/` in per-app repos | Writer ops via [`finalizeAppRepoMutation`](../src/gateway/services/syncV3/finalizeAppRepoMutation.ts) — desktop flush **and** cloud sandbox debounced push | `CloudSync.pullNow()` + revision subscriber |
+| **Git (legacy namespace)** | `data/jobs.json`, `workspace/` scaffold | Memory server git writeback for workspace-chat bootstrap only — **not** app source | Heartbeat pull |
 | **Turso** | Job/app `data.db` user tables | Gateway pull → run → push bookends; bump `sync-index` Turso DB | Heartbeat polls `sync-index` → scoped pull for changed replicas |
 | **Chat** | Main chat history | Ephemeral job sessions in cloud | `~/.paprwork-v2/chats.db` (local-first, not in git) |
 

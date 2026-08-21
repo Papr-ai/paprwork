@@ -7,6 +7,7 @@ import type {
   DocumentVersion,
   DocumentVersionFull,
 } from "../../hooks/useDocuments";
+import { markdownPreviewText } from "../../../src/core/utils/markdownPreview";
 import "./VersionHistory.css";
 
 interface VersionHistoryProps {
@@ -127,8 +128,7 @@ export function VersionHistory({
             </span>
             {v.preview && (
               <span className="version-history__item-preview">
-                {v.preview.slice(0, 80)}
-                {v.preview.length > 80 ? "..." : ""}
+                {markdownPreviewText(v.preview, 80)}
               </span>
             )}
           </button>

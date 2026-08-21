@@ -92,22 +92,11 @@ export function readDataSourceRegistryDbIds(paprDir: string, appId: string): str
 
 /** Git-relative paths to upload so apps.papr.ai can serve this app. */
 export function resolveAppCloudSyncRelativePaths(
-  paprDir: string,
+  _paprDir: string,
   appId: string,
 ): string[] {
-  const dependentJobIds = resolveAppDependentJobIds(paprDir, appId);
-  const paths = [
-    path.join("apps", appId),
-    ...dependentJobIds.map(jobRelativePath),
-  ];
-  // jobs.json index must travel with job folders — memory runtime resolves jobId from it.
-  if (dependentJobIds.length > 0) {
-    paths.push(path.join("data", "jobs.json"));
-  }
-  if (readDataSourceRegistryDbIds(paprDir, appId).length > 0) {
-    paths.push("data");
-  }
-  return paths;
+  // App source via app-repo writer; jobs/databases metadata via Mongo (Phase 4.6).
+  return [path.join("apps", appId)];
 }
 
 function expandJobPipeline(paprDir: string, seedJobIds: readonly string[]): string[] {

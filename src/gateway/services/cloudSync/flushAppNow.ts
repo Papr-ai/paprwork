@@ -1,7 +1,10 @@
 /**
  * Ordered cross-layer flush for Upload now (SYNC_CONTRACT §12.1).
  *
- * migrate → Turso schema+rows → verify Turso → git → verify full → publish if web-ready
+ * migrate → writer ops (app + linked jobs + owner migrations) → publish
+ *
+ * Row sync uses workspace log (not fingerprint Turso push in this path).
+ * Jobs/databases metadata uses Mongo registry (not namespace git).
  */
 
 import * as path from "path";
@@ -15,11 +18,6 @@ import {
   cancelScheduledTursoPushForSyncKeys,
 } from "../tursoPushScheduler.js";
 import { applyLocalMigrationsForApp } from "./applyLocalMigrationsForApp.js";
-import {
-  assertAppPushVerified,
-  verifyAppPushConvergence,
-} from "./postPushVerify.js";
-import { runConvergenceCheckForApp } from "./convergenceChecker.js";
 import { webReady } from "./webReady.js";
 import { yieldEventLoop } from "./yieldEventLoop.js";
 
@@ -30,6 +28,7 @@ export interface FlushAppNowResult {
   webReady: boolean;
   webReadyReason?: string;
   published: boolean;
+  catalogError?: string;
 }
 
 
@@ -55,78 +54,77 @@ export async function flushAppNow(
   }
   await yieldEventLoop();
 
-  const errors: string[] = [];
   let tursoPushed = false;
+  const linkedSources = await discoverTursoLinkedSources(appsRoot);
+  const appSources = linkedSources.filter((source) => source.appId === appId);
+  const syncKeys = appSources.map((source) => linkedSourceSyncKey(source));
+  cancelScheduledTursoPushForSyncKeys(syncKeys);
+  await awaitTursoPushInFlightForSyncKeys(syncKeys);
 
-  const bridge = (await import("../TursoSyncBridge.js")).getTursoSyncBridge();
-  if (bridge) {
-    try {
-      const linkedSources = await discoverTursoLinkedSources(appsRoot);
-      const syncKeys = linkedSources
-        .filter((source) => source.appId === appId)
-        .map((source) => linkedSourceSyncKey(source));
-      cancelScheduledTursoPushForSyncKeys(syncKeys);
-      await awaitTursoPushInFlightForSyncKeys(syncKeys);
-
-      const summary = await bridge.pushAppLinkedSources(appId);
-      tursoPushed = summary.pushed > 0 || summary.skipped > 0;
-      if (summary.failed > 0) {
-        const tursoErrors = summary.results
-          .filter((result) => result.error)
-          .map((result) => result.error)
-          .join("; ");
-        errors.push(
-          tursoErrors.length > 0
-            ? `Database sync to Turso failed: ${tursoErrors}`
-            : "Database sync to Turso failed",
-        );
-      }
-    } catch (err) {
-      errors.push(`Database sync to Turso failed: ${(err as Error).message}`);
+  for (const source of appSources) {
+    const { ensureReplicaReady } = await import("../syncV3/ensureReplicaReady.js");
+    const readyResult = await ensureReplicaReady(source);
+    if (readyResult.schemaShipped > 0 || readyResult.rowsShipped > 0) {
+      tursoPushed = true;
     }
   }
   await yieldEventLoop();
 
-  if (errors.length > 0) {
-    throw new Error(errors.join("; "));
-  }
+  const { catchUpLinkedSourceFromWorkspaceLog } =
+    await import("../syncV3/workspaceLogSync.js");
 
-  const tursoVerify = await verifyAppPushConvergence(
-    appId,
-    paprDir,
-    (args) => sync.runGit(args),
-    { skipGit: true },
-  );
-  if (!tursoVerify.ok) {
-    throw new Error(
-      `Turso verify failed for ${appId}: ${tursoVerify.errors.join("; ")}`,
-    );
+  for (const source of appSources) {
+    await catchUpLinkedSourceFromWorkspaceLog(source);
   }
   await yieldEventLoop();
 
+  let writerPushed = false;
   try {
-    await sync.pushGitNow({ appId, skipPostSyncHooks: true });
+    const { finalizeAppRepoMutation } = await import(
+      "../syncV3/finalizeAppRepoMutation.js"
+    );
+    const finalizeResult = await finalizeAppRepoMutation(paprDir, appId, {
+      source: "desktop-flush",
+      sync,
+      skipCatalog: true,
+    });
+    writerPushed = finalizeResult.writerPushed;
   } catch (err) {
-    throw new Error(`Git sync failed: ${(err as Error).message}`);
+    const { AppOpsConflictError } = await import("../syncV3/AppOpsClient.js");
+    if (err instanceof AppOpsConflictError) {
+      // Preserve the typed conflict (appId + per-path artifacts) so callers
+      // can surface "file changed on server" instead of a generic failure.
+      throw err;
+    }
+    throw new Error(`App sync failed: ${(err as Error).message}`);
   }
-  await yieldEventLoop();
-
-  await assertAppPushVerified(appId, paprDir, (args) => sync.runGit(args));
-  await yieldEventLoop();
-
-  await runConvergenceCheckForApp(appId, appsRoot, paprDir);
   await yieldEventLoop();
 
   const ready = await webReady(appId, paprDir);
   let published = false;
+  let catalogError: string | undefined;
 
   if (ready.ready) {
-    sync.markAppForPostFlushHooks(appId);
-    await sync.runPostFlushHooks({
-      skipTursoReschedule: options?.skipTursoReschedule ?? true,
+    const { syncPublishedAppCatalogLayer } = await import(
+      "../syncV3/syncPublishedAppCatalogLayer.js"
+    );
+    const catalogResult = await syncPublishedAppCatalogLayer(appId, {
+      afterWriterChange: writerPushed,
     });
-    published = true;
-    console.log(`[CloudSync] flushAppNow verified + web-ready for ${appId}`);
+    catalogError = catalogResult.catalogError;
+
+    if (catalogError) {
+      console.warn(
+        `[CloudSync] flushAppNow web-ready but catalog sync failed for ${appId}: ${catalogError}`,
+      );
+    } else {
+      sync.markAppForPostFlushHooks(appId);
+      await sync.runPostFlushHooks({
+        skipTursoReschedule: options?.skipTursoReschedule ?? true,
+      });
+      published = true;
+      console.log(`[CloudSync] flushAppNow verified + web-ready for ${appId}`);
+    }
   } else {
     console.warn(
       `[CloudSync] flushAppNow complete but not web-ready for ${appId}: ${ready.reason ?? "unknown"}${ready.detail ? ` (${ready.detail})` : ""}`,
@@ -140,5 +138,6 @@ export async function flushAppNow(
     webReady: ready.ready,
     webReadyReason: ready.reason,
     published,
+    catalogError,
   };
 }

@@ -21,7 +21,13 @@ export interface SyncCoordinatorStatus {
   queuedFlushAppIds: string[];
   flushErrors: Record<
     string,
-    { message: string; at: string; retryPending: boolean }
+    {
+      message: string;
+      at: string;
+      retryPending: boolean;
+      kind?: "conflict" | "error";
+      conflictPaths?: string[];
+    }
   >;
 }
 

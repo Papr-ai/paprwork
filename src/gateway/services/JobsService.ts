@@ -99,7 +99,6 @@ import {
   splitJobRecord,
   toConfigIndexEntry,
 } from "./jobs/jobRuntimeFields.js";
-import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
 import type { JobRuntimePatch } from "../types/cloudRuntime.js";
 export type {
   ActiveJobSummary,
@@ -382,13 +381,17 @@ export class JobsService {
       return;
     }
 
-    const { findHomeDailyBriefJobIdInRegistry, DEFAULT_HOME_APP_ID } =
+    const { findHomeDailyBriefJobIdInRegistry, DEFAULT_HOME_APP_ID, readHomeDailyBriefJobIdFromAppDir } =
       await import("./defaultHomeBundle.js");
     const { normalizePortableJobPrompt } = await import(
       "./jobs/normalizePortableJobPrompt.js"
     );
 
-    const jobId = findHomeDailyBriefJobIdInRegistry(this.jobs.values());
+    const homeAppDir = path.join(getPaprAppsRoot(), DEFAULT_HOME_APP_ID);
+    const preferJobId = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
+    const jobId = findHomeDailyBriefJobIdInRegistry(this.jobs.values(), {
+      preferJobId,
+    });
     if (!jobId) {
       return;
     }
@@ -464,10 +467,9 @@ export class JobsService {
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
     await this.loadJobs(); // Load existing jobs FIRST
     await this.migrateLegacyHomeDailyBriefJobIfNeeded();
-    if (isJobRuntimeOffGit()) {
-      await this.migrateAndHydrateJobRuntimeFiles();
-      await this.hydrateJobRuntimeFromCloud();
-    }
+    await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
+    await this.migrateAndHydrateJobRuntimeFiles();
+    await this.hydrateJobRuntimeFromCloud();
     await this.backfillJobAppIds();
     await this.rebuildIndexIfCorrupted(); // Safety net: recover jobs on disk but missing from index
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
@@ -520,6 +522,34 @@ export class JobsService {
     } catch (err) {
       console.warn(
         "[JobsService] Legacy Home Daily Brief migration failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /** Remove duplicate Daily Brief jobs re-introduced by cloud/git sync. */
+  private async reconcileDuplicateHomeDailyBriefJobsIfNeeded(): Promise<void> {
+    try {
+      const { reconcileDuplicateHomeDailyBriefJobs } = await import(
+        "./migrateLegacyHomeDailyBriefJob.js"
+      );
+      const result = await reconcileDuplicateHomeDailyBriefJobs({
+        paprDir: getPaprRoot(),
+        appsDir: getPaprAppsRoot(),
+        jobsRoot: this.jobsRootDir,
+        jobs: this.jobs,
+        saveJobs: () => this.saveJobs(),
+        persistJobRecord: (job) => this.persistJobRecord(job),
+      });
+      if (result.reconciled && result.removedJobIds.length > 0) {
+        notifyJobOwnershipChanged(getPaprRoot());
+        console.log(
+          `[JobsService] Reconciled duplicate Home Daily Brief jobs → kept ${result.canonicalJobId}, removed [${result.removedJobIds.join(", ")}]`,
+        );
+      }
+    } catch (err) {
+      console.warn(
+        "[JobsService] Duplicate Home Daily Brief reconciliation failed:",
         err instanceof Error ? err.message : err,
       );
     }
@@ -653,10 +683,17 @@ export class JobsService {
    */
   private async rebuildIndexIfCorrupted(): Promise<void> {
     try {
+      const { readMigrationMarker, shouldSkipDailyBriefJobDirRecovery } =
+        await import("./migrateLegacyHomeDailyBriefJob.js");
+      const migrationMarker = await readMigrationMarker(getPaprRoot());
+
       const dirsOnDisk = await fs.readdir(this.jobsRootDir);
       const jobDirsOnDisk: string[] = [];
 
       for (const dirName of dirsOnDisk) {
+        if (shouldSkipDailyBriefJobDirRecovery(dirName, migrationMarker)) {
+          continue;
+        }
         const dirPath = path.join(this.jobsRootDir, dirName);
         try {
           const stat = await fs.stat(dirPath);
@@ -847,9 +884,7 @@ export class JobsService {
   async reloadJobs(): Promise<void> {
     console.log("[JobsService] Reloading jobs from disk...");
     await this.loadJobs();
-    if (isJobRuntimeOffGit()) {
-      await this.hydrateJobsFromRuntimeFiles();
-    }
+    await this.hydrateJobsFromRuntimeFiles();
     await this.rebuildIndexIfCorrupted();
     await this.pruneStaleJobEntries();
     console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
@@ -879,9 +914,7 @@ export class JobsService {
             (a, b) =>
               new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
           )
-          .map((job) =>
-            isJobRuntimeOffGit() ? toConfigIndexEntry(job) : job,
-          );
+          .map((job) => toConfigIndexEntry(job));
         const data = JSON.stringify(list, null, 2);
 
         // Use timestamp + random suffix to ensure unique temp file
@@ -891,6 +924,18 @@ export class JobsService {
 
         await fs.writeFile(tmpPath, data, "utf8");
         await fs.rename(tmpPath, this.jobsIndexPath);
+
+        const updatedAt = new Date().toISOString();
+        void import("./syncV3/MetadataRegistryClient.js")
+          .then(({ uploadJobsIndexToCloud }) =>
+            uploadJobsIndexToCloud(list, updatedAt),
+          )
+          .catch((err: Error) => {
+            console.warn(
+              "[JobsService] jobs index cloud upload failed:",
+              err.message.slice(0, 120),
+            );
+          });
       } finally {
         // Clear lock after save completes or fails
         this.saveLock = null;
@@ -907,13 +952,9 @@ export class JobsService {
     }
     const jobDir = this.getJobDir(job.id);
     await fs.mkdir(jobDir, { recursive: true });
-    if (isJobRuntimeOffGit()) {
-      const { config, runtime } = splitJobRecord(job);
-      await writeJsonAtomic(path.join(jobDir, "job.json"), config);
-      await writeJsonAtomic(path.join(jobDir, JOB_RUNTIME_FILE_NAME), runtime);
-      return;
-    }
-    await writeJsonAtomic(path.join(jobDir, "job.json"), job);
+    const { config, runtime } = splitJobRecord(job);
+    await writeJsonAtomic(path.join(jobDir, "job.json"), config);
+    await writeJsonAtomic(path.join(jobDir, JOB_RUNTIME_FILE_NAME), runtime);
   }
 
   /**
@@ -1097,9 +1138,6 @@ export class JobsService {
    * Pull newer runtime patches from Mongo on startup (multi-device hydration).
    */
   private async hydrateJobRuntimeFromCloud(): Promise<void> {
-    if (!isJobRuntimeOffGit()) {
-      return;
-    }
     try {
       const { fetchCloudJobRuntimePatches } = await import(
         "./jobs/jobRuntimeCloudUpload.js"
@@ -1798,7 +1836,7 @@ export class JobsService {
     // Broadcast job status change to all connected WebSocket clients (including mini-apps)
     this.broadcastJobStatus(next);
 
-    if (isJobRuntimeOffGit() && !options?.fromCloudPatch) {
+    if (!options?.fromCloudPatch) {
       void import("./jobs/jobRuntimeCloudUpload.js")
         .then(({ uploadJobRuntimePatch }) =>
           uploadJobRuntimePatch(jobRecordToRuntimePatch(next, "desktop")),

@@ -6,7 +6,6 @@
 import type { JobRuntimePatch } from "../../types/cloudRuntime.js";
 import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { getPaprApiKey } from "../../utils/keyResolver.js";
-import { isJobRuntimeOffGit } from "./jobRuntimeOffGit.js";
 
 export interface JobRuntimeUpsertResponse {
   accepted: boolean;
@@ -22,10 +21,6 @@ export interface JobRuntimeListResponse {
 export async function uploadJobRuntimePatch(
   patch: JobRuntimePatch,
 ): Promise<boolean> {
-  if (!isJobRuntimeOffGit()) {
-    return false;
-  }
-
   const apiKey = await getPaprApiKey();
   if (!apiKey) {
     return false;
@@ -58,10 +53,6 @@ export async function uploadJobRuntimePatch(
 }
 
 export async function fetchCloudJobRuntimePatches(): Promise<JobRuntimePatch[]> {
-  if (!isJobRuntimeOffGit()) {
-    return [];
-  }
-
   const apiKey = await getPaprApiKey();
   if (!apiKey) {
     return [];

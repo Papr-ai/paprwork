@@ -9,7 +9,10 @@ import {
   shouldListInCommunity,
   sharingToAudienceModel,
 } from "../utils/shareAudienceModel.js";
-import { getCloudAppPublishService } from "../../gateway/services/CloudAppPublishService.js";
+import {
+  getCloudAppPublishService,
+  type CloudAppPublishService,
+} from "../../gateway/services/CloudAppPublishService.js";
 import { getAppPublishPrefs } from "../../gateway/services/cloudPublishPrefs.js";
 import {
   resolveSharingSettings,
@@ -253,21 +256,36 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
 
       await requireCloudPublishAvailable();
 
-      const sharing = resolveSharingSettings({
-        loginAccess: args.loginAccess as CloudLoginAccess | undefined,
-        externalLink: args.externalLink as CloudExternalLink | undefined,
-      });
-      const codeAccess: CodeAccess = args.codeAccess ?? "off";
+      const publishOptions: Parameters<CloudAppPublishService["publishApp"]>[1] =
+        {};
+      if (args.loginAccess !== undefined) {
+        publishOptions.loginAccess = args.loginAccess as CloudLoginAccess;
+      }
+      if (args.externalLink !== undefined) {
+        publishOptions.externalLink = args.externalLink as CloudExternalLink;
+      }
+      if (args.codeAccess !== undefined) {
+        publishOptions.codeAccess = args.codeAccess;
+      }
+      if (args.requireSignIn !== undefined) {
+        publishOptions.requireSignIn = args.requireSignIn;
+      }
+      if (args.perUserIsolation !== undefined) {
+        publishOptions.perUserIsolation = args.perUserIsolation;
+      }
 
-      const config = await publishService.publishApp(args.appId, {
-        loginAccess: sharing.loginAccess,
-        externalLink: sharing.externalLink,
-        codeAccess,
-        requireSignIn: args.requireSignIn,
-        perUserIsolation: args.perUserIsolation,
-      });
+      const config = await publishService.publishOrUpdateSharing(
+        args.appId,
+        publishOptions,
+      );
 
       const prefs = getAppPublishPrefs(args.appId);
+      const sharing = resolveSharingSettings({
+        loginAccess: config.loginAccess,
+        externalLink: config.externalLink,
+        accessMode: config.accessMode,
+      });
+      const codeAccess: CodeAccess = prefs.codeAccess ?? args.codeAccess ?? "off";
       return {
         success: true,
         data: formatPublishResult(args.appId, config, sharing, codeAccess, {

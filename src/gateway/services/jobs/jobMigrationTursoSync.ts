@@ -90,7 +90,7 @@ async function executeRemoteSqlIdempotent(
   }
 }
 
-async function applySchemaOpToRemote(
+export async function applySchemaOpToRemote(
   remote: Client,
   op: JobMigrationSchemaOp,
 ): Promise<void> {

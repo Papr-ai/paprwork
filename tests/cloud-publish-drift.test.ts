@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 import {
+  detectAutoPublishDrift,
   detectCatalogRequirementsDrift,
   detectPublishDrift,
   prefsSharingFieldsChanged,
   resolveShareTokenForConfig,
+  resolveSharingSettingsForDisplay,
   slugifyPublishTitle,
 } from "../src/gateway/services/cloudPublishDrift.js";
+import {
+  isUninitializedSharingPrefs,
+  mergeAutoPublishCandidateAppIds,
+  needsPublishRecovery,
+} from "../src/gateway/services/cloudPublishPrefs.js";
 import { resolveUniquePublishSlug } from "../src/gateway/utils/uniqueAppNaming.js";
 
 describe("cloudPublishDrift", () => {
@@ -348,5 +355,138 @@ describe("cloudPublishDrift", () => {
       ],
     });
     expect(reasons.some((r) => r.startsWith("catalogKeys:"))).toBe(true);
+  });
+
+  it("auto-publish drift ignores sharing mismatch (code/catalog only)", () => {
+    const prefs = {
+      autoPublish: true,
+      accessMode: "private" as const,
+    };
+    expect(isUninitializedSharingPrefs(prefs)).toBe(true);
+
+    const sharingDrift = detectPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "public_read",
+        slug: "deck-studio",
+        linkPermission: "read",
+        codeAccess: "install",
+      },
+      prefs,
+      expectedSlug: "deck-studio",
+    });
+    expect(sharingDrift.some((r) => r.startsWith("visibility:"))).toBe(true);
+
+    const autoDrift = detectAutoPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "public_read",
+        slug: "deck-studio",
+        linkPermission: "read",
+        codeAccess: "install",
+      },
+      prefs,
+      expectedSlug: "deck-studio",
+    });
+    expect(autoDrift).toEqual([]);
+  });
+
+  it("resolveSharingSettingsForDisplay reads cloud when local prefs unset", () => {
+    const display = resolveSharingSettingsForDisplay(
+      { autoPublish: true, accessMode: "private" },
+      {
+        enabled: true,
+        visibility: "public_read",
+        linkPermission: "read",
+      },
+    );
+    expect(display.loginAccess).toBe("public");
+  });
+
+  it("resolveSharingSettingsForDisplay prefers explicit local prefs", () => {
+    const display = resolveSharingSettingsForDisplay(
+      {
+        autoPublish: true,
+        accessMode: "private",
+        loginAccess: "team",
+        externalLink: "off",
+      },
+      {
+        enabled: true,
+        visibility: "public_read",
+        linkPermission: "read",
+      },
+    );
+    expect(display.loginAccess).toBe("team");
+  });
+
+  it("detectAutoPublishDrift includes title and platform metadata drift", () => {
+    const reasons = detectAutoPublishDrift({
+      memory: {
+        enabled: true,
+        slug: "my-app",
+        catalogTitle: "Old Title",
+        catalogPlatform: ["macos"],
+        catalogRequiresDesktop: false,
+      },
+      prefs: { accessMode: "team" },
+      expectedSlug: "my-app",
+      localCatalogMetadata: {
+        title: "New Title",
+        platform: ["macos", "windows", "linux"],
+        requiresDesktop: true,
+      },
+    });
+    expect(reasons).toContain("catalogTitle");
+    expect(reasons).toContain("catalogPlatform");
+    expect(reasons).toContain("catalogRequiresDesktop");
+  });
+});
+
+describe("cloudPublishPrefs recovery helpers", () => {
+  it("needsPublishRecovery when memory disabled but autoPublish on", () => {
+    expect(needsPublishRecovery({ enabled: false }, true)).toBe(true);
+    expect(needsPublishRecovery(null, true)).toBe(true);
+    expect(needsPublishRecovery({ enabled: true }, true)).toBe(false);
+    expect(needsPublishRecovery({ enabled: false }, false)).toBe(false);
+  });
+
+  it("mergeAutoPublishCandidateAppIds flush scope only includes synced apps", () => {
+    const flushIds = mergeAutoPublishCandidateAppIds(
+      ["app-a"],
+      ["app-b"],
+      {
+        apps: {
+          "app-c": { autoPublish: true, accessMode: "public_read" },
+          "app-d": { autoPublish: false, accessMode: "private" },
+        },
+      },
+      "flush",
+    );
+    expect(flushIds).toEqual(["app-b"]);
+
+    expect(
+      mergeAutoPublishCandidateAppIds(
+        ["app-a"],
+        [],
+        { apps: { "app-c": { autoPublish: true, accessMode: "public_read" } } },
+        "flush",
+      ),
+    ).toEqual([]);
+  });
+
+  it("mergeAutoPublishCandidateAppIds catalog scope includes prefs-only apps", () => {
+    const ids = mergeAutoPublishCandidateAppIds(
+      ["app-a"],
+      ["app-b"],
+      {
+        apps: {
+          "app-c": { autoPublish: true, accessMode: "public_read" },
+          "app-d": { autoPublish: false, accessMode: "private" },
+        },
+      },
+      "catalog",
+    );
+    expect(ids.sort()).toEqual(["app-b", "app-c"].sort());
   });
 });

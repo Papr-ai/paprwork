@@ -438,6 +438,10 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
     return;
   }
 
+  // Stop in-flight streams before closing SQLite — otherwise checkpoint timers on
+  // the old AgentService instance keep writing to a disposed StorageManager.
+  await abortAllActiveAgentStreams();
+
   process.env.PAPR_API_KEY = apiKey;
   clearKeyCache("PAPR_API_KEY");
   invalidatePaprUserIdCache();

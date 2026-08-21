@@ -348,7 +348,6 @@ section("3. Live Turso — sandbox path (pushLinkedSourceToCloud)");
         syncKey,
         dbPath,
         paprHome,
-        push1.tableFingerprints,
         push1.lastPushedLogId,
       );
 

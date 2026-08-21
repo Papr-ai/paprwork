@@ -2,9 +2,21 @@ import { describe, expect, test, vi } from "vitest";
 import { getJobsService } from "../src/gateway/services/JobsService.js";
 import { JobsScheduler } from "../src/gateway/services/JobsScheduler.js";
 import type { JobRecord } from "../src/gateway/services/JobsService.js";
+import * as cloudSchedulerAuthority from "../src/gateway/utils/cloudSchedulerAuthority.js";
+import * as jobSchedulerRunLease from "../src/gateway/services/jobs/jobSchedulerRunLease.js";
 
 describe("JobsScheduler", () => {
   test("runs due interval job through JobsService", async () => {
+    vi.spyOn(cloudSchedulerAuthority, "isCloudSchedulerAuthoritative").mockResolvedValue(
+      false,
+    );
+    vi.spyOn(jobSchedulerRunLease, "tryAcquireSchedulerRunLease").mockResolvedValue({
+      acquired: true,
+      runId: "run-test",
+    });
+    vi.spyOn(jobSchedulerRunLease, "releaseSchedulerRunLease").mockResolvedValue(
+      undefined,
+    );
     const scheduler = new JobsScheduler();
     const jobsService = getJobsService();
     const now = Date.now();
@@ -67,9 +79,20 @@ describe("JobsScheduler", () => {
     runSpy.mockRestore();
     getJobSpy.mockRestore();
     upsertSpy.mockRestore();
+    vi.restoreAllMocks();
   });
 
   test("runs due cron job through JobsService and persists next cron slot", async () => {
+    vi.spyOn(cloudSchedulerAuthority, "isCloudSchedulerAuthoritative").mockResolvedValue(
+      false,
+    );
+    vi.spyOn(jobSchedulerRunLease, "tryAcquireSchedulerRunLease").mockResolvedValue({
+      acquired: true,
+      runId: "run-test",
+    });
+    vi.spyOn(jobSchedulerRunLease, "releaseSchedulerRunLease").mockResolvedValue(
+      undefined,
+    );
     const scheduler = new JobsScheduler();
     const jobsService = getJobsService();
     const now = Date.now();
@@ -132,12 +155,51 @@ describe("JobsScheduler", () => {
     expect(upsertArg?.scheduleState?.nextRunAt).toBeDefined();
     const nextMs = new Date(upsertArg!.scheduleState!.nextRunAt!).getTime();
     expect(Number.isNaN(nextMs)).toBe(false);
-    expect(nextMs).toBeGreaterThan(beforeTick);
+    expect(nextMs).toBeGreaterThan(new Date(dueAt).getTime());
 
     initializeSpy.mockRestore();
     listSpy.mockRestore();
     runSpy.mockRestore();
     getJobSpy.mockRestore();
     upsertSpy.mockRestore();
+    vi.restoreAllMocks();
+  });
+
+  test("defers cloud-preferred jobs when cloud scheduler is authoritative", async () => {
+    vi.spyOn(cloudSchedulerAuthority, "isCloudSchedulerAuthoritative").mockResolvedValue(
+      true,
+    );
+    const scheduler = new JobsScheduler();
+    const jobsService = getJobsService();
+    const now = Date.now();
+    const dueJob: JobRecord = {
+      id: "job-cloud-preferred",
+      name: "Cloud Preferred Job",
+      type: "shell",
+      status: "pending",
+      appIds: ["__standalone__"],
+      command: "echo cloud",
+      executionCapability: "cloud-preferred",
+      schedule: {
+        enabled: true,
+        intervalMs: 60_000,
+      },
+      scheduleState: {
+        nextRunAt: new Date(now - 1000).toISOString(),
+      },
+      createdAt: new Date(now - 5000).toISOString(),
+      updatedAt: new Date(now - 5000).toISOString(),
+    };
+
+    vi.spyOn(jobsService, "initialize").mockResolvedValue(undefined);
+    vi.spyOn(jobsService, "listJobs").mockResolvedValue([dueJob]);
+    const runSpy = vi
+      .spyOn(jobsService, "runJobFromScheduler")
+      .mockResolvedValue({ ...dueJob, status: "completed" });
+
+    await scheduler.tickNow();
+
+    expect(runSpy).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
   });
 });

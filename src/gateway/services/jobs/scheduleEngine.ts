@@ -1,5 +1,10 @@
 import { CronExpressionParser } from "cron-parser";
-import type { JobSchedule, JobScheduleState, JobStatus } from "./types.js";
+import type {
+  JobExecutionCapability,
+  JobSchedule,
+  JobScheduleState,
+  JobStatus,
+} from "./types.js";
 
 type CronParseOptions = {
   currentDate: Date;
@@ -142,9 +147,14 @@ export function msUntilSoonestNextRun(
     schedule?: JobSchedule;
     scheduleState?: JobScheduleState;
     status?: JobStatus;
+    executionCapability?: JobExecutionCapability;
   }>,
   nowMs: number,
   activeLeasesPrefix: Set<string> = new Set(),
+  skipDueJob?: (job: {
+    id: string;
+    executionCapability?: JobExecutionCapability;
+  }) => boolean,
 ): number | null {
   let minFuture: number | null = null;
   for (const job of jobs) {
@@ -157,6 +167,9 @@ export function msUntilSoonestNextRun(
     // Skip jobs with active scheduler leases
     const leaseKey = `schedule:${job.id}`;
     if (activeLeasesPrefix.has(leaseKey)) {
+      continue;
+    }
+    if (skipDueJob?.(job)) {
       continue;
     }
     const raw = job.scheduleState?.nextRunAt;

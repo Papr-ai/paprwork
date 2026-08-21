@@ -125,7 +125,7 @@ function applyCloudContextToFetch(
 
 function loginUrl(returnTo?: string): string {
   const path = returnTo ?? resolveAuthReturnToPath();
-  return `/auth/login?returnTo=${encodeURIComponent(path)}&start=1`;
+  return `/auth/login?returnTo=${encodeURIComponent(path)}`;
 }
 
 function normalizeServerLoginUrl(serverLoginUrl: string | undefined): string | undefined {

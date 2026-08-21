@@ -525,6 +525,19 @@ function filterPublicCommunityEntries(
   );
 }
 
+/** Global Community tab — installable forks only, not live-preview-only publishes. */
+export function isCommunityInstallListing(
+  entry: CommunityCatalogEntry,
+): boolean {
+  return entry.codeInstallable === true;
+}
+
+function filterInstallableCommunityEntries(
+  entries: CommunityCatalogEntry[],
+): CommunityCatalogEntry[] {
+  return entries.filter(isCommunityInstallListing);
+}
+
 function defaultCloudAppsHost(): string {
   return (
     process.env.PAPR_CLOUD_APPS_HOST?.replace(/\/$/, "") ??
@@ -722,10 +735,12 @@ export class CommunityCatalogService {
       }
     }
 
-    cloudEntries = filterPublicCommunityEntries(
-      cloudEntries,
-      this.paprDir,
-      ownedAppIds,
+    cloudEntries = filterInstallableCommunityEntries(
+      filterPublicCommunityEntries(
+        cloudEntries,
+        this.paprDir,
+        ownedAppIds,
+      ),
     );
 
     // Community Apps tab is cloud-publish only. OSS paprwork-community-apps is deprecated.

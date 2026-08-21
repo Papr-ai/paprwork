@@ -3970,6 +3970,8 @@ Checks:
 - **100-line limit on code files** (enforced): \`.html\`, \`.css\`, \`.js\`, \`.ts\`, \`.tsx\`, \`.jsx\` must be ≤100 significant lines. **Not enforced on \`.md\`, \`.json\`, \`.txt\`** — put long report prose in \`content/reports/*.md\`, not split across dozens of TS files.
 - **HTML syntax**: Unclosed tags, malformed markup
 - **CSS syntax**: Mismatched braces, double semicolons
+- **CSS class coverage (warning)**: Markup class="..." with no matching rule in app CSS or Liquid Glass base.css — catches unstyled UI after accidental CSS loss
+- **CSS shrink (warning)**: App-wide selector count dropped >30% since last validate_app — catches bulk overwrite during file splits
 - **JavaScript/TypeScript syntax**: Mismatched delimiters (braces, parens, brackets)
 - **Code quality**: console.log statements (should be removed)
 - **Runtime preview (automatic)**: Launches hidden preview, reads console errors, merges errors forwarded from the user's app iframe

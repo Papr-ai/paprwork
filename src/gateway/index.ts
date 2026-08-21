@@ -48,6 +48,7 @@ import {
   applyGatewayPaprApiKey,
   switchActiveWorkspace,
   getWorkspaceSwitchHealthStatus,
+  getWorkspaceSwitchStatus,
 } from "./services/workspaceSwitchService.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
@@ -232,6 +233,11 @@ async function initializeServices(): Promise<void> {
       await import("./services/WorkspaceService.js");
     await getWorkspaceService().ensureSleepJob();
     await getWorkspaceService().ensureWikiWriterJob();
+
+    const { startAppRepoRevisionSubscriber } = await import(
+      "./services/syncV3/appRepoRevisionSubscriber.js"
+    );
+    startAppRepoRevisionSubscriber();
 
     console.log("[Gateway] All services initialized");
     console.log(
@@ -705,11 +711,17 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const { scheduleTursoPullForAppOpen } = await import(
-          "./services/tursoPullScheduler.js"
+        const body = (req.body ?? {}) as { wait?: boolean };
+        const sync = getCloudSyncService();
+        const token = sync ? await sync.ensureFreshToken() : null;
+        const { pullAppFromCloud } = await import(
+          "./services/syncV3/pullAppFromCloud.js"
         );
-        scheduleTursoPullForAppOpen(appId);
-        res.json({ success: true, scheduled: true });
+        const result = await pullAppFromCloud(appId, {
+          token,
+          waitForTurso: body.wait === true,
+        });
+        res.json({ success: true, ...result });
       } catch (err) {
         console.error("[Gateway] /api/apps/sync-from-cloud error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -911,15 +923,137 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const result = await dbRouter.write(appId, source, sql, params);
+        const { writeLinkedDbRowLocalFirst } = await import(
+          "./services/syncV3/localFirstDbWrite.js"
+        );
+        const { assertReplaySafeRowSql } = await import(
+          "./services/syncV3/replaySafeSql.js"
+        );
+        assertReplaySafeRowSql(sql);
+        const result = await writeLinkedDbRowLocalFirst(
+          dbPool,
+          dbRouter,
+          appId,
+          source,
+          sql,
+          params,
+        );
         console.log(
           `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
         );
         res.json(result);
       } catch (err) {
-        const e = err as Error & { status?: number };
+        const e = err as Error & { status?: number; name?: string };
+        if (e.name === "NonReplaySafeSqlError") {
+          res.status(400).json({ error: e.message });
+          return;
+        }
         console.error("[Gateway] /api/db/write error:", err);
         res.status(e.status ?? 500).json({ error: e.message });
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // ── Mini-app SQLite write batch API ─────────────────────────────────────
+    // Apps call: fetch('/api/db/write-batch', { method: 'POST', body: JSON.stringify({ appId, statements: [...] }) })
+    // Same write rules as /api/db/write; up to 25 statements per request.
+    // Returns: { results: [{ ok, changes, lastInsertRowid, source?, error? }, ...] }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    app.post("/api/db/write-batch", async (req, res) => {
+      try {
+        const { appId: bodyAppId, statements } = req.body as {
+          appId?: string;
+          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+        };
+
+        if (!Array.isArray(statements) || statements.length === 0) {
+          res.status(400).json({ error: "non-empty statements[] is required" });
+          return;
+        }
+        if (statements.length > 25) {
+          res.status(400).json({ error: "Batch limited to 25 statements" });
+          return;
+        }
+
+        const resolved = resolveRequestAppId(req, bodyAppId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
+
+        const { writeLinkedDbRowLocalFirst } = await import(
+          "./services/syncV3/localFirstDbWrite.js"
+        );
+        const { assertReplaySafeRowSql } = await import(
+          "./services/syncV3/replaySafeSql.js"
+        );
+
+        const results: Array<Record<string, unknown>> = [];
+        for (const stmt of statements) {
+          if (!stmt?.sql) {
+            res.status(400).json({ error: "Every statement requires sql" });
+            return;
+          }
+
+          const trimmed = stmt.sql.trim().toLowerCase();
+          const isWrite =
+            trimmed.startsWith("insert") ||
+            trimmed.startsWith("update") ||
+            trimmed.startsWith("delete") ||
+            trimmed.startsWith("replace") ||
+            trimmed.startsWith("upsert");
+          if (!isWrite) {
+            res.status(403).json({
+              error:
+                "Only INSERT, UPDATE, DELETE, REPLACE, and UPSERT are allowed on /api/db/write-batch.",
+            });
+            return;
+          }
+
+          try {
+            let source: import("./services/appDataSources.js").AppDataSource;
+            try {
+              source = await resolveLinkedSource(
+                appId,
+                stmt.sourceId,
+                stmt.sql,
+                "write",
+              );
+            } catch (err) {
+              const e = err as Error & { status?: number };
+              results.push({ ok: false, error: e.message });
+              continue;
+            }
+
+            assertReplaySafeRowSql(stmt.sql);
+            const result = await writeLinkedDbRowLocalFirst(
+              dbPool,
+              dbRouter,
+              appId,
+              source,
+              stmt.sql,
+              stmt.params,
+            );
+            results.push({ ok: true, ...result, source: source.alias });
+          } catch (stmtErr) {
+            const e = stmtErr as Error & { name?: string };
+            if (e.name === "NonReplaySafeSqlError") {
+              results.push({ ok: false, error: e.message });
+              continue;
+            }
+            results.push({ ok: false, error: e.message });
+          }
+        }
+
+        console.log(
+          `[Gateway] /api/db/write-batch app=${appId} count=${statements.length}`,
+        );
+        res.json({ results });
+      } catch (err) {
+        console.error("[Gateway] /api/db/write-batch error:", err);
+        res.status(500).json({ error: (err as Error).message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
@@ -991,7 +1125,10 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        await dbRouter.exec(appId, source, sql);
+        const { execLinkedDbSchemaLocalFirst } = await import(
+          "./services/syncV3/localFirstDbWrite.js"
+        );
+        await execLinkedDbSchemaLocalFirst(dbPool, dbRouter, appId, source, sql);
         console.log(
           `[Gateway] /api/db/exec app=${appId} source=${source.alias}`,
         );
@@ -1520,7 +1657,7 @@ async function startGateway(): Promise<void> {
               : {}),
           });
         }
-        const config = await getCloudAppPublishService().publishApp(
+        const config = await getCloudAppPublishService().publishOrUpdateSharing(
           req.params.appId,
           {
             accessMode: body.accessMode,
@@ -1570,8 +1707,16 @@ async function startGateway(): Promise<void> {
         const prefs = setAppPublishPrefs(req.params.appId, body);
         invalidateCloudLinkSyncReportCache();
         if (prefsSharingFieldsChanged(body)) {
-          const config = await getCloudAppPublishService().republishIfPublished(
+          const config = await getCloudAppPublishService().updateSharing(
             req.params.appId,
+            {
+              accessMode: body.accessMode,
+              loginAccess: body.loginAccess,
+              externalLink: body.externalLink,
+              codeAccess: body.codeAccess,
+              requireSignIn: body.requireSignIn,
+              perUserIsolation: body.perUserIsolation,
+            },
           );
           res.json({ prefs, ...(config ? { config } : {}) });
           return;
@@ -1994,6 +2139,10 @@ async function startGateway(): Promise<void> {
       res.json({ active: true, pointer });
     });
 
+    app.get("/api/workspace/switch-status", (_req, res) => {
+      res.json(getWorkspaceSwitchStatus());
+    });
+
     app.get("/api/sync/items", async (req, res) => {
       const sync = getCloudSyncService();
       if (!sync) {
@@ -2031,14 +2180,6 @@ async function startGateway(): Promise<void> {
           const { isCloudAutoUploadGloballyEnabled } = await import(
             "./services/cloudUploadMode.js"
           );
-          // Auto-merge legacy cloud job status writebacks before returning status.
-          // Skipped when JOB_RUNTIME_OFF_GIT=1 — runtime arrives via heartbeat patches.
-          const { isJobRuntimeOffGit } = await import(
-            "./services/jobs/jobRuntimeOffGit.js"
-          );
-          if (!isJobRuntimeOffGit()) {
-            await sync.tryAutoReconcileRemoteGit();
-          }
           // Reconcile whenever the UI asks for this app — git-clean folders
           // should show green even if mtime-only drift fooled the hash cache.
           await sync.reconcileAppDependentPaths(appId);
@@ -2089,10 +2230,13 @@ async function startGateway(): Promise<void> {
         }
 
         let upload = null;
+        let appSync = null;
         let uploadError: {
           message: string;
           at: string;
           retryPending?: boolean;
+          kind?: "conflict" | "error";
+          conflictPaths?: string[];
         } | null = null;
         {
           const { getSyncCoordinator } = await import(
@@ -2111,10 +2255,35 @@ async function startGateway(): Promise<void> {
                 message: coordErr.message,
                 at: coordErr.at,
                 retryPending: coordErr.retryPending,
+                ...(coordErr.kind ? { kind: coordErr.kind } : {}),
+                ...(coordErr.conflictPaths?.length
+                  ? { conflictPaths: coordErr.conflictPaths }
+                  : {}),
               };
             } else if (syncErr) {
-              uploadError = { ...syncErr, retryPending: false };
+              uploadError = {
+                ...syncErr,
+                retryPending: false,
+              };
             }
+
+            const { buildAppSyncV3Report } = await import(
+              "./services/syncV3/appSyncV3StatusReport.js"
+            );
+            const githubReport = sync.getGitHubSyncItemsReport();
+            appSync = await buildAppSyncV3Report({
+              appId,
+              paprDir: getPaprRoot(),
+              stateManager: sync.stateManager,
+              queuedPaths: githubReport.queuedPaths,
+              coordinatorUploading: upload?.status === "uploading",
+              coordinatorWaiting: upload?.status === "waiting",
+              coordinatorQueued: upload?.waitingReason === "queued",
+              queuePosition: upload?.queuePosition,
+              queueDepth: upload?.queueDepth,
+              flushErrorMessage: uploadError?.message ?? null,
+              flushErrorKind: uploadError?.kind,
+            });
           }
         }
 
@@ -2135,6 +2304,7 @@ async function startGateway(): Promise<void> {
           turso,
           publish,
           upload,
+          appSync,
           cloudLinks,
           appContext,
           cached: fromCache,
@@ -2161,11 +2331,15 @@ async function startGateway(): Promise<void> {
             "./services/cloudSync/SyncCoordinator.js"
           );
           const coordinator = getSyncCoordinator();
+          if (coordinator) {
+            coordinator.bumpFlushQueue(appId);
+          }
           const inFlight = coordinator?.getStatus().activeFlush?.appId === appId;
           sync.pushAppNowInBackground(appId);
           res.status(202).json({
             accepted: true,
             alreadyInProgress: inFlight,
+            bumpedQueue: true,
             ...sync.getState(),
           });
           return;
@@ -2749,6 +2923,25 @@ async function startGateway(): Promise<void> {
           .catch((err) =>
             console.warn(
               "[Gateway] Turso startup dirty push failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./services/syncV3/workspaceLogSync.js")
+          .then(async ({ catchUpAllLinkedSourcesFromWorkspaceLog }) => {
+            const appsRoot = tursoBridge.getAppsRootDir();
+            if (!appsRoot) {
+              return;
+            }
+            const applied = await catchUpAllLinkedSourcesFromWorkspaceLog(appsRoot);
+            if (applied > 0) {
+              console.log(
+                `[Gateway] Workspace log startup catch-up materialized ${applied} row op(s)`,
+              );
+            }
+          })
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Workspace log startup catch-up failed (non-fatal):",
               (err as Error).message.slice(0, 120),
             ),
           );

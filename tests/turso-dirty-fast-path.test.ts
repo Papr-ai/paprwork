@@ -120,7 +120,7 @@ describeSqlite("isLinkedSourceDirtyFast", () => {
       .get() as { max_id: number };
     db.close();
 
-    recordTursoPushSuccess("job-1", dbPath, paprDir, undefined, maxId.max_id);
+    recordTursoPushSuccess("job-1", dbPath, paprDir, maxId.max_id);
 
     markDbDirty("job-1", dbPath, paprDir);
 
@@ -137,7 +137,7 @@ describeSqlite("isLinkedSourceDirtyFast", () => {
       .get() as { max_id: number };
     db.close();
 
-    recordTursoPushSuccess("job-1", dbPath, paprDir, undefined, maxId.max_id);
+    recordTursoPushSuccess("job-1", dbPath, paprDir, maxId.max_id);
     state = loadTursoSyncState(paprDir);
     state.jobs["job-1"] = {
       ...state.jobs["job-1"]!,
@@ -153,5 +153,40 @@ describeSqlite("isLinkedSourceDirtyFast", () => {
     const loaded = loadTursoSyncState(paprDir);
     expect(loaded.jobs["job-1"]?.dirtyFlag).toBeUndefined();
     expect(isLinkedSourceDirtyFast("job-1", dbPath, loaded)).not.toBe(true);
+  });
+});
+
+describe("loadTursoSyncState legacy fingerprint cleanup", () => {
+  let paprDir: string;
+
+  beforeEach(() => {
+    paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-sync-state-"));
+    fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(paprDir, { recursive: true, force: true });
+  });
+
+  it("strips deprecated tableFingerprints on load", () => {
+    const statePath = path.join(paprDir, "data", ".turso-sync-state.json");
+    fs.writeFileSync(
+      statePath,
+      JSON.stringify({
+        jobs: {
+          "job-legacy": {
+            dbPath: "/tmp/data.db",
+            lastPushAt: "2026-01-01T00:00:00.000Z",
+            tableFingerprints: { items: "abc123" },
+            lastPushedLogId: 4,
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const loaded = loadTursoSyncState(paprDir);
+    expect(loaded.jobs["job-legacy"]?.lastPushedLogId).toBe(4);
+    expect(loaded.jobs["job-legacy"]?.tableFingerprints).toBeUndefined();
   });
 });

@@ -251,9 +251,8 @@ describe("Cloud Sync Settings Toggle", () => {
 
 describe("Retry Cap", () => {
   it("MAX_RETRY_FAILURES is 3", async () => {
-    // Verify the constant is accessible and correct
     const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncQueueProcessor.ts"),
       "utf-8",
     );
     expect(content).toContain("const MAX_RETRY_FAILURES = 3;");
@@ -271,22 +270,30 @@ describe("Retry Cap", () => {
 describe("Periodic Pull", () => {
   it("PULL_INTERVAL_MS is 5 minutes", () => {
     const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncHeartbeat.ts"),
       "utf-8",
     );
-    expect(content).toContain("const PULL_INTERVAL_MS = 5 * 60_000;");
+    expect(content).toContain("export const PULL_INTERVAL_MS = 5 * 60_000;");
   });
 });
 
 describe("Desktop heartbeat deduplication", () => {
   it("guards against duplicate heartbeat timers and orphaned CloudSync instances", () => {
-    const content = fs.readFileSync(
+    const heartbeat = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncHeartbeat.ts"),
+      "utf-8",
+    );
+    const service = fs.readFileSync(
       path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("backgroundInitStarted");
-    expect(content).toContain("Desktop heartbeat already running");
-    expect(content).toContain("stopping orphaned timers");
+    const singleton = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncSingleton.ts"),
+      "utf-8",
+    );
+    expect(heartbeat).toContain("Desktop heartbeat already running");
+    expect(service).toContain("backgroundInitStarted");
+    expect(singleton).toContain("stopping orphaned timers");
   });
 
   it("gateway deferred startup skips when cloud sync already initialized", () => {
@@ -299,65 +306,75 @@ describe("Desktop heartbeat deduplication", () => {
   });
 });
 
-describe("Per-folder commit strategy", () => {
-  it("commits and pushes each queued app/job folder separately", () => {
-    const content = fs.readFileSync(
+describe("Sync V3 push (no namespace git)", () => {
+  it("routes manual push through pushWorkspaceV3Now", () => {
+    const service = fs.readFileSync(
       path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("commitAndPushPaths");
-    expect(content).toContain("cloud sync: ${item.relativePath}");
-    expect(content).not.toContain("consolidateUnpushedCommits");
-  });
-
-  it("uses push gate — no new commit while unpushed commits exist", () => {
-    const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+    const pushApi = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncPushApi.ts"),
       "utf-8",
     );
-    expect(content).toContain("ensureRemoteCaughtUp");
-    expect(content).toContain("Never stack local commits");
-    expect(content).toMatch(/await this\.ensureRemoteCaughtUp\(\)/);
+    expect(service).toContain("pushGitNowFn(this.host");
+    expect(pushApi).toContain("pushWorkspaceV3Now");
+    expect(pushApi).toContain("./pushV3Now.js");
+    expect(service).toContain("No namespace monorepo git commit or push");
   });
 
-  it("hash-gates workspace commits like Papr Memory indexing", () => {
+  it("queue processor module flushes jobs via Sync V3", () => {
     const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncQueueProcessor.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("V3 job flush");
+    expect(content).toContain("pushWorkspaceV3Now");
+  });
+
+  it("hash-gates workspace changes locally (no instant git commit)", () => {
+    const content = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncWorkspaceWatch.ts"),
       "utf-8",
     );
     expect(content).toContain("getChangedInstantPaths");
     expect(content).toContain("syncWorkspaceIfChanged");
-    expect(content).toContain("hasItemChanged(relativePath)");
+    expect(content).toContain("hasItemChanged(dir)");
   });
 
-  it("PUSH_TIMEOUT_MS allows per-folder uploads", () => {
+  it("pushV3Now module flushes apps via SyncCoordinator", () => {
     const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      path.join(process.cwd(), "src/gateway/services/cloudSync/pushV3Now.ts"),
       "utf-8",
     );
-    expect(content).toContain("const PUSH_TIMEOUT_MS = 180_000;");
-    expect(content).toContain("const BACKLOG_PUSH_TIMEOUT_MS = 600_000;");
+    expect(content).toContain("flushAppViaCoordinator");
+    expect(content).toContain("listAppIdsOwningJob");
   });
+});
 
+describe("Legacy git hygiene (pull-only)", () => {
   it("excludes WAV recordings from git (Turso metadata + bucket for blobs)", () => {
     const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+      path.join(process.cwd(), "src/gateway/services/cloudSync/workspaceGitignore.ts"),
       "utf-8",
     );
     expect(content).toContain("**/*.wav");
-    expect(content).toContain("**/data/recordings/");
+    expect(content).toContain("**/recordings/");
   });
 
   it("excludes backup artifacts from git sync", () => {
-    const content = fs.readFileSync(
-      path.join(process.cwd(), "src/gateway/services/CloudSyncService.ts"),
+    const gitignore = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/cloudSync/workspaceGitignore.ts"),
       "utf-8",
     );
-    expect(content).toContain("**/*.bak");
-    expect(content).toContain("**/*.corrupt-*");
-    expect(content).toContain("**/*corrupt-backup*");
-    expect(content).not.toContain("**/*.pdf");
-    expect(content).toContain("unstageOversizedFiles");
+    const hygiene = fs.readFileSync(
+      path.join(process.cwd(), "src/gateway/services/cloudSync/cloudSyncRepoHygieneTick.ts"),
+      "utf-8",
+    );
+    expect(gitignore).toContain("**/*.bak");
+    expect(gitignore).toContain("**/*.corrupt-*");
+    expect(gitignore).toContain("**/*corrupt-backup*");
+    expect(gitignore).not.toContain("**/*.pdf");
+    expect(hygiene).toContain("runRepoMaintenance");
   });
 });
 

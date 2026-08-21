@@ -116,10 +116,15 @@ export async function publishCloudApp(
   return body;
 }
 
+export interface PatchCloudPublishPrefsResult {
+  prefs: CloudPublishPrefs;
+  config: CloudPublishState | null;
+}
+
 export async function patchCloudPublishPrefs(
   appId: string,
   input: Partial<CloudPublishPrefs>,
-): Promise<CloudPublishPrefs> {
+): Promise<PatchCloudPublishPrefsResult> {
   const res = await fetch(
     `${GATEWAY}/api/cloud/publish/${encodeURIComponent(appId)}/prefs`,
     {
@@ -128,11 +133,18 @@ export async function patchCloudPublishPrefs(
       body: JSON.stringify(input),
     },
   );
-  const body = (await res.json()) as { prefs?: CloudPublishPrefs; error?: string };
+  const body = (await res.json()) as {
+    prefs?: CloudPublishPrefs;
+    config?: CloudPublishState;
+    error?: string;
+  };
   if (!res.ok) {
     throw new Error(body.error ?? `Prefs update failed (${res.status})`);
   }
-  return body.prefs ?? {};
+  return {
+    prefs: body.prefs ?? {},
+    config: body.config ?? null,
+  };
 }
 
 export async function unpublishCloudApp(appId: string): Promise<void> {

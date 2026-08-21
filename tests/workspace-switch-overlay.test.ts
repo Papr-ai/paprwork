@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  formatActiveWorkspaceLabel,
   formatWorkspaceSwitchTarget,
   parseWorkspaceSwitchLabels,
   workspaceSwitchPhaseLabel,
@@ -27,6 +28,14 @@ describe("workspaceSwitchOverlay", () => {
         namespaceName: "Sandbox",
       }),
     ).toBe("Acme · Sandbox");
+  });
+
+  it("falls back to workspace name when org/namespace labels are missing", () => {
+    expect(
+      formatActiveWorkspaceLabel({
+        workspaceName: "My Workspace",
+      }),
+    ).toBe("My Workspace");
   });
 
   it("maps gateway phases to user-facing copy", () => {

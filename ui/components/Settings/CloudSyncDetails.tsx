@@ -6,6 +6,8 @@ import {
   type CloudExternalLink,
   type CloudLoginAccess,
 } from "../../utils/cloudShareLink";
+import { patchCloudPublishPrefs } from "../../utils/cloudPublishApi";
+import { isCloudAppLive } from "../../utils/cloudPublishRouting";
 import "./CloudSyncDetails.css";
 
 type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable" | "failed" | "quarantined" | "updates_available";
@@ -135,6 +137,34 @@ export interface UploadProgressReport {
   detail?: string;
   appId?: string;
   retryPending?: boolean;
+  waitingReason?: "queued" | "dirty";
+  queuePosition?: number;
+  queueDepth?: number;
+}
+
+/** Sync V3 per-app code status (writer ops + cloud repo — not namespace git). */
+export interface AppSyncV3Report {
+  protocol: "v3";
+  appId: string;
+  relativePath: string;
+  status:
+    | "synced"
+    | "pending"
+    | "uploading"
+    | "failed"
+    | "conflict"
+    | "not_uploaded";
+  phase: "synced" | "uploading" | "not_uploaded" | "changed";
+  label: string;
+  detail: string;
+  lastUploadedAt: string | null;
+  lastError?: string | null;
+  manualUploadHold?: boolean;
+  pendingWriterOps: number;
+  inflightWriterOps: number;
+  deadLetterWriterOps: number;
+  hasLocalChanges: boolean;
+  queuedForUpload: boolean;
 }
 
 export interface SyncItemsResponse {
@@ -143,6 +173,7 @@ export interface SyncItemsResponse {
   turso?: TursoSyncItemsReport | null;
   publish?: PublishLayerSyncReport | null;
   upload?: UploadProgressReport | null;
+  appSync?: AppSyncV3Report | null;
   uploadError?: {
     message: string;
     at: string;
@@ -366,23 +397,38 @@ function CloudLinkCard({
       setExternalLink(nextSharing.externalLink);
       setBusy(true);
       try {
-        const res = await fetch(
-          `http://localhost:18789/api/cloud/publish/${encodeURIComponent(item.appId)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              loginAccess: nextSharing.loginAccess,
-              externalLink: nextSharing.externalLink,
-              autoPublish: true,
-            }),
-          },
-        );
-        const body = (await res.json()) as PublishApiResponse;
-        if (!res.ok) {
-          throw new Error(body.error ?? `Publish failed (${res.status})`);
+        const live = isCloudAppLive({
+          enabled: item.enabled,
+          shareUrl: item.shareUrl,
+        });
+        if (live) {
+          const { config } = await patchCloudPublishPrefs(item.appId, {
+            loginAccess: nextSharing.loginAccess,
+            externalLink: nextSharing.externalLink,
+          });
+          if (!config) {
+            throw new Error("Sharing update did not return publish config");
+          }
+          applyPublishResponse(config);
+        } else {
+          const res = await fetch(
+            `http://localhost:18789/api/cloud/publish/${encodeURIComponent(item.appId)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                loginAccess: nextSharing.loginAccess,
+                externalLink: nextSharing.externalLink,
+                autoPublish: true,
+              }),
+            },
+          );
+          const body = (await res.json()) as PublishApiResponse;
+          if (!res.ok) {
+            throw new Error(body.error ?? `Publish failed (${res.status})`);
+          }
+          applyPublishResponse(body);
         }
-        applyPublishResponse(body);
         const linkNote = sharingSettingsRequireShareToken(nextSharing)
           ? body.shareToken
             ? " External link includes access token."
@@ -448,7 +494,9 @@ function CloudLinkCard({
 
   const setAutoPublish = useCallback(
     async (autoPublish: boolean) => {
+      const previousAutoPublish = item.autoPublish;
       setBusy(true);
+      onItemUpdated(item.appId, { autoPublish });
       try {
         const res = await fetch(
           `http://localhost:18789/api/cloud/publish/${encodeURIComponent(item.appId)}/prefs`,
@@ -458,16 +506,21 @@ function CloudLinkCard({
             body: JSON.stringify({ autoPublish }),
           },
         );
+        const body = (await res.json()) as {
+          prefs?: { autoPublish?: boolean };
+          error?: string;
+        };
         if (!res.ok) {
-          const body = (await res.json()) as { error?: string };
           throw new Error(body.error ?? "Failed to update auto-publish");
         }
+        const savedAutoPublish = body.prefs?.autoPublish !== false;
+        onItemUpdated(item.appId, { autoPublish: savedAutoPublish });
         onMessage({
           type: "success",
-          text: `${item.label}: auto-publish ${autoPublish ? "on" : "off"}`,
+          text: `${item.label}: auto-publish ${savedAutoPublish ? "on" : "off"}`,
         });
-        onRefresh();
       } catch (error) {
+        onItemUpdated(item.appId, { autoPublish: previousAutoPublish });
         onMessage({
           type: "error",
           text:
@@ -479,7 +532,7 @@ function CloudLinkCard({
         setBusy(false);
       }
     },
-    [item.appId, item.label, onMessage, onRefresh],
+    [item.appId, item.autoPublish, item.label, onItemUpdated, onMessage],
   );
 
   const copyUrl = useCallback(async (link: string | null | undefined) => {

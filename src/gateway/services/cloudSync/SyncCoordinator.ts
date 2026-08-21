@@ -12,6 +12,10 @@ import type { CloudSyncService } from "../CloudSyncService.js";
 import type { TursoPushTrigger } from "../tursoPushScheduler.js";
 import { scheduleTursoPushForJob } from "../tursoPushScheduler.js";
 import { shouldAutoUploadApp } from "../cloudUploadMode.js";
+import {
+  appNeedsOrderedFlush,
+  appNeedsOrderedFlushAsync,
+} from "./pendingLocalUploads.js";
 import { listAppLinkedSyncKeys } from "../tursoLinkedSources.js";
 import {
   clearStaleDirtyFlagIfClean,
@@ -33,10 +37,12 @@ import {
   markGatewaySyncBusy,
 } from "./syncBusyState.js";
 import {
-  boostFlushQueueItemToManual,
+  moveFlushQueueItemToFront,
   sortFlushQueue,
   type NamespaceFlushQueueItem,
 } from "./namespaceFlushQueue.js";
+import { AppOpsConflictError } from "../syncV3/AppOpsClient.js";
+import { isPermanentWriterClientError } from "../syncV3/writerOutboxErrors.js";
 
 /** Debounce for auto-upload app code changes (SYNC_CONTRACT §7.1). */
 const APP_AUTO_FLUSH_DEBOUNCE_MS = 35_000;
@@ -54,6 +60,8 @@ interface FlushErrorState {
   message: string;
   at: string;
   retryPending: boolean;
+  kind?: "conflict" | "error";
+  conflictPaths?: string[];
 }
 
 function parseAppIdFromRelativePath(relativePath: string): string | null {
@@ -99,14 +107,16 @@ export class SyncCoordinator {
   }
 
   /**
-   * Git dirty for app folders: auto-upload → ordered debounced flush.
-   * Jobs/other paths → legacy per-folder git queue.
+   * App folders: auto-upload → debounced writer flush; manual apps → no auto push.
+   * Jobs/other paths → namespace git queue.
    */
   markGitDirty(relativePath: string): void {
     const normalized = relativePath.replace(/\\/g, "/");
     const appId = parseAppIdFromRelativePath(normalized);
-    if (appId && shouldAutoUploadApp(appId, this.sync.getPaprDir())) {
-      this.scheduleAutoFlush(appId);
+    if (appId) {
+      if (shouldAutoUploadApp(appId, this.sync.getPaprDir())) {
+        this.scheduleAutoFlush(appId);
+      }
       return;
     }
     this.sync.enqueueRelativePath(normalized);
@@ -131,6 +141,15 @@ export class SyncCoordinator {
     this.gitDebounceTimers.set(appId, timer);
   }
 
+  /** Jump this app to the front of the flush queue (manual priority). */
+  bumpFlushQueue(appId: string): boolean {
+    const moved = moveFlushQueueItemToFront(this.flushQueue, appId);
+    if (moved) {
+      this.updateGatewayBusyState("manual");
+    }
+    return moved;
+  }
+
   /** Ordered cross-layer flush — coalesces concurrent calls per appId. */
   async flushNow(
     appId: string,
@@ -140,7 +159,7 @@ export class SyncCoordinator {
     const inflight = this.activeFlushes.get(appId);
     if (inflight) {
       if (trigger === "manual") {
-        boostFlushQueueItemToManual(this.flushQueue, appId);
+        moveFlushQueueItemToFront(this.flushQueue, appId);
         this.updateGatewayBusyState(trigger);
       }
       return inflight;
@@ -182,6 +201,17 @@ export class SyncCoordinator {
     }
     this.flushProcessorRunning = true;
 
+    try {
+      await this.drainFlushQueue();
+    } finally {
+      this.flushProcessorRunning = false;
+      this.updateGatewayBusyState();
+    }
+  }
+
+  private async drainFlushQueue(): Promise<void> {
+    const { yieldEventLoop } = await import("./yieldEventLoop.js");
+
     while (this.flushQueue.length > 0) {
       const item = this.flushQueue.shift();
       if (!item) {
@@ -195,6 +225,31 @@ export class SyncCoordinator {
       console.log(
         `[SyncCoordinator] flushNow appId=${item.appId} trigger=${item.trigger}`,
       );
+
+      if (
+        !this.sync.getManualFlushError(item.appId) &&
+        !this.flushErrors.has(item.appId)
+      ) {
+        if (!(await appNeedsOrderedFlushAsync(this.sync, item.appId))) {
+          const ready = await (
+            await import("./webReady.js")
+          ).webReady(item.appId, this.sync.getPaprDir());
+          console.log(
+            `[SyncCoordinator] Upload skipped for ${item.appId} — already up to date (${item.trigger})`,
+          );
+          item.resolve({
+            appId: item.appId,
+            localMigrationsApplied: [],
+            tursoPushed: false,
+            webReady: ready.ready,
+            webReadyReason: ready.reason,
+            published: false,
+          });
+          this.releaseActiveFlush(item.appId);
+          await yieldEventLoop();
+          continue;
+        }
+      }
 
       try {
         const result = await this.executeFlush(item.appId);
@@ -213,21 +268,25 @@ export class SyncCoordinator {
             webReadyReason: error.message.slice(0, 160),
           });
         } else {
-          this.recordFlushError(item.appId, error, false);
-          this.sync.recordManualFlushError(item.appId, error);
+          if (error instanceof AppOpsConflictError) {
+            const conflictPaths = error.artifacts.map((artifact) => artifact.path);
+            this.recordFlushError(item.appId, error, false, "conflict", conflictPaths);
+            this.sync.recordManualFlushError(item.appId, error, {
+              kind: "conflict",
+              conflictPaths,
+            });
+          } else {
+            this.recordFlushError(item.appId, error, false);
+            this.sync.recordManualFlushError(item.appId, error);
+          }
           item.reject(error);
         }
       } finally {
-        this.currentFlushAppId = null;
-        if (this.activeProgress?.appId === item.appId) {
-          this.activeProgress = null;
-        }
-        this.updateGatewayBusyState();
+        this.releaseActiveFlush(item.appId);
       }
-    }
 
-    this.flushProcessorRunning = false;
-    this.updateGatewayBusyState();
+      await yieldEventLoop();
+    }
   }
 
   private async executeFlush(appId: string): Promise<CoordinatorFlushResult> {
@@ -237,10 +296,37 @@ export class SyncCoordinator {
     });
     this.noteTursoFlushedForApp(appId);
     this.sync.clearManualFlushError(appId);
+    // Mark app folder synced after a successful ordered flush so startup
+    // enqueueAutoUploadApps does not treat the app as perpetually dirty.
+    this.sync.markRelativePathSynced(path.join("apps", appId));
     return result;
   }
 
   private handleAutoFlushFailure(appId: string, error: Error): void {
+    if (error instanceof AppOpsConflictError) {
+      const conflictPaths = error.artifacts.map((artifact) => artifact.path);
+      this.recordFlushError(appId, error, false, "conflict", conflictPaths);
+      this.sync.recordManualFlushError(appId, error, {
+        kind: "conflict",
+        conflictPaths,
+      });
+      console.warn(
+        `[SyncCoordinator] Writer conflict for ${appId} — auto retry skipped:`,
+        conflictPaths.join(", ").slice(0, 160),
+      );
+      return;
+    }
+
+    if (isPermanentWriterClientError(error)) {
+      this.recordFlushError(appId, error, false, "error");
+      this.sync.recordManualFlushError(appId, error);
+      console.warn(
+        `[SyncCoordinator] Permanent upload failure for ${appId} — auto retry skipped:`,
+        error.message.slice(0, 120),
+      );
+      return;
+    }
+
     const state = this.autoFlushRetry.get(appId) ?? { attempts: 0, timer: null };
     state.attempts += 1;
     const exhausted = state.attempts >= AUTO_FLUSH_MAX_RETRIES;
@@ -278,11 +364,15 @@ export class SyncCoordinator {
     appId: string,
     error: Error,
     retryPending: boolean,
+    kind: FlushErrorState["kind"] = "error",
+    conflictPaths?: string[],
   ): void {
     this.flushErrors.set(appId, {
       message: error.message.slice(0, 500),
       at: new Date().toISOString(),
       retryPending,
+      kind,
+      ...(conflictPaths && conflictPaths.length > 0 ? { conflictPaths } : {}),
     });
   }
 
@@ -298,6 +388,17 @@ export class SyncCoordinator {
       clearTimeout(state.timer);
       state.timer = null;
     }
+  }
+
+  /** Clear in-flight flush markers and sync-busy file for one app. */
+  private releaseActiveFlush(appId: string): void {
+    if (this.currentFlushAppId === appId) {
+      this.currentFlushAppId = null;
+    }
+    if (this.activeProgress?.appId === appId) {
+      this.activeProgress = null;
+    }
+    this.updateGatewayBusyState();
   }
 
   private updateGatewayBusyState(trigger?: FlushTrigger): void {
@@ -329,7 +430,13 @@ export class SyncCoordinator {
 
   getFlushError(
     appId: string,
-  ): { message: string; at: string; retryPending: boolean } | null {
+  ): {
+    message: string;
+    at: string;
+    retryPending: boolean;
+    kind?: "conflict" | "error";
+    conflictPaths?: string[];
+  } | null {
     return this.flushErrors.get(appId) ?? null;
   }
 
@@ -416,6 +523,11 @@ export class SyncCoordinator {
           )
         : flushErrors,
     };
+  }
+
+  /** True when this app still has git or Turso work for an ordered flush. */
+  needsOrderedFlush(appId: string): boolean {
+    return appNeedsOrderedFlush(this.sync, appId);
   }
 
   stop(): void {

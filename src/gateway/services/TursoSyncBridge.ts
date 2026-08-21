@@ -17,13 +17,10 @@ import { publishDbChanged } from "../utils/publishJobRunEvents.js";
 import {
   getPaprAppsRoot,
   getPaprJobsRoot,
-  getPaprRoot,
 } from "../../core/utils/paprRoot.js";
-import { readAppHasPendingLocalUpload } from "./cloudSync/pendingLocalUploads.js";
 import {
   discoverTursoLinkedSources,
   findLinkedSourceForJob,
-  isBidirectionalWriteAuthority,
   linkedSourceAlternateKeys,
   linkedSourceSyncKey,
   listLinkedJobIdsForTursoSync,
@@ -33,7 +30,6 @@ import {
 } from "./tursoLinkedSources.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
-  backupLocalJobDb,
   createRemoteClient,
   filterSyncableTables,
   isTursoDatabaseLimitError,
@@ -42,11 +38,6 @@ import {
   isTursoSqliteBindTypeError,
   listUserTables,
   openWritableLocalJobDb,
-  pullTursoToLocalDb,
-  pushLocalDbToTurso,
-  removeLocalJobDbBackup,
-  restoreLocalJobDb,
-  type LocalJobDbBackup,
   type PullResult,
   type PullSourceSyncOptions,
   type PushResult,
@@ -54,27 +45,16 @@ import {
 } from "./tursoSyncBridgeCore.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 import {
-  ensureRemoteTablesFromLocal,
   localRemoteSchemaDriftTables,
-  prepareRemoteTableForSync,
   remoteMissingLocalTables,
   remoteNeedsBootstrap,
 } from "./tursoDeltaSync.js";
-import {
-  applyPendingDatabaseMigrationsToTurso,
-  resolveMigrationRootFromDbPath,
-} from "./jobs/jobMigrationTursoSync.js";
-import { alignMigrationLedgers } from "./jobs/jobMigrationLedgerSync.js";
 import {
   clearStaleDirtyFlagIfClean,
   isJobDbDirty,
   isLinkedSourceDirtyFast,
   loadTursoSyncState,
   localDbHasSyncableData,
-  recordTursoPushSuccess,
-  recordTursoRemoteVersion,
-  recordTursoIndexVersion,
-  resolveTursoPushStateEntry,
 } from "./tursoSyncState.js";
 import {
   reconcileLinkedSourcesFromCloud,
@@ -85,7 +65,6 @@ import {
   type TursoCloudSyncSessionResult,
   type TursoCloudSyncTrigger,
 } from "./tursoSyncSession.js";
-import { bumpSyncIndexForShortName } from "./tursoSyncIndex.js";
 
 export interface JobSyncResult {
   jobId: string;
@@ -491,289 +470,31 @@ export class TursoSyncBridge {
     ) {
       return { status: "skipped", tables: [], reason: "workspace_switch" };
     }
-    const alternateKeys = linkedSourceAlternateKeys(linked);
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
 
-    const stateBeforePush = loadTursoSyncState();
-    const localDirty = isJobDbDirty(syncKey, dbPath, stateBeforePush, alternateKeys);
-    const bidirectional = isBidirectionalWriteAuthority(linked.writeAuthority);
-    const pendingLocalGitUpload =
-      linked.appId !== undefined &&
-      readAppHasPendingLocalUpload(linked.appId, getPaprRoot());
-    let dbBackup: LocalJobDbBackup | undefined;
-
-    try {
-      // Bidirectional (default): merge remote via delta+LWW before push so web rows survive.
-      // Skip pre-push pull while git code/migrations for this app are still local-only —
-      // remote Turso may lag behind unpushed schema and would clobber local agent work.
-      const shouldPreMergePull =
-        (!localDirty || bidirectional) && !pendingLocalGitUpload;
-      if (shouldPreMergePull) {
-        dbBackup = backupLocalJobDb(dbPath);
-        await this.pullJob(syncKey, creds, {
-          ...(localDirty && bidirectional ? { mergeWhileLocalDirty: true } : {}),
-        });
-      } else if (pendingLocalGitUpload) {
-        console.log(
-          `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — ` +
-            `app has pending local git upload (push code first)`,
-        );
-      } else {
-        console.log(
-          `[TursoSyncBridge] Skipping pre-push pull for ${syncKey} — ` +
-            `desktop-only source with local unpushed changes`,
-        );
-      }
-
-      const migrationRoot = resolveMigrationRootFromDbPath(dbPath);
-      const prepRemote = createRemoteClient(creds);
-      const prepLocal = openWritableLocalJobDb(dbPath);
-      try {
-        const localTables = filterSyncableTables(listUserTables(prepLocal));
-        const createdOnRemote = await ensureRemoteTablesFromLocal(
-          prepRemote,
-          prepLocal,
-          localTables,
-        );
-        if (createdOnRemote.length > 0) {
-          console.warn(
-            `[TursoSyncBridge] ${createdOnRemote.length} local table(s) were missing on remote for ${syncKey}: ` +
-              `${createdOnRemote.join(", ")} — created from local schema before migrations`,
-          );
-        }
-
-        if (migrationRoot) {
-          const appliedMigrations = await applyPendingDatabaseMigrationsToTurso(
-            prepRemote,
-            dbPath,
-            migrationRoot,
-          );
-          if (appliedMigrations.length > 0) {
-            console.log(
-              `[TursoSyncBridge] Applied database migrations on Turso for ${syncKey}: ` +
-                appliedMigrations.join(", "),
-            );
-          }
-        }
-      } finally {
-        prepLocal.close();
-        prepRemote.close();
-      }
-
-      const stateAfterPull = loadTursoSyncState();
-      const refreshedState = resolveTursoPushStateEntry(
-        syncKey,
-        dbPath,
-        stateAfterPull,
-        alternateKeys,
-      );
-
-      const repairBootstrap = pushOptions?.force === true;
-
-      if (
-        !canPerformWorkspaceDbWrite(
-          writeGeneration,
-          dbPath,
-          `turso bridge remote push ${syncKey}`,
-        )
-      ) {
-        return { status: "skipped", tables: [], reason: "workspace_switch" };
-      }
-
-      let result = await pushLocalDbToTurso(dbPath, creds, {
-        jobId: syncKey,
-        previousFingerprints: repairBootstrap
-          ? undefined
-          : refreshedState?.tableFingerprints,
-        lastPushedLogId: repairBootstrap ? 0 : refreshedState?.lastPushedLogId,
-        ...(pushOptions?.tableNames?.length
-          ? { tableNames: pushOptions.tableNames }
-          : {}),
-        ...(repairBootstrap ? { force: true } : {}),
-      });
-
-      if (localDbHasSyncableData(dbPath)) {
-        const verifyRemote = createRemoteClient(creds);
-        try {
-          const stillEmpty = await remoteNeedsBootstrap(verifyRemote);
-          if (stillEmpty) {
-            console.warn(
-              `[TursoSyncBridge] Remote empty after push for ${syncKey} — forcing bootstrap`,
-            );
-            result = await pushLocalDbToTurso(dbPath, creds, {
-              jobId: syncKey,
-              force: true,
-              previousFingerprints: undefined,
-              lastPushedLogId: 0,
-              ...(pushOptions?.tableNames?.length
-                ? { tableNames: pushOptions.tableNames }
-                : {}),
-            });
-          } else {
-            const localDb = openWritableLocalJobDb(dbPath);
-            try {
-              const localTables = filterSyncableTables(listUserTables(localDb));
-              const driftCheckTables = pushOptions?.tableNames?.length
-                ? localTables.filter((name) =>
-                    pushOptions.tableNames!.includes(name),
-                  )
-                : localTables;
-              const drifted = await localRemoteSchemaDriftTables(
-                verifyRemote,
-                localDb,
-                driftCheckTables,
-              );
-              if (drifted.length > 0) {
-                console.warn(
-                  `[TursoSyncBridge] Remote schema drift for ${syncKey} on ` +
-                    `${drifted.join(", ")} — applying incremental migration`,
-                );
-                for (const tableName of drifted) {
-                  await prepareRemoteTableForSync(
-                    verifyRemote,
-                    localDb,
-                    tableName,
-                  );
-                }
-                result = await pushLocalDbToTurso(dbPath, creds, {
-                  jobId: syncKey,
-                  previousFingerprints: refreshedState?.tableFingerprints,
-                  lastPushedLogId: refreshedState?.lastPushedLogId,
-                  ...(pushOptions?.tableNames?.length
-                    ? { tableNames: pushOptions.tableNames }
-                    : {}),
-                });
-              }
-            } finally {
-              localDb.close();
-            }
-          }
-        } finally {
-          verifyRemote.close();
-        }
-      }
-
-      if (result.status === "pushed" && result.remoteVersion !== undefined) {
-        recordTursoRemoteVersion(syncKey, dbPath, result.remoteVersion, undefined, {
-          ...(result.lastPushedLogId !== undefined
-            ? { lastPushedLogId: result.lastPushedLogId }
-            : {}),
-          ...(result.remoteLogMaxId !== undefined
-            ? { lastPulledLogId: result.remoteLogMaxId }
-            : {}),
-        });
-      }
-
-      const pushSucceeded =
-        result.status === "pushed" || result.reason === "all_tables_unchanged";
-
-      if (pushSucceeded) {
-        recordTursoPushSuccess(
-          syncKey,
-          dbPath,
-          undefined,
-          result.tableFingerprints,
-          result.lastPushedLogId,
-        );
-
-        void import("./cloudSync/convergenceChecker.js").then(
-          ({ markConvergenceVerifiedForLinkedSource }) => {
-            markConvergenceVerifiedForLinkedSource(linked, getPaprRoot());
-          },
-        );
-
-        void bumpSyncIndexForShortName(
-          (shortName) => this.fetchCredentials(shortName),
-          databaseName,
-        ).then((indexVersion) => {
-          if (indexVersion !== undefined) {
-            recordTursoIndexVersion(syncKey, dbPath, indexVersion);
-          }
-        });
-      }
-
-      return result;
-    } catch (error) {
-      if (dbBackup) {
-        try {
-          restoreLocalJobDb(dbPath, dbBackup);
-          console.warn(
-            `[TursoSyncBridge] Restored local DB after failed push for ${syncKey}`,
-          );
-        } catch (restoreError) {
-          console.error(
-            `[TursoSyncBridge] Failed to restore local DB backup for ${syncKey}:`,
-            (restoreError as Error).message,
-          );
-        }
-      }
-      throw error;
-    } finally {
-      if (dbBackup) {
-        removeLocalJobDbBackup(dbBackup);
-      }
-    }
+    const { pushLinkedSourceViaWorkspaceLog } = await import(
+      "./syncV3/workspaceLogSync.js"
+    );
+    return pushLinkedSourceViaWorkspaceLog(linked, creds, pushOptions);
   }
+
 
   async pullJob(
     jobId: string,
-    credentials?: TursoCredentials,
-    pullOptions?: Omit<PullSourceSyncOptions, "jobId">,
+    _credentials?: TursoCredentials,
+    _pullOptions?: Omit<PullSourceSyncOptions, "jobId">,
   ): Promise<PullResult> {
     const sources = await this.listLinkedSources();
     const linked = findLinkedSourceForJob(sources, jobId);
     if (!linked) {
       return { status: "skipped", reason: "not_linked_to_app" };
     }
-    const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
-    const creds = credentials ?? (await this.fetchCredentials(databaseName));
-    const state = loadTursoSyncState();
-    const syncKey = linkedSourceSyncKey(linked);
-    const alternateKeys = linkedSourceAlternateKeys(linked);
-    const jobState = resolveTursoPushStateEntry(
-      syncKey,
-      linked.dbPath,
-      state,
-      alternateKeys,
+    const { pullLinkedSourceViaWorkspaceLog } = await import(
+      "./syncV3/workspaceLogSync.js"
     );
-    const lastSeenRemoteVersion = jobState?.lastSeenRemoteVersion;
-    const result = await pullTursoToLocalDb(linked.dbPath, creds, {
-      jobId: syncKey,
-      ...(lastSeenRemoteVersion !== undefined ? { lastSeenRemoteVersion } : {}),
-      ...(jobState?.lastPulledLogId !== undefined
-        ? { lastPulledLogId: jobState.lastPulledLogId }
-        : {}),
-      ...pullOptions,
-    });
-    if (result.remoteVersion !== undefined) {
-      recordTursoRemoteVersion(syncKey, linked.dbPath, result.remoteVersion, undefined, {
-        ...(result.lastPulledLogId !== undefined
-          ? { lastPulledLogId: result.lastPulledLogId }
-          : {}),
-      });
-    }
+    const result = await pullLinkedSourceViaWorkspaceLog(linked);
     if (result.status === "pulled") {
-      const migrationRoot = resolveMigrationRootFromDbPath(linked.dbPath);
-      if (migrationRoot && fs.existsSync(linked.dbPath)) {
-        const ledgerRemote = createRemoteClient(creds);
-        try {
-          await alignMigrationLedgers(
-            ledgerRemote,
-            linked.dbPath,
-            migrationRoot,
-          );
-        } finally {
-          ledgerRemote.close();
-        }
-      }
-
-      void import("./cloudSync/convergenceChecker.js").then(
-        ({ markConvergenceVerifiedForLinkedSource }) => {
-          markConvergenceVerifiedForLinkedSource(linked, getPaprRoot());
-        },
-      );
-
       const target: { jobId?: string; dbId?: string } = {};
       if (linked.jobId) {
         target.jobId = linked.jobId;
@@ -869,13 +590,12 @@ export class TursoSyncBridge {
               linkedSourceSyncKey(linked),
               linked.dbPath,
               undefined,
-              pushResult.tableFingerprints,
               pushResult.lastPushedLogId,
             );
           }
         } else if (
           pushResult.reason === "all_tables_unchanged" &&
-          pushResult.tableFingerprints
+          pushResult.lastPushedLogId !== undefined
         ) {
           summary.skipped += 1;
           const linked = findLinkedSourceForJob(await this.listLinkedSources(), syncKey);
@@ -885,7 +605,6 @@ export class TursoSyncBridge {
               linkedSourceSyncKey(linked),
               linked.dbPath,
               undefined,
-              pushResult.tableFingerprints,
               pushResult.lastPushedLogId,
             );
           }
@@ -1094,13 +813,12 @@ export class TursoSyncBridge {
                 linkedSourceSyncKey(linked),
                 linked.dbPath,
                 undefined,
-                pushResult.tableFingerprints,
                 pushResult.lastPushedLogId,
               );
             }
           } else if (
             pushResult.reason === "all_tables_unchanged" &&
-            pushResult.tableFingerprints
+            pushResult.lastPushedLogId !== undefined
           ) {
             summary.skipped += 1;
             const linked = findLinkedSourceForJob(
@@ -1113,7 +831,6 @@ export class TursoSyncBridge {
                 linkedSourceSyncKey(linked),
                 linked.dbPath,
                 undefined,
-                pushResult.tableFingerprints,
                 pushResult.lastPushedLogId,
               );
             }
@@ -1310,36 +1027,16 @@ function sessionResultsToSyncSummary(
   return summary;
 }
 
-async function reconcileFromCloudQuiet(
-  logLabel: string,
-  scope?: TursoCloudSyncScope,
-  options?: {
-    assumeRemoteChanged?: boolean;
-    trigger?: TursoCloudSyncTrigger;
-  },
-): Promise<void> {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
-    return;
-  }
-  try {
-    const summary = await bridge.reconcileFromCloud(scope, options);
-    if (summary.pulled > 0 || summary.pushed > 0) {
-      console.log(
-        `[TursoSyncBridge] ${logLabel}: pulled=${summary.pulled} pushed=${summary.pushed} skipped=${summary.skipped}`,
-      );
-    }
-  } catch (error) {
-    console.warn(
-      `[TursoSyncBridge] ${logLabel} failed:`,
-      (error as Error).message.slice(0, 120),
+/** Materialize workspace log into local SQLite after git pull or startup. */
+export async function syncTursoAfterGitPull(): Promise<void> {
+  const { catchUpAllLinkedSourcesFromWorkspaceLog } = await import(
+    "./syncV3/workspaceLogSync.js"
+  );
+  const appsRoot = getPaprAppsRoot();
+  const applied = await catchUpAllLinkedSourcesFromWorkspaceLog(appsRoot);
+  if (applied > 0) {
+    console.log(
+      `[TursoSyncBridge] Materialized ${applied} workspace log entry(ies) after sync`,
     );
   }
-}
-
-/** Merge remote Turso changes into local SQLite after git pull (workspace updates). */
-export async function syncTursoAfterGitPull(): Promise<void> {
-  await reconcileFromCloudQuiet("Post-git-pull Turso reconcile", undefined, {
-    trigger: "post_git_pull",
-  });
 }

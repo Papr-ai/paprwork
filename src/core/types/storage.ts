@@ -96,6 +96,11 @@ export interface AppSettings {
     providerAuthPreference?: Partial<
       Record<"openai" | "anthropic", "oauth" | "apiKey">
     >;
+    /**
+     * Sidebar weather location source. Unset until the user chooses in the
+     * first-run location prompt.
+     */
+    weatherLocationMode?: "precise" | "approximate";
   };
   /** Anonymous install id for telemetry correlation only; not derived from user data. */
   telemetry: {

@@ -336,6 +336,20 @@ export interface ElectronAPI {
       namespaceName?: string;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
     }) => void) => void;
+    onWorkspaceSwitchStarting: (callback: (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName?: string;
+      namespaceId: string;
+      namespaceName?: string;
+    }) => void) => void;
+    removeWorkspaceSwitchStartingListener: (callback: (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName?: string;
+      namespaceId: string;
+      namespaceName?: string;
+    }) => void) => void;
     onWorkspaceCacheUpdated: (callback: () => void) => void;
     removeWorkspaceCacheUpdatedListener: (callback: () => void) => void;
     listWorkspaceMembers: () => Promise<{

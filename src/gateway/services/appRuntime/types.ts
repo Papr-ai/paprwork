@@ -69,6 +69,17 @@ export interface DbWriteResult {
   source?: string;
 }
 
+export interface DbWriteBatchStatement {
+  sourceId?: string;
+  sql: string;
+  params?: unknown[];
+}
+
+export interface DbWriteBatchResultItem extends DbWriteResult {
+  ok: boolean;
+  error?: string;
+}
+
 export interface DbSchemaTable {
   table: string;
   columns: Array<{ name: string; type: string; pk: boolean }>;

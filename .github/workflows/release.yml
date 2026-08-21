@@ -66,6 +66,12 @@ jobs:
           echo "=== All identities ==="
           security find-identity -v "$KEYCHAIN_PATH"
 
+      - name: Generate packaged gateway env
+        run: node scripts/generate-packaged-gateway-env.mjs
+        env:
+          PAPR_CLOUD_APP_HOST_KEY: ${{ secrets.PAPR_CLOUD_APP_HOST_KEY }}
+          PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
+
       - name: Build Mac distributables
         run: npx electron-builder --mac --arm64 --x64 --publish never
         env:
@@ -115,6 +121,12 @@ jobs:
         env:
           VITE_REQUIRE_PAPR_AUTH: true
 
+      - name: Generate packaged gateway env
+        run: node scripts/generate-packaged-gateway-env.mjs
+        env:
+          PAPR_CLOUD_APP_HOST_KEY: ${{ secrets.PAPR_CLOUD_APP_HOST_KEY }}
+          PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
+
       - name: Build Windows distributables
         run: npx electron-builder --win --publish never
         env:
@@ -148,6 +160,12 @@ jobs:
         run: npm run build
         env:
           VITE_REQUIRE_PAPR_AUTH: true
+
+      - name: Generate packaged gateway env
+        run: node scripts/generate-packaged-gateway-env.mjs
+        env:
+          PAPR_CLOUD_APP_HOST_KEY: ${{ secrets.PAPR_CLOUD_APP_HOST_KEY }}
+          PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
 
       - name: Build Linux distributables
         run: npx electron-builder --linux --publish never

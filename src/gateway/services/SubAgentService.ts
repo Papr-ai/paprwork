@@ -196,18 +196,21 @@ REQUIRED FIRST STEPS:
 
 OUTPUT (use all sections):
 ## Product Brief — job-to-be-done, scope, success criteria
-## Paprwork Architecture — mini-apps (modes), backend handlers, jobs (types, schedules, appIds, dependsOn), shared SQLite schema, data flow
+## Page map — one user task per page; multiple pages per app OK; split apps when workflows/audiences differ (see PRODUCT_ARCHITECT_GUIDE § Apps vs pages)
+## Paprwork Architecture — mini-apps (modes), backend handlers, jobs (types, schedules, appIds, dependsOn), shared SQLite schema + table design (entities, facts, aggregates), data flow
 ### Backend Handlers (REQUIRED subsection)
 List each POST /api/app/backend/:action or explicitly justify skipping ("read-only dashboard with 1-2 SELECTs, no secrets, no external APIs").
 Backend handlers are needed for: 3+ DB operations (CRUD), vault/API keys, external API calls, server-side validation, file operations, multi-table transactions — NOT just SQL.
 If the app calls ANY external API with secrets, those calls MUST go through backend handlers (never fetch() with API keys from the browser).
-## Design System — screens (2-3 sections max), ONE primary action per screen, Liquid Glass + brand
+## Cloud Read Budget — estimated rows read per page; aggregate tables (app_stats) for KPIs, not runtime COUNT(*) from frontend
+## Design System — one task per page, 2-3 sections per page, ONE primary action per page, Liquid Glass + brand
 ## Phased Plan — Phase 1 MVP, later phases
 ## Risks & Open Questions
 ## Recommendation — proceed / simplify / defer
 
 RULES:
-- Prefer 2-3 focused apps over one monolith
+- One user task per page; one related workflow per app; 2-3 apps when jobs/audiences are totally different (not "one more tab")
+- Entity + fact + aggregate tables in one DB — job writes aggregates, app reads rows (see PRODUCT_ARCHITECT_GUIDE § Table design)
 - Agent jobs for LLM work; python/node for fixed pipelines only
 - Every job needs appIds; custom keys via \${KEY_NAME} in command strings only
 - Mini-apps use window.paprAPI (browser context, not Node fs)

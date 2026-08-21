@@ -27,6 +27,12 @@ describe("resolveTursoSourceStatus", () => {
   it("reports pending when local has tables but remote is empty", () => {
     expect(resolveTursoSourceStatus(5, 0, true, false)).toBe("pending");
   });
+
+  it("reports unavailable when remote check failed under load", () => {
+    expect(resolveTursoSourceStatus(20, 0, true, false, false, false, true)).toBe(
+      "unavailable",
+    );
+  });
 });
 
 describe("deriveAppCloudSyncStatus database detail", () => {
@@ -70,7 +76,8 @@ describe("deriveAppCloudSyncStatus database detail", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
     expect(status.databases[0]?.detail).toBe(
-      "Local changes waiting — click Upload now to push to Turso",
+      "Row changes syncing to Turso in the background",
     );
+    expect(status.databases[0]?.rowsSyncing).toBe(true);
   });
 });

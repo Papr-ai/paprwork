@@ -8,7 +8,7 @@ import {
 } from "../src/gateway/services/cloudSync/resolveAppDependentJobs.js";
 
 describe("resolveAppCloudSyncRelativePaths", () => {
-  it("includes data folder when app links registry databases", () => {
+  it("returns only the app folder when app links registry databases", () => {
     const paprDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-sync-paths-"));
     const appId = "app-deck";
     try {
@@ -38,7 +38,6 @@ describe("resolveAppCloudSyncRelativePaths", () => {
       expect(readDataSourceRegistryDbIds(paprDir, appId)).toEqual(["db-2e4a46d7"]);
       expect(resolveAppCloudSyncRelativePaths(paprDir, appId)).toEqual([
         path.join("apps", appId),
-        "data",
       ]);
     } finally {
       fs.rmSync(paprDir, { recursive: true, force: true });

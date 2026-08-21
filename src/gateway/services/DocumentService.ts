@@ -10,6 +10,7 @@
  */
 
 import { promises as fs } from "fs";
+import { markdownPreviewText } from "../../core/utils/markdownPreview.js";
 import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
 import path from "path";
@@ -164,7 +165,7 @@ export class DocumentService {
       updatedAt: now,
       tags: [],
       favorite: false,
-      preview: content.slice(0, 200),
+      preview: markdownPreviewText(content),
       wordCount: wordCount(content),
       createdByAgentId,
       createdByAgentName,
@@ -248,7 +249,7 @@ export class DocumentService {
       tags: updates.tags ?? meta.tags,
       favorite: updates.favorite ?? meta.favorite,
       updatedAt: new Date().toISOString(),
-      preview: content.slice(0, 200),
+      preview: markdownPreviewText(content),
       wordCount: wordCount(content),
     };
 
@@ -275,7 +276,21 @@ export class DocumentService {
 
     for (const id of ids) {
       const meta = await this.readMeta(id);
-      if (meta) metas.push(meta);
+      if (!meta) continue;
+
+      try {
+        const content = await fs.readFile(this.contentPath(id), "utf-8");
+        const preview = markdownPreviewText(content);
+        if (preview !== meta.preview) {
+          meta.preview = preview;
+          meta.wordCount = wordCount(content);
+          await this.writeMeta(id, meta);
+        }
+      } catch {
+        /* content.md may not exist yet */
+      }
+
+      metas.push(meta);
     }
 
     return metas.sort(
@@ -376,7 +391,7 @@ export class DocumentService {
           path.join(versionsDir, `${v.versionId}.md`),
           "utf-8",
         );
-        v.preview = content.slice(0, 200);
+        v.preview = markdownPreviewText(content);
       } catch {
         /* noop */
       }
@@ -401,7 +416,7 @@ export class DocumentService {
         versionId,
         timestamp: versionIdToTimestamp(versionId),
         reason: versionId.split("_").slice(6).join("_") || "save",
-        preview: content.slice(0, 200),
+        preview: markdownPreviewText(content),
         content,
       };
     } catch {
@@ -512,7 +527,7 @@ export class DocumentService {
       updatedAt: fileMtime.toISOString(),
       tags: [],
       favorite: false,
-      preview: content.slice(0, 200).trim(),
+      preview: markdownPreviewText(content),
       wordCount: wordCount(content),
     };
 
@@ -594,7 +609,7 @@ export class DocumentService {
           updatedAt: doc.updatedAt,
           tags: doc.tags ?? [],
           favorite: doc.favorite ?? false,
-          preview: content.slice(0, 200),
+          preview: markdownPreviewText(content),
           wordCount: wordCount(content),
         };
         await this.writeMeta(doc.id, meta);

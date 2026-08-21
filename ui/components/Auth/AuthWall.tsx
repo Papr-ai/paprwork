@@ -173,7 +173,7 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     const hintTimeout = setTimeout(() => {
       trackAuthWallStep("login_timeout");
       setError(
-        "If you completed sign-in but nothing happened, use the verification code shown in your browser.",
+        "You finished signing in in your browser. Go back to Papr Work and tap \"I've signed in — Check now\". If you're still not signed in there, enter the code from your browser.",
       );
     }, 20_000);
 
@@ -312,11 +312,12 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
             <div className="auth-wall-waiting">
               <div className="auth-wall-spinner" />
               <p className="auth-wall-status">
-                Complete sign-in in your browser
+                Finish signing in in your browser, then return to Papr Work
               </p>
               <p className="auth-wall-hint">
-                When finished, your browser may ask to open Papr Work.
-                Click <strong>Open</strong> or <strong>Allow</strong> to continue.
+                If your browser asks to open Papr Work, choose <strong>Open</strong> or{" "}
+                <strong>Allow</strong>. Otherwise, switch back to the Papr Work app on your
+                computer.
               </p>
 
               {showRefresh && (
@@ -334,10 +335,11 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
               {showManualCode && (
                 <div className="auth-wall-manual-code">
                   <div className="auth-wall-manual-code-divider">
-                    <span>or enter verification code</span>
+                    <span>or enter your sign-in code</span>
                   </div>
                   <p className="auth-wall-manual-code-hint">
-                    Look for a 6-character code on the sign-in success page in your browser
+                    On the success page in your browser, copy the 6-character code. Paste it
+                    here if Papr Work hasn&apos;t signed you in yet.
                   </p>
                   <div className="auth-wall-manual-code-input-row">
                     <input

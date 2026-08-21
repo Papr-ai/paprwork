@@ -15,7 +15,7 @@ Desktop Paprwork stores apps, jobs, and workspace data under an **active org/nam
   orgs/{organizationId}/
     namespaces/{namespaceId}/
       apps/{appId}/               ← mini-app source
-      Jobs/{jobId}/               ← job code, logs, data/
+      Jobs/{jobId}/               ← job code, logs, data/ (capital J on disk)
       data/                       ← apps.json, jobs.json, plans.db, databases/
       workspace/                  ← MEMORY.md, BRAND.md, entities/
       documents/
@@ -41,7 +41,8 @@ Desktop Paprwork stores apps, jobs, and workspace data under an **active org/nam
 | **`$PAPR_HOME`** | Active workspace root from `.active-workspace.json` (org/namespace path above) |
 | **`$PAPR_USER_DATA`** | Active runtime dir under `~/.paprwork-v2/orgs/.../namespaces/.../` |
 | **`$PAPR_HOME/apps/{appId}/`** | Mini-app files — prefer `read_app_file` / `edit_app_file` / `edit_app_file_lines` |
-| **`$PAPR_HOME/Jobs/{jobId}/`** | Job folder — prefer `list_jobs` + `edit_file` on returned `dir` |
+| **`$PAPR_HOME/Jobs/{jobId}/`** | Job folder on disk — **always capital J** — prefer `list_jobs` + `edit_file` on returned `dir` |
+| **`jobs/{jobId}/` in app GitHub repo** | Cloud mirror of linked job code (lowercase) — automatic via writer ops; agents never edit this path directly |
 | **`$PAPR_HOME/data/`** | Index files: `apps.json`, `jobs.json`, `plans.db`, `settings.json`, … |
 | **`$PAPR_HOME/Chats/`** | Exported chat transcripts (`.txt`) for grep/bash search |
 

@@ -105,6 +105,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
     const logoutSuccessListenerMap = new WeakMap();
     const namespaceChangedListenerMap = new WeakMap();
     const organizationChangedListenerMap = new WeakMap();
+    const workspaceSwitchStartingListenerMap = new WeakMap();
     const workspaceCacheUpdatedListenerMap = new WeakMap();
 
     return {
@@ -215,6 +216,24 @@ contextBridge.exposeInMainWorld("electronAPI", {
         if (wrapper) {
           ipcRenderer.removeListener("papr:organization-changed", wrapper);
           organizationChangedListenerMap.delete(callback);
+        }
+      },
+
+      onWorkspaceSwitchStarting: (callback) => {
+        const wrapper = (_event, data) => {
+          callback(data);
+          window.dispatchEvent(
+            new CustomEvent("papr-workspace-switch-starting", { detail: data }),
+          );
+        };
+        workspaceSwitchStartingListenerMap.set(callback, wrapper);
+        ipcRenderer.on("papr:workspace-switch-starting", wrapper);
+      },
+      removeWorkspaceSwitchStartingListener: (callback) => {
+        const wrapper = workspaceSwitchStartingListenerMap.get(callback);
+        if (wrapper) {
+          ipcRenderer.removeListener("papr:workspace-switch-starting", wrapper);
+          workspaceSwitchStartingListenerMap.delete(callback);
         }
       },
 

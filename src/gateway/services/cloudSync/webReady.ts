@@ -1,25 +1,17 @@
 /**
- * Cross-layer web-ready gate (SYNC_CONTRACT §12.1, SYNC_ARCHITECTURE_V2 §2.6).
+ * Cross-layer web-ready gate (SYNC_CONTRACT §12.1).
  */
 
 import * as path from "path";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
-import { getCloudSyncService } from "../CloudSyncService.js";
-import { verifyAppPushConvergence } from "./postPushVerify.js";
 import { buildTursoSyncItemsReport } from "../tursoSyncStatus.js";
-import {
-  loadConvergenceStateForApp,
-  runConvergenceCheckForApp,
-} from "./convergenceChecker.js";
 
 export type WebReadyBlockReason =
   | "schema_drift"
   | "turso_pending"
   | "turso_quarantined"
-  | "git_pending"
-  | "git_failed"
-  | "verify_failed"
-  | "convergence_drift";
+  | "writer_pending"
+  | "writer_conflict";
 
 export interface WebReadyResult {
   ready: boolean;
@@ -62,26 +54,18 @@ export async function buildPublishLayerReport(
 
   if (
     options?.publishLive &&
-    (ready.reason === "git_pending" || ready.reason === "git_failed")
+    (ready.reason === "writer_pending" || ready.reason === "writer_conflict")
   ) {
     return {
       status: "synced",
       detail:
-        ready.reason === "git_pending"
-          ? "Live on the web — local git sync is catching up"
+        ready.reason === "writer_pending"
+          ? "Live on the web — writer sync is catching up"
           : (ready.detail ?? "Live on the web"),
     };
   }
 
-  if (ready.reason === "convergence_drift") {
-    return {
-      status: "drift",
-      reason: ready.reason,
-      detail: ready.detail,
-    };
-  }
-
-  if (ready.reason === "verify_failed" || ready.reason === "git_failed") {
+  if (ready.reason === "writer_conflict") {
     return {
       status: "error",
       reason: ready.reason,
@@ -102,38 +86,25 @@ export async function webReady(
 ): Promise<WebReadyResult> {
   const root = paprDir ?? getPaprRoot();
   const appsRoot = path.join(root, "apps");
-  const appPath = `apps/${appId}`;
 
-  const sync = getCloudSyncService();
-  const github = sync?.getGitHubSyncItemsReport() ?? {
-    workspace: [],
-    apps: [],
-    jobs: [],
-    queuedPaths: [],
-    summary: {
-      synced: 0,
-      pending: 0,
-      outdated: 0,
-      failed: 0,
-      updatesAvailable: 0,
-      total: 0,
-    },
-  };
-  const githubItem = github.apps.find((item) => item.relativePath === appPath);
-  if (!githubItem) {
-    return { ready: false, reason: "git_pending", detail: "App not in git sync report" };
-  }
-  if (githubItem.status === "failed") {
-    return { ready: false, reason: "git_failed", detail: githubItem.lastError ?? "Git upload failed" };
-  }
-  if (githubItem.status !== "synced") {
-    return { ready: false, reason: "git_pending", detail: `Git status: ${githubItem.status}` };
+  const { isAppWriterSyncReady } = await import("../syncV3/writerSyncStatus.js");
+  const writerReady = await isAppWriterSyncReady(appId);
+  if (!writerReady.ready) {
+    const isConflict = writerReady.detail?.includes("conflict");
+    return {
+      ready: false,
+      reason: isConflict ? "writer_conflict" : "writer_pending",
+      detail: writerReady.detail,
+    };
   }
 
   const turso = await buildTursoSyncItemsReport(appsRoot, appId);
   const sources = turso.sources.filter((source) => source.appId === appId);
 
   for (const source of sources) {
+    if (source.remoteCheckFailed) {
+      continue;
+    }
     if (source.schemaDrift) {
       return {
         ready: false,
@@ -155,36 +126,6 @@ export async function webReady(
         detail: `${source.alias}: ${source.status}`,
       };
     }
-  }
-
-  const verify = await verifyAppPushConvergence(appId, root);
-  if (!verify.ok) {
-    return {
-      ready: false,
-      reason: "verify_failed",
-      detail: verify.errors.slice(0, 2).join("; "),
-    };
-  }
-
-  const cachedConvergence = loadConvergenceStateForApp(appId, root);
-  if (cachedConvergence?.driftTables && cachedConvergence.driftTables.length > 0) {
-    // Cached drift may be stale (e.g. after all_tables_unchanged push). Re-verify live.
-    const refreshed = await runConvergenceCheckForApp(appId, appsRoot, root);
-    const driftTables = refreshed.flatMap((entry) => entry.driftTables);
-    if (driftTables.length > 0) {
-      return {
-        ready: false,
-        reason: "convergence_drift",
-        detail: `Drift in ${driftTables.join(", ")}`,
-      };
-    }
-  }
-
-  if (verify.warnings.length > 0) {
-    return {
-      ready: true,
-      detail: verify.warnings[0],
-    };
   }
 
   return { ready: true };

@@ -100,13 +100,25 @@ export function workspaceSwitchPhaseLabel(
 }
 
 export function formatWorkspaceSwitchTarget(snapshot: WorkspaceSwitchOverlaySnapshot): string | null {
-  const parts = [snapshot.organizationName, snapshot.namespaceName].filter(
+  return formatActiveWorkspaceLabel({
+    organizationName: snapshot.organizationName,
+    namespaceName: snapshot.namespaceName,
+  });
+}
+
+export function formatActiveWorkspaceLabel(input: {
+  organizationName?: string;
+  namespaceName?: string;
+  workspaceName?: string;
+}): string | null {
+  const parts = [input.organizationName, input.namespaceName].filter(
     (value): value is string => Boolean(value?.trim()),
   );
-  if (parts.length === 0) {
-    return null;
+  if (parts.length > 0) {
+    return parts.join(" · ");
   }
-  return parts.join(" · ");
+  const workspaceName = input.workspaceName?.trim();
+  return workspaceName || null;
 }
 
 export function useWorkspaceSwitchOverlay(): WorkspaceSwitchOverlaySnapshot {

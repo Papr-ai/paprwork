@@ -22,11 +22,11 @@ export async function notifySyncedAppRevisions(
 
   for (const appId of syncedAppIds) {
     try {
-      const config = await publish.getPublishConfig(appId);
-      if (!config.enabled) {
+      const status = await publish.getCloudPublishStatus(appId);
+      if (!status.published || !status.shareUrl) {
         continue;
       }
-      const route = parsePublishedAppRoute(config.shareUrl);
+      const route = parsePublishedAppRoute(status.shareUrl);
       if (!route) {
         continue;
       }

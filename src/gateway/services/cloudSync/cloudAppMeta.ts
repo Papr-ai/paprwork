@@ -15,12 +15,17 @@ import {
 
 export const PAPR_APP_META_RELATIVE_PATH = "__papr__/app-meta.json";
 
-export interface CloudAppMetaFile {
+/** Git-tracked fields only — no updatedAt (avoids pointless writer churn). */
+export interface CloudAppMetaRevision {
   schemaVersion: "1.0.0";
   distRevision: string;
   /** Highest executable migration id across linked DBs (excludes baseline markers). */
   requiredSchemaVersion: string | null;
-  updatedAt: string;
+}
+
+export interface CloudAppMetaFile extends CloudAppMetaRevision {
+  /** Mongo/API only — omitted from __papr__/app-meta.json on disk. */
+  updatedAt?: string;
 }
 
 function listAppliedMigrationIds(dbPath: string): string[] {
@@ -35,11 +40,45 @@ function listAppliedMigrationIds(dbPath: string): string[] {
   }
 }
 
+export function cloudAppMetaRevisionEqual(
+  a: CloudAppMetaRevision,
+  b: CloudAppMetaRevision,
+): boolean {
+  return (
+    a.schemaVersion === b.schemaVersion &&
+    a.distRevision === b.distRevision &&
+    a.requiredSchemaVersion === b.requiredSchemaVersion
+  );
+}
+
+export function serializeCloudAppMetaForGit(revision: CloudAppMetaRevision): string {
+  return `${JSON.stringify(revision, null, 2)}\n`;
+}
+
+export function parseCloudAppMetaRevision(raw: string): CloudAppMetaRevision | null {
+  try {
+    const parsed = JSON.parse(raw) as Partial<CloudAppMetaFile>;
+    if (parsed?.schemaVersion !== "1.0.0") {
+      return null;
+    }
+    if (typeof parsed.distRevision !== "string") {
+      return null;
+    }
+    return {
+      schemaVersion: "1.0.0",
+      distRevision: parsed.distRevision,
+      requiredSchemaVersion: parsed.requiredSchemaVersion ?? null,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function buildCloudAppMeta(
   appDir: string,
   appId: string,
   appsRootDir: string,
-): Promise<CloudAppMetaFile> {
+): Promise<CloudAppMetaRevision> {
   const distPath = path.join(appDir, "dist", "app.js");
   let distRevision: string;
   if (fs.existsSync(distPath)) {
@@ -66,7 +105,6 @@ export async function buildCloudAppMeta(
     schemaVersion: "1.0.0",
     distRevision,
     requiredSchemaVersion: requiredSchemaVersionFromMigrationIds(migrationIds),
-    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -75,27 +113,43 @@ export async function writeCloudAppMeta(
   appId: string,
 ): Promise<CloudAppMetaFile> {
   const appDir = path.join(paprDir, "apps", appId);
-  const meta = await buildCloudAppMeta(appDir, appId, path.join(paprDir, "apps"));
+  const revision = await buildCloudAppMeta(appDir, appId, path.join(paprDir, "apps"));
+  const existing = readCloudAppMeta(appDir);
+  if (existing) {
+    const existingRevision = {
+      schemaVersion: existing.schemaVersion,
+      distRevision: existing.distRevision,
+      requiredSchemaVersion: existing.requiredSchemaVersion,
+    };
+    if (cloudAppMetaRevisionEqual(existingRevision, revision)) {
+      return existing;
+    }
+  }
+
   const metaDir = path.join(appDir, "__papr__");
   fs.mkdirSync(metaDir, { recursive: true });
   fs.writeFileSync(
     path.join(metaDir, "app-meta.json"),
-    `${JSON.stringify(meta, null, 2)}\n`,
+    serializeCloudAppMetaForGit(revision),
     "utf8",
   );
-  return meta;
+
+  const mongoMeta: CloudAppMetaFile = {
+    ...revision,
+    updatedAt: new Date().toISOString(),
+  };
+
+  void import("../syncV3/MetadataRegistryClient.js")
+    .then(({ uploadAppRuntimeMetaToCloud }) =>
+      uploadAppRuntimeMetaToCloud(appId, mongoMeta),
+    )
+    .catch(() => {});
+
+  return mongoMeta;
 }
 
 export function readCloudAppMetaFromContent(raw: string): CloudAppMetaFile | null {
-  try {
-    const parsed = JSON.parse(raw) as CloudAppMetaFile;
-    if (parsed?.schemaVersion === "1.0.0") {
-      return parsed;
-    }
-  } catch {
-    /* invalid */
-  }
-  return null;
+  return parseCloudAppMetaRevision(raw);
 }
 
 export function readCloudAppMeta(appDir: string): CloudAppMetaFile | null {

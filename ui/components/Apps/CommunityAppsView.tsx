@@ -106,6 +106,26 @@ function namespaceSummary(
   return `${parts.join(" · ")} in ${label}`;
 }
 
+function catalogSummaryLine(
+  scope: CommunityCatalogScope,
+  catalog: CommunityCatalog,
+  namespaceName: string | null | undefined,
+  refreshing: boolean,
+  fallbackSuffix: string,
+): string | null {
+  if (scope === "namespace") {
+    let text = namespaceSummary(catalog.entries, namespaceName);
+    if (catalog.fallbackUsed) {
+      text += fallbackSuffix;
+    }
+    if (refreshing) {
+      text += " · updating…";
+    }
+    return text;
+  }
+  return refreshing ? "Updating…" : null;
+}
+
 /** Legacy shape for ImportSetupWizard */
 interface OssRegistryEntry {
   bundleId: string;
@@ -602,6 +622,9 @@ export function CommunityAppsView({
 
   const filteredEntries =
     catalog?.entries.filter((entry) => {
+      if (scope === "global" && !entry.codeInstallable) {
+        return false;
+      }
       if (scope !== "global" && entry.source === "opensource") {
         return false;
       }
@@ -706,17 +729,18 @@ export function CommunityAppsView({
               {scope === "namespace" ? "Team apps" : "Community apps"}
             </span>
             <div className="apps-view__library-toolbar-actions">
-              {catalog ? (
-                <span className="apps-view__library-count">
-                  {scope === "namespace"
-                    ? namespaceSummary(catalog.entries, namespaceName)
-                    : `${catalog.sources.cloud} cloud · ${catalog.sources.opensource} open source`}
-                  {catalog.fallbackUsed && scope === "namespace"
-                    ? " · some from global"
-                    : null}
-                  {refreshing ? " · updating…" : null}
-                </span>
-              ) : null}
+              {catalog ? (() => {
+                const summary = catalogSummaryLine(
+                  scope,
+                  catalog,
+                  namespaceName,
+                  refreshing,
+                  " · some from global",
+                );
+                return summary ? (
+                  <span className="apps-view__library-count">{summary}</span>
+                ) : null;
+              })() : null}
             </div>
           </div>
         ) : null
@@ -754,16 +778,18 @@ export function CommunityAppsView({
         </div>
       )}
 
-      {!hideToolbar && catalog ? (
-        <p className="community-apps__summary">
-          {scope === "namespace"
-            ? namespaceSummary(catalog.entries, namespaceName)
-            : `${catalog.sources.cloud} cloud · ${catalog.sources.opensource} open source`}
-          {catalog.fallbackUsed && scope === "namespace"
-            ? " · some results from global catalog"
-            : null}
-        </p>
-      ) : null}
+      {!hideToolbar && catalog ? (() => {
+        const summary = catalogSummaryLine(
+          scope,
+          catalog,
+          namespaceName,
+          refreshing,
+          " · some results from global catalog",
+        );
+        return summary ? (
+          <p className="community-apps__summary">{summary}</p>
+        ) : null;
+      })() : null}
 
       {installToast ? (
         <p className="community-apps__summary">{installToast}</p>
@@ -1153,7 +1179,7 @@ function CommunityAppCard({
                 className="community-card__action-btn"
                 onClick={onOpenLive}
               >
-                Open web app
+                Preview
               </button>
             ) : null}
             {showInstall ? (

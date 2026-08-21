@@ -11,6 +11,8 @@ import type {
 import { formatLastUploadedAt } from "../../utils/appCloudSyncStatus";
 import {
   buildMergeReviewAgentPrompt,
+  buildSchemaDriftAgentPrompt,
+  buildWriterConflictAgentPrompt,
   openCloudSyncAgentChat,
 } from "../../utils/openCloudSyncAgentChat";
 import { AUTO_UPLOAD_TOGGLE_LABEL } from "../../utils/appUploadMode";
@@ -26,6 +28,7 @@ export interface WebSyncPopoverProps {
   applyingUpdates: boolean;
   syncActionNeeded: boolean;
   onPushNow: () => void;
+  onBumpQueue?: () => void;
   onPullUpdates: () => void;
   onApplyRemoteUpdates: () => void;
   /** Per-app: upload to web automatically vs Upload now only */
@@ -100,6 +103,7 @@ export function WebSyncPopover({
   applyingUpdates,
   syncActionNeeded,
   onPushNow,
+  onBumpQueue,
   onPullUpdates,
   onApplyRemoteUpdates,
   autoUploadEnabled,
@@ -112,13 +116,22 @@ export function WebSyncPopover({
 }: WebSyncPopoverProps) {
   const busy = pushing || pulling || applyingUpdates || loading || refreshing || autoUploadSaving;
   const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
+  const writerConflict = status?.writerConflict === true;
   const metadataSync = status?.gitRemoteMetadataSync === true;
   const activelyUploading = status?.overall === "uploading";
+  const queuedForUpload = status?.uploadQueued === true;
   const showMergeReview = remoteReviewNeeded && !metadataSync;
+  const showWriterConflict = writerConflict && !showMergeReview && !metadataSync;
+  const schemaDriftBlocked =
+    status.hasSchemaDrift ||
+    (status.publishDetail?.toLowerCase().includes("schema") ?? false);
+  const showSchemaDriftHelp =
+    schemaDriftBlocked && !showMergeReview && !showWriterConflict && !metadataSync;
   const showAutoUploadToggle =
     onAutoUploadChange != null &&
     status?.overall !== "disabled" &&
     !showMergeReview &&
+    !showWriterConflict &&
     !metadataSync;
   const popoverClassName = className
     ? `mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked ${className}`
@@ -163,11 +176,9 @@ export function WebSyncPopover({
   const showHeadline =
     !showMergeReview &&
     !metadataSync &&
-    (refreshing && !activelyUploading
-      ? true
-      : status.summaryLine.trim().length > 0);
+    status.summaryLine.trim().length > 0;
   const headlineText =
-    refreshing && !activelyUploading
+    refreshing && !activelyUploading && !queuedForUpload && !status.summaryLine.trim()
       ? "Checking for updates…"
       : status.summaryLine;
 
@@ -197,7 +208,7 @@ export function WebSyncPopover({
   for (const db of status.databases) {
     if (isActivePhase(db.phase)) {
       statusRows.push({
-        key: db.jobId,
+        key: `${db.alias}:${db.jobId ?? "registry"}`,
         icon: rowIcon(db.phase),
         label: db.alias,
         detail: shortDetail(db.detail),
@@ -231,7 +242,6 @@ export function WebSyncPopover({
   if (
     status.uploadStatus &&
     status.uploadStatus !== "idle" &&
-    status.uploadStatus !== "waiting" &&
     status.uploadLabel
   ) {
     const uploadText = status.uploadDetail
@@ -244,8 +254,10 @@ export function WebSyncPopover({
           ? "◷"
           : status.uploadStatus === "failed"
             ? "✕"
-            : "○",
-      label: "Progress",
+            : status.uploadQueued
+              ? "○"
+              : "○",
+      label: status.uploadQueued ? "Queue" : "Progress",
       detail: shortDetail(uploadText, 88),
     });
   }
@@ -254,6 +266,7 @@ export function WebSyncPopover({
     statusRows.length === 0 &&
     status.overall === "synced" &&
     !showMergeReview &&
+    !showWriterConflict &&
     !metadataSync;
 
   return (
@@ -278,6 +291,18 @@ export function WebSyncPopover({
             <p className="mini-app-publish-bar__sync-remote-banner-body">{commitSummary}</p>
           ) : null}
         </div>
+      ) : showWriterConflict ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--review"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Upload conflict — cloud repo changed
+          </p>
+          <p className="mini-app-publish-bar__sync-remote-banner-body">
+            Get updates or ask the agent to reconcile remote changes, then upload again.
+          </p>
+        </div>
       ) : metadataSync ? (
         <div
           className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
@@ -301,6 +326,13 @@ export function WebSyncPopover({
         {status.overall === "disabled" ? (
           <p className="mini-app-publish-bar__sync-popover-hint">
             Turn on cloud sync in Settings.
+          </p>
+        ) : null}
+        {!autoUploadEnabled && status.overall !== "synced" && status.overall !== "disabled" ? (
+          <p className="mini-app-publish-bar__sync-popover-hint">
+            Upload is manual for this app — click <strong>Upload now</strong> when you want
+            local changes on the web. After sharing changes, wait until this panel shows
+            synced before copying the external link.
           </p>
         ) : null}
         {showAutoUploadToggle ? (
@@ -343,7 +375,82 @@ export function WebSyncPopover({
       </div>
 
       <div className="mini-app-publish-bar__sync-popover-actions">
-        {showMergeReview ? (
+        {showWriterConflict ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildWriterConflictAgentPrompt({
+                    appId,
+                    error: status.codeLastError ?? error,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync}
+              onClick={() => void onPushNow()}
+            >
+              {activelyUploading || pushing ? "Uploading…" : "Upload now"}
+            </button>
+          </>
+        ) : showSchemaDriftHelp ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildSchemaDriftAgentPrompt({
+                    appId,
+                    databases: status.databases.filter((db) => db.schemaDrift),
+                    publishDetail: status.publishDetail,
+                    error,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync}
+              onClick={() => void onPushNow()}
+            >
+              {activelyUploading || pushing ? "Uploading…" : "Upload now"}
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            {error ? (
+              <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+                Upload did not clear schema drift — try Ask agent to diagnose.
+              </p>
+            ) : null}
+          </>
+        ) : showMergeReview ? (
           <>
             <button
               type="button"
@@ -387,15 +494,35 @@ export function WebSyncPopover({
           </>
         ) : (
           <>
-            {(syncActionNeeded || pushing) && (
-              <button
-                type="button"
-                className="mini-app-publish-bar__sync-popover-btn"
-                disabled={busy || metadataSync}
-                onClick={() => void onPushNow()}
-              >
-                {pushing ? "Uploading…" : "Upload now"}
-              </button>
+            {(syncActionNeeded || pushing || queuedForUpload) && (
+              <>
+                {queuedForUpload && onBumpQueue ? (
+                  <button
+                    type="button"
+                    className="mini-app-publish-bar__sync-popover-btn"
+                    disabled={busy || metadataSync}
+                    onClick={() => void onBumpQueue()}
+                  >
+                    Move to front
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={`mini-app-publish-bar__sync-popover-btn${
+                    queuedForUpload && onBumpQueue
+                      ? " mini-app-publish-bar__sync-popover-btn--secondary"
+                      : ""
+                  }`}
+                  disabled={busy || metadataSync}
+                  onClick={() => void onPushNow()}
+                >
+                  {activelyUploading || pushing
+                    ? "Uploading…"
+                    : queuedForUpload
+                      ? "Upload now"
+                      : "Upload now"}
+                </button>
+              </>
             )}
             <button
               type="button"

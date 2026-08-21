@@ -2,37 +2,51 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { CloudSyncService } from "../src/gateway/services/CloudSyncService.js";
 
 const mockApplyLocalMigrations = vi.fn();
-const mockPushAppLinkedSources = vi.fn();
-const mockVerifyAppPushConvergence = vi.fn();
-const mockAssertAppPushVerified = vi.fn();
-const mockRunConvergenceCheckForApp = vi.fn();
+const mockCatchUpLinkedSource = vi.fn();
+const mockEnsureReplicaReady = vi.fn();
 const mockWebReady = vi.fn();
+const mockDiscoverTursoLinkedSources = vi.fn();
 
 vi.mock("../src/gateway/services/cloudSync/applyLocalMigrationsForApp.js", () => ({
   applyLocalMigrationsForApp: (...args: unknown[]) =>
     mockApplyLocalMigrations(...args),
 }));
 
-vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
-  getTursoSyncBridge: () => ({
-    pushAppLinkedSources: mockPushAppLinkedSources,
-  }),
+vi.mock("../src/gateway/services/tursoLinkedSources.js", () => ({
+  discoverTursoLinkedSources: (...args: unknown[]) =>
+    mockDiscoverTursoLinkedSources(...args),
+  linkedSourceSyncKey: () => "job-1",
 }));
 
-vi.mock("../src/gateway/services/cloudSync/postPushVerify.js", () => ({
-  verifyAppPushConvergence: (...args: unknown[]) =>
-    mockVerifyAppPushConvergence(...args),
-  assertAppPushVerified: (...args: unknown[]) =>
-    mockAssertAppPushVerified(...args),
+vi.mock("../src/gateway/services/tursoPushScheduler.js", () => ({
+  cancelScheduledTursoPushForSyncKeys: vi.fn(),
+  awaitTursoPushInFlightForSyncKeys: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../src/gateway/services/cloudSync/convergenceChecker.js", () => ({
-  runConvergenceCheckForApp: (...args: unknown[]) =>
-    mockRunConvergenceCheckForApp(...args),
+vi.mock("../src/gateway/services/syncV3/ensureReplicaReady.js", () => ({
+  ensureReplicaReady: (...args: unknown[]) => mockEnsureReplicaReady(...args),
+}));
+
+vi.mock("../src/gateway/services/syncV3/workspaceLogSync.js", () => ({
+  catchUpLinkedSourceFromWorkspaceLog: (...args: unknown[]) =>
+    mockCatchUpLinkedSource(...args),
 }));
 
 vi.mock("../src/gateway/services/cloudSync/webReady.js", () => ({
   webReady: (...args: unknown[]) => mockWebReady(...args),
+}));
+
+const mockFinalizeAppRepoMutation = vi.fn();
+const mockSyncPublishedAppCatalogLayer = vi.fn();
+
+vi.mock("../src/gateway/services/syncV3/finalizeAppRepoMutation.js", () => ({
+  finalizeAppRepoMutation: (...args: unknown[]) =>
+    mockFinalizeAppRepoMutation(...args),
+}));
+
+vi.mock("../src/gateway/services/syncV3/syncPublishedAppCatalogLayer.js", () => ({
+  syncPublishedAppCatalogLayer: (...args: unknown[]) =>
+    mockSyncPublishedAppCatalogLayer(...args),
 }));
 
 import { flushAppNow } from "../src/gateway/services/cloudSync/flushAppNow.js";
@@ -40,28 +54,32 @@ import { flushAppNow } from "../src/gateway/services/cloudSync/flushAppNow.js";
 describe("flushAppNow", () => {
   const sync = {
     getPaprDir: () => "/tmp/papr",
-    pushGitNow: vi.fn().mockResolvedValue(undefined),
     markAppForPostFlushHooks: vi.fn(),
     runPostFlushHooks: vi.fn().mockResolvedValue(undefined),
-    runGit: vi.fn(),
   } as unknown as CloudSyncService;
+
+  const linkedSource = {
+    appId: "app-1",
+    jobId: "job-1",
+    dbPath: "/tmp/papr/Jobs/job-1/data/data.db",
+    alias: "main",
+  };
 
   beforeEach(() => {
     mockApplyLocalMigrations.mockResolvedValue([]);
-    mockPushAppLinkedSources.mockResolvedValue({
-      pushed: 1,
-      skipped: 0,
-      failed: 0,
-      results: [],
+    mockDiscoverTursoLinkedSources.mockResolvedValue([linkedSource]);
+    mockCatchUpLinkedSource.mockResolvedValue(0);
+    mockEnsureReplicaReady.mockResolvedValue({
+      schemaShipped: 1,
+      rowsShipped: 1,
+      lastSyncLogId: 3,
     });
-    mockVerifyAppPushConvergence.mockResolvedValue({
-      ok: true,
-      errors: [],
-      warnings: [],
-      turso: { ok: true, sources: [], errors: [] },
+    mockFinalizeAppRepoMutation.mockResolvedValue({
+      appId: "app-1",
+      writerPushed: true,
+      catalogSynced: false,
     });
-    mockAssertAppPushVerified.mockResolvedValue(undefined);
-    mockRunConvergenceCheckForApp.mockResolvedValue(undefined);
+    mockSyncPublishedAppCatalogLayer.mockResolvedValue({ catalogSynced: true });
     mockWebReady.mockResolvedValue({ ready: true });
   });
 
@@ -69,25 +87,48 @@ describe("flushAppNow", () => {
     vi.clearAllMocks();
   });
 
-  it("runs Turso push before git and skips post-sync hooks during git", async () => {
+  it("runs ensureReplicaReady before catch-up and writer ops", async () => {
     const callOrder: string[] = [];
-    mockPushAppLinkedSources.mockImplementation(async () => {
-      callOrder.push("turso");
-      return { pushed: 1, skipped: 0, failed: 0, results: [] };
+    mockEnsureReplicaReady.mockImplementation(async () => {
+      callOrder.push("ensure-replica");
+      return { schemaShipped: 1, rowsShipped: 1, lastSyncLogId: 3 };
     });
-    vi.mocked(sync.pushGitNow).mockImplementation(async () => {
-      callOrder.push("git");
+    mockCatchUpLinkedSource.mockImplementation(async () => {
+      callOrder.push("log-catch-up");
+      return 0;
     });
-    mockAssertAppPushVerified.mockImplementation(async () => {
-      callOrder.push("verify");
+    mockFinalizeAppRepoMutation.mockImplementation(async () => {
+      callOrder.push("writer");
+      return {
+        appId: "app-1",
+        writerPushed: true,
+        catalogSynced: false,
+      };
+    });
+    mockSyncPublishedAppCatalogLayer.mockImplementation(async () => {
+      callOrder.push("catalog");
+      return { catalogSynced: true };
     });
 
     await flushAppNow(sync, "app-1");
 
-    expect(callOrder).toEqual(["turso", "git", "verify"]);
-    expect(sync.pushGitNow).toHaveBeenCalledWith({
-      appId: "app-1",
-      skipPostSyncHooks: true,
+    expect(callOrder).toEqual([
+      "ensure-replica",
+      "log-catch-up",
+      "writer",
+      "catalog",
+    ]);
+    expect(mockFinalizeAppRepoMutation).toHaveBeenCalledWith(
+      "/tmp/papr",
+      "app-1",
+      expect.objectContaining({
+        source: "desktop-flush",
+        sync,
+        skipCatalog: true,
+      }),
+    );
+    expect(mockSyncPublishedAppCatalogLayer).toHaveBeenCalledWith("app-1", {
+      afterWriterChange: true,
     });
     expect(sync.runPostFlushHooks).toHaveBeenCalled();
   });
@@ -104,5 +145,34 @@ describe("flushAppNow", () => {
     expect(result.webReady).toBe(false);
     expect(result.published).toBe(false);
     expect(sync.runPostFlushHooks).not.toHaveBeenCalled();
+    expect(mockSyncPublishedAppCatalogLayer).not.toHaveBeenCalled();
+  });
+
+  it("does not mark published when catalog sync returns an error", async () => {
+    mockSyncPublishedAppCatalogLayer.mockResolvedValue({
+      catalogSynced: false,
+      catalogError: "memory 503",
+    });
+
+    const result = await flushAppNow(sync, "app-1");
+
+    expect(result.webReady).toBe(true);
+    expect(result.published).toBe(false);
+    expect(result.catalogError).toBe("memory 503");
+    expect(sync.runPostFlushHooks).not.toHaveBeenCalled();
+  });
+
+  it("passes afterWriterChange=false when writer had no file changes", async () => {
+    mockFinalizeAppRepoMutation.mockResolvedValue({
+      appId: "app-1",
+      writerPushed: false,
+      catalogSynced: false,
+    });
+
+    await flushAppNow(sync, "app-1");
+
+    expect(mockSyncPublishedAppCatalogLayer).toHaveBeenCalledWith("app-1", {
+      afterWriterChange: false,
+    });
   });
 });

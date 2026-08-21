@@ -14,173 +14,225 @@ interface WeatherData {
   useFahrenheit: boolean;
 }
 
+interface GeoCoordinates {
+  lat: number;
+  lon: number;
+}
+
+interface IpGeolocationData {
+  latitude: number;
+  longitude: number;
+  city: string;
+  region?: string;
+  country_code?: string;
+}
+
+const FALLBACK_COORDS: GeoCoordinates = { lat: 40.7128, lon: -74.006 };
+const FALLBACK_LOCATION = "New York";
+const PRECISE_LOCATION_FAILED_KEY = "papr.weather.preciseLocationFailed";
+
+const fahrenheitCountries = new Set(["US", "PR", "GU", "VI", "AS", "MP"]);
+
+const weatherConditions: Record<number, string> = {
+  0: "Clear",
+  1: "Mainly Clear",
+  2: "Partly Cloudy",
+  3: "Overcast",
+  45: "Foggy",
+  48: "Foggy",
+  51: "Drizzle",
+  53: "Drizzle",
+  55: "Drizzle",
+  61: "Rain",
+  63: "Rain",
+  65: "Heavy Rain",
+  71: "Snow",
+  73: "Snow",
+  75: "Heavy Snow",
+  95: "Thunderstorm",
+};
+
+function usesFahrenheit(countryCode: string): boolean {
+  return fahrenheitCountries.has(countryCode.toUpperCase());
+}
+
+async function getReverseGeocode(
+  lat: number,
+  lon: number,
+): Promise<{ name: string; countryCode: string }> {
+  try {
+    const response = await fetch(
+      `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
+    );
+    const data = await response.json();
+    const name =
+      data.address?.city ||
+      data.address?.town ||
+      data.address?.village ||
+      `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`;
+    const countryCode = (data.address?.country_code || "").toUpperCase();
+    return { name, countryCode };
+  } catch {
+    return { name: `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`, countryCode: "" };
+  }
+}
+
+async function fetchWeatherForecast(
+  lat: number,
+  lon: number,
+  locationName: string,
+  useFahrenheit: boolean,
+): Promise<WeatherData> {
+  const unit = useFahrenheit ? "fahrenheit" : "celsius";
+  const response = await fetch(
+    `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weathercode&temperature_unit=${unit}&timezone=auto`,
+  );
+  const data = await response.json();
+  const weatherCode = data.current.weathercode as number;
+
+  return {
+    temperature: Math.round(data.current.temperature_2m),
+    condition: weatherConditions[weatherCode] || "Clear",
+    location: locationName,
+    useFahrenheit,
+  };
+}
+
+async function fetchWeatherFromIp(): Promise<WeatherData> {
+  const response = await gateway.send("geolocation:get-from-ip");
+  if (!response.success || !response.data) {
+    throw new Error(response.error || "IP geolocation failed");
+  }
+
+  const ipData = response.data as IpGeolocationData;
+  const locationName = ipData.region
+    ? `${ipData.city}, ${ipData.region}`
+    : ipData.city;
+  const countryCode = (ipData.country_code || "").toUpperCase();
+
+  return fetchWeatherForecast(
+    ipData.latitude,
+    ipData.longitude,
+    locationName,
+    usesFahrenheit(countryCode),
+  );
+}
+
+function logGeolocationFallback(error: GeolocationPositionError): void {
+  if (error.code === error.PERMISSION_DENIED) {
+    console.log(
+      "[Weather] Location permission not granted, using approximate location",
+    );
+    return;
+  }
+
+  if (error.code === error.TIMEOUT) {
+    console.log("[Weather] Location timed out, using approximate location");
+    return;
+  }
+
+  console.log("[Weather] Location unavailable, using approximate location");
+}
+
+async function tryBrowserGeolocation(): Promise<GeoCoordinates | null> {
+  if (!("geolocation" in navigator)) {
+    return null;
+  }
+
+  if (sessionStorage.getItem(PRECISE_LOCATION_FAILED_KEY) === "1") {
+    return null;
+  }
+
+  return new Promise((resolve) => {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        sessionStorage.removeItem(PRECISE_LOCATION_FAILED_KEY);
+        resolve({
+          lat: position.coords.latitude,
+          lon: position.coords.longitude,
+        });
+      },
+      (error) => {
+        logGeolocationFallback(error);
+        if (
+          error.code === error.TIMEOUT ||
+          error.code === error.POSITION_UNAVAILABLE
+        ) {
+          sessionStorage.setItem(PRECISE_LOCATION_FAILED_KEY, "1");
+        }
+        resolve(null);
+      },
+      {
+        enableHighAccuracy: false,
+        timeout: 10_000,
+        maximumAge: 300_000,
+      },
+    );
+  });
+}
+
+async function resolveWeatherData(): Promise<WeatherData> {
+  const browserCoords = await tryBrowserGeolocation();
+  if (browserCoords) {
+    const geo = await getReverseGeocode(browserCoords.lat, browserCoords.lon);
+    return fetchWeatherForecast(
+      browserCoords.lat,
+      browserCoords.lon,
+      geo.name,
+      usesFahrenheit(geo.countryCode),
+    );
+  }
+
+  try {
+    return await fetchWeatherFromIp();
+  } catch {
+    console.log("[Weather] Using fallback location:", FALLBACK_LOCATION);
+    return fetchWeatherForecast(
+      FALLBACK_COORDS.lat,
+      FALLBACK_COORDS.lon,
+      FALLBACK_LOCATION,
+      true,
+    );
+  }
+}
+
 export function WeatherWidget() {
   const [weather, setWeather] = useState<WeatherData | null>(null);
   const [date, setDate] = useState<Date>(new Date());
 
   useEffect(() => {
-    // Update date every minute
     const dateInterval = setInterval(() => {
       setDate(new Date());
-    }, 60000);
+    }, 60_000);
 
-    // Reverse geocode to get location name
-    const getReverseGeocode = async (
-      lat: number,
-      lon: number,
-    ): Promise<{ name: string; countryCode: string }> => {
+    let cancelled = false;
+
+    const loadWeather = async () => {
       try {
-        const response = await fetch(
-          `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lon}&format=json`,
-        );
-        const data = await response.json();
-        const name =
-          data.address?.city ||
-          data.address?.town ||
-          data.address?.village ||
-          `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`;
-        const countryCode = (data.address?.country_code || "").toUpperCase();
-        return { name, countryCode };
-      } catch {
-        return { name: `${lat.toFixed(1)}°, ${lon.toFixed(1)}°`, countryCode: "" };
-      }
-    };
-
-    // US territories and countries that primarily use Fahrenheit
-    const fahrenheitCountries = new Set(["US", "PR", "GU", "VI", "AS", "MP"]);
-
-    // Fetch weather data from Open-Meteo API
-    const fetchWeather = async (
-      lat: number,
-      lon: number,
-      locationName: string,
-      useFahrenheit: boolean = true,
-    ) => {
-      try {
-        const unit = useFahrenheit ? "fahrenheit" : "celsius";
-        const response = await fetch(
-          `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,weathercode&temperature_unit=${unit}&timezone=auto`,
-        );
-        const data = await response.json();
-
-        // Map weather codes to conditions
-        const weatherCode = data.current.weathercode;
-        const conditions: Record<number, string> = {
-          0: "Clear",
-          1: "Mainly Clear",
-          2: "Partly Cloudy",
-          3: "Overcast",
-          45: "Foggy",
-          48: "Foggy",
-          51: "Drizzle",
-          53: "Drizzle",
-          55: "Drizzle",
-          61: "Rain",
-          63: "Rain",
-          65: "Heavy Rain",
-          71: "Snow",
-          73: "Snow",
-          75: "Heavy Snow",
-          95: "Thunderstorm",
-        };
-
-        setWeather({
-          temperature: Math.round(data.current.temperature_2m),
-          condition: conditions[weatherCode] || "Clear",
-          location: locationName,
-          useFahrenheit,
-        });
-      } catch (error) {
-        console.error("Failed to fetch weather:", error);
-        // Set a default weather state even if fetch fails
-        setWeather({
-          temperature: useFahrenheit ? 72 : 22,
-          condition: "Clear",
-          location: locationName,
-          useFahrenheit,
-        });
-      }
-    };
-
-    // Get user's location and fetch weather
-    const getUserLocation = async () => {
-      try {
-        // Try browser geolocation first
-        if ("geolocation" in navigator) {
-          navigator.geolocation.getCurrentPosition(
-            async (position) => {
-              const lat = position.coords.latitude;
-              const lon = position.coords.longitude;
-              console.log(`[Weather] Got coordinates: ${lat}, ${lon}`);
-
-              // Get location name first, then fetch weather
-              const geo = await getReverseGeocode(lat, lon);
-              console.log(`[Weather] Location: ${geo.name} (${geo.countryCode})`);
-              const useFahrenheit = fahrenheitCountries.has(geo.countryCode);
-              await fetchWeather(lat, lon, geo.name, useFahrenheit);
-            },
-            async (error) => {
-              console.warn("[Weather] Geolocation denied or unavailable:", error.message);
-              // Fallback to IP-based geolocation via Gateway
-              try {
-                console.log(
-                  "[Weather] Trying IP-based location via Gateway...",
-                );
-
-                const response = await gateway.send("geolocation:get-from-ip");
-
-                if (response.success && response.data) {
-                  const ipData = response.data as {
-                    latitude: number;
-                    longitude: number;
-                    city: string;
-                    region?: string;
-                  };
-
-                  const locationName = ipData.region
-                    ? `${ipData.city}, ${ipData.region}`
-                    : ipData.city;
-                  const countryCode = ((ipData as any).country_code || "").toUpperCase();
-                  const useFahrenheit = fahrenheitCountries.has(countryCode);
-                  console.log(`[Weather] Using IP location: ${locationName} (${countryCode})`);
-                  await fetchWeather(
-                    ipData.latitude,
-                    ipData.longitude,
-                    locationName,
-                    useFahrenheit,
-                  );
-                } else {
-                  throw new Error(response.error || "IP geolocation failed");
-                }
-              } catch (ipError) {
-                console.warn("[Weather] IP geolocation also failed, using fallback");
-                // Last resort: default location (New York)
-                console.log("[Weather] Using fallback location: New York");
-                await fetchWeather(40.7128, -74.006, "New York", true);
-              }
-            },
-            {
-              enableHighAccuracy: false, // Changed to false for faster response
-              timeout: 5000, // Reduced timeout
-              maximumAge: 300000, // Cache for 5 minutes
-            },
-          );
-        } else {
-          // No geolocation support - use default
-          console.log("[Weather] No geolocation support, using default");
-          await fetchWeather(40.7128, -74.006, "New York", true);
+        const nextWeather = await resolveWeatherData();
+        if (!cancelled) {
+          setWeather(nextWeather);
         }
       } catch (error) {
-        console.error("[Weather] Failed to get location:", error);
-        // Fallback to default
-        await fetchWeather(40.7128, -74.006, "New York", true);
+        console.error("[Weather] Failed to load weather:", error);
+        if (!cancelled) {
+          setWeather({
+            temperature: 72,
+            condition: "Clear",
+            location: FALLBACK_LOCATION,
+            useFahrenheit: true,
+          });
+        }
       }
     };
 
-    getUserLocation();
-    const weatherInterval = setInterval(getUserLocation, 900000); // Every 15 minutes
+    void loadWeather();
+    const weatherInterval = setInterval(() => {
+      void loadWeather();
+    }, 900_000);
 
     return () => {
+      cancelled = true;
       clearInterval(dateInterval);
       clearInterval(weatherInterval);
     };
@@ -232,7 +284,9 @@ export function WeatherWidget() {
       {weather && (
         <div className="weather-widget__info">
           <div className="weather-widget__left">
-            <div className="weather-widget__temp">{weather.temperature}°{weather.useFahrenheit ? "F" : "C"}</div>
+            <div className="weather-widget__temp">
+              {weather.temperature}°{weather.useFahrenheit ? "F" : "C"}
+            </div>
             <div className="weather-widget__location">{weather.location}</div>
           </div>
           <div className="weather-widget__right">

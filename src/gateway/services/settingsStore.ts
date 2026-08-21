@@ -95,8 +95,8 @@ export const DEFAULT_SETTINGS: SettingsData = {
   preferences: {
     defaultHomeAppId: DEFAULT_HOME_APP_ID,
     cloudSyncEnabled: true,
-    cloudAutoPublishEnabled: true,
-    cloudAutoUploadEnabled: true,
+    cloudAutoPublishEnabled: false,
+    cloudAutoUploadEnabled: false,
     defaultMemoryScope: "user",
   },
   toolResultTruncation: { ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS },

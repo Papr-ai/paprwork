@@ -2,7 +2,7 @@
 /**
  * E2E: job runtime off git — Mongo + heartbeat + desktop upsert; no git status churn.
  *
- * When JOB_RUNTIME_OFF_GIT=1 on memory server (JOB_RUNTIME_GIT_DUAL_WRITE=0):
+ * When memory server has Sync V3 deployed (runtime always off git):
  * - Cloud job-run → runtime in Mongo + heartbeat pendingCloudRuns
  * - Desktop upsert → POST /v1/cloud/runtime/job-runtime/upsert + GET list
  * - GitHub data/jobs.json and Jobs/{id}/job.json stay config-only (no lastRunAt/status)
@@ -27,16 +27,9 @@ const memoryBase = (
   "https://memory.papr.ai"
 ).replace(/\/$/, "");
 
-const expectGitWriteback =
-  args.includes("--expect-git-writeback") ||
-  process.env.JOB_RUNTIME_GIT_DUAL_WRITE === "1" ||
-  process.env.JOB_RUNTIME_GIT_DUAL_WRITE === "true";
+const expectGitWriteback = args.includes("--expect-git-writeback");
 
-const runtimeOffGit =
-  process.env.JOB_RUNTIME_OFF_GIT === "1" ||
-  process.env.JOB_RUNTIME_OFF_GIT === "true" ||
-  args.includes("--runtime-off-git") ||
-  !expectGitWriteback;
+const runtimeOffGit = !expectGitWriteback;
 
 const TEST_JOB_ID = "e2e-cloud-writeback";
 const MARKER_PREFIX = "WRITEBACK_E2E_OK";
@@ -549,7 +542,7 @@ try {
   } else {
     fail(
       "runtime summary (Mongo/API)",
-      "GET /jobs lastRunAt/lastOutput not updated — is JOB_RUNTIME_OFF_GIT=1 on memory server?",
+      "GET /jobs lastRunAt/lastOutput not updated — is job runtime off git on memory server?",
     );
   }
 

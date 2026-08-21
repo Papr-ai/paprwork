@@ -29,9 +29,12 @@ export async function notifyCloudAppRevisionUpdated(
       body: JSON.stringify(input),
     });
     if (!response.ok) {
+      const text = await response.text().catch(() => "");
       console.warn(
-        `[CloudSync] App revision notify failed (${response.status}) for ${input.namespaceId}/${input.slug}`,
+        `[CloudSync] App revision notify failed (${response.status}) for ${input.namespaceId}/${input.slug}` +
+          (text ? `: ${text.slice(0, 200)}` : ""),
       );
+      return;
     }
   } catch (error) {
     console.warn(

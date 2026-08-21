@@ -89,15 +89,15 @@ describe("VaultSyncService", () => {
     expect(content).toContain("No PAPR_API_KEY");
   });
 
-  it("pulls vault keys for user, namespace, and org scopes", () => {
+  it("pulls user-scoped vault keys only (not org/namespace catalogs)", () => {
     const content = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("vaultPullScopes");
-    expect(content).toContain('scopes.push("namespace")');
-    expect(content).toContain('scopes.push("org")');
-    expect(content).toContain("fetchVaultKeyNamesForScope");
+    expect(content).toContain('fetchVaultKeyNamesForScope(\n        "user"');
+    expect(content).not.toContain("vaultPullScopes");
+    expect(content).not.toContain('scopes.push("namespace")');
+    expect(content).not.toContain('scopes.push("org")');
   });
 
   it("has syncForWorkspaceSwitch for org/namespace changes", () => {

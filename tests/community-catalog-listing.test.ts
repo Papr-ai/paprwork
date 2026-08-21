@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { CommunityCatalogEntry } from "../src/core/types/communityCatalog.js";
 import {
   isCommunityCatalogListed,
+  isCommunityInstallListing,
   shouldIncludeInPublicCommunity,
 } from "../src/gateway/services/CommunityCatalogService.js";
 
@@ -171,6 +172,17 @@ describe("shouldIncludeInPublicCommunity — link-only apps", () => {
     ).toBe(true);
     expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
       false,
+    );
+  });
+});
+
+describe("isCommunityInstallListing", () => {
+  it("requires codeInstallable for global Community Apps", () => {
+    expect(isCommunityInstallListing(cloudEntry({ codeInstallable: false }))).toBe(
+      false,
+    );
+    expect(isCommunityInstallListing(cloudEntry({ codeInstallable: true }))).toBe(
+      true,
     );
   });
 });

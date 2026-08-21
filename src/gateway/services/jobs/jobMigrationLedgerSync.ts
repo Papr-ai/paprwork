@@ -146,7 +146,7 @@ function listLocalAppliedMigrationIds(localDb: Database.Database): string[] {
   return listAppliedMigrationIdsReadOnly(localDb);
 }
 
-async function listRemoteAppliedMigrationIds(
+export async function listRemoteAppliedMigrationIds(
   remote: Client,
 ): Promise<Set<string>> {
   await ensureRemoteSchemaMigrationsTable(remote);

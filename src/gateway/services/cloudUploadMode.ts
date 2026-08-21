@@ -26,7 +26,7 @@ function readGlobalAutoUploadDisabled(settingsPath: string): boolean {
       };
       return data?.preferences?.cloudAutoUploadEnabled === false;
     },
-    false,
+    true,
   );
 }
 
@@ -37,7 +37,7 @@ function cloudSettingsPathForRoot(paprDir?: string): string {
   return defaultCloudSettingsPath();
 }
 
-/** Whether automatic git/Turso push is enabled globally (default ON). */
+/** Whether automatic git/Turso push is enabled globally (default OFF). */
 export function isCloudAutoUploadGloballyEnabled(
   settingsPath: string = defaultCloudSettingsPath(),
 ): boolean {
@@ -124,7 +124,12 @@ function buildJobOwnerIndex(paprDir: string): Map<string, string[]> {
   return owners;
 }
 
-function listAppIdsOwningJob(paprDir: string, jobId: string): string[] {
+/** Apps that own a job via data-sources, metadata, or jobs index. */
+export function listAppIdsOwningJob(paprDir: string, jobId: string): string[] {
+  return [...listAppIdsOwningJobInternal(paprDir, jobId)];
+}
+
+function listAppIdsOwningJobInternal(paprDir: string, jobId: string): string[] {
   const cached = jobOwnerIndexByRoot.get(paprDir);
   const now = Date.now();
   if (cached && now - cached.builtAtMs < JOB_OWNER_INDEX_TTL_MS) {

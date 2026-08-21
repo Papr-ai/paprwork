@@ -10,6 +10,12 @@ dist
 !.env.example
 coverage
 **/*.timestamp-*.mjs
+ui/
+tests/
+test/
+scripts/
+docs/
+.github/
 ui/dist
 release
 *.md

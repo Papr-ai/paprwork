@@ -11,6 +11,7 @@ import { rewritePaprPathForCloudRun } from "./cloudPaprPath.js";
 import { prepareCloudJobEnvironment } from "./prepareCloudJobEnvironment.js";
 import { reinitializeWorkspaceServicesForCloudRun } from "./reinitializeWorkspaceServices.js";
 import { startCloudAgentTursoDebouncedPush } from "./cloudAgentTursoDebouncedPush.js";
+import { startCloudAppWriterDebouncedPush, getCloudAppWriterPushedAppIds } from "./cloudAppWriterDebouncedPush.js";
 import {
   isSkippedEmptyTursoTarget,
   notifyCloudDbChangedForTarget,
@@ -110,7 +111,6 @@ export function resolveTursoBookendTargets(
       tursoUrl: source.databaseUrl,
       authToken: source.authToken,
       ...dbEventIdsForSyncKey(syncKey, linked),
-      // Apps subscribe by jobId; registry writeDbIds targets only had dbId before.
       jobId: request.jobId,
     });
   };
@@ -231,7 +231,7 @@ async function pushTursoTargets(
     }
     if (result.status !== "pushed") {
       failures.push(
-        `${target.syncKey}@${target.dbPath}: ${result.reason ?? "unknown"} (status=${result.status})`,
+        `${target.syncKey}@${target.dbPath}: ${result.reason ?? result.error ?? "unknown"} (status=${result.status})`,
       );
       if (hadLocalData) {
         retainSandbox = true;
@@ -305,14 +305,15 @@ export async function beginCloudAgentRun(
   process.env.HOME = runRoot;
   applyVaultKeys(request, envSnapshot);
 
-  await pullTursoTargets(tursoTargets);
-  const tursoDebouncedPush =
-    await startCloudAgentTursoDebouncedPush(tursoTargets);
   await reinitializeWorkspaceServicesForCloudRun({
     paprApiKey: request.paprApiKey,
     userDataPath,
   });
   await prepareCloudJobEnvironment(request.jobId);
+  await pullTursoTargets(tursoTargets);
+  const tursoDebouncedPush =
+    await startCloudAgentTursoDebouncedPush(tursoTargets);
+  const writerDebouncedPush = await startCloudAppWriterDebouncedPush();
 
   return {
     runRoot,
@@ -321,10 +322,24 @@ export async function beginCloudAgentRun(
     finish: async (finishOptions?: { deleteWorkspace?: boolean }) => {
       let syncSucceeded = true;
       let retainSandbox = false;
+      let writerPushedAppIds: string[] = [];
       try {
         if (tursoDebouncedPush) {
-          await tursoDebouncedPush.stop();
           await tursoDebouncedPush.flush();
+          await tursoDebouncedPush.stop();
+        }
+        if (writerDebouncedPush) {
+          const writerResult = await writerDebouncedPush.flushAndStop();
+          writerPushedAppIds = getCloudAppWriterPushedAppIds();
+          if (writerResult.failed.length > 0) {
+            syncSucceeded = false;
+            retainSandbox = true;
+            throw new Error(
+              `App code writer flush failed: ${writerResult.failed
+                .map((failure) => `${failure.appId} (${failure.error})`)
+                .join("; ")}`,
+            );
+          }
         }
         const outcome = await pushTursoTargets(tursoTargets);
         if (!outcome.ok) {
@@ -333,6 +348,23 @@ export async function beginCloudAgentRun(
           throw new Error(
             `Turso sync did not complete for cloud agent run. ${outcome.failures.join("; ")}`,
           );
+        }
+
+        if (writerPushedAppIds.length > 0) {
+          const { syncPublishedAppCatalogLayer } = await import(
+            "../syncV3/syncPublishedAppCatalogLayer.js"
+          );
+          const { webReady } = await import("../cloudSync/webReady.js");
+          for (const appId of writerPushedAppIds) {
+            const ready = await webReady(appId, paprHome);
+            if (!ready.ready) {
+              console.warn(
+                `[CloudAgentRun] Skipping catalog sync for ${appId}: ${ready.detail ?? ready.reason ?? "not web-ready"}`,
+              );
+              continue;
+            }
+            await syncPublishedAppCatalogLayer(appId, { afterWriterChange: true });
+          }
         }
       } catch (error) {
         syncSucceeded = false;

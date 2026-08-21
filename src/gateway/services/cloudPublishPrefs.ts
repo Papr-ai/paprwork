@@ -89,6 +89,37 @@ export function saveCloudPublishPrefs(
  * Read-only prefs lookup used on sync hot paths (once per app per queue scan).
  * Writers keep using loadCloudPublishPrefs so mutations always see fresh state.
  */
+export function hasStoredAppPublishPrefs(
+  appId: string,
+  paprDir?: string,
+): boolean {
+  const prefs = loadCloudPublishPrefs(paprDir);
+  return appId in prefs.apps;
+}
+
+/** Synthetic default when no prefs file entry exists yet. */
+export function isUninitializedSharingPrefs(
+  prefs: CloudPublishAppPrefs,
+): boolean {
+  return (
+    prefs.accessMode === "private" &&
+    prefs.loginAccess === undefined &&
+    (prefs.externalLink === undefined || prefs.externalLink === "off")
+  );
+}
+
+/** Synthetic default or auto-publish seed — not an explicit user sharing choice. */
+export function isDefaultPrivatePublishPrefs(
+  prefs: CloudPublishAppPrefs,
+): boolean {
+  return (
+    isUninitializedSharingPrefs(prefs) ||
+    (prefs.accessMode === "private" &&
+      prefs.loginAccess === "private" &&
+      (prefs.externalLink === undefined || prefs.externalLink === "off"))
+  );
+}
+
 export function getAppPublishPrefs(
   appId: string,
   paprDir?: string,
@@ -108,7 +139,8 @@ export function getAppPublishPrefs(
   return entry
     ? { ...entry }
     : {
-        autoPublish: true,
+        autoPublish: false,
+        uploadMode: "manual",
         accessMode: "private",
       };
 }
@@ -120,7 +152,8 @@ export function setAppPublishPrefs(
 ): CloudPublishAppPrefs {
   const prefs = loadCloudPublishPrefs(paprDir);
   const current = prefs.apps[appId] ?? {
-    autoPublish: true,
+    autoPublish: false,
+    uploadMode: "manual" as const,
     accessMode: "private" as const,
   };
   const next = { ...current, ...update };
@@ -137,4 +170,40 @@ export function removeAppPublishPrefs(appId: string, paprDir?: string): void {
   }
   delete prefs.apps[appId];
   saveCloudPublishPrefs(prefs, paprDir);
+}
+
+/**
+ * flush — Sync V3 per-app flush/post-hook: only apps that just uploaded.
+ * catalog — background recovery: synced apps + prefs apps with autoPublish on.
+ */
+export type AutoPublishCandidateScope = "flush" | "catalog";
+
+/** Per-app flush path (Sync V3): only the app(s) that just finished writer upload. */
+export function mergeAutoPublishCandidateAppIds(
+  catalogAppIds: readonly string[],
+  syncedAppIds: readonly string[] | undefined,
+  prefsFile: CloudPublishPrefsFile,
+  scope: AutoPublishCandidateScope = "flush",
+): string[] {
+  if (scope === "flush") {
+    return syncedAppIds && syncedAppIds.length > 0 ? [...syncedAppIds] : [];
+  }
+
+  const ids = new Set<string>(
+    syncedAppIds && syncedAppIds.length > 0 ? syncedAppIds : catalogAppIds,
+  );
+  for (const [appId, prefs] of Object.entries(prefsFile.apps)) {
+    if (prefs.autoPublish !== false) {
+      ids.add(appId);
+    }
+  }
+  return [...ids];
+}
+
+/** Memory publish record missing or disabled — local prefs still want cloud link. */
+export function needsPublishRecovery(
+  memory: { enabled?: boolean } | null,
+  autoPublish: boolean,
+): boolean {
+  return autoPublish && memory?.enabled !== true;
 }

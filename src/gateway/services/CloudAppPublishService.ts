@@ -14,23 +14,31 @@ import {
 import { isCloudAutoPublishGloballyEnabled } from "./cloudAutoPublishSettings.js";
 import {
   getAppPublishPrefs,
+  loadCloudPublishPrefs,
+  mergeAutoPublishCandidateAppIds,
+  needsPublishRecovery,
   setAppPublishPrefs,
+  type AutoPublishCandidateScope,
   type CloudAccessMode,
 } from "./cloudPublishPrefs.js";
 import {
   accessModeToSharingSettings,
   formatShareLink,
   memoryPublishResponseToConfig,
-  sharingSettingsRequireShareToken,
+  memoryPublishResponseToSharingSettings,
+  resolvePublishFieldsFromMemory,
   resolvePublishFieldsFromPrefs,
+  sharingSettingsRequireShareToken,
   resolveSharingSettings,
   type CloudSharingSettings,
   type MemoryPublishResponseFields,
 } from "./cloudPublishMapping.js";
 import {
-  detectPublishDrift,
+  detectAutoPublishDrift,
   resolveShareTokenForConfig,
+  resolveSharingSettingsForDisplay,
   slugifyPublishTitle,
+  type PublishDriftInput,
 } from "./cloudPublishDrift.js";
 import {
   publishSlugRetryCandidates,
@@ -49,6 +57,16 @@ import type { RequiredKeySpec } from "../../core/types/bundles.js";
 import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
 import type { GitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
 import type { TursoSyncItemsReport } from "./tursoSyncStatus.js";
+import {
+  isCloudCatalogLightSyncEnabled,
+  publishIntentTimeoutMs,
+  type CloudPublishIntent,
+} from "../../core/types/cloudPublishIntent.js";
+import {
+  readPlatformCatalogManifest,
+  reconcilePlatformCatalogManifest,
+} from "./syncV3/platformCatalogManifest.js";
+import { withPublishInFlight } from "./cloudPublishInFlight.js";
 
 export interface CloudPublishConfig {
   appId: string;
@@ -190,7 +208,7 @@ function buildConfigFromMemory(
   prefs: ReturnType<typeof getAppPublishPrefs>,
   expectedSlug: string,
 ): CloudPublishConfig {
-  const sharing = resolveSharingSettings(prefs);
+  const sharing = resolveSharingSettingsForDisplay(prefs, data);
   const config = parsePublishConfig(appId, data, sharing);
   const token = resolveShareTokenForConfig(data, prefs, expectedSlug);
   if (!token) {
@@ -278,12 +296,346 @@ export class CloudAppPublishService {
     return resolveUniquePublishSlug(appId, slugCatalog);
   }
 
-  async republishIfPublished(appId: string): Promise<CloudPublishConfig | null> {
+  private async resolveLocalCatalogMetadata(
+    appId: string,
+  ): Promise<NonNullable<PublishDriftInput["localCatalogMetadata"]>> {
+    const catalogMeta = loadAppCatalogMeta(this.paprDir);
+    const appMeta = catalogMeta.get(appId);
+    const appDir = path.join(this.paprDir, "apps", appId);
+    let manifest = await readPlatformCatalogManifest(appDir);
+    if (!manifest) {
+      manifest = await reconcilePlatformCatalogManifest(this.paprDir, appId);
+    }
+    return {
+      title: appMeta?.title,
+      description: appMeta?.description,
+      icon: appMeta?.icon,
+      tags: appMeta?.tags,
+      platform: manifest.platform,
+      requiresDesktop: manifest.requiresDesktopForFullFunctionality,
+    };
+  }
+
+  /** Sync App Files CDN visibility for a live app (no Mongo publish). */
+  async syncLiveAppArtifacts(appId: string): Promise<void> {
+    await this.publishAppFiles(appId);
+  }
+
+  /**
+   * Lightweight catalog metadata sync when local prefs/manifest drift from Mongo.
+   * Returns updated config when drift was repaired; null when already aligned.
+   */
+  async syncCatalogIfDrift(appId: string): Promise<CloudPublishConfig | null> {
     const memory = await this.fetchMemoryPublishResponse(appId);
     if (!memory?.enabled) {
       return null;
     }
-    return this.publishApp(appId);
+
+    const prefs = getAppPublishPrefs(appId, this.paprDir);
+    const expectedSlug = await this.resolveExpectedPublishSlug(appId);
+    const localCatalogRequirements =
+      await this.resolveLocalCatalogRequirements(appId);
+    const localCatalogMetadata = await this.resolveLocalCatalogMetadata(appId);
+    const drift = detectAutoPublishDrift({
+      memory,
+      prefs,
+      expectedSlug,
+      localCatalogRequirements,
+      localCatalogMetadata,
+    });
+
+    if (drift.length === 0) {
+      return null;
+    }
+
+    console.log(
+      `[CloudPublish] Catalog drift for ${appId} (${drift.join(", ")}) — intent:catalog`,
+    );
+
+    return this.updateCatalogMetadata(appId, { preserveCloudSharing: true });
+  }
+
+  /** Update Mongo publish record metadata only (intent: catalog). */
+  async updateCatalogMetadata(
+    appId: string,
+    options?: { preserveCloudSharing?: boolean; slug?: string },
+  ): Promise<CloudPublishConfig> {
+    if (!this.isWriteAllowed(`updateCatalogMetadata ${appId}`)) {
+      throw new WorkspaceWriteBlockedError(
+        `Blocked updateCatalogMetadata ${appId}`,
+      );
+    }
+
+    const prefs = getAppPublishPrefs(appId, this.paprDir);
+    const catalogMeta = loadAppCatalogMeta(this.paprDir);
+    const appMeta = catalogMeta.get(appId);
+    const expectedSlug = await this.resolveExpectedPublishSlug(appId);
+    const resolvedSlug = options?.slug ?? expectedSlug;
+
+    const liveMemory = await this.fetchMemoryPublishResponse(appId);
+    const sharing =
+      options?.preserveCloudSharing && liveMemory?.enabled
+        ? memoryPublishResponseToSharingSettings(liveMemory)
+        : resolveSharingSettings(prefs);
+    const publishFields =
+      options?.preserveCloudSharing && liveMemory?.enabled
+        ? resolvePublishFieldsFromMemory(liveMemory)
+        : resolvePublishFieldsFromPrefs({
+            loginAccess: sharing.loginAccess,
+            externalLink: sharing.externalLink,
+            accessMode: prefs.accessMode,
+            codeAccess: prefs.codeAccess ?? "off",
+            requireSignIn: prefs.requireSignIn,
+          });
+    const codeAccess: CodeAccess =
+      (options?.preserveCloudSharing && liveMemory?.enabled
+        ? liveMemory.codeAccess
+        : prefs.codeAccess) ?? "off";
+
+    const { requirements: credentialRequirements } =
+      await ensureAppRequirementsSyncedWithBackend(this.paprDir, appId);
+
+    const appDir = path.join(this.paprDir, "apps", appId);
+    let manifest = await readPlatformCatalogManifest(appDir);
+    if (!manifest) {
+      manifest = await reconcilePlatformCatalogManifest(this.paprDir, appId);
+    }
+
+    const catalogIconResult = await prepareCatalogIconForPublish({
+      icon: appMeta?.icon,
+      appDir,
+    });
+
+    const data = await this.postPublishToMemory(appId, resolvedSlug, {
+      intent: "catalog",
+      skipPlatformScan: true,
+      visibility: publishFields.visibility,
+      linkPermission: publishFields.linkPermission,
+      shareLinkEnabled: publishFields.shareLinkEnabled,
+      requireSignIn: publishFields.requireSignIn,
+      codeAccess,
+      catalogPlatform: manifest.platform,
+      catalogRequiresDesktop: manifest.requiresDesktopForFullFunctionality,
+      credentialRequirements,
+      catalogTitle: appMeta?.title,
+      catalogDescription: appMeta?.description,
+      catalogIcon: catalogIconResult.icon,
+      catalogTags: appMeta?.tags,
+    });
+
+    const config = parsePublishConfig(appId, data, sharing);
+    setAppPublishPrefs(
+      appId,
+      {
+        credentialRequirements,
+        lastAutoPublishError: undefined,
+      },
+      this.paprDir,
+    );
+    return config;
+  }
+
+  /** Update sharing ACL fields only (intent: sharing). */
+  async updateSharing(
+    appId: string,
+    options?: {
+      accessMode?: CloudAccessMode;
+      loginAccess?: CloudSharingSettings["loginAccess"];
+      externalLink?: CloudSharingSettings["externalLink"];
+      codeAccess?: CodeAccess;
+      requireSignIn?: boolean;
+      perUserIsolation?: boolean;
+    },
+  ): Promise<CloudPublishConfig | null> {
+    const memory = await this.fetchMemoryPublishResponse(appId);
+    if (!memory?.enabled) {
+      return null;
+    }
+
+    if (!this.isWriteAllowed(`updateSharing ${appId}`)) {
+      throw new WorkspaceWriteBlockedError(`Blocked updateSharing ${appId}`);
+    }
+
+    const prefs = getAppPublishPrefs(appId, this.paprDir);
+    const expectedSlug = await this.resolveExpectedPublishSlug(appId);
+
+    const sharing = resolveSharingSettings({
+      loginAccess: options?.loginAccess ?? prefs.loginAccess,
+      externalLink: options?.externalLink ?? prefs.externalLink,
+      accessMode: options?.accessMode ?? prefs.accessMode,
+    });
+    const codeAccess = options?.codeAccess ?? prefs.codeAccess ?? "off";
+    const requireSignIn =
+      options?.requireSignIn !== undefined
+        ? options.requireSignIn
+        : prefs.requireSignIn;
+    const publishFields = resolvePublishFieldsFromPrefs({
+      loginAccess: sharing.loginAccess,
+      externalLink: sharing.externalLink,
+      accessMode: options?.accessMode ?? prefs.accessMode,
+      codeAccess,
+      requireSignIn,
+    });
+
+    const perUserIsolation =
+      options?.perUserIsolation !== undefined
+        ? options.perUserIsolation
+        : prefs.perUserIsolation;
+
+    if (perUserIsolation !== undefined) {
+      const { applyPerUserIsolationForApp } = await import(
+        "./cloudAppPerUserIsolation.js"
+      );
+      await applyPerUserIsolationForApp(appId, perUserIsolation, this.paprDir);
+    }
+
+    const data = await this.postPublishToMemory(appId, memory.slug ?? expectedSlug, {
+      intent: "sharing",
+      skipPlatformScan: true,
+      visibility: publishFields.visibility,
+      linkPermission: publishFields.linkPermission,
+      shareLinkEnabled: publishFields.shareLinkEnabled,
+      requireSignIn: publishFields.requireSignIn,
+      codeAccess,
+    });
+
+    const config = parsePublishConfig(appId, data, sharing);
+    const shareTokenFromPublish =
+      sharingSettingsRequireShareToken(sharing) && config.shareToken
+        ? config.shareToken
+        : undefined;
+    setAppPublishPrefs(
+      appId,
+      {
+        accessMode: config.accessMode,
+        loginAccess: sharing.loginAccess,
+        externalLink: sharing.externalLink,
+        codeAccess,
+        requireSignIn: publishFields.requireSignIn ?? false,
+        liveLinkPermission: publishFields.linkPermission,
+        ...(shareTokenFromPublish ? { shareToken: shareTokenFromPublish } : {}),
+        ...(perUserIsolation !== undefined ? { perUserIsolation } : {}),
+      },
+      this.paprDir,
+    );
+    return config;
+  }
+
+  /**
+   * Live app + sharing fields → memory intent:sharing (fast ACL).
+   * First register or slug change → full publishApp (intent:register).
+   */
+  async publishOrUpdateSharing(
+    appId: string,
+    options?: {
+      accessMode?: CloudAccessMode;
+      loginAccess?: CloudSharingSettings["loginAccess"];
+      externalLink?: CloudSharingSettings["externalLink"];
+      codeAccess?: CodeAccess;
+      requireSignIn?: boolean;
+      perUserIsolation?: boolean;
+      slug?: string;
+      preserveCloudSharing?: boolean;
+    },
+  ): Promise<CloudPublishConfig> {
+    const memory = await this.fetchMemoryPublishResponse(appId);
+    const hasExplicitSharing =
+      options?.accessMode !== undefined ||
+      options?.loginAccess !== undefined ||
+      options?.externalLink !== undefined ||
+      options?.codeAccess !== undefined ||
+      options?.requireSignIn !== undefined ||
+      options?.perUserIsolation !== undefined;
+
+    if (memory?.enabled && hasExplicitSharing && !options?.slug) {
+      const updated = await this.updateSharing(appId, options);
+      if (updated) {
+        return updated;
+      }
+    }
+    return this.publishApp(appId, options);
+  }
+
+  private async postPublishToMemory(
+    appId: string,
+    slug: string,
+    body: {
+      intent?: CloudPublishIntent;
+      skipPlatformScan?: boolean;
+      visibility: ReturnType<typeof resolvePublishFieldsFromPrefs>["visibility"];
+      linkPermission: ReturnType<
+        typeof resolvePublishFieldsFromPrefs
+      >["linkPermission"];
+      shareLinkEnabled?: boolean;
+      requireSignIn?: boolean;
+      codeAccess: CodeAccess;
+      catalogPlatform?: string[];
+      catalogRequiresDesktop?: boolean;
+      credentialRequirements?: RequiredKeySpec[];
+      catalogTitle?: string;
+      catalogDescription?: string;
+      catalogIcon?: string;
+      catalogTags?: string[];
+    },
+  ): Promise<PublishApiResponse> {
+    if (!this.isWriteAllowed(`postPublishToMemory ${appId}`)) {
+      throw new WorkspaceWriteBlockedError(
+        `Blocked postPublishToMemory ${appId}`,
+      );
+    }
+
+    const intent = body.intent ?? "register";
+    const timeoutMs = publishIntentTimeoutMs(intent);
+
+    return withPublishInFlight(appId, async () => {
+      const response = await cloudApiFetch("/v1/cloud/apps/publish", {
+        method: "POST",
+        timeoutMs,
+        body: {
+          appId,
+          slug,
+          visibility: body.visibility,
+          linkPermission: body.linkPermission,
+          shareLinkEnabled: body.shareLinkEnabled,
+          ...(body.visibility === "public_read"
+            ? { requireSignIn: body.requireSignIn === true }
+            : body.requireSignIn
+              ? { requireSignIn: true }
+              : {}),
+          codeAccess: body.codeAccess,
+          intent,
+          skipPlatformScan: body.skipPlatformScan === true,
+          ...(body.credentialRequirements && body.credentialRequirements.length > 0
+            ? {
+                catalogRequirements: catalogRequirementsForPublish(
+                  body.credentialRequirements,
+                ),
+              }
+            : {}),
+          ...(body.catalogTitle ? { catalogTitle: body.catalogTitle } : {}),
+          ...(body.catalogDescription
+            ? { catalogDescription: body.catalogDescription }
+            : {}),
+          ...(body.catalogIcon ? { catalogIcon: body.catalogIcon } : {}),
+          ...(body.catalogTags?.length ? { catalogTags: body.catalogTags } : {}),
+          ...(body.catalogPlatform?.length
+            ? { catalogPlatform: body.catalogPlatform }
+            : {}),
+          ...(body.catalogRequiresDesktop !== undefined
+            ? { catalogRequiresDesktop: body.catalogRequiresDesktop }
+            : {}),
+        },
+      });
+
+      if (!response.ok) {
+        const lastBody = await response.text();
+        throw new Error(
+          `Cloud publish failed (${response.status}): ${lastBody.slice(0, 200)}`,
+        );
+      }
+
+      return (await response.json()) as PublishApiResponse;
+    });
   }
 
   /** Lightweight cloud publish check (no drift republish). */
@@ -331,27 +683,12 @@ export class CloudAppPublishService {
 
   async getPublishConfig(appId: string): Promise<CloudPublishConfig> {
     try {
-      const prefs = getAppPublishPrefs(appId, this.paprDir);
       const data = await this.fetchMemoryPublishResponse(appId);
+      const prefs = getAppPublishPrefs(appId, this.paprDir);
       const expectedSlug = await this.resolveExpectedPublishSlug(appId);
-      const localCatalogRequirements =
-        await this.resolveLocalCatalogRequirements(appId);
 
       if (!data) {
         return parsePublishConfig(appId, null, resolveSharingSettings(prefs));
-      }
-
-      const drift = detectPublishDrift({
-        memory: data,
-        prefs,
-        expectedSlug,
-        localCatalogRequirements,
-      });
-      if (drift.length > 0) {
-        console.log(
-          `[CloudPublish] Drift for ${appId} (${drift.join(", ")}) — republishing`,
-        );
-        return this.publishApp(appId);
       }
 
       return buildConfigFromMemory(appId, data, prefs, expectedSlug);
@@ -375,6 +712,8 @@ export class CloudAppPublishService {
       requireSignIn?: boolean;
       perUserIsolation?: boolean;
       slug?: string;
+      /** Code/catalog refresh only — keep ACL fields from the live cloud publish record. */
+      preserveCloudSharing?: boolean;
     },
   ): Promise<CloudPublishConfig> {
     if (!this.isWriteAllowed(`publishApp ${appId}`)) {
@@ -395,28 +734,68 @@ export class CloudAppPublishService {
       ? [options.slug]
       : publishSlugRetryCandidates(resolvedSlug);
 
-    const codeAccess: CodeAccess =
-      options?.codeAccess ?? prefs.codeAccess ?? "off";
-    const requireSignIn =
-      options?.requireSignIn !== undefined
-        ? options.requireSignIn
-        : prefs.requireSignIn;
+    const hasExplicitSharing =
+      options?.accessMode !== undefined ||
+      options?.loginAccess !== undefined ||
+      options?.externalLink !== undefined ||
+      options?.codeAccess !== undefined ||
+      options?.requireSignIn !== undefined;
+
+    const liveMemory =
+      options?.preserveCloudSharing && !hasExplicitSharing
+        ? await this.fetchMemoryPublishResponse(appId)
+        : null;
+
+    let sharing: CloudSharingSettings;
+    let codeAccess: CodeAccess;
+    let publishFields: ReturnType<typeof resolvePublishFieldsFromPrefs>;
+    let requireSignIn: boolean | undefined;
+
+    if (hasExplicitSharing) {
+      sharing = resolveSharingSettings({
+        loginAccess: options?.loginAccess ?? prefs.loginAccess,
+        externalLink: options?.externalLink ?? prefs.externalLink,
+        accessMode: options?.accessMode ?? prefs.accessMode,
+      });
+      codeAccess = options?.codeAccess ?? prefs.codeAccess ?? "off";
+      requireSignIn =
+        options?.requireSignIn !== undefined
+          ? options.requireSignIn
+          : prefs.requireSignIn;
+      publishFields = resolvePublishFieldsFromPrefs({
+        loginAccess: sharing.loginAccess,
+        externalLink: sharing.externalLink,
+        accessMode: options?.accessMode ?? prefs.accessMode,
+        codeAccess,
+        requireSignIn,
+      });
+    } else if (liveMemory?.enabled) {
+      const fromMemory = resolvePublishFieldsFromMemory(liveMemory);
+      sharing = memoryPublishResponseToSharingSettings(liveMemory);
+      codeAccess = fromMemory.codeAccess;
+      requireSignIn = fromMemory.requireSignIn;
+      publishFields = fromMemory;
+    } else {
+      sharing = resolveSharingSettings({
+        loginAccess: prefs.loginAccess,
+        externalLink: prefs.externalLink,
+        accessMode: prefs.accessMode,
+      });
+      codeAccess = prefs.codeAccess ?? "off";
+      requireSignIn = prefs.requireSignIn;
+      publishFields = resolvePublishFieldsFromPrefs({
+        loginAccess: sharing.loginAccess,
+        externalLink: sharing.externalLink,
+        accessMode: prefs.accessMode,
+        codeAccess,
+        requireSignIn,
+      });
+    }
+
     const perUserIsolation =
       options?.perUserIsolation !== undefined
         ? options.perUserIsolation
         : prefs.perUserIsolation;
-    const sharing = resolveSharingSettings({
-      loginAccess: options?.loginAccess ?? prefs.loginAccess,
-      externalLink: options?.externalLink ?? prefs.externalLink,
-      accessMode: options?.accessMode ?? prefs.accessMode,
-    });
-    const publishFields = resolvePublishFieldsFromPrefs({
-      loginAccess: sharing.loginAccess,
-      externalLink: sharing.externalLink,
-      accessMode: options?.accessMode ?? prefs.accessMode,
-      codeAccess,
-      requireSignIn,
-    });
 
     if (perUserIsolation !== undefined) {
       const { applyPerUserIsolationForApp } = await import(
@@ -425,63 +804,74 @@ export class CloudAppPublishService {
       await applyPerUserIsolationForApp(appId, perUserIsolation, this.paprDir);
     }
 
+    if (
+      options?.preserveCloudSharing &&
+      !hasExplicitSharing &&
+      isCloudCatalogLightSyncEnabled()
+    ) {
+      return this.updateCatalogMetadata(appId, {
+        preserveCloudSharing: true,
+        slug: options?.slug,
+      });
+    }
+
     const { requirements: credentialRequirements } =
       await ensureAppRequirementsSyncedWithBackend(this.paprDir, appId);
 
-    // Build dist/app.js at publish time so apps.papr.ai serves one bundled
-    // request instead of a 20-file TS module waterfall. Legacy multi-script
-    // apps (no ES-module entry) skip the build and serve per-file as before.
-    try {
-      const appDir = path.join(this.paprDir, "apps", appId);
-      const build = await buildMiniApp(appDir);
-      if (!build.legacy && !build.success) {
+    const appDir = path.join(this.paprDir, "apps", appId);
+    const lightSync = isCloudCatalogLightSyncEnabled();
+
+    if (lightSync) {
+      const { prepareAppForCloudGitSync } = await import(
+        "./cloudSync/prepareAppsForCloud.js"
+      );
+      await prepareAppForCloudGitSync(this.paprDir, appId);
+    } else {
+      try {
+        const build = await buildMiniApp(appDir);
+        if (!build.legacy && !build.success) {
+          console.warn(
+            `[CloudPublish] dist build failed for ${appId} — publishing unbundled:`,
+            build.errors.slice(0, 3).map((e) => e.message).join("; "),
+          );
+        } else if (!build.legacy) {
+          console.log(
+            `[CloudPublish] Built dist bundle for ${appId}: ${build.outputFiles.join(", ")}`,
+          );
+        }
+      } catch (error) {
         console.warn(
-          `[CloudPublish] dist build failed for ${appId} — publishing unbundled:`,
-          build.errors.slice(0, 3).map((e) => e.message).join("; "),
-        );
-      } else if (!build.legacy) {
-        console.log(
-          `[CloudPublish] Built dist bundle for ${appId}: ${build.outputFiles.join(", ")}`,
+          `[CloudPublish] dist build errored for ${appId} — publishing unbundled:`,
+          (error as Error).message,
         );
       }
-    } catch (error) {
-      console.warn(
-        `[CloudPublish] dist build errored for ${appId} — publishing unbundled:`,
-        (error as Error).message,
-      );
-    }
 
-    try {
-      const appDir = path.join(this.paprDir, "apps", appId);
-      const { buildAppBackendBundle } = await import(
-        "../utils/miniAppBackendBuild.js"
-      );
-      const backendBundle = await buildAppBackendBundle(appDir);
-      if (!backendBundle.success) {
-        console.warn(
-          `[CloudPublish] backend bundle failed for ${appId}:`,
-          backendBundle.errors.join("; "),
+      try {
+        const { buildAppBackendBundle } = await import(
+          "../utils/miniAppBackendBuild.js"
         );
-      } else if (backendBundle.wroteBundle) {
-        console.log(
-          `[CloudPublish] Built backend bundle for ${appId}: ${Object.keys(backendBundle.bundle?.actions ?? {}).join(", ")}`,
+        const backendBundle = await buildAppBackendBundle(appDir);
+        if (!backendBundle.success) {
+          console.warn(
+            `[CloudPublish] backend bundle failed for ${appId}:`,
+            backendBundle.errors.join("; "),
+          );
+        } else if (backendBundle.wroteBundle) {
+          console.log(
+            `[CloudPublish] Built backend bundle for ${appId}: ${Object.keys(backendBundle.bundle?.actions ?? {}).join(", ")}`,
+          );
+        }
+      } catch (error) {
+        console.warn(
+          `[CloudPublish] backend bundle errored for ${appId}:`,
+          (error as Error).message,
         );
       }
-    } catch (error) {
-      console.warn(
-        `[CloudPublish] backend bundle errored for ${appId}:`,
-        (error as Error).message,
-      );
     }
 
-    // Resolve App Files before talking to the publish API. If an asset would
-    // ship broken this throws with the file named, so the author fixes it
-    // instead of a visitor discovering it.
     await this.publishAppFiles(appId);
-
     await writeCloudAppMetadataFile(this.paprDir, appId);
 
-    const appDir = path.join(this.paprDir, "apps", appId);
     const catalogIconResult = await prepareCatalogIconForPublish({
       icon: appMeta?.icon,
       appDir,
@@ -490,97 +880,99 @@ export class CloudAppPublishService {
       console.log(`[CloudPublish] ${catalogIconResult.note}`);
     }
 
-    const { detectCommunityPlatformForApp } = await import(
-      "./cloudAppCompatibility.js"
-    );
-    const platformReport = await detectCommunityPlatformForApp(appId);
-    console.log(
-      `[CloudPublish] Local platform scan for ${appId}: ${platformReport.platform.join(", ")}` +
-        (platformReport.requiresDesktopForFullFunctionality
-          ? " (desktop required for full functionality)"
-          : " (cloud-ready)") +
-        " — memory server recomputes from GitHub repo on publish",
-    );
-
-    let response: Response | null = null;
-    let lastBody = "";
-    if (!this.isWriteAllowed(`publishApp ${appId} memory API`)) {
-      throw new WorkspaceWriteBlockedError(
-        `Blocked publishApp ${appId} memory API`,
+    let manifestPlatform: string[] | undefined;
+    let manifestRequiresDesktop: boolean | undefined;
+    if (lightSync) {
+      const manifest = await reconcilePlatformCatalogManifest(this.paprDir, appId);
+      manifestPlatform = manifest.platform;
+      manifestRequiresDesktop = manifest.requiresDesktopForFullFunctionality;
+      console.log(
+        `[CloudPublish] Platform manifest for ${appId}: ${manifest.platform.join(", ")}` +
+          (manifest.requiresDesktopForFullFunctionality
+            ? " (desktop required)"
+            : " (cloud-ready)"),
+      );
+    } else {
+      const { detectCommunityPlatformForApp } = await import(
+        "./cloudAppCompatibility.js"
+      );
+      const platformReport = await detectCommunityPlatformForApp(appId);
+      console.log(
+        `[CloudPublish] Local platform scan for ${appId}: ${platformReport.platform.join(", ")}` +
+          (platformReport.requiresDesktopForFullFunctionality
+            ? " (desktop required for full functionality)"
+            : " (cloud-ready)") +
+          " — memory server recomputes from GitHub repo on publish",
       );
     }
+
+    let data: PublishApiResponse | null = null;
+    let lastError = "";
     for (const slug of slugCandidates) {
-      response = await cloudApiFetch("/v1/cloud/apps/publish", {
-        method: "POST",
-        body: {
-          appId,
-          slug,
+      try {
+        data = await this.postPublishToMemory(appId, slug, {
+          intent: "register",
+          skipPlatformScan: lightSync,
           visibility: publishFields.visibility,
           linkPermission: publishFields.linkPermission,
           shareLinkEnabled: publishFields.shareLinkEnabled,
-          ...(publishFields.visibility === "public_read"
-            ? { requireSignIn: publishFields.requireSignIn === true }
-            : publishFields.requireSignIn
-              ? { requireSignIn: true }
-              : {}),
+          requireSignIn: publishFields.requireSignIn,
           codeAccess,
-          ...(credentialRequirements.length > 0
-            ? {
-                catalogRequirements: catalogRequirementsForPublish(
-                  credentialRequirements,
-                ),
-              }
-            : {}),
-          ...(appMeta?.title ? { catalogTitle: appMeta.title } : {}),
-          ...(appMeta?.description ? { catalogDescription: appMeta.description } : {}),
-          ...(catalogIconResult.icon ? { catalogIcon: catalogIconResult.icon } : {}),
-          ...(appMeta?.tags?.length ? { catalogTags: appMeta.tags } : {}),
-        },
-      });
-
-      if (response.ok) {
+          credentialRequirements,
+          catalogTitle: appMeta?.title,
+          catalogDescription: appMeta?.description,
+          catalogIcon: catalogIconResult.icon,
+          catalogTags: appMeta?.tags,
+          catalogPlatform: manifestPlatform,
+          catalogRequiresDesktop: manifestRequiresDesktop,
+        });
         if (slug !== resolvedSlug) {
           console.log(
             `[CloudPublish] Used fallback slug ${slug} for ${appId} (resolved ${resolvedSlug})`,
           );
         }
         break;
+      } catch (error) {
+        lastError = (error as Error).message;
+        const isNameCollision =
+          lastError.includes("409") &&
+          lastError.includes("already published in this namespace");
+        if (!isNameCollision || slug === slugCandidates.at(-1)) {
+          throw error;
+        }
+        console.warn(
+          `[CloudPublish] Slug ${slug} taken for ${appId}, retrying with next candidate`,
+        );
       }
-
-      lastBody = await response.text();
-      const isNameCollision =
-        response.status === 409 &&
-        lastBody.includes("already published in this namespace");
-      if (!isNameCollision || slug === slugCandidates.at(-1)) {
-        break;
-      }
-      console.warn(
-        `[CloudPublish] Slug ${slug} taken for ${appId}, retrying with next candidate`,
-      );
     }
 
-    if (!response?.ok) {
-      throw new Error(
-        `Cloud publish failed (${response?.status ?? 0}): ${lastBody.slice(0, 200)}`,
-      );
+    if (!data) {
+      throw new Error(lastError || "Cloud publish failed");
     }
-
-    const data = (await response.json()) as PublishApiResponse;
     const config = parsePublishConfig(appId, data, sharing);
+    const writeSharingPrefs =
+      hasExplicitSharing || !options?.preserveCloudSharing;
+    const shareTokenFromPublish =
+      sharingSettingsRequireShareToken(sharing) && config.shareToken
+        ? config.shareToken
+        : undefined;
     setAppPublishPrefs(
       appId,
       {
-        accessMode: config.accessMode,
-        loginAccess: sharing.loginAccess,
-        externalLink: sharing.externalLink,
-        codeAccess,
-        requireSignIn: publishFields.requireSignIn ?? false,
+        ...(writeSharingPrefs
+          ? {
+              accessMode: config.accessMode,
+              loginAccess: sharing.loginAccess,
+              externalLink: sharing.externalLink,
+              codeAccess,
+              requireSignIn: publishFields.requireSignIn ?? false,
+              liveLinkPermission: publishFields.linkPermission,
+              shareToken: shareTokenFromPublish,
+            }
+          : shareTokenFromPublish
+            ? { shareToken: shareTokenFromPublish }
+            : {}),
         ...(perUserIsolation !== undefined ? { perUserIsolation } : {}),
-        liveLinkPermission: publishFields.linkPermission,
-        shareToken:
-          sharingSettingsRequireShareToken(sharing) && config.shareToken
-            ? config.shareToken
-            : undefined,
         credentialRequirements,
         lastAutoPublishError: undefined,
       },
@@ -757,15 +1149,24 @@ export class CloudAppPublishService {
     return { built, skipped, failed };
   }
 
-  isAppReadyForCloudLink(
+  async isAppReadyForCloudLink(
     appId: string,
     github: GitHubSyncItemsReport,
     turso: TursoSyncItemsReport | null,
-  ): boolean {
-    const appPath = `apps/${appId}`;
-    const githubItem = github.apps.find((item) => item.relativePath === appPath);
-    if (!githubItem || githubItem.status !== "synced") {
-      return false;
+  ): Promise<boolean> {
+    const { isSyncV3FlagEnabled } = await import("./syncV3/syncV3Flags.js");
+    if (isSyncV3FlagEnabled("SYNC_V3_WRITER_OPS")) {
+      const { isAppWriterSyncReady } = await import("./syncV3/writerSyncStatus.js");
+      const writerReady = await isAppWriterSyncReady(appId);
+      if (!writerReady.ready) {
+        return false;
+      }
+    } else {
+      const appPath = `apps/${appId}`;
+      const githubItem = github.apps.find((item) => item.relativePath === appPath);
+      if (!githubItem || githubItem.status !== "synced") {
+        return false;
+      }
     }
 
     const tursoSources = turso?.sources.filter((s) => s.appId === appId) ?? [];
@@ -773,6 +1174,47 @@ export class CloudAppPublishService {
       return true;
     }
     return tursoSources.every((source) => source.status === "synced");
+  }
+
+  /**
+   * When the memory publish record is gone but autoPublish is on, push git for
+   * this app and reconcile sync state so auto-publish can run again.
+   */
+  private async tryRecoverAppSyncForPublish(
+    appId: string,
+    turso: TursoSyncItemsReport | null,
+    github: GitHubSyncItemsReport,
+  ): Promise<{ ready: boolean; github: GitHubSyncItemsReport }> {
+    const { getCloudSyncService } = await import("./CloudSyncService.js");
+    const sync = getCloudSyncService();
+    if (!sync) {
+      return { ready: false, github };
+    }
+
+    console.log(
+      `[CloudPublish] Sync recovery for ${appId} (autoPublish on, memory publish disabled)`,
+    );
+
+    try {
+      await sync.pushAppNow(appId);
+    } catch (error) {
+      console.warn(
+        `[CloudPublish] Sync recovery push failed for ${appId}:`,
+        (error as Error).message.slice(0, 120),
+      );
+      return { ready: false, github };
+    }
+
+    const refreshedGithub = sync.getGitHubSyncItemsReport();
+    const ready = await this.isAppReadyForCloudLink(appId, refreshedGithub, turso);
+    if (ready) {
+      console.log(`[CloudPublish] Sync recovery succeeded for ${appId}`);
+    } else {
+      console.warn(
+        `[CloudPublish] Sync recovery incomplete for ${appId} — git/turso not synced yet`,
+      );
+    }
+    return { ready, github: refreshedGithub };
   }
 
   async isAppVerifiedReadyForCloudLink(appId: string): Promise<boolean> {
@@ -797,20 +1239,17 @@ export class CloudAppPublishService {
       path.join(this.paprDir, "apps"),
       appId,
     );
-    if (!this.isAppReadyForCloudLink(appId, github, turso)) {
-      return false;
-    }
-    const { verifyAppPushConvergence } = await import(
-      "./cloudSync/postPushVerify.js"
-    );
-    const verify = await verifyAppPushConvergence(appId, this.paprDir);
-    return verify.ok;
+    return this.isAppReadyForCloudLink(appId, github, turso);
   }
 
   async tryAutoPublishSyncedApps(
     github: GitHubSyncItemsReport,
     turso: TursoSyncItemsReport | null,
-    options?: { syncedAppIds?: readonly string[] },
+    options?: {
+      syncedAppIds?: readonly string[];
+      /** flush = per-app post-hook only; catalog = background prefs recovery. */
+      candidateScope?: AutoPublishCandidateScope;
+    },
   ): Promise<void> {
     if (!isCloudAutoPublishGloballyEnabled()) {
       return;
@@ -825,23 +1264,22 @@ export class CloudAppPublishService {
 
     try {
       const catalogMeta = loadAppCatalogMeta(this.paprDir);
-      const candidateAppIds =
-        options?.syncedAppIds && options.syncedAppIds.length > 0
-          ? [...options.syncedAppIds]
-          : [...catalogMeta.keys()];
+      const prefsFile = loadCloudPublishPrefs(this.paprDir);
+      const candidateScope = options?.candidateScope ?? "flush";
+      const candidateAppIds = mergeAutoPublishCandidateAppIds(
+        [...catalogMeta.keys()],
+        options?.syncedAppIds,
+        prefsFile,
+        candidateScope,
+      );
+      if (candidateAppIds.length === 0) {
+        return;
+      }
+      let currentGithub = github;
 
       for (const appId of candidateAppIds) {
-        const prefs = getAppPublishPrefs(appId, this.paprDir);
-        if (prefs.autoPublish === false) {
-          continue;
-        }
-        if (!this.isAppReadyForCloudLink(appId, github, turso)) {
-          continue;
-        }
-        if (!(await this.isAppVerifiedReadyForCloudLink(appId))) {
-          console.warn(
-            `[CloudPublish] Skipping auto-publish for ${appId}: post-push verify not passed`,
-          );
+        const initialPrefs = getAppPublishPrefs(appId, this.paprDir);
+        if (initialPrefs.autoPublish === false) {
           continue;
         }
 
@@ -860,18 +1298,61 @@ export class CloudAppPublishService {
           continue;
         }
 
-        const expectedSlug = await this.resolveExpectedPublishSlug(appId);
-        const localCatalogRequirements =
-          await this.resolveLocalCatalogRequirements(appId);
-        const drift = detectPublishDrift({
-          memory,
-          prefs,
-          expectedSlug,
-          localCatalogRequirements,
-        });
+        if (
+          candidateScope === "flush" &&
+          !(await this.isAppReadyForCloudLink(appId, currentGithub, turso)) &&
+          needsPublishRecovery(memory, initialPrefs.autoPublish)
+        ) {
+          const recovered = await this.tryRecoverAppSyncForPublish(
+            appId,
+            turso,
+            currentGithub,
+          );
+          currentGithub = recovered.github;
+          if (!recovered.ready) {
+            continue;
+          }
+        }
+
+        if (!(await this.isAppReadyForCloudLink(appId, currentGithub, turso))) {
+          continue;
+        }
+        if (!(await this.isAppVerifiedReadyForCloudLink(appId))) {
+          console.warn(
+            `[CloudPublish] Skipping auto-publish for ${appId}: post-push verify not passed`,
+          );
+          continue;
+        }
+
         const needsInitialPublish = !memory?.enabled || !memory.shareUrl;
 
-        if (!needsInitialPublish && drift.length === 0) {
+        if (candidateScope === "catalog") {
+          if (!memory?.enabled) {
+            continue;
+          }
+          try {
+            if (!this.isWriteAllowed(`catalog-drift ${appId}`)) {
+              continue;
+            }
+            if (isCloudCatalogLightSyncEnabled()) {
+              await this.syncLiveAppArtifacts(appId);
+            }
+            const repaired = await this.syncCatalogIfDrift(appId);
+            if (repaired) {
+              console.log(
+                `[CloudPublish] Background catalog drift repair for ${appId}`,
+              );
+            }
+          } catch (error) {
+            console.warn(
+              `[CloudPublish] Background catalog drift failed for ${appId}:`,
+              (error as Error).message.slice(0, 120),
+            );
+          }
+          continue;
+        }
+
+        if (!needsInitialPublish) {
           continue;
         }
 
@@ -888,14 +1369,17 @@ export class CloudAppPublishService {
             },
             this.paprDir,
           );
-          const action = needsInitialPublish ? "Auto-published" : "Re-published (drift)";
+          const action = "Auto-published";
           console.log(
             `[CloudPublish] ${action} ${appId} → ${published.shareUrl ?? defaultAppsHost()}`,
           );
         } catch (error) {
           const message = (error as Error).message;
           if (message.includes("404") || message.includes("Not Found")) {
-            return;
+            console.warn(
+              `[CloudPublish] Auto-publish skipped ${appId} (404) — continuing scan`,
+            );
+            continue;
           }
           setAppPublishPrefs(
             appId,

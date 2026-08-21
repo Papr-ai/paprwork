@@ -3,8 +3,8 @@
  *
  * Watches each linked job's `data/` directory so writes are detected whether they
  * land on `data.db`, `data.db-wal`, or `data.db-shm` (WAL mode, long-lived jobs,
- * mini-app /api/db/write, bash sqlite, etc.). Debounced push + fingerprints still
- * decide whether Turso actually needs an upload at flush time.
+ * mini-app /api/db/write, bash sqlite, etc.). Debounced ship via workspace log
+ * decides whether remote Turso needs an update at flush time.
  */
 
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
@@ -85,7 +85,7 @@ async function rebuildWatchDirs(appsRootDir: string): Promise<string[]> {
 /**
  * Coalesce bursts of data.db / -wal / -shm writes into one evaluation.
  *
- * Each evaluation opens the SQLite file and fingerprints every syncable table,
+ * Each evaluation checks the local `_papr_sync_log` for unpushed row ops,
  * so a busy job writing in a loop could otherwise pin the gateway event loop
  * and starve /health and the WebSocket heartbeat.
  */
@@ -112,27 +112,30 @@ function handleDbChange(changedPath: string): void {
   pendingChangeTimers.set(watched.syncKey, timer);
 }
 
-function evaluateDbChange(watched: WatchedDbDir): void {
-  if (!isTursoStateDbPathInWorkspace(watched.dbPath)) {
+function handleLinkedDbEvaluationError(
+  watched: WatchedDbDir,
+  error: unknown,
+  context: string,
+): void {
+  const message = (error as Error).message;
+  if (isSqliteBusyError(error)) {
+    console.warn(
+      `[TursoLinkedDbWatcher] DB busy, deferring ${context} for ${watched.syncKey}`,
+    );
     return;
   }
+  if (isTursoLocalDatabaseCorruptError(message)) {
+    recordTursoPushQuarantine(watched.syncKey, watched.dbPath, message);
+    return;
+  }
+  console.warn(
+    `[TursoLinkedDbWatcher] ${context} failed for ${watched.syncKey}:`,
+    message,
+  );
+}
 
-  try {
-    ensureLocalDbChangeLogReady(watched.dbPath);
-  } catch (error) {
-    const message = (error as Error).message;
-    if (isSqliteBusyError(error)) {
-      console.warn(
-        `[TursoLinkedDbWatcher] DB busy, deferring changelog setup for ${watched.syncKey}`,
-      );
-    } else if (isTursoLocalDatabaseCorruptError(message)) {
-      recordTursoPushQuarantine(watched.syncKey, watched.dbPath, message);
-    } else {
-      console.warn(
-        `[TursoLinkedDbWatcher] Changelog setup failed for ${watched.syncKey}:`,
-        message,
-      );
-    }
+function evaluateDbChange(watched: WatchedDbDir): void {
+  if (!isTursoStateDbPathInWorkspace(watched.dbPath)) {
     return;
   }
 
@@ -141,12 +144,19 @@ function evaluateDbChange(watched: WatchedDbDir): void {
     return;
   }
 
-  if (!localDbHasSyncableUserTables(watched.dbPath)) {
-    return;
-  }
+  try {
+    ensureLocalDbChangeLogReady(watched.dbPath);
 
-  if (!hasUnpushedLocalDbChanges(watched.syncKey, watched.dbPath, syncState)) {
-    clearStaleDirtyFlagIfClean(watched.syncKey, watched.dbPath);
+    if (!localDbHasSyncableUserTables(watched.dbPath)) {
+      return;
+    }
+
+    if (!hasUnpushedLocalDbChanges(watched.syncKey, watched.dbPath, syncState)) {
+      clearStaleDirtyFlagIfClean(watched.syncKey, watched.dbPath);
+      return;
+    }
+  } catch (error) {
+    handleLinkedDbEvaluationError(watched, error, "db evaluation");
     return;
   }
 
@@ -235,6 +245,11 @@ export function resolveWatchedDbPathForTests(changedPath: string): string | null
     return null;
   }
   return normalizePath(changedPath);
+}
+
+/** @internal test helper */
+export function evaluateDbChangeForTests(watched: WatchedDbDir): void {
+  evaluateDbChange(watched);
 }
 
 /** @internal test helper */

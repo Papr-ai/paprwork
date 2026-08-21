@@ -64,6 +64,36 @@ export interface AppCloudDatabaseStatus {
   phase: AppCloudItemPhase;
   detail: string;
   manualUploadHold?: boolean;
+  /** Local SQLite schema differs from Turso — blocks web-ready until healed. */
+  schemaDrift?: boolean;
+  /** True when row-level CDC is catching up but replica already exists. */
+  rowsSyncing?: boolean;
+}
+
+/** Pending DB work that should block the green "Synced" chip. */
+function databaseBlocksOverallSync(input: {
+  status: AppCloudDatabaseStatus["status"];
+  schemaDrift?: boolean;
+  remoteTableCount?: number;
+  manualUploadHold?: boolean;
+}): boolean {
+  if (input.status === "quarantined" || input.status === "unavailable") {
+    return true;
+  }
+  if (input.status !== "pending") {
+    return false;
+  }
+  if (input.manualUploadHold) {
+    return true;
+  }
+  if (input.schemaDrift) {
+    return true;
+  }
+  // Row-level dirty with an existing Turso replica — background CDC, not a chip blocker.
+  if ((input.remoteTableCount ?? 0) > 0) {
+    return false;
+  }
+  return true;
 }
 
 export type AppCloudPublishStatus =
@@ -106,6 +136,8 @@ export interface AppCloudSyncStatus {
   totalJobCount: number;
   summaryLine: string;
   databases: AppCloudDatabaseStatus[];
+  /** True when any linked DB has local/remote schema drift blocking web sync. */
+  hasSchemaDrift: boolean;
   hasLinkedDatabases: boolean;
   hasRegistryDatabases: boolean;
   registryPhase: AppCloudItemPhase;
@@ -123,9 +155,15 @@ export interface AppCloudSyncStatus {
   uploadLabel?: string | null;
   uploadDetail?: string | null;
   uploadRetryPending?: boolean;
+  /** Waiting in global flush queue (not actively uploading yet). */
+  uploadQueued?: boolean;
+  uploadQueuePosition?: number | null;
+  uploadQueueDepth?: number | null;
   /** Remote git commits exist that local has not merged yet. */
   gitUpdatesAvailable: boolean;
   gitUpdatesSummary: string | null;
+  /** App-repo writer 409 — parentHash mismatch; merge or reconcile before re-upload. */
+  writerConflict: boolean;
   /** App/job source on remote — user must tap Merge remote changes. */
   gitRemoteRequiresReview: boolean;
   /** Cloud job status writebacks only — auto-integrating, no approval needed. */
@@ -143,6 +181,43 @@ const GIT_ACTIVE_STATUSES = new Set([
   "cloning",
   "pulling",
 ]);
+
+function mapAppSyncV3ToCodeStatus(
+  status: NonNullable<SyncItemsResponse["appSync"]>["status"],
+): AppCloudCodeStatus {
+  switch (status) {
+    case "synced":
+      return "synced";
+    case "uploading":
+    case "pending":
+    case "not_uploaded":
+      return "pending";
+    case "failed":
+    case "conflict":
+      return "failed";
+    default:
+      return "unknown";
+  }
+}
+
+function registryLabelForAppSync(
+  hasRegistryDatabases: boolean,
+  codePhase: AppCloudItemPhase,
+): string {
+  if (!hasRegistryDatabases) {
+    return "No registry databases";
+  }
+  if (codePhase === "synced") {
+    return "Registry on the web";
+  }
+  if (codePhase === "not_uploaded") {
+    return "Registry not on web yet";
+  }
+  if (codePhase === "uploading") {
+    return "Registry uploading with app code";
+  }
+  return "Registry uploads with app code";
+}
 
 function resolveItemPhase(
   status: AppCloudCodeStatus,
@@ -236,9 +311,10 @@ function databaseDetail(item: {
       if (item.schemaDrift) {
         return "Local schema changed — click Upload now to update Turso";
       }
-      return item.remoteTableCount > 0
-        ? "Local changes waiting — click Upload now to push to Turso"
-        : `${item.localTableCount} local table(s) not on Turso yet — click Upload now`;
+      if (item.remoteTableCount > 0) {
+        return "Row changes syncing to Turso in the background";
+      }
+      return `${item.localTableCount} local table(s) not on Turso yet — click Upload now`;
     case "empty":
       return "No data tables yet";
     case "unavailable":
@@ -306,31 +382,39 @@ function buildSummaryLine(opts: {
   codePhase: AppCloudItemPhase;
   syncedJobCount: number;
   totalJobCount: number;
-  dbPending: number;
+  dbBlockingPending: number;
+  dbRowsSyncing: number;
   registryNeedsSync: boolean;
   isActivelyUploading: boolean;
-  isChecking: boolean;
+  isQueuedForUpload: boolean;
+  uploadQueuePosition?: number | null;
+  uploadQueueDepth?: number | null;
   overall: AppCloudSyncOverall;
   lastUploadedAt: string | null;
   publishStatus?: AppCloudPublishStatus;
   publishDetail?: string | null;
   gitRemoteRequiresReview?: boolean;
   gitRemoteMetadataSync?: boolean;
+  uploadLabel?: string | null;
 }): string {
   const {
     codePhase,
     syncedJobCount,
     totalJobCount,
-    dbPending,
+    dbBlockingPending,
+    dbRowsSyncing,
     registryNeedsSync,
     isActivelyUploading,
-    isChecking,
+    isQueuedForUpload,
+    uploadQueuePosition,
+    uploadQueueDepth,
     overall,
     lastUploadedAt,
     publishStatus,
     publishDetail,
     gitRemoteRequiresReview,
     gitRemoteMetadataSync,
+    uploadLabel,
   } = opts;
 
   if (gitRemoteMetadataSync) {
@@ -340,8 +424,18 @@ function buildSummaryLine(opts: {
     return "Merge cloud changes before upload";
   }
 
-  if (isChecking && !isActivelyUploading) {
-    return "Checking for updates…";
+  if (isQueuedForUpload) {
+    if (uploadLabel?.trim()) {
+      return uploadLabel;
+    }
+    if (
+      uploadQueuePosition != null &&
+      uploadQueueDepth != null &&
+      uploadQueueDepth > 1
+    ) {
+      return `In upload queue (${uploadQueuePosition} of ${uploadQueueDepth})…`;
+    }
+    return "Waiting in upload queue…";
   }
 
   if (isActivelyUploading) {
@@ -358,7 +452,7 @@ function buildSummaryLine(opts: {
   if (codePhase === "not_uploaded") {
     parts.push("app code not uploaded yet");
   } else if (codePhase === "changed") {
-    parts.push("app code changed locally");
+    parts.push("local app changes not on web yet");
   }
   if (registryNeedsSync) {
     parts.push(
@@ -367,8 +461,10 @@ function buildSummaryLine(opts: {
         : "database registry will upload with app code",
     );
   }
-  if (dbPending > 0) {
-    parts.push(`${dbPending} database(s) waiting for Turso upload`);
+  if (dbBlockingPending > 0) {
+    parts.push(`${dbBlockingPending} database(s) waiting for Turso upload`);
+  } else if (dbRowsSyncing > 0) {
+    parts.push(`${dbRowsSyncing} database(s) syncing row changes in the background`);
   }
   if (publishStatus === "not_web_ready" || publishStatus === "drift") {
     parts.push(publishDetailLabel(publishStatus, publishDetail ?? null));
@@ -421,6 +517,7 @@ export function deriveAppCloudSyncStatus(
       totalJobCount: 0,
       summaryLine: "Cloud sync is off",
       databases: [],
+      hasSchemaDrift: false,
       hasLinkedDatabases: false,
       hasRegistryDatabases: false,
       registryPhase: "changed",
@@ -448,30 +545,58 @@ export function deriveAppCloudSyncStatus(
     items.github?.gitRemoteReviewHeadline ?? null;
   const globallySyncing = GIT_ACTIVE_STATUSES.has(gitGlobalStatus ?? "");
   const queuedPaths = new Set(items.github?.queuedPaths ?? []);
+  const uploadQueuedEarly = items.upload?.waitingReason === "queued";
+  const clientPushActive = isUploading && !uploadQueuedEarly;
   const appPath = `apps/${appId}`;
+  const appSync = items.appSync ?? null;
+  const writerConflict = appSync?.status === "conflict";
   const githubItem = items.github?.apps.find(
     (item) => item.relativePath === appPath,
   );
 
   let codeStatus: AppCloudCodeStatus = "unknown";
-  if (githubItem) {
+  let codePhase: AppCloudItemPhase = "changed";
+  let codeLabel = "Sync status unknown";
+  let codeLastError: string | null | undefined;
+
+  if (appSync) {
+    codeStatus = mapAppSyncV3ToCodeStatus(appSync.status);
+    codePhase = appSync.phase;
+    codeLabel = appSync.detail;
+    codeLastError = appSync.lastError ?? null;
+    if (clientPushActive && codePhase !== "synced" && appSync.status === "uploading") {
+      codePhase = "uploading";
+    }
+  } else if (githubItem) {
     codeStatus = githubItem.status;
-  }
-  const codePhase = resolveItemPhase(
-    codeStatus,
-    appPath,
-    queuedPaths,
-    githubItem?.lastSyncAt ?? null,
-  );
-  if (isUploading && codePhase !== "synced") {
-    // Client-side push in flight — show active upload for non-synced items.
+    codePhase = resolveItemPhase(
+      codeStatus,
+      appPath,
+      queuedPaths,
+      githubItem.lastSyncAt ?? null,
+    );
+    codeLabel = codeDetail(
+      codePhase,
+      codeStatus,
+      githubItem.manualUploadHold,
+      githubItem.lastError,
+    );
+    codeLastError = githubItem.lastError;
   }
 
   const jobIdSet = new Set(
     options?.dependentJobIds ?? items.appContext?.dependentJobIds ?? [],
   );
-  const dependentJobs: AppCloudJobStatus[] = (items.github?.jobs ?? [])
+  const seenDependentJobIds = new Set<string>();
+  const dependentJobsRaw: AppCloudJobStatus[] = (items.github?.jobs ?? [])
     .filter((job) => jobIdSet.has(job.id))
+    .filter((job) => {
+      if (seenDependentJobIds.has(job.id)) {
+        return false;
+      }
+      seenDependentJobIds.add(job.id);
+      return true;
+    })
     .map((job) => {
       let phase = resolveItemPhase(
         job.status,
@@ -479,28 +604,58 @@ export function deriveAppCloudSyncStatus(
         queuedPaths,
         job.lastSyncAt,
       );
+      if (appSync && appSync.phase !== "synced" && phase === "synced") {
+        phase = appSync.phase === "not_uploaded" ? "not_uploaded" : "changed";
+      }
       if (isUploading && phase !== "synced") {
         phase = "uploading";
       }
+      const detail =
+        appSync && appSync.phase !== "synced" && phase !== "synced"
+          ? "Uploads with app code via cloud repo"
+          : gitRemoteMetadataSync && job.status === "updates_available"
+            ? "Integrating cloud job status…"
+            : jobDetail(phase, job.status, job.manualUploadHold, job.lastError);
       return {
         jobId: job.id,
         label: job.label,
         status: job.status,
         phase,
-        detail:
-          gitRemoteMetadataSync && job.status === "updates_available"
-            ? "Integrating cloud job status…"
-            : jobDetail(phase, job.status, job.manualUploadHold, job.lastError),
+        detail,
         lastError: job.lastError,
         manualUploadHold: job.manualUploadHold,
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
 
+  const labelCounts = new Map<string, number>();
+  for (const job of dependentJobsRaw) {
+    labelCounts.set(job.label, (labelCounts.get(job.label) ?? 0) + 1);
+  }
+  const dependentJobs = dependentJobsRaw.map((job) => {
+    if ((labelCounts.get(job.label) ?? 0) <= 1) {
+      return job;
+    }
+    return {
+      ...job,
+      label: `${job.label} (${job.jobId.slice(0, 8)})`,
+    };
+  });
+
   const databases: AppCloudDatabaseStatus[] = (items.turso?.sources ?? [])
     .filter((source) => source.appId === appId)
     .map((source) => {
-      const phase = databasePhase(source.status);
+      const blocksOverall = databaseBlocksOverallSync({
+        status: source.status,
+        schemaDrift: source.schemaDrift,
+        remoteTableCount: source.remoteTableCount,
+        manualUploadHold: source.manualUploadHold,
+      });
+      const rowsSyncing =
+        source.status === "pending" &&
+        !blocksOverall &&
+        (source.remoteTableCount ?? 0) > 0;
+      const phase = rowsSyncing ? "synced" : databasePhase(source.status);
       return {
         alias: source.alias,
         jobId: source.jobId,
@@ -516,16 +671,28 @@ export function deriveAppCloudSyncStatus(
           manualUploadHold: source.manualUploadHold,
         }),
         manualUploadHold: source.manualUploadHold,
+        schemaDrift: source.schemaDrift,
+        rowsSyncing: rowsSyncing || undefined,
       };
     });
 
+  const hasSchemaDrift = databases.some((db) => db.schemaDrift === true);
   const hasLinkedDatabases = databases.length > 0;
   const hasDependentJobs = dependentJobs.length > 0;
   const syncedJobCount = dependentJobs.filter((job) => job.phase === "synced").length;
   const totalJobCount = dependentJobs.length;
-  const dbPending = databases.filter(
-    (db) => db.status === "pending" || db.status === "quarantined",
-  ).length;
+  const dbBlockingPending = databases.filter((db) => {
+    const source = (items.turso?.sources ?? []).find(
+      (s) => s.appId === appId && s.alias === db.alias,
+    );
+    return databaseBlocksOverallSync({
+      status: db.status,
+      schemaDrift: source?.schemaDrift,
+      remoteTableCount: source?.remoteTableCount,
+      manualUploadHold: db.manualUploadHold,
+    });
+  }).length;
+  const dbRowsSyncing = databases.filter((db) => db.rowsSyncing).length;
 
   const registryDbIds =
     options?.registryDbIds ?? items.appContext?.registryDbIds ?? [];
@@ -536,7 +703,10 @@ export function deriveAppCloudSyncStatus(
     registryPhase = "synced";
   } else if (codePhase === "synced") {
     registryPhase = "synced";
-  } else if (isUploading || codePhase === "uploading") {
+  } else if (
+    (isUploading || codePhase === "uploading") &&
+    !uploadQueuedEarly
+  ) {
     registryPhase = "uploading";
   } else if (codePhase === "not_uploaded") {
     registryPhase = "not_uploaded";
@@ -544,22 +714,30 @@ export function deriveAppCloudSyncStatus(
     registryPhase = "changed";
   }
   const registryNeedsSync = hasRegistryDatabases && registryPhase !== "synced";
-  const registryLabel = !hasRegistryDatabases
-    ? "No registry databases"
-    : registryPhase === "synced"
-      ? "Registry on the web"
-      : codePhase === "not_uploaded"
-        ? "Registry not on web yet"
-        : "Registry uploads with app code";
+  const registryLabel = appSync
+    ? registryLabelForAppSync(hasRegistryDatabases, registryPhase)
+    : !hasRegistryDatabases
+      ? "No registry databases"
+      : registryPhase === "synced"
+        ? "Registry on the web"
+        : codePhase === "not_uploaded"
+          ? "Registry not on web yet"
+          : "Registry uploads with app code";
 
   const codePhaseDisplay =
-    isUploading && codePhase !== "synced" ? "uploading" : codePhase;
-  let codeLabel = codeDetail(
-    codePhaseDisplay,
-    codeStatus,
-    githubItem?.manualUploadHold,
-    githubItem?.lastError,
-  );
+    clientPushActive && codePhase !== "synced"
+      ? "uploading"
+      : codePhase;
+  if (!appSync) {
+    codeLabel = codeDetail(
+      codePhaseDisplay,
+      codeStatus,
+      githubItem?.manualUploadHold,
+      githubItem?.lastError,
+    );
+  } else if (codePhaseDisplay === "uploading" && codePhase !== "uploading") {
+    codeLabel = "Uploading app code to cloud repo…";
+  }
 
   const publishLive = items.appContext?.publishLive === true;
   const publishedAt = items.appContext?.publishedAt ?? null;
@@ -580,18 +758,34 @@ export function deriveAppCloudSyncStatus(
   const uploadLabel = items.upload?.label ?? null;
   const uploadDetail = items.upload?.detail ?? null;
   const uploadRetryPending = items.upload?.retryPending ?? false;
+  const uploadQueued = items.upload?.waitingReason === "queued";
+  const uploadQueuePosition = items.upload?.queuePosition ?? null;
+  const uploadQueueDepth = items.upload?.queueDepth ?? null;
   const coordinatorUploading = uploadStatus === "uploading";
   const coordinatorWaiting = uploadStatus === "waiting";
   const coordinatorFailed = uploadStatus === "failed";
+
+  const isQueuedForUpload = uploadQueued;
+  const syncedOnWebNoLocalWork =
+    (codePhase === "synced" ||
+      (publishLive && codePhase === "not_uploaded" && codeStatus === "pending")) &&
+    (appSync == null ||
+      (appSync.phase === "synced" && appSync.hasLocalChanges !== true)) &&
+    dbBlockingPending === 0 &&
+    dependentJobs.every((job) => job.phase === "synced") &&
+    !registryNeedsSync;
+  const effectiveQueuedForUpload =
+    isQueuedForUpload && !syncedOnWebNoLocalWork;
   const coordinatorAffectsUi =
     !publishLayerSynced &&
+    !(isQueuedForUpload && syncedOnWebNoLocalWork) &&
     (coordinatorUploading || coordinatorWaiting || coordinatorFailed);
-
   const isActivelyUploading =
-    isUploading ||
-    (coordinatorUploading && !publishLayerSynced) ||
-    codePhaseDisplay === "uploading" ||
-    dependentJobs.some((job) => job.phase === "uploading");
+    !effectiveQueuedForUpload &&
+    (clientPushActive ||
+      (coordinatorUploading && !publishLayerSynced) ||
+      (codePhaseDisplay === "uploading" && !publishLayerSynced) ||
+      dependentJobs.some((job) => job.phase === "uploading"));
 
   let displayCodePhase = codePhaseDisplay;
   let displayRegistryPhase = registryPhase;
@@ -601,7 +795,7 @@ export function deriveAppCloudSyncStatus(
   if (publishLive && !isActivelyUploading) {
     if (codePhase === "not_uploaded" && codeStatus === "pending") {
       displayCodePhase = "synced";
-      codeLabel = "App code is on the web";
+      codeLabel = appSync?.label ?? "App code on the web";
     }
     if (registryPhase === "not_uploaded") {
       displayRegistryPhase = "synced";
@@ -610,26 +804,37 @@ export function deriveAppCloudSyncStatus(
     }
   }
 
-  const isChecking = refreshing && !isActivelyUploading;
-  const lastUploadedAt = githubItem?.lastSyncAt ?? publishedAt ?? null;
+  const lastUploadedAt =
+    appSync?.lastUploadedAt ??
+    githubItem?.lastSyncAt ??
+    publishedAt ??
+    null;
 
   const needsSync =
     codePhase === "changed" ||
     (codePhase === "not_uploaded" && !publishLive) ||
     codeStatus === "failed" ||
     (coordinatorFailed && !publishLayerSynced) ||
-    (coordinatorWaiting && !publishLayerSynced) ||
+    (coordinatorWaiting &&
+      !publishLayerSynced &&
+      !(isQueuedForUpload && syncedOnWebNoLocalWork)) ||
     dependentJobs.some(
       (job) =>
         job.phase === "changed" ||
         job.phase === "not_uploaded" ||
         job.status === "failed",
     ) ||
-    dbPending > 0 ||
-    displayRegistryNeedsSync;
+    dbBlockingPending > 0 ||
+    displayRegistryNeedsSync ||
+    (!publishLayerSynced &&
+      displayCodePhase === "synced" &&
+      dbBlockingPending === 0 &&
+      !displayRegistryNeedsSync);
 
   let overall: AppCloudSyncOverall = "unknown";
-  if (isActivelyUploading) {
+  if (effectiveQueuedForUpload) {
+    overall = "needs_sync";
+  } else if (isActivelyUploading) {
     overall = "uploading";
   } else if (
     gitRemoteRequiresReview ||
@@ -642,9 +847,12 @@ export function deriveAppCloudSyncStatus(
   } else if (
     displayCodePhase === "synced" &&
     dependentJobs.every((job) => job.phase === "synced") &&
-    dbPending === 0 &&
+    dbBlockingPending === 0 &&
     !displayRegistryNeedsSync &&
-    (!coordinatorWaiting || publishLayerSynced) &&
+    publishLayerSynced &&
+    (!coordinatorWaiting ||
+      publishLayerSynced ||
+      (isQueuedForUpload && syncedOnWebNoLocalWork)) &&
     (!(coordinatorFailed && !uploadRetryPending) || publishLayerSynced)
   ) {
     overall = "synced";
@@ -655,6 +863,8 @@ export function deriveAppCloudSyncStatus(
     chipLabel = "Upload failed";
   } else if (codeStatus === "failed") {
     chipLabel = "Upload failed";
+  } else if (writerConflict) {
+    chipLabel = "Conflict on the web";
   } else if (gitRemoteRequiresReview) {
     chipLabel = "Merge required";
   } else if (gitRemoteMetadataSync) {
@@ -662,6 +872,8 @@ export function deriveAppCloudSyncStatus(
   } else if (cloudPublishing || publishStatus === "republishing") {
     chipLabel = "Updating cloud…";
   } else if (coordinatorUploading && uploadLabel) {
+    chipLabel = uploadLabel;
+  } else if (effectiveQueuedForUpload && uploadLabel) {
     chipLabel = uploadLabel;
   } else if (overall === "synced") {
     const publishChip = publishChipLabel(publishStatus);
@@ -689,16 +901,20 @@ export function deriveAppCloudSyncStatus(
           codePhase: displayCodePhase,
           syncedJobCount,
           totalJobCount,
-          dbPending,
+          dbBlockingPending,
+          dbRowsSyncing,
           registryNeedsSync: displayRegistryNeedsSync,
           isActivelyUploading,
-          isChecking,
+          isQueuedForUpload: effectiveQueuedForUpload,
+          uploadQueuePosition,
+          uploadQueueDepth,
           overall,
           lastUploadedAt,
           publishStatus,
           publishDetail,
           gitRemoteRequiresReview,
           gitRemoteMetadataSync,
+          uploadLabel,
         });
 
   return {
@@ -713,6 +929,7 @@ export function deriveAppCloudSyncStatus(
     totalJobCount,
     summaryLine,
     databases,
+    hasSchemaDrift,
     hasLinkedDatabases,
     hasRegistryDatabases,
     registryPhase: displayRegistryPhase,
@@ -727,12 +944,16 @@ export function deriveAppCloudSyncStatus(
     uploadLabel: coordinatorAffectsUi ? uploadLabel : null,
     uploadDetail: coordinatorAffectsUi ? uploadDetail : null,
     uploadRetryPending: coordinatorAffectsUi ? uploadRetryPending : undefined,
+    uploadQueued: coordinatorAffectsUi ? effectiveQueuedForUpload : undefined,
+    uploadQueuePosition: coordinatorAffectsUi ? uploadQueuePosition : null,
+    uploadQueueDepth: coordinatorAffectsUi ? uploadQueueDepth : null,
     gitUpdatesAvailable,
     gitUpdatesSummary,
+    writerConflict,
     gitRemoteRequiresReview,
     gitRemoteMetadataSync,
     gitRemoteReviewHeadline,
-    codeLastError: githubItem?.lastError ?? null,
+    codeLastError: codeLastError ?? githubItem?.lastError ?? null,
     publishLive,
   };
 }
@@ -758,9 +979,6 @@ export function formatWebSyncStatusTooltip(
   }
   if (options.loading || !status) {
     return "Checking what's on the web…";
-  }
-  if (options.refreshing && status.overall !== "uploading") {
-    return "Checking for updates…";
   }
   if (status.gitRemoteRequiresReview) {
     return "Action needed — merge cloud changes before upload";
@@ -788,12 +1006,9 @@ export function webSyncVisualState(
 ): WebSyncVisualState {
   if (options.error) return "error";
   if (options.loading || !status) return "loading";
-  if (options.refreshing && status.overall !== "uploading" && !options.pushing) {
-    return "loading";
-  }
   if (status.overall === "disabled") return "disabled";
-  if (status.codeStatus === "failed") return "error";
-  if (status.gitRemoteRequiresReview) return "action_required";
+  if (status.codeStatus === "failed" && !status.writerConflict) return "error";
+  if (status.writerConflict || status.gitRemoteRequiresReview) return "action_required";
   if (options.pushing || status.overall === "uploading") return "syncing";
   if (status.overall === "synced") return "synced";
   if (

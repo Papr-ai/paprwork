@@ -10,8 +10,9 @@ import {
 } from "../utils/appCloudSyncStatus";
 import {
   readCachedAppCloudSyncStatus,
+  readCachedSyncItemsForApp,
   readCloudSyncTabSnapshot,
-  writeCloudSyncTabSnapshot,
+  writeCachedSyncItemsForApp,
 } from "../utils/cloudSyncTabCache";
 
 const GATEWAY =
@@ -33,14 +34,64 @@ const STATUS_CACHE_MS = 1_500;
 let gitStatusInFlight: Promise<GitSyncStatus> | null = null;
 let cachedGitStatus: { value: GitSyncStatus; at: number } | null = null;
 
+async function requestAppUpload(appId: string): Promise<void> {
+  const res = await fetch(`${GATEWAY}/api/sync/push`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ appId }),
+  });
+  if (res.status !== 202 && !res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? `Upload failed (${res.status})`);
+  }
+}
+
+async function waitForUploadCompletion(
+  appId: string,
+  refresh: (force?: boolean) => Promise<void>,
+): Promise<void> {
+  const deadline = Date.now() + 15 * 60_000;
+  let sawUploading = false;
+  while (Date.now() < deadline) {
+    await sleep(2_000);
+    const itemsRes = await fetch(
+      `${GATEWAY}/api/sync/items?refresh=1&appId=${encodeURIComponent(appId)}`,
+    );
+    if (!itemsRes.ok) {
+      continue;
+    }
+    const items = (await itemsRes.json()) as SyncItemsResponse;
+    if (items.uploadError?.message && !items.uploadError.retryPending) {
+      throw new Error(items.uploadError.message);
+    }
+    if (items.upload?.status === "failed" && !items.upload.retryPending) {
+      throw new Error(items.upload.detail ?? items.upload.label);
+    }
+    if (items.upload?.status === "uploading") {
+      sawUploading = true;
+    }
+    if (items.upload?.status === "idle") {
+      break;
+    }
+    // Flush finished but blocked (e.g. schema drift) — don't spin for 15m.
+    if (
+      sawUploading &&
+      items.upload?.status !== "uploading" &&
+      items.upload?.status !== undefined
+    ) {
+      break;
+    }
+  }
+  await refresh(true);
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function readInitialSyncItems(): SyncItemsResponse | null {
-  const snapshot = readCloudSyncTabSnapshot();
-  const items = snapshot?.syncItems ?? null;
-  const git = snapshot?.gitStatus as GitSyncStatus | null;
+function readInitialSyncItems(appId: string): SyncItemsResponse | null {
+  const items = readCachedSyncItemsForApp(appId);
+  const git = readCloudSyncTabSnapshot()?.gitStatus as GitSyncStatus | null;
   if (!items?.enabled || !items.github) {
     return null;
   }
@@ -126,11 +177,12 @@ export function useAppCloudSyncStatus(
   error: string | null;
   refresh: (force?: boolean) => Promise<void>;
   pushNow: () => Promise<void>;
+  bumpQueue: () => Promise<void>;
   pullUpdates: () => Promise<void>;
   applyRemoteUpdates: () => Promise<void>;
 } {
   const active = options?.enabled !== false;
-  const initialItems = readInitialSyncItems();
+  const initialItems = readInitialSyncItems(appId);
   const initialStatus = initialItems
     ? deriveAppCloudSyncStatus(
         appId,
@@ -166,6 +218,12 @@ export function useAppCloudSyncStatus(
 
   const status = useMemo(() => {
     if (syncItems) {
+      if (
+        syncItems.appContext?.appId &&
+        syncItems.appContext.appId !== appId
+      ) {
+        return null;
+      }
       return deriveAppCloudSyncStatus(appId, syncItems, gitGlobalStatus, {
         isUploading: pushing,
         refreshing,
@@ -183,7 +241,8 @@ export function useAppCloudSyncStatus(
         setError(null);
         if (!hasLoadedOnceRef.current) {
           setLoading(true);
-        } else if (isBackgroundRefresh) {
+        } else if (!isBackgroundRefresh) {
+          // Explicit refresh (e.g. after merge) — brief indicator without hiding status.
           setRefreshing(true);
         }
 
@@ -217,12 +276,7 @@ export function useAppCloudSyncStatus(
         hasLoadedOnceRef.current = true;
 
         if (shouldPersistSyncSnapshot(items, git)) {
-          const existing = readCloudSyncTabSnapshot();
-          writeCloudSyncTabSnapshot({
-            gitStatus: git,
-            vaultStatus: existing?.vaultStatus ?? null,
-            syncItems: items,
-          });
+          writeCachedSyncItemsForApp(appId, items);
         }
       } catch (err) {
         setError((err as Error).message.slice(0, 120));
@@ -243,44 +297,26 @@ export function useAppCloudSyncStatus(
     setPushing(true);
     setError(null);
     try {
-      const res = await fetch(`${GATEWAY}/api/sync/push`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ appId }),
-      });
-      if (res.status === 202) {
-        const deadline = Date.now() + 15 * 60_000;
-        while (Date.now() < deadline) {
-          await sleep(2_000);
-          const itemsRes = await fetch(
-            `${GATEWAY}/api/sync/items?refresh=1&appId=${encodeURIComponent(appId)}`,
-          );
-          if (!itemsRes.ok) {
-            continue;
-          }
-          const items = (await itemsRes.json()) as SyncItemsResponse;
-          if (items.uploadError?.message && !items.uploadError.retryPending) {
-            throw new Error(items.uploadError.message);
-          }
-          if (items.upload?.status === "failed" && !items.upload.retryPending) {
-            throw new Error(items.upload.detail ?? items.upload.label);
-          }
-          if (items.upload?.status === "idle") {
-            break;
-          }
-        }
-        await refresh(true);
-        return;
-      }
-      if (!res.ok) {
-        const body = (await res.json()) as { error?: string };
-        throw new Error(body.error ?? `Upload failed (${res.status})`);
-      }
-      await refresh(true);
+      await requestAppUpload(appId);
+      await waitForUploadCompletion(appId, refresh);
     } catch (err) {
       setError((err as Error).message.slice(0, 120));
     } finally {
       setPushing(false);
+    }
+  }, [refresh, appId, status?.gitRemoteRequiresReview]);
+
+  const bumpQueue = useCallback(async () => {
+    if (status?.gitRemoteRequiresReview) {
+      setError("Merge remote changes first, then upload.");
+      return;
+    }
+    setError(null);
+    try {
+      await requestAppUpload(appId);
+      await refresh(true);
+    } catch (err) {
+      setError((err as Error).message.slice(0, 120));
     }
   }, [refresh, appId, status?.gitRemoteRequiresReview]);
 
@@ -292,13 +328,27 @@ export function useAppCloudSyncStatus(
     setPulling(true);
     setError(null);
     try {
-      const res = await fetch(`${GATEWAY}/api/sync/pull`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      });
+      const res = await fetch(
+        `${GATEWAY}/api/apps/${encodeURIComponent(appId)}/sync-from-cloud`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ wait: true }),
+        },
+      );
       if (!res.ok) {
         const body = (await res.json()) as { error?: string };
         throw new Error(body.error ?? `Get updates failed (${res.status})`);
+      }
+      const body = (await res.json()) as {
+        code?: { conflictFiles?: string[]; skipped?: boolean; reason?: string };
+      };
+      if (body.code?.skipped && body.code.reason) {
+        setError(body.code.reason.slice(0, 120));
+      } else if ((body.code?.conflictFiles?.length ?? 0) > 0) {
+        setError(
+          `${body.code!.conflictFiles!.length} file conflict(s) — merge locally or ask the agent`,
+        );
       }
       await refresh(true);
     } catch (err) {
@@ -306,7 +356,7 @@ export function useAppCloudSyncStatus(
     } finally {
       setPulling(false);
     }
-  }, [refresh, status?.gitRemoteRequiresReview]);
+  }, [refresh, appId, status?.gitRemoteRequiresReview]);
 
   const applyRemoteUpdates = useCallback(async () => {
     setApplyingUpdates(true);
@@ -340,6 +390,11 @@ export function useAppCloudSyncStatus(
     setApplyingUpdates(false);
     setError(null);
 
+    const cached = readCachedSyncItemsForApp(appId);
+    setSyncItems(cached);
+    hasLoadedOnceRef.current = cached !== null;
+    setLoading(cached === null);
+
     void refresh(false);
   }, [active, appId, refresh]);
 
@@ -350,6 +405,7 @@ export function useAppCloudSyncStatus(
       pulling ||
       applyingUpdates ||
       status?.overall === "uploading" ||
+      status?.uploadQueued === true ||
       status?.publishStatus === "republishing" ||
       status?.globallySyncing
         ? 3_000
@@ -358,7 +414,7 @@ export function useAppCloudSyncStatus(
       void refresh();
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [active, refresh, pushing, pulling, applyingUpdates, status?.overall, status?.publishStatus, status?.globallySyncing]);
+  }, [active, refresh, pushing, pulling, applyingUpdates, status?.overall, status?.uploadQueued, status?.publishStatus, status?.globallySyncing]);
 
   return {
     status,
@@ -372,6 +428,7 @@ export function useAppCloudSyncStatus(
     error,
     refresh,
     pushNow,
+    bumpQueue,
     pullUpdates,
     applyRemoteUpdates,
   };

@@ -11,10 +11,10 @@ import {
 import {
   LEGACY_HOME_JOB_MIGRATION_MARKER,
   migrateLegacyHomeDailyBriefJobIfNeeded,
+  reconcileDuplicateHomeDailyBriefJobs,
 } from "../src/gateway/services/migrateLegacyHomeDailyBriefJob.js";
 import type { JobRecord } from "../src/gateway/services/jobs/types.js";
 import { loadTursoSyncState } from "../src/gateway/services/tursoSyncState.js";
-import { loadConvergenceState } from "../src/gateway/services/cloudSync/convergenceChecker.js";
 
 describe("migrateLegacyHomeDailyBriefJob", () => {
   let tmpDir: string;
@@ -209,12 +209,6 @@ describe("migrateLegacyHomeDailyBriefJob", () => {
     expect(tursoState.jobs[result.toJobId!]?.dbPath).toBe(newDbPath);
     expect(tursoState.jobs[LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID]).toBeUndefined();
 
-    const convergence = loadConvergenceState(tmpDir);
-    expect(convergence.sources[result.toJobId!]?.syncKey).toBe(result.toJobId);
-    expect(
-      convergence.sources[LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID],
-    ).toBeUndefined();
-
     const marker = JSON.parse(
       await fs.readFile(
         path.join(tmpDir, "data", LEGACY_HOME_JOB_MIGRATION_MARKER),
@@ -310,5 +304,97 @@ describe("migrateLegacyHomeDailyBriefJob", () => {
     expect(result.migrated).toBe(true);
     expect(result.toJobId).toBe(namespaceJobId);
     expect(jobs.has(namespaceJobId)).toBe(true);
+  });
+
+  it("reconcile removes legacy duplicate after migration marker exists", async () => {
+    const namespaceJobId = "11111111-2222-3333-4444-555555555555";
+    await seedLegacyJob();
+
+    jobs.delete(LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+    jobs.set(namespaceJobId, {
+      id: namespaceJobId,
+      name: DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
+      type: "agent",
+      status: "idle",
+      appIds: [DEFAULT_HOME_APP_ID],
+      dependsOn: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    jobs.set(LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID, {
+      id: LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+      name: DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
+      type: "agent",
+      status: "idle",
+      appIds: [DEFAULT_HOME_APP_ID],
+      dependsOn: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+    jobs.set(`${LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID}.migrated`, {
+      id: `${LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID}.migrated`,
+      name: DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
+      type: "agent",
+      status: "idle",
+      appIds: ["__standalone__"],
+      dependsOn: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    });
+
+    await fs.mkdir(path.join(jobsRoot, namespaceJobId, "data"), { recursive: true });
+    await fs.writeFile(
+      path.join(jobsRoot, namespaceJobId, "data", "data.db"),
+      "namespace-db",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(appsDir, DEFAULT_HOME_APP_ID, "default-job-id.txt"),
+      `${namespaceJobId}\n`,
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(tmpDir, "data", LEGACY_HOME_JOB_MIGRATION_MARKER),
+      JSON.stringify(
+        {
+          fromJobId: LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+          toJobId: namespaceJobId,
+          migratedAt: "2026-08-17T00:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const deps = {
+      paprDir: tmpDir,
+      appsDir,
+      jobsRoot,
+      jobs,
+      saveJobs: async () => {},
+      persistJobRecord: async () => {},
+    };
+
+    const result = await reconcileDuplicateHomeDailyBriefJobs(deps);
+
+    expect(result.reconciled).toBe(true);
+    expect(result.canonicalJobId).toBe(namespaceJobId);
+    expect(result.removedJobIds).toContain(LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+    expect(result.removedJobIds).toContain(
+      `${LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID}.migrated`,
+    );
+    expect(jobs.has(namespaceJobId)).toBe(true);
+    expect(jobs.has(LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID)).toBe(false);
+
+    const dataSources = JSON.parse(
+      await fs.readFile(
+        path.join(appsDir, DEFAULT_HOME_APP_ID, "data-sources.json"),
+        "utf8",
+      ),
+    ) as { sources: Array<{ jobId?: string; dbPath?: string }> };
+    expect(dataSources.sources).toHaveLength(1);
+    expect(dataSources.sources[0]?.jobId).toBe(namespaceJobId);
+    expect(dataSources.sources[0]?.dbPath).toContain(namespaceJobId);
   });
 });

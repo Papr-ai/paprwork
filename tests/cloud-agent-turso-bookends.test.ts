@@ -1,44 +1,36 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const {
-  pullTursoToLocalDb,
-  ensureLocalDbChangeLogReady,
-  pushLocalDbToTurso,
-  createRemoteClient,
-  localDbHasSyncableUserTables,
-} = vi.hoisted(() => ({
-  pullTursoToLocalDb: vi.fn(),
-  ensureLocalDbChangeLogReady: vi.fn(),
-  pushLocalDbToTurso: vi.fn(),
-  createRemoteClient: vi.fn(),
-  localDbHasSyncableUserTables: vi.fn(() => true),
-}));
-
-const applyPendingDatabaseMigrationsToTurso = vi.hoisted(() => vi.fn());
+const pullLinkedSourceViaWorkspaceLog = vi.hoisted(() => vi.fn());
+const pushLinkedSourceViaWorkspaceLog = vi.hoisted(() => vi.fn());
+const ensureLocalDbChangeLogReady = vi.hoisted(() => vi.fn());
+const localDbHasSyncableUserTables = vi.hoisted(() => vi.fn(() => true));
 const alignMigrationLedgers = vi.hoisted(() => vi.fn());
-const pushLinkedSourceWithDesktopParity = vi.hoisted(() => vi.fn());
 
-const fsMocks = vi.hoisted(() => ({
-  existsSync: vi.fn(() => true),
-  statSync: vi.fn(() => ({ size: 4096 })),
+vi.mock("../src/gateway/services/syncV3/workspaceLogSync.js", () => ({
+  pullLinkedSourceViaWorkspaceLog,
+  pushLinkedSourceViaWorkspaceLog,
 }));
 
 vi.mock("../src/gateway/services/tursoSyncBridgeCore.js", () => ({
-  pullTursoToLocalDb,
   ensureLocalDbChangeLogReady,
-  pushLocalDbToTurso,
-  createRemoteClient,
   localDbHasSyncableUserTables,
+  createRemoteClient: vi.fn(() => ({
+    close: vi.fn(),
+  })),
+}));
+
+vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
+  loadTursoSyncState: vi.fn(() => ({
+    jobs: {
+      "db-abc": { lastPulledLogId: 316, lastSeenRemoteVersion: 18 },
+    },
+  })),
 }));
 
 vi.mock("../src/gateway/services/jobs/jobMigrationTursoSync.js", () => ({
-  applyPendingDatabaseMigrationsToTurso,
   resolveMigrationRootFromDbPath: vi.fn((dbPath: string) => {
     if (dbPath.includes("/data/databases/")) {
       return dbPath.replace(/\/data\.db$/, "");
-    }
-    if (dbPath.includes("/data/data.db")) {
-      return dbPath.replace(/\/data\/data\.db$/, "");
     }
     return null;
   }),
@@ -48,30 +40,11 @@ vi.mock("../src/gateway/services/jobs/jobMigrationLedgerSync.js", () => ({
   alignMigrationLedgers,
 }));
 
-vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
-  loadTursoSyncState: vi.fn(() => ({
-    jobs: {
-      "db-abc": { lastPulledLogId: 316, lastSeenRemoteVersion: 18 },
-    },
-  })),
-  localDbHasSyncableData: () => true,
-}));
-
 vi.mock("fs", () => ({
   default: {
-    existsSync: fsMocks.existsSync,
-    statSync: fsMocks.statSync,
+    existsSync: vi.fn(() => true),
   },
-  existsSync: fsMocks.existsSync,
-  statSync: fsMocks.statSync,
-}));
-
-vi.mock("../src/gateway/services/tursoLinkedSourcePush.js", () => ({
-  pushLinkedSourceWithDesktopParity,
-}));
-
-vi.mock("../src/gateway/services/tursoDeltaSync.js", () => ({
-  remoteNeedsBootstrap: vi.fn().mockResolvedValue(false),
+  existsSync: vi.fn(() => true),
 }));
 
 import {
@@ -83,17 +56,11 @@ describe("cloud agent Turso bookends", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(localDbHasSyncableUserTables).mockReturnValue(true);
-    pullTursoToLocalDb.mockResolvedValue({ status: "pulled" });
-    pushLinkedSourceWithDesktopParity.mockResolvedValue({
+    pullLinkedSourceViaWorkspaceLog.mockResolvedValue({ status: "pulled", tables: ["*"] });
+    pushLinkedSourceViaWorkspaceLog.mockResolvedValue({
       status: "pushed",
       tables: ["audits"],
-      syncMode: "delta",
     });
-    createRemoteClient.mockReturnValue({
-      execute: vi.fn(),
-      close: vi.fn(),
-    });
-    applyPendingDatabaseMigrationsToTurso.mockResolvedValue([]);
     alignMigrationLedgers.mockResolvedValue({
       remoteBackfilled: [],
       localHydrated: [],
@@ -101,17 +68,19 @@ describe("cloud agent Turso bookends", () => {
     });
   });
 
-  it("installs changelog triggers after pulling from Turso", async () => {
+  it("materializes workspace log after pull", async () => {
     const target = {
       syncKey: "db-abc",
       dbPath: "/tmp/sandbox/data.db",
       tursoUrl: "libsql://example.turso.io",
       authToken: "token",
+      appId: "app-1",
+      dbId: "db-abc",
     };
 
     await pullLinkedSourceFromCloud(target);
 
-    expect(pullTursoToLocalDb).toHaveBeenCalledOnce();
+    expect(pullLinkedSourceViaWorkspaceLog).toHaveBeenCalledOnce();
     expect(ensureLocalDbChangeLogReady).toHaveBeenCalledWith(target.dbPath);
     expect(alignMigrationLedgers).not.toHaveBeenCalled();
   });
@@ -122,6 +91,8 @@ describe("cloud agent Turso bookends", () => {
       dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
       tursoUrl: "libsql://example.turso.io",
       authToken: "token",
+      appId: "app-1",
+      dbId: "db-abc",
     };
 
     await pullLinkedSourceFromCloud(target);
@@ -129,8 +100,9 @@ describe("cloud agent Turso bookends", () => {
     expect(alignMigrationLedgers).toHaveBeenCalledOnce();
   });
 
-  it("ignores git sync cursors when local db has no user tables yet", async () => {
+  it("skips workspace log pull when appId is missing", async () => {
     vi.mocked(localDbHasSyncableUserTables).mockReturnValue(false);
+    vi.stubEnv("APP_ID", "");
 
     await pullLinkedSourceFromCloud({
       syncKey: "db-abc",
@@ -139,18 +111,32 @@ describe("cloud agent Turso bookends", () => {
       authToken: "token",
     });
 
-    const pullOptions = pullTursoToLocalDb.mock.calls[0]?.[2];
-    expect(pullOptions).toEqual({ jobId: "db-abc" });
-    expect(pullOptions).not.toHaveProperty("lastPulledLogId");
-    expect(pullOptions).not.toHaveProperty("lastSeenRemoteVersion");
+    expect(pullLinkedSourceViaWorkspaceLog).not.toHaveBeenCalled();
+    expect(ensureLocalDbChangeLogReady).toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 
   it("returns full PushResult from pushLinkedSourceToCloud", async () => {
-    pushLinkedSourceWithDesktopParity.mockResolvedValue({
+    pushLinkedSourceViaWorkspaceLog.mockResolvedValue({
       status: "pushed",
       tables: ["audit_modules"],
-      syncMode: "snapshot_fallback",
     });
+
+    const result = await pushLinkedSourceToCloud({
+      syncKey: "db-abc",
+      dbPath: "/tmp/sandbox/data.db",
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+      appId: "app-1",
+      dbId: "db-abc",
+    });
+
+    expect(result.status).toBe("pushed");
+    expect(pushLinkedSourceViaWorkspaceLog).toHaveBeenCalledOnce();
+  });
+
+  it("fails push when appId is missing", async () => {
+    vi.stubEnv("APP_ID", "");
 
     const result = await pushLinkedSourceToCloud({
       syncKey: "db-abc",
@@ -159,29 +145,9 @@ describe("cloud agent Turso bookends", () => {
       authToken: "token",
     });
 
-    expect(result.status).toBe("pushed");
-    expect(result.syncMode).toBe("snapshot_fallback");
-    expect(pushLinkedSourceWithDesktopParity).toHaveBeenCalledOnce();
-  });
+    vi.unstubAllEnvs();
 
-  it("delegates push to desktop-parity helper with sync state", async () => {
-    await pushLinkedSourceToCloud({
-      syncKey: "db-abc",
-      dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
-      tursoUrl: "libsql://example.turso.io",
-      authToken: "token",
-    });
-
-    expect(pushLinkedSourceWithDesktopParity).toHaveBeenCalledWith(
-      expect.objectContaining({
-        syncKey: "db-abc",
-        dbPath: "/tmp/Papr/data/databases/gtm-audit/data.db",
-        credentials: {
-          tursoUrl: "libsql://example.turso.io",
-          authToken: "token",
-        },
-        state: {},
-      }),
-    );
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("appId");
   });
 });

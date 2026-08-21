@@ -2567,12 +2567,27 @@ async function applyActiveNamespaceSwitch(input: {
   organizationId: string;
   namespaceId: string;
   namespaceName: string;
+  organizationName?: string;
   customKeysStorage: CustomKeysStorage;
   settingsStorage: SettingsStorage;
   /** When false, skip renderer IPC (caller sends a combined workspace event). */
   notifyRenderer?: boolean;
 }): Promise<{ apiKey: string }> {
   await input.customKeysStorage.setActiveOrganization(input.organizationId);
+
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    win.webContents.send("papr:workspace-switch-starting", {
+      organizationId: input.organizationId,
+      parseOrganizationId: input.organizationId,
+      namespaceId: input.namespaceId,
+      namespaceName: input.namespaceName,
+      organizationName:
+        input.organizationName?.trim() ||
+        input.profile.workspaceName?.trim() ||
+        undefined,
+    });
+  }
 
   const pointer = readActiveWorkspacePointer();
   const pointerMatches =
@@ -4426,6 +4441,7 @@ export function initializePaprLoginIPC(
         organizationId: namespaceOrgId,
         namespaceId: defaultNs.namespaceId,
         namespaceName: defaultNs.namespaceName,
+        organizationName: displayName,
         customKeysStorage,
         settingsStorage,
         notifyRenderer: false,

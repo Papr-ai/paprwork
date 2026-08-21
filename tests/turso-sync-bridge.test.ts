@@ -66,6 +66,25 @@ describe("tursoSyncBridgeCore", () => {
     ).toEqual(["tweets"]);
   });
 
+  it("filterSyncableTables excludes workspace log infra tables", () => {
+    expect(
+      filterSyncableTables([
+        "decisions",
+        "_papr_sync_log",
+        "_papr_sync_mute",
+        "_papr_materialized",
+        "_papr_sync_infra",
+        "_papr_oplog",
+      ]),
+    ).toEqual(["decisions"]);
+  });
+
+  it("filterSyncableTables excludes SQLite lost_and_found recovery table", () => {
+    expect(filterSyncableTables(["decisions", "lost_and_found"])).toEqual([
+      "decisions",
+    ]);
+  });
+
   it("quoteIdent escapes double quotes", () => {
     expect(quoteIdent('foo"bar')).toBe('"foo""bar"');
   });
@@ -184,16 +203,15 @@ describe("tursoSyncBridgeCore", () => {
     const base = fs.mkdtempSync(path.join(os.tmpdir(), "papr-turso-pull-"));
     const dbPath = path.join(base, "nested", "data.db");
     try {
-      await expect(
-        pullTursoToLocalDb(
-          dbPath,
-          {
-            tursoUrl: "libsql://invalid.example.turso.io",
-            authToken: "bad-token",
-          },
-          { jobId: "job-1" },
-        ),
-      ).rejects.toThrow();
+      const result = await pullTursoToLocalDb(
+        dbPath,
+        {
+          tursoUrl: "libsql://invalid.example.turso.io",
+          authToken: "bad-token",
+        },
+        { jobId: "job-1" },
+      );
+      expect(result.status).toBe("failed");
       expect(fs.existsSync(path.dirname(dbPath))).toBe(true);
     } finally {
       fs.rmSync(base, { recursive: true, force: true });

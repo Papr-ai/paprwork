@@ -1,9 +1,10 @@
 /**
  * ProfileFooter - Bottom-of-sidebar identity row.
- * Avatar (→ profile section), name + plan, and a more (…) button → Settings.
+ * Avatar (→ profile), user name + active org/namespace, and a more (…) button → Settings.
  */
 
 import React, { useEffect } from "react";
+import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useProfileStore } from "../../stores/profileStore";
 import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
 import "./ProfileFooter.css";
@@ -21,31 +22,23 @@ function initials(name: string): string {
   return (first + last).toUpperCase();
 }
 
-function workspaceTooltip(
-  organizationName: string,
-  namespaceName: string,
-  workspaceName: string,
-): string | undefined {
-  const parts = [organizationName, namespaceName].filter(Boolean);
-  if (parts.length > 0) {
-    return parts.join(" · ");
-  }
-  return workspaceName || undefined;
-}
-
 export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterProps) {
   const {
     name,
-    plan,
     imageUrl,
     organizationName,
     namespaceName,
     workspaceName,
     loadProfile,
   } = useProfileStore();
-  const displayName = name || "Your account";
+  const displayName = name.trim() || "Your account";
+  const workspaceLabel =
+    formatActiveWorkspaceLabel({
+      organizationName,
+      namespaceName,
+      workspaceName,
+    }) ?? "";
   const ini = initials(name);
-  const tooltip = workspaceTooltip(organizationName, namespaceName, workspaceName);
 
   useEffect(() => {
     void loadProfile();
@@ -116,10 +109,12 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       <button
         className="profile-footer__id"
         onClick={onOpenProfile}
-        title={tooltip}
+        title={workspaceLabel || undefined}
       >
         <span className="profile-footer__name">{displayName}</span>
-        {plan ? <span className="profile-footer__plan">{plan}</span> : null}
+        {workspaceLabel ? (
+          <span className="profile-footer__plan">{workspaceLabel}</span>
+        ) : null}
       </button>
 
       <ConnectionIndicator />

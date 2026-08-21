@@ -3,7 +3,7 @@ import { applyPendingCloudRunPatches } from "../src/gateway/services/cloudSync/a
 import type { JobRuntimePatch } from "../src/gateway/types/cloudRuntime.js";
 
 describe("applyPendingCloudRunPatches", () => {
-  test("applies all patches and skips git when scheduleState present", async () => {
+  test("applies all patches when scheduleState present", async () => {
     const applyCloudRunPatch = vi
       .fn()
       .mockResolvedValueOnce({ id: "a" })
@@ -32,11 +32,11 @@ describe("applyPendingCloudRunPatches", () => {
       },
     );
 
-    expect(result).toEqual({ applied: 2, needsGitFallback: false });
+    expect(result).toEqual({ applied: 2, incompletePatches: 0 });
     expect(applyCloudRunPatch).toHaveBeenCalledTimes(2);
   });
 
-  test("requests git fallback when terminal patch lacks nextRunAt and was not applied", async () => {
+  test("counts incomplete terminal patches lacking nextRunAt (no git fallback)", async () => {
     const applyCloudRunPatch = vi.fn().mockResolvedValue(null);
 
     const result = await applyPendingCloudRunPatches(
@@ -55,10 +55,10 @@ describe("applyPendingCloudRunPatches", () => {
       },
     );
 
-    expect(result).toEqual({ applied: 0, needsGitFallback: true });
+    expect(result).toEqual({ applied: 0, incompletePatches: 1 });
   });
 
-  test("does not request git fallback when patch was skipped by LWW only", async () => {
+  test("does not count non-terminal skipped patches as incomplete", async () => {
     const applyCloudRunPatch = vi.fn().mockResolvedValue(null);
 
     const result = await applyPendingCloudRunPatches(
@@ -77,6 +77,6 @@ describe("applyPendingCloudRunPatches", () => {
       },
     );
 
-    expect(result).toEqual({ applied: 0, needsGitFallback: false });
+    expect(result).toEqual({ applied: 0, incompletePatches: 0 });
   });
 });

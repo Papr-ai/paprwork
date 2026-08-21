@@ -6,10 +6,13 @@ import type { RequiredKeySpec, ServiceCategory } from "../../core/types/bundles.
 import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
 import { catalogRequirementsForPublish } from "./cloudAppRequirements.js";
 import type { CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
+import { isUninitializedSharingPrefs } from "./cloudPublishPrefs.js";
 import {
-  resolveSharingSettings,
+  memoryPublishResponseToSharingSettings,
   resolvePublishFieldsFromPrefs,
+  resolveSharingSettings,
   sharingSettingsRequireShareToken,
+  type CloudSharingSettings,
   type MemoryCatalogRequirementFields,
   type MemoryPublishResponseFields,
 } from "./cloudPublishMapping.js";
@@ -41,6 +44,63 @@ export interface PublishDriftInput {
   expectedSlug: string;
   /** Effective local catalog (requirements.json + backend/manifest.json). */
   localCatalogRequirements?: RequiredKeySpec[];
+  /** Local listing metadata from apps.json + platform manifest. */
+  localCatalogMetadata?: {
+    title?: string;
+    description?: string;
+    icon?: string;
+    tags?: string[];
+    platform?: string[];
+    requiresDesktop?: boolean;
+  };
+}
+
+function normalizedStringArray(values: string[] | undefined): string[] {
+  return [...(values ?? [])].map((value) => value.trim()).filter(Boolean).sort();
+}
+
+function detectCatalogMetadataDrift(
+  memory: MemoryPublishResponseFields,
+  local: NonNullable<PublishDriftInput["localCatalogMetadata"]>,
+): string[] {
+  const reasons: string[] = [];
+
+  if (local.title !== undefined && local.title !== (memory.catalogTitle ?? "")) {
+    reasons.push("catalogTitle");
+  }
+  if (
+    local.description !== undefined &&
+    local.description !== (memory.catalogDescription ?? "")
+  ) {
+    reasons.push("catalogDescription");
+  }
+  if (local.icon !== undefined && local.icon !== (memory.catalogIcon ?? "")) {
+    reasons.push("catalogIcon");
+  }
+
+  const localTags = normalizedStringArray(local.tags);
+  const memoryTags = normalizedStringArray(memory.catalogTags);
+  if (localTags.length > 0 && localTags.join("|") !== memoryTags.join("|")) {
+    reasons.push("catalogTags");
+  }
+
+  const localPlatform = normalizedStringArray(local.platform);
+  const memoryPlatform = normalizedStringArray(memory.catalogPlatform);
+  if (
+    localPlatform.length > 0 &&
+    localPlatform.join("|") !== memoryPlatform.join("|")
+  ) {
+    reasons.push("catalogPlatform");
+  }
+
+  if (
+    local.requiresDesktop !== undefined &&
+    local.requiresDesktop !== (memory.catalogRequiresDesktop === true)
+  ) {
+    reasons.push("catalogRequiresDesktop");
+  }
+
+  return reasons;
 }
 
 function catalogDriftFingerprint(requirements: RequiredKeySpec[]): string {
@@ -127,8 +187,50 @@ export function detectCatalogRequirementsDrift(
 }
 
 /**
- * Returns human-readable drift reasons. Empty array = memory matches local intent.
+ * Drift that should trigger automatic code/catalog republish only.
+ * Sharing ACL changes require an explicit user or agent action.
  */
+export function detectAutoPublishDrift(input: PublishDriftInput): string[] {
+  const { memory, prefs, expectedSlug, localCatalogRequirements, localCatalogMetadata } =
+    input;
+  if (!memory?.enabled) {
+    return [];
+  }
+
+  const reasons: string[] = [];
+
+  if (memory.slug && memory.slug !== expectedSlug) {
+    reasons.push(`slug:${memory.slug}→${expectedSlug}`);
+  }
+
+  if (localCatalogRequirements !== undefined) {
+    reasons.push(
+      ...detectCatalogRequirementsDrift(
+        localCatalogRequirements,
+        memory,
+        prefs.credentialRequirements,
+      ),
+    );
+  }
+
+  if (localCatalogMetadata) {
+    reasons.push(...detectCatalogMetadataDrift(memory, localCatalogMetadata));
+  }
+
+  return reasons;
+}
+
+/** UI display: local prefs when set; otherwise show what is live on cloud. Read-only. */
+export function resolveSharingSettingsForDisplay(
+  prefs: CloudPublishAppPrefs,
+  memory: MemoryPublishResponseFields | null,
+): CloudSharingSettings {
+  if (memory?.enabled && isUninitializedSharingPrefs(prefs)) {
+    return memoryPublishResponseToSharingSettings(memory);
+  }
+  return resolveSharingSettings(prefs);
+}
+
 export function detectPublishDrift(input: PublishDriftInput): string[] {
   const { memory, prefs, expectedSlug, localCatalogRequirements } = input;
   if (!memory?.enabled) {

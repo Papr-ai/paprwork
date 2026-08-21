@@ -22,6 +22,7 @@
     "src/electron/index.cjs",
     "src/electron/supervisor-logic.cjs",
     "src/electron/preload.cjs",
+    "src/electron/geolocationPermission.cjs",
     "src/electron/ipc/**/*.cjs",
     "src/resources/**/*",
     "node_modules/playwright/**/*",
@@ -35,6 +36,12 @@
     "node_modules/playwright-core/**",
     "dist/resources/default-apps/**",
     "dist/resources/default-jobs/**"
+  ],
+  "extraResources": [
+    {
+      "from": "build/packaged-gateway-env.json",
+      "to": "packaged-gateway-env.json"
+    }
   ],
   "mac": {
     "category": "public.app-category.productivity",
@@ -63,7 +70,8 @@
     "extendInfo": {
       "NSMicrophoneUsageDescription": "Paprwork needs access to your microphone for meeting recording.",
       "NSCameraUsageDescription": "Paprwork needs access to your camera for meeting recording.",
-      "NSCalendarsUsageDescription": "Paprwork needs access to your calendar to show upcoming meetings."
+      "NSCalendarsUsageDescription": "Paprwork needs access to your calendar to show upcoming meetings.",
+      "NSLocationWhenInUseUsageDescription": "Papr Work uses your location to show local weather in the sidebar."
     }
   },
   "win": {

@@ -1,0 +1,207 @@
+/**
+ * Apply workspace log entries to local SQLite replicas (Phase 3).
+ *
+ * Memory server appends to Turso _papr_oplog; desktop materializes row/schema
+ * entries onto local data.db files.
+ */
+
+import type { AppDataSource } from "../appDataSources.js";
+import type { DbQueryPool, WriteResult } from "../DbQueryPool.js";
+import type {
+  WorkspaceLogEntry,
+  WorkspaceLogRowPayload,
+  WorkspaceLogSchemaPayload,
+} from "../../../core/types/workspaceLog.js";
+import { resolveTursoDatabaseNameForSource } from "../DatabaseRegistryService.js";
+import {
+  appendWorkspaceLogEntry,
+  readWorkspaceLogSince,
+} from "./WorkspaceLogClient.js";
+import {
+  getWorkspaceLogCursor,
+  setWorkspaceLogCursor,
+} from "./workspaceLogCursor.js";
+import { assertReplaySafeRowSql } from "./replaySafeSql.js";
+import {
+  isSeqMaterialized,
+  markSeqMaterialized,
+} from "./workspaceLogMaterialized.js";
+import {
+  applyInlineSchemaSqlLocally,
+  applyMigrationSchemaPayloadLocally,
+} from "./migrationSchemaLocal.js";
+import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
+import Database from "better-sqlite3";
+function isRowPayload(
+  payload: WorkspaceLogEntry["payload"],
+): payload is WorkspaceLogRowPayload {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "sql" in payload &&
+    typeof (payload as WorkspaceLogRowPayload).sql === "string" &&
+    !("migrationId" in payload)
+  );
+}
+
+function isSchemaPayload(
+  payload: WorkspaceLogEntry["payload"],
+): payload is WorkspaceLogSchemaPayload {
+  return (
+    typeof payload === "object" &&
+    payload !== null &&
+    "appId" in payload &&
+    typeof (payload as WorkspaceLogSchemaPayload).appId === "string"
+  );
+}
+
+export function resolveReplicaIdForSource(source: AppDataSource): string | null {
+  return resolveTursoDatabaseNameForSource(source);
+}
+
+/** Append schema op to server log, then materialize locally. */
+export async function appendAndMaterializeSchemaExec(
+  pool: DbQueryPool,
+  appId: string,
+  source: AppDataSource,
+  sql: string,
+): Promise<void> {
+  const replicaId = resolveReplicaIdForSource(source);
+  if (!replicaId) {
+    throw new Error(
+      `Cannot resolve Turso replica for source ${source.alias ?? source.jobId ?? "unknown"}`,
+    );
+  }
+
+  const appendResult = await appendWorkspaceLogEntry({
+    replicaId,
+    kind: "schema",
+    dbSourceId: source.alias ?? source.jobId,
+    payload: { appId, sql },
+  });
+
+  if (!(await isSeqMaterialized(pool, appId, source.dbPath, replicaId, appendResult.seq))) {
+    await pool.exec(appId, source.dbPath, sql);
+    await markSeqMaterialized(pool, appId, source.dbPath, replicaId, appendResult.seq);
+  }
+  await setWorkspaceLogCursor(replicaId, appendResult.seq);
+}
+
+/** Append row op to server log, then materialize locally. */
+export async function appendAndMaterializeRowWrite(
+  pool: DbQueryPool,
+  appId: string,
+  source: AppDataSource,
+  sql: string,
+  params?: unknown[],
+): Promise<WriteResult> {
+  const replicaId = resolveReplicaIdForSource(source);
+  if (!replicaId) {
+    throw new Error(
+      `Cannot resolve Turso replica for source ${source.alias ?? source.jobId ?? "unknown"}`,
+    );
+  }
+
+  assertReplaySafeRowSql(sql);
+
+  const appendResult = await appendWorkspaceLogEntry({
+    replicaId,
+    kind: "row",
+    dbSourceId: source.alias ?? source.jobId,
+    payload: { appId, sql, params },
+  });
+
+  if (await isSeqMaterialized(pool, appId, source.dbPath, replicaId, appendResult.seq)) {
+    await setWorkspaceLogCursor(replicaId, appendResult.seq);
+    return { changes: 0, lastInsertRowid: 0 };
+  }
+
+  const localResult = await pool.write(appId, source.dbPath, sql, params);
+  await markSeqMaterialized(pool, appId, source.dbPath, replicaId, appendResult.seq);
+  await setWorkspaceLogCursor(replicaId, appendResult.seq);
+  return localResult;
+}
+
+async function applyLogEntry(
+  pool: DbQueryPool,
+  source: AppDataSource,
+  entry: WorkspaceLogEntry,
+  replicaId: string,
+): Promise<void> {
+  const rowAppId =
+    entry.kind === "row" && isRowPayload(entry.payload)
+      ? entry.payload.appId
+      : undefined;
+  const schemaAppId =
+    entry.kind === "schema" && isSchemaPayload(entry.payload)
+      ? entry.payload.appId
+      : undefined;
+  const appId = rowAppId ?? schemaAppId ?? entry.dbSourceId ?? "log";
+
+  if (await isSeqMaterialized(pool, appId, source.dbPath, replicaId, entry.seq)) {
+    return;
+  }
+
+  if (entry.kind === "row" && isRowPayload(entry.payload)) {
+    const payload = entry.payload;
+    assertReplaySafeRowSql(payload.sql);
+    await pool.write(payload.appId, source.dbPath, payload.sql, payload.params);
+    await markSeqMaterialized(pool, payload.appId, source.dbPath, replicaId, entry.seq);
+    return;
+  }
+  if (entry.kind === "schema" && isSchemaPayload(entry.payload)) {
+    const schemaPayload = entry.payload;
+    const schemaApp = schemaPayload.appId ?? entry.dbSourceId ?? "schema";
+    const db = new Database(source.dbPath);
+    try {
+      if (schemaPayload.migrationId?.trim()) {
+        applyMigrationSchemaPayloadLocally(db, schemaPayload);
+      } else if (schemaPayload.sql?.trim()) {
+        applyInlineSchemaSqlLocally(db, schemaPayload.sql);
+      }
+    } finally {
+      db.close();
+    }
+    await markSeqMaterialized(pool, schemaApp, source.dbPath, replicaId, entry.seq);
+    return;
+  }
+  if (entry.kind === "snapshot") {
+    return;
+  }
+}
+
+/** Catch up from persisted cursor — idempotent by seq ordering. */
+export async function materializeWorkspaceLogSince(
+  pool: DbQueryPool,
+  replicaId: string,
+  source: AppDataSource,
+): Promise<number> {
+  let cursor = await getWorkspaceLogCursor(replicaId);
+  let applied = 0;
+
+  for (;;) {
+    const page = await readWorkspaceLogSince(replicaId, cursor, 200);
+    if (page.entries.length === 0) {
+      break;
+    }
+    for (const entry of page.entries) {
+      await applyLogEntry(pool, source, entry, replicaId);
+      cursor = entry.seq;
+      applied += 1;
+    }
+    await setWorkspaceLogCursor(replicaId, cursor);
+    if (!page.hasMore) {
+      break;
+    }
+  }
+
+  return applied;
+}
+
+/**
+ * Interactive /api/db/write uses local-first + async log ship when true.
+ * Log replay / catch-up paths still use appendAndMaterialize* directly.
+ */
+export function isWorkspaceLogRowsEnabled(): boolean {
+  return isCloudSyncEnabled();
+}

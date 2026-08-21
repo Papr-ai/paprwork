@@ -85,7 +85,7 @@ describe("resolveAppDependentJobIds", () => {
 });
 
 describe("resolveAppCloudSyncRelativePaths", () => {
-  it("includes data/jobs.json when app has dependent jobs", () => {
+  it("returns only the app folder (metadata off namespace git)", () => {
     const paprDir = makePaprDir();
 
     fs.writeFileSync(
@@ -100,9 +100,10 @@ describe("resolveAppCloudSyncRelativePaths", () => {
     );
 
     const paths = resolveAppCloudSyncRelativePaths(paprDir, "app-1");
-    expect(paths).toContain(path.join("apps", "app-1"));
-    expect(paths).toContain(path.join("Jobs", "job-b"));
-    expect(paths).toContain(path.join("data", "jobs.json"));
+    expect(paths).toEqual([path.join("apps", "app-1")]);
+    expect(paths).not.toContain(path.join("Jobs", "job-b"));
+    expect(paths).not.toContain(path.join("data", "jobs.json"));
+    expect(paths).not.toContain("data");
   });
 });
 

@@ -40,9 +40,15 @@ import {
   setActiveWorkspaceUiCacheKey,
   writeWorkspaceUiCache,
 } from "./workspaceUiCache";
+import {
+  fetchGatewayWorkspaceSwitchStatus,
+  isGatewayWorkspaceSwitchComplete,
+} from "./workspaceSwitchStatus";
 
 const LEGACY_TAB_STORAGE_KEY = "paprwork-tab-storage";
 const GATEWAY_RETRY_MS = 250;
+const SWITCH_STATUS_POLL_MS = 250;
+const SWITCH_STATUS_POLL_MAX_ATTEMPTS = 120;
 /** Gateway may still be resetting AppStateStorage during early switch — allow ~15s. */
 const TABS_LOAD_MAX_ATTEMPTS = 60;
 const CHAT_LIST_RETRY_MS = 250;
@@ -328,6 +334,58 @@ async function applyWorkspaceTabsAfterGatewayReady(
   }
 }
 
+async function completeWorkspaceSwitchReload(generation: number): Promise<void> {
+  if (generation !== workspaceReloadGeneration) {
+    return;
+  }
+  await applyWorkspaceTabsAfterGatewayReady(generation);
+  if (generation !== workspaceReloadGeneration) {
+    return;
+  }
+  endWorkspaceSwitchOverlay();
+  window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
+  scheduleDeferredWorkspaceWarmup();
+}
+
+async function catchUpWorkspaceSwitchCompleteIfNeeded(
+  generation: number,
+): Promise<void> {
+  if (generation !== workspaceReloadGeneration) {
+    return;
+  }
+  if (awaitingSwitchTabRecovery !== generation) {
+    return;
+  }
+
+  const status = await fetchGatewayWorkspaceSwitchStatus();
+  if (!status || !isGatewayWorkspaceSwitchComplete(status)) {
+    return;
+  }
+
+  console.log(
+    "[WorkspaceSwitch] Gateway switch already complete — catching up UI reload",
+  );
+  await completeWorkspaceSwitchReload(generation);
+}
+
+function scheduleSwitchStatusCatchUp(generation: number): void {
+  void (async () => {
+    for (let attempt = 0; attempt < SWITCH_STATUS_POLL_MAX_ATTEMPTS; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, SWITCH_STATUS_POLL_MS));
+      if (generation !== workspaceReloadGeneration) {
+        return;
+      }
+      if (awaitingSwitchTabRecovery !== generation) {
+        return;
+      }
+      await catchUpWorkspaceSwitchCompleteIfNeeded(generation);
+      if (awaitingSwitchTabRecovery !== generation) {
+        return;
+      }
+    }
+  })();
+}
+
 function scheduleSwitchTabLoadFallback(generation: number): void {
   void (async () => {
     await new Promise((resolve) =>
@@ -342,8 +400,25 @@ function scheduleSwitchTabLoadFallback(generation: number): void {
     console.warn(
       "[WorkspaceSwitch] switch-complete timeout — loading tabs from SQLite",
     );
-    await applyWorkspaceTabsAfterGatewayReady(generation);
+    await completeWorkspaceSwitchReload(generation);
   })();
+}
+
+/** Begin overlay + UI reset before main/gateway switch IPC (Settings picker). */
+export function prepareWorkspaceSwitchReload(
+  options?: ReloadWorkspaceSwitchOptions,
+): Promise<void> {
+  return reloadUiForWorkspaceSwitch({
+    ...options,
+    waitForGateway: true,
+  });
+}
+
+/** Cancel in-flight reload when workspace switch IPC fails. */
+export function abortWorkspaceSwitchReload(): void {
+  workspaceReloadGeneration += 1;
+  awaitingSwitchTabRecovery = null;
+  endWorkspaceSwitchOverlay();
 }
 
 async function loadChatsForWorkspaceWithRetry(): Promise<Set<string>> {
@@ -442,12 +517,7 @@ export function attachWorkspaceSwitchBroadcastListener(): void {
   window.addEventListener("gateway-broadcast", ((event: CustomEvent) => {
     const detail = event.detail as { type?: string; data?: unknown };
     if (detail?.type === "workspace:switch-complete") {
-      void (async () => {
-        await applyWorkspaceTabsAfterGatewayReady(workspaceReloadGeneration);
-        scheduleDeferredWorkspaceWarmup();
-        endWorkspaceSwitchOverlay();
-        window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
-      })();
+      void completeWorkspaceSwitchReload(workspaceReloadGeneration);
     }
     if (detail?.type === "workspace:switch-error") {
       endWorkspaceSwitchOverlay();
@@ -527,6 +597,8 @@ async function reloadUiForWorkspaceSwitchInner(
         "[WorkspaceSwitch] Waiting for gateway switch-complete before loading workspace tabs",
       );
       scheduleSwitchTabLoadFallback(generation);
+      void catchUpWorkspaceSwitchCompleteIfNeeded(generation);
+      scheduleSwitchStatusCatchUp(generation);
     } else {
       const tabsLoaded = await restoreWorkspaceTabsAndEntities(
         generation,

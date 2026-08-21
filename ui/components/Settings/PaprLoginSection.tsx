@@ -5,6 +5,11 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { flushWorkspaceStateToGateway } from "../../lib/persistedAppState";
+import {
+  abortWorkspaceSwitchReload,
+  prepareWorkspaceSwitchReload,
+} from "../../lib/workspaceSwitchReload";
+import { buildWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
 import { confirmAndAbortStreamsForWorkspaceSwitch } from "../../lib/workspaceSwitchStreaming";
 import {
   MEMORY_AUDIENCE_LABELS,
@@ -357,6 +362,9 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setError(null);
 
       try {
+        await prepareWorkspaceSwitchReload({
+          organizationName: org.name,
+        });
         await flushWorkspaceStateToGateway();
         const result = await window.electronAPI.papr.switchOrganization(
           workspaceId,
@@ -378,9 +386,11 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
             onApiKeyReceived(result.apiKey);
           }
         } else {
+          abortWorkspaceSwitchReload();
           setError(result.error || "Failed to switch organization");
         }
       } catch (err) {
+        abortWorkspaceSwitchReload();
         setError(err instanceof Error ? err.message : "Failed to switch organization");
       } finally {
         switchingOrganizationRef.current = false;
@@ -420,6 +430,14 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     switchingNamespaceRef.current = true;
     setError(null);
     try {
+      await prepareWorkspaceSwitchReload({
+        organizationName: group.organizationName,
+        namespaceName: ns.name,
+        targetWorkspaceKey: buildWorkspaceUiCacheKey(
+          group.organizationId,
+          namespaceId,
+        ),
+      });
       // Team picker is scoped to the active workspace — switch namespace (and
       // org when the namespace belongs to a secondary org in this workspace).
       await flushWorkspaceStateToGateway();
@@ -434,9 +452,11 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           onApiKeyReceived(result.apiKey);
         }
       } else {
+        abortWorkspaceSwitchReload();
         setError(result.error || "Failed to switch team");
       }
     } catch (err) {
+      abortWorkspaceSwitchReload();
       setError(err instanceof Error ? err.message : "Failed to switch team");
     } finally {
       switchingNamespaceRef.current = false;

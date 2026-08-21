@@ -997,6 +997,52 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Sync V3 Architecture</strong>
+                <p>
+                  Cloud sync is rebuilt around per-app repos and a workspace log —
+                  faster pushes, cleaner conflict handling, and no more stale
+                  &quot;merge required&quot; noise on apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter Cloud Publish</strong>
+                <p>
+                  Publishing and syncing mini-apps routes through the new app-repo
+                  writer with clearer status in the Cloud Sync tab.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Auto-Update Reliability</strong>
+                <p>
+                  Restart-to-update on macOS no longer closes the window without
+                  finishing the install — you should see the password prompt when
+                  needed.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Scheduler &amp; Job Improvements</strong>
+                <p>
+                  Cloud-capable jobs defer correctly when dispatch is enabled, with
+                  better migration ledger sync and execution capability detection.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.3.6" && (
           <div className="about-card">
             <h3>What's New in v2.3.6</h3>

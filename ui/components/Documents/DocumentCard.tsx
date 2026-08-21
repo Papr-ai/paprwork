@@ -2,8 +2,9 @@
  * DocumentCard - Document card with Liquid Glass orb icon (mirrors AppCard)
  */
 
-import React, { useState, useRef, useCallback } from "react";
+import React, { useState, useRef, useCallback, useMemo } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
+import { markdownPreviewText } from "../../../src/core/utils/markdownPreview";
 import "./DocumentCard.css";
 
 interface DocumentCardProps {
@@ -85,6 +86,11 @@ export function DocumentCard({
       e.dataTransfer.effectAllowed = "copy";
     },
     [artifact.id, artifact.type, artifact.title],
+  );
+
+  const previewText = useMemo(
+    () => (artifact.preview ? markdownPreviewText(artifact.preview) : ""),
+    [artifact.preview],
   );
 
   const renderIcon = () => {
@@ -172,8 +178,8 @@ export function DocumentCard({
             {artifact.title}
           </h3>
         )}
-        {artifact.preview && (
-          <p className="document-card__preview-text">{artifact.preview}</p>
+        {previewText && (
+          <p className="document-card__preview-text">{previewText}</p>
         )}
         <div className="document-card__meta">
           <span className="document-card__date">{formatDate(artifact.updatedAt)}</span>

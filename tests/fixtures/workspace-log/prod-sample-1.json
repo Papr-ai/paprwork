@@ -1,0 +1,42 @@
+{
+  "description": "Row delta workload (INSERT/UPDATE/DELETE). Refresh: npm run fixtures:capture-workspace-log",
+  "replicaId": "j-prod-sample-1",
+  "cursor": 0,
+  "nextCursor": 3,
+  "hasMore": false,
+  "entries": [
+    {
+      "seq": 1,
+      "hlc": "2026-08-01T12:00:00.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-1",
+        "sql": "INSERT INTO items (name, qty) VALUES (?, ?)",
+        "params": ["widget", 1]
+      }
+    },
+    {
+      "seq": 2,
+      "hlc": "2026-08-01T12:00:01.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-1",
+        "sql": "UPDATE items SET qty = ? WHERE name = ?",
+        "params": [2, "widget"]
+      }
+    },
+    {
+      "seq": 3,
+      "hlc": "2026-08-01T12:00:02.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-1",
+        "sql": "DELETE FROM items WHERE name = ?",
+        "params": ["widget"]
+      }
+    }
+  ]
+}

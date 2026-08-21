@@ -3,7 +3,8 @@ import type { JobsService } from "../JobsService.js";
 
 export interface ApplyPendingCloudRunPatchesResult {
   applied: number;
-  needsGitFallback: boolean;
+  /** Terminal patches missing scheduleState.nextRunAt that could not be applied. */
+  incompletePatches: number;
 }
 
 export interface ApplyPendingCloudRunPatchesDeps {
@@ -11,8 +12,8 @@ export interface ApplyPendingCloudRunPatchesDeps {
 }
 
 /**
- * Apply heartbeat pendingCloudRuns when JOB_RUNTIME_OFF_GIT is enabled.
- * Returns whether caller should fall back to git pull for incomplete patches.
+ * Apply heartbeat pendingCloudRuns (job runtime is always off git).
+ * V3: no git fallback — incomplete patches are counted for logging only.
  */
 export async function applyPendingCloudRunPatches(
   pending: JobRuntimePatch[],
@@ -21,7 +22,7 @@ export async function applyPendingCloudRunPatches(
   await deps.jobsService.initialize();
 
   let applied = 0;
-  let needsGitFallback = false;
+  let incompletePatches = 0;
 
   for (const patch of pending) {
     const result = await deps.jobsService.applyCloudRunPatch(patch);
@@ -35,9 +36,9 @@ export async function applyPendingCloudRunPatches(
       patch.status === "failed" ||
       patch.status === "cancelled";
     if (terminal && !patch.scheduleState?.nextRunAt) {
-      needsGitFallback = true;
+      incompletePatches++;
     }
   }
 
-  return { applied, needsGitFallback };
+  return { applied, incompletePatches };
 }

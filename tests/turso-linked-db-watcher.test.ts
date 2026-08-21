@@ -1,13 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as path from "path";
 import {
+  evaluateDbChangeForTests,
   isLinkedJobSqliteFile,
   resolveJobIdForDbFileChange,
   registerWatchedDbPathForTests,
   resolveWatchedDbPathForTests,
 } from "../src/gateway/services/TursoLinkedDbWatcher.js";
+import * as tursoSyncBridgeCore from "../src/gateway/services/tursoSyncBridgeCore.js";
+import * as tursoSyncState from "../src/gateway/services/tursoSyncState.js";
 
 describe("TursoLinkedDbWatcher", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   const jobId = "job-abc";
   const dbPath = path.join("/Users/test/Papr/jobs", jobId, "data", "data.db");
   const dataDir = path.dirname(dbPath);
@@ -38,5 +45,31 @@ describe("TursoLinkedDbWatcher", () => {
     expect(resolveWatchedDbPathForTests(`${dbPath}-wal`)).toBe(`${dbPath}-wal`);
     expect(resolveWatchedDbPathForTests(`${dbPath}-shm`)).toBe(`${dbPath}-shm`);
     expect(resolveWatchedDbPathForTests(path.join(dataDir, "scratch.db"))).toBeNull();
+  });
+
+  it("quarantines corrupt databases instead of throwing during evaluation", () => {
+    const dbPath = path.join("/tmp/Papr/Jobs", jobId, "data", "data.db");
+    const recordQuarantine = vi
+      .spyOn(tursoSyncState, "recordTursoPushQuarantine")
+      .mockImplementation(() => undefined);
+    vi.spyOn(tursoSyncState, "isTursoStateDbPathInWorkspace").mockReturnValue(true);
+    vi.spyOn(tursoSyncState, "loadTursoSyncState").mockReturnValue({ jobs: {} });
+    vi.spyOn(tursoSyncState, "isJobDbQuarantined").mockReturnValue(false);
+    vi.spyOn(tursoSyncBridgeCore, "ensureLocalDbChangeLogReady").mockImplementation(
+      () => undefined,
+    );
+    vi.spyOn(tursoSyncBridgeCore, "localDbHasSyncableUserTables").mockImplementation(() => {
+      throw new Error("database disk image is malformed");
+    });
+
+    expect(() =>
+      evaluateDbChangeForTests({ syncKey: jobId, dbPath, jobId }),
+    ).not.toThrow();
+
+    expect(recordQuarantine).toHaveBeenCalledWith(
+      jobId,
+      dbPath,
+      "database disk image is malformed",
+    );
   });
 });

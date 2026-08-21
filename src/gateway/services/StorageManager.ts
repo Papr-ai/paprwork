@@ -35,9 +35,35 @@ export class StorageManager {
   private config: StorageConfig | null = null;
 
   /**
+   * Close the current provider before replacing it (re-init or mode switch).
+   */
+  private disposeCurrentProvider(): void {
+    if (!this.provider) {
+      return;
+    }
+
+    try {
+      if (this.provider instanceof HybridStorageProvider) {
+        this.provider.getLocalProvider().close();
+      } else if (this.provider instanceof LocalStorageProvider) {
+        this.provider.close();
+      }
+    } catch (error) {
+      console.warn(
+        "[StorageManager] Provider dispose warning:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
+    this.provider = null;
+  }
+
+  /**
    * Initialize storage with specified mode and configuration
    */
   async initialize(config: StorageConfig): Promise<void> {
+    this.disposeCurrentProvider();
+
     this.config = config;
     this.currentMode = config.mode;
 

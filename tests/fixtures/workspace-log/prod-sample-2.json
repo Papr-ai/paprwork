@@ -1,0 +1,31 @@
+{
+  "description": "Schema migration + row insert. Refresh: npm run fixtures:capture-workspace-log",
+  "replicaId": "j-prod-sample-2",
+  "cursor": 0,
+  "nextCursor": 2,
+  "hasMore": false,
+  "entries": [
+    {
+      "seq": 1,
+      "hlc": "2026-08-02T09:00:00.000Z",
+      "kind": "schema",
+      "dbSourceId": "primary",
+      "payload": {
+        "migrationId": "20260802_add_metrics",
+        "contentHash": "abc123schema",
+        "sql": "CREATE TABLE metrics (id INTEGER PRIMARY KEY, value REAL NOT NULL)"
+      }
+    },
+    {
+      "seq": 2,
+      "hlc": "2026-08-02T09:00:01.000Z",
+      "kind": "row",
+      "dbSourceId": "primary",
+      "payload": {
+        "appId": "fixture-app-2",
+        "sql": "INSERT INTO metrics (value) VALUES (?)",
+        "params": [42.5]
+      }
+    }
+  ]
+}

@@ -34,15 +34,34 @@ Also check `$PAPR_HOME/workspace/BRAND.md` when UI is involved.
 ## Output Format (required sections)
 
 ### 1. Product Brief
-- **Job to be done** — one sentence user outcome
+- **Job to be done** — one sentence user outcome for the **product** (may span multiple pages or apps)
 - **Scope** — in / out
 - **Success criteria** — how we know it works
+
+#### Apps vs pages (required when UI is involved)
+
+| Level | Rule | Example |
+|-------|------|---------|
+| **Page / screen** | **One user task per page** — one question answered or one action completed | "Pick a shop to audit" (list page) → "Review shop metrics" (detail page) |
+| **App** | **One related workflow** — multiple pages OK when tasks are sequential or sibling views of the same domain | Joe Coffee: Shops list → Shop detail → Method comparison (3 pages, 1 app) |
+| **Multiple apps** | Split when the **job or audience is totally different** — not just "one more tab" | "Field audit companion" (mobile, one shop) vs "HQ analytics" (desktop, all shops) |
+
+**When user asks for "one app that does everything":** map each requested capability to a page task. If you get 3+ unrelated tasks (CRM + scheduling + analytics), recommend **2–3 apps** (or Phase 2 apps), not one tabbed monolith.
+
+**Required: Page map**
+
+| Page | User task (one verb) | Primary action | Queries (est. rows read) |
+|------|----------------------|----------------|--------------------------|
+| `/shops` | Browse shops | Open shop | `SELECT … FROM shops LIMIT 50` (~50) |
+| `/shops/:id` | Review one shop | Export report | 2–3 indexed SELECTs (~200) |
+
+Reject pages that combine unrelated tasks (e.g. "analytics + account settings + CRM" on one page).
 
 ### 2. Paprwork Architecture
 - **Mini-apps** — how many, what mode each serves (planning / field / delivery / read-only)
 - **Backend handlers** — list each `POST /api/app/backend/:action` (see decision table below). If skipping backend, explicitly justify ("read-only dashboard with 1-2 SELECTs")
 - **Jobs** — name, type (`agent` vs `python`/`node`), schedule, `appIds`, `dependsOn` + `autoTrigger`
-- **Shared SQLite** — tables, columns, and explicit writer/reader ownership. Mini-app iframe reads use `/api/db/query`, iframe mutations use `/api/db/write`, app-linked jobs use `$APP_DB`, and `$JOB_DB` is scratch-only.
+- **Shared SQLite** — tables, columns, and explicit writer/reader ownership (see **Table design principles** below). Mini-app iframe reads use `/api/db/query`, iframe mutations use `/api/db/write`, app-linked jobs use `$APP_DB`, and `$JOB_DB` is scratch-only.
 - **Data flow** — sources → jobs → DB → apps (ASCII diagram OK)
 - **Agent vs script** — justify each job; LLM work = `type: "agent"`, fixed ETL = script
 
@@ -52,7 +71,9 @@ Backend handlers are NOT just for SQL — they handle ALL server-side logic.
 
 | Scenario | Direct `/api/db/*` or frontend `fetch()` | Backend handler (`/api/app/backend/:action`) |
 |----------|------------------------------------------|---------------------------------------------|
-| Simple dashboard (1-2 SELECTs) | OK | Overkill |
+| Simple dashboard (1-2 **indexed** SELECTs with LIMIT, no COUNT(*) scans) | OK | Overkill |
+| Dashboard metrics / KPI counts across tables | NEVER — nested COUNT(*) scans every row per view | Backend handler or **precomputed `app_stats` row** (job writes after ETL) |
+| Tabbed UI with 5+ views each querying DB | Frontend re-fetch storm on every tab switch | Load once + cache; refresh via `onDbChanged` only |
 | CRUD app with 3+ DB operations | SQL soup in frontend | One action per resource |
 | Vault/API keys needed | NEVER in frontend | Keys declared in manifest.json |
 | Complex queries (JOINs, aggregates) | Fragile in frontend | Backend handler |
@@ -68,10 +89,35 @@ Backend handlers are NOT just for SQL — they handle ALL server-side logic.
 
 **Common miss:** Agents build `db.ts` with 15 `fetch('/api/db/query')` wrappers and call it "the backend." That's still frontend code running in the browser — it's the #1 architecture anti-pattern. Real backend = `apps/{appId}/backend/*.py` registered in `manifest.json`.
 
+#### Table design principles (within one DB)
+
+Turso syncs **per table** with row deltas — table count does not multiply sync cost the way bad queries multiply read cost. Still, schema sprawl hurts maintainability and invites expensive cross-table scans.
+
+| Principle | Guidance |
+|-----------|----------|
+| **Entity tables** | One table per **noun the user cares about** (shops, posts, menu_items) — normalized, `PRIMARY KEY` on every synced table |
+| **Fact / event tables** | Time-series or log rows (daily_metrics, social_daily) — index by `(entity_id, date)`; expect large row counts |
+| **Aggregate tables** | Precomputed KPIs the UI reads (`app_stats`, `shop_summary`, `daily_totals`) — **job writes, app reads one row**; never runtime COUNT(*) from frontend |
+| **Junction tables** | Many-to-many only when needed — don't duplicate entities as JSON blobs if you need to query/filter |
+| **When to add a table** | New entity type, new time grain (daily vs hourly rollup), or materialized summary for a page |
+| **When NOT to add a table** | "One table per page/tab" — pages share entities; add aggregate rows, not duplicate schemas |
+| **When to denormalize** | Read-heavy dashboard of one entity — e.g. `shop_summary` updated by job vs 6 JOINs on every page load |
+| **Row budget** | Tables >10k rows need indexed filters + LIMIT on every list query; >100k rows need pagination + rollup tables |
+
+**Typical shape for a dashboard app (5–12 tables, not 30):**
+
+```
+shops, menu_items, social_posts     ← entities (job ingests)
+daily_metrics, social_daily         ← facts (job writes, indexed by shop_id + date)
+app_stats OR shop_summary           ← aggregates (job refreshes after ETL)
+migrations / _papr_*                ← platform-managed
+```
+
 ### 3. Design System (Liquid Glass)
-- **Screens** — max 2–3 focused sections per screen
-- **Primary action** — ONE per screen
-- **Anti-patterns to avoid** — dashboard soup, 6+ cards, cramped layout
+- **Pages** — one user task per page; an app may have many pages (list → detail → action)
+- **Sections per page** — max 2–3 focused sections (not 6+ cards)
+- **Primary action** — ONE per page
+- **Anti-patterns to avoid** — dashboard soup, unrelated tasks on one page, 6+ cards, cramped layout
 - **Brand** — use workspace BRAND.md when set
 
 ### 4. Phased Plan
@@ -84,9 +130,42 @@ Backend handlers are NOT just for SQL — they handle ALL server-side logic.
 ### 6. Recommendation
 - **Proceed / simplify / defer** — with clear rationale
 
+### 7. Cloud Read Budget (required when app has linked DBs)
+
+Cloud apps on `apps.papr.ai` read **Turso** — billing is **per row read**, not per query. A few users opening a poorly designed dashboard can generate tens of millions of reads.
+
+**Architect must specify:**
+
+| Item | Requirement |
+|------|-------------|
+| **Estimated reads per page load** | Sum rows touched by each query (not query count). Flag if >10k reads/load. |
+| **Stats / KPIs** | Precomputed in `app_stats` or summary tables — **job writes after ETL**, app reads one row |
+| **Aggregates** | No runtime `COUNT(*)` across large tables from frontend — use backend handler or materialized counts |
+| **Lists** | `LIMIT` + pagination; never `SELECT *` without filter on tables >500 rows |
+| **Tab navigation** | Load data **once** on entry; cache in memory; refresh via `onDbChanged` only — not on every tab switch |
+| **Polling** | Forbidden — use `subscribeJobEvents({ onDbChanged })` |
+
+**Patterns:**
+
+```
+Job (ETL)  →  writes rows + updates app_stats (single JSON row or key/value counts)
+App load   →  1–3 indexed SELECTs with LIMIT
+Tab switch →  render cached data (0 new reads)
+Job write  →  onDbChanged → reload affected queries only
+```
+
+**Anti-patterns (validate_app will flag):**
+
+- Nested `(SELECT COUNT(*) FROM big_table)` subqueries in frontend SQL
+- `render()` / tab switch calling `loadAll()` with no cache
+- 5+ raw `/api/db/query` calls without backend handlers
+- `setInterval` + `/api/db/query` (polling)
+
+**Sync note:** V3 sync pushes **row deltas + schema migrations** via workspace log — it does **not** re-read every row on each sync. High Turso read/write spikes in metrics usually come from **legacy sync bootstrap**, **agent debug tools** (`query_cloud_turso`), or **app query patterns** — not routine V3 delta sync.
+
 ## Paprwork Rules (non-negotiable)
 
-1. **Prefer multiple focused apps** over one 50-file monolith
+1. **One task per page; one related workflow per app; split apps when jobs/audiences differ** — multiple pages per app is normal; multiple unrelated workflows in one app is not
 2. **Every job** needs `appIds` from `list_apps()` (or `__standalone__` only when truly orphan)
 3. **Custom keys** — `${KEY_NAME}` in `command` only, never `os.environ.get()` in scripts
 4. **Mini-apps** — browser iframe; use `window.paprAPI.invoke()` for system actions

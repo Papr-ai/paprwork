@@ -9,7 +9,6 @@ import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { getCloudSyncService } from "./CloudSyncService.js";
 import type { JobRecord } from "./jobs/types.js";
 import type { JobsService } from "./JobsService.js";
-import { isJobRuntimeOffGit } from "./jobs/jobRuntimeOffGit.js";
 import { CLOUD_AGENT_JOB_TIMEOUT_MS } from "../../core/constants/cloudAgentLimits.js";
 
 export type JobRunRuntime = "local" | "cloud";
@@ -57,32 +56,15 @@ async function syncAfterCloudRun(
   jobId: string,
   payload: CloudJobRunApiResponse,
 ): Promise<void> {
-  if (isJobRuntimeOffGit()) {
-    await jobsService.applyCloudRunPatch({
-      jobId,
-      status: payload.status,
-      exitCode: payload.exitCode,
-      lastOutput: payload.lastOutput ?? payload.stdout,
-      error: payload.error,
-      recordedAt: new Date().toISOString(),
-      source: "cloud_manual",
-    });
-    return;
-  }
-
-  const cloudSync = getCloudSyncService();
-  if (cloudSync) {
-    try {
-      await cloudSync.pullNow();
-    } catch (err) {
-      console.warn(
-        "[CloudJobRun] Pull after cloud run failed:",
-        (err as Error).message.slice(0, 120),
-      );
-    }
-  }
-
-  await jobsService.reloadJobs();
+  await jobsService.applyCloudRunPatch({
+    jobId,
+    status: payload.status,
+    exitCode: payload.exitCode,
+    lastOutput: payload.lastOutput ?? payload.stdout,
+    error: payload.error,
+    recordedAt: new Date().toISOString(),
+    source: "cloud_manual",
+  });
 }
 
 export async function runJobInCloud(

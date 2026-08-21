@@ -1,5 +1,5 @@
 /**
- * Tracks last successful Turso push per linked job (fingerprint-based dirty detection).
+ * Tracks last successful workspace-log ship per linked job (oplog cursor dirty detection).
  * State file: ~/Papr/data/.turso-sync-state.json
  */
 
@@ -8,7 +8,6 @@ import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import {
   computeSyncableTableFingerprintsForPath,
-  fingerprintsEqual,
 } from "./tursoTableFingerprint.js";
 import { maxSyncLogId } from "./tursoSyncLog.js";
 import Database from "better-sqlite3";
@@ -20,7 +19,7 @@ export interface TursoJobPushState {
   lastPushAt: string;
   /** @deprecated Legacy mtime-only dirty check; kept for migration reads. */
   dbMtimeMs?: number;
-  /** Local syncable table name → content fingerprint at last successful push. */
+  /** @deprecated Legacy fingerprint dirty check — stripped on load (Sync V3 uses oplog cursors). */
   tableFingerprints?: Record<string, string>;
   /** Remote _papr_sync_meta version at last successful push or pull. */
   lastSeenRemoteVersion?: number;
@@ -51,13 +50,20 @@ export function resolveTursoSyncStatePath(paprDir?: string): string {
   return path.join(root, "data", TURSO_SYNC_STATE_FILENAME);
 }
 
+function stripLegacyFingerprintFields(state: TursoSyncStateFile): TursoSyncStateFile {
+  for (const entry of Object.values(state.jobs)) {
+    delete entry.tableFingerprints;
+  }
+  return state;
+}
+
 export function loadTursoSyncState(paprDir?: string): TursoSyncStateFile {
   const statePath = resolveTursoSyncStatePath(paprDir);
   try {
     const raw = fs.readFileSync(statePath, "utf8");
     const parsed = JSON.parse(raw) as TursoSyncStateFile;
     if (parsed && typeof parsed === "object" && parsed.jobs) {
-      return parsed;
+      return stripLegacyFingerprintFields(parsed);
     }
   } catch {
     /* first run */
@@ -71,7 +77,11 @@ export function saveTursoSyncState(
 ): void {
   const statePath = resolveTursoSyncStatePath(paprDir);
   fs.mkdirSync(path.dirname(statePath), { recursive: true });
-  fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  fs.writeFileSync(
+    statePath,
+    JSON.stringify(stripLegacyFingerprintFields(state), null, 2),
+    "utf8",
+  );
 }
 
 export function readDbMtimeMs(dbPath: string): number | null {
@@ -140,31 +150,26 @@ export function isJobDbDirty(
     }
   }
 
+  const oplogDirty = isLinkedSourceDirtyFastIgnoringFlag(
+    jobId,
+    dbPath,
+    state,
+    alternateKeys,
+  );
+  if (oplogDirty === true) {
+    return true;
+  }
+  if (oplogDirty === false) {
+    return false;
+  }
+
   const normalizedPath = path.normalize(dbPath);
   if (!fs.existsSync(normalizedPath)) {
     return false;
   }
 
   const prev = resolveTursoPushStateEntry(jobId, dbPath, state, alternateKeys);
-  if (!prev) {
-    return true;
-  }
-
-  const currentFingerprints = computeSyncableTableFingerprintsForPath(normalizedPath);
-  if (currentFingerprints === null) {
-    return true;
-  }
-
-  if (prev.tableFingerprints) {
-    return !fingerprintsEqual(currentFingerprints, prev.tableFingerprints);
-  }
-
-  // Legacy state without fingerprints — treat as dirty once, then fingerprint on push.
-  const mtimeMs = readDbMtimeMs(normalizedPath);
-  if (mtimeMs === null) {
-    return false;
-  }
-  return prev.dbMtimeMs === undefined || mtimeMs > prev.dbMtimeMs;
+  return !prev;
 }
 
 /**
@@ -206,21 +211,13 @@ export function hasUnpushedLocalDbChanges(
     return true;
   }
   if (oplogDirty === false) {
-    if (prev.tableFingerprints) {
-      const currentFingerprints =
-        computeSyncableTableFingerprintsForPath(normalizedPath);
-      if (currentFingerprints === null) {
-        return true;
-      }
-      return !fingerprintsEqual(currentFingerprints, prev.tableFingerprints);
-    }
     return false;
   }
 
-  return isJobDbDirty(syncKey, dbPath, state, alternateKeys);
+  return oplogDirty ?? false;
 }
 
-/** Drop persisted dirtyFlag when oplog/fingerprints show no unpushed changes. */
+/** Drop persisted dirtyFlag when oplog cursor shows no unpushed changes. */
 export function clearStaleDirtyFlagIfClean(
   syncKey: string,
   dbPath: string,
@@ -272,9 +269,6 @@ export function markDbDirty(
     lastPushAt: existing?.lastPushAt ?? new Date(0).toISOString(),
     dirtyFlag: true,
     dirtyFlagAt: new Date().toISOString(),
-    ...(existing?.tableFingerprints
-      ? { tableFingerprints: existing.tableFingerprints }
-      : {}),
     ...(existing?.lastPushedLogId !== undefined
       ? { lastPushedLogId: existing.lastPushedLogId }
       : {}),
@@ -399,7 +393,7 @@ export function listDbDirtySyncKeysForApp(
 
 /**
  * Oplog cursor check only — ignores persisted dirtyFlag.
- * Returns true (dirty), false (clean), or null (needs fingerprint/mtime check).
+ * Returns true (dirty), false (clean), or null (needs full check).
  */
 export function isLinkedSourceDirtyFastIgnoringFlag(
   syncKey: string,
@@ -447,7 +441,7 @@ export function isLinkedSourceDirtyFastIgnoringFlag(
 }
 
 /**
- * Two-tier dirty check: dirty flag + oplog cursor before full fingerprints.
+ * Two-tier dirty check: dirty flag + local _papr_sync_log cursor.
  * Returns true (dirty), false (clean), or null (needs full check).
  */
 export function isLinkedSourceDirtyFast(
@@ -494,9 +488,6 @@ export function recordTursoPushQuarantine(
     lastPushAt: existing?.lastPushAt ?? new Date().toISOString(),
     quarantinedAt: new Date().toISOString(),
     quarantineReason: reason.slice(0, 500),
-    ...(existing?.tableFingerprints
-      ? { tableFingerprints: existing.tableFingerprints }
-      : {}),
   };
   saveTursoSyncState(state, paprDir);
   console.warn(
@@ -516,15 +507,12 @@ export function recordTursoPushSuccess(
   jobId: string,
   dbPath: string,
   paprDir?: string,
-  tableFingerprints?: Record<string, string>,
   lastPushedLogId?: number,
 ): void {
   const normalizedPath = path.normalize(dbPath);
   if (!shouldPersistTursoStateForDbPath(normalizedPath, paprDir, "push success")) {
     return;
   }
-  const fingerprints =
-    tableFingerprints ?? computeSyncableTableFingerprintsForPath(normalizedPath);
 
   const state = loadTursoSyncState(paprDir);
   const existing = state.jobs[jobId];
@@ -532,14 +520,17 @@ export function recordTursoPushSuccess(
     dbPath: normalizedPath,
     lastPushAt: new Date().toISOString(),
     dbMtimeMs: readDbMtimeMs(normalizedPath) ?? undefined,
-    ...(fingerprints ? { tableFingerprints: fingerprints } : {}),
     ...(existing?.lastSeenRemoteVersion !== undefined
       ? { lastSeenRemoteVersion: existing.lastSeenRemoteVersion }
       : {}),
     ...(existing?.lastPulledLogId !== undefined
       ? { lastPulledLogId: existing.lastPulledLogId }
       : {}),
-    ...(lastPushedLogId !== undefined ? { lastPushedLogId } : {}),
+    ...(lastPushedLogId !== undefined
+      ? { lastPushedLogId }
+      : existing?.lastPushedLogId !== undefined
+        ? { lastPushedLogId: existing.lastPushedLogId }
+        : {}),
     ...(existing?.lastSeenIndexVersion !== undefined
       ? { lastSeenIndexVersion: existing.lastSeenIndexVersion }
       : {}),
@@ -647,9 +638,6 @@ export function recordTursoRemoteVersion(
   state.jobs[jobId] = {
     dbPath,
     lastPushAt: existing?.lastPushAt ?? new Date().toISOString(),
-    ...(existing?.tableFingerprints
-      ? { tableFingerprints: existing.tableFingerprints }
-      : {}),
     ...(existing?.dbMtimeMs !== undefined ? { dbMtimeMs: existing.dbMtimeMs } : {}),
     lastSeenRemoteVersion: version,
     ...(options?.lastPushedLogId !== undefined
@@ -684,9 +672,6 @@ export function recordTursoIndexVersion(
   state.jobs[jobId] = {
     dbPath,
     lastPushAt: existing?.lastPushAt ?? new Date().toISOString(),
-    ...(existing?.tableFingerprints
-      ? { tableFingerprints: existing.tableFingerprints }
-      : {}),
     ...(existing?.dbMtimeMs !== undefined ? { dbMtimeMs: existing.dbMtimeMs } : {}),
     ...(existing?.lastSeenRemoteVersion !== undefined
       ? { lastSeenRemoteVersion: existing.lastSeenRemoteVersion }

@@ -5,7 +5,13 @@
  */
 
 import Database from "better-sqlite3";
-import { promises as fs } from "fs";
+import {
+  promises as fs,
+  existsSync,
+  openSync,
+  readSync,
+  closeSync,
+} from "fs";
 import path from "path";
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import {
@@ -27,6 +33,27 @@ export interface PersistedDatabaseLayout {
 }
 
 /** Parent dir containing migrations/ and the sqlite file (registry or job layout). */
+const SQLITE_MAGIC = "SQLite format 3\u0000";
+
+/** True when path exists and begins with the SQLite file header. */
+export function isValidSqliteDatabaseFile(dbPath: string): boolean {
+  try {
+    const fd = openSync(dbPath, "r");
+    try {
+      const header = Buffer.alloc(16);
+      const bytesRead = readSync(fd, header, 0, 16, 0);
+      if (bytesRead < 16) {
+        return false;
+      }
+      return header.toString("utf8") === SQLITE_MAGIC;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
+  }
+}
+
 export function resolveMigrationRootFromDbPath(dbPath: string): string | null {
   const normalized = path.normalize(dbPath);
   const parentDir = path.dirname(normalized);
@@ -181,6 +208,12 @@ export async function applyDatabaseMigrations(
   const migrationsDir = path.join(migrationRoot, "migrations");
   await fs.mkdir(migrationsDir, { recursive: true });
   await fs.mkdir(path.dirname(dbPath), { recursive: true });
+
+  if (existsSync(dbPath) && !isValidSqliteDatabaseFile(dbPath)) {
+    throw new Error(
+      `Database file is corrupt or empty (${dbPath}). Restore from the newest .sync-backup file in the same folder, or ask the agent to re-link the database.`,
+    );
+  }
 
   const files = (await fs.readdir(migrationsDir))
     .filter((name) => name.endsWith(".sql"))

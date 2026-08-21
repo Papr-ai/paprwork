@@ -4,7 +4,6 @@
 
 import { promises as fs } from "node:fs";
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import type { CloudAppLineageFile } from "../../core/types/cloudAppLineage.js";
@@ -14,6 +13,7 @@ import {
 } from "../../core/utils/cloudAppLineage.js";
 import { fileContentHash } from "../utils/fileContentHash.js";
 import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
+import { cloneCloudAppSource } from "./cloudSync/cloudGitClone.js";
 import {
   CLOUD_LINEAGE_FILENAME,
   getCloudAppLineageService,
@@ -25,11 +25,6 @@ import {
 import { getAppService } from "./AppService.js";
 import { decideTrackPullAction } from "./cloudSync/trackPullOnPublishLogic.js";
 import { fetchPublishedAppRevision } from "./cloudSync/trackUpstreamRevision.js";
-
-function authCloneUrl(cloneUrl: string, token: string): string {
-  const normalized = cloneUrl.replace(/^https:\/\//, "");
-  return `https://x-access-token:${token}@${normalized}`;
-}
 
 export interface TrackSyncResult {
   appId: string;
@@ -122,26 +117,18 @@ export class CloudAppTrackSyncService {
 
     const installService = getCloudAppInstallService();
     const prepare = await installService.prepareInstall(installInput);
-    const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-track-sync-"));
-    const repoDir = path.join(tempRoot, "repo");
+    const env = ephemeralGitEnv();
+
+    const { sourceDir: upstreamDir, repoDir, cleanup } = await cloneCloudAppSource(
+      {
+        cloneUrl: prepare.cloneUrl,
+        token: prepare.token,
+        repoPath: prepare.repoPath,
+      },
+      "papr-track-sync-",
+    );
 
     try {
-      const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
-      const env = ephemeralGitEnv();
-
-      await runGit(
-        ["clone", "--filter=blob:none", "--sparse", cloneUrl, repoDir],
-        env,
-        180_000,
-      );
-      await runGit(
-        ["sparse-checkout", "set", prepare.repoPath.replace(/\\/g, "/")],
-        env,
-        60_000,
-        repoDir,
-      );
-
-      const upstreamDir = path.join(repoDir, prepare.repoPath);
       const upstreamFiles = await collectLocalFiles(upstreamDir);
       const localFiles = await collectLocalFiles(path.join(this.appsDir, appId));
       const snapshot = lineage.syncSnapshot ?? {};
@@ -247,7 +234,7 @@ export class CloudAppTrackSyncService {
         upstreamRevision,
       };
     } finally {
-      await fs.rm(tempRoot, { recursive: true, force: true }).catch(() => {});
+      await cleanup();
     }
   }
 
@@ -338,38 +325,6 @@ export class CloudAppTrackSyncService {
 
     return results;
   }
-}
-
-async function runGit(
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  timeoutMs: number,
-  cwd?: string,
-): Promise<void> {
-  const { spawn } = await import("node:child_process");
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn("git", args, { cwd, env, stdio: ["ignore", "pipe", "pipe"] });
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`git timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new Error(`git ${args.join(" ")} failed: ${stderr.trim()}`));
-    });
-  });
 }
 
 let instance: CloudAppTrackSyncService | null = null;

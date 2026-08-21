@@ -33,6 +33,34 @@ describe("defaultHomeBundle", () => {
     expect(source.tables).toEqual(["briefs"]);
   });
 
+  it("findHomeDailyBriefJobIdInRegistry prefers namespace job over legacy duplicate", () => {
+    const namespaceId = "11111111-2222-3333-4444-555555555555";
+    const jobs: JobRecord[] = [
+      {
+        id: LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+        name: DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
+        type: "agent",
+        status: "idle",
+        appIds: [DEFAULT_HOME_APP_ID],
+        createdAt: "",
+        updatedAt: "",
+      },
+      {
+        id: namespaceId,
+        name: DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
+        type: "agent",
+        status: "idle",
+        appIds: [DEFAULT_HOME_APP_ID],
+        createdAt: "",
+        updatedAt: "",
+      },
+    ];
+    expect(findHomeDailyBriefJobIdInRegistry(jobs)).toBe(namespaceId);
+    expect(
+      findHomeDailyBriefJobIdInRegistry(jobs, { preferJobId: namespaceId }),
+    ).toBe(namespaceId);
+  });
+
   it("findHomeDailyBriefJobIdInRegistry matches Home-linked job by name", () => {
     const jobs: JobRecord[] = [
       {

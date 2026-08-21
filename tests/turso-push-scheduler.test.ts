@@ -52,18 +52,35 @@ describe("tursoSyncState", () => {
     },
   );
 
-  it("marks job dirty after file modification (legacy mtime fallback)", () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "turso-state-"));
-    const dbPath = path.join(tmpDir, "data.db");
-    fs.writeFileSync(dbPath, "sqlite");
-    recordTursoPushSuccess("job-1", dbPath, tmpDir);
+  it.skipIf(!canUseBetterSqlite)(
+    "marks job dirty after local _papr_sync_log advances",
+    () => {
+      const Database = require("better-sqlite3") as typeof import("better-sqlite3");
+      const { ensureLocalDbChangeLogReady } = require("../src/gateway/services/tursoSyncBridgeCore.js") as typeof import("../src/gateway/services/tursoSyncBridgeCore.js");
+      const { maxSyncLogId } = require("../src/gateway/services/tursoSyncLog.js") as typeof import("../src/gateway/services/tursoSyncLog.js");
 
-    fs.appendFileSync(dbPath, "x");
-    const state = loadTursoSyncState(tmpDir);
-    expect(isJobDbDirty("job-1", dbPath, state)).toBe(true);
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "turso-state-"));
+      const dbPath = path.join(tmpDir, "data.db");
+      const db = new Database(dbPath);
+      db.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)");
+      db.close();
+      ensureLocalDbChangeLogReady(dbPath);
 
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
+      const db2 = new Database(dbPath);
+      const maxId = maxSyncLogId(db2);
+      db2.close();
+      recordTursoPushSuccess("job-1", dbPath, tmpDir, maxId.max_id);
+
+      const db3 = new Database(dbPath);
+      db3.prepare("INSERT INTO items (label) VALUES (?)").run("beta");
+      db3.close();
+
+      const state = loadTursoSyncState(tmpDir);
+      expect(isJobDbDirty("job-1", dbPath, state)).toBe(true);
+
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    },
+  );
 
   it.skipIf(!canUseBetterSqlite)(
     "marks job clean when only WAL sidecar changes without content edits",
@@ -410,7 +427,7 @@ describe("tursoPushScheduler permanent skip integration", () => {
 
       state = loadTursoSyncState(tmpPapr);
       expect(state.jobs[dbId]?.dirtyFlag).toBeUndefined();
-      expect(state.jobs[dbId]?.tableFingerprints).toEqual({});
+      expect(state.jobs[dbId]?.tableFingerprints).toBeUndefined();
       expect(isJobDbDirty(dbId, dbPath, state)).toBe(false);
       expect(mod.getFirstDirtyAtMsForTests(syncKey)).toBeUndefined();
 

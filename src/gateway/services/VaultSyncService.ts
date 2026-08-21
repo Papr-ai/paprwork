@@ -3,9 +3,12 @@
  * (GCP Secret Manager) via the memory server.
  *
  * Flow:
- *   1. On init: push all local keys → cloud vault (idempotent)
- *   2. On init: pull vault key names → add any missing to local keychain
+ *   1. On init: push all local keys → cloud vault (idempotent, per-key shareScope)
+ *   2. On init: pull user-scoped vault key names for cross-device awareness (names only)
  *   3. On key change: push updated keys → cloud vault
+ *
+ * Pull uses scope=user only (acting user via external_user_id). Namespace/org
+ * catalogs are for cloud runtime ACL — not bulk-listed on desktop.
  *
  * The cloud proxy at /api/cloud/vault/* forwards to /v1/cloud/vault/*
  * on the memory server, attaching the user's PAPR_API_KEY automatically.
@@ -16,7 +19,6 @@ import {
   mapCustomKeyMetadataToVaultEntry,
 } from "../../core/utils/cloudReposScope.js";
 import type { CloudRepoScope, CloudVaultKeyEntry } from "../../core/utils/cloudReposScope.js";
-import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import { getCustomKeysService } from "./CustomKeysService.js";
 import { resolveVaultKeySource } from "./cloudAgentGateway/resolveCloudProviderAuth.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
@@ -50,6 +52,8 @@ interface VaultState {
   keyCount: number;
 }
 
+const VAULT_PUSH_DEBOUNCE_MS = 2_000;
+
 export class VaultSyncService {
   private state: VaultState = {
     status: "idle",
@@ -57,6 +61,10 @@ export class VaultSyncService {
     lastError: null,
     keyCount: 0,
   };
+
+  private pushDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pushInFlight: Promise<VaultSyncResponse | null> | null = null;
+  private pushPendingAfterInflight = false;
 
   private readonly gatewayPort: number;
 
@@ -208,18 +216,6 @@ export class VaultSyncService {
     }
   }
 
-  private vaultPullScopes(): CloudRepoScope[] {
-    const pointer = readActiveWorkspacePointer();
-    const scopes: CloudRepoScope[] = ["user"];
-    if (pointer?.namespaceId || process.env.PAPR_NAMESPACE_ID?.trim()) {
-      scopes.push("namespace");
-    }
-    if (pointer?.organizationId) {
-      scopes.push("org");
-    }
-    return scopes;
-  }
-
   private async fetchVaultKeyNamesForScope(
     scope: CloudRepoScope,
     signal: AbortSignal,
@@ -249,44 +245,36 @@ export class VaultSyncService {
   }
 
   /**
-   * Pull vault key names and add any missing keys to local keychain.
-   * Values are NOT pulled (would require a resolve endpoint). Only names
-   * are checked so the user knows which keys exist across devices.
+   * Pull user-scoped vault key names for cross-device awareness.
+   * Values are NOT pulled (list endpoint has no values). Names are never
+   * written to the local keychain from this path.
    */
   async pullKeys(): Promise<string[]> {
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
 
-      const vaultKeyNames = new Set<string>();
-      for (const scope of this.vaultPullScopes()) {
-        const names = await this.fetchVaultKeyNamesForScope(
-          scope,
-          controller.signal,
-        );
-        for (const name of names) {
-          vaultKeyNames.add(name);
-        }
-      }
+      const userScopedNames = await this.fetchVaultKeyNamesForScope(
+        "user",
+        controller.signal,
+      );
 
       clearTimeout(timer);
 
-      const allNames = [...vaultKeyNames];
       const customKeys = getCustomKeysService();
       const localKeys = await customKeys.listKeys();
       const localNames = new Set(localKeys.map((k) => k.name));
 
-      const missingLocally = allNames.filter((n) => !localNames.has(n));
+      const missingLocally = userScopedNames.filter((n) => !localNames.has(n));
 
       if (missingLocally.length > 0) {
         console.log(
-          `[VaultSync] Found ${missingLocally.length} vault key(s) not in local keychain (names omitted from logs)`,
+          `[VaultSync] ${missingLocally.length} user-scoped vault key(s) exist in cloud but not locally (names omitted from logs)`,
         );
         // We log but don't auto-add — values aren't available from list endpoint.
-        // The user would need to re-add them or we'd need a resolve endpoint for pull.
       }
 
-      return allNames;
+      return userScopedNames;
     } catch (err) {
       console.warn("[VaultSync] Pull failed:", (err as Error).message);
       return [];
@@ -310,20 +298,57 @@ export class VaultSyncService {
   }
 
   /**
-   * Notify that a key was added or updated. Triggers a full push.
+   * Coalesce rapid key changes (e.g. LinkedIn cookie refresh delete+add pairs)
+   * into one vault push after a short debounce window.
    */
-  async onKeyChanged(keyName: string): Promise<void> {
-    console.log(`[VaultSync] Key changed: ${keyName} — syncing to vault`);
-    await this.pushAllKeys();
+  schedulePushAfterKeyChange(keyName: string, kind: "changed" | "deleted"): void {
+    console.log(
+      `[VaultSync] Key ${kind}: ${keyName} — scheduling vault sync (${VAULT_PUSH_DEBOUNCE_MS}ms debounce)`,
+    );
+    if (this.pushDebounceTimer) {
+      clearTimeout(this.pushDebounceTimer);
+    }
+    this.pushDebounceTimer = setTimeout(() => {
+      this.pushDebounceTimer = null;
+      void this.flushScheduledPush();
+    }, VAULT_PUSH_DEBOUNCE_MS);
+  }
+
+  private async flushScheduledPush(): Promise<void> {
+    if (this.pushInFlight) {
+      this.pushPendingAfterInflight = true;
+      await this.pushInFlight;
+      if (!this.pushPendingAfterInflight) {
+        return;
+      }
+      this.pushPendingAfterInflight = false;
+    }
+
+    this.pushInFlight = this.pushAllKeys();
+    try {
+      await this.pushInFlight;
+    } finally {
+      this.pushInFlight = null;
+      if (this.pushPendingAfterInflight) {
+        this.pushPendingAfterInflight = false;
+        await this.flushScheduledPush();
+      }
+    }
   }
 
   /**
-   * Notify that a key was deleted. Triggers a full push (vault sync is
+   * Notify that a key was added or updated. Triggers a debounced full push.
+   */
+  async onKeyChanged(keyName: string): Promise<void> {
+    this.schedulePushAfterKeyChange(keyName, "changed");
+  }
+
+  /**
+   * Notify that a key was deleted. Triggers a debounced full push (vault sync is
    * idempotent — server will detect removed keys and delete them).
    */
   async onKeyDeleted(keyName: string): Promise<void> {
-    console.log(`[VaultSync] Key deleted: ${keyName} — syncing to vault`);
-    await this.pushAllKeys();
+    this.schedulePushAfterKeyChange(keyName, "deleted");
   }
 }
 

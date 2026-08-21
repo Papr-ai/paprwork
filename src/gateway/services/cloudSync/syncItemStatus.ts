@@ -9,7 +9,7 @@ import {
   formatDivergedGitHistoryHeadline,
   inferGitRemoteReviewState,
   summarizeIncomingRemoteGitLog,
-} from "./gitRemoteReconcile.js";
+} from "./namespaceGitReview.js";
 import { isWorkspaceChatJob } from "../../../core/constants/workspaceChatJob.js";
 
 export type GitHubItemSyncState =

@@ -12,15 +12,22 @@ import type { DatabasesRegistryFile } from "./DatabaseRegistryService.js";
 import { CLOUD_LINEAGE_FILENAME } from "./CloudAppLineageService.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { ephemeralGitEnv } from "../utils/ephemeralGitEnv.js";
+import {
+  cloneUrlMatchesAppRepo,
+  resolveAppRepoForSync,
+} from "./syncV3/AppRepoClient.js";
 import { prepareAppForCloudGitSync } from "./cloudSync/prepareAppsForCloud.js";
 import {
-  jobRelativePath,
   readDataSourceRegistryDbIds,
   resolveAppDependentJobIds,
 } from "./cloudSync/resolveAppDependentJobs.js";
 import { resolveMigrationRootFromDbPath } from "./jobs/databaseMigrations.js";
 import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { mergeContributeDataIndexesIntoRepo } from "./cloudSync/contributeDataIndexMerge.js";
+import {
+  appSourceRepoRelativeDir,
+  linkedJobRepoRelativeDir,
+} from "./cloudSync/cloudGitClone.js";
 
 export interface ProposeContributeInput {
   sourceNamespaceId: string;
@@ -249,6 +256,7 @@ async function collectMigrationTrees(
 async function buildContributeStaging(
   forkAppId: string,
   targetAppId: string,
+  repoPath: string,
   tempRoot: string,
 ): Promise<StagedRepoTree[]> {
   const paprDir = getPaprRoot();
@@ -256,6 +264,7 @@ async function buildContributeStaging(
 
   const remaps = new Map<string, string>([[forkAppId, targetAppId]]);
   const trees: StagedRepoTree[] = [];
+  const appRepoDir = appSourceRepoRelativeDir(repoPath, targetAppId);
 
   const forkAppDir = path.join(getPaprAppsRoot(), forkAppId);
   const appFiles = await stageDirectoryWithRemaps(
@@ -266,7 +275,7 @@ async function buildContributeStaging(
   );
   if (appFiles.size > 0) {
     trees.push({
-      repoRelativeDir: path.join("apps", targetAppId).replace(/\\/g, "/"),
+      repoRelativeDir: appRepoDir,
       files: appFiles,
     });
   }
@@ -282,7 +291,7 @@ async function buildContributeStaging(
     );
     if (jobFiles.size > 0) {
       trees.push({
-        repoRelativeDir: jobRelativePath(jobId),
+        repoRelativeDir: linkedJobRepoRelativeDir(repoPath, jobId),
         files: jobFiles,
       });
     }
@@ -296,7 +305,10 @@ async function writeStagedTree(
   repoDir: string,
   tree: StagedRepoTree,
 ): Promise<void> {
-  const targetDir = path.join(repoDir, tree.repoRelativeDir);
+  const targetDir =
+    tree.repoRelativeDir === "."
+      ? repoDir
+      : path.join(repoDir, tree.repoRelativeDir);
   for (const [relative, content] of tree.files) {
     const dest = path.join(targetDir, relative);
     await fs.mkdir(path.dirname(dest), { recursive: true });
@@ -317,6 +329,7 @@ async function pushContributeBranch(
     const trees = await buildContributeStaging(
       forkAppId,
       prepare.targetAppId,
+      prepare.repoPath,
       tempRoot,
     );
     if (trees.length === 0) {
@@ -411,6 +424,14 @@ export class CloudAppContributeService {
     }
 
     const prepare = (await prepareResp.json()) as PrepareResponse;
+
+    const ownerRepo = await resolveAppRepoForSync(prepare.targetAppId);
+    if (ownerRepo && !cloneUrlMatchesAppRepo(prepare.cloneUrl, ownerRepo)) {
+      console.warn(
+        `[CloudContribute] prepare.cloneUrl does not match RepoRegistry for ${prepare.targetAppId}`,
+      );
+    }
+
     const { headSha, stagedPaths } = await pushContributeBranch(
       prepare,
       input.installedAppId,

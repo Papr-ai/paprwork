@@ -716,6 +716,14 @@ export class PlatformSessionService {
       const keyName = getPlatformKeyName(platformId, cookieName);
       const existing = existingKeys.find((k) => k.name === keyName);
       if (existing) {
+        try {
+          const currentValue = await keysService.getKeyByName(keyName);
+          if (currentValue === cookieValue) {
+            continue;
+          }
+        } catch {
+          /* value unreadable — refresh below */
+        }
         await keysService.deleteKey(keyName);
       }
 
@@ -1087,7 +1095,14 @@ export class PlatformSessionService {
         const existing = existingKeys.find((k) => k.name === keyName);
 
         if (existing) {
-          // Delete and re-add (no update method)
+          try {
+            const currentValue = await keysService.getKeyByName(keyName);
+            if (currentValue === cookie.value) {
+              continue;
+            }
+          } catch {
+            /* refresh below */
+          }
           await keysService.deleteKey(keyName);
         }
 

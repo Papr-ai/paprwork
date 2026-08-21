@@ -65,6 +65,17 @@ export function resolveShareGatePresentation(state: ShareGateState): ShareGatePr
 
   if (!hasSession) {
     if (isInviteLinkVisibility(visibility)) {
+      if (hasShareToken) {
+        return {
+          headline: "This invite link isn't working yet",
+          message:
+            "The link includes an invite token, but the web app is still catching up. " +
+            "After changing sharing or uploading, allow 2–5 minutes for the publish catalog and app bundle to propagate, " +
+            "then copy a fresh external link from Paprwork (Share → Copy external link) and try again. " +
+            "If you already waited, the token may be outdated — request a new link after Upload now finishes.",
+          showLoginButton: false,
+        };
+      }
       return {
         headline: "Invite link required",
         message:

@@ -6,10 +6,16 @@
  */
 
 import type { AppRuntimeRouteAuth } from "./types.js";
+import type {
+  WorkspaceLogAppendBatchRequest,
+  WorkspaceLogAppendBatchResponse,
+  WorkspaceLogAppendRequest,
+  WorkspaceLogAppendResponse,
+} from "../../../core/types/workspaceLog.js";
 import { getMemoryServerBaseUrl, cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { buildCloudVaultRequestBody } from "../../../core/utils/cloudReposScope.js";
 
-function getCloudAppHostKey(): string {
+export function getCloudAppHostKey(): string {
   const key = process.env.PAPR_CLOUD_APP_HOST_KEY;
   if (!key) {
     throw new Error(
@@ -370,9 +376,11 @@ export async function getRuntimeJobStatus(
 
 /** Desktop gateway alive ping — cloud scheduler defers when heartbeat is fresh. */
 export async function sendDesktopHeartbeat(): Promise<void> {
+  const { buildDesktopHeartbeatBody } = await import("../syncV3/buildDesktopHeartbeatBody.js");
+  const appVersion = process.env.PAPRWORK_APP_VERSION?.trim() || undefined;
   const res = await cloudApiFetch("/v1/cloud/runtime/heartbeat", {
     method: "POST",
-    body: {},
+    body: buildDesktopHeartbeatBody(appVersion),
     timeoutMs: 15_000,
   });
   if (!res.ok) {
@@ -518,6 +526,67 @@ export interface RuntimeTursoDbChangedInput {
   tursoShortName?: string;
   tables?: string[];
   source?: string;
+}
+
+/** Cloud app host → memory workspace log append (Turso materialization on server). */
+export async function appendRuntimeWorkspaceLogEntry(
+  auth: AppRuntimeRouteAuth,
+  request: WorkspaceLogAppendRequest,
+): Promise<WorkspaceLogAppendResponse> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/workspace/log/append`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        replicaId: request.replicaId,
+        kind: request.kind,
+        dbSourceId: request.dbSourceId,
+        payload: request.payload,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime workspace log append failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as WorkspaceLogAppendResponse;
+}
+
+/** Cloud app host → memory workspace log append-batch (one round-trip for N row ops). */
+export async function appendRuntimeWorkspaceLogBatch(
+  auth: AppRuntimeRouteAuth,
+  request: WorkspaceLogAppendBatchRequest,
+): Promise<WorkspaceLogAppendBatchResponse> {
+  const timeoutMs = Math.min(
+    180_000,
+    45_000 + request.entries.length * 250,
+  );
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/workspace/log/append-batch`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        replicaId: request.replicaId,
+        entries: request.entries.map((entry) => ({
+          kind: entry.kind,
+          dbSourceId: entry.dbSourceId,
+          payload: entry.payload,
+        })),
+      }),
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime workspace log append-batch failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as WorkspaceLogAppendBatchResponse;
 }
 
 /** Record Turso write — memory server bumps workspace sync-index. */

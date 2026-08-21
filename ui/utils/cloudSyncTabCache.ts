@@ -16,6 +16,8 @@ export interface CloudSyncTabSnapshot {
   gitStatus: Record<string, unknown> | null;
   vaultStatus: Record<string, unknown> | null;
   syncItems: SyncItemsResponse | null;
+  /** Last fetched /api/sync/items payload per mini-app (publish bar). */
+  syncItemsByAppId?: Record<string, SyncItemsResponse>;
   savedAt: number;
 }
 
@@ -54,25 +56,69 @@ export function writeCloudSyncTabSnapshot(
   snapshot: Omit<CloudSyncTabSnapshot, "savedAt">,
 ): void {
   try {
+    const existing = readCloudSyncTabSnapshot();
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify({ ...snapshot, savedAt: Date.now() } satisfies CloudSyncTabSnapshot),
+      JSON.stringify({
+        ...snapshot,
+        syncItemsByAppId:
+          snapshot.syncItemsByAppId ?? existing?.syncItemsByAppId,
+        savedAt: Date.now(),
+      } satisfies CloudSyncTabSnapshot),
     );
   } catch {
     /* quota / private mode */
   }
 }
 
+export function readCachedSyncItemsForApp(
+  appId: string,
+): SyncItemsResponse | null {
+  const snapshot = readCloudSyncTabSnapshot();
+  const byApp = snapshot?.syncItemsByAppId?.[appId];
+  if (byApp) {
+    return byApp;
+  }
+  const legacy = snapshot?.syncItems;
+  if (!legacy) {
+    return null;
+  }
+  if (legacy.appContext?.appId === appId) {
+    return legacy;
+  }
+  const hasAppRow = legacy.github?.apps?.some((app) => app.id === appId);
+  return hasAppRow ? legacy : null;
+}
+
+export function writeCachedSyncItemsForApp(
+  appId: string,
+  items: SyncItemsResponse,
+): void {
+  const existing = readCloudSyncTabSnapshot();
+  writeCloudSyncTabSnapshot({
+    gitStatus: existing?.gitStatus ?? null,
+    vaultStatus: existing?.vaultStatus ?? null,
+    syncItems: items,
+    syncItemsByAppId: {
+      ...(existing?.syncItemsByAppId ?? {}),
+      [appId]: items,
+    },
+  });
+}
+
 export function readCachedAppCloudSyncStatus(
   appId: string,
 ): AppCloudSyncStatus | null {
-  const snapshot = readCloudSyncTabSnapshot();
-  if (!snapshot?.syncItems?.enabled || !snapshot.syncItems.github) {
+  const items = readCachedSyncItemsForApp(appId);
+  if (!items?.enabled || !items.github) {
     return null;
   }
-  const git = snapshot.gitStatus as { enabled?: boolean; status?: string } | null;
+  const git = readCloudSyncTabSnapshot()?.gitStatus as {
+    enabled?: boolean;
+    status?: string;
+  } | null;
   if (git?.enabled === false) {
     return null;
   }
-  return deriveAppCloudSyncStatus(appId, snapshot.syncItems, git?.status);
+  return deriveAppCloudSyncStatus(appId, items, git?.status);
 }

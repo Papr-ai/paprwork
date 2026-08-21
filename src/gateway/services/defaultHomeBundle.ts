@@ -56,25 +56,60 @@ export function buildDailyBriefDataSource(
   };
 }
 
+function isHomeDailyBriefRegistryJob(job: JobRecord): boolean {
+  if (job.id.endsWith(".migrated")) {
+    return false;
+  }
+  if (
+    job.name === DEFAULT_HOME_DAILY_BRIEF_JOB_NAME &&
+    job.appIds?.includes(DEFAULT_HOME_APP_ID)
+  ) {
+    return true;
+  }
+  return job.id === LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID;
+}
+
 export function findHomeDailyBriefJobIdInRegistry(
   jobs: Iterable<JobRecord>,
+  options?: { preferJobId?: string },
 ): string | undefined {
-  for (const job of jobs) {
-    if (
-      job.name === DEFAULT_HOME_DAILY_BRIEF_JOB_NAME &&
-      job.appIds?.includes(DEFAULT_HOME_APP_ID)
-    ) {
-      return job.id;
+  const prefer = options?.preferJobId?.trim();
+  if (prefer) {
+    for (const job of jobs) {
+      if (job.id === prefer && isHomeDailyBriefRegistryJob(job)) {
+        return prefer;
+      }
     }
   }
 
+  const linked: JobRecord[] = [];
   for (const job of jobs) {
-    if (job.id === LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID) {
-      return job.id;
+    if (isHomeDailyBriefRegistryJob(job)) {
+      linked.push(job);
     }
   }
 
-  return undefined;
+  if (linked.length === 0) {
+    return undefined;
+  }
+
+  const nonLegacy = linked.filter(
+    (job) => job.id !== LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+  );
+  if (nonLegacy.length === 1) {
+    return nonLegacy[0].id;
+  }
+  if (nonLegacy.length > 1) {
+    if (prefer) {
+      const match = nonLegacy.find((job) => job.id === prefer);
+      if (match) {
+        return match.id;
+      }
+    }
+    return nonLegacy[0].id;
+  }
+
+  return linked[0]?.id;
 }
 
 export async function readHomeDailyBriefJobIdFromAppDir(

@@ -16,8 +16,9 @@ import {
   type PaprAuthMode,
 } from "../../../core/utils/paprAuth0Pkce.js";
 import {
+  appLabelFromReturnTo,
   buildPaprAuthCallbackPageHtml,
-  buildPaprAuthLoginPageHtml,
+  humanizeAppSlug,
 } from "../../../resources/mini-app-sdk/papr-auth-ui.js";
 import { parseCookieHeader } from "./cloudAppHostContext.js";
 import {
@@ -26,6 +27,7 @@ import {
   clearAuthPendingCookie,
   clearLegacySessionCookies,
   getSessionCookieDiagnostics,
+  isBrowsableCloudReturnToPath,
   readAuthPendingCookie,
   readCloudAppSessionFromCookie,
   resolveCloudAuthReturnToPath,
@@ -97,42 +99,19 @@ export class CloudAppHostAuthService {
     );
     const mode: PaprAuthMode =
       req.query.mode === "signup" ? "signup" : "login";
-    const shouldStart = req.query.start === "1";
     const existingSession = this.getSessionToken(req);
 
     // Already signed in — skip Auth0 (prevents sign-in loop when access is still denied).
     if (existingSession) {
-      if (shouldStart || returnTo !== "/") {
-        res.redirect(302, returnTo);
-        return;
-      }
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(
-        buildPaprAuthLoginPageHtml({
-          returnTo,
-          headline: "Already signed in",
-          subtitle:
-            "You are already signed in to apps.papr.ai. If this app still will not open, you need the invite link or team access — not another sign-in.",
-          pageTitle: "Already signed in — Papr",
-        }),
-      );
+      res.redirect(302, returnTo);
       return;
     }
 
-    if (!shouldStart) {
-      const error =
-        typeof req.query.error === "string" ? req.query.error : undefined;
-      res.setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(
-        buildPaprAuthLoginPageHtml({
-          returnTo,
-          error,
-          headline: "Welcome!",
-          subtitle:
-            "Sign in to Papr to use this cloud app. Team-shared apps require a Papr account.",
-          pageTitle: "Sign in to Papr",
-        }),
-      );
+    const error =
+      typeof req.query.error === "string" ? req.query.error : undefined;
+    // After a failed callback, send users back to the app gate (app name + Sign in button).
+    if (error && isBrowsableCloudReturnToPath(returnTo)) {
+      res.redirect(302, returnTo);
       return;
     }
 
@@ -154,6 +133,10 @@ export class CloudAppHostAuthService {
     res.redirect(302, authUrl.toString());
   }
 
+  private loginErrorPath(returnTo: string, message: string): string {
+    return `/auth/login?returnTo=${encodeURIComponent(returnTo)}&error=${encodeURIComponent(message)}`;
+  }
+
   private async handleCallback(req: Request, res: Response): Promise<void> {
     const secure = requestIsSecure(req);
     const error = typeof req.query.error === "string" ? req.query.error : undefined;
@@ -164,7 +147,8 @@ export class CloudAppHostAuthService {
           ? req.query.error_description
           : null,
       );
-      res.redirect(302, `/auth/login?error=${encodeURIComponent(message)}`);
+      const returnTo = resolveReturnToFromRequest(req);
+      res.redirect(302, this.loginErrorPath(returnTo, message));
       return;
     }
 
@@ -173,11 +157,15 @@ export class CloudAppHostAuthService {
     const pending = readAuthPendingCookie(req.headers.cookie);
 
     const existingSession = this.getSessionToken(req);
+    const fallbackReturnTo = resolveReturnToFromRequest(req, pending?.returnTo);
 
     if (!code || !state) {
       res.redirect(
         302,
-        `/auth/login?error=${encodeURIComponent("Login session expired. Please try again.")}`,
+        this.loginErrorPath(
+          fallbackReturnTo,
+          "Login session expired. Please try again.",
+        ),
       );
       return;
     }
@@ -186,12 +174,15 @@ export class CloudAppHostAuthService {
       // Callback hit twice, pending expired, or signing key mismatch — don't strand users
       // who already have a valid session from a prior successful login.
       if (existingSession) {
-        res.redirect(302, resolveReturnToFromRequest(req, pending?.returnTo ?? "/"));
+        res.redirect(302, fallbackReturnTo);
         return;
       }
       res.redirect(
         302,
-        `/auth/login?error=${encodeURIComponent("Login session expired. Please try again.")}`,
+        this.loginErrorPath(
+          fallbackReturnTo,
+          "Login session expired. Please try again.",
+        ),
       );
       return;
     }
@@ -212,12 +203,17 @@ export class CloudAppHostAuthService {
       res.append("Set-Cookie", buildSessionCookie(claims.sessionToken, secure, claims.objectId, claims.email));
       res.append("Set-Cookie", clearAuthPendingCookie(secure));
       // 200 + client redirect: browsers reliably persist Set-Cookie vs 302 OAuth chains.
+      const cookies = parseCookieHeader(req.headers.cookie);
+      const appLabel = cookies.papr_cloud_slug
+        ? humanizeAppSlug(cookies.papr_cloud_slug)
+        : appLabelFromReturnTo(returnTo);
       res.status(200).setHeader("Content-Type", "text/html; charset=utf-8");
-      res.send(buildPaprAuthCallbackPageHtml(returnTo));
+      res.send(buildPaprAuthCallbackPageHtml({ returnTo, appLabel }));
     } catch (err) {
       const message = err instanceof Error ? err.message : "Login failed";
       res.append("Set-Cookie", clearAuthPendingCookie(secure));
-      res.redirect(302, `/auth/login?error=${encodeURIComponent(message)}`);
+      const returnTo = resolveReturnToFromRequest(req, pending.returnTo);
+      res.redirect(302, this.loginErrorPath(returnTo, message));
     }
   }
 

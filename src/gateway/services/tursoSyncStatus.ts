@@ -41,6 +41,8 @@ export interface TursoSourceSyncItem {
   localTableCount: number;
   remoteTableCount: number;
   schemaDrift?: boolean;
+  /** Turso token/query failed — remoteTableCount may be misleading. */
+  remoteCheckFailed?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
   /** Dirty but auto-upload off — use Upload now. */
@@ -91,11 +93,15 @@ export function resolveTursoSourceStatus(
   dirty: boolean,
   quarantined = false,
   schemaDrift = false,
+  remoteCheckFailed = false,
 ): TursoSourceSyncState {
   if (quarantined) {
     return "quarantined";
   }
   if (!dbExists) {
+    return "unavailable";
+  }
+  if (remoteCheckFailed && localTableCount > 0) {
     return "unavailable";
   }
   if (schemaDrift && localTableCount > 0 && remoteTableCount > 0) {
@@ -157,6 +163,7 @@ function sourceItem(
   dirty: boolean,
   schemaDrift: boolean,
   pushState: ReturnType<typeof loadTursoSyncState>,
+  remoteCheckFailed = false,
 ): TursoSourceSyncItem {
   const dbExists = fs.existsSync(source.dbPath);
   const syncKey = linkedSourceSyncKey(source);
@@ -169,6 +176,7 @@ function sourceItem(
     dirty,
     quarantined,
     schemaDrift,
+    remoteCheckFailed,
   );
   const manualUploadHold =
     !shouldAutoUploadTursoForApp(source.appId) &&
@@ -188,6 +196,7 @@ function sourceItem(
     quarantinedAt: jobState?.quarantinedAt ?? null,
     quarantineReason: jobState?.quarantineReason ?? null,
     manualUploadHold: manualUploadHold || undefined,
+    remoteCheckFailed: remoteCheckFailed || undefined,
   };
 }
 
@@ -294,6 +303,7 @@ export async function buildTursoSyncItemsReport(
     const dirty = isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
     let remoteTableCount = 0;
     let schemaDrift = false;
+    let remoteCheckFailed = false;
     const tursoDatabase = resolveTursoDatabaseLabel(source);
     try {
       remoteTableCount = await countRemoteSyncableTables(tursoDatabase);
@@ -301,10 +311,19 @@ export async function buildTursoSyncItemsReport(
         schemaDrift = await detectRemoteSchemaDrift(source.dbPath, tursoDatabase);
       }
     } catch (err) {
+      remoteCheckFailed = true;
       reportError = (err as Error).message.slice(0, 200);
     }
     items.push(
-      sourceItem(source, localTableCount, remoteTableCount, dirty, schemaDrift, pushState),
+      sourceItem(
+        source,
+        localTableCount,
+        remoteTableCount,
+        dirty,
+        schemaDrift,
+        pushState,
+        remoteCheckFailed,
+      ),
     );
   }
 

@@ -23,7 +23,14 @@ import {
 export const SYNC_LOG_TABLE = "_papr_sync_log";
 export const SYNC_MUTE_TABLE = "_papr_sync_mute";
 
-export const SYNC_INFRA_TABLES = new Set([SYNC_LOG_TABLE, SYNC_MUTE_TABLE]);
+/** Local/remote infra — never user sync tables; exclude from drift + row ship. */
+export const SYNC_INFRA_TABLES = new Set([
+  SYNC_LOG_TABLE,
+  SYNC_MUTE_TABLE,
+  "_papr_materialized",
+  "_papr_sync_infra",
+  "_papr_oplog",
+]);
 
 export type SyncLogOp = "insert" | "update" | "delete";
 
@@ -115,6 +122,39 @@ function createSyncLogTableSql(): string {
   );
 }
 
+function createSyncInfraMarkerTableSql(): string {
+  return (
+    `CREATE TABLE IF NOT EXISTS ${quoteIdent("_papr_sync_infra")} (` +
+    `key TEXT PRIMARY KEY, value TEXT NOT NULL` +
+    `)`
+  );
+}
+
+const CDC_MARKER_KEY = "cdc_triggers_v1";
+
+export function isLocalCdcMarkerSet(db: Database.Database): boolean {
+  const row = db
+    .prepare(
+      `SELECT value FROM ${quoteIdent("_papr_sync_infra")} WHERE key = ? LIMIT 1`,
+    )
+    .get(CDC_MARKER_KEY) as { value: string } | undefined;
+  return row?.value === "1";
+}
+
+export function markLocalCdcReady(db: Database.Database): void {
+  db.prepare(
+    `INSERT OR REPLACE INTO ${quoteIdent("_papr_sync_infra")} (key, value) VALUES (?, '1')`,
+  ).run(CDC_MARKER_KEY);
+}
+
+export function localInsertTriggerExists(
+  db: Database.Database,
+  tableName: string,
+): boolean {
+  const suffix = triggerSuffix(tableName);
+  return triggerExists(db, `_papr_tr_${suffix}_ai`);
+}
+
 function createSyncMuteTableSql(): string {
   return (
     `CREATE TABLE IF NOT EXISTS ${quoteIdent(SYNC_MUTE_TABLE)} (` +
@@ -168,6 +208,7 @@ const muteDepthCheckedDbs = new WeakSet<Database.Database>();
 export function ensureLocalSyncInfrastructure(db: Database.Database): void {
   db.exec(createSyncLogTableSql());
   db.exec(createSyncMuteTableSql());
+  db.exec(createSyncInfraMarkerTableSql());
   db.exec(
     `INSERT OR IGNORE INTO ${quoteIdent(SYNC_MUTE_TABLE)} (id, depth) VALUES (${MUTE_ROW_ID}, 0)`,
   );
@@ -542,12 +583,29 @@ export async function withSyncMutedAsync<T>(
   }
 }
 
+function localSyncInfrastructureReady(db: Database.Database): boolean {
+  const row = db
+    .prepare(
+      `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+    )
+    .get(SYNC_LOG_TABLE) as { 1: number } | undefined;
+  return row !== undefined;
+}
+
 export function readSyncLogSince(
   db: Database.Database,
   afterId: number,
   limit: number = LOG_BATCH_LIMIT,
 ): SyncLogEntry[] {
-  ensureLocalSyncInfrastructure(db);
+  if (db.readonly) {
+    if (!localSyncInfrastructureReady(db)) {
+      throw new Error(
+        `[TursoSyncLog] Sync log not ready on readonly DB — call ensureLocalDbChangeLogReady first`,
+      );
+    }
+  } else {
+    ensureLocalSyncInfrastructure(db);
+  }
   const rows = db
     .prepare(
       `SELECT id, table_name, op, row_pk FROM ${quoteIdent(SYNC_LOG_TABLE)} ` +

@@ -33,9 +33,9 @@ describe("cloudUploadMode", () => {
     return dir;
   }
 
-  it("defaults global auto-upload to enabled", () => {
+  it("defaults global auto-upload to disabled", () => {
     const settingsPath = path.join(os.tmpdir(), `settings-${Date.now()}.json`);
-    expect(isCloudAutoUploadGloballyEnabled(settingsPath)).toBe(true);
+    expect(isCloudAutoUploadGloballyEnabled(settingsPath)).toBe(false);
   });
 
   it("respects global cloudAutoUploadEnabled=false", () => {

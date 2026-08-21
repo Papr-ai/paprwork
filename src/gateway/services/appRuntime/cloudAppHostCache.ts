@@ -194,8 +194,10 @@ export async function fetchCachedRuntimeRepoFile(
       return file;
     } catch {
       // Origin refetch failed — fall back to cached hit only (never a cached miss).
-      if (entry?.value && now <= entry.staleUntil) return entry.value;
-      throw new Error(`Failed to fetch ${relativePath}`);
+      if (entry?.value && now <= entry.staleUntil) {
+        return entry.value;
+      }
+      return null;
     }
   }
 
@@ -321,6 +323,21 @@ export function invalidateRepoCacheForPublishedApp(
   slug: string,
 ): void {
   const prefix = `${namespaceId}:${slug}:`;
+  for (const key of repoFileCache.keys()) {
+    if (key.startsWith(prefix)) {
+      repoFileCache.delete(key);
+    }
+  }
+  for (const key of repoRevisionCache.keys()) {
+    if (key.startsWith(prefix)) {
+      repoRevisionCache.delete(key);
+    }
+  }
+}
+
+/** Broader invalidation when publish slug is unknown (Pub/Sub commit fanout). */
+export function invalidateRepoCacheForNamespace(namespaceId: string): void {
+  const prefix = `${namespaceId}:`;
   for (const key of repoFileCache.keys()) {
     if (key.startsWith(prefix)) {
       repoFileCache.delete(key);

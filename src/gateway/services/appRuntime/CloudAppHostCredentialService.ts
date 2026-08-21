@@ -189,7 +189,7 @@ export class CloudAppHostCredentialService {
       namespaceId: runtimeAuth.namespaceId,
       slug: runtimeAuth.slug,
     });
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     if (!runtimeAuth.sessionToken) {
       if (
@@ -236,7 +236,7 @@ export class CloudAppHostCredentialService {
       namespaceId: runtimeAuth.namespaceId,
       slug: runtimeAuth.slug,
     });
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`;
+    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
 
     if (!runtimeAuth.sessionToken) {
       res.status(401).json({
@@ -369,7 +369,7 @@ export class CloudAppHostCredentialService {
         : undefined);
       res.redirect(
         302,
-        `/auth/login?returnTo=${encodeURIComponent(returnTo)}&start=1`,
+        `/auth/login?returnTo=${encodeURIComponent(returnTo)}`,
       );
       return;
     }

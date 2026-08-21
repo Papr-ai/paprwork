@@ -1,6 +1,6 @@
 /**
- * Shared Papr sign-in branding for cloud apps (AuthWall-aligned).
- * Used by papr-auth-guard overlay and Cloud App Host auth HTML pages.
+ * Shared Papr sign-in UI for cloud apps.
+ * Used by papr-auth-guard overlay and Cloud App Host auth callback HTML.
  */
 
 export const PAPR_BRAND_BLUE = "#0080FF";
@@ -27,170 +27,6 @@ export function escapePaprAuthHtml(value: string): string {
 export function escapePaprAuthHtmlAttribute(value: string): string {
   return escapePaprAuthHtml(value).replaceAll("'", "&#39;");
 }
-
-export const PAPR_AUTH_PAGE_STYLES = `
-  *, *::before, *::after { box-sizing: border-box; }
-  body {
-    margin: 0;
-    min-height: 100vh;
-    font-family: "SF UI Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    color: #111827;
-    background: #F5F5F7;
-  }
-  .papr-auth {
-    display: flex;
-    min-height: 100vh;
-    width: 100%;
-  }
-  .papr-auth__left {
-    flex: 0 0 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: 48px 32px;
-    background: rgba(255, 255, 255, 0.72);
-    backdrop-filter: blur(40px);
-    -webkit-backdrop-filter: blur(40px);
-  }
-  .papr-auth__form {
-    width: 100%;
-    max-width: 420px;
-    text-align: center;
-  }
-  .papr-auth__title {
-    margin: 0 0 12px;
-    font-family: Montserrat, system-ui, -apple-system, sans-serif;
-    font-size: 36px;
-    font-weight: 700;
-    line-height: 1.1;
-    color: #111827;
-  }
-  .papr-auth__subtitle {
-    margin: 0 0 32px;
-    font-size: 18px;
-    line-height: 1.4;
-    color: #667085;
-  }
-  .papr-auth__error {
-    margin: 0 0 24px;
-    padding: 16px 20px;
-    background: rgba(239, 68, 68, 0.12);
-    border: 1px solid rgba(239, 68, 68, 0.45);
-    border-radius: 12px;
-    color: #dc2626;
-    font-size: 14px;
-    line-height: 1.5;
-    text-align: left;
-  }
-  .papr-auth__actions {
-    display: flex;
-    gap: 12px;
-    width: 100%;
-    margin-bottom: 20px;
-  }
-  .papr-auth__btn {
-    flex: 1;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 16px 20px;
-    border: none;
-    border-radius: 12px;
-    font-size: 16px;
-    font-weight: 600;
-    text-decoration: none;
-    cursor: pointer;
-    transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
-  }
-  .papr-auth__btn--primary {
-    color: #fff;
-    background: ${PAPR_BRAND_BLUE};
-    box-shadow: 0 2px 8px rgba(0, 128, 255, 0.2);
-  }
-  .papr-auth__btn--primary:hover {
-    background: ${PAPR_BRAND_BLUE_HOVER};
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(0, 128, 255, 0.3);
-  }
-  .papr-auth__btn--block {
-    display: flex;
-    width: 100%;
-    margin-bottom: 12px;
-  }
-  .papr-auth__terms {
-    margin: 0;
-    font-size: 13px;
-    color: #98A2B3;
-  }
-  .papr-auth__right {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: #fff;
-    position: relative;
-    overflow: hidden;
-  }
-  .papr-auth__brand {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 48px;
-    z-index: 1;
-  }
-  .papr-auth__logo-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-  .papr-auth__wordmark {
-    font-family: Montserrat, system-ui, -apple-system, sans-serif;
-    font-size: 32px;
-    font-weight: 700;
-    color: #111827;
-    letter-spacing: -0.02em;
-  }
-  .papr-auth__fold {
-    width: min(280px, 60vw);
-    opacity: 0.95;
-  }
-  .papr-auth__fold svg {
-    width: 100%;
-    height: auto;
-    display: block;
-  }
-  .papr-auth__waiting {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 16px;
-    padding: 16px 0 8px;
-  }
-  .papr-auth__spinner {
-    width: 40px;
-    height: 40px;
-    border: 3px solid rgba(0, 128, 255, 0.1);
-    border-top-color: ${PAPR_BRAND_BLUE};
-    border-radius: 50%;
-    animation: papr-auth-spin 0.8s linear infinite;
-  }
-  @keyframes papr-auth-spin {
-    to { transform: rotate(360deg); }
-  }
-  @media (max-width: 900px) {
-    .papr-auth { flex-direction: column; }
-    .papr-auth__left, .papr-auth__right { flex: none; min-height: auto; }
-    .papr-auth__right { padding: 48px 24px 64px; }
-    .papr-auth__fold { width: min(220px, 70vw); }
-  }
-  @media (prefers-color-scheme: dark) {
-    body { background: #1C1C1E; color: #F5F5F7; }
-    .papr-auth__left { background: rgba(28, 28, 30, 0.85); }
-    .papr-auth__title, .papr-auth__wordmark { color: #F5F5F7; }
-    .papr-auth__subtitle, .papr-auth__terms { color: #A1A1AA; }
-    .papr-auth__right { background: #111113; }
-  }
-`;
 
 export const PAPR_AUTH_OVERLAY_STYLES = `
   .papr-auth-overlay {
@@ -275,6 +111,18 @@ export const PAPR_AUTH_OVERLAY_STYLES = `
     align-items: center;
     gap: 28px;
   }
+  .papr-auth__logo-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .papr-auth__wordmark {
+    font-family: Montserrat, system-ui, -apple-system, sans-serif;
+    font-size: 28px;
+    font-weight: 700;
+    color: #111827;
+    letter-spacing: -0.02em;
+  }
   .papr-auth-overlay__fold { width: min(200px, 80%); }
   .papr-auth-overlay__fold svg { width: 100%; height: auto; display: block; }
   @media (min-width: 720px) {
@@ -282,69 +130,121 @@ export const PAPR_AUTH_OVERLAY_STYLES = `
   }
 `;
 
-function paprBrandBlock(): string {
-  return `<div class="papr-auth__brand">
-    <div class="papr-auth__logo-row">
-      ${PAPR_LOGO_MARK_SVG}
-      <span class="papr-auth__wordmark">Papr</span>
-    </div>
-    <div class="papr-auth__fold">${PAPR_FOLD_SVG}</div>
-  </div>`;
+/** Turn a published app slug into a readable label (e.g. weekly-war-room → Weekly War Room). */
+export function humanizeAppSlug(slug: string): string {
+  return slug
+    .split(/[-_]+/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
 }
 
-export interface PaprAuthLoginPageParams {
+/** Derive an app label from a published-app return path (/namespaceId/slug/…). */
+export function appLabelFromReturnTo(returnTo: string): string | undefined {
+  const pathOnly = returnTo.split("?")[0] ?? returnTo;
+  const segments = pathOnly.split("/").filter(Boolean);
+  if (segments.length < 2) return undefined;
+  const slug = segments[1];
+  if (!slug) return undefined;
+  return humanizeAppSlug(slug);
+}
+
+export interface PaprAuthCallbackPageParams {
   returnTo: string;
-  error?: string;
-  headline?: string;
-  subtitle?: string;
-  pageTitle?: string;
+  appLabel?: string;
 }
 
-export function buildPaprAuthLoginPageHtml(params: PaprAuthLoginPageParams): string {
-  const returnTo = encodeURIComponent(params.returnTo);
-  const title = escapePaprAuthHtml(params.headline ?? "Welcome!");
-  const subtitle = escapePaprAuthHtml(
-    params.subtitle ?? "Sign in to Papr to use this cloud app.",
-  );
-  const pageTitle = escapePaprAuthHtml(params.pageTitle ?? "Sign in to Papr");
-  const errorBlock = params.error
-    ? `<div class="papr-auth__error" role="alert">${escapePaprAuthHtml(params.error)}</div>`
-    : "";
+const PAPR_AUTH_CALLBACK_STYLES = `
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: "SF UI Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    color: #111827;
+    background: #F5F5F7;
+  }
+  .papr-auth-callback {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 32px 24px;
+  }
+  .papr-auth-callback__card {
+    width: 100%;
+    max-width: 360px;
+    text-align: center;
+  }
+  .papr-auth-callback__spinner {
+    width: 32px;
+    height: 32px;
+    margin: 0 auto 20px;
+    border: 3px solid rgba(0, 128, 255, 0.12);
+    border-top-color: ${PAPR_BRAND_BLUE};
+    border-radius: 50%;
+    animation: papr-auth-spin 0.8s linear infinite;
+  }
+  .papr-auth-callback__title {
+    margin: 0 0 8px;
+    font-size: 22px;
+    font-weight: 600;
+    line-height: 1.3;
+    color: #111827;
+  }
+  .papr-auth-callback__subtitle {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.5;
+    color: #667085;
+  }
+  .papr-auth-callback__fallback {
+    margin-top: 28px;
+  }
+  .papr-auth-callback__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 12px 20px;
+    border-radius: 10px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+    background: ${PAPR_BRAND_BLUE};
+    text-decoration: none;
+    box-shadow: 0 2px 8px rgba(0, 128, 255, 0.2);
+  }
+  .papr-auth-callback__btn:hover {
+    background: ${PAPR_BRAND_BLUE_HOVER};
+  }
+  @keyframes papr-auth-spin {
+    to { transform: rotate(360deg); }
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1C1C1E; color: #F5F5F7; }
+    .papr-auth-callback__title { color: #F5F5F7; }
+    .papr-auth-callback__subtitle { color: #A1A1AA; }
+  }
+`;
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>${pageTitle}</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap" rel="stylesheet" />
-  <style>${PAPR_AUTH_PAGE_STYLES}</style>
-</head>
-<body>
-  <div class="papr-auth">
-    <div class="papr-auth__left">
-      <div class="papr-auth__form">
-        <h1 class="papr-auth__title">${title}</h1>
-        <p class="papr-auth__subtitle">${subtitle}</p>
-        ${errorBlock}
-        <div class="papr-auth__actions">
-          <a class="papr-auth__btn papr-auth__btn--primary" href="/auth/login?returnTo=${returnTo}&mode=login&start=1">Sign in</a>
-          <a class="papr-auth__btn papr-auth__btn--primary" href="/auth/login?returnTo=${returnTo}&mode=signup&start=1">Create account</a>
-        </div>
-        <p class="papr-auth__terms">By continuing you agree to the terms of use</p>
-      </div>
-    </div>
-    <div class="papr-auth__right">${paprBrandBlock()}</div>
-  </div>
-</body>
-</html>`;
-}
-
-export function buildPaprAuthCallbackPageHtml(returnTo: string): string {
+export function buildPaprAuthCallbackPageHtml(
+  params: PaprAuthCallbackPageParams | string,
+): string {
+  const returnTo = typeof params === "string" ? params : params.returnTo;
+  const appLabel =
+    typeof params === "string"
+      ? appLabelFromReturnTo(returnTo)
+      : (params.appLabel ?? appLabelFromReturnTo(returnTo));
   const safeUrl = escapePaprAuthHtmlAttribute(returnTo);
   const jsUrl = JSON.stringify(returnTo);
+  const headline = appLabel
+    ? `Opening ${escapePaprAuthHtml(appLabel)}…`
+    : "Opening your app…";
+  const buttonLabel = appLabel
+    ? `Open ${escapePaprAuthHtml(appLabel)}`
+    : "Open app";
+  const pageTitle = appLabel
+    ? `Opening ${escapePaprAuthHtml(appLabel)}`
+    : "Opening your app";
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -352,27 +252,27 @@ export function buildPaprAuthCallbackPageHtml(returnTo: string): string {
   <meta charset="utf-8" />
   <meta http-equiv="refresh" content="0;url=${safeUrl}" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Signing you in…</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@700&display=swap" rel="stylesheet" />
-  <style>${PAPR_AUTH_PAGE_STYLES}</style>
+  <title>${pageTitle}</title>
+  <style>${PAPR_AUTH_CALLBACK_STYLES}</style>
 </head>
 <body>
-  <div class="papr-auth">
-    <div class="papr-auth__left">
-      <div class="papr-auth__form">
-        <h1 class="papr-auth__title">Signed in!</h1>
-        <p class="papr-auth__subtitle">Taking you back to your app…</p>
-        <div class="papr-auth__waiting">
-          <div class="papr-auth__spinner" aria-hidden="true"></div>
-        </div>
-        <a class="papr-auth__btn papr-auth__btn--primary papr-auth__btn--block" href="${safeUrl}">Continue to app</a>
+  <main class="papr-auth-callback">
+    <div class="papr-auth-callback__card">
+      <div class="papr-auth-callback__spinner" role="status" aria-label="Loading"></div>
+      <h1 class="papr-auth-callback__title">${headline}</h1>
+      <p class="papr-auth-callback__subtitle">You&rsquo;re signed in.</p>
+      <div class="papr-auth-callback__fallback" id="papr-auth-fallback" hidden>
+        <a class="papr-auth-callback__btn" href="${safeUrl}">${buttonLabel}</a>
       </div>
     </div>
-    <div class="papr-auth__right">${paprBrandBlock()}</div>
-  </div>
-  <script>location.replace(${jsUrl});</script>
+  </main>
+  <script>
+    setTimeout(function () {
+      var el = document.getElementById("papr-auth-fallback");
+      if (el) el.hidden = false;
+    }, 2500);
+    location.replace(${jsUrl});
+  </script>
 </body>
 </html>`;
 }

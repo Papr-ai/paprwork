@@ -13,6 +13,10 @@ describe("shouldExcludePathFromContentHash", () => {
     expect(shouldExcludePathFromContentHash("apps/x/requirements.json")).toBe(true);
     expect(shouldExcludePathFromContentHash("data/cloud-repo-head.txt")).toBe(true);
     expect(shouldExcludePathFromContentHash("apps/x/linked-databases.json")).toBe(true);
+    expect(shouldExcludePathFromContentHash("apps/x/__papr__/app-meta.json")).toBe(true);
+    expect(shouldExcludePathFromContentHash("apps/x/__papr__/platform-catalog.json")).toBe(
+      true,
+    );
     expect(shouldExcludePathFromContentHash("apps/x/src/App.tsx")).toBe(false);
     expect(shouldExcludePathFromContentHash("Jobs/job-1/job.runtime.json")).toBe(
       true,

@@ -4,6 +4,8 @@
  * loopback races during startup and removes an extra hop.
  */
 
+import { gzipSync } from "node:zlib";
+
 import {
   appendCloudActingUserQuery,
   mergeCloudActingUserBody,
@@ -22,6 +24,31 @@ export interface CloudApiFetchOptions {
   method?: string;
   body?: unknown;
   timeoutMs?: number;
+  /** When set, overrides internal timeout (for long-lived SSE streams). */
+  signal?: AbortSignal;
+  /** When false, skip gzip request body even for large JSON payloads. */
+  compressBody?: boolean;
+}
+
+const GZIP_MIN_BYTES = 1024;
+
+function prepareCloudJsonBody(
+  payload: unknown,
+  compressBody: boolean,
+): { body: string | Buffer; extraHeaders: Record<string, string> } {
+  const raw = JSON.stringify(payload);
+  const bytes = Buffer.from(raw, "utf8");
+  if (!compressBody || bytes.length < GZIP_MIN_BYTES) {
+    return { body: raw, extraHeaders: {} };
+  }
+  const compressed = gzipSync(bytes);
+  if (compressed.length >= bytes.length) {
+    return { body: raw, extraHeaders: {} };
+  }
+  return {
+    body: compressed,
+    extraHeaders: { "Content-Encoding": "gzip" },
+  };
 }
 
 export async function cloudApiFetch(
@@ -33,9 +60,13 @@ export async function cloudApiFetch(
     throw new Error("PAPR_API_KEY not configured. Login with Papr first.");
   }
 
+  const controller = opts.signal ? null : new AbortController();
+  const signal = opts.signal ?? controller!.signal;
   const timeoutMs = opts.timeoutMs ?? 60_000;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timer =
+    controller && timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
 
   try {
     const fetchOpts: RequestInit = {
@@ -43,8 +74,9 @@ export async function cloudApiFetch(
       headers: {
         "X-API-Key": apiKey,
         "Content-Type": "application/json",
+        "Accept-Encoding": "gzip",
       },
-      signal: controller.signal,
+      signal,
     };
     const method = fetchOpts.method ?? "GET";
     const hasJsonBody =
@@ -55,13 +87,17 @@ export async function cloudApiFetch(
         typeof opts.body === "object" && opts.body !== null && !Array.isArray(opts.body)
           ? mergeCloudActingUserBody(opts.body as Record<string, unknown>)
           : opts.body;
-      fetchOpts.body = JSON.stringify(payload);
+      const prepared = prepareCloudJsonBody(payload, opts.compressBody !== false);
+      fetchOpts.body = prepared.body;
+      Object.assign(fetchOpts.headers as Record<string, string>, prepared.extraHeaders);
     } else {
       pathWithActingUser = appendCloudActingUserQuery(cloudPath);
     }
     return await fetch(`${getMemoryServerBaseUrl()}${pathWithActingUser}`, fetchOpts);
   } finally {
-    clearTimeout(timer);
+    if (timer) {
+      clearTimeout(timer);
+    }
   }
 }
 

@@ -1225,7 +1225,9 @@
   color: var(--text-primary);
   font-size: 12px;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  text-align: center;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .share-sheet__icon-btn {

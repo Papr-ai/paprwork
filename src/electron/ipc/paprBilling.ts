@@ -248,41 +248,6 @@ function persistPlanSummaryToProfile(
   }
 }
 
-interface StripeSubscriptionApiResponse {
-  subscription?: PaprStripeSubscriptionInfo | null;
-  error?: string;
-}
-
-async function fetchStripeSubscription(
-  sessionToken: string,
-  workspaceId: string,
-): Promise<PaprStripeSubscriptionInfo | null> {
-  const url = new URL(`${PAPR_PLATFORM_URL}/api/v1/billing/subscription`);
-  url.searchParams.set("workspaceId", workspaceId);
-
-  const response = await fetch(url.toString(), {
-    headers: {
-      "X-Parse-Session-Token": sessionToken,
-    },
-  });
-
-  if (response.status === 404) {
-    return null;
-  }
-
-  if (!response.ok) {
-    const body = (await response.json().catch(() => ({}))) as { error?: string };
-    console.warn(
-      "[PaprBilling] Stripe subscription lookup failed:",
-      body.error || response.status,
-    );
-    return null;
-  }
-
-  const data = (await response.json()) as StripeSubscriptionApiResponse;
-  return data.subscription ?? null;
-}
-
 function formatStripeTrialEnd(trialEnd?: number | null): string | null {
   if (!trialEnd) return null;
   return new Date(trialEnd * 1000).toISOString();
@@ -462,41 +427,8 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
     organizationId,
   );
 
-  let stripeSubscription = await fetchStripeSubscription(
-    profile.sessionToken!,
-    workspaceId,
-  );
-
-  // Fallback: usage/metrics includes Stripe plan (same source as dashboard billing tab)
-  if (
-    (!stripeSubscription || !stripeSubscription.planNickname) &&
-    usageMetricsResult.subscriptionFromMetrics
-  ) {
-    stripeSubscription = {
-      ...usageMetricsResult.subscriptionFromMetrics,
-      ...stripeSubscription,
-      planNickname:
-        stripeSubscription?.planNickname ??
-        usageMetricsResult.subscriptionFromMetrics.planNickname,
-      status:
-        stripeSubscription?.status ?? usageMetricsResult.subscriptionFromMetrics.status,
-      planId:
-        stripeSubscription?.planId ?? usageMetricsResult.subscriptionFromMetrics.planId,
-      trialEnd:
-        stripeSubscription?.trialEnd ??
-        usageMetricsResult.subscriptionFromMetrics.trialEnd,
-      cancelAtPeriodEnd:
-        stripeSubscription?.cancelAtPeriodEnd ??
-        usageMetricsResult.subscriptionFromMetrics.cancelAtPeriodEnd,
-      isActive:
-        stripeSubscription?.isActive ??
-        usageMetricsResult.subscriptionFromMetrics.isActive,
-    };
-    console.log(
-      "[PaprBilling] Using subscription from usage/metrics:",
-      stripeSubscription.planNickname,
-    );
-  }
+  // Stripe subscription comes from usage/metrics (same dashboard route + getSubscriptionInfo).
+  const stripeSubscription = usageMetricsResult.subscriptionFromMetrics;
 
   const parseSubscriptionLabels = stripeCustomerId
     ? await fetchParseSubscriptionLabels(services.runGraphQL, stripeCustomerId)

@@ -30,6 +30,8 @@ export interface DatabaseRecord {
   tursoShortName: string;
   label?: string;
   ownerJobId?: string;
+  /** App whose repo ships migrations/ for this dbId (one owner per shared db). */
+  schemaOwnerAppId?: string;
   isolation: DatabaseIsolation;
   status: DatabaseStatus;
   createdAt: string;
@@ -47,6 +49,13 @@ function defaultRegistry(): DatabasesRegistryFile {
 
 export function normalizeDbPath(dbPath: string): string {
   return path.normalize(dbPath);
+}
+
+/** Slug segment from a registry db path (`data/databases/{slug}/data.db`). */
+export function registrySlugFromLocalPath(localPath: string): string | null {
+  const normalized = localPath.replace(/\\/g, "/");
+  const match = normalized.match(/\/data\/databases\/([^/]+)\/data\.db$/);
+  return match?.[1] ?? null;
 }
 
 export function dbIdFromPath(dbPath: string): string {
@@ -152,6 +161,18 @@ export class DatabaseRegistryService {
       await fs.promises.writeFile(tmpPath, JSON.stringify(state, null, 2), "utf8");
       await fs.promises.rename(tmpPath, this.registryPath);
       this.cache = state;
+
+      const updatedAt = new Date().toISOString();
+      void import("./syncV3/MetadataRegistryClient.js")
+        .then(({ uploadDatabasesRegistryToCloud }) =>
+          uploadDatabasesRegistryToCloud(state, updatedAt),
+        )
+        .catch((err: Error) => {
+          console.warn(
+            "[DatabaseRegistry] cloud upload failed:",
+            err.message.slice(0, 120),
+          );
+        });
     })();
 
     try {
@@ -210,6 +231,7 @@ export class DatabaseRegistryService {
     localPath: string;
     label?: string;
     ownerJobId?: string;
+    schemaOwnerAppId?: string;
     isolation?: DatabaseIsolation;
     dbId?: string;
     tursoShortName?: string;
@@ -234,6 +256,9 @@ export class DatabaseRegistryService {
       tursoShortName,
       ...(input.label ? { label: input.label } : {}),
       ...(input.ownerJobId ? { ownerJobId: input.ownerJobId } : {}),
+      ...(input.schemaOwnerAppId
+        ? { schemaOwnerAppId: input.schemaOwnerAppId }
+        : {}),
       isolation: input.isolation ?? "shared",
       status: "active",
       createdAt: now,
@@ -248,16 +273,28 @@ export class DatabaseRegistryService {
 
   async ensureForPath(
     dbPath: string,
-    options?: { label?: string; ownerJobId?: string },
+    options?: {
+      label?: string;
+      ownerJobId?: string;
+      schemaOwnerAppId?: string;
+    },
   ): Promise<DatabaseRecord> {
     const normalized = normalizeDbPath(dbPath);
     const existing = this.getByPath(normalized);
     if (existing) {
-      if (options?.ownerJobId && !existing.ownerJobId) {
+      const ownerJobId = options?.ownerJobId;
+      const schemaOwnerAppId = options?.schemaOwnerAppId;
+      if (
+        (ownerJobId && !existing.ownerJobId) ||
+        (schemaOwnerAppId && !existing.schemaOwnerAppId)
+      ) {
         const state = this.getState();
         state.databases[existing.dbId] = {
           ...existing,
-          ownerJobId: options.ownerJobId,
+          ...(ownerJobId && !existing.ownerJobId ? { ownerJobId } : {}),
+          ...(schemaOwnerAppId && !existing.schemaOwnerAppId
+            ? { schemaOwnerAppId }
+            : {}),
           updatedAt: new Date().toISOString(),
         };
         await this.save(state);
@@ -272,7 +309,25 @@ export class DatabaseRegistryService {
       localPath: normalized,
       label: options?.label,
       ownerJobId: options?.ownerJobId,
+      schemaOwnerAppId: options?.schemaOwnerAppId,
     });
+  }
+
+  /** Registry DBs whose migration SQL ships in this app's repo (schema owner). */
+  listBySchemaOwnerApp(appId: string): DatabaseRecord[] {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return [];
+    }
+    return Object.values(this.getState().databases).filter(
+      (record) =>
+        record.status === "active" && record.schemaOwnerAppId === trimmed,
+    );
+  }
+
+  isSchemaOwner(appId: string, dbId: string): boolean {
+    const record = this.getById(dbId);
+    return record?.schemaOwnerAppId === appId.trim();
   }
 
   async setIsolation(
@@ -409,7 +464,12 @@ export class DatabaseRegistryService {
     });
     const byPath = new Map<
       string,
-      { dbPath: string; label?: string; ownerJobId?: string }
+      {
+        dbPath: string;
+        label?: string;
+        ownerJobId?: string;
+        schemaOwnerAppId?: string;
+      }
     >();
 
     for (const entry of entries) {
@@ -440,9 +500,15 @@ export class DatabaseRegistryService {
               dbPath: normalized,
               label: source.alias,
               ownerJobId: source.jobId,
+              schemaOwnerAppId: entry.name,
             });
-          } else if (!existing.ownerJobId && source.jobId) {
-            existing.ownerJobId = source.jobId;
+          } else {
+            if (!existing.ownerJobId && source.jobId) {
+              existing.ownerJobId = source.jobId;
+            }
+            if (!existing.schemaOwnerAppId) {
+              existing.schemaOwnerAppId = entry.name;
+            }
           }
         }
       } catch {
@@ -456,6 +522,7 @@ export class DatabaseRegistryService {
       await this.ensureForPath(item.dbPath, {
         label: item.label,
         ownerJobId: item.ownerJobId,
+        schemaOwnerAppId: item.schemaOwnerAppId,
       });
       if (!before) {
         added += 1;

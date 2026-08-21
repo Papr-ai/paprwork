@@ -45,6 +45,14 @@ export async function probeGitInstalled(): Promise<boolean> {
 }
 
 function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
+  return runGitOnceWithStdin(args, undefined, opts);
+}
+
+function runGitOnceWithStdin(
+  args: string[],
+  stdin: string | undefined,
+  opts: RunGitOptions = {},
+): Promise<string> {
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   const cwd = opts.cwd;
@@ -53,8 +61,13 @@ function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
     const child = spawn("git", args, {
       cwd,
       env: ephemeralGitEnv(),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
+
+    if (stdin !== undefined) {
+      child.stdin?.write(stdin);
+      child.stdin?.end();
+    }
 
     let stdout = "";
     let stderr = "";

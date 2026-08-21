@@ -1759,7 +1759,8 @@ Papr Work is an app platform, not just a chat bot. Build automations with durabl
 
 ## Quick Reference
 
-- **Jobs root**: \`$PAPR_HOME/Jobs/{jobId}/\` with \`code/\`, \`logs/\`, \`data.db\`, \`job.json\`
+- **Jobs root**: \`$PAPR_HOME/Jobs/{jobId}/\` (capital **J** on disk) with \`code/\`, \`logs/\`, \`data/\`, \`job.json\`
+- **Cloud repo mirror**: linked job code syncs to per-app GitHub repo at \`jobs/{jobId}/\` (lowercase) — automatic; do not edit cloud paths manually
 - **Runtime selection**: Python (data/scraping), Node (TS/JS), Swift (macOS/iOS), Agent (reasoning)
 - **SQLite defaults**: Define tables with \`id\`, \`created_at\`, \`updated_at\`; use indexes
 - **Delivery pattern**: Script job → SQLite → Mini-app UI
@@ -1873,7 +1874,16 @@ delegate_task({
 })
 \`\`\`
 
-**Product Architect** (Claude Opus 4.6, GPT-5.5 fallback) produces: mini-app split, job types, SQLite schema, job DAG, Liquid Glass UI plan, phased delivery.
+**Product Architect** (Claude Opus 4.6, GPT-5.5 fallback) produces: mini-app split, job types, SQLite schema, job DAG, Liquid Glass UI plan, phased delivery, **page map** (one task per page), **Cloud Read Budget** (estimated Turso rows/read per page load).
+
+**Apps vs pages:** One **user task per page** (list, detail, action). One **app** = one related workflow with multiple pages OK. **Separate apps** when the job, audience, or domain is totally different — not "one more tab."
+
+**Cloud Read Budget (Product Architect must include for linked DBs):**
+- Turso bills **per row read** on \`apps.papr.ai\` — not per query. Few users × bad queries = millions of reads.
+- **Stats/KPIs:** precompute in \`app_stats\` (job writes after ETL) — never nested \`COUNT(*)\` across large tables from frontend.
+- **Tabs:** load once, cache in memory, refresh via \`onDbChanged\` only — not on every tab switch.
+- **Lists:** \`LIMIT\` + pagination; no \`SELECT *\` without filter on large tables.
+- **V3 sync:** row deltas + migrations only — does NOT re-read every row each sync. High Turso metrics usually = legacy bootstrap, agent \`query_cloud_turso\` debug, or app query patterns.
 
 **After approval:** Build yourself — but **don't skip the brief** when you judged the work complex.
 
@@ -2421,9 +2431,19 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 **Cloud git sync — what syncs vs. stays local (REQUIRED):**
 | Syncs to GitHub | Local only — do NOT rely on git for these |
 |---|---|
-| App source (\`apps/{id}/\`), job code (\`Jobs/{id}/\`), small assets (<10MB PDFs/icons) | \`**/*.db\` — data lives in **Turso** (\`attach_database\`) |
-| \`workspace/\`, \`data/*.json\` indexes | \`**/*.bak\`, \`**/*corrupt-*\` — recovery backups from crashes/repair |
-| | Files **>10MB** — cloud sync skips them; use \`upload_document_to_memory\` for large PDFs/docs and store the memory ID or URL in app DB |
+| App source (\`apps/{id}/\` at repo root via writer ops), small assets (<10MB PDFs/icons) | \`**/*.db\` — data lives in **Turso** (\`attach_database\`) |
+| Linked job **code** → per-app repo \`jobs/{jobId}/\` (lowercase — see path table below) | Job **runtime** (\`status\`, \`lastRunAt\`) — Mongo + heartbeat, never git |
+| \`workspace/\`, \`data/*.json\` registries (interim; moving to Mongo) | \`**/*.bak\`, \`**/*corrupt-*\` — recovery backups from crashes/repair |
+| | Files **>10MB** — cloud sync skips them; use \`upload_document_to_memory\` for large PDFs/docs |
+
+**Job path spelling — REQUIRED (do not mix these):**
+| Where | Path | Agent rule |
+|---|---|---|
+| **Local disk (always)** | \`$PAPR_HOME/Jobs/{jobId}/\` — capital **J** | Use \`edit_file\`, \`run_job\`, \`create_job\` — never lowercase on disk |
+| **Per-app GitHub repo (Sync V3)** | \`jobs/{jobId}/\` — lowercase | You never push here manually; writer ops map local \`Jobs/\` → repo \`jobs/\` on flush |
+| **Legacy namespace git** | \`Jobs/{jobId}/\` — capital **J** | Fallback only; linked jobs no longer sync here on app flush |
+
+**Never** write job files to \`$PAPR_HOME/jobs/\` (lowercase) or assume cloud git uses the same spelling as local disk.
 
 **Large brand/docs PDFs:** Do NOT copy 10MB+ PDFs into \`apps/\` or \`data/\` expecting git sync. Index with \`upload_document_to_memory\` (or \`add_document\`) and reference from the app via memory search or a stored metadata row. Small PDFs (<10MB) in \`apps/{id}/assets/\` are fine as static files.
 
@@ -2444,8 +2464,9 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 - **Workspace jobs** (\`Jobs/{id}/\`) — sandbox/agent/heavy ETL via \`/api/jobs/run\` — **normal for button actions**, including share-link visitors
 
 **When to create backend handlers vs. direct /api/db/* calls (REQUIRED decision):**
-- **Direct \`/api/db/*\`:** Simple read-only dashboards with 1-2 SELECTs — no backend needed
-- **Backend handlers required:** 3+ DB operations (CRUD app), vault/API keys, external API calls with secrets, complex JOINs, data validation, multi-table transactions, OAuth token exchange, file system access, server-side auth checks
+- **Direct \`/api/db/*\`:** Simple read-only dashboards with 1-2 **indexed SELECTs with LIMIT** — no runtime \`COUNT(*)\` table scans
+- **Backend handlers required:** 3+ DB operations (CRUD app), vault/API keys, external API calls with secrets, complex JOINs, **dashboard KPIs across tables**, data validation, multi-table transactions, OAuth token exchange, file system access, server-side auth checks
+- **Cloud read budget:** \`validate_app\` flags nested \`COUNT(*)\` subqueries, \`SELECT *\` without LIMIT, and tab-switch re-fetch storms. Product Architect must estimate rows/read per page load — see \`PRODUCT_ARCHITECT_GUIDE.md\` § Cloud Read Budget.
 - **Backend is NOT just for SQL** — any server-side logic belongs in backend handlers: external API proxy calls, webhook processing, auth validation, file I/O, data transformation. If your app calls ANY external API with a secret key, it MUST go through a backend handler.
 - **Rule of thumb:** If frontend \`db.ts\` has 5+ raw SQL functions calling \`/api/db/query|write\`, extract to \`backend/\` actions. A \`db.ts\` with 15 fetch-to-SQL wrappers is the #1 architecture anti-pattern — it means the agent skipped the backend layer entirely.
 - **validate_app enforcement:** >4 raw DB calls without backend/ → warning. >8 → error. External API calls with auth headers from frontend → error.
@@ -2671,8 +2692,8 @@ const { jobId } = await res.json();
 Design mini-apps with **ruthless focus and zero clutter** — every pixel must justify its existence.
 
 **Core Principles:**
-- **One mini-app = one use case.** Don't build a Swiss Army knife. Build a scalpel.
-- **One screen = one job to be done.** Each screen should answer exactly ONE question or complete ONE task. If a screen does two things, split it into two screens.
+- **One app = one related workflow.** Multiple **pages** per app is normal (list → detail → action). Split into **separate apps** only when the user job, audience, or data domain is totally different.
+- **One page = one user task.** Each page answers ONE question or completes ONE action. Unrelated tasks belong on separate pages — or separate apps if the workflow differs entirely.
 - **Say no to features.** The hardest part of design is deciding what to leave out. If a feature doesn't serve the core use case, cut it.
 - **Visible simplicity, hidden complexity.** The UI should feel obvious. All complexity lives in the data layer and jobs, not in the interface.
 - **Every element earns its place.** If you can't explain why a button, label, or section exists in one sentence tied to the core use case, remove it.

@@ -407,6 +407,8 @@ export class AgentService {
 
     // Lazy-load API keys on first message (no keychain popup on startup!)
     await this.ensureKeysLoaded();
+    // Re-bind after storage mode upgrades (local → hybrid) or singleton reset.
+    this.storageManager = getStorageManager();
     timings.ensureKeys = performance.now() - t;
 
     if (config.provider === "cursor") {
@@ -506,8 +508,24 @@ export class AgentService {
     const CHECKPOINT_MAX_BYTES = 5 * 1024 * 1024; // 5MB
     let checkpointCapLogged = false;
 
+    /** Prefer the live singleton — survives Papr API key refresh / storage reset. */
+    const resolveStreamStorage = (): StorageManager | null => {
+      const live = getStorageManager();
+      if (live.isInitialized()) {
+        return live;
+      }
+      if (this.storageManager.isInitialized()) {
+        return this.storageManager;
+      }
+      return null;
+    };
+
     const persistCheckpoint = async (): Promise<void> => {
       if (assistantMessageSaved) return;
+      const storage = resolveStreamStorage();
+      if (!storage) {
+        return;
+      }
       if (checkpointBytesEstimate > CHECKPOINT_MAX_BYTES) {
         if (!checkpointCapLogged) {
           checkpointCapLogged = true;
@@ -550,19 +568,19 @@ export class AgentService {
 
       try {
         if (!checkpointInserted) {
-          await this.storageManager.saveMessage(chatId, partialMsg);
+          await storage.saveMessage(chatId, partialMsg);
           checkpointInserted = true;
           console.log(
             `[AgentService] 📌 First streaming checkpoint for ${chatId} (${assistantMessageId})`,
           );
         } else {
-          await this.storageManager.updateMessage(
-            chatId,
-            assistantMessageId,
-            partialMsg,
-          );
+          await storage.updateMessage(chatId, assistantMessageId, partialMsg);
         }
       } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        if (message.includes("database connection is not open")) {
+          return;
+        }
         console.warn(
           `[AgentService] Checkpoint persist failed for ${chatId}:`,
           err,
@@ -638,11 +656,16 @@ export class AgentService {
               stableId: assistantMessageId,
             });
 
+        const storage = resolveStreamStorage();
+        if (!storage) {
+          return;
+        }
+
         if (checkpointInserted) {
           // Row already exists from a checkpoint — UPDATE in place
-          await this.storageManager.updateMessage(chatId, assistantMessageId, message);
+          await storage.updateMessage(chatId, assistantMessageId, message);
         } else {
-          await this.storageManager.saveMessage(chatId, message);
+          await storage.saveMessage(chatId, message);
           checkpointInserted = true;
         }
         assistantMessageSaved = true;
@@ -650,6 +673,11 @@ export class AgentService {
           `[AgentService] Saved ${params.asAbort ? "partial" : "error"} assistant for chat ${chatId}`,
         );
       } catch (saveError) {
+        const message =
+          saveError instanceof Error ? saveError.message : String(saveError);
+        if (message.includes("database connection is not open")) {
+          return;
+        }
         console.error(
           `[AgentService] Failed to save incomplete assistant for chat ${chatId}:`,
           saveError,
@@ -2152,13 +2180,20 @@ export class AgentService {
           lastCacheWriteTokens,
         ),
       });
-      if (checkpointInserted) {
-        // Checkpoint row already exists — UPDATE to final (complete) state
-        await this.storageManager.updateMessage(chatId, assistantMessageId, assistantMsg);
-      } else {
-        await this.storageManager.saveMessage(chatId, assistantMsg);
+      const streamStorage = resolveStreamStorage();
+      if (streamStorage) {
+        if (checkpointInserted) {
+          // Checkpoint row already exists — UPDATE to final (complete) state
+          await streamStorage.updateMessage(
+            chatId,
+            assistantMessageId,
+            assistantMsg,
+          );
+        } else {
+          await streamStorage.saveMessage(chatId, assistantMsg);
+        }
+        assistantMessageSaved = true;
       }
-      assistantMessageSaved = true;
 
       // 4.5. Yield done chunk to signal stream completion to frontend
       // Include finalMessage so the UI finalizes with the server-assigned id.

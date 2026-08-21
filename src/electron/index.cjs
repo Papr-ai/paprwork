@@ -13,6 +13,9 @@ const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
 const { autoUpdater } = require("electron-updater");
+const {
+  registerGeolocationPermissionHandlers,
+} = require("./geolocationPermission.cjs");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
@@ -2373,6 +2376,28 @@ app.whenReady().then(async () => {
   const activeWorkspaceEnv = readActiveWorkspaceEnv();
   const workspaceSettingsPath = readWorkspaceSettingsPath();
 
+  function readPackagedGatewayEnv() {
+    if (!app.isPackaged) {
+      return {};
+    }
+    try {
+      const envPath = path.join(process.resourcesPath, "packaged-gateway-env.json");
+      if (!require("fs").existsSync(envPath)) {
+        return {};
+      }
+      const parsed = JSON.parse(require("fs").readFileSync(envPath, "utf-8"));
+      return typeof parsed === "object" && parsed !== null ? parsed : {};
+    } catch (err) {
+      console.warn(
+        "[Electron] Failed to load packaged gateway env:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return {};
+    }
+  }
+
+  const packagedGatewayEnv = readPackagedGatewayEnv();
+
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
     isTelemetrySendingEnabledFn != null
@@ -2419,6 +2444,11 @@ app.whenReady().then(async () => {
     AGENT_STREAM_MAX_CONCURRENT:
       process.env.AGENT_STREAM_MAX_CONCURRENT ?? "6",
   };
+  for (const [key, value] of Object.entries(packagedGatewayEnv)) {
+    if (typeof value === "string" && value.trim() && !gatewayEnv[key]) {
+      gatewayEnv[key] = value.trim();
+    }
+  }
   if (
     gatewayEnv.PAPR_API_KEY &&
     !paprApiKeyMatchesActiveWorkspace(gatewayEnv.PAPR_API_KEY)
@@ -2469,6 +2499,11 @@ app.whenReady().then(async () => {
   if (setGatewayRestartAfterWorkspaceSwitch) {
     setGatewayRestartAfterWorkspaceSwitch(() => supervisor.restartForWorkspaceSwitch());
   }
+
+  registerGeolocationPermissionHandlers({
+    getMainWindow: () => mainWindow,
+    settingsStorage,
+  });
 
   await supervisor.start();
   await createMainWindow();
