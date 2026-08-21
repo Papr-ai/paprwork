@@ -2160,6 +2160,40 @@ app.whenReady().then(async () => {
   console.log("[Electron] Start time:", new Date(appStartTime).toISOString());
   console.log("[Electron] ===========================================");
 
+  // Media permissions for locally-hosted mini-apps.
+  //
+  // Electron denies getUserMedia by default when no handler is registered, so
+  // every mini-app saw "Permission denied" no matter what macOS had granted.
+  // That made a live microphone meter impossible to build, and the Meetings
+  // app recorded silence with nothing in the UI able to detect it.
+  //
+  // Scoped to the local gateway origin: remote content still gets denied, and
+  // macOS TCC remains the outer gate — this only stops Electron from refusing
+  // before the OS is ever asked.
+  {
+    const { session } = require("electron");
+    const LOCAL_APP_ORIGIN = "http://localhost:18789";
+    const MEDIA_PERMISSIONS = new Set(["media", "audioCapture", "videoCapture"]);
+
+    const isLocalApp = (url) => typeof url === "string" && url.startsWith(LOCAL_APP_ORIGIN);
+
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      if (!MEDIA_PERMISSIONS.has(permission)) return callback(false);
+      const url = details?.requestingUrl || webContents?.getURL?.() || "";
+      const allowed = isLocalApp(url);
+      if (!allowed) console.warn("[Electron] Denied", permission, "for", url);
+      callback(allowed);
+    });
+
+    // permissions.query() consults this separately; without it a mini-app reads
+    // state "denied" and can show a misleading "check System Settings" message
+    // before it has even tried.
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+      if (!MEDIA_PERMISSIONS.has(permission)) return false;
+      return isLocalApp(requestingOrigin);
+    });
+  }
+
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
