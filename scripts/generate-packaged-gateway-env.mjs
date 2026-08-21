@@ -13,7 +13,7 @@ const keys = [
   "PAPR_CLOUD_APP_HOST_KEY",
   "PAPR_APP_REPO_WRITER_URL",
   "PAPR_MEMORY_SERVER_URL",
-] as const;
+];
 
 const payload = {};
 for (const key of keys) {
