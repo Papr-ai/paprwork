@@ -132,12 +132,17 @@ function buildRowSyncTriggerStatements(tableName: string): string[] {
     `CREATE TRIGGER IF NOT EXISTS ${quoteIdent(bumpName)} ` +
       `AFTER UPDATE ON ${quoted} ` +
       `FOR EACH ROW ` +
-      `WHEN OLD.${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} = NEW.${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} ` +
+      // IS, not =: in SQLite `NULL = NULL` evaluates to NULL, which is falsy,
+      // so a row whose version was never initialised silently skipped this
+      // trigger and never bumped. IS is the NULL-safe comparison.
+      `WHEN OLD.${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} IS NEW.${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} ` +
       `AND ${SYNC_MUTE_GUARD} ` +
       `BEGIN ` +
       `UPDATE ${quoted} SET ` +
       `${quoteIdent(PAPR_ROW_SYNC_COLUMNS.updatedAt)} = datetime('now'), ` +
-      `${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} = OLD.${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} + 1 ` +
+      // COALESCE so a NULL version becomes 1 rather than staying NULL
+      // (NULL + 1 is NULL, which would leave the row permanently stuck).
+      `${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)} = COALESCE(OLD.${quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion)}, 0) + 1 ` +
       `WHERE rowid = NEW.rowid; ` +
       `END`,
   ];
