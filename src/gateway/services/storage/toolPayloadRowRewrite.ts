@@ -14,6 +14,8 @@ import type Database from "better-sqlite3";
 import fs from "fs";
 import path from "path";
 import {
+  buildOffloadStub,
+  COMPACT_PREVIEW_CHARS,
   MAX_ROW_PAYLOAD_CHARS,
   MIN_SPILL_CHARS,
   OFFLOAD_PREVIEW_CHARS,
@@ -75,6 +77,10 @@ export function offloadRowResults(
   // Anything over the per-result threshold goes, plus enough of the rest
   // (largest first) to bring the row under its budget. Results are sorted
   // descending, so the first one not worth a sidecar ends the search.
+  //
+  // Offloading reclaims everything past the preview, not the whole result, so
+  // the projection has to leave the preview behind or it will stop selecting
+  // too early and leave the row over budget.
   let inlineTotal = elements.reduce((sum, e) => sum + e.result_len, 0);
   const selected: typeof elements = [];
   for (const element of elements) {
@@ -85,8 +91,15 @@ export function offloadRowResults(
     }
     if (!element.tool_call_id) continue;
     selected.push(element);
-    inlineTotal -= element.result_len;
+    inlineTotal -= Math.max(element.result_len - OFFLOAD_PREVIEW_CHARS, 0);
   }
+
+  // Enough huge results and the previews alone exceed the budget. Nothing more
+  // can be moved out at that point, so trade inline fidelity for a bounded row.
+  const previewChars =
+    inlineTotal > MAX_ROW_PAYLOAD_CHARS
+      ? COMPACT_PREVIEW_CHARS
+      : OFFLOAD_PREVIEW_CHARS;
 
   // Paths are built in JS and bound as text; letting SQLite concatenate the
   // index risks a float creeping in.
@@ -119,6 +132,7 @@ export function offloadRowResults(
       toolCallId,
       toolName: element.tool_name,
       payload: result,
+      previewChars,
     });
     if (!moved) continue;
 
@@ -151,6 +165,7 @@ function moveToSidecar(args: {
   toolCallId: string;
   toolName: string | null;
   payload: string;
+  previewChars: number;
 }): { ref: { file: string; totalChars: number }; stub: string } | null {
   const relativePath = path.join(
     SIDECAR_DIRNAME,
@@ -171,15 +186,17 @@ function moveToSidecar(args: {
     return null;
   }
 
-  const total = args.payload.length;
-  const nameArg = args.toolName ? `, toolName: "${args.toolName}"` : "";
-  const stub =
-    args.payload.slice(0, OFFLOAD_PREVIEW_CHARS) +
-    `\n\n[... ${(total - OFFLOAD_PREVIEW_CHARS).toLocaleString()} more characters ` +
-    `stored outside the database (total ${total.toLocaleString()}). ` +
-    `Full result: get_full_tool_result({ toolCallId: "${args.toolCallId}"${nameArg} })]`;
+  const stub = buildOffloadStub({
+    payload: args.payload,
+    previewChars: args.previewChars,
+    toolCallId: args.toolCallId,
+    toolName: args.toolName ?? undefined,
+  });
 
-  return { ref: { file: relativePath, totalChars: total }, stub };
+  return {
+    ref: { file: relativePath, totalChars: args.payload.length },
+    stub,
+  };
 }
 
 /**
@@ -244,6 +261,7 @@ export function offloadRowSequenceOutputs(
       toolCallId,
       toolName: item.tool_name,
       payload: output,
+      previewChars: OFFLOAD_PREVIEW_CHARS,
     });
     if (!moved) continue;
 

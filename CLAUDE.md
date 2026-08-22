@@ -4740,21 +4740,22 @@ if (result.valid) {
 3. **Eager parsing** — `loadMessages` parsed both columns for every row, including rows nothing was about to render
 **Solution:**
 1. **Store each payload once** — `tool_calls` stays canonical; `sequence` keeps ordering metadata plus `inputRef`/`outputRef` pointers, rehydrated on read by `restoreSequencePayloads()`. A JSON `null` output stays inline (it serializes to nothing in `tool_calls`, so a pointer could not restore it).
-2. **Offload large payloads** — results over 256KB move to `~/.paprwork-v2/tool-results/<chatId>/<messageId>/<toolCallId>.txt`, leaving a 4KB preview plus a `resultOffload` pointer. `get_full_tool_result` follows the pointer, so **nothing is discarded**. The whole column also has a 1MB budget: the largest remaining results spill until the row fits.
+2. **Offload large payloads** — results over 256KB move to `~/.paprwork-v2/tool-results/<chatId>/<messageId>/<toolCallId>.txt`, leaving a **40K preview** plus a `resultOffload` pointer. `get_full_tool_result` follows the pointer, so **nothing is discarded**. The preview is sized to the default `absoluteMaxChars` (40,000) so the history formatter truncates from the preview exactly as it would from the full result — offloading cannot take away context the model would otherwise have received. The whole column also has a 1MB budget: the largest results spill to sidecars, then previews are re-cut to 4K if previews alone still exceed it.
 3. **Size-guard every read** — `boundedPayloadSql()` returns NULL instead of a column over 2MB, so an oversized row is never pulled into the heap. This stops the crash even before the backfill runs.
 4. **Background backfill** — `startToolPayloadMigration()` compacts existing rows in chunks of 50, entirely inside SQLite via `json_set`/`json_remove`, so a 100MB column is never parsed in JS. Idempotent and resumable via a `tool_payload_migrated` flag.
 **Results (real 3.0GB database, verified byte-for-byte against the untouched original):**
 
 | Sample | Rows before | Rows after | Sidecars | Checks |
 |---|---|---|---|---|
-| 25 largest messages | 1,199MB | **7.6MB** (−99.4%) | 585MB | 2,528 passed, 0 failed |
-| 150 largest messages | 1,958MB | **44.4MB** (−97.7%) | 929MB | 12,309 passed, 0 failed |
+| 150 largest messages | 1,958MB | **53.5MB** (−97.3%) | 930MB | 12,321 passed, 0 failed |
+
+**Consumer impact (checked, not assumed):** the two columns were never "full copy for the UI, trimmed copy for the LLM" — they held the same payload written twice, and the UI/LLM split happens at read time. `sequence[].data.output` and `tool_calls[].result` are written from the identical source value in `messagePersistence.ts`, so rebuilding one from the other is faithful. The chat UI does not render successful tool output at all (`getToolResultFeedback` returns `null` for `success`), and chat export truncates to 500 chars, so preview length is invisible to both.
 
 **Files Created:**
 - `src/gateway/services/storage/messagePayloadStore.ts` — serialize/restore, offload, sidecar I/O
 - `src/gateway/services/storage/toolPayloadMigration.ts` — backfill scheduling and progress
 - `src/gateway/services/storage/toolPayloadRowRewrite.ts` — per-row SQL surgery (json_set/json_remove)
-- `tests/message-payload-store.test.ts` — 11 round-trip/offload tests
+- `tests/message-payload-store.test.ts` — 13 round-trip/offload/preview-budget tests
 - `scripts/test-tool-payload-migration.mjs` — 26 backfill tests (Electron)
 - `scripts/verify-payload-migration-on-real-db.mjs` — losslessness check against a real DB (read-only)
 - `docs/TOOL_PAYLOAD_OFFLOADING.md` — complete documentation

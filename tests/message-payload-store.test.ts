@@ -14,6 +14,7 @@ import {
   SIDECAR_DIRNAME,
 } from "../src/gateway/services/storage/messagePayloadStore.js";
 import type { StoredMessage } from "../src/gateway/services/storage/IStorageProvider.js";
+import { ABSOLUTE_TOOL_RESULT_MAX_CHARS } from "../src/gateway/services/agent/toolResultTruncation.js";
 
 let dbDir: string;
 
@@ -228,6 +229,67 @@ describe("offloading oversized results", () => {
 
     // Every spilled result is still readable in full.
     for (const tc of offloaded) {
+      expect(readOffloadedResult(dbDir, tc.resultOffload)).toBe(chunk);
+    }
+  });
+
+  it("keeps enough inline for the model's own truncation ceiling", () => {
+    // The history formatter caps every category at or below absoluteMaxChars, so
+    // as long as the preview covers that ceiling, offloading cannot take away
+    // context the model would otherwise have received.
+    const result = "y".repeat(OFFLOAD_THRESHOLD_CHARS * 4);
+    const { toolCallsJson } = serializeMessagePayloads({
+      dbDir,
+      chatId: "chat-1",
+      messageId: "msg-1",
+      message: baseMessage({
+        toolCalls: [
+          { id: "tc-1", name: "read_file", args: {}, result, status: "success" },
+        ],
+      }),
+    });
+
+    const stored = JSON.parse(toolCallsJson!)[0];
+    expect(stored.result.length).toBeGreaterThanOrEqual(
+      ABSOLUTE_TOOL_RESULT_MAX_CHARS,
+    );
+    expect(stored.result.startsWith(result.slice(0, ABSOLUTE_TOOL_RESULT_MAX_CHARS))).toBe(
+      true,
+    );
+  });
+
+  it("degrades previews rather than exceeding the row budget", () => {
+    // Enough huge results that even the previews would blow the budget.
+    const chunk = "w".repeat(OFFLOAD_THRESHOLD_CHARS + 50_000);
+    const toolCalls = Array.from({ length: 40 }, (_, i) => ({
+      id: `tc-${i}`,
+      name: "bash",
+      args: {},
+      result: chunk,
+    }));
+
+    const { toolCallsJson } = serializeMessagePayloads({
+      dbDir,
+      chatId: "chat-1",
+      messageId: "msg-1",
+      message: baseMessage({ toolCalls }),
+    });
+
+    const stored = JSON.parse(toolCallsJson!);
+    const inlineChars = stored.reduce(
+      (sum: number, tc: any) => sum + tc.result.length,
+      0,
+    );
+    expect(inlineChars).toBeLessThanOrEqual(MAX_ROW_PAYLOAD_CHARS);
+
+    // Some previews were cut short, and every one still reports the true total
+    // and reads back in full.
+    expect(
+      stored.some((tc: any) => tc.result.length < OFFLOAD_PREVIEW_CHARS),
+    ).toBe(true);
+    for (const tc of stored) {
+      expect(tc.resultOffload.totalChars).toBe(chunk.length);
+      expect(tc.result).toContain(chunk.length.toLocaleString());
       expect(readOffloadedResult(dbDir, tc.resultOffload)).toBe(chunk);
     }
   });

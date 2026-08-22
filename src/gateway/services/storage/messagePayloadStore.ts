@@ -15,27 +15,38 @@
  * Reads rehydrate the pointers, so a `StoredMessage` looks exactly as it did
  * before. Nothing is discarded: an offloaded result keeps an inline preview and
  * the full text stays on disk, retrievable via `get_full_tool_result`.
+ *
+ * This module decides what to slim and what to offload; `toolResultSidecars.ts`
+ * owns the sidecar file layout and size budgets, and is re-exported here so
+ * callers have a single entry point.
  */
 
-import fs from "fs";
-import path from "path";
 import type { StoredMessage } from "./IStorageProvider.js";
+import {
+  buildOffloadStub,
+  COMPACT_PREVIEW_CHARS,
+  MAX_ROW_PAYLOAD_CHARS,
+  MIN_SPILL_CHARS,
+  offloadResult,
+  OFFLOAD_PREVIEW_CHARS,
+  OFFLOAD_THRESHOLD_CHARS,
+  type OffloadedResultRef,
+} from "./toolResultSidecars.js";
 
-/** Results longer than this move to a sidecar file instead of living in the row. */
-export const OFFLOAD_THRESHOLD_CHARS = 256 * 1024;
-
-/** How much of an offloaded result stays inline so the UI still shows something. */
-export const OFFLOAD_PREVIEW_CHARS = 4096;
-
-/**
- * Budget for the whole `tool_calls` column. A turn with dozens of results that
- * each sit just under the per-result threshold would otherwise still add up to
- * a huge row, so the largest ones spill to sidecars until the row fits.
- */
-export const MAX_ROW_PAYLOAD_CHARS = 1024 * 1024;
-
-/** Not worth a sidecar file below this size. */
-export const MIN_SPILL_CHARS = 8 * 1024;
+// The sidecar layout and budgets live in toolResultSidecars.ts; re-exported here
+// so callers have one entry point for message payload storage.
+export {
+  buildOffloadStub,
+  COMPACT_PREVIEW_CHARS,
+  deleteChatSidecars,
+  MAX_ROW_PAYLOAD_CHARS,
+  MIN_SPILL_CHARS,
+  OFFLOAD_PREVIEW_CHARS,
+  OFFLOAD_THRESHOLD_CHARS,
+  readOffloadedResult,
+  SIDECAR_DIRNAME,
+  type OffloadedResultRef,
+} from "./toolResultSidecars.js";
 
 /**
  * Largest single column we are willing to pull into JS and parse. Rows written
@@ -43,8 +54,6 @@ export const MIN_SPILL_CHARS = 8 * 1024;
  * enough to exhaust the heap, so the read path skips them instead.
  */
 export const MAX_INLINE_PAYLOAD_BYTES = 2 * 1024 * 1024;
-
-export const SIDECAR_DIRNAME = "tool-results";
 
 /**
  * SQL that yields NULL instead of a payload too large to pull into the heap.
@@ -55,14 +64,6 @@ export function boundedPayloadSql(column: "tool_calls" | "sequence"): string {
     `CASE WHEN LENGTH(${column}) > ${MAX_INLINE_PAYLOAD_BYTES} ` +
     `THEN NULL ELSE ${column} END AS ${column}`
   );
-}
-
-/** Pointer left in `tool_calls` when a result was moved to a sidecar file. */
-export interface OffloadedResultRef {
-  /** Sidecar location, relative to the directory holding chats.db. */
-  file: string;
-  /** Length in characters of the full result. */
-  totalChars: number;
 }
 
 type ToolCallRecord = {
@@ -85,11 +86,6 @@ const INPUT_REF = "toolCall";
 const OUTPUT_REF_STRING = "toolCall:string";
 const OUTPUT_REF_JSON = "toolCall:json";
 
-function sanitizeSegment(value: string): string {
-  const cleaned = value.replace(/[^a-zA-Z0-9_.-]/g, "_");
-  return cleaned.length > 120 ? cleaned.slice(0, 120) : cleaned || "_";
-}
-
 function isToolItem(
   item: SequenceItem,
 ): item is { type: "tool"; data: Record<string, unknown> } {
@@ -99,58 +95,6 @@ function isToolItem(
     item.data !== null &&
     !Array.isArray(item.data)
   );
-}
-
-function buildOffloadNotice(
-  ref: OffloadedResultRef,
-  toolCallId: string,
-  toolName?: string,
-): string {
-  const remaining = ref.totalChars - OFFLOAD_PREVIEW_CHARS;
-  const nameArg = toolName ? `, toolName: "${toolName}"` : "";
-  return (
-    `\n\n[... ${remaining.toLocaleString()} more characters stored outside the database ` +
-    `(total ${ref.totalChars.toLocaleString()}). ` +
-    `Full result: get_full_tool_result({ toolCallId: "${toolCallId}"${nameArg} })]`
-  );
-}
-
-function writeSidecar(absolutePath: string, contents: string): void {
-  fs.mkdirSync(path.dirname(absolutePath), { recursive: true });
-  const tmpPath = `${absolutePath}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tmpPath, contents, "utf8");
-  fs.renameSync(tmpPath, absolutePath);
-}
-
-/**
- * Move a single oversized result to a sidecar file.
- * Returns null when the write fails, so the caller keeps the result inline
- * rather than losing it.
- */
-function offloadResult(args: {
-  dbDir: string;
-  chatId: string;
-  messageId: string;
-  toolCallId: string;
-  result: string;
-}): OffloadedResultRef | null {
-  const relativePath = path.join(
-    SIDECAR_DIRNAME,
-    sanitizeSegment(args.chatId),
-    sanitizeSegment(args.messageId),
-    `${sanitizeSegment(args.toolCallId)}.txt`,
-  );
-
-  try {
-    writeSidecar(path.join(args.dbDir, relativePath), args.result);
-    return { file: relativePath, totalChars: args.result.length };
-  } catch (error) {
-    console.error(
-      `[MessagePayloadStore] Failed to offload result for ${args.toolCallId}, keeping it inline:`,
-      error instanceof Error ? error.message : error,
-    );
-    return null;
-  }
 }
 
 /**
@@ -197,13 +141,12 @@ export function serializeMessagePayloads(args: {
     });
     if (!ref) continue;
 
-    tc.result =
-      tc.result.slice(0, OFFLOAD_PREVIEW_CHARS) +
-      buildOffloadNotice(
-        ref,
-        toolCallId,
-        typeof tc.name === "string" ? tc.name : undefined,
-      );
+    tc.result = buildOffloadStub({
+      payload: tc.result,
+      previewChars: OFFLOAD_PREVIEW_CHARS,
+      toolCallId,
+      toolName: typeof tc.name === "string" ? tc.name : undefined,
+    });
     tc.resultOffload = ref;
   }
 
@@ -253,8 +196,12 @@ export function serializeMessagePayloads(args: {
 }
 
 /**
- * Move the largest remaining inline results to sidecars until the row fits the
- * budget. Mutates the records in place.
+ * Bring the row under budget, in two passes.
+ *
+ * First spill the largest results that are still fully inline. Once everything
+ * worth a sidecar has one, the row can still be over budget purely from
+ * previews (40K each adds up), so the second pass shrinks those previews to
+ * COMPACT_PREVIEW_CHARS, largest first. Mutates the records in place.
  */
 function spillLargestUntilRowFits(args: {
   dbDir: string;
@@ -280,7 +227,7 @@ function spillLargestUntilRowFits(args: {
         largest = tc;
       }
     }
-    if (!largest || typeof largest.id !== "string") return;
+    if (!largest || typeof largest.id !== "string") break;
 
     const ref = offloadResult({
       dbDir: args.dbDir,
@@ -289,16 +236,53 @@ function spillLargestUntilRowFits(args: {
       toolCallId: largest.id,
       result: largest.result as string,
     });
-    if (!ref) return;
+    if (!ref) break;
 
-    largest.result =
-      (largest.result as string).slice(0, OFFLOAD_PREVIEW_CHARS) +
-      buildOffloadNotice(
-        ref,
-        largest.id,
-        typeof largest.name === "string" ? largest.name : undefined,
-      );
+    largest.result = buildOffloadStub({
+      payload: largest.result as string,
+      previewChars: OFFLOAD_PREVIEW_CHARS,
+      toolCallId: largest.id,
+      toolName: typeof largest.name === "string" ? largest.name : undefined,
+    });
     largest.resultOffload = ref;
+  }
+
+  shrinkPreviewsUntilRowFits(toolCalls, rowSize);
+}
+
+/**
+ * Last resort once every spillable result already has a sidecar: re-cut the
+ * largest previews down to COMPACT_PREVIEW_CHARS. The full payload is already
+ * safe on disk, so this only trades inline fidelity for a bounded row.
+ */
+function shrinkPreviewsUntilRowFits(
+  toolCalls: ToolCallRecord[],
+  rowSize: () => number,
+): void {
+  while (rowSize() > MAX_ROW_PAYLOAD_CHARS) {
+    let largest: ToolCallRecord | undefined;
+    let largestRef: OffloadedResultRef | undefined;
+    for (const tc of toolCalls) {
+      const ref = tc.resultOffload;
+      if (!ref || typeof tc.result !== "string") continue;
+      if (tc.result.length <= COMPACT_PREVIEW_CHARS) continue;
+      if (!largest || tc.result.length > (largest.result as string).length) {
+        largest = tc;
+        largestRef = ref;
+      }
+    }
+    if (!largest || !largestRef || typeof largest.id !== "string") return;
+
+    // The existing preview starts with the payload's own head, so re-slicing it
+    // yields the same bytes a shorter preview would have taken originally. The
+    // true total comes from the ref, not from the preview we are slicing.
+    largest.result = buildOffloadStub({
+      payload: (largest.result as string).slice(0, COMPACT_PREVIEW_CHARS),
+      previewChars: COMPACT_PREVIEW_CHARS,
+      totalChars: largestRef.totalChars,
+      toolCallId: largest.id,
+      toolName: typeof largest.name === "string" ? largest.name : undefined,
+    });
   }
 }
 
@@ -342,13 +326,12 @@ function offloadOrphanPayload(args: {
 
   return {
     ...data,
-    output:
-      serialized.slice(0, OFFLOAD_PREVIEW_CHARS) +
-      buildOffloadNotice(
-        ref,
-        toolCallId,
-        typeof data.name === "string" ? data.name : undefined,
-      ),
+    output: buildOffloadStub({
+      payload: serialized,
+      previewChars: OFFLOAD_PREVIEW_CHARS,
+      toolCallId,
+      toolName: typeof data.name === "string" ? data.name : undefined,
+    }),
     outputOffload: ref,
   };
 }
@@ -414,32 +397,6 @@ export function restoreSequencePayloads(
   });
 }
 
-/** Read a result that was moved to a sidecar file. */
-export function readOffloadedResult(
-  dbDir: string,
-  ref: OffloadedResultRef,
-): string | null {
-  const root = path.resolve(dbDir, SIDECAR_DIRNAME);
-  const target = path.resolve(dbDir, ref.file);
-
-  // Refs come from our own rows, but a corrupted value should not read
-  // arbitrary files.
-  if (target !== root && !target.startsWith(root + path.sep)) {
-    console.error(`[MessagePayloadStore] Rejected out-of-tree ref: ${ref.file}`);
-    return null;
-  }
-
-  try {
-    return fs.readFileSync(target, "utf8");
-  } catch (error) {
-    console.error(
-      `[MessagePayloadStore] Missing sidecar ${ref.file}:`,
-      error instanceof Error ? error.message : error,
-    );
-    return null;
-  }
-}
-
 /** Find the offload pointer for one tool call, if it has one. */
 export function findOffloadRef(
   message: StoredMessage,
@@ -451,19 +408,6 @@ export function findOffloadRef(
     }
   }
   return null;
-}
-
-/** Drop every sidecar belonging to a chat (called when the chat is deleted). */
-export function deleteChatSidecars(dbDir: string, chatId: string): void {
-  const dir = path.join(dbDir, SIDECAR_DIRNAME, sanitizeSegment(chatId));
-  try {
-    fs.rmSync(dir, { recursive: true, force: true });
-  } catch (error) {
-    console.warn(
-      `[MessagePayloadStore] Could not remove sidecars for chat ${chatId}:`,
-      error instanceof Error ? error.message : error,
-    );
-  }
 }
 
 /**
