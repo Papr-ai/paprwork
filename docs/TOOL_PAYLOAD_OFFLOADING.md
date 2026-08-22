@@ -51,7 +51,7 @@ restore it.
 ### 2. Move large payloads out of the row
 
 A result over **256 KB** is written to a sidecar file and the row keeps a
-4 KB preview plus a pointer:
+**40 K preview** plus a pointer:
 
 ```
 ~/.paprwork-v2/tool-results/<chatId>/<messageId>/<toolCallId>.txt
@@ -60,7 +60,7 @@ A result over **256 KB** is written to a sidecar file and the row keeps a
 ```jsonc
 {
   "id": "tc-1",
-  "result": "first 4096 chars…\n\n[... 1,203,456 more characters stored outside the database (total 1,207,552). Full result: get_full_tool_result({ toolCallId: \"tc-1\" })]",
+  "result": "first 40000 chars…\n\n[... 1,167,552 more characters stored outside the database (total 1,207,552). Full result: get_full_tool_result({ toolCallId: \"tc-1\" })]",
   "resultOffload": { "file": "tool-results/c1/m1/tc-1.txt", "totalChars": 1207552 }
 }
 ```
@@ -68,9 +68,39 @@ A result over **256 KB** is written to a sidecar file and the row keeps a
 **Nothing is discarded.** `get_full_tool_result` follows the pointer and reads
 the sidecar, so the agent still has the complete text.
 
+#### Why the preview is 40 K
+
+`OFFLOAD_PREVIEW_CHARS` is sized to the default `absoluteMaxChars` (40,000) from
+Settings → Agent Context. Every category limit in `historyFormatter` sits at or
+below that ceiling, so the formatter truncates from the preview exactly as it
+would have from the full result: **offloading cannot take away context the model
+would otherwise have received.**
+
+Two configurations reach past it, and both fall back to the pointer:
+
+- `absoluteMaxChars` raised above 40,000
+- `disableAllTruncation` enabled
+
+In those cases a result over the offload threshold arrives as the preview plus
+the notice, and the agent recovers the rest with `get_full_tool_result` (a
+full-retention tool, so the fetched text is not re-truncated).
+
+Cost of the larger preview, measured on the 150 largest messages of a real
+3.0 GB database: **53.5 MB instead of 44.4 MB** — about 9 MB to keep the default
+model ceiling fully inline.
+
+#### Row budget
+
 Because many medium results can add up, the whole `tool_calls` column also has
-a **1 MB budget**: once exceeded, the largest remaining results spill to
-sidecars until the row fits. Sidecars are deleted with their chat.
+a **1 MB budget**, enforced in two passes:
+
+1. Spill the largest still-inline results to sidecars (40 K preview each).
+2. If previews alone still exceed the budget — dozens of huge results in one
+   turn — re-cut the largest previews to `COMPACT_PREVIEW_CHARS` (4 K), largest
+   first, until the row fits. The full payload is already on disk, so this only
+   trades inline fidelity for a bounded row.
+
+Sidecars are deleted with their chat.
 
 ### 3. Never parse a row large enough to be dangerous
 
@@ -117,11 +147,10 @@ every payload back against the untouched original.
 
 | Sample | Rows in DB before | After | Sidecars | Checks |
 |---|---|---|---|---|
-| 25 largest messages | 1,199 MB | **7.6 MB** (−99.4%) | 585 MB | 2,528 passed, 0 failed |
-| 150 largest messages | 1,958 MB | **44.4 MB** (−97.7%) | 929 MB | 12,309 passed, 0 failed |
+| 150 largest messages | 1,958 MB | **53.5 MB** (−97.3%) | 930 MB | 12,321 passed, 0 failed |
 
 The difference between the original size and (rows + sidecars) is the
-duplication that is now gone — roughly 985 MB across those 150 rows.
+duplication that is now gone — roughly 975 MB across those 150 rows.
 
 ---
 
@@ -148,7 +177,7 @@ duplication that is now gone — roughly 985 MB across those 150 rows.
 ## Testing
 
 ```bash
-npx vitest run tests/message-payload-store.test.ts --project unit-backend   # 11 tests
+npx vitest run tests/message-payload-store.test.ts --project unit-backend   # 13 tests
 npm run test:payload-migration                                              # 26 tests (Electron)
 
 # Optional: prove losslessness against your own database (read-only)
@@ -166,10 +195,17 @@ Electron's runtime and cannot be loaded by plain Node (`ERR_DLOPEN_FAILED`).
 - **Rows still oversized before the backfill reaches them** return no
   `toolCalls`/`sequence` and log a placeholder. The turn stays visible; tool
   detail returns once compacted. This replaces a crash.
-- **The UI shows the preview**, not the sidecar text. The inline notice tells
-  the agent how to fetch the rest. There is no lazy sidecar load in the UI yet.
-- **Chat export** truncates tool results to 500 chars anyway, so the 4 KB
-  preview is unaffected.
+- **The chat UI does not render successful tool output at all**
+  (`getToolResultFeedback` returns `null` for `success`), so preview length is
+  invisible there. `FileWritePreview` renders from `args`, not `result`, with one
+  exception: `bash` needs a `__GIT_CHANGES__:` marker inside `result`, and those
+  payloads are far below the offload threshold.
+- **Error and warning rows** do read `result` to pull out a detail line. An
+  error payload over 256 KB would no longer `JSON.parse`, so the detail falls
+  back to the separate `toolCall.error` field. Error payloads that large are not
+  something we have observed.
+- **Chat export** truncates tool results to 500 chars anyway, well below the
+  preview, so exports are unaffected.
 - **Papr sync** receives the full in-memory message on first sync, before
   SQLite slimming, so cloud fidelity is unchanged.
 
