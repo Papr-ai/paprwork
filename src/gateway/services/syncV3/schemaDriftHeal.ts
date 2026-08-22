@@ -59,6 +59,23 @@ async function openRemoteClient(
 }
 
 const REBUILD_SUFFIX = "__papr_rebuild";
+const OLD_SUFFIX = "__papr_old";
+
+/**
+ * Rebuilds are expensive (they copy every row) and the remote apply is capped
+ * by a timeout. Shipping several in one payload means a slow table starves the
+ * rest and the whole payload is retried from the start each sync, so nothing
+ * ever converges. One per pass converges steadily instead.
+ */
+const MAX_REBUILDS_PER_PASS = 1;
+
+/** Scaffolding left behind by an interrupted rebuild. */
+function staleRebuildCleanupOps(tableName: string): JobMigrationSchemaOp[] {
+  return [
+    `DROP TABLE IF EXISTS ${quoteIdent(`${tableName}${REBUILD_SUFFIX}`)}`,
+    `DROP TABLE IF EXISTS ${quoteIdent(`${tableName}${OLD_SUFFIX}`)}`,
+  ].map((statement) => ({ kind: "sql" as const, statement }));
+}
 
 function columnDefinition(col: TableColumn, inlinePk: boolean): string {
   const type = col.type.trim() || "TEXT";
@@ -114,10 +131,26 @@ function buildRemoteTableRebuildOps(
       `INSERT OR IGNORE INTO ${quoteIdent(temp)} (${carried}) SELECT ${carried} FROM ${quoteIdent(tableName)}`,
     );
   }
-  statements.push(`DROP TABLE ${quoteIdent(tableName)}`);
+  // Swap by renaming rather than DROP-then-RENAME.
+  //
+  // These statements are applied one at a time on the remote and the run can
+  // be cut short by a timeout. DROP TABLE followed by ALTER ... RENAME leaves
+  // a window in which the real table has been destroyed and its replacement
+  // has not been installed: if the run dies there, the table is simply gone
+  // from the replica and the web app 500s with "no such table" until a later
+  // sync recreates it. Observed repeatedly on a slow link — a different table
+  // vanished on each attempt.
+  //
+  // Renaming the original aside first keeps the data reachable the whole time.
+  // The only gap is between two metadata-only renames, and a run that dies in
+  // it leaves the rows in `__papr_old` rather than deleting them.
+  const old = `${tableName}${OLD_SUFFIX}`;
+  statements.push(`DROP TABLE IF EXISTS ${quoteIdent(old)}`);
+  statements.push(`ALTER TABLE ${quoteIdent(tableName)} RENAME TO ${quoteIdent(old)}`);
   statements.push(
     `ALTER TABLE ${quoteIdent(temp)} RENAME TO ${quoteIdent(tableName)}`,
   );
+  statements.push(`DROP TABLE IF EXISTS ${quoteIdent(old)}`);
 
   return statements.map((statement) => ({ kind: "sql" as const, statement }));
 }
@@ -146,6 +179,7 @@ async function buildColumnDriftHealOps(
   driftedTables: readonly string[],
 ): Promise<JobMigrationSchemaOp[]> {
   const ops: JobMigrationSchemaOp[] = [];
+  let rebuilds = 0;
   for (const tableName of driftedTables) {
     const exists = await remote.execute({
       sql: `SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1`,
@@ -159,6 +193,9 @@ async function buildColumnDriftHealOps(
         .get(tableName) as { sql?: string } | undefined;
       const ddl = ddlRow?.sql?.trim();
       if (ddl) {
+        // The table may be missing because an earlier rebuild was interrupted,
+        // in which case its scaffolding is still there holding a stale copy.
+        ops.push(...staleRebuildCleanupOps(tableName));
         const statement = ddl.toLowerCase().includes("if not exists")
           ? ddl
           : ddl.replace(/^create table/i, "CREATE TABLE IF NOT EXISTS");
@@ -176,6 +213,13 @@ async function buildColumnDriftHealOps(
     // drifts that way needs a full rebuild. Emitting add_column ops here (or
     // nothing at all) leaves the table permanently drifted.
     if (incompatibleColumns(localCols, remoteCols).length > 0) {
+      if (rebuilds >= MAX_REBUILDS_PER_PASS) {
+        // Leave the rest for the next pass rather than building a payload too
+        // large to finish; a truncated payload heals nothing and is retried
+        // whole, so batching them makes convergence slower, not faster.
+        continue;
+      }
+      rebuilds += 1;
       ops.push(...buildRemoteTableRebuildOps(tableName, localAll, remoteAll));
       continue;
     }
