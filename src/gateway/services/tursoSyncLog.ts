@@ -92,7 +92,28 @@ function cdcUpdateWhenClause(columns: TableColumn[]): string {
     return mute;
   }
   const versionCol = quoteIdent(PAPR_ROW_SYNC_COLUMNS.rowVersion);
-  return `${mute} AND OLD.${versionCol} = NEW.${versionCol}`;
+  // IS, not =: `NULL = NULL` is NULL (falsy) in SQLite, so user edits to any
+  // row with an uninitialised version were never written to the change log —
+  // the edit stayed local forever with nothing reported as failed.
+  return `${mute} AND OLD.${versionCol} IS NEW.${versionCol}`;
+}
+
+/**
+ * Tables that cannot carry change capture, so the warning is logged once each
+ * rather than on every sync pass.
+ */
+const cdcDisabledWarned = new Set<string>();
+
+function warnCdcDisabledOnce(tableName: string): void {
+  if (cdcDisabledWarned.has(tableName)) {
+    return;
+  }
+  cdcDisabledWarned.add(tableName);
+  console.warn(
+    `[TursoSyncLog] "${tableName}" has no PRIMARY KEY — change capture is disabled ` +
+      `for it, so local inserts and deletes will never reach Turso. ` +
+      `Add a PRIMARY KEY (or let schema drift heal restore it) to re-enable sync.`,
+  );
 }
 
 export function parseRowPkJson(raw: unknown): unknown[] {
@@ -504,6 +525,11 @@ export function ensureLocalTableSyncTriggers(
   ensureLocalSyncInfrastructure(db);
   const columns = readTableSchema(db, tableName);
   if (!pkJsonExpr(columns, "NEW")) {
+    // No PRIMARY KEY means row_pk cannot be expressed, so this table gets no
+    // insert/delete change capture at all. Callers ignore this boolean, so
+    // without a warning the table just stops syncing: rows accumulate locally
+    // and the replica stays empty with every push still reporting success.
+    warnCdcDisabledOnce(tableName);
     return false;
   }
   ensureLocalRowSyncColumns(db, tableName);
