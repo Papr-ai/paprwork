@@ -932,7 +932,7 @@ function AboutTab() {
           )}
 
           <p className="about-description">
-            AI-powered desktop assistant built with TypeScript and Mastra
+            AI workspace that automatically builds your company brain and runs your work
           </p>
 
           <div className="about-links">
@@ -1010,6 +1010,38 @@ function AboutTab() {
             </button>
           </div>
         </div>
+
+        {currentVersion === "2.4.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud Services Built In</strong>
+                <p>
+                  Packaged releases now ship with Papr Memory, app-repo writer,
+                  and cloud app host URLs preconfigured — cloud sync works out
+                  of the box after login.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release Build Validation</strong>
+                <p>
+                  CI verifies all gateway service keys are present before
+                  publishing installers, preventing broken cloud sync in
+                  production builds.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
 
         {currentVersion === "2.4.4" && (
           <div className="about-card">
