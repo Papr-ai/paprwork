@@ -2417,20 +2417,69 @@ app.whenReady().then(async () => {
     if (!app.isPackaged) {
       return {};
     }
+
+    /** @type {Record<string, string>} */
+    let baked = {};
     try {
       const envPath = path.join(process.resourcesPath, "packaged-gateway-env.json");
-      if (!require("fs").existsSync(envPath)) {
-        return {};
+      if (require("fs").existsSync(envPath)) {
+        const parsed = JSON.parse(require("fs").readFileSync(envPath, "utf-8"));
+        if (typeof parsed === "object" && parsed !== null) {
+          baked = parsed;
+        }
       }
-      const parsed = JSON.parse(require("fs").readFileSync(envPath, "utf-8"));
-      return typeof parsed === "object" && parsed !== null ? parsed : {};
     } catch (err) {
       console.warn(
         "[Electron] Failed to load packaged gateway env:",
         err instanceof Error ? err.message : String(err),
       );
-      return {};
     }
+
+    /** @type {Record<string, string>} */
+    let defaults = {};
+    try {
+      const defaultsPath = path.join(
+        process.resourcesPath,
+        "packaged-gateway-env.defaults.json",
+      );
+      if (require("fs").existsSync(defaultsPath)) {
+        const parsed = JSON.parse(require("fs").readFileSync(defaultsPath, "utf-8"));
+        if (typeof parsed === "object" && parsed !== null) {
+          defaults = parsed;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[Electron] Failed to load packaged gateway defaults:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    const keys = [
+      "PAPR_APP_REPO_WRITER_URL",
+      "PAPR_CLOUD_APP_HOST_KEY",
+      "PAPR_MEMORY_SERVER_URL",
+    ];
+    /** @type {Record<string, string>} */
+    const merged = { ...defaults };
+    for (const key of keys) {
+      const value = baked[key];
+      if (typeof value === "string" && value.trim()) {
+        merged[key] = value.trim();
+      }
+    }
+
+    const usedDefaults = keys.filter(
+      (key) => merged[key] && !(typeof baked[key] === "string" && baked[key].trim()),
+    );
+    if (usedDefaults.length > 0) {
+      console.warn(
+        "[Electron] Packaged gateway env incomplete — using defaults for:",
+        usedDefaults.join(", "),
+      );
+    }
+
+    return merged;
   }
 
   const packagedGatewayEnv = readPackagedGatewayEnv();
