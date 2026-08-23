@@ -71,8 +71,14 @@ export function registerPaprMiniAppSdkRoutes(app: Express): void {
   );
   // Served from the same place in both runtimes, so `papr.files.*` is one
   // import that behaves identically on desktop and apps.papr.ai.
+  //
+  // ESM, not the iife default: this module is consumed as
+  // `import { papr } from '/__papr__/papr-files.js'` and exports no window
+  // global, so an iife bundle exposes nothing. The import then throws
+  // "does not provide an export named 'papr'" — a module-level SyntaxError
+  // that aborts the whole app bundle, so the mini-app renders blank.
   app.get("/__papr__/papr-files.js", (req, res) =>
-    serveSdkFile("papr-files.ts", req, res),
+    serveSdkFile("papr-files.ts", req, res, "esm"),
   );
   app.get("/__papr__/papr-markdown.js", (req, res) =>
     serveSdkFile("papr-markdown.ts", req, res),
