@@ -93,12 +93,25 @@ function recordPushedApps(appIds: readonly string[]): void {
   }
 }
 
-function requeueFailedApps(failures: readonly CloudAppWriterFlushFailure[]): void {
+function requeueFailedApps(
+  failures: readonly CloudAppWriterFlushFailure[],
+): void {
   if (moduleStopped || failures.length === 0) {
     return;
   }
   for (const failure of failures) {
     moduleDirtyApps.add(failure.appId);
+  }
+  scheduleModuleFlush();
+}
+
+/** Queue apps whose flush was truncated by the batch budget. */
+function requeueIncompleteApps(appIds: readonly string[]): void {
+  if (moduleStopped || appIds.length === 0) {
+    return;
+  }
+  for (const appId of appIds) {
+    moduleDirtyApps.add(appId);
   }
   scheduleModuleFlush();
 }
@@ -113,6 +126,7 @@ async function executeWriterFlush(
   const paprDir = getPaprRoot();
   const pushedAppIds: string[] = [];
   const failed: CloudAppWriterFlushFailure[] = [];
+  const incomplete: string[] = [];
 
   for (const appId of appIds) {
     try {
@@ -127,6 +141,15 @@ async function executeWriterFlush(
             (result.commitSha ? ` @ ${result.commitSha.slice(0, 8)}` : ""),
         );
       }
+      // A flush capped by the batch budget sent only part of the app. Queue it
+      // again so the remainder follows instead of waiting for the next edit.
+      if (result.deferred > 0) {
+        incomplete.push(appId);
+        console.log(
+          `[CloudAppWriterDebouncedPush] ${appId} has ${result.deferred} ` +
+            `file(s) left — re-queued`,
+        );
+      }
     } catch (error) {
       failed.push({
         appId,
@@ -137,6 +160,7 @@ async function executeWriterFlush(
 
   recordPushedApps(pushedAppIds);
   requeueFailedApps(failed);
+  requeueIncompleteApps(incomplete);
 
   return { pushedAppIds, failed };
 }

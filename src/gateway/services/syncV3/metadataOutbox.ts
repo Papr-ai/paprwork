@@ -12,6 +12,7 @@ import type { CloudAppMetaFile } from "../cloudSync/cloudAppMeta.js";
 import type { DatabasesRegistryFile } from "../DatabaseRegistryService.js";
 import type { JobConfigSlice } from "../jobs/jobRuntimeFields.js";
 import type { AppDbConfigPayload } from "./appDbConfigUpload.js";
+import { readJsonlBounded } from "./outboxFile.js";
 
 const OUTBOX_FILENAME = "metadata-outbox.jsonl";
 const MAX_ATTEMPTS = 8;
@@ -39,24 +40,28 @@ function outboxPath(): string {
   return path.join(getPaprRoot(), "data", OUTBOX_FILENAME);
 }
 
+/**
+ * Entries embed whole registries, so a stuck queue can outgrow V8's string
+ * ceiling. Reading streams line by line and skips anything oversized rather
+ * than materialising the file.
+ */
 async function readEntries(): Promise<MetadataOutboxEntry[]> {
-  try {
-    const raw = await fs.readFile(outboxPath(), "utf8");
-    const entries: MetadataOutboxEntry[] = [];
-    for (const line of raw.split("\n")) {
-      if (!line.trim()) {
-        continue;
-      }
-      try {
-        entries.push(JSON.parse(line) as MetadataOutboxEntry);
-      } catch {
-        /* skip corrupt line */
-      }
-    }
-    return entries;
-  } catch {
-    return [];
+  const { lines, oversized } = await readJsonlBounded(outboxPath());
+  if (oversized.length > 0) {
+    console.warn(
+      `[metadataOutbox] Skipped ${oversized.length} oversized entr` +
+        `${oversized.length === 1 ? "y" : "ies"} — too large to upload.`,
+    );
   }
+  const entries: MetadataOutboxEntry[] = [];
+  for (const line of lines) {
+    try {
+      entries.push(JSON.parse(line) as MetadataOutboxEntry);
+    } catch {
+      /* skip corrupt line */
+    }
+  }
+  return entries;
 }
 
 async function writeEntries(entries: MetadataOutboxEntry[]): Promise<void> {
@@ -74,7 +79,10 @@ export async function enqueueMetadataOutboxEntry(
 ): Promise<void> {
   const entries = await readEntries();
   const filtered = entries.filter((existing) => {
-    if (existing.kind !== entry.kind || existing.updatedAt !== entry.updatedAt) {
+    if (
+      existing.kind !== entry.kind ||
+      existing.updatedAt !== entry.updatedAt
+    ) {
       return true;
     }
     if (
@@ -121,7 +129,10 @@ async function bumpAttempt(entryId: string, lastError: string): Promise<void> {
   await writeEntries(next.filter((entry) => entry.attempts < MAX_ATTEMPTS));
 }
 
-export async function flushMetadataOutbox(): Promise<{ flushed: number; failed: number }> {
+export async function flushMetadataOutbox(): Promise<{
+  flushed: number;
+  failed: number;
+}> {
   const entries = await readEntries();
   if (entries.length === 0) {
     return { flushed: 0, failed: 0 };
@@ -132,7 +143,8 @@ export async function flushMetadataOutbox(): Promise<{ flushed: number; failed: 
     uploadDatabasesRegistryToCloudDirect,
     uploadAppRuntimeMetaToCloudDirect,
   } = await import("./MetadataRegistryClient.js");
-  const { uploadAppDbConfigToCloudDirect } = await import("./appDbConfigUpload.js");
+  const { uploadAppDbConfigToCloudDirect } =
+    await import("./appDbConfigUpload.js");
 
   let flushed = 0;
   let failed = 0;
@@ -143,19 +155,28 @@ export async function flushMetadataOutbox(): Promise<{ flushed: number; failed: 
       if (entry.kind === "jobs" && entry.jobs) {
         ok = await uploadJobsIndexToCloudDirect(entry.jobs, entry.updatedAt);
       } else if (entry.kind === "databases" && entry.registry) {
-        ok = await uploadDatabasesRegistryToCloudDirect(entry.registry, entry.updatedAt);
+        ok = await uploadDatabasesRegistryToCloudDirect(
+          entry.registry,
+          entry.updatedAt,
+        );
       } else if (
         entry.kind === "app-runtime-meta" &&
         entry.appId &&
         entry.appRuntimeMeta
       ) {
-        ok = await uploadAppRuntimeMetaToCloudDirect(entry.appId, entry.appRuntimeMeta);
+        ok = await uploadAppRuntimeMetaToCloudDirect(
+          entry.appId,
+          entry.appRuntimeMeta,
+        );
       } else if (
         entry.kind === "app-db-config" &&
         entry.appId &&
         entry.appDbConfig
       ) {
-        ok = await uploadAppDbConfigToCloudDirect(entry.appId, entry.appDbConfig);
+        ok = await uploadAppDbConfigToCloudDirect(
+          entry.appId,
+          entry.appDbConfig,
+        );
       }
       if (ok) {
         await removeEntry(entry.id);

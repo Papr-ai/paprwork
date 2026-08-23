@@ -4772,4 +4772,63 @@ if (result.valid) {
 
 ---
 
+### Issue 71: Gateway OOM — Sync V3 Writer Outbox Read Unbounded ✅ FIXED
+**Added:** 2026-08-23
+**Severity:** CRITICAL — gateway died on every launch
+**Problem:** The gateway hit a V8 heap OOM roughly 70 seconds after each start. The allocation that killed it was `fs.readFile(outboxPath(), "utf8")` in `SyncOutbox.readAllLines()` against a **1.6GB** `sync-outbox.jsonl` — 869 entries, 868 still pending, with three individual lines around 520MB each. `appSyncV3StatusReport` called into the outbox several times per app shortly after startup, which is what placed the read ~70s in rather than at boot.
+**Root Causes:** Four compounding problems, not one:
+1. **No size cap on an entry** — a writer op carries the bytes of every file it touches, and the Papr Data Room app keeps uploaded PDFs and images inside its app directory
+2. **Binary read as UTF-8 JSON** — a JPEG read as `utf8` both bloats (invalid sequences become U+FFFD, 3 bytes each) and corrupts, so the blob was large *and* useless
+3. **A crash did not count as an attempt** — `markOutboxInflight` left `attempts` untouched, so the entry that killed the process was retried forever and never dead-lettered
+4. **Nothing coalesced duplicates** — every debounced flush appended a fresh op for the same app and paths without retiring the older pending ones
+
+Head-of-line blocking with a poison pill at the front: the queue could only grow, and reading it to find out what to do was itself the crash.
+
+**Solution — Layer 1, gateway guardrails:**
+1. **Bounded reads** (`syncV3/outboxFile.ts`, new) — `streamJsonlLines` walks bytes and only decodes a line once it is complete *and* under the cap. An oversized line is never turned into a string; its bytes stream to a `.oversized` quarantine file so the entries behind it drain and the payload stays on disk. `MAX_OUTBOX_LINE_BYTES` = 16MB (one op, set well above the collector's 6MB batch budget so JSON escaping cannot turn an acceptable batch into an unwritable line), `MAX_OUTBOX_FILE_BYTES` = 64MB (whole queue).
+2. **Cap at enqueue** — `appendOutboxEntry` throws `OutboxEntryTooLargeError` rather than writing a line that can never be read back.
+3. **A crash counts as an attempt** — `markOutboxInflight` increments `attempts`, so a poison pill reaches the dead-letter threshold.
+4. **Dead-lettering strips payloads** — keeps `droppedFileCount` + `droppedFilePaths` instead of `files[].content`.
+5. **Coalescing** — a new op supersedes older pending ops for the same app covering the same paths.
+6. **File budget backstop** — `trimToFileBudget` sheds the oldest work past 64MB. Dropped ops are recollectible from the filesystem, so this costs a re-scan, not data.
+7. **One read per status report** — `appSyncV3StatusReport` calls `listOutboxEntries` once and filters, instead of three reads per app. Same bounded read replaced the unbounded one in `metadataOutbox.ts`.
+
+**Solution — Layer 2, keep the bytes out:**
+1. **Correct never-track matching** — `matchesNeverTrackPathspec` matched by substring, so `*.db` excluded `sandbox.ts` and `*.bak.*` excluded anything containing `bak`; legitimate source files were silently dropped from sync. `isNeverTrackRepoPath` anchors matching (extensions against the basename suffix, directory specs against path segments). Added `*.db-journal` to `NEVER_TRACK_PATHSPECS`.
+2. **Exclude before reading** — the walkers in `collectAppOpFiles` test `isNeverTrackRepoPath` while walking, so a 500MB `database.db` is skipped by name and never read. `candidateToOpFile` checks `stat.size` *before* `fs.readFile`.
+3. **Aggregate batch budget** — per-file limits do not bound a batch (a thousand 5MB files still overflow). `MAX_OP_BATCH_CONTENT_BYTES` = 6MB caps total content per op; the remainder is counted as `deferred` and propagates through `PushAppViaWriterResult` → `FinalizeAppRepoMutationResult` → `cloudAppWriterDebouncedPush`, which re-queues the app. A large app syncs across several flushes instead of one unwritable op.
+4. OID cache is read once per flush rather than once per file.
+
+**Results (real production outbox, reconstructed in an isolated workspace):**
+
+| | Before | After |
+|---|---|---|
+| Reading the queue | OOM, process dies | completes in 2.3s |
+| Peak heap growth | unbounded — a 1.5GB string | **98MB** |
+| Entries recovered | 0 (crash) | **303**, all pending |
+| Queue on disk | 1521MB | **32MB** |
+| Oversized bytes | blocking the queue | 1489MB quarantined |
+
+**Files Created:**
+- `src/gateway/services/syncV3/outboxFile.ts` — streaming bounded JSONL reads, quarantine, compaction
+- `tests/sync-outbox-guardrails.test.ts` — 15 tests (streaming, enqueue cap, attempts, stripping, coalescing, recovery)
+- `tests/never-track-repo-path.test.ts` — 9 tests (anchored matching; `sandbox.ts` is *not* excluded)
+- `tests/sync-outbox-recovery-fixture.test.ts` — full recovery against a real oversized outbox (skipped unless `OUTBOX_FIXTURE` is set)
+- `docs/SYNC_V3_OUTBOX_GUARDRAILS.md` — complete documentation
+**Files Changed:**
+- `syncV3/SyncOutbox.ts` — bounded reads, enqueue cap, attempts on inflight, payload stripping, coalescing, file budget
+- `syncV3/metadataOutbox.ts` — bounded reads
+- `syncV3/appSyncV3StatusReport.ts` — single read per app
+- `syncV3/collectAppOpFiles.ts` — exclusion while walking, size check before read, batch budget, cached OIDs
+- `syncV3/pushAppViaWriterOps.ts`, `pushAppWriterOpsCore.ts`, `finalizeAppRepoMutation.ts` — `deferred` count
+- `cloudAgentGateway/cloudAppWriterDebouncedPush.ts` — re-queue apps with deferred files
+- `appRepoWriter/abuseFilter.ts` — `isNeverTrackRepoPath` replaces substring matching
+- `cloudSync/repoHygiene.ts` — added `*.db-journal`
+**Testing:** `npx vitest run tests/sync-outbox-guardrails.test.ts tests/never-track-repo-path.test.ts tests/collect-app-op-files.test.ts --project unit-backend` (30 tests). For the real-data path, set `OUTBOX_FIXTURE` to a `:`-joined list of outbox files.
+**App authors:** guardrails stop the crash but do not make large assets sync — an app keeping uploads in its own directory will see them rejected. Store them with App Files and keep the reference in SQLite.
+**Prevention:** Never `fs.readFile` a file whose size is controlled by user data — stream it, bound it, or check `stat.size` first. Cap a queue entry at enqueue; a line that cannot be read back is worse than a rejected write. Charge an attempt when work is picked up, not when it fails. Per-item limits do not bound a batch — add an aggregate budget and a way to defer the remainder. Anchor glob matching.
+**See:** `docs/SYNC_V3_OUTBOX_GUARDRAILS.md`
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

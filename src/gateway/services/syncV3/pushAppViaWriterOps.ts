@@ -11,6 +11,11 @@ export interface PushAppViaWriterResult {
   filesSent: number;
   skippedUnchanged: number;
   outboxReplayed: number;
+  /**
+   * Changed files held back by the batch budget. Non-zero means this app has
+   * more to send and needs another flush to converge.
+   */
+  deferred: number;
 }
 
 export async function pushAppViaWriterOps(

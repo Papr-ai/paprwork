@@ -65,8 +65,13 @@ async function markSyncedPaths(
 export async function pushAppWriterOpsForPaprDir(
   options: PushAppWriterOpsForPaprDirOptions,
 ): Promise<PushAppViaWriterResult> {
-  const { paprDir, appId, message, author = "paprwork-desktop", onSynced } =
-    options;
+  const {
+    paprDir,
+    appId,
+    message,
+    author = "paprwork-desktop",
+    onSynced,
+  } = options;
 
   await ensureAppRepoRecord(appId);
 
@@ -101,9 +106,8 @@ export async function pushAppWriterOpsForPaprDir(
   }
 
   if (!options.skipPrepare) {
-    const { prepareAppForCloudGitSync } = await import(
-      "../cloudSync/prepareAppsForCloud.js"
-    );
+    const { prepareAppForCloudGitSync } =
+      await import("../cloudSync/prepareAppsForCloud.js");
     await prepareAppForCloudGitSync(paprDir, appId);
   }
 
@@ -115,6 +119,7 @@ export async function pushAppWriterOpsForPaprDir(
       filesSent: 0,
       skippedUnchanged: collected.skippedUnchanged,
       outboxReplayed,
+      deferred: collected.deferred,
     };
   }
 
@@ -141,7 +146,8 @@ export async function pushAppWriterOpsForPaprDir(
 
     const record = await getAppRepoRecord(appId);
     if (record && ack.commitSha) {
-      const { fanoutAppRepoCommitted } = await import("./appRepoCommittedFanout.js");
+      const { fanoutAppRepoCommitted } =
+        await import("./appRepoCommittedFanout.js");
       await fanoutAppRepoCommitted({
         appId,
         commitSha: ack.commitSha,
@@ -158,6 +164,7 @@ export async function pushAppWriterOpsForPaprDir(
       filesSent: collected.files.length,
       skippedUnchanged: collected.skippedUnchanged,
       outboxReplayed,
+      deferred: collected.deferred,
     };
   } catch (err) {
     return handleOutboxPushFailure(outboxEntry.id, err, 1);

@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { dbIdFromPath } from "../src/gateway/services/DatabaseRegistryService.js";
 import {
   collectAppOpFiles,
+  MAX_OP_BATCH_CONTENT_BYTES,
   resolveWriterSyncedLocalPaths,
 } from "../src/gateway/services/syncV3/collectAppOpFiles.js";
 
@@ -78,14 +79,13 @@ describe("collectAppOpFiles", () => {
     fs.mkdirSync(path.join(jobDir, "data"), { recursive: true });
     fs.writeFileSync(path.join(jobDir, "data", "data.db"), "sqlite");
 
-    const dbPath = path.join(paprDir, "data", "databases", "billing", "data.db");
-    fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+    const dbDir = path.join(paprDir, "data", "databases", "billing");
+    const dbPath = path.join(dbDir, "data.db");
+    fs.mkdirSync(dbDir, { recursive: true });
     fs.writeFileSync(dbPath, "");
-    fs.mkdirSync(path.join(paprDir, "data", "databases", "billing", "migrations"), {
-      recursive: true,
-    });
+    fs.mkdirSync(path.join(dbDir, "migrations"), { recursive: true });
     fs.writeFileSync(
-      path.join(paprDir, "data", "databases", "billing", "migrations", "0001_init.sql"),
+      path.join(dbDir, "migrations", "0001_init.sql"),
       "CREATE TABLE items (id INTEGER PRIMARY KEY, name TEXT);\n",
     );
 
@@ -152,6 +152,73 @@ describe("collectAppOpFiles", () => {
 
     const { files } = await collectAppOpFiles(paprDir, consumerAppId);
     expect(files.some((file) => file.path.startsWith("databases/"))).toBe(false);
+  });
+
+  it("never reads app-local databases or their backups", async () => {
+    const paprDir = makePaprDir();
+    fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+    seedWorkspace(paprDir);
+
+    // The shape that exhausted the heap: a SQLite file and its dated backups
+    // sitting in the app folder, each read as a UTF-8 string before filtering.
+    const appDir = path.join(paprDir, "apps", appId);
+    const big = "x".repeat(1024 * 1024);
+    fs.writeFileSync(path.join(appDir, "database.db"), big);
+    fs.writeFileSync(path.join(appDir, "database.db-wal"), big);
+    fs.writeFileSync(path.join(appDir, "database.db.bak.2026-08-21"), big);
+    fs.mkdirSync(path.join(appDir, "backups"), { recursive: true });
+    fs.writeFileSync(path.join(appDir, "backups", "snapshot.json"), "{}");
+
+    const { files, rejected } = await collectAppOpFiles(paprDir, appId);
+    const paths = files.map((file) => file.path);
+
+    expect(paths).toContain("metadata.json");
+    expect(paths.some((p) => p.includes("database.db"))).toBe(false);
+    expect(paths.some((p) => p.startsWith("backups/"))).toBe(false);
+    // Excluded during the walk, so they are not even reported as rejected.
+    expect(rejected).toEqual([]);
+  });
+
+  it("skips a file over the size limit without sending it", async () => {
+    const paprDir = makePaprDir();
+    fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+    seedWorkspace(paprDir);
+
+    fs.writeFileSync(
+      path.join(paprDir, "apps", appId, "huge.txt"),
+      "a".repeat(11 * 1024 * 1024),
+    );
+
+    const { files, rejected } = await collectAppOpFiles(paprDir, appId);
+
+    expect(files.some((file) => file.path === "huge.txt")).toBe(false);
+    expect(rejected).toEqual([
+      { path: "huge.txt", reason: expect.stringContaining("App Files") },
+    ]);
+  });
+
+  it("defers files past the batch budget to a later flush", async () => {
+    const paprDir = makePaprDir();
+    fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+    seedWorkspace(paprDir);
+
+    // Eight 1MB assets against a 6MB budget: one op cannot carry them all.
+    const appDir = path.join(paprDir, "apps", appId);
+    for (let index = 0; index < 8; index += 1) {
+      fs.writeFileSync(
+        path.join(appDir, `asset-${index}.txt`),
+        "a".repeat(1024 * 1024),
+      );
+    }
+
+    const { files, deferred } = await collectAppOpFiles(paprDir, appId);
+
+    const totalBytes = files.reduce(
+      (sum, file) => sum + Buffer.byteLength(file.content ?? "", "utf8"),
+      0,
+    );
+    expect(deferred).toBeGreaterThan(0);
+    expect(totalBytes).toBeLessThanOrEqual(MAX_OP_BATCH_CONTENT_BYTES);
   });
 
   it("resolveWriterSyncedLocalPaths marks Jobs and owner migration roots", async () => {
