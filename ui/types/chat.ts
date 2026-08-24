@@ -38,6 +38,12 @@ export interface MessageAttachment {
 export interface ChatMessage extends CoreMessage {
   id: string;
   isStreaming?: boolean;
+  /**
+   * The turn ended without the agent finishing — gateway crash, restart, or an
+   * abandoned stream. Set when finalizing a partial message so the UI reports it
+   * as interrupted instead of presenting the truncated work as a finished answer.
+   */
+  interrupted?: boolean;
   streamingContent?: string;
   /** Context files/docs attached when the user sent this message */
   attachments?: MessageAttachment[];

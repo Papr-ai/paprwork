@@ -110,6 +110,12 @@ export function interruptedTurnNeedsContinue(
   return hadInterruptedPartial || lastUserTurnNeedsContinue(mergedMessages);
 }
 
+/**
+ * Close out messages left mid-stream. Every caller reaches here because a turn was
+ * abandoned rather than completed, so the partial is flagged `interrupted` — without
+ * it the truncated work renders identically to a finished answer, and any tool still
+ * "calling" would keep the card spinning forever.
+ */
 export function finalizeStreamingMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (!message.isStreaming) return message;
@@ -118,11 +124,27 @@ export function finalizeStreamingMessages(messages: ChatMessage[]): ChatMessage[
     return {
       ...message,
       isStreaming: false,
+      interrupted: true,
       content: content || message.content,
       ...(reasoning ? { reasoning } : {}),
+      ...(message.sequence
+        ? { sequence: settleUnfinishedToolCalls(message.sequence) }
+        : {}),
       streamingContent: undefined,
       streamingReasoning: undefined,
     };
+  });
+}
+
+/** A tool that never reported back cannot be left as "calling". */
+function settleUnfinishedToolCalls(
+  sequence: NonNullable<ChatMessage["sequence"]>,
+): NonNullable<ChatMessage["sequence"]> {
+  return sequence.map((item) => {
+    if (item.type !== "tool") return item;
+    const data = item.data as { status?: string } | undefined;
+    if (!data || data.status !== "calling") return item;
+    return { ...item, data: { ...data, status: "interrupted" } };
   });
 }
 

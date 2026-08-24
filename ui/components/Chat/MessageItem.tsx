@@ -545,6 +545,7 @@ function renderSequence(
           lastActivity={lastActivity}
           wasStopped={wasStopped}
           connectionPaused={connectionPaused}
+          wasInterrupted={!!message.interrupted}
         >
           {workingChildren}
         </WorkingCard>,

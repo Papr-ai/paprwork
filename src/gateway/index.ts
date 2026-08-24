@@ -3088,6 +3088,15 @@ startGateway();
 // Increase max listeners for process IPC (CustomKeysService uses many concurrent requests)
 process.setMaxListeners(20);
 
+// Track heap growth. The gateway has been aborting on V8 OOM mid-turn, and the
+// ceiling cannot be raised (Electron clamps it to the 4GB default), so the only
+// way forward is capturing where the memory goes before the limit is reached.
+void import("./services/MemoryWatchdog.js")
+  .then(({ startMemoryWatchdog }) => startMemoryWatchdog())
+  .catch((error) => {
+    console.warn("[Gateway] Memory watchdog unavailable:", error);
+  });
+
 // Handle uncaught errors
 process.on("uncaughtException", (error) => {
   console.error("[Gateway] Uncaught exception:", error);
