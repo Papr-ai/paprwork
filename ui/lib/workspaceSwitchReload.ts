@@ -20,6 +20,7 @@ import { clearCommunityCatalogCache } from "../utils/communityCatalogCache";
 import {
   applyPersistedAppStateToTabStore,
   fetchPersistedAppStateFromGateway,
+  flushWorkspaceStateToGateway,
   normalizeTabHierarchy,
   type WorkspaceEntityIdSets,
 } from "./persistedAppState";
@@ -405,10 +406,13 @@ function scheduleSwitchTabLoadFallback(generation: number): void {
 }
 
 /** Begin overlay + UI reset before main/gateway switch IPC (Settings picker). */
-export function prepareWorkspaceSwitchReload(
+export async function prepareWorkspaceSwitchReload(
   options?: ReloadWorkspaceSwitchOptions,
 ): Promise<void> {
-  return reloadUiForWorkspaceSwitch({
+  // Must flush while the leaving workspace's tabs are still in the tab store.
+  // reloadUiForWorkspaceSwitchInner clears tabs before gateway IPC runs.
+  await flushWorkspaceStateToGateway();
+  await reloadUiForWorkspaceSwitch({
     ...options,
     waitForGateway: true,
   });
@@ -572,7 +576,6 @@ async function reloadUiForWorkspaceSwitchInner(
     window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
 
     const hydratedFromCache =
-      !waitForGateway &&
       targetWorkspaceKey !== undefined &&
       hydrateWorkspaceFromCache(targetWorkspaceKey);
 

@@ -9,12 +9,15 @@ import * as path from "node:path";
 import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
 import { fileContentHash } from "../../utils/fileContentHash.js";
 import { getAppService } from "../AppService.js";
-import { cloneCloudAppSource } from "../cloudSync/cloudGitClone.js";
+import {
+  cloneCloudAppSource,
+  isGitRepositoryNotFoundError,
+} from "../cloudSync/cloudGitClone.js";
 import { appNeedsOrderedFlushAsync } from "../cloudSync/pendingLocalUploads.js";
 import { getCloudSyncService } from "../cloudSync/cloudSyncSingleton.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
-import { getAppRepoRecord } from "./AppRepoClient.js";
+import { ensureAppRepoRecord, fetchAppRepoReadCredentials, getAppRepoRecord } from "./AppRepoClient.js";
 import {
   applyAckedBlobOids,
   getCachedBlobOid,
@@ -85,13 +88,13 @@ export async function pullAppCodeFromRepo(
     };
   }
 
-  const record = await getAppRepoRecord(trimmed);
+  let record = await getAppRepoRecord(trimmed);
   if (!record) {
-    return { ...empty, skipped: true, reason: "no per-app repo registered" };
-  }
-
-  if (!options.token?.trim()) {
-    return { ...empty, skipped: true, reason: "cloud login required" };
+    try {
+      record = await ensureAppRepoRecord(trimmed);
+    } catch {
+      return { ...empty, skipped: true, reason: "no per-app repo registered" };
+    }
   }
 
   let head;
@@ -107,14 +110,45 @@ export async function pullAppCodeFromRepo(
 
   const remoteOidByPath = new Map(head.files.map((file) => [file.path, file.blobOid]));
 
-  const { sourceDir, cleanup } = await cloneCloudAppSource(
-    {
-      cloneUrl: record.cloneUrl,
-      token: options.token,
-      repoPath: "",
-    },
-    "papr-app-pull-",
-  );
+  const readCreds = await fetchAppRepoReadCredentials(trimmed);
+  const cloneToken = readCreds?.token ?? options.token;
+  const cloneUrl = readCreds?.cloneUrl ?? record.cloneUrl;
+  const cloneRepoPath = readCreds?.repoPath ?? "";
+
+  if (!cloneToken?.trim()) {
+    return { ...empty, skipped: true, reason: "cloud login required" };
+  }
+
+  let sourceDir: string;
+  let cleanup: () => Promise<void>;
+  try {
+    const cloned = await cloneCloudAppSource(
+      {
+        cloneUrl,
+        token: cloneToken,
+        repoPath: cloneRepoPath,
+      },
+      "papr-app-pull-",
+    );
+    sourceDir = cloned.sourceDir;
+    cleanup = cloned.cleanup;
+  } catch (err) {
+    if (isGitRepositoryNotFoundError(err)) {
+      const reason = readCreds
+        ? "per-app GitHub repo not provisioned yet — upload local changes or wait for cloud sync"
+        : "cannot access per-app repo — sign in to Papr and retry Get updates";
+      return {
+        ...empty,
+        skipped: true,
+        reason,
+      };
+    }
+    return {
+      ...empty,
+      skipped: true,
+      reason: (err as Error).message.slice(0, 120),
+    };
+  }
 
   try {
     const upstreamFiles = await collectTextFiles(sourceDir);

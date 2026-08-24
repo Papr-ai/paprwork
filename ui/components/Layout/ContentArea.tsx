@@ -3,7 +3,7 @@
  * Reference: Paprwork v1 split view implementation
  */
 
-import React, { useRef, useCallback, useEffect, useState } from "react";
+import React, { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import { ensureDefaultChatTab } from "../../lib/ensureDefaultChatTab";
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
@@ -15,9 +15,10 @@ import { DocumentsView } from "../Documents/DocumentsView";
 import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
-import { MiniAppView } from "../Apps/MiniAppView";
-import { CatalogPreviewTabView } from "../Apps/CatalogPreviewTabView";
-import { readCloudCatalogPreviewTabMetadata, isCatalogPreviewEntityId } from "../../types/cloudCatalogPreviewTab";
+import type { Tab } from "../../types/tabs";
+import { AppTabKeepAliveHost, type AppTabKeepAlivePlacement } from "./AppTabKeepAliveHost";
+import { selectMountedAppTabIds } from "../../utils/appPreviewMemoryPolicy";
+import "./AppTabKeepAliveHost.css";
 import { SkillsView } from "../Skills/SkillsView";
 import { AgentsView } from "../Agents/AgentsViewCards";
 import { ViewsView } from "../Views/ViewsView";
@@ -27,6 +28,10 @@ import { OnboardingView } from "../Onboarding/OnboardingView";
 import { MemoryView } from "../Memory/MemoryView";
 import { gateway } from "../../src/lib/gateway";
 import "./ContentArea.css";
+
+function isAppTab(tab: Tab | undefined): tab is Tab {
+  return tab?.type === "app";
+}
 
 // Component that redirects home tab to default app if configured
 function HomeRedirect() {
@@ -87,6 +92,7 @@ export function ContentArea() {
     getTab,
     setSplitRatio,
     getSplitRatio,
+    tabs,
   } = useTabs();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -249,6 +255,89 @@ export function ContentArea() {
     }
   }, [isAgentsInLeft, isAgentsInRight]);
 
+  const visiblePaneTabIds = useMemo(
+    () =>
+      new Set(
+        [leftPaneTabId, rightPaneTabId].filter(
+          (tabId): tabId is string => Boolean(tabId),
+        ),
+      ),
+    [leftPaneTabId, rightPaneTabId],
+  );
+
+  const lastActiveAtRef = useRef<Map<string, number>>(new Map());
+  const [lastActiveTick, setLastActiveTick] = useState(0);
+
+  useEffect(() => {
+    let touched = false;
+    for (const tabId of visiblePaneTabIds) {
+      const tab = getTab(tabId);
+      if (tab?.type === "app") {
+        lastActiveAtRef.current.set(tabId, Date.now());
+        touched = true;
+      }
+    }
+    if (touched) {
+      setLastActiveTick((tick) => tick + 1);
+    }
+  }, [visiblePaneTabIds, getTab]);
+
+  const appTabs = useMemo(
+    () => tabs.filter((tab) => tab.type === "app"),
+    [tabs],
+  );
+
+  const mountedAppTabIds = useMemo(
+    () =>
+      selectMountedAppTabIds(
+        appTabs,
+        visiblePaneTabIds,
+        lastActiveAtRef.current,
+      ),
+    [appTabs, visiblePaneTabIds, lastActiveTick],
+  );
+
+  const resolveAppTabPlacement = useCallback(
+    (tabId: string): AppTabKeepAlivePlacement => {
+      if (!visiblePaneTabIds.has(tabId)) {
+        return "hidden";
+      }
+      if (!showSplitView) {
+        return "full";
+      }
+      if (tabId === leftPaneTabId) {
+        return "left";
+      }
+      if (tabId === rightPaneTabId) {
+        return "right";
+      }
+      return "hidden";
+    },
+    [visiblePaneTabIds, showSplitView, leftPaneTabId, rightPaneTabId],
+  );
+
+  const appTabLayer = (
+    <div
+      className="content-area__app-tab-layer"
+      aria-hidden={
+        !appTabs.some(
+          (tab) =>
+            mountedAppTabIds.has(tab.id) && visiblePaneTabIds.has(tab.id),
+        )
+      }
+    >
+      {appTabs
+        .filter((tab) => mountedAppTabIds.has(tab.id))
+        .map((tab) => (
+          <AppTabKeepAliveHost
+            key={tab.id}
+            tab={tab}
+            placement={resolveAppTabPlacement(tab.id)}
+          />
+        ))}
+    </div>
+  );
+
   // Render view based on tab type
   const renderView = (tabId: string | null, skipAgents = false) => {
     if (!tabId) return null;
@@ -276,13 +365,7 @@ export function ContentArea() {
       case "view":
         return <TableView entityId={tab.entityId} />;
       case "app": {
-        if (
-          readCloudCatalogPreviewTabMetadata(tab) ||
-          isCatalogPreviewEntityId(tab.entityId)
-        ) {
-          return <CatalogPreviewTabView key={tab.id} tab={tab} />;
-        }
-        return <MiniAppView key={tab.entityId} appId={tab.entityId} />;
+        return null;
       }
       case "getting-started":
         return <OnboardingView />;
@@ -310,6 +393,7 @@ export function ContentArea() {
     pane: "left" | "right",
     isAgentsActive: boolean,
   ) => {
+    const tab = tabId ? getTab(tabId) : null;
     const hostsAgentsCache = agentsKeepAlive && agentsHostPane === pane;
     const useKeepAlive = hostsAgentsCache && isAgentsActive;
 
@@ -324,7 +408,17 @@ export function ContentArea() {
             <AgentsView />
           </div>
         )}
-        {useKeepAlive ? null : renderView(tabId, agentsKeepAlive)}
+        {isAppTab(tab) && mountedAppTabIds.has(tab.id) ? null : isAppTab(tab) ? (
+          <div className="app-tab-preview-suspended">
+            <p className="app-tab-preview-suspended__title">Preview unloaded</p>
+            <p className="app-tab-preview-suspended__hint">
+              Too many previews were open — this one was freed to save memory.
+              It will reload when selected.
+            </p>
+          </div>
+        ) : useKeepAlive ? null : (
+          renderView(tabId, agentsKeepAlive)
+        )}
       </>
     );
   };
@@ -336,6 +430,7 @@ export function ContentArea() {
         <div className="content-pane content-pane--full">
           {renderPaneContent(leftPaneTabId, "left", isAgentsInLeft)}
         </div>
+        {appTabLayer}
       </div>
     );
   }
@@ -358,6 +453,7 @@ export function ContentArea() {
       <div className="content-pane content-pane--right">
         {renderPaneContent(rightPaneTabId, "right", isAgentsInRight)}
       </div>
+      {appTabLayer}
     </div>
   );
 }

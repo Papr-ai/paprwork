@@ -3,6 +3,7 @@ import {
   MiniAppApiErrorSchema,
   MiniAppDbExecResponseSchema,
   MiniAppDbQueryResponseSchema,
+  MiniAppDbReadBatchResponseSchema,
   MiniAppDbWriteBatchResponseSchema,
   MiniAppDbWriteResponseSchema,
   MiniAppDbWriteRequestSchema,
@@ -27,9 +28,30 @@ describe("mini-app API contract (frozen §8.2)", () => {
   test("POST /api/db/write-batch success shape", () => {
     expect(
       MiniAppDbWriteBatchResponseSchema.safeParse({
+        atomic: false,
         results: [
           { ok: true, changes: 1, lastInsertRowid: 42, source: "primary" },
           { ok: false, error: "constraint failed" },
+        ],
+      }).success,
+    ).toBe(true);
+    expect(
+      MiniAppDbWriteBatchResponseSchema.safeParse({
+        atomic: true,
+        results: [
+          { ok: true, changes: 1, lastInsertRowid: 1, source: "primary" },
+          { ok: true, changes: 1, lastInsertRowid: 2, source: "primary" },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
+  test("POST /api/db/batch (read) success shape", () => {
+    expect(
+      MiniAppDbReadBatchResponseSchema.safeParse({
+        results: [
+          { ok: true, rows: [{ id: 1 }], count: 1, source: "primary" },
+          { ok: false, error: "no such table: missing" },
         ],
       }).success,
     ).toBe(true);
@@ -113,6 +135,12 @@ describe("mini-app API contract (frozen §8.2)", () => {
         count: 1,
       }).success,
     ).toBe(true);
+    expect(
+      MiniAppJobsListResponseSchema.safeParse({
+        jobs: [{ id: "job-agent", type: "agent" }],
+        count: 1,
+      }).success,
+    ).toBe(true);
   });
 
   test("GET /api/jobs/status/:jobId shape", () => {
@@ -138,6 +166,7 @@ describe("mini-app API contract (frozen §8.2)", () => {
     expect(
       MiniAppDbWriteBatchRequestSchema.safeParse({
         appId: "app-1",
+        atomic: true,
         statements: [
           { sql: "INSERT INTO t (x) VALUES (?)", params: [1] },
           { sourceId: "primary", sql: "UPDATE t SET x = ? WHERE id = ?", params: [2, 1] },

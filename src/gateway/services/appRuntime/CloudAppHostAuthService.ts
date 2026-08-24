@@ -32,6 +32,7 @@ import {
   readCloudAppSessionFromCookie,
   resolveCloudAuthReturnToPath,
 } from "./cloudAppHostCookies.js";
+import { handleCloudAppHostDesktopBridge } from "./cloudAppHostDesktopBridge.js";
 
 function requestIsSecure(req: Request): boolean {
   return req.protocol === "https" || req.headers["x-forwarded-proto"] === "https";
@@ -58,6 +59,14 @@ export class CloudAppHostAuthService {
     app.get("/auth/callback", (req, res) => void this.handleCallback(req, res));
     app.get("/auth/logout", (req, res) => this.handleLogout(req, res));
     app.get("/auth/status", (req, res) => this.handleStatus(req, res));
+    app.get("/auth/desktop-bridge", (req, res) =>
+      void handleCloudAppHostDesktopBridge(req, res).catch((err: unknown) => {
+        console.error("[CloudAppHost] desktop-bridge error:", err);
+        if (!res.headersSent) {
+          res.status(500).json({ error: "desktop_bridge_failed" });
+        }
+      }),
+    );
   }
 
   getSessionToken(req: Request): string | undefined {

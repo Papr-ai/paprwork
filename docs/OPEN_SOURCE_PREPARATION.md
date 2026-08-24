@@ -184,7 +184,7 @@ Environment variable template:
 
 ```bash
 # Create GitHub repository
-# Add description: "AI-powered desktop assistant built with TypeScript and Mastra"
+# Add description: "AI workspace that automatically builds your company brain and runs your work"
 # Add topics: electron, ai, typescript, claude, openai, gemini, assistant
 
 # Initialize repository

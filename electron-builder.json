@@ -41,6 +41,10 @@
     {
       "from": "build/packaged-gateway-env.json",
       "to": "packaged-gateway-env.json"
+    },
+    {
+      "from": "src/resources/packaged-gateway-env.defaults.json",
+      "to": "packaged-gateway-env.defaults.json"
     }
   ],
   "mac": {

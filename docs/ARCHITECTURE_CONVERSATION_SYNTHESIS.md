@@ -348,6 +348,7 @@ See also: [`USER_IDENTITY_AND_OPEN_ITEMS.md`](./USER_IDENTITY_AND_OPEN_ITEMS.md)
 | P1-1 | **Memory resolver may ignore top-level `external_user_id`** | Memory `_resolve_user_for_memory_parallel_v2` | Search copies request fields; memory path may not — verify parity |
 | P1-2 | **DeveloperUser relink + data migration script** | Memory / Parse ops | Batch: idB → idA across Chat, PostMessage, Memory, Post, Neo4j, Qdrant |
 | P1-3 | **Dual-read during migration** | Memory search | Match idA or legacy idB alias while backfill runs |
+| P1-4 | **Cloud DB perf (4s → &lt;1s writes)** | Memory + cloud app host | [CLOUD_DB_PERF_OPTIMIZATION_PLAN.md](./CLOUD_DB_PERF_OPTIMIZATION_PLAN.md) — access cache, fast path append, Mongo app db config |
 
 ### P2 — Product / guardrails
 

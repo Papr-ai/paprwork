@@ -7,23 +7,27 @@ import type { CommunityCatalogEntry } from "../../../src/core/types/communityCat
 import type { CloudCatalogPreviewTabMetadata } from "../../types/cloudCatalogPreviewTab";
 import { canInstallCloudCatalogEntry } from "../../utils/communityAppLocalOpen";
 import { fetchCatalogEntryById } from "../../utils/fetchCatalogEntry";
+import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { useCloudCatalogInstallFlow } from "../../hooks/useCloudCatalogInstallFlow";
 import { ImportSetupWizard } from "./ImportSetupWizard";
 import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { MiniAppPreviewUrlBar } from "./MiniAppPreviewUrlBar";
+import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import "./MiniAppPublishBar.css";
 import "./CloudCatalogPreviewView.css";
 
 interface CloudCatalogPreviewViewProps {
   title: string;
   preview: CloudCatalogPreviewTabMetadata;
+  /** False when preview tab is backgrounded but still LRU-mounted. */
+  previewTabVisible?: boolean;
 }
 
 type PreviewPhase = "loading" | "starting" | "ready" | "error";
 
-const SLOW_LOAD_MS = 3500;
-const STARTING_POLL_MS = 200;
-const STARTING_MAX_POLLS = 40;
+const SLOW_LOAD_MS = 8000;
+const STARTING_POLL_MS = 75;
+const STARTING_MAX_POLLS = 15;
 
 function readIframePreviewText(iframe: HTMLIFrameElement | null): string {
   try {
@@ -33,9 +37,39 @@ function readIframePreviewText(iframe: HTMLIFrameElement | null): string {
   }
 }
 
+function isPreviewAccessError(text: string): boolean {
+  return (
+    text.includes("Access validate failed") ||
+    text.includes("Forbidden") ||
+    text.includes("Sign in to Papr") ||
+    text.includes("Sign in required")
+  );
+}
+
+function isIframeContentReady(iframe: HTMLIFrameElement | null): boolean {
+  try {
+    const doc = iframe?.contentDocument;
+    if (!doc?.body) return false;
+
+    const mount =
+      doc.getElementById("root") ??
+      doc.getElementById("app") ??
+      doc.querySelector("[data-papr-app-root]");
+    if (mount && mount.childElementCount > 0) {
+      return true;
+    }
+
+    const text = doc.body.innerText?.trim() ?? "";
+    return text.length > 40;
+  } catch {
+    return false;
+  }
+}
+
 export function CloudCatalogPreviewView({
   title,
   preview,
+  previewTabVisible = true,
 }: CloudCatalogPreviewViewProps) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
@@ -44,6 +78,11 @@ export function CloudCatalogPreviewView({
   const [slowLoad, setSlowLoad] = useState(false);
   const [linkToast, setLinkToast] = useState<string | null>(null);
   const [catalogEntry, setCatalogEntry] = useState<CommunityCatalogEntry | null>(
+    null,
+  );
+  const [iframeBaseUrl, setIframeBaseUrl] = useState<string | null>(null);
+  const [previewMode, setPreviewMode] = useState<"direct" | "proxy" | null>(null);
+  const [sessionBootstrapError, setSessionBootstrapError] = useState<string | null>(
     null,
   );
 
@@ -78,6 +117,54 @@ export function CloudCatalogPreviewView({
     };
   }, [preview.catalogId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    setIframeBaseUrl(null);
+    setPreviewMode(null);
+    setSessionBootstrapError(null);
+    setPhase("loading");
+
+    const namespaceId = preview.namespaceId?.trim();
+    const slug = preview.slug?.trim();
+    if (!namespaceId || !slug) {
+      setSessionBootstrapError("Missing cloud app namespace or slug.");
+      setPhase("error");
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    let shareToken: string | undefined;
+    try {
+      shareToken = new URL(preview.liveUrl).searchParams.get("t") ?? undefined;
+    } catch {
+      shareToken = undefined;
+    }
+
+    void prepareCloudPreviewIframe({
+      namespaceId,
+      slug,
+      shareToken,
+      liveUrl: preview.liveUrl,
+    })
+      .then((resolved) => {
+        if (cancelled) return;
+        setIframeBaseUrl(resolved.iframeUrl);
+        setPreviewMode(resolved.mode);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setSessionBootstrapError(
+          err instanceof Error ? err.message : "Could not prepare cloud preview",
+        );
+        setPhase("error");
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [preview.liveUrl, preview.namespaceId, preview.slug]);
+
   const showCustomize = useMemo(() => {
     if (!catalogEntry) return false;
     const localAppId = resolveLocalAppId(catalogEntry);
@@ -88,17 +175,19 @@ export function CloudCatalogPreviewView({
     catalogEntry !== null && installingId === catalogEntry.catalogId;
 
   const iframeSrc = useMemo(() => {
+    if (!iframeBaseUrl) return null;
     try {
-      const url = new URL(preview.previewIframeUrl);
+      const url = new URL(iframeBaseUrl);
       url.searchParams.set("_r", String(iframeLoadKey));
       return url.toString();
     } catch {
-      const separator = preview.previewIframeUrl.includes("?") ? "&" : "?";
-      return `${preview.previewIframeUrl}${separator}_r=${iframeLoadKey}`;
+      const separator = iframeBaseUrl.includes("?") ? "&" : "?";
+      return `${iframeBaseUrl}${separator}_r=${iframeLoadKey}`;
     }
-  }, [preview.previewIframeUrl, iframeLoadKey]);
+  }, [iframeBaseUrl, iframeLoadKey]);
 
   useEffect(() => {
+    if (!iframeSrc) return;
     setPhase("loading");
     setLoadError(null);
     setSlowLoad(false);
@@ -109,6 +198,8 @@ export function CloudCatalogPreviewView({
 
     return () => window.clearTimeout(slowTimer);
   }, [iframeSrc]);
+
+  usePreviewTabLifecycle(iframeRef, previewTabVisible);
 
   const markReady = useCallback(() => {
     setPhase("ready");
@@ -124,11 +215,7 @@ export function CloudCatalogPreviewView({
       polls += 1;
       const text = readIframePreviewText(iframeRef.current);
 
-      if (
-        text.includes("Access validate failed") ||
-        text.includes("Forbidden") ||
-        text.includes("Sign in to Papr")
-      ) {
+      if (isPreviewAccessError(text)) {
         setPhase("error");
         setLoadError(
           text.includes("Access validate failed")
@@ -139,7 +226,7 @@ export function CloudCatalogPreviewView({
         return;
       }
 
-      if (text.length > 40) {
+      if (isIframeContentReady(iframeRef.current)) {
         markReady();
         return;
       }
@@ -152,7 +239,7 @@ export function CloudCatalogPreviewView({
       window.setTimeout(pollForContent, STARTING_POLL_MS);
     };
 
-    window.setTimeout(pollForContent, STARTING_POLL_MS);
+    pollForContent();
   }, [markReady]);
 
   const openInBrowser = useCallback(async () => {
@@ -200,8 +287,14 @@ export function CloudCatalogPreviewView({
   const loadingMessage =
     phase === "starting" ? "Starting app…" : "Loading live preview…";
   const loadingHint =
-    phase === "loading" && slowLoad
-      ? "Cloud apps can take a moment on first open — fetching from apps.papr.ai."
+    sessionBootstrapError
+      ? sessionBootstrapError
+      : phase === "loading" && slowLoad
+      ? previewMode === "direct"
+        ? "Connecting to apps.papr.ai with your Papr login…"
+        : previewMode === "proxy"
+          ? "Using gateway proxy (slower) — session seed failed; check Papr login."
+          : "Cloud apps can take a moment on first open — fetching from apps.papr.ai."
       : phase === "starting"
         ? "Connecting to shared data and verifying team access."
         : null;
@@ -229,6 +322,7 @@ export function CloudCatalogPreviewView({
         toast={barToast}
       />
       <div className="mini-app-view__frame-wrap">
+        {iframeSrc ? (
         <iframe
           ref={iframeRef}
           key={iframeSrc}
@@ -245,9 +339,10 @@ export function CloudCatalogPreviewView({
             );
           }}
         />
-        {loadError ? (
+        ) : null}
+        {loadError || sessionBootstrapError ? (
           <div className="mini-app-view__overlay mini-app-view__overlay--hint cloud-catalog-preview__overlay">
-            <p>{loadError}</p>
+            <p>{loadError ?? sessionBootstrapError}</p>
             <button
               type="button"
               className="mini-app-publish-bar__button"

@@ -58,6 +58,38 @@ export async function writeLinkedDbRowLocalFirst(
   return { ...result, cloudSyncScheduled: false };
 }
 
+/** Atomic multi-statement write on one linked SQLite file (single transaction). */
+export async function writeLinkedDbBatchAtomic(
+  pool: DbQueryPool,
+  dbRouter: DbRouter,
+  appId: string,
+  source: AppDataSource,
+  statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+): Promise<{ source: AppDataSource; results: WriteResult[] }> {
+  for (const stmt of statements) {
+    assertReplaySafeRowSql(stmt.sql);
+  }
+
+  const localStarted = performance.now();
+  let results: WriteResult[];
+
+  if (isCloudSyncEnabled()) {
+    ensureLocalDbChangeLogReady(source.dbPath);
+    results = await dbRouter.writeBatch(appId, source, statements);
+    scheduleWorkspaceLogShip(syncKeyForSource(source));
+    const localMs = Math.round(performance.now() - localStarted);
+    if (localMs > 50) {
+      console.log(
+        `[LocalFirstDbWrite] atomic batch app=${appId} source=${source.alias ?? source.jobId} count=${statements.length} local=${localMs}ms cloudSyncScheduled=true`,
+      );
+    }
+    return { source, results };
+  }
+
+  results = await pool.writeBatch(appId, source.dbPath, [...statements]);
+  return { source, results };
+}
+
 /** Schema bootstrap: local exec first; drift-heal ships schema on next push when cloud sync is on. */
 export async function execLinkedDbSchemaLocalFirst(
   pool: DbQueryPool,

@@ -210,7 +210,9 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | `/api/access?appId=ID` | GET | **Caller identity** — `{ mode, isOwner, canRead, canWrite, loggedIn, userId?, email?, appId }` — server-resolved when signed in; map `userId` to roles |
 | `/api/members?appId=ID` | GET | **Workspace roster** — `{ workspaceId, namespaceId?, members: [{ userId, email, displayName, role }] }` — requires Papr sign-in + app read access; use for role pickers (same `userId` as `/api/access`) |
 | `/api/db/query` | POST | **Read only** — `SELECT` / `WITH ... SELECT` on linked SQLite (INSERT/UPDATE/DELETE → **403**) |
-| `/api/db/write` | POST | **Writes** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
+| `/api/db/batch` | POST | **Batch reads** — up to 25 `SELECT`/`WITH` statements in one HTTP round trip. Aliases: `/api/db/query-batch`, `/api/db/read-batch`. Response: `{ results: [{ ok, rows?, error? }, ...] }`. **Never mix writes here.** |
+| `/api/db/write` | POST | **Single write** — `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` on linked SQLite (`?` + `params` required for values) |
+| `/api/db/write-batch` | POST | **Batch writes** — up to 25 write statements in one HTTP round trip. Response: `{ atomic: false, results: [{ ok, changes?, lastInsertRowid?, error? }, ...] }`. See **Batch semantics** below. |
 | `/api/db/exec` | POST | **DDL** — only `CREATE TABLE IF NOT EXISTS ...` (safe schema bootstrap) |
 | `/api/jobs/list` | GET | List all jobs (id, name, type, status) |
 | `/api/jobs/status/:jobId` | GET | Poll job status |
@@ -231,7 +233,68 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 
 > **NEW: Mini-apps can CREATE jobs dynamically via `/api/jobs/create` (desktop only)**. Rate limited to 10 jobs/min per app. See "Mini-App Job Creation" section below.
 
-> **CRITICAL:** If a mini-app needs to **INSERT/UPDATE/DELETE**, use **`POST /api/db/write`**, not `/api/db/query`. A 403 on `/api/db/query` means you used the read endpoint for a write — switch endpoints; **writes from apps are supported.**
+> **CRITICAL:** If a mini-app needs to **INSERT/UPDATE/DELETE**, use **`POST /api/db/write`** or **`POST /api/db/write-batch`**, not `/api/db/query` or `/api/db/batch`. A 403 on `/api/db/query` means you used the read endpoint for a write — switch endpoints; **writes from apps are supported.**
+
+### Batch read/write endpoints (two separate lanes)
+
+**Reads and writes are never mixed in one batch call.** Use the read lane for page-load SELECTs; use the write lane for multiple mutations — but understand transaction limits.
+
+| Lane | Endpoint | SQL allowed | Response |
+|------|----------|-------------|----------|
+| **Read batch** | `POST /api/db/batch` (aliases: `query-batch`, `read-batch`) | `SELECT`, `WITH ... SELECT` only | `{ results: [{ ok, rows?, count?, error? }, ...] }` |
+| **Write batch** | `POST /api/db/write-batch` | `INSERT`, `UPDATE`, `DELETE`, `REPLACE`, `UPSERT` only | `{ atomic: false, results: [{ ok, changes?, lastInsertRowid?, error? }, ...] }` |
+
+**When to use batch:** App mount fires 2+ reads → one `/api/db/batch`. App saves 2+ rows in one user action → `/api/db/write-batch` (or a single `/api/db/write` if only one statement).
+
+**`atomic: false` vs `atomic: true` (write-batch only):**
+
+| Value | Meaning | Supported today? |
+|-------|---------|------------------|
+| **`atomic: false`** | Each statement commits **independently**. If statement 2 fails, statement 1 may **already be persisted**. Always check **every** `results[i].ok`. | ✅ **Always** — this is the only mode |
+| **`atomic: true`** | All statements in one **transaction** on the **same linked database** — all succeed or all roll back. | ✅ Pass `atomic: true` in the request body (same `sourceId` for every statement) |
+
+**Read batch example (page load):**
+```typescript
+const { results } = await fetch('/api/db/batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    statements: [
+      { sourceId: 'main', sql: 'SELECT COUNT(*) AS n FROM people WHERE active = 1', params: [] },
+      { sourceId: 'main', sql: 'SELECT * FROM cycles ORDER BY started_at DESC LIMIT 1', params: [] },
+    ],
+  }),
+}).then(r => r.json());
+// results[0].ok, results[0].rows — per-statement; one may fail without aborting the HTTP call
+```
+
+**Write batch example (non-transactional — check each ok):**
+```typescript
+const { atomic, results } = await fetch('/api/db/write-batch', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId,
+    atomic: true, // all-or-nothing on one linked database
+    statements: [
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    statements: [
+      { sourceId: 'main', sql: 'INSERT INTO log (msg) VALUES (?)', params: ['step 1'] },
+      { sourceId: 'main', sql: 'UPDATE counters SET n = n + 1 WHERE id = ?', params: [1] },
+    ],
+  }),
+}).then(r => r.json());
+// atomic === false always today
+if (!results.every((r: { ok: boolean }) => r.ok)) {
+  // Partial commit possible — handle rollback in app logic or use backend action instead
+}
+```
+
+**Wrong paths trap (desktop):** Typo'd URLs like `/api/user/me` or non-existent `/api/db/query-batch` on an **old gateway** may return the SPA HTML shell (200 + `<!DOCTYPE html>`). Valid routes: `/api/db/batch`, `/api/db/query-batch`, `/api/db/read-batch`, `/api/db/write-batch`. Parse responses with `Content-Type: application/json` or check `r.ok` before `.json()`.
 
 ---
 
@@ -255,7 +318,7 @@ Build with relative `/api/...` paths — never hardcode `localhost:18789`.
 
 | Capability | Desktop gateway | Cloud (`apps.papr.ai`) |
 |------------|-----------------|------------------------|
-| `/api/db/schema`, `/api/db/query`, `/api/db/write`, `/api/db/exec` | ✅ Local SQLite | ✅ Turso — **same contract, same app code** |
+| `/api/db/schema`, `/api/db/query`, `/api/db/batch`, `/api/db/write`, `/api/db/write-batch`, `/api/db/exec` | ✅ Local SQLite | ✅ Turso — **same contract, same app code** |
 | `/api/db/*` | ✅ | ✅ on `apps.papr.ai` |
 | `/api/app/backend/:action` | ✅ local subprocess | ✅ Cloud App Host edge subprocess (handlers in `apps/{appId}/backend/`) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` | ✅ | ✅ on `apps.papr.ai` — **including share links** (requires `canRead`) |

@@ -82,6 +82,11 @@ export async function finalizeAppRepoMutation(
     catalogError = catalogResult.catalogError;
   }
 
+  if (pushResult.commitSha) {
+    const { uploadAppDbConfigToCloud } = await import("./appDbConfigUpload.js");
+    void uploadAppDbConfigToCloud(paprDir, appId, pushResult.commitSha).catch(() => {});
+  }
+
   return {
     appId,
     writerPushed,

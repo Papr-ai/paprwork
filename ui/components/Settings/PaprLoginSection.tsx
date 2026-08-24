@@ -4,7 +4,6 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
-import { flushWorkspaceStateToGateway } from "../../lib/persistedAppState";
 import {
   abortWorkspaceSwitchReload,
   prepareWorkspaceSwitchReload,
@@ -364,8 +363,15 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       try {
         await prepareWorkspaceSwitchReload({
           organizationName: org.name,
+          ...(target
+            ? {
+                targetWorkspaceKey: buildWorkspaceUiCacheKey(
+                  target.organizationId,
+                  target.namespaceId,
+                ),
+              }
+            : {}),
         });
-        await flushWorkspaceStateToGateway();
         const result = await window.electronAPI.papr.switchOrganization(
           workspaceId,
           org.name,
@@ -440,7 +446,6 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       });
       // Team picker is scoped to the active workspace — switch namespace (and
       // org when the namespace belongs to a secondary org in this workspace).
-      await flushWorkspaceStateToGateway();
       const result = await window.electronAPI.papr.switchNamespace(
         namespaceId,
         ns.name,

@@ -22,7 +22,35 @@ export const MiniAppDbWriteBatchResultSchema = z.object({
 
 /** POST /api/db/write-batch — success response */
 export const MiniAppDbWriteBatchResponseSchema = z.object({
+  /** false = each statement commits independently; true = single transaction (same database). */
+  atomic: z.boolean(),
   results: z.array(MiniAppDbWriteBatchResultSchema),
+});
+
+/** POST /api/db/batch (and aliases query-batch, read-batch) — per-statement result */
+export const MiniAppDbReadBatchResultSchema = z.object({
+  ok: z.boolean(),
+  rows: z.array(z.record(z.string(), z.unknown())).optional(),
+  count: z.number().optional(),
+  backend: z.string().optional(),
+  source: z.string().optional(),
+  error: z.string().optional(),
+});
+
+/** POST /api/db/batch — success response */
+export const MiniAppDbReadBatchResponseSchema = z.object({
+  results: z.array(MiniAppDbReadBatchResultSchema),
+});
+
+export const MiniAppDbReadBatchRequestSchema = z.object({
+  appId: z.string().optional(),
+  statements: z.array(
+    z.object({
+      sourceId: z.string().optional(),
+      sql: z.string(),
+      params: z.array(z.unknown()).optional(),
+    }),
+  ),
 });
 
 /** POST /api/db/write — error response */
@@ -68,14 +96,14 @@ export const MiniAppJobRunConflictResponseSchema = z.object({
   dependencyId: z.string().optional(),
 });
 
-/** GET /api/jobs/list */
+/** GET /api/jobs/list — minimal app-linked jobs for auth guard (cloud); desktop may include more fields */
 export const MiniAppJobsListResponseSchema = z.object({
   jobs: z.array(
     z.object({
       id: z.string(),
-      name: z.string(),
-      type: z.string(),
-      status: z.string(),
+      type: z.string().optional(),
+      name: z.string().optional(),
+      status: z.string().optional(),
       lastRunAt: z.string().optional(),
       completedAt: z.string().optional(),
     }),
@@ -105,6 +133,8 @@ export const MiniAppDbWriteRequestSchema = z.object({
 
 export const MiniAppDbWriteBatchRequestSchema = z.object({
   appId: z.string().optional(),
+  /** When true, all statements run in one transaction on the same linked database. */
+  atomic: z.boolean().optional(),
   statements: z.array(
     z.object({
       sourceId: z.string().optional(),

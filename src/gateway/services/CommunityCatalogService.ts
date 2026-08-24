@@ -4,7 +4,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import { getPaprRoot, getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 
 import {
   isLinkOnlyVisibility,
@@ -34,21 +34,30 @@ import {
   visibilityToAccessMode,
 } from "./cloudPublishMapping.js";
 import { slugifyPublishTitle } from "./cloudPublishDrift.js";
-import { getAppPublishPrefs } from "./cloudPublishPrefs.js";
+import { getAppPublishPrefs, hasStoredAppPublishPrefs } from "./cloudPublishPrefs.js";
 import { readAppRequirements } from "./cloudAppRequirements.js";
 import { resolveCatalogEntryTags } from "../../core/utils/catalogTags.js";
+import { readPlatformCatalogManifest } from "./syncV3/platformCatalogManifest.js";
 
-async function loadCommunityPlatformForApp(appId: string): Promise<{
+interface CatalogPlatformMeta {
   platform: string[];
   requiresDesktopForFullFunctionality: boolean;
-}> {
-  const { detectCommunityPlatformForApp } = await import(
-    "./cloudAppCompatibility.js"
+}
+
+/** Prefer cached publish manifest — full compatibility scan is publish-time only. */
+async function loadCatalogPlatformMeta(appId: string): Promise<CatalogPlatformMeta> {
+  const manifest = await readPlatformCatalogManifest(
+    path.join(getPaprAppsRoot(), appId),
   );
-  const report = await detectCommunityPlatformForApp(appId);
+  if (manifest) {
+    return {
+      platform: manifest.platform,
+      requiresDesktopForFullFunctionality: manifest.requiresDesktopForFullFunctionality,
+    };
+  }
   return {
-    platform: report.platform,
-    requiresDesktopForFullFunctionality: report.requiresDesktopForFullFunctionality,
+    platform: ["macos", "windows", "linux"],
+    requiresDesktopForFullFunctionality: false,
   };
 }
 
@@ -225,6 +234,38 @@ export function resolveCatalogLiveUrl(input: {
   );
 }
 
+/**
+ * Resolve whether a catalog row allows fork/install (Customize).
+ * Memory workspace rows often omit codeAccess/codeInstallable; papr web treats
+ * omitted codeInstallable as installable (`!== false`). Desktop matches that,
+ * with local synced publish prefs as a fallback when fields are missing.
+ */
+export function resolveCatalogCodeInstallable(
+  entry: CloudCommunityApiEntry,
+  paprDir?: string,
+): boolean {
+  if (entry.codeAccess === "off") {
+    return false;
+  }
+  if (entry.codeAccess === "install") {
+    return true;
+  }
+  if (typeof entry.codeInstallable === "boolean") {
+    return entry.codeInstallable;
+  }
+  if (entry.appId && paprDir && hasStoredAppPublishPrefs(entry.appId, paprDir)) {
+    const prefs = getAppPublishPrefs(entry.appId, paprDir);
+    const localCode = prefs.codeAccess ?? "off";
+    if (localCode === "off") {
+      return false;
+    }
+    if (communityCodeInstallable(localCode)) {
+      return true;
+    }
+  }
+  return true;
+}
+
 function cloudEntryFromApi(
   entry: CloudCommunityApiEntry,
   paprDir?: string,
@@ -257,8 +298,7 @@ function cloudEntryFromApi(
     namespaceId: entry.namespaceId,
     slug,
     liveUrl,
-    codeInstallable:
-      entry.codeAccess === "install" || entry.codeInstallable === true,
+    codeInstallable: resolveCatalogCodeInstallable(entry, paprDir),
     liveViewable: Boolean(liveUrl ?? entry.shareUrl),
     requirements: mapCatalogRequirements(entry.catalogRequirements),
     visibility: entry.visibility,
@@ -312,9 +352,19 @@ function buildCatalog(
   };
 }
 
-async function fetchRemoteCloudCatalog(path: string): Promise<CloudCommunityApiEntry[]> {
+interface RemoteCloudCatalogFetchOptions {
+  /** Global community listing — do not scope by acting user. */
+  globalCommunity?: boolean;
+}
+
+async function fetchRemoteCloudCatalog(
+  path: string,
+  options?: RemoteCloudCatalogFetchOptions,
+): Promise<CloudCommunityApiEntry[]> {
   try {
-    const response = await cloudApiFetch(path);
+    const response = await cloudApiFetch(path, {
+      skipActingUser: options?.globalCommunity === true,
+    });
     if (!response.ok) {
       if (response.status !== 404) {
         console.warn(
@@ -390,7 +440,7 @@ function filterNamespaceCloudEntries(
   );
 }
 
-const NAMESPACE_CATALOG_CACHE_TTL_MS = 30_000;
+const NAMESPACE_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 const GLOBAL_CATALOG_CACHE_TTL_MS = 5 * 60_000;
 const namespaceCatalogCache = new Map<
   string,
@@ -449,7 +499,7 @@ function dedupeCloudEntries(entries: CommunityCatalogEntry[]): CommunityCatalogE
 
 function markOwnedEntries(
   entries: CommunityCatalogEntry[],
-  ownedAppIds: Set<string>,
+  _ownedAppIds: Set<string>,
 ): CommunityCatalogEntry[] {
   const currentUserId = getPaprUserId()?.trim();
   return entries.map((entry) => {
@@ -464,11 +514,7 @@ function markOwnedEntries(
         : { ...entry, isOwned: false };
     }
 
-    if (entry.appId && ownedAppIds.has(entry.appId)) {
-      return { ...entry, isOwned: true };
-    }
-
-    return entry;
+    return { ...entry, isOwned: false };
   });
 }
 
@@ -525,17 +571,17 @@ function filterPublicCommunityEntries(
   );
 }
 
-/** Global Community tab — installable forks only, not live-preview-only publishes. */
-export function isCommunityInstallListing(
+/** Global Community tab — browse/preview live apps or install source. */
+export function isCommunityBrowseListing(
   entry: CommunityCatalogEntry,
 ): boolean {
-  return entry.codeInstallable === true;
+  return entry.codeInstallable === true || entry.liveViewable === true;
 }
 
-function filterInstallableCommunityEntries(
+function filterBrowseableCommunityEntries(
   entries: CommunityCatalogEntry[],
 ): CommunityCatalogEntry[] {
-  return entries.filter(isCommunityInstallListing);
+  return entries.filter(isCommunityBrowseListing);
 }
 
 function defaultCloudAppsHost(): string {
@@ -638,7 +684,7 @@ async function buildLocalCloudEntriesForSharing(
 
     const fileRequirements = readAppRequirements(paprDir, appId);
     const teamShared = options.loginAccess === "team";
-    const platformMeta = await loadCommunityPlatformForApp(appId);
+    const platformMeta = await loadCatalogPlatformMeta(appId);
 
     entries.push({
       catalogId: `cloud:${appId}`,
@@ -718,12 +764,17 @@ export class CommunityCatalogService {
     const ownedAppIds = this.ownedLocalAppIds();
     const localAppMeta = loadLocalAppMeta(this.paprDir);
 
-    const remoteCloud = await fetchRemoteCloudCatalog("/v1/cloud/apps/community");
+    const remoteCloud = await fetchRemoteCloudCatalog("/v1/cloud/apps/community", {
+      globalCommunity: true,
+    });
     let cloudEntries = remoteCloud.map((item) =>
       cloudEntryFromApi(item, this.paprDir, localAppMeta),
     );
 
     if (cloudEntries.length === 0) {
+      console.warn(
+        "[CommunityCatalog] Global community API returned no apps — using local publish prefs fallback",
+      );
       cloudEntries = await buildLocalPublicCloudEntries(this.paprDir);
     } else {
       const seen = new Set(cloudEntries.map((entry) => entry.appId));
@@ -735,7 +786,7 @@ export class CommunityCatalogService {
       }
     }
 
-    cloudEntries = filterInstallableCommunityEntries(
+    cloudEntries = filterBrowseableCommunityEntries(
       filterPublicCommunityEntries(
         cloudEntries,
         this.paprDir,
@@ -816,7 +867,9 @@ export class CommunityCatalogService {
         { allowTeam: true },
       );
     } else {
-      const globalCloud = await fetchRemoteCloudCatalog("/v1/cloud/apps/community");
+      const globalCloud = await fetchRemoteCloudCatalog("/v1/cloud/apps/community", {
+        globalCommunity: true,
+      });
       publicEntries = filterPublicCommunityEntries(
         filterNamespaceCloudEntries(
           globalCloud.map((item) =>
@@ -864,27 +917,20 @@ export class CommunityCatalogService {
     const encodedNamespaceId = encodeURIComponent(namespaceId);
     const workspacePath = `/v1/cloud/apps/namespace/${encodedNamespaceId}/workspace`;
 
-    const workspaceRemote = await fetchRemoteCloudCatalog(workspacePath);
+    const [workspaceRemote, localTeamEntries] = await Promise.all([
+      fetchRemoteCloudCatalog(workspacePath),
+      buildLocalTeamSharedCloudEntries(this.paprDir, namespaceId),
+    ]);
 
     let catalog: CommunityCatalog;
     if (workspaceRemote.length > 0) {
-      const [teamRemote, localTeamEntries] = await Promise.all([
-        this.fetchTeamSharedEntries(namespaceId),
-        buildLocalTeamSharedCloudEntries(this.paprDir, namespaceId),
-      ]);
-      const entries = markOwnedEntries(
-        dedupeCloudEntries([
-          ...mergeNamespaceWorkspaceCatalog({
-            workspaceRemote,
-            localTeamEntries,
-            paprDir: this.paprDir,
-            namespaceId,
-            ownedAppIds,
-          }),
-          ...teamRemote,
-        ]),
+      const entries = mergeNamespaceWorkspaceCatalog({
+        workspaceRemote,
+        localTeamEntries,
+        paprDir: this.paprDir,
+        namespaceId,
         ownedAppIds,
-      );
+      });
       catalog = buildCatalog("namespace", entries, { namespaceId });
     } else {
       catalog = await this.fetchNamespaceCommunityFallback(

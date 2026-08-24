@@ -8,7 +8,7 @@
 // Load environment variables from .env.local FIRST (before any other imports)
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme, session } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
@@ -16,6 +16,7 @@ const { autoUpdater } = require("electron-updater");
 const {
   registerGeolocationPermissionHandlers,
 } = require("./geolocationPermission.cjs");
+const { registerCloudPreviewSessionIPC } = require("./ipc/cloudPreviewSession.cjs");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
@@ -2160,6 +2161,40 @@ app.whenReady().then(async () => {
   console.log("[Electron] Start time:", new Date(appStartTime).toISOString());
   console.log("[Electron] ===========================================");
 
+  // Media permissions for locally-hosted mini-apps.
+  //
+  // Electron denies getUserMedia by default when no handler is registered, so
+  // every mini-app saw "Permission denied" no matter what macOS had granted.
+  // That made a live microphone meter impossible to build, and the Meetings
+  // app recorded silence with nothing in the UI able to detect it.
+  //
+  // Scoped to the local gateway origin: remote content still gets denied, and
+  // macOS TCC remains the outer gate — this only stops Electron from refusing
+  // before the OS is ever asked.
+  {
+    const { session } = require("electron");
+    const LOCAL_APP_ORIGIN = "http://localhost:18789";
+    const MEDIA_PERMISSIONS = new Set(["media", "audioCapture", "videoCapture"]);
+
+    const isLocalApp = (url) => typeof url === "string" && url.startsWith(LOCAL_APP_ORIGIN);
+
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      if (!MEDIA_PERMISSIONS.has(permission)) return callback(false);
+      const url = details?.requestingUrl || webContents?.getURL?.() || "";
+      const allowed = isLocalApp(url);
+      if (!allowed) console.warn("[Electron] Denied", permission, "for", url);
+      callback(allowed);
+    });
+
+    // permissions.query() consults this separately; without it a mini-app reads
+    // state "denied" and can show a misleading "check System Settings" message
+    // before it has even tried.
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+      if (!MEDIA_PERMISSIONS.has(permission)) return false;
+      return isLocalApp(requestingOrigin);
+    });
+  }
+
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
@@ -2318,6 +2353,8 @@ app.whenReady().then(async () => {
     },
   });
 
+  registerCloudPreviewSessionIPC(ipcMain, session);
+
   if (ensureActiveNamespaceApiKey) {
     try {
       await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage);
@@ -2380,20 +2417,69 @@ app.whenReady().then(async () => {
     if (!app.isPackaged) {
       return {};
     }
+
+    /** @type {Record<string, string>} */
+    let baked = {};
     try {
       const envPath = path.join(process.resourcesPath, "packaged-gateway-env.json");
-      if (!require("fs").existsSync(envPath)) {
-        return {};
+      if (require("fs").existsSync(envPath)) {
+        const parsed = JSON.parse(require("fs").readFileSync(envPath, "utf-8"));
+        if (typeof parsed === "object" && parsed !== null) {
+          baked = parsed;
+        }
       }
-      const parsed = JSON.parse(require("fs").readFileSync(envPath, "utf-8"));
-      return typeof parsed === "object" && parsed !== null ? parsed : {};
     } catch (err) {
       console.warn(
         "[Electron] Failed to load packaged gateway env:",
         err instanceof Error ? err.message : String(err),
       );
-      return {};
     }
+
+    /** @type {Record<string, string>} */
+    let defaults = {};
+    try {
+      const defaultsPath = path.join(
+        process.resourcesPath,
+        "packaged-gateway-env.defaults.json",
+      );
+      if (require("fs").existsSync(defaultsPath)) {
+        const parsed = JSON.parse(require("fs").readFileSync(defaultsPath, "utf-8"));
+        if (typeof parsed === "object" && parsed !== null) {
+          defaults = parsed;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[Electron] Failed to load packaged gateway defaults:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    const keys = [
+      "PAPR_APP_REPO_WRITER_URL",
+      "PAPR_CLOUD_APP_HOST_KEY",
+      "PAPR_MEMORY_SERVER_URL",
+    ];
+    /** @type {Record<string, string>} */
+    const merged = { ...defaults };
+    for (const key of keys) {
+      const value = baked[key];
+      if (typeof value === "string" && value.trim()) {
+        merged[key] = value.trim();
+      }
+    }
+
+    const usedDefaults = keys.filter(
+      (key) => merged[key] && !(typeof baked[key] === "string" && baked[key].trim()),
+    );
+    if (usedDefaults.length > 0) {
+      console.warn(
+        "[Electron] Packaged gateway env incomplete — using defaults for:",
+        usedDefaults.join(", "),
+      );
+    }
+
+    return merged;
   }
 
   const packagedGatewayEnv = readPackagedGatewayEnv();

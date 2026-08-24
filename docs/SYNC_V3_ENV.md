@@ -4,7 +4,21 @@ Sync V3 is **always on** in this build — row sync, writer ops, and schema migr
 
 **Desktop mini-app writes:** `/api/db/write` is **local-first** when cloud sync is enabled (`CLOUD_SYNC_ENABLED !== "false"`). Local SQLite updates immediately; `_papr_sync_log` CDC ships to workspace log on debounced push (~5s after interactive writes). When cloud sync is off, writes stay local-only.
 
-**Packaged desktop builds:** non-user gateway secrets (`PAPR_CLOUD_APP_HOST_KEY`, production `PAPR_APP_REPO_WRITER_URL`) are baked via `scripts/generate-packaged-gateway-env.mjs` in release CI → `Resources/packaged-gateway-env.json`.
+**Packaged desktop builds:** gateway service secrets are baked via `scripts/generate-packaged-gateway-env.mjs` in release CI → `Resources/packaged-gateway-env.json`.
+
+### GitHub secrets (release CI — optional overrides)
+
+Defaults live in `src/resources/packaged-gateway-env.defaults.json` and are baked into every release. GitHub secrets override when set:
+
+| Secret | Overrides default for |
+| --- | --- |
+| `PAPR_APP_REPO_WRITER_URL` | Cloud Run app-repo-writer URL |
+| `PAPR_CLOUD_APP_HOST_KEY` | Shared secret for apps.papr.ai refresh + Turso notify |
+| `PAPR_MEMORY_SERVER_URL` | Memory server base URL (`https://memory.papr.ai`) |
+
+Packaged apps also load defaults at runtime if `packaged-gateway-env.json` is empty or missing keys (fixes installs that shipped `{}`).
+
+**Not packaged (by design):** `PAPR_API_KEY` (user login / keychain), AI provider keys, Auth0 (`papr.auth0.com` defaults), `PAPR_PLATFORM_URL` (`dashboard.papr.ai` default), `VITE_REQUIRE_PAPR_AUTH` (Vite build time).
 
 ## Must-have (production)
 

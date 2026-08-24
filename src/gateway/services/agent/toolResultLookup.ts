@@ -7,6 +7,8 @@ interface ToolCallItem {
   name?: string;
   toolName?: string;
   result?: string | unknown;
+  /** Present when `result` is only a preview and the full text lives on disk. */
+  resultOffload?: { file: string; totalChars: number };
 }
 
 interface SequenceToolItem {
@@ -61,7 +63,7 @@ function findInMessageToolCalls(
   message: StoredMessage,
   toolCallId: string,
   toolName?: string,
-): { toolName: string; result: string } | null {
+): { toolName: string; result: string; isOffloaded?: boolean } | null {
   if (message.toolCalls) {
     for (const tc of message.toolCalls) {
       if (!matchesToolCall(tc as ToolCallItem, toolCallId, toolName)) {
@@ -71,6 +73,9 @@ function findInMessageToolCalls(
       return {
         toolName: item.name ?? item.toolName ?? toolName ?? "unknown",
         result: formatStoredResult(item.result),
+        // The row only holds a preview; the caller reads the sidecar for the
+        // full text, which is the whole point of this tool.
+        ...(item.resultOffload ? { isOffloaded: true } : {}),
       };
     }
   }
@@ -100,12 +105,23 @@ function findInMessageToolCalls(
   return null;
 }
 
-export function findFullToolResult(args: {
+interface FindFullToolResultArgs {
   chatIds: string[];
   toolCallId: string;
   toolName?: string;
   loadMessages: (chatId: string) => Promise<StoredMessage[]>;
-}): Promise<{
+  /**
+   * Reads a result that was moved out of the row into sidecar storage.
+   * Omit it and the caller gets the inline preview instead.
+   */
+  readOffloaded?: (
+    chatId: string,
+    messageId: string,
+    toolCallId: string,
+  ) => Promise<string | null>;
+}
+
+export function findFullToolResult(args: FindFullToolResultArgs): Promise<{
   toolName: string;
   result: string;
   messageId: string;
@@ -114,12 +130,9 @@ export function findFullToolResult(args: {
   return findFullToolResultImpl(args);
 }
 
-async function findFullToolResultImpl(args: {
-  chatIds: string[];
-  toolCallId: string;
-  toolName?: string;
-  loadMessages: (chatId: string) => Promise<StoredMessage[]>;
-}): Promise<{
+async function findFullToolResultImpl(
+  args: FindFullToolResultArgs,
+): Promise<{
   toolName: string;
   result: string;
   messageId: string;
@@ -148,8 +161,21 @@ async function findFullToolResultImpl(args: {
       if (!match) {
         continue;
       }
+
+      const { isOffloaded, ...found } = match;
+      if (isOffloaded && args.readOffloaded) {
+        const full = await args.readOffloaded(
+          chatId,
+          message.id,
+          args.toolCallId,
+        );
+        if (full !== null) {
+          found.result = full;
+        }
+      }
+
       return {
-        ...match,
+        ...found,
         messageId: message.id,
         chatId,
       };

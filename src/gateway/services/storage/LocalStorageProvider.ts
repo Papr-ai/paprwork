@@ -50,6 +50,16 @@ import {
   getTotalToolInvocationsForAgent,
   sumToolInvocations,
 } from "./agentToolCountsSql.js";
+import {
+  deleteChatSidecars,
+  findOffloadRef,
+  MAX_INLINE_PAYLOAD_BYTES,
+  oversizedPayloadPlaceholder,
+  readOffloadedResult,
+  restoreSequencePayloads,
+  serializeMessagePayloads,
+} from "./messagePayloadStore.js";
+import { startToolPayloadMigration } from "./toolPayloadMigration.js";
 
 export class LocalStorageProvider implements IStorageProvider {
   private db!: Database.Database;
@@ -64,6 +74,11 @@ export class LocalStorageProvider implements IStorageProvider {
   constructor(userDataPath: string) {
     this.dbPath = path.join(userDataPath, "chats.db");
     this.exporter = new ChatExporter();
+  }
+
+  /** Directory holding chats.db; offloaded tool payloads live alongside it. */
+  private get dbDir(): string {
+    return path.dirname(this.dbPath);
   }
 
   async initialize(): Promise<void> {
@@ -117,6 +132,11 @@ export class LocalStorageProvider implements IStorageProvider {
         this.contextEfficiencyCache = null;
       },
     });
+
+    // Rows written before payload offloading existed keep two copies of every
+    // tool payload and can be large enough to exhaust the heap when a chat is
+    // opened. Compact them in the background rather than blocking startup.
+    startToolPayloadMigration(this.db, this.dbDir);
   }
 
   private createSchema(): void {
@@ -372,6 +392,15 @@ export class LocalStorageProvider implements IStorageProvider {
 
     const messageId = message.id || uuidv4();
 
+    // Offload oversized results and drop the payloads `sequence` duplicates
+    // from `tool_calls`, so a single turn cannot write a multi-megabyte row.
+    const payloads = serializeMessagePayloads({
+      dbDir: this.dbDir,
+      chatId,
+      messageId,
+      message,
+    });
+
     // Insert message
     this.db
       .prepare(`
@@ -392,7 +421,7 @@ export class LocalStorageProvider implements IStorageProvider {
         message.content,
         timestamp,
         message.thinking || null,
-        message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+        payloads.toolCallsJson,
         message.error || null,
         message.incomplete ? 1 : 0,
         message.model || null,
@@ -406,7 +435,7 @@ export class LocalStorageProvider implements IStorageProvider {
         message.papr_message_id || null,
         message.source_agent_id || "main-agent",
         message.source_agent_name || "Paprwork Assistant",
-        message.sequence ? JSON.stringify(message.sequence) : null, // Store sequence as JSON
+        payloads.sequenceJson,
         message.attachments?.length
           ? JSON.stringify(message.attachments)
           : null,
@@ -470,6 +499,13 @@ export class LocalStorageProvider implements IStorageProvider {
       promptTokens = estimatedTokens;
     }
 
+    const payloads = serializeMessagePayloads({
+      dbDir: this.dbDir,
+      chatId,
+      messageId,
+      message,
+    });
+
     this.db
       .prepare(`
       UPDATE messages SET
@@ -499,7 +535,7 @@ export class LocalStorageProvider implements IStorageProvider {
         message.content,
         timestamp,
         message.thinking || null,
-        message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+        payloads.toolCallsJson,
         message.error || null,
         message.incomplete ? 1 : 0,
         message.model || null,
@@ -513,7 +549,7 @@ export class LocalStorageProvider implements IStorageProvider {
         message.papr_message_id || null,
         message.source_agent_id || "main-agent",
         message.source_agent_name || "Paprwork Assistant",
-        message.sequence ? JSON.stringify(message.sequence) : null,
+        payloads.sequenceJson,
         messageId,
         chatId,
       );
@@ -546,11 +582,17 @@ export class LocalStorageProvider implements IStorageProvider {
       status?: string;
     }
 
+    // `sequence` points at `tool_calls` for its payloads, so patching here is
+    // enough for both the LLM history and the UI.
     const rows = this.db
       .prepare(
+        // Skipping oversized rows costs nothing in practice: a live turn's
+        // payloads are capped on write, and legacy rows shrink once the
+        // backfill reaches them. Parsing one here would risk the heap.
         `SELECT id, tool_calls FROM messages
          WHERE chat_id = ? AND role = 'assistant'
            AND tool_calls IS NOT NULL AND tool_calls != ''
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}
          ORDER BY timestamp DESC`,
       )
       .all(chatId) as Array<{ id: string; tool_calls: string }>;
@@ -630,14 +672,23 @@ export class LocalStorageProvider implements IStorageProvider {
   ): Promise<StoredMessage[]> {
     // When limit is specified, we load most recent messages first (DESC), then reverse
     // to maintain chronological order in the UI
+    // The payload columns are left in SQLite when they exceed the read limit, so
+    // one oversized legacy row can no longer pull hundreds of megabytes into the
+    // heap. LENGTH() still comes back, which is how the mapper reports the skip.
     let query = `
       SELECT 
         id, chat_id, role, content, timestamp,
-        thinking, tool_calls, error, incomplete,
+        thinking, error, incomplete,
         model, prompt_tokens, completion_tokens, total_tokens,
         sync_status, papr_message_id, last_sync_attempt, sync_error,
         source_agent_id, source_agent_name,
-        sequence, attachments
+        attachments,
+        CASE WHEN LENGTH(tool_calls) > ${MAX_INLINE_PAYLOAD_BYTES}
+             THEN NULL ELSE tool_calls END AS tool_calls,
+        LENGTH(tool_calls) AS tool_calls_bytes,
+        CASE WHEN LENGTH(sequence) > ${MAX_INLINE_PAYLOAD_BYTES}
+             THEN NULL ELSE sequence END AS sequence,
+        LENGTH(sequence) AS sequence_bytes
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp ${limit ? 'DESC' : 'ASC'}
@@ -664,15 +715,26 @@ export class LocalStorageProvider implements IStorageProvider {
       );
     });
 
-    return orderedRows.map((row) => ({
+    return orderedRows.map((row) => {
+      const toolCalls = this.parsePayloadColumn<StoredMessage["toolCalls"]>(
+        row,
+        "tool_calls",
+      );
+
+      return {
       id: row.id,
       chat_id: row.chat_id,
       role: row.role as "user" | "assistant",
       content: row.content,
       timestamp: row.timestamp,
       thinking: row.thinking || undefined,
-      toolCalls: row.tool_calls ? JSON.parse(row.tool_calls) : undefined,
-      sequence: row.sequence ? JSON.parse(row.sequence) : undefined, // Parse sequence from JSON
+      toolCalls,
+      // `sequence` stores pointers into `tool_calls` rather than a second copy
+      // of every payload; rebuild them so consumers see the original shape.
+      sequence: restoreSequencePayloads(
+        this.parsePayloadColumn<StoredMessage["sequence"]>(row, "sequence"),
+        toolCalls,
+      ),
       error: row.error || undefined,
       incomplete: row.incomplete === 1,
       model: row.model,
@@ -689,7 +751,43 @@ export class LocalStorageProvider implements IStorageProvider {
       source_agent_id: row.source_agent_id || "main-agent",
       source_agent_name: row.source_agent_name || "Paprwork Assistant",
       attachments: row.attachments ? JSON.parse(row.attachments) : undefined,
-    }));
+      };
+    });
+  }
+
+  /**
+   * Parse one of the JSON payload columns.
+   *
+   * The query nulls out columns above MAX_INLINE_PAYLOAD_BYTES, so an oversized
+   * legacy row arrives here with only its length. Those are skipped rather than
+   * parsed — a single 100MB+ row was enough to abort the gateway on OOM. The
+   * offload migration rewrites them into sidecar files.
+   */
+  private parsePayloadColumn<T>(
+    row: { id: string; [key: string]: any },
+    column: "tool_calls" | "sequence",
+  ): T | undefined {
+    const raw = row[column];
+    const bytes = row[`${column}_bytes`] as number | null;
+
+    if (typeof raw !== "string" || raw.length === 0) {
+      if (bytes && bytes > MAX_INLINE_PAYLOAD_BYTES) {
+        console.warn(
+          `[LocalStorage] Skipped ${row.id} ${oversizedPayloadPlaceholder({ column, bytes })}`,
+        );
+      }
+      return undefined;
+    }
+
+    try {
+      return JSON.parse(raw) as T;
+    } catch (error) {
+      console.warn(
+        `[LocalStorage] Malformed ${column} on message ${row.id}:`,
+        error instanceof Error ? error.message : error,
+      );
+      return undefined;
+    }
   }
 
   async loadMessagesForLLM(chatId: string): Promise<any[]> {
@@ -752,7 +850,10 @@ export class LocalStorageProvider implements IStorageProvider {
 
     let recentMessages = this.db
       .prepare(`
-      SELECT role, content, thinking, tool_calls, timestamp, attachments
+      SELECT id, role, content, thinking, timestamp, attachments,
+             CASE WHEN LENGTH(tool_calls) > ${MAX_INLINE_PAYLOAD_BYTES}
+                  THEN NULL ELSE tool_calls END AS tool_calls,
+             LENGTH(tool_calls) AS tool_calls_bytes
       FROM messages 
       WHERE chat_id = ? 
       ORDER BY timestamp DESC 
@@ -775,7 +876,10 @@ export class LocalStorageProvider implements IStorageProvider {
       recentMessageLimit = expandedLimit;
       recentMessages = this.db
         .prepare(`
-        SELECT role, content, thinking, tool_calls, timestamp
+        SELECT id, role, content, thinking, timestamp, attachments,
+               CASE WHEN LENGTH(tool_calls) > ${MAX_INLINE_PAYLOAD_BYTES}
+                    THEN NULL ELSE tool_calls END AS tool_calls,
+               LENGTH(tool_calls) AS tool_calls_bytes
         FROM messages 
         WHERE chat_id = ? 
         ORDER BY timestamp DESC 
@@ -824,10 +928,10 @@ export class LocalStorageProvider implements IStorageProvider {
 
     // Format recent messages — pass toolCalls through for structured AI SDK format
     const formattedRecent = recentMessages.map((message) => {
-      const parsedToolCalls =
-        typeof message.tool_calls === "string" && message.tool_calls.length > 0
-          ? (JSON.parse(message.tool_calls) as unknown[])
-          : undefined;
+      const parsedToolCalls = this.parsePayloadColumn<unknown[]>(
+        message,
+        "tool_calls",
+      );
       const parsedAttachments =
         typeof message.attachments === "string" && message.attachments.length > 0
           ? (JSON.parse(message.attachments) as unknown[])
@@ -1008,6 +1112,37 @@ export class LocalStorageProvider implements IStorageProvider {
   async deleteChat(chatId: string): Promise<void> {
     // Foreign key cascade will delete messages
     this.db.prepare("DELETE FROM chats WHERE id = ?").run(chatId);
+    deleteChatSidecars(this.dbDir, chatId);
+  }
+
+  /**
+   * Read the full text of a tool result that was moved to sidecar storage.
+   * Returns null when this tool call kept its result inline.
+   */
+  async readOffloadedToolResult(
+    chatId: string,
+    messageId: string,
+    toolCallId: string,
+  ): Promise<string | null> {
+    const row = this.db
+      .prepare(
+        `SELECT tool_calls FROM messages
+         WHERE id = ? AND chat_id = ?
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}`,
+      )
+      .get(messageId, chatId) as { tool_calls: string | null } | undefined;
+
+    if (!row?.tool_calls) return null;
+
+    let toolCalls: StoredMessage["toolCalls"];
+    try {
+      toolCalls = JSON.parse(row.tool_calls);
+    } catch {
+      return null;
+    }
+
+    const ref = findOffloadRef({ toolCalls } as StoredMessage, toolCallId);
+    return ref ? readOffloadedResult(this.dbDir, ref) : null;
   }
 
   async listChats(): Promise<ChatMetadata[]> {
@@ -1191,9 +1326,14 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async getUnsyncedMessages(chatId: string): Promise<StoredMessage[]> {
+    // Named columns, not SELECT *: the payload columns are not part of the
+    // result and pulling them in only to drop them can exhaust the heap.
     const rows = this.db
       .prepare(`
-      SELECT * FROM messages 
+      SELECT id, chat_id, role, content, timestamp, model,
+             prompt_tokens, completion_tokens, total_tokens,
+             sync_status, papr_message_id, last_sync_attempt, sync_error
+      FROM messages 
       WHERE chat_id = ? 
         AND sync_status IN ('sync_pending', 'sync_failed')
       ORDER BY timestamp ASC

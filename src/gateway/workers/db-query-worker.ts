@@ -12,12 +12,18 @@ import Database from "better-sqlite3";
 
 // ── Message protocol ──────────────────────────────────────────────────────
 
+export interface DbWorkerWriteBatchStatement {
+  sql: string;
+  params?: unknown[];
+}
+
 export interface DbWorkerRequest {
   id: number;
-  type: "query" | "write" | "schema" | "exec" | "table-exists";
+  type: "query" | "write" | "write-batch" | "schema" | "exec" | "table-exists";
   dbPath: string;
   sql?: string;
   params?: unknown[];
+  statements?: DbWorkerWriteBatchStatement[];
   readonly?: boolean;
   tableName?: string;
 }
@@ -56,8 +62,17 @@ function openDb(dbPath: string, readonly: boolean): Database.Database {
   }
 }
 
+function isReadonlyRequest(req: DbWorkerRequest): boolean {
+  if (req.readonly != null) {
+    return req.readonly;
+  }
+  return (
+    req.type === "query" || req.type === "schema" || req.type === "table-exists"
+  );
+}
+
 function handle(req: DbWorkerRequest): DbWorkerResponse {
-  const db = openDb(req.dbPath, req.readonly ?? req.type !== "write");
+  const db = openDb(req.dbPath, isReadonlyRequest(req));
 
   try {
     switch (req.type) {
@@ -80,6 +95,33 @@ function handle(req: DbWorkerRequest): DbWorkerResponse {
             ? Number(result.lastInsertRowid)
             : result.lastInsertRowid;
         return { id: req.id, success: true, data: { changes: result.changes, lastInsertRowid } };
+      }
+
+      case "write-batch": {
+        if (!req.statements?.length) throw new Error("statements required");
+        const results: Array<{ changes: number; lastInsertRowid: number }> = [];
+        const runBatch = db.transaction(
+          (stmts: DbWorkerWriteBatchStatement[]) => {
+            for (const stmt of stmts) {
+              if (!stmt.sql) throw new Error("sql required");
+              const result = db
+                .prepare(stmt.sql)
+                .run(...(stmt.params ?? [])) as {
+                changes: number;
+                lastInsertRowid: number | bigint;
+              };
+              results.push({
+                changes: result.changes,
+                lastInsertRowid:
+                  typeof result.lastInsertRowid === "bigint"
+                    ? Number(result.lastInsertRowid)
+                    : result.lastInsertRowid,
+              });
+            }
+          },
+        );
+        runBatch(req.statements);
+        return { id: req.id, success: true, data: { results } };
       }
 
       case "exec": {

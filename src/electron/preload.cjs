@@ -266,6 +266,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
     };
   })(),
 
+  cloudPreview: {
+    seedSession: (input) => ipcRenderer.invoke("cloud-preview:seed-session", input),
+  },
+
   // Ollama API - Auto-install and manage local AI models
   ollama: (() => {
     // Track wrapper functions for proper cleanup

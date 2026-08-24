@@ -11,6 +11,7 @@ import type {
   WorkspaceLogAppendBatchResponse,
   WorkspaceLogAppendRequest,
   WorkspaceLogAppendResponse,
+  WorkspaceLogHostScope,
 } from "../../../core/types/workspaceLog.js";
 import { getMemoryServerBaseUrl, cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { buildCloudVaultRequestBody } from "../../../core/utils/cloudReposScope.js";
@@ -80,10 +81,39 @@ export function runtimeAuthPayload(
   return payload;
 }
 
+interface DbTokenCacheEntry {
+  tursoUrl: string;
+  authToken: string;
+  expiresAt: number;
+}
+
+/** In-process Turso credential cache — avoids memory/db-token on every cold client. */
+const dbTokenCache = new Map<string, DbTokenCacheEntry>();
+const DB_TOKEN_TTL_MS = 50 * 60 * 1000;
+
+function dbTokenCacheKey(auth: AppRuntimeRouteAuth, database: string): string {
+  return [
+    auth.namespaceId,
+    auth.slug,
+    auth.sessionToken ?? "",
+    auth.shareToken ?? "",
+    auth.paprApiKey ?? "",
+    auth.externalUserId ?? "",
+    database,
+  ].join("|");
+}
+
 export async function fetchRuntimeDbToken(
   auth: AppRuntimeRouteAuth,
   database: string,
 ): Promise<{ tursoUrl: string; authToken: string }> {
+  const cacheKey = dbTokenCacheKey(auth, database);
+  const now = Date.now();
+  const cached = dbTokenCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return { tursoUrl: cached.tursoUrl, authToken: cached.authToken };
+  }
+
   const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/db-token`,
     {
@@ -101,6 +131,11 @@ export async function fetchRuntimeDbToken(
     );
   }
   const json = (await res.json()) as { tursoUrl: string; authToken: string };
+  dbTokenCache.set(cacheKey, {
+    tursoUrl: json.tursoUrl,
+    authToken: json.authToken,
+    expiresAt: now + DB_TOKEN_TTL_MS,
+  });
   return { tursoUrl: json.tursoUrl, authToken: json.authToken };
 }
 
@@ -528,10 +563,24 @@ export interface RuntimeTursoDbChangedInput {
   source?: string;
 }
 
+function workspaceLogHostScopePayload(
+  hostScope: WorkspaceLogHostScope | undefined,
+): Record<string, string> {
+  if (!hostScope) {
+    return {};
+  }
+  return {
+    orgId: hostScope.orgId,
+    ownerUserId: hostScope.ownerUserId,
+    appId: hostScope.appId,
+  };
+}
+
 /** Cloud app host → memory workspace log append (Turso materialization on server). */
 export async function appendRuntimeWorkspaceLogEntry(
   auth: AppRuntimeRouteAuth,
   request: WorkspaceLogAppendRequest,
+  hostScope?: WorkspaceLogHostScope,
 ): Promise<WorkspaceLogAppendResponse> {
   const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/workspace/log/append`,
@@ -540,6 +589,7 @@ export async function appendRuntimeWorkspaceLogEntry(
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
         ...runtimeAuthPayload(auth),
+        ...workspaceLogHostScopePayload(hostScope),
         replicaId: request.replicaId,
         kind: request.kind,
         dbSourceId: request.dbSourceId,
@@ -559,6 +609,7 @@ export async function appendRuntimeWorkspaceLogEntry(
 export async function appendRuntimeWorkspaceLogBatch(
   auth: AppRuntimeRouteAuth,
   request: WorkspaceLogAppendBatchRequest,
+  hostScope?: WorkspaceLogHostScope,
 ): Promise<WorkspaceLogAppendBatchResponse> {
   const timeoutMs = Math.min(
     180_000,
@@ -571,6 +622,7 @@ export async function appendRuntimeWorkspaceLogBatch(
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
         ...runtimeAuthPayload(auth),
+        ...workspaceLogHostScopePayload(hostScope),
         replicaId: request.replicaId,
         entries: request.entries.map((entry) => ({
           kind: entry.kind,

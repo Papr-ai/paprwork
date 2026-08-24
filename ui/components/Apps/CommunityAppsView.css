@@ -169,6 +169,25 @@
   background: var(--hover, rgba(0, 0, 0, 0.03));
 }
 
+.community-apps__browse-filter-toggle {
+  padding: 4px 12px;
+  background: none;
+  border: 1px solid var(--glass-border, rgba(0, 0, 0, 0.08));
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 140ms ease;
+  white-space: nowrap;
+}
+
+.community-apps__browse-filter-toggle:hover {
+  color: var(--text-primary);
+  border-color: var(--accent, #0071E3);
+  background: var(--hover, rgba(0, 0, 0, 0.03));
+}
+
 .community-apps__empty-text {
   color: var(--text-tertiary);
 }

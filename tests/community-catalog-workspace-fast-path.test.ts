@@ -8,6 +8,7 @@ vi.mock("../src/gateway/services/cloudPublishPrefs.js", () => ({
     externalLink: false,
     codeAccess: "off",
   })),
+  hasStoredAppPublishPrefs: vi.fn(() => false),
 }));
 
 vi.mock("../src/gateway/utils/paprUserId.js", () => ({
@@ -28,6 +29,7 @@ describe("mergeNamespaceWorkspaceCatalog", () => {
         appId: "local-only",
         namespaceId: "ns-1",
         visibility: "team",
+        isOwned: true,
         codeInstallable: false,
         liveViewable: true,
       },
@@ -91,5 +93,70 @@ describe("mergeNamespaceWorkspaceCatalog", () => {
       false,
     );
     expect(entries.find((entry) => entry.appId === "my-app")?.isOwned).toBe(true);
+  });
+
+  it("defaults codeInstallable to true when memory omits ACL fields (web parity)", () => {
+    const entries = mergeNamespaceWorkspaceCatalog({
+      workspaceRemote: [
+        {
+          appId: "teammate-app",
+          namespaceId: "ns-1",
+          name: "Teammate App",
+          visibility: "team",
+        },
+      ],
+      localTeamEntries: [],
+      paprDir: "/tmp/papr",
+      namespaceId: "ns-1",
+      ownedAppIds: new Set(["teammate-app"]),
+    });
+
+    expect(
+      entries.find((entry) => entry.appId === "teammate-app")?.codeInstallable,
+    ).toBe(true);
+  });
+
+  it("honors explicit codeInstallable false from memory", () => {
+    const entries = mergeNamespaceWorkspaceCatalog({
+      workspaceRemote: [
+        {
+          appId: "live-only",
+          namespaceId: "ns-1",
+          name: "Live Only",
+          visibility: "team",
+          codeInstallable: false,
+        },
+      ],
+      localTeamEntries: [],
+      paprDir: "/tmp/papr",
+      namespaceId: "ns-1",
+      ownedAppIds: new Set(),
+    });
+
+    expect(
+      entries.find((entry) => entry.appId === "live-only")?.codeInstallable,
+    ).toBe(false);
+  });
+
+  it("does not mark synced teammate apps as owned without publisherUserId", () => {
+    const entries = mergeNamespaceWorkspaceCatalog({
+      workspaceRemote: [
+        {
+          appId: "teammate-app",
+          namespaceId: "ns-1",
+          name: "Teammate App",
+          visibility: "team",
+          codeAccess: "install",
+        },
+      ],
+      localTeamEntries: [],
+      paprDir: "/tmp/papr",
+      namespaceId: "ns-1",
+      ownedAppIds: new Set(["teammate-app"]),
+    });
+
+    const teammate = entries.find((entry) => entry.appId === "teammate-app");
+    expect(teammate?.isOwned).toBe(false);
+    expect(teammate?.codeInstallable).toBe(true);
   });
 });

@@ -55,6 +55,15 @@ export class HybridStorageProvider implements IStorageProvider {
     );
   }
 
+  /** Sidecar payloads are local files, so this always goes to SQLite. */
+  readOffloadedToolResult(
+    chatId: string,
+    messageId: string,
+    toolCallId: string,
+  ): Promise<string | null> {
+    return this.local.readOffloadedToolResult(chatId, messageId, toolCallId);
+  }
+
   // ===== Message Operations =====
 
   async updateMessage(

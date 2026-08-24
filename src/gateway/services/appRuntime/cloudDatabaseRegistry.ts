@@ -11,31 +11,34 @@ import {
   getDatabaseRegistryService,
 } from "../DatabaseRegistryService.js";
 import { LINKED_DATABASES_FILENAME } from "../cloudSync/linkedDatabasesForCloud.js";
-import type { AppDataSourcesFile } from "../appDataSources.js";
-import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
+import { parseDataSourcesFile, type AppDataSourcesFile } from "../appDataSources.js";
+import {
+  fetchCachedRuntimeRepoFile,
+  readAppDbConfigCache,
+  resolveAppCacheRevision,
+  writeAppDbConfigCache,
+} from "./cloudAppHostCache.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 
+export interface LoadAppDataSourcesStats {
+  cacheHit?: boolean;
+}
+
 const REGISTRY_REPO_PATH = `data/${DATABASES_REGISTRY_FILENAME}`;
+const DATA_SOURCES_FILENAME = "data-sources.json";
 
-export async function hydrateCloudDatabaseRegistry(
-  runtimeAuth: AppRuntimeRouteAuth,
+function mergeRegistryFiles(
+  registry: ReturnType<typeof getDatabaseRegistryService>,
+  linkedContent: string | undefined,
+  databasesContent: string | undefined,
   config?: AppDataSourcesFile,
-): Promise<void> {
-  const registry = getDatabaseRegistryService();
-
-  const linked = await fetchCachedRuntimeRepoFile(
-    runtimeAuth,
-    LINKED_DATABASES_FILENAME,
-  );
-  if (linked?.content) {
-    registry.mergeFromRegistryFile(linked.content);
+): void {
+  if (linkedContent) {
+    registry.mergeFromRegistryFile(linkedContent);
   }
-
-  const file = await fetchCachedRuntimeRepoFile(runtimeAuth, REGISTRY_REPO_PATH);
-  if (file?.content) {
-    registry.mergeFromRegistryFile(file.content);
+  if (databasesContent) {
+    registry.mergeFromRegistryFile(databasesContent);
   }
-
   if (config?.sources?.length) {
     for (const source of config.sources) {
       if (!source.dbPath) {
@@ -44,4 +47,92 @@ export async function hydrateCloudDatabaseRegistry(
       registry.ensureRecordForSource(source);
     }
   }
+}
+
+/**
+ * Load data-sources.json and hydrate registry files in one parallel fetch burst.
+ */
+export async function loadAppDataSourcesConfig(
+  runtimeAuth: AppRuntimeRouteAuth,
+  requestedPath = DATA_SOURCES_FILENAME,
+  stats?: LoadAppDataSourcesStats,
+): Promise<AppDataSourcesFile> {
+  const registry = getDatabaseRegistryService();
+  const revision = await resolveAppCacheRevision(runtimeAuth);
+  const cached = readAppDbConfigCache(
+    runtimeAuth.namespaceId,
+    runtimeAuth.slug,
+    revision,
+  );
+  if (cached && cached.config.sources.length > 0) {
+    if (stats) {
+      stats.cacheHit = true;
+    }
+    mergeRegistryFiles(
+      registry,
+      cached.linkedContent,
+      cached.databasesContent,
+      cached.config,
+    );
+    return cached.config;
+  }
+
+  if (stats) {
+    stats.cacheHit = false;
+  }
+
+  const [dataSourcesFile, linked, databasesFile] = await Promise.all([
+    fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath),
+    fetchCachedRuntimeRepoFile(runtimeAuth, LINKED_DATABASES_FILENAME),
+    fetchCachedRuntimeRepoFile(runtimeAuth, REGISTRY_REPO_PATH),
+  ]);
+
+  if (!dataSourcesFile?.content) {
+    mergeRegistryFiles(
+      registry,
+      linked?.content,
+      databasesFile?.content,
+    );
+    // Do not cache empty config — a transient repo-file miss would make apps
+    // look dead for minutes (repo-file misses are not cached; app-db-config was).
+    return { sources: [] };
+  }
+
+  const config = parseDataSourcesFile(dataSourcesFile.content);
+  mergeRegistryFiles(
+    registry,
+    linked?.content,
+    databasesFile?.content,
+    config,
+  );
+  writeAppDbConfigCache(
+    runtimeAuth.namespaceId,
+    runtimeAuth.slug,
+    revision,
+    {
+      config,
+      linkedContent: linked?.content,
+      databasesContent: databasesFile?.content,
+    },
+  );
+  return config;
+}
+
+export async function hydrateCloudDatabaseRegistry(
+  runtimeAuth: AppRuntimeRouteAuth,
+  config?: AppDataSourcesFile,
+): Promise<void> {
+  const registry = getDatabaseRegistryService();
+
+  const [linked, databasesFile] = await Promise.all([
+    fetchCachedRuntimeRepoFile(runtimeAuth, LINKED_DATABASES_FILENAME),
+    fetchCachedRuntimeRepoFile(runtimeAuth, REGISTRY_REPO_PATH),
+  ]);
+
+  mergeRegistryFiles(
+    registry,
+    linked?.content,
+    databasesFile?.content,
+    config,
+  );
 }

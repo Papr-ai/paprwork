@@ -248,6 +248,25 @@ export class DbQueryPool {
     }
   }
 
+  async writeBatch(
+    appId: string,
+    dbPath: string,
+    statements: Array<{ sql: string; params?: unknown[] }>,
+  ): Promise<WriteResult[]> {
+    await this.acquireSlot(appId);
+    try {
+      const res = await this.dispatch({
+        type: "write-batch",
+        dbPath,
+        statements,
+        readonly: false,
+      });
+      return (res.data as { results: WriteResult[] }).results;
+    } finally {
+      this.releaseSlot(appId);
+    }
+  }
+
   async exec(
     appId: string,
     dbPath: string,

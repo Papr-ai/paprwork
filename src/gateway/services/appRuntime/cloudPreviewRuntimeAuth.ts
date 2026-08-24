@@ -35,13 +35,15 @@ export interface CloudPreviewAuthHeaderOptions {
    * valid local session (production may not read X-Session-Token yet).
    */
   enrichFromSession?: boolean;
+  /** Reuse auth from the caller to avoid duplicate keychain/IPC lookups. */
+  auth?: AppRuntimeRouteAuth;
 }
 
 export async function buildCloudPreviewAuthHeaders(
   ctx: CloudRouteContext,
   options: CloudPreviewAuthHeaderOptions = {},
 ): Promise<Record<string, string>> {
-  let auth = await resolveCloudPreviewRuntimeAuth(ctx);
+  let auth = options.auth ?? (await resolveCloudPreviewRuntimeAuth(ctx));
   if (options.enrichFromSession) {
     auth = (await enrichRuntimeAuthWithPaprApiKey(auth)) ?? auth;
   }

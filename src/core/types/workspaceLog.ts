@@ -52,6 +52,14 @@ export interface WorkspaceLogAppendRequest {
   payload: WorkspaceLogPayload;
 }
 
+/** Pre-validated scope from cloud app host — enables memory fast path on append. */
+export interface WorkspaceLogHostScope {
+  orgId: string;
+  namespaceId: string;
+  ownerUserId: string;
+  appId: string;
+}
+
 export interface WorkspaceLogAppendResponse {
   replicaId: string;
   seq: number;

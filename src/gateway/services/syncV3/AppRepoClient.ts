@@ -129,3 +129,55 @@ export function cloneUrlMatchesAppRepo(
     url.replace(/^https:\/\/x-access-token:[^@]+@/i, "https://").replace(/\.git$/, "");
   return normalize(cloneUrl) === normalize(record.cloneUrl);
 }
+
+export interface AppRepoReadCredentials {
+  cloneUrl: string;
+  token: string;
+  expiresAt: string;
+  repoPath: string;
+}
+
+/** Scoped read token for per-app repo clone (Sync V3 Get updates / track pull). */
+export async function fetchAppRepoReadCredentials(
+  appId: string,
+): Promise<AppRepoReadCredentials | null> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const resp = await cloudApiFetch(`${repoPath(trimmed)}/read-token`, {
+    method: "POST",
+    body: {},
+    timeoutMs: 60_000,
+  });
+
+  if (resp.status === 404 || resp.status === 403) {
+    return null;
+  }
+  if (!resp.ok) {
+    const text = await resp.text();
+    throw new AppRepoApiError(trimmed, resp.status, text);
+  }
+
+  const payload = (await resp.json()) as {
+    cloneUrl?: string;
+    token?: string;
+    expiresAt?: string;
+    repoPath?: string;
+  };
+  const cloneUrl = payload.cloneUrl?.trim();
+  const token = payload.token?.trim();
+  const expiresAt = payload.expiresAt?.trim();
+  const repoPathValue = payload.repoPath?.trim() ?? ".";
+  if (!cloneUrl || !token || !expiresAt) {
+    throw new AppRepoApiError(trimmed, 502, "invalid read-token response shape");
+  }
+
+  return {
+    cloneUrl,
+    token,
+    expiresAt,
+    repoPath: repoPathValue,
+  };
+}

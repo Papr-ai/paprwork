@@ -28,6 +28,11 @@ export interface CloudApiFetchOptions {
   signal?: AbortSignal;
   /** When false, skip gzip request body even for large JSON payloads. */
   compressBody?: boolean;
+  /**
+   * Skip external_user_id on GET requests. Use for global public catalog routes
+   * where acting-user scoping would hide other publishers' apps.
+   */
+  skipActingUser?: boolean;
 }
 
 const GZIP_MIN_BYTES = 1024;
@@ -90,7 +95,7 @@ export async function cloudApiFetch(
       const prepared = prepareCloudJsonBody(payload, opts.compressBody !== false);
       fetchOpts.body = prepared.body;
       Object.assign(fetchOpts.headers as Record<string, string>, prepared.extraHeaders);
-    } else {
+    } else if (opts.skipActingUser !== true) {
       pathWithActingUser = appendCloudActingUserQuery(cloudPath);
     }
     return await fetch(`${getMemoryServerBaseUrl()}${pathWithActingUser}`, fetchOpts);

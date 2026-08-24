@@ -4730,4 +4730,46 @@ if (result.valid) {
 
 ---
 
+### Issue 70: Gateway OOM — Duplicated and Unbounded Tool Payloads ✅ FIXED
+**Added:** 2026-08-21
+**Severity:** CRITICAL — Gateway crash / chat unopenable
+**Problem:** Opening a chat with heavy tool use crashed the gateway with a V8 heap OOM. On a real 3.0GB `chats.db`, the 150 largest messages held 1.96GB — about 64% of the file — and parsing one of them exhausted the ~4GB heap.
+**Root Causes:** Three compounding issues:
+1. **Duplication** — every tool payload was written twice: `messages.tool_calls` (canonical: LLM context, analytics, Papr sync) and `messages.sequence` (UI ordering, carrying its own copy of `input`/`output`)
+2. **Unbounded rows** — no cap on a single row, so file reads/scrapes/delegation transcripts pushed rows past 100MB
+3. **Eager parsing** — `loadMessages` parsed both columns for every row, including rows nothing was about to render
+**Solution:**
+1. **Store each payload once** — `tool_calls` stays canonical; `sequence` keeps ordering metadata plus `inputRef`/`outputRef` pointers, rehydrated on read by `restoreSequencePayloads()`. A JSON `null` output stays inline (it serializes to nothing in `tool_calls`, so a pointer could not restore it).
+2. **Offload large payloads** — results over 256KB move to `~/.paprwork-v2/tool-results/<chatId>/<messageId>/<toolCallId>.txt`, leaving a **40K preview** plus a `resultOffload` pointer. `get_full_tool_result` follows the pointer, so **nothing is discarded**. The preview is sized to the default `absoluteMaxChars` (40,000) so the history formatter truncates from the preview exactly as it would from the full result — offloading cannot take away context the model would otherwise have received. The whole column also has a 1MB budget: the largest results spill to sidecars, then previews are re-cut to 4K if previews alone still exceed it.
+3. **Size-guard every read** — `boundedPayloadSql()` returns NULL instead of a column over 2MB, so an oversized row is never pulled into the heap. This stops the crash even before the backfill runs.
+4. **Background backfill** — `startToolPayloadMigration()` compacts existing rows in chunks of 50, entirely inside SQLite via `json_set`/`json_remove`, so a 100MB column is never parsed in JS. Idempotent and resumable via a `tool_payload_migrated` flag.
+**Results (real 3.0GB database, verified byte-for-byte against the untouched original):**
+
+| Sample | Rows before | Rows after | Sidecars | Checks |
+|---|---|---|---|---|
+| 150 largest messages | 1,958MB | **53.5MB** (−97.3%) | 930MB | 12,321 passed, 0 failed |
+
+**Consumer impact (checked, not assumed):** the two columns were never "full copy for the UI, trimmed copy for the LLM" — they held the same payload written twice, and the UI/LLM split happens at read time. `sequence[].data.output` and `tool_calls[].result` are written from the identical source value in `messagePersistence.ts`, so rebuilding one from the other is faithful. The chat UI does not render successful tool output at all (`getToolResultFeedback` returns `null` for `success`), and chat export truncates to 500 chars, so preview length is invisible to both.
+
+**Files Created:**
+- `src/gateway/services/storage/messagePayloadStore.ts` — serialize/restore, offload, sidecar I/O
+- `src/gateway/services/storage/toolPayloadMigration.ts` — backfill scheduling and progress
+- `src/gateway/services/storage/toolPayloadRowRewrite.ts` — per-row SQL surgery (json_set/json_remove)
+- `tests/message-payload-store.test.ts` — 13 round-trip/offload/preview-budget tests
+- `scripts/test-tool-payload-migration.mjs` — 26 backfill tests (Electron)
+- `scripts/verify-payload-migration-on-real-db.mjs` — losslessness check against a real DB (read-only)
+- `docs/TOOL_PAYLOAD_OFFLOADING.md` — complete documentation
+**Files Changed:**
+- `LocalStorageProvider.ts` — serialize on write, restore + guard on read, sidecar cleanup on delete, starts backfill, `getUnsyncedMessages` no longer uses `SELECT *`
+- `HybridStorageProvider.ts`, `IStorageProvider.ts` — `resultOffload` + `readOffloadedToolResult`
+- `toolResultLookup.ts`, `core/tools/chatHistory.ts` — `get_full_tool_result` resolves pointers
+- `contextFootprint.ts` — untruncated size uses `resultOffload.totalChars`, not the preview
+- `contextFootprintSql.ts`, `contextFootprintStore.ts`, `memorySearchSavings.ts` — bounded reads
+**Testing:** `npx vitest run tests/message-payload-store.test.ts --project unit-backend` and `npm run test:payload-migration`. SQLite tests run under Electron because `better-sqlite3` is built for Electron's runtime (`ERR_DLOPEN_FAILED` under plain Node).
+**Note:** SQLite does not return freed pages to the filesystem — run `VACUUM` after the backfill to shrink the file.
+**Prevention:** Cap what a row may hold; store a payload once and point at it; guard every read that parses a payload column; select named columns (`SELECT *` can pull a 100MB column into the heap just to discard it); do bulk JSON rewrites inside SQLite when values are too large for JS.
+**See:** `docs/TOOL_PAYLOAD_OFFLOADING.md`
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
