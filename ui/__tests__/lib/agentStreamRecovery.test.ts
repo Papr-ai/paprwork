@@ -179,4 +179,46 @@ describe("finalizeStreamingMessages", () => {
     expect(finalized[0]?.isStreaming).toBe(false);
     expect(finalized[0]?.content).toBe("Partial work");
   });
+
+  it("flags the abandoned turn as interrupted so it is not shown as finished", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "stream",
+        role: "assistant",
+        content: "",
+        isStreaming: true,
+        streamingContent: "Partial work",
+      },
+    ];
+
+    expect(finalizeStreamingMessages(messages)[0]?.interrupted).toBe(true);
+  });
+
+  it("settles tool calls that never reported back", () => {
+    const messages: ChatMessage[] = [
+      {
+        id: "stream",
+        role: "assistant",
+        content: "",
+        isStreaming: true,
+        sequence: [
+          { type: "tool", data: { id: "t1", toolName: "bash", status: "calling" } },
+          { type: "tool", data: { id: "t2", toolName: "bash", status: "success" } },
+        ],
+      },
+    ];
+
+    const sequence = finalizeStreamingMessages(messages)[0]?.sequence ?? [];
+
+    expect((sequence[0]?.data as { status: string }).status).toBe("interrupted");
+    expect((sequence[1]?.data as { status: string }).status).toBe("success");
+  });
+
+  it("leaves completed messages untouched", () => {
+    const messages: ChatMessage[] = [
+      { id: "done", role: "assistant", content: "All finished" },
+    ];
+
+    expect(finalizeStreamingMessages(messages)[0]?.interrupted).toBeUndefined();
+  });
 });
