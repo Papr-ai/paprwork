@@ -95,6 +95,34 @@ export function parseAddColumnStatement(
   return { table, column };
 }
 
+/**
+ * ALTER TABLE x RENAME TO y — the statement that makes copy-and-swap rebuilds
+ * unverifiable by name lookup.
+ *
+ * A rebuild creates a scratch table, copies rows in, then renames it over the
+ * original. Verifying the CREATE afterwards looks for a table that no longer
+ * exists under that name, so the migration is reported broken even though the
+ * schema is exactly right. Parsing RENAME lets the verifier follow the table
+ * to its final name instead.
+ */
+export function parseRenameTableStatement(
+  statement: string,
+): { from: string; to: string } | null {
+  const match = new RegExp(
+    String.raw`^ALTER\s+TABLE\s+${IDENT}\s+RENAME\s+TO\s+${IDENT}`,
+    "i",
+  ).exec(statement.trim());
+  if (!match) {
+    return null;
+  }
+  const from = firstCapture(match, 1, 5);
+  const to = firstCapture(match, 6, 5);
+  if (!from || !to) {
+    return null;
+  }
+  return { from, to };
+}
+
 /** Strip leading `--` line comments so chunks like `-- header\nCREATE TABLE…` are kept. */
 export function stripLeadingLineComments(sqlChunk: string): string {
   return sqlChunk

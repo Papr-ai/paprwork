@@ -49,4 +49,63 @@ CREATE INDEX IF NOT EXISTS idx_daily_shop_date ON daily_metrics(shop_id, date);`
     );
     expect(satisfied).toBe(false);
   });
+
+  /**
+   * Regression: a table rebuild wedged cloud sync permanently.
+   *
+   * Changing a column type or adding a PRIMARY KEY is impossible with ALTER in
+   * SQLite, so the drift healer emits copy-and-swap. Verified statement by
+   * statement, the CREATE of the scratch table looks unsatisfied — it was
+   * renamed onto the real table name. The verdict can never change, so every
+   * retry failed identically and publish stayed blocked.
+   */
+  it("accepts a table rebuild whose scratch table is renamed into place", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-verify-"));
+    const migrationsDir = path.join(root, "migrations");
+    fs.mkdirSync(migrationsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(migrationsDir, "0002_rebuild.sql"),
+      `DROP TABLE IF EXISTS "expenses__papr_rebuild";
+CREATE TABLE IF NOT EXISTS "expenses__papr_rebuild" ("id" TEXT PRIMARY KEY, "amount_cents" INTEGER);
+INSERT OR IGNORE INTO "expenses__papr_rebuild" ("id") SELECT "id" FROM "expenses";
+DROP TABLE IF EXISTS "expenses__papr_old";
+ALTER TABLE "expenses" RENAME TO "expenses__papr_old";
+ALTER TABLE "expenses__papr_rebuild" RENAME TO "expenses";
+DROP TABLE IF EXISTS "expenses__papr_old";`,
+    );
+
+    // Final state: only `expenses` exists. The scratch and old names are gone,
+    // which is exactly what made the old verifier fail.
+    const remote = createMigrationMockRemote({ expenses: ["id"] }, []);
+
+    const satisfied = await migrationSatisfiedOnRemote(
+      remote,
+      root,
+      "0002_rebuild.sql",
+    );
+    expect(satisfied).toBe(true);
+  });
+
+  it("still fails a rebuild when the final table is missing on remote", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-verify-"));
+    const migrationsDir = path.join(root, "migrations");
+    fs.mkdirSync(migrationsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(migrationsDir, "0002_rebuild.sql"),
+      `CREATE TABLE IF NOT EXISTS "expenses__papr_rebuild" ("id" TEXT PRIMARY KEY);
+ALTER TABLE "expenses__papr_rebuild" RENAME TO "expenses";
+CREATE INDEX IF NOT EXISTS "idx_expenses_id" ON "expenses"("id");`,
+    );
+
+    // The rename target never arrived, so this migration really is broken and
+    // must still be reported unsatisfied — the fix must not blanket-pass.
+    const remote = createMigrationMockRemote({}, []);
+
+    const satisfied = await migrationSatisfiedOnRemote(
+      remote,
+      root,
+      "0002_rebuild.sql",
+    );
+    expect(satisfied).toBe(false);
+  });
 });

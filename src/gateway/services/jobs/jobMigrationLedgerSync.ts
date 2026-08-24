@@ -29,6 +29,7 @@ import {
   parseCreateIndexStatement,
   parseCreateTableStatement,
   parseDropStatement,
+  parseRenameTableStatement,
   splitSqlStatements,
 } from "./migrationSqlHelpers.js";
 
@@ -106,6 +107,66 @@ function isSupersededDrop(
       created.name === drop.name
     );
   });
+}
+
+/**
+ * Was the object this statement acts on renamed away later in the migration?
+ *
+ * Table rebuilds (the only way to change a column type or add a PRIMARY KEY in
+ * SQLite) are expressed as copy-and-swap:
+ *
+ *   CREATE TABLE t__papr_rebuild (…)      -- new shape
+ *   INSERT INTO t__papr_rebuild SELECT …  -- carry rows over
+ *   ALTER TABLE t RENAME TO t__papr_old
+ *   ALTER TABLE t__papr_rebuild RENAME TO t
+ *   DROP TABLE IF EXISTS t__papr_old
+ *
+ * Verifying statement-by-statement afterwards, the CREATE looks unsatisfied:
+ * `t__papr_rebuild` is gone, because it *became* `t`. That verdict is
+ * permanent — the name can never come back — so cloud sync wedges and every
+ * retry fails identically.
+ *
+ * Only the final state matters, so a statement whose object is renamed away by
+ * a later statement in the same migration is skipped. The rename target is
+ * itself verified when the loop reaches the statement that creates it.
+ */
+function isSupersededByRename(
+  ops: readonly JobMigrationSchemaOp[],
+  index: number,
+): boolean {
+  const op = ops[index];
+  const subject =
+    createdObject(op) ??
+    (op.kind === "sql"
+      ? (() => {
+          const rename = parseRenameTableStatement(op.statement);
+          return rename
+            ? { objectType: "table" as const, name: rename.to }
+            : null;
+        })()
+      : null);
+  if (!subject || subject.objectType !== "table") {
+    return false;
+  }
+  return ops.slice(index + 1).some((later) => {
+    if (later.kind !== "sql") {
+      return false;
+    }
+    const rename = parseRenameTableStatement(later.statement);
+    return rename !== null && rename.from === subject.name;
+  });
+}
+
+/**
+ * A statement is irrelevant to final state when a later statement in the same
+ * migration overwrites its effect. Checking these individually is what made
+ * table rebuilds fail verification forever.
+ */
+function isSuperseded(
+  ops: readonly JobMigrationSchemaOp[],
+  index: number,
+): boolean {
+  return isSupersededDrop(ops, index) || isSupersededByRename(ops, index);
 }
 
 function warnUnverifiable(
@@ -396,7 +457,7 @@ export async function verifyMigrationOnRemote(
   const unverifiable: string[] = [];
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i];
-    if (isSupersededDrop(ops, i)) {
+    if (isSuperseded(ops, i)) {
       continue;
     }
     const check = await schemaOpSatisfiedOnRemote(remote, op);
@@ -434,7 +495,7 @@ export async function verifyMigrationOnLocal(
   const unverifiable: string[] = [];
   for (let i = 0; i < ops.length; i += 1) {
     const op = ops[i];
-    if (isSupersededDrop(ops, i)) {
+    if (isSuperseded(ops, i)) {
       continue;
     }
     const check = schemaOpSatisfiedOnLocal(localDb, op);
