@@ -10,8 +10,16 @@ import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import type { AppRepoOpFile } from "../../../core/types/appRepoWriterOps.js";
-import { filterAbusiveOpFiles } from "../appRepoWriter/abuseFilter.js";
+import {
+  filterAbusiveOpFiles,
+  isNeverTrackRepoPath,
+} from "../appRepoWriter/abuseFilter.js";
 import { resolveAppDependentJobIds } from "../cloudSync/resolveAppDependentJobs.js";
+import {
+  formatGitSyncSizeLimitMb,
+  isTooLargeForGitSync,
+  MAX_GIT_SYNC_FILE_BYTES,
+} from "../cloudSync/gitSyncLimits.js";
 import {
   DATABASES_REGISTRY_FILENAME,
   type DatabaseRecord,
@@ -20,7 +28,7 @@ import {
 } from "../DatabaseRegistryService.js";
 import { parseMonolithicJobJson } from "../jobs/jobRuntimeFields.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
-import { getCachedBlobOid } from "./OidCache.js";
+import { readOidCache } from "./OidCache.js";
 
 const SKIP_DIR_NAMES = new Set([
   "node_modules",
@@ -31,15 +39,24 @@ const SKIP_DIR_NAMES = new Set([
   "venv",
 ]);
 
-const JOB_SKIP_DIR_NAMES = new Set([
-  ...SKIP_DIR_NAMES,
-  "data",
-  "logs",
-]);
+const JOB_SKIP_DIR_NAMES = new Set([...SKIP_DIR_NAMES, "data", "logs"]);
 
 const JOB_SKIP_FILE_NAMES = new Set(["job.runtime.json"]);
 
 const JOB_SKIP_EXTENSIONS = new Set([".db", ".pyc", ".log", ".wal", ".shm"]);
+
+/**
+ * Ceiling on the content a single flush may carry.
+ *
+ * One flush becomes one outbox line and one writer request. Without a ceiling,
+ * an app folder holding a few hundred assets produced a ~400MB op that could
+ * neither be pushed nor held in memory, and every retry rebuilt it. Files past
+ * the budget are deferred to the next flush, so a large app converges over
+ * several passes instead of failing on all of them.
+ *
+ * Sized below the outbox line cap to leave room for JSON escaping.
+ */
+export const MAX_OP_BATCH_CONTENT_BYTES = 6 * 1024 * 1024;
 
 interface WalkCandidate {
   repoPath: string;
@@ -72,7 +89,14 @@ async function walkAppFiles(appDir: string): Promise<string[]> {
         continue;
       }
       if (entry.isFile()) {
-        results.push(rel.replace(/\\/g, "/"));
+        const repoPath = rel.replace(/\\/g, "/");
+        // Excluded here rather than after reading: this walk covers app
+        // folders that hold SQLite databases and their `.bak` copies, and
+        // reading one of those as a string is what exhausted the heap.
+        if (isNeverTrackRepoPath(repoPath)) {
+          continue;
+        }
+        results.push(repoPath);
       }
     }
   }
@@ -81,7 +105,10 @@ async function walkAppFiles(appDir: string): Promise<string[]> {
   return results.sort();
 }
 
-async function walkJobFiles(jobDir: string, jobId: string): Promise<WalkCandidate[]> {
+async function walkJobFiles(
+  jobDir: string,
+  jobId: string,
+): Promise<WalkCandidate[]> {
   const results: WalkCandidate[] = [];
 
   async function walk(currentDir: string, prefix: string): Promise<void> {
@@ -117,6 +144,9 @@ async function walkJobFiles(jobDir: string, jobId: string): Promise<WalkCandidat
       }
 
       const repoPath = `jobs/${jobId}/${rel.replace(/\\/g, "/")}`;
+      if (isNeverTrackRepoPath(repoPath)) {
+        continue;
+      }
       if (entry.name === "job.json") {
         results.push({
           repoPath,
@@ -231,33 +261,61 @@ async function collectSchemaOwnerMigrationCandidates(
   return candidates;
 }
 
+type CandidateOutcome =
+  | { kind: "op"; file: AppRepoOpFile; byteLength: number }
+  | { kind: "unchanged" }
+  | { kind: "rejected"; reason: string };
+
 async function candidateToOpFile(
-  appId: string,
   candidate: WalkCandidate,
-): Promise<AppRepoOpFile | null> {
+  cachedOids: Readonly<Record<string, string>>,
+): Promise<CandidateOutcome> {
   let stat;
   try {
     stat = await fs.stat(candidate.fullPath);
   } catch {
-    return null;
+    return { kind: "unchanged" };
   }
   if (!stat.isFile()) {
-    return null;
+    return { kind: "unchanged" };
+  }
+
+  // Checked before the read, not after. The writer rejects oversized files
+  // anyway, and reading one first only to discard it is how a single large
+  // asset took down the process.
+  if (!candidate.readContent && isTooLargeForGitSync(stat.size)) {
+    return {
+      kind: "rejected",
+      reason: `over ${formatGitSyncSizeLimitMb()} — store it with App Files`,
+    };
   }
 
   const content = candidate.readContent
     ? await candidate.readContent()
     : await fs.readFile(candidate.fullPath, "utf8");
+
+  const byteLength = Buffer.byteLength(content, "utf8");
+  if (byteLength > MAX_GIT_SYNC_FILE_BYTES) {
+    return {
+      kind: "rejected",
+      reason: `over ${formatGitSyncSizeLimitMb()} — store it with App Files`,
+    };
+  }
+
   const currentOid = await computeBlobOidForContent(content);
-  const cachedOid = await getCachedBlobOid(appId, candidate.repoPath);
+  const cachedOid = cachedOids[candidate.repoPath] ?? null;
   if (cachedOid === currentOid) {
-    return null;
+    return { kind: "unchanged" };
   }
 
   return {
-    path: candidate.repoPath,
-    content,
-    parentHash: cachedOid ?? "",
+    kind: "op",
+    byteLength,
+    file: {
+      path: candidate.repoPath,
+      content,
+      parentHash: cachedOid ?? "",
+    },
   };
 }
 
@@ -265,6 +323,8 @@ export interface CollectAppOpFilesResult {
   files: AppRepoOpFile[];
   rejected: Array<{ path: string; reason: string }>;
   skippedUnchanged: number;
+  /** Changed files held back by the batch budget; sent on a later flush. */
+  deferred: number;
 }
 
 /**
@@ -284,22 +344,54 @@ export async function collectAppOpFiles(
   }));
 
   candidates.push(...(await collectLinkedJobCandidates(paprDir, appId)));
-  candidates.push(...(await collectSchemaOwnerMigrationCandidates(paprDir, appId)));
+  candidates.push(
+    ...(await collectSchemaOwnerMigrationCandidates(paprDir, appId)),
+  );
+
+  // Loaded once per flush. Reading it per file meant parsing the whole cache
+  // several hundred times for one app.
+  const cachedOids = (await readOidCache()).apps[appId] ?? {};
 
   const opCandidates: AppRepoOpFile[] = [];
+  const skipped: Array<{ path: string; reason: string }> = [];
   let skippedUnchanged = 0;
+  let deferred = 0;
+  let batchBytes = 0;
 
   for (const candidate of candidates) {
-    const opFile = await candidateToOpFile(appId, candidate);
-    if (!opFile) {
+    if (batchBytes >= MAX_OP_BATCH_CONTENT_BYTES) {
+      deferred += 1;
+      continue;
+    }
+
+    const outcome = await candidateToOpFile(candidate, cachedOids);
+    if (outcome.kind === "unchanged") {
       skippedUnchanged += 1;
       continue;
     }
-    opCandidates.push(opFile);
+    if (outcome.kind === "rejected") {
+      skipped.push({ path: candidate.repoPath, reason: outcome.reason });
+      continue;
+    }
+
+    opCandidates.push(outcome.file);
+    batchBytes += outcome.byteLength;
+  }
+
+  if (deferred > 0) {
+    console.warn(
+      `[collectAppOpFiles] ${appId}: batch budget reached — sending ` +
+        `${opCandidates.length} files, deferring ${deferred} to the next flush.`,
+    );
   }
 
   const { accepted, rejected } = filterAbusiveOpFiles(opCandidates);
-  return { files: accepted, rejected, skippedUnchanged };
+  return {
+    files: accepted,
+    rejected: [...skipped, ...rejected],
+    skippedUnchanged,
+    deferred,
+  };
 }
 
 /** Recompute parentHash from OID cache before outbox replay. */
@@ -307,10 +399,11 @@ export async function refreshOpParentHashes(
   appId: string,
   files: AppRepoOpFile[],
 ): Promise<AppRepoOpFile[]> {
+  const cachedOids = (await readOidCache()).apps[appId] ?? {};
   const refreshed: AppRepoOpFile[] = [];
   for (const file of files) {
-    const cachedOid = await getCachedBlobOid(appId, file.path);
-    let content = file.content;
+    const cachedOid = cachedOids[file.path] ?? null;
+    const content = file.content;
     if (content !== null) {
       const oid = await computeBlobOidForContent(content);
       if (cachedOid === oid) {

@@ -4,11 +4,7 @@
 
 import type { SyncStateManager } from "../cloudSync/syncState.js";
 import { shouldAutoUploadApp } from "../cloudUploadMode.js";
-import {
-  listDeadLetterOutboxEntries,
-  listOutboxEntries,
-  listPendingOutboxEntries,
-} from "./SyncOutbox.js";
+import { listOutboxEntries } from "./SyncOutbox.js";
 import { listRecentWriterConflicts } from "./writerConflict.js";
 import {
   formatFlushQueueDetail,
@@ -172,15 +168,21 @@ export async function buildAppSyncV3Report(
   const autoUpload = shouldAutoUploadApp(appId, paprDir);
   const manualUploadHold = !autoUpload && hasLocalChanges;
 
+  // One read, three views. Reading the queue three times per app meant the
+  // whole file was parsed once per report — and the reports run on launch.
   const outboxEntries = await listOutboxEntries(appId);
-  const pendingWriterOps = outboxEntries.filter((e) => e.status === "pending").length;
-  const inflightWriterOps = outboxEntries.filter((e) => e.status === "inflight").length;
+  const pendingOutbox = outboxEntries.filter((e) => e.status === "pending");
+  const deadLetterOutbox = outboxEntries.filter(
+    (e) => e.status === "dead_letter",
+  );
+  const pendingWriterOps = pendingOutbox.length;
+  const inflightWriterOps = outboxEntries.filter(
+    (e) => e.status === "inflight",
+  ).length;
   const deadLetterWriterOps = outboxEntries.filter(
     (e) => e.status === "dead_letter" || e.status === "failed",
   ).length;
 
-  const deadLetterOutbox = await listDeadLetterOutboxEntries(appId);
-  const pendingOutbox = await listPendingOutboxEntries(appId);
   const conflicts = listRecentWriterConflicts(appId);
   const folderDeadLetter = stateManager.data.deadLetter?.[relativePath];
 
@@ -213,10 +215,7 @@ export async function buildAppSyncV3Report(
     options.flushErrorMessage
   ) {
     status = "failed";
-  } else if (
-    options.coordinatorUploading ||
-    inflightWriterOps > 0
-  ) {
+  } else if (options.coordinatorUploading || inflightWriterOps > 0) {
     status = "uploading";
   } else if (
     !alreadySyncedOnWeb &&

@@ -2,8 +2,6 @@
  * Reject abusive file ops before they reach git (writer door).
  */
 
-import * as path from "node:path";
-
 import {
   MAX_TRACKED_FILE_BYTES,
   NEVER_TRACK_PATHSPECS,
@@ -18,36 +16,52 @@ function normalizeRepoPath(filePath: string): string {
   return filePath.replace(/\\/g, "/").replace(/^\.\/+/, "");
 }
 
-function matchesNeverTrackPathspec(repoPath: string): boolean {
-  const normalized = normalizeRepoPath(repoPath);
-  const base = path.posix.basename(normalized).toLowerCase();
+/**
+ * Match a repo path against the never-track pathspecs.
+ *
+ * Extension specs are anchored to the end of the basename. Matching them as a
+ * bare substring instead — which this did — silently dropped ordinary source
+ * files from sync: `*.db` matched `sandbox.ts`, `*.mov` matched `remove.ts`,
+ * and `*.zip` matched `zipcode.ts`.
+ */
+export function isNeverTrackRepoPath(repoPath: string): boolean {
+  const normalized = normalizeRepoPath(repoPath).toLowerCase();
+  const segments = normalized.split("/");
+  const base = segments[segments.length - 1] ?? "";
+  const dirSegments = segments.slice(0, -1);
 
   for (const spec of NEVER_TRACK_PATHSPECS) {
-    const trimmed = spec.replace(/^\*\./, "");
-    if (spec.startsWith("**/")) {
-      if (normalized.includes(spec.slice(3))) {
+    const lower = spec.toLowerCase();
+
+    if (lower.endsWith("/")) {
+      const dirName = lower.replace(/^\*\*\//, "").slice(0, -1);
+      if (dirSegments.includes(dirName)) {
         return true;
       }
       continue;
     }
-    if (spec.endsWith("/")) {
-      if (normalized.startsWith(spec) || normalized.includes(`/${spec}`)) {
+
+    if (lower.startsWith("*.")) {
+      const suffix = lower.slice(1);
+      // "*.bak.*" — an infix such as `db.bak.2026-01-01`.
+      if (suffix.endsWith(".*")) {
+        if (base.includes(suffix.slice(0, -1))) {
+          return true;
+        }
+        continue;
+      }
+      if (base.endsWith(suffix)) {
         return true;
       }
       continue;
     }
-    if (spec.startsWith("*.")) {
-      if (base.endsWith(trimmed) || base.includes(trimmed)) {
-        return true;
-      }
+
+    if (base === lower) {
+      return true;
     }
   }
 
-  if (base.startsWith("tmp_pack_")) {
-    return true;
-  }
-
-  return false;
+  return base.startsWith("tmp_pack_");
 }
 
 export function validateOpFileForWriter(input: {
@@ -60,13 +74,12 @@ export function validateOpFileForWriter(input: {
     return { path: input.path, reason: "invalid path" };
   }
 
-  if (matchesNeverTrackPathspec(repoPath)) {
+  if (isNeverTrackRepoPath(repoPath)) {
     return { path: repoPath, reason: "path blocked by repo hygiene rules" };
   }
 
   if (input.content !== null) {
-    const bytes =
-      input.byteLength ?? Buffer.byteLength(input.content, "utf8");
+    const bytes = input.byteLength ?? Buffer.byteLength(input.content, "utf8");
     if (bytes > MAX_TRACKED_FILE_BYTES) {
       return {
         path: repoPath,
@@ -78,9 +91,9 @@ export function validateOpFileForWriter(input: {
   return null;
 }
 
-export function filterAbusiveOpFiles<T extends { path: string; content: string | null }>(
-  files: readonly T[],
-): { accepted: T[]; rejected: AbuseRejection[] } {
+export function filterAbusiveOpFiles<
+  T extends { path: string; content: string | null },
+>(files: readonly T[]): { accepted: T[]; rejected: AbuseRejection[] } {
   const accepted: T[] = [];
   const rejected: AbuseRejection[] = [];
   for (const file of files) {

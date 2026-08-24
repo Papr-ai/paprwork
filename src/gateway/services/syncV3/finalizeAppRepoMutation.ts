@@ -32,6 +32,8 @@ export interface FinalizeAppRepoMutationResult {
   commitSha?: string;
   catalogSynced: boolean;
   catalogError?: string;
+  /** Files held back by the batch budget — this app needs another flush. */
+  deferred: number;
 }
 
 export async function finalizeAppRepoMutation(
@@ -39,9 +41,8 @@ export async function finalizeAppRepoMutation(
   appId: string,
   options: FinalizeAppRepoMutationOptions,
 ): Promise<FinalizeAppRepoMutationResult> {
-  const { prepareAppForCloudGitSync } = await import(
-    "../cloudSync/prepareAppsForCloud.js"
-  );
+  const { prepareAppForCloudGitSync } =
+    await import("../cloudSync/prepareAppsForCloud.js");
   await prepareAppForCloudGitSync(paprDir, appId);
   await reconcilePlatformCatalogManifest(paprDir, appId);
 
@@ -84,7 +85,9 @@ export async function finalizeAppRepoMutation(
 
   if (pushResult.commitSha) {
     const { uploadAppDbConfigToCloud } = await import("./appDbConfigUpload.js");
-    void uploadAppDbConfigToCloud(paprDir, appId, pushResult.commitSha).catch(() => {});
+    void uploadAppDbConfigToCloud(paprDir, appId, pushResult.commitSha).catch(
+      () => {},
+    );
   }
 
   return {
@@ -93,5 +96,6 @@ export async function finalizeAppRepoMutation(
     commitSha: pushResult.commitSha,
     catalogSynced,
     catalogError,
+    deferred: pushResult.deferred,
   };
 }
