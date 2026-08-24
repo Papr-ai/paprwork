@@ -100,6 +100,36 @@ export function createMigrationMockRemote(
         return { rows: [], columns: [], rowsAffected: 0 };
       }
 
+      // Table rebuilds swap a scratch table over the original by renaming.
+      const renameMatch =
+        /^ALTER TABLE (?:"([^"]+)"|'([^']+)'|(\S+)) RENAME TO (?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
+          sql.trim(),
+        );
+      if (renameMatch) {
+        const from = renameMatch[1] ?? renameMatch[2] ?? renameMatch[3];
+        const to = renameMatch[4] ?? renameMatch[5] ?? renameMatch[6];
+        const cols = columnsByTable.get(from!);
+        if (cols) {
+          columnsByTable.delete(from!);
+          columnsByTable.set(to!, cols);
+        }
+        return { rows: [], columns: [], rowsAffected: 0 };
+      }
+
+      const dropTableMatch =
+        /^DROP TABLE(?: IF EXISTS)? (?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(sql.trim());
+      if (dropTableMatch) {
+        const table =
+          dropTableMatch[1] ?? dropTableMatch[2] ?? dropTableMatch[3];
+        columnsByTable.delete(table!);
+        return { rows: [], columns: [], rowsAffected: 0 };
+      }
+
+      const insertSelectMatch = /^INSERT (?:OR IGNORE )?INTO /i.exec(sql.trim());
+      if (insertSelectMatch) {
+        return { rows: [], columns: [], rowsAffected: 0 };
+      }
+
       const addMatch =
         /^ALTER TABLE (?:"([^"]+)"|'([^']+)'|(\S+)) ADD COLUMN (?:"([^"]+)"|'([^']+)'|(\S+))/i.exec(
           sql.trim(),
