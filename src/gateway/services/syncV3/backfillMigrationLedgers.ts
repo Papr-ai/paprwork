@@ -162,6 +162,9 @@ async function countRemoteSyncableTables(
     const result = await remote.execute(
       `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
     );
+    // Synchronous mapping over an already-awaited result — safe to return
+    // directly. Any async call here would need `await` so the finally does
+    // not close the client mid-flight.
     return filterSyncableTables(
       result.rows.map((row) => String(row.name ?? "")),
     ).length;

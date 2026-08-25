@@ -378,7 +378,15 @@ async function listDriftedTableNames(
   const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
     const tableNames = filterSyncableTables(listUserTables(localDb));
-    return localRemoteUserSchemaDriftTables(
+    // MUST await before the finally closes the client.
+    //
+    // `return promise` inside try/finally resolves the promise AFTER the
+    // finally block runs, so the local DB and the libSQL client were both
+    // closed while the drift scan was still issuing queries against them.
+    // The scan then died with "Client was manually closed" and the whole
+    // push reported failed — on every attempt, for any app whose replica
+    // had drifted.
+    return await localRemoteUserSchemaDriftTables(
       remoteHandle.remote,
       localDb,
       tableNames,
