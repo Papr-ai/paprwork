@@ -28,7 +28,7 @@ Packaged apps also load defaults at runtime if `packaged-gateway-env.json` is em
 | --- | --- | --- |
 | `PAPR_API_KEY` | keychain | Always — Papr login provisions this |
 | `PAPR_MEMORY_SERVER_URL` | `https://memory.papr.ai` | Non-default memory server |
-| `PAPR_APP_REPO_WRITER_URL` | `http://127.0.0.1:8789` | Production Cloud Run writer URL |
+| `PAPR_APP_REPO_WRITER_URL` | Cloud Run writer (built-in) | Only to override — e.g. `http://127.0.0.1:8789` for local writer dev |
 | `PAPR_CLOUD_APP_HOST_KEY` | packaged JSON / `.env.local` | Notify `apps.papr.ai` after DB/code sync (not user API key) |
 
 **Auth:** Desktop calls app-repo-writer with the user's `PAPR_API_KEY` only. Writer validates namespace ACL via memory server RepoRegistry — no shared writer secret on the open-source client (same idea as cloud-app-host using a server-side key to call memory, not the reverse).

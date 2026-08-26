@@ -15,7 +15,7 @@ import {
 } from "../../../core/types/appRepoWriterOps.js";
 import { getPaprApiKey } from "../../utils/keyResolver.js";
 import { applyAckedBlobOids, seedOidCacheFromHead } from "./OidCache.js";
-import { getAppRepoWriterBaseUrl } from "./writerConfig.js";
+import { getAppRepoWriterBaseUrl, isLocalAppRepoWriter } from "./writerConfig.js";
 import { incrementSyncV3Metric } from "./syncV3Metrics.js";
 import { invalidateWriterConflictPaths } from "./writerConflict.js";
 
@@ -62,10 +62,11 @@ async function writerFetch(
     "X-API-Key": apiKey,
   };
 
+  const baseUrl = getAppRepoWriterBaseUrl();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), WRITER_FETCH_TIMEOUT_MS);
   try {
-    return await fetch(`${getAppRepoWriterBaseUrl()}${route}`, {
+    return await fetch(`${baseUrl}${route}`, {
       ...init,
       headers: { ...headers, ...(init.headers as Record<string, string>) },
       signal: controller.signal,
@@ -78,7 +79,17 @@ async function writerFetch(
         `Writer request timed out after ${Math.round(WRITER_FETCH_TIMEOUT_MS / 1000)}s`,
       );
     }
-    throw err;
+    // Bare `fetch failed` hides the URL, so a wrong/unreachable writer looks
+    // like a generic sync bug. Name the host and the likely cause.
+    const cause = err instanceof Error ? err.message : String(err);
+    const hint = isLocalAppRepoWriter()
+      ? " Local writer is not running — start it with `npm run start:app-repo-writer`, or unset PAPR_APP_REPO_WRITER_URL to use the Papr Cloud writer."
+      : " Check your network connection and try Upload now again.";
+    throw new AppOpsClientError(
+      "writer",
+      503,
+      `Cannot reach app-repo-writer at ${baseUrl}: ${cause}.${hint}`,
+    );
   } finally {
     clearTimeout(timer);
   }
