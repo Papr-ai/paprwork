@@ -122,9 +122,11 @@ export function WebSyncPopover({
   const queuedForUpload = status?.uploadQueued === true;
   const showMergeReview = remoteReviewNeeded && !metadataSync;
   const showWriterConflict = writerConflict && !showMergeReview && !metadataSync;
+  // status is null until the first sync check resolves, and this runs above
+  // the `!status` guard below — keep it optional-chained.
   const schemaDriftBlocked =
-    status.hasSchemaDrift ||
-    (status.publishDetail?.toLowerCase().includes("schema") ?? false);
+    status?.hasSchemaDrift === true ||
+    (status?.publishDetail?.toLowerCase().includes("schema") ?? false);
   const showSchemaDriftHelp =
     schemaDriftBlocked && !showMergeReview && !showWriterConflict && !metadataSync;
   const showAutoUploadToggle =
@@ -137,7 +139,9 @@ export function WebSyncPopover({
     ? `mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked ${className}`
     : "mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked";
 
-  if (loading && !status) {
+  // No status yet (first open, or a check that has not resolved): show the
+  // shell with Upload now rather than rendering nothing on click.
+  if (!status) {
     return (
       <div
         ref={popoverRef}
@@ -161,10 +165,6 @@ export function WebSyncPopover({
         </div>
       </div>
     );
-  }
-
-  if (!status) {
-    return null;
   }
 
   const commitSummary =
