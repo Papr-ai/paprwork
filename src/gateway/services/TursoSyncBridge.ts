@@ -670,6 +670,17 @@ export class TursoSyncBridge {
               pushResult.lastPushedLogId,
             );
           }
+        } else if (pushResult.status === "failed") {
+          // Counting a failed push as "skipped" hid real sync failures
+          // behind a clean-looking summary.
+          summary.failed += 1;
+          if (pushResult.error) {
+            result.error = pushResult.error;
+          }
+          console.warn(
+            `[TursoSyncBridge] scoped push failed for ${syncKey}:`,
+            (pushResult.error ?? "").slice(0, 120),
+          );
         } else {
           summary.skipped += 1;
         }
@@ -895,6 +906,13 @@ export class TursoSyncBridge {
                 undefined,
                 pushResult.lastPushedLogId,
               );
+            }
+          } else if (pushResult.status === "failed") {
+            // A failed push counted as "skipped" made the sync panel look
+            // calm while nothing reached the cloud. Report it as failed.
+            summary.failed += 1;
+            if (pushResult.error) {
+              result.error = pushResult.error;
             }
           } else {
             summary.skipped += 1;
