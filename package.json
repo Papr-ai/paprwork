@@ -241,7 +241,7 @@
     "cross-env": "^7.0.3",
     "dotenv": "^17.2.4",
     "electron": "^40.8.5",
-    "electron-builder": "^26.7.0",
+    "electron-builder": "^26.15.3",
     "electron-vite": "^5.0.0",
     "empty-module": "^0.0.2",
     "happy-dom": "^17.6.1",
