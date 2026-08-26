@@ -68,11 +68,15 @@ export async function appHasLinkedSchemaDrift(
   appId: string,
   paprDir: string,
 ): Promise<boolean> {
+  const syncKeys = listAppLinkedSyncKeys(appId, paprDir);
+  if (syncKeys.size === 0) {
+    return false;
+  }
   const appsRoot = path.join(paprDir, "apps");
   const { buildTursoSyncItemsReport } = await import("../tursoSyncStatus.js");
   const report = await buildTursoSyncItemsReport(appsRoot, appId);
   return report.sources.some(
-    (source) => source.appId === appId && source.schemaDrift === true,
+    (source) => syncKeys.has(source.jobId) && source.schemaDrift === true,
   );
 }
 

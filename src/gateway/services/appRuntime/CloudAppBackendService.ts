@@ -9,11 +9,13 @@
 import { createHash } from "node:crypto";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
 import { sanitizeError } from "../../../core/tools/security.js";
+import { filterVaultKeyNames } from "../../../core/utils/platformInjectedEnvKeys.js";
 import { parseAppBackendManifest } from "./appBackendManifest.js";
 import {
   buildBackendActionEnv,
   resolveActionTimeoutMs,
   runBackendHandler,
+  type MiniAppCallerIdentity,
 } from "./appBackendRunner.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 import {
@@ -45,6 +47,8 @@ export class CloudAppBackendService {
       params?: Record<string, string>;
       timeoutMs?: number;
       bypassFresh?: boolean;
+      callerIdentity?: MiniAppCallerIdentity;
+      loggedIn?: boolean;
     },
   ): Promise<AppBackendRunResult & { action: string }> {
     const actionName = input.action.trim();
@@ -97,10 +101,11 @@ export class CloudAppBackendService {
       }
     }
 
+    const vaultKeyNames = filterVaultKeyNames(spec.keys ?? []);
     const { env: vaultEnv, missing } = await resolveRuntimeVaultEnv(auth, {
-      keyNames: spec.keys,
+      keyNames: vaultKeyNames,
     });
-    if (spec.keys?.length && missing.length > 0) {
+    if (vaultKeyNames.length && missing.length > 0) {
       throw new Error(
         `Missing vault keys for action ${actionName}: ${missing.join(", ")}. ` +
           "Ensure the key exists in Settings → Integration Keys, is declared in backend/manifest.json " +
@@ -133,6 +138,8 @@ export class CloudAppBackendService {
       params: input.params,
       vaultEnv,
       databaseEnv,
+      callerIdentity: input.callerIdentity,
+      loggedIn: input.loggedIn,
     });
 
     const result = await runBackendHandler({

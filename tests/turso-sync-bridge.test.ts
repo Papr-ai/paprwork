@@ -23,9 +23,12 @@ import {
   type LocalTable,
 } from "../src/gateway/services/tursoSyncBridgeCore.js";
 import {
+  dedupeLinkedSourcesBySyncKey,
   discoverTursoLinkedSources,
+  listAppsLinkingDbPath,
   listLinkedJobIdsForTursoSync,
 } from "../src/gateway/services/tursoLinkedSources.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 let canUseBetterSqlite = false;
 try {
@@ -313,8 +316,17 @@ describe("tursoSyncBridgeCore", () => {
 });
 
 describe("tursoLinkedSources", () => {
+  const workspace = useIsolatedPaprWorkspace("turso-linked-sources");
+
   it("discovers primary linked sources and skips scratch", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-apps-"));
+    const root = path.join(workspace.paprHome, "apps");
+    const jobADb = path.join(workspace.paprHome, "Jobs", "job-a", "data", "data.db");
+    const jobBDb = path.join(workspace.paprHome, "Jobs", "job-b", "data", "data.db");
+    const jobCDb = path.join(workspace.paprHome, "Jobs", "job-c", "data", "data.db");
+    for (const dbPath of [jobADb, jobBDb, jobCDb]) {
+      fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+      fs.writeFileSync(dbPath, "sqlite");
+    }
     const appDir = path.join(root, "app-1");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
@@ -327,7 +339,7 @@ describe("tursoLinkedSources", () => {
             type: "sqlite",
             jobId: "job-a",
             alias: "main",
-            dbPath: "/tmp/job-a/data.db",
+            dbPath: jobADb,
             tables: [],
             linkedAt: "2026-01-01T00:00:00.000Z",
             role: "primary",
@@ -337,7 +349,7 @@ describe("tursoLinkedSources", () => {
             type: "sqlite",
             jobId: "job-b",
             alias: "scratch",
-            dbPath: "/tmp/job-b/data.db",
+            dbPath: jobBDb,
             tables: [],
             linkedAt: "2026-01-01T00:00:00.000Z",
             role: "scratch",
@@ -361,7 +373,7 @@ describe("tursoLinkedSources", () => {
           type: "sqlite",
           jobId: "job-c",
           alias: "legacy",
-          dbPath: "/tmp/job-c/data.db",
+          dbPath: jobCDb,
           tables: [],
           linkedAt: "2026-01-01T00:00:00.000Z",
         },
@@ -369,13 +381,60 @@ describe("tursoLinkedSources", () => {
     );
     const all = await discoverTursoLinkedSources(root);
     expect(all.map((s) => s.jobId).sort()).toEqual(["job-a", "job-c"]);
+  });
 
-    fs.rmSync(root, { recursive: true, force: true });
+  it("returns one entry per app when multiple apps link the same registry db", async () => {
+    const root = path.join(workspace.paprHome, "apps");
+    fs.mkdirSync(root, { recursive: true });
+    const sharedDbPath = path.join(
+      workspace.paprHome,
+      "data",
+      "databases",
+      "sqa",
+      "data.db",
+    );
+    fs.mkdirSync(path.dirname(sharedDbPath), { recursive: true });
+    fs.writeFileSync(sharedDbPath, "sqlite");
+    const dbId = "db-shared01";
+    for (const appId of ["app-a", "app-b"]) {
+      const appDir = path.join(root, appId);
+      fs.mkdirSync(appDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(appDir, "data-sources.json"),
+        JSON.stringify({
+          primary: "sqa",
+          sources: [
+            {
+              id: `${dbId}:sqa`,
+              type: "sqlite",
+              dbId,
+              alias: "sqa",
+              dbPath: sharedDbPath,
+              tables: [],
+              linkedAt: "2026-01-01T00:00:00.000Z",
+              role: "primary",
+            },
+          ],
+        }),
+      );
+    }
+
+    const sources = await discoverTursoLinkedSources(root);
+    expect(sources).toHaveLength(2);
+    expect(sources.map((s) => s.appId).sort()).toEqual(["app-a", "app-b"]);
+    expect(new Set(sources.map((s) => s.dbPath)).size).toBe(1);
+
+    const linkingApps = listAppsLinkingDbPath(sources, sharedDbPath);
+    expect(linkingApps).toEqual(["app-a", "app-b"]);
+
+    const pushTargets = dedupeLinkedSourcesBySyncKey(sources);
+    expect(pushTargets).toHaveLength(1);
+    expect(pushTargets[0]?.dbId).toBe(dbId);
   });
 
   it("listLinkedJobIdsForTursoSync only returns jobs with existing db files", async () => {
-    const appsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "papr-apps-"));
-    const jobsRoot = fs.mkdtempSync(path.join(os.tmpdir(), "papr-jobs-"));
+    const appsRoot = path.join(workspace.paprHome, "apps");
+    const jobsRoot = path.join(workspace.paprHome, "Jobs");
     const jobId = "linked-job";
     const dbPath = path.join(jobsRoot, jobId, "data", "data.db");
     fs.mkdirSync(path.dirname(dbPath), { recursive: true });
@@ -400,8 +459,5 @@ describe("tursoLinkedSources", () => {
 
     const jobIds = await listLinkedJobIdsForTursoSync(appsRoot);
     expect(jobIds).toEqual([jobId]);
-
-    fs.rmSync(appsRoot, { recursive: true, force: true });
-    fs.rmSync(jobsRoot, { recursive: true, force: true });
   });
 });

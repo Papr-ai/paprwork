@@ -2385,6 +2385,16 @@ const deleteAppSchema = z.object({
     .boolean()
     .optional()
     .describe("Set true to also delete Turso cloud databases for the deleted jobs."),
+  deleteRegistryDbIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Registry dbIds to delete (only when sole linker — no other app uses the DB). Get dbIds from preview linkedRegistryDatabases where soleLinker=true.",
+    ),
+  deleteRegistryTurso: z
+    .boolean()
+    .optional()
+    .describe("Set true to delete Turso replicas for deleteRegistryDbIds."),
   confirmed: z
     .boolean()
     .optional()
@@ -2404,6 +2414,7 @@ export const deleteAppTool = createTool({
 If the app is published to the web, set unpublishFromCloud: true.
 If the app has linked jobs, set deleteLinkedJobs: true to also delete them.
 If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete those too.
+**Registry databases:** Preview includes linkedRegistryDatabases. Shared DBs (other apps link same dbId) are NOT deleted — warn the user. Sole-linker DBs can be removed with deleteRegistryDbIds + deleteRegistryTurso.
 
 **Prefer this over bash/rm** when removing an app: deleting files only leaves stale entries in the apps list until the registry is reconciled.`,
   inputSchema: deleteAppSchema,
@@ -2418,6 +2429,8 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
       unpublishFromCloud: args.unpublishFromCloud === true,
       deleteLinkedJobs: args.deleteLinkedJobs === true,
       deleteTursoDatabases: args.deleteTursoDatabases === true,
+      deleteRegistryDbIds: args.deleteRegistryDbIds,
+      deleteRegistryTurso: args.deleteRegistryTurso === true,
       confirmed: args.confirmed === true,
     });
     // Return preview for confirmation
@@ -2427,15 +2440,29 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
       if (preview.isPublished) {
         items.push(`Published at: ${preview.shareUrl ?? "apps.papr.ai"}`);
       }
+      for (const db of preview.linkedRegistryDatabases) {
+        if (db.soleLinker) {
+          items.push(
+            `Registry DB (sole linker, optional delete): ${db.label} (${db.dbId})`,
+          );
+        } else if (db.sharedWithApps.length > 0) {
+          items.push(
+            `Registry DB (shared, kept): ${db.label} — also used by ${db.sharedWithApps.map((a) => a.title).join(", ")}`,
+          );
+        }
+      }
       if (preview.linkedJobs.length > 0) {
         items.push(`Linked jobs (${preview.linkedJobs.length}): ${preview.linkedJobs.map(j => j.name).join(", ")}`);
       }
       if (preview.tursoDbCount > 0) {
-        items.push(`Turso cloud databases: ${preview.tursoDbCount}`);
+        items.push(`Job Turso cloud databases: ${preview.tursoDbCount}`);
       }
+      const soleLinkerIds = preview.linkedRegistryDatabases
+        .filter((db) => db.soleLinker)
+        .map((db) => db.dbId);
       return {
         success: false,
-        error: `Confirm deletion with user. What will be deleted:\n${items.join("\n")}\n\nAfter confirmation, call delete_app again with confirmed: true and appropriate options (unpublishFromCloud, deleteLinkedJobs, deleteTursoDatabases).`,
+        error: `Confirm deletion with user. What will be deleted:\n${items.join("\n")}\n\nAfter confirmation, call delete_app again with confirmed: true and appropriate options (unpublishFromCloud, deleteLinkedJobs, deleteTursoDatabases, deleteRegistryDbIds, deleteRegistryTurso).${soleLinkerIds.length > 0 ? `\nSole-linker registry dbIds: ${soleLinkerIds.join(", ")}` : ""}`,
         data: {
           preview: true,
           appId: preview.appId,
@@ -2444,6 +2471,8 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
           shareUrl: preview.shareUrl ?? null,
           linkedJobs: preview.linkedJobs,
           tursoDbCount: preview.tursoDbCount,
+          linkedRegistryDatabases: preview.linkedRegistryDatabases,
+          soleLinkerRegistryDbIds: soleLinkerIds,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
@@ -2465,6 +2494,8 @@ If jobs have Turso cloud databases, set deleteTursoDatabases: true to delete tho
         unpublished: result.unpublished === true,
         deletedJobCount: result.deletedJobCount ?? 0,
         deletedTursoDbCount: result.deletedTursoDbCount ?? 0,
+        deletedRegistryDbCount: result.deletedRegistryDbCount ?? 0,
+        deletedRegistryTursoCount: result.deletedRegistryTursoCount ?? 0,
       },
       duration: performance.now() - startTime,
       timestamp: new Date().toISOString(),

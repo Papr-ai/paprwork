@@ -21,6 +21,10 @@ export interface PublishedAppResolveResult {
   linkPermission: "read" | "read_write";
   /** Public Community apps may require Papr sign-in while staying listed. */
   requireSignIn?: boolean;
+  /** Publish catalog branding — available without repo-file access. */
+  catalogTitle?: string;
+  catalogDescription?: string;
+  catalogIcon?: string;
 }
 
 function memoryHeaders(sessionToken?: string): Record<string, string> {

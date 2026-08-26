@@ -2,12 +2,13 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const mockBridge = {
+  enabled: true,
   getAppsRootDir: () => "/tmp/apps",
   listLinkedSources: vi.fn(async () => []),
 };
 
 vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
-  getTursoSyncBridge: vi.fn(() => mockBridge),
+  ensureTursoSyncBridge: vi.fn(() => mockBridge),
 }));
 
 vi.mock("../src/gateway/services/cloudUploadMode.js", () => ({

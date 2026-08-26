@@ -27,10 +27,11 @@ import { alignMigrationLedgers } from "../jobs/jobMigrationLedgerSync.js";
 import { localRemoteUserSchemaDriftTables } from "../tursoDeltaSync.js";
 import { userSchemaColumns } from "../tursoTableFingerprint.js";
 import type { TursoLinkedSource } from "../tursoLinkedSources.js";
-import { getTursoSyncBridge } from "../TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
 import { yieldEventLoop } from "../cloudSync/yieldEventLoop.js";
 import {
   shipSchemaDriftHealPayload,
+  shipSchemaMigrationBatch,
   shipSchemaMigrationForDbPath,
 } from "./shipSchemaMigrationLog.js";
 import { computeSchemaPayloadContentHash } from "../jobs/migrationContentHash.js";
@@ -39,6 +40,10 @@ import { resolveReplicaIdForLinkedSource } from "./workspaceLogSync.js";
 
 const DRIFT_HEAL_PREFIX = "__schema_drift_heal__";
 
+function linkedSourceLabel(linked: TursoLinkedSource): string {
+  return linked.alias ?? linked.jobId ?? linked.dbId ?? linked.dbPath;
+}
+
 async function openRemoteClient(
   linked: TursoLinkedSource,
 ): Promise<{ remote: Client; close: () => void } | null> {
@@ -46,8 +51,8 @@ async function openRemoteClient(
   if (!replicaId) {
     return null;
   }
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return null;
   }
   const credentials = await bridge.fetchCredentials(replicaId);
@@ -56,6 +61,21 @@ async function openRemoteClient(
     authToken: credentials.authToken,
   });
   return { remote, close: () => remote.close() };
+}
+
+async function withRemoteClient<T>(
+  linked: TursoLinkedSource,
+  operation: (remote: Client) => Promise<T>,
+): Promise<T | null> {
+  const handle = await openRemoteClient(linked);
+  if (!handle) {
+    return null;
+  }
+  try {
+    return await operation(handle.remote);
+  } finally {
+    handle.close();
+  }
 }
 
 const REBUILD_SUFFIX = "__papr_rebuild";
@@ -239,22 +259,14 @@ async function buildColumnDriftHealOps(
   return ops;
 }
 
-/** Ship schema log entries for locally applied migrations not satisfied on Turso. */
-export async function shipUnsatisfiedSchemaMigrations(
+async function listUnsatisfiedMigrationIds(
+  remote: Client,
   linked: TursoLinkedSource,
-): Promise<number> {
-  if (!isSyncV3SchemaLogEnabled()) {
-    return 0;
-  }
+): Promise<string[]> {
   const dbPath = linked.dbPath;
   const migrationRoot = resolveMigrationRootFromDbPath(dbPath);
   if (!migrationRoot) {
-    return 0;
-  }
-
-  const remoteHandle = await openRemoteClient(linked);
-  if (!remoteHandle) {
-    return 0;
+    return [];
   }
 
   let localApplied: string[] = [];
@@ -268,36 +280,67 @@ export async function shipUnsatisfiedSchemaMigrations(
   }
 
   const unsatisfied: string[] = [];
-  try {
-    for (const migrationId of localApplied) {
-      if (shouldSkipMigrationForRemoteLedger(migrationId)) {
-        continue;
-      }
-      const hasExecutable = await migrationHasExecutableOps(
-        migrationRoot,
-        migrationId,
-      );
-      if (!hasExecutable) {
-        continue;
-      }
-      const satisfied = await migrationSatisfiedOnRemote(
-        remoteHandle.remote,
-        migrationRoot,
-        migrationId,
-      );
-      if (!satisfied) {
-        unsatisfied.push(migrationId);
-      }
+  for (const migrationId of localApplied) {
+    if (shouldSkipMigrationForRemoteLedger(migrationId)) {
+      continue;
     }
-  } finally {
-    remoteHandle.close();
+    const hasExecutable = await migrationHasExecutableOps(
+      migrationRoot,
+      migrationId,
+    );
+    if (!hasExecutable) {
+      continue;
+    }
+    const satisfied = await migrationSatisfiedOnRemote(
+      remote,
+      migrationRoot,
+      migrationId,
+    );
+    if (!satisfied) {
+      unsatisfied.push(migrationId);
+    }
   }
+  return unsatisfied;
+}
 
-  if (unsatisfied.length === 0) {
+/** Ship schema log entries for locally applied migrations not satisfied on Turso. */
+export async function shipUnsatisfiedSchemaMigrations(
+  linked: TursoLinkedSource,
+): Promise<number> {
+  if (!isSyncV3SchemaLogEnabled()) {
+    return 0;
+  }
+  const dbPath = linked.dbPath;
+  const unsatisfied = await withRemoteClient(linked, (remote) =>
+    listUnsatisfiedMigrationIds(remote, linked),
+  );
+  if (!unsatisfied || unsatisfied.length === 0) {
     return 0;
   }
 
   return shipSchemaMigrationForDbPath(linked, dbPath, unsatisfied);
+}
+
+async function buildDriftHealOpsIfNeeded(
+  remote: Client,
+  linked: TursoLinkedSource,
+): Promise<JobMigrationSchemaOp[]> {
+  const dbPath = linked.dbPath;
+  const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const tableNames = filterSyncableTables(listUserTables(localDb));
+    const driftedTables = await localRemoteUserSchemaDriftTables(
+      remote,
+      localDb,
+      tableNames,
+    );
+    if (driftedTables.length === 0) {
+      return [];
+    }
+    return await buildColumnDriftHealOps(remote, localDb, driftedTables);
+  } finally {
+    localDb.close();
+  }
 }
 
 /** Ship column-diff heal ops when migrations are ledger-satisfied but schema still drifts. */
@@ -307,48 +350,10 @@ export async function healSchemaDriftIfNeeded(
   if (!isSyncV3SchemaLogEnabled()) {
     return 0;
   }
-  const dbPath = linked.dbPath;
-  const remoteHandle = await openRemoteClient(linked);
-  if (!remoteHandle) {
-    return 0;
-  }
-
-  const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
-  let driftedTables: string[] = [];
-  try {
-    const tableNames = filterSyncableTables(listUserTables(localDb));
-    driftedTables = await localRemoteUserSchemaDriftTables(
-      remoteHandle.remote,
-      localDb,
-      tableNames,
-    );
-  } finally {
-    localDb.close();
-    remoteHandle.close();
-  }
-
-  if (driftedTables.length === 0) {
-    return 0;
-  }
-
-  const remoteHandle2 = await openRemoteClient(linked);
-  if (!remoteHandle2) {
-    return 0;
-  }
-  const localDb2 = new Database(dbPath, { readonly: true, fileMustExist: true });
-  let ops: JobMigrationSchemaOp[] = [];
-  try {
-    ops = await buildColumnDriftHealOps(
-      remoteHandle2.remote,
-      localDb2,
-      driftedTables,
-    );
-  } finally {
-    localDb2.close();
-    remoteHandle2.close();
-  }
-
-  if (ops.length === 0) {
+  const ops = await withRemoteClient(linked, (remote) =>
+    buildDriftHealOpsIfNeeded(remote, linked),
+  );
+  if (!ops || ops.length === 0) {
     return 0;
   }
 
@@ -378,7 +383,7 @@ async function listDriftedTableNames(
   const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
     const tableNames = filterSyncableTables(listUserTables(localDb));
-    return localRemoteUserSchemaDriftTables(
+    return await localRemoteUserSchemaDriftTables(
       remoteHandle.remote,
       localDb,
       tableNames,
@@ -420,42 +425,91 @@ export async function waitForLinkedSourceSchemaConvergence(
   return { converged: driftedTables.length === 0, driftedTables };
 }
 
-/** Backfill ledgers when Turso already has tables from legacy sync (avoid re-shipping DDL). */
-async function alignMigrationLedgersIfNeeded(
-  linked: TursoLinkedSource,
-): Promise<void> {
-  const migrationRoot = resolveMigrationRootFromDbPath(linked.dbPath);
-  if (!migrationRoot) {
-    return;
-  }
-  const remoteHandle = await openRemoteClient(linked);
-  if (!remoteHandle) {
-    return;
-  }
-  try {
-    await alignMigrationLedgers(
-      remoteHandle.remote,
-      linked.dbPath,
-      migrationRoot,
-    );
-  } finally {
-    remoteHandle.close();
-  }
-  await yieldEventLoop();
-}
-
 export async function runSchemaDriftHeal(
   linked: TursoLinkedSource,
 ): Promise<number> {
-  await alignMigrationLedgersIfNeeded(linked);
+  if (!isSyncV3SchemaLogEnabled()) {
+    return 0;
+  }
+
+  const label = linkedSourceLabel(linked);
+  console.log(`[SchemaDriftHeal] Starting for ${label}`);
+
+  const remoteWork = await withRemoteClient(linked, async (remote) => {
+    const migrationRoot = resolveMigrationRootFromDbPath(linked.dbPath);
+    if (migrationRoot) {
+      console.log(`[SchemaDriftHeal] Phase alignMigrationLedgers for ${label}`);
+      await alignMigrationLedgers(remote, linked.dbPath, migrationRoot);
+      await yieldEventLoop();
+    }
+
+    console.log(
+      `[SchemaDriftHeal] Phase listUnsatisfiedMigrationIds for ${label}`,
+    );
+    const unsatisfied = await listUnsatisfiedMigrationIds(remote, linked);
+    if (unsatisfied.length > 0) {
+      console.log(
+        `[SchemaDriftHeal] Unsatisfied migrations for ${label}: ${unsatisfied.join(", ")}`,
+      );
+    }
+
+    console.log(`[SchemaDriftHeal] Phase buildDriftHealOps for ${label}`);
+    const healOps = await buildDriftHealOpsIfNeeded(remote, linked);
+    if (healOps.length > 0) {
+      console.log(
+        `[SchemaDriftHeal] Column heal ops for ${label}: ${healOps.length}`,
+      );
+    }
+
+    return { unsatisfied, healOps };
+  });
+
+  if (!remoteWork) {
+    console.warn(
+      `[SchemaDriftHeal] Skipped ${label} — Turso remote client unavailable`,
+    );
+    return 0;
+  }
 
   let shipped = 0;
-  shipped += await shipUnsatisfiedSchemaMigrations(linked);
-  await yieldEventLoop();
-  shipped += await healSchemaDriftIfNeeded(linked);
+  const migrationCount = remoteWork.unsatisfied.length;
+  const healCount = remoteWork.healOps.length > 0 ? 1 : 0;
+  const batchCount = migrationCount + healCount;
+
+  if (batchCount > 0) {
+    if (linked.appId) {
+      const { reportFlushProgress } = await import(
+        "../cloudSync/flushProgress.js"
+      );
+      const detail =
+        batchCount === 1
+          ? "Applying one database schema update on the web. Large tables can take a few minutes."
+          : `Applying ${batchCount} database schema updates on the web. Large tables can take a few minutes.`;
+      await reportFlushProgress(linked.appId, {
+        layer: "turso",
+        label: "Applying database migrations…",
+        detail,
+      });
+    }
+
+    console.log(
+      `[SchemaDriftHeal] Shipping ${batchCount} schema entry(ies) in one batch for ${label}`,
+    );
+    shipped = await shipSchemaMigrationBatch(
+      linked,
+      linked.dbPath,
+      remoteWork.unsatisfied,
+      remoteWork.healOps.length > 0 ? remoteWork.healOps : undefined,
+    );
+    await yieldEventLoop();
+  } else {
+    console.log(`[SchemaDriftHeal] Nothing to ship for ${label}`);
+  }
 
   if (shipped > 0) {
-    await waitForLinkedSourceSchemaConvergence(linked);
+    console.log(
+      `[SchemaDriftHeal] Memory applied ${shipped} schema entry(ies) for ${label}`,
+    );
   }
 
   return shipped;

@@ -159,6 +159,37 @@ export async function writeAppRepoCommitCursor(
   await fs.writeFile(file, JSON.stringify(all, null, 2), "utf8");
 }
 
+export async function removeAppRepoCommitCursor(
+  appId: string,
+  paprHome?: string,
+): Promise<boolean> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const file = paprHome
+    ? path.join(paprHome, "data", "app-repo-commit-cursors.json")
+    : cursorPath();
+  let all: Record<string, AppRepoCommitCursorStore>;
+  try {
+    const raw = await fs.readFile(file, "utf8");
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null) {
+      return false;
+    }
+    all = parsed as Record<string, AppRepoCommitCursorStore>;
+  } catch {
+    return false;
+  }
+  if (!all[trimmed]) {
+    return false;
+  }
+  delete all[trimmed];
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(all, null, 2), "utf8");
+  return true;
+}
+
 export async function clearAppRepoCommitCursorsForTests(): Promise<void> {
   try {
     await fs.unlink(cursorPath());

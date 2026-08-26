@@ -30,6 +30,7 @@ import type {
   CoordinatorFlushResult,
   FlushNowOptions,
   FlushTrigger,
+  SyncCoordinatorLayer,
   SyncCoordinatorStatus,
 } from "./coordinatorTypes.js";
 import {
@@ -81,7 +82,13 @@ export class SyncCoordinator {
   private flushProcessorRunning = false;
   private currentFlushAppId: string | null = null;
   private namespaceBusyStartedAt: number | null = null;
-  private activeProgress: { appId: string; startedAt: number } | null = null;
+  private activeProgress: {
+    appId: string;
+    startedAt: number;
+    layer?: SyncCoordinatorLayer;
+    label?: string;
+    detail?: string;
+  } | null = null;
 
   constructor(sync: CloudSyncService) {
     this.sync = sync;
@@ -226,11 +233,22 @@ export class SyncCoordinator {
         `[SyncCoordinator] flushNow appId=${item.appId} trigger=${item.trigger}`,
       );
 
+      const { listDeadLetterOutboxEntries, clearDeadLetterOutboxEntries, requeueDeadLetterOutboxEntries } =
+        await import("../syncV3/SyncOutbox.js");
+      const deadLetterOutbox = await listDeadLetterOutboxEntries(item.appId);
+      const hasDeadLetterOutbox = deadLetterOutbox.length > 0;
+
       if (
         !this.sync.getManualFlushError(item.appId) &&
         !this.flushErrors.has(item.appId)
       ) {
         if (!(await appNeedsOrderedFlushAsync(this.sync, item.appId))) {
+          if (hasDeadLetterOutbox) {
+            const cleared = await clearDeadLetterOutboxEntries(item.appId);
+            console.log(
+              `[SyncCoordinator] Cleared ${cleared} stale dead-letter writer op(s) for ${item.appId} — app already up to date (${item.trigger})`,
+            );
+          }
           const ready = await (
             await import("./webReady.js")
           ).webReady(item.appId, this.sync.getPaprDir());
@@ -249,6 +267,13 @@ export class SyncCoordinator {
           await yieldEventLoop();
           continue;
         }
+      }
+
+      if (item.trigger === "manual" && hasDeadLetterOutbox) {
+        const requeued = await requeueDeadLetterOutboxEntries(item.appId);
+        console.log(
+          `[SyncCoordinator] Requeued ${requeued} dead-letter writer op(s) for manual upload (${item.appId})`,
+        );
       }
 
       try {
@@ -294,6 +319,8 @@ export class SyncCoordinator {
     const result = await flushAppNow(this.sync, appId, {
       skipTursoReschedule: true,
     });
+    const { clearDeadLetterOutboxEntries } = await import("../syncV3/SyncOutbox.js");
+    await clearDeadLetterOutboxEntries(appId);
     this.noteTursoFlushedForApp(appId);
     this.sync.clearManualFlushError(appId);
     // Mark app folder synced after a successful ordered flush so startup
@@ -390,6 +417,32 @@ export class SyncCoordinator {
     }
   }
 
+  /** Drop pending auto-flush state when an app is deleted locally. */
+  forgetDeletedApp(appId: string): void {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return;
+    }
+
+    this.clearAutoFlushFailure(trimmed);
+
+    const debounceTimer = this.gitDebounceTimers.get(trimmed);
+    if (debounceTimer) {
+      clearTimeout(debounceTimer);
+      this.gitDebounceTimers.delete(trimmed);
+    }
+
+    const queueIndex = this.flushQueue.findIndex((item) => item.appId === trimmed);
+    if (queueIndex >= 0) {
+      this.flushQueue.splice(queueIndex, 1);
+    }
+
+    this.activeFlushes.delete(trimmed);
+    this.tursoFlushedAppIds.delete(trimmed);
+    this.sync.clearManualFlushError(trimmed);
+    this.releaseActiveFlush(trimmed);
+  }
+
   /** Clear in-flight flush markers and sync-busy file for one app. */
   private releaseActiveFlush(appId: string): void {
     if (this.currentFlushAppId === appId) {
@@ -459,6 +512,25 @@ export class SyncCoordinator {
     );
   }
 
+  /** Update live upload phase copy while an ordered flush is running. */
+  setFlushProgress(
+    appId: string,
+    progress: { layer: SyncCoordinatorLayer; label: string; detail?: string },
+  ): void {
+    if (this.currentFlushAppId !== appId && this.activeProgress?.appId !== appId) {
+      return;
+    }
+    const startedAt = this.activeProgress?.startedAt ?? Date.now();
+    this.activeProgress = {
+      appId,
+      startedAt,
+      layer: progress.layer,
+      label: progress.label,
+      detail: progress.detail,
+    };
+    this.updateGatewayBusyState();
+  }
+
   getStatus(appId?: string): SyncCoordinatorStatus {
     const paprDir = this.sync.getPaprDir();
     const workspaceDirtyKeys = listDbDirtySyncKeys(paprDir);
@@ -486,9 +558,10 @@ export class SyncCoordinator {
     if (this.activeProgress) {
       activeFlush = {
         appId: this.activeProgress.appId,
-        layer: "publish",
+        layer: this.activeProgress.layer ?? "publish",
         startedAt: this.activeProgress.startedAt,
-        label: "Ordered flush in progress",
+        label: this.activeProgress.label,
+        detail: this.activeProgress.detail,
       };
     }
 

@@ -8,6 +8,8 @@
  * - Security and best practices
  */
 
+import { buildMiniAppSdkCatalogSection } from "./miniAppSdkCatalog.js";
+
 /** A single loaded workspace file with its content and metadata */
 export interface WorkspaceFileContext {
   name: string;
@@ -101,6 +103,7 @@ export class SystemPromptBuilder {
       this.buildJobOutputStrategySection(),
       this.buildIndependentDatabasesSection(),
       this.buildAppCreationReminderSection(),
+      buildMiniAppSdkCatalogSection(),
       this.buildMissingPackagesSection(), // NEW: Guide agent to install missing packages
       this.buildPlatformFeedbackSection(),
       this.buildSecuritySection(),
@@ -2162,11 +2165,81 @@ Content-only apps (no \`/api/db/*\`) **do not** need \`data-sources.json\`. Vali
 | Job scratch (jobId) | \`j-{jobId8}\` | only if explicitly linked — prefer registry DBs |
 
 - **Cloud eligibility:** \`attach_database\` writes \`data-sources.json\` → Git sync + Turso push follow automatically.
+- **Shared registry DBs:** One \`dbId\` can be linked from **multiple mini-apps** (\`data-sources.json\` in each app). They share the **same on-disk SQLite file** and **one Turso replica** (\`d-{dbId8}\`). Schema drift on the shared DB affects **every** linking app — green sync on one app does **not** mean another app's view is fine if that app was not in the discovery report.
+- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Upload now / \`push_cloud_sync({ appId })\` from any linking app** ships schema + rows for the shared DB (once). After migrations, verify remote schema from **each** app that queries those tables — one app may need code changes even after the DB heals.
 - **Cloud agent bookends:** Memory \`cloud_agent_run_prepare\` returns \`tursoSources[]\` for each write target; gateway pulls/pushes by \`syncKey\` (dbId).
 
 ## Multi-user, owner access, and data isolation (do not conflate)
 
 **Cloud publish access ≠ row-level security.** \`public_read\` / share links control who can **open the app URL** and call \`/api/db/*\` — the platform does **not** filter rows. Your schema + SQL (or backend actions) must isolate data.
+
+### Backend ACL — what changed vs what did NOT (read before probing)
+
+**Did NOT change (probes will still "pass"):**
+- \`/api/db/query\` and \`/api/db/write\` — **no row-level security**. Any signed-in user with \`canRead\`/\`canWrite\` can run any SELECT/UPDATE the app sends.
+- **No SQL functions** like \`papr_current_user()\`, \`current_user_id()\`, or \`papr_user_id()\` — they do not exist. Do not probe for them.
+- **No new endpoints** like \`/api/db/action\`, \`/api/db/secure-query\`, \`/api/app-actions\`, \`/api/actions\` — all **404**.
+- **Desktop owner** (\`mode: "owner"\`, \`isOwner: true\`) — always full \`/api/db/*\` access. Owner probes cannot prove ACL works.
+
+**What DID change (Feb 2026):**
+- \`POST /api/app/backend/:action\` — **the only new mechanism**. \`:action\` = key from \`apps/{appId}/backend/manifest.json\` (e.g. \`ping\`, \`claim-passcode\`).
+- When caller is signed in, gateway injects **env vars into the handler subprocess**: \`PAPR_CALLER_USER_ID\`, \`PAPR_CALLER_EMAIL\` (overrides client spoofing in \`params\`).
+- Same injection on \`POST /api/jobs/run\` → job env \`PAPR_CALLER_USER_ID\`.
+- **Security is in your handler code** — read env, lookup role, return scoped rows. Not in generic \`/api/db/*\`.
+
+**Exact call shape (copy this):**
+\`\`\`javascript
+await fetch('/api/app/backend/claim-passcode', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    appId: APP_ID,
+    params: { passcode: 'ABC123' },  // business params only — never userId for ACL
+  }),
+});
+// Response: { stdout, stderr, exitCode } — handler prints JSON to stdout
+\`\`\`
+
+**Required files (you must create these — platform does not auto-generate actions):**
+\`\`\`
+apps/{appId}/backend/manifest.json   ← register action name → handler file
+apps/{appId}/backend/ping.py         ← verify + regression (optional but recommended)
+apps/{appId}/backend/claim_passcode.py  ← reads os.environ["PAPR_CALLER_USER_ID"]
+\`\`\`
+
+**Older apps:** \`create_app\` scaffolds \`backend/\` for new apps only. Pre-existing apps may have **no** \`backend/\` folder. \`POST /api/app/backend/ping\` then returns **ENOENT** on the manifest (route is live — not 404). Create the folder + files below before verifying.
+
+**Minimal manifest (copy verbatim — validator requires numeric \`version: 1\` and field \`handler\`, not \`entry\`):**
+\`\`\`json
+{
+  "version": 1,
+  "actions": {
+    "ping": {
+      "handler": "ping.py",
+      "runtime": "python",
+      "description": "Health check + caller identity regression",
+      "timeoutMs": 10000
+    }
+  }
+}
+\`\`\`
+
+**Handler params (env — there is no \`PAPR_PARAMS_JSON\`):**
+- \`PAPR_ACTION_PARAMS\` — JSON string of all merged params
+- \`PAPR_PARAM_{key}\` — one env var per param (e.g. \`params.passcode\` → \`PAPR_PARAM_passcode\`)
+- \`PAPR_CALLER_USER_ID\` / \`PAPR_CALLER_EMAIL\` — top-level env when signed in
+- **Fail-safe:** gateway **overwrites** spoofed \`PAPR_CALLER_USER_ID\` / \`PAPR_CALLER_EMAIL\` in merged params too — so \`PAPR_PARAM_PAPR_CALLER_USER_ID\` also equals the session id. Prefer top-level \`PAPR_CALLER_USER_ID\`; never trust client \`userId\`, \`role\`, etc.
+
+**Verify caller injection (bash from agent, replace appId — requires \`backend/manifest.json\` + \`ping.py\` above):**
+\`\`\`bash
+curl -s -X POST http://localhost:18789/api/app/backend/ping \\
+  -H "Content-Type: application/json" \\
+  -d '{"appId":"YOUR_APP_ID","params":{"PAPR_CALLER_USER_ID":"spoofed"}}' | jq .
+# stdout JSON should show callerUserId = real signed-in id, NOT "spoofed"
+# (default ping handler echoes callerUserId when injected)
+\`\`\`
+
+**Passcode claim flow:** Leader creates roster row → user signs in → no row for \`access.userId\` → frontend calls \`POST /api/app/backend/claim-passcode\` → handler verifies hash, sets \`papr_user_id = PAPR_CALLER_USER_ID\`. Never write \`papr_user_id\` from browser via \`/api/db/write\`.
 
 ### \`GET /api/access\` — who is calling (mini-apps)
 
@@ -2196,7 +2269,7 @@ const access = await fetch('/api/access').then(r => r.json());
 
 **Pattern A security (important):** \`owner_session\` in \`localStorage\` is **UX isolation**, not cryptography. A motivated user can tamper with session id or run \`SELECT * FROM table\` via DevTools on \`public_read\` apps. UUID guessing is impractical; **unfiltered SQL** is the real risk — use **backend actions** for sensitive reads, or publish as **link/team** (sign-in) instead of \`public_read\`.
 
-**Pattern B (stronger):** Publish with \`link_read_write\` / \`team\` so visitors sign in; identity comes from Papr session via \`GET /api/access\` (\`access.userId\`). Prefer \`POST /api/app/backend/:action\` or jobs with \`PAPR_CALLER_USER_ID\` — never trust client \`userId\` params.
+**Pattern B (stronger):** Publish with \`link_read_write\` / \`team\` so visitors sign in; identity comes from Papr session via \`GET /api/access\` (\`access.userId\`). Prefer \`POST /api/app/backend/:action\` or jobs with server-injected \`PAPR_CALLER_USER_ID\` — never trust client \`userId\` params.
 
 **Role assignment:** Use \`GET /api/members\` for admin pickers — returns real workspace members keyed by \`userId\` (not free-text email). Flag roster rows whose \`userId\` is missing from \`members\`.
 
@@ -2208,6 +2281,8 @@ const access = await fetch('/api/access').then(r => r.json());
 | **Shared DB + session/user column** | Same Turso DB; app filters rows | \`owner_session\` (anonymous) or \`papr_user_id\` (signed-in) + \`GET /api/access\` |
 | **Per-user DB isolation** | Separate Turso replica per user | \`create_database({ isolation: "per-user" })\` + \`attach_database\` |
 
+❌ **Do NOT** probe for \`papr_current_user()\` or \`/api/db/secure-query\` — they do not exist.
+❌ **Do NOT** expect \`/api/db/query\` to enforce row ACL — use \`POST /api/app/backend/:action\` handlers for sensitive multi-user data.
 ❌ **Do NOT** conflate cloud publish settings with per-user data isolation.
 ❌ **Do NOT** rely on client-side session filters alone for sensitive data on \`public_read\` apps.
 ❌ **Do NOT** show owner admin UI to visitors (\`!access.isOwner\`) — hide the tab completely.
@@ -2357,6 +2432,23 @@ await window.paprAPI.invoke('notification.show', {
 \`\`\`
 
 **Why:** Mini-apps run in sandboxed iframes where \`<a download>\`, \`window.open()\`, and \`navigator.clipboard\` are blocked. \`window.paprAPI\` bridges to Electron's native APIs.
+
+**CRITICAL — Never use window.prompt / confirm / alert in mini-app code:**
+- Paprwork always previews apps in a **cross-origin iframe** (local gateway tab **and** published/web toggle). Chrome blocks subframe JS dialogs — \`prompt()\` returns \`null\`, \`confirm()\` returns \`false\`, with **no UI and no error**.
+- This is **not** a desktop-vs-web split. Both local preview and web preview inside Paprwork are iframe embeds.
+- Use the platform dialog SDK everywhere (desktop + cloud + top-level tab):
+\`\`\`typescript
+import { papr } from '/__papr__/papr-sdk.ts';
+
+const name = await papr.dialog.text('Function name', 'e.g. Engineering Manager');
+if (!name) return; // cancelled or empty
+
+if (!await papr.dialog.confirm('Remove this person from the roster?', 'Remove')) return;
+\`\`\`
+- See **Mini-app platform SDK** below — one \`papr\` import; do not curl/guess \`/__papr__/...\` URLs or invent modules like \`papr-tooltip\`.
+- Do **not** branch on \`window.paprAPI\` for text input or yes/no — in-DOM dialogs work in all embed contexts.
+- Legacy apps using \`window.prompt\` / \`confirm\` / \`alert\` still work in iframes: Paprwork injects \`/__papr__/papr-native-dialog-shim.js\` before app code (desktop + cloud). Prefer \`papr-sdk\` imports for new code.
+- \`dialog.showMessageBox\` via paprAPI is desktop-local-preview only; prefer \`askConfirm\` for portable confirm flows.
 
 **Do NOT confuse "sandboxed iframe" with "no parent access":** Sandbox blocks native browser APIs — it does **not** block \`window.paprAPI\`, which is injected specifically to reach Paprwork (chat, shell, dialogs). **Never tell the user mini-apps cannot open chat** — they can, via \`chat.open\` (desktop only).
 
@@ -2609,9 +2701,36 @@ apps/{appId}/backend/
 
 **Runtimes:** \`python\` (\`.py\`), \`node\` (\`.js\` / \`.mjs\` / \`.cjs\`), \`typescript\` (\`.ts\` — transpiled at invoke). Handlers read \`PAPR_ACTION_PARAMS\` from env and print JSON to stdout.
 
+**Verified caller identity (REQUIRED for ACL / multi-user backends):**
+
+**Endpoint (exact):** \`POST /api/app/backend/{actionName}\` where \`actionName\` is registered in \`apps/{appId}/backend/manifest.json\`. Not \`/api/db/*\`. Not guessed paths.
+
+- Gateway runs \`backend/{handler}\` as subprocess and injects env when signed in — **override** any client \`PAPR_CALLER_USER_ID\` in \`params\`.
+- \`PAPR_CALLER_USER_ID\` — Papr user id (Parse objectId); **only** trust this for ACL.
+- \`PAPR_CALLER_EMAIL\` — when email is known from session.
+- Handler reads env; frontend never sends \`userId\` for authorization.
+- **Optional** for public/ping handlers.
+- **Verify:** \`POST /api/app/backend/ping\` → parse \`stdout\` JSON → \`callerUserId\` should match session, not spoofed params.
+
+\`\`\`python
+# Python backend — role-scoped read
+import os
+user_id = os.environ.get("PAPR_CALLER_USER_ID")
+if not user_id:
+    sys.exit("Sign in required")
+# lookup role from roster WHERE papr_user_id = user_id, then return scoped rows
+\`\`\`
+
+\`\`\`typescript
+// TypeScript backend
+const userId = process.env.PAPR_CALLER_USER_ID;
+if (!userId) throw new Error("Sign in required");
+\`\`\`
+
 **Vault keys in backend (REQUIRED — do not reverse-engineer):**
 - User keys live in **Settings → Integration Keys** (Keychain locally, vault on cloud).
 - **Desktop:** list key names in \`backend/manifest.json\` → \`"keys": ["RR_ATTENTION_API_KEY"]\` on each action. Gateway injects as env vars.
+- **Never** list \`PAPR_CALLER_USER_ID\` / \`PAPR_CALLER_EMAIL\` in \`"keys"\` — they are session-injected automatically, not vault keys.
 - **Cloud (two layers — both required):**
   1. \`backend/manifest.json\` \`"keys"\` — per-action allowlist (what this handler may receive)
   2. \`requirements.json\` — app catalog (what cloud vault knows about). **Synced from backend manifest keys automatically before git push**, then auto-republished when drift is detected after **Sync now**.
@@ -2838,7 +2957,7 @@ If the UI shell renders but data never loads, the entry script may have failed t
 
 \`webview_execute\` is ONLY for one-shot DOM reads (\`window.__paprBoot\`, element count, \`getElementById\` text). Script MUST \`return\` a value or result is \`undefined\`. Never use it to test \`fetch('/api/...')\` — the gateway is localhost; use \`curl\` instead.
 
-\`validate_app\` always runs a **fresh esbuild.build()** before checking — never stale cache. After build passes it **auto-launches a preview** and **fails on console errors** (preview webview + errors forwarded from the user's app iframe via \`GET /api/apps/{appId}/runtime-logs\`). It resolves the full import graph (TS + CSS), so missing CSS imports, bad CSS syntax, and broken TS all produce real build errors. It also checks: **100-line limit on code files only** (not \`.md\`/content assets), HTML syntax, missing \`.hidden\` utility, external \`fetch()\` anti-patterns, **no emojis in UI source (\`no-emojis\` rule — use SVG + text only)**. \`write_file\`, \`edit_file\`, \`edit_app_file_lines\`, and \`create_app\` on $PAPR_HOME/apps/ auto-run validation after writes — if they return \`success: false\`, fix errors before any more edits. Silent logic bugs (wrong selector, no throw) may still need \`webview_snapshot\` or curl DB verification.
+\`validate_app\` always runs a **fresh esbuild.build()** before checking — never stale cache. After build passes it **auto-launches a preview** and **fails on console errors** (preview webview + errors forwarded from the user's app iframe via \`GET /api/apps/{appId}/runtime-logs\`). It resolves the full import graph (TS + CSS), so missing CSS imports, bad CSS syntax, and broken TS all produce real build errors. It also checks: **100-line limit on code files only** (not \`.md\`/content assets), HTML syntax, missing \`.hidden\` utility, external \`fetch()\` anti-patterns, **no emojis in UI source (\`no-emojis\` rule — use SVG + text only)**, **no \`window.prompt\` / \`confirm\` / \`alert\` (\`no-native-dialogs\` — use \`/__papr__/papr-sdk.ts\` → \`papr.dialog.*\`)**. \`write_file\`, \`edit_file\`, \`edit_app_file_lines\`, and \`create_app\` on $PAPR_HOME/apps/ auto-run validation after writes — if they return \`success: false\`, fix errors before any more edits. Silent logic bugs (wrong selector, no throw) may still need \`webview_snapshot\` or curl DB verification.
 
 **CSS architecture (IMPORTANT):** Each component MUST have a co-located CSS file and import it:
 \`\`\`typescript

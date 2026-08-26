@@ -29,12 +29,15 @@ def main() -> None:
     # Linked DB: APP_DB (local) or PAPR_DB_URL + PAPR_DB_AUTH_TOKEN (cloud Turso).
     #   from papr_db import connect, execute
     #   con = connect(); execute(con, "INSERT INTO ...", [...]); con.close()
+    # ACL: PAPR_CALLER_USER_ID / PAPR_CALLER_EMAIL — server-injected when signed in; never trust params.userId
     params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}"))
     payload = {
         "ok": True,
         "action": os.environ.get("PAPR_ACTION", "ping"),
         "appId": os.environ.get("PAPR_APP_ID"),
         "dbMode": os.environ.get("PAPR_DB_MODE"),
+        "callerUserId": os.environ.get("PAPR_CALLER_USER_ID"),
+        "callerEmail": os.environ.get("PAPR_CALLER_EMAIL"),
         "params": params,
     }
     json.dump(payload, sys.stdout)
@@ -49,6 +52,8 @@ const payload = {
   ok: true,
   action: process.env.PAPR_ACTION ?? "ping",
   appId: process.env.PAPR_APP_ID,
+  callerUserId: process.env.PAPR_CALLER_USER_ID,
+  callerEmail: process.env.PAPR_CALLER_EMAIL,
   params,
 };
 console.log(JSON.stringify(payload));
@@ -60,6 +65,8 @@ const payload = {
   ok: true,
   action: process.env.PAPR_ACTION ?? "ping",
   appId: process.env.PAPR_APP_ID,
+  callerUserId: process.env.PAPR_CALLER_USER_ID,
+  callerEmail: process.env.PAPR_CALLER_EMAIL,
   params,
 };
 console.log(JSON.stringify(payload));

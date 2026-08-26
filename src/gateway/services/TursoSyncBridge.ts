@@ -142,8 +142,45 @@ export class TursoSyncBridge {
   private linkedSourcesCache: TursoLinkedSource[] | null = null;
   private credentialsCacheByDb = new Map<string, CachedCredentials>();
   private credentialsFetchPromises = new Map<string, Promise<TursoCredentials>>();
-  /** Serialize pushJob per syncKey — avoids concurrent backup/pull on the same SQLite file. */
-  private pushJobChains = new Map<string, Promise<PushResult>>();
+  /** Serialize Turso remote ops per on-disk dbPath — avoids "Client was closed" races. */
+  private dbPathOperationChains = new Map<string, Promise<unknown>>();
+
+  private static normalizeDbPathLockKey(dbPath: string): string {
+    return path.normalize(dbPath);
+  }
+
+  /** Run one async Turso remote session at a time per SQLite file. */
+  async runExclusiveForDbPath<T>(
+    dbPath: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const key = TursoSyncBridge.normalizeDbPathLockKey(dbPath);
+    const prior = this.dbPathOperationChains.get(key);
+    const run = (prior ?? Promise.resolve())
+      .catch(() => undefined)
+      .then(() => operation());
+    this.dbPathOperationChains.set(key, run);
+    try {
+      return await run;
+    } finally {
+      if (this.dbPathOperationChains.get(key) === run) {
+        this.dbPathOperationChains.delete(key);
+      }
+    }
+  }
+
+  /** @deprecated Prefer runExclusiveForDbPath — resolves syncKey to dbPath. */
+  async runExclusiveForSyncKey<T>(
+    syncKey: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const sources = await this.listLinkedSources();
+    const linked = findLinkedSourceForJob(sources, syncKey);
+    if (linked) {
+      return this.runExclusiveForDbPath(linked.dbPath, operation);
+    }
+    return operation();
+  }
 
   private static readonly CREDENTIALS_TTL_MS = 30 * 60_000;
 
@@ -366,35 +403,13 @@ export class TursoSyncBridge {
     return findLinkedSourceForJob(sources, jobId) !== undefined;
   }
 
-  /** True when dirty fast-path, fingerprints, or remote lacks local tables. */
-  async linkedSourceNeedsPush(linked: TursoLinkedSource): Promise<boolean> {
-    const syncKey = linkedSourceSyncKey(linked);
-    const alternateKeys = linkedSourceAlternateKeys(linked);
-    clearStaleDirtyFlagIfClean(
-      syncKey,
-      linked.dbPath,
-      undefined,
-      alternateKeys,
-    );
-    const state = loadTursoSyncState();
-    const fast = isLinkedSourceDirtyFast(
-      syncKey,
-      linked.dbPath,
-      state,
-      alternateKeys,
-    );
-    if (fast === false) {
-      return false;
-    }
-    if (fast !== true && isJobDbDirty(syncKey, linked.dbPath, state, alternateKeys)) {
-      return true;
-    }
-    if (fast === true) {
-      return true;
-    }
-    if (!localDbHasSyncableData(linked.dbPath)) {
-      return false;
-    }
+  /**
+   * Remote Turso comparison for needs-push (caller must hold dbPath lock when
+   * concurrent pushes or status polls could overlap).
+   */
+  private async linkedSourceNeedsPushRemoteCheck(
+    linked: TursoLinkedSource,
+  ): Promise<boolean> {
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = await this.fetchCredentials(databaseName);
     const remote = createRemoteClient(creds);
@@ -423,6 +438,63 @@ export class TursoSyncBridge {
     }
   }
 
+  /** Needs-push evaluation without acquiring dbPath lock (for nested scheduler calls). */
+  private async evaluateLinkedSourceNeedsPush(
+    linked: TursoLinkedSource,
+  ): Promise<boolean> {
+    const syncKey = linkedSourceSyncKey(linked);
+    const alternateKeys = linkedSourceAlternateKeys(linked);
+    clearStaleDirtyFlagIfClean(
+      syncKey,
+      linked.dbPath,
+      undefined,
+      alternateKeys,
+    );
+    const state = loadTursoSyncState();
+    const fast = isLinkedSourceDirtyFast(
+      syncKey,
+      linked.dbPath,
+      state,
+      alternateKeys,
+    );
+    if (fast === false) {
+      return false;
+    }
+    if (fast !== true && isJobDbDirty(syncKey, linked.dbPath, state, alternateKeys)) {
+      return true;
+    }
+    if (fast === true) {
+      return true;
+    }
+    if (!localDbHasSyncableData(linked.dbPath)) {
+      return false;
+    }
+    return this.linkedSourceNeedsPushRemoteCheck(linked);
+  }
+
+  /** True when dirty fast-path, fingerprints, or remote lacks local tables. */
+  async linkedSourceNeedsPush(linked: TursoLinkedSource): Promise<boolean> {
+    return this.runExclusiveForDbPath(linked.dbPath, () =>
+      this.evaluateLinkedSourceNeedsPush(linked),
+    );
+  }
+
+  /**
+   * Scheduler / flush path: needs-push check + push under one dbPath lock so
+   * no other remote client opens/closes between the two steps.
+   */
+  async pushLinkedSourceIfNeeded(
+    linked: TursoLinkedSource,
+    pushOptions?: PushJobOptions,
+  ): Promise<PushResult | null> {
+    return this.runExclusiveForDbPath(linked.dbPath, async () => {
+      if (!(await this.evaluateLinkedSourceNeedsPush(linked))) {
+        return null;
+      }
+      return this.pushJobUnlocked(linked, undefined, pushOptions);
+    });
+  }
+
   async pushJob(
     jobId: string,
     credentials?: TursoCredentials,
@@ -438,19 +510,9 @@ export class TursoSyncBridge {
       return { status: "skipped", tables: [], reason: "local_db_missing" };
     }
 
-    const syncKey = linkedSourceSyncKey(linked);
-    const prior = this.pushJobChains.get(syncKey);
-    const run = (prior ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() => this.pushJobUnlocked(linked, credentials, pushOptions));
-    this.pushJobChains.set(syncKey, run);
-    try {
-      return await run;
-    } finally {
-      if (this.pushJobChains.get(syncKey) === run) {
-        this.pushJobChains.delete(syncKey);
-      }
-    }
+    return this.runExclusiveForDbPath(linked.dbPath, () =>
+      this.pushJobUnlocked(linked, credentials, pushOptions),
+    );
   }
 
   private async pushJobUnlocked(

@@ -14,6 +14,7 @@ import {
   buildBackendActionEnv,
   resolveActionTimeoutMs,
   runBackendHandler,
+  type MiniAppCallerIdentity,
 } from "./appBackendRunner.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { resolveDesktopAppBackendDatabaseEnv } from "./appBackendDatabase.js";
@@ -30,6 +31,8 @@ export class AppBackendService {
     action: string;
     params?: Record<string, string>;
     vaultEnv?: Record<string, string>;
+    callerIdentity?: MiniAppCallerIdentity;
+    loggedIn?: boolean;
   }): Promise<AppBackendRunResult> {
     const manifestPath = path.join(
       this.paprRoot,
@@ -64,6 +67,8 @@ export class AppBackendService {
       vaultEnv: input.vaultEnv,
       databaseEnv,
       paprRoot: this.paprRoot,
+      callerIdentity: input.callerIdentity,
+      loggedIn: input.loggedIn,
     });
 
     return runBackendHandler({

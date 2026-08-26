@@ -135,7 +135,8 @@ describe("tursoPushScheduler max-wait", () => {
     process.env.TURSO_PUSH_DEBOUNCE_MS = "60000";
     vi.resetModules();
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
+      ensureTursoSyncBridge: () => ({
+        enabled: true,
         isJobLinkedToApp: async () => true,
         listLinkedSources: async () => [
           {
@@ -183,7 +184,8 @@ describe("tursoPushScheduler max-wait", () => {
   it("suppresses repeat max-wait logs when job is already queued", async () => {
     vi.resetModules();
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
+      ensureTursoSyncBridge: () => ({
+        enabled: true,
         isJobLinkedToApp: async () => true,
         listLinkedSources: async () => [
           {
@@ -234,7 +236,8 @@ describe("tursoPushScheduler max-wait", () => {
     process.env.TURSO_PUSH_MAX_WAIT_MS = "5000";
     process.env.TURSO_PUSH_FAILURE_BACKOFF_MS = "60000";
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
+      ensureTursoSyncBridge: () => ({
+        enabled: true,
         isJobLinkedToApp: async () => true,
         listLinkedSources: async () => [
           {
@@ -278,7 +281,8 @@ describe("tursoPushScheduler max-wait", () => {
     vi.resetModules();
     process.env.TURSO_PUSH_MAX_WAIT_MS = "5000";
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
+      ensureTursoSyncBridge: () => ({
+        enabled: true,
         isJobLinkedToApp: async () => true,
         listLinkedSources: async () => [
           {
@@ -389,7 +393,8 @@ describe("tursoPushScheduler permanent skip integration", () => {
       }));
 
       vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-        getTursoSyncBridge: () => ({
+        ensureTursoSyncBridge: () => ({
+          enabled: true,
           isJobLinkedToApp: async () => true,
           listLinkedSources: async () => [
             {

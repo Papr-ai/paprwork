@@ -16,6 +16,7 @@ import {
   parseDataSourcesFile,
   serializeDataSourcesFile,
 } from "../src/gateway/services/appDataSources.js";
+import { parseCloudAppMetadataFile } from "../src/core/utils/cloudAppMetadata.js";
 
 describe("copyAppToNamespace", () => {
   let originalHome: string | undefined;
@@ -175,6 +176,17 @@ describe("copyAppToNamespace", () => {
     ) as MiniApp[];
     expect(targetApps).toHaveLength(1);
     expect(targetApps[0]?.title).toBe("Sales Dashboard");
+    expect(targetApps[0]?.organizationId).toBe("org-a");
+    expect(targetApps[0]?.namespaceId).toBe("ns-target");
+
+    const targetMetadata = parseCloudAppMetadataFile(
+      await fs.readFile(
+        path.join(targetHome, "apps", appId, "metadata.json"),
+        "utf8",
+      ),
+    );
+    expect(targetMetadata?.organizationId).toBe("org-a");
+    expect(targetMetadata?.namespaceId).toBe("ns-target");
 
     const targetJobs = JSON.parse(
       await fs.readFile(path.join(targetHome, "data", "jobs.json"), "utf8"),

@@ -55,6 +55,8 @@ interface DeleteAppPayload {
   unpublishFromCloud?: boolean;
   deleteLinkedJobs?: boolean;
   deleteTursoDatabases?: boolean;
+  deleteRegistryDbIds?: string[];
+  deleteRegistryTurso?: boolean;
   confirmed?: boolean;
 }
 
@@ -282,6 +284,8 @@ export async function setupAppHandlers(
           unpublishFromCloud: payload.unpublishFromCloud === true,
           deleteLinkedJobs: payload.deleteLinkedJobs === true,
           deleteTursoDatabases: payload.deleteTursoDatabases === true,
+          deleteRegistryDbIds: payload.deleteRegistryDbIds,
+          deleteRegistryTurso: payload.deleteRegistryTurso === true,
           confirmed: payload.confirmed === true,
         });
         // When not confirmed, we return a preview for the UI modal.

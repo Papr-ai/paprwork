@@ -154,6 +154,31 @@ describe("checkBackendManifestIntegrity", () => {
       issues.some((i) => i.rule === "backend-keys-missing-from-requirements"),
     ).toBe(true);
   });
+
+  it("warns when manifest lists platform-injected PAPR_CALLER keys", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "papr-manifest-"));
+    const backendDir = join(tempDir, "backend");
+    await mkdir(backendDir);
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({
+        version: 1,
+        actions: {
+          ping: {
+            handler: "ping.py",
+            runtime: "python",
+            keys: ["PAPR_CALLER_USER_ID", "PAPR_CALLER_EMAIL"],
+          },
+        },
+      }),
+    );
+    await writeFile(join(backendDir, "ping.py"), "print('ok')");
+
+    const issues = await checkBackendManifestIntegrity(tempDir);
+    expect(
+      issues.some((i) => i.rule === "backend-keys-platform-injected"),
+    ).toBe(true);
+  });
 });
 
 describe("checkOrphanBackendHandlers", () => {

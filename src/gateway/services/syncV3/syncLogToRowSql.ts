@@ -10,6 +10,18 @@ import {
   readSyncLogSince,
   type SyncLogEntry,
 } from "../tursoSyncLog.js";
+import { WORKSPACE_LOG_SHIP_BATCH_SIZE } from "./WorkspaceLogClient.js";
+
+/** Changelog rows read per ship round (loop until exhausted). */
+export const SYNC_LOG_SHIP_READ_LIMIT = WORKSPACE_LOG_SHIP_BATCH_SIZE;
+
+export interface SyncLogShipBatch {
+  writes: RowWriteFromSyncLog[];
+  /** Highest sync log id consumed this round — advance even when writes is empty. */
+  highWaterLogId: number;
+  /** True when the raw read hit the limit — more entries may remain. */
+  hasMore: boolean;
+}
 
 export interface RowWriteFromSyncLog {
   sql: string;
@@ -85,18 +97,38 @@ export function syncLogEntryToRowWrite(
   };
 }
 
-export function readRowWritesFromSyncLogSince(
+export function readSyncLogShipBatch(
   db: Database.Database,
   afterId: number,
-  limit = 500,
-): RowWriteFromSyncLog[] {
-  const entries = compactSyncLogEntries(readSyncLogSince(db, afterId, limit));
+  limit = SYNC_LOG_SHIP_READ_LIMIT,
+): SyncLogShipBatch {
+  const raw = readSyncLogSince(db, afterId, limit);
+  const entries = compactSyncLogEntries(raw);
+  if (entries.length === 0) {
+    return { writes: [], highWaterLogId: afterId, hasMore: false };
+  }
+
+  let highWaterLogId = afterId;
   const writes: RowWriteFromSyncLog[] = [];
   for (const entry of entries) {
+    highWaterLogId = Math.max(highWaterLogId, entry.id);
     const write = syncLogEntryToRowWrite(db, entry);
     if (write) {
       writes.push(write);
     }
   }
-  return writes;
+
+  return {
+    writes,
+    highWaterLogId,
+    hasMore: raw.length >= limit,
+  };
+}
+
+export function readRowWritesFromSyncLogSince(
+  db: Database.Database,
+  afterId: number,
+  limit = SYNC_LOG_SHIP_READ_LIMIT,
+): RowWriteFromSyncLog[] {
+  return readSyncLogShipBatch(db, afterId, limit).writes;
 }

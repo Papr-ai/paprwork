@@ -18,6 +18,7 @@ import { ipcMain, BrowserWindow, shell } from "electron";
 import { CustomKeysStorage, SettingsStorage } from "../../core/storage/index.js";
 import { invalidateKeyCache } from "./customKeys.js";
 import {
+  activatePaprWorkspaceLocally,
   notifyGatewayWorkspaceSwitch,
   notifyGatewayPaprApiKeyUpdate,
   registerPaprWorkspaceHandlers,
@@ -46,7 +47,9 @@ import path from "node:path";
 import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import {
   getPaprBaseDir,
+  isWorkspacePointerAlignedWithProfile,
   readActiveWorkspacePointer,
+  type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
 import {
   paprApiKeyMatchesNamespace,
@@ -2941,14 +2944,23 @@ async function ensureActiveNamespaceApiKeyInternal(
   const { profile } = auth;
 
   const pointer = readActiveWorkspacePointer();
-  const organizationId = pointer?.organizationId ?? profile.organizationId;
-  const namespaceId = pointer?.namespaceId ?? profile.activeNamespaceId;
+  // Profile is the user's explicit selection; pointer is the on-disk workspace root.
+  const organizationId =
+    profile.organizationId?.trim() ??
+    pointer?.organizationId ??
+    undefined;
+  const namespaceId =
+    profile.activeNamespaceId?.trim() ??
+    pointer?.namespaceId ??
+    undefined;
   if (!organizationId || !namespaceId) {
     return null;
   }
 
   const namespaceName =
-    pointer?.namespaceName ?? profile.activeNamespaceName ?? namespaceId;
+    profile.activeNamespaceName?.trim() ??
+    pointer?.namespaceName ??
+    namespaceId;
 
   await customKeysStorage.setActiveOrganization(organizationId);
 
@@ -2970,6 +2982,60 @@ async function ensureActiveNamespaceApiKeyInternal(
     namespaceId,
     namespaceName,
   });
+}
+
+export interface EnsureActiveWorkspaceReconciledResult {
+  reconciled: boolean;
+  pointer?: ActiveWorkspacePointer;
+}
+
+/**
+ * Align ~/Papr/.active-workspace.json with the Papr profile before gateway spawn.
+ * Profile holds the user's selected org/namespace; the pointer selects PAPR_HOME.
+ */
+export async function ensureActiveWorkspaceReconciled(
+  settingsStorage: SettingsStorage,
+): Promise<EnsureActiveWorkspaceReconciledResult> {
+  const profile = settingsStorage.getPaprProfile();
+  const profileOrg = profile?.organizationId?.trim();
+  const profileNs = profile?.activeNamespaceId?.trim();
+  if (!profileOrg || !profileNs) {
+    return { reconciled: false };
+  }
+
+  const pointer = readActiveWorkspacePointer();
+  if (
+    isWorkspacePointerAlignedWithProfile(
+      { organizationId: profileOrg, activeNamespaceId: profileNs },
+      pointer,
+    )
+  ) {
+    return { reconciled: false, pointer: pointer ?? undefined };
+  }
+
+  console.log(
+    `[PaprLogin] Workspace pointer out of sync with profile — reconciling to ${profileOrg}/${profileNs}` +
+      (pointer
+        ? ` (was ${pointer.organizationId}/${pointer.namespaceId})`
+        : " (no pointer)"),
+  );
+
+  const result = await activatePaprWorkspaceLocally({
+    organizationId: profileOrg,
+    namespaceId: profileNs,
+    organizationName: profile?.workspaceName?.trim() || profileOrg,
+    namespaceName: profile?.activeNamespaceName?.trim() || profileNs,
+  });
+
+  if (!result.success || !result.pointer) {
+    console.warn(
+      "[PaprLogin] Workspace reconciliation failed:",
+      result.error ?? "unknown error",
+    );
+    return { reconciled: false };
+  }
+
+  return { reconciled: true, pointer: result.pointer };
 }
 
 async function createApiKey(

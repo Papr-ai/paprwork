@@ -1,21 +1,27 @@
 /**
  * Ordered cross-layer flush for Upload now (SYNC_CONTRACT §12.1).
  *
- * migrate → writer ops (app + linked jobs + owner migrations) → publish
+ * log catch-up → schema/row push → log catch-up → writer ops → publish
  *
  * Row sync uses workspace log (not fingerprint Turso push in this path).
  * Jobs/databases metadata uses Mongo registry (not namespace git).
+ *
+ * Cloud-linked migrations ship via schema drift-heal (workspace log), not
+ * direct SQLite apply — see applyLocalMigrationsForApp.
  */
 
 import * as path from "path";
 import type { CloudSyncService } from "../CloudSyncService.js";
 import {
+  dedupeLinkedSourcesBySyncKey,
   discoverTursoLinkedSources,
   linkedSourceSyncKey,
 } from "../tursoLinkedSources.js";
+import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
 import {
   awaitTursoPushInFlightForSyncKeys,
   cancelScheduledTursoPushForSyncKeys,
+  withTursoPushInFlight,
 } from "../tursoPushScheduler.js";
 import { applyLocalMigrationsForApp } from "./applyLocalMigrationsForApp.js";
 import { webReady } from "./webReady.js";
@@ -36,6 +42,16 @@ export interface FlushAppNowOptions {
   skipTursoReschedule?: boolean;
 }
 
+async function catchUpAppLinkedSources(
+  appSources: Awaited<ReturnType<typeof discoverTursoLinkedSources>>,
+): Promise<void> {
+  const { catchUpLinkedSourceFromWorkspaceLog } =
+    await import("../syncV3/workspaceLogSync.js");
+  for (const source of appSources) {
+    await catchUpLinkedSourceFromWorkspaceLog(source);
+  }
+}
+
 export async function flushAppNow(
   sync: CloudSyncService,
   appId: string,
@@ -46,37 +62,65 @@ export async function flushAppNow(
 
   console.log(`[CloudSync] flushAppNow (ordered) appId=${appId}`);
 
+  const linkedSources = await discoverTursoLinkedSources(appsRoot);
+  const appSources = linkedSources.filter((source) => source.appId === appId);
+  const pushSources = dedupeLinkedSourcesBySyncKey(appSources);
+  const syncKeys = pushSources.map((source) => linkedSourceSyncKey(source));
+
+  await catchUpAppLinkedSources(appSources);
+  await yieldEventLoop();
+
   const localMigrationsApplied = await applyLocalMigrationsForApp(appId, appsRoot);
   if (localMigrationsApplied.length > 0) {
     console.log(
       `[CloudSync] Applied local migrations for ${appId}: ${localMigrationsApplied.join(", ")}`,
     );
+    const { reportFlushProgress } = await import("./flushProgress.js");
+    await reportFlushProgress(appId, {
+      layer: "turso",
+      label: "Preparing local database…",
+      detail: `Applied ${localMigrationsApplied.length} migration(s) locally before cloud sync.`,
+    });
   }
   await yieldEventLoop();
 
   let tursoPushed = false;
-  const linkedSources = await discoverTursoLinkedSources(appsRoot);
-  const appSources = linkedSources.filter((source) => source.appId === appId);
-  const syncKeys = appSources.map((source) => linkedSourceSyncKey(source));
   cancelScheduledTursoPushForSyncKeys(syncKeys);
   await awaitTursoPushInFlightForSyncKeys(syncKeys);
 
-  for (const source of appSources) {
-    const { ensureReplicaReady } = await import("../syncV3/ensureReplicaReady.js");
-    const readyResult = await ensureReplicaReady(source);
-    if (readyResult.schemaShipped > 0 || readyResult.rowsShipped > 0) {
-      tursoPushed = true;
+  const bridge = ensureTursoSyncBridge();
+  await withTursoPushInFlight(syncKeys, async () => {
+    for (const source of pushSources) {
+      const syncKey = linkedSourceSyncKey(source);
+      if (bridge.enabled) {
+        const pushResult = await bridge.pushJob(syncKey);
+        if (pushResult.status === "pushed") {
+          tursoPushed = true;
+        } else if (pushResult.status === "failed") {
+          throw new Error(
+            `Turso push failed for ${source.alias}: ${pushResult.error ?? "unknown"}`,
+          );
+        }
+      } else {
+        const { ensureReplicaReady } = await import("../syncV3/ensureReplicaReady.js");
+        const readyResult = await ensureReplicaReady(source);
+        if (readyResult.schemaShipped > 0 || readyResult.rowsShipped > 0) {
+          tursoPushed = true;
+        }
+      }
     }
-  }
+  });
   await yieldEventLoop();
 
-  const { catchUpLinkedSourceFromWorkspaceLog } =
-    await import("../syncV3/workspaceLogSync.js");
-
-  for (const source of appSources) {
-    await catchUpLinkedSourceFromWorkspaceLog(source);
-  }
+  await catchUpAppLinkedSources(appSources);
   await yieldEventLoop();
+
+  const { reportFlushProgress } = await import("./flushProgress.js");
+  await reportFlushProgress(appId, {
+    layer: "git",
+    label: "Uploading app files…",
+    detail: "Syncing code and migration files to the cloud repository.",
+  });
 
   let writerPushed = false;
   try {
@@ -92,8 +136,6 @@ export async function flushAppNow(
   } catch (err) {
     const { AppOpsConflictError } = await import("../syncV3/AppOpsClient.js");
     if (err instanceof AppOpsConflictError) {
-      // Preserve the typed conflict (appId + per-path artifacts) so callers
-      // can surface "file changed on server" instead of a generic failure.
       throw err;
     }
     throw new Error(`App sync failed: ${(err as Error).message}`);

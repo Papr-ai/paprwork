@@ -4,8 +4,16 @@ import type { CloudSyncService } from "../src/gateway/services/CloudSyncService.
 const mockApplyLocalMigrations = vi.fn();
 const mockCatchUpLinkedSource = vi.fn();
 const mockEnsureReplicaReady = vi.fn();
+const mockPushJob = vi.fn();
 const mockWebReady = vi.fn();
 const mockDiscoverTursoLinkedSources = vi.fn();
+
+vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
+  ensureTursoSyncBridge: () => ({
+    enabled: true,
+    pushJob: (...args: unknown[]) => mockPushJob(...args),
+  }),
+}));
 
 vi.mock("../src/gateway/services/cloudSync/applyLocalMigrationsForApp.js", () => ({
   applyLocalMigrationsForApp: (...args: unknown[]) =>
@@ -16,11 +24,14 @@ vi.mock("../src/gateway/services/tursoLinkedSources.js", () => ({
   discoverTursoLinkedSources: (...args: unknown[]) =>
     mockDiscoverTursoLinkedSources(...args),
   linkedSourceSyncKey: () => "job-1",
+  dedupeLinkedSourcesBySyncKey: (sources: unknown[]) => sources,
 }));
 
 vi.mock("../src/gateway/services/tursoPushScheduler.js", () => ({
   cancelScheduledTursoPushForSyncKeys: vi.fn(),
   awaitTursoPushInFlightForSyncKeys: vi.fn().mockResolvedValue(undefined),
+  withTursoPushInFlight: (_keys: unknown, operation: () => Promise<unknown>) =>
+    operation(),
 }));
 
 vi.mock("../src/gateway/services/syncV3/ensureReplicaReady.js", () => ({
@@ -69,6 +80,11 @@ describe("flushAppNow", () => {
     mockApplyLocalMigrations.mockResolvedValue([]);
     mockDiscoverTursoLinkedSources.mockResolvedValue([linkedSource]);
     mockCatchUpLinkedSource.mockResolvedValue(0);
+    mockPushJob.mockResolvedValue({
+      status: "pushed",
+      tables: ["*"],
+      lastPushedLogId: 3,
+    });
     mockEnsureReplicaReady.mockResolvedValue({
       schemaShipped: 1,
       rowsShipped: 1,
@@ -87,15 +103,15 @@ describe("flushAppNow", () => {
     vi.clearAllMocks();
   });
 
-  it("runs ensureReplicaReady before catch-up and writer ops", async () => {
+  it("runs log catch-up before push, then catch-up again before writer ops", async () => {
     const callOrder: string[] = [];
-    mockEnsureReplicaReady.mockImplementation(async () => {
-      callOrder.push("ensure-replica");
-      return { schemaShipped: 1, rowsShipped: 1, lastSyncLogId: 3 };
-    });
     mockCatchUpLinkedSource.mockImplementation(async () => {
       callOrder.push("log-catch-up");
       return 0;
+    });
+    mockPushJob.mockImplementation(async () => {
+      callOrder.push("turso-push");
+      return { status: "pushed", tables: ["*"], lastPushedLogId: 3 };
     });
     mockFinalizeAppRepoMutation.mockImplementation(async () => {
       callOrder.push("writer");
@@ -113,11 +129,13 @@ describe("flushAppNow", () => {
     await flushAppNow(sync, "app-1");
 
     expect(callOrder).toEqual([
-      "ensure-replica",
+      "log-catch-up",
+      "turso-push",
       "log-catch-up",
       "writer",
       "catalog",
     ]);
+    expect(mockCatchUpLinkedSource).toHaveBeenCalledTimes(2);
     expect(mockFinalizeAppRepoMutation).toHaveBeenCalledWith(
       "/tmp/papr",
       "app-1",

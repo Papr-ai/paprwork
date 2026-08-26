@@ -89,6 +89,45 @@ export async function invalidateCachedPath(
   }
 }
 
+export async function removeAppFromOidCache(
+  appId: string,
+  paprHome?: string,
+): Promise<boolean> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const filePath = paprHome
+    ? path.join(paprHome, "data", SYNC_OID_CACHE_FILENAME)
+    : cachePath();
+  let cache: OidCacheFile;
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as OidCacheFile;
+    if (parsed.version !== 1 || typeof parsed.apps !== "object") {
+      return false;
+    }
+    cache = parsed;
+  } catch {
+    return false;
+  }
+  if (!cache.apps[trimmed]) {
+    return false;
+  }
+  delete cache.apps[trimmed];
+  await writeOidCacheAtPath(filePath, cache);
+  return true;
+}
+
+async function writeOidCacheAtPath(
+  filePath: string,
+  cache: OidCacheFile,
+): Promise<void> {
+  cache.updatedAt = new Date().toISOString();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
+}
+
 export async function seedOidCacheFromHead(
   appId: string,
   files: ReadonlyArray<{ path: string; blobOid: string }>,

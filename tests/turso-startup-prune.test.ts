@@ -6,12 +6,17 @@ const mockPrune = vi.fn(() => 2);
 const mockDiscover = vi.fn(async () => []);
 
 vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
-  getTursoSyncBridge: () => mockGetBridge(),
+  ensureTursoSyncBridge: () => mockGetBridge(),
 }));
 
-vi.mock("../src/gateway/services/tursoLinkedSources.js", () => ({
-  discoverTursoLinkedSources: (...args: unknown[]) => mockDiscover(...args),
-}));
+vi.mock("../src/gateway/services/tursoLinkedSources.js", async (importOriginal) => {
+  const original =
+    await importOriginal<typeof import("../src/gateway/services/tursoLinkedSources.js")>();
+  return {
+    ...original,
+    discoverTursoLinkedSources: (...args: unknown[]) => mockDiscover(...args),
+  };
+});
 
 vi.mock("../src/core/utils/paprRoot.js", () => ({
   getPaprRoot: () => mockGetPaprRoot(),
@@ -32,12 +37,13 @@ describe("pushDirtyLinkedJobsOnStartup", () => {
     vi.clearAllMocks();
     vi.resetModules();
     mockGetBridge.mockReturnValue({
+      enabled: true,
       getAppsRootDir: () => "/tmp/papr-apps",
     });
   });
 
-  it("returns early when Turso bridge is unavailable", async () => {
-    mockGetBridge.mockReturnValue(null);
+  it("returns early when Turso sync is disabled", async () => {
+    mockGetBridge.mockReturnValue({ enabled: false });
     const { pushDirtyLinkedJobsOnStartup } = await import(
       "../src/gateway/services/tursoPushScheduler.js"
     );

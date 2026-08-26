@@ -36,11 +36,8 @@ import {
   getCatalogShareBadge,
 } from "../../utils/communityCatalogDisplay";
 import {
-  countHiddenPreviewOnlyCommunityEntries,
-  readCommunityShowPreviewOnlyPreference,
   shouldShowInCommunityBrowse,
   sortCommunityEntriesInstallableFirst,
-  writeCommunityShowPreviewOnlyPreference,
 } from "../../utils/communityCatalogBrowseFilter";
 import {
   resolveCatalogLiveWebUrl,
@@ -235,13 +232,6 @@ export function CommunityAppsView({
   const searchQuery = searchQueryProp ?? internalSearchQuery;
   const setSearchQuery = onSearchQueryChange ?? setInternalSearchQuery;
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
-  const [showPreviewOnlyApps, setShowPreviewOnlyAppsState] = useState(
-    () => readCommunityShowPreviewOnlyPreference(),
-  );
-  const setShowPreviewOnlyApps = useCallback((show: boolean) => {
-    setShowPreviewOnlyAppsState(show);
-    writeCommunityShowPreviewOnlyPreference(show);
-  }, []);
   const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
@@ -697,12 +687,7 @@ export function CommunityAppsView({
       if (scope === "global" && !entry.codeInstallable && !entry.liveViewable) {
         return false;
       }
-      if (
-        scope === "global" &&
-        !shouldShowInCommunityBrowse(entry, {
-          showPreviewOnly: showPreviewOnlyApps,
-        })
-      ) {
+      if (scope === "global" && !shouldShowInCommunityBrowse(entry)) {
         return false;
       }
       if (scope !== "global" && entry.source === "opensource") {
@@ -721,11 +706,6 @@ export function CommunityAppsView({
         entry.author.toLowerCase().includes(q)
       );
     }) ?? [];
-
-  const hiddenPreviewOnlyCount =
-    scope === "global" && catalog
-      ? countHiddenPreviewOnlyCommunityEntries(catalog.entries)
-      : 0;
 
   const teamEntries =
     scope === "namespace"
@@ -816,17 +796,6 @@ export function CommunityAppsView({
               {scope === "namespace" ? "Team apps" : "Community apps"}
             </span>
             <div className="apps-view__library-toolbar-actions">
-              {scope === "global" && hiddenPreviewOnlyCount > 0 ? (
-                <button
-                  type="button"
-                  className="community-apps__browse-filter-toggle"
-                  onClick={() => setShowPreviewOnlyApps(!showPreviewOnlyApps)}
-                >
-                  {showPreviewOnlyApps
-                    ? "Installable apps only"
-                    : `Show preview-only (+${hiddenPreviewOnlyCount})`}
-                </button>
-              ) : null}
               {catalog ? (() => {
                 const summary = catalogSummaryLine(
                   scope,
@@ -916,18 +885,6 @@ export function CommunityAppsView({
             : `Show all platforms (+${hiddenByPlatform} hidden)`}
         </button>
       )}
-
-      {scope === "global" && !hideToolbar && hiddenPreviewOnlyCount > 0 ? (
-        <button
-          type="button"
-          className="community-apps__browse-filter-toggle"
-          onClick={() => setShowPreviewOnlyApps(!showPreviewOnlyApps)}
-        >
-          {showPreviewOnlyApps
-            ? "Installable apps only"
-            : `Show preview-only apps (+${hiddenPreviewOnlyCount})`}
-        </button>
-      ) : null}
 
       {filteredEntries.length === 0 && (
         <div className="community-apps__status">

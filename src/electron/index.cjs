@@ -41,6 +41,7 @@ let isTelemetrySendingEnabledFn;
 let telemetryClientInstance = null;
 let initializePaprLoginIPC;
 let ensureActiveNamespaceApiKey;
+let ensureActiveWorkspaceReconciled;
 let resolveActivePaprApiKey;
 let setGatewayRestartAfterWorkspaceSwitch;
 let cleanupPaprLogin;
@@ -132,6 +133,7 @@ async function loadESMModules() {
     await importWithRetry("../../dist/electron/electron/ipc/paprLogin.js");
   initializePaprLoginIPC = paprLoginIpcModule.initializePaprLoginIPC;
   ensureActiveNamespaceApiKey = paprLoginIpcModule.ensureActiveNamespaceApiKey;
+  ensureActiveWorkspaceReconciled = paprLoginIpcModule.ensureActiveWorkspaceReconciled;
   resolveActivePaprApiKey = paprLoginIpcModule.resolveActivePaprApiKey;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
@@ -2354,6 +2356,17 @@ app.whenReady().then(async () => {
   });
 
   registerCloudPreviewSessionIPC(ipcMain, session);
+
+  if (ensureActiveWorkspaceReconciled) {
+    try {
+      await ensureActiveWorkspaceReconciled(settingsStorage);
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup workspace reconciliation failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   if (ensureActiveNamespaceApiKey) {
     try {

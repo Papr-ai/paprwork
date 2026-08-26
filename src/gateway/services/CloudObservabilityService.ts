@@ -21,7 +21,7 @@ import { GitRunner } from "./cloudSync/gitRunner.js";
 import { buildCloudLinkSyncReport } from "./cloudPublishStatus.js";
 import { getJobsService } from "./JobsService.js";
 import { stripRuntimeForGit } from "./jobs/jobRuntimeFields.js";
-import { getTursoSyncBridge } from "./TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "./TursoSyncBridge.js";
 import type { TursoPushScopedResult } from "./TursoSyncBridge.js";
 import type { PushGitScopedResult } from "./CloudSyncService.js";
 import {
@@ -511,9 +511,9 @@ export async function pushCloudSync(
 
   let turso: TursoPushScopedResult | undefined;
   if (targets.includes("turso")) {
-    const bridge = getTursoSyncBridge();
-    if (!bridge) {
-      throw new Error("Turso sync is not initialized.");
+    const bridge = ensureTursoSyncBridge();
+    if (!bridge.enabled) {
+      throw new Error("Turso sync is disabled.");
     }
     const hasTursoScope =
       Boolean(pushOptions.appId) ||
@@ -572,9 +572,9 @@ export async function queryCloudTurso(input: {
   await requirePaprApiKey();
   assertReadOnlySql(input.sql);
 
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
-    throw new Error("Turso sync is not initialized.");
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
+    throw new Error("Turso sync is disabled.");
   }
 
   const tursoDatabase = await resolveTursoDatabaseName(input);

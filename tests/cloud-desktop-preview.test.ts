@@ -8,7 +8,7 @@ import {
 
 describe("isCloudShareGateHtml", () => {
   it("detects team sign-in gate HTML", () => {
-    const html = `<!DOCTYPE html><html><body><main><p class="status">Sign in required</p></main></body></html>`;
+    const html = `<!DOCTYPE html><html><body><main><p class="gate-status">Sign in is required to access this app.</p></main></body></html>`;
     expect(isCloudShareGateHtml(html)).toBe(true);
   });
 

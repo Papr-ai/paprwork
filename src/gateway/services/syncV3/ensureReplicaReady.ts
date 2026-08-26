@@ -18,26 +18,40 @@ export async function ensureReplicaReady(
   linked: TursoLinkedSource,
   options?: import("./workspaceLogSync.js").WorkspaceLogPushOptions,
 ): Promise<EnsureReplicaReadyResult> {
-  let schemaShipped = 0;
-  if (isSyncV3SchemaLogEnabled()) {
-    schemaShipped = await runSchemaDriftHeal(linked);
-    if (schemaShipped > 0) {
+  const label = linked.alias ?? linked.jobId ?? linked.dbId ?? "unknown";
+  console.log(`[EnsureReplicaReady] Starting for ${label}`);
+
+  try {
+    let schemaShipped = 0;
+    if (isSyncV3SchemaLogEnabled()) {
+      schemaShipped = await runSchemaDriftHeal(linked);
+      if (schemaShipped > 0) {
+        console.log(
+          `[EnsureReplicaReady] Shipped ${schemaShipped} schema migration(s) for ${label}`,
+        );
+      }
+    }
+
+    const rowResult = await shipLinkedSourceToWorkspaceLog(linked, options);
+    if (rowResult.shipped > 0) {
       console.log(
-        `[EnsureReplicaReady] Shipped ${schemaShipped} schema migration(s) for ${linked.alias ?? linked.jobId}`,
+        `[EnsureReplicaReady] Shipped ${rowResult.shipped} row op(s) for ${label}`,
       );
     }
-  }
 
-  const rowResult = await shipLinkedSourceToWorkspaceLog(linked, options);
-  if (rowResult.shipped > 0) {
     console.log(
-      `[EnsureReplicaReady] Shipped ${rowResult.shipped} row op(s) for ${linked.alias ?? linked.jobId}`,
+      `[EnsureReplicaReady] Complete for ${label} (schema=${schemaShipped}, rows=${rowResult.shipped})`,
     );
-  }
 
-  return {
-    schemaShipped,
-    rowsShipped: rowResult.shipped,
-    lastSyncLogId: rowResult.lastSyncLogId,
-  };
+    return {
+      schemaShipped,
+      rowsShipped: rowResult.shipped,
+      lastSyncLogId: rowResult.lastSyncLogId,
+    };
+  } catch (error) {
+    console.warn(
+      `[EnsureReplicaReady] Failed for ${label}: ${(error as Error).message.slice(0, 300)}`,
+    );
+    throw error;
+  }
 }

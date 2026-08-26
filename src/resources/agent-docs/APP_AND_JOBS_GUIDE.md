@@ -414,7 +414,9 @@ const res = await fetch('/api/app/backend/fetch-attention-calls', {
 const { stdout, stderr, exitCode } = await res.json();
 ```
 
-Handlers receive `PAPR_ACTION_PARAMS` (JSON) and vault keys as env vars. Print JSON to stdout (Python: `json.dump`, Node/TS: `console.log(JSON.stringify(...))`).
+Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **`PAPR_PARAM_{key}`** (one env var per param — e.g. `passcode` → `PAPR_PARAM_passcode`), vault keys as env vars, and when signed in **`PAPR_CALLER_USER_ID`** / **`PAPR_CALLER_EMAIL`** (top-level env). **There is no `PAPR_PARAMS_JSON`.** Gateway **overwrites** spoofed identity in merged params too — `PAPR_PARAM_PAPR_CALLER_USER_ID` equals the session id (fail-safe). Prefer top-level `PAPR_CALLER_USER_ID` for ACL; never trust client `userId` / `role` params. Print JSON to stdout (Python: `json.dump`, Node/TS: `console.log(JSON.stringify(...))`).
+
+**Older apps:** may lack `backend/` entirely — `POST /api/app/backend/:action` returns ENOENT on manifest (route exists). Scaffold `manifest.json` + handler before first use. New apps get this from `create_app`.
 
 **Vault key injection (do not reverse-engineer):**
 1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
@@ -759,6 +761,42 @@ async function loadData() {
 - **No path traversal**: the db path is taken from the stored data-source record, not from the request.
 - **No row-level security**: the gateway runs whatever SQL the app sends. **You** must filter rows (see below).
 
+### Backend caller identity — NOT row-level SQL (common mistake)
+
+**This is not** SQL injection of \`papr_current_user()\` and **not** restricted \`/api/db/query\`. Probing \`SELECT papr_current_user()\` or \`/api/db/action\` will fail — those do not exist.
+
+**This is:** \`POST /api/app/backend/{actionName}\` runs your handler in \`apps/{appId}/backend/\` with env \`PAPR_CALLER_USER_ID\` set from the Papr session (desktop + cloud). Your Python/Node handler enforces ACL; generic \`/api/db/*\` stays unchanged.
+
+| Question | Answer |
+|----------|--------|
+| Endpoint? | \`POST /api/app/backend/claim-passcode\` (action must be in \`manifest.json\`) |
+| Where is user id? | \`os.environ["PAPR_CALLER_USER_ID"]\` in handler — **not** \`params.userId\` |
+| Does \`/api/db/query\` filter rows? | **No** — still runs any SELECT the client sends |
+| Desktop owner exempt? | Owner still has full \`/api/db/*\`; ACL lives in backend handlers for visitors |
+| How to verify? | Scaffold \`backend/manifest.json\` + \`ping.py\` if missing (ENOENT ≠ 404). \`curl POST .../api/app/backend/ping\` with spoofed \`PAPR_CALLER_USER_ID\` in params → \`stdout.callerUserId\` = real session id; \`PAPR_PARAM_PAPR_CALLER_USER_ID\` also overwritten |
+
+**Minimal manifest (required before verify — \`version\` is numeric \`1\`, field is \`handler\` not \`entry\`):**
+\`\`\`json
+{
+  "version": 1,
+  "actions": {
+    "ping": {
+      "handler": "ping.py",
+      "runtime": "python",
+      "timeoutMs": 10000
+    }
+  }
+}
+\`\`\`
+
+**Handler params:** \`PAPR_ACTION_PARAMS\` (JSON) + \`PAPR_PARAM_{key}\` per param. **No** \`PAPR_PARAMS_JSON\`. Identity keys in params are overwritten (fail-safe — \`PAPR_PARAM_PAPR_CALLER_USER_ID\` = session id).
+
+\`\`\`bash
+curl -s -X POST http://localhost:18789/api/app/backend/ping \\
+  -H "Content-Type: application/json" \\
+  -d '{"appId":"YOUR_APP_ID","params":{"PAPR_CALLER_USER_ID":"fake"}}'
+\`\`\`
+
 ### Data isolation & owner admin (`GET /api/access`)
 
 **Publish access ≠ data isolation.** `public_read` controls who can open the app — not which rows they see. The platform does not inject `WHERE` clauses.
@@ -800,6 +838,8 @@ const { members } = await fetch('/api/members').then(r => r.json());
 - `PAPR_CALLER_EMAIL` — when email is known
 
 Jobs should use these for authorization — never trust a user id passed in the request body.
+
+**Verified identity in backend actions:** `POST /api/app/backend/:action` injects the same env vars when signed in (desktop + cloud). Handlers use `os.environ["PAPR_CALLER_USER_ID"]` (Python) or `process.env.PAPR_CALLER_USER_ID` (Node/TS) for ACL — ignore client `params.userId`. Optional for public/ping handlers that do not need caller context.
 
 **Pick an isolation pattern when designing schema:**
 

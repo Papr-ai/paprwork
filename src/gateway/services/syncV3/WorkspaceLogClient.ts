@@ -60,12 +60,12 @@ export const WORKSPACE_LOG_SHIP_BATCH_SIZE = 500;
 
 export async function appendWorkspaceLogBatch(
   request: WorkspaceLogAppendBatchRequest,
+  options?: { timeoutMs?: number },
 ): Promise<WorkspaceLogAppendBatchResponse> {
   const started = performance.now();
-  const timeoutMs = Math.min(
-    180_000,
-    45_000 + request.entries.length * 250,
-  );
+  const timeoutMs =
+    options?.timeoutMs ??
+    Math.min(180_000, 45_000 + request.entries.length * 250);
   const resp = await cloudApiFetch("/v1/cloud/workspace/log/append-batch", {
     method: "POST",
     body: request,
@@ -115,10 +115,14 @@ export async function appendWorkspaceLogEntryWithApiKey(
   return result;
 }
 
+/** Default GET timeout for workspace log pages (large replays can be slow). */
+export const WORKSPACE_LOG_READ_TIMEOUT_MS = 300_000;
+
 export async function readWorkspaceLogSince(
   replicaId: string,
   cursor: number,
   limit = 500,
+  options?: { timeoutMs?: number },
 ): Promise<WorkspaceLogSinceResponse> {
   const qs = new URLSearchParams({
     replicaId,
@@ -127,7 +131,7 @@ export async function readWorkspaceLogSince(
   });
   const resp = await cloudApiFetch(`/v1/cloud/workspace/log/since?${qs.toString()}`, {
     method: "GET",
-    timeoutMs: 60_000,
+    timeoutMs: options?.timeoutMs ?? WORKSPACE_LOG_READ_TIMEOUT_MS,
   });
   return parseJsonResponse<WorkspaceLogSinceResponse>(resp, replicaId);
 }

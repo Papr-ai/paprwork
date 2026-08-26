@@ -21,6 +21,7 @@ import {
   parseAppBackendManifest,
 } from "./appRuntime/appBackendManifest.js";
 import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
+import { filterVaultKeyNames, isPlatformInjectedEnvKey } from "../../core/utils/platformInjectedEnvKeys.js";
 import { extractCustomKeyNames } from "../utils/keySubstitution.js";
 
 export const CLOUD_APP_REQUIREMENTS_FILENAME = "requirements.json";
@@ -46,12 +47,20 @@ export function readAppRequirements(
     if (!Array.isArray(parsed.requirements)) {
       return [];
     }
-    return normalizeCredentialRequirements(
-      parsed.requirements.map((item) => RequiredKeySpecSchema.parse(item)),
+    return stripPlatformInjectedRequirements(
+      normalizeCredentialRequirements(
+        parsed.requirements.map((item) => RequiredKeySpecSchema.parse(item)),
+      ),
     );
   } catch {
     return [];
   }
+}
+
+function stripPlatformInjectedRequirements(
+  requirements: RequiredKeySpec[],
+): RequiredKeySpec[] {
+  return requirements.filter((spec) => !isPlatformInjectedEnvKey(spec.name));
 }
 
 export function writeAppRequirements(
@@ -59,8 +68,10 @@ export function writeAppRequirements(
   appId: string,
   requirements: RequiredKeySpec[],
 ): CloudAppRequirementsFile {
-  const normalized = normalizeCredentialRequirements(
-    requirements.map((item) => RequiredKeySpecSchema.parse(item)),
+  const normalized = stripPlatformInjectedRequirements(
+    normalizeCredentialRequirements(
+      requirements.map((item) => RequiredKeySpecSchema.parse(item)),
+    ),
   );
   const payload: CloudAppRequirementsFile = {
     schemaVersion: "1.0.0",
@@ -81,8 +92,10 @@ export function parseRequirementsFileContent(
     if (!Array.isArray(parsed.requirements)) {
       return [];
     }
-    return normalizeCredentialRequirements(
-      parsed.requirements.map((item) => RequiredKeySpecSchema.parse(item)),
+    return stripPlatformInjectedRequirements(
+      normalizeCredentialRequirements(
+        parsed.requirements.map((item) => RequiredKeySpecSchema.parse(item)),
+      ),
     );
   } catch {
     return [];
@@ -148,7 +161,7 @@ export function mergeBackendKeysIntoRequirements(
   const byName = new Map(
     normalizeCredentialRequirements(requirements).map((spec) => [spec.name, spec]),
   );
-  for (const name of backendKeyNames) {
+  for (const name of filterVaultKeyNames(backendKeyNames)) {
     const trimmed = name.trim();
     if (!trimmed || byName.has(trimmed)) {
       continue;
@@ -213,7 +226,9 @@ export function readLinkedJobKeyNames(
       continue;
     }
     for (const name of extractCustomKeyNames(command)) {
-      names.add(name);
+      if (!isPlatformInjectedEnvKey(name)) {
+        names.add(name);
+      }
     }
   }
   return [...names].sort();

@@ -90,6 +90,8 @@ export interface WorkspaceLogAppendBatchResponse {
   count: number;
   hlc: string;
   latencyMs: number;
+  /** Schema entries materialized onto Turso before HTTP 200 (append-batch). */
+  schemaAppliedCount?: number;
 }
 
 export interface WorkspaceLogSinceResponse {

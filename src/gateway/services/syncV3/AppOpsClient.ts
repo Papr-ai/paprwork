@@ -78,6 +78,21 @@ async function writerFetch(
         `Writer request timed out after ${Math.round(WRITER_FETCH_TIMEOUT_MS / 1000)}s`,
       );
     }
+    if (err instanceof Error && err.message === "fetch failed") {
+      const cause = err.cause;
+      const causeDetail =
+        cause instanceof Error
+          ? cause.message
+          : typeof cause === "object" &&
+              cause !== null &&
+              "code" in cause &&
+              typeof (cause as { code?: unknown }).code === "string"
+            ? (cause as { code: string }).code
+            : undefined;
+      throw new Error(
+        causeDetail ? `fetch failed (${causeDetail})` : err.message,
+      );
+    }
     throw err;
   } finally {
     clearTimeout(timer);

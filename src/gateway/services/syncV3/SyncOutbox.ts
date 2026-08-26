@@ -350,6 +350,67 @@ export async function listDeadLetterOutboxEntries(
   return entries.filter((entry) => entry.status === "dead_letter");
 }
 
+/** Remove all queued writer ops for a deleted app. */
+export async function removeOutboxEntriesForApp(appId: string): Promise<number> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const entries = await listOutboxEntries();
+  const kept = entries.filter((entry) => entry.appId !== trimmed);
+  const removed = entries.length - kept.length;
+  if (removed > 0) {
+    await writeAllEntries(kept);
+  }
+  return removed;
+}
+
+/** Remove dead-letter rows for an app (stale failures after a successful sync). */
+export async function clearDeadLetterOutboxEntries(appId: string): Promise<number> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const entries = await listOutboxEntries();
+  const kept = entries.filter(
+    (entry) => entry.appId !== trimmed || entry.status !== "dead_letter",
+  );
+  const removed = entries.length - kept.length;
+  if (removed > 0) {
+    await writeAllEntries(kept);
+  }
+  return removed;
+}
+
+/** Manual retry — move dead-letter ops back to pending. */
+export async function requeueDeadLetterOutboxEntries(
+  appId: string,
+): Promise<number> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const entries = await listOutboxEntries();
+  let requeued = 0;
+  const next = entries.map((entry) => {
+    if (entry.appId !== trimmed || entry.status !== "dead_letter") {
+      return entry;
+    }
+    requeued += 1;
+    return {
+      ...entry,
+      status: "pending" as const,
+      attempts: 0,
+      lastError: undefined,
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  if (requeued > 0) {
+    await writeAllEntries(next);
+  }
+  return requeued;
+}
+
 /** Test-only — reset outbox file. */
 export async function clearSyncOutboxForTests(): Promise<void> {
   await fs.rm(outboxPath(), { force: true });

@@ -117,11 +117,32 @@ When cloud sync is enabled (default):
 |----------------|--------------|
 | `/api/db/schema`, `/api/db/query`, `/api/db/batch` (aliases: `query-batch`, `read-batch`), `/api/db/write`, `/api/db/write-batch`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` (SSE) | `/api/jobs/create` |
-| `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`) | `/api/memory/*` (does not exist — use backend handlers) |
+| `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`; **`PAPR_CALLER_USER_ID`** / **`PAPR_CALLER_EMAIL`** when signed in) | `/api/memory/*` (does not exist — use backend handlers) |
 
 **"Ask Agent" buttons (desktop):** Use `window.paprAPI.invoke('chat.open', { message })` — sandbox does **not** block this. Do **not** claim mini-apps cannot open chat. App code cannot call `delegate_task`; use `chat.open` for conversational flows or `/api/jobs/run` for silent background work.
 
 If an app needs job triggers or paprAPI on cloud later, tell the user those features require Paprwork desktop open, or redesign around `/api/db/*` for cloud-first flows.
+
+## Verified caller identity (backend + jobs)
+
+When handlers or jobs need to know **who invoked them** (role ACL, roster claim, per-user writes):
+
+| Env var | Set by | Use for |
+|---------|--------|---------|
+| `PAPR_CALLER_USER_ID` | Gateway / Cloud App Host (when signed in) | Roster lookup, row ACL, audit |
+| `PAPR_CALLER_EMAIL` | Same (when known) | Display / admin pickers only — prefer `userId` for binding |
+
+- **Endpoint (exact):** `POST /api/app/backend/{actionName}` — name from `backend/manifest.json`. **Not** `/api/db/*`. **Not** `/api/db/action` (404).
+- **No SQL RLS:** `papr_current_user()` does not exist. `/api/db/query` still runs any SELECT.
+- Injected on **`POST /api/app/backend/:action`** (desktop + cloud) and **`POST /api/jobs/run`**.
+- Server **overrides** client spoofing in `params` — never authorize from `params.userId`.
+- **Verify:** `POST /api/app/backend/ping` with fake `PAPR_CALLER_USER_ID` in params → `stdout.callerUserId` = real session id.
+
+```python
+user_id = os.environ.get("PAPR_CALLER_USER_ID")
+if not user_id:
+    sys.exit("Sign in required")
+```
 
 Users can disable auto-publish globally or per-app in Settings.
 
