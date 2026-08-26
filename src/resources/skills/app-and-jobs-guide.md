@@ -92,6 +92,62 @@ Desktop injects from Settings directly. Cloud injects from GCP vault **only for 
 
 See APP_AND_JOBS_GUIDE.md § App backend for full manifest example.
 
+### Verified caller identity (multi-user / ACL backends)
+
+**NOT row-level SQL.** No `papr_current_user()`, no `/api/db/secure-query`, no `/api/db/action`. `/api/db/query` is unchanged — any SELECT still runs.
+
+**Mechanism:** `POST /api/app/backend/{actionName}` — `actionName` from `apps/{appId}/backend/manifest.json`. Handler gets env `PAPR_CALLER_USER_ID` (session-trusted).
+
+**Older apps:** may have no `backend/` folder — endpoint returns **ENOENT** on manifest (route is live, not 404). Scaffold before verify.
+
+**Minimal manifest (copy verbatim — `version` is numeric `1`, field is `handler` not `entry`):**
+```json
+{
+  "version": 1,
+  "actions": {
+    "ping": {
+      "handler": "ping.py",
+      "runtime": "python",
+      "timeoutMs": 10000
+    }
+  }
+}
+```
+
+**Params env:** `PAPR_ACTION_PARAMS` (JSON) + `PAPR_PARAM_{key}` per param. **No `PAPR_PARAMS_JSON`.** Spoofed `PAPR_CALLER_USER_ID` in params is **overwritten** — `PAPR_PARAM_PAPR_CALLER_USER_ID` = session id (fail-safe).
+
+**Common wrong probes (all fail):** `SELECT papr_current_user()`, `/api/db/action`, `/api/app-actions`.
+
+**Verify:**
+```bash
+curl -s -X POST http://localhost:18789/api/app/backend/ping \
+  -H "Content-Type: application/json" \
+  -d '{"appId":"APP_ID","params":{"PAPR_CALLER_USER_ID":"fake"}}'
+# stdout JSON: callerUserId = real session id, NOT "fake"
+```
+
+When a backend handler must know **who invoked it** (roster lookup, role-scoped reads, passcode claim):
+
+- **`POST /api/app/backend/:action`** and **`POST /api/jobs/run`** inject server env vars when the caller is signed in — they **override** any client spoofing in `params` (including `PAPR_PARAM_*` copies of identity keys).
+- **`PAPR_CALLER_USER_ID`** — Papr user id (Parse objectId); use for ACL and roster binding.
+- **`PAPR_CALLER_EMAIL`** — when email is known from session.
+- **Optional** for public/ping handlers — ignore when identity is not needed.
+- **Never** authorize from client `userId`, `role`, or other business identity params — only `PAPR_CALLER_USER_ID` / `PAPR_CALLER_EMAIL`.
+
+```python
+user_id = os.environ.get("PAPR_CALLER_USER_ID")
+if not user_id:
+    sys.exit("Sign in required")
+# lookup role from roster WHERE papr_user_id = user_id
+```
+
+```typescript
+const userId = process.env.PAPR_CALLER_USER_ID;
+if (!userId) throw new Error("Sign in required");
+```
+
+For sensitive multi-role apps: put reads/writes in backend actions (not raw `/api/db/query` from the browser). See system prompt § **Backend ACL — what changed vs what did NOT**.
+
 ### Backend linked database (local + cloud)
 
 When a backend handler must **read or write** linked SQLite/Turso databases:

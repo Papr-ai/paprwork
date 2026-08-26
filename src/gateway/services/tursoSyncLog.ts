@@ -241,11 +241,8 @@ export function ensureLocalSyncInfrastructure(db: Database.Database): void {
 }
 
 export async function ensureRemoteSyncInfrastructure(remote: Client): Promise<void> {
-  await remote.execute(createSyncLogTableSql());
-  await remote.execute(createSyncMuteTableSql());
-  await remote.execute(
-    `INSERT OR IGNORE INTO ${quoteIdent(SYNC_MUTE_TABLE)} (id, depth) VALUES (${MUTE_ROW_ID}, 0)`,
-  );
+  const { ensureRemotePlatformTursoSchema } = await import("./tursoPlatformSchema.js");
+  await ensureRemotePlatformTursoSchema(remote);
 }
 
 /**
@@ -857,21 +854,8 @@ export async function readRemoteCompactedThroughId(remote: Client): Promise<numb
 }
 
 async function ensureRemoteCompactionMeta(remote: Client): Promise<void> {
-  await remote.execute(
-    `CREATE TABLE IF NOT EXISTS ${quoteIdent(SYNC_META_TABLE_NAME)} ` +
-      `(id INTEGER PRIMARY KEY CHECK (id = 1), version INTEGER NOT NULL DEFAULT 0, updated_at TEXT)`,
-  );
-  try {
-    await remote.execute(
-      `ALTER TABLE ${quoteIdent(SYNC_META_TABLE_NAME)} ` +
-        `ADD COLUMN compacted_through_id INTEGER NOT NULL DEFAULT 0`,
-    );
-  } catch {
-    /* column already exists */
-  }
-  await remote.execute(
-    `INSERT OR IGNORE INTO ${quoteIdent(SYNC_META_TABLE_NAME)} (id, version) VALUES (1, 0)`,
-  );
+  const { ensureRemotePlatformTursoSchema } = await import("./tursoPlatformSchema.js");
+  await ensureRemotePlatformTursoSchema(remote);
 }
 
 /**

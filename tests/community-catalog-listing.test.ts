@@ -177,7 +177,7 @@ describe("shouldIncludeInPublicCommunity — link-only apps", () => {
 });
 
 describe("isCommunityBrowseListing", () => {
-  it("includes installable and live-preview public apps", () => {
+  it("includes installable apps and excludes preview-only", () => {
     expect(isCommunityBrowseListing(cloudEntry({ codeInstallable: true }))).toBe(
       true,
     );
@@ -185,7 +185,7 @@ describe("isCommunityBrowseListing", () => {
       isCommunityBrowseListing(
         cloudEntry({ codeInstallable: false, liveViewable: true }),
       ),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isCommunityBrowseListing(
         cloudEntry({ codeInstallable: false, liveViewable: false }),

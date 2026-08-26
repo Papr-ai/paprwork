@@ -82,12 +82,25 @@ Backend handlers are NOT just for SQL — they handle ALL server-side logic.
 | **External API calls with secrets** | **NEVER** — keys exposed in browser | Backend proxies the call, vault keys injected |
 | **OAuth token exchange** | **NEVER** — client secret exposed | Backend handler |
 | **File system operations** | N/A from browser | Backend reads/writes server files |
-| **Server-side auth checks** | Can't trust frontend | Backend validates roles/tokens |
+| **Server-side auth checks** | Can't trust frontend | Backend validates roles/tokens via **`PAPR_CALLER_USER_ID`** (server-injected env) |
+| **Multi-user / role-scoped data** (manager vs IC, roster claim) | Raw `/api/db/*` — client can drop WHERE clauses | Backend handler reads `PAPR_CALLER_USER_ID`, looks up role, returns scoped rows only |
 | **Webhook receivers** | N/A | Backend handler processes incoming webhooks |
 
 **Rule of thumb:** If your `db.ts` has 5+ raw SQL functions, you need backend handlers. If your frontend calls ANY external API with a secret key, you MUST use a backend handler.
 
 **Common miss:** Agents build `db.ts` with 15 `fetch('/api/db/query')` wrappers and call it "the backend." That's still frontend code running in the browser — it's the #1 architecture anti-pattern. Real backend = `apps/{appId}/backend/*.py` registered in `manifest.json`.
+
+#### Verified caller identity (multi-user backends)
+
+When backend handlers enforce roles, roster binding, or passcode claim:
+
+- **`POST /api/app/backend/:action`** and **`POST /api/jobs/run`** inject **`PAPR_CALLER_USER_ID`** and **`PAPR_CALLER_EMAIL`** when the caller is signed in (desktop + `apps.papr.ai`).
+- Server **overrides** any client spoofing in `params` — never authorize from `params.userId` or `PAPR_PARAM_userId`.
+- Handlers: `os.environ["PAPR_CALLER_USER_ID"]` (Python) or `process.env.PAPR_CALLER_USER_ID` (Node/TS).
+- Optional for public/ping handlers that do not need identity.
+- **Publish access ≠ row ACL:** `link_read_write` / `team` controls who can open the app; backend handlers control what rows each user sees.
+
+Architect must list which backend actions need caller identity and how role is resolved (roster table, `GET /api/access` + `isOwner`, etc.).
 
 #### Table design principles (within one DB)
 
@@ -172,6 +185,7 @@ Job write  →  onDbChanged → reload affected queries only
 5. **Design** — load design system skill before any UI implementation (main agent enforces)
 6. **Delegate implementation** — Product Architect plans; Implementation Specialist or main agent builds after approval
 7. **One canonical DB contract** — name every table/column once, plus its writers and readers; multi-job apps require `data-contract.json`
+8. **Multi-user ACL** — sensitive reads/writes go through backend handlers using **`PAPR_CALLER_USER_ID`**; tag rows with `papr_user_id` but never rely on client-side SQL filters alone
 8. **No filesystem coupling** — jobs never read another job's `job.json`, `jobs.json`, or hardcoded `$PAPR_HOME/Jobs/...` paths
 9. **Evidence before completion** — interrupted or unavailable tool results are unknown, never proof; rerun validation and acceptance checks before claiming success
 

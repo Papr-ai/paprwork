@@ -21,7 +21,7 @@ const bridgeMock = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
-  getTursoSyncBridge: () => bridgeMock,
+  ensureTursoSyncBridge: () => bridgeMock,
 }));
 
 // Spread the real module instead of listing exports by hand — the two-export

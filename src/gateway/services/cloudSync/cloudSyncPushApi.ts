@@ -17,8 +17,8 @@ const composerPrepareAtByService = new WeakMap<CloudSyncService, number>();
 
 export async function pushNow(sync: CloudSyncHostService): Promise<void> {
   await pushGitNow(sync);
-  const bridge = (await import("../TursoSyncBridge.js")).getTursoSyncBridge();
-  if (bridge) {
+  const bridge = (await import("../TursoSyncBridge.js")).ensureTursoSyncBridge();
+  if (bridge.enabled) {
     await bridge.pushDirtyLinkedSources();
   }
 }

@@ -4,7 +4,12 @@
  * - On first tab focus: fetch __papr__/app-revision.json vs meta tag
  * - On parent Refresh (postMessage): same check before reload
  * - No polling, no persistent SSE
+ *
+ * Uses in-DOM confirm (papr-dialog) — window.confirm() is silently blocked in
+ * cross-origin iframes (Paprwork local + web preview toggles).
  */
+
+import { askConfirm } from "./papr-dialog.ts";
 
 const REVISION_META = "papr-app-revision";
 const REVISION_JSON_PATH = "__papr__/app-revision.json";
@@ -53,7 +58,7 @@ if (loadedRevision) {
       if (!currentRevision || currentRevision === loadedRevision) {
         return;
       }
-      if (window.confirm(PROMPT_MESSAGE)) {
+      if (await askConfirm(PROMPT_MESSAGE, "Refresh")) {
         location.reload();
       }
     })();
@@ -66,7 +71,7 @@ if (loadedRevision) {
     void (async () => {
       const currentRevision = await fetchCurrentRevision();
       if (currentRevision && currentRevision !== loadedRevision) {
-        if (window.confirm(PROMPT_MESSAGE)) {
+        if (await askConfirm(PROMPT_MESSAGE, "Refresh")) {
           location.reload();
           postToParent(event.source, false);
           return;

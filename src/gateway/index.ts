@@ -96,7 +96,7 @@ import {
   initializeCloudSyncService,
   getCloudSyncService,
 } from "./services/CloudSyncService.js";
-import { initializeTursoSyncBridge } from "./services/TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "./services/TursoSyncBridge.js";
 import { buildTursoSyncItemsReport } from "./services/tursoSyncStatus.js";
 import { isLoopbackRequest } from "./utils/isLoopbackRequest.js";
 import { buildCloudLinkSyncReport } from "./services/cloudPublishStatus.js";
@@ -2511,6 +2511,9 @@ async function startGateway(): Promise<void> {
         const { substituteCustomKeysInCommand } = await import(
           "./utils/keySubstitution.js"
         );
+        const { isPlatformInjectedEnvKey } = await import(
+          "../core/utils/platformInjectedEnvKeys.js"
+        );
         const { sanitizeError } = await import("../core/tools/security.js");
 
         const backend = new AppBackendService();
@@ -2538,6 +2541,9 @@ async function startGateway(): Promise<void> {
         const secretValues: string[] = [];
         if (spec.keys?.length) {
           for (const keyName of spec.keys) {
+            if (isPlatformInjectedEnvKey(keyName)) {
+              continue;
+            }
             const sub = await substituteCustomKeysInCommand(`echo \${${keyName}}`);
             if (sub.usedKeyNames.includes(keyName)) {
               // Extract actual value from the substituted command
@@ -2560,11 +2566,17 @@ async function startGateway(): Promise<void> {
         });
         secretValues.push(...collectBackendDatabaseSecrets(databaseEnv));
 
+        const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
+        const callerIdentity = getPaprCallerIdentity();
+        const loggedIn = Boolean(callerIdentity.userId?.trim());
+
         const result = await backend.runAction({
           appId,
           action: action.trim(),
           params: body.params,
           vaultEnv,
+          callerIdentity,
+          loggedIn,
         });
 
         res.json({
@@ -2810,6 +2822,11 @@ async function startGateway(): Promise<void> {
           const brandStyleTag = buildBrandStyleTag(brand.cssVariables);
           content = injectMiniAppBaseStyles(content, brandStyleTag);
 
+          const { injectMiniAppNativeDialogShim } = await import(
+            "./utils/injectMiniAppNativeDialogShim.js"
+          );
+          content = injectMiniAppNativeDialogShim(content);
+
           // Boot watchdog: turns a silent blank iframe into a labeled
           // diagnostic banner (entry module never ran / threw / rendered nothing).
           const { injectMiniAppBootWatchdog } = await import(
@@ -2851,6 +2868,7 @@ async function startGateway(): Promise<void> {
           return;
         }
         const cloudSync = initializeCloudSyncService();
+        ensureTursoSyncBridge();
         cloudSync.initialize().catch((err) => {
           console.warn(
             "[Gateway] Cloud sync init failed (non-fatal):",
@@ -2886,7 +2904,7 @@ async function startGateway(): Promise<void> {
         process.env.TURSO_STARTUP_DELAY_MS ?? "90000",
       );
       setTimeout(() => {
-        const tursoBridge = initializeTursoSyncBridge();
+        const tursoBridge = ensureTursoSyncBridge();
         if (process.env.TURSO_PULL_ON_STARTUP === "true") {
           void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
             console.warn(

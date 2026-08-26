@@ -5,6 +5,7 @@
 import type { Request } from "express";
 import {
   parseCloudAppMetadataFile,
+  buildDefaultCloudAppDescription,
   type CloudAppMetadataFile,
 } from "../../../core/utils/cloudAppMetadata.js";
 import {
@@ -17,7 +18,7 @@ import {
 } from "../../../core/utils/cloudAppPreview.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
-import { resolvePublishedApp, type PublishedAppVisibility } from "./cloudAppPublishClient.js";
+import { resolvePublishedApp, type PublishedAppResolveResult, type PublishedAppVisibility } from "./cloudAppPublishClient.js";
 import {
   ensurePublishedAppRootTrailingSlash,
   publishedAppBaseHref,
@@ -34,11 +35,51 @@ function isSvgIcon(icon: string): boolean {
   return icon.trim().startsWith("<svg");
 }
 
+function previewMetaFromCatalog(
+  resolved: PublishedAppResolveResult,
+  canonicalUrl: string,
+  iconUrl: string,
+  imageUrl: string,
+): CloudAppPreviewMeta | null {
+  const title = resolved.catalogTitle?.trim();
+  if (!title) {
+    return null;
+  }
+  const description =
+    resolved.catalogDescription?.trim() ||
+    buildDefaultCloudAppDescription(title);
+  return {
+    title,
+    description,
+    canonicalUrl,
+    iconUrl,
+    imageUrl,
+    siteName: CLOUD_APP_SITE_NAME,
+  };
+}
+
+function catalogIconToSvg(icon: string): string {
+  if (isSvgIcon(icon)) {
+    return icon;
+  }
+  return emojiIconToSvg(icon);
+}
+
+async function loadPublishedApp(
+  runtimeAuth: AppRuntimeRouteAuth,
+  publishedApp?: PublishedAppResolveResult | null,
+): Promise<PublishedAppResolveResult | null> {
+  if (publishedApp !== undefined) {
+    return publishedApp;
+  }
+  return resolvePublishedApp(runtimeAuth.namespaceId, runtimeAuth.slug);
+}
+
 const SHARE_GATE_SIGNED_IN_MESSAGE =
-  "You signed in at apps.papr.ai, but you still need access to this app. If sharing is set to People with invite link, open the full external link from Paprwork. If sharing is My team, ask the owner to add your email under Settings → Papr → Team, then sign in here again.";
+  "You're signed in, but this app isn't shared with your account. Ask the person who sent you this link to add you.";
 
 const SHARE_LINK_REQUIRED_MESSAGE =
-  "This app needs either the full invite link from Paprwork (Copy external link — includes a ?t= token) or Papr team access.";
+  "Use the full invite link you were sent, or sign in with an account the app owner has added.";
 
 export interface ShareGateState {
   hasSession: boolean;
@@ -67,38 +108,29 @@ export function resolveShareGatePresentation(state: ShareGateState): ShareGatePr
     if (isInviteLinkVisibility(visibility)) {
       if (hasShareToken) {
         return {
-          headline: "This invite link isn't working yet",
+          headline: "This link isn't working yet",
           message:
-            "The link includes an invite token, but the web app is still catching up. " +
-            "After changing sharing or uploading, allow 2–5 minutes for the publish catalog and app bundle to propagate, " +
-            "then copy a fresh external link from Paprwork (Share → Copy external link) and try again. " +
-            "If you already waited, the token may be outdated — request a new link after Upload now finishes.",
+            "The invite link may still be updating, or it may have expired. Ask the app owner for a fresh link and try again in a few minutes.",
           showLoginButton: false,
         };
       }
       return {
         headline: "Invite link required",
         message:
-          "You are not signed in, and this app is shared via invite link. " +
-          "Open the full external link from Paprwork (Copy external link — it includes a ?t= token). " +
-          "Signing in alone will not open this app.",
+          "Open the full link you were sent — signing in alone won't open this app.",
         showLoginButton: false,
       };
     }
     if (isTeamVisibility(visibility)) {
       return {
-        headline: "Sign in required",
-        message:
-          "You are not signed in. This app is shared with My team — sign in with a Papr account " +
-          "that the owner added under Settings → Papr → Team in Paprwork.",
+        headline: "Sign in is required to access this app.",
+        message: "Sign in with the Papr account your team uses for this app.",
         showLoginButton: true,
       };
     }
     return {
-      headline: "Sign in required",
-      message:
-        "You are not signed in. Sign in at apps.papr.ai if you are on the workspace team, " +
-        "or open the invite link from Paprwork. dashboard.papr.ai sign-in does not carry over here.",
+      headline: "Sign in is required to access this app.",
+      message: "",
       showLoginButton: true,
     };
   }
@@ -106,31 +138,26 @@ export function resolveShareGatePresentation(state: ShareGateState): ShareGatePr
   // Authenticated but still blocked
   if (isInviteLinkVisibility(visibility) && !hasShareToken) {
     return {
-      headline: "Signed in — invite link still required",
+      headline: "Invite link required",
       message:
-        "You are signed in, but this app is published as People with invite link. " +
-        "Team membership does not grant access to the bare URL. " +
-        "Ask the owner for the full external link from Paprwork (includes ?t=), or have them switch sharing to My team and click Update web version.",
+        "You're signed in, but you still need the full invite link from the person who shared this app.",
       showLoginButton: false,
     };
   }
 
   if (isTeamVisibility(visibility)) {
     return {
-      headline: "Signed in — access denied",
+      headline: "No access",
       message:
-        "You are signed in, but this Papr account is not authorized for this app namespace. " +
-        "Common fixes: confirm the app is still shared as My team and the owner clicked Update web version; " +
-        "confirm your email is on the owner's workspace team (Settings → Papr → Team); " +
-        "confirm you are signing in with the same Papr account (not a different email alias).",
+        "You're signed in, but this app isn't shared with your account. Ask the person who sent you this link to add you.",
       showLoginButton: false,
     };
   }
 
   return {
-    headline: hasShareToken ? "Access denied" : "Signed in — access denied",
+    headline: "No access",
     message: hasShareToken
-      ? "Your invite link may be invalid or expired. Ask the owner for a new external link from Paprwork."
+      ? "This invite link may be invalid or expired. Ask the app owner for a new link."
       : SHARE_GATE_SIGNED_IN_MESSAGE,
     showLoginButton: false,
   };
@@ -183,21 +210,30 @@ function previewMetaFromMetadata(
 async function readMetadataFromRepo(
   runtimeAuth: AppRuntimeRouteAuth,
 ): Promise<CloudAppMetadataFile | null> {
-  const metadataFile = await fetchCachedRuntimeRepoFile(runtimeAuth, "metadata.json");
-  if (!metadataFile?.content) {
+  try {
+    const metadataFile = await fetchCachedRuntimeRepoFile(runtimeAuth, "metadata.json");
+    if (!metadataFile?.content) {
+      return null;
+    }
+    return parseCloudAppMetadataFile(metadataFile.content);
+  } catch {
+    // Memory may deny repo-file for unsigned visitors even with host key — fall back to slug meta.
     return null;
   }
-  return parseCloudAppMetadataFile(metadataFile.content);
 }
 
 async function readIconSvgFromRepo(
   runtimeAuth: AppRuntimeRouteAuth,
 ): Promise<string | null> {
-  for (const iconPath of ["logo.svg", "icon.svg", "favicon.svg"]) {
-    const iconFile = await fetchCachedRuntimeRepoFile(runtimeAuth, iconPath);
-    if (iconFile?.content?.trim().startsWith("<svg")) {
-      return iconFile.content;
+  try {
+    for (const iconPath of ["logo.svg", "icon.svg", "favicon.svg"]) {
+      const iconFile = await fetchCachedRuntimeRepoFile(runtimeAuth, iconPath);
+      if (iconFile?.content?.trim().startsWith("<svg")) {
+        return iconFile.content;
+      }
     }
+  } catch {
+    // Same as readMetadataFromRepo — unsigned gate must not 500 on repo-file 403.
   }
   return null;
 }
@@ -206,8 +242,9 @@ export async function resolveCloudAppPreviewMeta(input: {
   runtimeAuth: AppRuntimeRouteAuth;
   publicBaseUrl: string;
   canReadRepo: boolean;
+  publishedApp?: PublishedAppResolveResult | null;
 }): Promise<CloudAppPreviewMeta> {
-  const { runtimeAuth, publicBaseUrl, canReadRepo } = input;
+  const { runtimeAuth, publicBaseUrl, canReadRepo, publishedApp } = input;
   const canonicalUrl = buildCanonicalAppUrl(
     publicBaseUrl,
     runtimeAuth.namespaceId,
@@ -229,10 +266,12 @@ export async function resolveCloudAppPreviewMeta(input: {
     }
   }
 
-  const resolved = await resolvePublishedApp(
-    runtimeAuth.namespaceId,
-    runtimeAuth.slug,
-  );
+  const resolved = await loadPublishedApp(runtimeAuth, publishedApp);
+  const catalogMeta = resolved ? previewMetaFromCatalog(resolved, canonicalUrl, iconUrl, imageUrl) : null;
+  if (catalogMeta) {
+    return catalogMeta;
+  }
+
   const slug = resolved?.slug ?? runtimeAuth.slug;
   return buildPreviewMetaFromSlug(slug, canonicalUrl, iconUrl, imageUrl);
 }
@@ -256,31 +295,39 @@ export function buildShareGateLandingHtml(
   meta: CloudAppPreviewMeta,
   loginUrl?: string,
   presentation?: ShareGatePresentation,
+  iconSvg?: string,
+  signupUrl?: string,
 ): string {
   return buildPreviewLandingHtml(meta, presentation?.message ?? SHARE_LINK_REQUIRED_MESSAGE, {
     loginUrl,
+    signupUrl,
     showLoginButton: presentation?.showLoginButton ?? true,
     headline: presentation?.headline,
+    iconSvg,
   });
 }
 
 export async function resolvePreviewIconSvg(
   runtimeAuth: AppRuntimeRouteAuth,
   canReadRepo: boolean,
+  publishedApp?: PublishedAppResolveResult | null,
 ): Promise<string> {
   if (canReadRepo) {
     const metadata = await readMetadataFromRepo(runtimeAuth);
     if (metadata?.icon) {
-      if (isSvgIcon(metadata.icon)) {
-        return metadata.icon;
-      }
-      return emojiIconToSvg(metadata.icon);
+      return catalogIconToSvg(metadata.icon);
     }
     const iconSvg = await readIconSvgFromRepo(runtimeAuth);
     if (iconSvg) {
       return iconSvg;
     }
   }
+
+  const resolved = await loadPublishedApp(runtimeAuth, publishedApp);
+  if (resolved?.catalogIcon?.trim()) {
+    return catalogIconToSvg(resolved.catalogIcon);
+  }
+
   return DEFAULT_PAPR_LOGO_SVG;
 }
 

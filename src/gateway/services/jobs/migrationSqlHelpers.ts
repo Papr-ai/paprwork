@@ -28,6 +28,16 @@ export function isDuplicateColumnError(error: unknown): boolean {
   return /duplicate column name/i.test(message);
 }
 
+export function isMissingTableError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such table:/i.test(message);
+}
+
+export function isMissingColumnError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /no such column:/i.test(message);
+}
+
 export function parseCreateTableStatement(
   statement: string,
 ): { table: string } | null {

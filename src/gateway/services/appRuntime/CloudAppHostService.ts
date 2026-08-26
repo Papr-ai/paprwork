@@ -99,7 +99,7 @@ import {
   setCachedDbResult,
 } from "./dbRequestGuard.js";
 import { isMiniAppTypeScriptFile } from "../../utils/miniAppTranspile.js";
-import { isLinkPreviewCrawler } from "../../../core/utils/cloudAppPreview.js";
+import { buildCloudAuthLoginUrl, isLinkPreviewCrawler } from "../../../core/utils/cloudAppPreview.js";
 import {
   buildShareGateLandingHtml,
   resolveShareGatePresentation,
@@ -1520,12 +1520,23 @@ export class CloudAppHostService {
       const backend = new CloudAppBackendService();
       const bypassFresh = shouldBypassRepoFileCache(req.headers);
 
+      const loggedIn = Boolean(this.auth.getSessionToken(req));
+      const callerEmail = loggedIn ? this.auth.getSessionEmail(req) : undefined;
+      const callerIdentity = loggedIn
+        ? {
+            userId: runtimeAuth.externalUserId,
+            ...(callerEmail ? { email: callerEmail } : {}),
+          }
+        : undefined;
+
       const result = await backend.runAction(runtimeAuth, {
         appId,
         action: action.trim(),
         params: body.params,
         timeoutMs: body.timeoutMs,
         bypassFresh,
+        callerIdentity,
+        loggedIn,
       });
 
       res.json(result);
@@ -2008,23 +2019,27 @@ export class CloudAppHostService {
     runtimeAuth: AppRuntimeRouteAuth,
   ): Promise<void> {
     const publicBaseUrl = getCloudAppPublicBaseUrl(req);
-    const access = await this.resolveAccess(req);
-    const meta = await resolveCloudAppPreviewMeta({
-      runtimeAuth,
-      publicBaseUrl,
-      canReadRepo: access?.canRead === true,
-    });
-    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
-      namespaceId: runtimeAuth.namespaceId,
-      slug: runtimeAuth.slug,
-    });
-    const loginUrl = `/auth/login?returnTo=${encodeURIComponent(returnTo)}`;
     const hasSession = Boolean(runtimeAuth.sessionToken);
+    // Prefer publish-catalog branding for unsigned visitors; repo metadata when signed in.
+    const canReadRepo = hasSession;
     const published = await resolvePublishedApp(
       runtimeAuth.namespaceId,
       runtimeAuth.slug,
       runtimeAuth.sessionToken,
     );
+    const meta = await resolveCloudAppPreviewMeta({
+      runtimeAuth,
+      publicBaseUrl,
+      canReadRepo,
+      publishedApp: published,
+    });
+    const iconSvg = await resolvePreviewIconSvg(runtimeAuth, canReadRepo, published);
+    const returnTo = resolveCloudAuthReturnToFromRequest(req, {
+      namespaceId: runtimeAuth.namespaceId,
+      slug: runtimeAuth.slug,
+    });
+    const loginUrl = buildCloudAuthLoginUrl(returnTo, "login");
+    const signupUrl = buildCloudAuthLoginUrl(returnTo, "signup");
     const presentation = resolveShareGatePresentation({
       hasSession,
       hasShareToken: Boolean(runtimeAuth.shareToken),
@@ -2033,7 +2048,9 @@ export class CloudAppHostService {
     res
       .status(200)
       .setHeader("Content-Type", "text/html; charset=utf-8")
-      .send(buildShareGateLandingHtml(meta, loginUrl, presentation));
+      .send(
+        buildShareGateLandingHtml(meta, loginUrl, presentation, iconSvg, signupUrl),
+      );
   }
 
   private async handleOpenGraphIcon(
@@ -2147,8 +2164,9 @@ export class CloudAppHostService {
         runtimeAuth.slug,
       );
 
-      // Platform scripts: auth guard + one-shot version check on focus / refresh.
+      // Platform scripts: native dialog shim (must run before app code), auth, version check.
       const platformScripts = [
+        `<script src="/__papr__/papr-native-dialog-shim.js"></script>`,
         `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
         `<script src="/__papr__/papr-version-check.js" defer></script>`,
       ].join("\n");

@@ -257,6 +257,8 @@ export function AppsView() {
   const handleConfirmDelete = async (options: {
     deleteLinkedJobs: boolean;
     deleteTursoDatabases: boolean;
+    deleteRegistryDbIds: string[];
+    deleteRegistryTurso: boolean;
     unpublishFromCloud: boolean;
   }) => {
     if (!deletePreview) return;

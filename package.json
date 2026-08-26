@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.4.5",
+  "version": "2.4.6",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -138,6 +138,7 @@
     "test:turso-auto-push": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-auto-push.mjs",
     "test:turso-permanent-skip": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-permanent-skip.mjs",
     "test:turso-delta-sync": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-delta-sync.mjs",
+    "test:schema-batch-live-e2e": "node scripts/test-schema-batch-live-e2e.mjs",
     "test:turso-phase1-oplog-e2e": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-phase1-oplog-e2e.mjs",
     "test:turso-sync-session-e2e": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-sync-session-e2e.mjs",
     "test:turso-sync-overlap-e2e": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-sync-overlap-e2e.mjs",

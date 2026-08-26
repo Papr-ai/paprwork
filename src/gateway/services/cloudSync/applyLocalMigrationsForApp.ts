@@ -8,11 +8,16 @@ import {
   resolveMigrationRootFromDbPath,
 } from "../jobs/databaseMigrations.js";
 import { discoverTursoLinkedSources } from "../tursoLinkedSources.js";
+import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
 
 export async function applyLocalMigrationsForApp(
   appId: string,
   appsRootDir: string,
 ): Promise<string[]> {
+  if (isCloudSyncEnabled()) {
+    return [];
+  }
+
   const sources = (await discoverTursoLinkedSources(appsRootDir)).filter(
     (source) => source.appId === appId,
   );

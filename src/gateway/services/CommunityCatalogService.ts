@@ -571,11 +571,14 @@ function filterPublicCommunityEntries(
   );
 }
 
-/** Global Community tab — browse/preview live apps or install source. */
+/** Global Community tab — installable / forkable listings only (no preview-only). */
 export function isCommunityBrowseListing(
   entry: CommunityCatalogEntry,
 ): boolean {
-  return entry.codeInstallable === true || entry.liveViewable === true;
+  if (entry.source === "opensource") {
+    return true;
+  }
+  return entry.codeInstallable === true;
 }
 
 function filterBrowseableCommunityEntries(

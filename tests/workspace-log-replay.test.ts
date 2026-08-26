@@ -161,6 +161,143 @@ describe("workspace log replay", () => {
     expect(second).toBe(1);
     expect(writeCalls).toHaveLength(1);
   });
+
+  test("materializeWorkspaceLogSince skips row ops for dropped tables", async () => {
+    let canUseBetterSqlite = false;
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      const probe = new Database(":memory:");
+      probe.close();
+      canUseBetterSqlite = true;
+    } catch {
+      canUseBetterSqlite = false;
+    }
+
+    if (!canUseBetterSqlite) {
+      return;
+    }
+
+    const Database = (await import("better-sqlite3")).default;
+    const dbPath = path.join(process.env.PAPR_HOME!, "replay-skip-missing.db");
+    const db = new Database(dbPath);
+    db.exec("CREATE TABLE person_label (id TEXT PRIMARY KEY, tag TEXT)");
+    db.close();
+
+    const writeCalls: string[] = [];
+    const pool = {
+      write: vi.fn(async (_appId: string, _dbPath: string, sql: string) => {
+        writeCalls.push(sql);
+        return { changes: 1, lastInsertRowid: 1 };
+      }),
+      exec: vi.fn(async () => undefined),
+      query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
+    } as unknown as DbQueryPool;
+
+    const source = {
+      alias: "primary",
+      jobId: "job-skip",
+      dbPath,
+      tables: ["person_label"],
+    };
+
+    vi.spyOn(
+      await import("../src/gateway/services/syncV3/WorkspaceLogClient.js"),
+      "readWorkspaceLogSince",
+    ).mockResolvedValue({
+      replicaId: "j-skip1",
+      cursor: 0,
+      nextCursor: 1,
+      hasMore: false,
+      entries: [
+        {
+          seq: 1,
+          hlc: "2026-01-01T00:00:00Z",
+          kind: "row",
+          dbSourceId: "primary",
+          payload: {
+            appId: "app-1",
+            sql: "INSERT INTO person_tags (id, tag) VALUES (?, ?)",
+            params: ["1", "foo"],
+          },
+        },
+      ],
+    });
+
+    const { materializeWorkspaceLogSince } = await import(
+      "../src/gateway/services/syncV3/LogMaterializer.js"
+    );
+    const applied = await materializeWorkspaceLogSince(pool, "j-skip1", source);
+    expect(applied).toBe(1);
+    expect(writeCalls).toHaveLength(0);
+  });
+
+  test("materializeWorkspaceLogSince skips row ops when SQLite reports missing table", async () => {
+    let canUseBetterSqlite = false;
+    try {
+      const Database = (await import("better-sqlite3")).default;
+      const probe = new Database(":memory:");
+      probe.close();
+      canUseBetterSqlite = true;
+    } catch {
+      canUseBetterSqlite = false;
+    }
+
+    if (!canUseBetterSqlite) {
+      return;
+    }
+
+    const Database = (await import("better-sqlite3")).default;
+    const dbPath = path.join(process.env.PAPR_HOME!, "replay-sqlite-skip.db");
+    const db = new Database(dbPath);
+    db.exec("CREATE TABLE person_label (id TEXT PRIMARY KEY, tag TEXT)");
+    db.close();
+
+    const pool = {
+      write: vi.fn(async () => {
+        throw new Error("no such table: person_tags");
+      }),
+      exec: vi.fn(async () => undefined),
+      query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
+    } as unknown as DbQueryPool;
+
+    const source = {
+      alias: "primary",
+      jobId: "job-sqlite-skip",
+      dbPath,
+      tables: ["person_label"],
+    };
+
+    vi.spyOn(
+      await import("../src/gateway/services/syncV3/WorkspaceLogClient.js"),
+      "readWorkspaceLogSince",
+    ).mockResolvedValue({
+      replicaId: "j-sqlite-skip",
+      cursor: 0,
+      nextCursor: 1,
+      hasMore: false,
+      entries: [
+        {
+          seq: 9,
+          hlc: "2026-01-01T00:00:00Z",
+          kind: "row",
+          dbSourceId: "primary",
+          payload: {
+            appId: "app-1",
+            sql: "WITH cte AS (SELECT 1) INSERT INTO person_tags (id) VALUES ('x')",
+            params: [],
+          },
+        },
+      ],
+    });
+
+    const { materializeWorkspaceLogSince } = await import(
+      "../src/gateway/services/syncV3/LogMaterializer.js"
+    );
+    await expect(
+      materializeWorkspaceLogSince(pool, "j-sqlite-skip", source),
+    ).resolves.toBe(1);
+    expect(pool.write).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("OID cache crash replay", () => {

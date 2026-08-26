@@ -38,14 +38,13 @@ import {
 import {
   buildWorkspaceLogRowBatchEntries,
   chunkSyncLogWrites,
-  maxSyncLogIdInBatch,
 } from "./workspaceLogBatchShip.js";
 import { yieldEventLoop } from "../cloudSync/yieldEventLoop.js";
 import {
   materializeWorkspaceLogSince,
 } from "./LogMaterializer.js";
 import { getDbPool } from "../DbQueryPool.js";
-import { readRowWritesFromSyncLogSince } from "./syncLogToRowSql.js";
+import { readSyncLogShipBatch } from "./syncLogToRowSql.js";
 import { incrementSyncV3Metric } from "./syncV3Metrics.js";
 import { ensureWorkspaceLogGenesisForDb } from "./workspaceLogGenesisCutover.js";
 
@@ -53,6 +52,9 @@ export interface WorkspaceLogPushOptions {
   force?: boolean;
   tableNames?: string[];
 }
+
+/** Safety cap — 500 rounds × 500 rows ≈ 250k changelog entries per push call. */
+const MAX_SYNC_LOG_SHIP_ROUNDS = 500;
 
 function linkedSourceAsAppDataSource(linked: TursoLinkedSource): AppDataSource {
   return {
@@ -128,36 +130,63 @@ export async function shipLinkedSourceToWorkspaceLog(
   try {
     ensureLocalDbChangeLogReady(dbPath);
     db = new Database(dbPath, { readonly: true, fileMustExist: true });
-    const writes = readRowWritesFromSyncLogSince(db, afterId);
-    if (writes.length === 0) {
-      return { shipped: 0, lastSyncLogId: afterId };
-    }
 
+    let cursor = afterId;
     let shipped = 0;
     let lastSyncLogId = afterId;
     const dbSourceId = linked.alias ?? linked.jobId;
-    const batches = chunkSyncLogWrites(writes, WORKSPACE_LOG_SHIP_BATCH_SIZE);
     const shipStarted = performance.now();
-    for (const batch of batches) {
-      await appendWorkspaceLogBatch({
-        replicaId,
-        entries: buildWorkspaceLogRowBatchEntries(
-          batch,
-          linked.appId,
-          dbSourceId,
-        ),
-      });
-      shipped += batch.length;
-      lastSyncLogId = Math.max(lastSyncLogId, maxSyncLogIdInBatch(batch));
-      incrementSyncV3Metric("v3_op_count", batch.length);
+    let rounds = 0;
+
+    while (rounds < MAX_SYNC_LOG_SHIP_ROUNDS) {
+      rounds += 1;
+      const batch = readSyncLogShipBatch(db, cursor);
+      if (batch.highWaterLogId <= cursor && batch.writes.length === 0) {
+        break;
+      }
+
+      if (batch.writes.length > 0) {
+        const apiBatches = chunkSyncLogWrites(
+          batch.writes,
+          WORKSPACE_LOG_SHIP_BATCH_SIZE,
+        );
+        for (const apiBatch of apiBatches) {
+          await appendWorkspaceLogBatch({
+            replicaId,
+            entries: buildWorkspaceLogRowBatchEntries(
+              apiBatch,
+              linked.appId,
+              dbSourceId,
+            ),
+          });
+          shipped += apiBatch.length;
+          incrementSyncV3Metric("v3_op_count", apiBatch.length);
+          await yieldEventLoop();
+        }
+      }
+
+      if (batch.highWaterLogId > cursor) {
+        lastSyncLogId = batch.highWaterLogId;
+        cursor = batch.highWaterLogId;
+        recordTursoPushSuccess(syncKey, dbPath, getPaprRoot(), lastSyncLogId);
+      }
+
+      if (!batch.hasMore) {
+        break;
+      }
       await yieldEventLoop();
     }
 
+    if (rounds >= MAX_SYNC_LOG_SHIP_ROUNDS) {
+      console.warn(
+        `[WorkspaceLogSync] Stopped after ${MAX_SYNC_LOG_SHIP_ROUNDS} ship round(s) for ${syncKey} — backlog may remain`,
+      );
+    }
+
     if (shipped > 0) {
-      recordTursoPushSuccess(syncKey, dbPath, getPaprRoot(), lastSyncLogId);
       const shipMs = Math.round(performance.now() - shipStarted);
       console.log(
-        `[WorkspaceLogSync] Confirmed ${shipped} row op(s) appended for ${syncKey} in ${shipMs}ms (lastSyncLogId=${lastSyncLogId})`,
+        `[WorkspaceLogSync] Confirmed ${shipped} row op(s) appended for ${syncKey} in ${shipMs}ms (${rounds} round(s), lastSyncLogId=${lastSyncLogId})`,
       );
     }
 
@@ -240,8 +269,10 @@ export async function pullLinkedSourceViaWorkspaceLog(
 export async function catchUpAllLinkedSourcesFromWorkspaceLog(
   appsRootDir: string,
 ): Promise<number> {
-  const { discoverTursoLinkedSources } = await import("../tursoLinkedSources.js");
-  const sources = await discoverTursoLinkedSources(appsRootDir);
+  const { discoverTursoLinkedSources, dedupeLinkedSourcesBySyncKey } = await import("../tursoLinkedSources.js");
+  const sources = dedupeLinkedSourcesBySyncKey(
+    await discoverTursoLinkedSources(appsRootDir),
+  );
   let total = 0;
   for (const source of sources) {
     total += await catchUpLinkedSourceFromWorkspaceLog(source);

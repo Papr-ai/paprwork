@@ -62,11 +62,23 @@ export function buildCoordinatorStatusReport(
     : Object.values(raw.flushErrors)[0] ?? null;
 
   if (raw.activeFlush && (!appId || raw.activeFlush.appId === appId)) {
+    const flush = raw.activeFlush;
+    if (flush.layer === "turso" && flush.label) {
+      return {
+        status: "uploading",
+        label: flush.label,
+        detail:
+          flush.detail ??
+          "Applying database schema on the web. Large tables can take a few minutes.",
+        appId: flush.appId,
+      };
+    }
     return {
       status: "uploading",
-      label: "Updating for the web…",
-      detail: "Database → app files → live link check.",
-      appId: raw.activeFlush.appId,
+      label: flush.label ?? "Updating for the web…",
+      detail:
+        flush.detail ?? "Database → app files → live link check.",
+      appId: flush.appId,
     };
   }
 

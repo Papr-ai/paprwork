@@ -73,10 +73,10 @@ export function isCloudShareGateHtml(html: string): boolean {
     return false;
   }
   return (
-    html.includes('class="status"') &&
-    (html.includes("Sign in required") ||
-      html.includes("Signed in — access denied") ||
-      html.includes("Invite link required") ||
-      html.includes("Signed in — invite link still required"))
+    html.includes('class="gate-status"') &&
+    (html.includes("Sign in is required to access this app") ||
+      html.includes("Sign in required") ||
+      html.includes("No access") ||
+      html.includes("Invite link required"))
   );
 }

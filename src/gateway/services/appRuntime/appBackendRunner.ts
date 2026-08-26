@@ -9,6 +9,14 @@ import * as path from "path";
 import { fileURLToPath } from "url";
 import type { AppBackendActionSpec } from "../../../core/types/appBackend.js";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
+import {
+  mergeVerifiedCallerJobParams,
+  VERIFIED_CALLER_EMAIL_PARAM,
+  VERIFIED_CALLER_USER_ID_PARAM,
+  type MiniAppCallerIdentity,
+} from "./miniAppAccess.js";
+
+export type { MiniAppCallerIdentity };
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 export const MAX_BACKEND_TIMEOUT_MS = 600_000;
@@ -28,7 +36,16 @@ export function buildBackendActionEnv(input: {
   vaultEnv?: Record<string, string>;
   databaseEnv?: Record<string, string>;
   paprRoot?: string;
+  /** Server-resolved caller — injected when signed in; overrides client identity params. */
+  callerIdentity?: MiniAppCallerIdentity;
+  loggedIn?: boolean;
 }): Record<string, string> {
+  const mergedParams = mergeVerifiedCallerJobParams(
+    input.params,
+    input.loggedIn ?? false,
+    input.callerIdentity,
+  );
+
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
     ...(input.databaseEnv ?? {}),
@@ -37,10 +54,18 @@ export function buildBackendActionEnv(input: {
     ...(input.paprRoot ? { PAPR_ROOT: input.paprRoot } : {}),
     ...(input.vaultEnv ?? {}),
   };
-  if (input.params) {
-    env.PAPR_ACTION_PARAMS = JSON.stringify(input.params);
-    for (const [key, value] of Object.entries(input.params)) {
+  if (mergedParams) {
+    env.PAPR_ACTION_PARAMS = JSON.stringify(mergedParams);
+    for (const [key, value] of Object.entries(mergedParams)) {
       env[`PAPR_PARAM_${key}`] = value;
+    }
+  }
+  const callerUserId = input.callerIdentity?.userId?.trim();
+  if (input.loggedIn && callerUserId) {
+    env[VERIFIED_CALLER_USER_ID_PARAM] = callerUserId;
+    const callerEmail = input.callerIdentity?.email?.trim();
+    if (callerEmail) {
+      env[VERIFIED_CALLER_EMAIL_PARAM] = callerEmail;
     }
   }
   return env;

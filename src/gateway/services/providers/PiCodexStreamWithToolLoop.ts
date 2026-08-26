@@ -19,22 +19,18 @@ import {
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
-import {
-  MID_TURN_MAX_TOKENS,
-  trimOldestHistoryTurns,
-  type HistoryTrimBounds,
-} from "../agent/midTurnContextTrim.js";
-import {
-  compactMidTurnContextForMemoryPressure,
-  compactStaleAssistantReasoning,
-  compactStaleToolResults,
-  stripAllAssistantReasoning,
-} from "../agent/compactToolResults.js";
+import type { HistoryTrimBounds } from "../agent/midTurnContextTrim.js";
+import { stripAllAssistantReasoning } from "../agent/compactToolResults.js";
 import {
   checkPiStreamMemory,
   PI_PROCESS_MEMORY_BACKSTOP_BYTES,
   PI_STREAM_MEMORY_BUDGET_BYTES,
 } from "./piStreamMemoryLimits.js";
+import {
+  applyMidTurnContextShaping,
+  resolvePiStreamMemoryLoopAction,
+  WRAP_UP_AFTER_MEMORY_BUDGET,
+} from "./piStreamMemoryWrapUp.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
   EMPTY_PI_AI_BILLING_USAGE,
@@ -309,36 +305,6 @@ function appendToolTurnToContext(
 }
 
 
-function applyMidTurnContextShaping(
-  messages: unknown[],
-  historyTrimBounds: HistoryTrimBounds | undefined,
-  memoryPressure: boolean,
-): void {
-  if (!historyTrimBounds) {
-    return;
-  }
-
-  if (memoryPressure) {
-    const stats = compactMidTurnContextForMemoryPressure(messages);
-    console.warn(
-      `[PiCodexToolLoop] Memory-pressure compaction: ` +
-        `truncated ${stats.staleResultsTruncated} stale tool result(s), ` +
-        `saved ~${Math.round((stats.bytesBefore - stats.bytesAfter) / 1024)}KB`,
-    );
-  } else {
-    compactStaleAssistantReasoning(messages);
-    compactStaleToolResults(messages);
-  }
-
-  trimOldestHistoryTurns(
-    messages as Array<{ role?: unknown; content?: unknown }>,
-    {
-      ...historyTrimBounds,
-      maxTokens: MID_TURN_MAX_TOKENS,
-    },
-  );
-}
-
 /**
  * Create a stream that runs multiple pi-ai turns when the model returns tool calls
  */
@@ -423,6 +389,8 @@ export async function* createPiCodexStreamWithToolLoop(
   let textEmittedSinceLastToolBatch = false;
   /** At most one automatic wrap-up continuation (orphan drain or tool-only stop). */
   let wrapUpContinuationUsed = false;
+  /** One memory-budget wrap-up step (compact → summary → end turn). */
+  let memoryWrapUpUsed = false;
 
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
@@ -457,37 +425,63 @@ export async function* createPiCodexStreamWithToolLoop(
     
     // CIRCUIT BREAKER 2: Per-stream + process backstop memory checks
     const memoryCheck = checkPiStreamMemory(baselineHeap);
-    if (memoryCheck.overStreamBudget || memoryCheck.overProcessBackstop) {
+    const memoryAction = resolvePiStreamMemoryLoopAction(
+      memoryCheck,
+      memoryWrapUpUsed,
+    );
+
+    if (memoryAction.kind === "process_error") {
       const streamMb = Math.round(memoryCheck.streamDelta / 1024 / 1024);
       const heapMb = Math.round(memoryCheck.heapUsed / 1024 / 1024);
       const budgetMb = Math.round(PI_STREAM_MEMORY_BUDGET_BYTES / 1024 / 1024);
       const backstopMb = Math.round(PI_PROCESS_MEMORY_BACKSTOP_BYTES / 1024 / 1024);
       console.error(
-        `[PiCodexToolLoop] 🚨 CRITICAL: Stream memory budget exceeded — ` +
+        `[PiCodexToolLoop] 🚨 CRITICAL: Process memory backstop exceeded — ` +
           `stream +${streamMb}MB (limit ${budgetMb}MB), process heap ${heapMb}MB ` +
           `(backstop ${backstopMb}MB). Aborting this stream.`,
       );
       yield {
         type: "error",
         error: {
-          type: memoryCheck.overProcessBackstop
-            ? "process_memory_exhaustion"
-            : "stream_memory_exhaustion",
+          type: "process_memory_exhaustion",
           message:
-            memoryCheck.overProcessBackstop
-              ? "The agent service is under heavy load (too many parallel tasks). " +
-                "Try again shortly, restart the app, or stagger scheduled agent jobs."
-              : "This agent task used too much memory (heavy tool use or long reasoning). " +
-                "Start a fresh chat or simplify the task, then try again.",
+            "The agent service is under heavy load (too many parallel tasks). " +
+            "Try again shortly, restart the app, or stagger scheduled agent jobs.",
         },
       };
       break;
     }
-    if (memoryCheck.overStreamWarning) {
+
+    if (memoryAction.kind === "graceful_end") {
       console.warn(
-        `[PiCodexToolLoop] ⚠️ High stream memory: +${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB ` +
-          `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB) — applying aggressive compaction`,
+        `[PiCodexToolLoop] Stream memory still high after wrap-up step ` +
+          `(+${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB) — ending turn gracefully`,
       );
+      break stepLoop;
+    }
+
+    let memoryPressure = false;
+    if (memoryAction.kind === "force_wrap_up") {
+      memoryWrapUpUsed = true;
+      context.tools = [];
+      context.messages.push({
+        role: "user",
+        content: WRAP_UP_AFTER_MEMORY_BUDGET,
+      } as never);
+      memoryPressure = true;
+      console.warn(
+        `[PiCodexToolLoop] Stream memory budget exceeded ` +
+          `(+${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB) — ` +
+          `compacting context and forcing wrap-up summary (tools disabled)`,
+      );
+    } else {
+      memoryPressure = memoryAction.memoryPressure;
+      if (memoryPressure) {
+        console.warn(
+          `[PiCodexToolLoop] ⚠️ High stream memory: +${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB ` +
+            `(process heap ${Math.round(memoryCheck.heapUsed / 1024 / 1024)}MB) — applying aggressive compaction`,
+        );
+      }
     }
 
     if (step > 0) {
@@ -497,7 +491,7 @@ export async function* createPiCodexStreamWithToolLoop(
     applyMidTurnContextShaping(
       context.messages,
       historyTrimBounds,
-      memoryCheck.overStreamWarning,
+      memoryPressure,
     );
 
     const toolCallsThisTurn: ToolCallAccum[] = [];
@@ -713,6 +707,14 @@ export async function* createPiCodexStreamWithToolLoop(
       (isToolUseStep || shouldDrainOrphanedTools) &&
       finalMessage != null
     ) {
+      if (memoryWrapUpUsed) {
+        console.warn(
+          `[PiCodexToolLoop] Model returned ${toolCallsThisTurn.length} tool call(s) during memory wrap-up — ` +
+            `skipping execution and ending turn (post-stream wrap-up may run)`,
+        );
+        break stepLoop;
+      }
+
       const doneMessage = finalMessage;
       if (shouldDrainOrphanedTools) {
         console.warn(

@@ -32,8 +32,12 @@ import {
   parseRenameTableStatement,
   splitSqlStatements,
 } from "./migrationSqlHelpers.js";
+import {
+  ensureRemoteSchemaMigrationsTable,
+  REMOTE_SCHEMA_MIGRATIONS_TABLE,
+} from "../tursoPlatformSchema.js";
 
-export const REMOTE_SCHEMA_MIGRATIONS_TABLE = "_papr_schema_migrations";
+export { ensureRemoteSchemaMigrationsTable, REMOTE_SCHEMA_MIGRATIONS_TABLE };
 
 /**
  * Outcome of checking one schema op.
@@ -182,18 +186,6 @@ function warnUnverifiable(
     `[MigrationLedger] ${migrationId} (${migrationRoot}): ` +
       `${unverifiable.length} statement(s) could not be verified on ${target} ` +
       `and were treated as satisfied: ${unverifiable.join(" | ")}`,
-  );
-}
-
-async function ensureRemoteSchemaMigrationsTable(
-  remote: Client,
-): Promise<void> {
-  await remote.execute(
-    `CREATE TABLE IF NOT EXISTS ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)} (` +
-      `id TEXT PRIMARY KEY, ` +
-      `applied_at TEXT NOT NULL, ` +
-      `source TEXT NOT NULL DEFAULT 'database_migration'` +
-      `)`,
   );
 }
 

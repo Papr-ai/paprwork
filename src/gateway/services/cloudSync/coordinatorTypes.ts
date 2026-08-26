@@ -11,6 +11,7 @@ export interface SyncCoordinatorActiveFlush {
   layer: SyncCoordinatorLayer;
   startedAt: number;
   label?: string;
+  detail?: string;
 }
 
 export interface SyncCoordinatorStatus {

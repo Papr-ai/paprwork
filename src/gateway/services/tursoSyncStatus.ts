@@ -14,9 +14,10 @@ import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
   discoverTursoLinkedSources,
   linkedSourceSyncKey,
+  listAppsLinkingDbPath,
   type TursoLinkedSource,
 } from "./tursoLinkedSources.js";
-import { getTursoSyncBridge } from "./TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "./TursoSyncBridge.js";
 import { isJobDbDirty, loadTursoSyncState } from "./tursoSyncState.js";
 import { localRemoteUserSchemaDriftTables } from "./tursoDeltaSync.js";
 import { getDatabaseRegistryService,
@@ -41,6 +42,8 @@ export interface TursoSourceSyncItem {
   localTableCount: number;
   remoteTableCount: number;
   schemaDrift?: boolean;
+  /** Other mini-apps linking the same on-disk SQLite file (shared registry DB). */
+  linkingAppIds?: string[];
   /** Turso token/query failed — remoteTableCount may be misleading. */
   remoteCheckFailed?: boolean;
   quarantinedAt?: string | null;
@@ -164,6 +167,7 @@ function sourceItem(
   schemaDrift: boolean,
   pushState: ReturnType<typeof loadTursoSyncState>,
   remoteCheckFailed = false,
+  linkingAppIds?: string[],
 ): TursoSourceSyncItem {
   const dbExists = fs.existsSync(source.dbPath);
   const syncKey = linkedSourceSyncKey(source);
@@ -197,6 +201,8 @@ function sourceItem(
     quarantineReason: jobState?.quarantineReason ?? null,
     manualUploadHold: manualUploadHold || undefined,
     remoteCheckFailed: remoteCheckFailed || undefined,
+    linkingAppIds:
+      linkingAppIds && linkingAppIds.length > 1 ? linkingAppIds : undefined,
   };
 }
 
@@ -207,57 +213,86 @@ async function detectRemoteSchemaDrift(
   if (!fs.existsSync(dbPath)) {
     return false;
   }
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return false;
   }
-  let credentials;
-  try {
-    credentials = await bridge.fetchCredentials(tursoDatabase);
-  } catch {
-    return false;
-  }
-  const remote = createClient({
-    url: credentials.tursoUrl,
-    authToken: credentials.authToken,
-  });
-  const localDb = openWritableLocalJobDb(dbPath);
-  try {
-    const tableNames = filterSyncableTables(listUserTables(localDb));
-    if (tableNames.length === 0) {
+  return bridge.runExclusiveForDbPath(dbPath, async () => {
+    let credentials;
+    try {
+      credentials = await bridge.fetchCredentials(tursoDatabase);
+    } catch {
       return false;
     }
-    const drifted = await localRemoteUserSchemaDriftTables(remote, localDb, tableNames);
-    return drifted.length > 0;
-  } finally {
-    localDb.close();
-    remote.close();
-  }
+    const remote = createClient({
+      url: credentials.tursoUrl,
+      authToken: credentials.authToken,
+    });
+    const localDb = openWritableLocalJobDb(dbPath);
+    try {
+      const tableNames = filterSyncableTables(listUserTables(localDb));
+      if (tableNames.length === 0) {
+        return false;
+      }
+      const drifted = await localRemoteUserSchemaDriftTables(remote, localDb, tableNames);
+      return drifted.length > 0;
+    } finally {
+      localDb.close();
+      remote.close();
+    }
+  });
 }
 
 async function countRemoteSyncableTables(
   tursoDatabase: string,
+  dbPath: string,
 ): Promise<number> {
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
     return 0;
   }
-  const databaseName = tursoDatabase;
-  const credentials = await bridge.fetchCredentials(databaseName);
-  const remote = createClient({
-    url: credentials.tursoUrl,
-    authToken: credentials.authToken,
+  return bridge.runExclusiveForDbPath(dbPath, async () => {
+    const credentials = await bridge.fetchCredentials(tursoDatabase);
+    const remote = createClient({
+      url: credentials.tursoUrl,
+      authToken: credentials.authToken,
+    });
+    try {
+      const result = await remote.execute(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
+      );
+      return filterSyncableTables(
+        result.rows.map((row) => String(row.name ?? "")),
+      ).length;
+    } finally {
+      remote.close();
+    }
   });
+}
+
+interface DbRemoteCheckSnapshot {
+  remoteTableCount: number;
+  schemaDrift: boolean;
+  remoteCheckFailed: boolean;
+}
+
+async function snapshotDbRemoteCheck(
+  dbPath: string,
+  tursoDatabase: string,
+  localTableCount: number,
+): Promise<DbRemoteCheckSnapshot> {
+  let remoteTableCount = 0;
+  let schemaDrift = false;
+  let remoteCheckFailed = false;
   try {
-    const result = await remote.execute(
-      `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'`,
-    );
-    return filterSyncableTables(
-      result.rows.map((row) => String(row.name ?? "")),
-    ).length;
-  } finally {
-    remote.close();
+    remoteTableCount = await countRemoteSyncableTables(tursoDatabase, dbPath);
+    if (remoteTableCount > 0 && localTableCount > 0) {
+      schemaDrift = await detectRemoteSchemaDrift(dbPath, tursoDatabase);
+    }
+  } catch {
+    remoteCheckFailed = true;
   }
+  return { remoteTableCount, schemaDrift, remoteCheckFailed };
 }
 
 export async function buildTursoSyncItemsReport(
@@ -273,14 +308,15 @@ export async function buildTursoSyncItemsReport(
     summary: { synced: 0, pending: 0, empty: 0, unavailable: 0, quarantined: 0, total: 0 },
   });
 
-  const bridge = getTursoSyncBridge();
-  if (!bridge) {
-    return emptyReport("Turso sync not initialized");
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
+    return emptyReport("Turso sync is disabled");
   }
 
-  const sources = (await discoverTursoLinkedSources(appsRootDir)).filter(
-    (source) => !filterAppId || source.appId === filterAppId,
-  );
+  const allSources = await discoverTursoLinkedSources(appsRootDir);
+  const sources = filterAppId
+    ? allSources.filter((source) => source.appId === filterAppId)
+    : allSources;
   if (sources.length === 0) {
     return {
       enabled: true,
@@ -295,34 +331,44 @@ export async function buildTursoSyncItemsReport(
   const items: TursoSourceSyncItem[] = [];
   let reportError: string | null = null;
   const pushState = loadTursoSyncState();
+  const remoteByDbPath = new Map<string, DbRemoteCheckSnapshot>();
 
   for (const source of sources) {
     const syncKey = linkedSourceSyncKey(source);
     const localTableCount = countLocalSyncableTables(source.dbPath);
     const alternateKeys = source.jobId && source.jobId !== syncKey ? [source.jobId] : [];
     const dirty = isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
-    let remoteTableCount = 0;
-    let schemaDrift = false;
-    let remoteCheckFailed = false;
     const tursoDatabase = resolveTursoDatabaseLabel(source);
-    try {
-      remoteTableCount = await countRemoteSyncableTables(tursoDatabase);
-      if (remoteTableCount > 0 && localTableCount > 0) {
-        schemaDrift = await detectRemoteSchemaDrift(source.dbPath, tursoDatabase);
+    const dbPathKey = source.dbPath;
+    let remoteSnapshot = remoteByDbPath.get(dbPathKey);
+    if (!remoteSnapshot) {
+      try {
+        remoteSnapshot = await snapshotDbRemoteCheck(
+          source.dbPath,
+          tursoDatabase,
+          localTableCount,
+        );
+      } catch (err) {
+        remoteSnapshot = {
+          remoteTableCount: 0,
+          schemaDrift: false,
+          remoteCheckFailed: true,
+        };
+        reportError = (err as Error).message.slice(0, 200);
       }
-    } catch (err) {
-      remoteCheckFailed = true;
-      reportError = (err as Error).message.slice(0, 200);
+      remoteByDbPath.set(dbPathKey, remoteSnapshot);
     }
+    const linkingAppIds = listAppsLinkingDbPath(allSources, source.dbPath);
     items.push(
       sourceItem(
         source,
         localTableCount,
-        remoteTableCount,
+        remoteSnapshot.remoteTableCount,
         dirty,
-        schemaDrift,
+        remoteSnapshot.schemaDrift,
         pushState,
-        remoteCheckFailed,
+        remoteSnapshot.remoteCheckFailed,
+        linkingAppIds,
       ),
     );
   }

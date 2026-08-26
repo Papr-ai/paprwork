@@ -47,6 +47,38 @@ export async function upsertCachedAppRepoRecord(
   await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
 }
 
+export async function removeCachedAppRepoRecord(
+  appId: string,
+  paprHome?: string,
+): Promise<boolean> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return false;
+  }
+  const filePath = paprHome
+    ? path.join(paprHome, "data", APP_REPO_REGISTRY_CACHE_FILENAME)
+    : cachePath();
+  let cache: AppRepoRegistryCacheFile;
+  try {
+    const raw = await fs.readFile(filePath, "utf8");
+    const parsed = JSON.parse(raw) as AppRepoRegistryCacheFile;
+    if (parsed.version !== 1 || typeof parsed.records !== "object") {
+      return false;
+    }
+    cache = parsed;
+  } catch {
+    return false;
+  }
+  if (!cache.records[trimmed]) {
+    return false;
+  }
+  delete cache.records[trimmed];
+  cache.updatedAt = new Date().toISOString();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, JSON.stringify(cache, null, 2), "utf8");
+  return true;
+}
+
 function emptyCache(): AppRepoRegistryCacheFile {
   return {
     version: 1,

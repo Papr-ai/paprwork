@@ -1011,6 +1011,52 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Sync Replica Genesis &amp; Schema Healing</strong>
+                <p>
+                  Smarter schema drift detection, batched migration shipping,
+                  and workspace log replay so linked databases sync reliably
+                  after schema changes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Mini-App SDK Bundle</strong>
+                <p>
+                  Official SDK now includes <code>papr-sdk</code>, native
+                  dialog shim, and version-check helpers — agents can build
+                  richer mini-apps with less boilerplate.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Safer App Deletion</strong>
+                <p>
+                  Deleting an app now cleans up linked Turso databases and
+                  sync artifacts, with a clearer confirmation modal.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Sync Improvements</strong>
+                <p>
+                  Faster push scheduling, platform schema support, and better
+                  sync status reporting in the Cloud Sync tab.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.5" && (
           <div className="about-card">
             <h3>What's New in v2.4.5</h3>

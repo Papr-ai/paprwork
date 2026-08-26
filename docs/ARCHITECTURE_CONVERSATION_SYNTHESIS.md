@@ -331,6 +331,7 @@ See also: [`USER_IDENTITY_AND_OPEN_ITEMS.md`](./USER_IDENTITY_AND_OPEN_ITEMS.md)
 | **Per-user Turso replica resolution (web)** | `tursoRuntimeIdentity.ts`, `TursoDbAdapter.ts`, `CloudAppHostService.tursoDbRequest` | Shared → publisher; per-user → caller |
 | **Per-user sign-in gate** | `cloudAppPerUserAccess.ts`, schema gate | Unsigned visitors blocked when linked per-user sources |
 | **Job caller injection** | `mergeVerifiedCallerJobParams` in job run handler | `PAPR_CALLER_USER_ID`, `PAPR_CALLER_EMAIL` |
+| **Backend action caller injection** | `buildBackendActionEnv` in `/api/app/backend/:action` (desktop + cloud app host) | Same env vars as jobs; overrides client `params` |
 | **Tests** | `tests/mini-app-access-api.test.ts`, `tests/turso-runtime-identity.test.ts` | Caller/publisher split + Turso acting user |
 
 ### P0 — Wrong data / identity (still open)
@@ -478,6 +479,7 @@ WEB APP (apps.papr.ai) — caller/publisher split landed
   Turso replica = owner (shared) OR caller (per-user)  ✅ fixed
   SQL rows = app's job to filter (shared DB)
   Jobs → PAPR_CALLER_USER_ID injected when signed in   ✅
+  Backend actions → PAPR_CALLER_USER_ID injected when signed in   ✅
            ↓
 VAULT
   owner keys → publisher

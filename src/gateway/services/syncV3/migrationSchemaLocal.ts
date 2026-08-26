@@ -7,6 +7,8 @@ import type { JobMigrationSchemaOp } from "../../../core/types/jobMigrations.js"
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import {
   isDuplicateColumnError,
+  isMissingColumnError,
+  isMissingTableError,
   parseAddColumnStatement,
   splitSqlStatements,
 } from "../jobs/migrationSqlHelpers.js";
@@ -63,17 +65,33 @@ function applySchemaOpToLocal(
       if (!localTableExists(db, op.table)) {
         return;
       }
-      db.exec(
-        `ALTER TABLE ${quoteIdent(op.table)} DROP COLUMN ${quoteIdent(op.column)}`,
-      );
+      try {
+        db.exec(
+          `ALTER TABLE ${quoteIdent(op.table)} DROP COLUMN ${quoteIdent(op.column)}`,
+        );
+      } catch (error) {
+        if (!isMissingTableError(error) && !isMissingColumnError(error)) {
+          throw error;
+        }
+      }
       return;
     case "rename_column":
       if (!localTableExists(db, op.table)) {
         return;
       }
-      db.exec(
-        `ALTER TABLE ${quoteIdent(op.table)} RENAME COLUMN ${quoteIdent(op.from)} TO ${quoteIdent(op.to)}`,
-      );
+      try {
+        db.exec(
+          `ALTER TABLE ${quoteIdent(op.table)} RENAME COLUMN ${quoteIdent(op.from)} TO ${quoteIdent(op.to)}`,
+        );
+      } catch (error) {
+        if (
+          !isMissingTableError(error) &&
+          !isMissingColumnError(error) &&
+          !isDuplicateColumnError(error)
+        ) {
+          throw error;
+        }
+      }
       return;
     case "sql":
       applyLocalSqlIdempotent(db, op.statement);
@@ -99,6 +117,9 @@ function applyLocalSqlIdempotent(db: Database.Database, statement: string): void
     db.exec(trimmed);
   } catch (error) {
     if (isDuplicateColumnError(error)) {
+      return;
+    }
+    if (isMissingTableError(error) || isMissingColumnError(error)) {
       return;
     }
     throw error;

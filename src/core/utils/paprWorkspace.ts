@@ -133,6 +133,29 @@ export function readActiveWorkspacePointer(): ActiveWorkspacePointer | null {
   }
 }
 
+export interface WorkspaceProfileSelection {
+  organizationId?: string;
+  activeNamespaceId?: string;
+}
+
+/** True when profile has no explicit selection, or pointer matches profile org/namespace. */
+export function isWorkspacePointerAlignedWithProfile(
+  profile: WorkspaceProfileSelection,
+  pointer: ActiveWorkspacePointer | null,
+): boolean {
+  const profileOrg = profile.organizationId?.trim();
+  const profileNs = profile.activeNamespaceId?.trim();
+  if (!profileOrg || !profileNs) {
+    return true;
+  }
+  if (!pointer) {
+    return false;
+  }
+  return (
+    pointer.organizationId === profileOrg && pointer.namespaceId === profileNs
+  );
+}
+
 export async function writeActiveWorkspacePointer(
   pointer: ActiveWorkspacePointer,
 ): Promise<void> {

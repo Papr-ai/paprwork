@@ -288,6 +288,38 @@ export function App() {
     };
   }, []);
 
+  // Cold boot: reload workspace-scoped UI when already logged in (profile may differ from last session cache)
+  useEffect(() => {
+    if (!authChecked || !isAuthenticated) {
+      return;
+    }
+    let cancelled = false;
+    const reloadForColdBoot = async () => {
+      try {
+        const workspace = await window.electronAPI.papr.getActiveWorkspace();
+        if (cancelled || !workspace.success || !workspace.pointer) {
+          return;
+        }
+        const { pointer } = workspace;
+        void reloadUiForWorkspaceSwitch({
+          waitForGateway: true,
+          targetWorkspaceKey: buildWorkspaceUiCacheKey(
+            pointer.organizationId,
+            pointer.namespaceId,
+          ),
+          organizationName: pointer.organizationName,
+          namespaceName: pointer.namespaceName,
+        });
+      } catch {
+        /* noop */
+      }
+    };
+    void reloadForColdBoot();
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, isAuthenticated]);
+
   // Initialize Amplitude telemetry (events only, no session replay)
   useEffect(() => {
     const initTelemetry = async () => {

@@ -4,6 +4,36 @@ import { SyncCoordinator } from "../src/gateway/services/cloudSync/SyncCoordinat
 import type { CloudSyncService } from "../src/gateway/services/CloudSyncService.js";
 
 describe("buildCoordinatorStatusReport", () => {
+  it("returns migration copy when flush is applying schema on Turso", () => {
+    const sync = {
+      getPaprDir: () => "/tmp/papr",
+      enqueueRelativePath: () => undefined,
+      hasRelativePathChanged: () => false,
+      markRelativePathSynced: () => undefined,
+    } as unknown as CloudSyncService;
+
+    const coordinator = new SyncCoordinator(sync);
+    vi.spyOn(coordinator, "getStatus").mockReturnValue({
+      activeFlush: {
+        appId: "app-1",
+        layer: "turso",
+        startedAt: Date.now(),
+        label: "Applying database migrations…",
+        detail: "Large tables can take a few minutes.",
+      },
+      gitDirtyAppIds: [],
+      dbDirtySyncKeys: [],
+      inFlightAppIds: ["app-1"],
+      queuedFlushAppIds: [],
+      flushErrors: {},
+    });
+
+    const report = buildCoordinatorStatusReport(coordinator, "app-1");
+    expect(report?.status).toBe("uploading");
+    expect(report?.label).toContain("Applying database migrations");
+    expect(report?.detail).toContain("few minutes");
+  });
+
   it("returns uploading copy when flush is active", () => {
     const sync = {
       getPaprDir: () => "/tmp/papr",

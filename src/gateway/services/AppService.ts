@@ -206,6 +206,10 @@ export interface DeleteAppOptions {
   deleteLinkedJobs?: boolean;
   /** When true, also delete Turso cloud databases for deleted jobs. */
   deleteTursoDatabases?: boolean;
+  /** Registry dbIds to delete (must be sole-linker — only this app references them). */
+  deleteRegistryDbIds?: string[];
+  /** When true, delete Turso replicas for registry DBs in deleteRegistryDbIds. */
+  deleteRegistryTurso?: boolean;
   /** When true, user has reviewed all deletion details and confirmed. */
   confirmed?: boolean;
 }
@@ -217,6 +221,9 @@ export interface LinkedJobInfo {
   hasTursoDb?: boolean;
 }
 
+export type { LinkedRegistryDbPreview } from "./deleteAppLinkedDatabases.js";
+import type { LinkedRegistryDbPreview } from "./deleteAppLinkedDatabases.js";
+
 export interface DeleteAppPreview {
   appId: string;
   appTitle: string;
@@ -225,8 +232,10 @@ export interface DeleteAppPreview {
   shareUrl?: string | null;
   /** Jobs that are exclusively linked to this app */
   linkedJobs: LinkedJobInfo[];
-  /** Number of Turso cloud databases that would be deleted */
+  /** Number of Turso cloud databases that would be deleted with linked jobs */
   tursoDbCount: number;
+  /** Registry databases linked via data-sources.json */
+  linkedRegistryDatabases: LinkedRegistryDbPreview[];
 }
 
 export interface DeleteAppResult {
@@ -238,6 +247,10 @@ export interface DeleteAppResult {
   deletedJobCount?: number;
   /** Number of Turso databases that were deleted */
   deletedTursoDbCount?: number;
+  /** Number of registry databases tombstoned + removed locally */
+  deletedRegistryDbCount?: number;
+  /** Number of Turso replicas deleted for registry databases */
+  deletedRegistryTursoCount?: number;
 }
 
 export interface ValidationResult {
@@ -1939,6 +1952,7 @@ export class AppService {
     // Check for exclusively linked jobs and Turso databases
     let exclusiveJobs: LinkedJobInfo[] = [];
     let tursoDbCount = 0;
+    let linkedRegistryDatabases: LinkedRegistryDbPreview[] = [];
     try {
       const { getJobsService } = await import("./JobsService.js");
       const jobsService = getJobsService();
@@ -1994,6 +2008,22 @@ export class AppService {
       );
     }
 
+    try {
+      const { buildLinkedRegistryDbPreview } = await import(
+        "./deleteAppLinkedDatabases.js"
+      );
+      linkedRegistryDatabases = await buildLinkedRegistryDbPreview(
+        id,
+        this.appsDir,
+        (otherAppId) => this.apps.get(otherAppId)?.title ?? otherAppId.slice(0, 8),
+      );
+    } catch (error) {
+      console.warn(
+        `[AppService] Could not check linked registry DBs for ${id}:`,
+        (error as Error).message,
+      );
+    }
+
     // If user hasn't confirmed, return preview for the deletion modal
     if (!options?.confirmed) {
       return {
@@ -2005,6 +2035,7 @@ export class AppService {
           shareUrl: cloudStatus.shareUrl,
           linkedJobs: exclusiveJobs,
           tursoDbCount,
+          linkedRegistryDatabases,
         },
       };
     }
@@ -2063,8 +2094,41 @@ export class AppService {
       }
     }
 
+    let deletedRegistryDbCount = 0;
+    let deletedRegistryTursoCount = 0;
+    if (options?.deleteRegistryDbIds && options.deleteRegistryDbIds.length > 0) {
+      try {
+        const { deleteSoleLinkerRegistryDatabases } = await import(
+          "./deleteAppLinkedDatabases.js"
+        );
+        const registryResult = await deleteSoleLinkerRegistryDatabases(
+          id,
+          options.deleteRegistryDbIds,
+          options.deleteRegistryTurso === true,
+        );
+        deletedRegistryDbCount = registryResult.deletedRegistryDbCount;
+        deletedRegistryTursoCount = registryResult.deletedRegistryTursoCount;
+      } catch (error) {
+        console.error(
+          `[AppService] Error deleting registry databases for ${id}:`,
+          error,
+        );
+      }
+    }
+
     const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
     removeAppPublishPrefs(id, this.paprRootDir);
+
+    // Stop cloud sync / writer state before removing files (prevents ghost __papr__ rebuild).
+    try {
+      const { deleteAppSyncArtifacts } = await import("./deleteAppSyncArtifacts.js");
+      await deleteAppSyncArtifacts(id, this.paprRootDir);
+    } catch (error) {
+      console.warn(
+        `[AppService] Sync artifact cleanup failed for ${id}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
 
     // Stop watching the app directory
     this.unwatchApp(id);
@@ -2094,7 +2158,14 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Deleted app: ${id}`);
-    return { deleted: true, unpublished, deletedJobCount, deletedTursoDbCount };
+    return {
+      deleted: true,
+      unpublished,
+      deletedJobCount,
+      deletedTursoDbCount,
+      deletedRegistryDbCount,
+      deletedRegistryTursoCount,
+    };
   }
 
   /**
@@ -2909,6 +2980,14 @@ export class AppService {
       issues.push(...checkMiniAppEmojiPatterns(fileContents));
     } catch (lintError) {
       console.warn("[AppService] Emoji lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppNativeDialogPatterns } = await import(
+        "../utils/miniAppNativeDialogLint.js"
+      );
+      issues.push(...checkMiniAppNativeDialogPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Native dialog lint failed:", lintError);
     }
     try {
       const { checkMiniAppCssCoverageAndShrink } = await import(

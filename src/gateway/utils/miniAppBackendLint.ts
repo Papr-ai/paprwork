@@ -6,6 +6,12 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { ValidationIssue } from "../services/AppService.js";
 import type { RequiredKeySpec } from "../../core/types/bundles.js";
+import type { AppBackendManifest } from "../../core/types/appBackend.js";
+import {
+  isPlatformInjectedEnvKey,
+  VERIFIED_CALLER_EMAIL_ENV,
+  VERIFIED_CALLER_USER_ID_ENV,
+} from "../../core/utils/platformInjectedEnvKeys.js";
 import {
   collectBackendManifestKeyNames,
   parseAppBackendManifest,
@@ -44,6 +50,8 @@ const IGNORED_BACKEND_ENV_NAMES = new Set([
   "PAPR_DB_MODE",
   "PAPR_DB_URL",
   "PAPR_DB_AUTH_TOKEN",
+  VERIFIED_CALLER_USER_ID_ENV,
+  VERIFIED_CALLER_EMAIL_ENV,
 ]);
 
 const ENV_VAR_REFERENCE_PATTERNS: RegExp[] = [
@@ -148,6 +156,29 @@ function checkBackendVaultKeyDeclarations(
   ];
 }
 
+function checkManifestPlatformInjectedKeys(
+  manifest: AppBackendManifest,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const [actionName, spec] of Object.entries(manifest.actions)) {
+    for (const key of spec.keys ?? []) {
+      if (!isPlatformInjectedEnvKey(key)) {
+        continue;
+      }
+      issues.push({
+        file: `${BACKEND_FOLDER}/manifest.json`,
+        severity: "warning",
+        message:
+          `Action "${actionName}" lists "${key.trim()}" in "keys", but ${key.trim()} is ` +
+          "server-injected when the caller is signed in — not a Settings vault key. " +
+          'Remove it from "keys"; handlers read os.environ / process.env directly.',
+        rule: "backend-keys-platform-injected",
+      });
+    }
+  }
+  return issues;
+}
+
 function checkBackendKeysInRequirements(
   backendKeyNames: readonly string[],
   requirements: RequiredKeySpec[],
@@ -189,6 +220,7 @@ export async function checkBackendManifestIntegrity(
 
   try {
     const manifest = parseAppBackendManifest(JSON.parse(manifestRaw) as unknown);
+    issues.push(...checkManifestPlatformInjectedKeys(manifest));
     const backendKeys = collectBackendManifestKeyNames(manifest);
     let requirementsFile: RequiredKeySpec[] = [];
     try {

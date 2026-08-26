@@ -164,9 +164,10 @@ const App = {
     const id = btn.dataset.id, next = btn.dataset.review, title = btn.dataset.title || 'this item';
     const state = this.loadState();
     if (next === 'irrelevant') {
-      const note = window.prompt(`Why is "${title}" irrelevant? This note will be saved for later.`, state[id]?.note || '');
-      if (note === null) return;
-      state[id] = { status: 'irrelevant', note: note.trim(), at: new Date().toISOString() };
+      const { askText } = await import('/__papr__/papr-dialog.ts');
+      const note = await askText(`Why is "${title}" irrelevant? This note will be saved for later.`, '', state[id]?.note || '', 'Save');
+      if (!note) return;
+      state[id] = { status: 'irrelevant', note, at: new Date().toISOString() };
     } else if (next === 'complete') state[id] = { status: 'complete', at: new Date().toISOString() };
     else if (next === 'active') delete state[id];
     this.saveState(state); await this.render();

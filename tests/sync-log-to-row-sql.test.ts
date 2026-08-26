@@ -5,9 +5,19 @@ import * as path from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   readRowWritesFromSyncLogSince,
+  readSyncLogShipBatch,
   syncLogEntryToRowWrite,
 } from "../src/gateway/services/syncV3/syncLogToRowSql.js";
 import { ensureLocalDbChangeLogReady } from "../src/gateway/services/tursoSyncBridgeCore.js";
+
+let canUseBetterSqlite = false;
+try {
+  const probe = new Database(":memory:");
+  probe.close();
+  canUseBetterSqlite = true;
+} catch {
+  canUseBetterSqlite = false;
+}
 
 const tempDirs: string[] = [];
 
@@ -35,7 +45,9 @@ function openTestDb(): { dbPath: string; db: Database.Database } {
 }
 
 describe("syncLogToRowSql", () => {
-  it("converts insert sync log entry to INSERT OR REPLACE", () => {
+  it.skipIf(!canUseBetterSqlite)(
+    "converts insert sync log entry to INSERT OR REPLACE",
+    () => {
     const { db } = openTestDb();
     db.exec(`INSERT INTO items (id, name) VALUES (1, 'alpha');`);
 
@@ -58,9 +70,10 @@ describe("syncLogToRowSql", () => {
     expect(write?.params?.[0]).toBe(1);
     expect(write?.params?.[1]).toBe("alpha");
     db.close();
-  });
+    },
+  );
 
-  it("reads batched row writes since cursor", () => {
+  it.skipIf(!canUseBetterSqlite)("reads batched row writes since cursor", () => {
     const { db } = openTestDb();
     db.exec(`INSERT INTO items (id, name) VALUES (2, 'beta');`);
     db.prepare(
@@ -73,4 +86,19 @@ describe("syncLogToRowSql", () => {
     expect(writes[0]?.params).toEqual([2]);
     db.close();
   });
+
+  it.skipIf(!canUseBetterSqlite)(
+    "advances highWaterLogId past entries that produce no row writes",
+    () => {
+    const { db } = openTestDb();
+    db.prepare(
+      `INSERT INTO _papr_sync_log (table_name, op, row_pk) VALUES (?, ?, ?)`,
+    ).run("missing_table", "insert", JSON.stringify([1]));
+
+    const batch = readSyncLogShipBatch(db, 0);
+    expect(batch.writes).toHaveLength(0);
+    expect(batch.highWaterLogId).toBe(1);
+    db.close();
+    },
+  );
 });

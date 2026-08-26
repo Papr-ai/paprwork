@@ -23,6 +23,10 @@ import {
 } from "./workspaceLogCursor.js";
 import { assertReplaySafeRowSql } from "./replaySafeSql.js";
 import {
+  extractPrimaryTableFromRowSql,
+  isPlatformTableName,
+} from "./logReplayRowSql.js";
+import {
   isSeqMaterialized,
   markSeqMaterialized,
 } from "./workspaceLogMaterialized.js";
@@ -31,7 +35,12 @@ import {
   applyMigrationSchemaPayloadLocally,
 } from "./migrationSchemaLocal.js";
 import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
+import {
+  isMissingColumnError,
+  isMissingTableError,
+} from "../jobs/migrationSqlHelpers.js";
 import Database from "better-sqlite3";
+import * as fs from "fs";
 function isRowPayload(
   payload: WorkspaceLogEntry["payload"],
 ): payload is WorkspaceLogRowPayload {
@@ -57,6 +66,46 @@ function isSchemaPayload(
 
 export function resolveReplicaIdForSource(source: AppDataSource): string | null {
   return resolveTursoDatabaseNameForSource(source);
+}
+
+function localUserTableExists(dbPath: string, tableName: string): boolean {
+  if (!fs.existsSync(dbPath)) {
+    return true;
+  }
+  const stats = fs.statSync(dbPath);
+  if (stats.size === 0) {
+    return true;
+  }
+
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const row = db
+      .prepare(
+        `SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1`,
+      )
+      .get(tableName) as { ok: number } | undefined;
+    return Boolean(row?.ok);
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Row ops targeting a user table that no longer exists locally are superseded
+ * (e.g. rename/drop applied ahead of log replay). Mark materialized, do not fail.
+ */
+export function shouldSkipRowReplayForMissingTable(
+  dbPath: string,
+  sql: string,
+): { skip: boolean; tableName: string | null } {
+  const tableName = extractPrimaryTableFromRowSql(sql);
+  if (!tableName || isPlatformTableName(tableName)) {
+    return { skip: false, tableName };
+  }
+  if (localUserTableExists(dbPath, tableName)) {
+    return { skip: false, tableName };
+  }
+  return { skip: true, tableName };
 }
 
 /** Append schema op to server log, then materialize locally. */
@@ -145,7 +194,43 @@ async function applyLogEntry(
   if (entry.kind === "row" && isRowPayload(entry.payload)) {
     const payload = entry.payload;
     assertReplaySafeRowSql(payload.sql);
-    await pool.write(payload.appId, source.dbPath, payload.sql, payload.params);
+    const missingTable = shouldSkipRowReplayForMissingTable(
+      source.dbPath,
+      payload.sql,
+    );
+    if (missingTable.skip) {
+      console.warn(
+        `[LogMaterializer] Skipping superseded row op seq=${entry.seq} ` +
+          `(table ${missingTable.tableName ?? "unknown"} no longer exists locally)`,
+      );
+      await markSeqMaterialized(
+        pool,
+        payload.appId,
+        source.dbPath,
+        replicaId,
+        entry.seq,
+      );
+      return;
+    }
+    try {
+      await pool.write(payload.appId, source.dbPath, payload.sql, payload.params);
+    } catch (error) {
+      if (isMissingTableError(error)) {
+        console.warn(
+          `[LogMaterializer] Skipping superseded row op seq=${entry.seq} ` +
+            `(table missing: ${(error as Error).message.slice(0, 120)})`,
+        );
+        await markSeqMaterialized(
+          pool,
+          payload.appId,
+          source.dbPath,
+          replicaId,
+          entry.seq,
+        );
+        return;
+      }
+      throw error;
+    }
     await markSeqMaterialized(pool, payload.appId, source.dbPath, replicaId, entry.seq);
     return;
   }
@@ -158,6 +243,15 @@ async function applyLogEntry(
         applyMigrationSchemaPayloadLocally(db, schemaPayload);
       } else if (schemaPayload.sql?.trim()) {
         applyInlineSchemaSqlLocally(db, schemaPayload.sql);
+      }
+    } catch (error) {
+      if (isMissingTableError(error) || isMissingColumnError(error)) {
+        console.warn(
+          `[LogMaterializer] Skipping superseded schema op seq=${entry.seq} ` +
+            `(${(error as Error).message.slice(0, 120)})`,
+        );
+      } else {
+        throw error;
       }
     } finally {
       db.close();

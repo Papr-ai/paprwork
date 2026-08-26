@@ -34,8 +34,38 @@ function isSyncableRole(role: AppDataSourceRole | undefined): boolean {
   return role !== "scratch";
 }
 
-function sourceKey(source: Pick<TursoLinkedSource, "dbPath">): string {
-  return path.normalize(source.dbPath);
+/** One entry per app+dbPath — shared registry DBs appear once per linking app. */
+function appSourceKey(source: Pick<TursoLinkedSource, "appId" | "dbPath">): string {
+  return `${source.appId}:${path.normalize(source.dbPath)}`;
+}
+
+/** One entry per syncKey — use before Turso push/pull to avoid double-shipping the same DB. */
+export function dedupeLinkedSourcesBySyncKey(
+  sources: readonly TursoLinkedSource[],
+): TursoLinkedSource[] {
+  const bySyncKey = new Map<string, TursoLinkedSource>();
+  for (const source of sources) {
+    const syncKey = linkedSourceSyncKey(source);
+    if (!bySyncKey.has(syncKey)) {
+      bySyncKey.set(syncKey, source);
+    }
+  }
+  return [...bySyncKey.values()];
+}
+
+/** All app IDs that link the same on-disk SQLite file (shared registry DBs). */
+export function listAppsLinkingDbPath(
+  sources: readonly TursoLinkedSource[],
+  dbPath: string,
+): string[] {
+  const normalized = path.normalize(dbPath);
+  const appIds = new Set<string>();
+  for (const source of sources) {
+    if (path.normalize(source.dbPath) === normalized) {
+      appIds.add(source.appId);
+    }
+  }
+  return [...appIds].sort();
 }
 
 export async function discoverTursoLinkedSources(
@@ -96,7 +126,7 @@ export async function discoverTursoLinkedSources(
         role: source.role,
         ...(source.writeAuthority ? { writeAuthority: source.writeAuthority } : {}),
       };
-      const key = sourceKey(linked);
+      const key = appSourceKey(linked);
       if (!byKey.has(key)) {
         byKey.set(key, linked);
       }
@@ -255,7 +285,9 @@ export function findLinkedSourceForJob(
 export async function listLinkedJobIdsForTursoSync(
   appsRootDir: string,
 ): Promise<string[]> {
-  const sources = await discoverTursoLinkedSources(appsRootDir);
+  const sources = dedupeLinkedSourcesBySyncKey(
+    await discoverTursoLinkedSources(appsRootDir),
+  );
   const keys = new Set<string>();
   for (const source of sources) {
     if (source.dbId || source.jobId) {

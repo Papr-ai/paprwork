@@ -20,8 +20,10 @@ import {
 } from "./jobMigrationManifest.js";
 import {
   alignMigrationLedgers,
+  ensureRemoteSchemaMigrationsTable,
   migrationSatisfiedOnRemote,
   remoteTableExists,
+  REMOTE_SCHEMA_MIGRATIONS_TABLE,
 } from "./jobMigrationLedgerSync.js";
 import {
   isDuplicateColumnError,
@@ -31,21 +33,11 @@ import {
 import { shouldSkipMigrationForRemoteLedger } from "./migrationLedgerPolicy.js";
 import { listAppliedMigrationIdsReadOnly } from "./schemaMigrationsLedger.js";
 
-export const REMOTE_SCHEMA_MIGRATIONS_TABLE = "_papr_schema_migrations";
-
+export {
+  REMOTE_SCHEMA_MIGRATIONS_TABLE,
+  ensureRemoteSchemaMigrationsTable,
+} from "./jobMigrationLedgerSync.js";
 export { resolveMigrationRootFromDbPath, jobDirFromDataDbPath } from "./databaseMigrations.js";
-
-export async function ensureRemoteSchemaMigrationsTable(
-  remote: Client,
-): Promise<void> {
-  await remote.execute(
-    `CREATE TABLE IF NOT EXISTS ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)} (` +
-      `id TEXT PRIMARY KEY, ` +
-      `applied_at TEXT NOT NULL, ` +
-      `source TEXT NOT NULL DEFAULT 'database_migration'` +
-      `)`,
-  );
-}
 
 async function listRemoteAppliedMigrationIds(remote: Client): Promise<Set<string>> {
   await ensureRemoteSchemaMigrationsTable(remote);

@@ -73,6 +73,10 @@ export interface TursoCloudSyncScope {
 export interface TursoCloudSyncBridge {
   enabled: boolean;
   listLinkedSources(refresh?: boolean): Promise<TursoLinkedSource[]>;
+  runExclusiveForDbPath<T>(
+    dbPath: string,
+    operation: () => Promise<T>,
+  ): Promise<T>;
   pushJob(
     syncKey: string,
     credentials?: import("./tursoSyncBridgeCore.js").TursoCredentials,
@@ -143,19 +147,21 @@ export async function isLinkedSourceRemoteAhead(
   );
   const databaseName = await bridge.resolveTursoDatabaseNameForLinked(linked);
   const creds = await bridge.fetchCredentials(databaseName);
-  const remote = createRemoteClient(creds);
-  try {
-    return await remoteAheadOfLocal(remote, {
-      ...(jobState?.lastSeenRemoteVersion !== undefined
-        ? { lastSeenRemoteVersion: jobState.lastSeenRemoteVersion }
-        : {}),
-      ...(jobState?.lastPulledLogId !== undefined
-        ? { lastPulledLogId: jobState.lastPulledLogId }
-        : {}),
-    });
-  } finally {
-    remote.close();
-  }
+  return bridge.runExclusiveForDbPath(linked.dbPath, async () => {
+    const remote = createRemoteClient(creds);
+    try {
+      return await remoteAheadOfLocal(remote, {
+        ...(jobState?.lastSeenRemoteVersion !== undefined
+          ? { lastSeenRemoteVersion: jobState.lastSeenRemoteVersion }
+          : {}),
+        ...(jobState?.lastPulledLogId !== undefined
+          ? { lastPulledLogId: jobState.lastPulledLogId }
+          : {}),
+      });
+    } finally {
+      remote.close();
+    }
+  });
 }
 
 function sessionActionFromPushPull(

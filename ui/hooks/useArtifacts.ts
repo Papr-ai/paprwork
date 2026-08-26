@@ -200,6 +200,8 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         unpublishFromCloud?: boolean;
         deleteLinkedJobs?: boolean;
         deleteTursoDatabases?: boolean;
+        deleteRegistryDbIds?: string[];
+        deleteRegistryTurso?: boolean;
         confirmed?: boolean;
       },
     ) => {
@@ -226,6 +228,8 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
               unpublishFromCloud: options?.unpublishFromCloud ?? false,
               deleteLinkedJobs: options?.deleteLinkedJobs ?? false,
               deleteTursoDatabases: options?.deleteTursoDatabases ?? false,
+              deleteRegistryDbIds: options?.deleteRegistryDbIds ?? [],
+              deleteRegistryTurso: options?.deleteRegistryTurso ?? false,
               confirmed: options?.confirmed ?? false,
             } : {}),
           },
@@ -240,6 +244,14 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
             shareUrl?: string | null;
             linkedJobs: Array<{ id: string; name: string; type: string; hasTursoDb?: boolean }>;
             tursoDbCount: number;
+            linkedRegistryDatabases: Array<{
+              dbId: string;
+              alias: string;
+              label: string;
+              tursoShortName: string;
+              sharedWithApps: Array<{ appId: string; title: string }>;
+              soleLinker: boolean;
+            }>;
           };
           deletedJobCount?: number;
           deletedTursoDbCount?: number;

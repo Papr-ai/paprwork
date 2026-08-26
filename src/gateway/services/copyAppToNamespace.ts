@@ -30,6 +30,7 @@ import {
   workspaceRegistryDbPath,
 } from "./resolveRegistryDbPath.js";
 import { isUnreadableDbPath } from "./portableDataSources.js";
+import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
 
 export interface CopyAppToNamespaceInput {
   appId: string;
@@ -767,6 +768,10 @@ export async function copyAppToNamespace(
 
   targetApps.push(copiedApp);
   await writeAppsIndex(targetIndexPath, targetApps);
+  // metadata.json is copied from the source folder and still points at the source
+  // namespace. listApps() and pruneStrayWorkspaceAppCopies() prefer disk metadata,
+  // so refresh it here or the copy vanishes when you switch workspaces.
+  await writeCloudAppMetadataFile(targetPaprHome, input.appId);
 
   return {
     appId: input.appId,
