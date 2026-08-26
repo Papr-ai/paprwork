@@ -13,7 +13,33 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const SDK_DIR = path.join(__dirname, "../../resources/mini-app-sdk");
+/**
+ * SDK sources must live OUTSIDE app.asar in packaged builds.
+ *
+ * esbuild bundles these files, and esbuild is a native binary running as a
+ * separate process. The asar virtual filesystem is patched into Electron's
+ * `fs` module only — a child process sees `app.asar` as a single opaque
+ * file, so every bundle failed with:
+ *
+ *   Could not resolve ".../app.asar/dist/resources/mini-app-sdk/papr-job-events.ts"
+ *
+ * Mini-apps import `/__papr__/papr-job-events.ts`, so that 500 meant the app
+ * bundle never evaluated and rendered blank — with an empty console, because
+ * a failed module fetch logs nothing.
+ *
+ * `dist/resources/mini-app-sdk/**` is in electron-builder `asarUnpack`, so
+ * prefer the unpacked copy whenever this file is loaded from inside an asar.
+ * Do NOT probe with fs.existsSync to choose: Electron's patched `fs` reports
+ * the in-asar path as readable, which is exactly the path esbuild cannot use.
+ */
+function resolveSdkDir(): string {
+  const bundled = path.join(__dirname, "../../resources/mini-app-sdk");
+  return bundled.includes(`app.asar${path.sep}`)
+    ? bundled.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
+    : bundled;
+}
+
+const SDK_DIR = resolveSdkDir();
 
 async function serveSdkFile(
   sdkFileName: string,
