@@ -244,7 +244,7 @@
     "electron-builder": "^26.7.0",
     "electron-vite": "^5.0.0",
     "empty-module": "^0.0.2",
-    "happy-dom": "^17.6.1",
+    "happy-dom": "^20.11.6",
     "jsdom": "^28.0.0",
     "oxfmt": "^0.13.0",
     "oxlint": "^0.13.0",
