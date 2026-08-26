@@ -132,17 +132,17 @@ export const useArtifactsStore = create<ArtifactsState>((set, get) => ({
     // Apply search
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
+      const matches = (value: unknown): boolean =>
+        typeof value === "string" && value.toLowerCase().includes(query);
+
       filtered = filtered.filter(
         (a) =>
-          a.title.toLowerCase().includes(query) ||
-          a.id.toLowerCase().includes(query) ||
-          a.description?.toLowerCase().includes(query) ||
-          a.tags?.some((tag) => tag.toLowerCase().includes(query)) ||
-          a.cloudLineage?.sourceSlug.toLowerCase().includes(query) ||
-          Object.values(a.metadata ?? {}).some(
-            (value) =>
-              typeof value === "string" && value.toLowerCase().includes(query),
-          ),
+          matches(a.title) ||
+          matches(a.id) ||
+          matches(a.description) ||
+          (Array.isArray(a.tags) && a.tags.some(matches)) ||
+          matches(a.cloudLineage?.sourceSlug) ||
+          Object.values(a.metadata ?? {}).some(matches),
       );
     }
 
