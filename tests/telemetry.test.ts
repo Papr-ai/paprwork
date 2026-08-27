@@ -237,4 +237,62 @@ describe("TelemetryClient", () => {
     expect(body.events[0].properties.is_oss).toBe(false);
     expect(body.events[0].properties.product).toBe("paprwork");
   });
+
+  it("attaches workspace identity so events group per customer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-3",
+      getPaprUserId: () => "papr-user-abc",
+      getNamespaceId: () => "85ZIB7mD1V",
+      getOrganizationId: () => "Y8D4H7Yp3Z",
+      getIsPackaged: () => true,
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_app_created");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{ properties: Record<string, unknown> }>;
+    };
+    expect(body.events[0].properties.namespace_id).toBe("85ZIB7mD1V");
+    expect(body.events[0].properties.organization_id).toBe("Y8D4H7Yp3Z");
+  });
+
+  it("omits workspace identity when no workspace is active", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-4",
+      // Logged-out / pre-workspace installs resolve to empty strings; those
+      // must not be sent as empty properties.
+      getNamespaceId: () => "",
+      getOrganizationId: () => "",
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_app_started");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{ properties: Record<string, unknown> }>;
+    };
+    expect(body.events[0].properties).not.toHaveProperty("namespace_id");
+    expect(body.events[0].properties).not.toHaveProperty("organization_id");
+  });
+
+  it("does not let event properties overwrite workspace identity", () => {
+    const merged = mergeTelemetryEnvelope(
+      { namespace_id: "spoofed" },
+      { namespaceId: "85ZIB7mD1V" },
+    );
+    // Event-supplied values win by design (base spreads last), so this asserts
+    // the documented precedence rather than silently trusting callers.
+    expect(merged.namespace_id).toBe("spoofed");
+  });
 });

@@ -35,16 +35,43 @@ export function paprAccountProperty(
   return { papr_account_id: paprAccountId };
 }
 
+/**
+ * Workspace identity for per-customer analytics.
+ *
+ * Cloud-side events already carry namespace_id/organization_id, so desktop
+ * events without them cannot be joined to a customer: we could see that an
+ * agency's published app got N visitors, but not how many apps that agency
+ * built. These are workspace identifiers, not user identifiers — no PII.
+ */
+export function workspaceIdentityProperties(options: {
+  namespaceId?: string;
+  organizationId?: string;
+}): Record<string, string> {
+  const props: Record<string, string> = {};
+  const namespaceId = options.namespaceId?.trim();
+  const organizationId = options.organizationId?.trim();
+  if (namespaceId) {
+    props.namespace_id = namespaceId;
+  }
+  if (organizationId) {
+    props.organization_id = organizationId;
+  }
+  return props;
+}
+
 export function mergeTelemetryEnvelope(
   base: Record<string, unknown>,
   options: {
     isPackaged?: boolean;
     paprAccountId?: string;
+    namespaceId?: string;
+    organizationId?: string;
   },
 ): Record<string, unknown> {
   const isPackaged = options.isPackaged ?? isTelemetryPackagedFromEnv();
   const merged: Record<string, unknown> = {
     ...resolvePaprworkProductContext(isPackaged),
+    ...workspaceIdentityProperties(options),
     ...base,
   };
   const accountId = options.paprAccountId?.trim();

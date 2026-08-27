@@ -3,6 +3,7 @@ import { AmplitudeEvents } from "../../core/telemetry/events.js";
 import { isTelemetryPackagedFromEnv } from "../../core/telemetry/telemetryProductContext.js";
 import { isTelemetrySendingEnabled } from "../../core/telemetry/telemetryEnv.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import {
   getDesktopSyncProtocol,
   registerSyncV3TelemetrySink,
@@ -38,6 +39,11 @@ export function getGatewayTelemetry(): TelemetryClient {
       getAnonymousInstallId: () =>
         process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID?.trim() ?? "",
       getPaprUserId: () => getPaprUserId() ?? "",
+      // Read per event, not cached: the user can switch workspace without a
+      // gateway restart, and events must follow the active one.
+      getNamespaceId: () => readActiveWorkspacePointer()?.namespaceId ?? "",
+      getOrganizationId: () =>
+        readActiveWorkspacePointer()?.organizationId ?? "",
       getIsPackaged: () => isTelemetryPackagedFromEnv(),
       appVersion: process.env.PAPRWORK_APP_VERSION?.trim() || "unknown",
     });

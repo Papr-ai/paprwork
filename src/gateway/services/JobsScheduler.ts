@@ -243,27 +243,26 @@ export class JobsScheduler {
             );
             const err =
               error instanceof Error ? error : new Error(String(error));
-            // A corrupt/non-SQLite linked database throws SQLITE_NOTADB from
-            // deep inside validation. That is a permanent configuration fault,
-            // not a transient run failure: if the schedule is not advanced the
-            // job stays due and relaunches on every tick (several times per
-            // second), starving the gateway. Treat it like an architecture
-            // failure so nextRunAt moves forward.
+            // A failed run still consumed its scheduled slot, so nextRunAt must
+            // move forward. Leaving it in the past keeps the job permanently due
+            // and relaunches it on every tick (several times per second) until
+            // someone notices — one job produced 645k failure events in a single
+            // week that way. DependencyRunningError is the only legitimate
+            // retry-next-tick case and is handled in the branch above; every
+            // other error advances the schedule and waits for the next slot.
             const isUnusableDatabase =
               (error as { code?: string })?.code === "SQLITE_NOTADB" ||
               /file is not a database|database disk image is malformed|malformed database schema/i.test(
                 err.message,
               );
-            const isArchitectureValidationFailure =
-              err.message.includes("Job architecture validation failed") ||
-              isUnusableDatabase;
             if (isUnusableDatabase) {
               console.error(
                 `[JobsScheduler] Job ${job.id} is linked to an unusable database — ` +
-                  `advancing schedule to stop retry storm. Re-link or recreate the database.`,
+                  `re-link or recreate the database.`,
               );
             }
-            if (isArchitectureValidationFailure) {
+            let scheduleAdvanced = false;
+            try {
               const latest = await jobsService.getJob(job.id);
               if (latest?.schedule?.enabled && latest.schedule) {
                 await this.patchNextRun(
@@ -272,9 +271,13 @@ export class JobsScheduler {
                   dueAt,
                   triggeredAt,
                 );
+                scheduleAdvanced = true;
               }
-              console.warn(
-                `[JobsScheduler] Advanced next run for ${job.id} after architecture validation failure`,
+            } catch (patchError) {
+              // Never let bookkeeping failure mask the original run failure.
+              console.error(
+                `[JobsScheduler] Failed to advance next run for ${job.id}:`,
+                patchError,
               );
             }
             getGatewayTelemetry().trackFireAndForget(
@@ -282,6 +285,8 @@ export class JobsScheduler {
               {
                 job_id: job.id,
                 error_type: err.constructor.name,
+                schedule_advanced: scheduleAdvanced,
+                unusable_database: isUnusableDatabase,
               },
             );
           }
