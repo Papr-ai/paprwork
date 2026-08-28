@@ -89,7 +89,7 @@ export class PaprMemoryProvider implements IStorageProvider {
       const storeBody: PaprMessageStoreBody = buildPaprSyncStoreBody({
         chatId,
         message,
-        externalUserId: memoryScope.external_user_id,
+        userId: memoryScope.user_id,
         namespaceId: memoryScope.namespace_id,
         policy: memoryScope.policy,
       });
