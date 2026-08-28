@@ -31,6 +31,7 @@ export interface CloudSyncPullHost extends CloudSyncGitRemoteHost {
   runExclusiveGitOp: <T>(fn: () => Promise<T>) => Promise<T>;
   enforceAppOwnershipAfterPull: () => Promise<void>;
   finalizePortableResourcesAfterPull: () => Promise<void>;
+  reconcileJobsRegistryAfterPull: () => Promise<void>;
 }
 
 export async function recoverUnpushedBacklogIfNeeded(host: {
@@ -130,6 +131,7 @@ export async function executeNamespaceGitPull(host: CloudSyncPullHost): Promise<
     if (pulledChanges) {
       await host.enforceAppOwnershipAfterPull();
       await host.finalizePortableResourcesAfterPull();
+      await host.reconcileJobsRegistryAfterPull();
     }
 
     await host.pullTursoLinkedSourcesAfterGitPull();
@@ -162,6 +164,7 @@ export async function executeNamespaceGitPull(host: CloudSyncPullHost): Promise<
         host.setConsecutivePullFailures(0);
         host.setPullBackoffUntilMs(0);
         await host.enforceAppOwnershipAfterPull();
+        await host.reconcileJobsRegistryAfterPull();
         await host.pullTursoLinkedSourcesAfterGitPull();
         return;
       }
@@ -218,6 +221,20 @@ export async function finalizePortableResourcesAfterPull(): Promise<void> {
     console.warn(
       "[CloudSync] Portable resource repair after pull failed:",
       (repairErr as Error).message.slice(0, 120),
+    );
+  }
+}
+
+export async function reconcileJobsRegistryAfterPull(): Promise<void> {
+  try {
+    const { reconcileJobsRegistryAfterSync } = await import(
+      "../jobs/jobsRegistryReconcile.js"
+    );
+    await reconcileJobsRegistryAfterSync();
+  } catch (err) {
+    console.warn(
+      "[CloudSync] Post-pull jobs registry reconcile failed:",
+      (err as Error).message.slice(0, 120),
     );
   }
 }

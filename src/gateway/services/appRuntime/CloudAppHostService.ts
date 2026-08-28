@@ -114,10 +114,14 @@ import {
 } from "../cloudSync/cloudAppMeta.js";
 import { normalizeRequiredSchemaVersion } from "../jobs/migrationLedgerPolicy.js";
 import {
-  evaluateCloudAppSchemaGate,
+  evaluateCloudAppSchemaGateCached,
+  toAppRevisionSchemaPayload,
+  warmCloudAppSchemaGate,
+  type SchemaGateResult,
 } from "./cloudAppSchemaGate.js";
 import {
   injectPaprAppRevisionMeta,
+  prefetchIndexHtmlRepoFiles,
   resolvePublishedAppRevision,
 } from "./publishedAppRevision.js";
 import { loadAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
@@ -829,6 +833,76 @@ export class CloudAppHostService {
     });
   }
 
+  /**
+   * Schema gate runs on data/backend APIs — not on index.html (see SYNC_CONTRACT §12).
+   * Returns null when the response was already sent (503 schema_syncing).
+   */
+  private async respondIfSchemaBlocked(
+    res: Response,
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext,
+    currentRevision?: string | null,
+    preloadedConfig?: AppDataSourcesFile,
+  ): Promise<SchemaGateResult | null> {
+    try {
+      const config = preloadedConfig ?? (await this.loadDataSources(runtimeAuth));
+      const gate = await evaluateCloudAppSchemaGateCached({
+        turso: this.turso,
+        runtimeAuth,
+        orgId: access.orgId,
+        namespaceId: access.namespaceId,
+        userId: access.userId,
+        callerUserId: runtimeAuth.externalUserId,
+        config,
+        currentRevision: currentRevision ?? null,
+      });
+      if (!gate.blocked) {
+        return gate;
+      }
+      res.status(503).json({
+        error:
+          "Database schema is syncing with this app version. Try again in a moment.",
+        code: "schema_syncing",
+        requiredSchemaVersion: gate.requiredSchemaVersion,
+        remoteSchemaVersion: gate.remoteSchemaVersion,
+        pinnedRevision: gate.pinnedRevision,
+      });
+      return null;
+    } catch (err) {
+      console.warn(
+        "[CloudAppHost] schema gate skipped:",
+        (err as Error).message.slice(0, 120),
+      );
+      return {
+        blocked: false,
+        requiredSchemaVersion: null,
+        remoteSchemaVersion: null,
+        pinnedRevision: null,
+      };
+    }
+  }
+
+  private warmSchemaGateInBackground(
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext,
+    revision: string | null,
+  ): void {
+    void this.loadDataSources(runtimeAuth)
+      .then((config) => {
+        warmCloudAppSchemaGate({
+          turso: this.turso,
+          runtimeAuth,
+          orgId: access.orgId,
+          namespaceId: access.namespaceId,
+          userId: access.userId,
+          callerUserId: runtimeAuth.externalUserId,
+          config,
+          currentRevision: revision,
+        });
+      })
+      .catch(() => {});
+  }
+
   private publishDbChangedForSource(
     config: AppDataSourcesFile,
     sourceId: string | undefined,
@@ -936,6 +1010,10 @@ export class CloudAppHostService {
         return;
       }
 
+      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
+        return;
+      }
+
       const config = await this.loadDataSources(runtimeAuth);
       const sources = await this.turso.schema({
         orgId: access.orgId,
@@ -982,6 +1060,10 @@ export class CloudAppHostService {
 
       if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
+        return;
+      }
+
+      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
         return;
       }
 
@@ -1125,6 +1207,10 @@ export class CloudAppHostService {
         return;
       }
 
+      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
+        return;
+      }
+
       const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
       configMs = performance.now() - configStarted;
@@ -1240,6 +1326,10 @@ export class CloudAppHostService {
         return;
       }
 
+      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
+        return;
+      }
+
       const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
       configMs = performance.now() - configStarted;
@@ -1327,6 +1417,10 @@ export class CloudAppHostService {
         } else {
           res.status(403).json({ error: "Write not allowed for this link" });
         }
+        return;
+      }
+
+      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
         return;
       }
 
@@ -1517,8 +1611,36 @@ export class CloudAppHostService {
         return;
       }
 
-      const backend = new CloudAppBackendService();
       const bypassFresh = shouldBypassRepoFileCache(req.headers);
+      const cacheOpts = bypassFresh ? { bypassFresh: true as const } : undefined;
+
+      const [dataSources, manifestFile] = await Promise.all([
+        this.loadDataSources(runtimeAuth),
+        fetchCachedRuntimeRepoFile(
+          runtimeAuth,
+          "backend/manifest.json",
+          cacheOpts,
+        ),
+      ]);
+
+      if (
+        (await this.respondIfSchemaBlocked(
+          res,
+          runtimeAuth,
+          access,
+          undefined,
+          dataSources,
+        )) === null
+      ) {
+        return;
+      }
+
+      if (!manifestFile) {
+        res.status(404).json({ error: "Backend manifest not found" });
+        return;
+      }
+
+      const backend = new CloudAppBackendService();
 
       const loggedIn = Boolean(this.auth.getSessionToken(req));
       const callerEmail = loggedIn ? this.auth.getSessionEmail(req) : undefined;
@@ -1537,6 +1659,8 @@ export class CloudAppHostService {
         bypassFresh,
         callerIdentity,
         loggedIn,
+        dataSources,
+        manifestContent: manifestFile?.content,
       });
 
       res.json(result);
@@ -1932,12 +2056,35 @@ export class CloudAppHostService {
       const meta = metaFile
         ? readCloudAppMetaFromContent(metaFile.content)
         : null;
-      res.json({
-        revision,
-        requiredSchemaVersion: normalizeRequiredSchemaVersion(
-          meta?.requiredSchemaVersion,
-        ),
-      });
+      const requiredSchemaVersion = normalizeRequiredSchemaVersion(
+        meta?.requiredSchemaVersion,
+      );
+
+      let schemaPayload: ReturnType<typeof toAppRevisionSchemaPayload>;
+      if (requiredSchemaVersion) {
+        const config = await this.loadDataSources(runtimeAuth);
+        const gate = await evaluateCloudAppSchemaGateCached({
+          turso: this.turso,
+          runtimeAuth,
+          orgId: access.orgId,
+          namespaceId: access.namespaceId,
+          userId: access.userId,
+          callerUserId: runtimeAuth.externalUserId,
+          config,
+          currentRevision: revision,
+        });
+        schemaPayload = toAppRevisionSchemaPayload(revision, gate);
+      } else {
+        schemaPayload = {
+          revision,
+          requiredSchemaVersion: null,
+          remoteSchemaVersion: null,
+          schemaReady: true,
+          schemaSyncing: false,
+        };
+      }
+
+      res.json(schemaPayload);
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -2007,6 +2154,10 @@ export class CloudAppHostService {
         return;
       }
 
+      if (access) {
+        void this.warmLinkedTursoSources(runtimeAuth, access).catch(() => {});
+      }
+
       await this.sendAppFile(req, res, runtimeAuth, requestedPath, access);
     } catch (err) {
       res.status(500).send((err as Error).message);
@@ -2074,6 +2225,18 @@ export class CloudAppHostService {
   ): Promise<void> {
     // Browser reload (F5 / hard reload) bypasses SWR so synced changes appear immediately.
     const bypassFresh = shouldBypassRepoFileCache(req.headers);
+
+    if (requestedPath === "index.html") {
+      await this.sendPublishedIndexHtml(
+        req,
+        res,
+        runtimeAuth,
+        access,
+        bypassFresh,
+      );
+      return;
+    }
+
     const file = await fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath, {
       bypassFresh,
     });
@@ -2086,96 +2249,6 @@ export class CloudAppHostService {
     let content = file.content;
     let contentType = getMiniAppContentType(ext) || file.contentType;
     let transpiled = false;
-
-    if (ext === ".html" && requestedPath === "index.html") {
-      const revision = await resolvePublishedAppRevision(runtimeAuth, {
-        bypassFresh,
-      });
-      const [distBundle, distCss] = await Promise.all([
-        fetchCachedRuntimeRepoFile(runtimeAuth, "dist/app.js", { bypassFresh }),
-        fetchCachedRuntimeRepoFile(runtimeAuth, "dist/app.css", { bypassFresh }),
-      ]);
-      if (distBundle) {
-        const { rewriteHtmlForBundledDist, appendDistAssetCacheBusters } =
-          await import("../../utils/miniAppBuild.js");
-        const { createHash } = await import("node:crypto");
-        content = rewriteHtmlForBundledDist(content, {
-          hasDistCss: distCss !== null,
-        });
-        const appJsHash = createHash("sha256")
-          .update(distBundle.content)
-          .digest("hex")
-          .slice(0, 16);
-        content = appendDistAssetCacheBusters(content, {
-          appJs: appJsHash,
-          ...(distCss
-            ? {
-                appCss: createHash("sha256")
-                  .update(distCss.content)
-                  .digest("hex")
-                  .slice(0, 16),
-              }
-            : {}),
-        });
-
-        if (revision) {
-          content = injectPaprAppRevisionMeta(content, revision);
-        }
-      }
-
-      if (access) {
-        try {
-          const config = await this.loadDataSources(runtimeAuth);
-          await evaluateCloudAppSchemaGate({
-            turso: this.turso,
-            runtimeAuth,
-            orgId: access.orgId,
-            namespaceId: access.namespaceId,
-            userId: access.userId,
-            callerUserId: runtimeAuth.externalUserId,
-            config,
-            currentRevision: revision ?? null,
-          });
-        } catch (err) {
-          console.warn(
-            "[CloudAppHost] schema gate skipped:",
-            (err as Error).message.slice(0, 120),
-          );
-        }
-      }
-
-      const publicBaseUrl = getCloudAppPublicBaseUrl(req);
-      const previewMeta = await resolveCloudAppPreviewMeta({
-        runtimeAuth,
-        publicBaseUrl,
-        canReadRepo: true,
-      });
-      content = injectCloudAppPreviewIntoHtml(
-        injectPublishedAppBaseHref(
-          injectPaprCloudContextMeta(
-            content,
-            runtimeAuth.namespaceId,
-            runtimeAuth.slug,
-          ),
-          publishedAppBaseHref(runtimeAuth.namespaceId, runtimeAuth.slug),
-        ),
-        previewMeta,
-        runtimeAuth.namespaceId,
-        runtimeAuth.slug,
-      );
-
-      // Platform scripts: native dialog shim (must run before app code), auth, version check.
-      const platformScripts = [
-        `<script src="/__papr__/papr-native-dialog-shim.js"></script>`,
-        `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
-        `<script src="/__papr__/papr-version-check.js" defer></script>`,
-      ].join("\n");
-      if (content.includes("</head>")) {
-        content = content.replace("</head>", `${platformScripts}\n</head>`);
-      } else {
-        content = platformScripts + "\n" + content;
-      }
-    }
 
     const isDistAsset = requestedPath.startsWith("dist/");
     if (!isDistAsset && isMiniAppTypeScriptFile(requestedPath)) {
@@ -2205,6 +2278,99 @@ export class CloudAppHostService {
     }
 
     res.setHeader("Content-Type", contentType);
+    res.send(content);
+  }
+
+  private async sendPublishedIndexHtml(
+    req: Request,
+    res: Response,
+    runtimeAuth: AppRuntimeRouteAuth,
+    access: AppAccessContext | null,
+    bypassFresh: boolean,
+  ): Promise<void> {
+    const publicBaseUrl = getCloudAppPublicBaseUrl(req);
+    const [bundle, previewMeta] = await Promise.all([
+      prefetchIndexHtmlRepoFiles(runtimeAuth, { bypassFresh }),
+      resolveCloudAppPreviewMeta({
+        runtimeAuth,
+        publicBaseUrl,
+        canReadRepo: true,
+      }),
+    ]);
+    if (!bundle.indexHtml) {
+      res.status(404).send("Not found");
+      return;
+    }
+
+    let content = bundle.indexHtml.content;
+    const revision = bundle.revision;
+    const distBundle = bundle.distJs;
+    const distCss = bundle.distCss;
+
+    if (distBundle) {
+      const { rewriteHtmlForBundledDist, appendDistAssetCacheBusters } =
+        await import("../../utils/miniAppBuild.js");
+      const { createHash } = await import("node:crypto");
+      content = rewriteHtmlForBundledDist(content, {
+        hasDistCss: distCss !== null,
+      });
+      const appJsHash = createHash("sha256")
+        .update(distBundle.content)
+        .digest("hex")
+        .slice(0, 16);
+      content = appendDistAssetCacheBusters(content, {
+        appJs: appJsHash,
+        ...(distCss
+          ? {
+              appCss: createHash("sha256")
+                .update(distCss.content)
+                .digest("hex")
+                .slice(0, 16),
+            }
+          : {}),
+      });
+
+      if (revision) {
+        content = injectPaprAppRevisionMeta(content, revision);
+      }
+    } else if (revision) {
+      const { appendLegacyTypeScriptCacheBusters } =
+        await import("../../utils/miniAppBuild.js");
+      content = appendLegacyTypeScriptCacheBusters(content, revision);
+      content = injectPaprAppRevisionMeta(content, revision);
+    }
+
+    if (access) {
+      this.warmSchemaGateInBackground(runtimeAuth, access, revision ?? null);
+    }
+
+    content = injectCloudAppPreviewIntoHtml(
+      injectPublishedAppBaseHref(
+        injectPaprCloudContextMeta(
+          content,
+          runtimeAuth.namespaceId,
+          runtimeAuth.slug,
+        ),
+        publishedAppBaseHref(runtimeAuth.namespaceId, runtimeAuth.slug),
+      ),
+      previewMeta,
+      runtimeAuth.namespaceId,
+      runtimeAuth.slug,
+    );
+
+    const platformScripts = [
+      `<script src="/__papr__/papr-native-dialog-shim.js"></script>`,
+      `<script src="/__papr__/papr-auth-guard.js" defer></script>`,
+      `<script src="/__papr__/papr-version-check.js" defer></script>`,
+    ].join("\n");
+    if (content.includes("</head>")) {
+      content = content.replace("</head>", `${platformScripts}\n</head>`);
+    } else {
+      content = platformScripts + "\n" + content;
+    }
+
+    res.setHeader("Cache-Control", "no-cache, must-revalidate");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.send(content);
   }
 

@@ -17,8 +17,9 @@ import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { resolveAgentFocusContext } from "../utils/agentFocusContext";
+import { isAppTabMergedWithChat } from "../utils/appTabMerge";
 import {
-  isAppEditToolName,
+  isAppAutoOpenToolName,
   isUserOnChatTab,
   resolveAppIdForAutoOpen,
   shouldAutoOpenArtifactTab,
@@ -71,6 +72,7 @@ export function useAgent() {
   const finalizeStreamingMessage = useChatStore((s) => s.finalizeStreamingMessage);
   const setSending = useChatStore((s) => s.setSending);
   const setConnectionPaused = useChatStore((s) => s.setConnectionPaused);
+  const setFinishingWork = useChatStore((s) => s.setFinishingWork);
   const setNeedsStreamRecovery = useChatStore((s) => s.setNeedsStreamRecovery);
   const setError = useChatStore((s) => s.setError);
   
@@ -490,69 +492,66 @@ export function useAgent() {
               }
 
               // === Auto-open document/app tabs when agent creates or edits them ===
+              const parsedResultForAutoOpen = (() => {
+                try {
+                  const raw =
+                    typeof payload.result === "string"
+                      ? JSON.parse(payload.result)
+                      : payload.result;
+                  return raw && typeof raw === "object"
+                    ? (raw as Record<string, unknown>)
+                    : null;
+                } catch {
+                  return null;
+                }
+              })();
+
               if (
                 shouldAutoOpenArtifactTab({
                   toolName: existingCall.toolName,
                   hasError: !!payload.error,
                   hasResult: !!payload.result,
-                  parsedResult: (() => {
-                    try {
-                      const raw =
-                        typeof payload.result === "string"
-                          ? JSON.parse(payload.result)
-                          : payload.result;
-                      return raw && typeof raw === "object"
-                        ? (raw as Record<string, unknown>)
-                        : null;
-                    } catch {
-                      return null;
-                    }
-                  })(),
+                  parsedResult: parsedResultForAutoOpen,
+                  args: existingCall.args,
                 })
               ) {
                 try {
-                  const parsedResult =
-                    typeof payload.result === "string"
-                      ? JSON.parse(payload.result)
-                      : payload.result;
+                  const parsedResult = parsedResultForAutoOpen;
 
                   let docId: string | undefined;
                   let docTitle: string | undefined;
                   let isApp = false;
 
-                  // For create/import, parse from result
                   if (
                     existingCall.toolName === "create_document" ||
-                    existingCall.toolName === "import_document" ||
-                    existingCall.toolName === "create_app"
+                    existingCall.toolName === "import_document"
                   ) {
                     const docData = parsedResult?.data ?? parsedResult;
                     docId = docData?.id as string | undefined;
                     docTitle = (docData?.title as string) || "Document";
-                    isApp = existingCall.toolName === "create_app";
-                  }
-
-                  // For app edits, resolve appId from args/result paths
-                  if (isAppEditToolName(existingCall.toolName)) {
+                  } else if (isAppAutoOpenToolName(existingCall.toolName)) {
                     docId = resolveAppIdForAutoOpen({
                       toolName: existingCall.toolName,
                       args: existingCall.args,
-                      parsedResult:
-                        parsedResult && typeof parsedResult === "object"
-                          ? (parsedResult as Record<string, unknown>)
-                          : null,
+                      parsedResult,
                     });
                     isApp = true;
 
-                    // Resolve title from existing tab if available
-                    if (docId) {
-                      const existingAppTab = useTabStore.getState().getTab(`app-${docId}`);
-                      docTitle = existingAppTab?.title || "App";
-                    } else {
-                      docTitle = "App";
-                    }
+                    const docData =
+                      parsedResult?.data && typeof parsedResult.data === "object"
+                        ? (parsedResult.data as Record<string, unknown>)
+                        : undefined;
+                    const existingAppTab = docId
+                      ? useTabStore.getState().getTab(`app-${docId}`)
+                      : undefined;
+                    docTitle =
+                      existingAppTab?.title ||
+                      (typeof docData?.title === "string" && docData.title.length > 0
+                        ? docData.title
+                        : undefined) ||
+                      "App";
 
-                    console.log("[useAgent] app edit auto-open:", {
+                    console.log("[useAgent] app auto-open:", {
                       toolName: existingCall.toolName,
                       appId: docId,
                       args: existingCall.args,
@@ -580,9 +579,18 @@ export function useAgent() {
                       getTab,
                     );
 
-                    if (existingTab) {
-                      // Tab exists - just merge with chat (refreshes the view)
-                      createArtifactFromChat(chatTabId, existingTabId, { autoSwitch });
+                    if (
+                      existingTab &&
+                      isApp &&
+                      isAppTabMergedWithChat(chatTabId, existingTabId)
+                    ) {
+                      console.log(
+                        `[useAgent] App tab already merged with chat, skipping re-open: ${existingTabId}`,
+                      );
+                    } else if (existingTab) {
+                      createArtifactFromChat(chatTabId, existingTabId, {
+                        autoSwitch,
+                      });
                       console.log(
                         `[useAgent] Refreshed existing ${tabType} tab: ${existingTabId}, autoSwitch: ${autoSwitch}`,
                       );
@@ -664,6 +672,10 @@ export function useAgent() {
           }
           break;
 
+        case "wrap-up-start":
+          setFinishingWork(chatId, true);
+          break;
+
         case "done":
           {
             // Clear any pending batch update for this chat
@@ -722,6 +734,7 @@ export function useAgent() {
                 untrackActiveStream(chatId);
                 setSending(chatId, false);
                 setConnectionPaused(chatId, false);
+                setFinishingWork(chatId, false);
                 setNeedsStreamRecovery(chatId, false);
                 const { setTabStreaming: clearTabStreaming } =
                   useTabStore.getState();
@@ -751,6 +764,7 @@ export function useAgent() {
               untrackActiveStream(chatId);
               setSending(chatId, false);
               setConnectionPaused(chatId, false);
+              setFinishingWork(chatId, false);
               setNeedsStreamRecovery(chatId, false);
               const { setTabStreaming: clearTabStreaming } =
                 useTabStore.getState();
@@ -828,6 +842,7 @@ export function useAgent() {
                 untrackActiveStream(chatId);
                 setSending(chatId, false);
                 setConnectionPaused(chatId, false);
+                setFinishingWork(chatId, false);
                 setNeedsStreamRecovery(chatId, false);
                 const { setTabStreaming } = useTabStore.getState();
                 setTabStreaming(`chat-${chatId}`, false);
@@ -949,6 +964,7 @@ export function useAgent() {
             // Set isSending to false FIRST to prevent empty loading indicator from appearing
             setSending(chatId, false);
             setConnectionPaused(chatId, false);
+            setFinishingWork(chatId, false);
             setNeedsStreamRecovery(chatId, false);
             
             // Clear streaming status (blue dot) for THIS chat's tab
@@ -1127,6 +1143,7 @@ export function useAgent() {
               );
               setSending(chatId, false);
               setConnectionPaused(chatId, false);
+              setFinishingWork(chatId, false);
               setNeedsStreamRecovery(chatId, true, "rateLimit");
               setError(null);
 
@@ -1240,6 +1257,7 @@ export function useAgent() {
             // Set isSending to false FIRST to prevent empty loading indicator from appearing
             setSending(chatId, false);
             setConnectionPaused(chatId, false);
+            setFinishingWork(chatId, false);
             
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
@@ -1320,6 +1338,7 @@ export function useAgent() {
       finalizeStreamingMessage,
       setSending,
       setConnectionPaused,
+      setFinishingWork,
       setNeedsStreamRecovery,
       setError,
       initStreamingState,
@@ -1439,6 +1458,7 @@ export function useAgent() {
 
       setSending(chatId, false);
       setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
       useChatStore.getState().setChatStreaming(chatId, false);
       useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
       clearStreamingState(chatId);
@@ -1460,6 +1480,7 @@ export function useAgent() {
       );
       clearResumeRetry(chatId);
       setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
       setNeedsStreamRecovery(chatId, false);
       setSending(chatId, true);
 
@@ -1501,6 +1522,7 @@ export function useAgent() {
         untrackActiveStream(chatId);
         setSending(chatId, false);
         setConnectionPaused(chatId, false);
+        setFinishingWork(chatId, false);
         setNeedsStreamRecovery(chatId, false);
         setTabStreaming(`chat-${chatId}`, false);
         clearStreamingState(chatId);
@@ -1646,6 +1668,7 @@ export function useAgent() {
       clearStreamingState,
       resumeInterruptedStream,
       setConnectionPaused,
+      setFinishingWork,
       setNeedsStreamRecovery,
       setError,
       setSending,
@@ -1661,6 +1684,7 @@ export function useAgent() {
       clearResumeRetry(chatId);
       setNeedsStreamRecovery(chatId, false);
       setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
       setError(null);
 
       const { setTabStreaming } = useTabStore.getState();

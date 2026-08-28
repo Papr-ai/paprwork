@@ -29,6 +29,48 @@ interface CloudJobsListResponse {
   count?: number;
 }
 
+/** Remove a job from the cloud runtime catalog (stops cloud-only / stale entries). */
+export async function deleteCloudJobCatalogEntry(jobId: string): Promise<boolean> {
+  const trimmed = jobId.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const apiKey = await getPaprApiKey();
+  if (!apiKey) {
+    return false;
+  }
+
+  try {
+    const res = await cloudApiFetch(
+      `/v1/cloud/runtime/jobs/${encodeURIComponent(trimmed)}`,
+      {
+        method: "DELETE",
+        timeoutMs: 15_000,
+      },
+    );
+    if (res.status === 404) {
+      return true;
+    }
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 120);
+      console.warn(
+        `[JobCloudSummary] Catalog delete failed for ${trimmed}:`,
+        res.status,
+        detail,
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn(
+      `[JobCloudSummary] Catalog delete error for ${trimmed}:`,
+      (err as Error).message.slice(0, 120),
+    );
+    return false;
+  }
+}
+
 export async function fetchCloudJobSummaries(
   localJobIds: string[],
 ): Promise<JobCloudStatusReport> {

@@ -54,6 +54,7 @@ interface ChatStore {
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
+  setFinishingWork: (chatId: string, finishing: boolean) => void;
   setNeedsStreamRecovery: (
     chatId: string,
     needs: boolean,
@@ -420,6 +421,20 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         ...chatState,
         connectionPaused: paused,
         ...(paused ? {} : { needsStreamRecovery: false }),
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setFinishingWork: (chatId, finishing) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        isFinishingWork: finishing,
       });
 
       return { chatStates: newChatStates };

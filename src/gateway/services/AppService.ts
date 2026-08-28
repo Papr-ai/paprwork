@@ -7,6 +7,7 @@ import { promises as fs } from "fs";
 import chokidar, { type FSWatcher } from "chokidar";
 import path from "path";
 import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
+import { isCloudPrepGitSyncArtifact } from "./cloudSync/syncState.js";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
@@ -86,6 +87,10 @@ import {
   type BundledDefaultJobDef,
 } from "./defaultHomeBundle.js";
 import type { JobRecord } from "./jobs/types.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 
 export { CopyAppError, type CopyAppToNamespaceResult, AppWorkspaceAssignError, type AssignAppToWorkspaceResult };
 
@@ -278,6 +283,8 @@ export class AppService {
   private initPromise: Promise<void> | null = null;
   /** PAPR_HOME at last successful initialize — prune must not run after env drift. */
   private loadedPaprRoot: string | null = null;
+  private boundPaprDir: string | null = null;
+  private boundWriteGeneration: number | null = null;
   /** Dedupes the prune-skip warning, which listApps() would otherwise repeat. */
   private lastPruneSkipWarnKey: string | null = null;
   /**
@@ -346,6 +353,22 @@ export class AppService {
     return path.join(getPaprDataDir(), "apps.json");
   }
 
+  private bindWorkspaceWriteContext(): void {
+    this.boundPaprDir = getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private isWriteContextValid(context: string): boolean {
+    if (this.boundPaprDir === null || this.boundWriteGeneration === null) {
+      return true;
+    }
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.boundPaprDir,
+      context,
+    );
+  }
+
   /** Reload index from disk after PAPR_HOME changes (cloud agent gateway). */
   async resetForWorkspaceReload(): Promise<void> {
     for (const timer of this.debounceTimers.values()) {
@@ -359,6 +382,8 @@ export class AppService {
     this.watchers.clear();
     this.initialized = false;
     this.loadedPaprRoot = null;
+    this.boundPaprDir = null;
+    this.boundWriteGeneration = null;
     this.apps.clear();
     this.pendingDefaultJobs = [];
     this.lastBuildResult.clear();
@@ -714,6 +739,24 @@ export class AppService {
     if (installed) {
       console.log(`[AppService] Installed default job ${jobId} for app ${appId}`);
     }
+
+    const bundledRecipePath = path.join(sourceDir, "recipe.md");
+    try {
+      const markdown = await fs.readFile(bundledRecipePath, "utf8");
+      const { getRecipeService } = await import("./jobs/RecipeService.js");
+      await getRecipeService().writeRecipe(jobId, markdown);
+      if (jobDef.recipe?.enabled) {
+        await jobsService.updateJob(jobId, { recipe: jobDef.recipe });
+      }
+    } catch (recipeErr) {
+      const code = (recipeErr as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `[AppService] Could not install bundled recipe for ${jobId}:`,
+          recipeErr instanceof Error ? recipeErr.message : recipeErr,
+        );
+      }
+    }
   }
 
   /**
@@ -797,6 +840,7 @@ export class AppService {
   private async runInitialize(): Promise<void> {
     if (this.initialized) return;
 
+    this.bindWorkspaceWriteContext();
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
@@ -1482,6 +1526,9 @@ export class AppService {
   }
 
   private async saveApps(): Promise<void> {
+    if (!this.isWriteContextValid("apps.json save")) {
+      return;
+    }
     if (this.saveLock) {
       await this.saveLock;
     }
@@ -2739,10 +2786,17 @@ export class AppService {
    * Handle file change detected by filesystem watcher
    */
   private handleFileChange(appId: string, filename: string): void {
+    const normalized = filename.replace(/\\/g, "/");
+
+    // Cloud-prep outputs (bundle.json, linked-databases.json, …) — no reload or auto flush
+    if (isCloudPrepGitSyncArtifact(normalized)) {
+      return;
+    }
+
     console.log(`[AppService] File changed on disk: ${appId}/${filename}`);
 
     // Skip rebuild for dist/ output files (avoids infinite loop)
-    if (filename.startsWith("dist/") || filename.startsWith("dist\\")) {
+    if (normalized.startsWith("dist/")) {
       return;
     }
 
@@ -2775,8 +2829,10 @@ export class AppService {
         const { notifyAppSaveForWriterOps } = await import("./syncV3/AppSaveWatcher.js");
         const coordinator = getSyncCoordinator();
         if (coordinator) {
-          await notifyAppSaveForWriterOps(appId, (id) =>
-            coordinator.scheduleAutoFlush(id),
+          await notifyAppSaveForWriterOps(
+            appId,
+            (id) => coordinator.scheduleAutoFlush(id),
+            this.paprRootDir,
           );
         } else if (process.env.GATEWAY_MODE === "cloud_agent") {
           const { notifyCloudSandboxAppSave } = await import(
@@ -2862,6 +2918,21 @@ export class AppService {
     try {
       const files = await this.getAllAppFiles(appPath);
       filesToCheck.push(...files);
+
+      const { listOversizedFilesInAppDir } = await import(
+        "./syncV3/collectAppOpFiles.js"
+      );
+      for (const entry of await listOversizedFilesInAppDir(appPath)) {
+        issues.push({
+          file: entry.path,
+          severity: "warning",
+          rule: "oversized-for-git-sync",
+          message:
+            entry.reason.includes("never tracked")
+              ? `${entry.path}: ${entry.reason}. Move to App Files and store the file id. See src/resources/agent-docs/APP_FILES_GUIDE.md.`
+              : `File is ${entry.reason} and will not sync to the web. Move it to App Files (object storage) and store the file id in your database. See src/resources/agent-docs/APP_FILES_GUIDE.md.`,
+        });
+      }
     } catch (error) {
       console.error(`[AppService] Failed to list app files:`, error);
       return {
@@ -2957,13 +3028,26 @@ export class AppService {
 
     issues.push(...this.checkMiniAppRuntimePatterns(fileContents));
     try {
-      const { checkMiniAppBashPatterns, checkBackendManifestIntegrity, checkOrphanBackendHandlers } =
-        await import("../utils/miniAppBackendLint.js");
+      const {
+        checkMiniAppBashPatterns,
+        checkBackendManifestIntegrity,
+        checkOrphanBackendHandlers,
+        checkMiniAppBackendFetchPatterns,
+      } = await import("../utils/miniAppBackendLint.js");
       issues.push(...checkMiniAppBashPatterns(fileContents));
+      issues.push(...checkMiniAppBackendFetchPatterns(fileContents));
       issues.push(...(await checkBackendManifestIntegrity(appPath)));
       issues.push(...(await checkOrphanBackendHandlers(appPath)));
     } catch (lintError) {
       console.warn("[AppService] Backend lint failed:", lintError);
+    }
+    try {
+      const { checkBackendActionSmokeTest } = await import(
+        "../utils/miniAppBackendSmokeTest.js"
+      );
+      issues.push(...(await checkBackendActionSmokeTest(appId)));
+    } catch (smokeError) {
+      console.warn("[AppService] Backend smoke test failed:", smokeError);
     }
     try {
       const { checkMiniAppJobEventPatterns } = await import(

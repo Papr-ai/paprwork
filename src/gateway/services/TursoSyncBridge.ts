@@ -22,6 +22,7 @@ import {
   discoverTursoLinkedSources,
   findLinkedSourceForJob,
   linkedSourceAlternateKeys,
+  linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
   listLinkedJobIdsForTursoSync,
   resolveLinkedSourcesForTursoPush,
@@ -410,6 +411,14 @@ export class TursoSyncBridge {
   private async linkedSourceNeedsPushRemoteCheck(
     linked: TursoLinkedSource,
   ): Promise<boolean> {
+    const appSource = linkedSourceAsAppDataSource(linked);
+    const { shouldUseTursoReplicaForSource, syncStatusForLinkedDb } =
+      await import("./tursoReplica/tursoReplicaRouting.js");
+    if (shouldUseTursoReplicaForSource(appSource)) {
+      const status = await syncStatusForLinkedDb(appSource);
+      return status.pendingPush;
+    }
+
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = await this.fetchCredentials(databaseName);
     const remote = createRemoteClient(creds);
@@ -442,6 +451,22 @@ export class TursoSyncBridge {
   private async evaluateLinkedSourceNeedsPush(
     linked: TursoLinkedSource,
   ): Promise<boolean> {
+    const appSource = linkedSourceAsAppDataSource(linked);
+    const { shouldUseTursoReplicaForSource, syncStatusForLinkedDb } =
+      await import("./tursoReplica/tursoReplicaRouting.js");
+    if (shouldUseTursoReplicaForSource(appSource)) {
+      try {
+        const status = await syncStatusForLinkedDb(appSource);
+        return (
+          status.pendingPush ||
+          status.migrationConflict ||
+          status.cutoverBlocked
+        );
+      } catch {
+        return true;
+      }
+    }
+
     const syncKey = linkedSourceSyncKey(linked);
     const alternateKeys = linkedSourceAlternateKeys(linked);
     clearStaleDirtyFlagIfClean(
@@ -535,6 +560,22 @@ export class TursoSyncBridge {
     const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
     const creds = credentials ?? (await this.fetchCredentials(databaseName));
 
+    const appSource = linkedSourceAsAppDataSource(linked);
+    const { shouldUseTursoReplicaForSource, pushLinkedDbViaTursoReplica } =
+      await import("./tursoReplica/tursoReplicaRouting.js");
+    if (shouldUseTursoReplicaForSource(appSource)) {
+      const result = await pushLinkedDbViaTursoReplica(appSource);
+      if (result.ok) {
+        return { status: "pushed", tables: [], syncMode: "replica" };
+      }
+      return {
+        status: "failed",
+        tables: [],
+        error: result.error ?? "Turso replica push failed",
+        syncMode: "replica",
+      };
+    }
+
     const { pushLinkedSourceViaWorkspaceLog } = await import(
       "./syncV3/workspaceLogSync.js"
     );
@@ -552,6 +593,26 @@ export class TursoSyncBridge {
     if (!linked) {
       return { status: "skipped", reason: "not_linked_to_app" };
     }
+
+    const appSource = linkedSourceAsAppDataSource(linked);
+    const { shouldUseTursoReplicaForSource, pullLinkedDbViaTursoReplica } =
+      await import("./tursoReplica/tursoReplicaRouting.js");
+    if (shouldUseTursoReplicaForSource(appSource)) {
+      try {
+        const pulled = await pullLinkedDbViaTursoReplica(appSource);
+        if (pulled) {
+          return { status: "pulled", syncMode: "replica" };
+        }
+        return { status: "skipped", reason: "remote_unchanged", syncMode: "replica" };
+      } catch (error) {
+        return {
+          status: "failed",
+          error: (error as Error).message,
+          syncMode: "replica",
+        };
+      }
+    }
+
     const { pullLinkedSourceViaWorkspaceLog } = await import(
       "./syncV3/workspaceLogSync.js"
     );

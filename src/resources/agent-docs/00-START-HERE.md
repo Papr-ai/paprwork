@@ -58,6 +58,10 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 | **Planning** | `create_plan`, `update_plan` |
 | **Browser** | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_type`, `browser_tabs` |
 | **Webview** | `webview_launch_app`, `webview_snapshot`, `webview_execute`, `webview_get_console`, `webview_list`, `webview_close` |
+| **Cloud sync** | `get_cloud_sync_status`, `push_cloud_sync`, `repair_cloud_sync` |
+| **Plan A DB (replica)** | `papr_db_sync_status`, `papr_db_apply_migration`, `papr_db_exec` (DML only), `repair_cloud_sync` |
+
+**Cloud sync semantics (Plan A):** Schema = `write_file migrations/*.sql` → `papr_db_apply_migration` (Turso primary). Rows = `papr_db_exec` or Upload now (auto-push when online). `push_cloud_sync({ appId })` ships git/code **and** triggers replica push. Migration conflicts → `repair_cloud_sync`.
 
 ---
 
@@ -70,6 +74,7 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 - `DELEGATION_STRATEGY.md` — When and how to delegate work
 - `SUBAGENT_CREATION_GUIDE.md` — Creating specialized sub-agents with model selection
 - `AGENT_SETUP_WORKFLOW.md` — Onboarding and workspace setup
+- `CLOUD_VS_DESKTOP_GUIDE.md` — Desktop vs cloud job routing, Turso replica sync on wake
 
 ## Skills (loaded on demand)
 

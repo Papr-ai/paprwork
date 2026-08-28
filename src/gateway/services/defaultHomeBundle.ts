@@ -38,6 +38,7 @@ export interface BundledDefaultJobDef {
   memoryPolicy?: JobRecord["memoryPolicy"];
   provider?: string;
   model?: string;
+  recipe?: JobRecord["recipe"];
 }
 
 export function buildDailyBriefDataSource(

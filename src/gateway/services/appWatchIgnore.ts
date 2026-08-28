@@ -6,6 +6,7 @@
  */
 
 import path from "path";
+import { isCloudPrepGitSyncArtifact } from "./cloudSync/syncState.js";
 
 const METADATA_FILENAMES = new Set([
   "data-sources.json",
@@ -15,6 +16,10 @@ const METADATA_FILENAMES = new Set([
 export function shouldIgnoreAppWatchPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, "/");
   const base = path.basename(filePath);
+
+  if (isCloudPrepGitSyncArtifact(normalized)) {
+    return true;
+  }
 
   if (base.startsWith(".")) {
     return true;

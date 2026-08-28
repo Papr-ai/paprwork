@@ -69,6 +69,113 @@ function isFrontendSource(relativePath: string): boolean {
   return /\.(ts|tsx|js|jsx|html)$/.test(relativePath);
 }
 
+const BACKEND_STDIN_PATTERN = /\bsys\.stdin\b|json\.load\s*\(\s*sys\.stdin\s*\)/;
+
+const BACKEND_FETCH_PATTERN =
+  /fetch\s*\(\s*[`'"]\/api\/app\/backend\/[^`'"]+[`'"]/g;
+
+/** Literal object passed to JSON.stringify in a backend fetch (single-level). */
+const BACKEND_FETCH_BODY_LITERAL =
+  /JSON\.stringify\s*\(\s*(\{[^{}]*\})\s*\)/;
+
+function stripLineCommentsForLint(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*") ||
+        trimmed.startsWith("#")
+      ) {
+        return "";
+      }
+      const slash = line.indexOf("//");
+      return slash >= 0 ? line.slice(0, slash) : line;
+    })
+    .join("\n");
+}
+
+export function checkBackendHandlerPatterns(
+  handlerRelativePath: string,
+  handlerSource: string,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const file = `${BACKEND_FOLDER}/${handlerRelativePath}`;
+
+  if (BACKEND_STDIN_PATTERN.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "error",
+      message:
+        "Backend handlers cannot read sys.stdin — the gateway injects params via PAPR_ACTION_PARAMS. " +
+        'Use: params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}")) (Python) or ' +
+        'JSON.parse(process.env.PAPR_ACTION_PARAMS ?? "{}") (Node/TS).',
+      rule: "backend-no-stdin",
+    });
+  }
+
+  if (/\bAPP_DB_PATH\b/.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "error",
+      message:
+        'APP_DB_PATH is not a platform env var. Use from papr_db import connect; con = connect("alias") ' +
+        "(or connect() for the active linked DB). See backend/papr_db.py scaffold.",
+      rule: "backend-no-app-db-path",
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Warn when frontend fetch('/api/app/backend/...') sends a literal body without params:.
+ * Skips JSON.stringify(variable) — cannot analyze runtime shapes safely.
+ */
+export function checkMiniAppBackendFetchPatterns(
+  fileContents: Map<string, string>,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  for (const [filename, content] of fileContents.entries()) {
+    if (!isFrontendSource(filename)) {
+      continue;
+    }
+
+    const code = stripLineCommentsForLint(content);
+    BACKEND_FETCH_PATTERN.lastIndex = 0;
+
+    for (const match of code.matchAll(BACKEND_FETCH_PATTERN)) {
+      const start = match.index ?? 0;
+      const slice = code.slice(start, start + 900);
+      const bodyMatch = BACKEND_FETCH_BODY_LITERAL.exec(slice);
+      if (!bodyMatch) {
+        continue;
+      }
+      const literal = bodyMatch[1] ?? "";
+      if (/\bparams\s*:/.test(literal)) {
+        continue;
+      }
+
+      issues.push({
+        file: filename,
+        severity: "warning",
+        message:
+          "POST /api/app/backend/:action expects { params: { ... } } in the JSON body " +
+          "(gateway maps params → PAPR_ACTION_PARAMS). Wrap handler args: " +
+          'JSON.stringify({ params: { key: value } }). Parse the response: ' +
+          "const { stdout, exitCode, stderr } = await res.json(); JSON.parse(stdout).",
+        rule: "backend-fetch-params-wrapper",
+      });
+      break;
+    }
+  }
+
+  return issues;
+}
+
 export function checkMiniAppBashPatterns(
   fileContents: Map<string, string>,
 ): ValidationIssue[] {
@@ -103,11 +210,35 @@ export function checkMiniAppBashPatterns(
   return issues;
 }
 
+/** Strip comments so scaffold examples do not trigger vault-key lint. */
+export function stripCommentsForVaultEnvScan(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#")) {
+        return "";
+      }
+      const hashIdx = line.indexOf("#");
+      if (hashIdx !== -1) {
+        return line.slice(0, hashIdx);
+      }
+      const slashIdx = line.indexOf("//");
+      if (slashIdx !== -1) {
+        return line.slice(0, slashIdx);
+      }
+      return line;
+    })
+    .join("\n");
+}
+
 export function extractVaultEnvReferences(handlerSource: string): Set<string> {
   const names = new Set<string>();
+  const scanSource = stripCommentsForVaultEnvScan(handlerSource);
   for (const pattern of ENV_VAR_REFERENCE_PATTERNS) {
     pattern.lastIndex = 0;
-    for (const match of handlerSource.matchAll(pattern)) {
+    for (const match of scanSource.matchAll(pattern)) {
       const name = match[1];
       if (
         !name ||
@@ -244,6 +375,7 @@ export async function checkBackendManifestIntegrity(
         await fs.access(handlerPath);
         const handlerSource = await fs.readFile(handlerPath, "utf8");
         issues.push(
+          ...checkBackendHandlerPatterns(spec.handler, handlerSource),
           ...checkBackendVaultKeyDeclarations(
             actionName,
             spec.handler,
@@ -315,8 +447,8 @@ export async function checkOrphanBackendHandlers(
     return issues;
   }
 
-  /** Shared DB helper copied by AppService scaffold — not an HTTP action handler. */
-  const backendHelperModules = new Set(["papr_db.py"]);
+  /** Shared DB helpers copied by scaffold — not HTTP action handlers. */
+  const backendHelperModules = new Set(["papr_db.py", "db_helper.py"]);
 
   for (const entry of entries) {
     if (!entry.endsWith(".py") || entry.startsWith("__")) {

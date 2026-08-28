@@ -6,6 +6,7 @@ import * as fs from "fs";
 import * as path from "path";
 import Database from "better-sqlite3";
 import { discoverTursoLinkedSources } from "../tursoLinkedSources.js";
+import { getDatabaseRegistryService } from "../DatabaseRegistryService.js";
 import { listAppliedMigrationIdsReadOnly } from "../jobs/schemaMigrationsLedger.js";
 import { requiredSchemaVersionFromMigrationIds } from "../jobs/migrationLedgerPolicy.js";
 import {
@@ -97,8 +98,19 @@ export async function buildCloudAppMeta(
     (source) => source.appId === appId,
   );
   const migrationIds: string[] = [];
+  const seenDbPaths = new Set<string>();
   for (const source of sources) {
     migrationIds.push(...listAppliedMigrationIds(source.dbPath));
+    seenDbPaths.add(path.normalize(source.dbPath));
+  }
+
+  for (const record of getDatabaseRegistryService().listBySchemaOwnerApp(appId)) {
+    const normalized = path.normalize(record.localPath);
+    if (seenDbPaths.has(normalized)) {
+      continue;
+    }
+    migrationIds.push(...listAppliedMigrationIds(record.localPath));
+    seenDbPaths.add(normalized);
   }
 
   return {

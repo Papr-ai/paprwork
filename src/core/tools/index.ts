@@ -38,11 +38,13 @@ import {
 import { wikiGraphTools } from "./wikiGraph.js";
 import { paprWorkspaceTools } from "./paprWorkspace.js";
 import { platformFeedbackTools } from "./platformFeedback.js";
+import { paprDbTools } from "./paprDb.js";
 
 export const databaseTools = [
   createDatabaseTool,
   attachDatabaseTool,
   deleteDatabaseTool,
+  ...paprDbTools,
 ];
 
 /**

@@ -139,6 +139,52 @@ function evaluateDbChange(watched: WatchedDbDir): void {
     return;
   }
 
+  void import("./tursoReplica/tursoReplicaRouting.js").then(
+    ({ shouldSuppressLegacyTursoPush }) => {
+      if (
+        shouldSuppressLegacyTursoPush({
+          syncKey: watched.syncKey,
+          dbPath: watched.dbPath,
+          dbId: watched.dbId,
+        })
+      ) {
+        evaluateDbChangeReplica(watched);
+        return;
+      }
+      void import("../utils/tursoReplicaEnabled.js").then(
+        ({ isLegacyWorkspaceRowSyncEnabled }) => {
+          if (!isLegacyWorkspaceRowSyncEnabled()) {
+            return;
+          }
+          evaluateDbChangeLegacy(watched);
+        },
+      );
+    },
+  );
+}
+
+function evaluateDbChangeReplica(watched: WatchedDbDir): void {
+  const coordinator = getSyncCoordinator();
+  if (coordinator) {
+    const status = coordinator.getStatus();
+    if (status.activeFlush || status.inFlightAppIds.length > 0) {
+      return;
+    }
+    coordinator.markDbDirty(watched.syncKey, watched.dbPath, "watcher");
+  } else {
+    void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+      ({ scheduleTursoReplicaPushForSyncKey }) => {
+        scheduleTursoReplicaPushForSyncKey(watched.syncKey, "normal", "watcher");
+      },
+    );
+  }
+  publishDbChanged({
+    ...(watched.jobId ? { jobId: watched.jobId } : {}),
+    ...(watched.dbId ? { dbId: watched.dbId } : {}),
+  });
+}
+
+function evaluateDbChangeLegacy(watched: WatchedDbDir): void {
   const syncState = loadTursoSyncState();
   if (isJobDbQuarantined(watched.syncKey, syncState)) {
     return;
@@ -177,6 +223,12 @@ function evaluateDbChange(watched: WatchedDbDir): void {
 export async function startTursoLinkedDbWatcher(
   appsRootDir?: string,
 ): Promise<void> {
+  const { isLegacyWorkspaceRowSyncEnabled, isTursoReplicaSyncFeatureEnabled } =
+    await import("../utils/tursoReplicaEnabled.js");
+  if (!isLegacyWorkspaceRowSyncEnabled() && !isTursoReplicaSyncFeatureEnabled()) {
+    return;
+  }
+
   const bridge = getTursoSyncBridge();
   if (!bridge) {
     return;

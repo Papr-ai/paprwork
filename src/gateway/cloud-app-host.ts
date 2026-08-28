@@ -19,6 +19,7 @@ import {
   MemoryServerPublishResolver,
   MemoryServerTursoCredentials,
 } from "./services/appRuntime/CloudAppHostService.js";
+import { shutdownBackendPythonWorker } from "./services/appRuntime/appBackendPythonWorker.js";
 
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
 
@@ -49,6 +50,13 @@ async function main(): Promise<void> {
       `[CloudAppHost] Memory server: ${process.env.PAPR_MEMORY_SERVER_URL ?? "https://memory.papr.ai"}`,
     );
   });
+
+  const shutdown = (): void => {
+    shutdownBackendPythonWorker();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 main().catch((err) => {

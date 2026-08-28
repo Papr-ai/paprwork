@@ -216,6 +216,14 @@ export async function processQueueItem(host: CloudSyncQueueHost): Promise<void> 
     host.setQueue([]);
     return;
   }
+
+  const { waitForWorkspaceReady } = await import("../workspaceReadiness.js");
+  await waitForWorkspaceReady();
+  if (host.isStopped() || !host.isWriteContextValid("cloud sync queue item")) {
+    host.setQueue([]);
+    return;
+  }
+
   if (host.queueLength === 0) {
     processNextInQueue(host);
     return;

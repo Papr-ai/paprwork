@@ -242,6 +242,9 @@ async function writeFile(
         ...(miniAppResult._jobEventsReminder
           ? { _jobEventsReminder: miniAppResult._jobEventsReminder }
           : {}),
+        ...(miniAppResult._largeFileReminder
+          ? { _largeFileReminder: miniAppResult._largeFileReminder }
+          : {}),
       } as unknown as ToolResult<WriteFileOutput>;
     }
 
@@ -306,6 +309,25 @@ async function writeFile(
       // Focus tracking is best-effort
     }
 
+    const {
+      extractAppIdFromAppsPath,
+      buildAppRelativePath,
+      buildLargeContentWriteReminder,
+      buildLargeFileWriteReminder,
+    } = await import("../utils/oversizedAppFileWarnings.js");
+    const { isTooLargeForGitSync } = await import(
+      "../../gateway/services/cloudSync/gitSyncLimits.js"
+    );
+
+    let largeFileReminder: string | undefined;
+    const appIdFromPath = extractAppIdFromAppsPath(filePath);
+    if (appIdFromPath && isTooLargeForGitSync(stats.size)) {
+      const appRelative = buildAppRelativePath(filePath, appIdFromPath);
+      largeFileReminder = appRelative
+        ? buildLargeContentWriteReminder(appRelative)
+        : buildLargeFileWriteReminder([filePath]);
+    }
+
     return {
       success: true,
       data: {
@@ -316,6 +338,7 @@ async function writeFile(
         git_staged: gitResult.staged,
         git_status: gitResult.staged ? "staged" : "untracked",
       },
+      ...(largeFileReminder ? { _largeFileReminder: largeFileReminder } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

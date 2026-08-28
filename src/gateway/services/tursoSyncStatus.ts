@@ -13,6 +13,7 @@ import {
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import {
   discoverTursoLinkedSources,
+  linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
   listAppsLinkingDbPath,
   type TursoLinkedSource,
@@ -23,6 +24,12 @@ import { localRemoteUserSchemaDriftTables } from "./tursoDeltaSync.js";
 import { getDatabaseRegistryService,
 } from "./DatabaseRegistryService.js";
 import { shouldAutoUploadTursoForApp } from "./cloudUploadMode.js";
+import { listLegacyCdcArtifactTablesForPath } from "./legacyCdcArtifacts.js";
+import type { TursoReplicaSyncStatus } from "./tursoReplica/tursoReplicaTypes.js";
+import {
+  shouldUseTursoReplicaForSource,
+  syncStatusForLinkedDb,
+} from "./tursoReplica/tursoReplicaRouting.js";
 
 export type TursoSourceSyncState =
   | "synced"
@@ -42,6 +49,8 @@ export interface TursoSourceSyncItem {
   localTableCount: number;
   remoteTableCount: number;
   schemaDrift?: boolean;
+  /** Local-only legacy CDC tables excluded from drift (diagnostic). */
+  legacyArtifactTables?: string[];
   /** Other mini-apps linking the same on-disk SQLite file (shared registry DB). */
   linkingAppIds?: string[];
   /** Turso token/query failed — remoteTableCount may be misleading. */
@@ -50,6 +59,15 @@ export interface TursoSourceSyncItem {
   quarantineReason?: string | null;
   /** Dirty but auto-upload off — use Upload now. */
   manualUploadHold?: boolean;
+  /** Plan A replica path — when set, row sync uses Turso Sync push/pull. */
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }
 
 export interface TursoSyncItemsReport {
@@ -88,6 +106,31 @@ function countLocalSyncableTables(dbPath: string): number {
   }
 }
 
+async function countLocalSyncableTablesForSource(
+  source: TursoLinkedSource,
+): Promise<number> {
+  const appSource = linkedSourceAsAppDataSource(source);
+  if (shouldUseTursoReplicaForSource(appSource)) {
+    try {
+      const { queryLinkedDbViaTursoReplica } = await import(
+        "./tursoReplica/tursoReplicaRouting.js"
+      );
+      const result = await queryLinkedDbViaTursoReplica(
+        appSource,
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+        [],
+        { pullBeforeRead: false },
+      );
+      return filterSyncableTables(
+        result.rows.map((row) => String(row.name ?? row[0] ?? "")),
+      ).length;
+    } catch {
+      return 0;
+    }
+  }
+  return countLocalSyncableTables(source.dbPath);
+}
+
 /** Exported for unit tests — fingerprint-aware Turso source status. */
 export function resolveTursoSourceStatus(
   localTableCount: number,
@@ -121,6 +164,31 @@ export function resolveTursoSourceStatus(
   }
   if (localTableCount > 0) {
     return "pending";
+  }
+  return "empty";
+}
+
+/** Exported for unit tests — replica-aware Turso source status. */
+export function resolveReplicaTursoSourceStatus(
+  localTableCount: number,
+  dbExists: boolean,
+  replica: Pick<
+    TursoReplicaSyncStatus,
+    "pendingPush" | "migrationConflict" | "cutoverBlocked"
+  >,
+  quarantined = false,
+): TursoSourceSyncState {
+  if (quarantined) {
+    return "quarantined";
+  }
+  if (!dbExists) {
+    return "unavailable";
+  }
+  if (replica.cutoverBlocked || replica.migrationConflict || replica.pendingPush) {
+    return "pending";
+  }
+  if (localTableCount > 0) {
+    return "synced";
   }
   return "empty";
 }
@@ -168,24 +236,34 @@ function sourceItem(
   pushState: ReturnType<typeof loadTursoSyncState>,
   remoteCheckFailed = false,
   linkingAppIds?: string[],
+  replica?: TursoReplicaSyncStatus,
+  legacyArtifactTables?: string[],
 ): TursoSourceSyncItem {
   const dbExists = fs.existsSync(source.dbPath);
   const syncKey = linkedSourceSyncKey(source);
   const jobState = pushState.jobs[syncKey];
   const quarantined = Boolean(jobState?.quarantinedAt);
-  const status = resolveTursoSourceStatus(
-    localTableCount,
-    remoteTableCount,
-    dbExists,
-    dirty,
-    quarantined,
-    schemaDrift,
-    remoteCheckFailed,
-  );
+  const status =
+    replica?.syncMode === "replica"
+      ? resolveReplicaTursoSourceStatus(
+          localTableCount,
+          dbExists,
+          replica,
+          quarantined,
+        )
+      : resolveTursoSourceStatus(
+          localTableCount,
+          remoteTableCount,
+          dbExists,
+          dirty,
+          quarantined,
+          schemaDrift,
+          remoteCheckFailed,
+        );
   const manualUploadHold =
     !shouldAutoUploadTursoForApp(source.appId) &&
     status === "pending" &&
-    dirty;
+    (replica?.syncMode === "replica" ? replica.pendingPush : dirty);
   return {
     appId: source.appId,
     jobId: syncKey,
@@ -196,13 +274,29 @@ function sourceItem(
     status,
     localTableCount,
     remoteTableCount,
-    schemaDrift,
+    schemaDrift: replica?.syncMode === "replica" ? undefined : schemaDrift,
+    legacyArtifactTables:
+      legacyArtifactTables && legacyArtifactTables.length > 0
+        ? legacyArtifactTables
+        : undefined,
     quarantinedAt: jobState?.quarantinedAt ?? null,
     quarantineReason: jobState?.quarantineReason ?? null,
     manualUploadHold: manualUploadHold || undefined,
     remoteCheckFailed: remoteCheckFailed || undefined,
     linkingAppIds:
       linkingAppIds && linkingAppIds.length > 1 ? linkingAppIds : undefined,
+    ...(replica?.syncMode === "replica"
+      ? {
+          syncMode: "replica" as const,
+          online: replica.online,
+          pendingPush: replica.pendingPush,
+          pendingOps: replica.pendingOps,
+          migrationConflict: replica.migrationConflict || undefined,
+          lastReplicaPushError: replica.lastPushError,
+          cutoverBlocked: replica.cutoverBlocked || undefined,
+          cutoverBlockReason: replica.cutoverBlockReason,
+        }
+      : {}),
   };
 }
 
@@ -210,6 +304,12 @@ async function detectRemoteSchemaDrift(
   dbPath: string,
   tursoDatabase: string,
 ): Promise<boolean> {
+  const { isReplicaManagedDbPath } = await import(
+    "./tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(dbPath)) {
+    return false;
+  }
   if (!fs.existsSync(dbPath)) {
     return false;
   }
@@ -280,13 +380,18 @@ async function snapshotDbRemoteCheck(
   dbPath: string,
   tursoDatabase: string,
   localTableCount: number,
+  replicaManaged = false,
 ): Promise<DbRemoteCheckSnapshot> {
   let remoteTableCount = 0;
   let schemaDrift = false;
   let remoteCheckFailed = false;
   try {
     remoteTableCount = await countRemoteSyncableTables(tursoDatabase, dbPath);
-    if (remoteTableCount > 0 && localTableCount > 0) {
+    if (
+      !replicaManaged &&
+      remoteTableCount > 0 &&
+      localTableCount > 0
+    ) {
       schemaDrift = await detectRemoteSchemaDrift(dbPath, tursoDatabase);
     }
   } catch {
@@ -332,12 +437,17 @@ export async function buildTursoSyncItemsReport(
   let reportError: string | null = null;
   const pushState = loadTursoSyncState();
   const remoteByDbPath = new Map<string, DbRemoteCheckSnapshot>();
+  const artifactsByDbPath = new Map<string, string[]>();
 
   for (const source of sources) {
     const syncKey = linkedSourceSyncKey(source);
-    const localTableCount = countLocalSyncableTables(source.dbPath);
+    const appSource = linkedSourceAsAppDataSource(source);
+    const replicaManaged = shouldUseTursoReplicaForSource(appSource);
+    const localTableCount = await countLocalSyncableTablesForSource(source);
     const alternateKeys = source.jobId && source.jobId !== syncKey ? [source.jobId] : [];
-    const dirty = isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
+    const dirty = replicaManaged
+      ? false
+      : isJobDbDirty(syncKey, source.dbPath, pushState, alternateKeys);
     const tursoDatabase = resolveTursoDatabaseLabel(source);
     const dbPathKey = source.dbPath;
     let remoteSnapshot = remoteByDbPath.get(dbPathKey);
@@ -347,6 +457,7 @@ export async function buildTursoSyncItemsReport(
           source.dbPath,
           tursoDatabase,
           localTableCount,
+          replicaManaged,
         );
       } catch (err) {
         remoteSnapshot = {
@@ -358,7 +469,20 @@ export async function buildTursoSyncItemsReport(
       }
       remoteByDbPath.set(dbPathKey, remoteSnapshot);
     }
+    let legacyArtifactTables = artifactsByDbPath.get(dbPathKey);
+    if (!legacyArtifactTables) {
+      legacyArtifactTables = listLegacyCdcArtifactTablesForPath(source.dbPath);
+      artifactsByDbPath.set(dbPathKey, legacyArtifactTables);
+    }
     const linkingAppIds = listAppsLinkingDbPath(allSources, source.dbPath);
+    let replicaStatus: TursoReplicaSyncStatus | undefined;
+    if (replicaManaged) {
+      try {
+        replicaStatus = await syncStatusForLinkedDb(appSource);
+      } catch {
+        /* best-effort — fall back to legacy CDC status */
+      }
+    }
     items.push(
       sourceItem(
         source,
@@ -369,6 +493,8 @@ export async function buildTursoSyncItemsReport(
         pushState,
         remoteSnapshot.remoteCheckFailed,
         linkingAppIds,
+        replicaStatus,
+        legacyArtifactTables,
       ),
     );
   }

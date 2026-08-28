@@ -21,13 +21,14 @@ import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 import {
   fetchRuntimeDbToken,
   resolveRuntimeVaultEnv,
+  type RuntimeVaultResolveResult,
 } from "./memoryRuntimeClient.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 import {
   collectBackendDatabaseSecrets,
   resolveCloudAppBackendDatabaseEnv,
 } from "./appBackendDatabase.js";
-import { parseDataSourcesFile } from "../appDataSources.js";
+import { parseDataSourcesFile, type AppDataSourcesFile } from "../appDataSources.js";
 import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
 import type { AppBackendBundleManifest } from "../../utils/miniAppBackendBuild.js";
 
@@ -49,22 +50,30 @@ export class CloudAppBackendService {
       bypassFresh?: boolean;
       callerIdentity?: MiniAppCallerIdentity;
       loggedIn?: boolean;
+      /** Preloaded by schema gate — skips duplicate repo fetches + registry hydrate. */
+      dataSources?: AppDataSourcesFile;
+      /** Preloaded in parallel with data-sources — skips manifest repo fetch. */
+      manifestContent?: string;
     },
   ): Promise<AppBackendRunResult & { action: string }> {
     const actionName = input.action.trim();
     const cacheOpts = input.bypassFresh ? { bypassFresh: true } : undefined;
 
-    const manifestFile = await fetchCachedRuntimeRepoFile(
-      auth,
-      BACKEND_MANIFEST_PATH,
-      cacheOpts,
-    );
-    if (!manifestFile) {
-      throw new Error(`Backend manifest not found for app ${input.appId}`);
+    let manifestContent = input.manifestContent;
+    if (!manifestContent) {
+      const manifestFile = await fetchCachedRuntimeRepoFile(
+        auth,
+        BACKEND_MANIFEST_PATH,
+        cacheOpts,
+      );
+      if (!manifestFile) {
+        throw new Error(`Backend manifest not found for app ${input.appId}`);
+      }
+      manifestContent = manifestFile.content;
     }
 
     const manifest = parseAppBackendManifest(
-      JSON.parse(manifestFile.content) as unknown,
+      JSON.parse(manifestContent) as unknown,
     );
     const spec = manifest.actions[actionName];
     if (!spec) {
@@ -72,20 +81,24 @@ export class CloudAppBackendService {
     }
 
     const handlerPath = `backend/${spec.handler}`;
-    const handlerFile = await fetchCachedRuntimeRepoFile(
-      auth,
-      handlerPath,
-      cacheOpts,
-    );
+    const vaultKeyNames = filterVaultKeyNames(spec.keys ?? []);
+    const preloadedDataSources = input.dataSources;
+
+    const [handlerFile, bundleFile, dsFile, vaultResult] = await Promise.all([
+      fetchCachedRuntimeRepoFile(auth, handlerPath, cacheOpts),
+      fetchCachedRuntimeRepoFile(auth, BACKEND_BUNDLE_PATH, cacheOpts),
+      preloadedDataSources
+        ? Promise.resolve(null)
+        : fetchCachedRuntimeRepoFile(auth, "data-sources.json", cacheOpts),
+      vaultKeyNames.length > 0
+        ? resolveRuntimeVaultEnv(auth, { keyNames: vaultKeyNames })
+        : Promise.resolve({ env: {}, missing: [] } satisfies RuntimeVaultResolveResult),
+    ]);
+
     if (!handlerFile) {
       throw new Error(`Backend handler not found: ${handlerPath}`);
     }
 
-    const bundleFile = await fetchCachedRuntimeRepoFile(
-      auth,
-      BACKEND_BUNDLE_PATH,
-      cacheOpts,
-    );
     if (bundleFile) {
       const bundle = JSON.parse(bundleFile.content) as AppBackendBundleManifest;
       const expected = bundle.actions?.[actionName];
@@ -101,10 +114,7 @@ export class CloudAppBackendService {
       }
     }
 
-    const vaultKeyNames = filterVaultKeyNames(spec.keys ?? []);
-    const { env: vaultEnv, missing } = await resolveRuntimeVaultEnv(auth, {
-      keyNames: vaultKeyNames,
-    });
+    const { env: vaultEnv, missing } = vaultResult;
     if (vaultKeyNames.length && missing.length > 0) {
       throw new Error(
         `Missing vault keys for action ${actionName}: ${missing.join(", ")}. ` +
@@ -115,15 +125,14 @@ export class CloudAppBackendService {
 
     const timeoutMs = resolveActionTimeoutMs(spec, input.timeoutMs);
 
-    const dsFile = await fetchCachedRuntimeRepoFile(
-      auth,
-      "data-sources.json",
-      cacheOpts,
-    );
-    const dataSources = dsFile?.content
-      ? parseDataSourcesFile(dsFile.content)
-      : { sources: [] };
-    await hydrateCloudDatabaseRegistry(auth, dataSources);
+    const dataSources =
+      preloadedDataSources ??
+      (dsFile?.content
+        ? parseDataSourcesFile(dsFile.content)
+        : { sources: [] });
+    if (!preloadedDataSources) {
+      await hydrateCloudDatabaseRegistry(auth, dataSources);
+    }
     const sourceId = input.params?.sourceId ?? spec.sourceId;
     const databaseEnv = await resolveCloudAppBackendDatabaseEnv({
       appId: input.appId,

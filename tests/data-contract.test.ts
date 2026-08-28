@@ -152,4 +152,28 @@ describe("dataContract", () => {
     expect(result.passed).toBe(false);
     expect(result.violations[0].message).toContain("agent_notes");
   });
+
+  test("requireTodayRow fails when today's brief missing", () => {
+    const dbPath = createTestDb(`
+      CREATE TABLE briefs (date TEXT, brief_json TEXT);
+      INSERT INTO briefs VALUES ('2020-01-01', '{}');
+    `);
+    dbPaths.push(dbPath);
+
+    const contract: DataContract = {
+      version: 1,
+      enforceOnFailure: true,
+      jobs: {
+        "Daily Brief Generator": {
+          requireTodayRow: { briefs: "date" },
+        },
+      },
+    };
+
+    const result = validateDatabaseAgainstContract(dbPath, contract, {
+      jobName: "Daily Brief Generator",
+    });
+    expect(result.passed).toBe(false);
+    expect(result.violations.some((v) => v.message.includes("today"))).toBe(true);
+  });
 });

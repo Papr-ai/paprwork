@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   checkBackendManifestIntegrity,
   checkMiniAppBashPatterns,
+  checkMiniAppBackendFetchPatterns,
+  checkBackendHandlerPatterns,
   checkOrphanBackendHandlers,
 } from "../src/gateway/utils/miniAppBackendLint.js";
 
@@ -27,6 +29,108 @@ describe("checkMiniAppBashPatterns", () => {
       ["backend/run.py", "# docs mention /api/bash/run"],
     ]);
     const issues = checkMiniAppBashPatterns(files);
+    expect(issues).toHaveLength(0);
+  });
+});
+
+describe("checkBackendHandlerPatterns", () => {
+  it("errors on sys.stdin in python handlers", () => {
+    const issues = checkBackendHandlerPatterns(
+      "meeting_start.py",
+      'body = json.load(sys.stdin)\n',
+    );
+    expect(issues.some((i) => i.rule === "backend-no-stdin" && i.severity === "error")).toBe(
+      true,
+    );
+  });
+
+  it("errors on APP_DB_PATH", () => {
+    const issues = checkBackendHandlerPatterns(
+      "migrate.py",
+      'db = os.environ.get("APP_DB_PATH")\n',
+    );
+    expect(
+      issues.some((i) => i.rule === "backend-no-app-db-path" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  it("passes scaffold-style handler", () => {
+    const issues = checkBackendHandlerPatterns(
+      "ping.py",
+      'params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}"))\n',
+    );
+    expect(issues).toHaveLength(0);
+  });
+});
+
+describe("extractVaultEnvReferences", () => {
+  it("ignores vault env names in comments (scaffold ping.py)", async () => {
+    const { extractVaultEnvReferences } = await import(
+      "../src/gateway/utils/miniAppBackendLint.js"
+    );
+    const { DEFAULT_BACKEND_PING_HANDLER } = await import(
+      "../src/gateway/utils/appBackendScaffold.js"
+    );
+    expect(extractVaultEnvReferences(DEFAULT_BACKEND_PING_HANDLER).size).toBe(0);
+  });
+
+  it("still detects real vault env usage in code", async () => {
+    const { extractVaultEnvReferences } = await import(
+      "../src/gateway/utils/miniAppBackendLint.js"
+    );
+    const refs = extractVaultEnvReferences(
+      `import os\n# not a real call: os.environ.get("COMMENT_KEY")\napi_key = os.environ.get("LIVE_API_KEY")\n`,
+    );
+    expect([...refs]).toEqual(["LIVE_API_KEY"]);
+  });
+});
+
+describe("checkMiniAppBackendFetchPatterns", () => {
+  it("warns when backend fetch body omits params wrapper", () => {
+    const files = new Map<string, string>([
+      [
+        "utils/api.ts",
+        `await fetch('/api/app/backend/meeting-start', {
+          method: 'POST',
+          body: JSON.stringify({ title: 'Daily' }),
+        });`,
+      ],
+    ]);
+    const issues = checkMiniAppBackendFetchPatterns(files);
+    expect(
+      issues.some(
+        (i) => i.rule === "backend-fetch-params-wrapper" && i.severity === "warning",
+      ),
+    ).toBe(true);
+  });
+
+  it("passes when params wrapper is present", () => {
+    const files = new Map<string, string>([
+      [
+        "utils/api.ts",
+        `await fetch('/api/app/backend/ping', {
+          method: 'POST',
+          body: JSON.stringify({ params: { hello: 'world' } }),
+        });`,
+      ],
+    ]);
+    const issues = checkMiniAppBackendFetchPatterns(files);
+    expect(issues).toHaveLength(0);
+  });
+
+  it("ignores JSON.stringify(variable) backend calls", () => {
+    const files = new Map<string, string>([
+      [
+        "utils/api.ts",
+        `function call(action, payload) {
+          return fetch('/api/app/backend/' + action, {
+            method: 'POST',
+            body: JSON.stringify(payload),
+          });
+        }`,
+      ],
+    ]);
+    const issues = checkMiniAppBackendFetchPatterns(files);
     expect(issues).toHaveLength(0);
   });
 });
@@ -71,6 +175,26 @@ describe("checkBackendManifestIntegrity", () => {
 
     const issues = await checkBackendManifestIntegrity(tempDir);
     expect(issues.some((i) => i.rule === "backend-handler-missing")).toBe(true);
+  });
+
+  it("errors when handler reads sys.stdin", async () => {
+    tempDir = await mkdtemp(join(tmpdir(), "papr-manifest-"));
+    const backendDir = join(tempDir, "backend");
+    await mkdir(backendDir);
+    await writeFile(
+      join(backendDir, "manifest.json"),
+      JSON.stringify({
+        version: 1,
+        actions: { ping: { handler: "ping.py", runtime: "python" } },
+      }),
+    );
+    await writeFile(
+      join(backendDir, "ping.py"),
+      "import json, sys\nbody = json.load(sys.stdin)\n",
+    );
+
+    const issues = await checkBackendManifestIntegrity(tempDir);
+    expect(issues.some((i) => i.rule === "backend-no-stdin")).toBe(true);
   });
 
   it("warns when handler reads vault env without manifest keys", async () => {

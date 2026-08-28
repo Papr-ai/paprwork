@@ -21,6 +21,11 @@ export interface TableContract {
 export interface JobContractCheck {
   /** table → minimum rows after this job completes successfully. */
   minRows?: Record<string, number>;
+  /**
+   * table → date column name. After a successful run, require a row where the
+   * column equals today's UTC date (YYYY-MM-DD).
+   */
+  requireTodayRow?: Record<string, string>;
 }
 
 export interface DataContract {
@@ -218,6 +223,37 @@ export function validateDatabaseAgainstContract(
       )) {
         const tableContract = contract.tables?.[table];
         checkTable(table, tableContract, minRows);
+      }
+    }
+
+    if (jobKey && contract.jobs?.[jobKey]?.requireTodayRow) {
+      const today = new Date().toISOString().slice(0, 10);
+      for (const [table, dateColumn] of Object.entries(
+        contract.jobs[jobKey].requireTodayRow ?? {},
+      )) {
+        tablesChecked.add(table);
+        if (!tableExists(db, table)) {
+          violations.push({
+            severity: "error",
+            message: `Table "${table}" does not exist (required today's row)`,
+            table,
+          });
+          continue;
+        }
+        const col = dateColumn.replace(/"/g, "");
+        const row = db
+          .prepare(
+            `SELECT 1 AS ok FROM "${table.replace(/"/g, "")}" WHERE "${col}" = ? LIMIT 1`,
+          )
+          .get(today) as { ok: number } | undefined;
+        if (!row) {
+          violations.push({
+            severity: "error",
+            message: `Table "${table}" has no row for today (${today}) in column "${col}"`,
+            table,
+            column: col,
+          });
+        }
       }
     }
   } finally {

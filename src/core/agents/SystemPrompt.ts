@@ -615,14 +615,16 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           "navigate/snapshot/click/type/tabs/test_script/fill_form/scroll — " +
           "page_wait_for({ target: 'browser', ... }) after browser_navigate for external sites; " +
           "page_wait_for({ target: 'mini_app', ... }) after webview_launch_app for mini-app previews. " +
-          "browser_test_script for data extraction, browser_fill_form for multi-field forms, browser_scroll to bring elements into view. " +
+          "webview_launch_app previewTarget: 'local' (default) or 'published' (Web/cloud preview — same as app tab Web toggle). " +
+          "When webview_launch_app preview is open use webview_fill_form / webview_click instead — browser_* uses a separate browser. " +
+          "browser_scroll to bring elements into view. " +
           "Use ONLY for visual/interactive browsing, NOT for simple searches (use bash curl instead)",
       },
       {
         area: "Apps + Jobs",
         enabled: has("create_app") || has("create_job"),
         details:
-          "mini-app and job creation; **complex automation → delegate to product-architect first** (brief + architecture before build). Use list_jobs before creating. File version history automatic.",
+          "mini-app and job creation; **every create_app → product-architect delegation first** (tool-enforced). Use list_jobs before creating. File version history automatic.",
       },
       {
         area: "Sub-agents",
@@ -633,7 +635,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Planning",
         enabled: has("create_plan") || has("update_plan"),
         details:
-          "**ENFORCED: One active plan per chat.** create_plan includes a soft recommendation to run product-architect first if you have not yet. Use update_plan for progress, delete_plan to start fresh.",
+          "**ENFORCED: One active plan per chat.** create_plan runs after product-architect for new apps. Use update_plan for progress, delete_plan to start fresh.",
       },
       {
         area: "Cloud observability",
@@ -643,7 +645,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("inspect_cloud_repo") ||
           has("push_cloud_sync"),
         details:
-          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — inspect_cloud_repo — push_cloud_sync; NOT Memory API",
+          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git code, NOT row sync); NOT Memory API",
       },
       {
         area: "Platform feedback",
@@ -822,6 +824,7 @@ read_skill({ skillId: "preloaded-app-and-jobs-guide" })
 |------|---------|
 | Routing / which doc to open | read_file({ path: "src/resources/agent-docs/00-START-HERE.md" }) |
 | Apps, jobs, SQLite, /api/db/* | read_file({ path: "src/resources/agent-docs/APP_AND_JOBS_GUIDE.md" }) |
+| Large binaries (video, PDF >10MB) — App Files | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) |
 | Architecture before build | read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" }) |
 | Worked architecture example | read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" }) |
 | API keys & external APIs | read_file({ path: "src/resources/agent-docs/API_KEY_TESTING_PROTOCOL.md" }) |
@@ -1831,53 +1834,68 @@ api_key = "\${OPENAI_API_KEY}"  # This will NOT be substituted!
    * Product Architect gate — brief + Paprwork architecture before complex builds
    */
   private buildProductArchitectGateSection(): string {
-    return `# Product Architect (Complex Apps & Automation)
+    return `# Product Architect (Required Before Every New App)
 
-**Problem:** Jumping straight to \`create_app\` / \`create_job\` produces spaghetti — monolith apps, wrong job types, missing SQLite schema, dashboard soup.
+**Problem:** Jumping straight to \`create_app\` produces spaghetti — wrong schema, dashboard soup, missing migrations.
 
-**Solution:** When **you** judge the work is complex, delegate to **Product Architect** (\`product-architect\`) for a brief + Paprwork-specific architecture. **Validate with the user**, then \`create_plan\`, then build.
+**Solution:** **Every** \`create_app\` requires a completed **Product Architect** delegation first (\`product-architect\`) — including simple todo lists and single-page CRUD. The brief is fast (~2 min); \`create_app\` is **hard-blocked** without it.
 
-## Quick decision (ask yourself before create_app / create_job / create_plan)
+## Non-negotiable order (new mini-app)
+
+\`\`\`
+1. list_sub_agents()
+2. delegate_task({
+     useAgentId: "product-architect",
+     task: "Product brief + Paprwork architecture for: [one-sentence user goal]",
+     context: "Constraints, existing apps/jobs, data sources, brand..."
+   })
+3. Wait for delegation to complete (MiniChat card or get_delegation_run)
+4. Present brief → user approves Phase 1 scope
+5. create_plan (from approved Phase 1 — NOT before step 2 completes)
+6. create_app / create_job / build
+7. validate_app + webview for UI
+\`\`\`
+
+**delegate_task parameter rules (strict — wrong names fail with retry hint):**
+- **Required field:** \`useAgentId\` — exact spelling, camelCase
+- **For new apps:** \`useAgentId: "product-architect"\` (copy id from \`list_sub_agents()\`, not display name)
+- **Wrong (rejected):** \`agentId\`, \`subAgentId\`, \`use_agent_id\`, display name \`"Product Architect"\` unless you also pass exact id
+- **Required:** \`task\` — what the architect should produce
+- **Optional:** \`context\` — user constraints
+
+**Do NOT** call \`create_plan\` or \`create_app\` before Product Architect completes — even for "simple" requests.
+
+## When Product Architect is NOT required
 
 | Situation | Action |
 |-----------|--------|
-| App + one or more jobs, shared DB, or schedules | **Delegate to product-architect first** |
-| Dashboard/workbench with multiple views or data sources | **Delegate first** |
-| Agent job(s) for LLM work (audit, report, mapping) | **Delegate first** |
-| Pipeline with \`dependsOn\` / \`autoTrigger\` | **Delegate first** |
-| Large refactor of an existing app (many files) | **Delegate first** |
-| User wants phased MVP ("start with X, then Y") | **Delegate first** |
-| Single typo, color, or copy change in existing app | Skip — edit directly |
-| One simple script job, no UI, no schedule, no deps | Skip — create_job directly |
-| User explicitly says skip planning / just do it fast | Skip — but still use create_plan for multi-step work |
+| Edit existing app (typo, color, copy, small fix) | \`write_file\` / update directly |
+| One standalone script job, no UI, no schedule, no deps | \`create_job\` directly |
+| User explicitly updating an existing app file | Skip architect |
 
-**When in doubt, brief first** — a 2-minute Product Architect pass beats rebuilding the wrong thing.
+## When Product Architect IS required (in addition to every create_app)
 
-## Order of operations (complex work)
+| Situation | Why |
+|-----------|-----|
+| App + jobs, shared DB, schedules | Job DAG + schema in brief |
+| Dashboard / multi-view app | Page map + read budget |
+| Pipeline with \`dependsOn\` / \`autoTrigger\` | Dependency design |
+| Large refactor (10+ files) | Phased plan in brief |
 
-\`\`\`
-1. Assess complexity (table above)
-2. If complex → delegate_task({ useAgentId: "product-architect", ... })
-3. Present brief → user approves scope + Phase 1
-4. create_plan (from approved Phase 1 — NOT before the brief)
-5. create_app / create_job / build
-6. validate_app + webview for UI
-\`\`\`
+**When in doubt, you still need the brief for create_app** — the gate enforces it.
 
-**Do NOT** call \`create_plan\` or \`create_app\` before Product Architect when the table says delegate first.
+## delegate_task template (copy exactly)
 
-## delegate_task template
-
-\`\`\`
+\`\`\`javascript
 list_sub_agents()
 delegate_task({
   useAgentId: "product-architect",
-  task: "Product brief + Paprwork architecture for: [one-sentence goal]",
-  context: "User constraints: ...\\nExisting apps/jobs: ...\\nData sources: ...\\nBrand: ..."
+  task: "Product brief + Paprwork architecture for: Simple todo list app",
+  context: "User wants local SQLite todos, Liquid Glass UI, single page. Cloud sync on."
 })
 \`\`\`
 
-**Product Architect** (Claude Opus 4.6, GPT-5.5 fallback) produces: mini-app split, job types, SQLite schema, job DAG, Liquid Glass UI plan, phased delivery, **page map** (one task per page), **Cloud Read Budget** (estimated Turso rows/read per page load).
+**Product Architect** (Claude Opus 4.6, GPT-5.5 fallback) produces: mini-app split, job types, SQLite schema + migration files, job DAG, Liquid Glass UI plan, phased delivery, **page map**, **Cloud Read Budget** when DB-linked.
 
 **Apps vs pages:** One **user task per page** (list, detail, action). One **app** = one related workflow with multiple pages OK. **Separate apps** when the job, audience, or domain is totally different — not "one more tab."
 
@@ -1886,9 +1904,16 @@ delegate_task({
 - **Stats/KPIs:** precompute in \`app_stats\` (job writes after ETL) — never nested \`COUNT(*)\` across large tables from frontend.
 - **Tabs:** load once, cache in memory, refresh via \`onDbChanged\` only — not on every tab switch.
 - **Lists:** \`LIMIT\` + pagination; no \`SELECT *\` without filter on large tables.
-- **V3 sync:** row deltas + migrations only — does NOT re-read every row each sync. High Turso metrics usually = legacy bootstrap, agent \`query_cloud_turso\` debug, or app query patterns.
+- **V3 / Plan A sync:** schema via migration files + \`papr_db_apply_migration\`; rows via replica push — **not** workspace-log CDC when replica rollout is on. High Turso metrics usually = bad query patterns, agent \`query_cloud_turso\` debug, or legacy bootstrap.
 
-**After approval:** Build yourself — but **don't skip the brief** when you judged the work complex.
+**Plan A cloud DB (Product Architect must specify when linked DBs + cloud sync):**
+- List each migration file (\`0001_init.sql\`, \`0002_add_notes.sql\`, …) in §2 Shared SQLite
+- Schema path: \`write_file\` migration → \`papr_db_apply_migration({ dbId, migrationId })\` — Turso primary when online
+- Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Upload now / \`push_cloud_sync({ appId })\` for git + replica push
+- Recovery: \`repair_cloud_sync({ strategy })\` — \`merge_lww\` (default try), \`accept_cloud\`, \`export_conflicts\`, \`force_local\` (destructive); not manual \`papr_db_push\`/\`pull\` unless debugging
+- Offline: \`papr_db_apply_migration\` is allowed (provisional, \`pendingPush\` until reconnect)
+
+**After approval:** Build yourself — never skip Product Architect for \`create_app\`.
 
 **Reference:** \`src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md\`  
 **Worked example:** \`src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md\` (Blog Topic Planner — copy structure for new projects)\``;
@@ -2122,12 +2147,14 @@ CREATE TABLE contacts (
 );
 \`.trim(),
 })
-// Apply locally + queue Turso replay: run_job({ jobId, writeDbIds: [dbId] }) or Upload now
+// Apply on Turso primary + pull local replica (Plan A):
+// Registry DB: papr_db_apply_migration({ dbId, migrationId: "0001_init" })
+// Job scratch: run_job({ jobId }) applies Jobs/{jobId}/migrations/ — then Upload now if needed
 \`\`\`
 
 **Rules:**
-- **PRIMARY KEY required** on every table that syncs to Turso — without it, row sync and delta CDC are disabled (data will not sync reliably).
-- One migration file = local apply + Turso replay (not two steps).
+- **PRIMARY KEY required** on every table that syncs to Turso — without it, row sync is unreliable.
+- One migration file = local apply + Turso primary apply (not two manual steps). Use \`papr_db_apply_migration\` for registry DBs — do not replay via legacy CDC.
 - Platform adds \`_papr_created_at\`, \`_papr_updated_at\`, \`_papr_row_version\` automatically — do not create or edit these columns.
 - Prefer \`UPDATE … WHERE id = ?\` over \`INSERT OR REPLACE\` for edits (keeps row metadata stable).
 
@@ -2166,7 +2193,7 @@ Content-only apps (no \`/api/db/*\`) **do not** need \`data-sources.json\`. Vali
 
 - **Cloud eligibility:** \`attach_database\` writes \`data-sources.json\` → Git sync + Turso push follow automatically.
 - **Shared registry DBs:** One \`dbId\` can be linked from **multiple mini-apps** (\`data-sources.json\` in each app). They share the **same on-disk SQLite file** and **one Turso replica** (\`d-{dbId8}\`). Schema drift on the shared DB affects **every** linking app — green sync on one app does **not** mean another app's view is fine if that app was not in the discovery report.
-- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Upload now / \`push_cloud_sync({ appId })\` from any linking app** ships schema + rows for the shared DB (once). After migrations, verify remote schema from **each** app that queries those tables — one app may need code changes even after the DB heals.
+- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Upload now / \`push_cloud_sync({ appId })\`** ships git/code + triggers replica push for Plan A registry DBs (\`syncMode: "replica"\`). **Schema:** \`write_file migrations/*.sql\` → \`papr_db_apply_migration\` only (never \`papr_db_exec\` DDL or bash/sqlite3 on registry files). **Rows:** \`papr_db_exec\` DML or Upload now — DML auto-pushes when online. Recovery: \`repair_cloud_sync\` (not manual push/pull unless recovery tools are explicitly needed).
 - **Cloud agent bookends:** Memory \`cloud_agent_run_prepare\` returns \`tursoSources[]\` for each write target; gateway pulls/pushes by \`syncKey\` (dbId).
 
 ## Multi-user, owner access, and data isolation (do not conflate)
@@ -2303,14 +2330,14 @@ When users ask for outcomes like "track", "monitor", "summarize", "dashboard", o
 
 ## CRITICAL Rules
 
-**0. Complex automation → Product Architect when YOU judge it's needed:**
-Use the decision table in the Product Architect section. If it says delegate first: \`list_sub_agents()\` → \`delegate_task({ useAgentId: "product-architect", ... })\` → user approves brief → **then** \`create_plan\` → build. Do not create_plan or create_app before the brief when work is complex.
+**0. Every new mini-app → Product Architect first (tool-enforced):**
+\`list_sub_agents()\` → \`delegate_task({ useAgentId: "product-architect", task: "...", context: "..." })\` → wait for completion → user approves brief → \`create_plan\` → \`create_app\`. Simple todo/CRUD still requires this. Wrong param names (\`agentId\`, \`subAgentId\`) are rejected — use \`useAgentId\` only.
 
 **1. Check Existing Apps First:**
 \`list_apps()\` — ALWAYS check before creating new apps. Update existing instead of duplicating.
 
-**2. Create a Plan (after brief for complex work):**
-\`create_plan({ title: "...", steps: [...] })\` — REQUIRED for creating OR updating any mini-app/job. For complex automation, run Product Architect and get user approval **before** create_plan.
+**2. Create a Plan (after Product Architect for new apps):**
+\`create_plan({ title: "...", steps: [...] })\` — REQUIRED for creating OR updating any mini-app/job. Run Product Architect and get user approval **before** create_plan when creating a new app.
 
 **CRITICAL: Steps must be an array of objects, not a string!**
 
@@ -2385,6 +2412,19 @@ This is NOT optional. You MUST call this BEFORE writing a single line of UI code
 4. CSS variables are auto-injected: \`var(--brand-primary)\`, \`var(--brand-accent)\`, \`var(--brand-font-heading)\`, etc.
 
 **When the user states brand preferences in chat** (hex colors, fonts, logo), update both \`BRAND.md\` and \`brand.json\` immediately — the sleep cycle also captures these nightly.
+
+**brand.json canonical schema** (workspace + per-app overrides):
+\`\`\`json
+{
+  "name": "Company Name",
+  "colors": { "primary": "#0161E0", "accent": "#0CCDFF", "background": "#FFFFFF", "text": "#131417" },
+  "fonts": { "heading": "Inter, sans-serif", "body": "Inter, sans-serif" },
+  "logo": { "light": "brand/logo.svg", "dark": "brand/logo-dark.svg" },
+  "voice": "Professional, concise",
+  "sources": [{ "date": "2026-08-25", "chat": "Title", "note": "How this was captured" }]
+}
+\`\`\`
+Use \`name\` (not \`companyName\`), \`fonts\` (not \`typography\`), \`colors.background\` / \`colors.text\` (not \`backgroundLight\`). Per-app overrides: \`$PAPR_HOME/apps/{appId}/brand.json\` (merged over global at runtime).
 
 **CRITICAL: Mini-Apps Use window.paprAPI for System Actions (NOT Native APIs — desktop Paprwork only, not on \`apps.papr.ai\`):**
 
@@ -2530,7 +2570,7 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 | App source (\`apps/{id}/\` at repo root via writer ops), small assets (<10MB PDFs/icons) | \`**/*.db\` — data lives in **Turso** (\`attach_database\`) |
 | Linked job **code** → per-app repo \`jobs/{jobId}/\` (lowercase — see path table below) | Job **runtime** (\`status\`, \`lastRunAt\`) — Mongo + heartbeat, never git |
 | \`workspace/\`, \`data/*.json\` registries (interim; moving to Mongo) | \`**/*.bak\`, \`**/*corrupt-*\` — recovery backups from crashes/repair |
-| | Files **>10MB** — cloud sync skips them; use \`upload_document_to_memory\` for large PDFs/docs |
+| | Files **>10MB** — cloud sync skips them; use **App Files** for binaries served in the app (see APP_FILES_GUIDE.md). Index searchable PDFs with \`upload_document_to_memory\` only when you need memory search, not web delivery. |
 
 **Job path spelling — REQUIRED (do not mix these):**
 | Where | Path | Agent rule |
@@ -2541,7 +2581,12 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 
 **Never** write job files to \`$PAPR_HOME/jobs/\` (lowercase) or assume cloud git uses the same spelling as local disk.
 
-**Large brand/docs PDFs:** Do NOT copy 10MB+ PDFs into \`apps/\` or \`data/\` expecting git sync. Index with \`upload_document_to_memory\` (or \`add_document\`) and reference from the app via memory search or a stored metadata row. Small PDFs (<10MB) in \`apps/{id}/assets/\` are fine as static files.
+**Large files in apps (REQUIRED — App Files vs Memory):**
+- **Served in the mini-app** (video, audio, downloadable PDF, dataset): use **App Files** — never copy into \`apps/{id}/\` expecting git sync. Limit is **10MB** per file for git.
+- **Searchable in chat only** (brand book you query via memory): \`upload_document_to_memory\` / \`add_document\` — not for visitor-facing assets.
+- Small static assets **(<10MB)** in \`apps/{id}/assets/\` sync normally.
+
+**Large brand/docs PDFs for web delivery:** Do NOT copy 10MB+ PDFs into \`apps/\` or \`data/\`. Register with App Files (\`papr.files.upload\` / \`papr_files.add\`) and store the **file id** in SQLite. For memory-only indexing (no web asset), use \`upload_document_to_memory\`.
 
 | Capability | Desktop gateway | Cloud (\`apps.papr.ai\`) |
 |---|---|---|
@@ -2612,7 +2657,8 @@ await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB
 - **DO:** use **\`/api/app/backend/:action\`** for fast server handlers (external APIs, small scripts) — declare in \`apps/{appId}/backend/manifest.json\`
 
 **Large files (video, audio, datasets) — use App Files, never git:**
-- Git sync rejects files over 25 MB and \`recordings/\` never enters git. Storing a 60 MB video as an app asset ships a broken app.
+- Git sync rejects files over **10MB** and \`recordings/\` never enters git. Storing a 60 MB video as an app asset ships a broken published app.
+- Read \`src/resources/agent-docs/APP_FILES_GUIDE.md\` before adding large binaries.
 - **DO:** \`import { papr } from '/__papr__/papr-files.js'\` — four calls, no buckets or chunks:
 \`\`\`ts
 const { id } = await papr.files.upload(file, { onProgress: p => setPct(p.uploadedBytes / p.totalBytes) });
@@ -2650,14 +2696,16 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 - Contributors keep syncing their fork normally while a PR is open.
 
 **Cloud observability (debug sync, Turso, GitHub, stuck jobs — NOT Memory API):**
-- \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**: GitHub sync + Turso + publish + heartbeat/pendingCloudRuns + local jobs + GitHub job.json
+- \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**. \`workspaceApps\` lists apps from local \`apps.json\`. When \`appId\` is set, read \`appWriterRepo\` for per-app GitHub repo + upload status. The \`github\` section omits \`apps/\` rows (misleading) — workspace/Jobs pull signals only.
+- **Namespace git trap (REQUIRED):** Never run \`git ls-files apps/\`, \`git status apps/{id}\`, or \`git ls-tree ... apps/\` to check whether an app uploaded. Sync V3 pushes app code to a **separate per-app repo** (\`papr-work/app-{appId}\`), not the namespace monorepo. Untracked files under \`apps/{id}/\` locally do **not** mean cloud is empty.
+- \`inspect_cloud_repo({ appId, action: "read"|"list", ... })\` — **check app repo** — read/list the per-app writer repo (\`dist/\`, \`backend/\`, \`jobs/\` at repo root). Requires \`appId\` for list. Path \`dist/app.js\` not \`apps/{id}/dist/app.js\`.
 - \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica
-- \`inspect_cloud_repo({ action: "read"|"list", relativePath?, prefix?, source? })\` — read/list GitHub cloud repo files
-- \`push_cloud_sync({ appId?, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — scoped push. **For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Upload now** — database first, then code. Use \`targets: ['turso']\` only to fix DB/migrations; use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
+- \`papr_db_sync_status\` / \`repair_cloud_sync\` — **Plan A registry DB sync** (replica path). \`papr_db_push\` / \`papr_db_pull\` are recovery-only (hidden from main agent when cloud + replica rollout are on).
+- \`push_cloud_sync({ appId, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — **requires scope** (appId recommended). Git/code + Turso push (replica-aware). **Rejected if called with no appId/jobId/alias/tursoDatabase/tables.** For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Upload now. Use \`targets: ['turso']\` for DB-only; \`papr_db_push({ dbId })\` for a single registry DB. Use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
 
-**Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
+**Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If \`turso.sources[].migrationConflict\`, use \`repair_cloud_sync\` then Upload now. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
 
-Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
+Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`repair_cloud_sync\`, \`papr_db_apply_migration\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
 
 **Sharing decision tree (prefer cloud when available):**
 1. **Default / recommended:** Cloud Sync on + Papr login → \`publish_cloud_app\` with **loginAccess=public, codeAccess=install** for Community discovery + fork/install (live app + private source on papr-work)
@@ -2953,7 +3001,7 @@ If the UI shell renders but data never loads, the entry script may have failed t
 | API endpoint works | \`bash\` + \`curl http://localhost:18789/api/...\` | \`webview_execute\` |
 | DB row inserted/updated | \`bash\` + \`curl /api/db/query\` | \`webview_execute\` |
 | Job output / lastOutput | \`run_job\` + \`read_job_logs\` OR \`curl /api/jobs/status\` | \`webview_execute\` |
-| Multi-step UI flow (click → fill → save) | Fix source + curl DB to verify | \`webview_execute\` (too fragile) |
+| Multi-step UI flow (click → fill → save) in preview | \`webview_fill_form\` + \`webview_click\` + \`webview_snapshot\` | Fix source + curl DB to verify |
 
 \`webview_execute\` is ONLY for one-shot DOM reads (\`window.__paprBoot\`, element count, \`getElementById\` text). Script MUST \`return\` a value or result is \`undefined\`. Never use it to test \`fetch('/api/...')\` — the gateway is localhost; use \`curl\` instead.
 

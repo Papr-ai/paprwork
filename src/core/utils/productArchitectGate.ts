@@ -2,19 +2,43 @@
 export const PRODUCT_ARCHITECT_ID = "product-architect";
 
 export const PRODUCT_ARCHITECT_REMINDER =
-  "For app+job automation, delegate_task({ useAgentId: \"product-architect\", ... }) runs BEFORE create_app/create_job (enforced).";
+  "Every create_app requires a completed product-architect delegation first (tool-enforced). " +
+  'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) — useAgentId only.';
 
 export const PRODUCT_ARCHITECT_PLAN_REMINDER =
   "After product-architect completes, align create_plan with the approved brief, then build.";
 
 export const PRODUCT_ARCHITECT_BLOCK_MESSAGE =
   "⛔ Product Architect required before this step.\n\n" +
-  "Complex app+job work must start with a completed product-architect delegation in this chat:\n" +
-  '1. delegate_task({ useAgentId: "product-architect", task: "...", context: "..." })\n' +
-  "2. Wait for completion (get_delegation_run or delegation card)\n" +
-  "3. create_plan aligned with the approved brief\n" +
-  "4. Then create_app / create_job\n\n" +
+  "Every new mini-app (create_app) requires a completed product-architect delegation in this chat — including simple CRUD apps.\n\n" +
+  "1. list_sub_agents()\n" +
+  '2. delegate_task({ useAgentId: "product-architect", task: "Product brief + architecture for: ...", context: "..." })\n' +
+  "3. Wait for delegation to complete (MiniChat card or get_delegation_run)\n" +
+  "4. create_plan aligned with the approved brief\n" +
+  "5. create_app / create_job\n\n" +
+  "Use exact field useAgentId — not agentId or subAgentId.\n\n" +
   "Reference: src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md";
+
+/** Required Product Architect brief section — platform wiring the builder must follow. */
+export const PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION =
+  "## Implementation Contracts\n" +
+  "- Builder MUST read_skill({ skillId: \"preloaded-app-and-jobs-guide\" }) before first backend/DB code edit\n" +
+  "- Backend handlers: read params from PAPR_ACTION_PARAMS env (Python: json.loads(os.environ.get(\"PAPR_ACTION_PARAMS\", \"{}\"))) — NEVER sys.stdin\n" +
+  "- Backend DB: from papr_db import connect (alias or active source) — NEVER APP_DB_PATH or raw os.environ DB paths\n" +
+  "- Frontend → backend: body JSON.stringify({ params: { ... } }) — params must be nested\n" +
+  "- Frontend ← backend: const { stdout, exitCode, stderr } = await res.json(); if (exitCode !== 0) throw; JSON.parse(stdout)\n" +
+  "- Frontend DB reads: POST /api/db/query with { sourceId, sql, params } — field name is sql, not query\n" +
+  "- Frontend DB writes: POST /api/db/write (not /api/db/query for INSERT/UPDATE/DELETE)\n" +
+  "- Plan A schema (cloud sync on): write_file migrations/{id}.sql → papr_db_apply_migration({ dbId, migrationId }) — Turso primary when online; never papr_db_exec DDL or bash/sqlite3 on registry DB files\n" +
+  "- Plan A rows: papr_db_exec DML or /api/db/write; Upload now / push_cloud_sync({ appId }) ships git + replica push — not legacy CDC\n" +
+  "- Extend backend/ping.py scaffold pattern — do not replace with stdin-based handlers";
+
+/** Returned on create_app after product-architect gate passes — reminds builder of platform contracts. */
+export const CREATE_APP_IMPLEMENTATION_REMINDER =
+  "⚠️ IMPLEMENTATION CONTRACTS: Before backend/DB code, read_skill({ skillId: \"preloaded-app-and-jobs-guide\" }). " +
+  "Backend: PAPR_ACTION_PARAMS (not sys.stdin), papr_db.connect() (not APP_DB_PATH). " +
+  "Frontend backend calls: JSON.stringify({ params: {...} }); parse stdout + check exitCode. " +
+  "/api/db/query uses sql (not query). Mirror backend/ping.py from the app scaffold.";
 
 export interface ProductArchitectGateInput {
   tool: "create_app" | "create_job";

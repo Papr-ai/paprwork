@@ -2,7 +2,7 @@
  * Central sync orchestrator (Phase 5).
  *
  * Routes dirty signals from watchers/jobs → debounced Turso push or ordered app flush.
- * Manual Upload now and auto-upload apps use flushAppNow (Turso → git → publish).
+ * Manual Upload now and auto-upload apps use flushAppNow (replica push if pending → git → publish).
  * Namespace app flushes are serialized; manual uploads jump the queue.
  */
 

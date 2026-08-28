@@ -133,11 +133,18 @@ export function getBashCommandDescription(
     if (/>/.test(cmd)) {
       const redirectMatch = cmd.match(/>\s*([^\s|;&]+)/);
       if (redirectMatch) {
-        const outfile = getDisplayFilename(redirectMatch[1]);
-        if (outfile) {
-          return isRunning
-            ? `Saving listing to ${outfile}`
-            : `Saved listing to ${outfile}`;
+        const rawTarget = redirectMatch[1].replace(/^["']|["']$/g, "").trim();
+        const discardTarget =
+          rawTarget === "null" ||
+          rawTarget === "/dev/null" ||
+          rawTarget.endsWith("/dev/null");
+        if (!discardTarget) {
+          const outfile = getDisplayFilename(rawTarget);
+          if (outfile) {
+            return isRunning
+              ? `Saving listing to ${outfile}`
+              : `Saved listing to ${outfile}`;
+          }
         }
       }
       return isRunning ? "Saving directory listing" : "Saved directory listing";
@@ -352,6 +359,30 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Querying cloud database",
     complete: "Cloud database queried",
   },
+  papr_db_sync_status: {
+    running: "Checking replica DB sync",
+    complete: "Replica DB sync checked",
+  },
+  papr_db_push: {
+    running: "Pushing replica DB to Turso",
+    complete: "Replica DB pushed",
+  },
+  papr_db_pull: {
+    running: "Pulling replica DB from Turso",
+    complete: "Replica DB pulled",
+  },
+  papr_db_exec: {
+    running: "Running replica DB query",
+    complete: "Replica DB query done",
+  },
+  papr_db_apply_migration: {
+    running: "Applying replica DB migration",
+    complete: "Replica DB migration applied",
+  },
+  repair_cloud_sync: {
+    running: "Repairing cloud sync",
+    complete: "Cloud sync repaired",
+  },
   inspect_cloud_repo: {
     running: "Inspecting cloud repo",
     complete: "Cloud repo inspected",
@@ -453,6 +484,14 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Running preview script",
     complete: "Preview script done",
   },
+  webview_fill_form: {
+    running: "Filling preview form",
+    complete: "Preview form filled",
+  },
+  webview_click: {
+    running: "Clicking in preview",
+    complete: "Preview click done",
+  },
   webview_get_console: {
     running: "Reading preview console",
     complete: "Preview console read",
@@ -490,6 +529,14 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
 
   if (toolName === "browser_snapshot") {
     return isRunning ? "Reading page" : "Page read";
+  }
+
+  if (toolName === "webview_launch_app") {
+    const mode =
+      toolCall.args?.previewTarget === "published" ? "Web" : "Local";
+    return isRunning
+      ? `Launching ${mode} app preview`
+      : `${mode} app preview ready`;
   }
 
   if (toolName === "browser_click" && typeof toolCall.args?.ref === "string") {
@@ -552,7 +599,7 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
     } else if (typeof args.appId === "string" && args.appId.length > 0) {
       parts.push(`app ${args.appId.slice(0, 8)}…`);
     }
-    const scope = parts.length > 0 ? parts.join(" · ") : "full workspace";
+    const scope = parts.length > 0 ? parts.join(" · ") : "scoped push";
     return isRunning ? `Pushing cloud sync (${scope})` : `Cloud sync pushed (${scope})`;
   }
 

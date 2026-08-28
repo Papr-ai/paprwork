@@ -40,8 +40,8 @@ describe("cloudAppHostCache", () => {
     await fetchCachedRuntimeRepoFile(auth, "app.tsx");
     await fetchCachedRuntimeRepoFile(auth, "app.tsx");
 
-    // First load: per-app revision marker + file; second load: fully cached.
-    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(2);
+    // First load: parallel revision (marker + meta + head) + file; second load: fully cached.
+    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(4);
   });
 
   it("caches access validation within TTL", async () => {
@@ -105,8 +105,8 @@ describe("cloudAppHostCache", () => {
     await fetchCachedRuntimeRepoFile(auth, "missing.tsx");
     await fetchCachedRuntimeRepoFile(auth, "missing.tsx");
 
-    // No negative cache — second load still retries the file (revision marker cached briefly).
-    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(3);
+    // No negative cache — second load still retries the file (revision cached).
+    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(5);
   });
 
   it("uses per-app revision so apps do not share cache keys", async () => {
@@ -128,14 +128,79 @@ describe("cloudAppHostCache", () => {
     await fetchCachedRuntimeRepoFile(appB, "dist/app.js");
     await fetchCachedRuntimeRepoFile(appA, "dist/app.js");
 
-    // app-a: marker + file (cached on third call)
-    // app-b: marker + file
-    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(4);
+    // app-a: parallel revision + file (cached on third call)
+    // app-b: parallel revision + file
+    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(8);
   });
 
   it("sets longer cache for dist assets", () => {
     expect(cacheControlForAppAsset("dist/app.js")).toContain("immutable");
     expect(cacheControlForAppAsset("index.html")).toContain("no-cache");
     expect(cacheControlForAppAsset("styles.css")).toContain("max-age=3600");
+  });
+
+  it("shares repo file cache across different sessions for the same app", async () => {
+    vi.mocked(fetchRuntimeRepoFile).mockImplementation(async (_auth, path) => {
+      if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
+        return { content: "rev-shared\n", contentType: "text/plain" };
+      }
+      return {
+        content: "shared-body",
+        contentType: "text/javascript",
+      };
+    });
+
+    const userA: AppRuntimeRouteAuth = {
+      namespaceId: "ns-1",
+      slug: "my-app",
+      sessionToken: "session-aaa",
+    };
+    const userB: AppRuntimeRouteAuth = {
+      namespaceId: "ns-1",
+      slug: "my-app",
+      sessionToken: "session-bbb",
+    };
+
+    await fetchCachedRuntimeRepoFile(userA, "app.tsx");
+    await fetchCachedRuntimeRepoFile(userB, "app.tsx");
+
+    // User B hits user A's warmed cache — only revision resolution on first user.
+    expect(fetchRuntimeRepoFile).toHaveBeenCalledTimes(4);
+  });
+
+  it("deduplicates concurrent revision resolution under parallel file fetches", async () => {
+    let releaseRevision!: () => void;
+    const revisionGate = new Promise<void>((resolve) => {
+      releaseRevision = resolve;
+    });
+
+    vi.mocked(fetchRuntimeRepoFile).mockImplementation(async (_auth, path) => {
+      if (typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH)) {
+        await revisionGate;
+        return { content: "rev-parallel\n", contentType: "text/plain" };
+      }
+      if (typeof path === "string" && path.includes("meta")) {
+        return null;
+      }
+      if (typeof path === "string" && path.includes("HEAD")) {
+        return { content: "head-fallback\n", contentType: "text/plain" };
+      }
+      return {
+        content: `file:${path}`,
+        contentType: "text/plain",
+      };
+    });
+
+    const first = fetchCachedRuntimeRepoFile(auth, "a.txt");
+    const second = fetchCachedRuntimeRepoFile(auth, "b.txt");
+    releaseRevision();
+    await Promise.all([first, second]);
+
+    const markerCalls = vi
+      .mocked(fetchRuntimeRepoFile)
+      .mock.calls.filter(([_, path]) =>
+        typeof path === "string" && path.includes(PAPR_APP_CLOUD_REVISION_PATH),
+      );
+    expect(markerCalls).toHaveLength(1);
   });
 });

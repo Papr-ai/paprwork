@@ -625,6 +625,13 @@ export async function alignMigrationLedgers(
   localDbPath: string,
   migrationRoot: string,
 ): Promise<MigrationLedgerSyncResult> {
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(localDbPath)) {
+    return { remoteBackfilled: [], localHydrated: [], localInferred: [] };
+  }
+
   const remoteBackfilled = await reconcileRemoteMigrationLedger(
     remote,
     migrationRoot,

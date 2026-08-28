@@ -15,6 +15,10 @@ import {
   VERIFIED_CALLER_USER_ID_PARAM,
   type MiniAppCallerIdentity,
 } from "./miniAppAccess.js";
+import {
+  isBackendPythonWorkerEnabled,
+  runPythonHandlerViaWorker,
+} from "./appBackendPythonWorker.js";
 
 export type { MiniAppCallerIdentity };
 
@@ -46,18 +50,21 @@ export function buildBackendActionEnv(input: {
     input.callerIdentity,
   );
 
-  const env: Record<string, string> = {
-    ...(process.env as Record<string, string>),
-    ...(input.databaseEnv ?? {}),
-    PAPR_APP_ID: input.appId,
-    PAPR_ACTION: input.action,
-    ...(input.paprRoot ? { PAPR_ROOT: input.paprRoot } : {}),
-    ...(input.vaultEnv ?? {}),
-  };
+    const env: Record<string, string> = {};
+    for (const [key, value] of Object.entries({
+      ...(process.env as Record<string, string>),
+      ...(input.databaseEnv ?? {}),
+      PAPR_APP_ID: input.appId,
+      PAPR_ACTION: input.action,
+      ...(input.paprRoot ? { PAPR_ROOT: input.paprRoot } : {}),
+      ...(input.vaultEnv ?? {}),
+    })) {
+      env[key] = String(value);
+    }
   if (mergedParams) {
     env.PAPR_ACTION_PARAMS = JSON.stringify(mergedParams);
     for (const [key, value] of Object.entries(mergedParams)) {
-      env[`PAPR_PARAM_${key}`] = value;
+      env[`PAPR_PARAM_${key}`] = String(value);
     }
   }
   const callerUserId = input.callerIdentity?.userId?.trim();
@@ -176,6 +183,15 @@ export async function runPythonHandlerFromSource(
   env: Record<string, string>,
   timeoutMs: number,
 ): Promise<AppBackendRunResult> {
+  if (isBackendPythonWorkerEnabled()) {
+    return runPythonHandlerViaWorker({
+      handlerSource,
+      dbHelperSource: await loadBackendDbHelperPy(),
+      env,
+      timeoutMs,
+    });
+  }
+
   const tmpdir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-backend-"));
   const handlerPath = path.join(tmpdir, "handler.py");
   try {

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CloudSyncService } from "../src/gateway/services/CloudSyncService.js";
 import {
+  appHasReplicaPendingPush,
   appNeedsOrderedFlush,
   appNeedsOrderedFlushAsync,
 } from "../src/gateway/services/cloudSync/pendingLocalUploads.js";
@@ -24,7 +25,37 @@ vi.mock("../src/gateway/services/tursoSyncStatus.js", () => ({
 }));
 
 vi.mock("../src/gateway/services/tursoLinkedSources.js", () => ({
-  listAppLinkedSyncKeys: vi.fn(() => []),
+  listAppLinkedSyncKeys: vi.fn(() => new Set<string>()),
+  discoverTursoLinkedSources: vi.fn(async () => []),
+  linkedSourceAsAppDataSource: vi.fn(
+    (source: {
+      appId: string;
+      alias: string;
+      dbPath: string;
+      jobId: string;
+    }) => ({
+      appId: source.appId,
+      alias: source.alias,
+      dbPath: source.dbPath,
+      dbId: source.jobId,
+      jobId: source.jobId,
+    }),
+  ),
+}));
+
+vi.mock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
+  shouldUseTursoReplicaForSource: vi.fn(() => true),
+  syncStatusForLinkedDb: vi.fn(async () => ({
+    online: true,
+    syncMode: "replica" as const,
+    pendingPush: false,
+    pendingOps: 0,
+    lastPushError: null,
+    migrationConflict: false,
+    cutoverBlocked: false,
+    cutoverBlockReason: null,
+    stats: null,
+  })),
 }));
 
 vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
@@ -42,6 +73,10 @@ function mockSync(
 }
 
 describe("appNeedsOrderedFlushAsync", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("returns true when git folder is dirty", async () => {
     const sync = mockSync({
       hasRelativePathChanged: (rel) => rel === "apps/app-a",
@@ -54,6 +89,10 @@ describe("appNeedsOrderedFlushAsync", () => {
     const { buildTursoSyncItemsReport } = await import(
       "../src/gateway/services/tursoSyncStatus.js"
     );
+    const { listAppLinkedSyncKeys } = await import(
+      "../src/gateway/services/tursoLinkedSources.js"
+    );
+    vi.mocked(listAppLinkedSyncKeys).mockReturnValue(new Set(["db-1"]));
     vi.mocked(buildTursoSyncItemsReport).mockResolvedValueOnce({
       enabled: true,
       databaseMode: "per-job",
@@ -87,6 +126,44 @@ describe("appNeedsOrderedFlushAsync", () => {
 
     const sync = mockSync();
     expect(appNeedsOrderedFlush(sync, "app-a")).toBe(false);
+    await expect(appNeedsOrderedFlushAsync(sync, "app-a")).resolves.toBe(true);
+  });
+
+  it("returns true when Plan A replica has pending CDC ops even if git is clean", async () => {
+    const { discoverTursoLinkedSources } = await import(
+      "../src/gateway/services/tursoLinkedSources.js"
+    );
+    const { syncStatusForLinkedDb } = await import(
+      "../src/gateway/services/tursoReplica/tursoReplicaRouting.js"
+    );
+
+    vi.mocked(discoverTursoLinkedSources).mockResolvedValue([
+      {
+        appId: "app-a",
+        jobId: "db-caf671ba",
+        alias: "todos",
+        dbPath: "/tmp/todos/data.db",
+        role: "linked",
+        tables: ["todos"],
+      },
+    ]);
+    vi.mocked(syncStatusForLinkedDb).mockResolvedValue({
+      online: true,
+      syncMode: "replica",
+      pendingPush: true,
+      pendingOps: 5,
+      lastPushError: null,
+      migrationConflict: false,
+      cutoverBlocked: false,
+      cutoverBlockReason: null,
+      stats: null,
+    });
+
+    const sync = mockSync();
+    expect(appNeedsOrderedFlush(sync, "app-a")).toBe(false);
+    await expect(appHasReplicaPendingPush("app-a", "/tmp/papr-test")).resolves.toBe(
+      true,
+    );
     await expect(appNeedsOrderedFlushAsync(sync, "app-a")).resolves.toBe(true);
   });
 });

@@ -68,6 +68,15 @@ export interface AppCloudDatabaseStatus {
   schemaDrift?: boolean;
   /** True when row-level CDC is catching up but replica already exists. */
   rowsSyncing?: boolean;
+  /** Plan A Turso Sync replica path. */
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }
 
 /** Pending DB work that should block the green "Synced" chip. */
@@ -76,9 +85,25 @@ function databaseBlocksOverallSync(input: {
   schemaDrift?: boolean;
   remoteTableCount?: number;
   manualUploadHold?: boolean;
+  syncMode?: "legacy" | "replica";
+  pendingPush?: boolean;
+  migrationConflict?: boolean;
+  cutoverBlocked?: boolean;
 }): boolean {
   if (input.status === "quarantined" || input.status === "unavailable") {
     return true;
+  }
+  if (input.syncMode === "replica") {
+    if (input.migrationConflict || input.cutoverBlocked) {
+      return true;
+    }
+    if (input.pendingPush) {
+      return true;
+    }
+    if (input.manualUploadHold) {
+      return true;
+    }
+    return false;
   }
   if (input.status !== "pending") {
     return false;
@@ -173,6 +198,9 @@ export interface AppCloudSyncStatus {
   codeLastError?: string | null;
   /** App has an active Papr cloud share link — local git/Turso lag should not block UI. */
   publishLive?: boolean;
+  /** Files in the app folder over 10MB — git sync skips them; use App Files. */
+  oversizedAppFilesMessage?: string | null;
+  oversizedAppFilesCount?: number;
 }
 
 const GIT_ACTIVE_STATUSES = new Set([
@@ -300,7 +328,38 @@ function databaseDetail(item: {
   schemaDrift?: boolean;
   quarantineReason?: string | null;
   manualUploadHold?: boolean;
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }): string {
+  if (item.syncMode === "replica") {
+    if (item.migrationConflict) {
+      return (
+        item.lastReplicaPushError?.slice(0, 120) ??
+        "Migration conflict — reconcile migrations, then Upload now"
+      );
+    }
+    if (item.cutoverBlocked) {
+      return (
+        item.cutoverBlockReason?.slice(0, 120) ??
+        "Replica cutover blocked — check Settings → Cloud Sync"
+      );
+    }
+    if (item.status === "pending" && item.pendingPush) {
+      if (item.online === false) {
+        return `Offline — ${item.pendingOps ?? 0} local change(s) will push when back online`;
+      }
+      return `Local changes not pushed to Turso yet (${item.pendingOps ?? 0} pending) — click Upload now`;
+    }
+    if (item.status === "synced") {
+      return `${item.remoteTableCount} table(s) on Turso (replica)`;
+    }
+  }
   switch (item.status) {
     case "synced":
       return `${item.remoteTableCount} table(s) on Turso`;
@@ -533,6 +592,8 @@ export function deriveAppCloudSyncStatus(
       gitRemoteRequiresReview: false,
       gitRemoteMetadataSync: false,
       gitRemoteReviewHeadline: null,
+      oversizedAppFilesMessage: null,
+      oversizedAppFilesCount: 0,
     };
   }
 
@@ -645,13 +706,19 @@ export function deriveAppCloudSyncStatus(
   const databases: AppCloudDatabaseStatus[] = (items.turso?.sources ?? [])
     .filter((source) => source.appId === appId)
     .map((source) => {
+      const isReplica = source.syncMode === "replica";
       const blocksOverall = databaseBlocksOverallSync({
         status: source.status,
         schemaDrift: source.schemaDrift,
         remoteTableCount: source.remoteTableCount,
         manualUploadHold: source.manualUploadHold,
+        syncMode: source.syncMode,
+        pendingPush: source.pendingPush,
+        migrationConflict: source.migrationConflict,
+        cutoverBlocked: source.cutoverBlocked,
       });
       const rowsSyncing =
+        !isReplica &&
         source.status === "pending" &&
         !blocksOverall &&
         (source.remoteTableCount ?? 0) > 0;
@@ -669,10 +736,26 @@ export function deriveAppCloudSyncStatus(
           schemaDrift: source.schemaDrift,
           quarantineReason: source.quarantineReason,
           manualUploadHold: source.manualUploadHold,
+          syncMode: source.syncMode,
+          online: source.online,
+          pendingPush: source.pendingPush,
+          pendingOps: source.pendingOps,
+          migrationConflict: source.migrationConflict,
+          lastReplicaPushError: source.lastReplicaPushError,
+          cutoverBlocked: source.cutoverBlocked,
+          cutoverBlockReason: source.cutoverBlockReason,
         }),
         manualUploadHold: source.manualUploadHold,
         schemaDrift: source.schemaDrift,
         rowsSyncing: rowsSyncing || undefined,
+        syncMode: source.syncMode,
+        online: source.online,
+        pendingPush: source.pendingPush,
+        pendingOps: source.pendingOps,
+        migrationConflict: source.migrationConflict,
+        lastReplicaPushError: source.lastReplicaPushError,
+        cutoverBlocked: source.cutoverBlocked,
+        cutoverBlockReason: source.cutoverBlockReason,
       };
     });
 
@@ -690,6 +773,10 @@ export function deriveAppCloudSyncStatus(
       schemaDrift: source?.schemaDrift,
       remoteTableCount: source?.remoteTableCount,
       manualUploadHold: db.manualUploadHold,
+      syncMode: source?.syncMode,
+      pendingPush: source?.pendingPush,
+      migrationConflict: source?.migrationConflict,
+      cutoverBlocked: source?.cutoverBlocked,
     });
   }).length;
   const dbRowsSyncing = databases.filter((db) => db.rowsSyncing).length;
@@ -740,6 +827,8 @@ export function deriveAppCloudSyncStatus(
   }
 
   const publishLive = items.appContext?.publishLive === true;
+  const oversizedAppFilesMessage = items.oversizedAppFiles?.message ?? null;
+  const oversizedAppFilesCount = items.oversizedAppFiles?.paths.length ?? 0;
   const publishedAt = items.appContext?.publishedAt ?? null;
 
   const publishStatus: AppCloudPublishStatus =
@@ -955,6 +1044,8 @@ export function deriveAppCloudSyncStatus(
     gitRemoteReviewHeadline,
     codeLastError: codeLastError ?? githubItem?.lastError ?? null,
     publishLive,
+    oversizedAppFilesMessage,
+    oversizedAppFilesCount,
   };
 }
 
@@ -1010,6 +1101,9 @@ export function webSyncVisualState(
   if (status.codeStatus === "failed" && !status.writerConflict) return "error";
   if (status.writerConflict || status.gitRemoteRequiresReview) return "action_required";
   if (options.pushing || status.overall === "uploading") return "syncing";
+  if (status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0) {
+    return "warn";
+  }
   if (status.overall === "synced") return "synced";
   if (
     status.publishStatus === "not_web_ready" ||

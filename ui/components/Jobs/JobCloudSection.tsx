@@ -228,8 +228,8 @@ export function CloudOnlyJobsBanner({
         {cloudStatus.cloudOnlyJobIds.length} job
         {cloudStatus.cloudOnlyJobIds.length === 1 ? "" : "s"} in your cloud catalog not on this
         device ({names}
-        {extra}). Delete locally syncs the catalog; cloud-only entries may need cleanup in Papr
-        dashboard.
+        {extra}). Deleting locally removes the job from git and the cloud catalog; if entries
+        linger, use Refresh or delete again after sync completes.
       </span>
     </div>
   );

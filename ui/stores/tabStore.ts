@@ -512,7 +512,11 @@ export const useTabStore = create<TabState>()((set, get) => ({
           if (alreadyCorrectChild) {
             // Nothing to do — tab is already the child of this parent.
             if (autoSwitch) {
-              get().switchToTab(parentId);
+              const state = get();
+              // Don't steal focus when the user is interacting with the app pane.
+              if (state.activeRightTab !== childId) {
+                get().switchToTab(parentId);
+              }
             } else {
               get().setTabPendingRefresh(parentId, true);
             }

@@ -25,6 +25,8 @@ export interface MiniAppRuntimePreviewResult {
   consoleLogs: PreviewConsoleLog[];
   /** Human-readable error lines from preview console (level error). */
   previewErrors: string[];
+  /** PNG data URL captured from the hidden preview window. */
+  previewScreenshot?: string;
 }
 
 const PREVIEW_WAIT_MS = 2000;
@@ -75,6 +77,22 @@ export async function runMiniAppRuntimePreview(
 
     await new Promise((resolve) => setTimeout(resolve, PREVIEW_WAIT_MS));
 
+    const snapshotRes = await requestWebviewTest({
+      action: "snapshot",
+      payload: { webviewId, includeScreenshot: true },
+    });
+    const snapshotData =
+      snapshotRes.success &&
+      snapshotRes.data !== undefined &&
+      snapshotRes.data !== null &&
+      typeof snapshotRes.data === "object"
+        ? (snapshotRes.data as { screenshot?: string })
+        : undefined;
+    const previewScreenshot =
+      typeof snapshotData?.screenshot === "string"
+        ? snapshotData.screenshot
+        : undefined;
+
     const consoleRes = await requestWebviewTest({
       action: "get_console",
       payload: { webviewId, limit: 100, clearAfterRead: true },
@@ -121,6 +139,7 @@ export async function runMiniAppRuntimePreview(
       loadStatus: launchData.status,
       consoleLogs: logs,
       previewErrors,
+      previewScreenshot,
     };
   } catch (error) {
     return {

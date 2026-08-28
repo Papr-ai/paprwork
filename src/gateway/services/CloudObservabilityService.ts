@@ -30,10 +30,27 @@ import {
 } from "./tursoSyncStatus.js";
 import {
   discoverTursoLinkedSources,
+  resolveLinkedSourcesForTursoPush,
   resolveTursoDatabaseLabel,
 } from "./tursoLinkedSources.js";
 import { jobTursoDatabaseName } from "./tursoDatabaseNaming.js";
+import {
+  buildOversizedAppFilesReport,
+  type OversizedAppFilesReport,
+} from "./cloudSync/oversizedAppFilesReport.js";
 import type { GitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
+import {
+  buildAppWriterRepoReport,
+  extractAppIdFromRepoPath,
+  listPerAppRepoFiles,
+  loadWorkspaceAppRegistry,
+  NAMESPACE_GIT_TRAP_WARNING,
+  normalizePerAppRepoRelativePath,
+  readPerAppRepoFile,
+  sanitizeGitHubReportForAgents,
+  type AppWriterRepoReport,
+  type WorkspaceAppRegistryEntry,
+} from "./cloudSync/appWriterRepoObservability.js";
 
 const DEFAULT_MAX_ROWS = 50;
 const MAX_ROWS_CAP = 200;
@@ -76,6 +93,14 @@ export interface CloudSyncStatusReport {
     dependentJobIds: string[];
     registryDbIds: string[];
   };
+  /** Files in the app folder over the git sync limit — use App Files instead. */
+  oversizedAppFiles?: OversizedAppFilesReport | null;
+  /** Canonical Sync V3 writer repo status — use this for app code, not github.apps. */
+  appWriterRepo?: AppWriterRepoReport;
+  /** Present when appId is scoped — legacy namespace git is not app code source of truth. */
+  namespaceGitTrapWarning?: string;
+  /** Apps in this workspace from local apps.json (disk registry — not namespace git). */
+  workspaceApps?: WorkspaceAppRegistryEntry[];
   checkedAt: string;
 }
 
@@ -316,9 +341,19 @@ export async function getCloudSyncStatus(options?: {
     await sync.reconcileAppDependentPaths(appId);
   }
 
-  let github = sync.getGitHubSyncItemsReport();
+  const githubFull = sync.getGitHubSyncItemsReport();
+  let github = sanitizeGitHubReportForAgents(
+    appId ? filterGitHubReportByApp(githubFull, appId, paprDir) : githubFull,
+  );
+
+  let appWriterRepo: AppWriterRepoReport | undefined;
   if (appId) {
-    github = filterGitHubReportByApp(github, appId, paprDir);
+    appWriterRepo = await buildAppWriterRepoReport({
+      appId,
+      paprDir,
+      stateManager: sync.stateManager,
+      queuedPaths: githubFull.queuedPaths,
+    });
   }
 
   const turso = await buildTursoSyncItemsReport(getPaprAppsRoot(), appId);
@@ -382,6 +417,10 @@ export async function getCloudSyncStatus(options?: {
     logTailLines: options?.logTailLines,
   });
 
+  const oversizedAppFiles = appId
+    ? await buildOversizedAppFilesReport(paprDir, appId)
+    : null;
+
   return {
     enabled: true,
     syncState: sync.getState(),
@@ -390,6 +429,10 @@ export async function getCloudSyncStatus(options?: {
     cloudLinks,
     desktopHeartbeat,
     jobs,
+    oversizedAppFiles,
+    appWriterRepo,
+    workspaceApps: loadWorkspaceAppRegistry(paprDir),
+    namespaceGitTrapWarning: NAMESPACE_GIT_TRAP_WARNING,
     ...(appId
       ? {
           appContext: {
@@ -404,6 +447,25 @@ export async function getCloudSyncStatus(options?: {
 }
 
 export type PushCloudSyncTarget = "github" | "turso";
+
+export const PUSH_CLOUD_SYNC_REQUIRES_SCOPE_ERROR =
+  "push_cloud_sync requires scope: pass appId (recommended), jobId, alias, tursoDatabase, or tables. " +
+  "Full-workspace push is not allowed — use Upload now per app in the UI, or papr_db_push({ dbId }) for one database.";
+
+export function hasPushCloudSyncScope(
+  options: PushCloudSyncOptions | undefined,
+): boolean {
+  if (!options) {
+    return false;
+  }
+  return Boolean(
+    options.appId?.trim() ||
+      options.jobId?.trim() ||
+      options.alias?.trim() ||
+      options.tursoDatabase?.trim() ||
+      options.tables?.length,
+  );
+}
 
 export interface PushCloudSyncOptions {
   appId?: string;
@@ -427,6 +489,7 @@ export interface PushCloudSyncResult {
   github?: PushGitScopedResult;
   turso?: TursoPushScopedResult;
   flush?: import("./cloudSync/flushAppNow.js").FlushAppNowResult;
+  oversizedAppFiles?: OversizedAppFilesReport | null;
   syncState: ReturnType<NonNullable<ReturnType<typeof getCloudSyncService>>["getState"]>;
   pushedAt: string;
   durationMs: number;
@@ -449,7 +512,7 @@ function buildPushCloudSyncScopeLabel(options: PushCloudSyncOptions): string {
   if (options.tables?.length) {
     parts.push(`tables ${options.tables.join(", ")}`);
   }
-  return parts.length > 0 ? parts.join(", ") : "full workspace";
+  return parts.length > 0 ? parts.join(", ") : "unspecified scope";
 }
 
 function resolvePushCloudSyncTargets(
@@ -471,6 +534,9 @@ export async function pushCloudSync(
   }
 
   const pushOptions: PushCloudSyncOptions = options ?? {};
+  if (!hasPushCloudSyncScope(pushOptions)) {
+    throw new Error(PUSH_CLOUD_SYNC_REQUIRES_SCOPE_ERROR);
+  }
   const targets = resolvePushCloudSyncTargets(pushOptions);
   const scope = buildPushCloudSyncScopeLabel(pushOptions);
 
@@ -489,12 +555,17 @@ export async function pushCloudSync(
             skipTursoReschedule: true,
           });
         })();
+    const oversizedAppFiles = await buildOversizedAppFilesReport(
+      getPaprRoot(),
+      pushOptions.appId,
+    );
     return {
       success: true,
       scope,
       targets,
       appId: pushOptions.appId,
       flush,
+      oversizedAppFiles,
       syncState: sync.getState(),
       pushedAt: new Date().toISOString(),
       durationMs: Math.round(performance.now() - startMs),
@@ -511,6 +582,27 @@ export async function pushCloudSync(
 
   let turso: TursoPushScopedResult | undefined;
   if (targets.includes("turso")) {
+    if (
+      pushOptions.appId &&
+      targets.length === 1 &&
+      targets[0] === "turso"
+    ) {
+      const { shouldRunReplicaCutover } = await import(
+        "../utils/tursoReplicaEnabled.js"
+      );
+      if (shouldRunReplicaCutover()) {
+        const { runReplicaCutoverForAppUpload, formatReplicaCutoverUploadFailure } =
+          await import(
+            "./tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js"
+          );
+        const batch = await runReplicaCutoverForAppUpload(pushOptions.appId);
+        const failure = formatReplicaCutoverUploadFailure(batch);
+        if (failure) {
+          throw new Error(failure);
+        }
+      }
+    }
+
     const bridge = ensureTursoSyncBridge();
     if (!bridge.enabled) {
       throw new Error("Turso sync is disabled.");
@@ -522,19 +614,38 @@ export async function pushCloudSync(
       Boolean(pushOptions.tursoDatabase) ||
       Boolean(pushOptions.tables?.length);
 
-    turso = await bridge.pushScoped({
+    const allSources = await discoverTursoLinkedSources(getPaprAppsRoot());
+    const { pushLinkedSourceWithReplicaRouting } = await import(
+      "./tursoReplica/tursoReplicaRouting.js"
+    );
+
+    if (!hasTursoScope) {
+      throw new Error(
+        "Turso push requires appId, jobId, alias, or tursoDatabase scope. " +
+          "Use papr_db_push({ dbId }) for a single registry database.",
+      );
+    }
+
+    const sourcesToPush = resolveLinkedSourcesForTursoPush(allSources, {
       appId: pushOptions.appId,
       jobId: pushOptions.jobId,
       alias: pushOptions.alias,
       tursoDatabase: pushOptions.tursoDatabase,
-      tables: pushOptions.tables,
-      dirtyOnly: !hasTursoScope,
     });
 
-    if (turso.failed > 0) {
-      const errors = turso.results
-        .filter((result) => result.error)
-        .map((result) => result.error)
+    const pushResults = [];
+    for (const source of sourcesToPush) {
+      pushResults.push(
+        await pushLinkedSourceWithReplicaRouting(source, {
+          tableNames: pushOptions.tables,
+        }),
+      );
+    }
+
+    const failed = pushResults.filter((result) => !result.ok);
+    if (failed.length > 0) {
+      const errors = failed
+        .map((result) => `${result.alias}: ${result.error ?? "failed"}`)
         .join("; ");
       throw new Error(
         errors.length > 0
@@ -542,7 +653,30 @@ export async function pushCloudSync(
           : "Database sync to Turso failed",
       );
     }
+
+    turso = {
+      attempted: pushResults.length,
+      pushed: pushResults.filter((result) => result.ok).length,
+      pulled: 0,
+      skipped: 0,
+      failed: 0,
+      results: pushResults.map((result) => ({
+        jobId: result.syncKey,
+        error: result.error,
+      })),
+      databases: pushResults.map((result) => ({
+        syncKey: result.syncKey,
+        tursoDatabase: result.syncKey,
+        alias: result.alias,
+        appId: result.appId,
+      })),
+    };
+
   }
+
+  const oversizedAppFiles = pushOptions.appId
+    ? await buildOversizedAppFilesReport(getPaprRoot(), pushOptions.appId)
+    : null;
 
   return {
     success: true,
@@ -555,6 +689,7 @@ export async function pushCloudSync(
     ...(pushOptions.tables?.length ? { tables: pushOptions.tables } : {}),
     ...(github ? { github } : {}),
     ...(turso ? { turso } : {}),
+    oversizedAppFiles,
     syncState: sync.getState(),
     pushedAt: new Date().toISOString(),
     durationMs: Math.round(performance.now() - startMs),
@@ -620,12 +755,32 @@ export async function readCloudRepoFile(input: {
   relativePath: string;
   source?: "github" | "local-git";
   maxChars?: number;
+  appId?: string;
 }): Promise<{
   relativePath: string;
   content: string;
   truncated: boolean;
-  source: "github" | "local-git";
+  source: "github" | "local-git" | "per-app-github";
+  namespaceGitTrapWarning?: string;
 }> {
+  const inferredAppId =
+    input.appId?.trim() || extractAppIdFromRepoPath(input.relativePath) || undefined;
+
+  if (inferredAppId && input.source !== "local-git") {
+    const perApp = await readPerAppRepoFile({
+      appId: inferredAppId,
+      relativePath: input.relativePath,
+    });
+    const maxChars = input.maxChars ?? DEFAULT_REPO_FILE_CHARS;
+    const truncated = perApp.content.length > maxChars;
+    return {
+      relativePath: perApp.relativePath,
+      content: truncated ? perApp.content.slice(0, maxChars) : perApp.content,
+      truncated,
+      source: perApp.source,
+    };
+  }
+
   const relativePath = input.relativePath.trim().replace(/^\/+/, "");
   const preferGitHub = input.source !== "local-git";
   let content: string | null = null;
@@ -645,18 +800,62 @@ export async function readCloudRepoFile(input: {
 
   const maxChars = input.maxChars ?? DEFAULT_REPO_FILE_CHARS;
   const truncated = content.length > maxChars;
+  const namespaceGitTrapWarning =
+    relativePath.startsWith("apps/") && !inferredAppId
+      ? `${NAMESPACE_GIT_TRAP_WARNING} Pass appId to inspect_cloud_repo for the per-app writer repo.`
+      : undefined;
   return {
     relativePath,
     content: truncated ? content.slice(0, maxChars) : content,
     truncated,
     source,
+    ...(namespaceGitTrapWarning ? { namespaceGitTrapWarning } : {}),
   };
 }
 
 export async function listCloudRepoFiles(input?: {
   prefix?: string;
   maxFiles?: number;
-}): Promise<{ prefix: string; files: string[]; source: "local-git-head" }> {
+  appId?: string;
+}): Promise<
+  | { prefix: string; files: string[]; source: "local-git-head"; namespaceGitTrapWarning: string }
+  | {
+      appId: string;
+      prefix: string;
+      files: string[];
+      source: "per-app-github-tree";
+      commitSha: string;
+    }
+> {
+  const appId = input?.appId?.trim();
+  if (appId) {
+    const prefixInput = input?.prefix ?? "";
+    const normalized = prefixInput
+      ? normalizePerAppRepoRelativePath(prefixInput, appId)
+      : { path: "" };
+    return listPerAppRepoFiles({
+      appId,
+      prefix: normalized.path,
+      maxFiles: input?.maxFiles,
+    });
+  }
+
+  const prefix = (input?.prefix ?? "apps/").trim().replace(/^\/+/, "");
+  if (prefix.startsWith("apps/")) {
+    const inferred = extractAppIdFromRepoPath(prefix.endsWith("/") ? prefix : `${prefix}/`);
+    if (inferred) {
+      return listPerAppRepoFiles({
+        appId: inferred,
+        prefix: normalizePerAppRepoRelativePath(prefix, inferred).path,
+        maxFiles: input?.maxFiles,
+      });
+    }
+    throw new Error(
+      `${NAMESPACE_GIT_TRAP_WARNING} listCloudRepoFiles requires appId when listing app code. ` +
+        `Example: inspect_cloud_repo({ action: "list", appId: "<uuid>", prefix: "dist/" }).`,
+    );
+  }
+
   const paprDir = getPaprRoot();
   const gitDir = path.join(paprDir, ".git");
   if (!fs.existsSync(gitDir)) {
@@ -665,7 +864,6 @@ export async function listCloudRepoFiles(input?: {
     );
   }
 
-  const prefix = (input?.prefix ?? "apps/").trim().replace(/^\/+/, "");
   const maxFiles = Math.min(Math.max(1, input?.maxFiles ?? 200), 500);
   const runner = new GitRunner();
   const output = await runner.run(
@@ -678,7 +876,12 @@ export async function listCloudRepoFiles(input?: {
     .filter(Boolean)
     .slice(0, maxFiles);
 
-  return { prefix, files, source: "local-git-head" };
+  return {
+    prefix,
+    files,
+    source: "local-git-head",
+    namespaceGitTrapWarning: NAMESPACE_GIT_TRAP_WARNING,
+  };
 }
 
 async function readJobLogTail(jobId: string, lines: number): Promise<string | undefined> {

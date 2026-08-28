@@ -341,6 +341,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("telemetry:set-enabled", enabled),
   },
 
+  replicaE2e: {
+    list: () => ipcRenderer.invoke("replica-e2e:list"),
+    run: (testId) => ipcRenderer.invoke("replica-e2e:run", testId),
+    cancel: () => ipcRenderer.invoke("replica-e2e:cancel"),
+  },
+
   providerAuth: {
     getPreference: (provider) =>
       ipcRenderer.invoke("provider-auth:get-preference", provider),
@@ -352,6 +358,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
     save: (input) => ipcRenderer.invoke("chat:save-attachment", input),
     readPreview: (input) =>
       ipcRenderer.invoke("chat:read-attachment-preview", input),
+  },
+
+  agentPreview: {
+    show: (webviewId) => ipcRenderer.invoke("agent-preview:show", webviewId),
+    isActive: (webviewId) =>
+      ipcRenderer.invoke("agent-preview:is-active", webviewId),
+    captureThumbnail: (webviewId) =>
+      ipcRenderer.invoke("agent-preview:capture-thumbnail", webviewId),
   },
 
   // App metadata

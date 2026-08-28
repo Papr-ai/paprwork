@@ -52,6 +52,42 @@ export async function uploadJobRuntimePatch(
   }
 }
 
+export async function deleteJobRuntimePatch(jobId: string): Promise<boolean> {
+  const apiKey = await getPaprApiKey();
+  if (!apiKey) {
+    return false;
+  }
+
+  try {
+    const res = await cloudApiFetch(
+      `/v1/cloud/runtime/job-runtime/${encodeURIComponent(jobId)}`,
+      {
+        method: "DELETE",
+        timeoutMs: 15_000,
+      },
+    );
+    if (res.status === 404) {
+      return true;
+    }
+    if (!res.ok) {
+      const detail = (await res.text()).slice(0, 120);
+      console.warn(
+        `[JobRuntimeCloud] Delete failed for ${jobId}:`,
+        res.status,
+        detail,
+      );
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn(
+      `[JobRuntimeCloud] Delete error for ${jobId}:`,
+      (err as Error).message.slice(0, 120),
+    );
+    return false;
+  }
+}
+
 export async function fetchCloudJobRuntimePatches(): Promise<JobRuntimePatch[]> {
   const apiKey = await getPaprApiKey();
   if (!apiKey) {

@@ -63,6 +63,42 @@ export function appNeedsOrderedFlush(
   return listDbDirtySyncKeysForApp(syncKeys, paprDir).length > 0;
 }
 
+/** Plan A replica: unpushed CDC ops or last push error on a linked registry DB. */
+export async function appHasReplicaPendingPush(
+  appId: string,
+  paprDir: string,
+): Promise<boolean> {
+  const appsRoot = path.join(paprDir, "apps");
+  const { discoverTursoLinkedSources, linkedSourceAsAppDataSource } =
+    await import("../tursoLinkedSources.js");
+  const { shouldUseTursoReplicaForSource, syncStatusForLinkedDb } =
+    await import("../tursoReplica/tursoReplicaRouting.js");
+
+  const linked = await discoverTursoLinkedSources(appsRoot);
+  for (const source of linked) {
+    if (source.appId !== appId) {
+      continue;
+    }
+    const appSource = linkedSourceAsAppDataSource(source);
+    if (!shouldUseTursoReplicaForSource(appSource)) {
+      continue;
+    }
+    try {
+      const status = await syncStatusForLinkedDb(appSource);
+      if (
+        status.pendingPush ||
+        status.pendingOps > 0 ||
+        (status.lastPushError?.trim().length ?? 0) > 0
+      ) {
+        return true;
+      }
+    } catch {
+      /* status is best-effort */
+    }
+  }
+  return false;
+}
+
 /** True when any linked Turso source for this app has local/remote schema drift. */
 export async function appHasLinkedSchemaDrift(
   appId: string,
@@ -80,7 +116,7 @@ export async function appHasLinkedSchemaDrift(
   );
 }
 
-/** Git/db dirty flags plus Turso schema drift (async — needs remote schema check). */
+/** Git/db dirty flags, Plan A replica pending push, and Turso schema drift. */
 export async function appNeedsOrderedFlushAsync(
   sync: Pick<CloudSyncService, "getPaprDir" | "hasRelativePathChanged">,
   appId: string,
@@ -88,7 +124,11 @@ export async function appNeedsOrderedFlushAsync(
   if (appNeedsOrderedFlush(sync, appId)) {
     return true;
   }
-  return appHasLinkedSchemaDrift(appId, sync.getPaprDir());
+  const paprDir = sync.getPaprDir();
+  if (await appHasReplicaPendingPush(appId, paprDir)) {
+    return true;
+  }
+  return appHasLinkedSchemaDrift(appId, paprDir);
 }
 
 /** Load sync state from disk and check whether a mini-app still has unpushed git work. */

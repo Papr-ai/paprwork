@@ -6,7 +6,10 @@ import type { Client, InArgs } from "@libsql/client";
 import type Database from "better-sqlite3";
 import {
   quoteIdent,
+  readLocalForeignKeyRefs,
   readRemoteTableSchema,
+  sortTableNamesForDelete,
+  sortTableNamesForInsert,
   type TableColumn,
 } from "./tursoSyncBridgeCore.js";
 import {
@@ -211,6 +214,12 @@ async function batchUpsertRemoteRows(
   await batchInsertLocalTableRows(remote, tableName, columns, rowsToWrite, "upsert");
 }
 
+interface TableDeltaWork {
+  columns: TableColumn[];
+  deletes: SyncLogEntry[];
+  upserts: ResolvedDeltaEntry[];
+}
+
 /** Push changelog entries from local → Turso. Returns touched table names. */
 export async function pushDeltaToRemote(
   localDb: Database.Database,
@@ -219,6 +228,7 @@ export async function pushDeltaToRemote(
 ): Promise<string[]> {
   const compacted = compactSyncLogEntries(entries);
   const touched = new Set<string>();
+  const workByTable = new Map<string, TableDeltaWork>();
 
   for (const [tableName, tableEntries] of groupEntriesByTable(compacted)) {
     const columns = await prepareRemoteTableForSync(remote, localDb, tableName);
@@ -232,9 +242,39 @@ export async function pushDeltaToRemote(
       columns,
       tableEntries,
     );
+    if (deletes.length === 0 && upserts.length === 0) {
+      continue;
+    }
+    workByTable.set(tableName, { columns, deletes, upserts });
+  }
 
-    await batchDeleteRemoteRows(remote, tableName, columns, deletes);
-    await batchUpsertRemoteRows(remote, tableName, columns, upserts);
+  if (workByTable.size === 0) {
+    return [];
+  }
+
+  const tableNames = [...workByTable.keys()];
+  const foreignKeyRefs = readLocalForeignKeyRefs(localDb, tableNames);
+
+  for (const tableName of sortTableNamesForDelete(tableNames, foreignKeyRefs)) {
+    const work = workByTable.get(tableName);
+    if (!work || work.deletes.length === 0) {
+      continue;
+    }
+    await batchDeleteRemoteRows(remote, tableName, work.columns, work.deletes);
+    touched.add(tableName);
+  }
+
+  for (const tableName of sortTableNamesForInsert(tableNames, foreignKeyRefs)) {
+    const work = workByTable.get(tableName);
+    if (!work || work.upserts.length === 0) {
+      continue;
+    }
+    await batchUpsertRemoteRows(
+      remote,
+      tableName,
+      work.columns,
+      work.upserts,
+    );
     touched.add(tableName);
   }
 

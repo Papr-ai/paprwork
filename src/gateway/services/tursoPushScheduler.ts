@@ -15,6 +15,7 @@ import {
   getWorkspaceWriteGeneration,
 } from "./workspaceWriteGuard.js";
 import { ensureTursoSyncBridge, type TursoSyncBridge } from "./TursoSyncBridge.js";
+import { isLegacyWorkspaceRowSyncEnabled } from "../utils/tursoReplicaEnabled.js";
 import {
   clearDirtyAfterPush,
   isJobDbQuarantined,
@@ -71,6 +72,7 @@ export type TursoPushTrigger =
   | "completion"
   | "api_write"
   | "max_wait"
+  | "migration"
   | "unknown";
 
 const jobTimers = new Map<string, NodeJS.Timeout>();
@@ -341,6 +343,20 @@ async function executePushForJob(
     return;
   }
 
+  const { shouldSuppressLegacyTursoPush } = await import(
+    "./tursoReplica/tursoReplicaRouting.js"
+  );
+  if (
+    shouldSuppressLegacyTursoPush({
+      syncKey: linkedSourceSyncKey(linked),
+      dbPath: linked.dbPath,
+      dbId: linked.dbId,
+    })
+  ) {
+    clearDirtyTracking(syncKey);
+    return;
+  }
+
   const resolvedSyncKey = linkedSourceSyncKey(linked);
 
   if (
@@ -542,6 +558,34 @@ export function scheduleTursoPushForJob(
     return;
   }
 
+  void import("./tursoReplica/tursoReplicaRouting.js").then(
+    ({ shouldSuppressLegacyTursoPush }) => {
+      if (shouldSuppressLegacyTursoPush({ syncKey: jobId })) {
+        void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+          ({ scheduleTursoReplicaPushForSyncKey }) => {
+            scheduleTursoReplicaPushForSyncKey(jobId, priority, trigger);
+          },
+        );
+        return;
+      }
+      if (!isLegacyWorkspaceRowSyncEnabled()) {
+        return;
+      }
+      scheduleTursoPushForJobLegacy(jobId, priority, trigger);
+    },
+  );
+}
+
+function scheduleTursoPushForJobLegacy(
+  jobId: string,
+  priority: TursoPushPriority = "normal",
+  trigger: TursoPushTrigger = "unknown",
+): void {
+  const bridge = ensureTursoSyncBridge();
+  if (!bridge.enabled) {
+    return;
+  }
+
   const syncState = loadTursoSyncState();
   if (isJobDbQuarantined(jobId, syncState)) {
     return;
@@ -596,19 +640,33 @@ export function scheduleTursoPushAllLinked(
     return;
   }
 
-  if (allLinkedTimer) {
-    clearTimeout(allLinkedTimer);
-  }
+  void import("../utils/tursoReplicaEnabled.js").then(
+    ({ isTursoReplicaSyncFeatureEnabled }) => {
+      if (isTursoReplicaSyncFeatureEnabled()) {
+        void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+          ({ scheduleTursoReplicaPushAllLinked }) => {
+            scheduleTursoReplicaPushAllLinked(trigger);
+          },
+        );
+      }
+      if (!isLegacyWorkspaceRowSyncEnabled()) {
+        return;
+      }
+      if (allLinkedTimer) {
+        clearTimeout(allLinkedTimer);
+      }
 
-  logTursoSchedule("*", trigger, `all linked debounce ${debounceMs("normal")}ms`);
+      logTursoSchedule("*", trigger, `all linked debounce ${debounceMs("normal")}ms`);
 
-  allLinkedTimer = setTimeout(() => {
-    allLinkedTimer = null;
-    void enqueueDirtyLinkedJobs(
-      bridge.getAppsRootDir() ?? defaultAppsRoot(),
-      trigger,
-    );
-  }, debounceMs("normal"));
+      allLinkedTimer = setTimeout(() => {
+        allLinkedTimer = null;
+        void enqueueDirtyLinkedJobs(
+          bridge.getAppsRootDir() ?? defaultAppsRoot(),
+          trigger,
+        );
+      }, debounceMs("normal"));
+    },
+  );
 }
 
 async function enqueueDirtyLinkedJobs(
@@ -654,6 +712,19 @@ export async function pushDirtyLinkedJobsOnStartup(
     return;
   }
 
+  const { isTursoReplicaSyncFeatureEnabled } = await import(
+    "../utils/tursoReplicaEnabled.js"
+  );
+  if (isTursoReplicaSyncFeatureEnabled()) {
+    const { pushPendingReplicaDbsOnStartup } = await import(
+      "./tursoReplica/tursoReplicaPushScheduler.js"
+    );
+    await pushPendingReplicaDbsOnStartup(appsRootDir);
+    if (!isLegacyWorkspaceRowSyncEnabled()) {
+      return;
+    }
+  }
+
   const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
   const { pruneTursoSyncStateForWorkspace } = await import("./tursoSyncState.js");
   const pruned = pruneTursoSyncStateForWorkspace(getPaprRoot());
@@ -680,6 +751,11 @@ function removeFromPushQueue(syncKey: string): void {
 export function cancelScheduledTursoPushForSyncKeys(
   syncKeys: readonly string[],
 ): void {
+  void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+    ({ cancelScheduledTursoReplicaPushes }) => {
+      cancelScheduledTursoReplicaPushes(syncKeys);
+    },
+  );
   for (const syncKey of syncKeys) {
     if (!syncKey) {
       continue;
@@ -744,6 +820,11 @@ export async function awaitTursoPushQueueForTests(): Promise<void> {
 
 /** Drop debounced/queued pushes (e.g. before org/namespace workspace switch). */
 export function cancelAllScheduledTursoPushes(reason = "workspace switch"): void {
+  void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+    ({ cancelAllScheduledTursoReplicaPushes }) => {
+      cancelAllScheduledTursoReplicaPushes(reason);
+    },
+  );
   for (const timer of jobTimers.values()) {
     clearTimeout(timer);
   }

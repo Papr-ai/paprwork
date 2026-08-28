@@ -472,6 +472,7 @@ async function finishWorkspaceSwitchInBackground(
   input: SwitchWorkspaceInput,
   pointer: ActiveWorkspacePointer,
   generation: number,
+  readinessGeneration: number,
 ): Promise<void> {
   try {
     if (isSwitchGenerationStale(generation)) {
@@ -507,6 +508,15 @@ async function finishWorkspaceSwitchInBackground(
     broadcast({ type: "app:list-updated" });
 
     setSwitchStatus({ active: false, phase: "complete" });
+
+    const { releaseWorkspaceReadinessBarrier } = await import(
+      "./workspaceReadiness.js"
+    );
+    releaseWorkspaceReadinessBarrier(
+      `switch complete org=${pointer.organizationId} ns=${pointer.namespaceId}`,
+      readinessGeneration,
+    );
+
     broadcast({ type: "workspace:switch-complete", data: { pointer } });
     console.log(
       `[WorkspaceSwitch] Background switch complete: org=${pointer.organizationId} ns=${pointer.namespaceId}`,
@@ -520,6 +530,12 @@ async function finishWorkspaceSwitchInBackground(
     const message = error instanceof Error ? error.message : String(error);
     console.error("[WorkspaceSwitch] Background switch failed:", message);
     setSwitchStatus({ active: false, phase: "error", error: message });
+
+    const { releaseWorkspaceReadinessBarrier } = await import(
+      "./workspaceReadiness.js"
+    );
+    releaseWorkspaceReadinessBarrier("switch failed", readinessGeneration);
+
     broadcast({ type: "workspace:switch-error", data: { error: message } });
   }
 }
@@ -544,6 +560,13 @@ export async function switchActiveWorkspace(
     error: undefined,
     startedAt: Date.now(),
   });
+
+  const { beginWorkspaceReadinessBarrier } = await import(
+    "./workspaceReadiness.js"
+  );
+  const readinessGeneration = beginWorkspaceReadinessBarrier(
+    `switch org=${input.organizationId} ns=${input.namespaceId}`,
+  );
 
   try {
     await cancelActiveAgentStreamsQuick();
@@ -581,12 +604,21 @@ export async function switchActiveWorkspace(
       },
     });
 
-    void finishWorkspaceSwitchInBackground(input, pointer, generation);
+    void finishWorkspaceSwitchInBackground(
+      input,
+      pointer,
+      generation,
+      readinessGeneration,
+    );
 
     return { success: true, pointer, status: "switching" };
   } catch (error) {
     if (generation === switchGeneration) {
       setSwitchStatus({ active: false, phase: "error" });
+      const { releaseWorkspaceReadinessBarrier } = await import(
+        "./workspaceReadiness.js"
+      );
+      releaseWorkspaceReadinessBarrier("switch aborted", readinessGeneration);
     }
     throw error;
   }

@@ -75,7 +75,29 @@ export function isGatewaySyncBusyGraceActive(
   if (!state) {
     return false;
   }
-  return nowMs - state.startedAtMs >= 0 && nowMs - state.startedAtMs < maxAgeMs;
+  const ageMs = nowMs - state.startedAtMs;
+  if (ageMs < 0 || ageMs >= maxAgeMs) {
+    return false;
+  }
+  return true;
+}
+
+/** Drop stale busy marker when flush exceeded grace (crash/hung upload). */
+export function clearStaleGatewaySyncBusy(
+  paprDir?: string,
+  nowMs: number = Date.now(),
+  maxAgeMs: number = 15 * 60_000,
+): boolean {
+  const state = readGatewaySyncBusyState(paprDir);
+  if (!state) {
+    return false;
+  }
+  const ageMs = nowMs - state.startedAtMs;
+  if (ageMs >= 0 && ageMs < maxAgeMs) {
+    return false;
+  }
+  clearGatewaySyncBusy(paprDir);
+  return true;
 }
 
 export function resolveGatewaySyncBusyPathForPaprHome(paprHome: string): string {

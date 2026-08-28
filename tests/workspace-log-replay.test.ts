@@ -2,9 +2,44 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import type { DbQueryPool } from "../src/gateway/services/DbQueryPool.js";
+import type { DbQueryPool, WriteResult } from "../src/gateway/services/DbQueryPool.js";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 import { hashBlobContent } from "../src/gateway/services/syncV3/computeParentHash.js";
+
+function mockReplayPool(
+  writeImpl: (
+    appId: string,
+    dbPath: string,
+    sql: string,
+    params?: unknown[],
+  ) => Promise<WriteResult>,
+  extras?: Partial<DbQueryPool>,
+): DbQueryPool {
+  const write = vi.fn(writeImpl);
+  const writeBatch = vi.fn(
+    async (
+      appId: string,
+      dbPath: string,
+      statements: Array<{ sql: string; params?: unknown[] }>,
+    ) => {
+      const results: WriteResult[] = [];
+      for (const statement of statements) {
+        if (statement.sql.includes("PRAGMA foreign_keys")) {
+          continue;
+        }
+        results.push(await write(appId, dbPath, statement.sql, statement.params));
+      }
+      return results;
+    },
+  );
+  return {
+    write,
+    writeBatch,
+    exec: vi.fn(async () => undefined),
+    query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
+    ...extras,
+  } as unknown as DbQueryPool;
+}
 
 describe("workspace log replay", () => {
   useIsolatedPaprWorkspace("workspace-log-replay");
@@ -19,14 +54,10 @@ describe("workspace log replay", () => {
 
   test("materializeWorkspaceLogSince applies row entries in order", async () => {
     const writeCalls: Array<{ sql: string; params?: unknown[] }> = [];
-    const pool = {
-      write: vi.fn(async (_appId: string, _dbPath: string, sql: string, params?: unknown[]) => {
-        writeCalls.push({ sql, params });
-        return { changes: 1, lastInsertRowid: writeCalls.length };
-      }),
-      exec: vi.fn(async () => undefined),
-      query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
-    } as unknown as DbQueryPool;
+    const pool = mockReplayPool(async (_appId, _dbPath, sql, params) => {
+      writeCalls.push({ sql, params });
+      return { changes: 1, lastInsertRowid: writeCalls.length };
+    });
 
     const source = {
       alias: "primary",
@@ -90,8 +121,8 @@ describe("workspace log replay", () => {
     const writeCalls: Array<{ sql: string; params?: unknown[] }> = [];
     const materialized = new Set<string>();
 
-    const pool = {
-      write: vi.fn(async (_appId: string, _dbPath: string, sql: string, params?: unknown[]) => {
+    const pool = mockReplayPool(
+      async (_appId, _dbPath, sql, params) => {
         if (sql.includes("_papr_materialized")) {
           const key = `${params?.[0]}:${params?.[1]}`;
           materialized.add(key);
@@ -99,20 +130,21 @@ describe("workspace log replay", () => {
         }
         writeCalls.push({ sql, params });
         return { changes: 1, lastInsertRowid: writeCalls.length };
-      }),
-      exec: vi.fn(async () => undefined),
-      query: vi.fn(async (_appId: string, _dbPath: string, sql: string, params?: unknown[]) => {
-        if (sql.includes("_papr_materialized")) {
-          const key = `${params?.[0]}:${params?.[1]}`;
-          return {
-            rows: materialized.has(key) ? [{ ok: 1 }] : [],
-            columns: ["ok"],
-            count: materialized.has(key) ? 1 : 0,
-          };
-        }
-        return { rows: [], columns: [], count: 0 };
-      }),
-    } as unknown as DbQueryPool;
+      },
+      {
+        query: vi.fn(async (_appId: string, _dbPath: string, sql: string, params?: unknown[]) => {
+          if (sql.includes("_papr_materialized")) {
+            const key = `${params?.[0]}:${params?.[1]}`;
+            return {
+              rows: materialized.has(key) ? [{ ok: 1 }] : [],
+              columns: ["ok"],
+              count: materialized.has(key) ? 1 : 0,
+            };
+          }
+          return { rows: [], columns: [], count: 0 };
+        }),
+      } as Partial<DbQueryPool>,
+    );
 
     const source = {
       alias: "primary",
@@ -184,14 +216,10 @@ describe("workspace log replay", () => {
     db.close();
 
     const writeCalls: string[] = [];
-    const pool = {
-      write: vi.fn(async (_appId: string, _dbPath: string, sql: string) => {
-        writeCalls.push(sql);
-        return { changes: 1, lastInsertRowid: 1 };
-      }),
-      exec: vi.fn(async () => undefined),
-      query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
-    } as unknown as DbQueryPool;
+    const pool = mockReplayPool(async (_appId, _dbPath, sql) => {
+      writeCalls.push(sql);
+      return { changes: 1, lastInsertRowid: 1 };
+    });
 
     const source = {
       alias: "primary",
@@ -252,13 +280,10 @@ describe("workspace log replay", () => {
     db.exec("CREATE TABLE person_label (id TEXT PRIMARY KEY, tag TEXT)");
     db.close();
 
-    const pool = {
-      write: vi.fn(async () => {
-        throw new Error("no such table: person_tags");
-      }),
-      exec: vi.fn(async () => undefined),
-      query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
-    } as unknown as DbQueryPool;
+    const write = vi.fn(async () => {
+      throw new Error("no such table: person_tags");
+    });
+    const pool = mockReplayPool(write);
 
     const source = {
       alias: "primary",
@@ -296,7 +321,7 @@ describe("workspace log replay", () => {
     await expect(
       materializeWorkspaceLogSince(pool, "j-sqlite-skip", source),
     ).resolves.toBe(1);
-    expect(pool.write).toHaveBeenCalledTimes(1);
+    expect(write).toHaveBeenCalledTimes(1);
   });
 });
 

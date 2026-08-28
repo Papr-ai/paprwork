@@ -9,10 +9,17 @@ import { loadTursoSyncState } from "../tursoSyncState.js";
 import { alignMigrationLedgers } from "../jobs/jobMigrationLedgerSync.js";
 import { resolveMigrationRootFromDbPath } from "../jobs/jobMigrationTursoSync.js";
 import type { TursoLinkedSource } from "../tursoLinkedSources.js";
+import { linkedSourceAsAppDataSource } from "../tursoLinkedSources.js";
+import {
+  pullLinkedDbViaTursoReplica,
+  pushLinkedDbViaTursoReplica,
+  shouldUseTursoReplicaForSource,
+} from "../tursoReplica/tursoReplicaRouting.js";
 import {
   pullLinkedSourceViaWorkspaceLog,
   pushLinkedSourceViaWorkspaceLog,
 } from "../syncV3/workspaceLogSync.js";
+import { isLegacyWorkspaceRowSyncEnabled } from "../../utils/tursoReplicaEnabled.js";
 
 /** Sync state key — job id or registry dbId (matches TursoSyncBridge linkedSourceSyncKey). */
 export interface TursoBookendTarget {
@@ -58,7 +65,20 @@ export async function pullLinkedSourceFromCloud(
   }
 
   if (linked) {
-    await pullLinkedSourceViaWorkspaceLog(linked);
+    const appSource = linkedSourceAsAppDataSource(linked);
+    if (shouldUseTursoReplicaForSource(appSource)) {
+      await pullLinkedDbViaTursoReplica(appSource);
+      return;
+    }
+    if (isLegacyWorkspaceRowSyncEnabled()) {
+      await pullLinkedSourceViaWorkspaceLog(linked);
+    } else {
+      return;
+    }
+  }
+
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return;
   }
 
   ensureLocalDbChangeLogReady(input.dbPath);
@@ -89,6 +109,30 @@ export async function pushLinkedSourceToCloud(
       error: "appId required for workspace log push",
     };
   }
+
+  const appSource = linkedSourceAsAppDataSource(linked);
+  if (shouldUseTursoReplicaForSource(appSource)) {
+    const result = await pushLinkedDbViaTursoReplica(appSource);
+    if (result.ok) {
+      return { status: "pushed", tables: ["*"] };
+    }
+    return {
+      status: "failed",
+      tables: [],
+      error: result.error ?? "replica push failed",
+    };
+  }
+
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return {
+      status: "failed",
+      tables: [],
+      error:
+        "Plan A rollout active — workspace log push disabled. " +
+        "Cutover this database to syncMode=replica before cloud sandbox sync.",
+    };
+  }
+
   return pushLinkedSourceViaWorkspaceLog(linked);
 }
 

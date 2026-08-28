@@ -14,7 +14,10 @@ vi.mock("../src/gateway/utils/cloudSchedulerAuthority.js", () => ({
 
 import { cloudApiFetch } from "../src/gateway/utils/cloudApiClient.js";
 import { getPaprApiKey } from "../src/gateway/utils/keyResolver.js";
-import { fetchCloudJobSummaries } from "../src/gateway/services/jobs/jobCloudSummary.js";
+import {
+  deleteCloudJobCatalogEntry,
+  fetchCloudJobSummaries,
+} from "../src/gateway/services/jobs/jobCloudSummary.js";
 
 describe("fetchCloudJobSummaries", () => {
   test("returns disconnected report without api key", async () => {
@@ -43,5 +46,21 @@ describe("fetchCloudJobSummaries", () => {
     expect(report.cloudSchedulerActive).toBe(true);
     expect(report.summariesById["local-a"]?.name).toBe("Local A");
     expect(report.cloudOnlyJobIds).toEqual(["cloud-only-b"]);
+  });
+
+  test("deleteCloudJobCatalogEntry treats 404 as success", async () => {
+    vi.mocked(getPaprApiKey).mockResolvedValue("sk-test");
+    vi.mocked(cloudApiFetch).mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: async () => "not found",
+    } as Response);
+
+    const ok = await deleteCloudJobCatalogEntry("gone-job");
+    expect(ok).toBe(true);
+    expect(cloudApiFetch).toHaveBeenCalledWith(
+      "/v1/cloud/runtime/jobs/gone-job",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

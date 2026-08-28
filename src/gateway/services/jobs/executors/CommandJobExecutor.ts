@@ -89,6 +89,20 @@ export class CommandJobExecutor implements IJobExecutor {
       ...(runtimeParamsForJobEnv(params.runtimeParams)),
     };
     
+    // ── Plan A: block sqlite3 writes to registry DB paths ─────────────────────
+    const { detectReplicaRegistrySqliteBlock } = await import(
+      "../../../../core/utils/replicaBashSqliteGuard.js"
+    );
+    const replicaBlock = detectReplicaRegistrySqliteBlock(finalCommand, {
+      env,
+      jobDb: jobDbPath,
+      appDb: writeTargets[0]?.dbPath,
+    });
+    if (replicaBlock) {
+      throw new Error(replicaBlock.message);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     const proc = spawn(shellPath, shellArgs, {
       cwd: params.jobDir,
       env,

@@ -15,6 +15,7 @@ export type StreamChunkType =
   | "step-usage" // Token usage from intermediate steps (not final)
   | "compression-start" // Context overflow — summarization in progress
   | "compression-complete" // Summarization finished, stream will retry
+  | "wrap-up-start" // Post-tool text summary in progress
   | "error"
   | "done";
 

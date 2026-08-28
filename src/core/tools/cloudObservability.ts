@@ -8,6 +8,8 @@ import { z } from "zod";
 import {
   getCloudSyncStatus,
   listCloudRepoFiles,
+  hasPushCloudSyncScope,
+  PUSH_CLOUD_SYNC_REQUIRES_SCOPE_ERROR,
   pushCloudSync,
   queryCloudTurso,
   readCloudRepoFile,
@@ -54,15 +56,19 @@ export const getCloudSyncStatusTool = createTool({
   description: `Inspect Papr Cloud health for the active workspace — one call for sync + jobs.
 
 Returns:
-- GitHub sync per app/job folder (synced | pending | outdated | failed)
-- Turso sync per linked database (local vs remote table counts, dirty/pending)
+- workspaceApps — apps in this workspace from local apps.json (what exists on disk)
+- appWriterRepo (when appId set) — per-app GitHub repo URL, last commit, Sync V3 upload status (use this to verify cloud code)
+- github — legacy namespace monorepo (workspace/, Jobs/ only — apps/ rows omitted as misleading)
+- Turso sync per linked database — legacy CDC fields plus Plan A replica fields when syncMode=replica: pendingPush, pendingOps, online, migrationConflict, lastReplicaPushError, cutoverBlocked
 - apps.papr.ai publish link status
 - Desktop heartbeat + pendingCloudRuns (cloud-triggered jobs waiting for desktop)
 - jobs.local — local job status (optionally with log tail)
 - jobs.githubRecords — job.json snapshots from GitHub for app-dependent jobs
+- oversizedAppFiles — files in the app folder over 10MB that git sync skips (use App Files instead)
 
-Use before debugging cloud mini-apps, Turso drift, or jobs stuck pending on apps.papr.ai.
-Read-only. To fix issues use push_cloud_sync, run_job, update_job, or publish_cloud_app.
+Use before debugging cloud mini-apps, Turso drift, migration conflicts, or jobs stuck pending on apps.papr.ai.
+NEVER use bash git ls-files/status on apps/{id}/ in the namespace repo — use appWriterRepo from this tool instead.
+Read-only. To fix: push_cloud_sync (git + ordered flush), papr_db_push/pull (replica row sync), repair_cloud_sync (migration conflicts), run_job, publish_cloud_app.
 Requires Papr login (PAPR_API_KEY).`,
   inputSchema: getCloudSyncStatusSchema,
   execute: async (input) => {
@@ -154,32 +160,37 @@ Use to verify cloud web apps see the same rows as local SQLite after sync.`,
 const inspectCloudRepoSchema = z.object({
   action: z
     .enum(["read", "list"])
-    .describe("read = fetch one file from GitHub cloud repo; list = list paths in local git HEAD"),
+    .describe("read = fetch one file from per-app writer repo; list = list paths in per-app repo"),
+  appId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe("Mini-app ID — REQUIRED for app code (Sync V3 per-app GitHub repo). Inferrable from apps/{appId}/... paths on read."),
   relativePath: z
     .string()
     .optional()
-    .describe("Repo-relative path for action=read, e.g. apps/{appId}/dist/app.js"),
+    .describe("Repo-relative path for action=read, e.g. dist/app.js or apps/{appId}/dist/app.js"),
   source: z
     .enum(["github", "local-git"])
     .optional()
-    .describe("For action=read: github (default, live cloud) or local-git (last committed HEAD)"),
+    .describe("For action=read without appId: legacy namespace monorepo only. Prefer appId for app files."),
   prefix: z
     .string()
     .optional()
-    .describe("Path prefix for action=list (default apps/)"),
+    .describe("Path prefix for action=list inside per-app repo (default root), e.g. dist/ or backend/"),
   maxFiles: z.number().int().min(1).max(500).optional(),
   maxChars: z.number().int().min(500).max(50_000).optional(),
 });
 
 export const inspectCloudRepoTool = createTool({
   id: "inspect_cloud_repo",
-  description: `Inspect files in Papr's GitHub cloud repo (papr-work user repo).
+  description: `Check app code in the Sync V3 per-app writer GitHub repo (canonical "check app repo" tool).
 
-action=read — fetch a single file from live GitHub (default) or local git HEAD (source=local-git). Provide relativePath.
+action=read — fetch a file, e.g. relativePath: "dist/app.js" with appId set.
 
-action=list — list tracked files under a prefix from local git HEAD (matches last pushed state after sync).
+action=list — list files in the per-app repo. Requires appId. Use prefix dist/, backend/, jobs/, etc.
 
-Use to verify dist/app.js, linked-databases.json, Jobs/{id}/job.json reached GitHub.`,
+Do NOT use paths like apps/{appId}/dist/app.js without appId — that hits the wrong legacy namespace repo and returns 404 even after a successful upload.`,
   inputSchema: inspectCloudRepoSchema,
   execute: async (input) => {
     const args = unwrapContext(input);
@@ -193,6 +204,7 @@ Use to verify dist/app.js, linked-databases.json, Jobs/{id}/job.json reached Git
           relativePath: args.relativePath,
           source: args.source,
           maxChars: args.maxChars,
+          appId: args.appId,
         });
         return {
           success: true,
@@ -205,6 +217,7 @@ Use to verify dist/app.js, linked-databases.json, Jobs/{id}/job.json reached Git
       const data = await listCloudRepoFiles({
         prefix: args.prefix,
         maxFiles: args.maxFiles,
+        appId: args.appId,
       });
       return {
         success: true,
@@ -248,28 +261,35 @@ const pushCloudSyncSchema = z.object({
       "What to push. Default: both (recommended for appId — database then code, same as Upload now). " +
         "['turso'] = database only. ['github'] = code folders only — does NOT sync linked DBs or refresh live web app.",
     ),
+}).refine(hasPushCloudSyncScope, {
+  message: PUSH_CLOUD_SYNC_REQUIRES_SCOPE_ERROR,
 });
 
 export const pushCloudSyncTool = createTool({
   id: "push_cloud_sync",
-  description: `Force Cloud Sync push (same engine as Settings → Sync now) with explicit scope.
+  description: `Force Cloud Sync push (same engine as Upload now) with **required scope** — full-workspace push is rejected.
 
 Targets (default: both github + turso — use this for appId when the live web app should update):
 - github — apps/{id}, Jobs/{id}, data/ to GitHub (code only — skips database + live link refresh)
-- turso — linked SQLite → Turso replica (migrations, schema, rows)
+- turso — linked SQLite → Turso (legacy CDC or Plan A replica push, depending on syncMode)
 
-Scope examples (prefer narrow scope — much faster than full workspace):
+For registry DBs on Plan A replica path (syncMode=replica), turso target uses papr_db_push semantics (pull-before-push, migration conflict detection). Prefer papr_db_push for row-only fixes on a single dbId.
+
+Scope examples (always pass at least one scope field):
 - push_cloud_sync({ appId }) — **recommended** — database, then app code + jobs (ordered, like Upload now)
 - push_cloud_sync({ appId, targets: ['turso'] }) — Turso DBs for one app only (DB fix, no code publish)
 - push_cloud_sync({ appId, alias: 'gtm-audit', targets: ['turso'] }) — one linked database
 - push_cloud_sync({ appId, alias: 'gtm-audit', tables: ['audits'], targets: ['turso'] }) — one table
 - push_cloud_sync({ tursoDatabase: 'd-2d6b4294', targets: ['turso'] }) — by Turso short name
 - push_cloud_sync({ appId, jobId, targets: ['github'] }) — job script folder only (not for live app refresh)
-- push_cloud_sync() — full workspace (slow — avoid unless needed)
+- push_cloud_sync({ jobId }) — job folder + linked job DB when applicable
+
+Do NOT call push_cloud_sync with no appId/jobId/alias/tursoDatabase/tables. For one DB row sync only, use papr_db_push({ dbId }).
 
 Do NOT use targets: ['github'] alone when the user expects the web app or database to update — use default both or Upload now.
 
 Returns scope label, github pushedPaths, turso databases touched, durationMs.
+When oversizedAppFiles is present, those paths were skipped — register them with App Files before publishing.
 After push, call get_cloud_sync_status to verify.`,
   inputSchema: pushCloudSyncSchema,
   execute: async (input) => {

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { readFileSync } from "fs";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -13,6 +14,8 @@ import {
   shouldRewriteDailyBriefDbPath,
 } from "../src/gateway/services/defaultHomeBundle.js";
 import type { JobRecord } from "../src/gateway/services/jobs/types.js";
+import { validateJobArchitecture } from "../src/gateway/services/jobs/jobArchitectureValidation.js";
+import { DEFAULT_HOME_APP_ID } from "../src/gateway/services/defaultHomeBundle.js";
 
 describe("defaultHomeBundle", () => {
   let tmpDir: string;
@@ -152,5 +155,23 @@ describe("defaultHomeBundle", () => {
         workspaceRoot,
       }),
     ).toBe(false);
+  });
+
+  it("bundled Daily Brief default-job.json passes app-linked architecture validation", () => {
+    const jobDefPath = path.join(
+      process.cwd(),
+      "src/resources/default-apps/home-dashboard/default-job.json",
+    );
+    const bundled = JSON.parse(readFileSync(jobDefPath, "utf8")) as {
+      command?: string;
+      appIds?: string[];
+      type?: string;
+    };
+    const issues = validateJobArchitecture({
+      type: bundled.type ?? "agent",
+      command: bundled.command ?? "",
+      appIds: bundled.appIds ?? [DEFAULT_HOME_APP_ID],
+    });
+    expect(issues.filter((issue) => issue.severity === "error")).toEqual([]);
   });
 });

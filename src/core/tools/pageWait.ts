@@ -2,22 +2,8 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { runBrowserWait } from "./browser.js";
 import { runWebviewWait } from "./webview.js";
+import { hasActiveWebviewSessions } from "./webviewSessionGuard.js";
 import { hasRecentWebviewPreviewActivity } from "./webviewActivity.js";
-
-async function hasActiveWebviewSessions(): Promise<boolean> {
-  try {
-    const { requestWebviewTest } =
-      await import("../../gateway/utils/webviewTestBridge.js");
-    const response = await requestWebviewTest({ action: "list", payload: {} });
-    if (!response.success || response.data === undefined) {
-      return false;
-    }
-    const data = response.data as { sessions?: unknown[] };
-    return Array.isArray(data.sessions) && data.sessions.length > 0;
-  } catch {
-    return false;
-  }
-}
 
 async function shouldRouteToMiniAppPreview(): Promise<boolean> {
   return (

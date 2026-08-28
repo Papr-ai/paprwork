@@ -2965,15 +2965,24 @@ async function ensureActiveNamespaceApiKeyInternal(
   await customKeysStorage.setActiveOrganization(organizationId);
 
   const storedKey = await resolveActivePaprApiKey(customKeysStorage);
-  if (storedKey) {
+  if (
+    storedKey &&
+    paprApiKeyMatchesNamespaceBound(storedKey, organizationId, namespaceId)
+  ) {
     await notifyGatewayPaprApiKeyUpdate(storedKey);
     invalidateKeyCache("PAPR_API_KEY");
     return storedKey;
   }
 
-  console.log(
-    `[PaprLogin] PAPR_API_KEY out of sync with active workspace (${namespaceId}) — refreshing…`,
-  );
+  if (storedKey) {
+    console.log(
+      `[PaprLogin] PAPR_API_KEY namespace mismatch for active workspace (${organizationId}/${namespaceId}) — refreshing…`,
+    );
+  } else {
+    console.log(
+      `[PaprLogin] PAPR_API_KEY missing for active workspace (${namespaceId}) — refreshing…`,
+    );
+  }
 
   return refreshActiveNamespaceApiKey({
     customKeysStorage,

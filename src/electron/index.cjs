@@ -35,6 +35,7 @@ let requestPermissionFromGateway;
 let initializeOllamaIPC;
 let cleanupOllama;
 let initializeTelemetryIPC;
+let initializeReplicaE2eTestsIPC;
 let initializeChatAttachmentsIPC;
 let TelemetryClientClass;
 let isTelemetrySendingEnabledFn;
@@ -162,6 +163,11 @@ async function loadESMModules() {
   );
   initializeTelemetryIPC = telemetryIpcModule.initializeTelemetryIPC;
 
+  const replicaE2eIpcModule = await importWithRetry(
+    "../../dist/electron/electron/ipc/replicaE2eTests.js"
+  );
+  initializeReplicaE2eTestsIPC = replicaE2eIpcModule.initializeReplicaE2eTestsIPC;
+
   const chatAttachmentsIpcModule = await importWithRetry(
     "../../dist/electron/electron/ipc/chatAttachments.js"
   );
@@ -212,6 +218,23 @@ function registerWebviewNetworkDispatch(session) {
   });
 }
 
+function wrapWebviewUserScript(script) {
+  const trimmed = typeof script === "string" ? script.trim() : "";
+  return `(function() {
+    try {
+      var __paprResult = (function() {
+        ${trimmed}
+      })();
+      return { __paprExecOk: true, value: __paprResult };
+    } catch (e) {
+      return {
+        __paprExecOk: false,
+        error: (e && e.message) ? e.message : String(e),
+      };
+    }
+  })()`;
+}
+
 // executeJavaScript can hang indefinitely when the renderer is busy or
 // frozen — which made snapshot/execute tools time out with no diagnosis.
 // Bound every call and surface a labeled "renderer unresponsive" error.
@@ -231,6 +254,80 @@ function execJsWithTimeout(win, script, timeoutMs = 8000, label = "script") {
       ),
     ),
   ]);
+}
+
+async function captureWebviewScreenshot(win, maxWidth = 640) {
+  const image = await win.webContents.capturePage();
+  const size = image.getSize();
+  if (size.width <= 0 || size.height <= 0) {
+    return null;
+  }
+  const scale = size.width > maxWidth ? maxWidth / size.width : 1;
+  const resized =
+    scale < 1
+      ? image.resize({
+          width: Math.round(size.width * scale),
+          height: Math.round(size.height * scale),
+        })
+      : image;
+  return `data:image/png;base64,${resized.toPNG().toString("base64")}`;
+}
+
+function resolveWebviewSessionId(webviewId) {
+  const id =
+    typeof webviewId === "string" && webviewId.length > 0
+      ? webviewId
+      : defaultWebviewId;
+  if (!id || !webviewSessions.has(id)) {
+    return null;
+  }
+  const entry = webviewSessions.get(id);
+  const win = entry?.window;
+  if (!win || win.isDestroyed()) {
+    return null;
+  }
+  return { id, win };
+}
+
+function showWebviewSession(webviewId) {
+  const resolved = resolveWebviewSessionId(webviewId);
+  if (!resolved) {
+    return { success: false, error: "no_active_session" };
+  }
+  const { id, win } = resolved;
+  if (!win.isVisible()) {
+    win.show();
+  }
+  if (win.isMinimized()) {
+    win.restore();
+  }
+  win.focus();
+  return {
+    success: true,
+    webviewId: id,
+    url: win.webContents.getURL(),
+    title: win.webContents.getTitle(),
+  };
+}
+
+function isWebviewSessionActive(webviewId) {
+  return resolveWebviewSessionId(webviewId) !== null;
+}
+
+async function captureWebviewThumbnail(webviewId) {
+  const resolved = resolveWebviewSessionId(webviewId);
+  if (!resolved) {
+    return { success: false, error: "no_active_session" };
+  }
+  try {
+    const screenshot = await captureWebviewScreenshot(resolved.win);
+    if (!screenshot) {
+      return { success: false, error: "capture_failed" };
+    }
+    return { success: true, screenshot, webviewId: resolved.id };
+  } catch {
+    return { success: false, error: "capture_failed" };
+  }
 }
 
 function isRequestKeysMessage(message) {
@@ -278,6 +375,8 @@ async function handleWebviewTestRequest(request) {
           url: entry.window.webContents.getURL(),
           title: entry.window.webContents.getTitle(),
           createdAt: entry.createdAt,
+          appId: entry.appId,
+          previewTarget: entry.previewTarget,
         })),
         defaultWebviewId,
       },
@@ -305,8 +404,13 @@ async function handleWebviewTestRequest(request) {
     const id = `webview-${Date.now()}-${++webviewCounter}`;
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
-    const visible = Boolean(payload.visible);
-    const url = `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
+    const visible = false;
+    const previewTarget =
+      payload.previewTarget === "published" ? "published" : "local";
+    const url =
+      typeof payload.url === "string" && payload.url.length > 0
+        ? payload.url
+        : `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
 
     const win = new BrowserWindow({
       width,
@@ -337,6 +441,12 @@ async function handleWebviewTestRequest(request) {
       consoleLogs: [],
       networkLogs: [],
       createdAt: new Date().toISOString(),
+      appId,
+      previewTarget,
+      publishedWebUrl:
+        typeof payload.publishedWebUrl === "string"
+          ? payload.publishedWebUrl
+          : undefined,
     };
     webviewSessions.set(id, entry);
     if (!defaultWebviewId) {
@@ -401,14 +511,27 @@ async function handleWebviewTestRequest(request) {
         loadError = err && err.message ? err.message : String(err);
       }
     }
+    let screenshot = null;
+    if (loadStatus === "loaded") {
+      try {
+        screenshot = await captureWebviewScreenshot(win);
+      } catch {
+        screenshot = null;
+      }
+    }
     return {
       success: true,
       data: {
         webviewId: id,
         url,
+        previewTarget,
+        ...(previewTarget === "published" && entry.publishedWebUrl
+          ? { publishedWebUrl: entry.publishedWebUrl }
+          : {}),
         title: win.webContents.getTitle(),
         status: loadStatus,
         ...(loadError ? { loadError } : {}),
+        ...(screenshot ? { screenshot } : {}),
         ...(loadStatus !== "loaded"
           ? {
               hint:
@@ -433,6 +556,7 @@ async function handleWebviewTestRequest(request) {
   if (action === "snapshot") {
     const maxHtmlChars = Number(payload.maxHtmlChars) || 80000;
     const maxTextChars = Number(payload.maxTextChars) || 12000;
+    const includeScreenshot = Boolean(payload.includeScreenshot);
     const html = await execJsWithTimeout(
       win,
       "document.documentElement.outerHTML",
@@ -484,6 +608,14 @@ async function handleWebviewTestRequest(request) {
         userWouldSeeBlankUi: brokenHidden.length > 0 || (overlays.length > 0 && main && !main.innerText.trim()),
       };
     })()`, 8000, "snapshot(visualState)");
+    let screenshot = null;
+    if (includeScreenshot) {
+      try {
+        screenshot = await captureWebviewScreenshot(win);
+      } catch {
+        screenshot = null;
+      }
+    }
     return {
       success: true,
       data: {
@@ -493,6 +625,7 @@ async function handleWebviewTestRequest(request) {
         html: typeof html === "string" ? html.slice(0, maxHtmlChars) : "",
         text: typeof text === "string" ? text.slice(0, maxTextChars) : "",
         visualState,
+        ...(screenshot ? { screenshot } : {}),
       },
     };
   }
@@ -502,15 +635,35 @@ async function handleWebviewTestRequest(request) {
     if (typeof script !== "string" || script.length === 0) {
       return { success: false, error: "script is required for execute" };
     }
-    const result = await execJsWithTimeout(win, script, 15000, "execute");
-    return {
-      success: true,
-      data: {
-        webviewId: id,
-        url: win.webContents.getURL(),
-        result,
-      },
-    };
+    try {
+      const raw = await execJsWithTimeout(
+        win,
+        wrapWebviewUserScript(script),
+        15000,
+        "execute",
+      );
+      if (raw && typeof raw === "object" && raw.__paprExecOk === false) {
+        return {
+          success: false,
+          error: raw.error || "Script failed in preview session",
+        };
+      }
+      const result =
+        raw && typeof raw === "object" && raw.__paprExecOk === true
+          ? raw.value
+          : raw;
+      return {
+        success: true,
+        data: {
+          webviewId: id,
+          url: win.webContents.getURL(),
+          result,
+        },
+      };
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      return { success: false, error: message };
+    }
   }
 
   if (action === "get_console") {
@@ -2255,11 +2408,25 @@ app.whenReady().then(async () => {
     initializeTelemetryIPC(settingsStorage);
   }
 
+  if (initializeReplicaE2eTestsIPC) {
+    initializeReplicaE2eTestsIPC();
+  }
+
   if (initializeChatAttachmentsIPC) {
     initializeChatAttachmentsIPC();
   }
 
   ipcMain.handle("app:get-version", () => app.getVersion());
+
+  ipcMain.handle("agent-preview:show", (_event, webviewId) =>
+    showWebviewSession(webviewId),
+  );
+  ipcMain.handle("agent-preview:is-active", (_event, webviewId) => ({
+    active: isWebviewSessionActive(webviewId),
+  }));
+  ipcMain.handle("agent-preview:capture-thumbnail", async (_event, webviewId) =>
+    captureWebviewThumbnail(webviewId),
+  );
 
   // Which credential to use when a provider has both OAuth and an API key.
   // Lives in main because main decides which tokens the gateway ever sees.
@@ -2301,6 +2468,29 @@ app.whenReady().then(async () => {
       return { success: true, preference };
     },
   );
+
+  // Reconcile workspace pointer + API key before any writes to namespace-scoped paths
+  if (ensureActiveWorkspaceReconciled) {
+    try {
+      await ensureActiveWorkspaceReconciled(settingsStorage);
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup workspace reconciliation failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  if (ensureActiveNamespaceApiKey) {
+    try {
+      await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage);
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup namespace API key sync failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   // Backfill gateway settings with Papr user id before telemetry + gateway spawn
   const paprProfile = settingsStorage.getPaprProfile();
@@ -2356,28 +2546,6 @@ app.whenReady().then(async () => {
   });
 
   registerCloudPreviewSessionIPC(ipcMain, session);
-
-  if (ensureActiveWorkspaceReconciled) {
-    try {
-      await ensureActiveWorkspaceReconciled(settingsStorage);
-    } catch (error) {
-      console.warn(
-        "[Electron] Startup workspace reconciliation failed:",
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
-
-  if (ensureActiveNamespaceApiKey) {
-    try {
-      await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage);
-    } catch (error) {
-      console.warn(
-        "[Electron] Startup namespace API key sync failed:",
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
 
   // Check Python installation on Windows (for non-technical users)
   if (process.platform === 'win32') {

@@ -18,6 +18,7 @@ import {
   tursoTargetHasLocalData,
   type TursoPushOutcome,
 } from "./cloudTursoPushHelpers.js";
+import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
 import {
   pullLinkedSourceFromCloud,
   pushLinkedSourceToCloud,
@@ -25,6 +26,7 @@ import {
 } from "./syncJobTursoBookends.js";
 import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
 import type { CloudAgentRunRequest, CloudLinkedSource, CloudTursoSource } from "./types.js";
+import { shouldUseCloudSandboxTursoDirect } from "./cloudSandboxTursoDirect.js";
 import {
   resolveCloudAgentChatId,
   resolveCloudAppAgentStreamOverrides,
@@ -309,10 +311,25 @@ export async function beginCloudAgentRun(
     paprApiKey: request.paprApiKey,
     userDataPath,
   });
-  await prepareCloudJobEnvironment(request.jobId);
-  await pullTursoTargets(tursoTargets);
-  const tursoDebouncedPush =
-    await startCloudAgentTursoDebouncedPush(tursoTargets);
+
+  const tursoDirect = shouldUseCloudSandboxTursoDirect(paprHome);
+  await prepareCloudJobEnvironment({
+    jobId: request.jobId,
+    userId: request.userId,
+    tursoSources: request.tursoSources,
+  });
+
+  let tursoDebouncedPush: Awaited<
+    ReturnType<typeof startCloudAgentTursoDebouncedPush>
+  > | null = null;
+  if (tursoDirect) {
+    console.log(
+      "[CloudAgentRun] Turso direct mode — skipping pull/push bookends and debounced SQLite watcher",
+    );
+  } else {
+    await pullTursoTargets(tursoTargets);
+    tursoDebouncedPush = await startCloudAgentTursoDebouncedPush(tursoTargets);
+  }
   const writerDebouncedPush = await startCloudAppWriterDebouncedPush();
 
   return {
@@ -341,13 +358,24 @@ export async function beginCloudAgentRun(
             );
           }
         }
-        const outcome = await pushTursoTargets(tursoTargets);
-        if (!outcome.ok) {
-          syncSucceeded = false;
-          retainSandbox = outcome.retainSandbox;
-          throw new Error(
-            `Turso sync did not complete for cloud agent run. ${outcome.failures.join("; ")}`,
-          );
+        if (!tursoDirect) {
+          const outcome = await pushTursoTargets(tursoTargets);
+          if (!outcome.ok) {
+            syncSucceeded = false;
+            retainSandbox = outcome.retainSandbox;
+            throw new Error(
+              `Turso sync did not complete for cloud agent run. ${outcome.failures.join("; ")}`,
+            );
+          }
+        } else if (tursoTargets.length > 0) {
+          // Direct Turso writes skip push bookends — still notify cloud app host for SSE.
+          for (const target of tursoTargets) {
+            await notifyCloudDbChanged({
+              ...(target.jobId ? { jobId: target.jobId } : {}),
+              ...(target.dbId ? { dbId: target.dbId } : {}),
+              tables: [],
+            });
+          }
         }
 
         if (writerPushedAppIds.length > 0) {
@@ -369,7 +397,7 @@ export async function beginCloudAgentRun(
       } catch (error) {
         syncSucceeded = false;
         if (!retainSandbox) {
-          retainSandbox = tursoTargets.some((target) =>
+          retainSandbox = !tursoDirect && tursoTargets.some((target) =>
             tursoTargetHasLocalData(target.dbPath),
           );
         }

@@ -13,16 +13,50 @@ export const WRAP_UP_AFTER_ORPHAN_DRAIN =
   "Do not call more tools unless strictly necessary.]";
 
 export const WRAP_UP_AFTER_TOOLS_NO_TEXT =
-  "[SYSTEM: Your last action was a tool call with no closing message to the user. " +
-  "Write a brief final summary of what you accomplished in this turn and any next steps. " +
-  "Do not call more tools unless essential.]";
+  "[SYSTEM: This turn is complete. Your last action was a tool call with no closing message. " +
+  "Write a brief user-facing summary of what you accomplished. Do not plan further edits, " +
+  "do not say you will update files next, and do not call tools.]";
 
+/** Disable tools and queue one text-only model step (memory pressure or hard limits). */
+export function applyForcedTextOnlyWrapUpStep(
+  context: { messages: unknown[]; tools?: unknown[] },
+  systemMessage: string,
+): void {
+  context.tools = [];
+  context.messages.push({
+    role: "user",
+    content: systemMessage,
+  });
+}
+
+function sequenceHasInterruptedTools(
+  sequence: Array<{ type: string; data: unknown }>,
+): boolean {
+  return sequence.some((item) => {
+    if (item.type !== "tool") {
+      return false;
+    }
+    const status = (item.data as { status?: string }).status;
+    return status === "interrupted" || status === "calling";
+  });
+}
+
+/**
+ * After the assistant stream has fully finished (turn done): add one text-only
+ * summary when the visible sequence ends on tool call(s) with no trailing text.
+ *
+ * Forced text-only wrap-up (memory / tool limits) is handled inside the pi tool
+ * loop — not here.
+ */
 export function shouldRequestWrapUpSummary(args: {
   sequence: Array<{ type: string; data: unknown }>;
   toolCallCount: number;
   aborted: boolean;
   isWrapUpContinuation: boolean;
 }): boolean {
+  if (sequenceHasInterruptedTools(args.sequence)) {
+    return false;
+  }
   return (
     !args.aborted &&
     !args.isWrapUpContinuation &&

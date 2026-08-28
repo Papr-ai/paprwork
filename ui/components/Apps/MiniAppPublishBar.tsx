@@ -36,7 +36,7 @@ import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
 import { CloudUpstreamBar } from "./CloudUpstreamBar";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
 import { AppWorkspaceMenu } from "./AppWorkspaceMenu";
-import { WebSyncPopover, WebSyncStatusDot } from "./WebSyncPopover";
+import { WebSyncPopover, WebSyncStatusDot, webSyncPushButtonLabel } from "./WebSyncPopover";
 import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
 import {
   CloudCompatibilityBadge,
@@ -787,6 +787,14 @@ export function MiniAppPublishBar({
       });
   };
 
+  const handleWebSyncPushOrPublish = async () => {
+    if (!cloud.live) {
+      await handlePublishClick();
+      return;
+    }
+    await webSyncPushNow();
+  };
+
   return (
     <>
       <div className="mini-app-publish-bar">
@@ -898,15 +906,16 @@ export function MiniAppPublishBar({
                     loading={webSyncLoading && !webSyncStatus}
                     refreshing={webSyncRefreshing}
                     error={webSyncError}
-                    pushing={webSyncPushing}
+                    pushing={webSyncPushing || Boolean(shareSyncNotice)}
                     pulling={webSyncPulling}
                     applyingUpdates={webSyncApplyingUpdates}
                     syncActionNeeded={webSyncActionNeeded}
+                    appLive={cloud.live}
                     autoUploadEnabled={autoUploadEnabled}
                     autoUploadUsesGlobalDefault={autoUploadUsesGlobalDefault}
                     autoUploadSaving={cloud.autoUploadSaving}
                     onAutoUploadChange={(enabled) => void cloud.setAutoUploadEnabled(enabled)}
-                    onPushNow={() => void webSyncPushNow()}
+                    onPushNow={() => void handleWebSyncPushOrPublish()}
                     onBumpQueue={() => void webSyncBumpQueue()}
                     onPullUpdates={() => void webSyncPullUpdates()}
                     onApplyRemoteUpdates={() => void webSyncApplyRemoteUpdates()}
@@ -1008,9 +1017,11 @@ export function MiniAppPublishBar({
                     type="button"
                     className="share-sheet__sync-banner-btn"
                     disabled={shareSheetBusy}
-                    onClick={() => void webSyncPushNow()}
+                    onClick={() => void handleWebSyncPushOrPublish()}
                   >
-                    {webSyncPushing ? "Uploading…" : "Upload now"}
+                    {webSyncPushing
+                      ? webSyncPushButtonLabel({ appLive: cloud.live, pushing: true })
+                      : webSyncPushButtonLabel({ appLive: cloud.live, pushing: false })}
                   </button>
                 ) : null}
               </div>

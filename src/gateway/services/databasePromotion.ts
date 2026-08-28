@@ -16,6 +16,7 @@ import {
 } from "./DatabaseRegistryService.js";
 import { dbTursoDatabaseName } from "./tursoDatabaseNaming.js";
 import { JobDatabase } from "./jobs/JobDatabase.js";
+import type { JobRecord } from "./jobs/types.js";
 
 function slugifyName(name: string): string {
   return name
@@ -131,19 +132,21 @@ export async function promoteJobDatabaseToRegistry(options: {
  */
 export async function preserveJobLinkedDatabasesBeforeDelete(
   jobId: string,
+  knownJob?: JobRecord | null,
 ): Promise<void> {
   const { getPaprAppsRoot, getPaprJobsRoot } = await import(
     "../../core/utils/paprRoot.js"
   );
-  const { getJobsService } = await import("./JobsService.js");
   const {
     parseDataSourcesFile,
     serializeDataSourcesFile,
   } = await import("./appDataSources.js");
 
-  const jobsService = getJobsService();
-  await jobsService.initialize();
-  const job = await jobsService.getJob(jobId);
+  let job = knownJob ?? null;
+  if (!job) {
+    const { getJobsService } = await import("./JobsService.js");
+    job = (await getJobsService().getJob(jobId)) ?? null;
+  }
   if (!job) {
     return;
   }

@@ -7,6 +7,23 @@
 
 import type { AppDataSource } from "../appDataSources.js";
 import type { DbQueryPool, WriteResult } from "../DbQueryPool.js";
+
+const DISABLE_FOREIGN_KEYS_SQL = "PRAGMA foreign_keys = OFF";
+
+async function replayRowWrite(
+  pool: DbQueryPool,
+  appId: string,
+  dbPath: string,
+  sql: string,
+  params?: unknown[],
+): Promise<WriteResult> {
+  const results = await pool.writeBatch(appId, dbPath, [
+    { sql: DISABLE_FOREIGN_KEYS_SQL },
+    { sql, params },
+  ]);
+  const last = results[results.length - 1];
+  return last ?? { changes: 0, lastInsertRowid: 0 };
+}
 import type {
   WorkspaceLogEntry,
   WorkspaceLogRowPayload,
@@ -38,6 +55,7 @@ import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
 import {
   isMissingColumnError,
   isMissingTableError,
+  isForeignKeyConstraintError,
 } from "../jobs/migrationSqlHelpers.js";
 import Database from "better-sqlite3";
 import * as fs from "fs";
@@ -108,6 +126,10 @@ export function shouldSkipRowReplayForMissingTable(
   return { skip: true, tableName };
 }
 
+function isDeleteOrUpdateSql(sql: string): boolean {
+  return /^\s*(DELETE|UPDATE)\b/i.test(sql.trim());
+}
+
 /** Append schema op to server log, then materialize locally. */
 export async function appendAndMaterializeSchemaExec(
   pool: DbQueryPool,
@@ -165,7 +187,7 @@ export async function appendAndMaterializeRowWrite(
     return { changes: 0, lastInsertRowid: 0 };
   }
 
-  const localResult = await pool.write(appId, source.dbPath, sql, params);
+  const localResult = await replayRowWrite(pool, appId, source.dbPath, sql, params);
   await markSeqMaterialized(pool, appId, source.dbPath, replicaId, appendResult.seq);
   await setWorkspaceLogCursor(replicaId, appendResult.seq);
   return localResult;
@@ -213,12 +235,35 @@ async function applyLogEntry(
       return;
     }
     try {
-      await pool.write(payload.appId, source.dbPath, payload.sql, payload.params);
+      await replayRowWrite(
+        pool,
+        payload.appId,
+        source.dbPath,
+        payload.sql,
+        payload.params,
+      );
     } catch (error) {
       if (isMissingTableError(error)) {
         console.warn(
           `[LogMaterializer] Skipping superseded row op seq=${entry.seq} ` +
             `(table missing: ${(error as Error).message.slice(0, 120)})`,
+        );
+        await markSeqMaterialized(
+          pool,
+          payload.appId,
+          source.dbPath,
+          replicaId,
+          entry.seq,
+        );
+        return;
+      }
+      if (
+        isForeignKeyConstraintError(error) &&
+        isDeleteOrUpdateSql(payload.sql)
+      ) {
+        console.warn(
+          `[LogMaterializer] Skipping superseded row op seq=${entry.seq} ` +
+            `(FK constraint on ${payload.sql.trim().slice(0, 80)})`,
         );
         await markSeqMaterialized(
           pool,
@@ -238,6 +283,7 @@ async function applyLogEntry(
     const schemaPayload = entry.payload;
     const schemaApp = schemaPayload.appId ?? entry.dbSourceId ?? "schema";
     const db = new Database(source.dbPath);
+    db.pragma("foreign_keys = OFF");
     try {
       if (schemaPayload.migrationId?.trim()) {
         applyMigrationSchemaPayloadLocally(db, schemaPayload);
@@ -270,6 +316,13 @@ export async function materializeWorkspaceLogSince(
   replicaId: string,
   source: AppDataSource,
 ): Promise<number> {
+  const { shouldSuppressLegacyTursoPushForLinkedSource } = await import(
+    "../tursoReplica/tursoReplicaRouting.js"
+  );
+  if (shouldSuppressLegacyTursoPushForLinkedSource(source)) {
+    return 0;
+  }
+
   let cursor = await getWorkspaceLogCursor(replicaId);
   let applied = 0;
 

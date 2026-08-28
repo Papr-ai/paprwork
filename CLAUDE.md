@@ -4831,4 +4831,29 @@ Head-of-line blocking with a poison pill at the front: the queue could only grow
 
 ---
 
+### Issue 72: Workspace Switch Regression — Job Init Deadlock + Cross-Org Corruption ✅ FIXED
+**Added:** 2026-08-26
+**Problem:** Org/namespace switching broke at startup and when changing teams. Gateway hung at "Initializing JobsService...", cloud sync targeted wrong repo, apps/jobs from previous org appeared.
+**Root Causes (stacked):**
+1. **Init deadlock:** Startup job dedup called `deleteJob()` → `preserveJobLinkedDatabasesBeforeDelete()` → `jobsService.initialize()` while init already in flight
+2. **Blocking cloud I/O during init:** `deleteJob()` awaited `pushNow()` during startup reconcile
+3. **Post-sync reconcile during switch:** `reconcileJobsRegistryAfterPull()` ran mid-switch, mixing `boundPaprDir` with live `getPaprRoot()`
+4. **Startup ordering:** Electron wrote profile to `settings.json` before reconciling pointer → wrong org folder
+5. **Stale API key:** `ensureActiveNamespaceApiKey` reused any cached key without namespace validation
+6. **Deferred cloud sync race:** 30s startup timer could init cloud sync while background workspace reinit still running
+
+**Prevention Rules (enforce in code review):**
+1. **Never call `jobsService.initialize()` from code paths reachable during `runInitialize()`** — pass known records (e.g. `preserveJobLinkedDatabasesBeforeDelete(jobId, job)`)
+2. **Never `await cloudSync.pushNow()` on user-facing or init paths** — fire-and-forget; batch after init/switch completes
+3. **Any post-git-pull / startup reconcile must check `getWorkspaceSwitchHealthStatus() === "switching"`** and skip
+4. **Path-bound services use `boundPaprDir` for reads AND writes during reconcile** — not live `getPaprRoot()` alone
+5. **Electron startup order:** `ensureActiveWorkspaceReconciled` → `ensureActiveNamespaceApiKey` → `syncProfileToGatewaySettings` → gateway spawn
+6. **API keys:** always validate with `paprApiKeyMatchesNamespaceBound` before reuse
+7. **Deferred background work** (cloud sync, job reconcile, push) must wait for workspace switch to complete
+
+**Regression Tests:** `tests/workspace-switch-invariants.test.ts` (static invariant checks — CI fails if violated)
+**Related:** v2.3.5 workspace switch safety (write generation, background reinit), Issue 67 (cloud sync clone)
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

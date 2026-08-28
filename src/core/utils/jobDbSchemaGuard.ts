@@ -148,15 +148,26 @@ function buildBlockMessage(
       ? `${ddlStatements.map((s) => (s.endsWith(";") ? s : `${s};`)).join("\n\n")}\n`
       : "-- Paste your ALTER TABLE / CREATE TABLE statements here\n";
 
+  const jobId = jobIdFromDbPath(dbPath);
+  const slug = registrySlugFromDbPath(dbPath);
+  const applyStep = slug
+    ? `2. papr_db_apply_migration({ dbId: "<from databases.json>", migrationId: "0002_add_columns" })`
+    : jobId
+      ? `2. run_job({ jobId: "${jobId}" }) — applies Jobs/${jobId}/migrations/ locally`
+      : `2. Apply migration via papr_db_apply_migration (registry) or run_job (job scratch)`;
+  const syncStep =
+    `3. papr_db_push({ dbId }) or Upload now / push_cloud_sync({ appId }) — Plan A replica sync\n` +
+    `   Do not use raw sqlite3 DDL on synced databases.`;
+
   const message =
     "⛔ Do not change synced SQLite table structure via bash/sqlite3. " +
-    "Use a migration file so the same DDL runs locally and syncs to Turso.\n\n" +
+    "Use a migration file so the same DDL runs locally and on Turso primary.\n\n" +
     `Instead:\n` +
     `1. write_file({ path: "${migrationPath.replace("000N_description", "0002_add_columns")}", content: ... })\n` +
     `   Registry (app) DBs: $PAPR_HOME/data/databases/{slug}/migrations/\n` +
     `   Job scratch only: $PAPR_HOME/Jobs/{jobId}/migrations/\n` +
-    `2. run_job({ jobId }) — applies registry migrations when writeDbIds is set\n` +
-    `3. Upload now / debounced sync replays migrations to Turso\n\n` +
+    `${applyStep}\n` +
+    `${syncStep}\n\n` +
     "Suggested SQL:\n" +
     suggestedSql.trim();
 
@@ -209,8 +220,8 @@ export function scanSourceForSchemaDdlAntiPattern(content: string): string[] {
       const snippet = match[1]?.trim().slice(0, 80) ?? "";
       warnings.push(
         `Inline schema DDL detected (\`${snippet}...\`). ` +
-          `Move DDL to Jobs/{jobId}/migrations/000N_description.sql and use write_file — ` +
-          `do not ALTER TABLE in Python/Node/bash.`,
+          `Move DDL to migrations/000N_description.sql via write_file — ` +
+          `registry DBs: papr_db_apply_migration; job scratch: Jobs/{jobId}/migrations/ + run_job.`,
       );
     }
   }

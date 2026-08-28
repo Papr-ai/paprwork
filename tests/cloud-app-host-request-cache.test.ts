@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { shouldBypassRepoFileCache } from "../src/gateway/services/appRuntime/cloudAppHostRequestCache.js";
 import { parseCloudRepoHeadContent } from "../src/gateway/services/cloudSync/cloudRepoHeadMarker.js";
-import { appendDistAssetCacheBusters } from "../src/gateway/utils/miniAppBuild.js";
+import { appendDistAssetCacheBusters, appendLegacyTypeScriptCacheBusters } from "../src/gateway/utils/miniAppBuild.js";
 
 describe("shouldBypassRepoFileCache", () => {
   it("treats normal browser reload (max-age=0) as revalidation", () => {
@@ -41,5 +41,15 @@ describe("appendDistAssetCacheBusters", () => {
     });
     expect(out).toContain('src="dist/app.js?v=deadbeef"');
     expect(out).toContain('href="dist/app.css?v=cafebabe"');
+  });
+});
+
+describe("appendLegacyTypeScriptCacheBusters", () => {
+  it("appends version query params to legacy app.ts entry scripts", () => {
+    const html =
+      '<script src="app.ts"></script><script src="./main.tsx"></script>';
+    const out = appendLegacyTypeScriptCacheBusters(html, "rev123");
+    expect(out).toContain('src="app.ts?v=rev123"');
+    expect(out).toContain('src="./main.tsx?v=rev123"');
   });
 });

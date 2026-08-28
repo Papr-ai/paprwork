@@ -100,6 +100,18 @@ function handle(req: DbWorkerRequest): DbWorkerResponse {
       case "write-batch": {
         if (!req.statements?.length) throw new Error("statements required");
         const results: Array<{ changes: number; lastInsertRowid: number }> = [];
+        let statements = req.statements;
+        const leadingPragma = statements[0]?.sql?.trim().toUpperCase() ?? "";
+        if (
+          leadingPragma === "PRAGMA FOREIGN_KEYS = OFF" ||
+          leadingPragma === "PRAGMA FOREIGN_KEYS=OFF"
+        ) {
+          db.pragma("foreign_keys = OFF");
+          statements = statements.slice(1);
+        }
+        if (statements.length === 0) {
+          return { id: req.id, success: true, data: { results } };
+        }
         const runBatch = db.transaction(
           (stmts: DbWorkerWriteBatchStatement[]) => {
             for (const stmt of stmts) {
@@ -120,7 +132,7 @@ function handle(req: DbWorkerRequest): DbWorkerResponse {
             }
           },
         );
-        runBatch(req.statements);
+        runBatch(statements);
         return { id: req.id, success: true, data: { results } };
       }
 

@@ -54,7 +54,7 @@ const App = {
         btn.innerHTML = 'Opening chat...';
         try {
           window.paprAPI.invoke('chat.open', {
-            message: 'My Home dashboard needs a Daily Brief Generator job. Please create an agent job that generates a daily brief and saves it to the briefs table in its SQLite database ($JOB_DB). The brief_json should include: hero (date, title, subtitle, stats), sections (priorities, timeline, alerts, freeform). The job ID should be linked to my Home app.'
+            message: 'My Home dashboard needs a Daily Brief Generator job. Please create an agent job linked to my Home app that generates a daily brief and saves it to the briefs table in $APP_DB (the app-linked database). The brief_json should include: hero (date, title, subtitle, stats), sections (priorities, timeline, alerts, freeform).'
           });
         } catch (e) { /* paprAPI may not be available */ }
         setTimeout(() => { btn.innerHTML = 'Generate My Real Brief'; btn.disabled = false; }, 2000);

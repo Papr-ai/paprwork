@@ -16,6 +16,7 @@ import {
 } from "../utils/jobDbSchemaGuard.js";
 import {
   assertProductArchitectGate,
+  CREATE_APP_IMPLEMENTATION_REMINDER,
   PRODUCT_ARCHITECT_REMINDER,
 } from "../utils/productArchitectGate.js";
 import {
@@ -160,11 +161,15 @@ const APP_VERIFY_AFTER_EDIT_REMINDER =
   "If validate_app passes, optionally webview_snapshot for visual checks. " +
   "Do not edit other files until validate_app passes.";
 
-const APP_FILES_PATH_REMINDER =
-  "Edit mini-app files via read_app_file + write_file (create/overwrite) or edit_file / edit_app_file_lines (patches). " +
+const APP_SOURCE_EDIT_REMINDER =
+  "Edit mini-app source via read_app_file + write_file (create/overwrite) or edit_file / edit_app_file_lines (patches). " +
   "Do NOT use bash rm/touch on app paths — workspace apps live under the active org namespace (see appPath in tool results), not ~/Papr/apps/{id}. " +
   "base.css is auto-injected Liquid Glass (system file, no line limit). Put custom CSS in style.css. " +
-  "Prototype UI with mock data first; wire DBs with create_database → attach_database → create_job({ writeDbIds }).";
+  "Prototype UI with mock data first; wire DBs with create_database → attach_database → create_job({ writeDbIds }). " +
+  "For large binaries (video, PDFs >10MB), use App Files — read src/resources/agent-docs/APP_FILES_GUIDE.md (NOT git sync).";
+
+/** @deprecated Use APP_SOURCE_EDIT_REMINDER — kept for tool result field name compatibility. */
+const APP_FILES_PATH_REMINDER = APP_SOURCE_EDIT_REMINDER;
 
 const APP_BUILD_FAILED_REMINDER =
   "BUILD FAILED. Fix all errors above before editing any other files. " +
@@ -253,6 +258,7 @@ function buildAppEditToolResult(input: {
   postEditContent?: string;
   postEditFocusLine?: number;
   postEditFocusText?: string;
+  largeFileReminder?: string;
 }): {
   success: boolean;
   data: Record<string, unknown>;
@@ -261,6 +267,7 @@ function buildAppEditToolResult(input: {
   _backendKeysReminder?: string;
   _emojiReminder: string;
   _jobEventsReminder?: string;
+  _largeFileReminder?: string;
 } {
   const { data, postValidation, editedFilename, postEditContent } = input;
   const backendKeysReminder =
@@ -309,6 +316,7 @@ function buildAppEditToolResult(input: {
       _emojiReminder: NO_EMOJI_UI_REMINDER,
       ...(backendKeysReminder ? { _backendKeysReminder: backendKeysReminder } : {}),
       ...(jobEventsReminder ? { _jobEventsReminder: jobEventsReminder } : {}),
+      ...(input.largeFileReminder ? { _largeFileReminder: input.largeFileReminder } : {}),
     };
   }
 
@@ -330,6 +338,7 @@ function buildAppEditToolResult(input: {
     _emojiReminder: NO_EMOJI_UI_REMINDER,
     ...(backendKeysReminder ? { _backendKeysReminder: backendKeysReminder } : {}),
     ...(jobEventsReminder ? { _jobEventsReminder: jobEventsReminder } : {}),
+    ...(input.largeFileReminder ? { _largeFileReminder: input.largeFileReminder } : {}),
   };
 }
 
@@ -804,8 +813,9 @@ export const createAppTool = createTool({
   id: "create_app",
   description:
     "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. " +
-    "ENFORCED: Requires a completed product-architect delegation in this chat first (delegate_task useAgentId product-architect). " +
-    "Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
+    "ENFORCED: Every new app requires a completed product-architect delegation in this chat first — " +
+    'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) after list_sub_agents(). ' +
+    "Simple todo/CRUD apps still require the brief (fast). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
   inputSchema: createAppSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateAppArgs }).context ?? input;
@@ -897,6 +907,7 @@ export const createAppTool = createTool({
           `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
           `Follow user brand when set; otherwise follow the design system.`,
         _architectReminder: PRODUCT_ARCHITECT_REMINDER,
+        _implementationReminder: CREATE_APP_IMPLEMENTATION_REMINDER,
         _verifyReminder: APP_BUILD_FAILED_REMINDER,
         _appFilesReminder: APP_FILES_PATH_REMINDER,
         _jobEventsReminder: JOB_EVENTS_REMINDER,
@@ -932,6 +943,7 @@ export const createAppTool = createTool({
         `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
         `Follow user brand when set; otherwise follow the design system.`,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
+      _implementationReminder: CREATE_APP_IMPLEMENTATION_REMINDER,
       _verifyReminder: APP_VERIFY_AFTER_EDIT_REMINDER,
       _jobEventsReminder: JOB_EVENTS_REMINDER,
       _emojiReminder: NO_EMOJI_UI_REMINDER,
@@ -2087,6 +2099,7 @@ export async function runWriteAppFile(args: {
   _backendKeysReminder?: string;
   _emojiReminder: string;
   _jobEventsReminder?: string;
+  _largeFileReminder?: string;
 }> {
   const { getAppService } = await import("../../gateway/services/AppService.js");
   const appService = getAppService();
@@ -2111,6 +2124,13 @@ export async function runWriteAppFile(args: {
     // Focus tracking is best-effort
   }
 
+  const { isContentTooLargeForGitSync, buildLargeContentWriteReminder } = await import(
+    "../utils/oversizedAppFileWarnings.js"
+  );
+  const largeFileReminder = isContentTooLargeForGitSync(args.content)
+    ? buildLargeContentWriteReminder(args.filename)
+    : undefined;
+
   return buildAppEditToolResult({
     appId: args.appId,
     data: {
@@ -2122,6 +2142,7 @@ export async function runWriteAppFile(args: {
     postValidation,
     editedFilename: args.filename,
     postEditContent: args.content,
+    largeFileReminder,
   });
 }
 
@@ -4119,6 +4140,9 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
             iframeErrorCount: runtimeCheck.iframeErrors.length,
             errors: runtimeCheck.allErrors,
           },
+          ...(runtimeCheck.preview.previewScreenshot
+            ? { previewScreenshot: runtimeCheck.preview.previewScreenshot }
+            : {}),
         },
       };
     }
@@ -4134,6 +4158,9 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           previewSkippedReason: runtimeCheck.preview.skippedReason,
           consoleLogCount: runtimeCheck.preview.consoleLogs.length,
         },
+        ...(runtimeCheck.preview.previewScreenshot
+          ? { previewScreenshot: runtimeCheck.preview.previewScreenshot }
+          : {}),
         nextStep:
           "Optional: webview_snapshot for visual layout. API/DB: bash+curl localhost:18789.",
         _testingGuide:

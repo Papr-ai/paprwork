@@ -1,12 +1,19 @@
 {
   "version": 1,
-  "enforceOnFailure": false,
+  "enforceOnFailure": true,
   "primarySource": "Daily Brief Generator",
   "tables": {
     "briefs": {
       "requiredColumns": ["date", "brief_json"],
       "writers": [],
       "readers": ["bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"]
+    }
+  },
+  "jobs": {
+    "Daily Brief Generator": {
+      "requireTodayRow": {
+        "briefs": "date"
+      }
     }
   }
 }

@@ -10,11 +10,19 @@ import { getToolDisplayLabel } from "../../utils/toolDisplay";
 import { PaprLogoIcon } from "./PaprLogoIcon";
 import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
 import {
+  AppToolPreview,
+  collectWebviewSessionPreview,
+  hasAppToolPreview,
+  shouldShowWebviewSessionPreview,
+  WebviewSessionPreview,
+} from "./AppToolPreview";
+import {
   ToolCallResultFeedback,
   ToolCallStatusIcon,
 } from "./ToolCallStatus";
 import "./ExploringCard.css";
 import "./FileWritePreview.css";
+import "./AppToolPreview.css";
 
 interface ExploringCardProps {
   toolCalls: ToolCall[];
@@ -107,6 +115,16 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
     return `${mins}m ${secs}s`;
   };
 
+  const webviewSessionPreviewState = collectWebviewSessionPreview(
+    toolCalls.map((toolCall) => ({
+      toolName: toolCall.toolName,
+      args: toolCall.args,
+      result: toolCall.result,
+      status: toolCall.status,
+    })),
+    isStreaming,
+  );
+
   return (
     <div className="exploring-card">
       <div className="exploring-card-header" onMouseDown={handleToggle}>
@@ -136,6 +154,12 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
             toolCall.args,
             typeof toolCall.result === "string" ? toolCall.result : undefined,
           );
+          const showAppPreview = hasAppToolPreview(
+            toolCall.toolName,
+            toolCall.args,
+            toolCall.result,
+            toolCall.status,
+          );
 
           return (
             <div key={toolCall.id || index} className="exploring-tool-row">
@@ -160,9 +184,21 @@ export const ExploringCard: React.FC<ExploringCardProps> = ({
                   }
                 />
               )}
+              {showAppPreview && (
+                <AppToolPreview
+                  toolName={toolCall.toolName}
+                  args={toolCall.args}
+                  result={toolCall.result}
+                  status={toolCall.status}
+                />
+              )}
             </div>
           );
         })}
+
+        {shouldShowWebviewSessionPreview(webviewSessionPreviewState) && (
+          <WebviewSessionPreview state={webviewSessionPreviewState!} />
+        )}
 
         {/* Show agent narration after tool calls */}
         {narration && <div className="exploring-narration">{narration}</div>}

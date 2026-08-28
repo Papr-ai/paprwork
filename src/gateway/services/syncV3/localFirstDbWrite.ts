@@ -11,10 +11,14 @@ import type { DbRouter } from "../appRuntime/DbRouter.js";
 import { ensureLocalDbChangeLogReady } from "../tursoSyncBridgeCore.js";
 import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
 import { assertReplaySafeRowSql } from "./replaySafeSql.js";
+import { shouldUseTursoReplicaForSource, writeLinkedDbViaTursoReplica, writeLinkedDbBatchViaTursoReplica, execLinkedDbViaTursoReplica } from "../tursoReplica/tursoReplicaRouting.js";
 
 export interface LocalFirstWriteResult extends WriteResult {
   /** True when a debounced workspace-log ship was scheduled after the local write. */
   cloudSyncScheduled: boolean;
+  /** True when write is queued on local replica pending Turso push (Plan A). */
+  pendingPush?: boolean;
+  backend?: "local" | "turso-replica";
 }
 
 function syncKeyForSource(source: AppDataSource): string {
@@ -37,6 +41,17 @@ export async function writeLinkedDbRowLocalFirst(
   params?: unknown[],
 ): Promise<LocalFirstWriteResult> {
   assertReplaySafeRowSql(sql);
+
+  if (shouldUseTursoReplicaForSource(source)) {
+    const replicaResult = await writeLinkedDbViaTursoReplica(source, sql, params);
+    return {
+      changes: replicaResult.changes,
+      lastInsertRowid: replicaResult.lastInsertRowid,
+      cloudSyncScheduled: false,
+      pendingPush: replicaResult.pendingPush,
+      backend: "turso-replica",
+    };
+  }
 
   const localStarted = performance.now();
   let result: WriteResult;
@@ -70,6 +85,18 @@ export async function writeLinkedDbBatchAtomic(
     assertReplaySafeRowSql(stmt.sql);
   }
 
+  if (shouldUseTursoReplicaForSource(source)) {
+    const replicaResult = await writeLinkedDbBatchViaTursoReplica(source, statements);
+    const writeResult = {
+      changes: replicaResult.changes,
+      lastInsertRowid: replicaResult.lastInsertRowid,
+    };
+    return {
+      source,
+      results: statements.map(() => ({ ...writeResult })),
+    };
+  }
+
   const localStarted = performance.now();
   let results: WriteResult[];
 
@@ -90,14 +117,25 @@ export async function writeLinkedDbBatchAtomic(
   return { source, results };
 }
 
-/** Schema bootstrap: local exec first; drift-heal ships schema on next push when cloud sync is on. */
+/** Schema bootstrap: Turso primary first under Plan A; legacy local-first otherwise. */
 export async function execLinkedDbSchemaLocalFirst(
   pool: DbQueryPool,
   dbRouter: DbRouter,
   appId: string,
   source: AppDataSource,
   sql: string,
-): Promise<{ cloudSyncScheduled: boolean }> {
+): Promise<{ cloudSyncScheduled: boolean; pendingPush?: boolean }> {
+  if (shouldUseTursoReplicaForSource(source)) {
+    const { assertReplicaDdlAllowed } = await import(
+      "../tursoReplica/replicaSchemaPolicy.js"
+    );
+
+    assertReplicaDdlAllowed(sql);
+
+    const replicaResult = await execLinkedDbViaTursoReplica(source, sql);
+    return { cloudSyncScheduled: false, pendingPush: replicaResult.pendingPush };
+  }
+
   if (isCloudSyncEnabled()) {
     ensureLocalDbChangeLogReady(source.dbPath);
     await dbRouter.exec(appId, source, sql);

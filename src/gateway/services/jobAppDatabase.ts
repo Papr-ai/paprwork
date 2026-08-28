@@ -11,6 +11,10 @@ import { STANDALONE_APP_ID } from "./jobs/appIds.js";
 import type { DatabaseRecord } from "./DatabaseRegistryService.js";
 import { rewritePaprPathForCloudRun } from "./cloudAgentGateway/cloudPaprPath.js";
 import {
+  shouldUseCloudSandboxTursoDirect,
+  type CloudSandboxTursoCredentials,
+} from "./cloudAgentGateway/cloudSandboxTursoDirect.js";
+import {
   extractDatabaseSlugFromPath,
   workspaceRegistryDbPath,
 } from "./resolveRegistryDbPath.js";
@@ -21,6 +25,13 @@ export interface JobWriteDatabaseTarget {
   dbPath: string;
   /** Env suffix e.g. METRICS → PAPR_DB_METRICS */
   envKey: string;
+  /** Cloud sandbox Turso-direct: jobs use HTTP instead of local SQLite path. */
+  turso?: CloudSandboxTursoCredentials;
+}
+
+export interface ResolveJobWriteTargetsOptions {
+  actingUserId?: string;
+  tursoCredsByDbId?: ReadonlyMap<string, CloudSandboxTursoCredentials>;
 }
 
 export function databaseEnvKey(
@@ -35,13 +46,6 @@ export function databaseEnvKey(
     return fromLabel;
   }
   return record.dbId.toUpperCase().replace(/-/g, "_");
-}
-
-function isCloudRunSandbox(paprHome: string): boolean {
-  return (
-    paprHome.includes(`${path.sep}papr-cloud-run${path.sep}`) ||
-    paprHome.includes(`${path.sep}papr-cloud-session${path.sep}`)
-  );
 }
 
 /** Resolve a registry db path for the active workspace (desktop or cloud sandbox). */
@@ -70,7 +74,10 @@ export function registryDbPathCandidates(storedPath: string): string[] {
   }
 
   const paprHome = getPaprRoot();
-  if (isCloudRunSandbox(paprHome)) {
+  if (
+    paprHome.includes(`${path.sep}papr-cloud-run${path.sep}`) ||
+    paprHome.includes(`${path.sep}papr-cloud-session${path.sep}`)
+  ) {
     add(rewritePaprPathForCloudRun(trimmed, paprHome));
   }
 
@@ -113,8 +120,59 @@ async function loadRegistryRecord(
   return record;
 }
 
+async function resolveTursoCredsForRegistryRecord(
+  record: DatabaseRecord,
+  options?: ResolveJobWriteTargetsOptions,
+): Promise<CloudSandboxTursoCredentials | null> {
+  const fromRequest = options?.tursoCredsByDbId?.get(record.dbId);
+  if (fromRequest) {
+    return fromRequest;
+  }
+
+  const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+  const bridge = getTursoSyncBridge();
+  if (!bridge?.enabled) {
+    return null;
+  }
+
+  const { tursoNameForRecord } = await import("./DatabaseRegistryService.js");
+  const database = tursoNameForRecord(record, options?.actingUserId);
+  try {
+    const creds = await bridge.fetchCredentials(database);
+    return { url: creds.tursoUrl, authToken: creds.authToken };
+  } catch {
+    return null;
+  }
+}
+
+async function resolveWriteTargetForRecord(
+  record: DatabaseRecord,
+  options?: ResolveJobWriteTargetsOptions,
+): Promise<JobWriteDatabaseTarget> {
+  if (shouldUseCloudSandboxTursoDirect()) {
+    const turso = await resolveTursoCredsForRegistryRecord(record, options);
+    if (turso) {
+      return {
+        ...targetFromRegistryRecord(record, record.localPath),
+        turso,
+      };
+    }
+  }
+
+  const dbPath = resolveExistingRegistryDbPath(record.localPath);
+  if (!dbPath) {
+    throw new Error(
+      `Database ${record.dbId} local file missing: ${record.localPath}. ` +
+        `Checked workspace paths under ${getPaprDataDir()}. ` +
+        "Run create_database or restore from sync before running this job.",
+    );
+  }
+  return targetFromRegistryRecord(record, dbPath);
+}
+
 export async function resolveJobWriteTargets(
   job: Pick<JobRecord, "writeDbIds" | "appIds">,
+  options?: ResolveJobWriteTargetsOptions,
 ): Promise<JobWriteDatabaseTarget[]> {
   const writeDbIds = job.writeDbIds ?? [];
   if (writeDbIds.length > 0) {
@@ -127,15 +185,7 @@ export async function resolveJobWriteTargets(
             "Create it with create_database first.",
         );
       }
-      const dbPath = resolveExistingRegistryDbPath(record.localPath);
-      if (!dbPath) {
-        throw new Error(
-          `Database ${dbId} local file missing: ${record.localPath}. ` +
-            `Checked workspace paths under ${getPaprDataDir()}. ` +
-            "Run create_database or restore from sync before running this job.",
-        );
-      }
-      targets.push(targetFromRegistryRecord(record, dbPath));
+      targets.push(await resolveWriteTargetForRecord(record, options));
     }
     return targets;
   }
@@ -156,6 +206,14 @@ export async function resolveJobWriteTargets(
 
   const record = await loadRegistryRecord(primary.dbId);
   const storedPath = record?.localPath ?? primary.dbPath ?? "";
+  if (record) {
+    try {
+      return [await resolveWriteTargetForRecord(record, options)];
+    } catch {
+      return [];
+    }
+  }
+
   const dbPath = resolveExistingRegistryDbPath(storedPath);
   if (!dbPath) {
     return [];
@@ -249,17 +307,32 @@ export function jobWriteDatabaseEnv(
   }
 
   for (const target of targets) {
-    env[`PAPR_DB_${target.envKey}`] = target.dbPath;
-    env[`PAPR_DB_${target.envKey}_ALIAS`] = target.alias;
-    env[`PAPR_DB_${target.envKey}_ID`] = target.dbId;
+    const prefix = `PAPR_DB_${target.envKey}`;
+    env[`${prefix}_ALIAS`] = target.alias;
+    env[`${prefix}_ID`] = target.dbId;
+    if (target.turso) {
+      env[`${prefix}_MODE`] = "turso";
+      env[`${prefix}_URL`] = target.turso.url;
+      env[`${prefix}_AUTH_TOKEN`] = target.turso.authToken;
+    } else {
+      env[prefix] = target.dbPath;
+      env[`${prefix}_MODE`] = "local";
+    }
   }
 
   if (targets.length > 0) {
     env.PAPR_WRITE_DB_IDS = targets.map((t) => t.dbId).join(",");
-    // Backward compatibility for scripts using APP_DB
-    env.APP_DB = targets[0].dbPath;
-    env.APP_DB_ALIAS = targets[0].alias;
-    env.APP_DB_ID = targets[0].dbId;
+    const first = targets[0];
+    env.APP_DB_ALIAS = first.alias;
+    env.APP_DB_ID = first.dbId;
+    if (first.turso) {
+      env.PAPR_DB_MODE = "turso";
+      env.PAPR_DB_URL = first.turso.url;
+      env.PAPR_DB_AUTH_TOKEN = first.turso.authToken;
+    } else {
+      env.APP_DB = first.dbPath;
+      env.PAPR_DB_MODE = "local";
+    }
   }
 
   return env;
@@ -293,12 +366,18 @@ export function jobWriteDatabasePromptLines(
   }
 
   const lines = [
-    "Write targets (registry SQLite — mini-apps read via /api/db/query + sourceId):",
+    "Write targets (registry databases — mini-apps read via /api/db/query + sourceId):",
   ];
   for (const target of targets) {
-    lines.push(
-      `  PAPR_DB_${target.envKey}="${target.dbPath}"  (${target.alias}, dbId=${target.dbId})`,
-    );
+    if (target.turso) {
+      lines.push(
+        `  PAPR_DB_${target.envKey}_MODE=turso  (${target.alias}, dbId=${target.dbId})`,
+      );
+    } else {
+      lines.push(
+        `  PAPR_DB_${target.envKey}="${target.dbPath}"  (${target.alias}, dbId=${target.dbId})`,
+      );
+    }
   }
   lines.push(
     "",

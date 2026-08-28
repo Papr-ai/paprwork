@@ -10,12 +10,26 @@ const APP_EDIT_TOOL_NAMES = new Set([
 
 const APP_CREATE_TOOL_NAMES = new Set(["create_app"]);
 
+const APP_PREVIEW_TOOL_NAMES = new Set(["validate_app"]);
+
 export function isAppEditToolName(toolName: string): boolean {
   return APP_EDIT_TOOL_NAMES.has(toolName);
 }
 
 export function isAppCreateToolName(toolName: string): boolean {
   return APP_CREATE_TOOL_NAMES.has(toolName);
+}
+
+export function isAppPreviewToolName(toolName: string): boolean {
+  return APP_PREVIEW_TOOL_NAMES.has(toolName);
+}
+
+export function isAppAutoOpenToolName(toolName: string): boolean {
+  return (
+    isAppCreateToolName(toolName) ||
+    isAppEditToolName(toolName) ||
+    isAppPreviewToolName(toolName)
+  );
 }
 
 function readString(value: unknown): string | undefined {
@@ -62,25 +76,30 @@ export function shouldAutoOpenArtifactTab(input: {
   hasError: boolean;
   hasResult: boolean;
   parsedResult?: Record<string, unknown> | null;
+  args?: Record<string, unknown>;
 }): boolean {
-  const { toolName, hasError, hasResult, parsedResult } = input;
+  const { toolName, hasError, hasResult, parsedResult, args } = input;
   if (hasError || !hasResult) return false;
 
-  const artifactTools = new Set([
-    "create_document",
-    "import_document",
-    "create_app",
-    "edit_app_file",
-    "edit_app_file_lines",
-    "edit_file",
-    "write_file",
-    "update_app",
-  ]);
-  if (!artifactTools.has(toolName)) return false;
+  if (toolName === "create_document" || toolName === "import_document") {
+    return parsedResult?.success !== false;
+  }
 
-  // App file edits persist even when esbuild/validate_app returns success: false.
-  if (isAppEditToolName(toolName)) return true;
+  if (!isAppAutoOpenToolName(toolName)) return false;
 
+  const appId = resolveAppIdForAutoOpen({ toolName, args, parsedResult });
+  if (!appId) return false;
+
+  // Edits, create (artifact on disk), and validate_app — open even when validation failed.
+  if (
+    isAppEditToolName(toolName) ||
+    toolName === "create_app" ||
+    toolName === "validate_app"
+  ) {
+    return true;
+  }
+
+  // Headless preview launch — only when the tool reported success.
   return parsedResult?.success !== false;
 }
 

@@ -43,6 +43,7 @@ import {
   type TursoDbActors,
 } from "./tursoRuntimeIdentity.js";
 import type { WorkspaceLogHostScope } from "../../../core/types/workspaceLog.js";
+import { isTursoReplicaSyncFeatureEnabled } from "../../utils/tursoReplicaEnabled.js";
 
 /** Cloud host request: `userId` = publisher; optional session visitor for per-user DBs. */
 type TursoDbActorInput = {
@@ -778,7 +779,13 @@ export class TursoDbAdapter {
   }
 
   private usesWorkspaceLogAuthority(): boolean {
-    return Boolean(process.env.PAPR_CLOUD_APP_HOST_KEY?.trim());
+    if (!process.env.PAPR_CLOUD_APP_HOST_KEY?.trim()) {
+      return false;
+    }
+    if (isTursoReplicaSyncFeatureEnabled()) {
+      return false;
+    }
+    return true;
   }
 
   async schema(input: TursoDbActorInput & {

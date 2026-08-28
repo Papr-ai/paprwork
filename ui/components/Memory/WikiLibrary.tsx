@@ -23,9 +23,9 @@ import {
 import {
   countSetupBlockingPlaceholderFiles,
   isBrandFileUnset,
+  isContextFileSetupNeeded,
   isEffectiveOnboardingPending,
   isOptionalContextFile,
-  isWorkspaceFilePlaceholder,
   shouldShowMemorySetupPanel,
 } from "../../utils/memoryWorkspaceHealth";
 import { MemorySetupPanel } from "./MemorySetupPanel";
@@ -253,8 +253,7 @@ function ContextFileCard({
   onOpen: (file: WorkspaceFilePreview) => void;
 }) {
   const isOptionalBrand = isOptionalContextFile(file.name);
-  const needsSetup =
-    !isOptionalBrand && isWorkspaceFilePlaceholder(file.content);
+  const needsSetup = isContextFileSetupNeeded(file.name, file.content);
   const brandUnset = isOptionalBrand && isBrandFileUnset(file.content);
   const chipLabel = needsSetup
     ? "Setup needed"
@@ -884,59 +883,6 @@ function ContextFilePage({
             ← Library
           </button>
           <div className="wiki-entity__hero-bg wiki-entity__hero-bg--context" />
-          {props.image ? (
-            <div
-              className={`wiki-entity__identity${node.type === "person" ? " wiki-entity__identity--person" : ""}`}
-            >
-              <img
-                src={String(props.image)}
-                alt={`${node.label} ${node.type === "company" ? "logo" : "photo"}`}
-              />
-            </div>
-          ) : null}
-          {canEditMedia ? (
-            <div className="wiki-entity__media-actions">
-              <label className="wiki-media-btn">
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
-                  disabled={mediaBusy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void updateMedia("image", f);
-                    e.currentTarget.value = "";
-                  }}
-                />
-                {props.image ? "Replace logo / photo" : "Add logo / photo"}
-              </label>
-              <label className="wiki-media-btn">
-                <input
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/gif"
-                  disabled={mediaBusy}
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void updateMedia("hero_image", f);
-                    e.currentTarget.value = "";
-                  }}
-                />
-                {props.hero_image ? "Replace hero" : "Add hero"}
-              </label>
-              {props.hero_image ? (
-                <button
-                  type="button"
-                  className="wiki-media-btn"
-                  disabled={mediaBusy}
-                  onClick={() => void updateMedia("hero_image")}
-                >
-                  Remove hero
-                </button>
-              ) : null}
-            </div>
-          ) : null}
-          {mediaError ? (
-            <div className="wiki-entity__media-error">{mediaError}</div>
-          ) : null}
           <div className="wiki-entity__hero-inner">
             <div className="wiki-entity__eyebrow">
               <span>Context</span>

@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { resolveTursoSourceStatus } from "../src/gateway/services/tursoSyncStatus.js";
+import {
+  resolveReplicaTursoSourceStatus,
+  resolveTursoSourceStatus,
+} from "../src/gateway/services/tursoSyncStatus.js";
 import { deriveAppCloudSyncStatus } from "../ui/utils/appCloudSyncStatus";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 
@@ -32,6 +35,38 @@ describe("resolveTursoSourceStatus", () => {
     expect(resolveTursoSourceStatus(20, 0, true, false, false, false, true)).toBe(
       "unavailable",
     );
+  });
+});
+
+describe("resolveReplicaTursoSourceStatus", () => {
+  it("reports pending when replica has unpushed ops", () => {
+    expect(
+      resolveReplicaTursoSourceStatus(5, true, {
+        pendingPush: true,
+        migrationConflict: false,
+        cutoverBlocked: false,
+      }),
+    ).toBe("pending");
+  });
+
+  it("reports pending on migration conflict", () => {
+    expect(
+      resolveReplicaTursoSourceStatus(5, true, {
+        pendingPush: false,
+        migrationConflict: true,
+        cutoverBlocked: false,
+      }),
+    ).toBe("pending");
+  });
+
+  it("reports synced when replica is clean", () => {
+    expect(
+      resolveReplicaTursoSourceStatus(5, true, {
+        pendingPush: false,
+        migrationConflict: false,
+        cutoverBlocked: false,
+      }),
+    ).toBe("synced");
   });
 });
 
@@ -79,5 +114,52 @@ describe("deriveAppCloudSyncStatus database detail", () => {
       "Row changes syncing to Turso in the background",
     );
     expect(status.databases[0]?.rowsSyncing).toBe(true);
+  });
+
+  it("blocks overall sync for replica pendingPush", () => {
+    const items: SyncItemsResponse = {
+      enabled: true,
+      github: {
+        workspace: [],
+        apps: [
+          {
+            id: "app-1",
+            kind: "app",
+            label: "Test",
+            relativePath: "apps/app-1",
+            status: "synced",
+            lastSyncAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        jobs: [],
+        queuedPaths: [],
+        summary: { synced: 1, pending: 0, outdated: 0, failed: 0, total: 1 },
+      },
+      turso: {
+        enabled: true,
+        error: null,
+        sources: [
+          {
+            appId: "app-1",
+            jobId: "db-1",
+            alias: "main",
+            role: "primary",
+            dbPath: "/tmp/data.db",
+            status: "pending",
+            localTableCount: 10,
+            remoteTableCount: 10,
+            syncMode: "replica",
+            online: true,
+            pendingPush: true,
+            pendingOps: 3,
+          },
+        ],
+        summary: { synced: 0, pending: 1, empty: 0, unavailable: 0, quarantined: 0, total: 1 },
+      },
+    };
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.databases[0]?.detail).toContain("Local changes not pushed");
+    expect(status.databases[0]?.rowsSyncing).toBeUndefined();
   });
 });

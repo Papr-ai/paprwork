@@ -118,4 +118,76 @@ describe("pushDeltaToRemote batching", () => {
     db.close();
   },
   );
+
+  it.skipIf(!canUseBetterSqlite)(
+    "deletes child rows before parent rows when FK refs exist",
+    async () => {
+    const deleteOrder: string[] = [];
+    const execute = vi.fn(async (query: string | { sql: string; args?: unknown[] }) => {
+      const sql = typeof query === "string" ? query : query.sql;
+      if (sql.includes("PRAGMA table_info")) {
+        const tableName = sql.match(/"([^"]+)"/)?.[1] ?? "";
+        if (tableName === "parents") {
+          return {
+            rows: [
+              { name: "id", type: "INTEGER", pk: 1 },
+              { name: "label", type: "TEXT", pk: 0 },
+            ],
+            columns: [],
+          };
+        }
+        return {
+          rows: [
+            { name: "id", type: "INTEGER", pk: 1 },
+            { name: "parent_id", type: "INTEGER", pk: 0 },
+          ],
+          columns: [],
+        };
+      }
+      if (sql.includes("DELETE FROM")) {
+        if (sql.includes('"parents"')) {
+          deleteOrder.push("parents");
+        } else if (sql.includes('"children"')) {
+          deleteOrder.push("children");
+        }
+      }
+      return { rows: [], columns: [] };
+    });
+    const remote = { execute } as unknown as Client;
+
+    const db = new Database(":memory:");
+    db.exec(`
+      CREATE TABLE parents (
+        id INTEGER PRIMARY KEY,
+        label TEXT NOT NULL
+      );
+      CREATE TABLE children (
+        id INTEGER PRIMARY KEY,
+        parent_id INTEGER NOT NULL REFERENCES parents(id)
+      );
+    `);
+    ensureLocalTableSyncTriggers(db, "parents");
+    ensureLocalTableSyncTriggers(db, "children");
+    db.prepare("INSERT INTO parents (id, label) VALUES (1, 'p')").run();
+    db.prepare("INSERT INTO children (id, parent_id) VALUES (1, 1)").run();
+    db.prepare("DELETE FROM children WHERE id = 1").run();
+    db.prepare("DELETE FROM parents WHERE id = 1").run();
+
+    const entries = db
+      .prepare(
+        `SELECT id, table_name, op, row_pk FROM _papr_sync_log ORDER BY id ASC`,
+      )
+      .all()
+      .map((row) => ({
+        id: Number((row as { id: number }).id),
+        tableName: String((row as { table_name: string }).table_name),
+        op: String((row as { op: string }).op) as SyncLogEntry["op"],
+        rowPk: JSON.parse(String((row as { row_pk: string }).row_pk)) as unknown[],
+      }));
+
+    await pushDeltaToRemote(db, remote, entries);
+    expect(deleteOrder).toEqual(["children", "parents"]);
+    db.close();
+  },
+  );
 });

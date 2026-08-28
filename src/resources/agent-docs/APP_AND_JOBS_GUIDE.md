@@ -146,6 +146,18 @@ CREATE TABLE invoices (
 
 **Required:** Every synced table needs a **PRIMARY KEY** (`INTEGER PRIMARY KEY`, `TEXT PRIMARY KEY`, or composite PK). Without it, delta sync and row versioning are disabled.
 
+**Plan A (Turso Sync replica — rolling out):** When cloud sync is on, registry DB rows/schema authority moves to **Turso primary** via `@tursodatabase/sync` (`push()` / `pull()`). Agents apply migrations immediately — git Upload ships migration **files** for collaboration only; it does **not** execute schema on Turso.
+
+| Task | Tool / API |
+|------|------------|
+| Apply `migrations/*.sql` | `papr_db_apply_migration({ dbId, migrationId })` — Turso primary when online |
+| Row DML | `papr_db_exec({ dbId, sql })` or mini-app `/api/db/write` — **no DDL** under Plan A |
+| Sync status / recovery | `papr_db_sync_status`, `repair_cloud_sync` |
+| Push / pull (recovery only) | `papr_db_push` / `papr_db_pull` — hidden from main agent when Plan A is on |
+| Code + publish | `push_cloud_sync({ appId })` or Upload now — git + replica push |
+
+DML auto-pushes when online. After offline row work, use **Upload now** or `repair_cloud_sync({ strategy: 'pull' })` before editing again. Job scratch DBs (`$JOB_DB`) stay legacy until cutover.
+
 **Platform-managed (auto-added, do not create):** `_papr_created_at`, `_papr_updated_at`, `_papr_row_version` — used for conflict resolution across devices.
 
 ### Cloud Turso naming (paprwork-v2 ↔ memory server)
@@ -182,8 +194,8 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | `edit_app_file_lines` | Mini-app line-range edits (multi-line HTML/JS blocks) |
 | `list_app_files` | List all files in an app |
 | `list_jobs` | List all jobs with status, deps, dir path (call before create!) |
-| `get_cloud_sync_status` | **Cloud debug** — GitHub/Turso sync, publish, jobs, heartbeat, pending cloud runs |
-| `push_cloud_sync` | Force git + Turso push after local fixes |
+| `get_cloud_sync_status` | **Cloud debug** — GitHub/Turso sync (incl. replica pendingPush/migrationConflict), publish, jobs, heartbeat |
+| `push_cloud_sync` | Force git + Turso push (replica-aware); row-only fixes → `papr_db_push` |
 | `query_cloud_turso` | Read-only SQL on Turso cloud replica |
 | `inspect_cloud_repo` | Read/list files in cloud GitHub repo |
 | `create_job` | Create a job with retries, dependencies, delivery |
@@ -514,10 +526,11 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 
 | Tool | Purpose |
 |------|---------|
-| `get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })` | **Start here** — GitHub folder sync, Turso table counts, publish links, `desktopAwake`, `pendingCloudRuns`, local job status/logs, GitHub `job.json` snapshots |
+| `get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })` | **Start here** — GitHub folder sync, Turso status (legacy + replica fields: `pendingPush`, `migrationConflict`, `online`), publish links, `desktopAwake`, `pendingCloudRuns`, local job status/logs |
+| `papr_db_sync_status` / `papr_db_push` / `papr_db_pull` / `repair_cloud_sync` | Plan A registry DB row sync — use when `turso.sources[].syncMode === "replica"` |
 | `query_cloud_turso({ sql, jobId \| tursoDatabase \| appId+alias })` | Read-only SQL on Turso replica — verify cloud rows match local |
 | `inspect_cloud_repo({ action: "read"\|"list", relativePath?, prefix? })` | Read/list files on GitHub (e.g. `apps/{id}/dist/app.js`, `Jobs/{id}/job.json`) |
-| `push_cloud_sync({ appId? })` | Force git + Turso push after local code/data fixes |
+| `push_cloud_sync({ appId? })` | Force git + Turso push (Upload now equivalent); replica DBs pushed via replica path |
 
 **Diagnose → fix → verify:**
 
@@ -535,7 +548,7 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 2. Check `desktopHeartbeat.desktopAwake` — if `false`, cloud triggered the job but desktop gateway is asleep; user must open Paprwork
 3. Check `desktopHeartbeat.pendingCloudRuns` — lists jobs waiting for desktop
 4. Check `jobs.githubRecords` — confirms job definition reached GitHub
-5. Check `turso.sources` — `pending` means local DB changes not yet on Turso; run `push_cloud_sync({ appId })`
+5. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Upload now or `papr_db_push`. `migrationConflict` → `repair_cloud_sync` then push. Legacy CDC shows row-level background sync separately.
 
 **Turso vs local mismatch:** `query_cloud_turso({ jobId, sql: "SELECT COUNT(*) FROM your_table" })` and compare to local `bash` sqlite3 query.
 
@@ -637,7 +650,9 @@ fetch('http://localhost:18789/api/jobs/list')
 
 ---
 
-## Editing App Files: Which Tool to Use?
+## Editing App Source Files: Which Tool to Use?
+
+> **Note:** This section is about **source code** in `apps/{id}/`. For **large binaries** (video, PDF >10MB), use **App Files** — see `APP_FILES_GUIDE.md`.
 
 **One patch tool for all paths:** `edit_file({ path, oldString, newString })`. When `path` is under `$PAPR_HOME/apps/{appId}/…`, Paprwork automatically runs the same mini-app pipeline as before (esbuild + `validate_app` + `_verifyReminder`). You do not call `edit_app_file` — that name is legacy-only for old sub-agent profiles.
 

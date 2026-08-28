@@ -16,6 +16,7 @@ import {
   jobTursoDatabaseName,
   LEGACY_USER_TURSO_DATABASE,
 } from "./tursoDatabaseNaming.js";
+import { isLegacyCdcArtifactTable } from "./legacyCdcArtifacts.js";
 import { SYNC_INFRA_TABLES } from "./tursoSyncLog.js";
 import {
   ensureLocalSyncInfrastructure,
@@ -34,6 +35,15 @@ import {
 } from "./tursoBulkInsert.js";
 import { batchUpsertLocalRows } from "./tursoLocalBulkWrite.js";
 import { ensureRemoteRowSyncColumns } from "./rowSyncColumns.js";
+import { assertNotReplicaManagedWritablePath, isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
+
+function isReplicaManagedDbPathSync(dbPath: string): boolean {
+  try {
+    return isReplicaManagedDbPath(dbPath);
+  } catch {
+    return false;
+  }
+}
 
 export interface TursoCredentials {
   tursoUrl: string;
@@ -78,7 +88,7 @@ export interface PushResult {
   remoteLogMaxId?: number;
   /** Changelog entries applied (delta mode). */
   deltaEntries?: number;
-  syncMode?: TursoSyncMode;
+  syncMode?: TursoSyncMode | "replica";
 }
 
 export interface PullResult {
@@ -91,7 +101,7 @@ export interface PullResult {
   /** Highest remote _papr_sync_log id applied locally. */
   lastPulledLogId?: number;
   deltaEntries?: number;
-  syncMode?: TursoSyncMode;
+  syncMode?: TursoSyncMode | "replica";
   /** Tables snapshot-pulled during post-delta fingerprint reconcile. */
   reconciledTables?: string[];
 }
@@ -162,7 +172,8 @@ export function isScratchTable(tableName: string): boolean {
     tableName === SYNC_META_TABLE ||
     tableName === "_papr_schema_migrations" ||
     tableName === SQLITE_RECOVERY_TABLE ||
-    SYNC_INFRA_TABLES.has(tableName)
+    SYNC_INFRA_TABLES.has(tableName) ||
+    isLegacyCdcArtifactTable(tableName)
   );
 }
 
@@ -351,6 +362,48 @@ export function sortTablesForInsert(
     visit(table.name);
   }
   return sorted;
+}
+
+/** FK parent tables referenced by columns in `tableNames`. */
+export function readLocalForeignKeyRefs(
+  db: Database.Database,
+  tableNames: readonly string[],
+): Map<string, string[]> {
+  const knownNames = new Set(tableNames);
+  const refs = new Map<string, string[]>();
+  for (const name of tableNames) {
+    const rows = db
+      .prepare(`PRAGMA foreign_key_list(${quoteIdent(name)})`)
+      .all() as Array<{ table: string }>;
+    refs.set(
+      name,
+      rows
+        .map((row) => row.table)
+        .filter((table) => knownNames.has(table)),
+    );
+  }
+  return refs;
+}
+
+/** Parent tables before children (table names only). */
+export function sortTableNamesForInsert(
+  tableNames: readonly string[],
+  foreignKeyRefs: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  const tables: LocalTable[] = tableNames.map((name) => ({
+    name,
+    columns: [{ name: "id", type: "INTEGER", primaryKey: true }],
+    rows: [],
+  }));
+  return sortTablesForInsert(tables, foreignKeyRefs).map((table) => table.name);
+}
+
+/** Child tables before parents — safe order for DELETE batches. */
+export function sortTableNamesForDelete(
+  tableNames: readonly string[],
+  foreignKeyRefs: ReadonlyMap<string, readonly string[]>,
+): string[] {
+  return [...sortTableNamesForInsert(tableNames, foreignKeyRefs)].reverse();
 }
 
 export function writeTablesToLocalDb(
@@ -833,7 +886,9 @@ export function resetChangeLogReadyCacheForTests(): void {
 }
 
 export function openWritableLocalJobDb(localDbPath: string): Database.Database {
-  const db = new Database(localDbPath);
+  const normalized = path.normalize(localDbPath);
+  assertNotReplicaManagedWritablePath(normalized, "openWritableLocalJobDb");
+  const db = new Database(normalized);
   db.pragma("journal_mode = WAL");
   db.pragma(`busy_timeout = ${LOCAL_DB_BUSY_TIMEOUT_MS}`);
   return db;
@@ -842,6 +897,9 @@ export function openWritableLocalJobDb(localDbPath: string): Database.Database {
 /** Install changelog infrastructure + triggers on a linked job DB (idempotent). */
 export function ensureLocalDbChangeLogReady(localDbPath: string): void {
   const normalized = path.normalize(localDbPath);
+  if (isReplicaManagedDbPathSync(normalized)) {
+    return;
+  }
   if (!fs.existsSync(normalized)) {
     return;
   }
@@ -883,7 +941,11 @@ export function localDbHasSyncableUserTables(localDbPath: string): boolean {
   if (stats.size === 0) {
     return false;
   }
-  const localDb = openWritableLocalJobDb(localDbPath);
+  const normalized = path.normalize(localDbPath);
+  const openReadonly = isReplicaManagedDbPathSync(normalized);
+  const localDb = openReadonly
+    ? new Database(normalized, { readonly: true, fileMustExist: true })
+    : openWritableLocalJobDb(normalized);
   try {
     return filterSyncableTables(listUserTables(localDb)).length > 0;
   } finally {

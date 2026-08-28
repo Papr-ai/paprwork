@@ -39,6 +39,30 @@ function jobDbSchemaDdlBlockResult(
   env: Record<string, string>,
 ): ToolResult<BashOutput> | null {
   const mergedEnv = mergeBashEnv(env);
+
+  const replicaBlock = detectReplicaRegistrySqliteBlock(command, {
+    appDb:
+      typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
+    jobDb:
+      typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+    env: mergedEnv,
+  });
+  if (replicaBlock) {
+    return {
+      success: false,
+      error: replicaBlock.message,
+      type: "validation_error",
+      data: {
+        stdout: "",
+        stderr: replicaBlock.message,
+        exitCode: 1,
+        command,
+        duration: 0,
+        _schemaMigrationReminder: replicaBlock.message,
+      },
+    };
+  }
+
   const block = detectJobDbSchemaDdlBlock(command, {
     appDb:
       typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
@@ -70,6 +94,11 @@ import {
   JOBS_INDEX_BASH_BLOCK_MESSAGE,
 } from "../utils/jobsIndexBashGuard.js";
 import { detectJobDbSchemaDdlBlock } from "../utils/jobDbSchemaGuard.js";
+import { detectReplicaRegistrySqliteBlock } from "../utils/replicaBashSqliteGuard.js";
+import {
+  buildNamespaceGitTrapWarning,
+  detectNamespaceGitTrapCommand,
+} from "../utils/namespaceGitTrapGuard.js";
 import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
 import { getShell, getShellCommand } from "../utils/platform.js";
 import { classifyChildProcessError } from "../utils/childProcessErrors.js";
@@ -708,6 +737,20 @@ export async function executeBashCommand(
       sanitizedStdout += formatAppDbGuidanceBlock(appDbGuidance);
     }
 
+    const oversizedWarning = await (async () => {
+      const { formatOversizedAppFileWarningBlock } = await import(
+        "../utils/oversizedAppFileWarnings.js"
+      );
+      return formatOversizedAppFileWarningBlock(input.command, cwd || process.cwd());
+    })();
+    if (oversizedWarning) {
+      sanitizedStdout += oversizedWarning;
+    }
+
+    if (detectNamespaceGitTrapCommand(command)) {
+      sanitizedStdout = buildNamespaceGitTrapWarning() + sanitizedStdout;
+    }
+
     void import("../../gateway/services/toolCapture/ToolCaptureService.js")
       .then(({ scheduleBashCapture }) =>
         scheduleBashCapture({
@@ -733,6 +776,7 @@ export async function executeBashCommand(
         ...(sqliteWarnings.length > 0
           ? { _sqlitePathWarnings: sqliteWarnings }
           : {}),
+        ...(oversizedWarning ? { _largeFileReminder: oversizedWarning.trim() } : {}),
       },
     };
   } catch (error: unknown) {

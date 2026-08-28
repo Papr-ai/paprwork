@@ -1,6 +1,8 @@
 # Paprwork Sync V3 — Detailed Implementation Plan
 
-**Status:** Active — Sync V3 implemented locally through Phase 4b/4.6 cutover plumbing (2026-08-18)
+**Status:** **Frozen** — row/log sync path superseded by [`SYNC_TURSO_REPLICA_PLAN.md`](./SYNC_TURSO_REPLICA_PLAN.md) (Plan A, spike passed 2026-08-26). Do not extend syncV3 row/log phases. Writer ops + per-app git remain valid.
+
+**Primary direction:** Plan A — Turso primary + `@tursodatabase/sync` replicas. Fallback: [`SYNC_REPLICA_GENESIS_AND_AUTHORITY_PLAN.md`](./SYNC_REPLICA_GENESIS_AND_AUTHORITY_PLAN.md) (Plan B).
 
 **Scope:** Full stack — **paprwork-v2** (desktop gateway + cloud-app-host), **memory** server ([`../memory`](../memory); dashboard/papr-dev-platform only proxies), **app-repo-writer** Cloud Run service.
 

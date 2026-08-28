@@ -61,6 +61,20 @@ describe("abuseFilter", () => {
     expect(accepted.map((file) => file.path)).toEqual(["index.html"]);
     expect(rejected).toHaveLength(2);
   });
+
+  test("accepts scaffolded backend helpers and db.ts", () => {
+    const { accepted, rejected } = filterAbusiveOpFiles([
+      { path: "backend/papr_db.py", content: "# helper", parentHash: "" },
+      { path: "backend/db_helper.py", content: "# helper", parentHash: "" },
+      { path: "db.ts", content: "export {}", parentHash: "" },
+    ]);
+    expect(rejected).toHaveLength(0);
+    expect(accepted.map((file) => file.path)).toEqual([
+      "backend/papr_db.py",
+      "backend/db_helper.py",
+      "db.ts",
+    ]);
+  });
 });
 
 describe("idempotencyCache", () => {

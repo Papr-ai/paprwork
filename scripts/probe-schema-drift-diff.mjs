@@ -24,6 +24,12 @@ const SCRATCH = new Set([
   "_papr_materialized",
   "lost_and_found",
   "schema_migrations",
+  "turso_sync_last_change_id",
+  "turso_sync_state",
+  "turso_sync_cursor",
+  "turso_sync_meta",
+  "turso_sync_log",
+  "turso_sync_registry",
 ]);
 
 function loadEnvLocal() {
@@ -81,7 +87,11 @@ function listUserTables(dbPath) {
 }
 
 function filterSyncableTables(names) {
-  return names.filter((name) => !SCRATCH.has(name));
+  return names.filter(
+    (name) =>
+      !SCRATCH.has(name) &&
+      !name.startsWith("turso_cdc_"),
+  );
 }
 
 function readTableSchema(dbPath, tableName) {

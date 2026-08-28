@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { CloudSyncDetails, type SyncItemsResponse } from "./CloudSyncDetails";
+import { ReplicaE2ePanel } from "./ReplicaE2ePanel";
 import {
   readCloudSyncTabSnapshot,
   writeCloudSyncTabSnapshot,
@@ -387,6 +388,8 @@ export function CloudSyncTab() {
               loading={loading}
               refreshing={refreshing}
             />
+
+            <ReplicaE2ePanel />
           </>
         )}
       </div>

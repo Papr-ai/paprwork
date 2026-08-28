@@ -185,6 +185,13 @@ export async function applyPendingDatabaseMigrationsToTurso(
   localDbPath: string,
   migrationRoot: string,
 ): Promise<string[]> {
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(localDbPath)) {
+    return [];
+  }
+
   const migrationsDir = path.join(migrationRoot, "migrations");
   try {
     await fs.access(migrationsDir);
@@ -234,6 +241,17 @@ export async function applyPendingDatabaseMigrationsToTurso(
 
   return appliedNow;
 }
+
+/** Plan A: apply one migration file directly on Turso primary (HTTP). */
+export async function applyMigrationSqlFileToTursoPrimary(
+  remote: Client,
+  migrationRoot: string,
+  migrationId: string,
+): Promise<void> {
+  await applyMigrationToRemote(remote, migrationRoot, migrationId);
+}
+
+export { executeRemoteSqlIdempotent, applyMigrationToRemote };
 
 /** @deprecated Use applyPendingDatabaseMigrationsToTurso */
 export async function applyPendingJobMigrationsToTurso(

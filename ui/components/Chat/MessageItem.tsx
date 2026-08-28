@@ -11,7 +11,16 @@ import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
 import { FileWritePreview, hasFilePreview } from "./FileWritePreview";
+import {
+  AppToolPreview,
+  collectWebviewSessionPreview,
+  hasAppToolPreview,
+  isWebviewSessionPreviewTool,
+  shouldShowWebviewSessionPreview,
+  WebviewSessionPreview,
+} from "./AppToolPreview";
 import "./FileWritePreview.css";
+import "./AppToolPreview.css";
 import { WorkingCard } from "./WorkingCard";
 import {
   ToolCallResultFeedback,
@@ -76,6 +85,7 @@ function renderSequence(
   getJobName: (jobId: string) => string | undefined,
   getAgentName: (agentId: string) => string,
   connectionPaused = false,
+  isFinishingWork = false,
   delegationFollowUps: ChatMessage[] = [],
 ): React.ReactNode {
 
@@ -145,6 +155,12 @@ function renderSequence(
   if (hasTools) {
     // Build exploring card with interleaved text and tools
     const exploringItems: React.ReactNode[] = [];
+    const webviewSessionToolCalls: Array<{
+      toolName: string;
+      args?: Record<string, unknown>;
+      result?: unknown;
+      status?: string;
+    }> = [];
     // Map of planId → latest PlanData — ensures one card per plan per response
     const planCardMap = new Map<
       string,
@@ -223,6 +239,15 @@ function renderSequence(
           result: toolStatus === "interrupted" ? undefined : toolData.output,
           error: toolData.error,
         };
+
+        if (isWebviewSessionPreviewTool(toolCall.toolName, toolCall.args)) {
+          webviewSessionToolCalls.push({
+            toolName: toolCall.toolName,
+            args: toolCall.args,
+            result: toolCall.result,
+            status: toolCall.status,
+          });
+        }
 
         // Check if this is a plan tool and extract plan data
         // Use a Map so multiple create_plan/update_plan calls for the same plan
@@ -334,6 +359,12 @@ function renderSequence(
           toolCall.args,
           typeof toolCall.result === "string" ? toolCall.result : undefined,
         );
+        const _showAppPreview = hasAppToolPreview(
+          toolCall.toolName,
+          toolCall.args,
+          toolCall.result,
+          toolCall.status,
+        );
         exploringItems.push(
           <div key={`tool-${index}`} className="exploring-tool-row">
             <div className="exploring-tool-item">
@@ -357,6 +388,14 @@ function renderSequence(
                     ? toolCall.result
                     : undefined
                 }
+              />
+            )}
+            {_showAppPreview && (
+              <AppToolPreview
+                toolName={toolCall.toolName}
+                args={toolCall.args}
+                result={toolCall.result}
+                status={toolCall.status}
               />
             )}
           </div>,
@@ -533,10 +572,22 @@ function renderSequence(
           (item.data as { error?: string }).error === "Stopped by user",
       );
 
+      const webviewSessionPreviewState = collectWebviewSessionPreview(
+        webviewSessionToolCalls,
+        message.isStreaming,
+      );
       const workingChildren: React.ReactNode[] = [
         ...delegationCardElements,
         ...exploringItems,
       ];
+      if (shouldShowWebviewSessionPreview(webviewSessionPreviewState)) {
+        workingChildren.push(
+          <WebviewSessionPreview
+            key="webview-session-preview"
+            state={webviewSessionPreviewState!}
+          />,
+        );
+      }
 
       elements.push(
         <WorkingCard
@@ -546,6 +597,7 @@ function renderSequence(
           wasStopped={wasStopped}
           connectionPaused={connectionPaused}
           wasInterrupted={!!message.interrupted}
+          isFinishingWork={isFinishingWork}
         >
           {workingChildren}
         </WorkingCard>,
@@ -631,6 +683,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
   const getAgentName = useSubAgentNameStore((s) => s.getAgentName);
   const connectionPaused =
     useChatStore((s) => s.chatStates.get(chatId)?.connectionPaused) ?? false;
+  const isFinishingWork =
+    useChatStore((s) => s.chatStates.get(chatId)?.isFinishingWork) ?? false;
 
   const copyText = !isUser && !message.isStreaming ? getAssistantCopyText(message) : "";
   const showCopyButton = copyText.length > 0;
@@ -719,6 +773,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             getJobName,
             getAgentName,
             connectionPaused && !!message.isStreaming,
+            isFinishingWork && !!message.isStreaming,
             delegationFollowUps,
           )
         ) : (

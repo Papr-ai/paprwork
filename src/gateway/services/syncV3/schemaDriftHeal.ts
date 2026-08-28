@@ -27,6 +27,7 @@ import { alignMigrationLedgers } from "../jobs/jobMigrationLedgerSync.js";
 import { localRemoteUserSchemaDriftTables } from "../tursoDeltaSync.js";
 import { userSchemaColumns } from "../tursoTableFingerprint.js";
 import type { TursoLinkedSource } from "../tursoLinkedSources.js";
+import { linkedSourceAsAppDataSource } from "../tursoLinkedSources.js";
 import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
 import { yieldEventLoop } from "../cloudSync/yieldEventLoop.js";
 import {
@@ -436,6 +437,13 @@ export async function waitForLinkedSourceSchemaConvergence(
 export async function runSchemaDriftHeal(
   linked: TursoLinkedSource,
 ): Promise<number> {
+  const { shouldSuppressLegacyTursoPushForLinkedSource } = await import(
+    "../tursoReplica/tursoReplicaRouting.js"
+  );
+  if (shouldSuppressLegacyTursoPushForLinkedSource(linkedSourceAsAppDataSource(linked))) {
+    return 0;
+  }
+
   if (!isSyncV3SchemaLogEnabled()) {
     return 0;
   }

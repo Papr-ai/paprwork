@@ -12,6 +12,7 @@ import { getJobsService, STANDALONE_APP_ID } from "./JobsService.js";
 import type { JobRecord, JobStatus } from "./jobs/types.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { DEFAULT_AGENT_MAX_TURNS } from "../../core/constants/agentLimits.js";
+import { PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION } from "../../core/utils/productArchitectGate.js";
 
 /** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
 export const DELEGATION_CHAT_PREFIX = "delegation:";
@@ -202,7 +203,10 @@ OUTPUT (use all sections):
 List each POST /api/app/backend/:action or explicitly justify skipping ("read-only dashboard with 1-2 SELECTs, no secrets, no external APIs").
 Backend handlers are needed for: 3+ DB operations (CRUD), vault/API keys, external API calls, server-side validation, file operations, multi-table transactions — NOT just SQL.
 If the app calls ANY external API with secrets, those calls MUST go through backend handlers (never fetch() with API keys from the browser).
+## Implementation Contracts (REQUIRED — copy checklist for builder)
+${PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION}
 ## Cloud Read Budget — estimated rows read per page; aggregate tables (app_stats) for KPIs, not runtime COUNT(*) from frontend
+## Plan A Cloud DB (when linked DBs + cloud sync) — list migrations/{id}.sql in schema; builder applies via papr_db_apply_migration (Turso primary); rows via DML only; Upload now for git + replica push
 ## Design System — one task per page, 2-3 sections per page, ONE primary action per page, Liquid Glass + brand
 ## Phased Plan — Phase 1 MVP, later phases
 ## Risks & Open Questions
@@ -216,6 +220,7 @@ RULES:
 - Mini-apps use window.paprAPI (browser context, not Node fs)
 - Never recommend spaghetti (50+ files in one app)
 - Backend handlers for ANY server-side logic: DB CRUD, external APIs, vault secrets, auth, file ops — not just SQL
+- Plan A (cloud sync on): schema changes = migration files + papr_db_apply_migration only — never papr_db_exec DDL or bash/sqlite3 on registry DB paths
 
 TURN BUDGET: Up to ${DEFAULT_AGENT_MAX_TURNS} tool steps (same as main agent). After investigation, STOP calling tools and deliver the FULL document as your final assistant message — not "let me check..." planning text.
 

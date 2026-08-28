@@ -50,6 +50,14 @@ export const HASH_IGNORED_RELATIVE_SUFFIXES = [
   "__papr__/platform-catalog.json",
 ] as const;
 
+/** Generated cloud-prep files — must not re-trigger app rebuild, iframe reload, or auto flush. */
+export function isCloudPrepGitSyncArtifact(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/");
+  return HASH_IGNORED_RELATIVE_SUFFIXES.some(
+    (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
+  );
+}
+
 /**
  * SQLite sidecars — synced via Turso, gitignored in CloudSyncService.
  * Exclude from hash so job DB activity does not re-queue git sync on every startup.
@@ -64,11 +72,7 @@ export function shouldExcludePathFromContentHash(relativePath: string): boolean 
   ) {
     return true;
   }
-  if (
-    HASH_IGNORED_RELATIVE_SUFFIXES.some(
-      (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
-    )
-  ) {
+  if (isCloudPrepGitSyncArtifact(normalized)) {
     return true;
   }
 

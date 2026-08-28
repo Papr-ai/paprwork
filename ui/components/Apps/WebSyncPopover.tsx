@@ -12,10 +12,23 @@ import { formatLastUploadedAt } from "../../utils/appCloudSyncStatus";
 import {
   buildMergeReviewAgentPrompt,
   buildSchemaDriftAgentPrompt,
+  buildUploadFailureAgentPrompt,
   buildWriterConflictAgentPrompt,
   openCloudSyncAgentChat,
 } from "../../utils/openCloudSyncAgentChat";
+import type { AppCloudSyncStatus } from "../../utils/appCloudSyncStatus";
 import { AUTO_UPLOAD_TOGGLE_LABEL } from "../../utils/appUploadMode";
+
+/** Primary push action label — Publish for first-time web deploy, Upload now when already live. */
+export function webSyncPushButtonLabel(options: {
+  appLive: boolean;
+  pushing: boolean;
+}): string {
+  if (options.pushing) {
+    return options.appLive ? "Uploading…" : "Publishing…";
+  }
+  return options.appLive ? "Upload now" : "Publish";
+}
 
 export interface WebSyncPopoverProps {
   status: AppCloudSyncStatus | null;
@@ -31,6 +44,8 @@ export interface WebSyncPopoverProps {
   onBumpQueue?: () => void;
   onPullUpdates: () => void;
   onApplyRemoteUpdates: () => void;
+  /** False when the app has never been published — primary action is Publish (share + upload). */
+  appLive?: boolean;
   /** Per-app: upload to web automatically vs Upload now only */
   autoUploadEnabled?: boolean;
   autoUploadUsesGlobalDefault?: boolean;
@@ -92,6 +107,57 @@ function isActivePhase(phase: AppCloudItemPhase): boolean {
   return phase !== "synced";
 }
 
+function isDatabaseSyncBlocker(db: AppCloudSyncStatus["databases"][number]): boolean {
+  return (
+    db.schemaDrift === true ||
+    db.migrationConflict === true ||
+    db.cutoverBlocked === true
+  );
+}
+
+function databaseBlockerHint(
+  databases: AppCloudSyncStatus["databases"],
+): string | null {
+  const blocked = databases.filter(isDatabaseSyncBlocker);
+  if (blocked.length === 0) {
+    return null;
+  }
+  if (blocked.some((db) => db.cutoverBlocked)) {
+    return "Replica cutover is blocked — Ask agent can diagnose migration or schema issues, then retry Upload now.";
+  }
+  if (blocked.some((db) => db.migrationConflict)) {
+    return "Migration ledger conflict — Ask agent can reconcile local vs Turso primary, then retry Upload now.";
+  }
+  return "Schema drift is blocking web-ready — Ask agent can align migrations, then retry Upload now.";
+}
+
+function resolveUploadFailureMessage(
+  error: string | null,
+  status: AppCloudSyncStatus | null,
+): string | null {
+  const fromHook = error?.trim();
+  if (fromHook) {
+    return fromHook;
+  }
+  if (!status) {
+    return null;
+  }
+  if (status.uploadStatus === "failed" && !status.uploadRetryPending) {
+    return (
+      status.uploadDetail?.trim() ||
+      status.uploadLabel?.trim() ||
+      "Upload failed"
+    );
+  }
+  const replicaDbError = status.databases.find(
+    (db) => db.lastReplicaPushError?.trim(),
+  )?.lastReplicaPushError;
+  if (replicaDbError?.trim()) {
+    return replicaDbError.trim();
+  }
+  return status.codeLastError?.trim() || null;
+}
+
 export function WebSyncPopover({
   status,
   appId,
@@ -106,6 +172,7 @@ export function WebSyncPopover({
   onBumpQueue,
   onPullUpdates,
   onApplyRemoteUpdates,
+  appLive = true,
   autoUploadEnabled,
   autoUploadUsesGlobalDefault = false,
   autoUploadSaving = false,
@@ -115,6 +182,7 @@ export function WebSyncPopover({
   style,
 }: WebSyncPopoverProps) {
   const busy = pushing || pulling || applyingUpdates || loading || refreshing || autoUploadSaving;
+  const pushLabel = webSyncPushButtonLabel({ appLive, pushing });
   const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
   const writerConflict = status?.writerConflict === true;
   const metadataSync = status?.gitRemoteMetadataSync === true;
@@ -127,8 +195,20 @@ export function WebSyncPopover({
   const schemaDriftBlocked =
     status?.hasSchemaDrift === true ||
     (status?.publishDetail?.toLowerCase().includes("schema") ?? false);
-  const showSchemaDriftHelp =
-    schemaDriftBlocked && !showMergeReview && !showWriterConflict && !metadataSync;
+  const hasDatabaseBlockers =
+    status?.databases.some(isDatabaseSyncBlocker) === true;
+  const showDatabaseBlockerHelp =
+    (schemaDriftBlocked || hasDatabaseBlockers) &&
+    !showMergeReview &&
+    !showWriterConflict &&
+    !metadataSync;
+  const uploadFailureMessage = resolveUploadFailureMessage(error, status);
+  const showUploadFailureHelp =
+    Boolean(uploadFailureMessage) &&
+    !showMergeReview &&
+    !showWriterConflict &&
+    !showDatabaseBlockerHelp &&
+    !metadataSync;
   const showAutoUploadToggle =
     onAutoUploadChange != null &&
     status?.overall !== "disabled" &&
@@ -152,15 +232,38 @@ export function WebSyncPopover({
       >
         <p className="mini-app-publish-bar__sync-popover-title">Web sync</p>
         <p className="mini-app-publish-bar__sync-popover-summary">Checking…</p>
-        {error ? <p className="mini-app-publish-bar__sync-popover-error">{error}</p> : null}
+        {uploadFailureMessage ? (
+          <p className="mini-app-publish-bar__sync-popover-error">{uploadFailureMessage}</p>
+        ) : null}
         <div className="mini-app-publish-bar__sync-popover-actions">
+          {uploadFailureMessage ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildUploadFailureAgentPrompt({
+                    appId,
+                    error: uploadFailureMessage,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+          ) : null}
           <button
             type="button"
-            className="mini-app-publish-bar__sync-popover-btn"
+            className={`mini-app-publish-bar__sync-popover-btn${
+              uploadFailureMessage
+                ? " mini-app-publish-bar__sync-popover-btn--secondary"
+                : ""
+            }`}
             disabled={busy}
             onClick={() => void onPushNow()}
           >
-            {pushing ? "Uploading…" : "Upload now"}
+            {pushLabel}
           </button>
         </div>
       </div>
@@ -191,6 +294,19 @@ export function WebSyncPopover({
       icon: rowIcon(status.codePhase, status.codeStatus),
       label: "App code",
       detail: shortDetail(status.codeLabel),
+    });
+  }
+
+  if (status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0) {
+    statusRows.push({
+      key: "oversized-files",
+      icon: "⚠",
+      label: "Large files skipped",
+      detail: shortDetail(
+        status.oversizedAppFilesMessage ??
+          `${status.oversizedAppFilesCount} file(s) over 10MB — use App Files`,
+        120,
+      ),
     });
   }
 
@@ -320,7 +436,7 @@ export function WebSyncPopover({
       ) : null}
 
       <div className="mini-app-publish-bar__sync-popover-scroll">
-        {status.codeLastError ? (
+        {status.codeLastError && status.codeLastError !== uploadFailureMessage ? (
           <p className="mini-app-publish-bar__sync-popover-error">{status.codeLastError}</p>
         ) : null}
         {status.overall === "disabled" ? (
@@ -330,9 +446,27 @@ export function WebSyncPopover({
         ) : null}
         {!autoUploadEnabled && status.overall !== "synced" && status.overall !== "disabled" ? (
           <p className="mini-app-publish-bar__sync-popover-hint">
-            Upload is manual for this app — click <strong>Upload now</strong> when you want
-            local changes on the web. After sharing changes, wait until this panel shows
-            synced before copying the external link.
+            {appLive ? (
+              <>
+                Upload is manual for this app — click <strong>Upload now</strong> when you
+                want local changes on the web. After sharing changes, wait until this panel
+                shows synced before copying the external link.
+              </>
+            ) : (
+              <>
+                This app is not on the web yet — click <strong>Publish</strong> to upload
+                code and databases and create your link (uses your current Share settings).
+              </>
+            )}
+          </p>
+        ) : null}
+        {appLive === false &&
+        autoUploadEnabled &&
+        status.overall !== "synced" &&
+        status.overall !== "disabled" ? (
+          <p className="mini-app-publish-bar__sync-popover-hint">
+            Not on the web yet — click <strong>Publish</strong> once; later changes upload
+            automatically.
           </p>
         ) : null}
         {showAutoUploadToggle ? (
@@ -371,7 +505,15 @@ export function WebSyncPopover({
               : "Everything matches the web."}
           </p>
         ) : null}
-        {error ? <p className="mini-app-publish-bar__sync-popover-error">{error}</p> : null}
+        {status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0 ? (
+          <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+            Move large files to App Files (panel beside Data Sources). Git sync skips
+            files over 10MB — visitors will not see assets left in the app folder.
+          </p>
+        ) : null}
+        {uploadFailureMessage ? (
+          <p className="mini-app-publish-bar__sync-popover-error">{uploadFailureMessage}</p>
+        ) : null}
       </div>
 
       <div className="mini-app-publish-bar__sync-popover-actions">
@@ -406,10 +548,10 @@ export function WebSyncPopover({
               disabled={busy || metadataSync}
               onClick={() => void onPushNow()}
             >
-              {activelyUploading || pushing ? "Uploading…" : "Upload now"}
+              {pushLabel}
             </button>
           </>
-        ) : showSchemaDriftHelp ? (
+        ) : showDatabaseBlockerHelp ? (
           <>
             <button
               type="button"
@@ -419,7 +561,7 @@ export function WebSyncPopover({
                 openCloudSyncAgentChat(
                   buildSchemaDriftAgentPrompt({
                     appId,
-                    databases: status.databases.filter((db) => db.schemaDrift),
+                    databases: status.databases.filter(isDatabaseSyncBlocker),
                     publishDetail: status.publishDetail,
                     error,
                   }),
@@ -434,7 +576,7 @@ export function WebSyncPopover({
               disabled={busy || metadataSync}
               onClick={() => void onPushNow()}
             >
-              {activelyUploading || pushing ? "Uploading…" : "Upload now"}
+              {pushLabel}
             </button>
             <button
               type="button"
@@ -444,9 +586,13 @@ export function WebSyncPopover({
             >
               {pulling ? "Getting updates…" : "Get updates"}
             </button>
-            {error ? (
+            {databaseBlockerHint(status.databases) ? (
               <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
-                Upload did not clear schema drift — try Ask agent to diagnose.
+                {databaseBlockerHint(status.databases)}
+              </p>
+            ) : error ? (
+              <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+                Upload did not clear the database blocker — try Ask agent to diagnose.
               </p>
             ) : null}
           </>
@@ -488,9 +634,51 @@ export function WebSyncPopover({
                 disabled
                 title="Merge remote changes first"
               >
-                Upload now
+                {pushLabel}
               </button>
             )}
+          </>
+        ) : showUploadFailureHelp ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildUploadFailureAgentPrompt({
+                    appId,
+                    error: uploadFailureMessage,
+                    databases: status.databases,
+                    uploadDetail: status.uploadDetail,
+                    codeLastError: status.codeLastError,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            {(syncActionNeeded || pushing || queuedForUpload) && (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy || metadataSync}
+                onClick={() => void onPushNow()}
+              >
+                {pushLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              Upload failed — Ask agent can diagnose and repair, then retry Upload now.
+            </p>
           </>
         ) : (
           <>
@@ -516,11 +704,7 @@ export function WebSyncPopover({
                   disabled={busy || metadataSync}
                   onClick={() => void onPushNow()}
                 >
-                  {activelyUploading || pushing
-                    ? "Uploading…"
-                    : queuedForUpload
-                      ? "Upload now"
-                      : "Upload now"}
+                  {pushLabel}
                 </button>
               </>
             )}

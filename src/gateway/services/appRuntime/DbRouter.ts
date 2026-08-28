@@ -18,9 +18,16 @@ import {
   quoteIdent,
 } from "../tursoSyncBridgeCore.js";
 import { resolveTursoDatabaseNameForSource } from "../DatabaseRegistryService.js";
+import {
+  queryLinkedDbViaTursoReplica,
+  schemaLinkedDbViaTursoReplica,
+  shouldUseTursoReplicaForSource,
+} from "../tursoReplica/tursoReplicaRouting.js";
+import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
+import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import { displayTableName, rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
 
-export type DbBackend = "local" | "turso";
+export type DbBackend = "local" | "turso" | "turso-replica";
 
 export interface RoutedQueryResult extends QueryResult {
   backend: DbBackend;
@@ -135,6 +142,15 @@ export class DbRouter {
     table: string,
     source: AppDataSource,
   ): Promise<boolean> {
+    if (shouldUseTursoReplicaForSource(source)) {
+      const result = await queryLinkedDbViaTursoReplica(
+        source,
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ? LIMIT 1",
+        [table],
+      );
+      return result.count > 0;
+    }
+
     if (isLocalDbReadable(dbPath)) {
       return this.pool.tableExists(dbPath, table);
     }
@@ -157,6 +173,39 @@ export class DbRouter {
     sql: string,
     params?: unknown[],
   ): Promise<RoutedQueryResult> {
+    if (shouldUseTursoReplicaForSource(source)) {
+      try {
+        const result = await queryLinkedDbViaTursoReplica(source, sql, params);
+        console.log(
+          `[DbRouter] Turso replica query app=${appId} source=${source.alias} rows=${result.count}`,
+        );
+        return { ...result, backend: "turso-replica" };
+      } catch (error) {
+        const message = (error as Error).message;
+        console.warn(
+          `[DbRouter] Replica query failed for ${source.alias ?? source.dbId} — ` +
+            `trying Turso primary fallback: ${message.slice(0, 160)}`,
+        );
+        await getTursoReplicaService().close(source.dbPath);
+        if (isTursoReplicaOnline()) {
+          const remote = await this.queryViaTursoPrimary(
+            appId,
+            source,
+            sql,
+            params,
+          );
+          if (remote) {
+            return remote;
+          }
+        }
+        if (isLocalDbReadable(source.dbPath)) {
+          const local = await this.pool.query(appId, source.dbPath, sql, params);
+          return { ...local, backend: "local" };
+        }
+        throw error;
+      }
+    }
+
     if (isLocalDbReadable(source.dbPath)) {
       const result = await this.pool.query(appId, source.dbPath, sql, params);
       return { ...result, backend: "local" };
@@ -173,6 +222,25 @@ export class DbRouter {
         `Local database not found at ${pathHint} and Turso fallback is unavailable. ` +
           "Sign in to Papr or run the linked job on this machine first.",
       );
+    }
+
+    const remote = await this.queryViaTursoPrimary(appId, source, sql, params, client);
+    if (!remote) {
+      throw new Error("Turso fallback query returned no result");
+    }
+    return remote;
+  }
+
+  private async queryViaTursoPrimary(
+    appId: string,
+    source: AppDataSource,
+    sql: string,
+    params?: unknown[],
+    existingClient?: Client | null,
+  ): Promise<RoutedQueryResult | null> {
+    const client = existingClient ?? (await getTursoClientForSource(source));
+    if (!client) {
+      return null;
     }
 
     const remoteTables = await listTursoLocalTables(source);
@@ -192,7 +260,7 @@ export class DbRouter {
     const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
 
     console.log(
-      `[DbRouter] Turso fallback query app=${appId} job=${source.jobId} rows=${rows.length}`,
+      `[DbRouter] Turso primary query app=${appId} source=${source.alias ?? source.jobId} rows=${rows.length}`,
     );
 
     return {
@@ -207,6 +275,19 @@ export class DbRouter {
     dbPath: string,
     source: AppDataSource,
   ): Promise<RoutedSchemaResult> {
+    if (shouldUseTursoReplicaForSource(source)) {
+      try {
+        const result = await schemaLinkedDbViaTursoReplica(source);
+        return { ...result, backend: "turso-replica" };
+      } catch (error) {
+        console.warn(
+          `[DbRouter] Replica schema failed for ${source.alias ?? source.dbId}:`,
+          (error as Error).message.slice(0, 160),
+        );
+        await getTursoReplicaService().close(source.dbPath);
+      }
+    }
+
     if (isLocalDbReadable(dbPath)) {
       const result = await this.pool.schema(dbPath);
       return { ...result, backend: "local" };

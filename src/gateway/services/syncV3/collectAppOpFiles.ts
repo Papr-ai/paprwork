@@ -39,6 +39,9 @@ const SKIP_DIR_NAMES = new Set([
   "venv",
 ]);
 
+/** Dotfiles excluded from git sync except these (cache revision for apps.papr.ai). */
+const ALLOWED_DOTFILE_NAMES = new Set([".papr-cloud-revision"]);
+
 const JOB_SKIP_DIR_NAMES = new Set([...SKIP_DIR_NAMES, "data", "logs"]);
 
 const JOB_SKIP_FILE_NAMES = new Set(["job.runtime.json"]);
@@ -76,7 +79,7 @@ async function walkAppFiles(appDir: string): Promise<string[]> {
     }
 
     for (const entry of entries) {
-      if (entry.name.startsWith(".")) {
+      if (entry.name.startsWith(".") && !ALLOWED_DOTFILE_NAMES.has(entry.name)) {
         continue;
       }
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
@@ -392,6 +395,87 @@ export async function collectAppOpFiles(
     skippedUnchanged,
     deferred,
   };
+}
+
+/** Files in an app folder that exceed the git sync size limit (local only — not uploaded). */
+export async function listOversizedAppFiles(
+  paprDir: string,
+  appId: string,
+): Promise<Array<{ path: string; sizeBytes: number; reason: string }>> {
+  const appDir = path.join(paprDir, "apps", appId);
+  return listOversizedFilesInAppDir(appDir);
+}
+
+/** Scan a mini-app directory for files that git sync will skip (oversized or never-track media). */
+export async function listOversizedFilesInAppDir(
+  appDir: string,
+): Promise<Array<{ path: string; sizeBytes: number; reason: string }>> {
+  const repoPaths = await walkAllAppFilesForReporting(appDir);
+  const unsyncable: Array<{ path: string; sizeBytes: number; reason: string }> =
+    [];
+
+  for (const repoPath of repoPaths) {
+    const fullPath = path.join(appDir, repoPath);
+    try {
+      const stat = await fs.stat(fullPath);
+      if (!stat.isFile()) {
+        continue;
+      }
+      if (isNeverTrackRepoPath(repoPath)) {
+        unsyncable.push({
+          path: repoPath,
+          sizeBytes: stat.size,
+          reason: "never tracked by git — use App Files",
+        });
+        continue;
+      }
+      if (isTooLargeForGitSync(stat.size)) {
+        unsyncable.push({
+          path: repoPath,
+          sizeBytes: stat.size,
+          reason: `over ${formatGitSyncSizeLimitMb()}`,
+        });
+      }
+    } catch {
+      // Missing or unreadable — skip
+    }
+  }
+
+  return unsyncable;
+}
+
+async function walkAllAppFilesForReporting(appDir: string): Promise<string[]> {
+  const results: string[] = [];
+
+  async function walk(currentDir: string, prefix: string): Promise<void> {
+    let entries;
+    try {
+      entries = await fs.readdir(currentDir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (entry.name.startsWith(".")) {
+        continue;
+      }
+      const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const full = path.join(currentDir, entry.name);
+      if (entry.isDirectory()) {
+        if (SKIP_DIR_NAMES.has(entry.name)) {
+          continue;
+        }
+        await walk(full, rel);
+        continue;
+      }
+      if (entry.isFile()) {
+        results.push(rel.replace(/\\/g, "/"));
+      }
+    }
+  }
+
+  await walk(appDir, "");
+  return results.sort();
 }
 
 /** Recompute parentHash from OID cache before outbox replay. */

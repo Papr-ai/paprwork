@@ -160,6 +160,43 @@ if (secretCheck.status !== 0) {
   console.log(`Secret ${secretName} exists — ensure value matches memory Cloud Run`);
 }
 
+const gcsCacheBucket =
+  getArg("gcs-cache-bucket", process.env.CLOUD_APP_HOST_GCS_BUCKET) ??
+  `${project}-cloud-app-host-cache`;
+
+console.log("\n--- Step 3b: GCS shared repo-file cache ---");
+console.log(`Bucket: ${gcsCacheBucket}`);
+run(
+  `gcloud services enable storage.googleapis.com storage-api.googleapis.com --project=${project}`,
+);
+const bucketUri = `gs://${gcsCacheBucket}`;
+const bucketCheck = spawnSync(
+  "gcloud",
+  ["storage", "buckets", "describe", bucketUri, `--project=${project}`],
+  { encoding: "utf8" },
+);
+if (bucketCheck.status !== 0) {
+  run(
+    `gcloud storage buckets create ${bucketUri} --project=${project} --location=${region} --uniform-bucket-level-access`,
+  );
+} else {
+  console.log(`Bucket ${gcsCacheBucket} already exists`);
+}
+if (!dryRun) {
+  const projectNumber = runCapture(
+    `gcloud projects describe ${project} --format='value(projectNumber)'`,
+  );
+  const runSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
+  run(
+    `gcloud storage buckets add-iam-policy-binding ${bucketUri} --member=serviceAccount:${runSa} --role=roles/storage.objectAdmin --project=${project}`,
+  );
+  const lifecycleFile = resolve(process.cwd(), "scripts/cloud-app-host-gcs-lifecycle.json");
+  run(
+    `gcloud storage buckets update ${bucketUri} --lifecycle-file=${lifecycleFile} --project=${project}`,
+  );
+  console.log("Lifecycle: delete objects older than 7 days (orphan safety net)");
+}
+
 console.log("\n--- Step 4: Build & push Docker image ---");
 const useCloudBuild =
   args.includes("--cloud-build") ||
@@ -194,7 +231,7 @@ const deployCmd = [
   "--max-instances=20",
   "--timeout=120",
   `--set-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
-  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production`,
+  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production`,
 ].join(" ");
 
 run(deployCmd);

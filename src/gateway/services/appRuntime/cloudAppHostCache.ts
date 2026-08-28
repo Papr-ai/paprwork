@@ -7,6 +7,8 @@ import type { AppDataSourcesFile } from "../appDataSources.js";
 import type { AppAccessContext, AppPublishResolver, AppRuntimeRouteAuth } from "./types.js";
 import { fetchRuntimeRepoFile } from "./memoryRuntimeClient.js";
 import {
+  gcsCacheDeleteByApp,
+  gcsCacheDeleteByNamespace,
   gcsCacheGet,
   gcsCachePut,
   isGcsSharedCacheEnabled,
@@ -25,6 +27,10 @@ import {
   PAPR_APP_CLOUD_REVISION_PATH,
   parseAppCloudRevisionContent,
 } from "../cloudSync/cloudAppRevisionMarker.js";
+import {
+  PAPR_APP_META_RELATIVE_PATH,
+  parseCloudAppMetaRevision,
+} from "../cloudSync/cloudAppMeta.js";
 
 /**
  * Repo files: stale-while-revalidate for repeat viewers. Cache keys include the
@@ -35,7 +41,8 @@ import {
  */
 const REPO_FILE_FRESH_MS = 600_000;
 const REPO_FILE_STALE_MS = 86_400_000;
-const REPO_REVISION_TTL_MS = 5_000;
+/** Revision marker rarely changes mid-session; longer TTL cuts memory hops on burst loads. */
+const REPO_REVISION_TTL_MS = 60_000;
 /** Publish/link permissions rarely change mid-session; bust on revision notify. */
 const ACCESS_TTL_MS = 30 * 60 * 1000;
 const TRANSPILE_TTL_MS = 3_600_000;
@@ -54,6 +61,7 @@ interface SwrEntry<T> {
 
 const repoFileCache = new Map<string, SwrEntry<{ content: string; contentType: string } | null>>();
 const repoRevisionCache = new Map<string, TimedEntry<string>>();
+const revisionInflight = new Map<string, Promise<string>>();
 const accessCache = new Map<string, TimedEntry<AppAccessContext | null>>();
 const transpileCache = new Map<string, TimedEntry<MiniAppTranspileResult>>();
 
@@ -125,12 +133,17 @@ function contentFingerprint(content: string): string {
   return createHash("sha256").update(content).digest("hex").slice(0, 16);
 }
 
+/** Published repo files are identical for all authorized readers of an app revision. */
+function appCacheScopeKey(auth: AppRuntimeRouteAuth): string {
+  return `${auth.namespaceId}:${auth.slug}`;
+}
+
 function repoFileCacheKey(
   auth: AppRuntimeRouteAuth,
   revision: string,
   relativePath: string,
 ): string {
-  return `${runtimeAuthKey(auth)}:${revision}:${relativePath}`;
+  return `${appCacheScopeKey(auth)}:${revision}:${relativePath}`;
 }
 
 /** Per-app git revision for cache keys (`.papr-cloud-revision` or repo head). */
@@ -141,11 +154,33 @@ export async function resolveAppCacheRevision(
   return getAppCacheRevision(auth, bypassRevisionCache);
 }
 
+async function resolveRevisionFromOrigin(auth: AppRuntimeRouteAuth): Promise<string> {
+  try {
+    const [markerFile, metaFile, headFile] = await Promise.all([
+      fetchRuntimeRepoFile(auth, PAPR_APP_CLOUD_REVISION_PATH),
+      fetchRuntimeRepoFile(auth, PAPR_APP_META_RELATIVE_PATH),
+      fetchRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH),
+    ]);
+    if (markerFile) {
+      return parseAppCloudRevisionContent(markerFile.content);
+    }
+    if (metaFile) {
+      const meta = parseCloudAppMetaRevision(metaFile.content);
+      if (meta?.distRevision && meta.distRevision !== "0") {
+        return meta.distRevision;
+      }
+    }
+    return headFile ? parseCloudRepoHeadContent(headFile.content) : "0";
+  } catch {
+    return "0";
+  }
+}
+
 async function getAppCacheRevision(
   auth: AppRuntimeRouteAuth,
   bypassRevisionCache: boolean,
 ): Promise<string> {
-  const revKey = runtimeAuthKey(auth);
+  const revKey = appCacheScopeKey(auth);
   if (!bypassRevisionCache) {
     const cached = readTimed(repoRevisionCache, revKey);
     if (cached !== undefined) {
@@ -153,21 +188,22 @@ async function getAppCacheRevision(
     }
   }
 
-  try {
-    const markerFile = await fetchRuntimeRepoFile(auth, PAPR_APP_CLOUD_REVISION_PATH);
-    if (markerFile) {
-      const revision = parseAppCloudRevisionContent(markerFile.content);
+  const inflightKey = `${revKey}:${bypassRevisionCache ? "bypass" : "normal"}`;
+  const inflight = revisionInflight.get(inflightKey);
+  if (inflight) {
+    return inflight;
+  }
+
+  const pending = resolveRevisionFromOrigin(auth)
+    .then((revision) => {
       writeTimed(repoRevisionCache, revKey, revision, REPO_REVISION_TTL_MS);
       return revision;
-    }
-
-    const headFile = await fetchRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH);
-    const revision = headFile ? parseCloudRepoHeadContent(headFile.content) : "0";
-    writeTimed(repoRevisionCache, revKey, revision, REPO_REVISION_TTL_MS);
-    return revision;
-  } catch {
-    return "0";
-  }
+    })
+    .finally(() => {
+      revisionInflight.delete(inflightKey);
+    });
+  revisionInflight.set(inflightKey, pending);
+  return pending;
 }
 
 function writeRepoFileEntry(
@@ -245,12 +281,16 @@ export async function fetchCachedRuntimeRepoFile(
   // another instance already fetched, skipping the memory-server chain.
   if (isGcsSharedCacheEnabled()) {
     const shared = await gcsCacheGet(key);
-    if (shared && now <= shared.freshUntil) {
-      writeRepoFileEntry(key, {
-        content: shared.content,
-        contentType: shared.contentType,
-      });
-      return { content: shared.content, contentType: shared.contentType };
+    if (shared) {
+      const staleUntil =
+        shared.freshUntil + (REPO_FILE_STALE_MS - REPO_FILE_FRESH_MS);
+      if (now <= shared.freshUntil || now <= staleUntil) {
+        writeRepoFileEntry(key, {
+          content: shared.content,
+          contentType: shared.contentType,
+        });
+        return { content: shared.content, contentType: shared.contentType };
+      }
     }
   }
 
@@ -391,6 +431,7 @@ export function cacheControlForAppAsset(
 export function resetCloudAppHostCachesForTests(): void {
   repoFileCache.clear();
   repoRevisionCache.clear();
+  revisionInflight.clear();
   accessCache.clear();
   transpileCache.clear();
   appDbConfigCache.clear();
@@ -433,8 +474,14 @@ export function invalidateRepoCacheForPublishedApp(
       repoRevisionCache.delete(key);
     }
   }
+  for (const key of transpileCache.keys()) {
+    if (key.startsWith(prefix)) {
+      transpileCache.delete(key);
+    }
+  }
   invalidateAppDbConfigCacheByPrefix(prefix);
   invalidateAccessCacheForPublishedApp(namespaceId, slug);
+  gcsCacheDeleteByApp(namespaceId, slug);
 }
 
 /** Broader invalidation when publish slug is unknown (Pub/Sub commit fanout). */
@@ -452,4 +499,5 @@ export function invalidateRepoCacheForNamespace(namespaceId: string): void {
   }
   invalidateAppDbConfigCacheByPrefix(prefix);
   invalidateAccessCacheForNamespace(namespaceId);
+  gcsCacheDeleteByNamespace(namespaceId);
 }

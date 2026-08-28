@@ -251,12 +251,72 @@ def executemany(
     return total
 
 
+class _TursoCursor:
+    """sqlite3.Cursor-compatible wrapper for cloud backends using raw cursor() API."""
+
+    def __init__(self, conn: "_TursoConnection") -> None:
+        self._conn = conn
+        self._rows: list[tuple[Any, ...]] = []
+        self.rowcount = -1
+        self.description: list[tuple[Any, ...]] | None = None
+
+    def execute(
+        self,
+        sql: str,
+        params: list[Any] | tuple[Any, ...] | None = None,
+    ) -> "_TursoCursor":
+        args = list(params or [])
+        result = self._conn.execute(sql, args)
+        if isinstance(result, list):
+            if result:
+                names = list(result[0].keys())
+                self.description = [(name, None, None, None, None, None, None) for name in names]
+                self._rows = [tuple(row[name] for name in names) for row in result]
+            else:
+                self.description = []
+                self._rows = []
+            self.rowcount = len(self._rows)
+        else:
+            self.description = None
+            self._rows = []
+            self.rowcount = int(result)
+        return self
+
+    def executemany(
+        self,
+        sql: str,
+        seq: list[list[Any] | tuple[Any, ...]],
+    ) -> "_TursoCursor":
+        total = 0
+        for params in seq:
+            total += int(self.execute(sql, params).rowcount)
+        self.rowcount = total
+        return self
+
+    def fetchone(self) -> tuple[Any, ...] | None:
+        if not self._rows:
+            return None
+        return self._rows[0]
+
+    def fetchall(self) -> list[tuple[Any, ...]]:
+        return list(self._rows)
+
+    def close(self) -> None:
+        return None
+
+
 class _TursoConnection:
     """Minimal Turso/libsql HTTP client (stdlib only)."""
 
     def __init__(self, libsql_url: str, auth_token: str) -> None:
         self._url = _http_url(libsql_url)
         self._token = auth_token
+
+    def cursor(self) -> _TursoCursor:
+        return _TursoCursor(self)
+
+    def commit(self) -> None:
+        return None
 
     def execute(
         self,

@@ -28,6 +28,19 @@ export interface TursoLinkedSource {
   writeAuthority?: WriteAuthority;
 }
 
+export function linkedSourceAsAppDataSource(source: TursoLinkedSource): AppDataSource {
+  return {
+    id: source.dbId ?? source.jobId ?? source.dbPath,
+    type: "sqlite",
+    dbId: source.dbId,
+    ...(source.jobId ? { jobId: source.jobId } : {}),
+    alias: source.alias,
+    dbPath: source.dbPath,
+    tables: [],
+    linkedAt: new Date().toISOString(),
+  };
+}
+
 export { isBidirectionalWriteAuthority };
 
 function isSyncableRole(role: AppDataSourceRole | undefined): boolean {

@@ -10,8 +10,12 @@
  */
 
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import { WebSyncPopover } from "../../components/Apps/WebSyncPopover";
+import { render, screen, fireEvent } from "@testing-library/react";
+import {
+  WebSyncPopover,
+  webSyncPushButtonLabel,
+} from "../../components/Apps/WebSyncPopover";
+import type { AppCloudSyncStatus } from "../../utils/appCloudSyncStatus";
 
 const baseProps = {
   appId: "0a1ab32b-7c0c-4364-a98a-da637aa0dc70",
@@ -20,6 +24,40 @@ const baseProps = {
   onPullUpdates: vi.fn(),
   onApplyRemoteUpdates: vi.fn(),
 };
+
+function minimalSyncStatus(
+  overrides: Partial<AppCloudSyncStatus> = {},
+): AppCloudSyncStatus {
+  return {
+    overall: "changed",
+    codePhase: "changed",
+    codeStatus: "pending",
+    codeLabel: "App code pending",
+    dependentJobs: [],
+    summaryLine: "local changes pending",
+    databases: [],
+    hasSchemaDrift: false,
+    hasLinkedDatabases: false,
+    hasRegistryDatabases: false,
+    registryPhase: "synced",
+    registryLabel: "Registry uploads with app code",
+    chipLabel: "Pending",
+    globallySyncing: false,
+    cloudPublishing: false,
+    publishStatus: "synced",
+    publishLabel: "Live",
+    publishDetail: null,
+    gitUpdatesAvailable: false,
+    gitUpdatesSummary: null,
+    writerConflict: false,
+    gitRemoteRequiresReview: false,
+    gitRemoteMetadataSync: false,
+    gitRemoteReviewHeadline: null,
+    syncedJobCount: 0,
+    totalJobCount: 0,
+    ...overrides,
+  };
+}
 
 describe("WebSyncPopover", () => {
   it("renders without throwing when status is null and loading", () => {
@@ -38,11 +76,27 @@ describe("WebSyncPopover", () => {
     ).not.toThrow();
   });
 
-  it("still offers Upload now while status is unresolved", () => {
-    render(<WebSyncPopover {...baseProps} status={null} loading={false} />);
+  it("still offers Upload now while status is unresolved (live app)", () => {
+    render(
+      <WebSyncPopover {...baseProps} status={null} loading={false} appLive />,
+    );
 
-    // Previously returned null here, so clicking Upload showed nothing at all.
     expect(screen.getByRole("button", { name: /upload now/i })).toBeTruthy();
+  });
+
+  it("offers Publish while status is unresolved (draft app)", () => {
+    render(
+      <WebSyncPopover {...baseProps} status={null} loading={false} appLive={false} />,
+    );
+
+    expect(screen.getByRole("button", { name: /^publish$/i })).toBeTruthy();
+  });
+
+  it("labels push action from publish state", () => {
+    expect(webSyncPushButtonLabel({ appLive: false, pushing: false })).toBe("Publish");
+    expect(webSyncPushButtonLabel({ appLive: false, pushing: true })).toBe("Publishing…");
+    expect(webSyncPushButtonLabel({ appLive: true, pushing: false })).toBe("Upload now");
+    expect(webSyncPushButtonLabel({ appLive: true, pushing: true })).toBe("Uploading…");
   });
 
   it("surfaces an error alongside the unresolved state", () => {
@@ -56,5 +110,79 @@ describe("WebSyncPopover", () => {
     );
 
     expect(screen.getByText("App sync failed")).toBeTruthy();
+  });
+
+  it("shows Ask agent when Upload now fails with an error", () => {
+    let openedMessage: string | undefined;
+    const listener = (event: Event) => {
+      openedMessage = (event as CustomEvent<{ message: string }>).detail.message;
+    };
+    window.addEventListener("papr-chat-open", listener);
+
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        status={minimalSyncStatus()}
+        syncActionNeeded
+        error="sync engine operation failed: unable to checkpoint WAL"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /ask agent/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /ask agent/i }));
+    expect(openedMessage).toContain("unable to checkpoint WAL");
+    expect(openedMessage).toContain(baseProps.appId);
+
+    window.removeEventListener("papr-chat-open", listener);
+  });
+
+  it("shows Ask agent for unresolved status when upload error is present", () => {
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        status={null}
+        loading={false}
+        error="Turso push failed"
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /ask agent/i })).toBeTruthy();
+  });
+
+  it("shows Ask agent when replica cutover is blocked (not only schemaDrift)", () => {
+    let openedMessage: string | undefined;
+    const listener = (event: Event) => {
+      openedMessage = (event as CustomEvent<{ message: string }>).detail.message;
+    };
+    window.addEventListener("papr-chat-open", listener);
+
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        status={minimalSyncStatus({
+          hasSchemaDrift: false,
+          databases: [
+            {
+              alias: "metrics",
+              jobId: "job-1",
+              status: "pending",
+              phase: "changed",
+              detail: "Cutover blocked: remote schema ahead",
+              syncMode: "replica",
+              cutoverBlocked: true,
+              cutoverBlockReason: "remote schema ahead",
+            },
+          ],
+        })}
+        syncActionNeeded
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /ask agent/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /ask agent/i }));
+    expect(openedMessage).toContain("metrics");
+    expect(openedMessage).toContain("cutover blocked");
+
+    window.removeEventListener("papr-chat-open", listener);
   });
 });

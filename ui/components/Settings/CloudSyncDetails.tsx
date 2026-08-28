@@ -58,6 +58,14 @@ interface TursoSourceSyncItem {
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
   manualUploadHold?: boolean;
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }
 
 interface TursoSyncItemsReport {
@@ -190,6 +198,11 @@ export interface SyncItemsResponse {
     publishedAt?: string | null;
   };
   reason?: string;
+  /** Files in the app folder over the git sync limit — use App Files panel instead. */
+  oversizedAppFiles?: {
+    paths: Array<{ path: string; sizeBytes: number; reason?: string }>;
+    message: string;
+  } | null;
 }
 
 export interface PublishLayerSyncReport {
@@ -1105,18 +1118,31 @@ export const CloudSyncDetails: React.FC<{
               label={item.alias}
               status={item.status}
               meta={
-                item.status === "quarantined"
-                  ? "Paused"
-                  : item.status === "synced"
-                    ? `${item.remoteTableCount} tables`
-                    : item.localTableCount > 0
-                      ? `${item.localTableCount} local`
-                      : item.role
+                item.migrationConflict
+                  ? "Migration conflict"
+                  : item.syncMode === "replica" && item.pendingPush
+                    ? item.online === false
+                      ? "Offline"
+                      : "Not pushed"
+                    : item.status === "quarantined"
+                      ? "Paused"
+                      : item.status === "synced"
+                        ? `${item.remoteTableCount} tables`
+                        : item.localTableCount > 0
+                          ? `${item.localTableCount} local`
+                          : item.role
               }
               detail={
-                item.status === "quarantined"
-                  ? item.quarantineReason?.slice(0, 120) ?? undefined
-                  : undefined
+                item.migrationConflict
+                  ? item.lastReplicaPushError?.slice(0, 120) ??
+                    "Migration ledger conflict — reconcile before push"
+                  : item.syncMode === "replica" && item.pendingPush
+                    ? item.online === false
+                      ? `${item.pendingOps ?? 0} change(s) waiting for network`
+                      : `${item.pendingOps ?? 0} local change(s) not pushed yet`
+                    : item.status === "quarantined"
+                      ? item.quarantineReason?.slice(0, 120) ?? undefined
+                      : undefined
               }
               action={
                 item.status === "quarantined" ? (

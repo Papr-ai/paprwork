@@ -61,12 +61,30 @@ describe("workspace log replay fixtures", () => {
     }
 
     const writeCalls: Array<{ sql: string; params?: unknown[] }> = [];
+    const write = vi.fn(async (_appId: string, _dbPath: string, sql: string, params?: unknown[]) => {
+      writeCalls.push({ sql, params });
+      return { changes: 1, lastInsertRowid: writeCalls.length };
+    });
     const pool = {
-      write: vi.fn(async (_appId: string, _dbPath: string, sql: string, params?: unknown[]) => {
-        writeCalls.push({ sql, params });
-        return { changes: 1, lastInsertRowid: writeCalls.length };
-      }),
+      write,
+      writeBatch: vi.fn(
+        async (
+          appId: string,
+          dbPath: string,
+          statements: Array<{ sql: string; params?: unknown[] }>,
+        ) => {
+          const results = [];
+          for (const statement of statements) {
+            if (statement.sql.includes("PRAGMA foreign_keys")) {
+              continue;
+            }
+            results.push(await write(appId, dbPath, statement.sql, statement.params));
+          }
+          return results;
+        },
+      ),
       exec: vi.fn(async () => undefined),
+      query: vi.fn(async () => ({ rows: [], columns: [], count: 0 })),
     } as unknown as DbQueryPool;
 
     const source = {
@@ -87,7 +105,8 @@ describe("workspace log replay fixtures", () => {
     const applied = await materializeWorkspaceLogSince(pool, fixture.replicaId, source);
 
     expect(applied).toBe(fixture.entries.length);
-    expect(writeCalls.length).toBe(rowEntries.length);
+    const dataWrites = writeCalls.filter((call) => !call.sql.includes("_papr_materialized"));
+    expect(dataWrites.length).toBe(rowEntries.length);
 
     const { getWorkspaceLogCursor } = await import(
       "../src/gateway/services/syncV3/workspaceLogCursor.js"

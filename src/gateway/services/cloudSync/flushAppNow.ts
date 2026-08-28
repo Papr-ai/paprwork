@@ -1,13 +1,8 @@
 /**
  * Ordered cross-layer flush for Upload now (SYNC_CONTRACT §12.1).
  *
- * log catch-up → schema/row push → log catch-up → writer ops → publish
- *
- * Row sync uses workspace log (not fingerprint Turso push in this path).
- * Jobs/databases metadata uses Mongo registry (not namespace git).
- *
- * Cloud-linked migrations ship via schema drift-heal (workspace log), not
- * direct SQLite apply — see applyLocalMigrationsForApp.
+ * Plan A (replica rollout): legacy cutover (Upload now) → replica push → git writer → publish.
+ * Legacy: log catch-up → schema/row push → log catch-up → writer ops → publish.
  */
 
 import * as path from "path";
@@ -15,9 +10,15 @@ import type { CloudSyncService } from "../CloudSyncService.js";
 import {
   dedupeLinkedSourcesBySyncKey,
   discoverTursoLinkedSources,
+  linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
+  type TursoLinkedSource,
 } from "../tursoLinkedSources.js";
-import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
+import {
+  pushLinkedSourceWithReplicaRouting,
+  shouldSkipTursoPushInFlushForReplicaSource,
+  shouldUseTursoReplicaForSource,
+} from "../tursoReplica/tursoReplicaRouting.js";
 import {
   awaitTursoPushInFlightForSyncKeys,
   cancelScheduledTursoPushForSyncKeys,
@@ -26,6 +27,36 @@ import {
 import { applyLocalMigrationsForApp } from "./applyLocalMigrationsForApp.js";
 import { webReady } from "./webReady.js";
 import { yieldEventLoop } from "./yieldEventLoop.js";
+import { isLegacyWorkspaceRowSyncEnabled } from "../../utils/tursoReplicaEnabled.js";
+
+async function runPlanACutoverForUpload(appId: string): Promise<void> {
+  const {
+    runReplicaCutoverForAppUpload,
+    formatReplicaCutoverUploadFailure,
+  } = await import(
+    "../tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js"
+  );
+
+  const { reportFlushProgress } = await import("./flushProgress.js");
+  await reportFlushProgress(appId, {
+    layer: "turso",
+    label: "Migrating database to cloud sync…",
+    detail: "One-time upgrade from legacy sync to Plan A replica (same Turso database).",
+  });
+
+  const batch = await runReplicaCutoverForAppUpload(appId);
+  const failure = formatReplicaCutoverUploadFailure(batch);
+  if (failure) {
+    throw new Error(failure);
+  }
+
+  if (batch.succeeded > 0) {
+    console.log(
+      `[CloudSync] flushAppNow cutover succeeded for ${appId}: ` +
+        `${batch.succeeded} database(s) now syncMode=replica`,
+    );
+  }
+}
 
 export interface FlushAppNowResult {
   appId: string;
@@ -36,7 +67,6 @@ export interface FlushAppNowResult {
   published: boolean;
   catalogError?: string;
 }
-
 
 export interface FlushAppNowOptions {
   skipTursoReschedule?: boolean;
@@ -52,6 +82,59 @@ async function catchUpAppLinkedSources(
   }
 }
 
+async function pushLinkedSourcesForFlush(
+  pushSources: TursoLinkedSource[],
+  syncKeys: string[],
+  options?: { replicaOnly?: boolean },
+): Promise<boolean> {
+  cancelScheduledTursoPushForSyncKeys(syncKeys);
+  await awaitTursoPushInFlightForSyncKeys(syncKeys);
+
+  const sourcesNeedingTursoPush: TursoLinkedSource[] = [];
+  for (const source of pushSources) {
+    if (options?.replicaOnly) {
+      const appSource = linkedSourceAsAppDataSource(source);
+      if (!shouldUseTursoReplicaForSource(appSource)) {
+        continue;
+      }
+    }
+    const skip = await shouldSkipTursoPushInFlushForReplicaSource(source);
+    if (skip) {
+      console.log(
+        `[CloudSync] flushAppNow skipping Turso push for ${source.alias} — replica auto-synced`,
+      );
+    } else {
+      sourcesNeedingTursoPush.push(source);
+    }
+  }
+
+  if (sourcesNeedingTursoPush.length === 0) {
+    return false;
+  }
+
+  const { reportFlushProgress } = await import("./flushProgress.js");
+  await reportFlushProgress(sourcesNeedingTursoPush[0]!.appId, {
+    layer: "turso",
+    label: "Syncing database to Turso…",
+    detail: `Pushing ${sourcesNeedingTursoPush.length} linked database(s) via replica.`,
+  });
+
+  let tursoPushed = false;
+  await withTursoPushInFlight(syncKeys, async () => {
+    for (const source of sourcesNeedingTursoPush) {
+      const pushResult = await pushLinkedSourceWithReplicaRouting(source);
+      if (pushResult.ok) {
+        tursoPushed = true;
+      } else {
+        throw new Error(
+          `Turso push failed for ${source.alias}: ${pushResult.error ?? "unknown"}`,
+        );
+      }
+    }
+  });
+  return tursoPushed;
+}
+
 export async function flushAppNow(
   sync: CloudSyncService,
   appId: string,
@@ -59,61 +142,66 @@ export async function flushAppNow(
 ): Promise<FlushAppNowResult> {
   const paprDir = sync.getPaprDir();
   const appsRoot = path.join(paprDir, "apps");
+  const legacyRowSync = isLegacyWorkspaceRowSyncEnabled();
 
-  console.log(`[CloudSync] flushAppNow (ordered) appId=${appId}`);
+  console.log(
+    `[CloudSync] flushAppNow appId=${appId} legacyRowSync=${legacyRowSync}`,
+  );
 
   const linkedSources = await discoverTursoLinkedSources(appsRoot);
   const appSources = linkedSources.filter((source) => source.appId === appId);
   const pushSources = dedupeLinkedSourcesBySyncKey(appSources);
   const syncKeys = pushSources.map((source) => linkedSourceSyncKey(source));
 
-  await catchUpAppLinkedSources(appSources);
-  await yieldEventLoop();
-
-  const localMigrationsApplied = await applyLocalMigrationsForApp(appId, appsRoot);
-  if (localMigrationsApplied.length > 0) {
-    console.log(
-      `[CloudSync] Applied local migrations for ${appId}: ${localMigrationsApplied.join(", ")}`,
-    );
-    const { reportFlushProgress } = await import("./flushProgress.js");
-    await reportFlushProgress(appId, {
-      layer: "turso",
-      label: "Preparing local database…",
-      detail: `Applied ${localMigrationsApplied.length} migration(s) locally before cloud sync.`,
-    });
-  }
-  await yieldEventLoop();
-
+  let localMigrationsApplied: string[] = [];
   let tursoPushed = false;
-  cancelScheduledTursoPushForSyncKeys(syncKeys);
-  await awaitTursoPushInFlightForSyncKeys(syncKeys);
 
-  const bridge = ensureTursoSyncBridge();
-  await withTursoPushInFlight(syncKeys, async () => {
-    for (const source of pushSources) {
-      const syncKey = linkedSourceSyncKey(source);
-      if (bridge.enabled) {
-        const pushResult = await bridge.pushJob(syncKey);
-        if (pushResult.status === "pushed") {
-          tursoPushed = true;
-        } else if (pushResult.status === "failed") {
-          throw new Error(
-            `Turso push failed for ${source.alias}: ${pushResult.error ?? "unknown"}`,
-          );
-        }
-      } else {
-        const { ensureReplicaReady } = await import("../syncV3/ensureReplicaReady.js");
-        const readyResult = await ensureReplicaReady(source);
-        if (readyResult.schemaShipped > 0 || readyResult.rowsShipped > 0) {
-          tursoPushed = true;
-        }
-      }
+  if (legacyRowSync) {
+    await catchUpAppLinkedSources(appSources);
+    await yieldEventLoop();
+
+    localMigrationsApplied = await applyLocalMigrationsForApp(appId, appsRoot);
+    if (localMigrationsApplied.length > 0) {
+      console.log(
+        `[CloudSync] Applied local migrations for ${appId}: ${localMigrationsApplied.join(", ")}`,
+      );
+      const { reportFlushProgress } = await import("./flushProgress.js");
+      await reportFlushProgress(appId, {
+        layer: "turso",
+        label: "Preparing local database…",
+        detail: `Applied ${localMigrationsApplied.length} migration(s) locally before cloud sync.`,
+      });
     }
-  });
-  await yieldEventLoop();
+    await yieldEventLoop();
 
-  await catchUpAppLinkedSources(appSources);
-  await yieldEventLoop();
+    tursoPushed = await pushLinkedSourcesForFlush(pushSources, syncKeys);
+    await yieldEventLoop();
+
+    await catchUpAppLinkedSources(appSources);
+    await yieldEventLoop();
+  } else {
+    localMigrationsApplied = await applyLocalMigrationsForApp(appId, appsRoot);
+    if (localMigrationsApplied.length > 0) {
+      console.log(
+        `[CloudSync] Applied local migrations for ${appId} before cutover: ${localMigrationsApplied.join(", ")}`,
+      );
+      const { reportFlushProgress } = await import("./flushProgress.js");
+      await reportFlushProgress(appId, {
+        layer: "turso",
+        label: "Preparing local database…",
+        detail: `Applied ${localMigrationsApplied.length} migration(s) locally before replica cutover.`,
+      });
+    }
+    await yieldEventLoop();
+
+    await runPlanACutoverForUpload(appId);
+    await yieldEventLoop();
+
+    tursoPushed = await pushLinkedSourcesForFlush(pushSources, syncKeys, {
+      replicaOnly: true,
+    });
+    await yieldEventLoop();
+  }
 
   const { reportFlushProgress } = await import("./flushProgress.js");
   await reportFlushProgress(appId, {

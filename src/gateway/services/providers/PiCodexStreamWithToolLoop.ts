@@ -8,14 +8,13 @@
  * 4. Repeat until we get stop/length or hit maxSteps
  *
  * When pi-ai emits toolcall_end then done with reason stop/length (orphan drain),
- * tools are executed and one continuation step requests a user-facing summary.
+ * pending tools are executed and the loop continues until the model is truly done.
+ * After the stream finishes, AgentService may add a text-only summary if the
+ * sequence ends on tool(s). Forced text-only steps (memory / limits) run in-loop.
  */
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
-import {
-  WRAP_UP_AFTER_ORPHAN_DRAIN,
-  WRAP_UP_AFTER_TOOLS_NO_TEXT,
-} from "../agent/wrapUpContinuation.js";
+import { applyForcedTextOnlyWrapUpStep, WRAP_UP_AFTER_TOOLS_NO_TEXT } from "../agent/wrapUpContinuation.js";
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
@@ -385,12 +384,8 @@ export async function* createPiCodexStreamWithToolLoop(
   // Per-stream memory budget (baseline captured before context/tool accumulation)
   const baselineHeap = process.memoryUsage().heapUsed;
 
-  /** True once text was streamed since the last tool batch finished. */
-  let textEmittedSinceLastToolBatch = false;
-  /** At most one automatic wrap-up continuation (orphan drain or tool-only stop). */
-  let wrapUpContinuationUsed = false;
-  /** One memory-budget wrap-up step (compact → summary → end turn). */
-  let memoryWrapUpUsed = false;
+  /** One forced text-only step (memory budget or hard tool/step limits). */
+  let textOnlyWrapUpStepUsed = false;
 
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
@@ -427,7 +422,7 @@ export async function* createPiCodexStreamWithToolLoop(
     const memoryCheck = checkPiStreamMemory(baselineHeap);
     const memoryAction = resolvePiStreamMemoryLoopAction(
       memoryCheck,
-      memoryWrapUpUsed,
+      textOnlyWrapUpStepUsed,
     );
 
     if (memoryAction.kind === "process_error") {
@@ -462,12 +457,8 @@ export async function* createPiCodexStreamWithToolLoop(
 
     let memoryPressure = false;
     if (memoryAction.kind === "force_wrap_up") {
-      memoryWrapUpUsed = true;
-      context.tools = [];
-      context.messages.push({
-        role: "user",
-        content: WRAP_UP_AFTER_MEMORY_BUDGET,
-      } as never);
+      textOnlyWrapUpStepUsed = true;
+      applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_MEMORY_BUDGET);
       memoryPressure = true;
       console.warn(
         `[PiCodexToolLoop] Stream memory budget exceeded ` +
@@ -651,12 +642,10 @@ export async function* createPiCodexStreamWithToolLoop(
                 return;
               }
             }
-            if (chunk?.type === "text-delta") {
-              const text =
-                typeof chunk.text === "string" ? chunk.text.trim() : "";
-              if (text.length > 0) {
-                textEmittedSinceLastToolBatch = true;
-              }
+            // Defer tool-call UI until we execute — emitting early orphans the
+            // turn when capacity retries or wrap-up ends before execution.
+            if (chunk?.type === "tool-call") {
+              continue;
             }
             if (chunk) yield chunk;
           }
@@ -707,10 +696,10 @@ export async function* createPiCodexStreamWithToolLoop(
       (isToolUseStep || shouldDrainOrphanedTools) &&
       finalMessage != null
     ) {
-      if (memoryWrapUpUsed) {
+      if (textOnlyWrapUpStepUsed) {
+        // Forced text-only step — pending calls were never emitted to the UI.
         console.warn(
-          `[PiCodexToolLoop] Model returned ${toolCallsThisTurn.length} tool call(s) during memory wrap-up — ` +
-            `skipping execution and ending turn (post-stream wrap-up may run)`,
+          `[PiCodexToolLoop] Text-only wrap-up: ignoring ${toolCallsThisTurn.length} tool call(s)`,
         );
         break stepLoop;
       }
@@ -803,20 +792,24 @@ export async function* createPiCodexStreamWithToolLoop(
       if (totalToolCalls >= MAX_TOTAL_TOOL_CALLS) {
         console.error(
           `[PiCodexToolLoop] 🛑 HARD LIMIT: ${totalToolCalls} tool calls exceeds maximum (${MAX_TOTAL_TOOL_CALLS}). ` +
-          `Forcing stop to prevent infinite loops.`
+          `Forcing text-only wrap-up.`,
         );
-        
-        // Add a system instruction to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${totalToolCalls} tool calls, which exceeds the maximum limit of ${MAX_TOTAL_TOOL_CALLS}. You MUST stop making tool calls and provide your final response now. Summarize what you've learned and respond to the user.]`,
-        } as any);
-        
+        textOnlyWrapUpStepUsed = true;
+        applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
         continue stepLoop;
       }
       
       // Execute all tools in parallel — full results preserved for this turn.
       // Stale results from prior turns are compacted before the next model call.
+      for (const tc of toolCallsThisTurn) {
+        yield {
+          type: "tool-call",
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          args: tc.args,
+        };
+      }
+
       const toolResults = await Promise.all(
         toolCallsThisTurn.map((tc) =>
           executeToolCall(
@@ -847,9 +840,6 @@ export async function* createPiCodexStreamWithToolLoop(
         };
       }
 
-      // Next model step should include a user-facing summary if it stops now.
-      textEmittedSinceLastToolBatch = false;
-
       if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
         console.error(
           `[PiCodexToolLoop] 🚨 CRITICAL: ${validationErrorCount} validation errors detected. Aborting.`,
@@ -869,18 +859,11 @@ export async function* createPiCodexStreamWithToolLoop(
       const STEP_FORCE_STOP_THRESHOLD = 95;
       
       if (step >= STEP_FORCE_STOP_THRESHOLD) {
-        // Force stop at 95 steps - inject final instruction and break
         console.warn(
-          `[PiCodexToolLoop] 🛑 Reached ${step} steps (force stop threshold). ` +
-          `Breaking tool loop and forcing final response.`
+          `[PiCodexToolLoop] 🛑 Reached ${step} steps (force stop threshold). Text-only wrap-up.`,
         );
-        
-        // Add a system instruction as the last tool result to force a response
-        context.messages.push({
-          role: "user",
-          content: `[SYSTEM: You've made ${step} tool calls. You MUST provide your final response now. Do not make any more tool calls. Summarize your findings and respond to the user.]`,
-        } as any);
-        
+        textOnlyWrapUpStepUsed = true;
+        applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
         continue stepLoop;
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
@@ -923,44 +906,18 @@ export async function* createPiCodexStreamWithToolLoop(
             `total tool calls: ${totalToolCalls}`,
         );
       } else {
-        // Orphan drain — append results and continue once for a user-facing summary.
+        // Orphan drain — tools ran after stop/length; continue so the model sees results.
         appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens);
         stripAllAssistantReasoning(context.messages as unknown[]);
-
-        if (!wrapUpContinuationUsed && step < maxSteps - 1) {
-          wrapUpContinuationUsed = true;
-          context.messages.push({
-            role: "user",
-            content: WRAP_UP_AFTER_ORPHAN_DRAIN,
-          } as never);
-          step++;
-          console.log(
-            `[PiCodexToolLoop] Continuing after orphan drain (${toolCallsThisTurn.length} tools) for user-facing summary`,
-          );
-          continue stepLoop;
-        }
-        break stepLoop;
-      }
-    } else {
-      // Model stopped without pending tools — wrap up if last actions were tools only.
-      const needsWrapUp =
-        totalToolCalls > 0 &&
-        !textEmittedSinceLastToolBatch &&
-        !wrapUpContinuationUsed &&
-        step < maxSteps - 1;
-
-      if (needsWrapUp) {
-        wrapUpContinuationUsed = true;
-        context.messages.push({
-          role: "user",
-          content: WRAP_UP_AFTER_TOOLS_NO_TEXT,
-        } as never);
         step++;
         console.log(
-          `[PiCodexToolLoop] Requesting wrap-up summary — ${totalToolCalls} tool calls ended without trailing user text`,
+          `[PiCodexToolLoop] Step ${step}: orphan drain executed ${toolCallsThisTurn.length} tool(s), continuing`,
         );
         continue stepLoop;
       }
+    } else {
+      // Model stopped without pending tools — turn is done; post-stream wrap-up
+      // in AgentService adds user text if the sequence ends on tool(s).
       break stepLoop;
     }
   }

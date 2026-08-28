@@ -17,6 +17,9 @@ import dotenv from "dotenv";
 import { resolve } from "path";
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
 
+import { logTursoReplicaStartupGuard } from "./utils/tursoReplicaEnabled.js";
+logTursoReplicaStartupGuard();
+
 // CRITICAL: Ensure crypto is available globally for @mastra/core
 // In newer Node.js versions (v16+), crypto is already global
 // In older versions or some environments, we need to import it
@@ -37,6 +40,7 @@ import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
 import {
   clearGatewaySyncBusy,
+  clearStaleGatewaySyncBusy,
   readGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
 } from "./services/cloudSync/syncBusyState.js";
@@ -50,6 +54,7 @@ import {
   getWorkspaceSwitchHealthStatus,
   getWorkspaceSwitchStatus,
 } from "./services/workspaceSwitchService.js";
+import { workspaceReadinessMiddleware } from "./services/workspaceReadiness.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService, getAppService } from "./services/AppService.js";
@@ -365,6 +370,7 @@ async function startGateway(): Promise<void> {
     // Large chats.db + tool registration can take 60s+ on cold start.
     // Clear stale busy marker from a previous gateway process (crash mid-upload).
     clearGatewaySyncBusy();
+    clearStaleGatewaySyncBusy();
     let gatewayReady = false;
     const app = express();
     const server = createServer(app);
@@ -395,6 +401,8 @@ async function startGateway(): Promise<void> {
       next();
     });
 
+    app.use(workspaceReadinessMiddleware);
+
     app.get("/health", (_req, res) => {
       if (getWorkspaceSwitchHealthStatus() === "switching") {
         res.json({
@@ -403,8 +411,8 @@ async function startGateway(): Promise<void> {
         });
         return;
       }
-      const busy = readGatewaySyncBusyState();
-      const syncBusy = isGatewaySyncBusyGraceActive(busy);
+      clearStaleGatewaySyncBusy();
+      const syncBusy = isGatewaySyncBusyGraceActive(readGatewaySyncBusyState());
       res.json({
         status: gatewayReady ? "ok" : "starting",
         timestamp: Date.now(),
@@ -1067,8 +1075,9 @@ async function startGateway(): Promise<void> {
     // ─────────────────────────────────────────────────────────────────────────
     app.post("/api/db/exec", async (req, res) => {
       try {
-        const { appId: bodyAppId, sql } = req.body as {
+        const { appId: bodyAppId, sourceId, sql } = req.body as {
           appId?: string;
+          sourceId?: string;
           sql?: string;
         };
 
@@ -1095,7 +1104,7 @@ async function startGateway(): Promise<void> {
 
         let source: import("./services/appDataSources.js").AppDataSource;
         try {
-          source = await resolveLinkedSource(appId, undefined, sql, "write");
+          source = await resolveLinkedSource(appId, sourceId, sql, "write");
         } catch (err) {
           const e = err as Error & { status?: number };
           res.status(e.status ?? 400).json({ error: e.message });
@@ -1368,6 +1377,13 @@ async function startGateway(): Promise<void> {
 
     registerJobEventsSseRoutes(app, {
       hub: getJobEventHub(),
+      onDbIdsSubscribe: (dbIds) => {
+        void import("./services/tursoPullScheduler.js").then(
+          ({ scheduleTursoPullForDbIds }) => {
+            scheduleTursoPullForDbIds(dbIds);
+          },
+        );
+      },
       pollJobStatus: async (jobId, _req) => {
         const job = await getJobsService().getJob(jobId);
         if (!job) {
@@ -2285,7 +2301,17 @@ async function startGateway(): Promise<void> {
           cloudLinks,
           appContext,
           cached: fromCache,
-          ...(appId ? { uploadError } : {}),
+          ...(appId
+            ? {
+                uploadError,
+                oversizedAppFiles: await (async () => {
+                  const { buildOversizedAppFilesReport } = await import(
+                    "./services/cloudSync/oversizedAppFilesReport.js"
+                  );
+                  return buildOversizedAppFilesReport(getPaprRoot(), appId);
+                })(),
+              }
+            : {}),
         });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -2860,22 +2886,41 @@ async function startGateway(): Promise<void> {
       const cloudSyncStartupDelayMs = Number(
         process.env.CLOUD_SYNC_STARTUP_DELAY_MS ?? "30000",
       );
-      setTimeout(() => {
-        if (getCloudSyncService()) {
-          console.log(
-            "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+      const cloudSyncStartupRetryMs = Number(
+        process.env.CLOUD_SYNC_STARTUP_RETRY_MS ?? "5000",
+      );
+
+      const tryDeferredCloudSyncStartup = (): void => {
+        void (async () => {
+          const { waitForWorkspaceReady } = await import(
+            "./services/workspaceReadiness.js"
           );
-          return;
-        }
-        const cloudSync = initializeCloudSyncService();
-        ensureTursoSyncBridge();
-        cloudSync.initialize().catch((err) => {
+          await waitForWorkspaceReady();
+
+          if (getCloudSyncService()) {
+            console.log(
+              "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+            );
+            return;
+          }
+          const cloudSync = initializeCloudSyncService();
+          ensureTursoSyncBridge();
+          cloudSync.initialize().catch((err) => {
+            console.warn(
+              "[Gateway] Cloud sync init failed (non-fatal):",
+              (err as Error).message,
+            );
+          });
+        })().catch((err) => {
           console.warn(
-            "[Gateway] Cloud sync init failed (non-fatal):",
+            "[Gateway] Deferred cloud sync startup failed:",
             (err as Error).message,
           );
+          setTimeout(tryDeferredCloudSyncStartup, cloudSyncStartupRetryMs);
         });
-      }, cloudSyncStartupDelayMs);
+      };
+
+      setTimeout(tryDeferredCloudSyncStartup, cloudSyncStartupDelayMs);
 
       setTimeout(() => {
         initializeVaultSyncService({ gatewayPort: Number(PORT) })
@@ -2921,18 +2966,53 @@ async function startGateway(): Promise<void> {
               (err as Error).message.slice(0, 120),
             ),
           );
-        void import("./services/syncV3/workspaceLogSync.js")
-          .then(async ({ catchUpAllLinkedSourcesFromWorkspaceLog }) => {
-            const appsRoot = tursoBridge.getAppsRootDir();
-            if (!appsRoot) {
+        void import(
+          "./services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js"
+        )
+          .then(({ runPendingReplicaCutovers }) =>
+            runPendingReplicaCutovers({ fromStartup: true }).then((batch) => {
+              if (batch.results.length === 0) {
+                return;
+              }
+              console.log(
+                `[Gateway] Replica cutover: attempted=${batch.attempted} ` +
+                  `succeeded=${batch.succeeded} blocked=${batch.blocked} skipped=${batch.skipped}`,
+              );
+              for (const result of batch.results) {
+                if (!result.ok && result.error) {
+                  console.warn(
+                    `[Gateway] Replica cutover ${result.dbId}: ${result.error.slice(0, 160)}`,
+                  );
+                }
+              }
+            }),
+          )
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Replica cutover startup failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import("./utils/tursoReplicaEnabled.js")
+          .then(({ isLegacyWorkspaceRowSyncEnabled }) => {
+            if (!isLegacyWorkspaceRowSyncEnabled()) {
               return;
             }
-            const applied = await catchUpAllLinkedSourcesFromWorkspaceLog(appsRoot);
-            if (applied > 0) {
-              console.log(
-                `[Gateway] Workspace log startup catch-up materialized ${applied} row op(s)`,
-              );
-            }
+            return import("./services/syncV3/workspaceLogSync.js").then(
+              async ({ catchUpAllLinkedSourcesFromWorkspaceLog }) => {
+                const appsRoot = tursoBridge.getAppsRootDir();
+                if (!appsRoot) {
+                  return;
+                }
+                const applied =
+                  await catchUpAllLinkedSourcesFromWorkspaceLog(appsRoot);
+                if (applied > 0) {
+                  console.log(
+                    `[Gateway] Workspace log startup catch-up materialized ${applied} row op(s)`,
+                  );
+                }
+              },
+            );
           })
           .catch((err) =>
             console.warn(

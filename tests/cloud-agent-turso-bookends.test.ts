@@ -6,6 +6,21 @@ const ensureLocalDbChangeLogReady = vi.hoisted(() => vi.fn());
 const localDbHasSyncableUserTables = vi.hoisted(() => vi.fn(() => true));
 const alignMigrationLedgers = vi.hoisted(() => vi.fn());
 
+const pullLinkedDbViaTursoReplica = vi.hoisted(() => vi.fn());
+const pushLinkedDbViaTursoReplica = vi.hoisted(() => vi.fn());
+const shouldUseTursoReplicaForSource = vi.hoisted(() => vi.fn(() => false));
+const mockIsLegacyWorkspaceRowSyncEnabled = vi.hoisted(() => vi.fn(() => true));
+
+vi.mock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
+  pullLinkedDbViaTursoReplica,
+  pushLinkedDbViaTursoReplica,
+  shouldUseTursoReplicaForSource,
+}));
+
+vi.mock("../src/gateway/utils/tursoReplicaEnabled.js", () => ({
+  isLegacyWorkspaceRowSyncEnabled: () => mockIsLegacyWorkspaceRowSyncEnabled(),
+}));
+
 vi.mock("../src/gateway/services/syncV3/workspaceLogSync.js", () => ({
   pullLinkedSourceViaWorkspaceLog,
   pushLinkedSourceViaWorkspaceLog,
@@ -55,6 +70,7 @@ import {
 describe("cloud agent Turso bookends", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(true);
     vi.mocked(localDbHasSyncableUserTables).mockReturnValue(true);
     pullLinkedSourceViaWorkspaceLog.mockResolvedValue({ status: "pulled", tables: ["*"] });
     pushLinkedSourceViaWorkspaceLog.mockResolvedValue({
@@ -133,6 +149,41 @@ describe("cloud agent Turso bookends", () => {
 
     expect(result.status).toBe("pushed");
     expect(pushLinkedSourceViaWorkspaceLog).toHaveBeenCalledOnce();
+  });
+
+  it("pushes via Turso replica when source is replica-managed", async () => {
+    shouldUseTursoReplicaForSource.mockReturnValue(true);
+    pushLinkedDbViaTursoReplica.mockResolvedValue({ ok: true });
+
+    const result = await pushLinkedSourceToCloud({
+      syncKey: "db-abc",
+      dbPath: "/tmp/sandbox/data.db",
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+      appId: "app-1",
+      dbId: "db-abc",
+    });
+
+    expect(result.status).toBe("pushed");
+    expect(pushLinkedDbViaTursoReplica).toHaveBeenCalledOnce();
+    expect(pushLinkedSourceViaWorkspaceLog).not.toHaveBeenCalled();
+  });
+
+  it("pulls via Turso replica without workspace log when source is replica-managed", async () => {
+    shouldUseTursoReplicaForSource.mockReturnValue(true);
+
+    await pullLinkedSourceFromCloud({
+      syncKey: "db-abc",
+      dbPath: "/tmp/sandbox/data.db",
+      tursoUrl: "libsql://example.turso.io",
+      authToken: "token",
+      appId: "app-1",
+      dbId: "db-abc",
+    });
+
+    expect(pullLinkedDbViaTursoReplica).toHaveBeenCalledOnce();
+    expect(pullLinkedSourceViaWorkspaceLog).not.toHaveBeenCalled();
+    expect(ensureLocalDbChangeLogReady).not.toHaveBeenCalled();
   });
 
   it("fails push when appId is missing", async () => {

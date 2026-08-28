@@ -8,7 +8,11 @@
 import { createHash, randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { getPaprDataDir } from "../../core/utils/paprRoot.js";
+import { getPaprDataDir, getPaprRoot } from "../../core/utils/paprRoot.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
 import {
   dbTursoDatabaseName,
   jobTursoDatabaseName,
@@ -18,6 +22,8 @@ import {
   parseDataSourcesFile,
   type AppDataSource,
 } from "./appDataSources.js";
+import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
+import { defaultSyncModeForNewRegistryDb } from "../utils/tursoReplicaEnabled.js";
 
 export const DATABASES_REGISTRY_FILENAME = "databases.json";
 
@@ -34,6 +40,19 @@ export interface DatabaseRecord {
   schemaOwnerAppId?: string;
   isolation: DatabaseIsolation;
   status: DatabaseStatus;
+  /** legacy = CDC/log path; replica = Turso Sync (@tursodatabase/sync). */
+  syncMode?: DatabaseSyncMode;
+  cutoverAt?: string;
+  /** True while cutover is running — cleared on success or rollback (crash resume). */
+  cutoverInProgress?: boolean;
+  cutoverStartedAt?: string;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string;
+  lastReplicaPushError?: string;
+  /** ISO timestamp of last successful replica push (Plan A phantom CDC guard). */
+  lastReplicaPushAt?: string;
+  /** ISO timestamp of last local replica mutation (DML/DDL/migration). */
+  lastReplicaLocalMutationAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -118,6 +137,8 @@ export class DatabaseRegistryService {
   private appsRootDir: string;
   private cache: DatabasesRegistryFile | null = null;
   private saveLock: Promise<void> | null = null;
+  private boundPaprDir: string | null = null;
+  private boundWriteGeneration: number | null = null;
 
   constructor(paprDataDir?: string, appsRootDir?: string) {
     const dataDir = paprDataDir ?? getPaprDataDir();
@@ -127,8 +148,25 @@ export class DatabaseRegistryService {
   }
 
   async initialize(): Promise<void> {
+    this.bindWorkspaceWriteContext();
     this.cache = await this.load();
     await this.backfillFromAppsIfNeeded();
+  }
+
+  private bindWorkspaceWriteContext(): void {
+    this.boundPaprDir = getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private isWriteContextValid(context: string): boolean {
+    if (this.boundPaprDir === null || this.boundWriteGeneration === null) {
+      return true;
+    }
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.boundPaprDir,
+      context,
+    );
   }
 
   getRegistryPath(): string {
@@ -149,6 +187,9 @@ export class DatabaseRegistryService {
   }
 
   private async save(state: DatabasesRegistryFile): Promise<void> {
+    if (!this.isWriteContextValid("databases.json save")) {
+      return;
+    }
     if (this.saveLock) {
       await this.saveLock;
     }
@@ -208,6 +249,97 @@ export class DatabaseRegistryService {
     await this.save(state);
   }
 
+  /** Mark legacy database as cut over to Plan A replica sync. */
+  async markSyncModeReplicaCutover(dbId: string): Promise<void> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return;
+    }
+    const now = new Date().toISOString();
+    state.databases[dbId] = {
+      ...record,
+      syncMode: "replica",
+      cutoverAt: now,
+      cutoverInProgress: false,
+      cutoverStartedAt: undefined,
+      cutoverBlocked: false,
+      cutoverBlockReason: undefined,
+      updatedAt: now,
+    };
+    await this.save(state);
+  }
+
+  async updateReplicaPushState(
+    dbId: string,
+    patch: {
+      lastReplicaPushError?: string | null;
+      lastReplicaPushAt?: string | null;
+      lastReplicaLocalMutationAt?: string | null;
+      cutoverBlocked?: boolean;
+      cutoverBlockReason?: string | null;
+      cutoverInProgress?: boolean;
+      cutoverStartedAt?: string | null;
+    },
+  ): Promise<void> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return;
+    }
+    state.databases[dbId] = {
+      ...record,
+      ...(patch.lastReplicaPushError !== undefined
+        ? {
+            lastReplicaPushError:
+              patch.lastReplicaPushError === null
+                ? undefined
+                : patch.lastReplicaPushError,
+          }
+        : {}),
+      ...(patch.lastReplicaPushAt !== undefined
+        ? {
+            lastReplicaPushAt:
+              patch.lastReplicaPushAt === null
+                ? undefined
+                : patch.lastReplicaPushAt,
+          }
+        : {}),
+      ...(patch.lastReplicaLocalMutationAt !== undefined
+        ? {
+            lastReplicaLocalMutationAt:
+              patch.lastReplicaLocalMutationAt === null
+                ? undefined
+                : patch.lastReplicaLocalMutationAt,
+          }
+        : {}),
+      ...(patch.cutoverBlocked !== undefined
+        ? { cutoverBlocked: patch.cutoverBlocked }
+        : {}),
+      ...(patch.cutoverBlockReason !== undefined
+        ? {
+            cutoverBlockReason:
+              patch.cutoverBlockReason === null
+                ? undefined
+                : patch.cutoverBlockReason,
+          }
+        : {}),
+      ...(patch.cutoverInProgress !== undefined
+        ? { cutoverInProgress: patch.cutoverInProgress }
+        : {}),
+      ...(patch.cutoverStartedAt !== undefined
+        ? {
+            cutoverStartedAt:
+              patch.cutoverStartedAt === null
+                ? undefined
+                : patch.cutoverStartedAt,
+          }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    await this.save(state);
+  }
+
   getByPath(dbPath: string): DatabaseRecord | undefined {
     const normalized = normalizeDbPath(dbPath);
     for (const record of Object.values(this.getState().databases)) {
@@ -250,6 +382,7 @@ export class DatabaseRegistryService {
         ? jobTursoDatabaseName(input.ownerJobId)
         : dbTursoDatabaseName(dbId));
 
+    const syncMode = defaultSyncModeForNewRegistryDb();
     const record: DatabaseRecord = {
       dbId,
       localPath: normalizedPath,
@@ -261,6 +394,7 @@ export class DatabaseRegistryService {
         : {}),
       isolation: input.isolation ?? "shared",
       status: "active",
+      ...(syncMode ? { syncMode } : {}),
       createdAt: now,
       updatedAt: now,
     };
@@ -268,6 +402,25 @@ export class DatabaseRegistryService {
     const state = this.getState();
     state.databases[dbId] = record;
     await this.save(state);
+
+    if (syncMode === "replica") {
+      try {
+        const { provisionTursoReplicaForRecord } = await import(
+          "./tursoReplica/tursoReplicaProvision.js"
+        );
+        await provisionTursoReplicaForRecord(record);
+        await this.updateReplicaPushState(dbId, { lastReplicaPushError: null });
+      } catch (error) {
+        const message = (error as Error).message.slice(0, 500);
+        console.warn(
+          `[DatabaseRegistry] Turso replica provision failed for ${dbId}: ${message}`,
+        );
+        await this.updateReplicaPushState(dbId, {
+          lastReplicaPushError: message,
+        });
+      }
+    }
+
     return record;
   }
 

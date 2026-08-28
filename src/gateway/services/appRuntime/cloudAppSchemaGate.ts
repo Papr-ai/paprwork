@@ -41,6 +41,49 @@ export interface SchemaGateResult {
   pinnedRevision: string | null;
 }
 
+export interface AppRevisionSchemaPayload {
+  revision: string;
+  requiredSchemaVersion: string | null;
+  remoteSchemaVersion: string | null;
+  schemaReady: boolean;
+  schemaSyncing: boolean;
+}
+
+const SCHEMA_STATUS_TTL_MS = 15_000;
+const schemaStatusCache = new Map<
+  string,
+  { value: SchemaGateResult; freshUntil: number }
+>();
+
+function schemaStatusCacheKey(input: {
+  namespaceId: string;
+  slug: string;
+  userId: string;
+  callerUserId?: string;
+}): string {
+  return `${input.namespaceId}:${input.slug}:${input.userId}:${input.callerUserId ?? ""}`;
+}
+
+export function resetSchemaStatusCacheForTests(): void {
+  schemaStatusCache.clear();
+  bundleRevisionPins.clear();
+}
+
+export function toAppRevisionSchemaPayload(
+  revision: string,
+  gate: SchemaGateResult,
+): AppRevisionSchemaPayload {
+  const required = gate.requiredSchemaVersion;
+  const schemaSyncing = Boolean(required && gate.blocked);
+  return {
+    revision,
+    requiredSchemaVersion: required,
+    remoteSchemaVersion: gate.remoteSchemaVersion,
+    schemaReady: !schemaSyncing,
+    schemaSyncing,
+  };
+}
+
 export async function evaluateCloudAppSchemaGate(input: {
   turso: TursoDbAdapter;
   runtimeAuth: AppRuntimeRouteAuth;
@@ -113,4 +156,51 @@ export async function evaluateCloudAppSchemaGate(input: {
     remoteSchemaVersion,
     pinnedRevision: pinRevision,
   };
+}
+
+/** Cached schema gate for API/revision endpoints — not on HTML critical path. */
+export async function evaluateCloudAppSchemaGateCached(input: {
+  turso: TursoDbAdapter;
+  runtimeAuth: AppRuntimeRouteAuth;
+  orgId: string;
+  namespaceId: string;
+  userId: string;
+  callerUserId?: string;
+  config: AppDataSourcesFile;
+  currentRevision: string | null;
+  bypassCache?: boolean;
+}): Promise<SchemaGateResult> {
+  const key = schemaStatusCacheKey({
+    namespaceId: input.namespaceId,
+    slug: input.runtimeAuth.slug,
+    userId: input.userId,
+    callerUserId: input.callerUserId,
+  });
+  if (!input.bypassCache) {
+    const cached = schemaStatusCache.get(key);
+    if (cached && Date.now() < cached.freshUntil) {
+      return cached.value;
+    }
+  }
+
+  const result = await evaluateCloudAppSchemaGate(input);
+  schemaStatusCache.set(key, {
+    value: result,
+    freshUntil: Date.now() + SCHEMA_STATUS_TTL_MS,
+  });
+  return result;
+}
+
+/** Fire-and-forget warm — populates schema status cache without blocking HTML. */
+export function warmCloudAppSchemaGate(input: {
+  turso: TursoDbAdapter;
+  runtimeAuth: AppRuntimeRouteAuth;
+  orgId: string;
+  namespaceId: string;
+  userId: string;
+  callerUserId?: string;
+  config: AppDataSourcesFile;
+  currentRevision: string | null;
+}): void {
+  void evaluateCloudAppSchemaGateCached(input).catch(() => {});
 }

@@ -8,6 +8,7 @@ import type { CloudSyncGitRemoteHost } from "./cloudSyncGitRemoteReview.js";
 import {
   enforceAppOwnershipAfterPull,
   finalizePortableResourcesAfterPull,
+  reconcileJobsRegistryAfterPull,
   type CloudSyncPullHost,
 } from "./cloudSyncGitPullExecution.js";
 import {
@@ -219,6 +220,7 @@ export function createGitRemoteHost(service: CloudSyncHostService): CloudSyncPul
       return service.consecutivePullFailures;
     },
     finalizePortableResourcesAfterPull: () => finalizePortableResourcesAfterPull(),
+    reconcileJobsRegistryAfterPull: () => reconcileJobsRegistryAfterPull(),
   };
 }
 

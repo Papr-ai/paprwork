@@ -27,10 +27,9 @@ COPY tsconfig.gateway.json tsconfig.json ./
 COPY src ./src
 RUN npm run build:gateway
 
-FROM node:24-alpine
+FROM node:24-bookworm-slim
 WORKDIR /app
 # Backend handlers: python3 subprocess + node (typescript transpiled via esbuild) at the edge
-RUN apk add --no-cache python3
 ENV NODE_ENV=production
 COPY package.json package-lock.json ./
 RUN node -e "\
@@ -43,7 +42,10 @@ RUN node -e "\
   const lock=JSON.parse(fs.readFileSync('package-lock.json','utf8'));\
   drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
-" && npm install --omit=dev --no-audit --no-fund
+" && npm install --omit=dev --no-audit --no-fund \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends python3 ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 COPY --from=build /app/dist ./dist
 EXPOSE 8080
 CMD ["node", "dist/gateway/cloud-app-host.js"]

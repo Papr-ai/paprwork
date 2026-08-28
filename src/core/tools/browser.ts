@@ -5,6 +5,7 @@ import type { Browser, Page } from "playwright";
 import { isCloudAgentGatewayMode } from "../utils/paprRoot.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
+import { getBrowserToolWebviewBlockReason } from "./webviewSessionGuard.js";
 
 // Track if we've already tried installing Playwright browsers
 let playwrightInstallAttempted = false;
@@ -75,6 +76,13 @@ async function requestBrowserPermission(action: string): Promise<void> {
         ? error.message
         : "Browser permission request failed",
     );
+  }
+}
+
+async function assertBrowserToolAllowed(toolName: string): Promise<void> {
+  const reason = await getBrowserToolWebviewBlockReason(toolName);
+  if (reason) {
+    throw new Error(reason);
   }
 }
 
@@ -429,6 +437,7 @@ export const browserNavigateTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof navigateSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_navigate");
     await requestBrowserPermission(`navigate:${args.url}`);
     const session = await getBrowserSession();
     await session.page.goto(args.url, { waitUntil: "domcontentloaded" });
@@ -452,6 +461,7 @@ export const browserSnapshotTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof snapshotSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_snapshot");
     await requestBrowserPermission("snapshot");
     const session = await getBrowserSession();
     const html = await session.page.content();
@@ -484,6 +494,7 @@ export const browserClickTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof clickSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_click");
     await requestBrowserPermission(`click:${args.selector}`);
     const session = await getBrowserSession();
     await session.page.click(args.selector);
@@ -498,6 +509,7 @@ export const browserTypeTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof typeSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_type");
     await requestBrowserPermission(`type:${args.selector}`);
     const session = await getBrowserSession();
     await session.page.fill(args.selector, args.text);
@@ -605,6 +617,7 @@ export const browserEvaluateScriptTool = createTool({
     const args =
       (input as { context?: z.infer<typeof browserScriptSchema> }).context ??
       input;
+    await assertBrowserToolAllowed("browser_test_script");
     await requestBrowserPermission("test_script");
     const session = await getBrowserSession();
     try {
@@ -755,6 +768,7 @@ export const browserFillFormTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof fillFormSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_fill_form");
     await requestBrowserPermission(`fill_form:${args.fields.length} fields`);
     const session = await getBrowserSession();
 
@@ -786,6 +800,7 @@ export const browserScrollTool = createTool({
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof scrollSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_scroll");
     await requestBrowserPermission("scroll");
     const session = await getBrowserSession();
 

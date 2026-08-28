@@ -132,6 +132,25 @@ describe("collectAppOpFiles", () => {
     expect(parsed.id).toBe("job-worker");
   });
 
+  it("includes .papr-cloud-revision for apps.papr.ai cache busting", async () => {
+    const paprDir = makePaprDir();
+    fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });
+    seedWorkspace(paprDir);
+    fs.writeFileSync(
+      path.join(paprDir, "apps", appId, ".papr-cloud-revision"),
+      "abc123revision\n",
+    );
+    fs.writeFileSync(
+      path.join(paprDir, "apps", appId, ".secrets.env"),
+      "KEY=secret\n",
+    );
+
+    const { files } = await collectAppOpFiles(paprDir, appId);
+    const paths = files.map((file) => file.path);
+    expect(paths).toContain(".papr-cloud-revision");
+    expect(paths.some((p) => p.includes(".secrets"))).toBe(false);
+  });
+
   it("skips migrations for consumer apps that are not schema owner", async () => {
     const paprDir = makePaprDir();
     fs.mkdirSync(path.join(paprDir, "data"), { recursive: true });

@@ -1011,6 +1011,53 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.7" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.7</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Embedded Replica (Plan A)</strong>
+                <p>
+                  Desktop databases now sync through Turso embedded replicas with
+                  primary-authority writes, offline outbox draining, and
+                  cutover tooling for legacy workspaces.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>paprDb Agent Tools</strong>
+                <p>
+                  New agent-facing database API for exec, migrations, sync
+                  status, push, and pull — with guards against direct SQLite
+                  access when replica mode is active.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>App Tool Previews in Chat</strong>
+                <p>
+                  Mini-app tool calls now render inline previews in the chat
+                  stream so you can see app output without switching tabs.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Readiness &amp; Job Cleanup</strong>
+                <p>
+                  Safer workspace switching with readiness guards, job
+                  tombstones, cloud cleanup, and improved sync status in the
+                  Cloud Sync tab.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.7"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.6" && (
           <div className="about-card">
             <h3>What's New in v2.4.6</h3>

@@ -38,6 +38,11 @@ export function isMissingColumnError(error: unknown): boolean {
   return /no such column:/i.test(message);
 }
 
+export function isForeignKeyConstraintError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /FOREIGN KEY constraint failed/i.test(message);
+}
+
 export function parseCreateTableStatement(
   statement: string,
 ): { table: string } | null {

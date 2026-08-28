@@ -105,7 +105,11 @@ export async function webReady(
     if (source.remoteCheckFailed) {
       continue;
     }
-    if (source.schemaDrift) {
+    const legacyArtifactDriftOnly =
+      source.schemaDrift === true &&
+      (source.legacyArtifactTables?.length ?? 0) > 0 &&
+      source.syncMode !== "replica";
+    if (source.schemaDrift && !legacyArtifactDriftOnly) {
       return {
         ready: false,
         reason: "schema_drift",

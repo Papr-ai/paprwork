@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const SLEEP_JOB_NAMES = ["Papr Sleep Cycle", "papr-sleep"] as const;
-export const SLEEP_PROMPT_VERSION = 15;
+export const SLEEP_PROMPT_VERSION = 16;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
@@ -323,9 +323,28 @@ export class SleepCycleService {
     try {
       const { loadGatewayProfile, getWorkspaceFileHealth, formatWorkspaceFileHealthForSleep } =
         await import("./identityAboutSeed.js");
+      const { BRAND_JSON_CANONICAL_EXAMPLE } = await import("./brandNormalize.js");
+      const {
+        listAppBrandOverrides,
+        formatAppBrandOverridesForSleep,
+      } = await import("./brandCatalog.js");
       const profile = await loadGatewayProfile();
       const health = await getWorkspaceFileHealth();
       sections.push(formatWorkspaceFileHealthForSleep(health, profile));
+
+      const appBrands = await listAppBrandOverrides();
+      sections.push("## Per-app brand overrides", "");
+      sections.push(formatAppBrandOverridesForSleep(appBrands));
+      sections.push("");
+
+      sections.push("## Brand JSON schema (canonical — use when writing brand.json)", "");
+      sections.push(
+        "Global: `$PAPR_HOME/workspace/brand.json`. Per-app: `$PAPR_HOME/apps/{appId}/brand.json`.",
+      );
+      sections.push("```json");
+      sections.push(BRAND_JSON_CANONICAL_EXAMPLE);
+      sections.push("```");
+      sections.push("");
     } catch (error) {
       sections.push(
         "## Workspace file health",

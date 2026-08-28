@@ -464,6 +464,29 @@ export interface ElectronAPI {
     ) => Promise<{ success: boolean; enabled: boolean }>;
   };
 
+  replicaE2e: {
+    list: () => Promise<{
+      tests: Array<{
+        id: string;
+        name: string;
+        npmScript: string;
+        description: string;
+        requiresAuth: boolean;
+      }>;
+      available: boolean;
+      runningTestId: string | null;
+    }>;
+    run: (testId: string) => Promise<{
+      testId: string;
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      durationMs: number;
+      cancelled: boolean;
+    }>;
+    cancel: () => Promise<{ cancelled: boolean; testId?: string }>;
+  };
+
   providerAuth: {
     getPreference: (
       provider: "openai" | "anthropic",
@@ -485,6 +508,23 @@ export interface ElectronAPI {
       filePath: string;
       mimeType?: string;
     }) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+  };
+
+  agentPreview: {
+    show: (webviewId?: string) => Promise<{
+      success: boolean;
+      webviewId?: string;
+      url?: string;
+      title?: string;
+      error?: string;
+    }>;
+    isActive: (webviewId?: string) => Promise<{ active: boolean }>;
+    captureThumbnail: (webviewId?: string) => Promise<{
+      success: boolean;
+      screenshot?: string;
+      webviewId?: string;
+      error?: string;
+    }>;
   };
 
   // App metadata

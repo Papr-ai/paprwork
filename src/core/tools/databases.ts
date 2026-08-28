@@ -81,7 +81,12 @@ export const createDatabaseTool = createTool({
     const { ensureRegistryDatabase } = await import(
       "../../gateway/services/jobs/databaseMigrations.js"
     );
-    await ensureRegistryDatabase(localPath);
+    const { shouldDeferRegistrySqliteFileForReplica } = await import(
+      "../../gateway/utils/tursoReplicaEnabled.js"
+    );
+    await ensureRegistryDatabase(localPath, {
+      deferSqliteFile: shouldDeferRegistrySqliteFileForReplica(),
+    });
 
     const registry = await initializeDatabaseRegistry();
     const record = await registry.register({
@@ -97,6 +102,7 @@ export const createDatabaseTool = createTool({
         localPath: record.localPath,
         tursoShortName: record.tursoShortName,
         isolation: record.isolation,
+        syncMode: record.syncMode ?? "legacy",
       },
     };
   },
@@ -165,7 +171,9 @@ export const deleteDatabaseTool = createTool({
   id: "delete_database",
   description:
     "Tombstone a registry database when no apps reference it. " +
-    "Optionally delete Turso replica when deleteTurso=true.",
+    "Optionally delete Turso replica when deleteTurso=true. " +
+    "NEVER use to fix schema drift or cutover — that destroys cloud row data. " +
+    "For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing Turso instance).",
   inputSchema: deleteDatabaseSchema,
   execute: async (input) => {
     const args =

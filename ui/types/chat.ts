@@ -65,6 +65,8 @@ export interface ChatState {
   isStreaming: boolean;
   /** True when gateway disconnected mid-stream — Working card shows reconnecting */
   connectionPaused?: boolean;
+  /** Post-tool text summary in progress (wrap-up continuation). */
+  isFinishingWork?: boolean;
   /** Auto-resume failed — user can tap Continue to retry stream recovery */
   needsStreamRecovery?: boolean;
   /** Defaults to "connection" when unset, matching the original recovery banner. */

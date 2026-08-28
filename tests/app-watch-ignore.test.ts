@@ -20,6 +20,22 @@ describe("shouldIgnoreAppWatchPath", () => {
     expect(shouldIgnoreAppWatchPath(path.join(appDir, ".hidden"))).toBe(true);
   });
 
+  it("ignores cloud-prep artifacts written during Upload now", () => {
+    const appDir = "/Users/me/Papr/orgs/o/n/apps/app-id";
+    expect(
+      shouldIgnoreAppWatchPath(path.join(appDir, "backend", "bundle.json")),
+    ).toBe(true);
+    expect(
+      shouldIgnoreAppWatchPath(path.join(appDir, "requirements.json")),
+    ).toBe(true);
+    expect(
+      shouldIgnoreAppWatchPath(path.join(appDir, "__papr__", "app-meta.json")),
+    ).toBe(true);
+    expect(
+      shouldIgnoreAppWatchPath(path.join(appDir, ".papr-cloud-revision")),
+    ).toBe(true);
+  });
+
   it("does not ignore app source files", () => {
     const appDir = "/Users/me/Papr/orgs/o/n/apps/app-id";
     expect(shouldIgnoreAppWatchPath(path.join(appDir, "index.html"))).toBe(

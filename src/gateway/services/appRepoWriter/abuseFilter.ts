@@ -12,8 +12,18 @@ export interface AbuseRejection {
   reason: string;
 }
 
+/** App scaffold files that must sync even if a hygiene spec would match. */
+const ALWAYS_TRACK_REPO_PATHS = new Set([
+  "backend/papr_db.py",
+  "backend/db_helper.py",
+]);
+
 function normalizeRepoPath(filePath: string): string {
   return filePath.replace(/\\/g, "/").replace(/^\.\/+/, "");
+}
+
+export function isRepoPathAlwaysTracked(repoPath: string): boolean {
+  return ALWAYS_TRACK_REPO_PATHS.has(normalizeRepoPath(repoPath).toLowerCase());
 }
 
 /**
@@ -25,6 +35,9 @@ function normalizeRepoPath(filePath: string): string {
  * and `*.zip` matched `zipcode.ts`.
  */
 export function isNeverTrackRepoPath(repoPath: string): boolean {
+  if (isRepoPathAlwaysTracked(repoPath)) {
+    return false;
+  }
   const normalized = normalizeRepoPath(repoPath).toLowerCase();
   const segments = normalized.split("/");
   const base = segments[segments.length - 1] ?? "";

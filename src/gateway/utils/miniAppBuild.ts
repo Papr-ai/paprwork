@@ -269,6 +269,17 @@ export function rewriteHtmlForBundledDist(
   return result;
 }
 
+/** Append ?v= on legacy app.ts / main.ts entry scripts (no dist/ bundle). */
+export function appendLegacyTypeScriptCacheBusters(
+  html: string,
+  version: string,
+): string {
+  return html.replace(
+    /((?:src)=["'])((?:\.\/)?(?:app|main)(?:\.tsx?))(\?[^"']*)?(["'])/gi,
+    `$1$2?v=${version}$4`,
+  );
+}
+
 /** Append ?v= content hashes so browsers fetch new bundles after sync. */
 export function appendDistAssetCacheBusters(
   html: string,

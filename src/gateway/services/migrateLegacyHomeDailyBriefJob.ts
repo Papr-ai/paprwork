@@ -54,6 +54,8 @@ export interface LegacyHomeJobMigrationDeps {
   jobs: Map<string, JobRecord>;
   saveJobs: () => Promise<void>;
   persistJobRecord: (job: JobRecord) => Promise<void>;
+  /** When set, duplicates are fully deleted (disk + cloud) instead of index-only removal. */
+  deleteJob?: (jobId: string) => Promise<void>;
 }
 
 function markerPath(paprDir: string): string {
@@ -496,11 +498,17 @@ export async function reconcileDuplicateHomeDailyBriefJobs(
   }
 
   for (const id of idsToRemove) {
-    deps.jobs.delete(id);
+    if (deps.deleteJob) {
+      await deps.deleteJob(id);
+    } else {
+      deps.jobs.delete(id);
+    }
     result.removedJobIds.push(id);
   }
 
-  await deps.saveJobs();
+  if (!deps.deleteJob) {
+    await deps.saveJobs();
+  }
 
   const newDbPath = resolveDailyBriefDbPath(deps.jobsRoot, canonicalJobId);
   if (existsSync(homeAppDir)) {

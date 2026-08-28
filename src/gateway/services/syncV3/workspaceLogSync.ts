@@ -47,6 +47,9 @@ import { getDbPool } from "../DbQueryPool.js";
 import { readSyncLogShipBatch } from "./syncLogToRowSql.js";
 import { incrementSyncV3Metric } from "./syncV3Metrics.js";
 import { ensureWorkspaceLogGenesisForDb } from "./workspaceLogGenesisCutover.js";
+import { isLegacyWorkspaceRowSyncEnabled } from "../../utils/tursoReplicaEnabled.js";
+import { runSchemaDriftHeal } from "./schemaDriftHeal.js";
+import { isSyncV3SchemaLogEnabled } from "./syncV3Flags.js";
 
 export interface WorkspaceLogPushOptions {
   force?: boolean;
@@ -81,6 +84,18 @@ export function resolveReplicaIdForLinkedSource(
 export async function catchUpLinkedSourceFromWorkspaceLog(
   linked: TursoLinkedSource,
 ): Promise<number> {
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return 0;
+  }
+
+  const source = linkedSourceAsAppDataSource(linked);
+  const { shouldSuppressLegacyTursoPushForLinkedSource } = await import(
+    "../tursoReplica/tursoReplicaRouting.js"
+  );
+  if (shouldSuppressLegacyTursoPushForLinkedSource(source)) {
+    return 0;
+  }
+
   const replicaId = resolveReplicaIdForLinkedSource(linked);
   if (!replicaId) {
     return 0;
@@ -97,6 +112,18 @@ export async function shipLinkedSourceToWorkspaceLog(
   linked: TursoLinkedSource,
   options?: WorkspaceLogPushOptions,
 ): Promise<{ shipped: number; lastSyncLogId: number }> {
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return { shipped: 0, lastSyncLogId: 0 };
+  }
+
+  const source = linkedSourceAsAppDataSource(linked);
+  const { shouldSuppressLegacyTursoPushForLinkedSource } = await import(
+    "../tursoReplica/tursoReplicaRouting.js"
+  );
+  if (shouldSuppressLegacyTursoPushForLinkedSource(source)) {
+    return { shipped: 0, lastSyncLogId: 0 };
+  }
+
   const dbPath = linked.dbPath;
   const syncKey = linkedSourceSyncKey(linked);
   const writeGeneration = getWorkspaceWriteGeneration();
@@ -213,28 +240,56 @@ export async function pushLinkedSourceViaWorkspaceLog(
   _credentials?: TursoCredentials,
   options?: WorkspaceLogPushOptions,
 ): Promise<PushResult> {
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return {
+      status: "skipped",
+      tables: [],
+      reason: "legacy_row_sync_disabled",
+    };
+  }
+
   const syncKey = linkedSourceSyncKey(linked);
+  const source = linkedSourceAsAppDataSource(linked);
+  const { shouldSuppressLegacyTursoPushForLinkedSource } = await import(
+    "../tursoReplica/tursoReplicaRouting.js"
+  );
+  if (shouldSuppressLegacyTursoPushForLinkedSource(source)) {
+    return {
+      status: "skipped",
+      tables: [],
+      reason: "replica_managed",
+    };
+  }
+
   try {
-    const { ensureReplicaReady } = await import("./ensureReplicaReady.js");
-    const { schemaShipped, rowsShipped, lastSyncLogId } =
-      await ensureReplicaReady(linked, options);
-    if (schemaShipped === 0 && rowsShipped === 0) {
+    let schemaShipped = 0;
+    if (isSyncV3SchemaLogEnabled()) {
+      schemaShipped = await runSchemaDriftHeal(linked);
+      if (schemaShipped > 0) {
+        console.log(
+          `[WorkspaceLogSync] Shipped ${schemaShipped} schema migration(s) for ${syncKey}`,
+        );
+      }
+    }
+
+    const rowResult = await shipLinkedSourceToWorkspaceLog(linked, options);
+    if (schemaShipped === 0 && rowResult.shipped === 0) {
       return {
         status: "skipped",
         tables: [],
         reason: "all_tables_unchanged",
-        lastPushedLogId: lastSyncLogId,
+        lastPushedLogId: rowResult.lastSyncLogId,
       };
     }
-    if (schemaShipped > 0 || rowsShipped > 0) {
+    if (schemaShipped > 0 || rowResult.shipped > 0) {
       console.log(
-        `[WorkspaceLogSync] Shipped schema=${schemaShipped} row=${rowsShipped} for ${syncKey}`,
+        `[WorkspaceLogSync] Shipped schema=${schemaShipped} row=${rowResult.shipped} for ${syncKey}`,
       );
     }
     return {
       status: "pushed",
       tables: ["*"],
-      lastPushedLogId: lastSyncLogId,
+      lastPushedLogId: rowResult.lastSyncLogId,
     };
   } catch (error) {
     return {
@@ -248,6 +303,10 @@ export async function pushLinkedSourceViaWorkspaceLog(
 export async function pullLinkedSourceViaWorkspaceLog(
   linked: TursoLinkedSource,
 ): Promise<PullResult> {
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return { status: "skipped", reason: "legacy_row_sync_disabled" };
+  }
+
   const syncKey = linkedSourceSyncKey(linked);
   try {
     const applied = await catchUpLinkedSourceFromWorkspaceLog(linked);
@@ -269,6 +328,10 @@ export async function pullLinkedSourceViaWorkspaceLog(
 export async function catchUpAllLinkedSourcesFromWorkspaceLog(
   appsRootDir: string,
 ): Promise<number> {
+  if (!isLegacyWorkspaceRowSyncEnabled()) {
+    return 0;
+  }
+
   const { discoverTursoLinkedSources, dedupeLinkedSourcesBySyncKey } = await import("../tursoLinkedSources.js");
   const sources = dedupeLinkedSourcesBySyncKey(
     await discoverTursoLinkedSources(appsRootDir),

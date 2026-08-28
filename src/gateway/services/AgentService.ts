@@ -211,6 +211,23 @@ export class AgentService {
       >[0];
       this.toolRegistry.registerLegacy(registryTool);
     }
+
+    const { isPlanACloudDbAuthority } = await import(
+      "./tursoReplica/replicaSchemaPolicy.js"
+    );
+    if (isPlanACloudDbAuthority()) {
+      for (const recoveryToolId of ["papr_db_push", "papr_db_pull"] as const) {
+        const recoveryTool = this.toolRegistry.getTool(recoveryToolId);
+        if (recoveryTool) {
+          this.toolRegistry.unregister(recoveryToolId);
+          this.toolRegistry.registerLegacy(recoveryTool);
+        }
+      }
+      console.log(
+        "[AgentService] Plan A cloud DB: papr_db_push/pull registered as legacy recovery tools",
+      );
+    }
+
     console.log("[AgentService] Tools registered");
 
     console.log("[AgentService] Building system prompt...");
@@ -2022,6 +2039,8 @@ export class AgentService {
         return;
       }
 
+      // After the assistant stream fully finishes: if the turn ended on tool(s)
+      // without trailing user text, one text-only summary step for the user.
       if (
         shouldRequestWrapUpSummary({
           sequence,
@@ -2033,6 +2052,12 @@ export class AgentService {
         console.log(
           `[AgentService] Running wrap-up summary for ${chatId} — tools completed without a user-facing reply`,
         );
+
+        yield {
+          type: "wrap-up-start",
+          chatId,
+          timestamp: new Date().toISOString(),
+        } as StreamChunk & { chatId: string };
 
         try {
           let wrapUpState:

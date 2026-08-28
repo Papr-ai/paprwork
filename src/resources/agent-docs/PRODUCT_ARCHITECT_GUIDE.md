@@ -24,6 +24,7 @@ Also check `$PAPR_HOME/workspace/BRAND.md` when UI is involved.
 
 ## When This Is Needed
 
+- **Every new mini-app** (\`create_app\`) — tool-enforced; includes simple todo/CRUD apps
 - New mini-app with multiple screens or data sources
 - App + one or more jobs (typical automation)
 - Job pipelines with `dependsOn` / schedules
@@ -143,7 +144,26 @@ migrations / _papr_*                ← platform-managed
 ### 6. Recommendation
 - **Proceed / simplify / defer** — with clear rationale
 
-### 7. Cloud Read Budget (required when app has linked DBs)
+### 7. Implementation Contracts (required — builder handoff)
+
+Copy this checklist into every brief when the app uses backend handlers and/or linked DBs. The implementing agent must follow these platform contracts (full detail in `preloaded-app-and-jobs-guide`):
+
+| Contract | Rule |
+|----------|------|
+| **Guide first** | `read_skill({ skillId: "preloaded-app-and-jobs-guide" })` before first backend/DB edit |
+| **Backend params** | `PAPR_ACTION_PARAMS` env — **never** `sys.stdin` |
+| **Backend DB** | `from papr_db import connect` — **never** `APP_DB_PATH` |
+| **Frontend → backend** | `JSON.stringify({ params: { ... } })` — nested `params` required |
+| **Frontend ← backend** | `{ stdout, exitCode, stderr } = await res.json()` → check `exitCode` → `JSON.parse(stdout)` |
+| **DB reads** | `POST /api/db/query` with `{ sourceId, sql, params }` — field is **`sql`**, not `query` |
+| **DB writes** | `POST /api/db/write` — not `/api/db/query` for mutations |
+| **Plan A schema** (cloud sync on) | `migrations/{id}.sql` in brief → builder runs `write_file` + `papr_db_apply_migration({ dbId, migrationId })` on Turso primary — **never** `papr_db_exec` DDL or bash/sqlite3 on registry DB files |
+| **Plan A rows** | `papr_db_exec` DML, `/api/db/write`, or job SQL via `$PAPR_DB_*`; Upload now ships git + replica push |
+| **Scaffold** | Extend `backend/ping.py` pattern — do not replace with stdin handlers |
+
+List any app-specific handler names from §2 here (e.g. `meeting-start`, `agenda-manage`) so the builder wires the correct actions.
+
+### 8. Cloud Read Budget (required when app has linked DBs)
 
 Cloud apps on `apps.papr.ai` read **Turso** — billing is **per row read**, not per query. A few users opening a poorly designed dashboard can generate tens of millions of reads.
 
@@ -174,7 +194,7 @@ Job write  →  onDbChanged → reload affected queries only
 - 5+ raw `/api/db/query` calls without backend handlers
 - `setInterval` + `/api/db/query` (polling)
 
-**Sync note:** V3 sync pushes **row deltas + schema migrations** via workspace log — it does **not** re-read every row on each sync. High Turso read/write spikes in metrics usually come from **legacy sync bootstrap**, **agent debug tools** (`query_cloud_turso`), or **app query patterns** — not routine V3 delta sync.
+**Sync note (Plan A — cloud sync on):** Registry DB **schema** = migration files + `papr_db_apply_migration` (Turso primary when online). **Rows** = local replica → `push()` to Turso (auto when online). Git Upload ships migration **files** for collaboration — it does not execute schema. Legacy workspace-log CDC is off when `PAPR_TURSO_REPLICA_SYNC=replica-records`. High Turso read spikes usually come from **bad app query patterns**, **agent debug tools** (`query_cloud_turso`), or **legacy bootstrap** — not routine replica push/pull.
 
 ## Paprwork Rules (non-negotiable)
 
@@ -194,7 +214,8 @@ Job write  →  onDbChanged → reload affected queries only
 - Primary app database is attached and resolves as `$APP_DB` for every app-linked job
 - Mini-app reads use `/api/db/query`; mini-app mutations use `/api/db/write`
 - App-linked jobs use `$APP_DB` for UI-facing tables and `$JOB_DB` only for scratch state
-- Migrations, app SQL, and job SQL match the canonical data contract
+- Migrations listed in the brief as `migrations/{id}.sql` files; builder applies with `papr_db_apply_migration` (Plan A) — not raw DDL via `papr_db_exec` or bash/sqlite3
+- App SQL, job SQL, and migration files match the canonical data contract
 - Each dependency that should chain includes `autoTrigger: true`
 - A smoke recipe proves the user outcome through DB assertions and a launched app, not merely a completed process
 

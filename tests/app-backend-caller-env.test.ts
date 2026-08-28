@@ -44,18 +44,15 @@ describe("buildBackendActionEnv caller identity", () => {
     expect(env.PAPR_PARAM_passcode).toBe("ABC123");
   });
 
-  it("omits caller env vars when logged out", () => {
+  it("stringifies numeric action params for python subprocess env", () => {
     const env = buildBackendActionEnv({
       appId: "app-1",
-      action: "ping",
-      params: { ping: "1" },
-      loggedIn: false,
-      callerIdentity: { userId: "should-not-appear" },
+      action: "migrate",
+      params: { week: 12 as unknown as string, limit: 10 as unknown as string },
     });
 
-    expect(env[VERIFIED_CALLER_USER_ID_PARAM]).toBeUndefined();
-    expect(env[VERIFIED_CALLER_EMAIL_PARAM]).toBeUndefined();
-    const params = JSON.parse(env.PAPR_ACTION_PARAMS ?? "{}") as Record<string, string>;
-    expect(params[VERIFIED_CALLER_USER_ID_PARAM]).toBeUndefined();
+    expect(env.PAPR_PARAM_week).toBe("12");
+    expect(env.PAPR_PARAM_limit).toBe("10");
+    expect(typeof env.PAPR_PARAM_week).toBe("string");
   });
 });

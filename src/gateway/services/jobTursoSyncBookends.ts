@@ -12,6 +12,8 @@ import { findLinkedSourceForJob } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import { ensureLocalDbChangeLogReady } from "./tursoSyncBridgeCore.js";
 import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
+import { linkedSourceAsAppDataSource } from "./tursoLinkedSources.js";
+import { shouldUseTursoReplicaForSource } from "./tursoReplica/tursoReplicaRouting.js";
 
 export function resolveJobTursoSyncKeys(
   job: Pick<JobRecord, "id" | "writeDbIds">,
@@ -83,7 +85,10 @@ export async function pullJobTursoBeforeRun(
     try {
       const result = await bridge.pullJob(syncKey, undefined, {});
       if (result.status === "pulled") {
-        ensureLocalDbChangeLogReady(linked.dbPath);
+        const appSource = linkedSourceAsAppDataSource(linked);
+        if (!shouldUseTursoReplicaForSource(appSource)) {
+          ensureLocalDbChangeLogReady(linked.dbPath);
+        }
         await appendLog?.(
           `[Turso] Pulled remote DB before run (${syncKey})`,
         );

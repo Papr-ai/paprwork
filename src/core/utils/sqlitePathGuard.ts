@@ -28,8 +28,14 @@ export function extractSqliteDbPaths(command: string): string[] {
   return [...paths];
 }
 
+/** True when command pipes SQL from a file into sqlite3 (writes bypass inline SQL detection). */
+export function commandHasSqliteInputRedirect(command: string): boolean {
+  return /sqlite3\s+[^\s]+\s*<\s*[^\s|&;]+/i.test(command);
+}
+
 export function commandHasSqliteWrite(command: string): boolean {
   if (!/sqlite3|\.connect\s*\(/i.test(command)) return false;
+  if (commandHasSqliteInputRedirect(command)) return true;
   return SQLITE_WRITE_SQL_RE.test(command);
 }
 

@@ -16,6 +16,7 @@ import type {
   BrandTokens,
 } from "../../core/types/brand.js";
 import { EMPTY_BRAND_TOKENS } from "../../core/types/brand.js";
+import { normalizeBrandTokens } from "./brandNormalize.js";
 
 export type { BrandTokens } from "../../core/types/brand.js";
 
@@ -172,7 +173,7 @@ async function readBrandJsonFile(filePath: string): Promise<BrandTokens | null> 
 
   try {
     const raw = await fs.readFile(filePath, "utf8");
-    const parsed = JSON.parse(raw) as BrandTokens;
+    const parsed = normalizeBrandTokens(JSON.parse(raw) as unknown);
     const cleaned = stripEmptyBrandFields(parsed);
     return Object.keys(cleaned).length > 0 ? cleaned : null;
   } catch {

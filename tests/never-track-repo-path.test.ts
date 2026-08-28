@@ -74,6 +74,16 @@ describe("isNeverTrackRepoPath", () => {
   it("excludes stranded git repack temp files", () => {
     expect(isNeverTrackRepoPath("tmp_pack_abc123")).toBe(true);
   });
+
+  it("always tracks app backend scaffold helpers", () => {
+    for (const repoPath of [
+      "backend/papr_db.py",
+      "backend/db_helper.py",
+      "apps/demo/backend/papr_db.py",
+    ]) {
+      expect(isNeverTrackRepoPath(repoPath), repoPath).toBe(false);
+    }
+  });
 });
 
 describe("validateOpFileForWriter", () => {

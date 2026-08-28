@@ -56,6 +56,16 @@ function objectName(cacheKey: string): string {
   return `repo-files/${encodeURIComponent(cacheKey)}`;
 }
 
+/** GCS object name prefix for all repo-file keys under namespace/slug. */
+export function gcsObjectPrefixForApp(namespaceId: string, slug: string): string {
+  return `repo-files/${encodeURIComponent(`${namespaceId}:${slug}:`)}`;
+}
+
+/** GCS object name prefix for all repo-file keys under a namespace. */
+export function gcsObjectPrefixForNamespace(namespaceId: string): string {
+  return `repo-files/${encodeURIComponent(`${namespaceId}:`)}`;
+}
+
 export interface GcsCachedFile {
   content: string;
   contentType: string;
@@ -141,4 +151,60 @@ export function gcsCachePut(
       // Best-effort — in-process cache still works without GCS.
     }
   })();
+}
+
+interface GcsListResponse {
+  items?: Array<{ name: string }>;
+  nextPageToken?: string;
+}
+
+/** Delete all shared-cache objects for a published app. Fire-and-forget. */
+export function gcsCacheDeleteByApp(namespaceId: string, slug: string): void {
+  void gcsCacheDeleteByObjectPrefix(gcsObjectPrefixForApp(namespaceId, slug));
+}
+
+/** Delete all shared-cache objects for a namespace. Fire-and-forget. */
+export function gcsCacheDeleteByNamespace(namespaceId: string): void {
+  void gcsCacheDeleteByObjectPrefix(gcsObjectPrefixForNamespace(namespaceId));
+}
+
+async function gcsCacheDeleteByObjectPrefix(objectPrefix: string): Promise<void> {
+  const bucket = gcsBucket();
+  if (!bucket) return;
+  const token = await getAccessToken();
+  if (!token) return;
+
+  try {
+    let pageToken: string | undefined;
+    do {
+      const listUrl =
+        `https://storage.googleapis.com/storage/v1/b/${bucket}/o` +
+        `?prefix=${encodeURIComponent(objectPrefix)}` +
+        (pageToken ? `&pageToken=${encodeURIComponent(pageToken)}` : "");
+      const listRes = await fetch(listUrl, {
+        headers: { Authorization: `Bearer ${token}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!listRes.ok) return;
+      const list = (await listRes.json()) as GcsListResponse;
+      const names = (list.items ?? []).map((item) => item.name).filter(Boolean);
+      if (names.length > 0) {
+        await fetch(
+          `https://storage.googleapis.com/storage/v1/b/${bucket}/o/batchDelete`,
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ objects: names.map((name) => ({ name })) }),
+            signal: AbortSignal.timeout(30_000),
+          },
+        );
+      }
+      pageToken = list.nextPageToken;
+    } while (pageToken);
+  } catch {
+    // Best-effort — lifecycle rules still prune orphans.
+  }
 }

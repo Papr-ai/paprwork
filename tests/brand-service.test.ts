@@ -73,4 +73,23 @@ describe("BrandService", () => {
     const resolved = resolveBrandLogoUrls(withUrl);
     expect(resolved.logo?.light).toBe("https://example.com/logo.png");
   });
+
+  it("normalizes legacy brand.json when loading from disk shape", async () => {
+    const { normalizeBrandTokens } = await import(
+      "../src/gateway/services/brandNormalize.js"
+    );
+    const legacy = {
+      companyName: "Papr",
+      colors: {
+        primary: "#0161E0",
+        accent: "#0CCDFF",
+        backgroundLight: "#FFFFFF",
+        textLight: "#131417",
+      },
+    };
+    const normalized = normalizeBrandTokens(legacy);
+    const vars = buildBrandCssVariables(normalized);
+    expect(vars["--brand-primary"]).toBe("#0161E0");
+    expect(vars["--brand-background"]).toBe("#FFFFFF");
+  });
 });

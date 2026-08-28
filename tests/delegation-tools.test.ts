@@ -65,6 +65,8 @@ describe('Tool Schema Validation', () => {
     expect(tool).toBeDefined();
     expect(tool?.id).toBe('delegate_task');
     expect(tool?.description.toLowerCase()).toContain('delegate');
+    expect(tool?.description).toContain('useAgentId');
+    expect(tool?.description).toContain('product-architect');
     expect(tool?.inputSchema).toBeDefined();
   });
   

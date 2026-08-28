@@ -135,6 +135,8 @@ export class JobsService {
   private initialized: boolean;
   private initPromise: Promise<void> | null = null;
   private saveLock: Promise<void> | null = null; // Prevent concurrent saves
+  /** Set when startup reconcile deletes jobs; triggers one batched cloud push after init. */
+  private deferredDeleteCloudPush = false;
   /** Workspace bound at initialize — disk writes never follow getPaprRoot() mid-flight. */
   private boundPaprDir: string | null = null;
   private boundWriteGeneration: number | null = null;
@@ -284,6 +286,33 @@ export class JobsService {
           continue;
         }
 
+        const { LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID } = await import(
+          "./defaultHomeBundle.js"
+        );
+        const { readMigrationMarker } = await import(
+          "./migrateLegacyHomeDailyBriefJob.js"
+        );
+        const homeMigrationMarker = await readMigrationMarker(getPaprRoot());
+        if (
+          jobId === LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID &&
+          homeMigrationMarker?.toJobId &&
+          homeMigrationMarker.toJobId !== jobId
+        ) {
+          console.log(
+            `[JobsService] Skipping bundled legacy Daily Brief (${jobId}) — workspace uses ${homeMigrationMarker.toJobId}`,
+          );
+          continue;
+        }
+
+        const { readJobTombstones } = await import("./jobs/jobTombstones.js");
+        const tombstones = await readJobTombstones(getPaprRoot());
+        if (tombstones.has(jobId)) {
+          console.log(
+            `[JobsService] Skipping tombstoned default job: ${jobId} (${jobConfig.name})`,
+          );
+          continue;
+        }
+
         // Check if job already exists (both in registry and on disk)
         if (this.jobs.has(jobId)) {
           console.log(`[JobsService] Default job already in registry: ${jobId} (${jobConfig.name})`);
@@ -373,7 +402,12 @@ export class JobsService {
     }
 
     const jobDefPath = path.join(bundledAppsDir, "default-job.json");
-    let bundledDef: { command?: string; appIds?: string[]; name?: string };
+    let bundledDef: {
+      command?: string;
+      appIds?: string[];
+      name?: string;
+      recipe?: JobRecord["recipe"];
+    };
     try {
       bundledDef = JSON.parse(
         await fs.readFile(jobDefPath, "utf8"),
@@ -414,8 +448,12 @@ export class JobsService {
     const commandChanged = normalizedCommand !== (job.command ?? "");
     const appIdsChanged =
       JSON.stringify(nextAppIds) !== JSON.stringify(job.appIds ?? []);
+    const bundledRecipe = bundledDef.recipe;
+    const recipeChanged =
+      bundledRecipe !== undefined &&
+      JSON.stringify(bundledRecipe) !== JSON.stringify(job.recipe ?? null);
 
-    if (!commandChanged && !appIdsChanged) {
+    if (!commandChanged && !appIdsChanged && !recipeChanged) {
       return;
     }
 
@@ -423,12 +461,14 @@ export class JobsService {
       ...job,
       ...(commandChanged ? { command: normalizedCommand } : {}),
       ...(appIdsChanged ? { appIds: nextAppIds } : {}),
+      ...(recipeChanged ? { recipe: bundledRecipe } : {}),
       updatedAt: new Date().toISOString(),
     };
 
     this.jobs.set(jobId, updated);
     try {
       await this.persistJobRecord(updated);
+      await this.syncBundledHomeDailyBriefRecipe(bundledAppsDir, jobId);
       await this.saveJobs();
       console.log(
         `[JobsService] Synced Home Daily Brief job ${jobId} from bundled default-job.json`,
@@ -438,6 +478,27 @@ export class JobsService {
         `[JobsService] Could not sync Home Daily Brief job ${jobId}:`,
         err instanceof Error ? err.message : err,
       );
+    }
+  }
+
+  /** Copy bundled recipe.md into the workspace Daily Brief job folder when present. */
+  private async syncBundledHomeDailyBriefRecipe(
+    bundledAppDir: string,
+    jobId: string,
+  ): Promise<void> {
+    const recipePath = path.join(bundledAppDir, "recipe.md");
+    try {
+      const markdown = await fs.readFile(recipePath, "utf8");
+      const { getRecipeService } = await import("./jobs/RecipeService.js");
+      await getRecipeService().writeRecipe(jobId, markdown);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `[JobsService] Could not sync bundled recipe for ${jobId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
     }
   }
 
@@ -462,40 +523,103 @@ export class JobsService {
     if (this.initialized) {
       return;
     }
+    const step = (label: string) =>
+      console.log(`[JobsService] Init: ${label}…`);
+    step("bind workspace");
     this.bindWorkspaceWriteContext();
+    step("legacy migration");
     await this.migrateLegacyIfNeeded();
+    step("ensure directories");
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
+    step("load jobs index");
     await this.loadJobs(); // Load existing jobs FIRST
+    step("filter tombstones");
+    await this.filterTombstonedJobsFromRegistry();
+    step("migrate Home Daily Brief");
     await this.migrateLegacyHomeDailyBriefJobIfNeeded();
-    await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
+    step("migrate job runtime files");
     await this.migrateAndHydrateJobRuntimeFiles();
+    step("hydrate runtime from cloud");
     await this.hydrateJobRuntimeFromCloud();
+    step("backfill app ids (pass 1)");
     await this.backfillJobAppIds();
+    step("prune stale entries");
     await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
+    step("install default jobs");
     await this.installDefaultJobs(); // Optional extra bundled jobs (Home uses default-job.json)
+    step("install workspace chat job");
     await this.installWorkspaceChatJob();
+    step("sync Home Daily Brief bundle");
     await this.syncHomeDailyBriefFromBundle(); // Patch Home Daily Brief prompt from bundle
+    step("reconcile duplicate Home Daily Brief");
+    await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
+    step("filter tombstones after hydrate");
+    await this.filterTombstonedJobsFromRegistry();
+    step("backfill app ids (pass 2)");
     await this.backfillJobAppIds();
 
-    // Initialize run history
+    step("run history");
     const runHistory = getJobRunHistory();
     await runHistory.initialize();
 
-    // Reconcile interrupted jobs from previous session
+    step("reconcile interrupted jobs");
     await this.reconcileInterruptedJobs();
 
-    // Detect and mark stale running jobs (jobs stuck in "running" for >30s with no tracked process)
-    // Using 30s threshold to catch stale agent jobs faster while avoiding false positives
+    step("reconcile stale running jobs");
     await this.reconcileStaleRunningJobs(30_000);
 
+    step("reconcile schedule states");
     await this.reconcileScheduleStates();
 
+    step("migrate unlinked jobs");
     await this.migrateUnlinkedJobsToLocalOnly();
 
     void this.rebuildGraph();
 
     this.initialized = true;
+    console.log(`[JobsService] Init complete (${this.jobs.size} jobs in registry)`);
+
+    if (this.deferredDeleteCloudPush) {
+      this.deferredDeleteCloudPush = false;
+      void this.flushDeferredDeleteCloudPush();
+    }
+  }
+
+  private voidDeleteJobCloudArtifacts(
+    jobId: string,
+    options?: { skipWorkspacePush?: boolean },
+  ): void {
+    void import("./jobs/jobCloudCleanup.js")
+      .then(({ deleteJobCloudArtifacts }) =>
+        deleteJobCloudArtifacts(jobId, options),
+      )
+      .catch((err) => {
+        console.warn(
+          `[JobsService] Cloud cleanup failed for ${jobId}:`,
+          err instanceof Error ? err.message.slice(0, 120) : err,
+        );
+      });
+  }
+
+  private async flushDeferredDeleteCloudPush(): Promise<void> {
+    const { waitForWorkspaceReady } = await import("./workspaceReadiness.js");
+    await waitForWorkspaceReady();
+    if (!this.isWriteContextValid("deferred job delete cloud push")) {
+      return;
+    }
+    try {
+      const { getCloudSyncService } = await import("./CloudSyncService.js");
+      const cloudSync = getCloudSyncService();
+      if (cloudSync) {
+        await cloudSync.pushNow();
+      }
+    } catch (err) {
+      console.warn(
+        "[JobsService] Deferred cloud push after startup job deletes failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   /**
@@ -542,6 +666,9 @@ export class JobsService {
         jobs: this.jobs,
         saveJobs: () => this.saveJobs(),
         persistJobRecord: (job) => this.persistJobRecord(job),
+        deleteJob: async (jobId) => {
+          await this.deleteJob(jobId, true, false, { deferCloudCleanup: true });
+        },
       });
       if (result.reconciled && result.removedJobIds.length > 0) {
         notifyJobOwnershipChanged(getPaprRoot());
@@ -719,14 +846,89 @@ export class JobsService {
     await this.loadJobs();
     await this.hydrateJobsFromRuntimeFiles();
     await this.pruneStaleJobEntries();
+    await this.reconcileRegistryAfterSync();
     console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
-    
-    // Request scheduler to reschedule in case job schedules changed
+
     void import("./JobsScheduler.js")
       .then(({ getJobsScheduler }) => {
         getJobsScheduler().requestReschedule();
       })
       .catch(() => {});
+  }
+
+  /** Drop tombstoned job IDs re-introduced by git/metadata merge. */
+  async filterTombstonedJobsFromRegistry(
+    paprDir: string = this.boundPaprDir ?? getPaprRoot(),
+  ): Promise<number> {
+    const { readJobTombstones } = await import("./jobs/jobTombstones.js");
+    const tombstones = await readJobTombstones(paprDir);
+    if (tombstones.size === 0) {
+      return 0;
+    }
+
+    const removed: string[] = [];
+    for (const jobId of tombstones) {
+      if (this.jobs.has(jobId)) {
+        this.jobs.delete(jobId);
+        removed.push(jobId);
+      }
+    }
+
+    if (removed.length > 0) {
+      await this.saveJobs();
+      console.log(
+        `[JobsService] Removed ${removed.length} tombstoned job(s) from registry: [${removed.join(", ")}]`,
+      );
+    }
+    return removed.length;
+  }
+
+  /** After cloud/git sync — dedupe Home Daily Brief, repair links, respect tombstones. */
+  async reconcileRegistryAfterSync(): Promise<{
+    tombstonesRemoved: number;
+    duplicatesReconciled: boolean;
+    duplicateIdsRemoved: string[];
+  }> {
+    if (!this.isWriteContextValid("jobs registry reconcile")) {
+      return {
+        tombstonesRemoved: 0,
+        duplicatesReconciled: false,
+        duplicateIdsRemoved: [],
+      };
+    }
+
+    const paprDir = this.boundPaprDir ?? getPaprRoot();
+    const tombstonesRemoved = await this.filterTombstonedJobsFromRegistry(paprDir);
+    const { reconcileDuplicateHomeDailyBriefJobs } = await import(
+      "./migrateLegacyHomeDailyBriefJob.js"
+    );
+    const reconcile = await reconcileDuplicateHomeDailyBriefJobs({
+      paprDir,
+      appsDir: path.join(paprDir, "apps"),
+      jobsRoot: this.jobsRootDir,
+      jobs: this.jobs,
+      saveJobs: () => this.saveJobs(),
+      persistJobRecord: (job) => this.persistJobRecord(job),
+      deleteJob: async (jobId) => {
+        await this.deleteJob(jobId, true, false);
+      },
+    });
+
+    try {
+      const { getAppService } = await import("./AppService.js");
+      await getAppService().repairHomeAndWorkspaceOnStartup();
+    } catch (err) {
+      console.warn(
+        "[JobsService] Home repair after sync failed:",
+        (err as Error).message.slice(0, 120),
+      );
+    }
+
+    return {
+      tombstonesRemoved,
+      duplicatesReconciled: reconcile.reconciled,
+      duplicateIdsRemoved: reconcile.removedJobIds,
+    };
   }
 
   private async saveJobs(): Promise<void> {
@@ -853,8 +1055,19 @@ export class JobsService {
   private async migrateAndHydrateJobRuntimeFiles(): Promise<void> {
     let migrated = 0;
     try {
+      const paprDir = getPaprRoot();
+      const { readJobTombstones } = await import("./jobs/jobTombstones.js");
+      const tombstones = await readJobTombstones(paprDir);
+      const { readMigrationMarker, shouldSkipDailyBriefJobDirRecovery } =
+        await import("./migrateLegacyHomeDailyBriefJob.js");
+      const homeMigrationMarker = await readMigrationMarker(paprDir);
+
       const dirs = await fs.readdir(this.jobsRootDir);
       for (const dirName of dirs) {
+        if (shouldSkipDailyBriefJobDirRecovery(dirName, homeMigrationMarker)) {
+          continue;
+        }
+
         const jobDir = path.join(this.jobsRootDir, dirName);
         try {
           const stat = await fs.stat(jobDir);
@@ -876,6 +1089,9 @@ export class JobsService {
 
         const jobId =
           typeof raw.id === "string" && raw.id.length > 0 ? raw.id : dirName;
+        if (tombstones.has(jobId)) {
+          continue;
+        }
         let runtimeRaw: Partial<JobRecord> | null = null;
         try {
           runtimeRaw = JSON.parse(
@@ -966,7 +1182,89 @@ export class JobsService {
     return this.setJobStatus(job.id, status, updates, {
       updatedAt: recordedAt,
       fromCloudPatch: true,
+    }).then(async (updated) => {
+      if (!updated) {
+        return updated;
+      }
+      const terminal =
+        status === "completed" || status === "failed" || status === "cancelled";
+      if (terminal && patch.source?.startsWith("cloud")) {
+        await this.handleCloudRunCompletion(updated, patch, status);
+      }
+      return this.jobs.get(job.id) ?? updated;
     });
+  }
+
+  private async handleCloudRunCompletion(
+    job: JobRecord,
+    patch: JobRuntimePatch,
+    status: JobStatus,
+  ): Promise<void> {
+    const runId = `${job.id}-cloud-${Date.parse(patch.recordedAt) || Date.now()}`;
+    const completedAt = patch.completedAt ?? patch.recordedAt;
+
+    try {
+      const runHistory = getJobRunHistory();
+      await runHistory.appendRun({
+        runId,
+        jobId: job.id,
+        status: status === "completed" ? "completed" : status === "cancelled" ? "cancelled" : "failed",
+        startedAt: patch.lastRunAt ?? patch.recordedAt,
+        completedAt,
+        exitCode: patch.exitCode,
+        error: patch.error ?? undefined,
+        attempt: 1,
+        maxAttempts: 1,
+      });
+    } catch (err) {
+      console.warn(
+        `[JobsService] Cloud run history append failed for ${job.id}:`,
+        (err as Error).message.slice(0, 120),
+      );
+    }
+
+    try {
+      const bridge = (await import("./TursoSyncBridge.js")).getTursoSyncBridge();
+      if (bridge) {
+        await bridge.pullJob(job.id);
+      }
+    } catch (err) {
+      console.warn(
+        `[JobsService] Turso pull after cloud run failed for ${job.id}:`,
+        (err as Error).message.slice(0, 120),
+      );
+    }
+
+    if (status !== "completed") {
+      return;
+    }
+
+    const contractOutcome = await this.runDataContractValidation(job);
+    if (contractOutcome && !contractOutcome.result.passed) {
+      const label = contractOutcome.enforceOnFailure ? "FAILED" : "WARNING";
+      await this.appendLog(
+        job.id,
+        `[Contract] ${label} (cloud): ${contractOutcome.result.summary}`,
+      );
+      if (contractOutcome.enforceOnFailure) {
+        await this.setJobStatus(job.id, "failed", {
+          exitCode: 1,
+          error: contractOutcome.result.summary,
+          lastOutput: patch.lastOutput,
+          lastExecutionId: runId,
+        }, { fromCloudPatch: true });
+        return;
+      }
+    }
+
+    if (job.recipe?.enabled && job.recipe?.autoEvaluate) {
+      void this.runRecipeEvaluation(job, runId).catch((err) => {
+        console.error(
+          `[JobsService] Cloud recipe evaluation failed for ${job.id}:`,
+          err,
+        );
+      });
+    }
   }
 
   /**
@@ -1224,6 +1522,10 @@ export class JobsService {
 
   async getJob(jobId: string): Promise<JobRecord | null> {
     return this.jobs.get(jobId) ?? null;
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
   }
 
   async validateJobArchitecture(jobId: string): Promise<JobArchitectureIssue[]> {
@@ -2743,6 +3045,7 @@ export class JobsService {
     jobId: string,
     deleteFiles = false,
     deleteTursoDb = false,
+    options?: { deferCloudCleanup?: boolean },
   ): Promise<{ id: string; name: string; tursoDbDeleted?: boolean }> {
     const job = this.jobs.get(jobId);
     if (!job) {
@@ -2759,7 +3062,7 @@ export class JobsService {
     const { preserveJobLinkedDatabasesBeforeDelete } = await import(
       "./databasePromotion.js"
     );
-    await preserveJobLinkedDatabasesBeforeDelete(jobId);
+    await preserveJobLinkedDatabasesBeforeDelete(jobId, job);
 
     // Delete Turso cloud database if requested
     let tursoDbDeleted = false;
@@ -2778,11 +3081,18 @@ export class JobsService {
       }
     }
 
-    // Remove from index
+    // Remove from index and upload updated catalog (job absent = deleted in cloud metadata)
     this.jobs.delete(jobId);
     await this.saveJobs();
     notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
+
+    if (options?.deferCloudCleanup === true) {
+      this.deferredDeleteCloudPush = true;
+      this.voidDeleteJobCloudArtifacts(jobId, { skipWorkspacePush: true });
+    } else {
+      this.voidDeleteJobCloudArtifacts(jobId);
+    }
 
     // Optionally remove the job directory (scripts, logs, scratch db)
     if (deleteFiles) {

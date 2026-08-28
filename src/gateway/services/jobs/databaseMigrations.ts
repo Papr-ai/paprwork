@@ -23,6 +23,7 @@ import {
   loadJobMigrationManifest,
   sha256Hex,
 } from "./jobMigrationManifest.js";
+import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 
 export type PersistedDatabaseKind = "registry" | "job";
 
@@ -164,7 +165,10 @@ export {
  * Ensure registry database file, migrations folder, and schema_migrations table.
  * Called from create_database and before applying registry migrations.
  */
-export async function ensureRegistryDatabase(dbPath: string): Promise<string> {
+export async function ensureRegistryDatabase(
+  dbPath: string,
+  options?: { deferSqliteFile?: boolean },
+): Promise<string> {
   const layout = resolvePersistedDatabaseLayout(dbPath);
   if (!layout || layout.kind !== "registry") {
     throw new Error(`Not a registry database path: ${dbPath}`);
@@ -175,15 +179,17 @@ export async function ensureRegistryDatabase(dbPath: string): Promise<string> {
   });
   await fs.mkdir(path.dirname(layout.dbPath), { recursive: true });
 
-  let db: Database.Database | null = null;
-  try {
-    db = new Database(layout.dbPath);
-    applySqlitePerformancePragmas(db);
-    ensureSchemaMigrationsTable(db);
-  } catch {
-    await fs.writeFile(layout.dbPath, "", { flag: "a" });
-  } finally {
-    db?.close();
+  if (!options?.deferSqliteFile && !isReplicaManagedDbPath(layout.dbPath)) {
+    let db: Database.Database | null = null;
+    try {
+      db = new Database(layout.dbPath);
+      applySqlitePerformancePragmas(db);
+      ensureSchemaMigrationsTable(db);
+    } catch {
+      await fs.writeFile(layout.dbPath, "", { flag: "a" });
+    } finally {
+      db?.close();
+    }
   }
 
   const baselineMigration = path.join(
@@ -205,6 +211,13 @@ export async function applyDatabaseMigrations(
   migrationRoot: string,
   dbPath: string,
 ): Promise<string[]> {
+  if (isReplicaManagedDbPath(dbPath)) {
+    const { applyReplicaRegistryDatabaseMigrations } = await import(
+      "../tursoReplica/tursoReplicaRegistryMigrations.js"
+    );
+    return applyReplicaRegistryDatabaseMigrations(migrationRoot, dbPath);
+  }
+
   const migrationsDir = path.join(migrationRoot, "migrations");
   await fs.mkdir(migrationsDir, { recursive: true });
   await fs.mkdir(path.dirname(dbPath), { recursive: true });
@@ -278,6 +291,8 @@ export async function applyRegistryDatabaseMigrations(
   if (!layout || layout.kind !== "registry") {
     return [];
   }
-  await ensureRegistryDatabase(layout.dbPath);
+  if (!isReplicaManagedDbPath(layout.dbPath)) {
+    await ensureRegistryDatabase(layout.dbPath);
+  }
   return applyDatabaseMigrations(layout.migrationRoot, layout.dbPath);
 }

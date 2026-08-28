@@ -159,8 +159,11 @@ export async function readMigrationSql(
   jobDir: string,
   migrationId: string,
 ): Promise<string | null> {
+  const fileName = migrationId.endsWith(".sql")
+    ? migrationId
+    : `${migrationId}.sql`;
   try {
-    return await fs.readFile(path.join(migrationsDir(jobDir), migrationId), "utf8");
+    return await fs.readFile(path.join(migrationsDir(jobDir), fileName), "utf8");
   } catch {
     return null;
   }

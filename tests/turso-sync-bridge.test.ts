@@ -82,6 +82,16 @@ describe("tursoSyncBridgeCore", () => {
     ).toEqual(["decisions"]);
   });
 
+  it("filterSyncableTables excludes legacy CDC artifact tables", () => {
+    expect(
+      filterSyncableTables([
+        "contacts",
+        "turso_sync_last_change_id",
+        "turso_cdc_state",
+      ]),
+    ).toEqual(["contacts"]);
+  });
+
   it("filterSyncableTables excludes SQLite lost_and_found recovery table", () => {
     expect(filterSyncableTables(["decisions", "lost_and_found"])).toEqual([
       "decisions",

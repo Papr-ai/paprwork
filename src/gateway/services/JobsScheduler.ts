@@ -146,6 +146,9 @@ export class JobsScheduler {
   }
 
   private async tick(): Promise<void> {
+    const { waitForWorkspaceReady } = await import("./workspaceReadiness.js");
+    await waitForWorkspaceReady();
+
     const tickStart = Date.now();
     const jobsService = getJobsService();
     await jobsService.initialize();

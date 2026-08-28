@@ -41,6 +41,7 @@ describe("jobDbSchemaGuard", () => {
     expect(block).not.toBeNull();
     expect(block?.message).toContain("write_file");
     expect(block?.message).toContain("migrations");
+    expect(block?.message).toContain("run_job");
     expect(block?.suggestedSql).toContain("contact_name");
   });
 
@@ -55,6 +56,17 @@ describe("jobDbSchemaGuard", () => {
       },
     );
     expect(block).not.toBeNull();
+  });
+
+  test("blocks ALTER on registry db with papr_db_apply_migration guidance", () => {
+    const home = process.env.HOME ?? "/Users/test";
+    const db = `${home}/Papr/data/databases/billing/data.db`;
+    const block = detectJobDbSchemaDdlBlock(
+      `sqlite3 "${db}" "ALTER TABLE invoices ADD COLUMN status TEXT"`,
+    );
+    expect(block).not.toBeNull();
+    expect(block?.message).toContain("papr_db_apply_migration");
+    expect(block?.message).toContain("papr_db_push");
   });
 
   test("allows INSERT on synced db (data writes OK via bash)", () => {
