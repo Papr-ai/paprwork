@@ -36,7 +36,8 @@ export interface PaprMessageStoreBody {
     role: "user" | "assistant";
     customMetadata: PaprSyncCustomMetadata;
   };
-  external_user_id?: string;
+  /** Real Papr _User.objectId — see memoryAcl.ts for why this is not external_user_id. */
+  user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }
@@ -266,7 +267,7 @@ function assembleStoreBody(
   content: string | PaprContentBlock[],
   customMetadata: PaprSyncCustomMetadata,
   scope?: {
-    externalUserId?: string;
+    userId?: string;
     namespaceId?: string;
     policy?: MemoryAddPolicy;
   },
@@ -285,8 +286,8 @@ function assembleStoreBody(
     },
   };
 
-  if (scope?.externalUserId) {
-    body.external_user_id = scope.externalUserId;
+  if (scope?.userId) {
+    body.user_id = scope.userId;
   }
   if (scope?.namespaceId) {
     body.namespace_id = scope.namespaceId;
@@ -301,7 +302,7 @@ function assembleStoreBody(
 export function buildPaprSyncStoreBody(input: {
   chatId: string;
   message: StoredMessage;
-  externalUserId?: string;
+  userId?: string;
   namespaceId?: string;
   policy?: MemoryAddPolicy;
   maxBytes?: number;
@@ -311,7 +312,7 @@ export function buildPaprSyncStoreBody(input: {
   const maxBytes = input.maxBytes ?? PAPR_SYNC_MAX_BYTES;
   const customMetadata = buildPaprSyncCustomMetadata(input.message);
   const scope = {
-    externalUserId: input.externalUserId,
+    userId: input.userId,
     namespaceId: input.namespaceId,
     policy: input.policy,
   };

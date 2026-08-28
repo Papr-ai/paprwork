@@ -124,8 +124,8 @@ async function upsertGraphEntityName(input: {
 
   await input.client.memory.add({
     content: `Wiki sync: ${input.entityType} ${input.nodeId} renamed to "${input.newName}"`,
-    ...(memoryScope.external_user_id
-      ? { external_user_id: memoryScope.external_user_id }
+    ...(memoryScope.user_id
+      ? { user_id: memoryScope.user_id }
       : {}),
     ...(memoryScope.namespace_id
       ? { namespace_id: memoryScope.namespace_id }

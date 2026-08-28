@@ -18,6 +18,11 @@ import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
+import {
+  buildJobRunDimensions,
+  isAgentJobType,
+} from "../../core/telemetry/jobRunTelemetry.js";
+import type { JobRunTrigger } from "../../core/telemetry/jobRunTelemetry.js";
 import { getJobRunHistory } from "./jobs/JobRunHistory.js";
 import {
   getPaprAppsRoot,
@@ -1431,6 +1436,18 @@ export class JobsService {
       has_schedule: !!input.schedule?.enabled,
       has_dependencies: (input.dependsOn ?? []).length > 0,
       schedule_type: input.schedule?.cron ? "cron" : input.schedule?.intervalMs ? "interval" : undefined,
+      // App attribution at create time answers "how many agents does this app
+      // have" without needing a run to have happened yet.
+      ...(() => {
+        const owned = appIds.filter((id) => id !== STANDALONE_APP_ID);
+        return {
+          app_id: owned[0],
+          app_count: owned.length,
+          is_standalone: owned.length === 0,
+        };
+      })(),
+      agent_kind: isAgentJobType(input.type) ? "agent" : "script",
+      is_agent: isAgentJobType(input.type),
     });
 
     return job;
@@ -2227,6 +2244,15 @@ export class JobsService {
     if (architectureErrors) {
       throw new Error(`Job architecture validation failed before run:\n${architectureErrors}`);
     }
+    // Read before stack.add: a non-empty stack means this run was pulled in by
+    // ensureDependencyChain rather than started directly. Separating chained
+    // runs from human ones keeps pipeline fan-out from reading as user demand.
+    const runTrigger: JobRunTrigger =
+      stack.size > 0
+        ? "dependency"
+        : scheduledDueAt && scheduledDueAt.length > 0
+          ? "scheduled"
+          : "manual";
     stack.add(jobId);
 
     try {
@@ -2369,10 +2395,18 @@ export class JobsService {
           }
 
           getGatewayTelemetry().trackFireAndForget("paprwork_job_completed", {
-            job_id: job.id,
-            job_type: job.type,
-            duration_ms: Math.round(performance.now() - attemptStart),
+            ...buildJobRunDimensions({
+              jobId: job.id,
+              jobType: job.type,
+              appIds: job.appIds,
+              durationMs: performance.now() - attemptStart,
+              surface: "local",
+              trigger: runTrigger,
+              subAgentId: job.subAgentId,
+            }),
+            exit_code: result.exitCode,
             attempts: attempt,
+            had_retry: attempt > 1,
           });
 
           // Sync structured job DB rows to Papr Memory (preferred over log writeback)
@@ -2482,10 +2516,19 @@ export class JobsService {
             result.errorMessage ?? `Exit code ${result.exitCode}`,
           );
           getGatewayTelemetry().trackFireAndForget("paprwork_job_failed", {
-            job_id: job.id,
+            ...buildJobRunDimensions({
+              jobId: job.id,
+              jobType: job.type,
+              appIds: job.appIds,
+              // Failed work still consumed time and compute. Excluding it would
+              // make an agent that burns 20 minutes then errors look free.
+              durationMs: performance.now() - attemptStart,
+              surface: "local",
+              trigger: runTrigger,
+              subAgentId: job.subAgentId,
+            }),
             job_name:
               job.name.length > 80 ? `${job.name.slice(0, 79)}…` : job.name,
-            job_type: job.type,
             exit_code: result.exitCode,
             error_type: `exit_${result.exitCode}`,
             attempts: maxAttempts,

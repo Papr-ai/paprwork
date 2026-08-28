@@ -10,6 +10,8 @@ import { getCloudSyncService } from "./CloudSyncService.js";
 import type { JobRecord } from "./jobs/types.js";
 import type { JobsService } from "./JobsService.js";
 import { CLOUD_AGENT_JOB_TIMEOUT_MS } from "../../core/constants/cloudAgentLimits.js";
+import { buildJobRunDimensions } from "../../core/telemetry/jobRunTelemetry.js";
+import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 
 export type JobRunRuntime = "local" | "cloud";
 
@@ -49,6 +51,42 @@ async function appendCloudRunLog(
   const body = [payload.stdout, payload.stderr].filter(Boolean).join("\n");
   const footer = `\nexitCode=${payload.exitCode} status=${payload.status}\n`;
   await fs.appendFile(logPath, `${header}${body}${footer}`, "utf8");
+}
+
+/**
+ * Cloud runs previously emitted nothing, so total agent hours silently meant
+ * "local only". Same event names and dimension builder as the local path, with
+ * surface=cloud as the only difference — so charts can sum both or split them.
+ */
+function emitCloudRunTelemetry(
+  job: JobRecord,
+  payload: CloudJobRunApiResponse,
+  durationMs: number,
+): void {
+  const succeeded = payload.exitCode === 0;
+  const dimensions = buildJobRunDimensions({
+    jobId: job.id,
+    jobType: job.type,
+    appIds: job.appIds,
+    durationMs,
+    surface: "cloud",
+    // Reached only via the explicit run-in-cloud action; scheduled cloud runs
+    // report through applyCloudRunPatch instead.
+    trigger: "manual",
+    subAgentId: job.subAgentId,
+  });
+
+  getGatewayTelemetry().trackFireAndForget(
+    succeeded ? "paprwork_job_completed" : "paprwork_job_failed",
+    succeeded
+      ? { ...dimensions, exit_code: payload.exitCode, attempts: 1 }
+      : {
+          ...dimensions,
+          exit_code: payload.exitCode,
+          error_type: `exit_${payload.exitCode}`,
+          attempts: 1,
+        },
+  );
 }
 
 async function syncAfterCloudRun(
@@ -97,6 +135,9 @@ export async function runJobInCloud(
   }
 
   const timeoutMs = cloudRunTimeoutMs(job);
+  // Measured around the request only. Includes cloud queue + execution, which
+  // is the wall-clock time the user actually waited for the agent's work.
+  const startedAt = Date.now();
   const res = await cloudApiFetch("/v1/cloud/runtime/job-run", {
     method: "POST",
     body: {
@@ -117,6 +158,7 @@ export async function runJobInCloud(
   const payload = (await res.json()) as CloudJobRunApiResponse;
   await appendCloudRunLog(jobId, payload);
   await syncAfterCloudRun(jobsService, jobId, payload);
+  emitCloudRunTelemetry(job, payload, Date.now() - startedAt);
 
   const updated = await jobsService.getJob(jobId);
   if (!updated) {
