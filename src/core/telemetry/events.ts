@@ -3,6 +3,11 @@
  * Central registry of all tracked events with their properties
  */
 
+import type {
+  JobAgentKind,
+  JobRunTelemetryDimensions,
+} from "./jobRunTelemetry.js";
+
 // ============================================
 // Event Names (Centralized)
 // ============================================
@@ -235,29 +240,46 @@ export interface BrowserActionProperties extends BaseEventProperties {
 
 export interface JobCreatedProperties extends BaseEventProperties {
   job_id: string;
-  job_type: "python" | "node" | "bash" | "shell" | "agent" | "subagent" | "swift";
+  job_type:
+    | "python"
+    | "node"
+    | "bash"
+    | "shell"
+    | "agent"
+    | "subagent"
+    | "swift";
   has_schedule: boolean;
   has_dependencies: boolean;
   schedule_type?: "interval" | "cron" | "at_time";
+  /**
+   * Owning mini-app. Without this, "agents per app" — the shape of a Paprwork
+   * app like My Papr Books — cannot be computed from create events.
+   */
+  app_id?: string;
+  app_count?: number;
+  is_standalone?: boolean;
+  agent_kind?: JobAgentKind;
+  is_agent?: boolean;
 }
 
-export interface JobCompletedProperties extends BaseEventProperties {
-  job_id: string;
-  job_type: string;
-  duration_ms: number;
+export interface JobCompletedProperties
+  extends BaseEventProperties,
+    JobRunTelemetryDimensions {
   exit_code?: number;
-  had_retry: boolean;
+  had_retry?: boolean;
   output_size_bytes?: number;
-  scheduled: boolean;
+  attempts?: number;
 }
 
-export interface JobFailedProperties extends BaseEventProperties {
-  job_id: string;
-  job_type: string;
+export interface JobFailedProperties
+  extends BaseEventProperties,
+    JobRunTelemetryDimensions {
   error_type: string;
   error_message?: string;
-  attempt_number: number;
-  max_attempts: number;
+  exit_code?: number;
+  attempts?: number;
+  retry_class?: string;
+  failure_hint?: string;
 }
 
 /**
@@ -379,7 +401,9 @@ export interface SyncV3MetricProperties extends BaseEventProperties {
 // Type Guards
 // ============================================
 
-export function isValidEventName(name: string): name is keyof typeof AmplitudeEvents {
+export function isValidEventName(
+  name: string,
+): name is keyof typeof AmplitudeEvents {
   return Object.values(AmplitudeEvents).includes(name as any);
 }
 

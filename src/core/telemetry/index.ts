@@ -19,3 +19,11 @@ export type {
   TelemetryClientDeps,
   TelemetryClientOptions,
 } from "./TelemetryClient.js";
+export { buildJobRunDimensions, isAgentJobType } from "./jobRunTelemetry.js";
+export type {
+  JobAgentKind,
+  JobRunSurface,
+  JobRunTelemetryDimensions,
+  JobRunTelemetryInput,
+  JobRunTrigger,
+} from "./jobRunTelemetry.js";
