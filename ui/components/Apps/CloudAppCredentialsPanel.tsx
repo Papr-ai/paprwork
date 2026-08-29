@@ -3,8 +3,11 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { RequiredKeySpec } from "../../../src/core/types/bundles";
-import type { CredentialScope } from "../../../src/core/types/bundles";
+import type {
+  CredentialScope,
+  RequiredKeySpec,
+  ServiceCategory,
+} from "../../../src/core/types/bundles";
 import {
   fetchAppRequirements,
   saveAppRequirements,
@@ -21,6 +24,7 @@ interface DraftRow {
   name: string;
   service: string;
   description: string;
+  category: ServiceCategory;
   credentialScope: CredentialScope;
 }
 
@@ -29,6 +33,7 @@ function toDraft(spec: RequiredKeySpec): DraftRow {
     name: spec.name,
     service: spec.service,
     description: spec.description ?? "",
+    category: spec.category ?? "other",
     credentialScope: spec.credentialScope === "owner" ? "owner" : "user",
   };
 }
@@ -37,7 +42,7 @@ function toSpec(row: DraftRow): RequiredKeySpec {
   return {
     name: row.name.trim(),
     service: row.service.trim() || row.name.trim(),
-    category: "other",
+    category: row.category,
     description: row.description.trim(),
     required: true,
     credentialScope: row.credentialScope,
@@ -82,6 +87,7 @@ export function CloudAppCredentialsPanel({
         name: "",
         service: "",
         description: "",
+        category: "other",
         credentialScope: "user",
       },
     ]);
@@ -143,14 +149,14 @@ export function CloudAppCredentialsPanel({
             <p className="share-sheet__footnote">
               No keys detected yet. Declare keys in{" "}
               <code>backend/manifest.json</code> action <code>keys</code> arrays,
-              linked job commands (<code>${"{KEY_NAME}"}</code>), or add them
-              manually below.
+              linked job commands (<code>${"{KEY_NAME}"}</code>), enable embedded
+              app assistant chat, or add them manually below.
             </p>
           ) : null}
 
           {detectedKeyNames.length > 0 ? (
             <p className="share-sheet__footnote">
-              Detected from app backend and linked jobs:{" "}
+              Detected from app backend, linked jobs, and embedded chat:{" "}
               <strong>{detectedKeyNames.join(", ")}</strong>. Save credentials
               to include them in the published catalog.
             </p>

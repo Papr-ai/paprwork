@@ -61,6 +61,12 @@ const createSubAgentSchema = z.object({
 
 const deleteSubAgentSchema = z.object({
   agentId: z.string().min(1),
+  force: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set true only after removing app agent chat / job references. Default blocks delete when apps or jobs still reference this profile.",
+    ),
 });
 
 const delegateTaskSchema = z
@@ -173,15 +179,27 @@ export const createSubAgentTool = createTool({
 
 export const deleteSubAgentTool = createTool({
   id: "delete_sub_agent",
-  description: "Delete a persistent sub-agent profile",
+  description:
+    "Delete a persistent sub-agent profile. Blocked when apps (agent chat) or subagent jobs still reference the profile unless force: true.",
   inputSchema: deleteSubAgentSchema,
   execute: async (input) => {
     const args = (input as { context?: DeleteSubAgentArgs }).context ?? input;
     const { getSubAgentService } =
       await import("../../gateway/services/SubAgentService.js");
     const service = getSubAgentService();
-    const deleted = await service.deleteAgent(args.agentId);
-    return { success: true, data: { agentId: args.agentId, deleted } };
+    try {
+      const deleted = await service.deleteAgent(args.agentId, {
+        force: args.force === true,
+      });
+      return { success: true, data: { agentId: args.agentId, deleted } };
+    } catch (error) {
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: (error as Error).message,
+        }),
+      );
+    }
   },
 });
 

@@ -41,6 +41,7 @@ import {
   runtimeFetch,
 } from "./memoryRuntimeClient.js";
 import { CloudAppBackendService } from "./CloudAppBackendService.js";
+import { createCloudBackendDbProxyRouter, type BackendDbProxySession } from "./backendDbProxy.js";
 import {
   MINI_APP_BASH_DISABLED_CODE,
   MINI_APP_BASH_DISABLED_MESSAGE,
@@ -117,7 +118,6 @@ import {
   evaluateCloudAppSchemaGateCached,
   toAppRevisionSchemaPayload,
   warmCloudAppSchemaGate,
-  type SchemaGateResult,
 } from "./cloudAppSchemaGate.js";
 import {
   injectPaprAppRevisionMeta,
@@ -312,6 +312,16 @@ export class CloudAppHostService {
       void this.handleInternalDbChanged(req, res),
     );
 
+    app.use(
+      "/internal/backend-db",
+      createCloudBackendDbProxyRouter({
+        query: async (session, sql, params) =>
+          this.runBackendDbProxyQuery(session, sql, params),
+        write: async (session, sql, params) =>
+          this.runBackendDbProxyWrite(session, sql, params),
+      }),
+    );
+
     app.get("/api/access", (req, res) => void this.handleAccess(req, res));
     app.get("/api/members", (req, res) => void this.handleMembers(req, res));
     app.get("/api/db/schema", (req, res) => this.handleSchema(req, res));
@@ -422,6 +432,84 @@ export class CloudAppHostService {
       userId: access.userId,
       callerUserId: runtimeAuth.externalUserId,
     };
+  }
+
+  private backendDbProxyAccess(session: BackendDbProxySession): AppAccessContext {
+    const cloud = session.cloud;
+    if (!cloud) {
+      throw Object.assign(new Error("Invalid cloud backend DB proxy session"), {
+        status: 401,
+      });
+    }
+    return {
+      orgId: cloud.orgId,
+      namespaceId: cloud.namespaceId,
+      userId: cloud.userId,
+      appId: session.appId,
+      mode: "owner",
+      canRead: cloud.canRead,
+      canWrite: cloud.canWrite,
+    };
+  }
+
+  private async runBackendDbProxyQuery(
+    session: BackendDbProxySession,
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ rows: Record<string, unknown>[]; count: number }> {
+    const cloud = session.cloud;
+    if (!cloud) {
+      throw Object.assign(new Error("Invalid cloud backend DB proxy session"), {
+        status: 401,
+      });
+    }
+    if (!cloud.canRead) {
+      throw Object.assign(new Error("Read not allowed for this link"), { status: 403 });
+    }
+    const access = this.backendDbProxyAccess(session);
+    const config = await this.loadDataSources(cloud.runtimeAuth);
+    return this.turso.query({
+      orgId: cloud.orgId,
+      namespaceId: cloud.namespaceId,
+      ...this.tursoDbRequest(access, cloud.runtimeAuth),
+      runtimeAuth: cloud.runtimeAuth,
+      config,
+      sourceId: session.sourceId,
+      sql,
+      params,
+    });
+  }
+
+  private async runBackendDbProxyWrite(
+    session: BackendDbProxySession,
+    sql: string,
+    params?: unknown[],
+  ): Promise<{ changes: number; lastInsertRowid: number }> {
+    const cloud = session.cloud;
+    if (!cloud) {
+      throw Object.assign(new Error("Invalid cloud backend DB proxy session"), {
+        status: 401,
+      });
+    }
+    if (!cloud.canWrite) {
+      throw Object.assign(new Error("Write not allowed for this link"), { status: 403 });
+    }
+    const access = this.backendDbProxyAccess(session);
+    const config = await this.loadDataSources(cloud.runtimeAuth);
+    const result = await this.turso.write({
+      orgId: cloud.orgId,
+      namespaceId: cloud.namespaceId,
+      ...this.tursoDbRequest(access, cloud.runtimeAuth),
+      runtimeAuth: cloud.runtimeAuth,
+      config,
+      appId: session.appId,
+      sourceId: session.sourceId,
+      sql,
+      params,
+    });
+    invalidateDbCacheForApp(cloud.runtimeAuth.namespaceId, cloud.runtimeAuth.slug);
+    this.publishDbChangedForSource(config, session.sourceId, session.appId, cloud.runtimeAuth);
+    return result;
   }
 
   private callerIsSignedIn(runtimeAuth: AppRuntimeRouteAuth): boolean {
@@ -833,55 +921,6 @@ export class CloudAppHostService {
     });
   }
 
-  /**
-   * Schema gate runs on data/backend APIs — not on index.html (see SYNC_CONTRACT §12).
-   * Returns null when the response was already sent (503 schema_syncing).
-   */
-  private async respondIfSchemaBlocked(
-    res: Response,
-    runtimeAuth: AppRuntimeRouteAuth,
-    access: AppAccessContext,
-    currentRevision?: string | null,
-    preloadedConfig?: AppDataSourcesFile,
-  ): Promise<SchemaGateResult | null> {
-    try {
-      const config = preloadedConfig ?? (await this.loadDataSources(runtimeAuth));
-      const gate = await evaluateCloudAppSchemaGateCached({
-        turso: this.turso,
-        runtimeAuth,
-        orgId: access.orgId,
-        namespaceId: access.namespaceId,
-        userId: access.userId,
-        callerUserId: runtimeAuth.externalUserId,
-        config,
-        currentRevision: currentRevision ?? null,
-      });
-      if (!gate.blocked) {
-        return gate;
-      }
-      res.status(503).json({
-        error:
-          "Database schema is syncing with this app version. Try again in a moment.",
-        code: "schema_syncing",
-        requiredSchemaVersion: gate.requiredSchemaVersion,
-        remoteSchemaVersion: gate.remoteSchemaVersion,
-        pinnedRevision: gate.pinnedRevision,
-      });
-      return null;
-    } catch (err) {
-      console.warn(
-        "[CloudAppHost] schema gate skipped:",
-        (err as Error).message.slice(0, 120),
-      );
-      return {
-        blocked: false,
-        requiredSchemaVersion: null,
-        remoteSchemaVersion: null,
-        pinnedRevision: null,
-      };
-    }
-  }
-
   private warmSchemaGateInBackground(
     runtimeAuth: AppRuntimeRouteAuth,
     access: AppAccessContext,
@@ -1010,10 +1049,6 @@ export class CloudAppHostService {
         return;
       }
 
-      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
-        return;
-      }
-
       const config = await this.loadDataSources(runtimeAuth);
       const sources = await this.turso.schema({
         orgId: access.orgId,
@@ -1060,10 +1095,6 @@ export class CloudAppHostService {
 
       if (!access.canRead) {
         await this.respondAccessDenied(req, res, runtimeAuth);
-        return;
-      }
-
-      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
         return;
       }
 
@@ -1207,10 +1238,6 @@ export class CloudAppHostService {
         return;
       }
 
-      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
-        return;
-      }
-
       const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
       configMs = performance.now() - configStarted;
@@ -1326,10 +1353,6 @@ export class CloudAppHostService {
         return;
       }
 
-      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
-        return;
-      }
-
       const configStarted = performance.now();
       const config = await this.loadDataSources(runtimeAuth);
       configMs = performance.now() - configStarted;
@@ -1417,10 +1440,6 @@ export class CloudAppHostService {
         } else {
           res.status(403).json({ error: "Write not allowed for this link" });
         }
-        return;
-      }
-
-      if ((await this.respondIfSchemaBlocked(res, runtimeAuth, access)) === null) {
         return;
       }
 
@@ -1623,18 +1642,6 @@ export class CloudAppHostService {
         ),
       ]);
 
-      if (
-        (await this.respondIfSchemaBlocked(
-          res,
-          runtimeAuth,
-          access,
-          undefined,
-          dataSources,
-        )) === null
-      ) {
-        return;
-      }
-
       if (!manifestFile) {
         res.status(404).json({ error: "Backend manifest not found" });
         return;
@@ -1661,6 +1668,13 @@ export class CloudAppHostService {
         loggedIn,
         dataSources,
         manifestContent: manifestFile?.content,
+        cloudAccess: {
+          orgId: access.orgId,
+          namespaceId: access.namespaceId,
+          userId: access.userId,
+          canRead: access.canRead,
+          canWrite: access.canWrite,
+        },
       });
 
       res.json(result);
@@ -1986,6 +2000,27 @@ export class CloudAppHostService {
     }
 
     invalidateRepoCacheForPublishedApp(namespaceId, slug);
+
+    const runtimeAuth: AppRuntimeRouteAuth = { namespaceId, slug };
+    void import("./warmDeploySnapshot.js")
+      .then(({ warmDeploySnapshotForPublishedApp }) =>
+        warmDeploySnapshotForPublishedApp(runtimeAuth),
+      )
+      .then((result) => {
+        if (result.warmed > 0) {
+          console.log(
+            `[CloudAppHost] Deploy snapshot warmed ${result.warmed} file(s) ` +
+              `for ${namespaceId}/${slug} @ ${result.revision}`,
+          );
+        }
+      })
+      .catch((err: Error) => {
+        console.warn(
+          `[CloudAppHost] Deploy snapshot warm failed for ${namespaceId}/${slug}:`,
+          err.message.slice(0, 120),
+        );
+      });
+
     res.json({ ok: true, cacheInvalidated: true });
   }
 
@@ -2272,9 +2307,12 @@ export class CloudAppHostService {
       transpiled = true;
     }
 
-    const cacheControl = cacheControlForAppAsset(requestedPath, { transpiled });
-    if (cacheControl) {
-      res.setHeader("Cache-Control", cacheControl);
+    const cachePolicy = cacheControlForAppAsset(requestedPath, { transpiled });
+    if (cachePolicy) {
+      res.setHeader("Cache-Control", cachePolicy.cacheControl);
+      if (cachePolicy.cdnCacheControl) {
+        res.setHeader("CDN-Cache-Control", cachePolicy.cdnCacheControl);
+      }
     }
 
     res.setHeader("Content-Type", contentType);

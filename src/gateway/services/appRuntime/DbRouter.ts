@@ -20,9 +20,11 @@ import {
 import { resolveTursoDatabaseNameForSource } from "../DatabaseRegistryService.js";
 import {
   queryLinkedDbViaTursoReplica,
+  recoverReplicaAfterCheckpointError,
   schemaLinkedDbViaTursoReplica,
   shouldUseTursoReplicaForSource,
 } from "../tursoReplica/tursoReplicaRouting.js";
+import { isReplicaCheckpointWalError } from "../tursoReplica/tursoReplicaCheckpointRecovery.js";
 import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import { displayTableName, rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
@@ -182,6 +184,38 @@ export class DbRouter {
         return { ...result, backend: "turso-replica" };
       } catch (error) {
         const message = (error as Error).message;
+        const tursoDatabase = resolveTursoDatabaseName(source);
+
+        if (tursoDatabase && isReplicaCheckpointWalError(message)) {
+          console.warn(
+            `[DbRouter] Replica checkpoint error for ${source.alias ?? source.dbId} — ` +
+              "attempting Tier-1 recovery (pull + drain CDC)",
+          );
+          const recovered = await recoverReplicaAfterCheckpointError(
+            source,
+            tursoDatabase,
+          );
+          if (recovered) {
+            try {
+              const retry = await queryLinkedDbViaTursoReplica(
+                source,
+                sql,
+                params,
+                { pullBeforeRead: true },
+              );
+              console.log(
+                `[DbRouter] Turso replica query (recovered) app=${appId} source=${source.alias} rows=${retry.count}`,
+              );
+              return { ...retry, backend: "turso-replica" };
+            } catch (retryError) {
+              console.warn(
+                `[DbRouter] Replica retry after recovery failed:`,
+                (retryError as Error).message.slice(0, 160),
+              );
+            }
+          }
+        }
+
         console.warn(
           `[DbRouter] Replica query failed for ${source.alias ?? source.dbId} — ` +
             `trying Turso primary fallback: ${message.slice(0, 160)}`,
@@ -197,12 +231,15 @@ export class DbRouter {
           if (remote) {
             return remote;
           }
+          console.warn(
+            `[DbRouter] Turso primary unavailable for ${source.alias ?? source.dbId}`,
+          );
         }
-        if (isLocalDbReadable(source.dbPath)) {
-          const local = await this.pool.query(appId, source.dbPath, sql, params);
-          return { ...local, backend: "local" };
-        }
-        throw error;
+        throw new Error(
+          `Replica read failed for ${source.alias ?? source.dbId} and Turso primary is unavailable. ` +
+            "Run Upload to recover replica sync, or retry after sync completes. " +
+            `Original: ${message.slice(0, 200)}`,
+        );
       }
     }
 
@@ -280,11 +317,62 @@ export class DbRouter {
         const result = await schemaLinkedDbViaTursoReplica(source);
         return { ...result, backend: "turso-replica" };
       } catch (error) {
+        const message = (error as Error).message;
+        const tursoDatabase = resolveTursoDatabaseName(source);
+
+        if (tursoDatabase && isReplicaCheckpointWalError(message)) {
+          const recovered = await recoverReplicaAfterCheckpointError(
+            source,
+            tursoDatabase,
+          );
+          if (recovered) {
+            try {
+              const retry = await schemaLinkedDbViaTursoReplica(source);
+              return { ...retry, backend: "turso-replica" };
+            } catch {
+              /* fall through to primary / error */
+            }
+          }
+        }
+
         console.warn(
           `[DbRouter] Replica schema failed for ${source.alias ?? source.dbId}:`,
-          (error as Error).message.slice(0, 160),
+          message.slice(0, 160),
         );
         await getTursoReplicaService().close(source.dbPath);
+
+        if (isTursoReplicaOnline()) {
+          const client = await getTursoClientForSource(source);
+          if (client) {
+            const tablesResult = await client.execute({
+              sql: `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+              args: [],
+            });
+            const tables = await Promise.all(
+              filterSyncableTables(
+                tablesResult.rows.map((row) => String(row.name ?? "")),
+              ).map(async (localName) => {
+                const cols = await client.execute(
+                  `PRAGMA table_info(${quoteIdent(localName)})`,
+                );
+                return {
+                  table: localName,
+                  columns: cols.rows.map((column) => ({
+                    name: String(column.name ?? ""),
+                    type: String(column.type ?? ""),
+                    pk: Number(column.pk ?? 0) === 1,
+                  })),
+                };
+              }),
+            );
+            return { tables, backend: "turso" };
+          }
+        }
+
+        throw new Error(
+          `Replica schema read failed for ${source.alias ?? source.dbId}. ` +
+            `Run Upload to recover. Original: ${message.slice(0, 200)}`,
+        );
       }
     }
 

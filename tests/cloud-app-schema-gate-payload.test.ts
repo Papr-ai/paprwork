@@ -26,7 +26,7 @@ describe("cloud app schema gate payload", () => {
     });
   });
 
-  it("marks schemaSyncing when Turso lags bundle", () => {
+  it("reports ready and serves pre-update revision when Turso lags bundle", () => {
     expect(
       toAppRevisionSchemaPayload("rev-2", {
         blocked: true,
@@ -35,11 +35,11 @@ describe("cloud app schema gate payload", () => {
         pinnedRevision: "rev-1",
       }),
     ).toEqual({
-      revision: "rev-2",
+      revision: "rev-1",
       requiredSchemaVersion: "0005_add.sql",
       remoteSchemaVersion: "0003_old.sql",
-      schemaReady: false,
-      schemaSyncing: true,
+      schemaReady: true,
+      schemaSyncing: false,
     });
   });
 

@@ -107,6 +107,18 @@ export function safeCleanupSqliteSidecars(dbPath: string): void {
   }
 }
 
+/** Remove Turso Sync sidecars only — keeps main data.db (cheap repair vs full reseed). */
+export function removeTursoReplicaSidecarsOnly(dbPath: string): void {
+  safeCleanupSqliteSidecars(dbPath);
+  for (const suffix of REPLICA_SIDEcar_SUFFIXES) {
+    try {
+      fs.unlinkSync(dbPath + suffix);
+    } catch {
+      /* absent */
+    }
+  }
+}
+
 /** Remove a Turso Sync replica file set (local db + sync sidecars). */
 export function removeTursoReplicaLocalFiles(dbPath: string): void {
   safeCleanupSqliteSidecars(dbPath);

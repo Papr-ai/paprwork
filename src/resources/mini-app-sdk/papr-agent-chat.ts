@@ -11,9 +11,19 @@
 import { renderMarkdownToHtml } from "./papr-markdown.js";
 import {
   parsePlanFromToolResult,
-  renderPlanCardHtml,
   type PlanData,
 } from "./papr-agent-chat-plan.js";
+import { renderTurnActivityDom } from "./papr-agent-chat-activity.js";
+import {
+  computeSdkLastActivity,
+  createSdkTurnActivity,
+  flushTextSegment,
+  finalizeSdkTurnActivity,
+  getFinalTextAfterTools,
+  isSdkExploring,
+  pickThinkingPhrase,
+  type SdkTurnActivity,
+} from "./papr-agent-chat-sequence.js";
 
 export interface PublicAppAgentChatConfig {
   enabled: boolean;
@@ -29,21 +39,6 @@ interface ChatMessage {
   content: string;
 }
 
-interface ToolCallActivity {
-  toolCallId?: string;
-  name: string;
-  args?: Record<string, unknown>;
-  status?: "pending" | "success" | "error";
-  result?: unknown;
-}
-
-interface TurnActivity {
-  thinking: string;
-  thinkingStreaming: boolean;
-  toolCalls: ToolCallActivity[];
-  plans: PlanData[];
-  startedAt: number;
-}
 
 export interface OpenAppAgentChatOptions {
   message?: string;
@@ -53,31 +48,6 @@ let openPanelHandler: ((options?: OpenAppAgentChatOptions) => void) | null = nul
 
 const SESSION_STORAGE_KEY = "papr-agent-chat-session";
 
-function formatToolLabel(toolName: string, args?: Record<string, unknown>, running = true): string {
-  const prefix = running ? "Using" : "Used";
-  if (toolName === "read_app_file" && typeof args?.path === "string") {
-    const path = args.path.split("/").pop() ?? args.path;
-    return `${prefix} ${path}`;
-  }
-  if (toolName === "edit_app_file" && typeof args?.path === "string") {
-    const path = args.path.split("/").pop() ?? args.path;
-    return `${running ? "Editing" : "Edited"} ${path}`;
-  }
-  if (toolName === "edit_app_file_lines" && typeof args?.path === "string") {
-    const path = args.path.split("/").pop() ?? args.path;
-    return `${running ? "Editing" : "Edited"} ${path}`;
-  }
-  if (toolName === "list_app_files") {
-    return running ? "Listing app files" : "Listed app files";
-  }
-  if (toolName === "bash" && typeof args?.command === "string") {
-    const cmd = args.command.trim().slice(0, 40);
-    return `${prefix} bash: ${cmd}${args.command.length > 40 ? "…" : ""}`;
-  }
-  const readable = toolName.replace(/_/g, " ");
-  return `${prefix} ${readable}`;
-}
-
 function setMessageMarkdown(el: HTMLElement, content: string): void {
   const contentEl = el.querySelector(".papr-agent-chat-msg__content");
   if (contentEl) {
@@ -85,13 +55,6 @@ function setMessageMarkdown(el: HTMLElement, content: string): void {
     return;
   }
   el.innerHTML = `<div class="papr-agent-chat-msg__content">${renderMarkdownToHtml(content)}</div>`;
-}
-
-function getLastToolActivity(toolCalls: ToolCallActivity[]): string {
-  if (toolCalls.length === 0) return "Working";
-  const last = toolCalls[toolCalls.length - 1];
-  const running = (last.status ?? "pending") === "pending";
-  return formatToolLabel(last.name, last.args, running);
 }
 
 function resolveAppIdFromPath(): string | null {
@@ -513,6 +476,55 @@ function createBubbleStyles(): void {
       word-break: break-word;
       max-height: 120px;
       overflow-y: auto;
+      transition: max-height 0.3s ease, opacity 0.3s ease;
+    }
+    .papr-agent-chat-thinking__preview {
+      font-weight: 400;
+      color: #777;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .papr-agent-chat-thinking__cursor {
+      animation: papr-blink 1s step-end infinite;
+    }
+    @keyframes papr-blink { 50% { opacity: 0; } }
+    .papr-agent-chat-working__labels {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+    .papr-agent-chat-working__primary { font-weight: 600; white-space: nowrap; }
+    .papr-agent-chat-working__primary--shimmer,
+    .papr-agent-chat-working__secondary--shimmer {
+      background: linear-gradient(90deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.35) 35%, #333 50%, rgba(0,0,0,0.35) 65%, rgba(0,0,0,0.35) 100%);
+      background-size: 300% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: papr-working-shimmer 2s ease-in-out infinite;
+    }
+    @keyframes papr-working-shimmer {
+      0% { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+    .papr-agent-chat-working__narration {
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #444;
+      border-top: 1px solid rgba(0,0,0,0.04);
+    }
+    .papr-agent-chat-working__list {
+      max-height: 420px;
+      overflow-y: auto;
+      transition: max-height 0.3s ease, opacity 0.3s ease;
     }
     .papr-agent-chat-working {
       border: 1px solid rgba(0,0,0,0.08);
@@ -659,6 +671,7 @@ async function streamTurn(
   handlers: {
     onTurnStart?: () => void;
     onTurnId?: (turnId: string) => void;
+    onStatus?: (message: string) => void;
     onThinkingDelta: (text: string) => void;
     onDelta: (text: string) => void;
     onToolCall: (input: {
@@ -701,6 +714,17 @@ async function streamTurn(
 
     source.addEventListener("app-agent:turn-start", () => {
       handlers.onTurnStart?.();
+    });
+
+    source.addEventListener("app-agent:status", (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data) as { message?: string };
+        if (typeof data.message === "string" && data.message.length > 0) {
+          handlers.onStatus?.(data.message);
+        }
+      } catch {
+        /* ignore */
+      }
     });
 
     source.addEventListener("app-agent:thinking-delta", (event) => {
@@ -878,155 +902,37 @@ function mountWidget(
     expandBtn.setAttribute("aria-label", expanded ? "Collapse panel" : "Expand panel");
   });
 
-  let turnActivity: TurnActivity | null = null;
-  let completedActivity: TurnActivity | null = null;
+  let turnActivity: SdkTurnActivity | null = null;
+  let completedActivity: SdkTurnActivity | null = null;
   let streamingAssistantId: string | null = null;
   let thinkingCollapsed = true;
   let workingCollapsed = true;
   let completedWorkingCollapsed = true;
-  const thinkingPhrase = "Thinking…";
+  let thinkingPhrase = pickThinkingPhrase();
+  let showWorkingShimmer = false;
+  let shimmerTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastShimmerKey = "";
 
-  const renderActivity = (
-    container: HTMLElement,
-    activity: TurnActivity | null,
-    options: { live: boolean; sendingNow: boolean; collapsed: boolean },
-  ): void => {
-    if (!activity) return;
-    const hasThinking = activity.thinking.length > 0;
-    const hasTools = activity.toolCalls.length > 0;
-    const hasPlans = activity.plans.length > 0;
-    const showWaiting =
-      options.live &&
-      options.sendingNow &&
-      !hasThinking &&
-      !hasTools &&
-      !hasPlans;
-
-    if (!hasThinking && !hasTools && !hasPlans && !showWaiting) return;
-
-    const activityEl = document.createElement("div");
-    activityEl.className = "papr-agent-chat-activity";
-
-    if (hasThinking) {
-      const thinkingEl = document.createElement("div");
-      thinkingEl.className = "papr-agent-chat-thinking";
-
-      const headerBtn = document.createElement("button");
-      headerBtn.type = "button";
-      headerBtn.className = `papr-agent-chat-thinking__header${
-        activity.thinkingStreaming ? " papr-agent-chat-thinking__header--streaming" : ""
-      }`;
-      headerBtn.innerHTML = `
-        <span class="papr-agent-chat-thinking__chevron${
-          thinkingCollapsed ? " papr-agent-chat-thinking__chevron--collapsed" : ""
-        }">▼</span>
-        <span>${
-          activity.thinkingStreaming
-            ? thinkingPhrase
-            : "Thought process"
-        }</span>
-      `;
-      headerBtn.addEventListener("click", () => {
-        thinkingCollapsed = !thinkingCollapsed;
-        renderMessages();
-      });
-
-      const bodyEl = document.createElement("div");
-      bodyEl.className = "papr-agent-chat-thinking__body";
-      bodyEl.textContent = activity.thinking;
-      bodyEl.hidden = thinkingCollapsed;
-
-      thinkingEl.appendChild(headerBtn);
-      thinkingEl.appendChild(bodyEl);
-      activityEl.appendChild(thinkingEl);
+  const scheduleWorkingShimmer = (activity: SdkTurnActivity, exploring: boolean): void => {
+    const key = computeSdkLastActivity(activity);
+    if (!exploring) {
+      showWorkingShimmer = false;
+      lastShimmerKey = "";
+      if (shimmerTimer) {
+        clearTimeout(shimmerTimer);
+        shimmerTimer = null;
+      }
+      return;
     }
-
-    if (showWaiting || hasTools || hasPlans) {
-      const workingEl = document.createElement("div");
-      workingEl.className = "papr-agent-chat-working";
-      const lastActivity = hasTools
-        ? getLastToolActivity(activity.toolCalls)
-        : activity.plans[activity.plans.length - 1]?.title ?? "Working";
-      const isRunning =
-        options.live &&
-        (options.sendingNow ||
-          activity.thinkingStreaming ||
-          activity.toolCalls.some((t) => t.status === "pending" || !t.status));
-      const header = document.createElement("button");
-      header.type = "button";
-      header.className = "papr-agent-chat-working__header";
-      header.innerHTML = `
-        <span class="papr-agent-chat-working__chevron${
-          options.collapsed ? " papr-agent-chat-working__chevron--collapsed" : ""
-        }">▼</span>
-        <span>${isRunning ? "Working" : "Finished Working"}</span>
-        ${
-          options.collapsed
-            ? `<span class="papr-agent-chat-working__label-secondary">${showWaiting ? "Starting…" : lastActivity}</span>`
-            : ""
-        }
-        ${options.live && elapsedSeconds > 0 ? `<span class="papr-agent-chat-working__timer">${elapsedSeconds}s</span>` : ""}
-      `;
-
-      const list = document.createElement("div");
-      list.className = `papr-agent-chat-working__list${
-        options.collapsed ? " papr-agent-chat-working__list--collapsed" : ""
-      }`;
-
-      header.addEventListener("click", () => {
-        if (options.live) {
-          workingCollapsed = !workingCollapsed;
-        } else {
-          completedWorkingCollapsed = !completedWorkingCollapsed;
-        }
+    if (key !== lastShimmerKey) {
+      lastShimmerKey = key;
+      showWorkingShimmer = false;
+      if (shimmerTimer) clearTimeout(shimmerTimer);
+      shimmerTimer = setTimeout(() => {
+        showWorkingShimmer = true;
         renderMessages();
-      });
-
-      workingEl.appendChild(header);
-
-      if (hasPlans) {
-        for (const plan of activity.plans) {
-          const planWrap = document.createElement("div");
-          planWrap.innerHTML = renderPlanCardHtml(plan, options.collapsed);
-          const planEl = planWrap.firstElementChild;
-          if (planEl) {
-            const planHeader = planEl.querySelector(".papr-agent-chat-plan__header");
-            planHeader?.addEventListener("click", () => {
-              const steps = planEl.querySelector(".papr-agent-chat-plan__steps");
-              const chevron = planEl.querySelector(".papr-agent-chat-plan__chevron");
-              steps?.classList.toggle("papr-agent-chat-plan__steps--collapsed");
-              chevron?.classList.toggle("papr-agent-chat-plan__chevron--collapsed");
-            });
-            list.appendChild(planEl);
-          }
-        }
-      }
-
-      for (const tool of activity.toolCalls) {
-        const row = document.createElement("div");
-        const status = tool.status ?? "pending";
-        row.className = `papr-agent-chat-tool papr-agent-chat-tool--${status}`;
-        const label = document.createElement("span");
-        label.textContent = formatToolLabel(
-          tool.name,
-          tool.args,
-          status === "pending",
-        );
-        const badge = document.createElement("span");
-        badge.className = "papr-agent-chat-tool__status";
-        badge.textContent = status === "success" ? "✓" : status === "error" ? "✗" : "…";
-        row.appendChild(label);
-        row.appendChild(badge);
-        list.appendChild(row);
-      }
-
-      if (hasTools || hasPlans) {
-        workingEl.appendChild(list);
-      }
-      activityEl.appendChild(workingEl);
+      }, 3000);
     }
-
-    container.appendChild(activityEl);
   };
 
   const pruneEmptyAssistantMessages = (): void => {
@@ -1052,19 +958,48 @@ function mountWidget(
       setMessageMarkdown(el, msg.content);
       messagesEl.appendChild(el);
     }
-    if (turnActivity) {
-      renderActivity(messagesEl, turnActivity, {
-        live: true,
+
+    const liveActivity = turnActivity;
+    const doneActivity = !sending ? completedActivity : null;
+    const activity = liveActivity ?? doneActivity;
+
+    if (activity) {
+      const exploring = isSdkExploring(activity, Boolean(liveActivity && sending));
+      if (exploring && liveActivity) {
+        workingCollapsed = false;
+      }
+      scheduleWorkingShimmer(activity, exploring);
+
+      const finalText = renderTurnActivityDom(messagesEl, activity, {
+        live: Boolean(liveActivity),
         sendingNow: sending,
-        collapsed: workingCollapsed,
+        workingCollapsed: liveActivity ? workingCollapsed : completedWorkingCollapsed,
+        thinkingCollapsed,
+        thinkingPhrase,
+        elapsedSeconds,
+        showWorkingShimmer,
+        onToggleWorking: () => {
+          if (liveActivity) {
+            workingCollapsed = !workingCollapsed;
+          } else {
+            completedWorkingCollapsed = !completedWorkingCollapsed;
+          }
+          renderMessages();
+        },
+        onToggleThinking: () => {
+          thinkingCollapsed = !thinkingCollapsed;
+          renderMessages();
+        },
       });
-    } else if (completedActivity && !sending) {
-      renderActivity(messagesEl, completedActivity, {
-        live: false,
-        sendingNow: false,
-        collapsed: completedWorkingCollapsed,
-      });
+
+      if (finalText.trim()) {
+        const el = document.createElement("div");
+        el.className = "papr-agent-chat-msg papr-agent-chat-msg--assistant";
+        setMessageMarkdown(el, finalText);
+        messagesEl.appendChild(el);
+      }
     }
+
     messagesEl.scrollTop = messagesEl.scrollHeight;
   };
 
@@ -1109,12 +1044,12 @@ function mountWidget(
         if (!sessionId) {
           sessionId = await ensureSession(appId);
         }
-        if (!open || !sessionId) {
+        if (!sessionId) {
           return;
         }
 
-        if (!warmStatusEl) {
-          warmStatusEl = appendStatus("Starting assistant…");
+        if (open && !warmStatusEl) {
+          warmStatusEl = appendStatus("Preparing assistant workspace…");
         }
 
         const result = await warmSession(sessionId);
@@ -1234,29 +1169,33 @@ function mountWidget(
       const assistantId = `a-${Date.now()}`;
       streamingAssistantId = assistantId;
       messages.push({ id: assistantId, role: "assistant", content: "" });
-      turnActivity = {
-        thinking: "",
-        thinkingStreaming: false,
-        toolCalls: [],
-        plans: [],
-        startedAt: Date.now(),
-      };
+      turnActivity = createSdkTurnActivity();
+      turnActivity.thinkingStreaming = true;
+      turnActivity.statusMessage = "Connecting…";
       thinkingCollapsed = true;
       workingCollapsed = true;
       completedWorkingCollapsed = true;
+      thinkingPhrase = pickThinkingPhrase();
+      showWorkingShimmer = false;
+      lastShimmerKey = "";
       startTurnTimer();
       renderMessages();
 
       const assistantIndex = messages.findIndex((m) => m.id === assistantId);
 
-      const findToolIndex = (toolCallId?: string, toolName?: string): number => {
+      const findSequenceToolIndex = (toolCallId?: string, toolName?: string): number => {
         if (!turnActivity) return -1;
         if (toolCallId) {
-          const byId = turnActivity.toolCalls.findIndex((t) => t.toolCallId === toolCallId);
+          const byId = turnActivity.sequence.findIndex(
+            (item) => item.type === "tool" && item.data.toolCallId === toolCallId,
+          );
           if (byId >= 0) return byId;
         }
-        return turnActivity.toolCalls.findIndex(
-          (t) => t.status === undefined && (!toolName || t.name === toolName),
+        return turnActivity.sequence.findIndex(
+          (item) =>
+            item.type === "tool" &&
+            item.data.status === "calling" &&
+            (!toolName || item.data.name === toolName),
         );
       };
 
@@ -1266,52 +1205,67 @@ function mountWidget(
         },
         onTurnStart: () => {
           if (!turnActivity) {
-            turnActivity = {
-              thinking: "",
-              thinkingStreaming: false,
-              toolCalls: [],
-              plans: [],
-              startedAt: Date.now(),
-            };
+            turnActivity = createSdkTurnActivity();
+            turnActivity.thinkingStreaming = true;
             renderMessages();
           }
+        },
+        onStatus: (message) => {
+          if (!turnActivity) return;
+          turnActivity.statusMessage = message;
+          turnActivity.isFinishingWork =
+            message.includes("Summarizing") || message.includes("Finishing");
+          renderMessages();
         },
         onThinkingDelta: (delta) => {
           if (!turnActivity) return;
           turnActivity.thinking += delta;
           turnActivity.thinkingStreaming = true;
+          turnActivity.statusMessage = undefined;
+          turnActivity.isFinishingWork = false;
           renderMessages();
         },
         onDelta: (delta) => {
-          if (turnActivity?.thinking) {
-            turnActivity.thinkingStreaming = false;
-          }
-          if (assistantIndex >= 0) {
-            messages[assistantIndex].content += delta;
-            renderMessages();
-          }
+          if (!turnActivity) return;
+          turnActivity.textSegment += delta;
+          turnActivity.statusMessage = undefined;
+          renderMessages();
         },
         onToolCall: ({ toolCallId, toolName, args }) => {
           if (!turnActivity) return;
-          turnActivity.thinking = "";
+          flushTextSegment(turnActivity);
           turnActivity.thinkingStreaming = false;
-          turnActivity.toolCalls.push({
-            toolCallId,
-            name: toolName,
-            args,
-            status: "pending",
-          });
+          turnActivity.statusMessage = undefined;
+          turnActivity.isFinishingWork = false;
+          const existingIdx = toolCallId
+            ? turnActivity.sequence.findIndex(
+                (item) => item.type === "tool" && item.data.toolCallId === toolCallId,
+              )
+            : -1;
+          if (existingIdx >= 0) {
+            const item = turnActivity.sequence[existingIdx];
+            if (item?.type === "tool") {
+              item.data.name = toolName;
+              item.data.args = args;
+              item.data.status = "calling";
+            }
+          } else {
+            turnActivity.sequence.push({
+              type: "tool",
+              data: { toolCallId, name: toolName, args, status: "calling" },
+            });
+          }
           renderMessages();
         },
         onToolResult: ({ toolCallId, toolName, success, result }) => {
           if (!turnActivity) return;
-          const idx = findToolIndex(toolCallId, toolName);
+          const idx = findSequenceToolIndex(toolCallId, toolName);
           if (idx >= 0) {
-            turnActivity.toolCalls[idx] = {
-              ...turnActivity.toolCalls[idx],
-              status: success ? "success" : "error",
-              result,
-            };
+            const item = turnActivity.sequence[idx];
+            if (item?.type === "tool") {
+              item.data.status = success ? "success" : "error";
+              item.data.result = result;
+            }
           }
           const plan = parsePlanFromToolResult(toolName, result);
           if (plan) {
@@ -1321,21 +1275,32 @@ function mountWidget(
         },
         onDone: ({ shouldRefreshApp, stopped }) => {
           if (turnActivity) {
+            finalizeSdkTurnActivity(turnActivity);
+            turnActivity.wasStopped = Boolean(stopped);
             turnActivity.thinkingStreaming = false;
+            turnActivity.isFinishingWork = false;
             completedActivity = {
+              sequence: [...turnActivity.sequence],
               thinking: turnActivity.thinking,
               thinkingStreaming: false,
-              toolCalls: [...turnActivity.toolCalls],
+              textSegment: "",
               plans: [...turnActivity.plans],
               startedAt: turnActivity.startedAt,
+              wasStopped: turnActivity.wasStopped,
             };
             completedWorkingCollapsed = true;
+            thinkingCollapsed = true;
+            const finalText = getFinalTextAfterTools(turnActivity);
+            if (assistantIndex >= 0 && finalText.trim()) {
+              messages[assistantIndex].content = finalText;
+            }
           }
           turnActivity = null;
           streamingAssistantId = null;
           activeTurnId = null;
           stopTurnTimer();
           setSendingUi(false);
+          showWorkingShimmer = false;
           pruneEmptyAssistantMessages();
           renderMessages();
           if (sessionId) {
@@ -1422,6 +1387,13 @@ function mountWidget(
     });
   }
   renderMessages();
+
+  void ensureSession(appId)
+    .then((sid) => {
+      sessionId = sid;
+      startWarmOnIntent();
+    })
+    .catch(() => undefined);
 
   return () => {
     if (openPanelHandler === openPanel) {

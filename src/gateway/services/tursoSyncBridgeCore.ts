@@ -88,7 +88,7 @@ export interface PushResult {
   remoteLogMaxId?: number;
   /** Changelog entries applied (delta mode). */
   deltaEntries?: number;
-  syncMode?: TursoSyncMode | "replica";
+  syncMode?: TursoSyncMode | "replica" | "legacy-cdc";
 }
 
 export interface PullResult {
@@ -101,7 +101,7 @@ export interface PullResult {
   /** Highest remote _papr_sync_log id applied locally. */
   lastPulledLogId?: number;
   deltaEntries?: number;
-  syncMode?: TursoSyncMode | "replica";
+  syncMode?: TursoSyncMode | "replica" | "legacy-cdc";
   /** Tables snapshot-pulled during post-delta fingerprint reconcile. */
   reconciledTables?: string[];
 }
@@ -136,6 +136,8 @@ export interface PullSourceSyncOptions extends LinkedSourceSyncOptions {
    * unpushed edits. Skips bulk snapshot reconcile that would clobber local rows.
    */
   mergeWhileLocalDirty?: boolean;
+  /** Close and reopen the local replica connection before pull (Get updates). */
+  forceReconnect?: boolean;
 }
 
 /** @deprecated Legacy shared user DB — use jobTursoDatabaseName(jobId) instead. */

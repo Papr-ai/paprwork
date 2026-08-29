@@ -15,6 +15,7 @@ import {
 } from "../../../utils/tursoReplicaEnabled.js";
 import { getTursoReplicaService } from "../TursoReplicaService.js";
 import {
+  attachTursoReplicaInPlaceForCutover,
   provisionTursoReplicaForCutover,
   pushLocalLegacyFileToTursoPrimary,
 } from "../tursoReplicaProvision.js";
@@ -27,12 +28,25 @@ import {
   listLegacyCutoverCandidatesForApp,
   listLinkedLegacyCutoverCandidates,
 } from "./tursoReplicaCutoverCandidates.js";
-import { stripLegacyCdcArtifacts } from "../../legacyCdcArtifacts.js";
+import { stripLegacySyncPathArtifacts } from "../../legacyCdcArtifacts.js";
+import { verifyReplicaCutoverHealth } from "./tursoReplicaCutoverVerify.js";
 import type {
   CutoverBatchResult,
   CutoverClassification,
   CutoverRunResult,
 } from "./tursoReplicaCutoverTypes.js";
+
+function shouldUseInPlaceCutoverAttach(
+  classification: CutoverClassification,
+): boolean {
+  if (classification.bucket === "pull_remote") {
+    return true;
+  }
+  return (
+    classification.bucket === "seed_local" &&
+    classification.snapshot.localTableCount > 0
+  );
+}
 
 function isCutoverExecutionAllowed(options?: {
   dryRun?: boolean;
@@ -134,13 +148,28 @@ async function runLegacyPushBeforeCutover(
   }
 }
 
-async function finalizeReplicaCutover(record: DatabaseRecord): Promise<void> {
+async function finalizeReplicaCutover(
+  record: DatabaseRecord,
+  classification: CutoverClassification,
+): Promise<void> {
   const registry = getDatabaseRegistryService();
   const replica = getTursoReplicaService();
   await replica.close(record.localPath);
 
   // Provision while still legacy — only flip syncMode after success (no half-switch).
-  await provisionTursoReplicaForCutover(record);
+  if (shouldUseInPlaceCutoverAttach(classification)) {
+    await attachTursoReplicaInPlaceForCutover(record);
+  } else {
+    await provisionTursoReplicaForCutover(record);
+  }
+
+  const verify = await verifyReplicaCutoverHealth(record);
+  if (!verify.ok) {
+    throw new Error(
+      verify.error ??
+        "Replica cutover verification failed (pull/read check after provision)",
+    );
+  }
 
   await registry.markSyncModeReplicaCutover(record.dbId);
 
@@ -237,7 +266,7 @@ export async function runCutoverForRecord(
     await markCutoverInProgress(record.dbId);
     backupPath = await backupLocalDbPreReplica(record.localPath);
 
-    const strippedArtifacts = stripLegacyCdcArtifacts(record.localPath);
+    const strippedArtifacts = stripLegacySyncPathArtifacts(record.localPath);
     if (strippedArtifacts.length > 0) {
       console.log(
         `[TursoReplicaCutover] Stripped legacy CDC artifacts from ${record.dbId}: ` +
@@ -246,10 +275,9 @@ export async function runCutoverForRecord(
     }
 
     const needsLegacyPush =
-      (classification.bucket === "seed_local" &&
-        classification.snapshot.localTableCount > 0) ||
-      (classification.bucket === "pull_remote" &&
-        classification.snapshot.dirty);
+      classification.bucket === "seed_local" &&
+      classification.snapshot.localTableCount > 0 &&
+      classification.snapshot.remoteTableCount === 0;
 
     let legacyPush:
       | { ok: boolean; error?: string; skipped?: boolean }
@@ -287,7 +315,7 @@ export async function runCutoverForRecord(
       };
     }
 
-    await finalizeReplicaCutover(record);
+    await finalizeReplicaCutover(record, classification);
 
     return {
       dbId: record.dbId,

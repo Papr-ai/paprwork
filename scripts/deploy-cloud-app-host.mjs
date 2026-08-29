@@ -231,7 +231,7 @@ const deployCmd = [
   "--max-instances=20",
   "--timeout=120",
   `--set-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
-  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production`,
+  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production,PAPR_TURSO_REPLICA_SYNC=replica-records`,
 ].join(" ");
 
 run(deployCmd);
@@ -269,3 +269,5 @@ console.log(`   ${publicUrl}/auth/callback`);
 console.log(`\n4. Smoke test from paprwork-v2:`);
 console.log(`   npm run test:cloud-app-host -- --host=${serviceUrl}`);
 console.log(`\n5. Enable cloud link on an app in Paprwork → open share URL → sign in`);
+console.log(`\n6. Optional Phase 4 CDN (edge cache for dist/*):`);
+console.log(`   node scripts/setup-apps-papr-ai-cdn.mjs --project=${project} --region=${region}`);

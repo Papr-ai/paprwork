@@ -38,22 +38,40 @@ export function useDocument(documentId: string | null) {
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savingRef = useRef(false);
+  /** Latest editor content — may be ahead of the last completed save. */
+  const pendingContentRef = useRef<string | null>(null);
+  /** Timestamp of the most recent keystroke (debounced save scheduled). */
+  const lastEditAtRef = useRef(0);
 
   // Fetch the document
-  const loadDocument = useCallback(async () => {
-    if (!documentId) return;
-    setLoading(true);
-    setError(null);
+  const loadDocument = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!documentId) return;
+      const silent = options?.silent ?? false;
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
 
-    try {
-      const response = await gateway.send("document:get", { documentId });
-      setDocument(response.data as DocumentData);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load document");
-    } finally {
-      setLoading(false);
-    }
-  }, [documentId]);
+      try {
+        const response = await gateway.send("document:get", { documentId });
+        setDocument(response.data as DocumentData);
+      } catch (err) {
+        if (!silent) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load document",
+          );
+        } else {
+          console.error("[useDocument] Silent reload error:", err);
+        }
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+      }
+    },
+    [documentId],
+  );
 
   // Save content (debounced externally by the editor)
   const saveContent = useCallback(
@@ -75,7 +93,17 @@ export function useDocument(documentId: string | null) {
           documentId,
           content,
         });
-        setDocument(response.data as DocumentData);
+        const saved = response.data as DocumentData;
+        // If the user typed ahead while this save was in flight, keep the
+        // in-editor content in state so DocumentView does not roll back.
+        setDocument((prev) => {
+          if (pendingContentRef.current === content) {
+            pendingContentRef.current = null;
+            return saved;
+          }
+          const liveContent = pendingContentRef.current ?? prev?.content ?? content;
+          return prev ? { ...saved, content: liveContent } : saved;
+        });
       } catch (err) {
         console.error("[useDocument] Save error:", err);
       } finally {
@@ -84,7 +112,7 @@ export function useDocument(documentId: string | null) {
         // triggered by our own write gets ignored
         setTimeout(() => {
           savingRef.current = false;
-        }, 500);
+        }, 1500);
       }
     },
     [documentId],
@@ -93,10 +121,13 @@ export function useDocument(documentId: string | null) {
   // Debounced save (1s after last keystroke)
   const debouncedSave = useCallback(
     (content: string) => {
+      pendingContentRef.current = content;
+      lastEditAtRef.current = Date.now();
       if (saveTimer.current) {
         clearTimeout(saveTimer.current);
       }
       saveTimer.current = setTimeout(() => {
+        saveTimer.current = null;
         saveContent(content);
       }, 1000);
     },
@@ -188,10 +219,14 @@ export function useDocument(documentId: string | null) {
         // Skip if the user is currently saving (avoids save → watch → reload loop)
         if (savingRef.current) return;
 
+        // Skip while the user is still typing or has unsaved debounced content
+        if (saveTimer.current) return;
+        if (Date.now() - lastEditAtRef.current < 2500) return;
+
         // Debounce: fs.watch can fire multiple times per write
         if (reloadTimer.current) clearTimeout(reloadTimer.current);
         reloadTimer.current = setTimeout(() => {
-          loadDocument();
+          loadDocument({ silent: true });
         }, 300);
       }
     };

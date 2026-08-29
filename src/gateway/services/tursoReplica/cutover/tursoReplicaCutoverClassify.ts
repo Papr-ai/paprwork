@@ -142,8 +142,8 @@ export async function classifyRecordForReplicaCutover(
       reason: bucketReason(
         "pull_remote",
         snapshot.dirty
-          ? "Turso has data — final legacy push then pull remote truth"
-          : "Turso has data — pull remote truth into replica file",
+          ? "Turso has data — in-place attach with pull-only (no full reseed)"
+          : "Turso has data — in-place attach with pull-only",
       ),
       snapshot,
     };

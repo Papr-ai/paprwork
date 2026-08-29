@@ -221,6 +221,11 @@ export function createGitRemoteHost(service: CloudSyncHostService): CloudSyncPul
     },
     finalizePortableResourcesAfterPull: () => finalizePortableResourcesAfterPull(),
     reconcileJobsRegistryAfterPull: () => reconcileJobsRegistryAfterPull(),
+    getPaprDir: () => service.paprDir,
+    reconcileSubAgentsAfterPull: () =>
+      import("./cloudSyncGitPullExecution.js").then((m) =>
+        m.reconcileSubAgentsAfterPull(service.paprDir),
+      ),
   };
 }
 

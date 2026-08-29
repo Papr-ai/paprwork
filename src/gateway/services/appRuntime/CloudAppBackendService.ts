@@ -10,7 +10,10 @@ import { createHash } from "node:crypto";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
 import { sanitizeError } from "../../../core/tools/security.js";
 import { filterVaultKeyNames } from "../../../core/utils/platformInjectedEnvKeys.js";
-import { parseAppBackendManifest } from "./appBackendManifest.js";
+import {
+  loadBackendHandlerContent,
+  loadBackendRevisionArtifacts,
+} from "./backendArtifactCache.js";
 import {
   buildBackendActionEnv,
   resolveActionTimeoutMs,
@@ -28,12 +31,16 @@ import {
   collectBackendDatabaseSecrets,
   resolveCloudAppBackendDatabaseEnv,
 } from "./appBackendDatabase.js";
+import {
+  mintBackendDbProxyEnv,
+  revokeBackendDbProxyToken,
+} from "./backendDbProxy.js";
 import { parseDataSourcesFile, type AppDataSourcesFile } from "../appDataSources.js";
 import { hydrateCloudDatabaseRegistry } from "./cloudDatabaseRegistry.js";
-import type { AppBackendBundleManifest } from "../../utils/miniAppBackendBuild.js";
 
-const BACKEND_MANIFEST_PATH = "backend/manifest.json";
-const BACKEND_BUNDLE_PATH = "backend/bundle.json";
+const CLOUD_APP_HOST_PORT = Number(
+  process.env.PORT ?? process.env.CLOUD_APP_HOST_PORT ?? 8787,
+);
 
 function sha256(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -54,27 +61,20 @@ export class CloudAppBackendService {
       dataSources?: AppDataSourcesFile;
       /** Preloaded in parallel with data-sources — skips manifest repo fetch. */
       manifestContent?: string;
+      cloudAccess?: {
+        orgId: string;
+        namespaceId: string;
+        userId: string;
+        canRead: boolean;
+        canWrite: boolean;
+      };
     },
   ): Promise<AppBackendRunResult & { action: string }> {
     const actionName = input.action.trim();
     const cacheOpts = input.bypassFresh ? { bypassFresh: true } : undefined;
 
-    let manifestContent = input.manifestContent;
-    if (!manifestContent) {
-      const manifestFile = await fetchCachedRuntimeRepoFile(
-        auth,
-        BACKEND_MANIFEST_PATH,
-        cacheOpts,
-      );
-      if (!manifestFile) {
-        throw new Error(`Backend manifest not found for app ${input.appId}`);
-      }
-      manifestContent = manifestFile.content;
-    }
-
-    const manifest = parseAppBackendManifest(
-      JSON.parse(manifestContent) as unknown,
-    );
+    const artifacts = await loadBackendRevisionArtifacts(auth, cacheOpts);
+    const manifest = artifacts.manifest;
     const spec = manifest.actions[actionName];
     if (!spec) {
       throw new Error(`Unknown backend action: ${actionName}`);
@@ -84,9 +84,8 @@ export class CloudAppBackendService {
     const vaultKeyNames = filterVaultKeyNames(spec.keys ?? []);
     const preloadedDataSources = input.dataSources;
 
-    const [handlerFile, bundleFile, dsFile, vaultResult] = await Promise.all([
-      fetchCachedRuntimeRepoFile(auth, handlerPath, cacheOpts),
-      fetchCachedRuntimeRepoFile(auth, BACKEND_BUNDLE_PATH, cacheOpts),
+    const [handlerContent, dsFile, vaultResult] = await Promise.all([
+      loadBackendHandlerContent(auth, handlerPath, artifacts, cacheOpts),
       preloadedDataSources
         ? Promise.resolve(null)
         : fetchCachedRuntimeRepoFile(auth, "data-sources.json", cacheOpts),
@@ -95,15 +94,10 @@ export class CloudAppBackendService {
         : Promise.resolve({ env: {}, missing: [] } satisfies RuntimeVaultResolveResult),
     ]);
 
-    if (!handlerFile) {
-      throw new Error(`Backend handler not found: ${handlerPath}`);
-    }
-
-    if (bundleFile) {
-      const bundle = JSON.parse(bundleFile.content) as AppBackendBundleManifest;
-      const expected = bundle.actions?.[actionName];
+    if (artifacts.bundle) {
+      const expected = artifacts.bundle.actions?.[actionName];
       if (expected) {
-        const actualHash = sha256(handlerFile.content);
+        const actualHash = sha256(handlerContent);
         if (actualHash !== expected.sha256) {
           throw new Error(
             `Backend handler hash mismatch for ${actionName}. ` +
@@ -140,33 +134,53 @@ export class CloudAppBackendService {
       fetchTursoToken: (database) => fetchRuntimeDbToken(auth, database),
       sourceId,
     });
+    const proxyEnv = mintBackendDbProxyEnv({
+      appId: input.appId,
+      sourceId,
+      proxyBaseUrl: `http://127.0.0.1:${CLOUD_APP_HOST_PORT}`,
+      cloud: input.cloudAccess
+        ? {
+            runtimeAuth: auth,
+            orgId: input.cloudAccess.orgId,
+            namespaceId: input.cloudAccess.namespaceId,
+            userId: input.cloudAccess.userId,
+            callerUserId: input.callerIdentity?.userId,
+            canRead: input.cloudAccess.canRead,
+            canWrite: input.cloudAccess.canWrite,
+          }
+        : undefined,
+    });
 
     const runEnv = buildBackendActionEnv({
       appId: input.appId,
       action: actionName,
       params: input.params,
       vaultEnv,
-      databaseEnv,
+      databaseEnv: { ...databaseEnv, ...proxyEnv },
       callerIdentity: input.callerIdentity,
       loggedIn: input.loggedIn,
     });
 
-    const result = await runBackendHandler({
-      spec,
-      handlerSource: handlerFile.content,
-      env: runEnv,
-      timeoutMs,
-    });
+    try {
+      const result = await runBackendHandler({
+        spec,
+        handlerSource: handlerContent,
+        env: runEnv,
+        timeoutMs,
+      });
 
-    const secretValues = [
-      ...Object.values(vaultEnv).filter((v) => v.length > 0),
-      ...collectBackendDatabaseSecrets(databaseEnv),
-    ];
-    return {
-      action: actionName,
-      stdout: sanitizeError(result.stdout, secretValues),
-      stderr: sanitizeError(result.stderr, secretValues),
-      exitCode: result.exitCode,
-    };
+      const secretValues = [
+        ...Object.values(vaultEnv).filter((v) => v.length > 0),
+        ...collectBackendDatabaseSecrets(databaseEnv),
+      ];
+      return {
+        action: actionName,
+        stdout: sanitizeError(result.stdout, secretValues),
+        stderr: sanitizeError(result.stderr, secretValues),
+        exitCode: result.exitCode,
+      };
+    } finally {
+      revokeBackendDbProxyToken(proxyEnv.PAPR_DB_PROXY_TOKEN);
+    }
   }
 }

@@ -192,6 +192,8 @@ export async function syncLinkedSourceFromCloud(
   options?: {
     assumeRemoteChanged?: boolean;
     trigger?: TursoCloudSyncTrigger;
+    /** Get updates / explicit remote pull — skip push-if-dirty and pull from cloud first. */
+    preferRemote?: boolean;
   },
 ): Promise<TursoCloudSyncSessionResult> {
   const trigger = options?.trigger ?? "manual";
@@ -209,8 +211,33 @@ export async function syncLinkedSourceFromCloud(
   const resolvedKey = linkedSourceSyncKey(linked);
   const localDirty = isLinkedSourceLocallyDirty(linked);
   const pendingLocalGitUpload =
+    !options?.preferRemote &&
     linked.appId !== undefined &&
     readAppHasPendingLocalUpload(linked.appId, getPaprRoot());
+
+  if (options?.preferRemote) {
+    // Get updates — always pull Turso even when app git folder hash differs.
+    // Git upload pending must not block cloud→local database reconcile.
+    try {
+      const pull = await bridge.pullJob(resolvedKey, undefined, {
+        forceReconnect: true,
+      });
+      return {
+        syncKey: resolvedKey,
+        action: pull.status === "pulled" ? "pulled" : "skipped",
+        trigger,
+        pull,
+        ...(pull.reason ? { reason: pull.reason } : {}),
+      };
+    } catch (error) {
+      return {
+        syncKey: resolvedKey,
+        action: "failed",
+        trigger,
+        error: (error as Error).message,
+      };
+    }
+  }
 
   if (localDirty) {
     try {
@@ -285,6 +312,7 @@ export async function reconcileLinkedSourcesFromCloud(
   options?: {
     assumeRemoteChanged?: boolean;
     trigger?: TursoCloudSyncTrigger;
+    preferRemote?: boolean;
   },
 ): Promise<TursoCloudSyncSessionResult[]> {
   if (!bridge.enabled) {
@@ -299,6 +327,7 @@ export async function reconcileLinkedSourcesFromCloud(
     const result = await syncLinkedSourceFromCloud(bridge, syncKey, {
       assumeRemoteChanged: options?.assumeRemoteChanged,
       trigger: options?.trigger,
+      preferRemote: options?.preferRemote,
     });
     recordSessionResult(result);
     results.push(result);

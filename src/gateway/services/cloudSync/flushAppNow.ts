@@ -1,7 +1,7 @@
 /**
  * Ordered cross-layer flush for Upload now (SYNC_CONTRACT §12.1).
  *
- * Plan A (replica rollout): legacy cutover (Upload now) → replica push → git writer → publish.
+ * Plan A (replica rollout): legacy cutover (Upload now) → in-place replica attach → git writer → publish.
  * Legacy: log catch-up → schema/row push → log catch-up → writer ops → publish.
  */
 
@@ -197,9 +197,12 @@ export async function flushAppNow(
     await runPlanACutoverForUpload(appId);
     await yieldEventLoop();
 
-    tursoPushed = await pushLinkedSourcesForFlush(pushSources, syncKeys, {
-      replicaOnly: true,
-    });
+    // Post-cutover replica push in the same flush can re-trigger checkpoint failures
+    // on freshly provisioned replicas — cutover already pull-verified remote state.
+    console.log(
+      `[CloudSync] flushAppNow skipping post-cutover replica push for ${appId} ` +
+        "(cutover provisioned pull-only sync)",
+    );
     await yieldEventLoop();
   }
 

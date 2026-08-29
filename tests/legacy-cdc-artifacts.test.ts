@@ -9,8 +9,10 @@ import {
 } from "../src/gateway/services/tursoSyncBridgeCore.js";
 import {
   isLegacyCdcArtifactTable,
+  isLegacySyncPathTable,
   listLegacyCdcArtifactTablesForPath,
   stripLegacyCdcArtifacts,
+  stripLegacySyncPathArtifacts,
 } from "../src/gateway/services/legacyCdcArtifacts.js";
 
 let canUseBetterSqlite = false;
@@ -34,7 +36,8 @@ describe("legacyCdcArtifacts", () => {
       ),
     ).toBe(true);
     expect(isLegacyCdcArtifactTable("contacts")).toBe(false);
-    expect(isLegacyCdcArtifactTable("_papr_sync_log")).toBe(false);
+    expect(isLegacySyncPathTable("_papr_sync_log")).toBe(true);
+    expect(isLegacySyncPathTable("_papr_schema_migrations")).toBe(false);
   });
 
   it.skipIf(!canUseBetterSqlite)(
@@ -72,6 +75,36 @@ describe("legacyCdcArtifacts", () => {
 
     const after = new Database(dbPath, { readonly: true });
     expect(filterSyncableTables(listUserTables(after))).toEqual(["contacts"]);
+    after.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.skipIf(!canUseBetterSqlite)("stripLegacySyncPathArtifacts drops V3 sync tables", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-sync-path-"));
+    const dbPath = path.join(dir, "data.db");
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE contacts (id INTEGER PRIMARY KEY, name TEXT);
+      CREATE TABLE _papr_sync_log (id INTEGER PRIMARY KEY, table_name TEXT);
+      CREATE TABLE _papr_oplog (seq INTEGER PRIMARY KEY);
+      CREATE TABLE _papr_schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT);
+      INSERT INTO contacts (name) VALUES ('Acme');
+    `);
+    db.close();
+
+    const dropped = stripLegacySyncPathArtifacts(dbPath);
+    expect(dropped).toContain("_papr_sync_log");
+    expect(dropped).toContain("_papr_oplog");
+    expect(dropped).not.toContain("_papr_schema_migrations");
+
+    const after = new Database(dbPath, { readonly: true });
+    expect(filterSyncableTables(listUserTables(after))).toEqual(["contacts"]);
+    const tables = after
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+      )
+      .all() as Array<{ name: string }>;
+    expect(tables.map((row) => row.name)).toContain("_papr_schema_migrations");
     after.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });

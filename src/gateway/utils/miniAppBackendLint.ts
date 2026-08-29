@@ -50,6 +50,10 @@ const IGNORED_BACKEND_ENV_NAMES = new Set([
   "PAPR_DB_MODE",
   "PAPR_DB_URL",
   "PAPR_DB_AUTH_TOKEN",
+  "PAPR_DB_PROXY_URL",
+  "PAPR_DB_PROXY_TOKEN",
+  "PAPR_ACTIVE_SOURCE_ID",
+  "PAPR_LINKED_DB_ALIASES",
   VERIFIED_CALLER_USER_ID_ENV,
   VERIFIED_CALLER_EMAIL_ENV,
 ]);
@@ -70,6 +74,12 @@ function isFrontendSource(relativePath: string): boolean {
 }
 
 const BACKEND_STDIN_PATTERN = /\bsys\.stdin\b|json\.load\s*\(\s*sys\.stdin\s*\)/;
+
+const BACKEND_RAW_SQLITE3_PATTERN =
+  /\bimport\s+sqlite3\b|(?:^|[^\w])sqlite3\.connect\s*\(/m;
+
+const BACKEND_LASTROWID_PATTERN =
+  /\b(?:cursor|cur)\.lastrowid\b|\.lastrowid\b(?!\s*=)/;
 
 const BACKEND_FETCH_PATTERN =
   /fetch\s*\(\s*[`'"]\/api\/app\/backend\/[^`'"]+[`'"]/g;
@@ -124,6 +134,29 @@ export function checkBackendHandlerPatterns(
         'APP_DB_PATH is not a platform env var. Use from papr_db import connect; con = connect("alias") ' +
         "(or connect() for the active linked DB). See backend/papr_db.py scaffold.",
       rule: "backend-no-app-db-path",
+    });
+  }
+
+  if (BACKEND_RAW_SQLITE3_PATTERN.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "error",
+      message:
+        "Do not import sqlite3 or call sqlite3.connect() in backend handlers — cloud runs with " +
+        "PAPR_DB_MODE=turso (no local APP_DB file). Use from papr_db import connect; con = connect() " +
+        'or connect("alias").',
+      rule: "backend-no-raw-sqlite3",
+    });
+  }
+
+  if (BACKEND_LASTROWID_PATTERN.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "warning",
+      message:
+        "Avoid cursor.lastrowid in backend handlers — use write(con, sql, params).last_insert_rowid " +
+        "or INSERT … RETURNING with query(). Cloud and desktop both route through the Papr DB contract.",
+      rule: "backend-no-lastrowid",
     });
   }
 

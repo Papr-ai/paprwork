@@ -67,9 +67,14 @@ export function shouldDeferRegistrySqliteFileForReplica(): boolean {
   return defaultSyncModeForNewRegistryDb() === "replica";
 }
 
-/** Legacy workspace-log row sync (CDC + LogMaterializer). Off when Plan A rollout is active. */
+/**
+ * Legacy workspace-log row sync (CDC + LogMaterializer).
+ *
+ * Stays on for uncutover apps even during Plan A rollout. Replica-mode DBs
+ * skip legacy push/pull via shouldSuppressLegacyTursoPushForLinkedSource().
+ */
 export function isLegacyWorkspaceRowSyncEnabled(): boolean {
-  return isCloudSyncEnabled() && !isTursoReplicaSyncFeatureEnabled();
+  return isCloudSyncEnabled();
 }
 
 /** Phase 3: auto-cutover legacy registry DBs when Plan A rollout is active. */
@@ -110,12 +115,12 @@ export function logTursoReplicaStartupGuard(): void {
     return;
   }
   console.warn(
-    `[TursoReplica] Plan A rollout=${mode} — Turso primary + local replica; ` +
-      "legacy workspace-log row sync disabled.",
+    `[TursoReplica] Plan A rollout=${mode} — new registry DBs default to replica; ` +
+      "uncutover apps keep legacy workspace-log sync until Upload.",
   );
   console.warn(
     "[TursoReplica] Legacy → replica cutover runs on Upload now (per app). " +
-      "Untouched apps stay on legacy until the user uploads.",
+      "Untouched apps stay on legacy sync until the user uploads.",
   );
   if (process.env.PAPR_TURSO_REPLICA_CUTOVER_ON_STARTUP === "1") {
     console.warn(

@@ -24,7 +24,7 @@ export const PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION =
   "## Implementation Contracts\n" +
   "- Builder MUST read_skill({ skillId: \"preloaded-app-and-jobs-guide\" }) before first backend/DB code edit\n" +
   "- Backend handlers: read params from PAPR_ACTION_PARAMS env (Python: json.loads(os.environ.get(\"PAPR_ACTION_PARAMS\", \"{}\"))) — NEVER sys.stdin\n" +
-  "- Backend DB: from papr_db import connect (alias or active source) — NEVER APP_DB_PATH or raw os.environ DB paths\n" +
+  "- Backend DB: from papr_db import connect (alias or active source) — NEVER sqlite3.connect, APP_DB_PATH, or raw os.environ DB paths\n" +
   "- Frontend → backend: body JSON.stringify({ params: { ... } }) — params must be nested\n" +
   "- Frontend ← backend: const { stdout, exitCode, stderr } = await res.json(); if (exitCode !== 0) throw; JSON.parse(stdout)\n" +
   "- Frontend DB reads: POST /api/db/query with { sourceId, sql, params } — field name is sql, not query\n" +
@@ -36,7 +36,7 @@ export const PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION =
 /** Returned on create_app after product-architect gate passes — reminds builder of platform contracts. */
 export const CREATE_APP_IMPLEMENTATION_REMINDER =
   "⚠️ IMPLEMENTATION CONTRACTS: Before backend/DB code, read_skill({ skillId: \"preloaded-app-and-jobs-guide\" }). " +
-  "Backend: PAPR_ACTION_PARAMS (not sys.stdin), papr_db.connect() (not APP_DB_PATH). " +
+  "Backend: PAPR_ACTION_PARAMS (not sys.stdin), papr_db.connect() (not sqlite3.connect / APP_DB_PATH). " +
   "Frontend backend calls: JSON.stringify({ params: {...} }); parse stdout + check exitCode. " +
   "/api/db/query uses sql (not query). Mirror backend/ping.py from the app scaffold.";
 

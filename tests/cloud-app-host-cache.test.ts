@@ -134,9 +134,10 @@ describe("cloudAppHostCache", () => {
   });
 
   it("sets longer cache for dist assets", () => {
-    expect(cacheControlForAppAsset("dist/app.js")).toContain("immutable");
-    expect(cacheControlForAppAsset("index.html")).toContain("no-cache");
-    expect(cacheControlForAppAsset("styles.css")).toContain("max-age=3600");
+    expect(cacheControlForAppAsset("dist/app.js")?.cacheControl).toContain("immutable");
+    expect(cacheControlForAppAsset("dist/app.js")?.cdnCacheControl).toContain("immutable");
+    expect(cacheControlForAppAsset("index.html")?.cacheControl).toContain("no-cache");
+    expect(cacheControlForAppAsset("styles.css")?.cacheControl).toContain("max-age=3600");
   });
 
   it("shares repo file cache across different sessions for the same app", async () => {

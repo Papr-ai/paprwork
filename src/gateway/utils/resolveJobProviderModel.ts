@@ -4,6 +4,7 @@
  */
 
 import type { Provider } from "../../core/types/index.js";
+import { reconcileCloudProviderAuth } from "../services/cloudAgentGateway/resolveCloudProviderAuth.js";
 import { normalizeOpenAIModelId } from "./modelNormalizer.js";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<Provider, string> = {
@@ -343,14 +344,20 @@ export async function resolveCloudAgentJobSessionFromAuthOverride(input: {
     model: input.model,
   });
 
+  const llmAuth = reconcileCloudProviderAuth({
+    provider: resolved.provider,
+    token: input.token,
+    authType: input.authType,
+  });
+
   console.log(
-    `[ResolveJobProviderModel] Cloud session (authOverride): ${resolved.provider}/${resolved.model} authType=${input.authType}`,
+    `[ResolveJobProviderModel] Cloud session (authOverride): ${resolved.provider}/${resolved.model} authType=${llmAuth.authType}`,
   );
 
   return {
     provider: resolved.provider,
     model: resolved.model,
-    token: input.token,
-    authType: input.authType,
+    token: llmAuth.token,
+    authType: llmAuth.authType,
   };
 }

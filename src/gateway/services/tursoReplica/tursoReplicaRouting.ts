@@ -23,6 +23,7 @@ import {
   MIGRATION_CONFLICT_CODE,
 } from "./tursoReplicaMigrationConflict.js";
 import { drainInboundReplicaCdcIfCaughtUp } from "./tursoReplicaInboundDrain.js";
+import { isReplicaCheckpointWalError } from "./tursoReplicaCheckpointRecovery.js";
 import {
   linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
@@ -206,8 +207,32 @@ export async function execLinkedDbViaTursoReplica(
   return result;
 }
 
+export async function recoverReplicaAfterCheckpointError(
+  source: AppDataSource,
+  tursoDatabase: string,
+): Promise<boolean> {
+  const replica = getTursoReplicaService();
+  await replica.close(source.dbPath);
+  const pulled = await replica.pull(source.dbPath, tursoDatabase);
+  const drain = await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
+  const phantomCdcCleared =
+    drain.drained ||
+    drain.skippedReason === "no_cdc" ||
+    (drain.cdcOperationsAfter ?? drain.cdcOperationsBefore ?? 1) === 0;
+
+  if (phantomCdcCleared && source.dbId) {
+    const registry = getDatabaseRegistryService();
+    await registry.updateReplicaPushState(source.dbId, {
+      lastReplicaPushError: null,
+    });
+  }
+
+  return pulled || phantomCdcCleared;
+}
+
 export async function pullLinkedDbViaTursoReplica(
   source: AppDataSource,
+  options?: { forceReconnect?: boolean },
 ): Promise<boolean> {
   const tursoDatabase = resolveTursoDatabaseNameForSource(source);
   if (!tursoDatabase) {
@@ -217,6 +242,9 @@ export async function pullLinkedDbViaTursoReplica(
   }
 
   const replica = getTursoReplicaService();
+  if (options?.forceReconnect) {
+    await replica.close(source.dbPath);
+  }
   const pulled = await replica.pull(source.dbPath, tursoDatabase);
   if (isTursoReplicaOnline()) {
     await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
@@ -277,6 +305,25 @@ export async function pushLinkedDbViaTursoReplica(
       notifyReplicaDbChanged(source);
       await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
       await noteReplicaPushSuccess(source);
+    } else if (
+      !result.ok &&
+      result.error &&
+      isReplicaCheckpointWalError(result.error)
+    ) {
+      const recovered = await recoverReplicaAfterCheckpointError(
+        source,
+        tursoDatabase,
+      );
+      if (recovered) {
+        notifyReplicaDbChanged(source);
+        return { ok: true };
+      }
+      if (source.dbId) {
+        const registry = getDatabaseRegistryService();
+        await registry.updateReplicaPushState(source.dbId, {
+          lastReplicaPushError: result.error,
+        });
+      }
     } else if (!result.ok && source.dbId) {
       const registry = getDatabaseRegistryService();
       await registry.updateReplicaPushState(source.dbId, {

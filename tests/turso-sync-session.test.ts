@@ -40,6 +40,7 @@ function makeBridge(overrides?: Partial<TursoCloudSyncBridge>): TursoCloudSyncBr
       tursoUrl: "libsql://example.turso.io",
       authToken: "token",
     })),
+    runExclusiveForDbPath: vi.fn(async (_dbPath, fn) => fn()),
     ...overrides,
   };
 }
@@ -64,14 +65,24 @@ vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
   resolveTursoPushStateEntry: vi.fn(() => ({})),
 }));
 
+vi.mock("../src/gateway/services/cloudSync/pendingLocalUploads.js", () => ({
+  readAppHasPendingLocalUpload: vi.fn(() => false),
+}));
+
+vi.mock("../src/core/utils/paprRoot.js", () => ({
+  getPaprRoot: vi.fn(() => "/tmp/papr-turso-sync-session-test"),
+}));
+
 import { remoteAheadOfLocal } from "../src/gateway/services/tursoSyncBridgeCore.js";
 import { isJobDbDirty } from "../src/gateway/services/tursoSyncState.js";
+import { readAppHasPendingLocalUpload } from "../src/gateway/services/cloudSync/pendingLocalUploads.js";
 
 describe("tursoSyncSession", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(isJobDbDirty).mockReturnValue(false);
     vi.mocked(remoteAheadOfLocal).mockResolvedValue(false);
+    vi.mocked(readAppHasPendingLocalUpload).mockReturnValue(false);
   });
 
   it("resolveSyncKeysForCloudPull scopes by appId", () => {
@@ -103,6 +114,21 @@ describe("tursoSyncSession", () => {
 
     expect(result.action).toBe("pulled");
     expect(bridge.pullJob).toHaveBeenCalledWith("job-abc");
+    expect(bridge.pushJob).not.toHaveBeenCalled();
+  });
+
+  it("preferRemote pulls even when app has pending local git upload", async () => {
+    vi.mocked(readAppHasPendingLocalUpload).mockReturnValue(true);
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc", {
+      preferRemote: true,
+      trigger: "manual",
+    });
+
+    expect(result.action).toBe("pulled");
+    expect(bridge.pullJob).toHaveBeenCalledWith("job-abc", undefined, {
+      forceReconnect: true,
+    });
     expect(bridge.pushJob).not.toHaveBeenCalled();
   });
 

@@ -18,6 +18,12 @@ import {
 } from "./appBackendRunner.js";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { resolveDesktopAppBackendDatabaseEnv } from "./appBackendDatabase.js";
+import {
+  mintBackendDbProxyEnv,
+  revokeBackendDbProxyToken,
+} from "./backendDbProxy.js";
+
+const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 
 export class AppBackendService {
   private paprRoot: string;
@@ -60,22 +66,31 @@ export class AppBackendService {
       paprRoot: this.paprRoot,
       sourceId,
     });
+    const proxyEnv = mintBackendDbProxyEnv({
+      appId: input.appId,
+      sourceId,
+      proxyBaseUrl: `http://127.0.0.1:${GATEWAY_PORT}`,
+    });
     const env = buildBackendActionEnv({
       appId: input.appId,
       action: input.action,
       params: input.params,
       vaultEnv: input.vaultEnv,
-      databaseEnv,
+      databaseEnv: { ...databaseEnv, ...proxyEnv },
       paprRoot: this.paprRoot,
       callerIdentity: input.callerIdentity,
       loggedIn: input.loggedIn,
     });
 
-    return runBackendHandler({
-      spec,
-      handlerPath,
-      env,
-      timeoutMs,
-    });
+    try {
+      return await runBackendHandler({
+        spec,
+        handlerPath,
+        env,
+        timeoutMs,
+      });
+    } finally {
+      revokeBackendDbProxyToken(proxyEnv.PAPR_DB_PROXY_TOKEN);
+    }
   }
 }

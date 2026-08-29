@@ -275,6 +275,9 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     const markCutover = vi.fn(async () => {
       callOrder.push("mark");
     });
+    const attachInPlace = vi.fn(async () => {
+      callOrder.push("attach");
+    });
     const provisionCutover = vi.fn(async () => {
       callOrder.push("provision");
     });
@@ -326,6 +329,7 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     vi.doMock(
       "../src/gateway/services/tursoReplica/tursoReplicaProvision.js",
       () => ({
+        attachTursoReplicaInPlaceForCutover: attachInPlace,
         provisionTursoReplicaForCutover: provisionCutover,
         pushLocalLegacyFileToTursoPrimary: vi.fn(async () => {}),
       }),
@@ -334,6 +338,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
       "../src/gateway/services/tursoReplica/TursoReplicaService.js",
       () => ({
         getTursoReplicaService: () => ({ close: closeReplica }),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverVerify.js",
+      () => ({
+        verifyReplicaCutoverHealth: vi.fn(async () => ({ ok: true })),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoSyncState.js",
+      () => ({
+        clearLegacyTursoSyncStateForDbPath: vi.fn(() => 0),
       }),
     );
 
@@ -346,9 +362,197 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(callOrder).toEqual(["provision", "mark"]);
+    expect(callOrder).toEqual(["attach", "mark"]);
+    expect(attachInPlace).toHaveBeenCalledTimes(1);
+    expect(provisionCutover).not.toHaveBeenCalled();
     expect(markCutover).toHaveBeenCalledTimes(1);
     expect(restoreBackup).not.toHaveBeenCalled();
+  });
+
+  it("pull_remote uses in-place attach without legacy push", async () => {
+    process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+
+    const attachInPlace = vi.fn(async () => {});
+    const legacyPush = vi.fn(async () => {});
+    const markCutover = vi.fn(async () => {});
+
+    vi.doMock("../src/gateway/services/legacyCdcArtifacts.js", () => ({
+      stripLegacySyncPathArtifacts: vi.fn(() => []),
+    }));
+    vi.doMock("fs", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("fs")>();
+      return {
+        ...actual,
+        existsSync: vi.fn(() => true),
+      };
+    });
+    vi.doMock(
+      "../src/gateway/services/DatabaseRegistryService.js",
+      () => ({
+        getDatabaseRegistryService: () => ({
+          getById: () => baseRecord(),
+          markSyncModeReplicaCutover: markCutover,
+          updateReplicaPushState: vi.fn(async () => {}),
+        }),
+        initializeDatabaseRegistry: vi.fn(async () => {}),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverClassify.js",
+      () => ({
+        classifyRecordForReplicaCutover: vi.fn(async () => ({
+          dbId: "db-test",
+          bucket: "pull_remote",
+          reason: "[pull_remote] Turso has data",
+          snapshot: {
+            dbExists: true,
+            localTableCount: 18,
+            remoteTableCount: 18,
+            schemaDrift: false,
+            legacyArtifactTables: ["_papr_oplog"],
+            remoteCheckFailed: false,
+            dirty: true,
+            quarantined: false,
+            localMigrationIds: [],
+            remoteMigrationIds: [],
+            migrationConflict: false,
+          },
+        })),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverBackup.js",
+      () => ({
+        backupLocalDbPreReplica: vi.fn(async () => "/tmp/data.db.pre-replica.bak"),
+        restoreLocalDbFromPreReplicaBackup: vi.fn(async () => true),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/tursoReplicaProvision.js",
+      () => ({
+        attachTursoReplicaInPlaceForCutover: attachInPlace,
+        provisionTursoReplicaForCutover: vi.fn(async () => {}),
+        pushLocalLegacyFileToTursoPrimary: legacyPush,
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/TursoReplicaService.js",
+      () => ({
+        getTursoReplicaService: () => ({ close: vi.fn(async () => {}) }),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverVerify.js",
+      () => ({
+        verifyReplicaCutoverHealth: vi.fn(async () => ({ ok: true })),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoSyncState.js",
+      () => ({
+        clearLegacyTursoSyncStateForDbPath: vi.fn(() => 0),
+      }),
+    );
+
+    const { runCutoverForRecord } = await import(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js"
+    );
+
+    const result = await runCutoverForRecord(baseRecord(), {
+      allowWithoutProductionAck: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(legacyPush).not.toHaveBeenCalled();
+    expect(attachInPlace).toHaveBeenCalledTimes(1);
+    expect(markCutover).toHaveBeenCalledTimes(1);
+  });
+
+  it("both-empty seed_local uses wipe provision path", async () => {
+    process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+
+    const attachInPlace = vi.fn(async () => {});
+    const provisionCutover = vi.fn(async () => {});
+
+    vi.doMock("../src/gateway/services/legacyCdcArtifacts.js", () => ({
+      stripLegacySyncPathArtifacts: vi.fn(() => []),
+    }));
+
+    vi.doMock(
+      "../src/gateway/services/DatabaseRegistryService.js",
+      () => ({
+        getDatabaseRegistryService: () => ({
+          getById: () => baseRecord(),
+          markSyncModeReplicaCutover: vi.fn(async () => {}),
+          updateReplicaPushState: vi.fn(async () => {}),
+        }),
+        initializeDatabaseRegistry: vi.fn(async () => {}),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverClassify.js",
+      () => ({
+        classifyRecordForReplicaCutover: vi.fn(async () => ({
+          dbId: "db-test",
+          bucket: "seed_local",
+          reason: "[seed_local] both empty",
+          snapshot: {
+            dbExists: false,
+            localTableCount: 0,
+            remoteTableCount: 0,
+            schemaDrift: false,
+            legacyArtifactTables: [],
+            remoteCheckFailed: false,
+            dirty: false,
+            quarantined: false,
+            localMigrationIds: [],
+            remoteMigrationIds: [],
+            migrationConflict: false,
+          },
+        })),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverBackup.js",
+      () => ({
+        backupLocalDbPreReplica: vi.fn(async () => undefined),
+        restoreLocalDbFromPreReplicaBackup: vi.fn(async () => true),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/tursoReplicaProvision.js",
+      () => ({
+        attachTursoReplicaInPlaceForCutover: attachInPlace,
+        provisionTursoReplicaForCutover: provisionCutover,
+        pushLocalLegacyFileToTursoPrimary: vi.fn(async () => {}),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/TursoReplicaService.js",
+      () => ({
+        getTursoReplicaService: () => ({ close: vi.fn(async () => {}) }),
+      }),
+    );
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverVerify.js",
+      () => ({
+        verifyReplicaCutoverHealth: vi.fn(async () => ({ ok: true })),
+      }),
+    );
+
+    const { runCutoverForRecord } = await import(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js"
+    );
+
+    const result = await runCutoverForRecord(baseRecord(), {
+      allowWithoutProductionAck: true,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(provisionCutover).toHaveBeenCalledTimes(1);
+    expect(attachInPlace).not.toHaveBeenCalled();
   });
 
   it("restores backup and stays legacy when provision fails", async () => {

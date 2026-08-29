@@ -32,6 +32,8 @@ export interface CloudSyncPullHost extends CloudSyncGitRemoteHost {
   enforceAppOwnershipAfterPull: () => Promise<void>;
   finalizePortableResourcesAfterPull: () => Promise<void>;
   reconcileJobsRegistryAfterPull: () => Promise<void>;
+  getPaprDir: () => string;
+  reconcileSubAgentsAfterPull: () => Promise<void>;
 }
 
 export async function recoverUnpushedBacklogIfNeeded(host: {
@@ -111,6 +113,7 @@ export async function executeNamespaceGitPull(host: CloudSyncPullHost): Promise<
       console.log("[CloudSync] Pull: pre-merged cloud runtime metadata");
     }
 
+    await captureSubAgentsBeforeGitPull(host.getPaprDir());
     const output = await host.runGit([
       "pull",
       "--rebase=false",
@@ -132,6 +135,7 @@ export async function executeNamespaceGitPull(host: CloudSyncPullHost): Promise<
       await host.enforceAppOwnershipAfterPull();
       await host.finalizePortableResourcesAfterPull();
       await host.reconcileJobsRegistryAfterPull();
+      await host.reconcileSubAgentsAfterPull();
     }
 
     await host.pullTursoLinkedSourcesAfterGitPull();
@@ -165,6 +169,7 @@ export async function executeNamespaceGitPull(host: CloudSyncPullHost): Promise<
         host.setPullBackoffUntilMs(0);
         await host.enforceAppOwnershipAfterPull();
         await host.reconcileJobsRegistryAfterPull();
+        await host.reconcileSubAgentsAfterPull();
         await host.pullTursoLinkedSourcesAfterGitPull();
         return;
       }
@@ -222,6 +227,50 @@ export async function finalizePortableResourcesAfterPull(): Promise<void> {
       "[CloudSync] Portable resource repair after pull failed:",
       (repairErr as Error).message.slice(0, 120),
     );
+  }
+}
+
+export async function reconcileSubAgentsAfterPull(paprDir: string): Promise<void> {
+  try {
+    const {
+      consumePrePullCustomSubAgentSnapshot,
+      reconcileSubAgentProfilesOnDisk,
+      formatOrphanedSubAgentWarning,
+    } = await import("../subagents/subAgentIntegrity.js");
+    const preserved = consumePrePullCustomSubAgentSnapshot();
+    const result = await reconcileSubAgentProfilesOnDisk(paprDir, preserved);
+    if (preserved.length > 0 && result.mergedCustomProfiles > 0) {
+      console.log(
+        `[CloudSync] Merged ${preserved.length} custom sub-agent profile(s) after git pull`,
+      );
+    }
+    if (result.recoveredFromSidecar.length > 0) {
+      console.warn(
+        `[CloudSync] Recovered sub-agent profile(s) from agent-chat sidecar: ${result.recoveredFromSidecar.join(", ")}`,
+      );
+    }
+    const warning = formatOrphanedSubAgentWarning(result.stillOrphaned);
+    if (warning) {
+      console.warn(warning);
+    }
+    const { getSubAgentService } = await import("../SubAgentService.js");
+    await getSubAgentService().reloadProfilesFromDisk();
+  } catch (err) {
+    console.warn(
+      "[CloudSync] Post-pull sub-agent reconcile failed:",
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
+export async function captureSubAgentsBeforeGitPull(paprDir: string): Promise<void> {
+  try {
+    const { captureCustomSubAgentsBeforeGitPull } = await import(
+      "../subagents/subAgentIntegrity.js"
+    );
+    captureCustomSubAgentsBeforeGitPull(paprDir);
+  } catch {
+    /* non-fatal */
   }
 }
 

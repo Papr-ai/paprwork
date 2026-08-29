@@ -108,9 +108,12 @@ export class CloudAgentSessionCache {
       runRoot: handle.runRoot,
       paprHome: handle.paprHome,
       tursoTargets: handle.tursoTargets,
-      finish: async (options?: { deleteWorkspace?: boolean }) => {
+      finish: async (options?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => {
         const keepWarm = options?.deleteWorkspace === false;
-        await handle.finish({ deleteWorkspace: !keepWarm });
+        await handle.finish({
+          deleteWorkspace: !keepWarm,
+          ...(options?.prepOnly ? { prepOnly: true } : {}),
+        });
         if (keepWarm) {
           entry.expiresAt = Date.now() + CLOUD_AGENT_SESSION_TTL_MS;
         } else {
@@ -157,8 +160,8 @@ export class CloudAgentSessionCache {
       skipClone = false;
     }
 
-    const handle = await beginCloudAgentRun(request, { skipClone, runRoot });
-    await handle.finish({ deleteWorkspace: false });
+    const handle = await beginCloudAgentRun(request, { skipClone, runRoot, prepOnly: true });
+    await handle.finish({ deleteWorkspace: false, prepOnly: true });
 
     const entry = this.entries.get(sessionId);
     if (entry) {

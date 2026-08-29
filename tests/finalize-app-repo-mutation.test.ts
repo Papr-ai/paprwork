@@ -23,6 +23,13 @@ vi.mock("../src/gateway/services/syncV3/syncPublishedAppCatalogLayer.js", () => 
     mockSyncPublishedAppCatalogLayer(...args),
 }));
 
+const mockSyncMetadataForFlush = vi.fn();
+
+vi.mock("../src/gateway/services/syncV3/syncMetadataForFlush.js", () => ({
+  syncMetadataToCloudForFlush: (...args: unknown[]) =>
+    mockSyncMetadataForFlush(...args),
+}));
+
 import { finalizeAppRepoMutation } from "../src/gateway/services/syncV3/finalizeAppRepoMutation.js";
 
 describe("finalizeAppRepoMutation", () => {
@@ -44,6 +51,7 @@ describe("finalizeAppRepoMutation", () => {
     mockSyncPublishedAppCatalogLayer.mockResolvedValue({
       catalogSynced: true,
     });
+    mockSyncMetadataForFlush.mockResolvedValue(undefined);
   });
 
   afterEach(() => {

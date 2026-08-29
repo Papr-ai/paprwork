@@ -24,6 +24,16 @@ export interface AppAccessContext {
   canWrite: boolean;
 }
 
+/** Read-only GitHub credentials for Cloud App Host direct repo reads (host key only). */
+export interface AppRuntimeRepoCredentials {
+  githubOrg: string;
+  repoName: string;
+  repoPath: string;
+  token: string;
+  expiresAt: string;
+  defaultBranch: string;
+}
+
 /** GET /api/access — mini-apps use this to gate admin UI and owner-only flows. */
 export interface MiniAppAccessResponse {
   mode: AppAccessMode | null;
@@ -122,7 +132,7 @@ export interface TursoCredentialsProvider {
     userId: string,
     runtimeAuth: AppRuntimeRouteAuth,
     database: string,
-  ): Promise<{ tursoUrl: string; authToken: string }>;
+  ): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }>;
 }
 
 export interface AppPublishResolver {

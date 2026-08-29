@@ -144,8 +144,12 @@ export function DocumentView({ documentId }: DocumentViewProps) {
   }, [editor]);
 
   // Sync document content into editor without yanking the user's scroll position.
+  // Only applies external changes — never overwrite while the user is actively editing.
   useEffect(() => {
     if (!document || !editor) return;
+
+    // User is typing — local editor state is authoritative.
+    if (editor.isFocused) return;
 
     const currentMarkdown =
       (editor.storage.markdown?.getMarkdown() as string) ?? editor.getText();
@@ -301,7 +305,10 @@ export function DocumentView({ documentId }: DocumentViewProps) {
             ? "Waiting for the gateway to come online."
             : error || "This document may have been deleted or moved."}
         </p>
-        <button className="document-view__retry-btn" onClick={loadDocument}>
+        <button
+          className="document-view__retry-btn"
+          onClick={() => loadDocument()}
+        >
           Retry
         </button>
       </div>

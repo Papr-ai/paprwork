@@ -5,7 +5,7 @@
  * and returns Turso/repo credentials for the app owner — not the host key identity.
  */
 
-import type { AppRuntimeRouteAuth } from "./types.js";
+import type { AppRuntimeRouteAuth, AppRuntimeRepoCredentials } from "./types.js";
 import type {
   WorkspaceLogAppendBatchRequest,
   WorkspaceLogAppendBatchResponse,
@@ -81,37 +81,22 @@ export function runtimeAuthPayload(
   return payload;
 }
 
-interface DbTokenCacheEntry {
-  tursoUrl: string;
-  authToken: string;
-  expiresAt: number;
-}
-
-/** In-process Turso credential cache — avoids memory/db-token on every cold client. */
-const dbTokenCache = new Map<string, DbTokenCacheEntry>();
-const DB_TOKEN_TTL_MS = 50 * 60 * 1000;
-
-function dbTokenCacheKey(auth: AppRuntimeRouteAuth, database: string): string {
-  return [
-    auth.namespaceId,
-    auth.slug,
-    auth.sessionToken ?? "",
-    auth.shareToken ?? "",
-    auth.paprApiKey ?? "",
-    auth.externalUserId ?? "",
-    database,
-  ].join("|");
-}
+import {
+  dbTokenCacheExpiresAt,
+  dbTokenCacheKey,
+  readDbTokenCache,
+  writeDbTokenCache,
+} from "./dbTokenRuntimeCache.js";
 
 export async function fetchRuntimeDbToken(
   auth: AppRuntimeRouteAuth,
   database: string,
-): Promise<{ tursoUrl: string; authToken: string }> {
+): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }> {
   const cacheKey = dbTokenCacheKey(auth, database);
   const now = Date.now();
-  const cached = dbTokenCache.get(cacheKey);
-  if (cached && cached.expiresAt > now) {
-    return { tursoUrl: cached.tursoUrl, authToken: cached.authToken };
+  const cached = readDbTokenCache(cacheKey, now);
+  if (cached) {
+    return cached;
   }
 
   const res = await runtimeFetch(
@@ -130,13 +115,36 @@ export async function fetchRuntimeDbToken(
       `Runtime db-token failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
     );
   }
-  const json = (await res.json()) as { tursoUrl: string; authToken: string };
-  dbTokenCache.set(cacheKey, {
+  const json = (await res.json()) as {
+    tursoUrl: string;
+    authToken: string;
+    expiresAt?: string;
+  };
+  writeDbTokenCache(cacheKey, {
     tursoUrl: json.tursoUrl,
     authToken: json.authToken,
-    expiresAt: now + DB_TOKEN_TTL_MS,
+    expiresAt: dbTokenCacheExpiresAt(json.expiresAt, now),
   });
-  return { tursoUrl: json.tursoUrl, authToken: json.authToken };
+  return { tursoUrl: json.tursoUrl, authToken: json.authToken, expiresAt: json.expiresAt };
+}
+
+export async function fetchRuntimeRepoCredentials(
+  auth: AppRuntimeRouteAuth,
+): Promise<AppRuntimeRepoCredentials> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/repo-credentials`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify(runtimeAuthPayload(auth)),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime repo-credentials failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as AppRuntimeRepoCredentials;
 }
 
 export async function fetchRuntimeRepoFile(

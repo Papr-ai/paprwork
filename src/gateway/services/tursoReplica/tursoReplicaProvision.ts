@@ -19,7 +19,11 @@ import {
 } from "../../utils/tursoReplicaEnabled.js";
 import { connectTursoReplica } from "./tursoReplicaConnect.js";
 import { ensureReplicaSchemaMigrationsLedger } from "./tursoReplicaSchemaLedger.js";
-import { removeTursoReplicaLocalFiles } from "./tursoReplicaFileGuard.js";
+import {
+  removeTursoReplicaLocalFiles,
+  removeTursoReplicaSidecarsOnly,
+} from "./tursoReplicaFileGuard.js";
+import { clearLegacyTursoSyncStateForDbPath } from "../tursoSyncState.js";
 import {
   bumpRemoteSyncVersion,
   ensureLocalDbChangeLogReady,
@@ -30,7 +34,7 @@ import {
 } from "../tursoSyncBridgeCore.js";
 import { prepareRemoteTableForSync } from "../tursoTablePrep.js";
 import { batchInsertLocalTableRows } from "../tursoBulkInsert.js";
-import { stripLegacyCdcArtifacts } from "../legacyCdcArtifacts.js";
+import { stripLegacySyncPathArtifacts } from "../legacyCdcArtifacts.js";
 
 function recordAsDataSource(record: DatabaseRecord): AppDataSource {
   return {
@@ -116,6 +120,7 @@ export async function provisionTursoReplicaForRecord(
 /**
  * Cutover path — provision while syncMode may still be legacy.
  * Caller must mark syncMode=replica only after this succeeds.
+ * Wipes local files — use only when both sides are empty (fresh replica bootstrap).
  */
 export async function provisionTursoReplicaForCutover(
   record: DatabaseRecord,
@@ -125,6 +130,62 @@ export async function provisionTursoReplicaForCutover(
   }
 
   await provisionTursoReplicaCore(record, "legacy_cutover");
+}
+
+/**
+ * Cutover path — attach @tursodatabase/sync to an existing data.db without re-downloading rows.
+ * Strips legacy CDC artifacts, clears stale sync state, resets sidecars, pull-only reconcile.
+ */
+export async function attachTursoReplicaInPlaceForCutover(
+  record: DatabaseRecord,
+): Promise<void> {
+  if (!isCloudSyncEnabled() || !isTursoReplicaSyncFeatureEnabled()) {
+    throw new Error("Cloud sync or Plan A rollout disabled — cannot cut over");
+  }
+  if (!fs.existsSync(record.localPath)) {
+    throw new Error(`Local database missing: ${record.localPath}`);
+  }
+
+  const stripped = stripLegacySyncPathArtifacts(record.localPath);
+  if (stripped.length > 0) {
+    console.log(
+      `[TursoReplicaProvision] Stripped legacy sync artifacts before in-place attach for ${record.dbId}: ` +
+        stripped.join(", "),
+    );
+  }
+
+  const clearedLegacy = clearLegacyTursoSyncStateForDbPath(record.localPath);
+  if (clearedLegacy > 0) {
+    console.log(
+      `[TursoReplicaProvision] Cleared ${clearedLegacy} legacy Turso sync state ` +
+        `entries before in-place attach for ${record.dbId}`,
+    );
+  }
+
+  removeTursoReplicaSidecarsOnly(record.localPath);
+
+  const bridge = getTursoSyncBridge();
+  if (!bridge) {
+    throw new Error("Turso sync bridge unavailable — cannot attach replica database");
+  }
+
+  const tursoDatabase = tursoNameForRecord(record);
+  const creds = await bridge.fetchCredentials(tursoDatabase);
+
+  const db = await connectTursoReplica({
+    localPath: record.localPath,
+    tursoUrl: creds.tursoUrl,
+    authToken: creds.authToken,
+    bootstrapIfEmpty: false,
+  });
+
+  try {
+    await syncReplicaAfterConnect(db, "legacy_cutover");
+  } finally {
+    await db.close();
+  }
+
+  await ensureReplicaSchemaMigrationsLedger(recordAsDataSource(record));
 }
 
 /**
@@ -141,7 +202,7 @@ export async function pushLocalLegacyFileToTursoPrimary(
     throw new Error(`Local database missing: ${record.localPath}`);
   }
 
-  const stripped = stripLegacyCdcArtifacts(record.localPath);
+  const stripped = stripLegacySyncPathArtifacts(record.localPath);
   if (stripped.length > 0) {
     console.log(
       `[TursoReplicaProvision] Stripped legacy CDC artifacts before Turso push for ${record.dbId}: ` +

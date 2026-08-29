@@ -1043,6 +1043,41 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    // ── Backend handler DB proxy (loopback — same rules as /api/db/*) ───────
+    // Python papr_db uses PAPR_DB_MODE=proxy to route query/write here instead
+    // of raw sqlite3 or Turso tokens in the subprocess.
+    // ─────────────────────────────────────────────────────────────────────────
+    const { createDesktopBackendDbProxyRouter } = await import(
+      "./services/appRuntime/backendDbProxy.js"
+    );
+    app.use(
+      "/internal/backend-db",
+      createDesktopBackendDbProxyRouter({
+        resolveSource: resolveLinkedSource,
+        query: async (appId, source, sql, params) => {
+          const result = await dbRouter.query(appId, source, sql, params);
+          return { rows: result.rows, count: result.count };
+        },
+        write: async (appId, source, sql, params) => {
+          const { writeLinkedDbRowLocalFirst } = await import(
+            "./services/syncV3/localFirstDbWrite.js"
+          );
+          const result = await writeLinkedDbRowLocalFirst(
+            dbPool,
+            dbRouter,
+            appId,
+            source,
+            sql,
+            params,
+          );
+          return {
+            changes: result.changes,
+            lastInsertRowid: result.lastInsertRowid,
+          };
+        },
+      }),
+    );
+
     // ── App Files API (large blobs → GCS, pointer rows in the app DB) ───────
     // Apps call: fetch('/api/files/upload', { body: { appId, filePath } }).
     // Bytes never go through git — repoHygiene rejects anything over 25 MB, so
@@ -2702,6 +2737,14 @@ async function startGateway(): Promise<void> {
           return;
         }
 
+        if (requestedPath === "index.html") {
+          void import("./services/tursoPullScheduler.js").then(
+            ({ scheduleTursoPullForAppOpen }) => {
+              scheduleTursoPullForAppOpen(appId);
+            },
+          );
+        }
+
         const ext = path.extname(requestedPath).toLowerCase();
 
         const {
@@ -2946,10 +2989,25 @@ async function startGateway(): Promise<void> {
       }, 45_000);
 
       const tursoStartupDelayMs = Number(
-        process.env.TURSO_STARTUP_DELAY_MS ?? "90000",
+        process.env.TURSO_STARTUP_DELAY_MS ?? "15000",
       );
       setTimeout(() => {
         const tursoBridge = ensureTursoSyncBridge();
+        void import("./services/TursoSyncBridge.js")
+          .then(({ syncTursoFromSyncIndex }) => syncTursoFromSyncIndex())
+          .then((summary) => {
+            if (summary.pulled > 0 || summary.pushed > 0) {
+              console.log(
+                `[Gateway] Turso startup sync-index: pulled=${summary.pulled} pushed=${summary.pushed}`,
+              );
+            }
+          })
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Turso startup sync-index failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
         if (process.env.TURSO_PULL_ON_STARTUP === "true") {
           void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
             console.warn(

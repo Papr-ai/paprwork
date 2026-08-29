@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildOversizedFilesAgentPrompt,
   buildSchemaDriftAgentPrompt,
   buildUploadFailureAgentPrompt,
 } from "../../utils/openCloudSyncAgentChat";
@@ -45,6 +46,23 @@ describe("buildSchemaDriftAgentPrompt", () => {
     expect(prompt).toContain("migration conflict");
     expect(prompt).toContain("cutover blocked: remote ahead");
     expect(prompt).toContain("repair_cloud_sync");
+  });
+});
+
+describe("buildOversizedFilesAgentPrompt", () => {
+  it("includes app id, skipped file details, and App Files workflow", () => {
+    const prompt = buildOversizedFilesAgentPrompt({
+      appId: "9e70c06b-ac30-4c95-bfe2-adc1daecbeb0",
+      count: 1,
+      message:
+        "1 file(s) in this app will not sync to the web:\n  • apps/9e70c06b/data.db (never tracked by git — use App Files)",
+    });
+
+    expect(prompt).toContain("9e70c06b-ac30-4c95-bfe2-adc1daecbeb0");
+    expect(prompt).toContain("1 file(s) skipped");
+    expect(prompt).toContain("data.db");
+    expect(prompt).toContain("get_cloud_sync_status");
+    expect(prompt).toContain("App Files");
   });
 });
 

@@ -2113,13 +2113,19 @@ await create_job({
 \`\`\`
 
 \`\`\`python
-# backend/save_invoice.py — papr_db.py scaffolded on app create
+# backend/save_invoice.py — papr_db.py scaffolded on app create (local + cloud)
 from papr_db import connect, execute
 
-con = connect("billing")  # explicit alias when 2+ linked DBs
-execute(con, "INSERT INTO invoices (amount) VALUES (?)", [100])
+con = connect("billing")  # explicit alias when 2+ linked DBs; never sqlite3.connect(APP_DB)
+rows = execute(
+    con,
+    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
+    [100],
+)  # list[dict] — works desktop (local SQLite) and cloud (Turso)
 con.close()
 \`\`\`
+
+**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip). **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
 
 \`\`\`javascript
 // Frontend — optional params.sourceId overrides manifest
@@ -2161,7 +2167,7 @@ CREATE TABLE contacts (
 | Layer | How it uses the DB |
 |-------|-------------------|
 | **Mini-app** | \`POST /api/db/query\` (SELECT) and \`POST /api/db/write\` (INSERT/UPDATE/DELETE) with \`sourceId: alias\` |
-| **App backend** (\`backend/\` handlers) | \`sourceId\` in manifest or \`params.sourceId\` → \`APP_DB\` / \`PAPR_DB_*\`; all linked DBs get \`PAPR_DB_{KEY}\` env vars; Python \`papr_db.connect("alias")\` |
+| **App backend** (\`backend/\` handlers) | \`sourceId\` in manifest or \`params.sourceId\` → \`PAPR_DB_*\`; Python \`papr_db.connect("alias")\` (local file or Turso — never raw \`sqlite3.connect\`) |
 | **Jobs** | \`writeDbIds: [dbId]\` → \`PAPR_DB_{ALIAS}\`, \`PAPR_WRITE_DB_IDS\`; \`$JOB_DB\` = scratch only |
 
 ## Env vars

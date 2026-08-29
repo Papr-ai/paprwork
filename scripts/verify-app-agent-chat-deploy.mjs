@@ -145,14 +145,50 @@ function resolveAgentChatContext(paprDir, targetAppId) {
   return { jobId, subAgentId, metadata };
 }
 
-function jobInJobsJson(jobsRaw, jobId) {
-  return jobsList(jobsRaw).some((j) => j?.id === jobId);
+function subAgentProfileExists(paprDir, subAgentId) {
+  if (!subAgentId) {
+    return false;
+  }
+  const subagentsPath = join(paprDir, "data", "subagents.json");
+  if (!existsSync(subagentsPath)) {
+    return false;
+  }
+  try {
+    const list = readJson(subagentsPath);
+    if (!Array.isArray(list)) {
+      return false;
+    }
+    return list.some((p) => p?.id === subAgentId);
+  } catch {
+    return false;
+  }
+}
+
+function checkSubAgentProfile(name, paprDir, subAgentId, failOnMissing = true) {
+  if (!subAgentId) {
+    if (failOnMissing) {
+      fail(name, "metadata.agentChat.subAgentId missing");
+    } else {
+      warn(name, "subAgentId not set");
+    }
+    return;
+  }
+  if (subAgentProfileExists(paprDir, subAgentId)) {
+    pass(name, subAgentId);
+  } else if (failOnMissing) {
+    fail(
+      name,
+      `${subAgentId} missing from data/subagents.json — restart gateway (sidecar recovery) or create_sub_agent to re-upload Mongo registry.`,
+    );
+  } else {
+    warn(name, `${subAgentId} missing from subagents.json`);
+  }
 }
 
 function runUnitTests() {
   console.log(`\n${BOLD}${CYAN}Layer 1 — Unit tests${RESET}`);
   const cmd =
-    "npx vitest run tests/app-dependent-sync.test.ts tests/jobs-service.test.ts tests/app-agent-chat-sidecar.test.ts -t \"agent chat|subagent|sidecar\"";
+    "npx vitest run tests/app-dependent-sync.test.ts tests/jobs-service.test.ts tests/app-agent-chat-sidecar.test.ts tests/sub-agent-metadata-slice.test.ts tests/hydrate-subagents-registry.test.ts -t \"agent chat|subagent|sidecar|metadata\"";
   const result = spawnSync(cmd, {
     shell: true,
     stdio: "inherit",
@@ -197,12 +233,21 @@ function runLocalChecks(paprDir, targetAppId, ctx) {
     } else {
       fail("local job.json shape", JSON.stringify({ type: jobJson.type, appIds: jobJson.appIds }));
     }
+    if (jobJson.subAgentId && ctx.subAgentId && jobJson.subAgentId !== ctx.subAgentId) {
+      warn(
+        "local job subAgentId differs from metadata",
+        `job=${jobJson.subAgentId} metadata=${ctx.subAgentId}`,
+      );
+    }
   } else {
     fail("local Jobs/{jobId}/job.json exists");
   }
 
+  checkSubAgentProfile("local subagents.json contains subAgentId", paprDir, ctx.subAgentId);
+
   const dirty = gitPorcelain(paprDir, [
     "data/jobs.json",
+    "data/subagents.json",
     `Jobs/${ctx.jobId}`,
     `apps/${targetAppId}/metadata.json`,
   ]);
@@ -255,6 +300,46 @@ function runGitHeadChecks(paprDir, targetAppId, ctx) {
       `expected ${ctx.jobId}, got ${headMeta.agentChatJobId ?? "null"}`,
     );
   }
+
+  const headSubagentsRaw = gitShow(paprDir, "data/subagents.json");
+  if (!headSubagentsRaw) {
+    fail("git HEAD data/subagents.json readable");
+  } else {
+    pass("git HEAD data/subagents.json readable");
+    const headSubagents = JSON.parse(headSubagentsRaw);
+    const hasProfile =
+      Array.isArray(headSubagents) &&
+      ctx.subAgentId &&
+      headSubagents.some((p) => p?.id === ctx.subAgentId);
+    if (hasProfile) {
+      pass("git HEAD subagents.json contains subAgentId");
+    } else {
+      warn(
+        "git HEAD subagents.json contains subAgentId",
+        `${ctx.subAgentId ?? "null"} missing from namespace git — Mongo registry is authoritative (Phase 4.6)`,
+      );
+    }
+  }
+}
+
+async function memorySubagentsIndex() {
+  const memoryBase = (
+    process.env.PAPR_MEMORY_SERVER_URL ?? "https://memory.papr.ai"
+  ).replace(/\/$/, "");
+  const res = await fetch(`${memoryBase}/v1/cloud/metadata/subagents`, {
+    headers: {
+      Accept: "application/json",
+      ...(process.env.PAPR_API_KEY ? { "X-API-Key": process.env.PAPR_API_KEY } : {}),
+    },
+  });
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = { raw: text };
+  }
+  return { status: res.status, data, text, ok: res.ok };
 }
 
 async function memoryRepoFile(namespace, appSlug, relativePath) {
@@ -327,6 +412,46 @@ async function runLiveCloudChecks(namespace, appSlug, ctx) {
     pass("cloud Jobs/{jobId}/job.json fetch");
   } else {
     fail("cloud Jobs/{jobId}/job.json fetch", `${jobRes.status}`);
+  }
+
+  const subagentsRes = await memorySubagentsIndex();
+  if (!subagentsRes.ok || !Array.isArray(subagentsRes.data?.profiles)) {
+    fail(
+      "cloud Mongo subagents index fetch",
+      `${subagentsRes.status} ${subagentsRes.text.slice(0, 200)}`,
+    );
+  } else {
+    pass("cloud Mongo subagents index fetch", `source=${subagentsRes.data.source ?? "unknown"}`);
+    const cloudSubagents = subagentsRes.data.profiles;
+    const hasProfile =
+      ctx.subAgentId && cloudSubagents.some((p) => p?.id === ctx.subAgentId);
+    if (hasProfile) {
+      pass("cloud Mongo subagents index contains subAgentId");
+    } else {
+      fail(
+        "cloud Mongo subagents index contains subAgentId",
+        `${ctx.subAgentId ?? "null"} missing — restart gateway to dual-write profiles, then redeploy memory server if needed`,
+      );
+    }
+  }
+
+  const legacySubagentsRes = await memoryRepoFile(namespace, appSlug, "data/subagents.json");
+  if (legacySubagentsRes.status === 200 && typeof legacySubagentsRes.data.content === "string") {
+    const cloudSubagents = JSON.parse(legacySubagentsRes.data.content);
+    const hasLegacyProfile =
+      Array.isArray(cloudSubagents) &&
+      ctx.subAgentId &&
+      cloudSubagents.some((p) => p?.id === ctx.subAgentId);
+    if (hasLegacyProfile) {
+      pass("legacy git subagents.json contains subAgentId");
+    } else {
+      warn(
+        "legacy git subagents.json contains subAgentId",
+        "missing from namespace git — expected when Sync V3 metadata push is disabled",
+      );
+    }
+  } else {
+    warn("legacy git subagents.json fetch", `${legacySubagentsRes.status}`);
   }
 }
 

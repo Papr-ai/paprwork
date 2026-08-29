@@ -9,7 +9,7 @@ export const APP_DB_QUICK_REFERENCE =
   "- Mini-app writes: POST /api/db/write with { appId, sourceId, sql, params } — all linked DBs are writable\n" +
   "- Mini-app identity: GET /api/access → { isOwner, mode, canRead, canWrite, userId?, email? } — gate admin UI; map userId to roles\n" +
   "- Anonymous apps: owner_session column + localStorage UUID; multi-user: sign-in + papr_user_id or isolation: per-user\n" +
-  "- App backend: sourceId on manifest action or params.sourceId → PAPR_DB_* env vars; Python papr_db.connect(\"alias\")\n" +
+  "- App backend: sourceId on manifest → papr_db.connect(\"alias\") — never sqlite3.connect (cloud = Turso)\n" +
   "- Jobs: create_job({ writeDbIds: [dbId] }) → PAPR_DB_{ALIAS} env vars for job scripts\n" +
   "- APP_DB = active source (backend) or first write target (jobs, legacy)\n" +
   "- $JOB_DB = job-local scratch only (run logs, checkpoints) — NOT mini-app data\n" +

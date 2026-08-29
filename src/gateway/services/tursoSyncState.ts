@@ -686,3 +686,39 @@ export function recordTursoIndexVersion(
   };
   saveTursoSyncState(state, paprDir);
 }
+
+/** Remove legacy CDC push-state for a registry database path (Plan A cutover). */
+export function hasLegacyTursoSyncStateForDbPath(
+  dbPath: string,
+  paprDir?: string,
+): boolean {
+  const normalized = path.normalize(dbPath);
+  const state = loadTursoSyncState(paprDir);
+  for (const entry of Object.values(state.jobs)) {
+    if (path.normalize(entry.dbPath) === normalized) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export function clearLegacyTursoSyncStateForDbPath(
+  dbPath: string,
+  paprDir?: string,
+): number {
+  const normalized = path.normalize(dbPath);
+  const state = loadTursoSyncState(paprDir);
+  let cleared = 0;
+
+  for (const [key, entry] of Object.entries(state.jobs)) {
+    if (path.normalize(entry.dbPath) === normalized) {
+      delete state.jobs[key];
+      cleared += 1;
+    }
+  }
+
+  if (cleared > 0) {
+    saveTursoSyncState(state, paprDir);
+  }
+  return cleared;
+}

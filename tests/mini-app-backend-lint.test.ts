@@ -54,6 +54,26 @@ describe("checkBackendHandlerPatterns", () => {
     ).toBe(true);
   });
 
+  it("errors on raw sqlite3.connect in handlers", () => {
+    const issues = checkBackendHandlerPatterns(
+      "save.py",
+      'import sqlite3\nconn = sqlite3.connect(os.environ["APP_DB"])\n',
+    );
+    expect(
+      issues.some((i) => i.rule === "backend-no-raw-sqlite3" && i.severity === "error"),
+    ).toBe(true);
+  });
+
+  it("warns on cursor.lastrowid in handlers", () => {
+    const issues = checkBackendHandlerPatterns(
+      "save.py",
+      'row_id = cur.lastrowid\n',
+    );
+    expect(
+      issues.some((i) => i.rule === "backend-no-lastrowid" && i.severity === "warning"),
+    ).toBe(true);
+  });
+
   it("passes scaffold-style handler", () => {
     const issues = checkBackendHandlerPatterns(
       "ping.py",

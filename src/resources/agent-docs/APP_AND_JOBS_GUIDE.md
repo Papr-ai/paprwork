@@ -404,15 +404,18 @@ apps/{appId}/backend/
 from papr_db import connect, execute
 
 con = connect("billing")   # explicit alias — required when 2+ linked DBs
-# con = connect()          # active source (manifest sourceId / params.sourceId / legacy default)
-execute(con, "INSERT INTO invoices (amount) VALUES (?)", [100])
+# con = connect()          # active source (manifest sourceId / params.sourceId)
+rows = execute(
+    con,
+    "INSERT INTO invoices (amount) VALUES (?) RETURNING id, amount",
+    [100],
+)  # list[dict] on desktop (local SQLite) and cloud (Turso)
 con.close()
 ```
 
-**Node/TS handler:**
-```javascript
-const dbPath = process.env.PAPR_DB_BILLING;  // or process.env.APP_DB for active source
-```
+Use **`papr_db.connect()` only** — never `sqlite3.connect(APP_DB)` (cloud has no local file). After plain `INSERT`, `con.lastrowid` / `cursor().lastrowid` work in both modes. Each `execute()` is one statement; no multi-call transactions on cloud.
+
+**Node/TS handler:** No `papr_db` equivalent — use **Python** for SQL backend actions, or keep DB access in the frontend via `/api/db/query` and `/api/db/write`.
 
 **❌ NEVER:** parse `data-sources.json` manually or grep keychain for DB paths — use injected env vars only.
 

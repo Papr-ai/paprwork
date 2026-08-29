@@ -4,15 +4,21 @@ import { parseCloudRepoHeadContent } from "../src/gateway/services/cloudSync/clo
 import { appendDistAssetCacheBusters, appendLegacyTypeScriptCacheBusters } from "../src/gateway/utils/miniAppBuild.js";
 
 describe("shouldBypassRepoFileCache", () => {
-  it("treats normal browser reload (max-age=0) as revalidation", () => {
+  it("does not bypass normal browser reload (max-age=0)", () => {
     expect(
       shouldBypassRepoFileCache({ "cache-control": "max-age=0" }),
-    ).toBe(true);
+    ).toBe(false);
   });
 
-  it("treats hard reload (no-cache) as revalidation", () => {
+  it("does not bypass no-cache alone (typical revalidation)", () => {
     expect(
       shouldBypassRepoFileCache({ "cache-control": "no-cache" }),
+    ).toBe(false);
+  });
+
+  it("bypasses hard reload (no-cache + no-store)", () => {
+    expect(
+      shouldBypassRepoFileCache({ "cache-control": "no-cache, no-store" }),
     ).toBe(true);
   });
 

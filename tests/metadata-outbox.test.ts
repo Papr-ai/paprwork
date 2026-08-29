@@ -3,11 +3,13 @@ import type { CloudAppMetaFile } from "../src/gateway/services/cloudSync/cloudAp
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const uploadAppRuntimeMetaToCloudDirect = vi.fn();
+const uploadSubAgentsIndexToCloudDirect = vi.fn();
 
 vi.mock("../src/gateway/services/syncV3/MetadataRegistryClient.js", () => ({
   uploadJobsIndexToCloudDirect: vi.fn(),
   uploadDatabasesRegistryToCloudDirect: vi.fn(),
   uploadAppRuntimeMetaToCloudDirect,
+  uploadSubAgentsIndexToCloudDirect,
 }));
 
 import {
@@ -29,6 +31,7 @@ describe("metadataOutbox app-runtime-meta", () => {
   afterEach(async () => {
     await clearMetadataOutboxForTests();
     uploadAppRuntimeMetaToCloudDirect.mockReset();
+    uploadSubAgentsIndexToCloudDirect.mockReset();
   });
 
   it("flushes queued app runtime meta uploads", async () => {
@@ -44,5 +47,33 @@ describe("metadataOutbox app-runtime-meta", () => {
     const result = await flushMetadataOutbox();
     expect(result.flushed).toBe(1);
     expect(uploadAppRuntimeMetaToCloudDirect).toHaveBeenCalledWith("app-1", sampleMeta);
+  });
+
+  it("flushes queued subagents index uploads", async () => {
+    uploadSubAgentsIndexToCloudDirect.mockResolvedValue(true);
+
+    await enqueueMetadataOutboxEntry({
+      kind: "subagents",
+      updatedAt: "2026-08-19T00:00:00.000Z",
+      subagents: [
+        {
+          id: "agent-1",
+          name: "Helper",
+          description: "Test",
+          systemPrompt: "Help",
+          createdAt: "2026-08-19T00:00:00.000Z",
+          updatedAt: "2026-08-19T00:00:00.000Z",
+        },
+      ],
+    });
+
+    const result = await flushMetadataOutbox();
+    expect(result.flushed).toBe(1);
+    expect(uploadSubAgentsIndexToCloudDirect).toHaveBeenCalledWith(
+      [
+        expect.objectContaining({ id: "agent-1", name: "Helper" }),
+      ],
+      "2026-08-19T00:00:00.000Z",
+    );
   });
 });

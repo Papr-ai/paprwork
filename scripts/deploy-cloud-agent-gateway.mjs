@@ -216,7 +216,7 @@ const deployCmd = [
   "--timeout=1800",
   "--concurrency=1",
   `--set-secrets=PAPR_CLOUD_AGENT_GATEWAY_KEY=${secretName}:latest${appHostSecretCheck.status === 0 ? `,PAPR_CLOUD_APP_HOST_KEY=${appHostSecretName}:latest` : ""}`,
-  `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,NODE_ENV=production,CLOUD_AGENT_GATEWAY_TIMEOUT_SEC=1800,PAPR_CLOUD_APPS_HOST=${getArg("apps-host", process.env.PAPR_CLOUD_APPS_HOST ?? "https://apps.papr.ai")}`,
+  `--set-env-vars=GATEWAY_MODE=cloud_agent,CLOUD_SYNC_ENABLED=false,PAPR_MEMORY_SERVER_URL=${memoryUrl},TURSO_SYNC_ENABLED=false,PAPR_CLOUD_SANDBOX_TURSO_DIRECT=1,NODE_ENV=production,CLOUD_AGENT_GATEWAY_TIMEOUT_SEC=1800,PAPR_CLOUD_APPS_HOST=${getArg("apps-host", process.env.PAPR_CLOUD_APPS_HOST ?? "https://apps.papr.ai")}`,
 ].join(" ");
 
 run(deployCmd);

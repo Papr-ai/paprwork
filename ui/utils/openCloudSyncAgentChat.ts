@@ -151,6 +151,33 @@ export function buildUploadFailureAgentPrompt(input: {
   return parts.join(" ");
 }
 
+export function buildOversizedFilesAgentPrompt(input: {
+  appId?: string;
+  message?: string | null;
+  count?: number;
+}): string {
+  const parts = [
+    "Help me fix large or unsyncable files in my Papr mini-app that will not sync to the web.",
+    "Git sync skips files over 10MB and never-tracked paths (e.g. data.db left in the app folder). Move them to App Files (object storage) or linked job databases instead.",
+  ];
+  if (input.appId) {
+    parts.push(`App id: ${input.appId}.`);
+  }
+  if (input.count != null && input.count > 0) {
+    parts.push(`${input.count} file(s) skipped.`);
+  }
+  if (input.message?.trim()) {
+    parts.push(`Skipped files:\n${input.message.trim()}`);
+  }
+  parts.push(
+    "Workflow: get_cloud_sync_status → read oversizedAppFiles paths and reasons.",
+    "For binary assets (images, PDFs, large JSON): upload via App Files and update the app to use the App Files reference instead of a local path.",
+    "For data.db in the app folder: if it belongs to a job, ensure the database lives under Jobs/ and is linked in Data Sources — not copied into apps/<appId>/.",
+    "Remove or relocate skipped paths from the app folder, then verify oversizedAppFiles is clear with get_cloud_sync_status and retry Upload now if needed.",
+  );
+  return parts.join(" ");
+}
+
 export function buildWriterConflictAgentPrompt(input: {
   appId?: string;
   error?: string | null;

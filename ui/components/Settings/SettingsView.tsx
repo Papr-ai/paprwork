@@ -1011,6 +1011,50 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.8" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.8</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud App Agent Chat</strong>
+                <p>
+                  Richer in-app agent chat with activity cards, tool display
+                  labels, and improved cloud streaming for published mini-apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Faster Cloud App Host</strong>
+                <p>
+                  Direct GitHub repo access, deploy snapshots, backend DB proxy,
+                  and warm-cache loading cut cold-start latency for cloud apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Replica Recovery &amp; Cutover</strong>
+                <p>
+                  Checkpoint recovery, sidecar wedge repair, legacy CDC purge,
+                  and post-cutover verification for Turso embedded replicas.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sub-Agent Cloud Integrity</strong>
+                <p>
+                  Cloud runs now hydrate sub-agent metadata from the registry
+                  with integrity checks before delegation.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.8"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.7" && (
           <div className="about-card">
             <h3>What's New in v2.4.7</h3>

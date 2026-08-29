@@ -6,7 +6,10 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import type { Provider } from "../../../core/types/agents.js";
-import { cloneUserRepoToPaprHome } from "./cloneUserRepo.js";
+import {
+  cloneUserRepoToPaprHome,
+  materializeAppWorkspaceToPaprHome,
+} from "./cloneUserRepo.js";
 import { rewritePaprPathForCloudRun } from "./cloudPaprPath.js";
 import { prepareCloudJobEnvironment } from "./prepareCloudJobEnvironment.js";
 import { reinitializeWorkspaceServicesForCloudRun } from "./reinitializeWorkspaceServices.js";
@@ -25,6 +28,9 @@ import {
   type TursoBookendTarget,
 } from "./syncJobTursoBookends.js";
 import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
+import { clearKeyCache } from "../../utils/keyResolver.js";
+import { hydrateSubAgentsRegistryForCloudRun, applySubAgentsHydrationFromMongo } from "./hydrateSubAgentsRegistryForCloudRun.js";
+import { fetchSubAgentsIndexFromCloudDirect } from "../syncV3/MetadataRegistryClient.js";
 import type { CloudAgentRunRequest, CloudLinkedSource, CloudTursoSource } from "./types.js";
 import { shouldUseCloudSandboxTursoDirect } from "./cloudSandboxTursoDirect.js";
 import {
@@ -45,12 +51,15 @@ export interface CloudRunHandle {
   runRoot: string;
   paprHome: string;
   tursoTargets: TursoBookendTarget[];
-  finish: (options?: { deleteWorkspace?: boolean }) => Promise<void>;
+  finish: (options?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => Promise<void>;
 }
 
 interface CloudRunEnvSnapshot {
   previousPaprHome?: string;
   previousPaprUserData?: string;
+  previousPaprOrgId?: string;
+  previousPaprNamespaceId?: string;
+  previousPaprApiKey?: string;
   previousHome?: string;
   previousJobDir?: string;
   previousJobDb?: string;
@@ -141,6 +150,9 @@ function captureCloudRunEnv(): CloudRunEnvSnapshot {
   return {
     previousPaprHome: process.env.PAPR_HOME,
     previousPaprUserData: process.env.PAPR_USER_DATA,
+    previousPaprOrgId: process.env.PAPR_ORG_ID,
+    previousPaprNamespaceId: process.env.PAPR_NAMESPACE_ID,
+    previousPaprApiKey: process.env.PAPR_API_KEY,
     previousHome: process.env.HOME,
     previousJobDir: process.env.JOB_DIR,
     previousJobDb: process.env.JOB_DB,
@@ -165,11 +177,30 @@ function applyVaultKeys(
   }
 }
 
+function applyPaprApiKey(
+  request: CloudAgentRunRequest,
+  snapshot: CloudRunEnvSnapshot,
+): void {
+  const key = request.paprApiKey?.trim();
+  if (!key) {
+    return;
+  }
+  snapshot.previousPaprApiKey = process.env.PAPR_API_KEY;
+  process.env.PAPR_API_KEY = key;
+  clearKeyCache("PAPR_API_KEY");
+}
+
 async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> {
   if (snapshot.previousPaprHome === undefined) delete process.env.PAPR_HOME;
   else process.env.PAPR_HOME = snapshot.previousPaprHome;
   if (snapshot.previousPaprUserData === undefined) delete process.env.PAPR_USER_DATA;
   else process.env.PAPR_USER_DATA = snapshot.previousPaprUserData;
+  if (snapshot.previousPaprOrgId === undefined) delete process.env.PAPR_ORG_ID;
+  else process.env.PAPR_ORG_ID = snapshot.previousPaprOrgId;
+  if (snapshot.previousPaprNamespaceId === undefined) delete process.env.PAPR_NAMESPACE_ID;
+  else process.env.PAPR_NAMESPACE_ID = snapshot.previousPaprNamespaceId;
+  if (snapshot.previousPaprApiKey === undefined) delete process.env.PAPR_API_KEY;
+  else process.env.PAPR_API_KEY = snapshot.previousPaprApiKey;
   if (snapshot.previousHome === undefined) delete process.env.HOME;
   else process.env.HOME = snapshot.previousHome;
   if (snapshot.previousJobDir === undefined) delete process.env.JOB_DIR;
@@ -254,6 +285,8 @@ export interface BeginCloudAgentRunOptions {
   /** Skip git clone when workspace directory already exists (session reuse). */
   skipClone?: boolean;
   runRoot?: string;
+  /** Warm-only: clone + hydrate on disk; skip job env, Turso bookends, and sync push on finish. */
+  prepOnly?: boolean;
 }
 
 export async function beginCloudAgentRun(
@@ -275,14 +308,43 @@ export async function beginCloudAgentRun(
   const envSnapshot = captureCloudRunEnv();
   const tursoTargets = resolveTursoBookendTargets(request, paprHome);
 
+  const prepOnly = options.prepOnly === true;
   const skipClone = options.skipClone === true;
+
+  const mongoHydratePromise = skipClone
+    ? null
+    : fetchSubAgentsIndexFromCloudDirect(request.paprApiKey).catch(() => null);
+
   if (!skipClone) {
-    await cloneUserRepoToPaprHome({
-      targetPaprHome: paprHome,
-      cloneUrl: request.repoCloneUrl,
-      token: request.repoToken,
-      branch: request.repoBranch,
-    });
+    if (
+      request.workspaceScope === "app" &&
+      request.appId &&
+      request.appRepoOwner &&
+      request.appRepoName
+    ) {
+      await materializeAppWorkspaceToPaprHome({
+        targetPaprHome: paprHome,
+        appId: request.appId,
+        jobId: request.jobId,
+        owner: request.appRepoOwner,
+        repo: request.appRepoName,
+        token: request.repoToken,
+        branch: request.repoBranch,
+        scaffoldFiles: request.scaffoldFiles,
+      });
+    } else {
+      if (!request.repoCloneUrl) {
+        throw new Error(
+          "repoCloneUrl is required for namespace workspace clone",
+        );
+      }
+      await cloneUserRepoToPaprHome({
+        targetPaprHome: paprHome,
+        cloneUrl: request.repoCloneUrl,
+        token: request.repoToken,
+        branch: request.repoBranch,
+      });
+    }
   } else {
     try {
       await fs.access(paprHome);
@@ -296,6 +358,38 @@ export async function beginCloudAgentRun(
   const userDataPath = resolveCloudUserDataPath(runRoot);
   await fs.mkdir(userDataPath, { recursive: true });
 
+  try {
+    if (mongoHydratePromise) {
+      const mongoEntries = await mongoHydratePromise;
+      if (mongoEntries !== null) {
+        await applySubAgentsHydrationFromMongo(paprHome, mongoEntries);
+      }
+    } else {
+      await hydrateSubAgentsRegistryForCloudRun({
+        paprHome,
+        paprApiKey: request.paprApiKey,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      "[CloudAgentRun] Sub-agents Mongo hydrate failed:",
+      (err as Error).message.slice(0, 160),
+    );
+  }
+
+  if (prepOnly) {
+    return {
+      runRoot,
+      paprHome,
+      tursoTargets,
+      finish: async (finishOptions?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => {
+        if (finishOptions?.deleteWorkspace) {
+          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+        }
+      },
+    };
+  }
+
   process.env.PAPR_HOME = paprHome;
   process.env.PAPR_USER_DATA = userDataPath;
   if (request.orgId) {
@@ -306,6 +400,7 @@ export async function beginCloudAgentRun(
   }
   process.env.HOME = runRoot;
   applyVaultKeys(request, envSnapshot);
+  applyPaprApiKey(request, envSnapshot);
 
   await reinitializeWorkspaceServicesForCloudRun({
     paprApiKey: request.paprApiKey,
@@ -336,7 +431,14 @@ export async function beginCloudAgentRun(
     runRoot,
     paprHome,
     tursoTargets,
-    finish: async (finishOptions?: { deleteWorkspace?: boolean }) => {
+    finish: async (finishOptions?: { deleteWorkspace?: boolean; prepOnly?: boolean }) => {
+      if (finishOptions?.prepOnly) {
+        await restoreCloudRunEnv(envSnapshot);
+        if (finishOptions.deleteWorkspace) {
+          await fs.rm(runRoot, { recursive: true, force: true }).catch(() => undefined);
+        }
+        return;
+      }
       let syncSucceeded = true;
       let retainSandbox = false;
       let writerPushedAppIds: string[] = [];

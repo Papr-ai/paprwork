@@ -185,4 +185,35 @@ describe("WebSyncPopover", () => {
 
     window.removeEventListener("papr-chat-open", listener);
   });
+
+  it("shows Ask agent when large files are skipped from web sync", () => {
+    let openedMessage: string | undefined;
+    const listener = (event: Event) => {
+      openedMessage = (event as CustomEvent<{ message: string }>).detail.message;
+    };
+    window.addEventListener("papr-chat-open", listener);
+
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        status={minimalSyncStatus({
+          overall: "synced",
+          codePhase: "synced",
+          codeStatus: "synced",
+          codeLabel: "App code synced",
+          summaryLine: "5 of 5 jobs on the web",
+          oversizedAppFilesCount: 1,
+          oversizedAppFilesMessage:
+            "1 file(s) in this app will not sync to the web:\n  • apps/9e70c06b/data.db (never tracked by git — use App Files)",
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /ask agent/i })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /ask agent/i }));
+    expect(openedMessage).toContain("data.db");
+    expect(openedMessage).toContain(baseProps.appId);
+
+    window.removeEventListener("papr-chat-open", listener);
+  });
 });

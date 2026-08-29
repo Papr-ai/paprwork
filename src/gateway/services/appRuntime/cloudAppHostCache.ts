@@ -4,8 +4,18 @@
 
 import { createHash } from "node:crypto";
 import type { AppDataSourcesFile } from "../appDataSources.js";
-import type { AppAccessContext, AppPublishResolver, AppRuntimeRouteAuth } from "./types.js";
-import { fetchRuntimeRepoFile } from "./memoryRuntimeClient.js";
+import type {
+  AppAccessContext,
+  AppPublishResolver,
+  AppRuntimeRouteAuth,
+  AppRuntimeRepoCredentials,
+} from "./types.js";
+import { fetchRuntimeRepoFile, fetchRuntimeRepoCredentials } from "./memoryRuntimeClient.js";
+import { isDirectGithubRepoFetchEnabled } from "./cloudAppHostDirectGithub.js";
+import {
+  fetchGithubRepoTextFile,
+  repoCredentialsCacheTtlMs,
+} from "./githubAppRepoClient.js";
 import {
   gcsCacheDeleteByApp,
   gcsCacheDeleteByNamespace,
@@ -13,6 +23,15 @@ import {
   gcsCachePut,
   isGcsSharedCacheEnabled,
 } from "./gcsSharedCache.js";
+import { gcsDeploySnapshotGet, gcsDeploySnapshotDeleteByApp } from "./gcsDeploySnapshot.js";
+import {
+  invalidateBackendArtifactCacheForNamespace,
+  invalidateBackendArtifactCacheForPublishedApp,
+} from "./backendArtifactCache.js";
+import {
+  invalidateDbTokenCacheForNamespace,
+  invalidateDbTokenCacheForPublishedApp,
+} from "./dbTokenRuntimeCache.js";
 import {
   isMiniAppTypeScriptFile,
   transpileMiniAppTypeScript,
@@ -37,7 +56,8 @@ import {
  * per-app revision marker (`.papr-cloud-revision`, dist bundle hash) so syncing
  * one app does not bust caches for other apps in the same git repo. Legacy apps
  * without the marker fall back to repo-wide `data/cloud-repo-head.txt`.
- * Browser reload (F5) bypasses SWR via shouldBypassRepoFileCache().
+ * Browser hard reload bypasses SWR via shouldBypassRepoFileCache().
+ * Normal F5 does not — revision markers bust caches after Sync now.
  */
 const REPO_FILE_FRESH_MS = 600_000;
 const REPO_FILE_STALE_MS = 86_400_000;
@@ -63,6 +83,7 @@ const repoFileCache = new Map<string, SwrEntry<{ content: string; contentType: s
 const repoRevisionCache = new Map<string, TimedEntry<string>>();
 const revisionInflight = new Map<string, Promise<string>>();
 const accessCache = new Map<string, TimedEntry<AppAccessContext | null>>();
+const repoCredentialsCache = new Map<string, TimedEntry<AppRuntimeRepoCredentials>>();
 const transpileCache = new Map<string, TimedEntry<MiniAppTranspileResult>>();
 
 /** Parsed app db config (Phase 3.3) — keyed by namespace + slug + revision, not per-user auth. */
@@ -86,7 +107,7 @@ function sweepExpired(): void {
   for (const [key, entry] of appDbConfigCache) {
     if (now > entry.staleUntil) appDbConfigCache.delete(key);
   }
-  for (const cache of [accessCache, transpileCache, repoRevisionCache]) {
+  for (const cache of [accessCache, transpileCache, repoRevisionCache, repoCredentialsCache]) {
     for (const [key, entry] of cache) {
       if (now > (entry as TimedEntry<unknown>).expiresAt) {
         cache.delete(key);
@@ -156,10 +177,11 @@ export async function resolveAppCacheRevision(
 
 async function resolveRevisionFromOrigin(auth: AppRuntimeRouteAuth): Promise<string> {
   try {
+    const fetchFile = (path: string) => fetchRuntimeRepoFileOrigin(auth, path);
     const [markerFile, metaFile, headFile] = await Promise.all([
-      fetchRuntimeRepoFile(auth, PAPR_APP_CLOUD_REVISION_PATH),
-      fetchRuntimeRepoFile(auth, PAPR_APP_META_RELATIVE_PATH),
-      fetchRuntimeRepoFile(auth, CLOUD_REPO_HEAD_RELATIVE_PATH),
+      fetchFile(PAPR_APP_CLOUD_REVISION_PATH),
+      fetchFile(PAPR_APP_META_RELATIVE_PATH),
+      fetchFile(CLOUD_REPO_HEAD_RELATIVE_PATH),
     ]);
     if (markerFile) {
       return parseAppCloudRevisionContent(markerFile.content);
@@ -206,6 +228,59 @@ async function getAppCacheRevision(
   return pending;
 }
 
+export function cacheRuntimeRepoCredentials(
+  auth: Pick<
+    AppRuntimeRouteAuth,
+    "namespaceId" | "slug" | "paprApiKey" | "sessionToken" | "shareToken" | "externalUserId"
+  >,
+  credentials: AppRuntimeRepoCredentials,
+): void {
+  const key = runtimeAuthKey(auth as AppRuntimeRouteAuth);
+  writeTimed(
+    repoCredentialsCache,
+    key,
+    credentials,
+    repoCredentialsCacheTtlMs(credentials.expiresAt),
+  );
+}
+
+function readCachedRepoCredentials(
+  auth: AppRuntimeRouteAuth,
+): AppRuntimeRepoCredentials | undefined {
+  return readTimed(repoCredentialsCache, runtimeAuthKey(auth));
+}
+
+async function fetchRuntimeRepoFileOrigin(
+  auth: AppRuntimeRouteAuth,
+  relativePath: string,
+): Promise<{ content: string; contentType: string } | null> {
+  if (isDirectGithubRepoFetchEnabled()) {
+    let credentials = readCachedRepoCredentials(auth);
+    if (!credentials) {
+      try {
+        credentials = await fetchRuntimeRepoCredentials(auth);
+        cacheRuntimeRepoCredentials(auth, credentials);
+      } catch (err) {
+        console.warn(
+          `[CloudAppHost] Runtime repo-credentials failed, falling back to memory repo-file: ` +
+            `${(err as Error).message}`,
+        );
+      }
+    }
+    if (credentials) {
+      try {
+        return await fetchGithubRepoTextFile(credentials, relativePath);
+      } catch (err) {
+        console.warn(
+          `[CloudAppHost] Direct GitHub fetch failed for ${relativePath}, ` +
+            `falling back to memory repo-file: ${(err as Error).message}`,
+        );
+      }
+    }
+  }
+  return fetchRuntimeRepoFile(auth, relativePath);
+}
+
 function writeRepoFileEntry(
   key: string,
   value: { content: string; contentType: string } | null,
@@ -244,7 +319,7 @@ export async function fetchCachedRuntimeRepoFile(
 
   if (opts?.bypassFresh) {
     try {
-      const file = await fetchRuntimeRepoFile(auth, relativePath);
+      const file = await fetchRuntimeRepoFileOrigin(auth, relativePath);
       writeRepoFileEntry(key, file);
       if (file && isGcsSharedCacheEnabled()) {
         gcsCachePut(key, file, Date.now() + REPO_FILE_FRESH_MS);
@@ -267,7 +342,7 @@ export async function fetchCachedRuntimeRepoFile(
     // Stale-while-revalidate: serve stale immediately, refresh in background.
     if (!entry.revalidating) {
       entry.revalidating = true;
-      void fetchRuntimeRepoFile(auth, relativePath)
+      void fetchRuntimeRepoFileOrigin(auth, relativePath)
         .then((file) => writeRepoFileEntry(key, file))
         .catch(() => {
           // Keep serving stale on refresh failure; next request retries.
@@ -275,6 +350,30 @@ export async function fetchCachedRuntimeRepoFile(
         });
     }
     return entry.value;
+  }
+
+  // DB config must match memory allowlist — never serve stale deploy snapshots.
+  const skipDeploySnapshot =
+    relativePath === "data-sources.json" ||
+    relativePath === "linked-databases.json" ||
+    relativePath === "data/databases.json";
+
+  // L2b: immutable deploy snapshot (Sync now warm) — revision-pinned, no origin hop.
+  if (!skipDeploySnapshot && isGcsSharedCacheEnabled()) {
+    const snapshot = await gcsDeploySnapshotGet(
+      auth.namespaceId,
+      auth.slug,
+      revision,
+      relativePath,
+    );
+    if (snapshot) {
+      const file = {
+        content: snapshot.content,
+        contentType: snapshot.contentType,
+      };
+      writeRepoFileEntry(key, file);
+      return file;
+    }
   }
 
   // L2: shared GCS cache — lets a fresh Cloud Run instance reuse content
@@ -294,7 +393,7 @@ export async function fetchCachedRuntimeRepoFile(
     }
   }
 
-  const file = await fetchRuntimeRepoFile(auth, relativePath);
+  const file = await fetchRuntimeRepoFileOrigin(auth, relativePath);
   writeRepoFileEntry(key, file);
   if (file && isGcsSharedCacheEnabled()) {
     gcsCachePut(key, file, Date.now() + REPO_FILE_FRESH_MS);
@@ -350,6 +449,14 @@ function invalidateAppDbConfigCacheByPrefix(prefix: string): void {
   }
 }
 
+/** Drop cached data-sources + linked-databases bundle for one published app. */
+export function invalidateAppDbConfigCacheForApp(
+  namespaceId: string,
+  slug: string,
+): void {
+  invalidateAppDbConfigCacheByPrefix(`${namespaceId}:${slug}:`);
+}
+
 export async function validateCachedAccess(
   publishResolver: AppPublishResolver,
   runtimeAuth: AppRuntimeRouteAuth,
@@ -403,16 +510,19 @@ export async function getCachedTranspiledTypeScript(
   return result;
 }
 
-/** Browser cache policy for published app static assets. */
+/** Browser + CDN cache policy for published app static assets. */
 export function cacheControlForAppAsset(
   requestedPath: string,
   options: { transpiled?: boolean } = {},
-): string | null {
+): { cacheControl: string; cdnCacheControl?: string } | null {
   if (requestedPath === "index.html") {
-    return "no-cache, must-revalidate";
+    return { cacheControl: "no-cache, must-revalidate" };
   }
   if (requestedPath.startsWith("dist/")) {
-    return "public, max-age=31536000, immutable";
+    return {
+      cacheControl: "public, max-age=31536000, immutable",
+      cdnCacheControl: "public, max-age=31536000, immutable",
+    };
   }
   const ext = requestedPath.slice(requestedPath.lastIndexOf(".")).toLowerCase();
   const staticExts = [
@@ -420,11 +530,23 @@ export function cacheControlForAppAsset(
     ".woff", ".woff2", ".png", ".jpg", ".jpeg", ".webp", ".ico", ".json",
   ];
   if (staticExts.includes(ext)) {
-    return options.transpiled
+    const cacheControl = options.transpiled
       ? "public, max-age=600, stale-while-revalidate=3600"
       : "public, max-age=3600, stale-while-revalidate=86400";
+    return {
+      cacheControl,
+      cdnCacheControl: cacheControl,
+    };
   }
   return null;
+}
+
+/** @deprecated Use cacheControlForAppAsset return value — kept for callers expecting string. */
+export function cacheControlHeaderForAppAsset(
+  requestedPath: string,
+  options: { transpiled?: boolean } = {},
+): string | null {
+  return cacheControlForAppAsset(requestedPath, options)?.cacheControl ?? null;
 }
 
 /** Reset caches (unit tests). */
@@ -433,6 +555,7 @@ export function resetCloudAppHostCachesForTests(): void {
   repoRevisionCache.clear();
   revisionInflight.clear();
   accessCache.clear();
+  repoCredentialsCache.clear();
   transpileCache.clear();
   appDbConfigCache.clear();
 }
@@ -481,7 +604,15 @@ export function invalidateRepoCacheForPublishedApp(
   }
   invalidateAppDbConfigCacheByPrefix(prefix);
   invalidateAccessCacheForPublishedApp(namespaceId, slug);
+  invalidateBackendArtifactCacheForPublishedApp(namespaceId, slug);
+  invalidateDbTokenCacheForPublishedApp(namespaceId, slug);
+  for (const key of repoCredentialsCache.keys()) {
+    if (key.startsWith(prefix)) {
+      repoCredentialsCache.delete(key);
+    }
+  }
   gcsCacheDeleteByApp(namespaceId, slug);
+  gcsDeploySnapshotDeleteByApp(namespaceId, slug);
 }
 
 /** Broader invalidation when publish slug is unknown (Pub/Sub commit fanout). */
@@ -499,5 +630,7 @@ export function invalidateRepoCacheForNamespace(namespaceId: string): void {
   }
   invalidateAppDbConfigCacheByPrefix(prefix);
   invalidateAccessCacheForNamespace(namespaceId);
+  invalidateBackendArtifactCacheForNamespace(namespaceId);
+  invalidateDbTokenCacheForNamespace(namespaceId);
   gcsCacheDeleteByNamespace(namespaceId);
 }

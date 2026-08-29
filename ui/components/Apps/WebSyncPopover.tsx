@@ -11,12 +11,12 @@ import type {
 import { formatLastUploadedAt } from "../../utils/appCloudSyncStatus";
 import {
   buildMergeReviewAgentPrompt,
+  buildOversizedFilesAgentPrompt,
   buildSchemaDriftAgentPrompt,
   buildUploadFailureAgentPrompt,
   buildWriterConflictAgentPrompt,
   openCloudSyncAgentChat,
 } from "../../utils/openCloudSyncAgentChat";
-import type { AppCloudSyncStatus } from "../../utils/appCloudSyncStatus";
 import { AUTO_UPLOAD_TOGGLE_LABEL } from "../../utils/appUploadMode";
 
 /** Primary push action label — Publish for first-time web deploy, Upload now when already live. */
@@ -208,6 +208,14 @@ export function WebSyncPopover({
     !showMergeReview &&
     !showWriterConflict &&
     !showDatabaseBlockerHelp &&
+    !metadataSync;
+  const hasOversizedFiles = (status?.oversizedAppFilesCount ?? 0) > 0;
+  const showOversizedFilesHelp =
+    hasOversizedFiles &&
+    !showMergeReview &&
+    !showWriterConflict &&
+    !showDatabaseBlockerHelp &&
+    !showUploadFailureHelp &&
     !metadataSync;
   const showAutoUploadToggle =
     onAutoUploadChange != null &&
@@ -508,7 +516,8 @@ export function WebSyncPopover({
         {status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0 ? (
           <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
             Move large files to App Files (panel beside Data Sources). Git sync skips
-            files over 10MB — visitors will not see assets left in the app folder.
+            files over 10MB — visitors will not see assets left in the app folder. Ask
+            agent can relocate them for you.
           </p>
         ) : null}
         {uploadFailureMessage ? (
@@ -678,6 +687,47 @@ export function WebSyncPopover({
             </button>
             <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
               Upload failed — Ask agent can diagnose and repair, then retry Upload now.
+            </p>
+          </>
+        ) : showOversizedFilesHelp ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildOversizedFilesAgentPrompt({
+                    appId,
+                    message: status.oversizedAppFilesMessage,
+                    count: status.oversizedAppFilesCount,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            {(syncActionNeeded || pushing || queuedForUpload) && (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy || metadataSync}
+                onClick={() => void onPushNow()}
+              >
+                {pushLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              Large files will not reach the web — Ask agent can move them to App Files
+              or fix linked database paths.
             </p>
           </>
         ) : (

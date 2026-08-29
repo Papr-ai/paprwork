@@ -26,9 +26,10 @@ import sys
 def main() -> None:
     # Vault keys: declare names in manifest.json "keys" array — injected as env vars.
     # Example: api_key = os.environ.get("YOUR_API_KEY")
-    # Linked DB: APP_DB (local) or PAPR_DB_URL + PAPR_DB_AUTH_TOKEN (cloud Turso).
+    # Linked DB: papr_db.connect() — local file (desktop) or Turso HTTP (cloud). Never sqlite3.connect(APP_DB).
     #   from papr_db import connect, execute
-    #   con = connect(); execute(con, "INSERT INTO ...", [...]); con.close()
+    #   con = connect()
+    #   execute(con, "INSERT INTO ... RETURNING id, name", [...])  # or con.lastrowid after INSERT
     # ACL: PAPR_CALLER_USER_ID / PAPR_CALLER_EMAIL — server-injected when signed in; never trust params.userId
     params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}"))
     payload = {

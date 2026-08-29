@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.4.7",
+  "version": "2.4.8",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -93,6 +93,7 @@
     "test:cloud-e2e": "node scripts/test-cloud-e2e.mjs",
     "test:cloud-sync": "node scripts/test-cloud-sync-e2e.mjs",
     "test:cloud-app-host": "node scripts/test-cloud-app-host-e2e.mjs",
+    "test:cloud-app-host-phases-2-4": "node scripts/test-cloud-app-host-phases-2-4-e2e.mjs",
     "test:plan-a-turso-direct-e2e": "npm run build:gateway && node scripts/test-plan-a-turso-direct-e2e.mjs",
     "test:desktop-session-bridge": "node scripts/test-desktop-session-bridge.mjs",
     "test:cloud-app-backend": "node scripts/test-cloud-app-backend-e2e.mjs",
@@ -134,6 +135,7 @@
     "test:app-agent-warm-e2e": "node scripts/test-app-agent-warm-e2e.mjs",
     "test:app-agent-storage-e2e": "node scripts/test-app-agent-storage-e2e.mjs",
     "test:app-agent-deploy-verify": "node scripts/verify-app-agent-chat-deploy.mjs",
+    "test:subagents-metadata-e2e": "node --import tsx scripts/test-subagents-metadata-e2e.ts",
     "setup:apps-dns": "node scripts/setup-apps-papr-ai-dns.mjs",
     "test:payload-migration": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-tool-payload-migration.mjs",
     "test:turso-auto-push": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-auto-push.mjs",

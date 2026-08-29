@@ -35,7 +35,8 @@ describe("tursoReplicaEnabled", () => {
     expect(
       mod.shouldUseTursoReplicaForDb({ syncMode: "legacy" }),
     ).toBe(false);
-    expect(mod.isLegacyWorkspaceRowSyncEnabled()).toBe(false);
+    // Uncutover legacy apps still need workspace-log sync during rollout.
+    expect(mod.isLegacyWorkspaceRowSyncEnabled()).toBe(true);
   });
 
   it("startup batch cutover is off unless PAPR_TURSO_REPLICA_CUTOVER_ON_STARTUP=1", async () => {

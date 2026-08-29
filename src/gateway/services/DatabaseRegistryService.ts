@@ -204,16 +204,17 @@ export class DatabaseRegistryService {
       this.cache = state;
 
       const updatedAt = new Date().toISOString();
-      void import("./syncV3/MetadataRegistryClient.js")
-        .then(({ uploadDatabasesRegistryToCloud }) =>
-          uploadDatabasesRegistryToCloud(state, updatedAt),
-        )
-        .catch((err: Error) => {
-          console.warn(
-            "[DatabaseRegistry] cloud upload failed:",
-            err.message.slice(0, 120),
-          );
-        });
+      try {
+        const { uploadDatabasesRegistryToCloud } = await import(
+          "./syncV3/MetadataRegistryClient.js"
+        );
+        await uploadDatabasesRegistryToCloud(state, updatedAt);
+      } catch (err) {
+        console.warn(
+          "[DatabaseRegistry] cloud upload failed:",
+          (err as Error).message.slice(0, 120),
+        );
+      }
     })();
 
     try {

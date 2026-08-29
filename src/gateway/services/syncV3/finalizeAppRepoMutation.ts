@@ -83,12 +83,10 @@ export async function finalizeAppRepoMutation(
     catalogError = catalogResult.catalogError;
   }
 
-  if (pushResult.commitSha) {
-    const { uploadAppDbConfigToCloud } = await import("./appDbConfigUpload.js");
-    void uploadAppDbConfigToCloud(paprDir, appId, pushResult.commitSha).catch(
-      () => {},
-    );
-  }
+  const { syncMetadataToCloudForFlush } = await import(
+    "./syncMetadataForFlush.js"
+  );
+  await syncMetadataToCloudForFlush(paprDir, appId, pushResult.commitSha);
 
   return {
     appId,

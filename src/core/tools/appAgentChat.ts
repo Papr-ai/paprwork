@@ -143,28 +143,35 @@ export const enableAppAgentChatTool = createTool({
       const jobsService = getJobsService();
       await jobsService.initialize();
       const jobName = `App Agent Chat: ${app.title}`;
+      const jobUpdate = {
+        appIds: [args.appId],
+        command:
+          "Embedded app assistant turn. Pass the user's message via runtimeParams.prompt; conversation history is loaded from the warm sandbox chats.db.",
+        ...(subAgent.provider ? { provider: subAgent.provider } : {}),
+        ...(subAgent.model ? { model: subAgent.model } : {}),
+      };
       const existing = (await jobsService.listJobs()).find(
         (job) => job.name === jobName && job.type === "subagent",
       );
       if (existing) {
         agentChat.cloudJobId = existing.id;
-        await jobsService.updateJob(existing.id, {
-          appIds: [args.appId],
-          command:
-            "Embedded app assistant turn. Pass the user's message via runtimeParams.prompt; conversation history is loaded from the warm sandbox chats.db.",
-        });
+        await jobsService.updateJob(existing.id, jobUpdate);
       } else {
         const cloudJob = await jobsService.createJob({
           name: jobName,
           type: "subagent",
           subAgentId: args.subAgentId,
-          appIds: [args.appId],
-          command:
-            "Embedded app assistant turn. Pass the user's message via runtimeParams.prompt; conversation history is loaded from the warm sandbox chats.db.",
           maxTurns: 20,
+          ...jobUpdate,
         });
         agentChat.cloudJobId = cloudJob.id;
       }
+
+      const { getPaprRoot } = await import("../../core/utils/paprRoot.js");
+      const { ensureAppRequirementsSyncedWithBackend } = await import(
+        "../../gateway/services/cloudAppRequirements.js"
+      );
+      await ensureAppRequirementsSyncedWithBackend(getPaprRoot(), args.appId);
     }
 
     const updated = await appService.setAppAgentChat(args.appId, agentChat);

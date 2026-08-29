@@ -586,7 +586,7 @@ export class TursoSyncBridge {
   async pullJob(
     jobId: string,
     _credentials?: TursoCredentials,
-    _pullOptions?: Omit<PullSourceSyncOptions, "jobId">,
+    pullOptions?: Omit<PullSourceSyncOptions, "jobId">,
   ): Promise<PullResult> {
     const sources = await this.listLinkedSources();
     const linked = findLinkedSourceForJob(sources, jobId);
@@ -599,7 +599,9 @@ export class TursoSyncBridge {
       await import("./tursoReplica/tursoReplicaRouting.js");
     if (shouldUseTursoReplicaForSource(appSource)) {
       try {
-        const pulled = await pullLinkedDbViaTursoReplica(appSource);
+        const pulled = await pullLinkedDbViaTursoReplica(appSource, {
+          forceReconnect: pullOptions?.forceReconnect === true,
+        });
         if (pulled) {
           return { status: "pulled", syncMode: "replica" };
         }
@@ -616,7 +618,23 @@ export class TursoSyncBridge {
     const { pullLinkedSourceViaWorkspaceLog } = await import(
       "./syncV3/workspaceLogSync.js"
     );
-    const result = await pullLinkedSourceViaWorkspaceLog(linked);
+    let result = await pullLinkedSourceViaWorkspaceLog(linked);
+
+    if (result.status !== "pulled") {
+      const databaseName = await this.resolveTursoDatabaseNameForLinked(linked);
+      const creds =
+        _credentials ?? (await this.fetchCredentials(databaseName));
+      const { pullLinkedSourceViaTursoRemoteCdc } = await import(
+        "./tursoRemoteCdcPull.js"
+      );
+      const cdcResult = await this.runExclusiveForDbPath(linked.dbPath, () =>
+        pullLinkedSourceViaTursoRemoteCdc(linked, creds),
+      );
+      if (cdcResult.status === "pulled") {
+        result = cdcResult;
+      }
+    }
+
     if (result.status === "pulled") {
       const target: { jobId?: string; dbId?: string } = {};
       if (linked.jobId) {
@@ -805,6 +823,7 @@ export class TursoSyncBridge {
     options?: {
       assumeRemoteChanged?: boolean;
       trigger?: TursoCloudSyncTrigger;
+      preferRemote?: boolean;
     },
   ): Promise<SyncSummary> {
     const sessions = await reconcileLinkedSourcesFromCloud(

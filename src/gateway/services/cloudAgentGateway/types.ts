@@ -34,9 +34,20 @@ export interface CloudAgentRunRequest {
   paprApiKey: string;
   allowedToolIds?: string[];
   maxTurns?: number;
-  repoCloneUrl: string;
+  /** Full namespace workspace clone URL (workspaceScope=namespace). */
+  repoCloneUrl?: string;
   repoToken: string;
   repoBranch?: string;
+  /**
+   * namespace — full Papr workspace repo (Papr Web, desktop-parity).
+   * app — per-app Sync V3 repo only + Mongo scaffold (embedded app-agent chat).
+   */
+  workspaceScope?: "namespace" | "app";
+  appId?: string;
+  appRepoOwner?: string;
+  appRepoName?: string;
+  /** Repo-relative paths → UTF-8 contents (e.g. data/jobs.json) written after materialize. */
+  scaffoldFiles?: Record<string, string>;
   /** Linked mini-app sources from memory prepare (metadata). */
   linkedSources?: CloudLinkedSource[];
   /** @deprecated Prefer tursoSources from job writeDbIds + app linked sources. */

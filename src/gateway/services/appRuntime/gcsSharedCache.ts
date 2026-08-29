@@ -26,8 +26,18 @@ function gcsBucket(): string | null {
   return process.env.CLOUD_APP_HOST_GCS_BUCKET || null;
 }
 
+/** Exported for deploy snapshot module. */
+export function gcsBucketName(): string | null {
+  return gcsBucket();
+}
+
 export function isGcsSharedCacheEnabled(): boolean {
   return gcsBucket() !== null;
+}
+
+/** Exported for deploy snapshot module. */
+export async function getGcsAccessToken(): Promise<string | null> {
+  return getAccessToken();
 }
 
 async function getAccessToken(): Promise<string | null> {

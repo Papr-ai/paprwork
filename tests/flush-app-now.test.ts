@@ -301,12 +301,12 @@ describe("flushAppNow", () => {
 
     const result = await flushAppNow(sync, "app-1");
 
-    expect(callOrder).toEqual(["migrations", "cutover", "turso-push", "writer", "catalog"]);
+    expect(callOrder).toEqual(["migrations", "cutover", "writer", "catalog"]);
     expect(mockRunReplicaCutoverForAppUpload).toHaveBeenCalledWith("app-1");
     expect(mockCatchUpLinkedSource).not.toHaveBeenCalled();
     expect(mockApplyLocalMigrations).toHaveBeenCalledWith("app-1", "/tmp/papr/apps");
-    expect(mockPushLinkedSource).toHaveBeenCalledOnce();
-    expect(result.tursoPushed).toBe(true);
+    expect(mockPushLinkedSource).not.toHaveBeenCalled();
+    expect(result.tursoPushed).toBe(false);
     expect(result.published).toBe(true);
   });
 
@@ -337,9 +337,9 @@ describe("flushAppNow", () => {
     expect(mockPushLinkedSource).not.toHaveBeenCalled();
   });
 
-  it("Plan A flush skips replica push when already auto-synced", async () => {
+  it("Plan A flush skips post-cutover replica push entirely", async () => {
     mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(false);
-    mockShouldSkipTursoPush.mockResolvedValue(true);
+    mockShouldSkipTursoPush.mockResolvedValue(false);
 
     const result = await flushAppNow(sync, "app-1");
 

@@ -40,6 +40,11 @@ export class AppAgentChatCloudRunner {
 
     input.onEvent({ type: "app-agent:turn-start", data: { turnId } });
 
+    input.onEvent({
+      type: "app-agent:status",
+      data: { turnId, message: "Preparing workspace…" },
+    });
+
     await this.sessionStore.appendMessage(input.session.id, {
       id: `msg-${uuidv4()}`,
       role: "user",

@@ -15,6 +15,9 @@ import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 
 const bundleRevisionPins = new Map<string, string>();
 
+/** Last bundle revision known to match Turso schema — used when a new deploy outruns migrations. */
+const lastSatisfiedBundleRevision = new Map<string, string>();
+
 function pinKey(namespaceId: string, slug: string): string {
   return `${namespaceId}/${slug}`;
 }
@@ -67,6 +70,14 @@ function schemaStatusCacheKey(input: {
 export function resetSchemaStatusCacheForTests(): void {
   schemaStatusCache.clear();
   bundleRevisionPins.clear();
+  lastSatisfiedBundleRevision.clear();
+}
+
+export function getLastSatisfiedBundleRevision(
+  namespaceId: string,
+  slug: string,
+): string | null {
+  return lastSatisfiedBundleRevision.get(pinKey(namespaceId, slug)) ?? null;
 }
 
 export function toAppRevisionSchemaPayload(
@@ -74,13 +85,15 @@ export function toAppRevisionSchemaPayload(
   gate: SchemaGateResult,
 ): AppRevisionSchemaPayload {
   const required = gate.requiredSchemaVersion;
-  const schemaSyncing = Boolean(required && gate.blocked);
+  const serveRevision =
+    gate.blocked && gate.pinnedRevision ? gate.pinnedRevision : revision;
+  // Never surface schema_syncing UX — serve pre-update bundle or let migrate catch up quietly.
   return {
-    revision,
+    revision: serveRevision,
     requiredSchemaVersion: required,
     remoteSchemaVersion: gate.remoteSchemaVersion,
-    schemaReady: !schemaSyncing,
-    schemaSyncing,
+    schemaReady: true,
+    schemaSyncing: false,
   };
 }
 
@@ -124,8 +137,13 @@ export async function evaluateCloudAppSchemaGate(input: {
   const satisfied =
     remoteSchemaVersion !== null && remoteSchemaVersion >= required;
 
+  const key = pinKey(input.namespaceId, input.runtimeAuth.slug);
+
   if (satisfied) {
-    bundleRevisionPins.delete(pinKey(input.namespaceId, input.runtimeAuth.slug));
+    bundleRevisionPins.delete(key);
+    if (input.currentRevision) {
+      lastSatisfiedBundleRevision.set(key, input.currentRevision);
+    }
     return {
       blocked: false,
       requiredSchemaVersion: required,
@@ -138,16 +156,11 @@ export async function evaluateCloudAppSchemaGate(input: {
     input.namespaceId,
     input.runtimeAuth.slug,
   );
-  const pinRevision =
-    existingPin ??
-    (input.currentRevision ? input.currentRevision : meta!.distRevision);
+  const lastGood = lastSatisfiedBundleRevision.get(key);
+  const pinRevision = existingPin ?? lastGood ?? null;
 
-  if (input.currentRevision && !existingPin) {
-    setPinnedBundleRevision(
-      input.namespaceId,
-      input.runtimeAuth.slug,
-      pinRevision,
-    );
+  if (pinRevision && !existingPin) {
+    setPinnedBundleRevision(input.namespaceId, input.runtimeAuth.slug, pinRevision);
   }
 
   return {

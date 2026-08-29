@@ -23,6 +23,13 @@ import {
 import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
 import { filterVaultKeyNames, isPlatformInjectedEnvKey } from "../../core/utils/platformInjectedEnvKeys.js";
 import { extractCustomKeyNames } from "../utils/keySubstitution.js";
+import type { AppAgentChatConfig } from "../../core/types/appAgentChat.js";
+import type { Provider } from "../../core/types/agents.js";
+import type { SubAgentProfile } from "../../core/types/subagents.js";
+import {
+  collectLlmEnvKeysForProviders,
+  mergeAgentChatLlmKeysIntoRequirements,
+} from "../../core/utils/agentChatLlmRequirements.js";
 
 export const CLOUD_APP_REQUIREMENTS_FILENAME = "requirements.json";
 
@@ -214,6 +221,78 @@ function readJobCommand(paprDir: string, jobId: string): string | null {
   }
 }
 
+function readAppsJsonEntry(
+  paprDir: string,
+  appId: string,
+): { agentChat?: AppAgentChatConfig } | null {
+  const appsPath = path.join(paprDir, "data", "apps.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(appsPath, "utf8")) as Array<{
+      id?: string;
+      agentChat?: AppAgentChatConfig;
+    }>;
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    const entry = parsed.find((app) => app.id === appId);
+    return entry ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readSubAgentProfile(
+  paprDir: string,
+  subAgentId: string,
+): SubAgentProfile | null {
+  const subagentsPath = path.join(paprDir, "data", "subagents.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(subagentsPath, "utf8")) as SubAgentProfile[];
+    if (!Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed.find((profile) => profile.id === subAgentId) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function readJobProvider(paprDir: string, jobId: string): Provider | null {
+  const jobJsonPath = path.join(paprDir, "Jobs", jobId, "job.json");
+  try {
+    const parsed = JSON.parse(fs.readFileSync(jobJsonPath, "utf8")) as {
+      provider?: Provider;
+    };
+    return parsed.provider ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * LLM env keys implied by enabled embedded app-agent chat (sub-agent + cloud job providers).
+ */
+export function readAgentChatLlmKeyNames(paprDir: string, appId: string): string[] {
+  const appEntry = readAppsJsonEntry(paprDir, appId);
+  const agentChat = appEntry?.agentChat;
+  if (!agentChat?.enabled || !agentChat.subAgentId?.trim()) {
+    return [];
+  }
+
+  const profile = readSubAgentProfile(paprDir, agentChat.subAgentId.trim());
+  const providers: Array<Provider | string | undefined> = [
+    profile?.provider,
+    profile?.fallbackProvider,
+  ];
+
+  const cloudJobId = agentChat.cloudJobId?.trim();
+  if (cloudJobId) {
+    providers.push(readJobProvider(paprDir, cloudJobId) ?? undefined);
+  }
+
+  return collectLlmEnvKeysForProviders(providers);
+}
+
 /** ${KEY_NAME} placeholders from jobs linked to this app (data-sources, appIds, deps). */
 export function readLinkedJobKeyNames(
   paprDir: string,
@@ -242,10 +321,12 @@ export async function readEffectiveAppRequirements(
   const fromFile = readAppRequirements(paprDir, appId);
   const backendKeys = await readBackendManifestKeyNames(paprDir, appId);
   const jobKeys = readLinkedJobKeyNames(paprDir, appId);
-  return mergeBackendKeysIntoRequirements(
+  const agentChatLlmKeys = readAgentChatLlmKeyNames(paprDir, appId);
+  const mergedJobs = mergeBackendKeysIntoRequirements(
     mergeBackendKeysIntoRequirements(fromFile, backendKeys),
     jobKeys,
   );
+  return mergeAgentChatLlmKeysIntoRequirements(mergedJobs, agentChatLlmKeys);
 }
 
 export interface AppRequirementsDiscovery {
@@ -279,9 +360,13 @@ export async function ensureAppRequirementsSyncedWithBackend(
   const existing = readAppRequirements(paprDir, appId);
   const backendKeys = await readBackendManifestKeyNames(paprDir, appId);
   const jobKeys = readLinkedJobKeyNames(paprDir, appId);
-  const merged = mergeBackendKeysIntoRequirements(
-    mergeBackendKeysIntoRequirements(existing, backendKeys),
-    jobKeys,
+  const agentChatLlmKeys = readAgentChatLlmKeyNames(paprDir, appId);
+  const merged = mergeAgentChatLlmKeysIntoRequirements(
+    mergeBackendKeysIntoRequirements(
+      mergeBackendKeysIntoRequirements(existing, backendKeys),
+      jobKeys,
+    ),
+    agentChatLlmKeys,
   );
   const existingNames = new Set(existing.map((spec) => spec.name));
   const added = merged.filter((spec) => !existingNames.has(spec.name));

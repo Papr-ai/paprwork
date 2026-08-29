@@ -29,8 +29,10 @@ import {
 import { MIGRATION_CONFLICT_CODE } from "./tursoReplicaMigrationConflict.js";
 import { drainInboundReplicaCdcIfCaughtUp } from "./tursoReplicaInboundDrain.js";
 import type { AppDataSource } from "../appDataSources.js";
+import { isReplicaReadTransportError } from "./tursoReplicaCheckpointRecovery.js";
 
 const REPLICA_STATUS_OPEN_TIMEOUT_MS = 12_000;
+const REPLICA_PULL_TIMEOUT_MS = 15_000;
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -301,28 +303,72 @@ export class TursoReplicaService {
     pullBeforeRead?: boolean;
   }): Promise<import("../DbQueryPool.js").QueryResult> {
     return this.withSerializedPath(options.localPath, async () => {
-      const handle = await this.getOrOpen({
-        localPath: options.localPath,
-        tursoDatabase: options.tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(options.localPath),
-      });
+      const executeRead = async (pullFirst: boolean) => {
+        const handle = await this.getOrOpen({
+          localPath: options.localPath,
+          tursoDatabase: options.tursoDatabase,
+          bootstrapIfEmpty: !fs.existsSync(options.localPath),
+        });
 
-      if (isTursoReplicaOnline() && options.pullBeforeRead !== false) {
-        await handle.db.pull();
-      }
+        if (isTursoReplicaOnline() && pullFirst) {
+          await withTimeout(
+            handle.db.pull(),
+            REPLICA_PULL_TIMEOUT_MS,
+            "replica pull before read",
+          );
+        }
 
-      const stmt = await handle.db.prepare(options.sql);
-      const rawRows = await stmt.all(...(options.params ?? []));
-      const rows = normalizeReplicaRows(
-        Array.isArray(rawRows) ? rawRows : [],
-      );
-      const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+        const stmt = await handle.db.prepare(options.sql);
+        const rawRows = await stmt.all(...(options.params ?? []));
+        const rows = normalizeReplicaRows(
+          Array.isArray(rawRows) ? rawRows : [],
+        );
+        const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
 
-      return {
-        rows,
-        columns,
-        count: rows.length,
+        return {
+          rows,
+          columns,
+          count: rows.length,
+        };
       };
+
+      try {
+        return await executeRead(options.pullBeforeRead !== false);
+      } catch (error) {
+        const message = (error as Error).message;
+        if (!isReplicaReadTransportError(message)) {
+          throw error;
+        }
+
+        console.warn(
+          `[TursoReplicaService] Read wedge on ${options.tursoDatabase} — ` +
+            `recovering: ${message.slice(0, 160)}`,
+        );
+        await this.close(options.localPath);
+
+        try {
+          await withTimeout(
+            this.pull(options.localPath, options.tursoDatabase),
+            REPLICA_PULL_TIMEOUT_MS,
+            "replica recovery pull",
+          );
+          await drainInboundReplicaCdcIfCaughtUp({
+            source: {
+              id: options.tursoDatabase,
+              type: "sqlite",
+              alias: options.tursoDatabase,
+              dbPath: options.localPath,
+              tables: [],
+              linkedAt: new Date().toISOString(),
+            },
+            tursoDatabase: options.tursoDatabase,
+          });
+          return await executeRead(false);
+        } catch (recoveryError) {
+          noteTursoReplicaTransportError(recoveryError);
+          throw error;
+        }
+      }
     });
   }
 
@@ -331,43 +377,70 @@ export class TursoReplicaService {
     tursoDatabase: string,
   ): Promise<import("../DbQueryPool.js").SchemaResult> {
     return this.withSerializedPath(localPath, async () => {
-      const handle = await this.getOrOpen({
-        localPath,
-        tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(localPath),
-      });
+      const executeSchema = async (pullFirst: boolean) => {
+        const handle = await this.getOrOpen({
+          localPath,
+          tursoDatabase,
+          bootstrapIfEmpty: !fs.existsSync(localPath),
+        });
 
-      if (isTursoReplicaOnline()) {
-        await handle.db.pull();
-      }
+        if (isTursoReplicaOnline() && pullFirst) {
+          await withTimeout(
+            handle.db.pull(),
+            REPLICA_PULL_TIMEOUT_MS,
+            "replica pull before schema",
+          );
+        }
 
-      const listStmt = await handle.db.prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
-      );
-      const tableRows = await listStmt.all();
-      const tableNames = normalizeReplicaRows(
-        Array.isArray(tableRows) ? tableRows : [],
-      )
-        .map((row) => String(row.name ?? ""))
-        .filter((name) => name.length > 0);
-
-      const tables: import("../DbQueryPool.js").SchemaTable[] = [];
-      for (const tableName of tableNames) {
-        const infoStmt = await handle.db.prepare(
-          `PRAGMA table_info(${quoteIdent(tableName)})`,
+        const listStmt = await handle.db.prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
         );
-        const colRows = await infoStmt.all();
-        const columns = normalizeReplicaRows(
-          Array.isArray(colRows) ? colRows : [],
-        ).map((column) => ({
-          name: String(column.name ?? ""),
-          type: String(column.type ?? ""),
-          pk: Number(column.pk ?? 0) === 1,
-        }));
-        tables.push({ table: tableName, columns });
-      }
+        const tableRows = await listStmt.all();
+        const tableNames = normalizeReplicaRows(
+          Array.isArray(tableRows) ? tableRows : [],
+        )
+          .map((row) => String(row.name ?? ""))
+          .filter((name) => name.length > 0);
 
-      return { tables };
+        const tables: import("../DbQueryPool.js").SchemaTable[] = [];
+        for (const tableName of tableNames) {
+          const infoStmt = await handle.db.prepare(
+            `PRAGMA table_info(${quoteIdent(tableName)})`,
+          );
+          const colRows = await infoStmt.all();
+          const columns = normalizeReplicaRows(
+            Array.isArray(colRows) ? colRows : [],
+          ).map((column) => ({
+            name: String(column.name ?? ""),
+            type: String(column.type ?? ""),
+            pk: Number(column.pk ?? 0) === 1,
+          }));
+          tables.push({ table: tableName, columns });
+        }
+
+        return { tables };
+      };
+
+      try {
+        return await executeSchema(true);
+      } catch (error) {
+        const message = (error as Error).message;
+        if (!isReplicaReadTransportError(message)) {
+          throw error;
+        }
+
+        await this.close(localPath);
+        try {
+          await withTimeout(
+            this.pull(localPath, tursoDatabase),
+            REPLICA_PULL_TIMEOUT_MS,
+            "replica recovery pull",
+          );
+          return await executeSchema(false);
+        } catch {
+          throw error;
+        }
+      }
     });
   }
 

@@ -43,7 +43,8 @@ import {
   type TursoDbActors,
 } from "./tursoRuntimeIdentity.js";
 import type { WorkspaceLogHostScope } from "../../../core/types/workspaceLog.js";
-import { isTursoReplicaSyncFeatureEnabled } from "../../utils/tursoReplicaEnabled.js";
+import { shouldUseTursoReplicaForDb } from "../../utils/tursoReplicaEnabled.js";
+import { refreshAppDataSourcesConfig } from "./cloudDatabaseRegistry.js";
 
 /** Cloud host request: `userId` = publisher; optional session visitor for per-user DBs. */
 type TursoDbActorInput = {
@@ -70,7 +71,7 @@ interface SyncVersionMemo {
 }
 
 export class TursoDbAdapter {
-  private clientCache = new Map<string, Client>();
+  private clientCache = new Map<string, { client: Client; tokenExpiresAt: number }>();
   /** Last observed _papr_sync_meta version per client key. */
   private syncVersionMemo = new Map<string, SyncVersionMemo>();
   /** Remote changelog triggers installed per client key. */
@@ -144,17 +145,53 @@ export class TursoDbAdapter {
     const database = await this.resolveTursoDatabaseName(source, actors);
     const cacheKey = this.clientKey(runtimeAuth, actingUserId, database);
     const cached = this.clientCache.get(cacheKey);
-    if (cached) return cached;
+    const now = Date.now();
+    if (cached && cached.tokenExpiresAt > now) {
+      return cached.client;
+    }
+    if (cached) {
+      try {
+        cached.client.close();
+      } catch {
+        /* best-effort */
+      }
+      this.clientCache.delete(cacheKey);
+    }
 
-    const { tursoUrl, authToken } = await this.credentials.getUserDatabaseToken(
-      orgId,
-      namespaceId,
-      actingUserId,
-      runtimeAuth,
-      database,
-    );
+    const fetchToken = async (): Promise<{
+      tursoUrl: string;
+      authToken: string;
+      expiresAt?: string;
+    }> =>
+      this.credentials.getUserDatabaseToken(
+        orgId,
+        namespaceId,
+        actingUserId,
+        runtimeAuth,
+        database,
+      );
+
+    let tokenBundle: { tursoUrl: string; authToken: string; expiresAt?: string };
+    try {
+      tokenBundle = await fetchToken();
+    } catch (error) {
+      const message = (error as Error).message;
+      const isDbTokenDenied =
+        message.includes("403") && message.includes("not linked");
+      if (isDbTokenDenied && source.dbId) {
+        await refreshAppDataSourcesConfig(runtimeAuth);
+        tokenBundle = await fetchToken();
+      } else {
+        throw error;
+      }
+    }
+
+    const { tursoUrl, authToken, expiresAt } = tokenBundle;
     const client = createClient({ url: tursoUrl, authToken });
-    this.clientCache.set(cacheKey, client);
+    const tokenExpiresAt = expiresAt
+      ? Math.max(now + 60_000, new Date(expiresAt).getTime() - 60_000)
+      : now + 50 * 60 * 1000;
+    this.clientCache.set(cacheKey, { client, tokenExpiresAt });
 
     const registry = getDatabaseRegistryService();
     const record = registry.getRecordForSource(source);
@@ -388,7 +425,7 @@ export class TursoDbAdapter {
     const actingUserId = resolveTursoActingUserIdForSource(source, actors);
     const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
-    if (this.usesWorkspaceLogAuthority()) {
+    if (this.usesWorkspaceLogAuthorityForSource(source)) {
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
@@ -523,7 +560,7 @@ export class TursoDbAdapter {
       const actingUserId = resolveTursoActingUserIdForSource(group[0].source, actors);
       const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
-      if (this.usesWorkspaceLogAuthority()) {
+      if (this.usesWorkspaceLogAuthorityForSource(group[0].source)) {
         const { appendRuntimeWorkspaceLogBatch } = await import(
           "./memoryRuntimeClient.js"
         );
@@ -616,7 +653,10 @@ export class TursoDbAdapter {
       return { results };
     }
 
-    if (this.usesWorkspaceLogAuthority()) {
+    const allLegacyWorkspaceLog = resolved.every((item) =>
+      this.usesWorkspaceLogAuthorityForSource(item.source),
+    );
+    if (allLegacyWorkspaceLog) {
       const groups = new Map<string, ResolvedStmt[]>();
       for (const item of resolved) {
         const group = groups.get(item.database) ?? [];
@@ -750,7 +790,7 @@ export class TursoDbAdapter {
     const actingUserId = resolveTursoActingUserIdForSource(source, actors);
     const cacheKey = this.clientKey(input.runtimeAuth, actingUserId, database);
 
-    if (this.usesWorkspaceLogAuthority()) {
+    if (this.usesWorkspaceLogAuthorityForSource(source)) {
       const { appendRuntimeWorkspaceLogEntry } = await import(
         "./memoryRuntimeClient.js"
       );
@@ -778,14 +818,14 @@ export class TursoDbAdapter {
     return { ok: true, source: source.alias };
   }
 
-  private usesWorkspaceLogAuthority(): boolean {
+  /** Legacy linked sources use workspace log; replica-mode sources use Turso direct. */
+  private usesWorkspaceLogAuthorityForSource(source: AppDataSource): boolean {
     if (!process.env.PAPR_CLOUD_APP_HOST_KEY?.trim()) {
       return false;
     }
-    if (isTursoReplicaSyncFeatureEnabled()) {
-      return false;
-    }
-    return true;
+    const registry = getDatabaseRegistryService();
+    const record = registry.getRecordForSource(source);
+    return !shouldUseTursoReplicaForDb({ syncMode: record?.syncMode });
   }
 
   async schema(input: TursoDbActorInput & {

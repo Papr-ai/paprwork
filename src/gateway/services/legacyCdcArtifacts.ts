@@ -1,10 +1,16 @@
 /**
- * Pre-_papr_* legacy CDC metadata tables — local-only artifacts, not user data.
- * Excluded from syncable table counts and schema drift checks; stripped at cutover.
+ * Legacy sync-path artifacts — local-only tables/triggers, not user app data.
+ * Stripped at replica cutover and on startup repair so Plan A uses Turso Sync only.
  */
 
 import * as fs from "fs";
 import Database from "better-sqlite3";
+import {
+  filterSyncableTables,
+  listUserTables,
+} from "./tursoSyncBridgeCore.js";
+import { SYNC_INFRA_TABLES } from "./tursoSyncLog.js";
+import { dropLocalTableSyncTriggers } from "./tursoSyncLog.js";
 
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
@@ -37,6 +43,23 @@ export function isLegacyCdcArtifactTable(tableName: string): boolean {
   return false;
 }
 
+/** V3 CDC / workspace-log tables and pre-_papr turso_* artifacts — not used by Plan A replica. */
+export function isLegacySyncPathTable(tableName: string): boolean {
+  if (tableName === "_papr_schema_migrations") {
+    return false;
+  }
+  if (isLegacyCdcArtifactTable(tableName)) {
+    return true;
+  }
+  if (SYNC_INFRA_TABLES.has(tableName)) {
+    return true;
+  }
+  if (tableName === "_papr_sync_meta") {
+    return true;
+  }
+  return false;
+}
+
 function listSqliteUserTables(db: Database.Database): string[] {
   const rows = db
     .prepare(
@@ -46,8 +69,10 @@ function listSqliteUserTables(db: Database.Database): string[] {
   return rows.map((row) => String(row.name ?? "")).filter(Boolean);
 }
 
-/** Legacy artifact tables still present on disk (for diagnostics / cutover strip). */
-export function listLegacyCdcArtifactTablesForPath(dbPath: string): string[] {
+function listLegacyTablesForPath(
+  dbPath: string,
+  predicate: (tableName: string) => boolean,
+): string[] {
   if (!fs.existsSync(dbPath)) {
     return [];
   }
@@ -58,7 +83,7 @@ export function listLegacyCdcArtifactTablesForPath(dbPath: string): string[] {
     }
     const db = new Database(dbPath, { readonly: true });
     try {
-      return listSqliteUserTables(db).filter(isLegacyCdcArtifactTable);
+      return listSqliteUserTables(db).filter(predicate);
     } finally {
       db.close();
     }
@@ -67,25 +92,41 @@ export function listLegacyCdcArtifactTablesForPath(dbPath: string): string[] {
   }
 }
 
+/** Legacy turso_* artifact tables still present on disk. */
+export function listLegacyCdcArtifactTablesForPath(dbPath: string): string[] {
+  return listLegacyTablesForPath(dbPath, isLegacyCdcArtifactTable);
+}
+
+/** Legacy sync-path tables (V3 CDC + workspace log) still on a Plan A replica file. */
+export function listLegacySyncPathTablesForPath(dbPath: string): string[] {
+  return listLegacyTablesForPath(dbPath, isLegacySyncPathTable);
+}
+
 /**
- * Drop local-only legacy CDC artifact tables before replica cutover.
- * Returns dropped table names (empty when none found).
+ * Drop legacy sync-path tables and CDC triggers. Preserves user app tables and
+ * `_papr_schema_migrations` (Plan A schema ledger).
  */
-export function stripLegacyCdcArtifacts(dbPath: string): string[] {
+export function stripLegacySyncPathArtifacts(dbPath: string): string[] {
   if (!fs.existsSync(dbPath)) {
     return [];
   }
   const db = new Database(dbPath);
   try {
     const dropped: string[] = [];
-    for (const tableName of listSqliteUserTables(db).filter(
-      isLegacyCdcArtifactTable,
-    )) {
+    for (const tableName of listSqliteUserTables(db).filter(isLegacySyncPathTable)) {
       db.exec(`DROP TABLE IF EXISTS ${quoteIdent(tableName)}`);
       dropped.push(tableName);
+    }
+    for (const tableName of filterSyncableTables(listUserTables(db))) {
+      dropLocalTableSyncTriggers(db, tableName);
     }
     return dropped;
   } finally {
     db.close();
   }
+}
+
+/** @deprecated Prefer stripLegacySyncPathArtifacts — kept for call sites that only strip turso_* tables. */
+export function stripLegacyCdcArtifacts(dbPath: string): string[] {
+  return stripLegacySyncPathArtifacts(dbPath);
 }

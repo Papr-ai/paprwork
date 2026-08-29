@@ -1,7 +1,6 @@
 /**
- * Drain phantom outbound CDC after inbound pull (cloud HTTP → desktop pull).
- * When migration ledger is caught up (no local-only ids), push+checkpoint clears
- * local WAL counters without re-uploading schema already on Turso primary.
+ * After inbound pull, reconcile phantom CDC counters via pull-only.
+ * Never push+checkpoint on replica files — that wedges empty-WAL sidecars.
  */
 
 import type { AppDataSource } from "../appDataSources.js";
@@ -13,6 +12,10 @@ import {
   readLocalReplicaMigrationIds,
   readRemoteTursoMigrationIds,
 } from "./tursoReplicaMigrationConflict.js";
+import {
+  detectReplicaSidecarWedge,
+} from "./tursoReplicaSidecarWedge.js";
+import { removeTursoReplicaSidecarsOnly } from "./tursoReplicaFileGuard.js";
 
 export type InboundDrainSkipReason =
   | "offline"
@@ -29,7 +32,7 @@ export interface InboundReplicaDrainResult {
   pushError?: string;
 }
 
-/** Push (no pull) + checkpoint when schema ledger shows inbound-only catch-up. */
+/** Pull-only reconcile when schema ledger shows inbound-only catch-up. */
 export async function drainInboundReplicaCdcIfCaughtUp(options: {
   source: AppDataSource;
   tursoDatabase: string;
@@ -65,23 +68,23 @@ export async function drainInboundReplicaCdcIfCaughtUp(options: {
     };
   }
 
-  const pushResult = await replica.push(
-    options.source.dbPath,
-    options.tursoDatabase,
-    { pullBeforePush: false },
-  );
-  if (!pushResult.ok) {
+  if (detectReplicaSidecarWedge(options.source.dbPath)) {
+    await replica.close(options.source.dbPath);
+    removeTursoReplicaSidecarsOnly(options.source.dbPath);
+  }
+
+  try {
+    await replica.pull(options.source.dbPath, options.tursoDatabase);
+  } catch (error) {
     return {
       drained: false,
       skippedReason: "push_failed",
-      pushError: pushResult.error,
+      pushError: (error as Error).message,
       cdcOperationsBefore: cdcBefore,
       cdcOperationsAfter: cdcBefore,
     };
   }
 
-  await replica.pull(options.source.dbPath, options.tursoDatabase);
-  await replica.checkpoint(options.source.dbPath, options.tursoDatabase);
   const cdcAfter = await replica.readCdcOperations(
     options.source.dbPath,
     options.tursoDatabase,

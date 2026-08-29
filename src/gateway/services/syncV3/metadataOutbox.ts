@@ -11,6 +11,7 @@ import { getPaprRoot } from "../../../core/utils/paprRoot.js";
 import type { CloudAppMetaFile } from "../cloudSync/cloudAppMeta.js";
 import type { DatabasesRegistryFile } from "../DatabaseRegistryService.js";
 import type { JobConfigSlice } from "../jobs/jobRuntimeFields.js";
+import type { SubAgentConfigSlice } from "../subagents/subAgentMetadataSlice.js";
 import type { AppDbConfigPayload } from "./appDbConfigUpload.js";
 import { readJsonlBounded } from "./outboxFile.js";
 
@@ -20,6 +21,7 @@ const MAX_ATTEMPTS = 8;
 export type MetadataOutboxKind =
   | "jobs"
   | "databases"
+  | "subagents"
   | "app-runtime-meta"
   | "app-db-config";
 
@@ -30,6 +32,7 @@ export interface MetadataOutboxEntry {
   attempts: number;
   lastError?: string;
   jobs?: JobConfigSlice[];
+  subagents?: SubAgentConfigSlice[];
   registry?: DatabasesRegistryFile;
   appId?: string;
   appRuntimeMeta?: CloudAppMetaFile;
@@ -142,6 +145,7 @@ export async function flushMetadataOutbox(): Promise<{
     uploadJobsIndexToCloudDirect,
     uploadDatabasesRegistryToCloudDirect,
     uploadAppRuntimeMetaToCloudDirect,
+    uploadSubAgentsIndexToCloudDirect,
   } = await import("./MetadataRegistryClient.js");
   const { uploadAppDbConfigToCloudDirect } =
     await import("./appDbConfigUpload.js");
@@ -154,6 +158,11 @@ export async function flushMetadataOutbox(): Promise<{
       let ok = false;
       if (entry.kind === "jobs" && entry.jobs) {
         ok = await uploadJobsIndexToCloudDirect(entry.jobs, entry.updatedAt);
+      } else if (entry.kind === "subagents" && entry.subagents) {
+        ok = await uploadSubAgentsIndexToCloudDirect(
+          entry.subagents,
+          entry.updatedAt,
+        );
       } else if (entry.kind === "databases" && entry.registry) {
         ok = await uploadDatabasesRegistryToCloudDirect(
           entry.registry,

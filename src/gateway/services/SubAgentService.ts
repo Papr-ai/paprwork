@@ -13,6 +13,14 @@ import type { JobRecord, JobStatus } from "./jobs/types.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { DEFAULT_AGENT_MAX_TURNS } from "../../core/constants/agentLimits.js";
 import { PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION } from "../../core/utils/productArchitectGate.js";
+import {
+  collectSubAgentReferences,
+  formatOrphanedSubAgentWarning,
+  findOrphanedSubAgentReferences,
+  reconcileSubAgentProfilesOnDisk,
+} from "./subagents/subAgentIntegrity.js";
+import { listCustomSubAgentConfigEntries } from "./subagents/subAgentMetadataSlice.js";
+import { getPaprRoot } from "../../core/utils/paprRoot.js";
 
 /** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
 export const DELEGATION_CHAT_PREFIX = "delegation:";
@@ -311,7 +319,64 @@ export class SubAgentService {
     await Promise.all([this.loadProfiles(), this.loadLegacyRuns()]);
     await this.migrateLegacyRunsIfNeeded();
     await this.ensureDefaultProfiles();
+    await this.reconcileIntegrityAfterLoad();
+    void this.uploadCustomProfilesToCloud();
     this.initialized = true;
+  }
+
+  /** Dual-write custom profiles to Mongo (Phase 4.6) — backfill on init + after saves. */
+  private uploadCustomProfilesToCloud(updatedAt?: string): void {
+    const list = listCustomSubAgentConfigEntries(
+      Array.from(this.profiles.values()),
+    );
+    if (list.length === 0) {
+      return;
+    }
+    const resolvedUpdatedAt =
+      updatedAt ??
+      (list.reduce((latest, profile) => {
+        const candidate = profile.updatedAt ?? profile.createdAt ?? "";
+        return candidate > latest ? candidate : latest;
+      }, "") || new Date().toISOString());
+    void import("./syncV3/MetadataRegistryClient.js")
+      .then(({ uploadSubAgentsIndexToCloud }) =>
+        uploadSubAgentsIndexToCloud(list, resolvedUpdatedAt),
+      )
+      .catch((err: Error) => {
+        console.warn(
+          "[SubAgentService] subagents index cloud upload failed:",
+          err.message.slice(0, 120),
+        );
+      });
+  }
+
+  /** Reload profiles from disk (after git pull merge / sidecar recovery). */
+  async reloadProfilesFromDisk(): Promise<void> {
+    await this.loadProfiles();
+    await this.ensureDefaultProfiles();
+    await this.reconcileIntegrityAfterLoad();
+  }
+
+  private async reconcileIntegrityAfterLoad(): Promise<void> {
+    try {
+      const paprDir = getPaprRoot();
+      const result = await reconcileSubAgentProfilesOnDisk(paprDir);
+      if (result.recoveredFromSidecar.length > 0) {
+        console.warn(
+          `[SubAgentService] Recovered sub-agent profile(s) from agent-chat sidecar: ${result.recoveredFromSidecar.join(", ")}`,
+        );
+        await this.loadProfiles();
+      }
+      const warning = formatOrphanedSubAgentWarning(result.stillOrphaned);
+      if (warning) {
+        console.warn(warning);
+      }
+    } catch (error) {
+      console.warn(
+        "[SubAgentService] Sub-agent integrity reconcile skipped:",
+        (error as Error).message.slice(0, 160),
+      );
+    }
   }
 
   private async migrateLegacyRunsIfNeeded(): Promise<void> {
@@ -391,6 +456,7 @@ export class SubAgentService {
       a.name.localeCompare(b.name),
     );
     await fs.writeFile(this.profilePath, JSON.stringify(list, null, 2), "utf8");
+    this.uploadCustomProfilesToCloud(new Date().toISOString());
   }
 
   private async ensureDefaultProfiles(): Promise<void> {
@@ -490,13 +556,34 @@ export class SubAgentService {
     return profile;
   }
 
-  async deleteAgent(agentId: string): Promise<boolean> {
+  async deleteAgent(agentId: string, options?: { force?: boolean }): Promise<boolean> {
     await this.initialize();
+    if (BUILTIN_SUB_AGENT_ID_SET.has(agentId)) {
+      throw new Error(`Cannot delete built-in sub-agent: ${agentId}`);
+    }
+    const refs = collectSubAgentReferences(getPaprRoot(), agentId);
+    if (refs.length > 0 && !options?.force) {
+      const summary = refs.map((r) => `${r.kind} "${r.label}" (${r.id})`).join("; ");
+      throw new Error(
+        `Cannot delete sub-agent ${agentId} — still referenced by ${summary}. ` +
+          "Disable app agent chat or update jobs first, or pass force: true.",
+      );
+    }
     const deleted = this.profiles.delete(agentId);
     if (deleted) {
       await this.saveProfiles();
     }
     return deleted;
+  }
+
+  async listOrphanedReferences(): Promise<
+    ReturnType<typeof findOrphanedSubAgentReferences>
+  > {
+    await this.initialize();
+    return findOrphanedSubAgentReferences(
+      getPaprRoot(),
+      Array.from(this.profiles.values()),
+    );
   }
 
   async listRuns(limit = 50): Promise<DelegationRunRecord[]> {

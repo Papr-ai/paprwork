@@ -3,6 +3,7 @@
  */
 
 import { reconcileLinkedSourcesFromCloud } from "../tursoSyncSession.js";
+import { getCloudSyncService } from "../cloudSync/cloudSyncSingleton.js";
 import { getTursoSyncBridge } from "../TursoSyncBridge.js";
 import { pullAppCodeFromRepo, type PullAppCodeFromRepoResult } from "./pullAppCodeFromRepo.js";
 
@@ -13,6 +14,18 @@ export interface PullAppFromCloudResult {
   turso?: Awaited<ReturnType<typeof reconcileLinkedSourcesFromCloud>>;
 }
 
+/** After a successful Get updates, realign git fingerprint baseline with disk. */
+function markAppCodeBaselineSynced(appId: string, code: PullAppCodeFromRepoResult): void {
+  if (code.skipped || code.conflictFiles.length > 0) {
+    return;
+  }
+  const sync = getCloudSyncService();
+  if (!sync) {
+    return;
+  }
+  sync.markRelativePathSynced(`apps/${appId}`);
+}
+
 export async function pullAppFromCloud(
   appId: string,
   options: { token: string | null; waitForTurso?: boolean },
@@ -21,6 +34,7 @@ export async function pullAppFromCloud(
 
   const bridge = getTursoSyncBridge();
   if (!bridge?.enabled) {
+    markAppCodeBaselineSynced(appId, code);
     return { appId, code, tursoScheduled: false };
   }
 
@@ -28,8 +42,9 @@ export async function pullAppFromCloud(
     const turso = await reconcileLinkedSourcesFromCloud(
       bridge,
       { appId },
-      { trigger: "manual", assumeRemoteChanged: true },
+      { trigger: "manual", assumeRemoteChanged: true, preferRemote: true },
     );
+    markAppCodeBaselineSynced(appId, code);
     return { appId, code, tursoScheduled: false, turso };
   }
 

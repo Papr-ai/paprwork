@@ -14,6 +14,7 @@ import { LINKED_DATABASES_FILENAME } from "../cloudSync/linkedDatabasesForCloud.
 import { parseDataSourcesFile, type AppDataSourcesFile } from "../appDataSources.js";
 import {
   fetchCachedRuntimeRepoFile,
+  invalidateAppDbConfigCacheForApp,
   readAppDbConfigCache,
   resolveAppCacheRevision,
   writeAppDbConfigCache,
@@ -49,6 +50,37 @@ function mergeRegistryFiles(
   }
 }
 
+function sourcesMissingRegistry(config: AppDataSourcesFile): boolean {
+  const registry = getDatabaseRegistryService();
+  return config.sources.some((source) => {
+    if (source.role === "scratch") {
+      return false;
+    }
+    if (!source.dbId?.trim()) {
+      return false;
+    }
+    return registry.getById(source.dbId) === undefined;
+  });
+}
+
+async function fetchDbConfigBundle(
+  runtimeAuth: AppRuntimeRouteAuth,
+  requestedPath: string,
+  bypassFresh: boolean,
+): Promise<{
+  dataSourcesFile: { content: string; contentType: string } | null;
+  linked: { content: string; contentType: string } | null;
+  databasesFile: { content: string; contentType: string } | null;
+}> {
+  const fetchOpts = bypassFresh ? { bypassFresh: true as const } : undefined;
+  const [dataSourcesFile, linked, databasesFile] = await Promise.all([
+    fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath, fetchOpts),
+    fetchCachedRuntimeRepoFile(runtimeAuth, LINKED_DATABASES_FILENAME, fetchOpts),
+    fetchCachedRuntimeRepoFile(runtimeAuth, REGISTRY_REPO_PATH, fetchOpts),
+  ]);
+  return { dataSourcesFile, linked, databasesFile };
+}
+
 /**
  * Load data-sources.json and hydrate registry files in one parallel fetch burst.
  */
@@ -56,55 +88,65 @@ export async function loadAppDataSourcesConfig(
   runtimeAuth: AppRuntimeRouteAuth,
   requestedPath = DATA_SOURCES_FILENAME,
   stats?: LoadAppDataSourcesStats,
+  options?: { bypassFresh?: boolean },
 ): Promise<AppDataSourcesFile> {
   const registry = getDatabaseRegistryService();
-  const revision = await resolveAppCacheRevision(runtimeAuth);
-  const cached = readAppDbConfigCache(
-    runtimeAuth.namespaceId,
-    runtimeAuth.slug,
-    revision,
+  const revision = await resolveAppCacheRevision(
+    runtimeAuth,
+    options?.bypassFresh === true,
   );
-  if (cached && cached.config.sources.length > 0) {
-    if (stats) {
-      stats.cacheHit = true;
-    }
-    mergeRegistryFiles(
-      registry,
-      cached.linkedContent,
-      cached.databasesContent,
-      cached.config,
+  if (!options?.bypassFresh) {
+    const cached = readAppDbConfigCache(
+      runtimeAuth.namespaceId,
+      runtimeAuth.slug,
+      revision,
     );
-    return cached.config;
+    if (cached && cached.config.sources.length > 0) {
+      mergeRegistryFiles(
+        registry,
+        cached.linkedContent,
+        cached.databasesContent,
+        cached.config,
+      );
+      if (!sourcesMissingRegistry(cached.config)) {
+        if (stats) {
+          stats.cacheHit = true;
+        }
+        return cached.config;
+      }
+    }
   }
 
   if (stats) {
     stats.cacheHit = false;
   }
 
-  const [dataSourcesFile, linked, databasesFile] = await Promise.all([
-    fetchCachedRuntimeRepoFile(runtimeAuth, requestedPath),
-    fetchCachedRuntimeRepoFile(runtimeAuth, LINKED_DATABASES_FILENAME),
-    fetchCachedRuntimeRepoFile(runtimeAuth, REGISTRY_REPO_PATH),
-  ]);
+  let { dataSourcesFile, linked, databasesFile } = await fetchDbConfigBundle(
+    runtimeAuth,
+    requestedPath,
+    options?.bypassFresh === true,
+  );
 
   if (!dataSourcesFile?.content) {
-    mergeRegistryFiles(
-      registry,
-      linked?.content,
-      databasesFile?.content,
-    );
-    // Do not cache empty config — a transient repo-file miss would make apps
-    // look dead for minutes (repo-file misses are not cached; app-db-config was).
+    mergeRegistryFiles(registry, linked?.content, databasesFile?.content);
     return { sources: [] };
   }
 
-  const config = parseDataSourcesFile(dataSourcesFile.content);
-  mergeRegistryFiles(
-    registry,
-    linked?.content,
-    databasesFile?.content,
-    config,
-  );
+  let config = parseDataSourcesFile(dataSourcesFile.content);
+  mergeRegistryFiles(registry, linked?.content, databasesFile?.content, config);
+
+  if (sourcesMissingRegistry(config)) {
+    ({ dataSourcesFile, linked, databasesFile } = await fetchDbConfigBundle(
+      runtimeAuth,
+      requestedPath,
+      true,
+    ));
+    if (dataSourcesFile?.content) {
+      config = parseDataSourcesFile(dataSourcesFile.content);
+      mergeRegistryFiles(registry, linked?.content, databasesFile?.content, config);
+    }
+  }
+
   writeAppDbConfigCache(
     runtimeAuth.namespaceId,
     runtimeAuth.slug,
@@ -116,6 +158,17 @@ export async function loadAppDataSourcesConfig(
     },
   );
   return config;
+}
+
+/** Bust cached db config and reload from origin (db-token retry / stale snapshot repair). */
+export async function refreshAppDataSourcesConfig(
+  runtimeAuth: AppRuntimeRouteAuth,
+  requestedPath = DATA_SOURCES_FILENAME,
+): Promise<AppDataSourcesFile> {
+  invalidateAppDbConfigCacheForApp(runtimeAuth.namespaceId, runtimeAuth.slug);
+  return loadAppDataSourcesConfig(runtimeAuth, requestedPath, undefined, {
+    bypassFresh: true,
+  });
 }
 
 export async function hydrateCloudDatabaseRegistry(
