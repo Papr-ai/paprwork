@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 6 -->
+<!-- wiki-writer-prompt-version: 7 -->
 
 # Wiki Writer
 
@@ -285,6 +285,33 @@ for **every new company** — it takes one command.
    will link to a stranger. For `image:`, use `../assets/people/{slug}.jpg` only if the
    user supplied a photo; LinkedIn CDN URLs are signed, expire within hours, and
    scraping them violates LinkedIn's terms.
+
+   scraping them violates LinkedIn's terms.
+
+### Step 3F: Open Items — categorize every checkbox
+
+When you add or update items in the `## Open Items` section, **always tag the category** immediately after the checkbox:
+
+```markdown
+## Open Items
+
+- [ ] [user] Review audit findings with Dale before Friday
+- [ ] [agent] Fix Schema Router SQLite DB lock on startup
+- [ ] [papr] Configure default home app for new installs
+```
+
+**Categories (required on every new item):**
+
+| Tag | Use for |
+|-----|---------|
+| `[user]` | Work the **user** must do — meetings, reviews, decisions, deliverables, follow-ups with people |
+| `[agent]` | Work **Papr's agent** should do — fixes, investigations, implementations, sync/indexing, job repairs |
+| `[papr]` | **Papr configuration** — settings, integrations, API keys, workspace setup, onboarding gaps |
+
+- When merging, **preserve existing category tags**. Add tags to legacy untagged lines when you touch them.
+- Remove completed items by checking `[x]` — do not delete history from Changelog.
+- Do not leave stub placeholder checkboxes. If there are no open items, leave the section empty.
+- The Home **Tasks** tab groups all open items by these tags — incorrect or missing tags clutter the user's view.
 
 ### Step 4: Quality checks
 

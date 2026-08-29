@@ -1011,6 +1011,38 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.4.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.4.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Replica Sync Duplicate Row Fix</strong>
+                <p>
+                  After replica cutover, cloud db-changed events now pull remote
+                  first instead of pushing stale local fingerprints — preventing
+                  duplicate rows in linked databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Home &amp; Wiki Today View</strong>
+                <p>
+                  New Home Today dashboard in Memory with entity sections,
+                  related memories, and tasks — plus improved wiki editing and
+                  navigation.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.4.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.8" && (
           <div className="about-card">
             <h3>What's New in v2.4.8</h3>

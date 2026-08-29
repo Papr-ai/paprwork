@@ -30,6 +30,36 @@ function createEmptyChatTab(): string {
   return tabId;
 }
 
+/** Switch to an existing Home (memory) tab, or open a new one. */
+export function switchToHomeTab(): string {
+  const { tabs, switchToTab, createTab, updateTabTitle } =
+    useTabStore.getState();
+  const existingHome = [...tabs]
+    .reverse()
+    .find((tab) => tab.type === "memory" && tab.displayMode === "standalone");
+  if (existingHome) {
+    if (existingHome.title === "Memory") {
+      updateTabTitle(existingHome.id, "Home");
+    }
+    switchToTab(existingHome.id);
+    return existingHome.id;
+  }
+  const tabId = createTab("memory", "memory", "Home");
+  switchToTab(tabId);
+  return tabId;
+}
+
+/** Returns the active tab id after ensuring Home exists when none is selected. */
+export function ensureDefaultHomeTab(): string {
+  const { activeTabId, getTab, switchToTab } = useTabStore.getState();
+
+  if (activeTabId && getTab(activeTabId)) {
+    return activeTabId;
+  }
+
+  return switchToHomeTab();
+}
+
 /** Switch to an existing chat tab, or open a new empty one. */
 export function switchToChatTab(): string {
   const { tabs, switchToTab } = useTabStore.getState();

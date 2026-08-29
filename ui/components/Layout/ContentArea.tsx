@@ -5,7 +5,7 @@
 
 import React, { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import { useTabs } from "../../hooks/useTabs";
-import { ensureDefaultChatTab } from "../../lib/ensureDefaultChatTab";
+import { ensureDefaultHomeTab } from "../../lib/ensureDefaultChatTab";
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import { useTabStore } from "../../stores/tabStore";
 import { ChatContainer } from "../Chat/ChatContainer";
@@ -119,7 +119,7 @@ export function ContentArea() {
         useTabStore.getState();
       if (!currentActiveId || !resolveTab(currentActiveId)) {
         if (!isWorkspaceSwitchReloading()) {
-          ensureDefaultChatTab();
+          ensureDefaultHomeTab();
         }
       }
     };

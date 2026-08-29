@@ -26,11 +26,14 @@ interface MiniAppViewProps {
   appId: string;
   /** False when preview tab is backgrounded but still LRU-mounted. */
   previewTabVisible?: boolean;
+  /** Hide publish bar — used when embedding the home dashboard in Home → Today. */
+  embedded?: boolean;
 }
 
 export function MiniAppView({
   appId,
   previewTabVisible = true,
+  embedded = false,
 }: MiniAppViewProps) {
   const { reloadKey, triggerReload } = useApp(appId);
   const iframeRef = useRef<HTMLIFrameElement>(null);
@@ -524,20 +527,24 @@ export function MiniAppView({
   }, [isPublishedPreview, iframeSrc]);
 
   return (
-    <div className="mini-app-view">
-      <MiniAppPublishBar
-        appId={appId}
-        appTitle={appTitle}
-        cloud={cloud}
-        cloudLineage={cloudLineage}
-        viewMode={viewMode}
-        onViewModeChange={handleViewModeChange}
-        workspaceMode={workspaceMode}
-        onWorkspaceModeChange={setWorkspaceMode}
-        onTrackPullComplete={() => void refreshAppMetadata()}
-        onRefreshPreview={handleRefreshPreview}
-      />
-      {workspaceMode === "files" ? (
+    <div
+      className={`mini-app-view${embedded ? " mini-app-view--embedded" : ""}`}
+    >
+      {!embedded ? (
+        <MiniAppPublishBar
+          appId={appId}
+          appTitle={appTitle}
+          cloud={cloud}
+          cloudLineage={cloudLineage}
+          viewMode={viewMode}
+          onViewModeChange={handleViewModeChange}
+          workspaceMode={workspaceMode}
+          onWorkspaceModeChange={setWorkspaceMode}
+          onTrackPullComplete={() => void refreshAppMetadata()}
+          onRefreshPreview={handleRefreshPreview}
+        />
+      ) : null}
+      {!embedded && workspaceMode === "files" ? (
         <MiniAppFilesView appId={appId} />
       ) : (
         <div className="mini-app-view__frame-wrap">

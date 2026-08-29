@@ -69,6 +69,11 @@ vi.mock("../src/gateway/services/cloudSync/pendingLocalUploads.js", () => ({
   readAppHasPendingLocalUpload: vi.fn(() => false),
 }));
 
+vi.mock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
+  shouldUseTursoReplicaForSource: vi.fn(() => false),
+  syncStatusForLinkedDb: vi.fn(async () => ({ pendingPush: false })),
+}));
+
 vi.mock("../src/core/utils/paprRoot.js", () => ({
   getPaprRoot: vi.fn(() => "/tmp/papr-turso-sync-session-test"),
 }));
@@ -76,6 +81,10 @@ vi.mock("../src/core/utils/paprRoot.js", () => ({
 import { remoteAheadOfLocal } from "../src/gateway/services/tursoSyncBridgeCore.js";
 import { isJobDbDirty } from "../src/gateway/services/tursoSyncState.js";
 import { readAppHasPendingLocalUpload } from "../src/gateway/services/cloudSync/pendingLocalUploads.js";
+import {
+  shouldUseTursoReplicaForSource,
+  syncStatusForLinkedDb,
+} from "../src/gateway/services/tursoReplica/tursoReplicaRouting.js";
 
 describe("tursoSyncSession", () => {
   beforeEach(() => {
@@ -83,6 +92,8 @@ describe("tursoSyncSession", () => {
     vi.mocked(isJobDbDirty).mockReturnValue(false);
     vi.mocked(remoteAheadOfLocal).mockResolvedValue(false);
     vi.mocked(readAppHasPendingLocalUpload).mockReturnValue(false);
+    vi.mocked(shouldUseTursoReplicaForSource).mockReturnValue(false);
+    vi.mocked(syncStatusForLinkedDb).mockResolvedValue({ pendingPush: false });
   });
 
   it("resolveSyncKeysForCloudPull scopes by appId", () => {
@@ -172,8 +183,33 @@ describe("tursoSyncSession", () => {
     expect(results[0]?.trigger).toBe("post_cloud_run");
   });
 
-  it("isLinkedSourceLocallyDirty delegates to fingerprint state", () => {
+  it("assumeRemoteChanged on replica pulls even when legacy fingerprint dirty", async () => {
+    vi.mocked(shouldUseTursoReplicaForSource).mockReturnValue(true);
     vi.mocked(isJobDbDirty).mockReturnValue(true);
-    expect(isLinkedSourceLocallyDirty(linked)).toBe(true);
+    vi.mocked(syncStatusForLinkedDb).mockResolvedValue({ pendingPush: false });
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc", {
+      assumeRemoteChanged: true,
+      trigger: "cloud_db_changed",
+    });
+
+    expect(result.action).toBe("pulled");
+    expect(bridge.pullJob).toHaveBeenCalledWith("job-abc", undefined, {
+      forceReconnect: true,
+    });
+    expect(bridge.pushJob).not.toHaveBeenCalled();
+  });
+
+  it("isLinkedSourceLocallyDirty delegates to fingerprint state for legacy", async () => {
+    vi.mocked(isJobDbDirty).mockReturnValue(true);
+    expect(await isLinkedSourceLocallyDirty(linked)).toBe(true);
+  });
+
+  it("isLinkedSourceLocallyDirty uses replica pendingPush when replica mode", async () => {
+    vi.mocked(shouldUseTursoReplicaForSource).mockReturnValue(true);
+    vi.mocked(syncStatusForLinkedDb).mockResolvedValue({ pendingPush: true });
+    vi.mocked(isJobDbDirty).mockReturnValue(true);
+    expect(await isLinkedSourceLocallyDirty(linked)).toBe(true);
+    expect(isJobDbDirty).not.toHaveBeenCalled();
   });
 });

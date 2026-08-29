@@ -47,6 +47,8 @@ export interface WorkspaceFile {
   content: string;
   truncated: boolean;
   rawLength: number;
+  /** ISO timestamp from filesystem mtime when available */
+  updatedAt?: string;
 }
 
 /** Full workspace context ready for system prompt injection */
@@ -326,6 +328,9 @@ export class WorkspaceService {
       const raw = await fs.readFile(filePath, "utf8");
       if (raw.trim().length === 0) return null;
 
+      const stat = await fs.stat(filePath);
+      const updatedAt = stat.mtime.toISOString();
+
       const maxChars = Math.min(MAX_CHARS_PER_FILE, remainingBudget);
       let content = raw;
       let truncated = false;
@@ -342,6 +347,7 @@ export class WorkspaceService {
         content,
         truncated,
         rawLength: raw.length,
+        updatedAt,
       };
     } catch {
       return null;

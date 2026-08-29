@@ -12,6 +12,7 @@ import {
   mergeLocalTabsIntoSnapshot,
   normalizeTabHierarchy,
 } from '../lib/persistedAppState';
+import { ensureDefaultHomeTab } from '../lib/ensureDefaultChatTab';
 import { serializeTabForGatewayPersistence } from '../lib/tabPersistenceMetadata';
 import { isWorkspaceSwitchReloading } from '../lib/workspaceSwitchReload';
 import {
@@ -44,6 +45,7 @@ export function useAppStatePersistence() {
     void fetchPersistedAppStateFromGateway()
       .then((snapshot) => {
         if (!snapshot) {
+          ensureDefaultHomeTab();
           return;
         }
 

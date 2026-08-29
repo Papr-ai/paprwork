@@ -127,6 +127,8 @@ export async function setupMemoryHandlers(
       await handleWikiAddType(ws, message);
     } else if (message.type === "memory:wiki-update-media") {
       await handleWikiUpdateMedia(ws, message);
+    } else if (message.type === "memory:wiki-toggle-open-item") {
+      await handleWikiToggleOpenItem(ws, message);
     } else {
       sendError(ws, message.id, `Unknown memory message type: ${message.type}`);
     }
@@ -389,6 +391,7 @@ async function handleReadContextFile(
     }
 
     const content = fs.readFileSync(filePath, "utf-8");
+    const stat = fs.statSync(filePath);
     sendResponse(ws, {
       id: message.id,
       success: true,
@@ -399,6 +402,7 @@ async function handleReadContextFile(
         truncated: false,
         rawLength: content.length,
         path: filePath,
+        updatedAt: stat.mtime.toISOString(),
       },
     });
   } catch (error) {
@@ -452,6 +456,7 @@ async function handleWriteContextFile(
         truncated: false,
         rawLength: content.length,
         path: filePath,
+        updatedAt: new Date().toISOString(),
       },
     });
   } catch (error) {
@@ -491,6 +496,7 @@ async function handleGetContextPreview(
         size: file.content.length,
         truncated: file.truncated,
         rawLength: file.rawLength,
+        updatedAt: file.updatedAt,
       })),
       ...ctx.dailyLogs.map((log) => ({
         name: log.name,
@@ -498,6 +504,7 @@ async function handleGetContextPreview(
         size: log.content.length,
         truncated: log.truncated,
         rawLength: log.rawLength,
+        updatedAt: log.updatedAt,
       })),
     ];
 
@@ -783,6 +790,46 @@ async function handleWikiUpdateMedia(
       id: payload.id,
       kind: payload.kind,
       dataUrl: payload.dataUrl,
+    });
+    sendResponse(ws, { id: message.id, success: true, data });
+  } catch (error) {
+    sendError(ws, message.id, error as Error);
+  }
+}
+
+async function handleWikiToggleOpenItem(
+  ws: WebSocket,
+  message: WSMessage,
+): Promise<void> {
+  try {
+    const payload = message.payload as
+      | {
+          type?: string;
+          id?: string;
+          itemIndex?: number;
+          completed?: boolean;
+        }
+      | undefined;
+    if (
+      !payload?.type ||
+      !payload.id ||
+      typeof payload.itemIndex !== "number" ||
+      typeof payload.completed !== "boolean"
+    ) {
+      sendError(
+        ws,
+        message.id,
+        "Missing type, id, itemIndex, or completed flag",
+      );
+      return;
+    }
+    const { toggleEntityOpenItem } =
+      await import("../services/wikiEntitySectionUpdate.js");
+    const data = toggleEntityOpenItem({
+      type: payload.type,
+      id: payload.id,
+      itemIndex: payload.itemIndex,
+      completed: payload.completed,
     });
     sendResponse(ws, { id: message.id, success: true, data });
   } catch (error) {

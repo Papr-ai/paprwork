@@ -11,10 +11,15 @@ import type { PullResult, PushResult } from "./tursoSyncBridgeCore.js";
 import {
   findLinkedSourceForJob,
   linkedSourceAlternateKeys,
+  linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
   resolveLinkedSourcesForTursoPush,
   type TursoLinkedSource,
 } from "./tursoLinkedSources.js";
+import {
+  shouldUseTursoReplicaForSource,
+  syncStatusForLinkedDb,
+} from "./tursoReplica/tursoReplicaRouting.js";
 import {
   isJobDbDirty,
   loadTursoSyncState,
@@ -122,7 +127,20 @@ export function resolveSyncKeysForCloudPull(
   return [...new Set(sources.map((source) => linkedSourceSyncKey(source)))];
 }
 
-export function isLinkedSourceLocallyDirty(linked: TursoLinkedSource): boolean {
+/** True when this linked source has unpushed local DB changes. */
+export async function isLinkedSourceLocallyDirty(
+  linked: TursoLinkedSource,
+): Promise<boolean> {
+  const appSource = linkedSourceAsAppDataSource(linked);
+  if (shouldUseTursoReplicaForSource(appSource)) {
+    try {
+      const status = await syncStatusForLinkedDb(appSource);
+      return status.pendingPush;
+    } catch {
+      return false;
+    }
+  }
+
   const syncKey = linkedSourceSyncKey(linked);
   const state = loadTursoSyncState();
   return isJobDbDirty(
@@ -209,11 +227,49 @@ export async function syncLinkedSourceFromCloud(
   }
 
   const resolvedKey = linkedSourceSyncKey(linked);
-  const localDirty = isLinkedSourceLocallyDirty(linked);
+  const appSource = linkedSourceAsAppDataSource(linked);
+  const isReplica = shouldUseTursoReplicaForSource(appSource);
   const pendingLocalGitUpload =
     !options?.preferRemote &&
     linked.appId !== undefined &&
     readAppHasPendingLocalUpload(linked.appId, getPaprRoot());
+
+  // Cloud db-changed on replica DBs: pull remote first. Legacy fingerprint dirty
+  // (!prev after cutover) must not trigger push-before-pull and duplicate rows.
+  if (options?.assumeRemoteChanged === true && isReplica) {
+    try {
+      const pull = await bridge.pullJob(resolvedKey, undefined, {
+        forceReconnect: true,
+      });
+      const stillDirty = await isLinkedSourceLocallyDirty(linked);
+      if (stillDirty) {
+        const push = await bridge.pushJob(resolvedKey);
+        return {
+          syncKey: resolvedKey,
+          action: sessionActionFromPushPull(true, push),
+          trigger,
+          push,
+          pull,
+        };
+      }
+      return {
+        syncKey: resolvedKey,
+        action: pull.status === "pulled" ? "pulled" : "skipped",
+        trigger,
+        pull,
+        ...(pull.reason ? { reason: pull.reason } : {}),
+      };
+    } catch (error) {
+      return {
+        syncKey: resolvedKey,
+        action: "failed",
+        trigger,
+        error: (error as Error).message,
+      };
+    }
+  }
+
+  const localDirty = await isLinkedSourceLocallyDirty(linked);
 
   if (options?.preferRemote) {
     // Get updates — always pull Turso even when app git folder hash differs.

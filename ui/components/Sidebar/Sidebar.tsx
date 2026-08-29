@@ -14,8 +14,8 @@ import { NewChatButton } from "./NewChatButton";
 import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
 import { SidebarToggleButton } from "./SidebarToggleButton";
-import { MemoryIcon } from "../Memory/MemoryIcon";
-import { switchToChatTab } from "../../lib/ensureDefaultChatTab";
+import { HomeIcon } from "../common/HomeIcon";
+import { switchToChatTab, switchToHomeTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
 
 type View = "chat" | "apps" | "memory" | "documents";
@@ -27,6 +27,7 @@ function tabTypeToView(type: TabType | undefined): View {
     case "apps":
       return "apps";
     case "memory":
+    case "home":
       return "memory";
     case "document":
     case "documents":
@@ -44,7 +45,7 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
   // Derive active view from the current left-pane tab type
   // For split view, activeLeftTab is the parent/left pane
   const activeView = useMemo<View>(() => {
-    if (!activeLeftTab) return "chat";
+    if (!activeLeftTab) return "memory";
     const tab = tabs.find((t) => t.id === activeLeftTab);
     if (!tab) return "chat";
 
@@ -105,7 +106,8 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     if (view === "apps") {
       tabId = createTab("apps" as TabType, "apps", "Apps");
     } else if (view === "memory") {
-      tabId = createTab("memory" as TabType, "memory", "Memory");
+      tabId = switchToHomeTab();
+      return;
     } else if (view === "documents") {
       tabId = createTab("documents" as TabType, "documents", "Documents");
     } else if (view === "chat") {
@@ -149,6 +151,12 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
         <NewChatButton onClick={handleNewChat} />
 
         <div className="sidebar__nav">
+          <NavButton
+            icon={<HomeIcon size={20} />}
+            label="Home"
+            isActive={activeView === "memory"}
+            onClick={() => handleNavClick("memory")}
+          />
           <NavButton
             icon={
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
@@ -209,12 +217,6 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
             label="Apps"
             isActive={activeView === "apps"}
             onClick={() => handleNavClick("apps")}
-          />
-          <NavButton
-            icon={<MemoryIcon size={20} />}
-            label="Memory"
-            isActive={activeView === "memory"}
-            onClick={() => handleNavClick("memory")}
           />
           <NavButton
             icon={

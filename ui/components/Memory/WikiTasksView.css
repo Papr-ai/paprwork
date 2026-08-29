@@ -1,0 +1,338 @@
+.tasks-view {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding: 28px 40px 48px;
+  box-sizing: border-box;
+  -webkit-overflow-scrolling: touch;
+}
+
+.tasks-view__header {
+  margin-bottom: 24px;
+}
+
+.tasks-view__intro h1 {
+  margin: 0 0 6px;
+  font-size: 32px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  line-height: 1.1;
+}
+
+.tasks-view__intro p {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text-mute);
+}
+
+.tasks-view__filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tasks-view__filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--text-mute);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 7px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.tasks-view__filter:hover {
+  border-color: color-mix(in srgb, var(--text-dim) 60%, var(--line));
+  color: var(--text);
+}
+
+.tasks-view__filter--active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent) 8%, var(--bg-panel));
+  color: var(--text);
+}
+
+.tasks-view__filter-count {
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 18px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-sunk);
+  color: var(--text-dim);
+}
+
+.tasks-view__filter--active .tasks-view__filter-count {
+  background: color-mix(in srgb, var(--accent) 14%, var(--bg-sunk));
+  color: var(--text);
+}
+
+.tasks-view__error {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, #ef4444 35%, var(--line));
+  background: color-mix(in srgb, #ef4444 8%, var(--bg-panel));
+  color: var(--text);
+  font-size: 13px;
+}
+
+.tasks-view__sections {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.tasks-section__head {
+  margin-bottom: 10px;
+}
+
+.tasks-section__head h2 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-mute);
+}
+
+.tasks-section__head p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.tasks-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg-panel);
+  overflow: hidden;
+}
+
+.tasks-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  contain: layout style paint;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 64px;
+}
+
+.tasks-row:last-child {
+  border-bottom: none;
+}
+
+@media (hover: hover) {
+  .tasks-row:hover {
+    background: var(--bg-sunk);
+  }
+}
+
+.tasks-row--busy {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.tasks-row--user {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.tasks-row--agent {
+  box-shadow: inset 3px 0 0 #8b5cf6;
+}
+
+.tasks-row--papr {
+  box-shadow: inset 3px 0 0 #0ea5e9;
+}
+
+.tasks-row--uncategorized {
+  box-shadow: inset 3px 0 0 var(--text-dim);
+}
+
+.tasks-row__check {
+  flex-shrink: 0;
+  margin-top: 2px;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.tasks-row__check-ring {
+  display: block;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid color-mix(in srgb, var(--text-dim) 70%, var(--line));
+}
+
+@media (hover: hover) {
+  .tasks-row__check:hover .tasks-row__check-ring {
+    border-color: var(--accent);
+  }
+
+  .tasks-row__check:active .tasks-row__check-ring {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+}
+
+.tasks-row__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.tasks-row__title {
+  margin: 0 0 6px;
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  word-break: break-word;
+}
+
+.tasks-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.tasks-row__category {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--text-mute);
+}
+
+.tasks-row__category--user {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+  color: var(--accent);
+}
+
+.tasks-row__category--agent {
+  border-color: color-mix(in srgb, #8b5cf6 30%, var(--line));
+  color: #8b5cf6;
+}
+
+.tasks-row__category--papr {
+  border-color: color-mix(in srgb, #0ea5e9 30%, var(--line));
+  color: #0ea5e9;
+}
+
+.tasks-row__entity {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--entity-color, var(--accent));
+  cursor: pointer;
+}
+
+.tasks-row__entity:hover {
+  text-decoration: underline;
+}
+
+.tasks-view__empty {
+  margin-top: 48px;
+  text-align: center;
+  padding: 40px 24px;
+  border: 1px dashed var(--line);
+  border-radius: 16px;
+  background: var(--bg-panel);
+}
+
+.tasks-view__empty--filter {
+  margin-top: 24px;
+}
+
+.tasks-view__empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 16px;
+  border-radius: 50%;
+  font-size: 22px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-sunk));
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+}
+
+.tasks-view__empty h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 500;
+  letter-spacing: -0.02em;
+}
+
+.tasks-view__empty p {
+  margin: 0 auto;
+  max-width: 360px;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--text-mute);
+}
+
+.tasks-view__empty code {
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: var(--bg-sunk);
+  border: 1px solid var(--line);
+}
+
+.tasks-view__empty-action {
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-panel);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 8px 16px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.tasks-view__empty-action:hover {
+  border-color: var(--text-dim);
+}
+
+.wiki-shell__content--tasks {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+@media (max-width: 640px) {
+  .tasks-view {
+    padding: 20px 16px 32px;
+  }
+}

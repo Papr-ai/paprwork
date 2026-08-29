@@ -1,14 +1,20 @@
 /**
- * MemoryView — Wiki library + context files in a unified Meridian-style shell
- * 
- * v2: Removed wiki/context tab toggle (context is now inline in wiki home).
- *     Added breadcrumb navigation and sessionStorage position caching.
+ * MemoryView — Home workspace with Today, Tasks, and Memory tabs
  */
 
-import React, { useCallback, useEffect, useState, Component, type ErrorInfo, type ReactNode } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+  Component,
+  type ErrorInfo,
+  type ReactNode,
+} from "react";
 import { MemoryIcon } from "./MemoryIcon";
-import { WikiLibrary } from "./WikiLibrary";
+import { WikiLibrary, type HomeWorkspaceTab } from "./WikiLibrary";
 import "./WikiLibrary.css";
+
+const WORKSPACE_TAB_KEY = "home-workspace-tab";
 
 class MemoryErrorBoundary extends Component<
   { children: ReactNode; onReset?: () => void },
@@ -28,8 +34,11 @@ class MemoryErrorBoundary extends Component<
     if (this.state.error) {
       return (
         <div className="wiki-empty-state">
-          <h2>Memory page error</h2>
-          <p>{this.state.error.message || "Something went wrong while loading this view."}</p>
+          <h2>Home page error</h2>
+          <p>
+            {this.state.error.message ||
+              "Something went wrong while loading this view."}
+          </p>
           <button
             type="button"
             className="wiki-btn wiki-btn--secondary"
@@ -47,15 +56,44 @@ class MemoryErrorBoundary extends Component<
   }
 }
 
+const WORKSPACE_TABS: { id: HomeWorkspaceTab; label: string }[] = [
+  { id: "today", label: "Today" },
+  { id: "tasks", label: "Tasks" },
+  { id: "memory", label: "Memory" },
+];
+
+function readStoredWorkspaceTab(): HomeWorkspaceTab {
+  try {
+    const stored = sessionStorage.getItem(WORKSPACE_TAB_KEY);
+    if (stored === "home") return "today";
+    if (stored === "today" || stored === "tasks" || stored === "memory") {
+      return stored;
+    }
+  } catch {
+    /* noop */
+  }
+  return "today";
+}
 
 export function MemoryView() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [refreshToken, setRefreshToken] = useState(0);
   const [boundaryKey, setBoundaryKey] = useState(0);
+  const [workspaceTab, setWorkspaceTab] = useState<HomeWorkspaceTab>(
+    readStoredWorkspaceTab,
+  );
   /** Label of the currently focused entity (null = home/library) */
   const [focusLabel, setFocusLabel] = useState<string | null>(null);
   /** Callback to clear focus (go back to library) */
   const [onBack, setOnBack] = useState<(() => void) | null>(null);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(WORKSPACE_TAB_KEY, workspaceTab);
+    } catch {
+      /* noop */
+    }
+  }, [workspaceTab]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -97,14 +135,20 @@ export function MemoryView() {
   }, []);
 
   /** WikiLibrary reports its focus changes here */
-  const handleFocusChange = useCallback((label: string | null, backFn: (() => void) | null) => {
-    setFocusLabel(label);
-    setOnBack(() => backFn);
-  }, []);
+  const handleFocusChange = useCallback(
+    (label: string | null, backFn: (() => void) | null) => {
+      setFocusLabel(label);
+      setOnBack(() => backFn);
+    },
+    [],
+  );
 
   const handleBackClick = useCallback(() => {
     if (onBack) onBack();
   }, [onBack]);
+
+  const activeTabLabel =
+    WORKSPACE_TABS.find((tab) => tab.id === workspaceTab)?.label ?? "Today";
 
   return (
     <div className="memory-view">
@@ -113,12 +157,12 @@ export function MemoryView() {
           type="button"
           className={`wiki-topbar__brand${focusLabel ? " wiki-topbar__brand--clickable" : ""}`}
           onClick={focusLabel ? handleBackClick : undefined}
-          aria-label={focusLabel ? "Back to Memory library" : "Memory"}
+          aria-label={focusLabel ? "Back to Home" : "Home"}
         >
           <span className="wiki-topbar__logo" aria-hidden>
             <MemoryIcon size={14} />
           </span>
-          <span>Memory</span>
+          <span>Home</span>
         </button>
         <span className="wiki-topbar__sep">/</span>
         <div className="wiki-topbar__crumbs">
@@ -129,13 +173,25 @@ export function MemoryView() {
                 className="wiki-topbar__crumb-link"
                 onClick={handleBackClick}
               >
-                Library
+                {activeTabLabel}
               </button>
               <span className="wiki-topbar__sep">/</span>
               <span className="wiki-topbar__cur">{focusLabel}</span>
             </>
           ) : (
-            <span className="wiki-topbar__cur">Library</span>
+            <nav className="home-workspace-nav" aria-label="Home sections">
+              {WORKSPACE_TABS.map((tab) => (
+                <button
+                  key={tab.id}
+                  type="button"
+                  className={`home-workspace-nav__tab${workspaceTab === tab.id ? " home-workspace-nav__tab--active" : ""}`}
+                  aria-current={workspaceTab === tab.id ? "page" : undefined}
+                  onClick={() => setWorkspaceTab(tab.id)}
+                >
+                  {tab.label}
+                </button>
+              ))}
+            </nav>
           )}
         </div>
         <div className="wiki-topbar__grow" />
@@ -160,7 +216,11 @@ export function MemoryView() {
         <MemoryErrorBoundary
           key={boundaryKey}
           onReset={() => {
-            try { sessionStorage.removeItem("memory-view-focus"); } catch { /* noop */ }
+            try {
+              sessionStorage.removeItem("memory-view-focus");
+            } catch {
+              /* noop */
+            }
             setFocusLabel(null);
             setOnBack(null);
             setRefreshToken((t) => t + 1);
@@ -172,6 +232,7 @@ export function MemoryView() {
             paletteOpen={paletteOpen}
             onPaletteOpenChange={setPaletteOpen}
             onFocusChange={handleFocusChange}
+            workspaceTab={workspaceTab}
           />
         </MemoryErrorBoundary>
       </div>

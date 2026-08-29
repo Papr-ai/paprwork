@@ -344,7 +344,9 @@ function readEntityFilesSync(): {
     for (const file of fs.readdirSync(dirPath)) {
       if (!file.endsWith(".md")) continue;
       try {
-        const content = fs.readFileSync(path.join(dirPath, file), "utf8");
+        const filePath = path.join(dirPath, file);
+        const content = fs.readFileSync(filePath, "utf8");
+        const stat = fs.statSync(filePath);
         const fm = parseEntityFrontmatter(content);
         const sections = parseMarkdownSections(content);
         const markdownBody = content.replace(/^---[\s\S]*?---\n/, "").trim();
@@ -368,7 +370,9 @@ function readEntityFilesSync(): {
             ...(fm.status ? { status: String(fm.status) } : {}),
             ...(fm.confidence ? { confidence: String(fm.confidence) } : {}),
             ...(fm.created_at ? { created_at: String(fm.created_at) } : {}),
-            ...(fm.updated_at ? { updated_at: String(fm.updated_at) } : {}),
+            updated_at: String(
+              fm.updated_at || stat.mtime.toISOString().slice(0, 10),
+            ),
             ...(fm.kind ? { kind: String(fm.kind) } : {}),
             ...(fm.app_id ? { app_id: String(fm.app_id) } : {}),
             // Visual + link identity — company logos, person avatars, profile links.
@@ -1727,11 +1731,7 @@ No interactions captured yet.
 
 ## Decisions & Insights
 
-No decisions or insights captured yet.
-
 ## Open Items
-
-- [ ] Enrich this entity with more context from memory and conversations
 
 ## Changelog
 

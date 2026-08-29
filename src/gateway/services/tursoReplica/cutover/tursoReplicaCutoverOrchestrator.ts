@@ -175,6 +175,7 @@ async function finalizeReplicaCutover(
 
   await registry.updateReplicaPushState(record.dbId, {
     lastReplicaPushError: null,
+    lastReplicaPushAt: new Date().toISOString(),
     cutoverBlocked: false,
     cutoverBlockReason: null,
     cutoverInProgress: false,

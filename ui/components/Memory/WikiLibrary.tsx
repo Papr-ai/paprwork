@@ -29,6 +29,15 @@ import {
   shouldShowMemorySetupPanel,
 } from "../../utils/memoryWorkspaceHealth";
 import { MemorySetupPanel } from "./MemorySetupPanel";
+import {
+  ContextFileSections,
+  UpdatedAtBadge,
+  WikiEntitySections,
+} from "./WikiEntitySections";
+import { WikiTasksView } from "./WikiTasksView";
+import { HomeTodayView } from "./HomeTodayView";
+import { RelatedMemoriesPanel } from "./WikiRelatedMemories";
+import { entityUpdatedAt, KEY_DETAIL_HIDDEN_KEYS } from "../../utils/wikiSectionUtils";
 import { getActiveWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
 import "./WikiLibrary.css";
 
@@ -38,6 +47,7 @@ interface WorkspaceFilePreview {
   size: number;
   truncated: boolean;
   rawLength: number;
+  updatedAt?: string;
 }
 
 const FOCUS_CACHE_KEY_PREFIX = "memory-view-focus";
@@ -50,17 +60,65 @@ function getFocusCacheKey(): string {
 }
 
 function fileLabel(name: string): string {
+  const dateMatch = name.match(/^(\d{4})-(\d{2})-(\d{2})\.md$/i);
+  if (dateMatch) {
+    const [, year, month, day] = dateMatch;
+    const date = new Date(Number(year), Number(month) - 1, Number(day));
+    const today = new Date();
+    const isToday = date.toDateString() === today.toDateString();
+    const yesterday = new Date(today);
+    yesterday.setDate(yesterday.getDate() - 1);
+    const isYesterday = date.toDateString() === yesterday.toDateString();
+    const formatted = date.toLocaleDateString(undefined, {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+    });
+    if (isToday) return `Today's Log · ${formatted}`;
+    if (isYesterday) return `Yesterday · ${formatted}`;
+    return `Daily Log · ${formatted}`;
+  }
+
   return name
     .replace(/\.(md|txt|yaml|yml|json)$/i, "")
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+const CONTEXT_FILE_ORDER: Record<string, number> = {
+  "IDENTITY.md": 0,
+  "ONBOARD.md": 1,
+  "MEMORY.md": 2,
+  "AGENTS.md": 3,
+  "TOOLS.md": 4,
+};
+
+function sortContextFiles(
+  files: WorkspaceFilePreview[],
+): WorkspaceFilePreview[] {
+  return [...files].sort((a, b) => {
+    const rankA = CONTEXT_FILE_ORDER[a.name] ?? 100;
+    const rankB = CONTEXT_FILE_ORDER[b.name] ?? 100;
+    if (rankA !== rankB) return rankA - rankB;
+
+    const dailyA = /^\d{4}-\d{2}-\d{2}\.md$/i.test(a.name);
+    const dailyB = /^\d{4}-\d{2}-\d{2}\.md$/i.test(b.name);
+    if (dailyA && dailyB) return b.name.localeCompare(a.name);
+    if (dailyA) return -1;
+    if (dailyB) return 1;
+
+    return a.name.localeCompare(b.name);
+  });
+}
+
+export type HomeWorkspaceTab = "today" | "tasks" | "memory";
+
 interface WikiLibraryProps {
   refreshToken?: number;
   paletteOpen?: boolean;
   onPaletteOpenChange?: (open: boolean) => void;
   onFocusChange?: (label: string | null, backFn: (() => void) | null) => void;
+  workspaceTab?: HomeWorkspaceTab;
 }
 
 function bodyPreview(body: string, maxLen = 140): string {
@@ -192,6 +250,12 @@ function PosterCard({
         {node.description ? (
           <p className="wiki-card__preview">{bodyPreview(node.description)}</p>
         ) : null}
+        <div className="wiki-card__footer">
+          <UpdatedAtBadge
+            value={entityUpdatedAt(node) ?? undefined}
+            className="wiki-card__updated"
+          />
+        </div>
       </div>
     </article>
   );
@@ -214,6 +278,9 @@ function PersonCard({
     .toUpperCase();
   const props = node.props ?? {};
   const image = props.image ? String(props.image) : null;
+  const role = props.role ? String(props.role) : null;
+  const preview =
+    !role && node.description ? bodyPreview(node.description, 90) : null;
   return (
     <article className="wiki-card person" onClick={onClick}>
       <div className="wiki-card__avatar">
@@ -224,9 +291,16 @@ function PersonCard({
         )}
       </div>
       <div className="wiki-card__name">{label}</div>
-      {props.role ? (
-        <div className="wiki-card__role">{String(props.role)}</div>
+      {role ? <div className="wiki-card__role">{role}</div> : null}
+      {preview ? (
+        <p className="wiki-card__preview wiki-card__preview--person">{preview}</p>
       ) : null}
+      <div className="wiki-card__footer">
+        <UpdatedAtBadge
+          value={entityUpdatedAt(node) ?? undefined}
+          className="wiki-card__updated"
+        />
+      </div>
     </article>
   );
 }
@@ -284,9 +358,15 @@ function ContextFileCard({
               ? "Brand colors and logo not configured yet"
               : bodyPreview(file.content, 240) || "Empty context file"}
         </p>
-        <div className="wiki-card__meta">
-          <span>{Math.max(1, Math.round(file.size / 1024))} KB</span>
-          {file.truncated ? <span>Preview</span> : null}
+        <div className="wiki-card__footer">
+          <div className="wiki-card__meta">
+            <span>{Math.max(1, Math.round(file.size / 1024))} KB</span>
+            {file.truncated ? <span>Preview</span> : null}
+          </div>
+          <UpdatedAtBadge
+            value={file.updatedAt}
+            className="wiki-card__updated"
+          />
         </div>
       </div>
     </article>
@@ -670,7 +750,9 @@ function displaySectionsFor(node: WikiNode): Record<string, string> {
         ([k, v]) =>
           v != null &&
           String(v).trim() !== "" &&
-          !["description", "description_short"].includes(k),
+          !["description", "description_short"].includes(k) &&
+          !KEY_DETAIL_HIDDEN_KEYS.has(k.toLowerCase().replace(/\s+/g, "_")) &&
+          !KEY_DETAIL_HIDDEN_KEYS.has(k.toLowerCase()),
       )
       .slice(0, 12)
       .map(([k, v]) => `- ${k.replace(/_/g, " ")}: ${String(v)}`);
@@ -683,13 +765,6 @@ function displaySectionsFor(node: WikiNode): Record<string, string> {
       .map((e) => `- ${e.date || "Undated"} — ${e.summary || e.source}`)
       .join("\n");
   }
-  if (!sections["Decisions & Insights"])
-    sections["Decisions & Insights"] =
-      "- No durable decisions or insights have been captured yet.";
-  if (!sections["Open Items"])
-    sections["Open Items"] = "No open items captured yet.";
-  if (!sections["Changelog"])
-    sections["Changelog"] = "- No changelog entries captured yet.";
   return sections;
 }
 
@@ -845,12 +920,16 @@ function ContextFilePage({
   error,
   onBack,
   onSave,
+  allNodes,
+  onPick,
 }: {
   file: WorkspaceFilePreview;
   loading: boolean;
   error?: string;
   onBack: () => void;
   onSave: (content: string) => Promise<string | undefined>;
+  allNodes: WikiNode[];
+  onPick: (node: WikiNode) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(file.content);
@@ -966,9 +1045,13 @@ function ContextFilePage({
                 />
               </>
             ) : file.content.trim() ? (
-              <div className="wiki-entity__markdown">
-                <Markdown>{file.content}</Markdown>
-              </div>
+              <ContextFileSections
+                content={file.content}
+                fileName={file.name}
+                updatedAt={file.updatedAt}
+                allNodes={allNodes}
+                onPick={onPick}
+              />
             ) : (
               <div className="wiki-empty-state">
                 <p>This file is empty.</p>
@@ -1014,7 +1097,6 @@ function WikiHome({
   onboardingPending: boolean;
 }) {
   const featured = data?.featured ?? null;
-  const meta = featured ? wikiTypeMeta(featured.type) : null;
   const placeholderFileCount = countSetupBlockingPlaceholderFiles(contextFiles);
   const identityFile = contextFiles.find((file) => file.name === "IDENTITY.md");
   const wikiHasContent = (data?.rails.length ?? 0) > 0 || !!featured;
@@ -1028,6 +1110,7 @@ function WikiHome({
     wikiHasContent,
   });
   const wikiEmpty = (data?.rails.length ?? 0) === 0 && !featured;
+  const sortedContextFiles = sortContextFiles(contextFiles);
 
   if (loading && !data) {
     return (
@@ -1094,42 +1177,7 @@ function WikiHome({
   }
 
   return (
-    <div
-      className={`wiki-library${featured && meta ? " wiki-library--has-hero" : ""}`}
-    >
-      {featured && meta ? (
-        <div className="wiki-hero">
-          <div
-            className="wiki-hero__bg"
-            style={{
-              background: `var(--g-${featured.type}, linear-gradient(135deg, ${meta.color}, color-mix(in srgb, ${meta.color} 60%, #111))`,
-            }}
-          />
-          <div className="wiki-hero__pattern" />
-          <div className="wiki-hero__inner">
-            <div className="wiki-hero__eyebrow">
-              <span className="wiki-hero__pill">Featured</span>
-              <span>{meta.label}</span>
-            </div>
-            <h1>{featured.label}</h1>
-            {featured.description ? (
-              <p className="wiki-hero__tag">
-                {bodyPreview(featured.description, 200)}
-              </p>
-            ) : null}
-            <div className="wiki-hero__actions">
-              <button
-                type="button"
-                className="wiki-btn wiki-btn--primary"
-                onClick={() => onPick(featured)}
-              >
-                Open →
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
+    <div className="wiki-library">
       {showSetupPanel ? (
         <MemorySetupPanel
           variant="setup"
@@ -1147,20 +1195,20 @@ function WikiHome({
         <span className="wiki-search-float__kbd">⌘K</span>
       </button>
 
-      {contextFiles.length > 0 ? (
+      {sortedContextFiles.length > 0 ? (
         <section className="wiki-rail wiki-rail--context">
           <div className="wiki-rail__head">
-            <h2>Content</h2>
+            <h2>Context</h2>
             <span className="wiki-rail__reason">
               {setupPending
-                ? "Files Papr reads every conversation · Setup in progress"
-                : "Markdown context Papr reads each chat · Wiki refreshes overnight"}
+                ? "Identity, daily logs, and workspace files · Setup in progress"
+                : "Identity, daily logs, and files Papr reads each chat · Wiki refreshes overnight"}
               {" · "}
-              {contextFiles.length}
+              {sortedContextFiles.length}
             </span>
           </div>
           <div className="wiki-rail__track">
-            {contextFiles.map((file) => (
+            {sortedContextFiles.map((file) => (
               <ContextFileCard
                 key={file.name}
                 file={file}
@@ -1199,30 +1247,6 @@ function WikiHome({
 
 /* ── Entity Detail Page ────────────────────────────── */
 
-function RelatedMemoriesPanel({ memories }: { memories: WikiRelatedMemory[] }) {
-  if (!memories || memories.length === 0) return null;
-  return (
-    <div className="wiki-entity__related">
-      <h3>Related Memories</h3>
-      <div className="wiki-related-memories">
-        {memories.map((m) => (
-          <div key={m.id} className="wiki-related-memory">
-            <div className="wiki-related-memory__header">
-              <span className="wiki-related-memory__date">
-                {m.createdAt ? new Date(m.createdAt).toLocaleDateString() : ""}
-              </span>
-              <span className="wiki-related-memory__category">
-                {m.category || "memory"}
-              </span>
-            </div>
-            <p className="wiki-related-memory__content">{m.content}</p>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 function fileToDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -1243,6 +1267,7 @@ function WikiEntityPage({
   onBack,
   onPick,
   onMediaUpdated,
+  onSectionsChanged,
 }: {
   node: WikiNode | null;
   rails: WikiRail[];
@@ -1253,6 +1278,7 @@ function WikiEntityPage({
   onBack: () => void;
   onPick: (n: WikiNode) => void;
   onMediaUpdated?: (n: WikiNode) => void;
+  onSectionsChanged?: () => void;
 }) {
   const meta = node ? wikiTypeMeta(node.type) : null;
   const [mediaBusy, setMediaBusy] = useState(false);
@@ -1282,6 +1308,7 @@ function WikiEntityPage({
   const relationships = node.relationships ?? [];
   const evidence = node.evidence ?? [];
   const props = node.props ?? {};
+  const entitySections = displaySectionsFor(node);
   const canEditMedia = node.type === "company" || node.type === "person";
   const updateMedia = async (kind: "image" | "hero_image", file?: File) => {
     setMediaBusy(true);
@@ -1400,7 +1427,13 @@ function WikiEntityPage({
             <h1>{node.label}</h1>
             <div className="wiki-entity__meta-row">
               {Object.entries(props)
-                .filter(([key]) => key !== "image" && key !== "hero_image")
+                .filter(
+                  ([key]) =>
+                    key !== "image" &&
+                    key !== "hero_image" &&
+                    key !== "updated_at" &&
+                    key !== "updatedAt",
+                )
                 .map(([key, value]) => {
                   const text = String(value);
                   // website / linkedin are URLs — render them clickable instead of
@@ -1433,21 +1466,28 @@ function WikiEntityPage({
         <div className="wiki-entity__stats">
           <span>{relationships.length} relationships</span>
           <span>{evidence.length} evidence items</span>
-          <span>{node.markdownBody ? "full content" : "no content"}</span>
+          <UpdatedAtBadge
+            value={
+              node.props?.updated_at != null
+                ? String(node.props.updated_at)
+                : node.props?.updatedAt != null
+                  ? String(node.props.updatedAt)
+                  : undefined
+            }
+            className="wiki-entity__stat-updated"
+          />
         </div>
 
         {/* Content */}
         <div className="wiki-entity__content">
           <div className="wiki-entity__main">
-            {node.markdownBody ? (
-              <div className="wiki-entity__markdown">
-                <Markdown>{String(node.markdownBody)}</Markdown>
-              </div>
-            ) : node.description ? (
-              <div className="wiki-entity__overview">
-                <p>{node.description}</p>
-              </div>
-            ) : null}
+            <WikiEntitySections
+              node={node}
+              sections={entitySections}
+              allNodes={allNodes}
+              onPick={onPick}
+              onSectionsChanged={onSectionsChanged}
+            />
           </div>
 
           {/* Sidebar */}
@@ -1499,6 +1539,7 @@ export function WikiLibrary({
   paletteOpen: paletteOpenProp,
   onPaletteOpenChange,
   onFocusChange,
+  workspaceTab = "today",
 }: WikiLibraryProps) {
   const [home, setHome] = useState<WikiHomeData | null>(null);
   const [homeLoading, setHomeLoading] = useState(true);
@@ -1668,6 +1709,7 @@ export function WikiLibrary({
             size: data.size ?? data.content.length,
             truncated: data.truncated ?? false,
             rawLength: data.rawLength ?? data.content.length,
+            updatedAt: data.updatedAt,
           });
         }
       } catch (err) {
@@ -1700,6 +1742,7 @@ export function WikiLibrary({
           size: data?.size ?? content.length,
           truncated: false,
           rawLength: data?.rawLength ?? content.length,
+          updatedAt: data?.updatedAt ?? new Date().toISOString(),
         });
         void loadContext();
         return undefined;
@@ -1873,7 +1916,15 @@ export function WikiLibrary({
 
   return (
     <div className="wiki-shell">
-      <div className="wiki-shell__content">
+      <div
+        className={`wiki-shell__content${
+          workspaceTab === "tasks"
+            ? " wiki-shell__content--tasks"
+            : workspaceTab === "today"
+              ? " wiki-shell__content--today"
+              : ""
+        }`}
+      >
         {focus ? (
           <WikiEntityPage
             node={focus}
@@ -1888,6 +1939,9 @@ export function WikiLibrary({
               setFocus(updated);
               void loadHome({ silent: true, forceRefresh: true });
             }}
+            onSectionsChanged={() => {
+              if (focus) void loadEntity(focus);
+            }}
           />
         ) : contextFocus ? (
           <ContextFilePage
@@ -1896,7 +1950,19 @@ export function WikiLibrary({
             error={contextError}
             onBack={clearContextFocus}
             onSave={saveContextFile}
+            allNodes={allNodes}
+            onPick={handlePick}
           />
+        ) : workspaceTab === "tasks" ? (
+          <WikiTasksView
+            nodes={allNodes}
+            onPick={handlePick}
+            onChanged={() => {
+              void loadHome({ silent: true, forceRefresh: true });
+            }}
+          />
+        ) : workspaceTab === "today" ? (
+          <HomeTodayView />
         ) : (
           <WikiHome
             data={home}
