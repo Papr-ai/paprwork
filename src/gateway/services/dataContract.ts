@@ -6,6 +6,7 @@
 
 import Database from "better-sqlite3";
 import { existsSync } from "fs";
+import { todayBriefDateKey } from "../../core/utils/briefDateKey.js";
 
 export interface TableContract {
   /** Columns that must exist (PRAGMA table_info). */
@@ -23,7 +24,7 @@ export interface JobContractCheck {
   minRows?: Record<string, number>;
   /**
    * table → date column name. After a successful run, require a row where the
-   * column equals today's UTC date (YYYY-MM-DD).
+   * column equals today's local calendar date (YYYY-MM-DD).
    */
   requireTodayRow?: Record<string, string>;
 }
@@ -227,7 +228,7 @@ export function validateDatabaseAgainstContract(
     }
 
     if (jobKey && contract.jobs?.[jobKey]?.requireTodayRow) {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = todayBriefDateKey();
       for (const [table, dateColumn] of Object.entries(
         contract.jobs[jobKey].requireTodayRow ?? {},
       )) {

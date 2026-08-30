@@ -2640,6 +2640,8 @@ app.whenReady().then(async () => {
       "PAPR_APP_REPO_WRITER_URL",
       "PAPR_CLOUD_APP_HOST_KEY",
       "PAPR_MEMORY_SERVER_URL",
+      "PAPR_TURSO_REPLICA_SYNC",
+      "PAPR_TURSO_REPLICA_SYNC_ALLOW_PRODUCTION",
     ];
     /** @type {Record<string, string>} */
     const merged = { ...defaults };

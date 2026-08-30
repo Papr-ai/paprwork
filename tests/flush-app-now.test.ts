@@ -7,6 +7,7 @@ const mockPushJob = vi.fn();
 const mockWebReady = vi.fn();
 const mockDiscoverTursoLinkedSources = vi.fn();
 const mockIsLegacyWorkspaceRowSyncEnabled = vi.fn(() => true);
+const mockShouldRunReplicaCutover = vi.fn(() => false);
 
 vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
   ensureTursoSyncBridge: () => ({
@@ -37,6 +38,7 @@ vi.mock("../src/gateway/services/tursoPushScheduler.js", () => ({
 
 vi.mock("../src/gateway/utils/tursoReplicaEnabled.js", () => ({
   isLegacyWorkspaceRowSyncEnabled: () => mockIsLegacyWorkspaceRowSyncEnabled(),
+  shouldRunReplicaCutover: () => mockShouldRunReplicaCutover(),
 }));
 
 vi.mock("../src/gateway/services/syncV3/workspaceLogSync.js", () => ({
@@ -109,6 +111,7 @@ describe("flushAppNow", () => {
 
   beforeEach(() => {
     mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(true);
+    mockShouldRunReplicaCutover.mockReturnValue(false);
     mockShouldUseTursoReplicaForSource.mockReturnValue(true);
     mockRunReplicaCutoverForAppUpload.mockResolvedValue({
       dryRun: false,
@@ -253,7 +256,66 @@ describe("flushAppNow", () => {
     expect(result.tursoPushed).toBe(false);
   });
 
+  it("Plan A flush runs cutover then git (legacy row sync may stay enabled)", async () => {
+    mockShouldRunReplicaCutover.mockReturnValue(true);
+    mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(true);
+    mockShouldSkipTursoPush.mockResolvedValue(false);
+    const callOrder: string[] = [];
+    mockRunReplicaCutoverForAppUpload.mockImplementation(async () => {
+      callOrder.push("cutover");
+      return {
+        dryRun: false,
+        results: [{ dbId: "db-1", ok: true, dryRun: false, classification: {} }],
+        attempted: 1,
+        succeeded: 1,
+        blocked: 0,
+        skipped: 0,
+      };
+    });
+    mockApplyLocalMigrations.mockImplementation(async () => {
+      callOrder.push("migrations");
+      return [];
+    });
+    mockCatchUpLinkedSource.mockImplementation(async () => {
+      callOrder.push("log-catch-up");
+      return 0;
+    });
+    mockPushLinkedSource.mockImplementation(async () => {
+      callOrder.push("turso-push");
+      return {
+        syncKey: "job-1",
+        alias: "main",
+        appId: "app-1",
+        backend: "replica",
+        ok: true,
+      };
+    });
+    mockFinalizeAppRepoMutation.mockImplementation(async () => {
+      callOrder.push("writer");
+      return {
+        appId: "app-1",
+        writerPushed: true,
+        catalogSynced: false,
+      };
+    });
+    mockSyncPublishedAppCatalogLayer.mockImplementation(async () => {
+      callOrder.push("catalog");
+      return { catalogSynced: true };
+    });
+
+    const result = await flushAppNow(sync, "app-1");
+
+    expect(callOrder).toEqual(["migrations", "cutover", "writer", "catalog"]);
+    expect(mockRunReplicaCutoverForAppUpload).toHaveBeenCalledWith("app-1");
+    expect(mockCatchUpLinkedSource).not.toHaveBeenCalled();
+    expect(mockApplyLocalMigrations).toHaveBeenCalledWith("app-1", "/tmp/papr/apps");
+    expect(mockPushLinkedSource).not.toHaveBeenCalled();
+    expect(result.tursoPushed).toBe(false);
+    expect(result.published).toBe(true);
+  });
+
   it("Plan A flush runs cutover then pushes pending replica DBs then git", async () => {
+    mockShouldRunReplicaCutover.mockReturnValue(true);
     mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(false);
     mockShouldSkipTursoPush.mockResolvedValue(false);
     const callOrder: string[] = [];
@@ -311,6 +373,7 @@ describe("flushAppNow", () => {
   });
 
   it("Plan A flush fails when cutover is blocked", async () => {
+    mockShouldRunReplicaCutover.mockReturnValue(true);
     mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(false);
     mockRunReplicaCutoverForAppUpload.mockResolvedValue({
       dryRun: false,
@@ -338,6 +401,7 @@ describe("flushAppNow", () => {
   });
 
   it("Plan A flush skips post-cutover replica push entirely", async () => {
+    mockShouldRunReplicaCutover.mockReturnValue(true);
     mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(false);
     mockShouldSkipTursoPush.mockResolvedValue(false);
 

@@ -1962,7 +1962,7 @@ export function WikiLibrary({
             }}
           />
         ) : workspaceTab === "today" ? (
-          <HomeTodayView />
+          <HomeTodayView refreshToken={refreshToken} />
         ) : (
           <WikiHome
             data={home}

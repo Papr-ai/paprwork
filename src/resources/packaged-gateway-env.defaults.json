@@ -1,5 +1,7 @@
 {
   "PAPR_APP_REPO_WRITER_URL": "https://app-repo-writer-223473570766.us-west1.run.app",
   "PAPR_CLOUD_APP_HOST_KEY": "++eHkzM8K0HGIlELM28ve31l0/s/uhnd3I0nEOZqbe8=",
-  "PAPR_MEMORY_SERVER_URL": "https://memory.papr.ai"
+  "PAPR_MEMORY_SERVER_URL": "https://memory.papr.ai",
+  "PAPR_TURSO_REPLICA_SYNC": "replica-records",
+  "PAPR_TURSO_REPLICA_SYNC_ALLOW_PRODUCTION": "1"
 }

@@ -67,6 +67,7 @@ const JOB_ENV_KEYS = [
   "APP_DB_ALIAS",
   "APP_DB_ID",
   "PAPR_WRITE_DB_IDS",
+  "BRIEF_DATE_KEY",
 ] as const;
 
 /** Collect job-scoped env vars from process.env (cloud sandbox after prepareCloudJobEnvironment). */

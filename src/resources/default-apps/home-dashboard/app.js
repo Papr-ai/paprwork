@@ -73,16 +73,21 @@ const App = {
         const statusRes = await fetch(`/api/jobs/status/${jobId}`);
         if (!statusRes.ok) continue;
         const job = await statusRes.json();
-        if (job.status === 'completed') {
-          btn.innerHTML = 'Generated! Reloading...';
-          setTimeout(() => {
-            this.dates = [];
-            this.init();
-          }, 800);
-          return;
-        }
-        if (job.status === 'failed') {
-          throw new Error(job.error || 'Brief job failed');
+        if (job.status === 'completed' || job.status === 'failed') {
+          const rows = await Data.query(
+            'SELECT date FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1',
+          ).catch(() => []);
+          if (rows.length > 0 || job.status === 'completed') {
+            btn.innerHTML = job.status === 'failed' ? 'Brief saved — reloading…' : 'Generated! Reloading...';
+            setTimeout(() => {
+              this.dates = [];
+              this.init();
+            }, 800);
+            return;
+          }
+          if (job.status === 'failed') {
+            throw new Error(job.error || 'Brief job failed');
+          }
         }
       }
       throw new Error('Brief generation is taking longer than expected');
@@ -123,12 +128,10 @@ const App = {
   },
   async init() {
     this.dates = await Data.dates();
-    if (!this.dates.length) this.dates = [new Date().toISOString().slice(0, 10)];
-    
-    // Check if we're showing sample data
-    // If dates only has today and no actual data was queried, we're using sample
+    if (!this.dates.length) this.dates = [Data.todayKey()];
+
     const testBrief = await Data.load();
-    this.isSampleData = testBrief._isSample === true;
+    this.isSampleData = this.dates.length === 0 || testBrief._isSample === true;
     
     await this.render(); FoldNav.bind(this);
     document.getElementById('sections').addEventListener('click', async (e) => {
@@ -151,7 +154,14 @@ const App = {
   },
   async render() {
     const date = this.dates[this.idx];
-    this.brief = this.decorate(await Data.load(date), date);
+    let brief = await Data.load(date);
+    if (brief._isSample && this.dates.length > 0) {
+      brief = await Data.load();
+      if (!brief._isSample && this.dates[this.idx] !== this.dates[0]) {
+        this.idx = 0;
+      }
+    }
+    this.brief = this.decorate(brief, date);
     
     // Render banner if sample data
     const banner = this.renderSampleDataBanner();

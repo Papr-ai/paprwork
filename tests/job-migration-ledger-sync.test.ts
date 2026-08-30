@@ -86,6 +86,37 @@ DROP TABLE IF EXISTS "expenses__papr_old";`,
     expect(satisfied).toBe(true);
   });
 
+  it("accepts a table swap that drops then renames back to the same name", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-verify-"));
+    const migrationsDir = path.join(root, "migrations");
+    fs.mkdirSync(migrationsDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(migrationsDir, "0002_drop_manager_fk.sql"),
+      `CREATE TABLE csms_new (
+  id INTEGER PRIMARY KEY,
+  name TEXT UNIQUE NOT NULL,
+  manager_id INTEGER
+);
+INSERT INTO csms_new (id, name, manager_id) SELECT id, name, manager_id FROM csms;
+DROP TABLE csms;
+ALTER TABLE csms_new RENAME TO csms;
+CREATE INDEX idx_csms_manager_id ON csms (manager_id);
+CREATE INDEX idx_csms_role ON csms (role);`,
+    );
+
+    const remote = createMigrationMockRemote(
+      { csms: ["id", "name", "manager_id"] },
+      ["idx_csms_manager_id", "idx_csms_role"],
+    );
+
+    const satisfied = await migrationSatisfiedOnRemote(
+      remote,
+      root,
+      "0002_drop_manager_fk.sql",
+    );
+    expect(satisfied).toBe(true);
+  });
+
   it("still fails a rebuild when the final table is missing on remote", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "papr-mig-verify-"));
     const migrationsDir = path.join(root, "migrations");

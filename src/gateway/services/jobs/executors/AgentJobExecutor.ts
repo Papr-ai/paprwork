@@ -17,6 +17,8 @@ import {
   getWikiWriterService,
   isWikiWriterJobName,
 } from "../../WikiWriterService.js";
+import { isHomeDailyBriefJob } from "../dailyBriefVerification.js";
+import { todayBriefDateKey } from "../../../../core/utils/briefDateKey.js";
 import type { SubAgentIconName } from "../../../../core/types/subagents.js";
 import {
   jobWriteDatabaseEnv,
@@ -224,6 +226,11 @@ export class AgentJobExecutor implements IJobExecutor {
       ...(jobDbPath ? { JOB_DB: jobDbPath } : {}),
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
+        : {}),
+      ...(isHomeDailyBriefJob(params.job)
+        ? {
+            BRIEF_DATE_KEY: todayBriefDateKey(params.job.schedule?.timezone),
+          }
         : {}),
       ...runtimeParamsForJobEnv(params.runtimeParams),
     };

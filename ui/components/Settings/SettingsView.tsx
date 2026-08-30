@@ -1011,6 +1011,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Sync in Packaged Builds</strong>
+                <p>
+                  Desktop releases now ship with Plan A replica sync enabled
+                  (<code>replica-records</code>) and production cutover allowed —
+                  matching dev behavior without a local <code>.env.local</code>.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sync Metadata on Upload</strong>
+                <p>
+                  Upload now flushes registry metadata alongside app code so
+                  cloud databases stay aligned after publish.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Home Dashboard &amp; Daily Brief</strong>
+                <p>
+                  Updated home dashboard data contract, brief date handling,
+                  and Home Today wiki improvements.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.4.9" && (
           <div className="about-card">
             <h3>What's New in v2.4.9</h3>

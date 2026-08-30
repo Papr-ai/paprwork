@@ -1,9 +1,62 @@
+import { useEffect, useState } from "react";
 import { MiniAppView } from "../Apps/MiniAppView";
 import { useDefaultHomeApp } from "../../hooks/useDefaultHomeApp";
+import { DEFAULT_HOME_DAILY_BRIEF_JOB_NAME } from "../../constants/defaultHomeApp";
 import "./HomeTodayView.css";
 
-export function HomeTodayView() {
+const DAILY_BRIEF_JOB_TERMINAL = new Set(["completed", "failed", "idle"]);
+
+interface HomeTodayViewProps {
+  refreshToken?: number;
+}
+
+export function HomeTodayView({ refreshToken = 0 }: HomeTodayViewProps) {
   const { appId, loading } = useDefaultHomeApp();
+  const [iframeKey, setIframeKey] = useState(0);
+
+  useEffect(() => {
+    setIframeKey((key) => key + 1);
+  }, [refreshToken, appId]);
+
+  useEffect(() => {
+    if (!appId) return;
+
+    const reloadBrief = (): void => {
+      setIframeKey((key) => key + 1);
+    };
+
+    const handler = (event: Event): void => {
+      const detail = (event as CustomEvent).detail as {
+        type?: string;
+        data?: {
+          name?: string;
+          status?: string;
+          tables?: string[];
+        };
+      };
+      if (!detail?.type) return;
+
+      if (
+        detail.type === "jobs:status-changed" &&
+        detail.data?.name === DEFAULT_HOME_DAILY_BRIEF_JOB_NAME &&
+        detail.data.status &&
+        DAILY_BRIEF_JOB_TERMINAL.has(detail.data.status)
+      ) {
+        reloadBrief();
+        return;
+      }
+
+      if (
+        detail.type === "jobs:db-changed" &&
+        detail.data?.tables?.includes("briefs")
+      ) {
+        reloadBrief();
+      }
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [appId]);
 
   if (loading) {
     return (
@@ -27,7 +80,12 @@ export function HomeTodayView() {
 
   return (
     <div className="home-today">
-      <MiniAppView appId={appId} embedded previewTabVisible />
+      <MiniAppView
+        key={iframeKey}
+        appId={appId}
+        embedded
+        previewTabVisible
+      />
     </div>
   );
 }

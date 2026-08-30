@@ -45,6 +45,7 @@ export async function uploadJobsIndexToCloudDirect(
 export async function uploadDatabasesRegistryToCloudDirect(
   registry: DatabasesRegistryFile,
   updatedAt: string,
+  options?: { timeoutMs?: number },
 ): Promise<boolean> {
   const apiKey = await getPaprApiKey();
   if (!apiKey) {
@@ -54,7 +55,7 @@ export async function uploadDatabasesRegistryToCloudDirect(
   const res = await cloudApiFetch("/v1/cloud/metadata/databases", {
     method: "PUT",
     body: { registry, updatedAt },
-    timeoutMs: 15_000,
+    timeoutMs: options?.timeoutMs ?? 15_000,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -151,9 +152,14 @@ export async function uploadJobsIndexToCloud(
 export async function uploadDatabasesRegistryToCloud(
   registry: DatabasesRegistryFile,
   updatedAt: string,
+  options?: { timeoutMs?: number },
 ): Promise<boolean> {
   try {
-    const ok = await uploadDatabasesRegistryToCloudDirect(registry, updatedAt);
+    const ok = await uploadDatabasesRegistryToCloudDirect(
+      registry,
+      updatedAt,
+      options,
+    );
     if (!ok) {
       await enqueueMetadataOutboxEntry({ kind: "databases", updatedAt, registry });
     }

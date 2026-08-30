@@ -201,6 +201,17 @@ export async function resolveJobWriteTargets(
   await appService.initialize();
   const primary = await appService.getPrimaryDataSource(linkedAppIds[0]);
   if (!primary?.dbId) {
+    if (primary?.dbPath && existsSync(primary.dbPath)) {
+      const keyId = primary.jobId ?? primary.id;
+      return [
+        {
+          dbId: keyId,
+          alias: primary.alias,
+          dbPath: primary.dbPath,
+          envKey: databaseEnvKey({ dbId: keyId, label: primary.alias }),
+        },
+      ];
+    }
     return [];
   }
 

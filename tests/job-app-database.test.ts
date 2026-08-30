@@ -154,6 +154,23 @@ describe("job write database resolution", () => {
     }
   });
 
+  it("legacy fallback uses job-linked sqlite when primary has jobId but no dbId", async () => {
+    getPrimaryDataSource.mockResolvedValue({
+      id: "job-abc:Daily Brief Generator (job-abc)",
+      jobId: "job-abc-uuid",
+      alias: "Daily Brief Generator (job-abc)",
+      dbPath: "/tmp/brief/data.db",
+    });
+
+    await expect(resolveJobWriteTargets({ appIds: ["app-123"] })).resolves.toEqual([
+      expect.objectContaining({
+        dbId: "job-abc-uuid",
+        dbPath: "/tmp/brief/data.db",
+        alias: "Daily Brief Generator (job-abc)",
+      }),
+    ]);
+  });
+
   it("legacy fallback uses app primary linked source", async () => {
     getPrimaryDataSource.mockResolvedValue({
       dbId: "db-legacy",

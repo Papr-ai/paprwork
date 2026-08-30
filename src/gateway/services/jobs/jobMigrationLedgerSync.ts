@@ -105,11 +105,21 @@ function isSupersededDrop(
   }
   return ops.slice(index + 1).some((later) => {
     const created = createdObject(later);
-    return (
+    if (
       created !== null &&
       created.objectType === drop.objectType &&
       created.name === drop.name
-    );
+    ) {
+      return true;
+    }
+    // Table swap: DROP t then ALTER TABLE scratch RENAME TO t (e.g. 0002_drop_manager_fk).
+    if (drop.objectType === "table" && later.kind === "sql") {
+      const rename = parseRenameTableStatement(later.statement);
+      if (rename !== null && rename.to === drop.name) {
+        return true;
+      }
+    }
+    return false;
   });
 }
 

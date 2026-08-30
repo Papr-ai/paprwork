@@ -4,6 +4,7 @@
 
 import Database from "better-sqlite3";
 import { existsSync } from "fs";
+import { todayBriefDateKey } from "../../../core/utils/briefDateKey.js";
 import { DEFAULT_HOME_DAILY_BRIEF_JOB_NAME } from "../defaultHomeBundle.js";
 import type { JobRecord } from "./types.js";
 
@@ -11,15 +12,16 @@ export function isHomeDailyBriefJob(job: Pick<JobRecord, "id" | "name" | "appIds
   return job.name === DEFAULT_HOME_DAILY_BRIEF_JOB_NAME;
 }
 
+/** @deprecated Use todayBriefDateKey from core — kept for tests importing this module. */
 export function todayUtcDateKey(): string {
-  return new Date().toISOString().slice(0, 10);
+  return todayBriefDateKey();
 }
 
 export function verifyDailyBriefRowForToday(dbPath: string): {
   ok: boolean;
   message: string;
 } {
-  const today = todayUtcDateKey();
+  const today = todayBriefDateKey();
   if (!existsSync(dbPath)) {
     return {
       ok: false,

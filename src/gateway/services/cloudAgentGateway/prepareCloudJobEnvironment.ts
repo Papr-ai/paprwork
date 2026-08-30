@@ -8,6 +8,8 @@ import {
 } from "../jobAppDatabase.js";
 import { getJobsService, initializeJobsService } from "../JobsService.js";
 import { STANDALONE_APP_ID } from "../jobs/appIds.js";
+import { isHomeDailyBriefJob } from "../jobs/dailyBriefVerification.js";
+import { todayBriefDateKey } from "../../../core/utils/briefDateKey.js";
 import {
   tursoCredsByDbIdFromCloudSources,
   shouldUseCloudSandboxTursoDirect,
@@ -65,5 +67,11 @@ export async function prepareCloudJobEnvironment(
     delete process.env.PAPR_DB_MODE;
     delete process.env.PAPR_DB_URL;
     delete process.env.PAPR_DB_AUTH_TOKEN;
+  }
+
+  if (isHomeDailyBriefJob(job)) {
+    process.env.BRIEF_DATE_KEY = todayBriefDateKey(job.schedule?.timezone);
+  } else {
+    delete process.env.BRIEF_DATE_KEY;
   }
 }

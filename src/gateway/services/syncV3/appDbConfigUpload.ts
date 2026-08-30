@@ -43,6 +43,7 @@ export async function readAppDbConfigFromDisk(
 export async function uploadAppDbConfigToCloudDirect(
   appId: string,
   payload: AppDbConfigPayload,
+  options?: { timeoutMs?: number },
 ): Promise<boolean> {
   const apiKey = await getPaprApiKey();
   if (!apiKey) {
@@ -59,7 +60,7 @@ export async function uploadAppDbConfigToCloudDirect(
         updatedAt: payload.updatedAt,
         commitSha: payload.commitSha,
       },
-      timeoutMs: 15_000,
+      timeoutMs: options?.timeoutMs ?? 15_000,
     },
   );
   if (!res.ok) {
@@ -76,6 +77,7 @@ export async function uploadAppDbConfigToCloud(
   paprDir: string,
   appId: string,
   commitSha?: string,
+  options?: { timeoutMs?: number },
 ): Promise<boolean> {
   const payload = await readAppDbConfigFromDisk(paprDir, appId);
   if (!payload) {
@@ -86,7 +88,7 @@ export async function uploadAppDbConfigToCloud(
   }
 
   try {
-    const ok = await uploadAppDbConfigToCloudDirect(appId, payload);
+    const ok = await uploadAppDbConfigToCloudDirect(appId, payload, options);
     if (!ok) {
       await enqueueMetadataOutboxEntry({
         kind: "app-db-config",

@@ -2,6 +2,13 @@ const Data = {
   APP_ID: 'bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c',
   LEGACY_JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
   _jobId: null,
+  todayKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  },
   async resolveJobId() {
     if (this._jobId) return this._jobId;
     if (typeof App !== 'undefined' && App.JOB_ID) {
