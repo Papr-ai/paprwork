@@ -138,25 +138,39 @@ describe("mergeNamespaceWorkspaceCatalog", () => {
     ).toBe(false);
   });
 
-  it("does not mark synced teammate apps as owned without publisherUserId", () => {
+  it("prefers the real team publish over a stale e2e test catalog row for the same appId", () => {
     const entries = mergeNamespaceWorkspaceCatalog({
       workspaceRemote: [
         {
-          appId: "teammate-app",
+          appId: "shared-app",
           namespaceId: "ns-1",
-          name: "Teammate App",
+          slug: "e2e-perf-mt391l5a",
+          name: null,
+          author: "Dale",
           visibility: "team",
+          publisherUserId: "user-dale",
+          codeAccess: "off",
+        },
+        {
+          appId: "shared-app",
+          namespaceId: "ns-1",
+          slug: "talent-assessment-1",
+          name: "Talent Assessment_1",
+          author: "Amir Kabbara",
+          visibility: "team",
+          publisherUserId: "user-amir",
           codeAccess: "install",
         },
       ],
       localTeamEntries: [],
       paprDir: "/tmp/papr",
       namespaceId: "ns-1",
-      ownedAppIds: new Set(["teammate-app"]),
+      ownedAppIds: new Set(["shared-app"]),
     });
 
-    const teammate = entries.find((entry) => entry.appId === "teammate-app");
-    expect(teammate?.isOwned).toBe(false);
-    expect(teammate?.codeInstallable).toBe(true);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.slug).toBe("talent-assessment-1");
+    expect(entries[0]?.name).toBe("Talent Assessment_1");
+    expect(entries[0]?.isOwned).toBe(true);
   });
 });

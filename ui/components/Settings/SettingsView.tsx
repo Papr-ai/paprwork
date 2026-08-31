@@ -1011,6 +1011,30 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Community Catalog Dedupe</strong>
+                <p>
+                  Smarter catalog merging prefers real app names over slug-only
+                  entries and deprioritizes throwaway <code>e2e-*</code> test
+                  slugs when workspace and remote catalogs overlap.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.1" && (
           <div className="about-card">
             <h3>What's New in v2.5.1</h3>

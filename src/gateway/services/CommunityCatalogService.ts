@@ -480,19 +480,95 @@ export function mergeNamespaceWorkspaceCatalog(input: {
     (entry) => entry.appId && !remoteAppIds.has(entry.appId),
   );
   return markOwnedEntries(
-    dedupeCloudEntries([...remoteEntries, ...localOnly]),
+    dedupeCloudEntries([...remoteEntries, ...localOnly], input.paprDir),
     input.ownedAppIds,
   );
 }
 
-function dedupeCloudEntries(entries: CommunityCatalogEntry[]): CommunityCatalogEntry[] {
-  const seen = new Set<string>();
-  const merged: CommunityCatalogEntry[] = [];
+function isE2eTestCatalogSlug(slug: string | null | undefined): boolean {
+  const trimmed = slug?.trim();
+  return Boolean(trimmed && /^e2e-/i.test(trimmed));
+}
+
+function scoreCatalogEntryForDedupe(
+  entry: CommunityCatalogEntry,
+  paprDir?: string,
+): number {
+  let score = 0;
+  const slug = entry.slug?.trim() ?? "";
+  const name = entry.name?.trim() ?? "";
+
+  if (name && name !== slug) {
+    score += 120;
+  } else if (name) {
+    score += 40;
+  }
+
+  if (slug && !isE2eTestCatalogSlug(slug)) {
+    score += 50;
+  }
+  if (isE2eTestCatalogSlug(slug)) {
+    score -= 500;
+  }
+
+  if (entry.codeInstallable) {
+    score += 30;
+  }
+
+  const currentUserId = getPaprUserId()?.trim();
+  if (currentUserId && entry.publisherUserId?.trim() === currentUserId) {
+    score += 100;
+  }
+
+  if (paprDir && entry.appId) {
+    const prefs = getAppPublishPrefs(entry.appId, paprDir);
+    if (prefs.accessMode === "team" || prefs.loginAccess === "team") {
+      score += 10;
+    }
+    if (prefs.codeAccess === "install" && entry.codeInstallable) {
+      score += 20;
+    }
+  }
+
+  return score;
+}
+
+function pickPreferredCatalogEntry(
+  entries: CommunityCatalogEntry[],
+  paprDir?: string,
+): CommunityCatalogEntry {
+  if (entries.length <= 1) {
+    return entries[0];
+  }
+  return entries.reduce((best, candidate) =>
+    scoreCatalogEntryForDedupe(candidate, paprDir) >
+    scoreCatalogEntryForDedupe(best, paprDir)
+      ? candidate
+      : best,
+  );
+}
+
+function dedupeCloudEntries(
+  entries: CommunityCatalogEntry[],
+  paprDir?: string,
+): CommunityCatalogEntry[] {
+  const withoutAppId: CommunityCatalogEntry[] = [];
+  const byAppId = new Map<string, CommunityCatalogEntry[]>();
+
   for (const entry of entries) {
-    const key = entry.appId ?? entry.catalogId;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(entry);
+    const appId = entry.appId?.trim();
+    if (!appId) {
+      withoutAppId.push(entry);
+      continue;
+    }
+    const group = byAppId.get(appId) ?? [];
+    group.push(entry);
+    byAppId.set(appId, group);
+  }
+
+  const merged: CommunityCatalogEntry[] = [...withoutAppId];
+  for (const group of byAppId.values()) {
+    merged.push(pickPreferredCatalogEntry(group, paprDir));
   }
   return merged;
 }
@@ -887,9 +963,12 @@ export class CommunityCatalogService {
       fallbackUsed = publicEntries.length > 0;
     }
 
-    const teamEntries = dedupeCloudEntries([...teamRemote, ...localTeamEntries]);
+    const teamEntries = dedupeCloudEntries(
+      [...teamRemote, ...localTeamEntries],
+      this.paprDir,
+    );
     const entries = markOwnedEntries(
-      dedupeCloudEntries([...teamEntries, ...publicEntries]),
+      dedupeCloudEntries([...teamEntries, ...publicEntries], this.paprDir),
       ownedAppIds,
     );
 
