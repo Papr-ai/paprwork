@@ -213,6 +213,14 @@ export async function recoverReplicaAfterCheckpointError(
 ): Promise<boolean> {
   const replica = getTursoReplicaService();
   await replica.close(source.dbPath);
+  const { repairReplicaSidecarsOnCheckpointError } = await import(
+    "./tursoReplicaSidecarWedge.js"
+  );
+  if (repairReplicaSidecarsOnCheckpointError(source.dbPath)) {
+    console.warn(
+      `[TursoReplica] Reset sync sidecars before checkpoint recovery for ${source.dbId ?? source.dbPath}`,
+    );
+  }
   const pulled = await replica.pull(source.dbPath, tursoDatabase);
   const drain = await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
   const phantomCdcCleared =

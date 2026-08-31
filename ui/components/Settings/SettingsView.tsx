@@ -1011,6 +1011,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Replica Sidecar &amp; Checkpoint Recovery</strong>
+                <p>
+                  Hardened sidecar wedge repair, checkpoint recovery, and
+                  offline Turso credential caching for more reliable replica
+                  reconnect after sleep or network blips.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cutover Migration Authority</strong>
+                <p>
+                  Safer legacy-to-replica cutover with explicit migration
+                  ledger authority checks before applying schema changes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; Home Dashboard Polish</strong>
+                <p>
+                  Follow-scroll in agent chat, turn-end diagnostics, and
+                  refreshed home dashboard styling.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.0" && (
           <div className="about-card">
             <h3>What's New in v2.5.0</h3>

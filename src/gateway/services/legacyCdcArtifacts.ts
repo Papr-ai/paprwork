@@ -26,8 +26,6 @@ const LEGACY_CDC_ARTIFACT_EXACT = new Set([
   "turso_sync_registry",
   "turso_cdc",
   "turso_cdc_version",
-  /** Legacy job/registry migration ledger — Plan A uses _papr_schema_migrations. */
-  "schema_migrations",
 ]);
 
 export function isLegacyCdcArtifactTable(tableName: string): boolean {
@@ -45,7 +43,7 @@ export function isLegacyCdcArtifactTable(tableName: string): boolean {
 
 /** V3 CDC / workspace-log tables and pre-_papr turso_* artifacts — not used by Plan A replica. */
 export function isLegacySyncPathTable(tableName: string): boolean {
-  if (tableName === "_papr_schema_migrations") {
+  if (tableName === "schema_migrations" || tableName === "_papr_schema_migrations") {
     return false;
   }
   if (isLegacyCdcArtifactTable(tableName)) {
@@ -104,7 +102,7 @@ export function listLegacySyncPathTablesForPath(dbPath: string): string[] {
 
 /**
  * Drop legacy sync-path tables and CDC triggers. Preserves user app tables and
- * `_papr_schema_migrations` (Plan A schema ledger).
+ * Plan A migration ledgers (`schema_migrations`, `_papr_schema_migrations`).
  */
 export function stripLegacySyncPathArtifacts(dbPath: string): string[] {
   if (!fs.existsSync(dbPath)) {

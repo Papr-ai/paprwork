@@ -40,7 +40,8 @@ export interface CutoverRunResult {
   skipped?: boolean;
   blocked?: boolean;
   backupPath?: string;
-  legacyPush?: { ok: boolean; error?: string };
+  legacyPush?: { ok: boolean; error?: string; skipped?: boolean };
+  schemaPush?: { applied: string[]; skipped?: boolean; error?: string };
   error?: string;
 }
 

@@ -121,7 +121,7 @@ describe("tursoReplicaCutoverClassify", () => {
     expect(result.bucket).toBe("pull_remote");
   });
 
-  it("blocks schema drift when both sides have tables", async () => {
+  it("allows local-ahead schema drift and routes to pull_remote", async () => {
     process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
     process.env.CLOUD_SYNC_ENABLED = "true";
 
@@ -137,8 +137,39 @@ describe("tursoReplicaCutoverClassify", () => {
           remoteCheckFailed: false,
           dirty: false,
           quarantined: false,
-          localMigrationIds: [],
-          remoteMigrationIds: [],
+          localMigrationIds: ["0001_baseline", "0007_repair"],
+          remoteMigrationIds: ["0001_baseline"],
+          migrationConflict: false,
+        })),
+      }),
+    );
+
+    const { classifyRecordForReplicaCutover } = await import(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverClassify.js"
+    );
+
+    const result = await classifyRecordForReplicaCutover(baseRecord());
+    expect(result.bucket).toBe("pull_remote");
+  });
+
+  it("blocks schema drift when Turso migration ledger is ahead of local", async () => {
+    process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverSnapshot.js",
+      () => ({
+        snapshotLegacyRecordForCutover: vi.fn(async () => ({
+          dbExists: true,
+          localTableCount: 2,
+          remoteTableCount: 2,
+          schemaDrift: true,
+          legacyArtifactTables: [],
+          remoteCheckFailed: false,
+          dirty: false,
+          quarantined: false,
+          localMigrationIds: ["0001_baseline"],
+          remoteMigrationIds: ["0001_baseline", "0008_cloud_only"],
           migrationConflict: false,
         })),
       }),
@@ -286,6 +317,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     const closeReplica = vi.fn(async () => {});
 
     vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
+    vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
         getDatabaseRegistryService: () => ({
@@ -388,6 +431,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
       };
     });
     vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
+    vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
         getDatabaseRegistryService: () => ({
@@ -481,6 +536,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     }));
 
     vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
+    vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
         getDatabaseRegistryService: () => ({
@@ -567,6 +634,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     const updatePushState = vi.fn(async () => {});
 
     vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
+    vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
         getDatabaseRegistryService: () => ({
@@ -647,6 +726,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     const restoreBackup = vi.fn(async () => true);
 
     vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
+    vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
         getDatabaseRegistryService: () => ({
@@ -693,6 +784,18 @@ describe("tursoReplicaCutoverOrchestrator", () => {
     const updatePushState = vi.fn(async () => {});
     const restoreBackup = vi.fn(async () => true);
 
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
     vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
@@ -752,6 +855,18 @@ describe("listLinkedLegacyCutoverCandidates", () => {
     });
 
     vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
+    vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({
         getDatabaseRegistryService: () => ({
@@ -810,6 +925,18 @@ describe("runReplicaCutoverForAppUpload", () => {
       localPath: "/tmp/other/data.db",
     });
 
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js",
+      () => ({
+        needsLocalSchemaPushBeforeCutover: vi.fn(() => false),
+        pushLocalSchemaToTursoBeforeCutover: vi.fn(async () => ({ applied: [] })),
+        restoreMigrationLedgerFromBackup: vi.fn(() => []),
+        repairReplicaMigrationAuthorityAfterCutover: vi.fn(async () => ({
+          ledgerInferred: [],
+          migrationsApplied: [],
+        })),
+      }),
+    );
     vi.doMock(
       "../src/gateway/services/DatabaseRegistryService.js",
       () => ({

@@ -3,7 +3,7 @@
   border: 0; background: transparent; cursor: pointer; -webkit-tap-highlight-color: transparent;
   transition: transform .24s ease, filter .24s ease, opacity .2s ease;
 }
-.papr-fold svg { width: 126px; height: 119px; display: block; filter: drop-shadow(0 12px 18px rgba(0,0,0,.34)); }
+.papr-fold svg { width: 126px; height: 119px; display: block; filter: drop-shadow(var(--fold-shadow)); }
 .papr-fold::after {
   content: ''; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .2s ease;
   background: linear-gradient(135deg, rgba(255,255,255,.18), transparent 34%, rgba(0,0,0,.14) 72%, transparent);

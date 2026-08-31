@@ -5,7 +5,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import type { Database } from "@tursodatabase/sync";
-import { getTursoSyncBridge } from "../TursoSyncBridge.js";
+import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import {
   connectTursoReplica,
@@ -29,10 +29,22 @@ import {
 import { MIGRATION_CONFLICT_CODE } from "./tursoReplicaMigrationConflict.js";
 import { drainInboundReplicaCdcIfCaughtUp } from "./tursoReplicaInboundDrain.js";
 import type { AppDataSource } from "../appDataSources.js";
-import { isReplicaReadTransportError } from "./tursoReplicaCheckpointRecovery.js";
+import {
+  isReplicaCheckpointWalError,
+  isReplicaReadTransportError,
+} from "./tursoReplicaCheckpointRecovery.js";
+import {
+  detectReplicaSidecarWedge,
+  repairReplicaSidecarWedge,
+  repairReplicaSidecarsOnCheckpointError,
+} from "./tursoReplicaSidecarWedge.js";
 
 const REPLICA_STATUS_OPEN_TIMEOUT_MS = 12_000;
 const REPLICA_PULL_TIMEOUT_MS = 15_000;
+/** Max wait for a prior op on the same db path — avoids wedging all reads behind one stuck pull/push. */
+const REPLICA_CHAIN_WAIT_MS = 20_000;
+const REPLICA_OPERATION_TIMEOUT_MS = 30_000;
+const REPLICA_CONNECT_TIMEOUT_MS = 20_000;
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -154,7 +166,11 @@ export class TursoReplicaService {
       let pendingPush = false;
       if (online) {
         try {
-          await this.pullAndPushReplica(handle);
+          await this.pullAndPushReplicaWithRecovery(
+            options.localPath,
+            options.tursoDatabase,
+            handle,
+          );
         } catch (error) {
           noteTursoReplicaTransportError(error);
           throw new Error(
@@ -192,7 +208,11 @@ export class TursoReplicaService {
       let pendingPush = false;
       if (online) {
         try {
-          await this.pullAndPushReplica(handle);
+          await this.pullAndPushReplicaWithRecovery(
+            localPath,
+            tursoDatabase,
+            handle,
+          );
         } catch (error) {
           noteTursoReplicaTransportError(error);
           throw new Error(
@@ -221,16 +241,13 @@ export class TursoReplicaService {
         });
         if (isTursoReplicaOnline()) {
           if (options?.pullBeforePush === false) {
-            await handle.db.push();
-            markTursoReplicaReachable();
-            const dbWithCheckpoint = handle.db as Database & {
-              checkpoint?: () => Promise<void>;
-            };
-            if (typeof dbWithCheckpoint.checkpoint === "function") {
-              await dbWithCheckpoint.checkpoint();
-            }
+            await this.pushOnlyWithRecovery(localPath, tursoDatabase, handle);
           } else {
-            await this.pullAndPushReplica(handle);
+            await this.pullAndPushReplicaWithRecovery(
+              localPath,
+              tursoDatabase,
+              handle,
+            );
           }
         }
       });
@@ -243,15 +260,37 @@ export class TursoReplicaService {
 
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
     return this.withSerializedPath(localPath, async () => {
-      const handle = await this.getOrOpen({
-        localPath,
-        tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(localPath),
-      });
-      return handle.db.pull().then((pulled) => {
+      try {
+        const handle = await this.getOrOpen({
+          localPath,
+          tursoDatabase,
+          bootstrapIfEmpty: !fs.existsSync(localPath),
+        });
+        const pulled = await withTimeout(
+          handle.db.pull(),
+          REPLICA_PULL_TIMEOUT_MS,
+          "replica pull",
+        );
         markTursoReplicaReachable();
         return pulled;
-      });
+      } catch (error) {
+        if (!isReplicaCheckpointWalError((error as Error).message)) {
+          throw error;
+        }
+        await this.recoverSidecarsAfterCheckpointError(localPath);
+        const handle = await this.getOrOpen({
+          localPath,
+          tursoDatabase,
+          bootstrapIfEmpty: !fs.existsSync(localPath),
+        });
+        const pulled = await withTimeout(
+          handle.db.pull(),
+          REPLICA_PULL_TIMEOUT_MS,
+          "replica pull after sidecar recovery",
+        );
+        markTursoReplicaReachable();
+        return pulled;
+      }
     });
   }
 
@@ -280,19 +319,10 @@ export class TursoReplicaService {
   }
 
   async checkpoint(localPath: string, tursoDatabase: string): Promise<void> {
-    await this.withSerializedPath(localPath, async () => {
-      const handle = await this.getOrOpen({
-        localPath,
-        tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(localPath),
-      });
-      const dbWithCheckpoint = handle.db as Database & {
-        checkpoint?: () => Promise<void>;
-      };
-      if (typeof dbWithCheckpoint.checkpoint === "function") {
-        await dbWithCheckpoint.checkpoint();
-      }
-    });
+    // Intentionally unimplemented for Plan A replicas — checkpoint() after push
+    // wedges @tursodatabase/sync sidecars (empty WAL vs stale -info metadata).
+    void localPath;
+    void tursoDatabase;
   }
 
   async runQuery(options: {
@@ -333,7 +363,7 @@ export class TursoReplicaService {
       };
 
       try {
-        return await executeRead(options.pullBeforeRead !== false);
+        return await executeRead(options.pullBeforeRead === true);
       } catch (error) {
         const message = (error as Error).message;
         if (!isReplicaReadTransportError(message)) {
@@ -345,10 +375,20 @@ export class TursoReplicaService {
             `recovering: ${message.slice(0, 160)}`,
         );
         await this.close(options.localPath);
+        if (repairReplicaSidecarWedge(options.localPath)) {
+          console.warn(
+            `[TursoReplicaService] Reset wedged sync sidecars during read recovery: ${options.localPath}`,
+          );
+        }
 
         try {
+          const handle = await this.getOrOpen({
+            localPath: options.localPath,
+            tursoDatabase: options.tursoDatabase,
+            bootstrapIfEmpty: !fs.existsSync(options.localPath),
+          });
           await withTimeout(
-            this.pull(options.localPath, options.tursoDatabase),
+            handle.db.pull(),
             REPLICA_PULL_TIMEOUT_MS,
             "replica recovery pull",
           );
@@ -375,6 +415,7 @@ export class TursoReplicaService {
   async runSchema(
     localPath: string,
     tursoDatabase: string,
+    options?: { pullBeforeRead?: boolean },
   ): Promise<import("../DbQueryPool.js").SchemaResult> {
     return this.withSerializedPath(localPath, async () => {
       const executeSchema = async (pullFirst: boolean) => {
@@ -422,7 +463,7 @@ export class TursoReplicaService {
       };
 
       try {
-        return await executeSchema(true);
+        return await executeSchema(options?.pullBeforeRead === true);
       } catch (error) {
         const message = (error as Error).message;
         if (!isReplicaReadTransportError(message)) {
@@ -430,9 +471,19 @@ export class TursoReplicaService {
         }
 
         await this.close(localPath);
+        if (repairReplicaSidecarWedge(localPath)) {
+          console.warn(
+            `[TursoReplicaService] Reset wedged sync sidecars during schema recovery: ${localPath}`,
+          );
+        }
         try {
+          const handle = await this.getOrOpen({
+            localPath,
+            tursoDatabase,
+            bootstrapIfEmpty: !fs.existsSync(localPath),
+          });
           await withTimeout(
-            this.pull(localPath, tursoDatabase),
+            handle.db.pull(),
             REPLICA_PULL_TIMEOUT_MS,
             "replica recovery pull",
           );
@@ -518,6 +569,7 @@ export class TursoReplicaService {
       migrationConflict,
       cutoverBlocked: options.cutoverBlocked ?? false,
       cutoverBlockReason: options.cutoverBlockReason ?? null,
+      sidecarWedge: detectReplicaSidecarWedge(options.localPath),
       stats,
     };
   }
@@ -548,9 +600,80 @@ export class TursoReplicaService {
 
   /** Pull remote generation before push — avoids target_pull_gen > source_pull_gen drift. */
   private async pullAndPushReplica(handle: OpenReplicaHandle): Promise<void> {
-    await handle.db.pull();
-    await handle.db.push();
+    await withTimeout(
+      handle.db.pull(),
+      REPLICA_PULL_TIMEOUT_MS,
+      "replica pull before push",
+    );
+    await withTimeout(
+      handle.db.push(),
+      REPLICA_PULL_TIMEOUT_MS,
+      "replica push",
+    );
     markTursoReplicaReachable();
+  }
+
+  private async pullAndPushReplicaWithRecovery(
+    localPath: string,
+    tursoDatabase: string,
+    handle: OpenReplicaHandle,
+  ): Promise<void> {
+    try {
+      await this.pullAndPushReplica(handle);
+    } catch (error) {
+      if (!isReplicaCheckpointWalError((error as Error).message)) {
+        throw error;
+      }
+      await this.recoverSidecarsAfterCheckpointError(localPath);
+      const fresh = await this.getOrOpen({
+        localPath,
+        tursoDatabase,
+        bootstrapIfEmpty: !fs.existsSync(localPath),
+      });
+      await this.pullAndPushReplica(fresh);
+    }
+  }
+
+  private async pushOnlyWithRecovery(
+    localPath: string,
+    tursoDatabase: string,
+    handle: OpenReplicaHandle,
+  ): Promise<void> {
+    try {
+      await withTimeout(
+        handle.db.push(),
+        REPLICA_PULL_TIMEOUT_MS,
+        "replica push",
+      );
+      markTursoReplicaReachable();
+    } catch (error) {
+      if (!isReplicaCheckpointWalError((error as Error).message)) {
+        throw error;
+      }
+      await this.recoverSidecarsAfterCheckpointError(localPath);
+      const fresh = await this.getOrOpen({
+        localPath,
+        tursoDatabase,
+        bootstrapIfEmpty: !fs.existsSync(localPath),
+      });
+      await withTimeout(
+        fresh.db.push(),
+        REPLICA_PULL_TIMEOUT_MS,
+        "replica push after sidecar recovery",
+      );
+      markTursoReplicaReachable();
+    }
+  }
+
+  private async recoverSidecarsAfterCheckpointError(
+    localPath: string,
+  ): Promise<void> {
+    await this.close(localPath);
+    if (repairReplicaSidecarsOnCheckpointError(localPath)) {
+      console.warn(
+        `[TursoReplicaService] Reset sync sidecars after checkpoint error: ${localPath}`,
+      );
+    }
   }
 
   private async withSerializedPath<T>(
@@ -559,7 +682,30 @@ export class TursoReplicaService {
   ): Promise<T> {
     const key = normalizeDbPath(localPath);
     const prev = this.operationChains.get(key) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
+
+    let chainTimedOut = false;
+    await Promise.race([
+      prev.catch(() => undefined),
+      new Promise<void>((resolve) => {
+        setTimeout(() => {
+          chainTimedOut = true;
+          resolve();
+        }, REPLICA_CHAIN_WAIT_MS);
+      }),
+    ]);
+
+    if (chainTimedOut) {
+      console.warn(
+        `[TursoReplicaService] Operation chain wait exceeded ${REPLICA_CHAIN_WAIT_MS}ms for ${key} — closing stuck replica handle`,
+      );
+      await this.close(localPath);
+      this.operationChains.set(key, Promise.resolve());
+    }
+
+    const run = () =>
+      withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica operation (${key})`);
+
+    const next = chainTimedOut ? run() : prev.then(run, run);
     this.operationChains.set(
       key,
       next.catch(() => undefined),
@@ -607,27 +753,42 @@ export class TursoReplicaService {
     syncOnOpen?: boolean;
     inboundDrainSource?: AppDataSource;
   }): Promise<OpenReplicaHandle> {
-    const bridge = getTursoSyncBridge();
-    if (!bridge?.enabled) {
+    const bridge = ensureTursoSyncBridge();
+    if (!bridge.enabled) {
       throw new Error("Turso sync bridge not available — sign in to Papr");
     }
 
+    const localReplicaExists = fs.existsSync(options.localPath);
+    const bootstrapIfEmpty =
+      options.bootstrapIfEmpty ?? !localReplicaExists;
+
     try {
-      const creds = await bridge.fetchCredentials(options.tursoDatabase);
-      const db = await connectTursoReplica({
-        localPath: options.localPath,
-        tursoUrl: creds.tursoUrl,
-        authToken: creds.authToken,
-        bootstrapIfEmpty: options.bootstrapIfEmpty,
-        clientName: options.clientName,
-      });
+      const creds = await bridge.resolveCredentialsForReplicaOpen(
+        options.tursoDatabase,
+        { localReplicaExists },
+      );
+      const db = await withTimeout(
+        connectTursoReplica({
+          localPath: options.localPath,
+          tursoUrl: creds.tursoUrl,
+          authToken: creds.authToken,
+          bootstrapIfEmpty,
+          clientName: options.clientName,
+        }),
+        REPLICA_CONNECT_TIMEOUT_MS,
+        "replica connect",
+      );
       if (
         options.syncOnOpen &&
         isTursoReplicaOnline() &&
-        fs.existsSync(options.localPath) &&
-        options.bootstrapIfEmpty !== true
+        localReplicaExists &&
+        bootstrapIfEmpty !== true
       ) {
-        await db.pull();
+        await withTimeout(
+          db.pull(),
+          REPLICA_PULL_TIMEOUT_MS,
+          "replica pull on open",
+        );
         if (options.inboundDrainSource) {
           await drainInboundReplicaCdcIfCaughtUp({
             source: options.inboundDrainSource,

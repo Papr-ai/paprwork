@@ -44,6 +44,13 @@ import {
   type PushResult,
   type TursoCredentials,
 } from "./tursoSyncBridgeCore.js";
+import {
+  clearTursoCredentialsStore,
+  getTursoCredentialsEntry,
+  removeTursoCredentialsEntry,
+  saveTursoCredentialsEntry,
+  tursoCredentialsFromRecord,
+} from "./tursoCredentialsStore.js";
 import { recordTursoPushQuarantine } from "./tursoSyncState.js";
 import {
   localRemoteSchemaDriftTables,
@@ -114,6 +121,7 @@ interface TursoTokenResponse {
   tursoUrl: string;
   authToken: string;
   database?: string;
+  expiresAt?: string;
 }
 
 interface CachedCredentials {
@@ -183,7 +191,9 @@ export class TursoSyncBridge {
     return operation();
   }
 
-  private static readonly CREDENTIALS_TTL_MS = 30 * 60_000;
+  /** Fallback cache TTL when memory server omits expiresAt. */
+  private static readonly CREDENTIALS_TTL_MS = 50 * 60_000;
+  private static readonly CREDENTIALS_EXPIRY_SAFETY_MS = 60_000;
 
   constructor(options?: {
     jobsRootDir?: string;
@@ -245,22 +255,36 @@ export class TursoSyncBridge {
       return cached.creds;
     }
 
+    const persisted = getTursoCredentialsEntry(databaseName);
+    if (persisted && persisted.expiresAtMs > now) {
+      this.rememberCredentials(databaseName, tursoCredentialsFromRecord(persisted), persisted.expiresAtMs);
+      return tursoCredentialsFromRecord(persisted);
+    }
+
     const inFlight = this.credentialsFetchPromises.get(databaseName);
     if (inFlight) {
       return inFlight;
     }
 
     const promise = this.fetchCredentialsUncached(databaseName)
-      .then((creds) => {
-        this.credentialsCacheByDb.set(databaseName, {
-          creds,
-          expiresAt: Date.now() + TursoSyncBridge.CREDENTIALS_TTL_MS,
-        });
+      .then((bundle) => {
+        this.rememberCredentials(databaseName, bundle.creds, bundle.expiresAtMs);
         this.credentialsFetchPromises.delete(databaseName);
-        return creds;
+        return bundle.creds;
       })
       .catch((error) => {
         this.credentialsFetchPromises.delete(databaseName);
+        if (persisted) {
+          console.warn(
+            `[TursoSyncBridge] Token refresh failed for ${databaseName} — using persisted credentials (${(error as Error).message.slice(0, 80)})`,
+          );
+          this.rememberCredentials(
+            databaseName,
+            tursoCredentialsFromRecord(persisted),
+            persisted.expiresAtMs,
+          );
+          return tursoCredentialsFromRecord(persisted);
+        }
         throw error;
       });
 
@@ -268,19 +292,79 @@ export class TursoSyncBridge {
     return promise;
   }
 
+  /**
+   * Offline-first credentials for opening a local Turso replica file.
+   * Uses persisted credentials when the network or token refresh is unavailable.
+   */
+  async resolveCredentialsForReplicaOpen(
+    databaseName: string,
+    options: { localReplicaExists: boolean },
+  ): Promise<TursoCredentials> {
+    const now = Date.now();
+    const cached = this.credentialsCacheByDb.get(databaseName);
+    if (cached && cached.expiresAt > now) {
+      return cached.creds;
+    }
+
+    const persisted = getTursoCredentialsEntry(databaseName);
+    if (persisted && persisted.expiresAtMs > now) {
+      this.rememberCredentials(databaseName, tursoCredentialsFromRecord(persisted), persisted.expiresAtMs);
+      return tursoCredentialsFromRecord(persisted);
+    }
+
+    try {
+      return await this.fetchCredentials(databaseName);
+    } catch (error) {
+      if (options.localReplicaExists && persisted) {
+        console.warn(
+          `[TursoSyncBridge] Opening local replica for ${databaseName} with persisted credentials (offline or refresh failed)`,
+        );
+        this.rememberCredentials(
+          databaseName,
+          tursoCredentialsFromRecord(persisted),
+          persisted.expiresAtMs,
+        );
+        return tursoCredentialsFromRecord(persisted);
+      }
+      throw error;
+    }
+  }
+
   invalidateCredentialsCache(databaseName?: string): void {
     if (databaseName) {
       this.credentialsCacheByDb.delete(databaseName);
       this.credentialsFetchPromises.delete(databaseName);
+      removeTursoCredentialsEntry(databaseName);
       return;
     }
     this.credentialsCacheByDb.clear();
     this.credentialsFetchPromises.clear();
+    clearTursoCredentialsStore();
+  }
+
+  private rememberCredentials(
+    databaseName: string,
+    creds: TursoCredentials,
+    expiresAtMs: number,
+  ): void {
+    this.credentialsCacheByDb.set(databaseName, { creds, expiresAt: expiresAtMs });
+    saveTursoCredentialsEntry(databaseName, creds, expiresAtMs);
+  }
+
+  private resolveCredentialExpiryMs(expiresAt?: string): number {
+    const now = Date.now();
+    if (expiresAt) {
+      return Math.max(
+        now + TursoSyncBridge.CREDENTIALS_EXPIRY_SAFETY_MS,
+        new Date(expiresAt).getTime() - TursoSyncBridge.CREDENTIALS_EXPIRY_SAFETY_MS,
+      );
+    }
+    return now + TursoSyncBridge.CREDENTIALS_TTL_MS;
   }
 
   private async fetchCredentialsUncached(
     databaseName: string,
-  ): Promise<TursoCredentials> {
+  ): Promise<{ creds: TursoCredentials; expiresAtMs: number }> {
     const apiKey = await getPaprApiKey();
     if (!apiKey) {
       throw new Error("PAPR_API_KEY not configured");
@@ -324,7 +408,14 @@ export class TursoSyncBridge {
     if (!data.tursoUrl || !data.authToken) {
       throw new Error("Turso token response missing tursoUrl or authToken");
     }
-    return { tursoUrl: data.tursoUrl, authToken: data.authToken };
+    const creds: TursoCredentials = {
+      tursoUrl: data.tursoUrl,
+      authToken: data.authToken,
+    };
+    return {
+      creds,
+      expiresAtMs: this.resolveCredentialExpiryMs(data.expiresAt),
+    };
   }
 
   async deleteTursoDatabaseByName(databaseName: string): Promise<boolean> {

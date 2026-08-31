@@ -598,6 +598,7 @@ function renderSequence(
           connectionPaused={connectionPaused}
           wasInterrupted={!!message.interrupted}
           isFinishingWork={isFinishingWork}
+          contentRevision={workingChildren.length}
         >
           {workingChildren}
         </WorkingCard>,

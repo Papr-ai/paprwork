@@ -81,7 +81,7 @@ describe("drainInboundReplicaCdcIfCaughtUp", () => {
     delete process.env.PAPR_TURSO_REPLICA_SYNC;
   });
 
-  it("push+checkpoint when ledger caught up and cdcOperations > 0", async () => {
+  it("pull-only when ledger caught up and cdcOperations > 0", async () => {
     process.env.CLOUD_SYNC_ENABLED = "true";
     process.env.PAPR_TURSO_REPLICA_SYNC = "force";
 
@@ -97,9 +97,8 @@ describe("drainInboundReplicaCdcIfCaughtUp", () => {
       "0006_cloud",
     ]);
 
-    const push = vi.fn(async () => ({ ok: true as const }));
     const pull = vi.fn(async () => true);
-    const checkpoint = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
     let cdcReads = 0;
     const readCdcOperations = vi.fn(async () => {
       cdcReads += 1;
@@ -111,9 +110,8 @@ describe("drainInboundReplicaCdcIfCaughtUp", () => {
     );
     vi.spyOn(replicaMod, "getTursoReplicaService").mockReturnValue({
       readCdcOperations,
-      push,
       pull,
-      checkpoint,
+      close,
     } as unknown as ReturnType<typeof replicaMod.getTursoReplicaService>);
 
     const { drainInboundReplicaCdcIfCaughtUp } = await import(
@@ -128,11 +126,7 @@ describe("drainInboundReplicaCdcIfCaughtUp", () => {
     expect(result.drained).toBe(true);
     expect(result.cdcOperationsBefore).toBe(2);
     expect(result.cdcOperationsAfter).toBe(0);
-    expect(push).toHaveBeenCalledWith(source.dbPath, "d-test0001", {
-      pullBeforePush: false,
-    });
     expect(pull).toHaveBeenCalledWith(source.dbPath, "d-test0001");
-    expect(checkpoint).toHaveBeenCalledTimes(1);
 
     delete process.env.CLOUD_SYNC_ENABLED;
     delete process.env.PAPR_TURSO_REPLICA_SYNC;

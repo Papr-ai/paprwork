@@ -13,6 +13,7 @@ import type {
   CutoverBucket,
   CutoverClassification,
 } from "./tursoReplicaCutoverTypes.js";
+import { isRemoteAheadSchemaDrift } from "./tursoReplicaCutoverMigrationAuthority.js";
 
 function bucketReason(
   bucket: CutoverBucket,
@@ -106,18 +107,13 @@ export async function classifyRecordForReplicaCutover(
     };
   }
 
-  if (
-    snapshot.schemaDrift &&
-    snapshot.localTableCount > 0 &&
-    snapshot.remoteTableCount > 0 &&
-    snapshot.legacyArtifactTables.length === 0
-  ) {
+  if (isRemoteAheadSchemaDrift(snapshot)) {
     return {
       dbId: record.dbId,
       bucket: "blocked",
       reason: bucketReason(
         "blocked",
-        "Schema drift between local SQLite and Turso primary",
+        "Schema drift — Turso primary is ahead of local migration ledger",
       ),
       snapshot,
     };

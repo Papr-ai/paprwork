@@ -14,8 +14,8 @@ import {
 } from "./tursoReplicaMigrationConflict.js";
 import {
   detectReplicaSidecarWedge,
+  repairReplicaSidecarWedge,
 } from "./tursoReplicaSidecarWedge.js";
-import { removeTursoReplicaSidecarsOnly } from "./tursoReplicaFileGuard.js";
 
 export type InboundDrainSkipReason =
   | "offline"
@@ -70,7 +70,7 @@ export async function drainInboundReplicaCdcIfCaughtUp(options: {
 
   if (detectReplicaSidecarWedge(options.source.dbPath)) {
     await replica.close(options.source.dbPath);
-    removeTursoReplicaSidecarsOnly(options.source.dbPath);
+    repairReplicaSidecarWedge(options.source.dbPath);
   }
 
   try {

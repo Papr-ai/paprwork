@@ -212,6 +212,16 @@ async function initializeServices(): Promise<void> {
     await initializeJobsService();
     console.log("[Gateway] JobsService initialized");
 
+    if (
+      process.env.CLOUD_SYNC_ENABLED !== "false" &&
+      process.env.TURSO_SYNC_ENABLED !== "false"
+    ) {
+      ensureTursoSyncBridge();
+      console.log(
+        "[Gateway] TursoSyncBridge initialized (replica credentials ready)",
+      );
+    }
+
     // Now that JobsService is ready, install any default jobs deferred by AppService
     const { getAppService } = await import("./services/AppService.js");
     const appService = getAppService();
@@ -3048,6 +3058,18 @@ async function startGateway(): Promise<void> {
           .catch((err) =>
             console.warn(
               "[Gateway] Replica cutover startup failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
+        void import(
+          "./services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js"
+        )
+          .then(({ repairAllReplicaMigrationAuthorityOnStartup }) =>
+            repairAllReplicaMigrationAuthorityOnStartup(),
+          )
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Replica migration repair startup failed (non-fatal):",
               (err as Error).message.slice(0, 120),
             ),
           );

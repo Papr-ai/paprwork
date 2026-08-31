@@ -30,6 +30,12 @@ import {
 } from "./tursoReplicaCutoverCandidates.js";
 import { stripLegacySyncPathArtifacts } from "../../legacyCdcArtifacts.js";
 import { verifyReplicaCutoverHealth } from "./tursoReplicaCutoverVerify.js";
+import {
+  needsLocalSchemaPushBeforeCutover,
+  pushLocalSchemaToTursoBeforeCutover,
+  repairReplicaMigrationAuthorityAfterCutover,
+  restoreMigrationLedgerFromBackup,
+} from "./tursoReplicaCutoverMigrationAuthority.js";
 import type {
   CutoverBatchResult,
   CutoverClassification,
@@ -173,6 +179,19 @@ async function finalizeReplicaCutover(
 
   await registry.markSyncModeReplicaCutover(record.dbId);
 
+  try {
+    await repairReplicaMigrationAuthorityAfterCutover({
+      ...record,
+      syncMode: "replica",
+      cutoverAt: new Date().toISOString(),
+    });
+  } catch (error) {
+    console.warn(
+      `[TursoReplicaCutover] Post-cutover migration repair failed for ${record.dbId}: ` +
+        `${(error as Error).message.slice(0, 200)}`,
+    );
+  }
+
   await registry.updateReplicaPushState(record.dbId, {
     lastReplicaPushError: null,
     lastReplicaPushAt: new Date().toISOString(),
@@ -275,6 +294,17 @@ export async function runCutoverForRecord(
       );
     }
 
+    const restoredLedger = restoreMigrationLedgerFromBackup(
+      record.localPath,
+      backupPath,
+    );
+    if (restoredLedger.length > 0) {
+      console.log(
+        `[TursoReplicaCutover] Restored migration ledger for ${record.dbId}: ` +
+          restoredLedger.join(", "),
+      );
+    }
+
     const needsLegacyPush =
       classification.bucket === "seed_local" &&
       classification.snapshot.localTableCount > 0 &&
@@ -303,6 +333,35 @@ export async function runCutoverForRecord(
       }
     }
 
+    let schemaPush:
+      | { applied: string[]; skipped?: boolean; error?: string }
+      | undefined;
+    if (needsLocalSchemaPushBeforeCutover(classification)) {
+      schemaPush = await pushLocalSchemaToTursoBeforeCutover(record);
+      if (schemaPush.error) {
+        await blockCutover(
+          record.dbId,
+          schemaPush.error ?? "Local schema push failed before cutover",
+        );
+        return {
+          dbId: record.dbId,
+          dryRun: false,
+          classification,
+          ok: false,
+          blocked: true,
+          backupPath,
+          schemaPush,
+          error: schemaPush.error,
+        };
+      }
+      if (schemaPush.applied.length > 0) {
+        console.log(
+          `[TursoReplicaCutover] Pushed local schema to Turso for ${record.dbId}: ` +
+            schemaPush.applied.join(", "),
+        );
+      }
+    }
+
     if (!fs.existsSync(record.localPath) && classification.bucket === "pull_remote") {
       await blockCutover(record.dbId, "Local database file missing before cutover");
       return {
@@ -325,6 +384,7 @@ export async function runCutoverForRecord(
       ok: true,
       backupPath,
       legacyPush,
+      schemaPush,
     };
   } catch (error) {
     const message = (error as Error).message;

@@ -36,6 +36,7 @@ describe("legacyCdcArtifacts", () => {
       ),
     ).toBe(true);
     expect(isLegacyCdcArtifactTable("contacts")).toBe(false);
+    expect(isLegacySyncPathTable("schema_migrations")).toBe(false);
     expect(isLegacySyncPathTable("_papr_sync_log")).toBe(true);
     expect(isLegacySyncPathTable("_papr_schema_migrations")).toBe(false);
   });
@@ -78,6 +79,32 @@ describe("legacyCdcArtifacts", () => {
     after.close();
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it.skipIf(!canUseBetterSqlite)(
+    "stripLegacySyncPathArtifacts preserves schema_migrations ledger",
+    () => {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-ledger-"));
+      const dbPath = path.join(dir, "data.db");
+      const db = new Database(dbPath);
+      db.exec(`
+        CREATE TABLE contacts (id INTEGER PRIMARY KEY, name TEXT);
+        CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
+        INSERT INTO schema_migrations (id, applied_at) VALUES ('0003_person.sql', datetime('now'));
+      `);
+      db.close();
+
+      const dropped = stripLegacySyncPathArtifacts(dbPath);
+      expect(dropped).not.toContain("schema_migrations");
+
+      const after = new Database(dbPath, { readonly: true });
+      const ids = after
+        .prepare("SELECT id FROM schema_migrations ORDER BY id")
+        .all() as Array<{ id: string }>;
+      expect(ids.map((row) => row.id)).toEqual(["0003_person.sql"]);
+      after.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    },
+  );
 
   it.skipIf(!canUseBetterSqlite)("stripLegacySyncPathArtifacts drops V3 sync tables", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-sync-path-"));

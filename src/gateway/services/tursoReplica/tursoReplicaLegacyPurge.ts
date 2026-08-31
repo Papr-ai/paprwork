@@ -11,14 +11,14 @@ import {
   stripLegacySyncPathArtifacts,
 } from "../legacyCdcArtifacts.js";
 import { clearLegacyTursoSyncStateForDbPath, hasLegacyTursoSyncStateForDbPath } from "../tursoSyncState.js";
-import {
-  removeTursoReplicaSidecarsOnly,
-} from "./tursoReplicaFileGuard.js";
 import { getTursoReplicaService } from "./TursoReplicaService.js";
 import { pullLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
 import type { AppDataSource } from "../appDataSources.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
-import { detectReplicaSidecarWedge } from "./tursoReplicaSidecarWedge.js";
+import {
+  detectReplicaSidecarWedge,
+  repairReplicaSidecarWedge,
+} from "./tursoReplicaSidecarWedge.js";
 
 function recordAsDataSource(record: DatabaseRecord): AppDataSource {
   return {
@@ -65,7 +65,7 @@ export async function purgeLegacySyncPathForReplicaRecord(
 
   let resetSidecars = false;
   if (detectReplicaSidecarWedge(dbPath)) {
-    removeTursoReplicaSidecarsOnly(dbPath);
+    repairReplicaSidecarWedge(dbPath);
     resetSidecars = true;
   }
 

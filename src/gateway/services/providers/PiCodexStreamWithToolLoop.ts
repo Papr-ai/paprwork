@@ -28,8 +28,15 @@ import {
 import {
   applyMidTurnContextShaping,
   resolvePiStreamMemoryLoopAction,
+  type PiStreamMemoryLoopAction,
   WRAP_UP_AFTER_MEMORY_BUDGET,
 } from "./piStreamMemoryWrapUp.js";
+import {
+  logPiStreamMemoryCheck,
+  logPiTurnEnd,
+  logWrapUpTrigger,
+  type PiTurnEndReason,
+} from "../agent/turnEndDiagnostics.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
   EMPTY_PI_AI_BILLING_USAGE,
@@ -398,8 +405,42 @@ export async function* createPiCodexStreamWithToolLoop(
   cumulativeTokens = Math.ceil(initialContextStr.length / 4);
 
   console.log(
-    `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens`,
+    `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens ` +
+      `(chatId=${toolContext?.chatId ?? "unknown"}, sessionId=${streamOptions.sessionId})`,
   );
+
+  let turnEndLogged = false;
+  let lastModelFinishReason: string | null = null;
+  let streamedTextChars = 0;
+
+  const emitTurnEnd = (
+    reason: PiTurnEndReason,
+    extra?: {
+      memoryCheck?: ReturnType<typeof checkPiStreamMemory>;
+      memoryAction?: PiStreamMemoryLoopAction["kind"];
+    },
+  ): void => {
+    if (turnEndLogged) {
+      return;
+    }
+    turnEndLogged = true;
+    logPiTurnEnd({
+      chatId: toolContext?.chatId,
+      sessionId: streamOptions.sessionId,
+      reason,
+      step,
+      maxSteps,
+      totalToolCalls,
+      cumulativeTokens,
+      modelFinishReason: lastModelFinishReason,
+      textOnlyWrapUpUsed: textOnlyWrapUpStepUsed,
+      validationErrorCount,
+      memoryCheck: extra?.memoryCheck,
+      memoryAction: extra?.memoryAction,
+      assistantTextPreview:
+        streamedTextChars > 0 ? `~${streamedTextChars} chars streamed to UI` : undefined,
+    });
+  };
 
   stepLoop: while (step < maxSteps) {
     // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
@@ -415,6 +456,7 @@ export async function* createPiCodexStreamWithToolLoop(
           message: `Too many validation errors (${validationErrorCount}). This usually indicates a schema mismatch or malformed data. Please refresh and try again.`,
         },
       };
+      emitTurnEnd("validation_loop");
       break;
     }
     
@@ -424,6 +466,13 @@ export async function* createPiCodexStreamWithToolLoop(
       memoryCheck,
       textOnlyWrapUpStepUsed,
     );
+
+    logPiStreamMemoryCheck({
+      chatId: toolContext?.chatId,
+      step,
+      check: memoryCheck,
+      action: memoryAction,
+    });
 
     if (memoryAction.kind === "process_error") {
       const streamMb = Math.round(memoryCheck.streamDelta / 1024 / 1024);
@@ -444,6 +493,10 @@ export async function* createPiCodexStreamWithToolLoop(
             "Try again shortly, restart the app, or stagger scheduled agent jobs.",
         },
       };
+      emitTurnEnd("process_memory_error", {
+        memoryCheck,
+        memoryAction: memoryAction.kind,
+      });
       break;
     }
 
@@ -452,6 +505,10 @@ export async function* createPiCodexStreamWithToolLoop(
         `[PiCodexToolLoop] Stream memory still high after wrap-up step ` +
           `(+${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB) — ending turn gracefully`,
       );
+      emitTurnEnd("memory_graceful_end", {
+        memoryCheck,
+        memoryAction: memoryAction.kind,
+      });
       break stepLoop;
     }
 
@@ -460,6 +517,14 @@ export async function* createPiCodexStreamWithToolLoop(
       textOnlyWrapUpStepUsed = true;
       applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_MEMORY_BUDGET);
       memoryPressure = true;
+      logWrapUpTrigger({
+        chatId: toolContext?.chatId,
+        sessionId: streamOptions.sessionId,
+        trigger: "memory_force_wrap_up",
+        step,
+        totalToolCalls,
+        memoryCheck,
+      });
       console.warn(
         `[PiCodexToolLoop] Stream memory budget exceeded ` +
           `(+${Math.round(memoryCheck.streamDelta / 1024 / 1024)}MB) — ` +
@@ -519,6 +584,7 @@ export async function* createPiCodexStreamWithToolLoop(
               shouldRetryCapacity = true;
             } else {
               yield yieldRateLimitExhausted();
+              emitTurnEnd("rate_limit_exhausted");
               return;
             }
           } else if (err && typeof err === "object" && "errors" in err) {
@@ -539,6 +605,7 @@ export async function* createPiCodexStreamWithToolLoop(
                     "Too many validation errors. This usually indicates a schema mismatch. Please refresh and try again.",
                 },
               };
+              emitTurnEnd("validation_loop");
               return;
             }
 
@@ -561,6 +628,7 @@ export async function* createPiCodexStreamWithToolLoop(
                   break;
                 }
                 yield yieldRateLimitExhausted();
+                emitTurnEnd("rate_limit_exhausted");
                 return;
               }
             }
@@ -579,6 +647,7 @@ export async function* createPiCodexStreamWithToolLoop(
                   : event.reason === "length"
                     ? "length"
                     : "stop";
+              lastModelFinishReason = lastFinishReason;
               finalMessage = event.message;
 
               const stepUsage = extractPiAiUsageFromDoneEvent(event);
@@ -639,6 +708,7 @@ export async function* createPiCodexStreamWithToolLoop(
                   break;
                 }
                 yield yieldRateLimitExhausted();
+                emitTurnEnd("rate_limit_exhausted");
                 return;
               }
             }
@@ -646,6 +716,12 @@ export async function* createPiCodexStreamWithToolLoop(
             // turn when capacity retries or wrap-up ends before execution.
             if (chunk?.type === "tool-call") {
               continue;
+            }
+            if (chunk?.type === "text-delta") {
+              const delta = (chunk as { text?: string }).text;
+              if (typeof delta === "string") {
+                streamedTextChars += delta.length;
+              }
             }
             if (chunk) yield chunk;
           }
@@ -657,6 +733,7 @@ export async function* createPiCodexStreamWithToolLoop(
             shouldRetryCapacity = true;
           } else {
             yield yieldRateLimitExhausted();
+            emitTurnEnd("rate_limit_exhausted");
             return;
           }
         } else {
@@ -701,6 +778,7 @@ export async function* createPiCodexStreamWithToolLoop(
         console.warn(
           `[PiCodexToolLoop] Text-only wrap-up: ignoring ${toolCallsThisTurn.length} tool call(s)`,
         );
+        emitTurnEnd("text_only_wrap_up_ignored_tools");
         break stepLoop;
       }
 
@@ -760,6 +838,7 @@ export async function* createPiCodexStreamWithToolLoop(
             `STOP retrying this exact call. Explain the validation error to the user and ask how to proceed, ` +
             `or use a different approach (edit_file on an existing app, smaller files payload, fix schema fields).]`,
         } as never);
+        emitTurnEnd("repetition_abort");
         break stepLoop;
       }
       
@@ -796,6 +875,13 @@ export async function* createPiCodexStreamWithToolLoop(
         );
         textOnlyWrapUpStepUsed = true;
         applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
+        logWrapUpTrigger({
+          chatId: toolContext?.chatId,
+          sessionId: streamOptions.sessionId,
+          trigger: "tool_call_hard_limit",
+          step,
+          totalToolCalls,
+        });
         continue stepLoop;
       }
       
@@ -851,6 +937,7 @@ export async function* createPiCodexStreamWithToolLoop(
             message: `Too many validation errors (${validationErrorCount}). This usually indicates a schema mismatch or malformed tool arguments. Please refresh and try again.`,
           },
         };
+        emitTurnEnd("validation_loop");
         break stepLoop;
       }
 
@@ -864,6 +951,13 @@ export async function* createPiCodexStreamWithToolLoop(
         );
         textOnlyWrapUpStepUsed = true;
         applyForcedTextOnlyWrapUpStep(context, WRAP_UP_AFTER_TOOLS_NO_TEXT);
+        logWrapUpTrigger({
+          chatId: toolContext?.chatId,
+          sessionId: streamOptions.sessionId,
+          trigger: "step_limit",
+          step,
+          totalToolCalls,
+        });
         continue stepLoop;
       } else if (step >= STEP_WARNING_THRESHOLD) {
         // At 90+ steps, warn the model
@@ -918,8 +1012,15 @@ export async function* createPiCodexStreamWithToolLoop(
     } else {
       // Model stopped without pending tools — turn is done; post-stream wrap-up
       // in AgentService adds user text if the sequence ends on tool(s).
+      emitTurnEnd(
+        lastFinishReason === "length" ? "model_length" : "model_stop",
+      );
       break stepLoop;
     }
+  }
+
+  if (!turnEndLogged) {
+    emitTurnEnd("max_steps_exhausted");
   }
 }
 

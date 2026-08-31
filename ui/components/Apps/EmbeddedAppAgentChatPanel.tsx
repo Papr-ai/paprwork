@@ -158,7 +158,11 @@ export function EmbeddedAppAgentChatPanel({
               />
             )}
             {(toolCalls.length > 0 || plans.length > 0) && (
-              <WorkingCard isExploring={sending} lastActivity={lastActivity}>
+              <WorkingCard
+                isExploring={sending}
+                lastActivity={lastActivity}
+                contentRevision={toolCalls.length + plans.length}
+              >
                 {plans.map((plan) => (
                   <PlanCard key={plan.planId} data={plan} />
                 ))}

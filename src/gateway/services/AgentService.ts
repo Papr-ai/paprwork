@@ -80,6 +80,11 @@ import {
 } from "./agent/streamChunks.js";
 import { orchestrateModelStream, sequenceEndsWithToolWithoutTrailingText } from "./agent/streamOrchestrator.js";
 import {
+  explainPostStreamWrapUp,
+  logAgentTurnEnd,
+  previewText,
+} from "./agent/turnEndDiagnostics.js";
+import {
   mergeWrapUpTextIntoState,
   runAiSdkWrapUpContinuation,
   runPiAiWrapUpContinuation,
@@ -1192,7 +1197,16 @@ export class AgentService {
           
           if (stepCount >= FORCE_STOP) {
             console.warn(
-              `[AgentService] 🛑 Force stopping at step ${stepCount} (threshold: ${FORCE_STOP}/${maxSteps})`
+              `[AgentService] 🛑 Force stopping at step ${stepCount} (threshold: ${FORCE_STOP}/${maxSteps})`,
+            );
+            console.warn(
+              `[TurnEnd:ai-sdk] ${JSON.stringify({
+                ts: new Date().toISOString(),
+                chatId,
+                trigger: "step_force_stop",
+                stepCount,
+                maxSteps,
+              })}`,
             );
             return true;
           }
@@ -2129,6 +2143,71 @@ export class AgentService {
             wrapUpError,
           );
         }
+      } else {
+        const skip = explainPostStreamWrapUp({
+          sequence,
+          toolCallCount: toolCalls.length,
+          aborted: abortController.signal.aborted,
+          isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+        });
+        if (toolCalls.length > 0 && skip.skipReason) {
+          console.warn(
+            `[TurnEnd:post-stream-wrap-up-skipped] ${JSON.stringify({
+              ts: new Date().toISOString(),
+              chatId,
+              reason: skip.skipReason,
+            })}`,
+          );
+        }
+      }
+
+      {
+        const wrapUpDecision = explainPostStreamWrapUp({
+          sequence,
+          toolCallCount: toolCalls.length,
+          aborted: abortController.signal.aborted,
+          isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+        });
+        let activePlanCount = 0;
+        let activePlanPendingSteps = 0;
+        try {
+          const { getPlanService } = await import("./PlanService.js");
+          const plans = await getPlanService().getActivePlansForChat(chatId);
+          activePlanCount = plans.length;
+          activePlanPendingSteps = plans.reduce(
+            (sum, plan) =>
+              sum +
+              plan.steps.filter(
+                (s) => s.status !== "completed" && s.status !== "skipped",
+              ).length,
+            0,
+          );
+        } catch {
+          // Plan lookup is best-effort for diagnostics only.
+        }
+        logAgentTurnEnd({
+          chatId,
+          route: usePiAi ? "pi-ai" : "ai-sdk",
+          provider: config.provider,
+          model: config.model,
+          toolCallCount: toolCalls.length,
+          assistantTextChars: assistantText.length,
+          thinkingTextChars: thinkingText.length,
+          sequenceItems: sequence.length,
+          trailingTextAfterTools:
+            toolCalls.length > 0 &&
+            !sequenceEndsWithToolWithoutTrailingText(sequence),
+          aborted: abortController.signal.aborted,
+          contextTokens:
+            piAiContextTokens > 0
+              ? piAiContextTokens
+              : tokenUsage?.promptTokens,
+          postStreamWrapUpRequested: wrapUpDecision.requested,
+          postStreamWrapUpSkipReason: wrapUpDecision.skipReason,
+          activePlanCount,
+          activePlanPendingSteps,
+          assistantTextPreview: previewText(assistantText),
+        });
       }
 
       // 4. Empty-completion silent self-heal

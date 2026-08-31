@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { useFollowScroll } from "../../hooks/useFollowScroll";
 import "./WorkingCard.css";
 
 const SHIMMER_DELAY_MS = 3000;
@@ -16,6 +17,8 @@ interface WorkingCardProps {
   connectionPaused?: boolean; // Gateway disconnected mid-stream
   wasInterrupted?: boolean; // Turn ended without the agent finishing
   isFinishingWork?: boolean; // Post-tool text wrap-up in progress
+  /** Bumps when inner content grows (tool rows, jobs, etc.). */
+  contentRevision?: number;
 }
 
 export const WorkingCard: React.FC<WorkingCardProps> = ({
@@ -26,10 +29,22 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
   connectionPaused = false,
   wasInterrupted = false,
   isFinishingWork = false,
+  contentRevision = 0,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [showShimmer, setShowShimmer] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const shouldFollowScroll = isExploring && !isCollapsed;
+
+  useFollowScroll(
+    contentRef,
+    [lastActivity, contentRevision, isCollapsed],
+    {
+      enabled: shouldFollowScroll,
+      resetFollow: isExploring,
+    },
+  );
 
   useEffect(() => {
     setShowShimmer(false);
@@ -99,6 +114,7 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
         </div>
       </div>
       <div
+        ref={contentRef}
         className={`working-card-content ${isCollapsed ? "working-card-content--collapsed" : ""}`}
         style={{
           maxHeight: isCollapsed ? "0px" : "420px",

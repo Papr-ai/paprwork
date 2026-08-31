@@ -45,6 +45,8 @@ export interface TursoReplicaSyncStatus {
   migrationConflict: boolean;
   cutoverBlocked: boolean;
   cutoverBlockReason: string | null;
+  /** True when sync WAL is empty but -info claims progress — pull/push will wedge. */
+  sidecarWedge: boolean;
   stats: TursoReplicaDatabaseStats | null;
 }
 

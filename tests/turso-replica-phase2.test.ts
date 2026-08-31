@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppDataSource } from "../src/gateway/services/appDataSources.js";
+import { tursoReplicaBridgeMock } from "./helpers/tursoReplicaBridgeMock.js";
 
 describe("tursoReplicaSchemaLedger", () => {
   afterEach(() => {
@@ -237,15 +238,9 @@ describe("TursoReplicaService.runWrite", () => {
       })),
     }));
 
-    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
-        enabled: true,
-        fetchCredentials: vi.fn(async () => ({
-          tursoUrl: "libsql://example.turso.io",
-          authToken: "token",
-        })),
-      }),
-    }));
+    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
+      tursoReplicaBridgeMock(),
+    );
 
     vi.doMock("fs", async (importOriginal) => {
       const actual = await importOriginal<typeof import("fs")>();
@@ -301,15 +296,9 @@ describe("TursoReplicaService.push", () => {
       })),
     }));
 
-    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
-        enabled: true,
-        fetchCredentials: vi.fn(async () => ({
-          tursoUrl: "libsql://example.turso.io",
-          authToken: "token",
-        })),
-      }),
-    }));
+    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
+      tursoReplicaBridgeMock(),
+    );
 
     const { getTursoReplicaService, resetTursoReplicaServiceForTests } =
       await import("../src/gateway/services/tursoReplica/TursoReplicaService.js");
@@ -349,15 +338,9 @@ describe("TursoReplicaService.syncStatus", () => {
       })),
     }));
 
-    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
-        enabled: true,
-        fetchCredentials: vi.fn(async () => ({
-          tursoUrl: "libsql://example.turso.io",
-          authToken: "token",
-        })),
-      }),
-    }));
+    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
+      tursoReplicaBridgeMock(),
+    );
 
     vi.doMock("fs", async (importOriginal) => {
       const actual = await importOriginal<typeof import("fs")>();
@@ -404,15 +387,9 @@ describe("TursoReplicaService.syncStatus", () => {
       })),
     }));
 
-    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
-      getTursoSyncBridge: () => ({
-        enabled: true,
-        fetchCredentials: vi.fn(async () => ({
-          tursoUrl: "libsql://example.turso.io",
-          authToken: "token",
-        })),
-      }),
-    }));
+    vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
+      tursoReplicaBridgeMock(),
+    );
 
     vi.doMock("fs", async (importOriginal) => {
       const actual = await importOriginal<typeof import("fs")>();
@@ -433,7 +410,7 @@ describe("TursoReplicaService.syncStatus", () => {
       syncMode: "replica",
     });
 
-    expect(pull).toHaveBeenCalledTimes(1);
+    expect(pull).not.toHaveBeenCalled();
     expect(push).not.toHaveBeenCalled();
     expect(stats).toHaveBeenCalledTimes(1);
     expect(status.pendingOps).toBe(2);

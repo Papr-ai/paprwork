@@ -1,8 +1,20 @@
 /**
- * Detect Turso Sync sidecar metadata drift (empty WAL vs non-zero watermark).
+ * Plan A @tursodatabase/sync sidecar wedge detection and one-time repair.
+ *
+ * Two different "sidecar" concepts:
+ * - Legacy (cutover): `_papr_sync_log`, CDC tables, legacy sync state — stripped at cutover,
+ *   not recreated. Safe to delete permanently.
+ * - Plan A replica (required): `data.db-info`, `data.db-changes`, `data.db-wal`, `data.db-shm`,
+ *   `data.db-wal-revert` — owned by @tursodatabase/sync. The SDK recreates them on connect;
+ *   do not delete them in normal operation.
+ *
+ * A "wedge" is when Plan A metadata (-info) claims WAL progress but the sync WAL is empty.
+ * That state wedges pull()/push(). Root cause: calling checkpoint() after push on replica files.
+ * Repair resets only Plan A sidecars (keeps data.db) for already-wedged disks — not a startup scan.
  */
 
 import * as fs from "fs";
+import { removeTursoReplicaSidecarsOnly } from "./tursoReplicaFileGuard.js";
 
 interface ReplicaSidecarInfo {
   revertSinceWalWatermark: number;
@@ -67,4 +79,28 @@ export function detectReplicaSidecarWedge(dbPath: string): boolean {
     return false;
   }
   return info.revertSinceWalWatermark > 0 || info.walFragmentNo > 0;
+}
+
+/**
+ * Reset @tursodatabase/sync sidecars when metadata claims WAL progress but the sync WAL is empty.
+ * Keeps data.db intact — next pull reconnects from Turso.
+ */
+export function repairReplicaSidecarWedge(dbPath: string): boolean {
+  if (!detectReplicaSidecarWedge(dbPath)) {
+    return false;
+  }
+  removeTursoReplicaSidecarsOnly(dbPath);
+  return true;
+}
+
+/**
+ * After a sync-engine checkpoint/WAL error, reset Plan A sidecars (keep data.db).
+ * Stronger than detect-only repair — the error itself signals metadata/WAL drift.
+ */
+export function repairReplicaSidecarsOnCheckpointError(dbPath: string): boolean {
+  if (!fs.existsSync(dbPath)) {
+    return false;
+  }
+  removeTursoReplicaSidecarsOnly(dbPath);
+  return true;
 }

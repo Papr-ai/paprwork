@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.5.0",
+  "version": "2.5.1",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -147,6 +147,10 @@
     "cutover:replica:dry-run": "npm run build:gateway && node scripts/cutover-replica.mjs --dry-run",
     "cutover:replica": "npm run build:gateway && node scripts/cutover-replica.mjs",
     "test:replica-cutover-e2e": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-replica-cutover-e2e.mjs",
+    "test:replica-sidecar": "npx vitest run tests/turso-replica-checkpoint-recovery.test.ts tests/turso-replica-sidecar-wedge.test.ts tests/turso-replica-inbound-drain.test.ts tests/db-router.test.ts tests/turso-replica-phase2.test.ts --project unit-backend",
+    "verify:replica-sidecar": "npm run build:gateway && node scripts/verify-replica-sidecar-health.mjs",
+    "verify:replica-sidecar:repair": "npm run build:gateway && node scripts/verify-replica-sidecar-health.mjs --repair",
+    "apply:replica-migration": "npm run build:gateway && node scripts/apply-replica-migration.mjs",
     "test:replica-production-e2e": "node scripts/test-replica-production-e2e.mjs",
     "test:replica-production-e2e:http": "node scripts/test-replica-production-e2e.mjs --http",
     "test:replica-connect-flap": "node scripts/test-replica-connect-flap.mjs",

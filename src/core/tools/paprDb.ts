@@ -29,7 +29,8 @@ export const paprDbSyncStatusTool = createTool({
   id: "papr_db_sync_status",
   description:
     "Plan A Turso replica sync status for a registry database. " +
-    "Returns online, syncMode, pendingPush, pendingOps, cutoverBlocked, lastPushError. " +
+    "Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. " +
+    "When sidecarWedge is true, pull/push/migration will fail until sidecars are reset (repair_cloud_sync pull or accept_cloud). " +
     "Requires PAPR_TURSO_REPLICA_SYNC and Papr cloud sync enabled.",
   inputSchema: dbRefSchema,
   execute: async (input) => {

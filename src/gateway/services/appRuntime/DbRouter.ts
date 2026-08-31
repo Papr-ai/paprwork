@@ -1,7 +1,7 @@
 /**
- * Routes mini-app DB reads: local SQLite first, Turso fallback when data.db is missing.
- * Writes always use local SQLite (cloud replica is updated via TursoSyncBridge push).
- * One Turso database per linked job.
+ * Routes mini-app DB reads and writes.
+ * Legacy DBs: local better-sqlite3. Replica DBs: @tursodatabase/sync with
+ * local-first UI reads (background pull for cloud freshness).
  */
 
 import * as fs from "fs";
@@ -24,7 +24,10 @@ import {
   schemaLinkedDbViaTursoReplica,
   shouldUseTursoReplicaForSource,
 } from "../tursoReplica/tursoReplicaRouting.js";
-import { isReplicaCheckpointWalError } from "../tursoReplica/tursoReplicaCheckpointRecovery.js";
+import {
+  isReplicaCheckpointWalError,
+  isReplicaSqlSchemaError,
+} from "../tursoReplica/tursoReplicaCheckpointRecovery.js";
 import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import { displayTableName, rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
@@ -43,6 +46,33 @@ const tursoClients = new Map<string, Client>();
 const tursoClientPromises = new Map<string, Promise<Client | null>>();
 const tursoUnavailableUntil = new Map<string, number>();
 const TURSO_UNAVAILABLE_COOLDOWN_MS = 30_000;
+/** Mini-app UI reads must not block on cloud pull or a stuck sync queue. */
+const REPLICA_MINI_APP_READ_TIMEOUT_MS = 10_000;
+
+function withMiniAppReplicaReadTimeout<T>(
+  promise: Promise<T>,
+  label: string,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(
+        new Error(
+          `${label} timed out after ${REPLICA_MINI_APP_READ_TIMEOUT_MS}ms`,
+        ),
+      );
+    }, REPLICA_MINI_APP_READ_TIMEOUT_MS);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
 
 export function isLocalDbReadable(dbPath: string): boolean {
   try {
@@ -177,13 +207,23 @@ export class DbRouter {
   ): Promise<RoutedQueryResult> {
     if (shouldUseTursoReplicaForSource(source)) {
       try {
-        const result = await queryLinkedDbViaTursoReplica(source, sql, params);
+        const result = await withMiniAppReplicaReadTimeout(
+          queryLinkedDbViaTursoReplica(source, sql, params, {
+            pullBeforeRead: false,
+          }),
+          `replica read (${source.alias ?? source.dbId ?? "db"})`,
+        );
         console.log(
           `[DbRouter] Turso replica query app=${appId} source=${source.alias} rows=${result.count}`,
         );
         return { ...result, backend: "turso-replica" };
       } catch (error) {
         const message = (error as Error).message;
+
+        if (isReplicaSqlSchemaError(message)) {
+          throw error;
+        }
+
         const tursoDatabase = resolveTursoDatabaseName(source);
 
         if (tursoDatabase && isReplicaCheckpointWalError(message)) {

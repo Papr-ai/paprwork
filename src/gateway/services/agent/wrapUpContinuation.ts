@@ -3,9 +3,9 @@ import type { LanguageModel, ModelMessage } from "ai";
 import type { StreamChunk } from "../../../core/types/index.js";
 import {
   orchestrateModelStream,
-  sequenceEndsWithToolWithoutTrailingText,
   type StreamOrchestratorResult,
 } from "./streamOrchestrator.js";
+import { explainPostStreamWrapUp } from "./turnEndDiagnostics.js";
 
 export const WRAP_UP_AFTER_ORPHAN_DRAIN =
   "[SYSTEM: You emitted tool calls then stopped before they could run. They have now been executed. " +
@@ -29,18 +29,6 @@ export function applyForcedTextOnlyWrapUpStep(
   });
 }
 
-function sequenceHasInterruptedTools(
-  sequence: Array<{ type: string; data: unknown }>,
-): boolean {
-  return sequence.some((item) => {
-    if (item.type !== "tool") {
-      return false;
-    }
-    const status = (item.data as { status?: string }).status;
-    return status === "interrupted" || status === "calling";
-  });
-}
-
 /**
  * After the assistant stream has fully finished (turn done): add one text-only
  * summary when the visible sequence ends on tool call(s) with no trailing text.
@@ -54,15 +42,7 @@ export function shouldRequestWrapUpSummary(args: {
   aborted: boolean;
   isWrapUpContinuation: boolean;
 }): boolean {
-  if (sequenceHasInterruptedTools(args.sequence)) {
-    return false;
-  }
-  return (
-    !args.aborted &&
-    !args.isWrapUpContinuation &&
-    args.toolCallCount > 0 &&
-    sequenceEndsWithToolWithoutTrailingText(args.sequence)
-  );
+  return explainPostStreamWrapUp(args).requested;
 }
 
 export function mergeWrapUpTextIntoState(
