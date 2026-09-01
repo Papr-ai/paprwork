@@ -34,6 +34,14 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Any, Union
 
+# Bump when this helper gains behaviour app backends depend on.
+# Vendored copies in <app>/backend/papr_db.py are refreshed by the gateway
+# when their PAPR_DB_HELPER_VERSION is lower (or absent). Copies at or above
+# this number are left alone, so hand-edited helpers are never clobbered.
+#   1 = pre-proxy (writes directly to the SQLite file — wedges replica sync)
+#   2 = proxy support (PAPR_DB_MODE=proxy), query()/write(), _ProxyConnection
+PAPR_DB_HELPER_VERSION = 2
+
 
 @dataclass(frozen=True)
 class QueryResult:

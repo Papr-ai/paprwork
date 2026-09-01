@@ -22,12 +22,17 @@ script — which is why the fix has to live here and not in job code.
 
 HOW IT WORKS
 ------------
-When PAPR_DB_*_MODE is "replica" the gateway also exports proxy credentials:
+For a replica database both reads and writes go through the desktop gateway,
+which owns the sync engine's connection:
 
-  * reads  → local file opened `mode=ro` (never takes a write lock, never
-             checkpoints, so the sync engine's offset stays valid)
-  * writes → POST to the gateway, which owns a long-lived connection and
-             coordinates with the sync engine
+  * writes → POST to the gateway; it coordinates with the sync engine instead
+             of letting a job process checkpoint the WAL
+  * reads  → same route. Reading the file directly returns STALE data: the
+             engine holds committed state the OS file does not reflect, so a
+             job could not read its own writes.
+
+Reading the file directly is only used as a fallback when no gateway
+credentials are present.
 
 "local" (unsynced) and "turso" (cloud sandbox) modes are unchanged.
 
@@ -112,6 +117,15 @@ def _resolve(source_id):
 
 
 # ── gateway proxy ─────────────────────────────────────────────────────────────
+
+def _has_gateway_credentials():
+    """True when writes/reads can be routed through the desktop gateway."""
+    if os.environ.get("PAPR_DB_PROXY_URL", "").strip() and os.environ.get(
+        "PAPR_DB_PROXY_TOKEN", ""
+    ).strip():
+        return True
+    return bool(os.environ.get("APP_ID", "").strip())
+
 
 def _proxy_post(action, sql, params, alias=""):
     """POST to the gateway. Token → per-run proxy session; otherwise the public
@@ -206,59 +220,37 @@ class ReplicaConnection:
         self._last = None
 
     def _read_rows(self, sql, params):
-        """Open, read, close — one statement at a time.
+        """Read through the gateway — the same owner that serves writes.
 
-        A held-open read handle keeps a SHARED lock on the file. The Turso sync
-        engine needs an EXCLUSIVE lock to commit a gateway write, so a job that
-        reads and then writes deadlocks against itself:
+        Reading the file directly looks cheaper but returns STALE data. The
+        sync engine keeps committed state the OS file does not reflect: after
+        a gateway write, sync_status reported mainWalSize 1425544 while
+        data.db-wal on disk was 0 bytes, and a mode=ro connection read the
+        pre-write value. A job could not read its own writes.
 
-            Locking error: Failed locking file '...data.db'.
-            File is locked by another process
+        Direct reads also fought the engine for locks — a held-open read
+        blocked the EXCLUSIVE lock a write needs ("Failed locking file"), and
+        a read landing mid-commit failed with "database is locked". Routing
+        through the single owner removes the staleness and the contention
+        together.
 
-        Closing between statements is safe here precisely because mode=ro never
-        checkpoints — the close that truncates the WAL only happens on a
-        writable handle. So this costs a little open/close overhead and buys
-        back read+write in the same job.
+        Falls back to a read-only file read only when no gateway credentials
+        exist, which is better than failing outright — but it may be stale.
         """
-        # timeout= sets SQLite's busy handler: the sync engine takes an
-        # EXCLUSIVE lock while it commits/checkpoints, and without a busy
-        # timeout a read landing in that window fails instantly with
-        # "database is locked". Waiting is correct — those windows are short.
-        last = None
-        for attempt in range(_READ_RETRIES):
-            con = None
-            try:
-                con = sqlite3.connect(
-                    "file:%s?mode=ro" % self._path, uri=True, timeout=_BUSY_TIMEOUT_S
-                )
-                con.row_factory = sqlite3.Row
-                return con.execute(sql, params or []).fetchall()
-            except sqlite3.OperationalError as e:
-                msg = str(e)
-                # "unable to open database file" here is not a missing file —
-                # it is a WAL-mode database whose -shm is absent because the
-                # sync engine released its handle. A read-only connection is
-                # not allowed to create -shm, so direct reads are impossible
-                # until the engine reopens. Fall through to the gateway, which
-                # always holds a valid handle.
-                if "unable to open" in msg:
-                    return self._read_via_gateway(sql, params)
-                if "locked" not in msg and "busy" not in msg:
-                    raise
-                last = e
-                time.sleep(0.25 * (attempt + 1))
-            finally:
-                if con is not None:
-                    con.close()
-        # Persistent lock contention: same answer, let the owner do the read.
-        return self._read_via_gateway(sql, params)
+        if _has_gateway_credentials():
+            out = _proxy_post("query", sql, params, self._alias)
+            # /api/db/query returns dicts; callers index by column name, which
+            # behaves the same as sqlite3.Row.
+            return (out or {}).get("rows", [])
 
-    def _read_via_gateway(self, sql, params):
-        out = _proxy_post("query", sql, params, self._alias)
-        rows = (out or {}).get("rows", [])
-        # /api/db/query returns dicts; callers index by column name, which
-        # works the same for dict as for sqlite3.Row.
-        return rows
+        con = sqlite3.connect(
+            "file:%s?mode=ro" % self._path, uri=True, timeout=_BUSY_TIMEOUT_S
+        )
+        con.row_factory = sqlite3.Row
+        try:
+            return con.execute(sql, params or []).fetchall()
+        finally:
+            con.close()
 
     def execute(self, sql, params=None):
         verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
