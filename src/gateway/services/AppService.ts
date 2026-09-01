@@ -3,7 +3,7 @@
  * Reference: Paprwork v1 appManager.js
  */
 
-import { promises as fs } from "fs";
+import { existsSync, promises as fs } from "fs";
 import chokidar, { type FSWatcher } from "chokidar";
 import path from "path";
 import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
@@ -82,6 +82,10 @@ import {
   mergeDailyBriefDataSource,
   dailyBriefDataSourceNeedsUpdate,
   DEFAULT_HOME_APP_ID,
+  DEFAULT_HOME_BRIEFS_DB_LABEL,
+  DEFAULT_HOME_BRIEFS_DB_SLUG,
+  DEFAULT_HOME_DB_MIGRATIONS_DIR,
+  DEFAULT_HOME_JOB_ASSETS_DIR,
   findHomeDailyBriefJobIdInRegistry,
   readHomeDailyBriefJobIdFromAppDir,
   resolveOrAllocateHomeDailyBriefJobId,
@@ -690,6 +694,37 @@ export class AppService {
       ],
     );
 
+    await this.installHomeJobAssets(sourceDir, jobId, dbPath);
+
+    // Briefs live in a real registry database (data/databases/{slug}/data.db),
+    // not the job's scratch data.db: job writes it via writeDbIds, app reads it
+    // as an attached source. Falls back to the job DB if provisioning fails so
+    // Home still installs.
+    const briefsDb = await this.provisionHomeBriefsRegistryDb(
+      sourceDir,
+      jobId,
+      dbPath,
+      appId,
+    );
+    const briefsDbId = briefsDb?.dbId;
+    const briefsDbPath = briefsDb?.dbPath ?? dbPath;
+
+    if (briefsDb) {
+      try {
+        // writeDbIds injects PAPR_DB_* (and APP_DB for a single target) so the
+        // job writes the registry DB instead of its own scratch database.
+        const existingJob = await jobsService.getJob(jobId);
+        if (!existingJob?.writeDbIds?.includes(briefsDb.dbId)) {
+          await jobsService.updateJob(jobId, { writeDbIds: [briefsDb.dbId] });
+        }
+      } catch (writeDbErr) {
+        console.warn(
+          `[AppService] Could not set writeDbIds for Home job ${jobId}:`,
+          writeDbErr instanceof Error ? writeDbErr.message : writeDbErr,
+        );
+      }
+    }
+
     const dataSourcesPath = path.join(targetDir, "data-sources.json");
     try {
       const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
@@ -711,13 +746,20 @@ export class AppService {
       );
       if (briefIndex >= 0) {
         const existing = kept[briefIndex];
-        const merged = mergeDailyBriefDataSource(existing, jobId, dbPath);
+        const merged = mergeDailyBriefDataSource(
+          existing,
+          jobId,
+          briefsDbPath,
+          briefsDbId,
+        );
         if (dailyBriefDataSourceNeedsUpdate(existing, merged)) {
           kept[briefIndex] = merged;
           updated = true;
         }
       } else {
-        kept.unshift(mergeDailyBriefDataSource(undefined, jobId, dbPath));
+        kept.unshift(
+          mergeDailyBriefDataSource(undefined, jobId, briefsDbPath, briefsDbId),
+        );
         updated = true;
       }
 
@@ -728,7 +770,8 @@ export class AppService {
           "utf8",
         );
         console.log(
-          `[AppService] Linked Daily Brief data-source for app ${appId} → ${dbPath}`,
+          `[AppService] Linked Daily Brief data-source for app ${appId} → ${briefsDbPath}` +
+            (briefsDbId ? ` (registry ${briefsDbId})` : " (legacy job DB)"),
         );
       }
     } catch (dsErr) {
@@ -755,6 +798,257 @@ export class AppService {
           recipeErr instanceof Error ? recipeErr.message : recipeErr,
         );
       }
+    }
+  }
+
+  /**
+   * Install bundled job assets (save_brief.py) into the job directory.
+   *
+   * save_brief.py is the ONLY supported write path for the briefs table; the
+   * job prompt invokes "$JOB_DIR/save_brief.py". Refreshed on every boot so
+   * the prompt and the script can never drift apart across app updates.
+   */
+  private async installHomeJobAssets(
+    sourceDir: string,
+    jobId: string,
+    jobDbPath: string,
+  ): Promise<void> {
+    // jobDbPath is "{jobDir}/data/data.db" (canonicalJobDatabasePath).
+    const jobDir = path.dirname(path.dirname(jobDbPath));
+    const assetsDir = path.join(sourceDir, DEFAULT_HOME_JOB_ASSETS_DIR);
+    try {
+      const assets = await fs.readdir(assetsDir);
+      for (const asset of assets) {
+        await fs.copyFile(
+          path.join(assetsDir, asset),
+          path.join(jobDir, asset),
+        );
+      }
+      if (assets.length > 0) {
+        console.log(
+          `[AppService] Installed ${assets.length} Home job asset(s) for ${jobId}`,
+        );
+      }
+    } catch (assetErr) {
+      const code = (assetErr as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `[AppService] Could not install Home job assets for ${jobId}:`,
+          assetErr instanceof Error ? assetErr.message : assetErr,
+        );
+      }
+    }
+  }
+
+  /**
+   * Provision the Home briefs database as a real registry database.
+   *
+   * Path is `$PAPR_HOME/data/databases/home-daily-briefs/data.db` — NOT the
+   * job's `data/data.db`. That distinction is load-bearing:
+   * registrySlugFromLocalPath() only matches `/data/databases/{slug}/data.db`,
+   * and register() derives the Turso instance from ownerJobId when set. A job
+   * path therefore yields a `j-*` instance with no migrations dir; only this
+   * layout yields a `d-*` replica-synced registry DB.
+   *
+   * Ownership after this runs: job writes (writeDbIds → PAPR_DB_* env), app
+   * reads (attached data source). The job's own data.db stays scratch.
+   *
+   * Existing users: rows are backfilled once from the legacy job DB, and only
+   * into dates the registry DB does not already have — never overwriting newer
+   * data. The legacy DB is left untouched as a safety net.
+   *
+   * Best-effort: on failure we return undefined and the caller falls back to
+   * linking the job DB, so Home still installs.
+   *
+   * @returns the registry dbId and its local path when available.
+   */
+  private async provisionHomeBriefsRegistryDb(
+    sourceDir: string,
+    jobId: string,
+    legacyJobDbPath: string,
+    appId: string,
+  ): Promise<{ dbId: string; dbPath: string } | undefined> {
+    try {
+      const dbDir = path.join(
+        getPaprDataDir(),
+        "databases",
+        DEFAULT_HOME_BRIEFS_DB_SLUG,
+      );
+      const dbPath = path.join(dbDir, "data.db");
+
+      // Ship migrations before creating the DB so the first apply has them.
+      const migrationsDir = path.join(dbDir, "migrations");
+      await fs.mkdir(migrationsDir, { recursive: true });
+      const bundledMigrations = path.join(
+        sourceDir,
+        DEFAULT_HOME_DB_MIGRATIONS_DIR,
+      );
+      try {
+        for (const file of await fs.readdir(bundledMigrations)) {
+          const target = path.join(migrationsDir, file);
+          // Never clobber a migration the user's workspace already applied.
+          if (!existsSync(target)) {
+            await fs.copyFile(path.join(bundledMigrations, file), target);
+          }
+        }
+      } catch (migErr) {
+        const code = (migErr as NodeJS.ErrnoException).code;
+        if (code !== "ENOENT") {
+          throw migErr;
+        }
+      }
+
+      const { ensureRegistryDatabase, applyRegistryDatabaseMigrations } =
+        await import("./jobs/databaseMigrations.js");
+      const { shouldDeferRegistrySqliteFileForReplica } = await import(
+        "../utils/tursoReplicaEnabled.js"
+      );
+      await ensureRegistryDatabase(dbPath, {
+        deferSqliteFile: shouldDeferRegistrySqliteFileForReplica(),
+      });
+
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
+      const registry = await initializeDatabaseRegistry();
+      const record = await registry.register({
+        localPath: dbPath,
+        label: DEFAULT_HOME_BRIEFS_DB_LABEL,
+        schemaOwnerAppId: appId,
+        // No ownerJobId: that would name the Turso instance j-{jobId} and tie
+        // a shared registry DB to one job. This DB outlives the job.
+      });
+
+      await applyRegistryDatabaseMigrations(dbPath);
+      await this.backfillHomeBriefsFromLegacyDb(
+        legacyJobDbPath,
+        record.dbId,
+        record.localPath,
+      );
+
+      return { dbId: record.dbId, dbPath: record.localPath };
+    } catch (registryErr) {
+      console.warn(
+        `[AppService] Could not provision Home briefs registry DB for ${jobId}:`,
+        registryErr instanceof Error ? registryErr.message : registryErr,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * One-time backfill of briefs from a legacy job database.
+   *
+   * Uses INSERT OR IGNORE so existing rows always win — a re-run can never
+   * overwrite a newer brief with a stale one. Opens the legacy file read-only:
+   * it may be replica-managed, where a read-write handle truncates the WAL on
+   * close and wedges sync in both directions.
+   */
+  private async backfillHomeBriefsFromLegacyDb(
+    legacyJobDbPath: string,
+    dbId: string,
+    registryDbPath: string,
+  ): Promise<void> {
+    if (!existsSync(legacyJobDbPath)) {
+      return;
+    }
+    if (path.resolve(legacyJobDbPath) === path.resolve(registryDbPath)) {
+      return;
+    }
+
+    let rows: Array<{ date: string; brief_json: string }> = [];
+    try {
+      const { default: Database } = await import("better-sqlite3");
+      // better-sqlite3 takes a plain path — it does NOT parse file: URIs, so
+      // `file:...?mode=ro` throws "unable to open database file". readonly:true
+      // is the real guard, and it matters: the legacy DB may be
+      // replica-managed, where a read-write handle truncates the WAL on close
+      // and wedges sync in both directions.
+      const legacy = new Database(legacyJobDbPath, { readonly: true });
+      try {
+        const hasTable = legacy
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='briefs' LIMIT 1",
+          )
+          .get();
+        if (!hasTable) {
+          return;
+        }
+        rows = legacy
+          .prepare(
+            "SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL",
+          )
+          .all() as Array<{ date: string; brief_json: string }>;
+      } finally {
+        legacy.close();
+      }
+    } catch (readErr) {
+      console.warn(
+        "[AppService] Could not read legacy Home briefs for backfill:",
+        readErr instanceof Error ? readErr.message : readErr,
+      );
+      return;
+    }
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const sql =
+      "INSERT OR IGNORE INTO briefs (date, brief_json, created_at) " +
+      "VALUES (?, ?, datetime('now'))";
+
+    try {
+      const { isTursoReplicaSyncFeatureEnabled } = await import(
+        "../utils/tursoReplicaEnabled.js"
+      );
+      let migrated = 0;
+
+      if (isTursoReplicaSyncFeatureEnabled()) {
+        // Replica-managed: must route through paprDbExec. Opening the file
+        // directly would truncate the WAL and wedge sync.
+        const { paprDbExec } = await import(
+          "./tursoReplica/PaprDbService.js"
+        );
+        for (const row of rows) {
+          const result = await paprDbExec({
+            dbId,
+            sql,
+            params: [row.date, row.brief_json],
+          });
+          migrated += result.changes ?? 0;
+        }
+      } else {
+        // Legacy sync: plain local write is safe and much faster.
+        const { default: Database } = await import("better-sqlite3");
+        const target = new Database(registryDbPath);
+        try {
+          const stmt = target.prepare(sql);
+          const insertAll = target.transaction(
+            (items: Array<{ date: string; brief_json: string }>) => {
+              let count = 0;
+              for (const row of items) {
+                count += stmt.run(row.date, row.brief_json).changes;
+              }
+              return count;
+            },
+          );
+          migrated = insertAll(rows);
+        } finally {
+          target.close();
+        }
+      }
+
+      if (migrated > 0) {
+        console.log(
+          `[AppService] Backfilled ${migrated} Home brief(s) from legacy job DB into ${dbId}`,
+        );
+      }
+    } catch (writeErr) {
+      console.warn(
+        "[AppService] Could not backfill Home briefs into registry DB:",
+        writeErr instanceof Error ? writeErr.message : writeErr,
+      );
     }
   }
 
@@ -4177,15 +4471,50 @@ export class AppService {
     return app;
   }
 
+  /** Active per-app chokidar watchers (for diagnostics). */
+  getActiveWatcherCount(): number {
+    return this.watchers.size;
+  }
+
+  /**
+   * Close per-app watchers to reclaim fds during internal fd-pressure recovery.
+   * Watchers are re-established by {@link reestablishAppWatchers}.
+   */
+  async releaseWatchersForFdRecovery(): Promise<number> {
+    const count = this.watchers.size;
+    if (count === 0) {
+      return 0;
+    }
+
+    for (const timer of this.debounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
+
+    await Promise.all([...this.watchers.values()].map((watcher) => watcher.close()));
+    this.watchers.clear();
+    return count;
+  }
+
+  /** Re-open watchers after fd recovery (only when AppService is initialized). */
+  async reestablishAppWatchers(): Promise<void> {
+    if (this.disposed || !this.initialized) {
+      return;
+    }
+
+    const appIds = [...this.apps.keys()];
+    await Promise.all(appIds.map((appId) => this.watchApp(appId)));
+  }
+
   /**
    * Cleanup: stop all file watchers
    */
   cleanup(): void {
     this.disposed = true;
     console.log(`[AppService] Cleaning up ${this.watchers.size} watchers`);
-    
+
     for (const [_appId, watcher] of this.watchers.entries()) {
-      watcher.close();
+      void watcher.close();
     }
     this.watchers.clear();
 
@@ -4227,6 +4556,15 @@ export function getAppService(): AppService {
 /** Reset singleton between unit tests (avoids stale HOME paths). */
 export function resetAppServiceSingletonForTests(): void {
   appServiceInstance?.cleanup();
+  appServiceInstance = null;
+}
+
+/** Await watcher teardown during org/namespace workspace switch. */
+export async function resetAppServiceForWorkspaceSwitch(): Promise<void> {
+  if (!appServiceInstance) {
+    return;
+  }
+  await appServiceInstance.resetForWorkspaceReload();
   appServiceInstance = null;
 }
 

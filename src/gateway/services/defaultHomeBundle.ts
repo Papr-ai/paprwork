@@ -19,6 +19,40 @@ export const DEFAULT_HOME_DAILY_BRIEF_BUNDLED_SLUG = "daily-brief-generator";
 export const DEFAULT_HOME_DAILY_BRIEF_JOB_NAME = "Daily Brief Generator";
 export const DEFAULT_HOME_JOB_ID_FILE = "default-job-id.txt";
 
+/**
+ * Stable data-source alias for the Home briefs database.
+ *
+ * Must NOT embed the job id. The previous alias was
+ * `Daily Brief Generator (${jobId.slice(0,8)})`, which changes per workspace
+ * and diverges from the data-source `id` — jobs that hardcoded either string
+ * hit "Data source not found", which /api/db/* reports with HTTP 200, so the
+ * write silently no-ops and the dashboard goes stale.
+ */
+export const DEFAULT_HOME_BRIEFS_ALIAS = "briefs";
+
+/** Registry database label for the Home briefs DB (replica-synced). */
+export const DEFAULT_HOME_BRIEFS_DB_LABEL = "Home Daily Briefs";
+
+/**
+ * Registry slug for the Home briefs database.
+ *
+ * The DB lives at `$PAPR_HOME/data/databases/home-daily-briefs/data.db` — a
+ * real registry database, NOT the job's `data/data.db`. Only paths matching
+ * `/data/databases/{slug}/data.db` are recognised by
+ * registrySlugFromLocalPath(), get a `d-*` Turso instance, and support
+ * `migrations/*.sql`. A job DB registered by path stays a `j-*` instance.
+ *
+ * Ownership: the Daily Brief job writes it (writeDbIds), the Home app reads it
+ * (attached data source). Nobody writes the job's scratch DB.
+ */
+export const DEFAULT_HOME_BRIEFS_DB_SLUG = "home-daily-briefs";
+
+/** Bundled job assets copied into the job dir on install (source of truth for writes). */
+export const DEFAULT_HOME_JOB_ASSETS_DIR = "job-assets";
+
+/** Bundled migrations copied into the registry DB's migrations/ dir on install. */
+export const DEFAULT_HOME_DB_MIGRATIONS_DIR = "db-migrations";
+
 /** Legacy fixed UUID from early bundles — migration lookup only. */
 export const LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID =
   "2cafb2e9-696b-42db-98fa-5d605977123c";
@@ -44,13 +78,16 @@ export interface BundledDefaultJobDef {
 export function buildDailyBriefDataSource(
   jobId: string,
   dbPath: string,
+  dbId?: string,
 ): AppDataSource {
-  const short = jobId.slice(0, 8);
   return {
-    id: `${jobId}:Daily Brief Generator (${short})`,
+    // id === alias keeps sourceId unambiguous: findDataSource() matches by id
+    // first, then alias, so both spellings resolve to this same source.
+    id: DEFAULT_HOME_BRIEFS_ALIAS,
     type: "sqlite",
     jobId,
-    alias: `Daily Brief Generator (${short})`,
+    ...(dbId ? { dbId } : {}),
+    alias: DEFAULT_HOME_BRIEFS_ALIAS,
     dbPath,
     tables: ["briefs"],
     linkedAt: new Date().toISOString(),
@@ -67,8 +104,9 @@ export function mergeDailyBriefDataSource(
   existing: AppDataSource | undefined,
   jobId: string,
   dbPath: string,
+  dbId?: string,
 ): AppDataSource {
-  const canonical = buildDailyBriefDataSource(jobId, dbPath);
+  const canonical = buildDailyBriefDataSource(jobId, dbPath, dbId);
 
   if (!existing) {
     return canonical;
@@ -89,6 +127,8 @@ export function mergeDailyBriefDataSource(
     ...existing,
     type: existing.type ?? canonical.type,
     jobId,
+    // Bind to the registry database once provisioned; never drop an existing id.
+    ...(dbId ?? existing.dbId ? { dbId: dbId ?? existing.dbId } : {}),
     dbPath,
     tables: existing.tables?.length ? existing.tables : canonical.tables,
     alias: alias || canonical.alias,

@@ -85,10 +85,8 @@ function spawnAgentHint(code: string): string {
     case "EMFILE":
     case "ENFILE":
       return (
-        "Do NOT tell the user the OS shell is 'jammed'. " +
-        "Ask them to fully quit Paprwork (Cmd+Q / File → Quit) and relaunch. " +
-        "Prefer write_file + run_job over long inline python heredocs in bash. " +
-        "Avoid rapid back-to-back bash calls until Paprwork is restarted."
+        "Paprwork could not start the shell process (resource pressure). " +
+        "Retry the command once; prefer write_file + run_job for large scripts."
       );
     case "ENOENT":
       return "Verify the executable path exists. For Python jobs, use run_job with a script file under code/.";

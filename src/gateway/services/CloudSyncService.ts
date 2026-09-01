@@ -670,6 +670,11 @@ export class CloudSyncService implements CloudSyncInternals {
   getRepoSizeInfo(): { gitDirBytes: number; level: "ok" | "warn" | "critical" } {
     return classifyRepoSize(measureGitDirBytes(this.paprDir));
   }
+
+  /** Whether the workspace/data chokidar watcher is still running. */
+  hasActiveWatcher(): boolean {
+    return this.watcher !== null;
+  }
 }
 
 export {

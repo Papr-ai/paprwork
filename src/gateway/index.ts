@@ -3174,6 +3174,36 @@ async function startGateway(): Promise<void> {
         console.error("[Gateway] Failed to stop Turso DB watcher:", error);
       }
 
+      try {
+        const { cancelAllScheduledTursoReplicaPushes } = await import(
+          "./services/tursoReplica/tursoReplicaPushScheduler.js"
+        );
+        cancelAllScheduledTursoReplicaPushes("gateway shutdown");
+        const { drainTursoReplicaConnections } = await import(
+          "./services/tursoReplica/TursoReplicaService.js"
+        );
+        await drainTursoReplicaConnections("gateway shutdown");
+      } catch (error) {
+        console.error("[Gateway] Failed to drain Turso replica connections:", error);
+      }
+
+      try {
+        const { getSessionKeeperService } = await import(
+          "./services/platforms/SessionKeeperService.js"
+        );
+        getSessionKeeperService().stop();
+        const { closeRealChromePlatformSession } = await import(
+          "./services/platforms/platformAgentBrowser.js"
+        );
+        await closeRealChromePlatformSession();
+        const { getPlatformSessionService } = await import(
+          "./services/platforms/PlatformSessionService.js"
+        );
+        await getPlatformSessionService().shutdown();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop platform sessions:", error);
+      }
+
       getJobsScheduler().stop();
       dbPool.terminate();
       server.close();
@@ -3273,6 +3303,12 @@ void import("./services/MemoryWatchdog.js")
   .then(({ startMemoryWatchdog }) => startMemoryWatchdog())
   .catch((error) => {
     console.warn("[Gateway] Memory watchdog unavailable:", error);
+  });
+
+void import("./services/FdWatchdog.js")
+  .then(({ startFdWatchdog }) => startFdWatchdog())
+  .catch((error) => {
+    console.warn("[Gateway] FD watchdog unavailable:", error);
   });
 
 // Handle uncaught errors

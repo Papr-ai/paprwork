@@ -12,7 +12,7 @@ import {
 import { getPaprApiKey, clearKeyCache } from "../utils/keyResolver.js";
 import {
   initializeAppService,
-  resetAppServiceSingletonForTests,
+  resetAppServiceForWorkspaceSwitch,
 } from "./AppService.js";
 import {
   initializeJobsService,
@@ -184,6 +184,15 @@ async function abortAllActiveAgentStreams(): Promise<void> {
 }
 
 async function resetPathBoundSingletons(): Promise<void> {
+  const {
+    captureWatcherResourceSnapshot,
+    logWatcherResourceSnapshot,
+    warnIfWatchersLeaked,
+  } = await import("./watcherResourceAudit.js");
+
+  const watchersBefore = captureWatcherResourceSnapshot();
+  logWatcherResourceSnapshot("watchers before reset", watchersBefore);
+
   await abortAllActiveAgentStreams();
   await yieldEventLoop();
   await pauseWorkspaceSwitchWriters();
@@ -210,8 +219,12 @@ async function resetPathBoundSingletons(): Promise<void> {
   await yieldEventLoop();
 
   resetJobsServiceSingletonForTests();
-  resetAppServiceSingletonForTests();
+  await resetAppServiceForWorkspaceSwitch();
   await yieldEventLoop();
+
+  const watchersAfter = captureWatcherResourceSnapshot();
+  logWatcherResourceSnapshot("watchers after reset", watchersAfter);
+  warnIfWatchersLeaked(watchersBefore, watchersAfter);
 
   resetAgentServiceSingletonForTests();
   await resetStorageManagerSingleton();
@@ -358,6 +371,28 @@ async function pauseWorkspaceSwitchWriters(): Promise<void> {
 
   const { cancelAllScheduledTursoPushes } = await import("./tursoPushScheduler.js");
   cancelAllScheduledTursoPushes();
+
+  const { cancelAllScheduledTursoReplicaPushes } = await import(
+    "./tursoReplica/tursoReplicaPushScheduler.js"
+  );
+  cancelAllScheduledTursoReplicaPushes("workspace switch");
+
+  const { drainTursoReplicaConnections } = await import(
+    "./tursoReplica/TursoReplicaService.js"
+  );
+  await drainTursoReplicaConnections("workspace switch");
+
+  try {
+    const { closeRealChromePlatformSession } = await import(
+      "./platforms/platformAgentBrowser.js"
+    );
+    await closeRealChromePlatformSession();
+  } catch (error) {
+    console.warn(
+      "[WorkspaceSwitch] Real Chrome session cleanup failed:",
+      error instanceof Error ? error.message : error,
+    );
+  }
 
   const { resetCloudAppPublishServiceForWorkspaceSwitch } = await import(
     "./CloudAppPublishService.js"

@@ -12,6 +12,7 @@ import {
   isPlaceholderSection,
   KEY_DETAIL_IMAGE_KEYS,
   KEY_DETAIL_LINK_KEYS,
+  OPEN_ITEM_CATEGORY_LABELS,
   parseChangelogEntries,
   parseDecisions,
   parseKeyDetailRows,

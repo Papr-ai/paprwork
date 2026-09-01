@@ -279,6 +279,10 @@ export async function refreshTursoLinkedDbWatcher(
   await startTursoLinkedDbWatcher(appsRootDir);
 }
 
+export function isTursoLinkedDbWatcherActive(): boolean {
+  return watcher !== null;
+}
+
 export async function stopTursoLinkedDbWatcher(): Promise<void> {
   for (const timer of pendingChangeTimers.values()) {
     clearTimeout(timer);

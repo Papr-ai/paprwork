@@ -1,46 +1,19 @@
 import { describe, expect, it } from "vitest";
-import path from "path";
 import { shouldIgnoreAppWatchPath } from "../src/gateway/services/appWatchIgnore.js";
 
 describe("shouldIgnoreAppWatchPath", () => {
-  it("ignores metadata and build output paths (absolute paths from chokidar)", () => {
-    const appDir = "/Users/me/Papr/orgs/o/n/apps/app-id";
-    expect(shouldIgnoreAppWatchPath(path.join(appDir, "data-sources.json"))).toBe(
+  it("ignores dependency and build trees", () => {
+    expect(shouldIgnoreAppWatchPath("/apps/foo/node_modules/lodash/index.js")).toBe(true);
+    expect(shouldIgnoreAppWatchPath("/apps/foo/.venv/lib/python3.12/site-packages/x.py")).toBe(
       true,
     );
-    expect(
-      shouldIgnoreAppWatchPath(path.join(appDir, "linked-databases.json")),
-    ).toBe(true);
-    expect(shouldIgnoreAppWatchPath(path.join(appDir, "dist", "app.js"))).toBe(
-      true,
-    );
-    expect(
-      shouldIgnoreAppWatchPath(path.join(appDir, ".versions", "abc.json")),
-    ).toBe(true);
-    expect(shouldIgnoreAppWatchPath(path.join(appDir, ".hidden"))).toBe(true);
+    expect(shouldIgnoreAppWatchPath("/apps/foo/data/cache.db")).toBe(true);
+    expect(shouldIgnoreAppWatchPath("/apps/foo/build/out.js")).toBe(true);
+    expect(shouldIgnoreAppWatchPath("/apps/foo/dist/bundle.js")).toBe(true);
   });
 
-  it("ignores cloud-prep artifacts written during Upload now", () => {
-    const appDir = "/Users/me/Papr/orgs/o/n/apps/app-id";
-    expect(
-      shouldIgnoreAppWatchPath(path.join(appDir, "backend", "bundle.json")),
-    ).toBe(true);
-    expect(
-      shouldIgnoreAppWatchPath(path.join(appDir, "requirements.json")),
-    ).toBe(true);
-    expect(
-      shouldIgnoreAppWatchPath(path.join(appDir, "__papr__", "app-meta.json")),
-    ).toBe(true);
-    expect(
-      shouldIgnoreAppWatchPath(path.join(appDir, ".papr-cloud-revision")),
-    ).toBe(true);
-  });
-
-  it("does not ignore app source files", () => {
-    const appDir = "/Users/me/Papr/orgs/o/n/apps/app-id";
-    expect(shouldIgnoreAppWatchPath(path.join(appDir, "index.html"))).toBe(
-      false,
-    );
-    expect(shouldIgnoreAppWatchPath(path.join(appDir, "app.ts"))).toBe(false);
+  it("still watches app source files", () => {
+    expect(shouldIgnoreAppWatchPath("/apps/foo/src/App.tsx")).toBe(false);
+    expect(shouldIgnoreAppWatchPath("/apps/foo/index.html")).toBe(false);
   });
 });

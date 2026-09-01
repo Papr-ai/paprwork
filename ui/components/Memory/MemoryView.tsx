@@ -10,6 +10,7 @@ import React, {
   type ErrorInfo,
   type ReactNode,
 } from "react";
+import { formatWikiJobLastUpdated } from "../../utils/wikiSectionUtils";
 import { MemoryIcon } from "./MemoryIcon";
 import { WikiLibrary, type HomeWorkspaceTab } from "./WikiLibrary";
 import "./WikiLibrary.css";
@@ -86,6 +87,9 @@ export function MemoryView() {
   const [focusLabel, setFocusLabel] = useState<string | null>(null);
   /** Callback to clear focus (go back to library) */
   const [onBack, setOnBack] = useState<(() => void) | null>(null);
+  const [wikiLastUpdatedAt, setWikiLastUpdatedAt] = useState<string | null>(
+    null,
+  );
 
   useEffect(() => {
     try {
@@ -149,6 +153,7 @@ export function MemoryView() {
 
   const activeTabLabel =
     WORKSPACE_TABS.find((tab) => tab.id === workspaceTab)?.label ?? "Today";
+  const wikiLastUpdatedLabel = formatWikiJobLastUpdated(wikiLastUpdatedAt);
 
   return (
     <div className="memory-view">
@@ -195,6 +200,9 @@ export function MemoryView() {
           )}
         </div>
         <div className="wiki-topbar__grow" />
+        {workspaceTab === "memory" && wikiLastUpdatedLabel && !focusLabel ? (
+          <span className="wiki-topbar__last-updated">{wikiLastUpdatedLabel}</span>
+        ) : null}
         <button
           type="button"
           className="wiki-topbar__search"
@@ -232,6 +240,7 @@ export function MemoryView() {
             paletteOpen={paletteOpen}
             onPaletteOpenChange={setPaletteOpen}
             onFocusChange={handleFocusChange}
+            onWikiLastUpdatedChange={setWikiLastUpdatedAt}
             workspaceTab={workspaceTab}
           />
         </MemoryErrorBoundary>

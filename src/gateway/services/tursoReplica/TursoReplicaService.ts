@@ -585,6 +585,10 @@ export class TursoReplicaService {
     await handle.db.close();
   }
 
+  getOpenConnectionCount(): number {
+    return this.openByPath.size;
+  }
+
   async closeAll(): Promise<void> {
     const paths = [...this.openByPath.keys()];
     for (const key of paths) {
@@ -800,8 +804,23 @@ export function getTursoReplicaService(): TursoReplicaService {
   return serviceInstance;
 }
 
+/** Close all embedded replica handles (workspace switch, gateway shutdown). */
+export async function drainTursoReplicaConnections(context: string): Promise<void> {
+  if (!serviceInstance) {
+    return;
+  }
+  const openCount = serviceInstance.getOpenConnectionCount();
+  if (openCount === 0) {
+    return;
+  }
+  await serviceInstance.closeAll();
+  console.log(
+    `[TursoReplica] Drained ${openCount} open replica connection(s) (${context})`,
+  );
+}
+
 export function resetTursoReplicaServiceForTests(): void {
-  void serviceInstance?.closeAll();
+  void drainTursoReplicaConnections("test reset");
   serviceInstance = null;
 }
 

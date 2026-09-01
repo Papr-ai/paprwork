@@ -80,6 +80,44 @@ export function formatLastUpdated(value: string | undefined | null): string | nu
   return `Last updated ${label}`;
 }
 
+/** Top-bar label for when the Wiki Writer job last ran. */
+export function formatWikiJobLastUpdated(
+  value: string | undefined | null,
+): string | null {
+  if (!value?.trim()) return null;
+  const ms = Date.parse(value.trim());
+  if (Number.isNaN(ms)) return null;
+  const diffMs = Date.now() - ms;
+  if (diffMs < 0) return "Last updated at: just now";
+  const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  if (diffHours < 1) return "Last updated at: just now";
+  if (diffHours < 24) {
+    return `Last updated at: ${diffHours} hour${diffHours === 1 ? "" : "s"} ago`;
+  }
+  if (diffDays === 1) return "Last updated at: 1 day ago";
+  return `Last updated at: ${diffDays} days ago`;
+}
+
+/** Extract YYYY-MM-DD from daily log display names like `memory/2026-09-01.md (today)`. */
+export function parseDailyLogDate(name: string): string | null {
+  const match = name.match(/(\d{4}-\d{2}-\d{2})\.md/i);
+  return match ? match[1] : null;
+}
+
+export function wikiNodeUpdatedAtMs(node: WikiNode): number {
+  const raw = node.props?.updated_at ?? node.props?.updatedAt;
+  if (raw == null) return 0;
+  const ms = Date.parse(String(raw));
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+export function sortWikiNodesByUpdatedAt(nodes: WikiNode[]): WikiNode[] {
+  return [...nodes].sort(
+    (a, b) => wikiNodeUpdatedAtMs(b) - wikiNodeUpdatedAtMs(a),
+  );
+}
+
 export function entityUpdatedAt(node: WikiNode): string | null {
   const raw = node.props?.updated_at ?? node.props?.updatedAt;
   return formatUpdatedAt(raw != null ? String(raw) : null);

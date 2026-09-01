@@ -328,6 +328,13 @@ export interface EntityFileNode extends WikiNode {
   evidence: Array<{ date: string; source: string; summary: string }>;
 }
 
+function entityNodeUpdatedAtMs(node: EntityFileNode): number {
+  const raw = node.props.updated_at ?? node.props.updatedAt;
+  if (raw == null) return 0;
+  const ms = Date.parse(String(raw));
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
 function readEntityFilesSync(): {
   nodes: EntityFileNode[];
   rails: WikiRail[];
@@ -406,6 +413,10 @@ function readEntityFilesSync(): {
     grouped.set(n.type, list);
   }
 
+  for (const list of grouped.values()) {
+    list.sort((a, b) => entityNodeUpdatedAtMs(b) - entityNodeUpdatedAtMs(a));
+  }
+
   const knownOrder = ENTITY_RAIL_ORDER.filter((t) => grouped.has(t));
   const extraTypes = [...grouped.keys()]
     .filter(
@@ -472,6 +483,8 @@ export interface WikiHomeResult {
   relatedMemories?: any[];
   /** True when rails came from semantic search instead of GraphQL */
   searchFallback?: boolean;
+  /** ISO timestamp of the last Wiki Writer job run */
+  wikiLastUpdatedAt?: string | null;
 }
 
 export interface WikiEntityResult {
@@ -1161,6 +1174,10 @@ async function fetchWikiHomeFromGraphQL(client: Papr): Promise<{
 export async function fetchWikiHome(options?: {
   forceRefresh?: boolean;
 }): Promise<WikiHomeResult> {
+  const { getWikiWriterLastRunAt } =
+    await import("./WikiWriterService.js");
+  const wikiLastUpdatedAt = await getWikiWriterLastRunAt();
+
   // PRIMARY: entity .md files under the active org/namespace workspace:
   // {paprHome}/workspace/entities/ (paprHome from .active-workspace.json or PAPR_HOME)
   const entityResult = readEntityFilesSync();
@@ -1175,6 +1192,7 @@ export async function fetchWikiHome(options?: {
       typeCounts: entityResult.typeCounts,
       configured: true,
       searchFallback: false,
+      wikiLastUpdatedAt,
     };
   }
 
@@ -1185,7 +1203,7 @@ export async function fetchWikiHome(options?: {
   if (!options?.forceRefresh) {
     const cached = getCachedWikiHomeRemote();
     if (cached) {
-      return cached;
+      return { ...cached, wikiLastUpdatedAt };
     }
   }
 
@@ -1199,6 +1217,7 @@ export async function fetchWikiHome(options?: {
       rails: [],
       typeCounts: {},
       configured: false,
+      wikiLastUpdatedAt,
       error:
         "Connect Papr in Settings → AI Models to browse your knowledge graph.",
     };
@@ -1225,6 +1244,7 @@ export async function fetchWikiHome(options?: {
     typeCounts,
     configured: true,
     searchFallback,
+    wikiLastUpdatedAt,
     ...(rails.length === 0 && graphqlResult.graphqlFailed
       ? {
           error:

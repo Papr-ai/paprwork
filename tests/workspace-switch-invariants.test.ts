@@ -206,6 +206,38 @@ describe("workspace switch — Electron startup invariants", () => {
   });
 });
 
+describe("workspace switch — resource lifecycle invariants", () => {
+  it("pauseWorkspaceSwitchWriters drains Turso replica connections", () => {
+    const content = read("src/gateway/services/workspaceSwitchService.ts");
+    const pauseFn = content.slice(
+      content.indexOf("async function pauseWorkspaceSwitchWriters"),
+      content.indexOf("const WORKSPACE_SWITCH_JOB_STOP_REASON"),
+    );
+
+    expect(pauseFn).toContain("drainTursoReplicaConnections");
+    expect(pauseFn).toContain("cancelAllScheduledTursoReplicaPushes");
+  });
+
+  it("gateway shutdown drains Turso replicas and platform sessions", () => {
+    const content = read("src/gateway/index.ts");
+    const shutdownFn = content.slice(
+      content.indexOf("const shutdown = async () =>"),
+      content.indexOf("process.on(\"SIGINT\", shutdown)"),
+    );
+
+    expect(shutdownFn).toContain("drainTursoReplicaConnections");
+    expect(shutdownFn).toContain("closeRealChromePlatformSession");
+    expect(shutdownFn).toContain("getPlatformSessionService().shutdown()");
+  });
+
+  it("bash exec uses stdin-ignored shell helper (prevents Gateway EBADF)", () => {
+    const content = read("src/core/tools/bash.ts");
+    expect(content).toContain("execShellCommand");
+    expect(content).toContain("SPAWN_STDIO_IGNORE_IN");
+    expect(content).not.toMatch(/=\s*exec\s*\(/);
+  });
+});
+
 describe("workspace switch — database promotion invariants", () => {
   it("preserveJobLinkedDatabasesBeforeDelete skips initialize when job is provided", () => {
     const content = read("src/gateway/services/databasePromotion.ts");

@@ -1011,6 +1011,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Home Dashboard Registry DB</strong>
+                <p>
+                  Bundled home dashboard now ships with its own registry
+                  database migration and <code>save_brief.py</code> job asset
+                  for reliable daily brief persistence.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>FD Watchdog &amp; Pressure Recovery</strong>
+                <p>
+                  Gateway monitors file descriptor pressure and recovers from
+                  watcher leaks to prevent silent resource exhaustion.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Wiki &amp; Workspace Switch Hardening</strong>
+                <p>
+                  Improved wiki library sections, safer workspace switching,
+                  and shared shell exec utilities for more reliable bash tools.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.3" && (
           <div className="about-card">
             <h3>What's New in v2.5.3</h3>

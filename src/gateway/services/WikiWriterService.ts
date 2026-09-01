@@ -47,6 +47,18 @@ export function isWikiWriterJobName(name: string): boolean {
   return (WIKI_WRITER_JOB_NAMES as readonly string[]).includes(name);
 }
 
+/** Last successful Wiki Writer run time, if the job exists. */
+export async function getWikiWriterLastRunAt(): Promise<string | null> {
+  try {
+    const { getJobsService } = await import("./JobsService.js");
+    const jobs = await getJobsService().listJobs();
+    const wikiJob = jobs.find((job) => isWikiWriterJobName(job.name));
+    return wikiJob?.lastRunAt ?? wikiJob?.completedAt ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveTemplatesDir(): string {
   const candidates = [
     path.resolve(__dirname, "../../resources/workspace-templates"),

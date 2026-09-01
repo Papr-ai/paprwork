@@ -49,6 +49,8 @@ export interface WikiHomeData {
   error?: string;
   relatedMemories?: WikiRelatedMemory[];
   searchFallback?: boolean;
+  /** ISO timestamp of the last Wiki Writer job run */
+  wikiLastUpdatedAt?: string | null;
 }
 
 export interface WikiRelatedMemory {

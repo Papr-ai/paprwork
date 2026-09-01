@@ -17,7 +17,7 @@ describe("classifyChildProcessError", () => {
     });
     expect(result?.message).toContain("EBADF");
     expect(result?.message).not.toContain("exit code");
-    expect(result?.agentHint).toContain("Do NOT tell the user");
+    expect(result?.agentHint).toContain("Retry the command once");
   });
 
   it("treats numeric code as shell exit code", () => {

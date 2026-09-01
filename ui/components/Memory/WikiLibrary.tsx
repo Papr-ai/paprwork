@@ -37,7 +37,7 @@ import {
 import { WikiTasksView } from "./WikiTasksView";
 import { HomeTodayView } from "./HomeTodayView";
 import { RelatedMemoriesPanel } from "./WikiRelatedMemories";
-import { entityUpdatedAt, KEY_DETAIL_HIDDEN_KEYS } from "../../utils/wikiSectionUtils";
+import { entityUpdatedAt, KEY_DETAIL_HIDDEN_KEYS, parseDailyLogDate, sortWikiNodesByUpdatedAt } from "../../utils/wikiSectionUtils";
 import { getActiveWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
 import "./WikiLibrary.css";
 
@@ -60,10 +60,10 @@ function getFocusCacheKey(): string {
 }
 
 function fileLabel(name: string): string {
-  const dateMatch = name.match(/^(\d{4})-(\d{2})-(\d{2})\.md$/i);
-  if (dateMatch) {
-    const [, year, month, day] = dateMatch;
-    const date = new Date(Number(year), Number(month) - 1, Number(day));
+  const dateStr = parseDailyLogDate(name);
+  if (dateStr) {
+    const [year, month, day] = dateStr.split("-").map(Number);
+    const date = new Date(year, month - 1, day);
     const today = new Date();
     const isToday = date.toDateString() === today.toDateString();
     const yesterday = new Date(today);
@@ -80,6 +80,8 @@ function fileLabel(name: string): string {
   }
 
   return name
+    .replace(/^memory\//i, "")
+    .replace(/\s*\((today|yesterday)\)\s*$/i, "")
     .replace(/\.(md|txt|yaml|yml|json)$/i, "")
     .replace(/[-_]/g, " ")
     .replace(/\b\w/g, (c) => c.toUpperCase());
@@ -101,11 +103,15 @@ function sortContextFiles(
     const rankB = CONTEXT_FILE_ORDER[b.name] ?? 100;
     if (rankA !== rankB) return rankA - rankB;
 
-    const dailyA = /^\d{4}-\d{2}-\d{2}\.md$/i.test(a.name);
-    const dailyB = /^\d{4}-\d{2}-\d{2}\.md$/i.test(b.name);
-    if (dailyA && dailyB) return b.name.localeCompare(a.name);
+    const dailyA = parseDailyLogDate(a.name);
+    const dailyB = parseDailyLogDate(b.name);
+    if (dailyA && dailyB) return dailyB.localeCompare(dailyA);
     if (dailyA) return -1;
     if (dailyB) return 1;
+
+    const msA = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+    const msB = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+    if (msA !== msB) return msB - msA;
 
     return a.name.localeCompare(b.name);
   });
@@ -118,6 +124,7 @@ interface WikiLibraryProps {
   paletteOpen?: boolean;
   onPaletteOpenChange?: (open: boolean) => void;
   onFocusChange?: (label: string | null, backFn: (() => void) | null) => void;
+  onWikiLastUpdatedChange?: (value: string | null) => void;
   workspaceTab?: HomeWorkspaceTab;
 }
 
@@ -146,6 +153,8 @@ const IC = `fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap=
  */
 function fileGlyphSvg(name: string): string {
   const n = name.toLowerCase();
+  if (parseDailyLogDate(name))
+    return `<svg viewBox="0 0 24 24" ${IC}><rect x="4" y="5" width="16" height="16" rx="2"/><path d="M8 3v4M16 3v4M4 11h16"/></svg>`;
   if (n.includes("identity") || n.includes("brand"))
     return `<svg viewBox="0 0 24 24" ${IC}><circle cx="12" cy="8" r="3.2"/><path d="M5.5 19c.6-3.2 3.2-5 6.5-5s5.9 1.8 6.5 5"/></svg>`;
   if (n.includes("icp") || n.includes("customer") || n.includes("audience"))
@@ -1111,6 +1120,14 @@ function WikiHome({
   });
   const wikiEmpty = (data?.rails.length ?? 0) === 0 && !featured;
   const sortedContextFiles = sortContextFiles(contextFiles);
+  const sortedRails = useMemo(
+    () =>
+      (data?.rails ?? []).map((rail) => ({
+        ...rail,
+        items: sortWikiNodesByUpdatedAt(rail.items),
+      })),
+    [data?.rails],
+  );
 
   if (loading && !data) {
     return (
@@ -1236,7 +1253,7 @@ function WikiHome({
         </div>
       ) : (
         <div className="wiki-rails">
-          {data.rails.map((rail) => (
+          {sortedRails.map((rail) => (
             <WikiRailSection key={rail.title} rail={rail} onPick={onPick} />
           ))}
         </div>
@@ -1539,6 +1556,7 @@ export function WikiLibrary({
   paletteOpen: paletteOpenProp,
   onPaletteOpenChange,
   onFocusChange,
+  onWikiLastUpdatedChange,
   workspaceTab = "today",
 }: WikiLibraryProps) {
   const [home, setHome] = useState<WikiHomeData | null>(null);
@@ -1600,7 +1618,9 @@ export function WikiLibrary({
               { timeoutMs: 30_000 },
             );
             if (response.success && response.data) {
-              setHome(response.data as WikiHomeData);
+              const payload = response.data as WikiHomeData;
+              setHome(payload);
+              onWikiLastUpdatedChange?.(payload.wikiLastUpdatedAt ?? null);
               setHomeLoadError(null);
               return;
             }
@@ -1628,7 +1648,7 @@ export function WikiLibrary({
         }
       }
     },
-    [],
+    [onWikiLastUpdatedChange],
   );
 
   /** Load context files for inline display */

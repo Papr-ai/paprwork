@@ -7,6 +7,7 @@ import {
   buildDailyBriefDataSource,
   dailyBriefDataSourceNeedsUpdate,
   DEFAULT_HOME_APP_ID,
+  DEFAULT_HOME_BRIEFS_DB_SLUG,
   DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
   findHomeDailyBriefJobIdInRegistry,
   LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
@@ -29,12 +30,25 @@ describe("defaultHomeBundle", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("buildDailyBriefDataSource uses workspace-local source id", () => {
+  it("buildDailyBriefDataSource uses a stable id/alias that never embeds the job id", () => {
     const jobId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const source = buildDailyBriefDataSource(jobId, "/tmp/data.db");
-    expect(source.id).toBe(`${jobId}:Daily Brief Generator (aaaaaaaa)`);
+    // id === alias so both spellings of sourceId resolve to this source.
+    expect(source.id).toBe("briefs");
+    expect(source.alias).toBe("briefs");
+    expect(source.id).toBe(source.alias);
     expect(source.jobId).toBe(jobId);
     expect(source.tables).toEqual(["briefs"]);
+    // Regression: a job-id-derived alias silently broke writes when the id changed.
+    expect(source.alias).not.toContain(jobId.slice(0, 8));
+  });
+
+  it("buildDailyBriefDataSource binds the registry dbId when provided", () => {
+    const jobId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    expect(buildDailyBriefDataSource(jobId, "/tmp/data.db").dbId).toBeUndefined();
+    expect(
+      buildDailyBriefDataSource(jobId, "/tmp/data.db", "db-1234abcd").dbId,
+    ).toBe("db-1234abcd");
   });
 
   it("mergeDailyBriefDataSource preserves alias when the same job is already linked", () => {
@@ -63,17 +77,36 @@ describe("defaultHomeBundle", () => {
   it("mergeDailyBriefDataSource uses canonical alias for a new link", () => {
     const jobId = "6953796f-1111-2222-3333-444444444444";
     const merged = mergeDailyBriefDataSource(undefined, jobId, "/data.db");
-    expect(merged.alias).toBe("Daily Brief Generator (6953796f)");
+    expect(merged.alias).toBe("briefs");
+    expect(merged.id).toBe("briefs");
   });
 
-  it("mergeDailyBriefDataSource replaces alias when job id changes", () => {
+  it("mergeDailyBriefDataSource keeps the alias stable when job id changes", () => {
     const oldJobId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const newJobId = "6953796f-1111-2222-3333-444444444444";
     const existing = buildDailyBriefDataSource(oldJobId, "/old/data.db");
-    existing.alias = "briefs";
     const merged = mergeDailyBriefDataSource(existing, newJobId, "/new/data.db");
-    expect(merged.alias).toBe("Daily Brief Generator (6953796f)");
+    // Relinking to a different job must NOT rename the source — mini-apps and
+    // the brief job address it by this alias.
+    expect(merged.alias).toBe("briefs");
+    expect(merged.id).toBe("briefs");
     expect(merged.jobId).toBe(newJobId);
+    expect(merged.dbPath).toBe("/new/data.db");
+  });
+
+  it("mergeDailyBriefDataSource adopts a registry dbId and never drops an existing one", () => {
+    const jobId = "6953796f-1111-2222-3333-444444444444";
+    const linked = mergeDailyBriefDataSource(
+      undefined,
+      jobId,
+      "/data.db",
+      "db-1234abcd",
+    );
+    expect(linked.dbId).toBe("db-1234abcd");
+
+    // Later boots without an explicit dbId must preserve the binding.
+    const preserved = mergeDailyBriefDataSource(linked, jobId, "/data.db");
+    expect(preserved.dbId).toBe("db-1234abcd");
   });
 
   it("dailyBriefDataSourceNeedsUpdate is false when only canonical fields match", () => {
@@ -228,5 +261,85 @@ describe("defaultHomeBundle", () => {
       appIds: bundled.appIds ?? [DEFAULT_HOME_APP_ID],
     });
     expect(issues.filter((issue) => issue.severity === "error")).toEqual([]);
+  });
+
+  /**
+   * Regression: the bundled prompt used to instruct the agent to write the
+   * briefs table with `sqlite3 "$APP_DB"`. That races the Turso replica sync
+   * layer, so rows were silently discarded while the job still exited 0 —
+   * the Home dashboard went stale for days with no error surfaced.
+   */
+  it("bundled Daily Brief prompt mandates save_brief.py and forbids direct sqlite3 writes", () => {
+    const command = JSON.parse(
+      readFileSync(
+        path.join(
+          process.cwd(),
+          "src/resources/default-apps/home-dashboard/default-job.json",
+        ),
+        "utf8",
+      ),
+    ).command as string;
+
+    expect(command).toContain('python3 "$JOB_DIR/save_brief.py"');
+    // No instruction to write the DB directly, and no $APP_DB write target.
+    expect(command).not.toMatch(/sqlite3\s+\\?"?\$APP_DB/);
+    expect(command).not.toContain("$APP_DB");
+    // Must warn that /api/db/* reports errors with HTTP 200.
+    expect(command).toContain("HTTP 200");
+  });
+
+  /**
+   * The briefs DB must live at data/databases/{slug}/data.db.
+   * registrySlugFromLocalPath() only matches that shape, and register()
+   * derives a j-* Turso instance from ownerJobId. Pointing at the job's
+   * data/data.db yields a job DB with a replica flag — not a registry DB.
+   */
+  it("Home briefs slug resolves to a real registry database path", async () => {
+    const { registrySlugFromLocalPath } = await import(
+      "../src/gateway/services/DatabaseRegistryService.js"
+    );
+
+    const registryPath = `/Papr/data/databases/${DEFAULT_HOME_BRIEFS_DB_SLUG}/data.db`;
+    expect(registrySlugFromLocalPath(registryPath)).toBe(
+      DEFAULT_HOME_BRIEFS_DB_SLUG,
+    );
+
+    // The shape we must NOT use — a job DB is not a registry DB.
+    expect(
+      registrySlugFromLocalPath(
+        "/Papr/Jobs/6953796f-b12d-4397-bc80-78bc43911fce/data/data.db",
+      ),
+    ).toBeNull();
+  });
+
+  it("bundled registry migration creates briefs with a primary key", () => {
+    const sql = readFileSync(
+      path.join(
+        process.cwd(),
+        "src/resources/default-apps/home-dashboard/db-migrations/0001_init.sql",
+      ),
+      "utf8",
+    );
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS\s+briefs/i);
+    // Turso replica sync requires a PRIMARY KEY for row versioning.
+    expect(sql).toMatch(/date\s+TEXT\s+PRIMARY KEY/i);
+  });
+
+  it("bundled save_brief.py never hardcodes a sourceId and checks the error field", () => {
+    const script = readFileSync(
+      path.join(
+        process.cwd(),
+        "src/resources/default-apps/home-dashboard/job-assets/save_brief.py",
+      ),
+      "utf8",
+    );
+
+    // Resolves the source from data-sources.json rather than guessing.
+    expect(script).toContain("def resolve_source_id");
+    expect(script).not.toContain("Daily Brief Generator (");
+    // The check that was missing and caused the silent no-op.
+    expect(script).toContain('parsed.get("error")');
+    // Verifies by reading the row back, not by trusting the write response.
+    expect(script).toContain("write reported success but no row exists");
   });
 });

@@ -44,6 +44,9 @@ describe("workspace switch gateway handler", () => {
 
     expect(pauseFn).toContain("resetCloudSyncServiceForWorkspaceSwitch");
     expect(pauseFn).toContain("cancelAllScheduledTursoPushes");
+    expect(pauseFn).toContain("cancelAllScheduledTursoReplicaPushes");
+    expect(pauseFn).toContain("drainTursoReplicaConnections");
+    expect(pauseFn).toContain("closeRealChromePlatformSession");
     expect(pauseFn).toContain("resetCloudAppPublishServiceForWorkspaceSwitch");
   });
 

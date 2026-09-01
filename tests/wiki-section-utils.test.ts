@@ -3,14 +3,18 @@ import {
   collectOpenItemsAcrossEntities,
   formatLastUpdated,
   formatUpdatedAt,
+  formatWikiJobLastUpdated,
   groupOpenItemsByCategory,
   isIdentitySectionPlaceholder,
   parseChangelogEntries,
+  parseDailyLogDate,
   parseDecisions,
   parseKeyDetailRows,
   parseOpenItems,
   parseWikiEntityRef,
+  sortWikiNodesByUpdatedAt,
   splitEntityMentions,
+  wikiNodeUpdatedAtMs,
 } from "../ui/utils/wikiSectionUtils";
 import type { WikiNode } from "../ui/types/wiki";
 
@@ -184,5 +188,48 @@ describe("wikiSectionUtils", () => {
     expect(
       isIdentitySectionPlaceholder("Goals", "- Launch enterprise tier"),
     ).toBe(false);
+  });
+
+  it("parses daily log display names with memory/ prefix and labels", () => {
+    expect(parseDailyLogDate("memory/2026-09-01.md (today)")).toBe("2026-09-01");
+    expect(parseDailyLogDate("2026-08-30.md")).toBe("2026-08-30");
+    expect(parseDailyLogDate("IDENTITY.md")).toBeNull();
+  });
+
+  it("formats wiki job last updated for the top bar", () => {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+    expect(formatWikiJobLastUpdated(twoHoursAgo)).toBe(
+      "Last updated at: 2 hours ago",
+    );
+    const threeDaysAgo = new Date(
+      Date.now() - 3 * 24 * 60 * 60 * 1000,
+    ).toISOString();
+    expect(formatWikiJobLastUpdated(threeDaysAgo)).toBe(
+      "Last updated at: 3 days ago",
+    );
+  });
+
+  it("sorts wiki nodes by updated_at descending", () => {
+    const nodes: WikiNode[] = [
+      {
+        id: "project/old",
+        type: "project",
+        label: "Old",
+        description: "",
+        props: { updated_at: "2026-01-01" },
+      },
+      {
+        id: "project/new",
+        type: "project",
+        label: "New",
+        description: "",
+        props: { updated_at: "2026-09-01" },
+      },
+    ];
+    const sorted = sortWikiNodesByUpdatedAt(nodes);
+    expect(sorted[0].label).toBe("New");
+    expect(wikiNodeUpdatedAtMs(sorted[0])).toBeGreaterThan(
+      wikiNodeUpdatedAtMs(sorted[1]),
+    );
   });
 });

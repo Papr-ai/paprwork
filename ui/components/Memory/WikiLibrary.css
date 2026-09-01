@@ -148,6 +148,14 @@
   flex: 1;
 }
 
+.wiki-topbar__last-updated {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted, rgba(255, 255, 255, 0.45));
+  white-space: nowrap;
+  margin-right: 4px;
+}
+
 .wiki-view-switch {
   display: flex;
   background: var(--bg-sunk);

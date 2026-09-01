@@ -13,6 +13,17 @@ const METADATA_FILENAMES = new Set([
   "linked-databases.json",
 ]);
 
+/** Directory segments we never need hot-reload or Sync V3 debounce on. */
+const IGNORED_DIR_SEGMENTS = [
+  "/node_modules/",
+  "/.venv/",
+  "/venv/",
+  "/data/",
+  "/build/",
+  "/__pycache__/",
+  "/.git/",
+] as const;
+
 export function shouldIgnoreAppWatchPath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, "/");
   const base = path.basename(filePath);
@@ -35,6 +46,12 @@ export function shouldIgnoreAppWatchPath(filePath: string): boolean {
     normalized.includes("/.dist-staging/")
   ) {
     return true;
+  }
+
+  for (const segment of IGNORED_DIR_SEGMENTS) {
+    if (normalized.includes(segment)) {
+      return true;
+    }
   }
 
   return false;

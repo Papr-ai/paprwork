@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.5.3",
+  "version": "2.5.4",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",

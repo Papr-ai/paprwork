@@ -155,7 +155,9 @@ describe("defaultHomeAppRepair", () => {
     expect(saved.sources).toHaveLength(1);
     expect(saved.sources[0]?.jobId).toBe(DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
     expect(saved.sources[0]?.dbPath).toBe(briefDb);
-    expect(saved.sources[0]?.id).toContain("Daily Brief Generator");
+    // Stable id/alias — must NOT embed the job id or job name. A job-id-derived
+    // sourceId is what silently broke writes (gateway 404 returned as HTTP 200).
+    expect(saved.sources[0]?.id).toBe("briefs");
 
     const jobIdFile = await fs.readFile(
       path.join(appsDir, DEFAULT_HOME_APP_ID, "default-job-id.txt"),

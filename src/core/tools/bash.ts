@@ -9,7 +9,7 @@
  * - Error handling
  */
 
-import { exec, spawn, type ChildProcess } from "child_process";
+import { spawn, type ChildProcess } from "child_process";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
@@ -100,11 +100,10 @@ import {
   detectNamespaceGitTrapCommand,
 } from "../utils/namespaceGitTrapGuard.js";
 import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
-import { getShell, getShellCommand } from "../utils/platform.js";
+import { getShellCommand } from "../utils/platform.js";
 import { classifyChildProcessError } from "../utils/childProcessErrors.js";
-
-/** Avoid inheriting a closed stdin from the Gateway child process (prevents EBADF). */
-const EXEC_STDIO: ["ignore", "pipe", "pipe"] = ["ignore", "pipe", "pipe"];
+import { execShellCommand } from "../utils/shellExec.js";
+import { SPAWN_STDIO_IGNORE_IN } from "../utils/spawnStdio.js";
 
 function destroyChildProcessStreams(proc: ChildProcess | null): void {
   if (!proc) return;
@@ -200,6 +199,8 @@ export interface BashOutput {
   migrationPath?: string;
   suggestedSql?: string;
   _schemaMigrationReminder?: string;
+  /** Actionable recovery hint when spawn fails (EBADF, EMFILE, fd pressure). */
+  _processHint?: string;
 }
 
 /**
@@ -391,18 +392,14 @@ const WRITE_KEYWORDS_RE = /(>|>>|tee\b|sed\s+-i|cat\s+>|patch\b|git\s+(commit|re
  */
 async function gitFingerprint(cwd: string | undefined): Promise<string | null> {
   try {
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execA = promisify(exec);
     const opts = { cwd: cwd || process.cwd(), timeout: 1500 };
 
     try {
-      await execA("git rev-parse --is-inside-work-tree", opts);
+      await execShellCommand("git rev-parse --is-inside-work-tree", opts);
     } catch {
       return null;
     }
-    // Single short status to capture all dirty/untracked state
-    const { stdout } = await execA(
+    const { stdout } = await execShellCommand(
       "git status --porcelain --untracked-files=normal",
       opts,
     );
@@ -432,18 +429,16 @@ async function captureGitChangesIfChanged(
     const after = await gitFingerprint(cwd);
     if (after === null || after === beforeFingerprint) return "";
 
-    const { exec } = await import("child_process");
-    const { promisify } = await import("util");
-    const execA = promisify(exec);
     const opts = { cwd: cwd || process.cwd(), timeout: 2500 };
 
-    const { stdout: stat } = await execA("git diff HEAD --stat", opts).catch(() => ({
+    const { stdout: stat } = await execShellCommand("git diff HEAD --stat", opts).catch(() => ({
       stdout: "",
+      stderr: "",
     }));
     let combinedStat = stat.trim();
 
     try {
-      const { stdout: untracked } = await execA(
+      const { stdout: untracked } = await execShellCommand(
         "git ls-files --others --exclude-standard",
         opts,
       );
@@ -460,10 +455,10 @@ async function captureGitChangesIfChanged(
     }
     if (!combinedStat) return "";
 
-    const { stdout: namesOut } = await execA(
+    const { stdout: namesOut } = await execShellCommand(
       "git diff HEAD --name-only",
       opts,
-    ).catch(() => ({ stdout: "" }));
+    ).catch(() => ({ stdout: "", stderr: "" }));
     const files = namesOut.split("\n").map((s) => s.trim()).filter(Boolean);
 
     const payload = JSON.stringify({ stat: combinedStat, files });
@@ -613,44 +608,18 @@ export async function executeBashCommand(
       );
     }
 
-    // Execute with timeout and improved buffer
-    // Use a race between execAsync and explicit SIGKILL timeout
-    let childProcess: ReturnType<typeof exec> | null = null;
-    const execPromise = new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
-      childProcess = exec(command, {
-        cwd: cwd || process.cwd(),
-        timeout,
-        maxBuffer: 100 * 1024 * 1024, // 100MB buffer (up from 10MB)
-        env: { ...process.env, ...(env as Record<string, string>) },
-        shell: getShell(),
-      }, (error: Error | null, stdout: string, stderr: string) => {
-        if (error) {
-          reject(error);
-        } else {
-          resolve({ stdout: stdout || '', stderr: stderr || '' });
-        }
-      });
+    // Execute with timeout and improved buffer (stdin ignored — prevents EBADF)
+    const mergedExecEnv: NodeJS.ProcessEnv =
+      Object.keys(env).length > 0
+        ? { ...process.env, ...(env as Record<string, string>) }
+        : process.env;
+
+    const { stdout, stderr } = await execShellCommand(command, {
+      cwd: cwd || process.cwd(),
+      timeout,
+      maxBuffer: 100 * 1024 * 1024,
+      env: mergedExecEnv,
     });
-
-    // Explicit SIGKILL timeout handler (fallback if exec's timeout doesn't work)
-    const killTimer = setTimeout(() => {
-      if (childProcess && !childProcess.killed) {
-        console.warn('[Bash Tool] Timeout exceeded, sending SIGKILL');
-        childProcess.kill('SIGKILL');
-      }
-    }, timeout + 5000); // Give exec 5s grace period, then SIGKILL
-
-    let stdout: string;
-    let stderr: string;
-    
-    try {
-      const result = await execPromise;
-      stdout = result.stdout;
-      stderr = result.stderr;
-    } finally {
-      clearTimeout(killTimer);
-      destroyChildProcessStreams(childProcess);
-    }
     
     // Validate output exists (catch undefined/null from process failures)
     if (stdout === undefined && stderr === undefined) {
@@ -938,7 +907,7 @@ export async function executeBashCommandStreaming(
       cwd: cwd || process.cwd(),
       env: env ? { ...process.env, ...(env as Record<string, string>) } : process.env,
       timeout,
-      stdio: EXEC_STDIO,
+      stdio: SPAWN_STDIO_IGNORE_IN,
     });
 
     // Stream stdout (sanitize before sending)
