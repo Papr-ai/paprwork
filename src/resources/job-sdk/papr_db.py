@@ -132,6 +132,10 @@ def _proxy_post(action, sql, params, alias=""):
             "truncate the WAL and corrupt sync."
         )
 
+    return _send(endpoint, payload, headers, action)
+
+
+def _send(endpoint, payload, headers, action, _retried=False):
     req = urllib.request.Request(
         endpoint, data=json.dumps(payload).encode(), headers=headers
     )
@@ -139,8 +143,22 @@ def _proxy_post(action, sql, params, alias=""):
         with urllib.request.urlopen(req, timeout=60) as resp:
             return json.load(resp)
     except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        # The job env alias is the database LABEL ("linkedin-outreach"); the
+        # app's sourceId is the ATTACHMENT alias ("outreach"). They are
+        # different namespaces and often differ. The gateway's 404 names the
+        # aliases it does accept, so adopt the single one it offers rather
+        # than failing a write that is otherwise correct.
+        if e.code == 404 and not _retried and "Available:" in body:
+            available = [
+                a.strip() for a in body.split("Available:")[1]
+                .rstrip("\"}").split(",") if a.strip()
+            ]
+            if len(available) == 1:
+                payload["sourceId"] = available[0]
+                return _send(endpoint, payload, headers, action, _retried=True)
         raise PaprDbError(
-            "gateway %s failed (%s): %s" % (action, e.code, e.read().decode()[:300])
+            "gateway %s failed (%s): %s" % (action, e.code, body[:300])
         )
     except urllib.error.URLError as e:
         raise PaprDbError(
@@ -249,11 +267,23 @@ class ReplicaConnection:
         return False
 
 
+def is_replica_file(path):
+    """True when a Turso sync engine owns this file's WAL.
+
+    Detected from the sidecar rather than trusting PAPR_DB_*_MODE, because the
+    env is written by the executor: an older desktop build still exports
+    "local" for a replica database, and taking that at face value opens a raw
+    write handle and truncates the WAL. Sidecar detection fails safe across
+    executor versions.
+    """
+    return bool(path) and os.path.exists(path + "-info")
+
+
 def connect(source_id=None):
     """Open the active database, or a linked one by alias."""
     mode, path, alias = _resolve(source_id)
 
-    if mode == "replica":
+    if mode == "replica" or is_replica_file(path):
         return ReplicaConnection(path, alias)
 
     if mode == "turso":
