@@ -11,7 +11,9 @@ import {
   type AppPreviewMode,
 } from "./MiniAppPublishBar";
 import { MiniAppFilesView } from "./MiniAppFilesView";
-import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
+import { MiniAppJobsView } from "./MiniAppJobsView";
+import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
+import { useJobs } from "../../hooks/useJobs";
 import {
   clearCloudPreviewCookies,
   buildUpstreamPublishedWebUrl,
@@ -41,6 +43,9 @@ export function MiniAppView({
   const [cloudLineage, setCloudLineage] = useState<ArtifactCloudLineage | null>(null);
   const [viewMode, setViewMode] = useState<AppPreviewMode>("local");
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
+  const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
+  const { graph } = useJobs();
+  const linkedJobCount = graph?.appLinks[appId]?.jobIds.length ?? 0;
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
   const [publishedIframeBaseUrl, setPublishedIframeBaseUrl] = useState<string | null>(
     null,
@@ -55,6 +60,10 @@ export function MiniAppView({
   const { isReady: gatewaySupervisorReady, isStarting: gatewaySupervisorStarting, status: gatewaySupervisorStatus } =
     useGatewaySupervisorStatus();
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
+
+  useEffect(() => {
+    setWorkspacePanel("code");
+  }, [appId]);
 
   const localSrc = useMemo(() => {
     const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
@@ -539,13 +548,25 @@ export function MiniAppView({
           viewMode={viewMode}
           onViewModeChange={handleViewModeChange}
           workspaceMode={workspaceMode}
-          onWorkspaceModeChange={setWorkspaceMode}
+          onWorkspaceModeChange={(mode) => {
+            setWorkspaceMode(mode);
+            if (mode === "files") {
+              setWorkspacePanel("code");
+            }
+          }}
+          workspacePanel={workspacePanel}
+          onWorkspacePanelChange={setWorkspacePanel}
+          linkedJobCount={linkedJobCount}
           onTrackPullComplete={() => void refreshAppMetadata()}
           onRefreshPreview={handleRefreshPreview}
         />
       ) : null}
       {!embedded && workspaceMode === "files" ? (
-        <MiniAppFilesView appId={appId} />
+        workspacePanel === "jobs" ? (
+          <MiniAppJobsView appId={appId} appTitle={appTitle} />
+        ) : (
+          <MiniAppFilesView appId={appId} panel={workspacePanel} />
+        )
       ) : (
         <div className="mini-app-view__frame-wrap">
           {gatewaySupervisorStarting && !isPublishedPreview ? (

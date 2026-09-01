@@ -31,7 +31,7 @@ export const connectPlatformTool = createTool({
 
 Use this to:
 - Check if a platform is connected: action="status"
-- **Automate with agent browser tools: action="prepare_browser"** (injects session cookies, then use browser_snapshot/browser_navigate)
+- **Automate with agent browser tools: action="prepare_browser"** (desktop LinkedIn: real Chrome profile; others: session cookies → browser_snapshot/browser_navigate)
 - Ask user to connect: action="request_connect"
 - Open a visible window for the user: action="browse" (NOT for agent automation)
 - Disconnect / refresh sessions
@@ -62,7 +62,7 @@ IMPORTANT:
       ])
       .default("status")
       .describe(
-        "Action: status, connect, disconnect, refresh, prepare_browser (inject session into agent browser — USE THIS for automation), browse (visible window for user only), get_rate_limits, request_connect",
+        "Action: status, connect, disconnect, refresh, prepare_browser (desktop LinkedIn: real Chrome profile; others: inject cookies — USE THIS for automation), browse (visible window for user only), get_rate_limits, request_connect",
       ),
     reason: z
       .string()
@@ -349,6 +349,9 @@ IMPORTANT:
                     "browser_snapshot — read current page",
                     "browser_navigate — go to specific pages (session persists)",
                     "browser_test_script — extract structured data",
+                    ...(platform === "linkedin"
+                      ? ["Desktop: real Chrome profile — stay logged into LinkedIn in Google Chrome"]
+                      : []),
                   ]
                 : currentStatus.status === "connected"
                   ? [

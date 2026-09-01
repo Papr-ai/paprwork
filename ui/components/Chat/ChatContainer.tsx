@@ -41,6 +41,7 @@ import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import { chatHasActiveStreamUi, lastUserTurnNeedsContinue } from "../../lib/agentStreamRecovery";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
+import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
 
@@ -171,6 +172,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isStarting: gatewaySupervisorStarting,
     isRestarting: gatewaySupervisorRestarting,
   } = useGatewaySupervisorStatus();
+  const gatewayConnectionState = useGatewayConnectionState();
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
@@ -202,15 +204,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     }
   }, [gatewaySupervisorReady, chatId, loadMessages, isSending]);
 
-  const gatewayBanner = gatewaySupervisorStarting
-    ? {
-        message:
-          gatewaySupervisorMessage ??
-          (gatewaySupervisorRestarting
-            ? "Reconnecting to Gateway..."
-            : "Gateway is starting..."),
-      }
-    : null;
+  const gatewayBanner =
+    gatewaySupervisorStarting &&
+    gatewayConnectionState !== "connected"
+      ? {
+          message:
+            gatewaySupervisorMessage ??
+            (gatewaySupervisorRestarting
+              ? "Reconnecting to Gateway..."
+              : "Gateway is starting..."),
+        }
+      : null;
 
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 

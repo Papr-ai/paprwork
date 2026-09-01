@@ -7,6 +7,7 @@ import {
   shouldAutoUploadApp,
   shouldAutoUploadJobFolder,
   shouldAutoUploadRelativePath,
+  shouldAutoUploadReplicaSyncKey,
 } from "../src/gateway/services/cloudUploadMode.js";
 import { saveCloudPublishPrefs } from "../src/gateway/services/cloudPublishPrefs.js";
 
@@ -29,6 +30,13 @@ describe("cloudUploadMode", () => {
     fs.writeFileSync(
       path.join(dir, "apps", "app-manual", "data-sources.json"),
       JSON.stringify({ sources: [{ jobId: "job-1", alias: "main" }] }),
+    );
+    fs.mkdirSync(path.join(dir, "apps", "app-registry"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "apps", "app-registry", "data-sources.json"),
+      JSON.stringify({
+        sources: [{ dbId: "db-test", alias: "registry", type: "sqlite" }],
+      }),
     );
     return dir;
   }
@@ -81,5 +89,22 @@ describe("cloudUploadMode", () => {
       paprDir,
     );
     expect(shouldAutoUploadApp("app-manual", paprDir)).toBe(true);
+  });
+
+  it("blocks replica auto-push for registry dbId when linking app is manual", () => {
+    const paprDir = makePaprDir();
+    saveCloudPublishPrefs(
+      {
+        apps: {
+          "app-registry": {
+            autoPublish: false,
+            accessMode: "private",
+            uploadMode: "manual",
+          },
+        },
+      },
+      paprDir,
+    );
+    expect(shouldAutoUploadReplicaSyncKey("db-test", paprDir)).toBe(false);
   });
 });

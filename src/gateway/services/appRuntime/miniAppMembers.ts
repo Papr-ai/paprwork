@@ -4,7 +4,8 @@
 
 import {
   fetchWorkspaceMembers,
-  resolveWorkspaceIdForNamespace,
+  resolveWorkspaceIdForContext,
+  WorkspaceContextResolutionError,
   type WorkspaceMember,
 } from "../../../core/utils/paprWorkspaceTeam.js";
 import { readActiveWorkspacePointer } from "../../../core/utils/paprWorkspace.js";
@@ -43,39 +44,6 @@ function mapMember(member: WorkspaceMember): MiniAppWorkspaceMember {
   };
 }
 
-async function resolveWorkspaceId(
-  sessionToken: string,
-  options: {
-    workspaceId?: string;
-    namespaceId?: string;
-  },
-): Promise<string> {
-  const explicitWorkspaceId = options.workspaceId?.trim();
-  if (explicitWorkspaceId) {
-    return explicitWorkspaceId;
-  }
-
-  const namespaceId = options.namespaceId?.trim();
-  if (namespaceId) {
-    const fromNamespace = await resolveWorkspaceIdForNamespace(
-      sessionToken,
-      namespaceId,
-    );
-    if (fromNamespace) {
-      return fromNamespace;
-    }
-    throw new MiniAppMembersError(
-      "Could not resolve workspace for this namespace. Sign in again or contact support.",
-      503,
-    );
-  }
-
-  throw new MiniAppMembersError(
-    "No workspace context is available for this app.",
-    503,
-  );
-}
-
 /** Fetch workspace members for a signed-in mini-app caller. */
 export async function listMiniAppMembers(input: {
   sessionToken: string;
@@ -91,10 +59,18 @@ export async function listMiniAppMembers(input: {
     );
   }
 
-  const workspaceId = await resolveWorkspaceId(sessionToken, {
-    workspaceId: input.workspaceId,
-    namespaceId: input.namespaceId,
-  });
+  let workspaceId: string;
+  try {
+    workspaceId = await resolveWorkspaceIdForContext(sessionToken, {
+      workspaceId: input.workspaceId,
+      namespaceId: input.namespaceId,
+    });
+  } catch (err) {
+    if (err instanceof WorkspaceContextResolutionError) {
+      throw new MiniAppMembersError(err.message, 503);
+    }
+    throw err;
+  }
 
   const members = await fetchWorkspaceMembers(sessionToken, workspaceId);
   const namespaceId =

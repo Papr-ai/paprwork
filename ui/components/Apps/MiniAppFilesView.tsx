@@ -9,6 +9,7 @@ import {
   isBinaryWorkspaceFile,
   isGeneratedReadOnlyPath,
   useAppWorkspace,
+  type AppWorkspacePanel,
 } from "../../hooks/useAppWorkspace";
 import { WorkspaceCodeEditor } from "./WorkspaceCodeEditor";
 import { WorkspaceDbPreview } from "./WorkspaceDbPreview";
@@ -24,6 +25,7 @@ import "./WorkspaceFileTree.css";
 
 interface MiniAppFilesViewProps {
   appId: string;
+  panel: AppWorkspacePanel;
 }
 
 function AppIcon() {
@@ -57,7 +59,7 @@ function JobIcon() {
   );
 }
 
-export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
+export function MiniAppFilesView({ appId, panel }: MiniAppFilesViewProps) {
   const workspace = useAppWorkspace(appId);
   const [selectedAppFile, setSelectedAppFile] = useState<AppFileRow | null>(null);
 
@@ -118,32 +120,33 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
           </button>
         </div>
 
-        <MiniAppCodeSearch
-          appId={appId}
-          jobs={jobGroups}
-          onOpenHit={(target) => {
-            setSelectedAppFile(null);
-            void workspace.openTarget(target);
-          }}
-        />
+        {panel === "code" ? (
+          <MiniAppCodeSearch
+            appId={appId}
+            jobs={jobGroups}
+            onOpenHit={(target) => {
+              setSelectedAppFile(null);
+              void workspace.openTarget(target);
+            }}
+          />
+        ) : null}
 
         <div className="mini-app-files__tree">
-          <MiniAppDataSourcesPanel appId={appId} />
+          {panel === "db" ? <MiniAppDataSourcesPanel appId={appId} /> : null}
 
-          {/* Beside data sources rather than in the file tree: App Files are
-              attached storage, not source code, and must never look like
-              something git carries. */}
-          <AppFilesPanel
-            appId={appId}
-            selectedId={selectedAppFile?.id ?? null}
-            onSelect={setSelectedAppFile}
-          />
+          {panel === "files" ? (
+            <AppFilesPanel
+              appId={appId}
+              selectedId={selectedAppFile?.id ?? null}
+              onSelect={setSelectedAppFile}
+            />
+          ) : null}
 
-          {appGroup.length === 0 && jobGroups.length === 0 && !workspace.loadingTree ? (
+          {panel === "code" && appGroup.length === 0 && jobGroups.length === 0 && !workspace.loadingTree ? (
             <p className="mini-app-files__empty">No files found.</p>
           ) : null}
 
-          {appGroup.length > 0 ? (
+          {panel === "code" && appGroup.length > 0 ? (
             <section className="mini-app-files__group mini-app-files__group--app">
               <header className="mini-app-files__group-header">
                 <span className="mini-app-files__group-icon">
@@ -167,7 +170,8 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
             </section>
           ) : null}
 
-          {jobGroups.map((job) => (
+          {panel === "code"
+            ? jobGroups.map((job) => (
             <section
               key={job.jobId}
               className="mini-app-files__group mini-app-files__group--job"
@@ -196,13 +200,66 @@ export function MiniAppFilesView({ appId }: MiniAppFilesViewProps) {
                 }}
               />
             </section>
-          ))}
+          ))
+            : null}
+
+          {panel === "db" && jobGroups.length > 0 ? (
+            <>
+              <p className="mini-app-files__panel-hint">
+                Open a job&apos;s <strong>data.db</strong> below to preview tables.
+              </p>
+              {jobGroups.map((job) => (
+                <section
+                  key={job.jobId}
+                  className="mini-app-files__group mini-app-files__group--job"
+                >
+                  <header className="mini-app-files__group-header">
+                    <span className="mini-app-files__group-icon mini-app-files__group-icon--job">
+                      <JobIcon />
+                    </span>
+                    <div className="mini-app-files__group-copy">
+                      <span className="mini-app-files__group-label">{job.name}</span>
+                      <span className="mini-app-files__group-sub">
+                        <span className="mini-app-files__job-badge">Job</span>
+                        {job.alias}
+                      </span>
+                    </div>
+                  </header>
+                  <WorkspaceFileTree
+                    entries={job.files.filter((entry) => entry.kind === "database")}
+                    scope="job"
+                    appId={appId}
+                    jobId={job.jobId}
+                    selectedKey={workspace.selectedKey}
+                    onSelect={(target) => {
+                      setSelectedAppFile(null);
+                      void workspace.openTarget(target);
+                    }}
+                  />
+                </section>
+              ))}
+            </>
+          ) : null}
         </div>
       </aside>
 
       <section className="mini-app-files__editor">
-        {selectedAppFile ? (
+        {panel === "files" && selectedAppFile ? (
           <AppFilePreview appId={appId} file={selectedAppFile} />
+        ) : panel === "files" && !selectedAppFile ? (
+          <div className="mini-app-files__placeholder">
+            <p>Select an app file to preview or download.</p>
+            <p className="mini-app-files__placeholder-sub">
+              Large attachments live here — not in git.
+            </p>
+          </div>
+        ) : panel === "db" && !workspace.selected ? (
+          <div className="mini-app-files__placeholder">
+            <p>Linked databases for this app.</p>
+            <p className="mini-app-files__placeholder-sub">
+              Select a job database below to browse tables and rows.
+            </p>
+          </div>
         ) : !workspace.selected ? (
           <div className="mini-app-files__placeholder">
             <p>Select a file to view or edit its source.</p>

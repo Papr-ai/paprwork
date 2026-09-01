@@ -5,17 +5,18 @@ import * as os from "os";
 import * as path from "path";
 import {
   buildDailyBriefDataSource,
+  dailyBriefDataSourceNeedsUpdate,
   DEFAULT_HOME_APP_ID,
   DEFAULT_HOME_DAILY_BRIEF_JOB_NAME,
   findHomeDailyBriefJobIdInRegistry,
   LEGACY_DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+  mergeDailyBriefDataSource,
   resolveHomeDailyBriefJobId,
   resolveOrAllocateHomeDailyBriefJobId,
   shouldRewriteDailyBriefDbPath,
 } from "../src/gateway/services/defaultHomeBundle.js";
 import type { JobRecord } from "../src/gateway/services/jobs/types.js";
 import { validateJobArchitecture } from "../src/gateway/services/jobs/jobArchitectureValidation.js";
-import { DEFAULT_HOME_APP_ID } from "../src/gateway/services/defaultHomeBundle.js";
 
 describe("defaultHomeBundle", () => {
   let tmpDir: string;
@@ -34,6 +35,60 @@ describe("defaultHomeBundle", () => {
     expect(source.id).toBe(`${jobId}:Daily Brief Generator (aaaaaaaa)`);
     expect(source.jobId).toBe(jobId);
     expect(source.tables).toEqual(["briefs"]);
+  });
+
+  it("mergeDailyBriefDataSource preserves alias when the same job is already linked", () => {
+    const jobId = "6953796f-1111-2222-3333-444444444444";
+    const existing = {
+      id: "briefs",
+      type: "sqlite" as const,
+      jobId,
+      alias: "briefs",
+      dbPath: "/old/data.db",
+      tables: ["briefs"],
+      linkedAt: "2026-08-30T19:01:00.000Z",
+    };
+    const merged = mergeDailyBriefDataSource(
+      existing,
+      jobId,
+      "/new/data.db",
+    );
+    expect(merged.alias).toBe("briefs");
+    expect(merged.id).toBe("briefs");
+    expect(merged.dbPath).toBe("/new/data.db");
+    expect(merged.jobId).toBe(jobId);
+    expect(merged.linkedAt).toBe("2026-08-30T19:01:00.000Z");
+  });
+
+  it("mergeDailyBriefDataSource uses canonical alias for a new link", () => {
+    const jobId = "6953796f-1111-2222-3333-444444444444";
+    const merged = mergeDailyBriefDataSource(undefined, jobId, "/data.db");
+    expect(merged.alias).toBe("Daily Brief Generator (6953796f)");
+  });
+
+  it("mergeDailyBriefDataSource replaces alias when job id changes", () => {
+    const oldJobId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const newJobId = "6953796f-1111-2222-3333-444444444444";
+    const existing = buildDailyBriefDataSource(oldJobId, "/old/data.db");
+    existing.alias = "briefs";
+    const merged = mergeDailyBriefDataSource(existing, newJobId, "/new/data.db");
+    expect(merged.alias).toBe("Daily Brief Generator (6953796f)");
+    expect(merged.jobId).toBe(newJobId);
+  });
+
+  it("dailyBriefDataSourceNeedsUpdate is false when only canonical fields match", () => {
+    const jobId = "6953796f-1111-2222-3333-444444444444";
+    const source = {
+      id: "briefs",
+      type: "sqlite" as const,
+      jobId,
+      alias: "briefs",
+      dbPath: "/data.db",
+      tables: ["briefs"],
+      linkedAt: "2026-08-30T19:01:00.000Z",
+    };
+    const merged = mergeDailyBriefDataSource(source, jobId, "/data.db");
+    expect(dailyBriefDataSourceNeedsUpdate(source, merged)).toBe(false);
   });
 
   it("findHomeDailyBriefJobIdInRegistry prefers namespace job over legacy duplicate", () => {

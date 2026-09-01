@@ -36,8 +36,9 @@ import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
 import { CloudUpstreamBar } from "./CloudUpstreamBar";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
 import { AppWorkspaceMenu } from "./AppWorkspaceMenu";
+import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
 import { WebSyncPopover, WebSyncStatusDot, webSyncPushButtonLabel } from "./WebSyncPopover";
-import type { AppWorkspaceMode } from "../../hooks/useAppWorkspace";
+import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import {
   CloudCompatibilityBadge,
   CloudCompatibilityPanel,
@@ -50,6 +51,7 @@ import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppComp
 import { PreviewUrlRow } from "./PreviewUrlRow";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
+import "./AppWorkspacePanelMenu.css";
 
 export type AppPreviewMode = "local" | "published";
 
@@ -64,6 +66,9 @@ interface MiniAppPublishBarProps {
   onViewModeChange: (mode: AppPreviewMode) => void;
   workspaceMode: AppWorkspaceMode;
   onWorkspaceModeChange: (mode: AppWorkspaceMode) => void;
+  workspacePanel: AppWorkspacePanel;
+  onWorkspacePanelChange: (panel: AppWorkspacePanel) => void;
+  linkedJobCount?: number;
   onTrackPullComplete?: () => void;
   onRefreshPreview?: () => void;
 }
@@ -253,6 +258,9 @@ export function MiniAppPublishBar({
   onViewModeChange,
   workspaceMode,
   onWorkspaceModeChange,
+  workspacePanel,
+  onWorkspacePanelChange,
+  linkedJobCount = 0,
   onTrackPullComplete,
   onRefreshPreview,
 }: MiniAppPublishBarProps) {
@@ -924,7 +932,13 @@ export function MiniAppPublishBar({
                 )
               : null}
           </div>
-        ) : null}
+        ) : (
+          <AppWorkspacePanelMenu
+            panel={workspacePanel}
+            onPanelChange={onWorkspacePanelChange}
+            jobCount={linkedJobCount}
+          />
+        )}
 
         {workspaceMode === "preview" && previewDisplayUrl ? (
           <PreviewUrlRow

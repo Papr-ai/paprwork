@@ -690,9 +690,11 @@ export class TursoSyncBridge {
       await import("./tursoReplica/tursoReplicaRouting.js");
     if (shouldUseTursoReplicaForSource(appSource)) {
       try {
-        const pulled = await pullLinkedDbViaTursoReplica(appSource, {
-          forceReconnect: pullOptions?.forceReconnect === true,
-        });
+        const pulled = await this.runExclusiveForDbPath(linked.dbPath, () =>
+          pullLinkedDbViaTursoReplica(appSource, {
+            forceReconnect: pullOptions?.forceReconnect === true,
+          }),
+        );
         if (pulled) {
           return { status: "pulled", syncMode: "replica" };
         }

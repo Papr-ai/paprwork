@@ -28,11 +28,6 @@ const Data = {
     this._jobId = this.LEGACY_JOB_ID;
     return this._jobId;
   },
-  async getSrcId() {
-    const jobId = await this.resolveJobId();
-    const short = jobId.slice(0, 8);
-    return `${jobId}:Daily Brief Generator (${short})`;
-  },
   async query(sql) {
     const r = await fetch('/api/db/query', { method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -42,15 +37,40 @@ const Data = {
     if (!r.ok) throw new Error(data?.error || 'Database query failed');
     return data?.rows || [];
   },
+  loadError(message) {
+    return {
+      _loadError: true,
+      _errorMessage: message,
+      hero: {
+        date: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+        title: 'Could not load your brief',
+        subtitle: 'The database query failed — your data may still be there.',
+        stats: [],
+      },
+      sections: [{
+        type: 'alerts',
+        title: 'What happened',
+        items: [{
+          severity: 'high',
+          message,
+          action: 'Click "Ask Agent to fix" below, or open chat and say your Home dashboard cannot load briefs.',
+        }],
+      }],
+    };
+  },
   async load(date) {
+    const sql = date
+      ? `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`
+      : `SELECT brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
     try {
-      const sql = date
-        ? `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`
-        : `SELECT brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
       const rows = await this.query(sql);
       if (rows[0]?.brief_json) return JSON.parse(rows[0].brief_json);
-    } catch(e) {}
-    return Data.sample();
+      return Data.sample();
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      console.error('[Home] Failed to load brief:', message);
+      return Data.loadError(message);
+    }
   },
   async dates() {
     try {

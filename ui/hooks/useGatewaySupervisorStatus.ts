@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { gateway } from "../src/lib/gateway";
 
 export type GatewaySupervisorStatus =
   | "unknown"
@@ -55,7 +56,23 @@ export function useGatewaySupervisorStatus(): {
       setMessage(data.message);
     });
 
+    // If the renderer missed a "ready" IPC (common after sleep/wake), infer
+    // readiness from a live WebSocket so banners do not stay stuck.
+    const clearStaleSupervisorState = (): void => {
+      if (!gateway.isConnected()) return;
+      setStatus((prev) =>
+        prev === "starting" || prev === "restarting" ? "ready" : prev,
+      );
+      setMessage(undefined);
+    };
+
+    clearStaleSupervisorState();
+    const unsubscribe = gateway.onConnectionChange((connected) => {
+      if (connected) clearStaleSupervisorState();
+    });
+
     return () => {
+      unsubscribe();
       api.removeStatusListener?.();
     };
   }, []);

@@ -26,6 +26,7 @@ import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
+import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useChatStore } from "./stores/chatStore";
 import {
@@ -572,6 +573,7 @@ export function App() {
         onClose={() => setCommandPaletteOpen(false)}
       />
       <PaprQuotaBanner />
+      <ConnectionIndicator />
       <UpdateBanner />
       {appAgentChatSession && (
         <AppAgentChatOverlay

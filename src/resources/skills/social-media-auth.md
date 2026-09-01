@@ -37,6 +37,30 @@ browser_snapshot({})
 browser_navigate({ url: "https://www.linkedin.com/messaging/" })
 ```
 
+**Desktop LinkedIn:** `prepare_browser` launches a **persistent real Google Chrome profile** (not headless cookie injection). On first use it imports cookies from your Chrome login into `~/Papr/browser-profiles/linkedin/browser-data`. Stay logged into LinkedIn in Chrome for best results.
+
+**Cloud / other platforms:** Still use headless Playwright with session cookies until a cloud strategy is defined.
+
+## LinkedIn agent reads (proven pattern)
+
+Use this for profile research — feed first, then one profile, with seconds between navigations:
+
+```typescript
+connect_platform({ platform: "linkedin", action: "status" })
+connect_platform({ platform: "linkedin", action: "prepare_browser" }) // feed — no url param
+browser_snapshot({}) // optional
+
+page_wait_for({ target: "browser", time: 4 }) // 3–8s before next page (required)
+
+browser_navigate({ url: "https://www.linkedin.com/in/handle/" })
+page_wait_for({ target: "browser", time: 3 })
+browser_snapshot({})
+```
+
+- **Rate budget:** ~2 views per person (feed + profile) toward **80 views/day** — do not chain extra navigations
+- **Pacing:** always `page_wait_for({ target: "browser", time: 3–8 })` between `browser_navigate` calls
+- **Avoid redirect loops:** never skip `prepare_browser`; do not hit linkedin.com URLs before prepare
+
 **Do NOT:**
 - Call LinkedIn Voyager / internal GraphQL / REST APIs via bash/curl with `${LINKEDIN_*}` cookies
 - Reverse-engineer `/voyager/api/` endpoints — query IDs go stale and LinkedIn returns 302 bot blocks

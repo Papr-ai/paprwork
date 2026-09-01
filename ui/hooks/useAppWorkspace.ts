@@ -8,6 +8,8 @@ import { isTransientGatewayError } from "../utils/gatewayRetry";
 
 export type AppWorkspaceMode = "preview" | "files";
 
+export type AppWorkspacePanel = "code" | "db" | "files" | "jobs";
+
 export type WorkspaceFileKind = "file" | "database" | "sqlite-internal" | "log";
 
 export type WorkspaceFileTarget =

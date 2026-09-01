@@ -1,7 +1,6 @@
 {
   "version": 1,
   "enforceOnFailure": true,
-  "primarySource": "Daily Brief Generator",
   "tables": {
     "briefs": {
       "requiredColumns": ["date", "brief_json"],

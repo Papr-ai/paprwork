@@ -57,6 +57,58 @@ export function buildDailyBriefDataSource(
   };
 }
 
+/**
+ * Refresh dbPath/jobId on an existing Daily Brief link without rewriting alias/id
+ * when the same job is already linked. Gateway startup re-ran installDefaultJob
+ * on every boot and spread buildDailyBriefDataSource(), renaming aliases out from
+ * under mini-apps that queried by sourceId.
+ */
+export function mergeDailyBriefDataSource(
+  existing: AppDataSource | undefined,
+  jobId: string,
+  dbPath: string,
+): AppDataSource {
+  const canonical = buildDailyBriefDataSource(jobId, dbPath);
+
+  if (!existing) {
+    return canonical;
+  }
+
+  const existingJobId = existing.jobId?.trim();
+  if (existingJobId && existingJobId !== jobId) {
+    return {
+      ...canonical,
+      linkedAt: existing.linkedAt ?? canonical.linkedAt,
+    };
+  }
+
+  const alias = existing.alias?.trim();
+  const id = existing.id?.trim();
+
+  return {
+    ...existing,
+    type: existing.type ?? canonical.type,
+    jobId,
+    dbPath,
+    tables: existing.tables?.length ? existing.tables : canonical.tables,
+    alias: alias || canonical.alias,
+    id: id || canonical.id,
+  };
+}
+
+export function dailyBriefDataSourceNeedsUpdate(
+  before: AppDataSource,
+  after: AppDataSource,
+): boolean {
+  return (
+    before.dbPath !== after.dbPath ||
+    before.jobId !== after.jobId ||
+    before.alias !== after.alias ||
+    before.id !== after.id ||
+    before.dbId !== after.dbId
+  );
+}
+
 function isHomeDailyBriefRegistryJob(job: JobRecord): boolean {
   if (job.id.endsWith(".migrated")) {
     return false;

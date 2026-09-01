@@ -453,3 +453,10 @@
   font-size: 12px;
   color: var(--text-secondary);
 }
+
+.mini-app-files__panel-hint {
+  margin: 8px 12px 4px;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}

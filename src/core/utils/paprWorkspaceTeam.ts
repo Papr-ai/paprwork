@@ -145,6 +145,49 @@ interface NamespaceWorkspaceGraphQLResponse {
   errors?: unknown[];
 }
 
+export class WorkspaceContextResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceContextResolutionError";
+  }
+}
+
+/**
+ * Resolve the Papr workspace id for the active org/namespace context.
+ * Namespace wins over explicit workspaceId — env/profile workspace ids are
+ * not updated on every org switch, so they can be stale after workspace switch.
+ */
+export async function resolveWorkspaceIdForContext(
+  sessionToken: string,
+  options: {
+    workspaceId?: string;
+    namespaceId?: string;
+  },
+): Promise<string> {
+  const namespaceId = options.namespaceId?.trim();
+  if (namespaceId) {
+    const fromNamespace = await resolveWorkspaceIdForNamespace(
+      sessionToken,
+      namespaceId,
+    );
+    if (fromNamespace) {
+      return fromNamespace;
+    }
+    throw new WorkspaceContextResolutionError(
+      "Could not resolve workspace for this namespace. Sign in again or contact support.",
+    );
+  }
+
+  const explicitWorkspaceId = options.workspaceId?.trim();
+  if (explicitWorkspaceId) {
+    return explicitWorkspaceId;
+  }
+
+  throw new WorkspaceContextResolutionError(
+    "No workspace context is available for this app.",
+  );
+}
+
 /** Resolve Papr workspace id from a namespace id (cloud app host + team apps). */
 export async function resolveWorkspaceIdForNamespace(
   sessionToken: string,

@@ -1,7 +1,7 @@
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { execSync } from "node:child_process";
-import type { Browser, Page } from "playwright";
+import type { Browser, BrowserContext, Page } from "playwright";
 import { isCloudAgentGatewayMode } from "../utils/paprRoot.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
@@ -11,10 +11,12 @@ import { getBrowserToolWebviewBlockReason } from "./webviewSessionGuard.js";
 let playwrightInstallAttempted = false;
 
 interface BrowserSessionState {
-  browser: Browser;
   page: Page;
   consoleLogs: BrowserConsoleLog[];
   networkLogs: BrowserNetworkLog[];
+  browser?: Browser;
+  persistentContext?: BrowserContext;
+  platformId?: string;
 }
 
 export interface BrowserConsoleLog {
@@ -34,6 +36,75 @@ export interface BrowserNetworkLog {
 }
 
 let browserSession: BrowserSessionState | null = null;
+
+function attachPageListeners(
+  page: Page,
+  consoleLogs: BrowserConsoleLog[],
+  networkLogs: BrowserNetworkLog[],
+): void {
+  page.on("console", (msg) => {
+    consoleLogs.push({
+      type: msg.type(),
+      text: msg.text(),
+      location: msg.location().url || "",
+      timestamp: new Date().toISOString(),
+    });
+    if (consoleLogs.length > 500) {
+      consoleLogs.shift();
+    }
+  });
+
+  page.on("response", (response) => {
+    const request = response.request();
+    networkLogs.push({
+      url: response.url(),
+      method: request.method(),
+      status: response.status(),
+      ok: response.ok(),
+      resourceType: request.resourceType(),
+      timestamp: new Date().toISOString(),
+    });
+    if (networkLogs.length > 500) {
+      networkLogs.shift();
+    }
+  });
+}
+
+async function closeActiveBrowserSession(): Promise<void> {
+  if (!browserSession) {
+    return;
+  }
+  try {
+    if (browserSession.persistentContext) {
+      const { closeRealChromePlatformSession } = await import(
+        "../../gateway/services/platforms/platformAgentBrowser.js"
+      );
+      await closeRealChromePlatformSession();
+    } else if (browserSession.browser) {
+      await browserSession.browser.close();
+    }
+  } catch (error) {
+    console.warn("[Browser Tool] Error closing browser session:", error);
+  }
+  browserSession = null;
+}
+
+function bindRealChromeSession(
+  platformId: string,
+  context: BrowserContext,
+  page: Page,
+): BrowserSessionState {
+  const consoleLogs: BrowserConsoleLog[] = [];
+  const networkLogs: BrowserNetworkLog[] = [];
+  attachPageListeners(page, consoleLogs, networkLogs);
+  return {
+    page,
+    consoleLogs,
+    networkLogs,
+    persistentContext: context,
+    platformId,
+  };
+}
 
 /** Cap wait timeouts — LLM args skip Zod parse; timeout:0 hangs forever in Playwright */
 const DEFAULT_WAIT_MS = 30_000;
@@ -113,13 +184,16 @@ export interface PlatformBrowserPrepareResult {
 }
 
 /**
- * Inject stored Social Login cookies into the agent's headless browser and verify auth.
- * Call this before browser_navigate / browser_snapshot on a connected platform.
+ * Prepare a connected platform session for agent browser automation.
+ * Desktop LinkedIn uses a persistent real Chrome profile; other platforms use headless inject.
  */
 export async function preparePlatformBrowserSession(
   platformId: string,
   targetUrl?: string,
 ): Promise<PlatformBrowserPrepareResult> {
+  const { shouldUseRealChromeProfile, prepareRealChromePlatformSession } = await import(
+    "../../gateway/services/platforms/platformAgentBrowser.js"
+  );
   const { getPlatformSessionService } = await import(
     "../../gateway/services/platforms/PlatformSessionService.js"
   );
@@ -153,6 +227,29 @@ export async function preparePlatformBrowserSession(
     };
   }
 
+  if (shouldUseRealChromeProfile(platformId)) {
+    await closeActiveBrowserSession();
+    const result = await prepareRealChromePlatformSession(
+      platformId,
+      config,
+      targetUrl,
+    );
+    if (result.success) {
+      const { getActiveRealChromeSession } = await import(
+        "../../gateway/services/platforms/platformAgentBrowser.js"
+      );
+      const realSession = getActiveRealChromeSession();
+      if (realSession) {
+        browserSession = bindRealChromeSession(
+          platformId,
+          realSession.context,
+          realSession.page,
+        );
+      }
+    }
+    return result;
+  }
+
   const cookies = await sessionService.getSessionCookiesForBrowser(platformId as PlatformId);
   if (cookies.length === 0) {
     return {
@@ -164,6 +261,7 @@ export async function preparePlatformBrowserSession(
     };
   }
 
+  await closeActiveBrowserSession();
   const session = await getBrowserSession();
   const context = session.page.context();
   await context.clearCookies();
@@ -219,6 +317,19 @@ export async function preparePlatformBrowserSession(
 
 async function getBrowserSession(): Promise<BrowserSessionState> {
   if (browserSession) {
+    return browserSession;
+  }
+
+  const { getActiveRealChromeSession } = await import(
+    "../../gateway/services/platforms/platformAgentBrowser.js"
+  );
+  const realSession = getActiveRealChromeSession();
+  if (realSession) {
+    browserSession = bindRealChromeSession(
+      realSession.platformId,
+      realSession.context,
+      realSession.page,
+    );
     return browserSession;
   }
 
@@ -323,33 +434,7 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
   const page = await context.newPage();
   const consoleLogs: BrowserConsoleLog[] = [];
   const networkLogs: BrowserNetworkLog[] = [];
-
-  page.on("console", (msg) => {
-    consoleLogs.push({
-      type: msg.type(),
-      text: msg.text(),
-      location: msg.location().url || "",
-      timestamp: new Date().toISOString(),
-    });
-    if (consoleLogs.length > 500) {
-      consoleLogs.shift();
-    }
-  });
-
-  page.on("response", (response) => {
-    const request = response.request();
-    networkLogs.push({
-      url: response.url(),
-      method: request.method(),
-      status: response.status(),
-      ok: response.ok(),
-      resourceType: request.resourceType(),
-      timestamp: new Date().toISOString(),
-    });
-    if (networkLogs.length > 500) {
-      networkLogs.shift();
-    }
-  });
+  attachPageListeners(page, consoleLogs, networkLogs);
 
   browserSession = { browser, page, consoleLogs, networkLogs };
   return browserSession;
@@ -526,16 +611,14 @@ export const browserTabsTool = createTool({
       (input as { context?: z.infer<typeof tabsSchema> }).context ?? input;
     await requestBrowserPermission(`tabs:${args.action}`);
     if (args.action === "close") {
-      if (browserSession) {
-        await browserSession.browser.close();
-        browserSession = null;
-      }
+      await closeActiveBrowserSession();
       return { success: true, data: { closed: true } };
     }
 
     const session = await getBrowserSession();
-    const contexts = session.browser.contexts();
-    const pages = contexts.flatMap((context) => context.pages());
+    const pages = session.persistentContext
+      ? session.persistentContext.pages()
+      : (session.browser?.contexts().flatMap((context) => context.pages()) ?? [session.page]);
     const serialized = await Promise.all(
       pages.map(async (page, index) => ({
         index,

@@ -1011,6 +1011,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Job Replica DB Routing</strong>
+                <p>
+                  Jobs now route replica database reads and writes through the
+                  gateway instead of opening SQLite directly — fixing stale
+                  reads and WAL wedge issues after job runs.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Replica Job Quiesce</strong>
+                <p>
+                  Database jobs quiesce replica push/pull while running so
+                  concurrent sync does not corrupt sidecar state.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Gateway Connection Indicator</strong>
+                <p>
+                  Clearer connection status in the sidebar with reconnect
+                  feedback and improved update banner behavior.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Platform Agent Browser</strong>
+                <p>
+                  Social platform login flows use a dedicated agent browser
+                  with proper Chrome environment for reliable session capture.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.2" && (
           <div className="about-card">
             <h3>What's New in v2.5.2</h3>

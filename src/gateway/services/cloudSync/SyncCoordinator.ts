@@ -26,6 +26,7 @@ import {
   markDbDirty as persistDbDirty,
 } from "../tursoSyncState.js";
 import { localDbHasSyncableUserTables } from "../tursoSyncBridgeCore.js";
+import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 import type {
   CoordinatorFlushResult,
   FlushNowOptions,
@@ -100,6 +101,15 @@ export class SyncCoordinator {
     dbPath: string,
     trigger: TursoPushTrigger = "watcher",
   ): void {
+    if (isReplicaManagedDbPath(dbPath)) {
+      void import("../tursoReplica/tursoReplicaPushScheduler.js").then(
+        ({ scheduleTursoReplicaPushForSyncKey }) => {
+          scheduleTursoReplicaPushForSyncKey(syncKey, "normal", trigger);
+        },
+      );
+      return;
+    }
+
     if (!localDbHasSyncableUserTables(dbPath)) {
       return;
     }

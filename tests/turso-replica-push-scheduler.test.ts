@@ -102,4 +102,39 @@ describe("tursoReplicaPushScheduler routing", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(replicaSchedule).toHaveBeenCalledWith("db-test", "normal", "watcher");
   });
+
+  it("scheduleTursoReplicaPushForSyncKey skips watcher push in manual upload mode", async () => {
+    vi.doUnmock("../src/gateway/services/tursoReplica/tursoReplicaPushScheduler.js");
+    vi.resetModules();
+
+    process.env.PAPR_TURSO_REPLICA_SYNC = "force";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+
+    const { resetTursoReplicaPushSchedulerForTests, scheduleTursoReplicaPushForSyncKey } =
+      await import(
+        "../src/gateway/services/tursoReplica/tursoReplicaPushScheduler.js"
+      );
+    resetTursoReplicaPushSchedulerForTests();
+
+    const uploadMode = await import("../src/gateway/services/cloudUploadMode.js");
+    vi.spyOn(uploadMode, "shouldAutoUploadReplicaSyncKey").mockReturnValue(false);
+
+    const bridgeMod = await import("../src/gateway/services/TursoSyncBridge.js");
+    vi.spyOn(bridgeMod, "ensureTursoSyncBridge").mockReturnValue({
+      enabled: true,
+      getAppsRootDir: () => "/tmp/papr/apps",
+    } as ReturnType<typeof bridgeMod.ensureTursoSyncBridge>);
+
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    scheduleTursoReplicaPushForSyncKey("db-test", "normal", "watcher");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(logSpy).toHaveBeenCalledWith(
+      expect.stringContaining("skipped (manual upload mode)"),
+    );
+
+    logSpy.mockRestore();
+    resetTursoReplicaPushSchedulerForTests();
+  });
 });

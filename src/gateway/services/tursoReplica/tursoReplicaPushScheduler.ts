@@ -4,6 +4,8 @@
  */
 
 import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
+import { shouldAutoUploadReplicaSyncKey } from "../cloudUploadMode.js";
+import * as path from "path";
 import {
   dedupeLinkedSourcesBySyncKey,
   discoverTursoLinkedSources,
@@ -253,8 +255,33 @@ async function replicaSourceNeedsPush(source: AppDataSource): Promise<boolean> {
   }
 }
 
+function replicaPaprDir(): string {
+  const bridge = ensureTursoSyncBridge();
+  const appsRoot = bridge.getAppsRootDir() ?? getPaprAppsRoot();
+  return path.dirname(appsRoot);
+}
+
+function shouldScheduleReplicaPush(
+  syncKey: string,
+  trigger: TursoPushTrigger,
+): boolean {
+  if (trigger === "manual") {
+    return true;
+  }
+  if (!shouldAutoUploadReplicaSyncKey(syncKey, replicaPaprDir())) {
+    logReplicaSchedule(syncKey, trigger, "skipped (manual upload mode)");
+    return false;
+  }
+  return true;
+}
+
 async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
   if (!isTursoReplicaSyncFeatureEnabled()) {
+    clearDirtyTracking(syncKey);
+    return;
+  }
+
+  if (!shouldAutoUploadReplicaSyncKey(syncKey, replicaPaprDir())) {
     clearDirtyTracking(syncKey);
     return;
   }
@@ -369,6 +396,10 @@ export function scheduleTursoReplicaPushForSyncKey(
     return;
   }
 
+  if (!shouldScheduleReplicaPush(syncKey, trigger)) {
+    return;
+  }
+
   const hadDebounceTimer = jobTimers.has(syncKey);
   noteDirty(syncKey);
   if (flushIfMaxWaitElapsed(syncKey, trigger)) {
@@ -434,6 +465,9 @@ async function enqueuePendingReplicaLinkedSources(
       continue;
     }
     const syncKey = linkedSourceSyncKey(linked);
+    if (!shouldScheduleReplicaPush(syncKey, trigger)) {
+      continue;
+    }
     if (!(await replicaSourceNeedsPush(source))) {
       continue;
     }

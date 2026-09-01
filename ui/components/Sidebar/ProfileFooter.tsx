@@ -6,7 +6,6 @@
 import React, { useEffect } from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useProfileStore } from "../../stores/profileStore";
-import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
 import "./ProfileFooter.css";
 
 interface ProfileFooterProps {
@@ -116,8 +115,6 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
           <span className="profile-footer__plan">{workspaceLabel}</span>
         ) : null}
       </button>
-
-      <ConnectionIndicator />
 
       <button
         className="profile-footer__more"

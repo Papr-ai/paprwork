@@ -163,6 +163,17 @@ function evaluateDbChange(watched: WatchedDbDir): void {
   );
 }
 
+function scheduleReplicaPushFromWatcher(
+  watched: WatchedDbDir,
+  trigger: "watcher" | "completion" = "watcher",
+): void {
+  void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
+    ({ scheduleTursoReplicaPushForSyncKey }) => {
+      scheduleTursoReplicaPushForSyncKey(watched.syncKey, "normal", trigger);
+    },
+  );
+}
+
 function evaluateDbChangeReplica(watched: WatchedDbDir): void {
   const coordinator = getSyncCoordinator();
   if (coordinator) {
@@ -170,14 +181,8 @@ function evaluateDbChangeReplica(watched: WatchedDbDir): void {
     if (status.activeFlush || status.inFlightAppIds.length > 0) {
       return;
     }
-    coordinator.markDbDirty(watched.syncKey, watched.dbPath, "watcher");
-  } else {
-    void import("./tursoReplica/tursoReplicaPushScheduler.js").then(
-      ({ scheduleTursoReplicaPushForSyncKey }) => {
-        scheduleTursoReplicaPushForSyncKey(watched.syncKey, "normal", "watcher");
-      },
-    );
   }
+  scheduleReplicaPushFromWatcher(watched);
   publishDbChanged({
     ...(watched.jobId ? { jobId: watched.jobId } : {}),
     ...(watched.dbId ? { dbId: watched.dbId } : {}),

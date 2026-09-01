@@ -204,6 +204,29 @@ export function listAppLinkedSyncKeys(
   return keys;
 }
 
+/** App IDs whose data-sources.json link the given sync key (dbId or jobId). */
+export function listAppIdsLinkingSyncKey(
+  syncKey: string,
+  paprDir: string,
+): string[] {
+  const appsDir = path.join(paprDir, "apps");
+  if (!fs.existsSync(appsDir)) {
+    return [];
+  }
+
+  const appIds: string[] = [];
+  for (const entry of fs.readdirSync(appsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) {
+      continue;
+    }
+    const keys = listAppLinkedSyncKeys(entry.name, paprDir);
+    if (keys.has(syncKey)) {
+      appIds.push(entry.name);
+    }
+  }
+  return appIds.sort();
+}
+
 /** Other sync-state keys for the same linked DB (registry dbId vs job UUID). */
 export function linkedSourceAlternateKeys(source: TursoLinkedSource): string[] {
   const syncKey = linkedSourceSyncKey(source);

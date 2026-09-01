@@ -23,6 +23,9 @@ import {
   recoverReplicaAfterCheckpointError,
   schemaLinkedDbViaTursoReplica,
   shouldUseTursoReplicaForSource,
+  writeLinkedDbViaTursoReplica,
+  writeLinkedDbBatchViaTursoReplica,
+  execLinkedDbViaTursoReplica,
 } from "../tursoReplica/tursoReplicaRouting.js";
 import {
   isReplicaCheckpointWalError,
@@ -463,6 +466,13 @@ export class DbRouter {
     sql: string,
     params?: unknown[],
   ): Promise<import("../DbQueryPool.js").WriteResult> {
+    if (shouldUseTursoReplicaForSource(source)) {
+      const result = await writeLinkedDbViaTursoReplica(source, sql, params);
+      return {
+        changes: result.changes,
+        lastInsertRowid: result.lastInsertRowid,
+      };
+    }
     if (!isLocalDbReadable(source.dbPath)) {
       throw Object.assign(
         new Error(
@@ -480,6 +490,15 @@ export class DbRouter {
     source: AppDataSource,
     statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
   ): Promise<import("../DbQueryPool.js").WriteResult[]> {
+    if (shouldUseTursoReplicaForSource(source)) {
+      const result = await writeLinkedDbBatchViaTursoReplica(source, statements);
+      return [
+        {
+          changes: result.changes,
+          lastInsertRowid: result.lastInsertRowid,
+        },
+      ];
+    }
     if (!isLocalDbReadable(source.dbPath)) {
       throw Object.assign(
         new Error(
@@ -493,6 +512,10 @@ export class DbRouter {
   }
 
   async exec(appId: string, source: AppDataSource, sql: string): Promise<void> {
+    if (shouldUseTursoReplicaForSource(source)) {
+      await execLinkedDbViaTursoReplica(source, sql);
+      return;
+    }
     if (!isLocalDbReadable(source.dbPath)) {
       throw Object.assign(
         new Error(

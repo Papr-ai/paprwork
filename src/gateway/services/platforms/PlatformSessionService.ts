@@ -15,6 +15,7 @@ import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { exec, execSync } from "node:child_process";
 import { promisify } from "node:util";
+import { isGoogleChromeInstalled } from "./platformChromeEnv.js";
 import type { Browser, BrowserContext, Cookie } from "playwright";
 import { getPaprDataDir, getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getCustomKeysService } from "../CustomKeysService.js";
@@ -36,26 +37,6 @@ import {
 const execAsync = promisify(exec);
 const CHROME_COOKIE_POLL_MS = 10_000; // 10s — each read can trigger a macOS keychain prompt
 const CHROME_COOKIE_CACHE_MS = 20_000;
-
-function isChromeInstalled(): boolean {
-  if (process.platform === "darwin") {
-    return existsSync("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
-  }
-  if (process.platform === "win32") {
-    const localAppData = process.env.LOCALAPPDATA ?? "";
-    const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-    return (
-      existsSync(join(localAppData, "Google", "Chrome", "Application", "chrome.exe")) ||
-      existsSync(join(programFiles, "Google", "Chrome", "Application", "chrome.exe"))
-    );
-  }
-  try {
-    execSync("which google-chrome || which google-chrome-stable", { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-}
 
 async function openInChrome(url: string): Promise<void> {
   if (process.platform === "darwin") {
@@ -335,7 +316,7 @@ export class PlatformSessionService {
     console.log(`[PlatformSessionService] Starting connect flow for ${platformId}`);
 
     try {
-      if (isChromeInstalled()) {
+      if (isGoogleChromeInstalled()) {
         return await this.connectViaChrome(platformId, config);
       }
 
@@ -441,7 +422,7 @@ export class PlatformSessionService {
     const playwright = await loadPlaywright();
 
     let browserType: "chrome" | "chromium" = "chromium";
-    if (isChromeInstalled()) {
+    if (isGoogleChromeInstalled()) {
       browserType = "chrome";
     }
 
@@ -886,7 +867,7 @@ export class PlatformSessionService {
     console.log(`[PlatformSessionService] Refreshing session for ${platformId}`);
 
     try {
-      if (isChromeInstalled()) {
+      if (isGoogleChromeInstalled()) {
         const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
         if (extracted.success) {
           await this.persistChromeSession(
@@ -981,6 +962,40 @@ export class PlatformSessionService {
     } finally {
       await this.closeBrowser();
     }
+  }
+
+  /**
+   * Persistent Chrome user-data directory for agent automation (desktop LinkedIn).
+   */
+  getBrowserDataDir(platformId: PlatformId): string {
+    return join(this.getProfilePath(platformId), "browser-data");
+  }
+
+  /**
+   * Import full Playwright cookie set from the user's Google Chrome login.
+   */
+  async importPlaywrightCookiesFromChrome(platformId: PlatformId): Promise<Cookie[]> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+    const config = getPlatformConfig(platformId);
+    if (!config || !isGoogleChromeInstalled()) {
+      return [];
+    }
+
+    const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
+    if (!extracted.success) {
+      return [];
+    }
+
+    const playwrightCookies = await this.extractPlaywrightCookiesFromChrome(config);
+    await this.persistChromeSession(
+      platformId,
+      config,
+      extracted.cookies,
+      playwrightCookies,
+    );
+    return playwrightCookies;
   }
 
   /**

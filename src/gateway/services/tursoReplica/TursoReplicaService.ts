@@ -41,8 +41,6 @@ import {
 
 const REPLICA_STATUS_OPEN_TIMEOUT_MS = 12_000;
 const REPLICA_PULL_TIMEOUT_MS = 15_000;
-/** Max wait for a prior op on the same db path — avoids wedging all reads behind one stuck pull/push. */
-const REPLICA_CHAIN_WAIT_MS = 20_000;
 const REPLICA_OPERATION_TIMEOUT_MS = 30_000;
 const REPLICA_CONNECT_TIMEOUT_MS = 20_000;
 
@@ -515,21 +513,23 @@ export class TursoReplicaService {
 
     if (isTursoReplicaSyncFeatureEnabled() && fs.existsSync(options.localPath)) {
       try {
-        handle = await withTimeout(
-          this.getOrOpen({
-            localPath: options.localPath,
-            tursoDatabase: options.tursoDatabase,
-            bootstrapIfEmpty: false,
-            syncOnOpen: false,
-          }),
-          REPLICA_STATUS_OPEN_TIMEOUT_MS,
-          "replica sync status open",
-        );
-        stats = await handle.db.stats();
-        pendingOps =
-          stats && typeof stats === "object" && "cdcOperations" in stats
-            ? Number((stats as TursoReplicaDatabaseStats).cdcOperations)
-            : 0;
+        await this.withSerializedPath(options.localPath, async () => {
+          handle = await withTimeout(
+            this.getOrOpen({
+              localPath: options.localPath,
+              tursoDatabase: options.tursoDatabase,
+              bootstrapIfEmpty: false,
+              syncOnOpen: false,
+            }),
+            REPLICA_STATUS_OPEN_TIMEOUT_MS,
+            "replica sync status open",
+          );
+          stats = await handle.db.stats();
+          pendingOps =
+            stats && typeof stats === "object" && "cdcOperations" in stats
+              ? Number((stats as TursoReplicaDatabaseStats).cdcOperations)
+              : 0;
+        });
       } catch {
         /* status best-effort */
       }
@@ -683,29 +683,10 @@ export class TursoReplicaService {
     const key = normalizeDbPath(localPath);
     const prev = this.operationChains.get(key) ?? Promise.resolve();
 
-    let chainTimedOut = false;
-    await Promise.race([
-      prev.catch(() => undefined),
-      new Promise<void>((resolve) => {
-        setTimeout(() => {
-          chainTimedOut = true;
-          resolve();
-        }, REPLICA_CHAIN_WAIT_MS);
-      }),
-    ]);
-
-    if (chainTimedOut) {
-      console.warn(
-        `[TursoReplicaService] Operation chain wait exceeded ${REPLICA_CHAIN_WAIT_MS}ms for ${key} — closing stuck replica handle`,
-      );
-      await this.close(localPath);
-      this.operationChains.set(key, Promise.resolve());
-    }
-
     const run = () =>
       withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica operation (${key})`);
 
-    const next = chainTimedOut ? run() : prev.then(run, run);
+    const next = prev.then(run, run);
     this.operationChains.set(
       key,
       next.catch(() => undefined),

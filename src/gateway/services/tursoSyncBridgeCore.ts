@@ -229,7 +229,8 @@ export function isTursoLocalDatabaseCorruptError(message: string): boolean {
     lower.includes("database disk image is malformed") ||
     lower.includes("file is not a database") ||
     lower.includes("sqlite_corrupt") ||
-    lower.includes("database corruption")
+    lower.includes("database corruption") ||
+    lower.includes("malformed database schema")
   );
 }
 
@@ -944,6 +945,9 @@ export function localDbHasSyncableUserTables(localDbPath: string): boolean {
     return false;
   }
   const normalized = path.normalize(localDbPath);
+  if (isReplicaManagedDbPathSync(normalized)) {
+    return true;
+  }
   const openReadonly = isReplicaManagedDbPathSync(normalized);
   const localDb = openReadonly
     ? new Database(normalized, { readonly: true, fileMustExist: true })

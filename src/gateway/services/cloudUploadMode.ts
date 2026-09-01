@@ -12,6 +12,7 @@ import {
 } from "./cloudPublishPrefs.js";
 import { readDerivedFromFile } from "./cloudSync/jsonFileCache.js";
 import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
+import { listAppIdsLinkingSyncKey } from "./tursoLinkedSources.js";
 
 export type CloudUploadModePref = "auto" | "manual" | "inherit";
 export type CloudEnabledPref = true | false | "inherit";
@@ -156,6 +157,19 @@ export function shouldAutoUploadTursoForApp(
   paprDir?: string,
 ): boolean {
   return shouldAutoUploadApp(appId, paprDir);
+}
+
+/** Gate Turso Sync replica auto-push (dbId or job sync key). Manual Upload now bypasses via trigger=manual. */
+export function shouldAutoUploadReplicaSyncKey(
+  syncKey: string,
+  paprDir?: string,
+): boolean {
+  const root = paprDir ?? getPaprRoot();
+  const appIds = listAppIdsLinkingSyncKey(syncKey, root);
+  if (appIds.length > 0) {
+    return appIds.every((appId) => shouldAutoUploadApp(appId, root));
+  }
+  return shouldAutoUploadJobFolder(syncKey, root);
 }
 
 /**

@@ -79,7 +79,8 @@ import {
 } from "./appWorkspaceAssignment.js";
 import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
 import {
-  buildDailyBriefDataSource,
+  mergeDailyBriefDataSource,
+  dailyBriefDataSourceNeedsUpdate,
   DEFAULT_HOME_APP_ID,
   findHomeDailyBriefJobIdInRegistry,
   readHomeDailyBriefJobIdFromAppDir,
@@ -693,8 +694,6 @@ export class AppService {
     try {
       const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
       const config = parseDataSourcesFile(dsContent);
-      const nextSource = buildDailyBriefDataSource(jobId, dbPath);
-
       let updated = false;
       const kept = (config.sources ?? []).filter((ds) => {
         if (!ds.tables?.includes("briefs")) {
@@ -711,14 +710,14 @@ export class AppService {
         (ds) => ds.jobId === jobId || ds.tables?.includes("briefs"),
       );
       if (briefIndex >= 0) {
-        kept[briefIndex] = {
-          ...kept[briefIndex],
-          ...nextSource,
-          dbPath,
-        };
-        updated = true;
+        const existing = kept[briefIndex];
+        const merged = mergeDailyBriefDataSource(existing, jobId, dbPath);
+        if (dailyBriefDataSourceNeedsUpdate(existing, merged)) {
+          kept[briefIndex] = merged;
+          updated = true;
+        }
       } else {
-        kept.unshift(nextSource);
+        kept.unshift(mergeDailyBriefDataSource(undefined, jobId, dbPath));
         updated = true;
       }
 

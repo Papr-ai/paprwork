@@ -53,7 +53,7 @@ describe("listMiniAppMembers", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns mapped members when workspace id is provided", async () => {
+  it("returns mapped members when only workspace id is provided", async () => {
     const fetchMock = vi.fn(async (url: string | URL) => {
       const href = String(url);
       if (href.includes("/api/workspace/members")) {
@@ -81,14 +81,12 @@ describe("listMiniAppMembers", () => {
     const result = await listMiniAppMembers({
       sessionToken: "session-token",
       workspaceId: "ws-123",
-      namespaceId: "ns-1",
       workspaceName: "Acme",
     });
 
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       workspaceId: "ws-123",
       workspaceName: "Acme",
-      namespaceId: "ns-1",
       members: [
         {
           userId: "user-abc",
@@ -98,6 +96,46 @@ describe("listMiniAppMembers", () => {
         },
       ],
     });
+  });
+
+  it("prefers namespace-resolved workspace id over stale explicit workspace id", async () => {
+    const fetchMock = vi.fn(async (url: string | URL, init?: RequestInit) => {
+      const href = String(url);
+      if (href.includes("/graphql")) {
+        return new Response(
+          JSON.stringify({
+            data: {
+              namespace: {
+                objectId: "ns-new",
+                organization: {
+                  workspace: { objectId: "ws-from-ns" },
+                },
+              },
+            },
+          }),
+          { status: 200 },
+        );
+      }
+      if (href.includes("/api/workspace/members")) {
+        const parsed = new URL(href);
+        expect(parsed.searchParams.get("workspaceId")).toBe("ws-from-ns");
+        expect(init?.headers).toMatchObject({
+          "X-Parse-Session-Token": "session-token",
+        });
+        return new Response(JSON.stringify({ members: [] }), { status: 200 });
+      }
+      throw new Error(`Unexpected fetch: ${href}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await listMiniAppMembers({
+      sessionToken: "session-token",
+      workspaceId: "ws-stale-from-previous-switch",
+      namespaceId: "ns-new",
+    });
+
+    expect(result.workspaceId).toBe("ws-from-ns");
+    expect(result.namespaceId).toBe("ns-new");
   });
 
   it("resolves workspace from namespace when workspace id omitted", async () => {

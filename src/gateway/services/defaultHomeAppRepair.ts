@@ -14,6 +14,7 @@ import {
 } from "./appDataSources.js";
 import {
   buildDailyBriefDataSource,
+  mergeDailyBriefDataSource,
   DEFAULT_HOME_APP_ID,
   readHomeDailyBriefJobIdFromAppDir,
   resolveHomeDailyBriefJobId,
@@ -107,7 +108,8 @@ export async function repairDefaultHomeAppLinkedSources(params: {
     ) {
       const dbPath = params.resolveJobDbPath(dailyBriefJobId);
       kept.push(
-        buildDailyBriefDataSource(
+        mergeDailyBriefDataSource(
+          source,
           dailyBriefJobId,
           existsSync(dbPath) ? dbPath : "",
         ),

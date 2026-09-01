@@ -2,6 +2,7 @@ const App = {
   dates: [], idx: 0, turning: false, labelTimer: null, brief: null,
   storeKey: 'home-review-v1',
   isSampleData: false, // Track if showing sample data
+  loadError: false,
   fmtDate(d) { return new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); },
   loadState() { try { return JSON.parse(localStorage.getItem(this.storeKey) || '{}'); } catch { return {}; } },
   saveState(s) { localStorage.setItem(this.storeKey, JSON.stringify(s)); },
@@ -105,6 +106,23 @@ const App = {
       }, 2500);
     }
   },
+  renderLoadErrorBanner(message) {
+    const safe = String(message || 'Database query failed').replace(/</g, '&lt;');
+    return `
+      <div class="load-error-banner">
+        <div class="load-error-content">
+          <div class="load-error-icon" aria-hidden="true">⚠</div>
+          <div class="load-error-text">
+            <strong>Could not load your brief</strong>
+            <span class="load-error-detail">${safe}</span>
+          </div>
+          <button id="fix-load-error-btn" class="fix-load-error-btn" type="button">
+            Ask Agent to fix
+          </button>
+        </div>
+      </div>
+    `;
+  },
   renderSampleDataBanner() {
     if (!this.isSampleData) return '';
     
@@ -131,7 +149,8 @@ const App = {
     if (!this.dates.length) this.dates = [Data.todayKey()];
 
     const testBrief = await Data.load();
-    this.isSampleData = this.dates.length === 0 || testBrief._isSample === true;
+    this.loadError = testBrief._loadError === true;
+    this.isSampleData = !this.loadError && (this.dates.length === 0 || testBrief._isSample === true);
     
     await this.render(); FoldNav.bind(this);
     document.getElementById('sections').addEventListener('click', async (e) => {
@@ -152,22 +171,41 @@ const App = {
       genBtn.addEventListener('click', () => this.generateRealBrief());
     }
   },
+  bindLoadErrorButton(message) {
+    const fixBtn = document.getElementById('fix-load-error-btn');
+    if (!fixBtn) return;
+    fixBtn.addEventListener('click', () => {
+      const msg = message || 'Home dashboard cannot load briefs from the linked database.';
+      try {
+        window.paprAPI.invoke('chat.open', {
+          message: `My Home dashboard cannot load briefs: ${msg}. Please check the Daily Brief Generator job link and data source alias.`,
+        });
+      } catch (e) { /* paprAPI may not be available */ }
+    });
+  },
   async render() {
     const date = this.dates[this.idx];
     let brief = await Data.load(date);
-    if (brief._isSample && this.dates.length > 0) {
+    this.loadError = brief._loadError === true;
+    if (!this.loadError && brief._isSample && this.dates.length > 0) {
       brief = await Data.load();
-      if (!brief._isSample && this.dates[this.idx] !== this.dates[0]) {
+      this.loadError = brief._loadError === true;
+      if (!this.loadError && !brief._isSample && this.dates[this.idx] !== this.dates[0]) {
         this.idx = 0;
       }
     }
     this.brief = this.decorate(brief, date);
     
-    // Render banner if sample data
-    const banner = this.renderSampleDataBanner();
+    // Render banner if sample data or load error
+    const banner = this.loadError
+      ? this.renderLoadErrorBanner(this.brief._errorMessage)
+      : this.renderSampleDataBanner();
     
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
     document.getElementById('sections').innerHTML = (this.brief.sections || []).map((s) => R.section(s)).join('');
+    if (this.loadError) {
+      this.bindLoadErrorButton(this.brief._errorMessage);
+    }
     this.updateNav(); this.animateBars();
   },
   async review(btn) {

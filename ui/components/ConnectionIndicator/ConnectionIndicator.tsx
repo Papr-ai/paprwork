@@ -1,61 +1,49 @@
 /**
- * ConnectionIndicator - Shows Gateway WebSocket + supervisor status
+ * ConnectionIndicator - Floating banner when Gateway WebSocket is offline
  */
 
-import React, { useEffect, useState } from "react";
-import { gateway } from "../../src/lib/gateway";
+import React from "react";
+import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import "./ConnectionIndicator.css";
 
 export function ConnectionIndicator() {
-  const [connectionState, setConnectionState] = useState<
-    "connected" | "reconnecting" | "disconnected"
-  >(gateway.getConnectionState());
+  const connectionState = useGatewayConnectionState();
   const {
     isStarting: gatewaySupervisorStarting,
     isRestarting: gatewaySupervisorRestarting,
     message: gatewaySupervisorMessage,
   } = useGatewaySupervisorStatus();
 
-  useEffect(() => {
-    const unsubscribe = gateway.onConnectionChange(() => {
-      setConnectionState(gateway.getConnectionState());
-    });
-
-    const interval = setInterval(() => {
-      setConnectionState(gateway.getConnectionState());
-    }, 1000);
-
-    return () => {
-      unsubscribe();
-      clearInterval(interval);
-    };
-  }, []);
-
-  if (gatewaySupervisorStarting) {
-    return (
-      <div className="connection-indicator connection-indicator--reconnecting">
-        <div className="connection-indicator__dot" />
-        <span className="connection-indicator__text">
-          {gatewaySupervisorMessage ??
-            (gatewaySupervisorRestarting
-              ? "Gateway restarting..."
-              : "Gateway starting...")}
-        </span>
-      </div>
-    );
-  }
-
   if (connectionState === "connected") {
     return null;
   }
 
+  const showSupervisorMessage =
+    gatewaySupervisorStarting &&
+    (connectionState === "disconnected" || gatewaySupervisorRestarting);
+
+  const label = showSupervisorMessage
+    ? (gatewaySupervisorMessage ??
+      (gatewaySupervisorRestarting
+        ? "Reconnecting to Gateway..."
+        : "Gateway starting..."))
+    : connectionState === "reconnecting"
+      ? "Reconnecting..."
+      : "Connection lost";
+
+  const visualState = showSupervisorMessage
+    ? "reconnecting"
+    : connectionState;
+
   return (
-    <div className={`connection-indicator connection-indicator--${connectionState}`}>
+    <div
+      className={`connection-indicator connection-indicator--${visualState}`}
+      role="status"
+      aria-live="polite"
+    >
       <div className="connection-indicator__dot" />
-      <span className="connection-indicator__text">
-        {connectionState === "reconnecting" ? "Reconnecting..." : "Disconnected"}
-      </span>
+      <span className="connection-indicator__text">{label}</span>
     </div>
   );
 }
