@@ -87,21 +87,20 @@ export async function pullJobTursoBeforeRun(
       const appSource = linkedSourceAsAppDataSource(linked);
       const isReplica = shouldUseTursoReplicaForSource(appSource);
 
-      await releaseReplicaHandleForJob(linked.dbPath);
-      const result = await bridge.pullJob(syncKey, undefined, {});
-
-      // Deliberately NOT releasing the replica handle here anymore.
-      //
-      // This existed so a job could open the replica file directly. Jobs now
-      // read read-only and write through the gateway (papr_db), and the
-      // gateway needs that handle to serve them — releasing it made every
+      // Legacy (non-replica) sources still hand jobs a raw file path, so the
+      // handle must be released for them. Replica sources must NOT release:
+      // jobs now read read-only and write through the gateway (papr_db), and
+      // the gateway needs this handle to serve them. Closing it made every
       // job-issued write hang until "replica operation timed out after
-      // 30000ms", and left sidecarWedge stuck true.
-      if (isReplica) {
+      // 30000ms", then wedged the sidecar on reopen.
+      if (!isReplica) {
+        await releaseReplicaHandleForJob(linked.dbPath);
+      } else {
         await appendLog?.(
           `[Turso] Replica handle retained — jobs write via gateway (${syncKey})`,
         );
       }
+      const result = await bridge.pullJob(syncKey, undefined, {});
 
       if (result.status === "pulled") {
         if (!isReplica) {
