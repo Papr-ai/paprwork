@@ -14,6 +14,7 @@ import { ensureLocalDbChangeLogReady } from "./tursoSyncBridgeCore.js";
 import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
 import { linkedSourceAsAppDataSource } from "./tursoLinkedSources.js";
 import { shouldUseTursoReplicaForSource } from "./tursoReplica/tursoReplicaRouting.js";
+import { releaseReplicaHandleForJob } from "./tursoReplica/replicaDbJobQuiesce.js";
 
 export function resolveJobTursoSyncKeys(
   job: Pick<JobRecord, "id" | "writeDbIds">,
@@ -83,10 +84,27 @@ export async function pullJobTursoBeforeRun(
     }
 
     try {
+      const appSource = linkedSourceAsAppDataSource(linked);
+      const isReplica = shouldUseTursoReplicaForSource(appSource);
+
+      await releaseReplicaHandleForJob(linked.dbPath);
       const result = await bridge.pullJob(syncKey, undefined, {});
+
+      // Deliberately NOT releasing the replica handle here anymore.
+      //
+      // This existed so a job could open the replica file directly. Jobs now
+      // read read-only and write through the gateway (papr_db), and the
+      // gateway needs that handle to serve them — releasing it made every
+      // job-issued write hang until "replica operation timed out after
+      // 30000ms", and left sidecarWedge stuck true.
+      if (isReplica) {
+        await appendLog?.(
+          `[Turso] Replica handle retained — jobs write via gateway (${syncKey})`,
+        );
+      }
+
       if (result.status === "pulled") {
-        const appSource = linkedSourceAsAppDataSource(linked);
-        if (!shouldUseTursoReplicaForSource(appSource)) {
+        if (!isReplica) {
           ensureLocalDbChangeLogReady(linked.dbPath);
         }
         await appendLog?.(

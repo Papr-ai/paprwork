@@ -49,8 +49,14 @@ call `.execute()` / `.commit()` / `.fetchone()` keep working unchanged.
 import json
 import os
 import sqlite3
+import time
 import urllib.error
 import urllib.request
+
+# The sync engine's exclusive-lock windows are short (commit / checkpoint), so
+# a read should wait them out rather than fail the job.
+_BUSY_TIMEOUT_S = 10.0
+_READ_RETRIES = 3
 
 __all__ = ["connect", "query", "execute", "PaprDbError"]
 
@@ -198,8 +204,61 @@ class ReplicaConnection:
         self._path = path
         self._alias = alias
         self._last = None
-        self._read = sqlite3.connect("file:%s?mode=ro" % path, uri=True)
-        self._read.row_factory = sqlite3.Row
+
+    def _read_rows(self, sql, params):
+        """Open, read, close — one statement at a time.
+
+        A held-open read handle keeps a SHARED lock on the file. The Turso sync
+        engine needs an EXCLUSIVE lock to commit a gateway write, so a job that
+        reads and then writes deadlocks against itself:
+
+            Locking error: Failed locking file '...data.db'.
+            File is locked by another process
+
+        Closing between statements is safe here precisely because mode=ro never
+        checkpoints — the close that truncates the WAL only happens on a
+        writable handle. So this costs a little open/close overhead and buys
+        back read+write in the same job.
+        """
+        # timeout= sets SQLite's busy handler: the sync engine takes an
+        # EXCLUSIVE lock while it commits/checkpoints, and without a busy
+        # timeout a read landing in that window fails instantly with
+        # "database is locked". Waiting is correct — those windows are short.
+        last = None
+        for attempt in range(_READ_RETRIES):
+            con = None
+            try:
+                con = sqlite3.connect(
+                    "file:%s?mode=ro" % self._path, uri=True, timeout=_BUSY_TIMEOUT_S
+                )
+                con.row_factory = sqlite3.Row
+                return con.execute(sql, params or []).fetchall()
+            except sqlite3.OperationalError as e:
+                msg = str(e)
+                # "unable to open database file" here is not a missing file —
+                # it is a WAL-mode database whose -shm is absent because the
+                # sync engine released its handle. A read-only connection is
+                # not allowed to create -shm, so direct reads are impossible
+                # until the engine reopens. Fall through to the gateway, which
+                # always holds a valid handle.
+                if "unable to open" in msg:
+                    return self._read_via_gateway(sql, params)
+                if "locked" not in msg and "busy" not in msg:
+                    raise
+                last = e
+                time.sleep(0.25 * (attempt + 1))
+            finally:
+                if con is not None:
+                    con.close()
+        # Persistent lock contention: same answer, let the owner do the read.
+        return self._read_via_gateway(sql, params)
+
+    def _read_via_gateway(self, sql, params):
+        out = _proxy_post("query", sql, params, self._alias)
+        rows = (out or {}).get("rows", [])
+        # /api/db/query returns dicts; callers index by column name, which
+        # works the same for dict as for sqlite3.Row.
+        return rows
 
     def execute(self, sql, params=None):
         verb = sql.lstrip().split(None, 1)[0].upper() if sql.strip() else ""
@@ -213,7 +272,7 @@ class ReplicaConnection:
             _proxy_post("write", sql, params, self._alias)
             self._last = _Cursor([])
         else:
-            self._last = _Cursor(self._read.execute(sql, params or []).fetchall())
+            self._last = _Cursor(self._read_rows(sql, params))
         return self._last
 
     def executemany(self, sql, seq_of_params):
@@ -248,11 +307,12 @@ class ReplicaConnection:
         )
 
     def close(self):
-        self._read.close()
+        """No-op: read handles are opened and closed per statement, so there
+        is nothing held open to release."""
 
     @property
     def row_factory(self):
-        return self._read.row_factory
+        return sqlite3.Row
 
     @row_factory.setter
     def row_factory(self, value):
