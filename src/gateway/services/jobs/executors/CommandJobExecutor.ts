@@ -15,6 +15,7 @@ import {
 } from "../../jobAppDatabase.js";
 import { STANDALONE_APP_ID } from "../appIds.js";
 import { jobSdkEnv } from "../jobSdkEnv.js";
+import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -77,6 +78,11 @@ export class CommandJobExecutor implements IJobExecutor {
 
     const nvmEnv = this.getNvmEnv();
 
+    // Replica-managed databases: hand the job proxy credentials so papr_db
+    // writes through the gateway instead of opening a raw write handle, which
+    // would truncate the WAL and wedge the sync engine.
+    const dbProxy = leaseJobDbProxyEnv(writeTargets, linkedAppId);
+
     const env: NodeJS.ProcessEnv = {
       ...nvmEnv,
       JOB_DIR: params.jobDir,
@@ -86,6 +92,7 @@ export class CommandJobExecutor implements IJobExecutor {
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),
+      ...dbProxy.env,
       ...(runtimeParamsForJobEnv(params.runtimeParams)),
     };
     
@@ -108,6 +115,12 @@ export class CommandJobExecutor implements IJobExecutor {
       env,
       stdio: ["ignore", "pipe", "pipe"],
     });
+
+    // Revoke the proxy session with the process rather than on a timer, so a
+    // finished job cannot keep writing. "close" (not "exit") waits for stdio,
+    // and both listeners are needed because a spawn failure emits only "error".
+    proc.once("close", dbProxy.release);
+    proc.once("error", dbProxy.release);
 
     return {
       mode: "process",

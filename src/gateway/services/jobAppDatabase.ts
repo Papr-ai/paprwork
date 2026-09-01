@@ -9,6 +9,7 @@ import { getPaprDataDir, getPaprRoot } from "../../core/utils/paprRoot.js";
 import type { JobRecord } from "./jobs/types.js";
 import { STANDALONE_APP_ID } from "./jobs/appIds.js";
 import type { DatabaseRecord } from "./DatabaseRegistryService.js";
+import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
 import { rewritePaprPathForCloudRun } from "./cloudAgentGateway/cloudPaprPath.js";
 import {
   shouldUseCloudSandboxTursoDirect,
@@ -27,6 +28,14 @@ export interface JobWriteDatabaseTarget {
   envKey: string;
   /** Cloud sandbox Turso-direct: jobs use HTTP instead of local SQLite path. */
   turso?: CloudSandboxTursoCredentials;
+  /**
+   * "replica" means a Turso sync engine owns this file's WAL. Jobs must not
+   * hold a raw write handle on it: SQLite auto-checkpoints when the last
+   * connection closes, truncating the WAL to zero, while the sync engine's
+   * data.db-info still points at a byte offset inside it. The next push then
+   * fails with "short read on WAL frame at offset N: expected 4096, got 0".
+   */
+  syncMode?: DatabaseSyncMode;
 }
 
 export interface ResolveJobWriteTargetsOptions {
@@ -103,6 +112,7 @@ export function targetFromRegistryRecord(
     alias,
     dbPath,
     envKey: databaseEnvKey(record),
+    ...(record.syncMode ? { syncMode: record.syncMode } : {}),
   };
 }
 
@@ -308,6 +318,17 @@ export async function requireJobAppDatabase(
   return ctx;
 }
 
+/**
+ * A replica-managed file must never be opened for writing by a job process.
+ * See JobWriteDatabaseTarget.syncMode for the WAL-truncation mechanism.
+ */
+export function isReplicaManagedTarget(
+  target: Pick<JobWriteDatabaseTarget, "syncMode" | "turso">,
+): boolean {
+  // Cloud sandbox Turso-direct already writes over HTTP — no local WAL at risk.
+  return !target.turso && target.syncMode === "replica";
+}
+
 export function jobWriteDatabaseEnv(
   targets: readonly JobWriteDatabaseTarget[],
   appId?: string,
@@ -326,8 +347,13 @@ export function jobWriteDatabaseEnv(
       env[`${prefix}_URL`] = target.turso.url;
       env[`${prefix}_AUTH_TOKEN`] = target.turso.authToken;
     } else {
+      // The path stays exported either way: reads are the common case and a
+      // read-only handle never checkpoints. "replica" mode tells papr_db to
+      // open it mode=ro and route writes through the gateway proxy instead.
       env[prefix] = target.dbPath;
-      env[`${prefix}_MODE`] = "local";
+      env[`${prefix}_MODE`] = isReplicaManagedTarget(target)
+        ? "replica"
+        : "local";
     }
   }
 
@@ -342,7 +368,7 @@ export function jobWriteDatabaseEnv(
       env.PAPR_DB_AUTH_TOKEN = first.turso.authToken;
     } else {
       env.APP_DB = first.dbPath;
-      env.PAPR_DB_MODE = "local";
+      env.PAPR_DB_MODE = isReplicaManagedTarget(first) ? "replica" : "local";
     }
   }
 
@@ -379,10 +405,16 @@ export function jobWriteDatabasePromptLines(
   const lines = [
     "Write targets (registry databases — mini-apps read via /api/db/query + sourceId):",
   ];
+  let hasReplica = false;
   for (const target of targets) {
     if (target.turso) {
       lines.push(
         `  PAPR_DB_${target.envKey}_MODE=turso  (${target.alias}, dbId=${target.dbId})`,
+      );
+    } else if (isReplicaManagedTarget(target)) {
+      hasReplica = true;
+      lines.push(
+        `  PAPR_DB_${target.envKey}="${target.dbPath}"  (${target.alias}, dbId=${target.dbId}) [replica — read-only file]`,
       );
     } else {
       lines.push(
@@ -390,10 +422,30 @@ export function jobWriteDatabasePromptLines(
       );
     }
   }
-  lines.push(
-    "",
-    "Use PAPR_DB_* paths for app-facing tables. Use $JOB_DB only for scratch.",
-  );
+
+  if (hasReplica) {
+    // Without this the agent writes sqlite3.connect(APP_DB), which truncates
+    // the WAL on close and wedges the replica's sync engine. Telling it the
+    // right API is the only durable fix — agent jobs rewrite their own scripts.
+    lines.push(
+      "",
+      "A [replica] database is sync-managed. In Python use the bundled helper:",
+      "    import papr_db",
+      "    con = papr_db.connect()          # or papr_db.connect(\"alias\")",
+      "    con.execute(\"INSERT INTO t (a) VALUES (?)\", [v])",
+      "",
+      "It reads the file read-only and sends writes through the gateway.",
+      "Do NOT call sqlite3.connect() on a [replica] path, and do NOT use the",
+      "sqlite3 CLI on it: closing a write handle checkpoints and truncates the",
+      "WAL, which corrupts sync and blocks every later write.",
+    );
+  } else {
+    lines.push(
+      "",
+      "Use PAPR_DB_* paths for app-facing tables. Use $JOB_DB only for scratch.",
+    );
+  }
+
   if (targets.length === 1) {
     lines.push(`Legacy alias: APP_DB="${targets[0].dbPath}"`);
   }

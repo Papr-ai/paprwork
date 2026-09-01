@@ -26,6 +26,8 @@ import {
   resolveJobWriteTargets,
 } from "../../jobAppDatabase.js";
 import { STANDALONE_APP_ID } from "../appIds.js";
+import { jobSdkEnv } from "../jobSdkEnv.js";
+import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
 import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type { IsolatedJobRunDiagnostics } from "../../AgentService.js";
 
@@ -220,6 +222,11 @@ export class AgentJobExecutor implements IJobExecutor {
     );
     const jobDbPath = await getJobsService().getJobDatabasePath(params.job.id);
     const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
+    // Agent jobs write their own scripts at runtime, so a raw sqlite3 handle
+    // cannot be prevented by fixing job code — the agent regenerates it. Proxy
+    // credentials plus papr_db on PYTHONPATH give it a safe path by default.
+    const dbProxy = leaseJobDbProxyEnv(writeTargets, linkedAppId);
+
     const jobEnv: Record<string, string> = {
       PAPR_HOME: getPaprRoot(),
       JOB_DIR: params.jobDir,
@@ -227,6 +234,8 @@ export class AgentJobExecutor implements IJobExecutor {
       ...(writeTargets.length > 0
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),
+      ...dbProxy.env,
+      ...jobSdkEnv(process.env.PYTHONPATH),
       ...(isHomeDailyBriefJob(params.job)
         ? {
             BRIEF_DATE_KEY: todayBriefDateKey(params.job.schedule?.timezone),
@@ -314,6 +323,10 @@ export class AgentJobExecutor implements IJobExecutor {
       await params.appendLog(
         `Agent execution failed: ${executionError.message}`,
       );
+    } finally {
+      // Revoke database access the moment the agent stops running, whether it
+      // succeeded or threw. Everything below this point is delivery/logging.
+      dbProxy.release();
     }
     // ─────────────────────────────────────────────────────────────────────────
 
