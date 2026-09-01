@@ -171,7 +171,17 @@ export async function repairCloudSync(options: {
         const { reseedTursoReplicaFromRemote } = await import(
           "./tursoReplicaProvision.js"
         );
+        // Close BEFORE reseeding, and again after.
+        //
+        // Reseeding rewrites data.db and its sidecars on disk, but a cached
+        // sync handle keeps its own WAL offset in memory. Without closing, the
+        // files come back healthy — papr_db_sync_status reports sidecarWedge
+        // false — while every write still fails "short read on WAL frame",
+        // because the live handle points into the WAL that was just replaced.
+        // That is why this repair only appeared to work after an app restart.
+        await replica.close(source.dbPath);
         await reseedTursoReplicaFromRemote(record);
+        await replica.close(source.dbPath);
       } else {
         await replica.close(source.dbPath);
         await paprDbPull({ dbId: options.dbId });
