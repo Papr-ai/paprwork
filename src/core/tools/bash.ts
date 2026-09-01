@@ -1079,7 +1079,8 @@ export const bashTool = createTool({
 WHEN TO USE BASH TOOL:
 ✓ Short commands that complete in <60 seconds
 ✓ Commands with output <100MB
-✓ One-off operations: file operations, git commands, package installs, quick scripts, API probes (curl), sqlite peeks
+✓ One-off operations: file operations, git commands, package installs, quick scripts, API probes (curl), sqlite peeks on job scratch DBs
+✗ NEVER sqlite3/sqlite3.connect on a registry DB (data/databases/*/data.db) — even SELECT truncates the WAL and wedges cloud sync; blocked. Use query_cloud_turso / papr_db_sync_status, or sqlite3 "file:$PATH?mode=ro"
 ✓ Commands where you need to see the full output immediately
 ✓ Exploring data shape BEFORE committing to create_job — bash first, job only when reusable/scheduled/app-wired
 

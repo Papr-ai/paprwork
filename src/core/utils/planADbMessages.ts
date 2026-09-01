@@ -11,8 +11,10 @@ export const SCHEMA_REQUIRES_ONLINE_MSG =
   "If cloud schema is ahead after reconnect, use repair_cloud_sync({ strategy: 'merge_lww' | 'accept_cloud' }).";
 
 export const REPLICA_BASH_SQLITE_MSG =
-  "Plan A (cloud sync): do not run sqlite3 or Python sqlite against replica-managed database files. " +
-  "Use papr_db_apply_migration for schema and papr_db_exec or /api/db/write for rows.";
+  "Plan A (cloud sync): do not open replica-managed database files with sqlite3 or Python sqlite. " +
+  "Even a plain SELECT opens the file read-write and truncates the WAL on close, which wedges sync in both directions. " +
+  "Use papr_db_apply_migration for schema, papr_db_exec or /api/db/write for rows, and query_cloud_turso or papr_db_sync_status to inspect. " +
+  'If you must read the local file, open it read-only: sqlite3 "file:/path/data.db?mode=ro" "SELECT ..."';
 
 export function isPlanACloudEnvFromProcessEnv(
   env: NodeJS.ProcessEnv = process.env,

@@ -8,6 +8,7 @@ import {
   isReplicaManagedDbPathFromRegistry,
   resetReplicaRegistryCacheForTests,
 } from "../src/core/utils/replicaBashSqliteGuard.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const PLAN_A_ENV = {
   PAPR_TURSO_REPLICA_SYNC: "replica-records",
@@ -15,6 +16,8 @@ const PLAN_A_ENV = {
 } as const;
 
 describe("replicaBashSqliteGuard", () => {
+  useIsolatedPaprWorkspace("replica-bash-sqlite-guard");
+
   it("detects registry database paths", () => {
     expect(
       isRegistryDatabasePath("/Users/me/Papr/data/databases/replica-v3/data.db"),
@@ -84,6 +87,57 @@ describe("replicaBashSqliteGuard", () => {
       resetReplicaRegistryCacheForTests();
       fs.rmSync(tmpRoot, { recursive: true, force: true });
     }
+  });
+
+  // Regression: a plain SELECT via the sqlite3 CLI opens the file read-write
+  // and truncates the WAL on close, wedging replica sync. Keyword-based write
+  // detection let these through and caused a real sync wedge.
+  it("blocks read-only-looking sqlite3 SELECT against registry DB", () => {
+    const dbPath = "/Users/me/Papr/data/databases/replica-v3/data.db";
+    const block = detectReplicaRegistrySqliteBlock(
+      `sqlite3 "${dbPath}" "SELECT COUNT(*) FROM topics"`,
+      { env: { ...PLAN_A_ENV } },
+    );
+    expect(block?.message).toMatch(/mode=ro/);
+  });
+
+  it("blocks python sqlite3.connect SELECT against registry DB", () => {
+    const dbPath = "/Users/me/Papr/data/databases/replica-v3/data.db";
+    const block = detectReplicaRegistrySqliteBlock(
+      `python3 -c "import sqlite3; c=sqlite3.connect('${dbPath}'); print(c.execute('SELECT 1').fetchall())"`,
+      { env: { ...PLAN_A_ENV } },
+    );
+    expect(block).not.toBeNull();
+  });
+
+  it("allows explicit read-only opens (mode=ro / -readonly)", () => {
+    const dbPath = "/Users/me/Papr/data/databases/replica-v3/data.db";
+    expect(
+      detectReplicaRegistrySqliteBlock(
+        `sqlite3 "file:${dbPath}?mode=ro" "SELECT COUNT(*) FROM topics"`,
+        { env: { ...PLAN_A_ENV } },
+      ),
+    ).toBeNull();
+    expect(
+      detectReplicaRegistrySqliteBlock(
+        `sqlite3 -readonly "${dbPath}" "SELECT COUNT(*) FROM topics"`,
+        { env: { ...PLAN_A_ENV } },
+      ),
+    ).toBeNull();
+  });
+
+  it("still allows non-sqlite commands touching the path", () => {
+    const dbPath = "/Users/me/Papr/data/databases/replica-v3/data.db";
+    expect(
+      detectReplicaRegistrySqliteBlock(`ls -la "${dbPath}"`, {
+        env: { ...PLAN_A_ENV },
+      }),
+    ).toBeNull();
+    expect(
+      detectReplicaRegistrySqliteBlock(`stat -f %z "${dbPath}"`, {
+        env: { ...PLAN_A_ENV },
+      }),
+    ).toBeNull();
   });
 
   it("blocks sqlite3 input redirect against registry DB under Plan A", () => {

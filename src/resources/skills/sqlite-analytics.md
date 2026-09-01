@@ -91,15 +91,20 @@ INSERT INTO schema_migrations (version) VALUES (1);
 
 ## Querying from Mini-Apps
 
-Apps query job databases via the linked data source:
+Apps query linked databases via `/api/db/query`, naming the source with `sourceId` (the alias from `attach_database`).
+
+**Never shell out to `sqlite3` from a mini-app.** Registry databases on replica sync are managed by the sync engine: opening the file with the `sqlite3` CLI opens WAL read-write and truncates it on close — even for a pure `SELECT` — which wedges sync in both directions. The bash guard blocks this. It also doesn't work in the cloud, where there is no local file.
 
 ```javascript
 // In mini-app JavaScript
-async function query(sql) {
-  const result = await window.electronAPI.executeCommand(
-    `sqlite3 -json "${dbPath}" "${sql}"`
-  );
-  return JSON.parse(result.stdout);
+async function query(sql, params = []) {
+  const res = await fetch("/api/db/query", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sourceId: "analytics", sql, params }),
+  });
+  const { rows } = await res.json();
+  return rows;
 }
 
 // Example queries

@@ -280,22 +280,43 @@ connect_platform({ platform: "linkedin", action: "connect" })
 2. \`connect_platform({ action: "request_connect", reason: "To fetch your messages" })\` - **PREFERRED:** Shows branded modal to user
 3. Sessions refresh automatically in the background (no manual Chrome Manager needed!)
 4. Jobs access cookies via \`\${LINKEDIN_LI_AT}\`, \`\${INSTAGRAM_SESSIONID}\`, etc.
-5. \`connect_platform({ action: "prepare_browser" })\` — inject session into agent browser, then use browser_* tools
+5. \`connect_platform({ action: "prepare_browser" })\` — on **desktop LinkedIn**, opens a persistent **real Google Chrome profile** (imports from Chrome if needed); other platforms inject session cookies. Then use browser_* tools.
 
 **Reading a connected account (agent automation — USE THIS):**
 \`\`\`typescript
 // 1. Check connected
 connect_platform({ platform: "linkedin", action: "status" })
 
-// 2. Inject stored session into YOUR browser tools (headless Playwright)
+// 2. Prepare agent browser (desktop LinkedIn = real Chrome profile at ~/Papr/browser-profiles/linkedin/browser-data)
 connect_platform({ platform: "linkedin", action: "prepare_browser" })
-// Optional: prepare_browser with url for a specific page
+// Optional: prepare_browser with url for a specific page — do NOT pass url on first call unless needed
 
 // 3. Read/interact — session persists in the same browser session
 browser_snapshot({})
 browser_navigate({ url: "https://www.linkedin.com/messaging/" })
 browser_test_script({ script: "..." })
 \`\`\`
+
+**Desktop LinkedIn tips:**
+- User should stay logged into LinkedIn in **Google Chrome** (prepare_browser imports/syncs from Chrome)
+- If prepare_browser fails with redirect loop or empty page: \`refresh\` once (re-syncs from Chrome), retry \`prepare_browser\`, then ask user to Disconnect + Connect in Settings → Platforms
+
+**Proven read pattern (feed → profile → read):**
+\`\`\`typescript
+connect_platform({ platform: "linkedin", action: "status" })
+connect_platform({ platform: "linkedin", action: "prepare_browser" }) // lands on feed — no url param
+browser_snapshot({}) // optional: scan feed
+
+// Human pacing BEFORE the next navigation (3–8s — LinkedIn is strict)
+page_wait_for({ target: "browser", time: 4 })
+
+browser_navigate({ url: "https://www.linkedin.com/in/their-handle/" })
+page_wait_for({ target: "browser", time: 3 }) // let profile SPA render
+browser_snapshot({}) // read title, headline, posts
+\`\`\`
+- **Two navigations** (feed + profile) ≈ **2 views** toward the **80/day** cap — stay well under it for research
+- **Always** \`page_wait_for({ target: "browser", time: 3–8 })\` between \`browser_navigate\` calls — never chain rapid page loads
+- Do not add extra hops (search → profile → activity → back) unless the user asked — each navigation counts
 
 **Do NOT:**
 - Use \`browser_navigate\` to linkedin.com without \`prepare_browser\` first — you'll be logged out
@@ -306,9 +327,9 @@ browser_test_script({ script: "..." })
 
 **LinkedIn read order (always follow):**
 1. \`connect_platform({ action: "status" })\` — skip reconnect if already connected
-2. \`connect_platform({ action: "prepare_browser" })\` — inject session into agent browser
+2. \`connect_platform({ action: "prepare_browser" })\` — real Chrome profile on desktop (no url param on first call unless you need a deep link)
 3. \`browser_snapshot\` / \`browser_navigate\` / \`browser_test_script\` — read the real page like a user
-4. If blocked (redirect loop, login page): try \`action: "refresh"\` once, retry \`prepare_browser\` — then **stop** and tell the user (do not switch to Voyager/API)
+4. If blocked (redirect loop, login page, empty DOM): try \`action: "refresh"\` once, retry \`prepare_browser\` — then **stop** and tell user to reconnect via Settings → Platforms (ensure logged into LinkedIn in Chrome). Do not switch to Voyager/API
 5. Last resort only: visible \`browse\` for the user, or a scheduled job with rate limits — never Voyager/GraphQL hacks
 
 **Asking user to connect (preferred flow):**
@@ -1994,7 +2015,7 @@ See \`docs/APP_AGENT_CHAT.md\` and \`read_file({ path: "src/resources/agent-docs
 - **Natural** (default): Human-readable text
 - **Structured**: JSON with schema enforcement (\`outputMode: "structured"\`)
 - **Tool-Based**: Agent creates files/apps during execution
-- **SQLite**: Jobs declare **write targets** via \`writeDbIds\` (registry dbIds from \`create_database\`). Runtime injects \`PAPR_DB_*\` env vars (+ \`APP_DB\` when single target). Use \`PAPR_DB_*\` / \`$APP_DB\` for app-facing tables; \`$JOB_DB\` is job-local scratch only. **Workflow:** \`create_database\` → \`attach_database\` on app(s) → \`create_job({ writeDbIds: [dbId] })\`. Mini-apps pass \`sourceId\` (alias) on every \`/api/db/*\` call — no default database. Never create \`audit.db\` / \`database.sqlite\` in the app folder; bash warns on non-canonical sqlite3 writes (does not block).
+- **SQLite**: Jobs declare **write targets** via \`writeDbIds\` (registry dbIds from \`create_database\`). Runtime injects \`PAPR_DB_*\` env vars (+ \`APP_DB\` when single target). Use \`PAPR_DB_*\` / \`$APP_DB\` for app-facing tables; \`$JOB_DB\` is job-local scratch only. **Workflow:** \`create_database\` → \`attach_database\` on app(s) → \`create_job({ writeDbIds: [dbId] })\`. Mini-apps pass \`sourceId\` (alias) on every \`/api/db/*\` call — no default database. Never create \`audit.db\` / \`database.sqlite\` in the app folder; bash warns on non-canonical sqlite3 writes (does not block). **Registry DBs on replica sync: never open the file with \`sqlite3\` or \`sqlite3.connect()\` — reads included.** A plain \`SELECT\` opens WAL read-write and truncates it on close, wedging sync both ways; bash **blocks** this. Inspect with \`query_cloud_turso\` (cloud rows), \`papr_db_sync_status\` (sync state), or \`read_app_data_health\`. Local file read only as \`sqlite3 "file:$PATH?mode=ro" "SELECT …"\`.
 - **Data contracts** (optional): \`$PAPR_HOME/apps/{appId}/data-contract.json\`. By default violations log as \`[Contract] WARNING\` only. Set \`"enforceOnFailure": true\` to fail the job on violation. Inspect via \`read_app_data_health({ appId })\`. Stray DB cleanup: \`normalize_app_databases({ appId })\` — **dry-run by default**; \`apply: true\` to delete empty stubs only.
 
 ## Delivery Mechanisms

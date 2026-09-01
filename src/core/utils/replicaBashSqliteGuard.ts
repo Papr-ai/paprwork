@@ -6,7 +6,8 @@ import fs from "fs";
 import path from "path";
 import {
   collectPaprDbPathsFromEnv,
-  commandHasSqliteWrite,
+  commandOpensSqliteReadOnly,
+  commandTouchesSqlite,
   extractSqliteDbPaths,
   type SqlitePathGuardContext,
 } from "./sqlitePathGuard.js";
@@ -62,6 +63,23 @@ function tursoReplicaRolloutMode(
   return "off";
 }
 
+/**
+ * Plan A rollout flags are set on the HOST process, not on a tool's env.
+ *
+ * Agent bash tools build their env from getJobToolEnv() + tool input, which
+ * does not include PAPR_TURSO_REPLICA_SYNC. Checking only the passed env made
+ * this guard silently disable itself for exactly the caller that needed it:
+ * the reply-drafter agent ran `sqlite3 "<replica>/data.db"`, truncated the WAL
+ * on close, and wedged sync. Fall back to process.env so a scoped tool env
+ * cannot switch the protection off.
+ */
+function isPlanAReplicaEnv(env: NodeJS.ProcessEnv): boolean {
+  return (
+    isPlanACloudEnvFromProcessEnv(env) ||
+    isPlanACloudEnvFromProcessEnv(process.env)
+  );
+}
+
 function shouldBlockReplicaManagedRecord(
   record: RegistryRecordLite,
   env: NodeJS.ProcessEnv,
@@ -74,7 +92,8 @@ function shouldBlockReplicaManagedRecord(
 }
 
 function resolveDatabasesRegistryPath(env: NodeJS.ProcessEnv): string {
-  const explicitHome = env.PAPR_HOME?.trim();
+  // Same reason as isPlanAReplicaEnv: a scoped tool env has no PAPR_HOME.
+  const explicitHome = (env.PAPR_HOME ?? process.env.PAPR_HOME)?.trim();
   if (explicitHome) {
     return path.join(path.resolve(explicitHome), "data", "databases.json");
   }
@@ -125,7 +144,7 @@ export function isReplicaManagedDbPathFromRegistry(
   resolvedPath: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (!isPlanACloudEnvFromProcessEnv(env)) {
+  if (!isPlanAReplicaEnv(env)) {
     return false;
   }
   const record = loadRegistryByPath(env).get(normalizeDbPath(resolvedPath));
@@ -179,10 +198,16 @@ export function detectReplicaRegistrySqliteBlock(
   ctx: SqlitePathGuardContext = {},
 ): ReplicaBashSqliteBlock | null {
   const env = ctx.env ?? process.env;
-  if (!isPlanACloudEnvFromProcessEnv(env)) {
+  if (!isPlanAReplicaEnv(env)) {
     return null;
   }
-  if (!commandHasSqliteWrite(command)) {
+  // NOT commandHasSqliteWrite() here: any read-write open of a replica-managed
+  // WAL database truncates the WAL on close and wedges sync, even for a pure
+  // SELECT. Block every sqlite3/python open unless it is explicitly read-only.
+  if (!commandTouchesSqlite(command)) {
+    return null;
+  }
+  if (commandOpensSqliteReadOnly(command)) {
     return null;
   }
 

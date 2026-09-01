@@ -39,6 +39,31 @@ export function commandHasSqliteWrite(command: string): boolean {
   return SQLITE_WRITE_SQL_RE.test(command);
 }
 
+/** True when the command opens a SQLite database at all (read or write). */
+export function commandTouchesSqlite(command: string): boolean {
+  return /sqlite3|\.connect\s*\(/i.test(command);
+}
+
+/**
+ * True when a sqlite3/python open is provably read-only.
+ *
+ * Opening a WAL database read-write auto-checkpoints on close and TRUNCATES
+ * the WAL — even for a plain SELECT. For a replica-managed file that destroys
+ * the frames the sync engine still has an offset into, which wedges sync in
+ * both directions. So "no INSERT keyword" is NOT evidence of safety; only an
+ * explicit read-only open is.
+ *
+ * Recognised read-only forms:
+ *   sqlite3 "file:/path/data.db?mode=ro" "SELECT ..."
+ *   sqlite3 -readonly /path/data.db "SELECT ..."
+ *   sqlite3.connect("file:/path/data.db?mode=ro", uri=True)
+ */
+export function commandOpensSqliteReadOnly(command: string): boolean {
+  if (/[?&]mode=ro\b/i.test(command)) return true;
+  if (/(?:^|\s)-{1,2}readonly(?=\s|$)/i.test(command)) return true;
+  return false;
+}
+
 function expandHome(p: string): string {
   if (p.startsWith("~/")) {
     const home = process.env.HOME ?? process.env.USERPROFILE ?? "";
