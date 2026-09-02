@@ -34,9 +34,12 @@ import {
   isReplicaReadTransportError,
 } from "./tursoReplicaCheckpointRecovery.js";
 import {
+  describeReplicaSidecarWedge,
   detectReplicaSidecarWedge,
+  inspectReplicaSidecarWedge,
   repairReplicaSidecarWedge,
   repairReplicaSidecarsOnCheckpointError,
+  resetReplicaSidecars,
 } from "./tursoReplicaSidecarWedge.js";
 
 const REPLICA_STATUS_OPEN_TIMEOUT_MS = 12_000;
@@ -148,6 +151,9 @@ export class TursoReplicaService {
   }): Promise<TursoReplicaWriteResult> {
     return this.withSerializedPath(options.localPath, async () => {
       const online = isTursoReplicaOnline();
+      if (online) {
+        await this.ensureSyncableSidecars(options.localPath, "write sync");
+      }
       const handle = await this.getOrOpen({
         localPath: options.localPath,
         tursoDatabase: options.tursoDatabase,
@@ -195,6 +201,9 @@ export class TursoReplicaService {
   ): Promise<{ pendingPush: boolean }> {
     return this.withSerializedPath(localPath, async () => {
       const online = isTursoReplicaOnline();
+      if (online) {
+        await this.ensureSyncableSidecars(localPath, "exec sync");
+      }
       const handle = await this.getOrOpen({
         localPath,
         tursoDatabase,
@@ -232,6 +241,9 @@ export class TursoReplicaService {
   ): Promise<TursoReplicaPushResponse> {
     try {
       await this.withSerializedPath(localPath, async () => {
+        if (isTursoReplicaOnline()) {
+          await this.ensureSyncableSidecars(localPath, "push");
+        }
         const handle = await this.getOrOpen({
           localPath,
           tursoDatabase,
@@ -259,6 +271,7 @@ export class TursoReplicaService {
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
     return this.withSerializedPath(localPath, async () => {
       try {
+        await this.ensureSyncableSidecars(localPath, "pull");
         const handle = await this.getOrOpen({
           localPath,
           tursoDatabase,
@@ -669,6 +682,31 @@ export class TursoReplicaService {
     }
   }
 
+  /**
+   * Precondition for every sync call: the watermark in `-info` must name a frame the `-wal`
+   * actually holds.
+   *
+   * An unsatisfiable watermark makes the engine abort the process from Rust, so there is no
+   * error to recover from afterwards — the check has to happen before pull()/push() is reached.
+   * Closing first matters: the repair unlinks the `-wal` the open handle is holding.
+   */
+  private async ensureSyncableSidecars(
+    localPath: string,
+    context: string,
+  ): Promise<boolean> {
+    const report = inspectReplicaSidecarWedge(localPath);
+    if (!report.wedged) {
+      return false;
+    }
+    await this.close(localPath);
+    resetReplicaSidecars(localPath);
+    console.warn(
+      `[TursoReplicaService] Reset wedged sync sidecars before ${context}: ` +
+        `${localPath} — ${describeReplicaSidecarWedge(report)}`,
+    );
+    return true;
+  }
+
   private async recoverSidecarsAfterCheckpointError(
     localPath: string,
   ): Promise<void> {
@@ -742,6 +780,10 @@ export class TursoReplicaService {
     if (!bridge.enabled) {
       throw new Error("Turso sync bridge not available — sign in to Papr");
     }
+
+    // Cold path (startup, reconnect, post-close): sidecars left by an unclean shutdown are
+    // repaired here, before the engine can be handed an unsatisfiable watermark.
+    await this.ensureSyncableSidecars(options.localPath, "connect");
 
     const localReplicaExists = fs.existsSync(options.localPath);
     const bootstrapIfEmpty =

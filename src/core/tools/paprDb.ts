@@ -30,7 +30,9 @@ export const paprDbSyncStatusTool = createTool({
   description:
     "Plan A Turso replica sync status for a registry database. " +
     "Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. " +
-    "When sidecarWedge is true, pull/push/migration will fail until sidecars are reset. " +
+    "sidecarWedge means the recorded WAL watermark names a frame the WAL does not hold. " +
+    "Connecting now resets those sidecars automatically, so this is normally false; if it stays " +
+    "true the replica could not be opened at all and needs repair_cloud_sync. " +
     "Only repair_cloud_sync accept_cloud resets them - 'pull' and 'merge_lww' do NOT, and may report success while doing nothing. " +
     "accept_cloud reseeds local from the Turso primary, so confirm cloud is not missing local-only rows before using it. " +
     "Requires PAPR_TURSO_REPLICA_SYNC and Papr cloud sync enabled.",
