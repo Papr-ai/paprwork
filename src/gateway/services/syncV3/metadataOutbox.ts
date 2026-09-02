@@ -82,10 +82,15 @@ export async function enqueueMetadataOutboxEntry(
 ): Promise<void> {
   const entries = await readEntries();
   const filtered = entries.filter((existing) => {
-    if (
-      existing.kind !== entry.kind ||
-      existing.updatedAt !== entry.updatedAt
-    ) {
+    // Supersede ANY queued entry of the same kind, not just one with an
+    // identical updatedAt. Every entry is a FULL snapshot of the registry or
+    // index, so an older one carries nothing the newer one lacks. Matching on
+    // updatedAt meant each retry — which stamps a fresh timestamp — appended
+    // instead of replacing: 200+ duplicate 42KB PUTs accumulated in minutes and
+    // tripped the server's 60-requests-per-minute limit. The flush then failed
+    // with 429 and re-enqueued, so the queue grew faster than it drained and
+    // every app's cloud upload failed on "registry upload failed".
+    if (existing.kind !== entry.kind) {
       return true;
     }
     if (
