@@ -3,6 +3,7 @@ import {
   formatPaprQuotaMessage,
   reportPaprQuotaError,
 } from "../utils/paprQuota.js";
+import { PAPR_DEFAULT_HEADERS } from "./paprSurface.js";
 
 export async function getPaprClient(): Promise<Papr> {
   const { getPaprApiKey } = await import("../../gateway/utils/keyResolver.js");
@@ -17,6 +18,9 @@ export async function getPaprClient(): Promise<Papr> {
     xAPIKey: apiKey,
     maxRetries: 2,
     timeout: 120000,
+    // Surface attribution — see paprSurface.ts. Without this, Paprwork writes
+    // would be misattributed to ts_sdk via X-Stainless-Lang.
+    defaultHeaders: PAPR_DEFAULT_HEADERS,
   });
 }
 

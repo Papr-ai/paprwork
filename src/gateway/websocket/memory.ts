@@ -887,10 +887,14 @@ async function handleListSchemas(
     }
 
     const Papr = (await import("@papr/memory")).default;
+    const { PAPR_DEFAULT_HEADERS } = await import(
+      "../../core/tools/paprSurface.js"
+    );
     const client = new Papr({
       xAPIKey: apiKey,
       maxRetries: 2,
       timeout: 30_000,
+      defaultHeaders: PAPR_DEFAULT_HEADERS,
     });
 
     const payload = message.payload as { statusFilter?: string } | undefined;
