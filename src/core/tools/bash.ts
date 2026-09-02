@@ -279,7 +279,11 @@ async function searchPaprMemoryForCode(
     const { buildSearchPolicy } = await import(
       "../../gateway/utils/paprMemoryPolicy.js"
     );
-    const client = new Papr({ xAPIKey: paprKey });
+    const { PAPR_DEFAULT_HEADERS } = await import("./paprSurface.js");
+    const client = new Papr({
+      xAPIKey: paprKey,
+      defaultHeaders: PAPR_DEFAULT_HEADERS,
+    });
 
     const projectId = extractProjectIdFromPaprPath(grepPath);
     const customMetadata: Record<string, string> = {
