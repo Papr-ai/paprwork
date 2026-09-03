@@ -6,6 +6,8 @@
  * We patch the outgoing Messages API payload via pi-ai's onPayload hook.
  */
 
+import { anthropicModelUsesAdaptiveThinking } from "../../utils/anthropicAdaptiveThinking.js";
+
 export type PiAiReasoningLevel =
   | "minimal"
   | "low"
@@ -50,15 +52,15 @@ export interface PiAiAnthropicStreamOptions {
 /** Minimum Claude Code CLI version Anthropic accepts for OAuth-backed frontier models. */
 export const CLAUDE_CODE_OAUTH_USER_AGENT_VERSION = "2.1.251";
 
-/** Models pi-ai misconfigures (budget thinking) but Anthropic requires adaptive-only. */
+/**
+ * Models pi-ai misconfigures (budget thinking) but Anthropic requires adaptive-only.
+ *
+ * Shares one list with the AI SDK path so the OAuth and API-key routes cannot drift
+ * apart — a model handled here but missed there streams empty thinking deltas and
+ * the turn renders as nothing at all.
+ */
 export function requiresPiAiAdaptiveThinkingOverride(modelId: string): boolean {
-  return (
-    modelId.includes("fable") ||
-    modelId.includes("opus-5") ||
-    modelId.includes("opus-4-8") ||
-    modelId.includes("opus-4.8") ||
-    modelId.includes("sonnet-5")
-  );
+  return anthropicModelUsesAdaptiveThinking(modelId);
 }
 
 export function mapPiAiReasoningToAnthropicEffort(

@@ -50,6 +50,7 @@ import {
   compactStaleToolResults,
   estimateMessagesTokens,
 } from "./agent/compactToolResults.js";
+import { anthropicModelUsesAdaptiveThinking } from "../utils/anthropicAdaptiveThinking.js";
 import {
   computeHistoryTokenBudget,
   isContextLengthError,
@@ -1015,6 +1016,9 @@ export class AgentService {
             min_p?: number;
           };
         };
+        anthropic?: {
+          thinking?: { type: "adaptive"; display?: "summarized" };
+        };
       } = {};
 
       // For OpenAI GPT-5.x models with reasoning effort and summary
@@ -1061,6 +1065,24 @@ export class AgentService {
           providerOptions,
           buildMoonshotProviderOptions(config.model, config.reasoning),
         );
+      }
+
+      // For Anthropic models that self-enable thinking (Fable 5.1, Sonnet 5, Opus 5).
+      // Without display:"summarized" they stream empty thinking deltas, so the turn
+      // shows nothing after reasoning-start.
+      //
+      // sendReasoning is deliberately left at its default (true): the SDK replays a
+      // thinking block only when it still holds the signature Anthropic issued, and
+      // drops unsigned reasoning with a warning rather than sending a block the API
+      // would reject. Turning it off would discard the model's own signed reasoning
+      // between tool steps for no safety gain.
+      if (
+        config.provider === "anthropic" &&
+        anthropicModelUsesAdaptiveThinking(config.model)
+      ) {
+        providerOptions.anthropic = {
+          thinking: { type: "adaptive", display: "summarized" },
+        };
       }
 
       // For Ollama models (Qwen, Gemma, etc.) — thinking + adaptive context
@@ -1185,7 +1207,10 @@ export class AgentService {
           ...(tools as unknown as ToolSet),
           ...nativeSearchTools, // Merge native search tools
         },
-        maxTokens: effectiveMaxTokens,
+        // `ai` v6 renamed this from maxTokens. Passing the old name is not an error —
+        // it is dropped as an unknown key with no warning, and @ai-sdk/anthropic then
+        // substitutes its own 4096 default, silently truncating every reply.
+        maxOutputTokens: effectiveMaxTokens,
         // Allow up to maxSteps tool roundtrips before stopping.
         // Hard limit at maxSteps (default 100), but we force stop at 95 to give
         // the model a chance to respond gracefully before hitting the limit.
@@ -1226,6 +1251,7 @@ export class AgentService {
         ...(providerOptions.openai ||
         providerOptions.google ||
         providerOptions.ollama ||
+        providerOptions.anthropic ||
         config.provider === "zai" ||
         config.provider === "groq" ||
         config.provider === "moonshot"
