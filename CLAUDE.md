@@ -4856,4 +4856,38 @@ Head-of-line blocking with a poison pill at the front: the queue could only grow
 
 ---
 
+### Issue 73: "Finished Working" With Pending Plan Steps ✅ FIXED
+**Added:** 2026-09-03
+**Problem:** Turns ran 6–77 tool calls, ended on a sentence announcing the *next* action, and the UI reported the turn as finished while the plan sat at 0/7. Users then saw apparent context loss on the following message.
+**Evidence:** In 54 logged turns, 9 ended with plan steps outstanding, all with `reason:"model_stop"` / `modelFinishReason:"stop"` — no step limit, no token cap, no abort. The gateway already flagged 6 of them: `"likelyCause":"model_stop_with_pending_plan_steps (not gateway wrap-up)"`.
+**Root Causes:** The turn-end decision was binary and *both* outcomes end the turn:
+1. **Terminal wrap-up fired over unfinished work.** When a turn ended on a tool call with no text, the gateway injected `WRAP_UP_AFTER_TOOLS_NO_TEXT` — "This turn is complete … do not call tools" — regardless of plan state. On one opus-5 turn that fired with 4 steps pending, so the false "finished" claim was the *gateway's*, not the model's.
+2. **Any trailing text skipped all intervention** (`skipReason: "trailing_text_after_tools"`, 47/54 turns). A mid-work preamble ("Now let me see how the launcher invokes…") is indistinguishable from a closing summary under that rule.
+3. **Plan state was queried at turn end but only logged** — "Plan lookup is best-effort for diagnostics only."
+**Not a context bug:** `loadActivePlansContext` was verified to run on both routes and inject step statuses, progress, and "continue where you left off." The perceived amnesia is a *consequence* — a turn ending on "I'll do X next" leaves no evidence X happened, so the next turn re-derives state.
+**Solution:** Three-way turn-end decision (`wrap_up` | `continue` | `none`) in `agent/turnContinuation.ts`:
+- Continuation is **gated on an active plan with pending steps** — no plan means no reliable signal, so those turns keep the old behavior (bounds the blast radius)
+- The terminal wrap-up can no longer fire over pending steps; `WRAP_UP_WITH_PLAN_INCOMPLETE` asks for an honest status instead of claiming completion
+- `trailingTextAwaitsUser` suppresses continuation when the tail (last 400 chars) ends in a question or an approval phrase, so genuine handoffs ("say the word", "for your approval", "tell me which") are not steamrolled
+- Nudge names the next pending step, requires `update_plan`, forbids new plans, and offers an escape hatch ("ask one direct question and stop") so it can't loop against a real blocker
+- Bounded at `MAX_PLAN_CONTINUATIONS_PER_TURN = 2`
+**Where continuation happens:**
+- **pi-ai (OAuth):** in-loop via a `resolveModelStop` callback at the `model_stop` exit — resuming the existing loop keeps every budget (steps, memory, tokens, repetition) in force and keeps the turn as one message/one card. Callback lives in AgentService so the provider layer stays free of PlanService.
+- **ai-sdk:** post-stream. `stopWhen` is only consulted after a step with tool calls, so `finishReason: "stop"` can't be overridden from inside; `runAiSdkPlanContinuation` issues a fresh `streamText` with options spread (tools/stopWhen/prepareStep intact) and merges via `mergeContinuationIntoState`.
+**Files Created:**
+- `src/gateway/services/agent/turnContinuation.ts` — decision matrix, handoff detection, nudge builder
+- `tests/turn-continuation.test.ts` — 30 tests; handoff cases use verbatim trailing text from the logged failures
+- `docs/PLAN_AWARE_TURN_CONTINUATION.md` — full write-up
+**Files Changed:**
+- `src/gateway/services/agent/wrapUpContinuation.ts` — `WRAP_UP_WITH_PLAN_INCOMPLETE`, `applyPlanContinuationStep`, `runAiSdkPlanContinuation`, `mergeContinuationIntoState`, optional `wrapUpMessage`
+- `src/gateway/services/providers/PiCodexStreamWithToolLoop.ts` — `resolveModelStop` hook, per-step trailing-text tracking
+- `src/gateway/services/AgentService.ts` — `loadPendingPlanState`, resolver wiring, plan-aware wrap-up wording, ai-sdk continuation loop
+**Known limitation:** token usage from an ai-sdk continuation is not merged into reported usage (matches the pre-existing wrap-up path).
+**Observability:** `[TurnEnd:plan-continuation]` logs each resume (chat, step, pending count, attempt). Success looks like `activePlanPendingSteps: 0` on turns that previously logged `likelyCause: "model_stop_with_pending_plan_steps"`.
+**Prevention:** A turn-end policy needs a third option. "Summarize and stop" and "do nothing" both end the turn, so with only those two the gateway cannot represent "keep going" — and a terminal prompt asserting completion must never be sent without checking whether the work is actually complete.
+**Related:** Issue 30 (GPT-5.4 duplicate plans — tool-level enforcement), Issue 49 (send button stuck), Enhancement 17 (GPT-5.4 context limit)
+**See:** `docs/PLAN_AWARE_TURN_CONTINUATION.md`
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
