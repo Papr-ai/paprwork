@@ -108,6 +108,40 @@ function isGatewaySyncBusyGraceActive(
   return age >= 0 && age < maxAgeMs;
 }
 
+/**
+ * Pick which PIDs reported on the gateway port are safe to SIGKILL.
+ *
+ * `lsof -ti:PORT` reports every socket on the port, including *outbound client*
+ * connections. The Electron main process POSTs to the gateway while starting up,
+ * so when an orphaned gateway is answering on the port that POST connects and
+ * main's own PID joins the list. The supervisor then SIGKILLs itself ~0.6s into
+ * launch and the app never loads. Without an orphan the POST is refused, no
+ * socket exists, and the bug stays invisible — so filter here as well as passing
+ * `-sTCP:LISTEN`, and never return a PID we depend on.
+ */
+function selectOrphanPidsToKill(rawOutput, protectedPids = []) {
+  if (typeof rawOutput !== "string") {
+    return [];
+  }
+  const protectedSet = new Set(
+    protectedPids
+      .map((pid) => Number.parseInt(String(pid), 10))
+      .filter((pid) => Number.isInteger(pid) && pid > 0),
+  );
+
+  const seen = new Set();
+  const result = [];
+  for (const line of rawOutput.split(/\r?\n/)) {
+    const pid = Number.parseInt(line.trim(), 10);
+    // Drop blank lines, non-numeric noise, and pid 0 (kernel / whole process group).
+    if (!Number.isInteger(pid) || pid <= 0) continue;
+    if (protectedSet.has(pid) || seen.has(pid)) continue;
+    seen.add(pid);
+    result.push(pid);
+  }
+  return result;
+}
+
 const VALID_STATE_TRANSITIONS = {
   stopped: ["starting"],
   starting: ["running", "backoff", "stopped"],
@@ -130,6 +164,7 @@ module.exports = {
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
+  selectOrphanPidsToKill,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 };

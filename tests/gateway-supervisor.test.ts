@@ -22,6 +22,7 @@ const {
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
+  selectOrphanPidsToKill,
   isValidTransition,
   VALID_STATE_TRANSITIONS,
 } = require("../src/electron/supervisor-logic.cjs");
@@ -321,6 +322,65 @@ describe("parseHealthResponse", () => {
       alive: false,
       ready: false,
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Orphan PID selection
+//
+// A Turso SIGABRT leaves the gateway orphaned on port 18789 still answering
+// /health. On the next launch the Electron main process POSTs to that port, the
+// socket connects, and unfiltered `lsof -ti:PORT` reports main's own PID beside
+// the orphan's. The supervisor then SIGKILLed itself ~0.6s into startup and the
+// app never loaded — reproduced with a detached squatter, which yielded exactly
+// "Found 2 orphaned process(es) on port 18789: 25799, 26221" (25799 = orphan,
+// 26221 = the app) followed by silence.
+// ---------------------------------------------------------------------------
+describe("selectOrphanPidsToKill", () => {
+  test("regression: never returns our own PID alongside a real orphan", () => {
+    const lsofOutput = "25799\n26221\n";
+    expect(selectOrphanPidsToKill(lsofOutput, [26221])).toEqual([25799]);
+  });
+
+  test("protects the parent PID too", () => {
+    expect(selectOrphanPidsToKill("111\n222\n333\n", [222, 333])).toEqual([111]);
+  });
+
+  test("returns a lone orphan", () => {
+    expect(selectOrphanPidsToKill("6036\n", [999])).toEqual([6036]);
+  });
+
+  test("no listeners yields nothing to kill", () => {
+    expect(selectOrphanPidsToKill("", [123])).toEqual([]);
+    expect(selectOrphanPidsToKill("   \n\n", [123])).toEqual([]);
+  });
+
+  test("everything protected yields nothing to kill", () => {
+    // Must be empty, not "kill them anyway" — that is the self-kill path.
+    expect(selectOrphanPidsToKill("26221\n", [26221])).toEqual([]);
+  });
+
+  test("drops non-numeric noise and pid 0", () => {
+    // pid 0 would signal the whole process group.
+    expect(selectOrphanPidsToKill("abc\n0\n-5\n404\n", [])).toEqual([404]);
+  });
+
+  test("deduplicates repeated PIDs", () => {
+    expect(selectOrphanPidsToKill("500\n500\n501\n", [])).toEqual([500, 501]);
+  });
+
+  test("handles CRLF from Windows netstat", () => {
+    expect(selectOrphanPidsToKill("700\r\n701\r\n", [701])).toEqual([700]);
+  });
+
+  test("non-string input is not trusted", () => {
+    expect(selectOrphanPidsToKill(undefined, [])).toEqual([]);
+    expect(selectOrphanPidsToKill(null, [])).toEqual([]);
+  });
+
+  test("tolerates protected PIDs given as strings", () => {
+    // process.ppid can arrive stringified through env plumbing.
+    expect(selectOrphanPidsToKill("800\n801\n", ["801"])).toEqual([800]);
   });
 });
 

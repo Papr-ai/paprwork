@@ -1134,6 +1134,7 @@ const {
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
+  selectOrphanPidsToKill,
   isValidTransition,
 } = require("./supervisor-logic.cjs");
 
@@ -1241,64 +1242,96 @@ class GatewayProcessSupervisor {
     this._transitionTo("stopped");
   }
 
+  /** PIDs we must never SIGKILL while clearing the port. */
+  _protectedPids() {
+    return [process.pid, process.ppid, this.process?.pid].filter(Boolean);
+  }
+
+  /** Listening PIDs on the gateway port. Listeners only — a client socket is not an orphan. */
+  _findPortListeners() {
+    try {
+      if (process.platform === "win32") {
+        const output = execSync(`netstat -ano | findstr :${this.port}`, {
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        // findstr matches any state; keep only LISTENING rows.
+        const listening = output
+          .split(/\r?\n/)
+          .map((line) => line.match(/LISTENING\s+(\d+)/))
+          .filter(Boolean)
+          .map((match) => match[1])
+          .join("\n");
+        return selectOrphanPidsToKill(listening, this._protectedPids());
+      }
+      const output = execSync(`lsof -ti:${this.port} -sTCP:LISTEN`, {
+        encoding: "utf8",
+        timeout: 5000,
+      });
+      return selectOrphanPidsToKill(output, this._protectedPids());
+    } catch {
+      // Non-zero exit means nothing matched — that is the healthy case.
+      return [];
+    }
+  }
+
   _killOrphans() {
     try {
       console.log("[Supervisor] Checking for orphaned Gateway processes...");
-      
-      if (process.platform === "win32") {
-        // Windows: Use netstat to find PIDs listening on the port
+
+      const pids = this._findPortListeners();
+      if (pids.length === 0) {
+        return;
+      }
+
+      console.log(
+        `[Supervisor] Found ${pids.length} orphaned listener(s) on port ${this.port}: ${pids.join(", ")}`,
+      );
+
+      for (const pid of pids) {
         try {
-          const output = execSync(`netstat -ano | findstr :${this.port}`, {
-            encoding: "utf8",
-            timeout: 5000,
-          });
-          
-          const lines = output.trim().split("\n");
-          for (const line of lines) {
-            const match = line.match(/LISTENING\s+(\d+)/);
-            if (match) {
-              const pid = match[1];
-              console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
-              execSync(`taskkill /PID ${pid} /F`, { timeout: 5000 });
-              // Brief delay for cleanup
-              const start = Date.now();
-              while (Date.now() - start < 500) {
-                // Busy wait
-              }
-              console.log("[Supervisor] Orphaned process killed");
-            }
+          if (process.platform === "win32") {
+            execSync(`taskkill /PID ${pid} /F`, { timeout: 5000 });
+          } else {
+            execSync(`kill -9 ${pid}`, { timeout: 5000 });
           }
-        } catch (e) {
-          // No process on port or command failed — good
-        }
-      } else {
-        // Unix (macOS, Linux): Use lsof
-        try {
-          const output = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
-          if (output) {
-            // Split by newline to handle multiple PIDs
-            const pids = output.split('\n').filter(p => p.trim());
-            console.log(`[Supervisor] Found ${pids.length} orphaned process(es) on port ${this.port}: ${pids.join(', ')}`);
-            
-            // Kill each PID individually
-            for (const pid of pids) {
-              try {
-                execSync(`kill -9 ${pid.trim()}`);
-                console.log(`[Supervisor] Killed orphaned process ${pid}`);
-              } catch (killErr) {
-                console.warn(`[Supervisor] Failed to kill PID ${pid}:`, killErr.message);
-              }
-            }
-            
-            execSync("sleep 0.5");
-            console.log("[Supervisor] Orphaned processes cleanup complete");
-          }
-        } catch (e) {
-          // No process on port — good
+          console.log(`[Supervisor] Killed orphaned process ${pid}`);
+        } catch (killErr) {
+          console.warn(`[Supervisor] Failed to kill PID ${pid}:`, killErr.message);
         }
       }
+
+      // Spawning before the port is actually released just trades a self-kill for
+      // an EADDRINUSE crash loop, so confirm it drained before returning.
+      const freed = this._waitForPortFree();
+      console.log(
+        freed
+          ? "[Supervisor] Orphaned processes cleanup complete"
+          : `[Supervisor] Port ${this.port} still held after cleanup — spawning anyway`,
+      );
     } catch (error) {
       console.warn("[Supervisor] Cleanup warning:", error.message);
+    }
+  }
+
+  /** Poll until no listener holds the port. Bounded so startup can never hang here. */
+  _waitForPortFree(timeoutMs = 2000, intervalMs = 150) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (this._findPortListeners().length === 0) {
+        return true;
+      }
+      if (Date.now() + intervalMs >= deadline) {
+        return false;
+      }
+      // _killOrphans is synchronous and runs before spawn, so block the thread
+      // rather than spinning it — SIGKILL'd sockets usually drain in one tick.
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        intervalMs,
+      );
     }
   }
 
