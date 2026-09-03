@@ -8,17 +8,40 @@
  *   `data.db-wal-revert` — owned by @tursodatabase/sync. The SDK recreates them on connect;
  *   do not delete them in normal operation.
  *
- * A "wedge" is when Plan A metadata (-info) claims WAL progress but the sync WAL is empty.
- * That state wedges pull()/push(). Root cause: calling checkpoint() after push on replica files.
- * Repair resets only Plan A sidecars (keeps data.db) for already-wedged disks — not a startup scan.
+ * A "wedge" is when `data.db-info` carries a `revert_since_wal_watermark` that names a frame
+ * the `data.db-wal` does not contain. The engine resolves that watermark through
+ * `WalFile::find_frame`, which asserts the frame exists — an unsatisfiable watermark is a Rust
+ * `panic!`, and a panic inside the napi worker aborts the whole process rather than surfacing a
+ * catchable error. Detection is therefore a precondition check, not error handling: once pull()
+ * runs it is already too late.
+ *
+ * Repair resets only Plan A sidecars (keeps data.db), so the next connect re-bootstraps WAL
+ * state from Turso.
  */
 
 import * as fs from "fs";
 import { removeTursoReplicaSidecarsOnly } from "./tursoReplicaFileGuard.js";
+import { readReplicaWalShape } from "./tursoReplicaWalFrames.js";
 
 interface ReplicaSidecarInfo {
   revertSinceWalWatermark: number;
+  /** Remote revision marker, *not* a local WAL frame index — never gates a wedge. */
   walFragmentNo: number;
+}
+
+export type ReplicaSidecarWedgeReason =
+  | "ok"
+  | "missing_db"
+  | "no_sidecar_info"
+  | "wal_unreadable"
+  | "watermark_past_wal_end";
+
+export interface ReplicaSidecarWedgeReport {
+  wedged: boolean;
+  reason: ReplicaSidecarWedgeReason;
+  watermark: number;
+  walFrameCount: number;
+  walSizeBytes: number;
 }
 
 function readReplicaSidecarInfo(dbPath: string): ReplicaSidecarInfo | null {
@@ -54,35 +77,99 @@ function readReplicaSidecarInfo(dbPath: string): ReplicaSidecarInfo | null {
   }
 }
 
-function localTursoSyncWalSize(dbPath: string): number {
-  try {
-    return fs.statSync(`${dbPath}-wal`).size;
-  } catch {
-    return 0;
-  }
-}
-
 /**
- * Sync engine metadata claims WAL progress but the Turso Sync WAL file is empty.
- * Reads via sqlite3/better-sqlite3 still work; pull()/push() wedge.
+ * Report whether the sync engine would be asked to resolve a WAL frame that is not there.
+ *
+ * Deliberately narrow. Repair deletes sidecars and forces a re-bootstrap from Turso, so a false
+ * positive is expensive: it throws away local WAL state on a database that was fine. We only
+ * report a wedge when the WAL is parseable *and* provably too short for the recorded watermark.
+ *
+ * In particular a checkpointed (empty) WAL alongside a non-zero `wal_fragment_no` is the normal
+ * resting state of a healthy replica — `wal_fragment_no` tracks the remote revision, not local
+ * frames, so it says nothing about whether `find_frame` can be satisfied.
  */
-export function detectReplicaSidecarWedge(dbPath: string): boolean {
+export function inspectReplicaSidecarWedge(
+  dbPath: string,
+): ReplicaSidecarWedgeReport {
+  const base: ReplicaSidecarWedgeReport = {
+    wedged: false,
+    reason: "ok",
+    watermark: 0,
+    walFrameCount: 0,
+    walSizeBytes: 0,
+  };
+
   if (!fs.existsSync(dbPath)) {
-    return false;
+    return { ...base, reason: "missing_db" };
   }
-  const walSize = localTursoSyncWalSize(dbPath);
-  if (walSize > 0) {
-    return false;
-  }
+
   const info = readReplicaSidecarInfo(dbPath);
   if (!info) {
-    return false;
+    return { ...base, reason: "no_sidecar_info" };
   }
-  return info.revertSinceWalWatermark > 0 || info.walFragmentNo > 0;
+
+  const wal = readReplicaWalShape(dbPath);
+  const watermark = info.revertSinceWalWatermark;
+
+  if (watermark <= 0) {
+    // Nothing to revert — find_frame is never asked for a watermark frame.
+    return {
+      ...base,
+      watermark,
+      walFrameCount: wal.frameCount,
+      walSizeBytes: wal.sizeBytes,
+    };
+  }
+
+  if (!wal.frameCountKnown) {
+    // Can't parse the WAL, so we can't prove the watermark is unsatisfiable.
+    // Leaving it alone is the safe call; a real wedge still trips the checkpoint-error path.
+    return {
+      ...base,
+      reason: "wal_unreadable",
+      watermark,
+      walSizeBytes: wal.sizeBytes,
+    };
+  }
+
+  if (watermark > wal.frameCount) {
+    return {
+      wedged: true,
+      reason: "watermark_past_wal_end",
+      watermark,
+      walFrameCount: wal.frameCount,
+      walSizeBytes: wal.sizeBytes,
+    };
+  }
+
+  return {
+    ...base,
+    watermark,
+    walFrameCount: wal.frameCount,
+    walSizeBytes: wal.sizeBytes,
+  };
+}
+
+/** One-line diagnostic for logs — explains *why* sidecars are being reset. */
+export function describeReplicaSidecarWedge(
+  report: ReplicaSidecarWedgeReport,
+): string {
+  return (
+    `${report.reason} (watermark=${report.watermark}, ` +
+    `walFrames=${report.walFrameCount}, walBytes=${report.walSizeBytes})`
+  );
 }
 
 /**
- * Reset @tursodatabase/sync sidecars when metadata claims WAL progress but the sync WAL is empty.
+ * Sync engine metadata names a WAL frame the sync WAL does not contain.
+ * Reads via sqlite3/better-sqlite3 still work; pull()/push() abort the process.
+ */
+export function detectReplicaSidecarWedge(dbPath: string): boolean {
+  return inspectReplicaSidecarWedge(dbPath).wedged;
+}
+
+/**
+ * Reset @tursodatabase/sync sidecars when the recorded watermark is unsatisfiable.
  * Keeps data.db intact — next pull reconnects from Turso.
  */
 export function repairReplicaSidecarWedge(dbPath: string): boolean {
@@ -91,6 +178,16 @@ export function repairReplicaSidecarWedge(dbPath: string): boolean {
   }
   removeTursoReplicaSidecarsOnly(dbPath);
   return true;
+}
+
+/**
+ * Delete Plan A sidecars for a path the caller has already inspected and closed.
+ *
+ * Split from {@link repairReplicaSidecarWedge} so the pre-sync path can inspect once, close the
+ * open handle, then repair — unlinking a `-wal` that the engine still has open corrupts it.
+ */
+export function resetReplicaSidecars(dbPath: string): void {
+  removeTursoReplicaSidecarsOnly(dbPath);
 }
 
 /**

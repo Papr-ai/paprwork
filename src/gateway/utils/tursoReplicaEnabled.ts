@@ -28,6 +28,19 @@ export function isTursoReplicaSyncFeatureEnabled(): boolean {
   return tursoReplicaRolloutMode() !== "off";
 }
 
+/**
+ * Run pull()/push() in a child process so a panic in the native sync engine cannot abort
+ * the gateway along with the app.
+ *
+ * Opt-in. Isolation is not free: the parent has to release the replica while the worker
+ * holds it, so each sync costs an extra connect. Default off until a canary build confirms
+ * the added latency is acceptable on the write path.
+ */
+export function isTursoSyncIsolationEnabled(): boolean {
+  const raw = process.env.PAPR_TURSO_SYNC_ISOLATION?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "on";
+}
+
 /** Phase 1: online when cloud sync is on unless tests force offline. */
 let replicaOnlineOverride: boolean | null = null;
 

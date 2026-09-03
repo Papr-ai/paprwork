@@ -198,7 +198,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("syncStatus reports sidecarWedge when -info claims progress but WAL is empty", async () => {
+  it("syncStatus repairs an unsatisfiable watermark on connect and reports healthy", async () => {
     process.env.CLOUD_SYNC_ENABLED = "true";
     process.env.PAPR_TURSO_REPLICA_SYNC = "force";
 
@@ -243,7 +243,11 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
       syncMode: "replica",
     });
 
-    expect(status.sidecarWedge).toBe(true);
+    // watermark=12 against an empty WAL is unsatisfiable: the engine would abort the
+    // process resolving it, so opening the replica resets the sidecars first. By the time
+    // status is computed the replica is genuinely no longer wedged.
+    expect(fs.existsSync(`${dbPath}-info`)).toBe(false);
+    expect(status.sidecarWedge).toBe(false);
     expect(status.pendingOps).toBe(2);
 
     fs.rmSync(dir, { recursive: true, force: true });

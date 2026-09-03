@@ -30,9 +30,14 @@ export const paprDbSyncStatusTool = createTool({
   description:
     "Plan A sync status for a registry database. Two tiers only: " +
     "**replica** (embedded @tursodatabase/sync handle on desktop) and **cloud** (Turso primary). " +
-    "Returns online, syncMode, pendingPush, sidecarWedge, cutoverBlocked, lastPushError. " +
-    "When sidecarWedge is true, use papr_db_reconcile_sync repair_sidecar_wedge. " +
-    "Never sqlite3 the data.db path — that reads the on-disk file, not the replica handle.",
+    "Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. " +
+    "sidecarWedge means the recorded WAL watermark names a frame the WAL does not hold. " +
+    "Connecting now resets those sidecars automatically, so this is normally false; if it stays " +
+    "true the replica could not be opened at all and needs repair_cloud_sync. " +
+    "Only repair_cloud_sync accept_cloud resets them - 'pull' and 'merge_lww' do NOT, and may report success while doing nothing. " +
+    "accept_cloud reseeds local from the Turso primary, so confirm cloud is not missing local-only rows before using it. " +
+    "Never sqlite3 the data.db path — that reads the on-disk file, not the replica handle. " +
+    "Requires PAPR_TURSO_REPLICA_SYNC and Papr cloud sync enabled.",
   inputSchema: dbRefSchema,
   execute: async (input) => {
     const args = unwrapContext(input);

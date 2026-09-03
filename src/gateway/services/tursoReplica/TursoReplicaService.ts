@@ -22,7 +22,10 @@ import type {
 import {
   isTursoReplicaOnline,
   isTursoReplicaSyncFeatureEnabled,
+  isTursoSyncIsolationEnabled,
 } from "../../utils/tursoReplicaEnabled.js";
+import { runIsolatedReplicaSync } from "./tursoReplicaIsolatedSync.js";
+import { shutdownTursoReplicaSyncWorker } from "./TursoReplicaSyncWorkerClient.js";
 import {
   markTursoReplicaReachable,
   noteTursoReplicaTransportError,
@@ -35,9 +38,12 @@ import {
   isReplicaReadTransportError,
 } from "./tursoReplicaCheckpointRecovery.js";
 import {
+  describeReplicaSidecarWedge,
   detectReplicaSidecarWedge,
+  inspectReplicaSidecarWedge,
   repairReplicaSidecarWedge,
   repairReplicaSidecarsOnCheckpointError,
+  resetReplicaSidecars,
 } from "./tursoReplicaSidecarWedge.js";
 
 const REPLICA_STATUS_OPEN_TIMEOUT_MS = 12_000;
@@ -153,6 +159,9 @@ export class TursoReplicaService {
     const pushAfterWrite = options.writeOptions?.pushAfterWrite !== false;
     return this.withSerializedPath(options.localPath, async () => {
       const online = isTursoReplicaOnline();
+      if (online) {
+        await this.ensureSyncableSidecars(options.localPath, "write sync");
+      }
       const handle = await this.getOrOpen({
         localPath: options.localPath,
         tursoDatabase: options.tursoDatabase,
@@ -202,6 +211,9 @@ export class TursoReplicaService {
     const pushAfterWrite = writeOptions?.pushAfterWrite !== false;
     return this.withSerializedPath(localPath, async () => {
       const online = isTursoReplicaOnline();
+      if (online) {
+        await this.ensureSyncableSidecars(localPath, "exec sync");
+      }
       const handle = await this.getOrOpen({
         localPath,
         tursoDatabase,
@@ -239,6 +251,17 @@ export class TursoReplicaService {
   ): Promise<TursoReplicaPushResponse> {
     try {
       await this.withSerializedPath(localPath, async () => {
+        if (isTursoReplicaOnline()) {
+          await this.ensureSyncableSidecars(localPath, "push");
+          if (isTursoSyncIsolationEnabled()) {
+            await this.syncOutOfProcess(
+              localPath,
+              tursoDatabase,
+              options?.pullBeforePush === false ? "push" : "pullPush",
+            );
+            return;
+          }
+        }
         const handle = await this.getOrOpen({
           localPath,
           tursoDatabase,
@@ -266,6 +289,10 @@ export class TursoReplicaService {
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
     return this.withSerializedPath(localPath, async () => {
       try {
+        await this.ensureSyncableSidecars(localPath, "pull");
+        if (isTursoSyncIsolationEnabled()) {
+          return await this.syncOutOfProcess(localPath, tursoDatabase, "pull");
+        }
         const handle = await this.getOrOpen({
           localPath,
           tursoDatabase,
@@ -339,13 +366,25 @@ export class TursoReplicaService {
   }): Promise<import("../DbQueryPool.js").QueryResult> {
     return this.withSerializedPath(options.localPath, async () => {
       const executeRead = async (pullFirst: boolean) => {
+        const shouldPull = isTursoReplicaOnline() && pullFirst;
+        const isolated = isTursoSyncIsolationEnabled();
+
+        // Isolated sync has to run before we take a handle — the worker needs the files.
+        if (shouldPull && isolated) {
+          await this.syncOutOfProcess(
+            options.localPath,
+            options.tursoDatabase,
+            "pull",
+          );
+        }
+
         const handle = await this.getOrOpen({
           localPath: options.localPath,
           tursoDatabase: options.tursoDatabase,
           bootstrapIfEmpty: !fs.existsSync(options.localPath),
         });
 
-        if (isTursoReplicaOnline() && pullFirst) {
+        if (shouldPull && !isolated) {
           await withTimeout(
             handle.db.pull(),
             REPLICA_PULL_TIMEOUT_MS,
@@ -387,14 +426,9 @@ export class TursoReplicaService {
         }
 
         try {
-          const handle = await this.getOrOpen({
-            localPath: options.localPath,
-            tursoDatabase: options.tursoDatabase,
-            bootstrapIfEmpty: !fs.existsSync(options.localPath),
-          });
-          await withTimeout(
-            handle.db.pull(),
-            REPLICA_PULL_TIMEOUT_MS,
+          await this.pullForRecovery(
+            options.localPath,
+            options.tursoDatabase,
             "replica recovery pull",
           );
           await drainInboundReplicaCdcIfCaughtUp({
@@ -424,13 +458,20 @@ export class TursoReplicaService {
   ): Promise<import("../DbQueryPool.js").SchemaResult> {
     return this.withSerializedPath(localPath, async () => {
       const executeSchema = async (pullFirst: boolean) => {
+        const shouldPull = isTursoReplicaOnline() && pullFirst;
+        const isolated = isTursoSyncIsolationEnabled();
+
+        if (shouldPull && isolated) {
+          await this.syncOutOfProcess(localPath, tursoDatabase, "pull");
+        }
+
         const handle = await this.getOrOpen({
           localPath,
           tursoDatabase,
           bootstrapIfEmpty: !fs.existsSync(localPath),
         });
 
-        if (isTursoReplicaOnline() && pullFirst) {
+        if (shouldPull && !isolated) {
           await withTimeout(
             handle.db.pull(),
             REPLICA_PULL_TIMEOUT_MS,
@@ -482,14 +523,9 @@ export class TursoReplicaService {
           );
         }
         try {
-          const handle = await this.getOrOpen({
+          await this.pullForRecovery(
             localPath,
             tursoDatabase,
-            bootstrapIfEmpty: !fs.existsSync(localPath),
-          });
-          await withTimeout(
-            handle.db.pull(),
-            REPLICA_PULL_TIMEOUT_MS,
             "replica recovery pull",
           );
           return await executeSchema(false);
@@ -629,6 +665,11 @@ export class TursoReplicaService {
     tursoDatabase: string,
     handle: OpenReplicaHandle,
   ): Promise<void> {
+    if (isTursoSyncIsolationEnabled()) {
+      // Releases `handle` — callers must not use it after this point.
+      await this.syncOutOfProcess(localPath, tursoDatabase, "pullPush");
+      return;
+    }
     try {
       await this.pullAndPushReplica(handle);
     } catch (error) {
@@ -650,6 +691,11 @@ export class TursoReplicaService {
     tursoDatabase: string,
     handle: OpenReplicaHandle,
   ): Promise<void> {
+    if (isTursoSyncIsolationEnabled()) {
+      // Releases `handle` — callers must not use it after this point.
+      await this.syncOutOfProcess(localPath, tursoDatabase, "push");
+      return;
+    }
     try {
       await withTimeout(
         handle.db.push(),
@@ -674,6 +720,74 @@ export class TursoReplicaService {
       );
       markTursoReplicaReachable();
     }
+  }
+
+  /**
+   * Precondition for every sync call: the watermark in `-info` must name a frame the `-wal`
+   * actually holds.
+   *
+   * An unsatisfiable watermark makes the engine abort the process from Rust, so there is no
+   * error to recover from afterwards — the check has to happen before pull()/push() is reached.
+   * Closing first matters: the repair unlinks the `-wal` the open handle is holding.
+   */
+  private async ensureSyncableSidecars(
+    localPath: string,
+    context: string,
+  ): Promise<boolean> {
+    const report = inspectReplicaSidecarWedge(localPath);
+    if (!report.wedged) {
+      return false;
+    }
+    await this.close(localPath);
+    resetReplicaSidecars(localPath);
+    console.warn(
+      `[TursoReplicaService] Reset wedged sync sidecars before ${context}: ` +
+        `${localPath} — ${describeReplicaSidecarWedge(report)}`,
+    );
+    return true;
+  }
+
+  /**
+   * Hand this replica's sync to the worker process.
+   *
+   * Our handle is closed first and deliberately not reopened: the worker owns the replica
+   * files for the duration, and the next read/write reopens lazily through getOrOpen(). Any
+   * handle the caller was holding is stale once this returns.
+   */
+  private async syncOutOfProcess(
+    localPath: string,
+    tursoDatabase: string,
+    op: "pull" | "push" | "pullPush",
+  ): Promise<boolean> {
+    await this.close(localPath);
+    const pulled = await runIsolatedReplicaSync({
+      op,
+      localPath,
+      tursoDatabase,
+    });
+    markTursoReplicaReachable();
+    return pulled;
+  }
+
+  /**
+   * Pull after a read wedge. Worth isolating: the replica just failed a read, so this is
+   * the pull most likely to hand the engine an inconsistent WAL.
+   */
+  private async pullForRecovery(
+    localPath: string,
+    tursoDatabase: string,
+    label: string,
+  ): Promise<void> {
+    if (isTursoSyncIsolationEnabled()) {
+      await this.syncOutOfProcess(localPath, tursoDatabase, "pull");
+      return;
+    }
+    const handle = await this.getOrOpen({
+      localPath,
+      tursoDatabase,
+      bootstrapIfEmpty: !fs.existsSync(localPath),
+    });
+    await withTimeout(handle.db.pull(), REPLICA_PULL_TIMEOUT_MS, label);
   }
 
   private async recoverSidecarsAfterCheckpointError(
@@ -750,6 +864,10 @@ export class TursoReplicaService {
       throw new Error("Turso sync bridge not available — sign in to Papr");
     }
 
+    // Cold path (startup, reconnect, post-close): sidecars left by an unclean shutdown are
+    // repaired here, before the engine can be handed an unsatisfiable watermark.
+    await this.ensureSyncableSidecars(options.localPath, "connect");
+
     const localReplicaExists = fs.existsSync(options.localPath);
     const bootstrapIfEmpty =
       options.bootstrapIfEmpty ?? !localReplicaExists;
@@ -813,6 +931,10 @@ export function getTursoReplicaService(): TursoReplicaService {
 
 /** Close all embedded replica handles (workspace switch, gateway shutdown). */
 export async function drainTursoReplicaConnections(context: string): Promise<void> {
+  // The worker can hold replica files while the parent holds none — under isolation that
+  // is the normal resting state — so stop it before the open-handle short-circuit below.
+  await shutdownTursoReplicaSyncWorker();
+
   if (!serviceInstance) {
     return;
   }
