@@ -12,6 +12,7 @@ import {
   type MemoryScopeContext,
 } from "../../core/utils/memoryScope.js";
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import type { MemoryMetadata } from "@papr/memory/resources/memory.js";
 import {
   applyExplicitReadAclToPolicy,
   hasExplicitMemoryReadAcl,
@@ -205,11 +206,31 @@ export function buildPaprMemoryWriteScopeSync(input: {
   };
 }
 
+/** Document upload expects policy as a JSON string, not a MemoryAddPolicy object. */
+export function paprMemoryDocumentUploadFields(scope: {
+  user_id?: string;
+  external_user_id?: string;
+  namespace_id?: string;
+  policy?: MemoryAddPolicy;
+}): {
+  user_id?: string;
+  external_user_id?: string;
+  namespace_id?: string;
+  policy?: string;
+} {
+  const { policy, namespace_id, ...identity } = scope;
+  return {
+    ...identity,
+    ...(namespace_id ? { namespace_id } : {}),
+    ...(policy ? { policy: JSON.stringify(policy) } : {}),
+  };
+}
+
 /** Merge user identity into metadata for single-add (v2 auth reads metadata). */
-export function withMemoryScopeMetadata<M extends Record<string, unknown>>(
-  metadata: M,
+export function withMemoryScopeMetadata(
+  metadata: MemoryMetadata,
   scope: { user_id?: string; external_user_id?: string },
-): M {
+): MemoryMetadata {
   return mergeUserIdentityIntoMetadata(
     metadata,
     scope.user_id ?? scope.external_user_id,

@@ -1011,6 +1011,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Worker Isolation</strong>
+                <p>
+                  Replica sync runs in a separate worker so a panic cannot
+                  take down the gateway, with WAL watermark repair before
+                  engine abort.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>FD &amp; Process Stability</strong>
+                <p>
+                  Child-process stream cleanup and EBADF recovery prevent
+                  file-descriptor leaks from bash, git, and job spawns.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent &amp; Memory Reliability</strong>
+                <p>
+                  Recover pending tool calls on length truncation, dual-send
+                  Papr Memory user identity, and scheduler retry-storm fixes.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Sync &amp; Startup Hardening</strong>
+                <p>
+                  Metadata outbox dedupe, auth wall IPC fixes, job secret
+                  leak prevention, and per-app agent work telemetry.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.5" && (
           <div className="about-card">
             <h3>What's New in v2.5.5</h3>

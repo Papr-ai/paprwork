@@ -138,6 +138,28 @@ export function classifyChildProcessError(
   return null;
 }
 
+/** True when spawn failed due to fd table exhaustion (recoverable in-process). */
+export function isSpawnResourceError(error: unknown): boolean {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+  const err = error as NodeExecError;
+  const code =
+    typeof err.code === "string"
+      ? err.code
+      : err.message?.match(/^spawn\s+(\S+)/i)?.[1];
+  if (code === "EBADF" || code === "EMFILE" || code === "ENFILE") {
+    return true;
+  }
+  const msg = err.message?.toLowerCase() ?? "";
+  return (
+    msg.includes("ebadf") ||
+    msg.includes("emfile") ||
+    msg.includes("enfile") ||
+    msg.includes("could not open process pipes")
+  );
+}
+
 /** Format spawn errors consistently for job logs and tool surfaces. */
 export function formatSpawnErrorForLogs(message: string): string {
   if (/^spawn\s/i.test(message)) {

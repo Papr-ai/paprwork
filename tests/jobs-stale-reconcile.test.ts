@@ -83,7 +83,7 @@ describe("JobsService - Stale Running Job Reconciliation", () => {
     expect(setStatusSpy).not.toHaveBeenCalled();
   });
 
-  test("skips agent jobs (no child process)", async () => {
+  test("reconciles stale agent jobs when no agent run is tracked", async () => {
     const now = Date.now();
     vi.setSystemTime(now);
 
@@ -93,17 +93,55 @@ describe("JobsService - Stale Running Job Reconciliation", () => {
       type: "agent",
       status: "running",
       command: "do something",
+      appIds: ["app-1"],
+      runSessionStartedAt: new Date(now - 60_000).toISOString(),
       lastRunAt: new Date(now - 60_000).toISOString(),
       createdAt: new Date(now - 120_000).toISOString(),
       updatedAt: new Date(now - 60_000).toISOString(),
     };
 
-    const getJobSpy = vi
-      .spyOn(jobsService.jobs as any, "entries")
-      .mockReturnValue([[agentJob.id, agentJob]]);
-    const runningSpy = vi
-      .spyOn(jobsService.running as any, "has")
-      .mockReturnValue(false);
+    vi.spyOn(jobsService.jobs as any, "entries").mockReturnValue([
+      [agentJob.id, agentJob],
+    ]);
+    vi.spyOn(jobsService.running as any, "has").mockReturnValue(false);
+    vi.spyOn(jobsService.agentRuns as any, "has").mockReturnValue(false);
+    const setStatusSpy = vi
+      .spyOn(jobsService as any, "setJobStatus")
+      .mockResolvedValue({ ...agentJob, status: "failed" });
+    vi.spyOn(jobsService as any, "appendLog").mockResolvedValue(undefined);
+
+    await jobsService.reconcileStaleRunningJobs(20_000);
+
+    expect(setStatusSpy).toHaveBeenCalledWith(
+      agentJob.id,
+      "failed",
+      expect.objectContaining({
+        error: expect.stringContaining("Stale running state"),
+      }),
+    );
+  });
+
+  test("skips active agent jobs tracked in agentRuns", async () => {
+    const now = Date.now();
+    vi.setSystemTime(now);
+
+    const agentJob: JobRecord = {
+      id: "agent-job-2",
+      name: "Active Agent",
+      type: "agent",
+      status: "running",
+      command: "do something",
+      appIds: ["app-1"],
+      runSessionStartedAt: new Date(now - 60_000).toISOString(),
+      lastRunAt: new Date(now - 60_000).toISOString(),
+      createdAt: new Date(now - 120_000).toISOString(),
+      updatedAt: new Date(now - 60_000).toISOString(),
+    };
+
+    vi.spyOn(jobsService.jobs as any, "entries").mockReturnValue([
+      [agentJob.id, agentJob],
+    ]);
+    vi.spyOn(jobsService.agentRuns as any, "has").mockReturnValue(true);
     const setStatusSpy = vi.spyOn(jobsService as any, "setJobStatus");
 
     await jobsService.reconcileStaleRunningJobs(20_000);

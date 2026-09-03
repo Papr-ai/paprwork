@@ -193,9 +193,8 @@ export const uploadDocumentToMemoryTool = createTool({
       const { buildAgentMemoryAddPolicy } = await import(
         "../../gateway/utils/workspaceContextSchema.js"
       );
-      const { paprMemoryScopeSpread } = await import(
-        "../../gateway/utils/memoryScopeResolver.js"
-      );
+      const { paprMemoryScopeSpread, paprMemoryDocumentUploadFields } =
+        await import("../../gateway/utils/memoryScopeResolver.js");
       const resolvedChatId = resolveConversationId(
         args.chatId ?? getCurrentChatId() ?? undefined,
       );
@@ -215,13 +214,7 @@ export const uploadDocumentToMemoryTool = createTool({
 
       const response = await client.document.upload({
         file: createReadStream(resolvedPath),
-        ...memoryScope,
-        ...(memoryScope.namespace_id
-          ? { namespace_id: memoryScope.namespace_id }
-          : {}),
-        ...(memoryScope.policy
-          ? { policy: JSON.stringify(memoryScope.policy) }
-          : {}),
+        ...paprMemoryDocumentUploadFields(memoryScope),
         metadata: JSON.stringify(metadataPayload),
       });
 

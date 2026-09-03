@@ -9,7 +9,7 @@
  * - Error handling
  */
 
-import { spawn, type ChildProcess } from "child_process";
+import { spawn } from "child_process";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
@@ -125,7 +125,8 @@ import {
 } from "../utils/namespaceGitTrapGuard.js";
 import { isPaprAppsOrJobsSearchPath } from "../utils/paprAgentPaths.js";
 import { getShellCommand } from "../utils/platform.js";
-import { classifyChildProcessError } from "../utils/childProcessErrors.js";
+import { classifyChildProcessError, isSpawnResourceError } from "../utils/childProcessErrors.js";
+import { notifySpawnResourceError } from "../utils/spawnResourceErrorHandler.js";
 import { execShellCommand } from "../utils/shellExec.js";
 import { SPAWN_STDIO_IGNORE_IN } from "../utils/spawnStdio.js";
 import {
@@ -133,12 +134,7 @@ import {
   formatPlatformBrowserBashTip,
 } from "../utils/platformBrowserBashGuard.js";
 
-function destroyChildProcessStreams(proc: ChildProcess | null): void {
-  if (!proc) return;
-  proc.stdout?.destroy();
-  proc.stderr?.destroy();
-  proc.stdin?.destroy();
-}
+import { destroyChildProcessStreams } from "../utils/destroyChildProcessStreams.js";
 
 /** Commands that fetch or produce external content - wrap stdout for prompt injection defense */
 const CURL_WGET_REGEX = /\b(curl|wget)\b/i;
@@ -788,6 +784,10 @@ export async function executeBashCommand(
   } catch (error: unknown) {
     const duration = Date.now() - startTime;
     const apiKeys = getApiKeysForSanitization();
+
+    if (isSpawnResourceError(error)) {
+      notifySpawnResourceError(error, "bash tool spawn");
+    }
 
     const classified = classifyChildProcessError(error, timeout);
     if (classified) {

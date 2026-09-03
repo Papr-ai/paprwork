@@ -71,6 +71,8 @@ export interface JobRecord {
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
+  /** Set once per runJobWithDependencies session — stale reconcile anchor (not reset on retry). */
+  runSessionStartedAt?: string;
   completedAt?: string;
   exitCode?: number;
   error?: string;

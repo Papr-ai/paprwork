@@ -50,6 +50,18 @@ export async function attemptFdPressureRecovery(reason: string): Promise<boolean
       // Code indexing may not be running.
     }
 
+    try {
+      const { drainTursoReplicaConnections } = await import(
+        "./tursoReplica/TursoReplicaService.js"
+      );
+      await drainTursoReplicaConnections("fd pressure recovery");
+    } catch (error) {
+      console.warn(
+        "[FdRecovery] Turso replica drain failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+
     await new Promise((resolve) => setTimeout(resolve, 150));
 
     const after = getOpenFdCount();

@@ -13,7 +13,9 @@ import {
   validateJobArchitecture,
 } from "./jobs/jobArchitectureValidation.js";
 import { CommandJobExecutor } from "./jobs/executors/CommandJobExecutor.js";
-import { formatSpawnErrorForLogs } from "../../core/utils/childProcessErrors.js";
+import { formatSpawnErrorForLogs, isSpawnResourceError } from "../../core/utils/childProcessErrors.js";
+import { destroyChildProcessStreams } from "../../core/utils/destroyChildProcessStreams.js";
+import { notifySpawnResourceError } from "../../core/utils/spawnResourceErrorHandler.js";
 import { AgentJobExecutor } from "./jobs/executors/AgentJobExecutor.js";
 import type { IJobExecutor } from "./jobs/executors/IJobExecutor.js";
 import { sanitizeError } from "../../core/tools/security.js";
@@ -141,6 +143,8 @@ export class JobsService {
   private legacyJobsIndexPath: string;
   private jobs: Map<string, JobRecord>;
   private running: Map<string, ChildProcess>;
+  /** In-flight agent/subagent runs (not backed by ChildProcess). */
+  private agentRuns: Map<string, { runId: string; startedAtMs: number }>;
   private jobDatabase: JobDatabase;
   private executors: IJobExecutor[];
   private initialized: boolean;
@@ -165,6 +169,7 @@ export class JobsService {
     );
     this.jobs = new Map();
     this.running = new Map();
+    this.agentRuns = new Map();
     this.jobDatabase = new JobDatabase();
     this.executors = [
       new CommandJobExecutor(["shell", "bash", "node", "python", "swift"]),
@@ -2020,13 +2025,25 @@ export class JobsService {
       status,
       updatedAt: now,
       ...(shouldTagDesktopRun ? { lastRunSource: "desktop" } : {}),
-      ...(status === "running" ? { lastRunAt: now, error: undefined } : {}),
+      ...(updates.runSessionStartedAt !== undefined
+        ? { runSessionStartedAt: updates.runSessionStartedAt }
+        : {}),
+      ...(status === "running"
+        ? {
+            lastRunAt:
+              existing.status === "running" && existing.lastRunAt
+                ? existing.lastRunAt
+                : now,
+            error: undefined,
+          }
+        : {}),
       ...(status === "completed" ||
       status === "failed" ||
       status === "cancelled"
         ? {
             completedAt: updates.completedAt ?? now,
             lastRunAt: updates.lastRunAt ?? existing.lastRunAt ?? now,
+            runSessionStartedAt: undefined,
             // Clear retry tracking on terminal states (if not overridden by updates)
             currentAttempt: updates.currentAttempt,
             maxAttempts: updates.maxAttempts,
@@ -2532,6 +2549,7 @@ export class JobsService {
             proc.kill("SIGKILL");
           } catch { /* already dead */ }
           this.running.delete(job.id);
+          destroyChildProcessStreams(proc);
           safeResolve({ exitCode: -1, errorMessage: "Watchdog timeout — process killed after 30 minutes" });
         }
       }, WATCHDOG_MS);
@@ -2560,6 +2578,7 @@ export class JobsService {
       });
       proc.on("close", (code: number | null) => {
         this.running.delete(job.id);
+        destroyChildProcessStreams(proc);
         const exitCode = code ?? -1;
         void appendRunLog(`Process exited with code ${exitCode}`);
         const lastOutput =
@@ -2568,6 +2587,8 @@ export class JobsService {
       });
       proc.on("error", (error: Error) => {
         this.running.delete(job.id);
+        destroyChildProcessStreams(proc);
+        notifySpawnResourceError(error, `job ${job.id} spawn`);
         const formatted = formatSpawnErrorForLogs(error.message);
         void appendRunLog(`Process error: ${formatted}`);
         safeResolve({ exitCode: -1, errorMessage: formatted });
@@ -2652,6 +2673,7 @@ export class JobsService {
 
       const maxAttempts = Math.max(1, job.retries?.maxAttempts ?? 1);
       const backoffMs = Math.max(0, job.retries?.backoffMs ?? 1000);
+      const runSessionStartedAt = new Date().toISOString();
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const attemptStart = performance.now();
@@ -2663,6 +2685,7 @@ export class JobsService {
           currentAttempt: attempt,
           maxAttempts: maxAttempts,
           nextRetryAt: undefined, // Clear since we're running now
+          runSessionStartedAt,
         });
 
         await this.appendLog(
@@ -2670,7 +2693,22 @@ export class JobsService {
           `[attempt ${attempt}/${maxAttempts}] Starting execution ${runId}`,
         );
 
-        const result = await this.runSingleAttempt(job, runId, runtimeParams);
+        let result: {
+          exitCode: number;
+          errorMessage?: string;
+          lastOutput?: string;
+        };
+        try {
+          result = await this.runSingleAttempt(job, runId, runtimeParams);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          await this.appendLog(job.id, `Execution error: ${message}`);
+          this.running.delete(job.id);
+          if (isSpawnResourceError(err)) {
+            notifySpawnResourceError(err, `job ${job.id} runSingleAttempt`);
+          }
+          result = { exitCode: 1, errorMessage: message };
+        }
         const status: JobStatus =
           result.exitCode === 0 ? "completed" : "failed";
 
@@ -2907,6 +2945,126 @@ export class JobsService {
       runtimeParams,
       scheduledDueAt,
     );
+  }
+
+  /** Track in-flight agent/subagent runs for stale reconciliation. */
+  registerAgentRun(jobId: string, runId: string): void {
+    this.agentRuns.set(jobId, { runId, startedAtMs: Date.now() });
+  }
+
+  clearAgentRun(jobId: string, runId: string): void {
+    const current = this.agentRuns.get(jobId);
+    if (current?.runId === runId) {
+      this.agentRuns.delete(jobId);
+    }
+  }
+
+  /**
+   * Validate a job can start without executing it (API preflight / collision checks).
+   */
+  async preflightJobRun(jobId: string): Promise<void> {
+    await this.initialize();
+    const job = this.jobs.get(jobId);
+    if (!job) {
+      throw new Error(`Job not found: ${jobId}`);
+    }
+    if (this.running.has(jobId) || this.agentRuns.has(jobId)) {
+      throw new Error("Job is already running");
+    }
+    const architectureIssues = await this.validateJobCandidate(job, jobId);
+    const architectureErrors = formatJobArchitectureErrors(architectureIssues);
+    if (architectureErrors) {
+      throw new Error(
+        `Job architecture validation failed before run:\n${architectureErrors}`,
+      );
+    }
+    for (const dependency of job.dependsOn ?? []) {
+      const required = this.jobs.get(dependency.jobId);
+      if (!required) {
+        throw new Error(
+          `Dependency job not found: ${dependency.jobId} (required by ${job.id})`,
+        );
+      }
+      if (required.status === "running") {
+        throw new JobsService.DependencyRunningError(required.id);
+      }
+    }
+  }
+
+  async markBackgroundJobRunFailed(
+    jobId: string,
+    err: unknown,
+  ): Promise<void> {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== "running") {
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    await this.setJobStatus(jobId, "failed", {
+      error: message,
+      exitCode: 1,
+      currentExecutionId: undefined,
+      currentAttempt: undefined,
+      maxAttempts: undefined,
+      runSessionStartedAt: undefined,
+    });
+  }
+
+  /**
+   * Start a job for mini-app API: preflight, run in background, wait until
+   * running is persisted or an immediate spawn failure is detected.
+   */
+  async startJobRunForApi(
+    jobId: string,
+    runtimeParams?: Record<string, string>,
+  ): Promise<{ jobId: string; status: JobStatus; error?: string }> {
+    await this.preflightJobRun(jobId);
+
+    const runPromise = this.runJob(jobId, runtimeParams).catch(
+      async (err: unknown) => {
+        if (
+          !(
+            err instanceof JobsService.DependencyRunningError ||
+            (err instanceof Error && err.message === "Job is already running")
+          )
+        ) {
+          await this.markBackgroundJobRunFailed(jobId, err);
+        }
+        throw err;
+      },
+    );
+
+    const deadline = Date.now() + 12_000;
+    while (Date.now() < deadline) {
+      const job = await this.getJob(jobId);
+      if (!job) {
+        break;
+      }
+      if (job.status === "failed" && job.error) {
+        return { jobId, status: "failed", error: job.error };
+      }
+      if (job.status === "completed") {
+        void runPromise.catch(() => undefined);
+        return { jobId, status: "completed" };
+      }
+      if (job.status === "running" && job.currentExecutionId) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const again = await this.getJob(jobId);
+        if (again?.status === "failed") {
+          return {
+            jobId,
+            status: "failed",
+            error: again.error ?? "Job failed to start",
+          };
+        }
+        void runPromise.catch(() => undefined);
+        return { jobId, status: "running" };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+
+    void runPromise.catch(() => undefined);
+    return { jobId, status: "running" };
   }
 
   /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
@@ -3317,13 +3475,13 @@ export class JobsService {
           }
         }
         const anchorMs = new Date(
-          job.lastRunAt ?? job.updatedAt,
+          job.runSessionStartedAt ?? job.lastRunAt ?? job.updatedAt,
         ).getTime();
         if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
           continue;
         }
         console.warn(
-          `[JobsService] Stale running job ${jobId} (no tracked process since ${job.lastRunAt ?? job.updatedAt}); marking failed`,
+          `[JobsService] Stale running job ${jobId} (no tracked process since ${job.runSessionStartedAt ?? job.lastRunAt ?? job.updatedAt}); marking failed`,
         );
         await this.appendLog(
           jobId,
@@ -3336,9 +3494,32 @@ export class JobsService {
         });
         continue;
       }
-      
-      // Agent/subagent jobs are NOT checked at runtime (can run for hours)
-      // They are only reconciled on app startup via reconcileInterruptedJobs()
+
+      // Agent/subagent: reconcile when not in agentRuns map (phantom running).
+      if (job.type === "agent" || job.type === "subagent") {
+        if (this.agentRuns.has(jobId)) {
+          continue;
+        }
+        const anchorMs = new Date(
+          job.runSessionStartedAt ?? job.lastRunAt ?? job.updatedAt,
+        ).getTime();
+        if (Number.isNaN(anchorMs) || nowMs - anchorMs < minStaleMs) {
+          continue;
+        }
+        console.warn(
+          `[JobsService] Stale running agent job ${jobId} (no active agent run since ${job.runSessionStartedAt ?? job.lastRunAt ?? job.updatedAt}); marking failed`,
+        );
+        await this.appendLog(
+          jobId,
+          "Stale running state cleared: agent run was not active (may have crashed or failed to save completion).",
+        );
+        await this.setJobStatus(jobId, "failed", {
+          error:
+            "Stale running state — the agent job was not active. Check logs, then run again if needed.",
+          currentExecutionId: undefined,
+          runSessionStartedAt: undefined,
+        });
+      }
     }
   }
 

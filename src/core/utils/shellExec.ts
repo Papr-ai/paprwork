@@ -1,6 +1,8 @@
 import { spawn } from "child_process";
 import { getShellCommand } from "./platform.js";
 import { SPAWN_STDIO_IGNORE_IN } from "./spawnStdio.js";
+import { destroyChildProcessStreams } from "./destroyChildProcessStreams.js";
+import { notifySpawnResourceError } from "./spawnResourceErrorHandler.js";
 
 export interface ShellExecOptions {
   cwd?: string;
@@ -44,11 +46,16 @@ export function execShellCommand(
     let stderr = "";
     let settled = false;
 
+    const finish = (): void => {
+      destroyChildProcessStreams(proc);
+    };
+
     const fail = (err: ShellExecError): void => {
       if (settled) return;
       settled = true;
       err.stdout = stdout;
       err.stderr = stderr;
+      finish();
       reject(err);
     };
 
@@ -95,6 +102,7 @@ export function execShellCommand(
 
     proc.on("error", (err) => {
       if (timer) clearTimeout(timer);
+      notifySpawnResourceError(err, "shellExec spawn");
       fail(err);
     });
 
@@ -104,6 +112,7 @@ export function execShellCommand(
 
       if (code === 0) {
         settled = true;
+        finish();
         resolve({ stdout, stderr });
         return;
       }

@@ -10,6 +10,8 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { destroyChildProcessStreams } from "../../../core/utils/destroyChildProcessStreams.js";
+import { notifySpawnResourceError } from "../../../core/utils/spawnResourceErrorHandler.js";
 import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 
 export interface RunGitOptions {
@@ -112,11 +114,14 @@ function runGitOnceWithStdin(
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(child);
+      notifySpawnResourceError(err, "git spawn");
       reject(err);
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(child);
       if (killedForSize) {
         reject(
           new Error(

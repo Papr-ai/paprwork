@@ -52,6 +52,20 @@ export function classifyError(error: unknown): ErrorType {
   if (msg.includes("validation error") || msg.includes("invalid input"))
     return "permanent";
 
+  const codeStr = typeof code === "string" ? code : undefined;
+  if (codeStr === "EBADF" || codeStr === "EMFILE" || codeStr === "ENFILE") {
+    return "permanent";
+  }
+  if (
+    msg.includes("ebadf") ||
+    msg.includes("emfile") ||
+    msg.includes("enfile") ||
+    msg.includes("could not open process pipes") ||
+    msg.includes("too many open files")
+  ) {
+    return "permanent";
+  }
+
   // Default to transient (safer to retry than give up)
   return "transient";
 }
@@ -83,6 +97,18 @@ export function getErrorClassificationReason(error: unknown): string {
     return "Forbidden (permanent error, no retry)";
   if (msg.includes("validation error"))
     return "Validation error (permanent error, no retry)";
+
+  const codeStr = typeof code === "string" ? code : undefined;
+  if (
+    codeStr === "EBADF" ||
+    codeStr === "EMFILE" ||
+    codeStr === "ENFILE" ||
+    msg.includes("ebadf") ||
+    msg.includes("emfile") ||
+    msg.includes("could not open process pipes")
+  ) {
+    return "Process spawn resource error (permanent error, no retry)";
+  }
 
   return "Unknown error (will retry)";
 }

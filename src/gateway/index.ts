@@ -1292,23 +1292,41 @@ async function startGateway(): Promise<void> {
             throw runErr;
           }
         } else {
-          jobsService.runJob(jobId, verifiedParams).catch((err: unknown) => {
-            if (isExpectedJobRunCollision(err)) {
-              const note =
-                err instanceof JobsService.DependencyRunningError
-                  ? `dependency ${err.dependencyId} still running`
-                  : (err as Error).message;
-              console.warn(
-                `[Gateway] /api/jobs/run skipped for ${jobId}: ${note}`,
-              );
+          try {
+            const started = await jobsService.startJobRunForApi(
+              jobId,
+              verifiedParams,
+            );
+            if (started.status === "failed") {
+              res.status(503).json({
+                jobId: started.jobId,
+                status: "failed",
+                error: started.error ?? "Job failed to start",
+              });
               return;
             }
-            console.error(
-              `[Gateway] /api/jobs/run background error for ${jobId}:`,
-              err,
-            );
-          });
-          res.json({ jobId, status: "running" });
+            res.json({ jobId: started.jobId, status: started.status });
+          } catch (runErr: unknown) {
+            if (isExpectedJobRunCollision(runErr)) {
+              const snapshot = await jobsService.getJob(jobId);
+              const reason =
+                runErr instanceof JobsService.DependencyRunningError
+                  ? "dependency_running"
+                  : "already_running";
+              res.status(409).json({
+                jobId,
+                status: snapshot?.status ?? "pending",
+                error:
+                  runErr instanceof Error ? runErr.message : String(runErr),
+                reason,
+                ...(runErr instanceof JobsService.DependencyRunningError
+                  ? { dependencyId: runErr.dependencyId }
+                  : {}),
+              });
+              return;
+            }
+            throw runErr;
+          }
         }
       } catch (err) {
         console.error("[Gateway] /api/jobs/run error:", err);
@@ -3315,6 +3333,19 @@ void import("./services/FdWatchdog.js")
   .then(({ startFdWatchdog }) => startFdWatchdog())
   .catch((error) => {
     console.warn("[Gateway] FD watchdog unavailable:", error);
+  });
+
+void import("../core/utils/spawnResourceErrorHandler.js")
+  .then(({ setSpawnResourceErrorHandler }) =>
+    setSpawnResourceErrorHandler((reason) => {
+      void import("./services/fdPressureRecovery.js").then(
+        ({ attemptFdPressureRecovery }) =>
+          attemptFdPressureRecovery(reason),
+      );
+    }),
+  )
+  .catch((error) => {
+    console.warn("[Gateway] Spawn resource error handler unavailable:", error);
   });
 
 // Handle uncaught errors

@@ -215,6 +215,9 @@ export class AgentJobExecutor implements IJobExecutor {
     await params.appendLog(`Starting isolated agent run: ${params.runId}`);
     await params.appendLog(`Environment: ${envBlock}`);
 
+    const jobsService = getJobsService();
+    jobsService.registerAgentRun(params.job.id, params.runId);
+
     const jobChatId = `job:${params.job.id}:${params.runId}`;
     const writeTargets = await resolveJobWriteTargets(params.job);
     const linkedAppId = (params.job.appIds ?? []).find(
@@ -324,6 +327,7 @@ export class AgentJobExecutor implements IJobExecutor {
         `Agent execution failed: ${executionError.message}`,
       );
     } finally {
+      jobsService.clearAgentRun(params.job.id, params.runId);
       // Revoke database access the moment the agent stops running, whether it
       // succeeded or threw. Everything below this point is delivery/logging.
       dbProxy.release();

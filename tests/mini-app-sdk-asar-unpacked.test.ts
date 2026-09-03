@@ -71,4 +71,14 @@ describe("mini-app SDK packaging", () => {
       );
     }
   });
+
+  it("emits Node-importable SDK modules as .js after build:gateway", () => {
+    const distSdk = path.join(repoRoot, "dist/resources/mini-app-sdk");
+    for (const file of ["sdk-manifest.js", "papr-auth-ui.js"]) {
+      expect(
+        fs.existsSync(path.join(distSdk, file)),
+        `missing dist/resources/mini-app-sdk/${file} — run npm run build:gateway`,
+      ).toBe(true);
+    }
+  });
 });

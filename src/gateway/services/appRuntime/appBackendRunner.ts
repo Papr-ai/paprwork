@@ -7,6 +7,8 @@ import * as fs from "fs/promises";
 import * as os from "os";
 import * as path from "path";
 import { fileURLToPath } from "url";
+import { destroyChildProcessStreams } from "../../../core/utils/destroyChildProcessStreams.js";
+import { notifySpawnResourceError } from "../../../core/utils/spawnResourceErrorHandler.js";
 import type { AppBackendActionSpec } from "../../../core/types/appBackend.js";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
 import {
@@ -103,10 +105,13 @@ function spawnWithTimeout(
     }, timeoutMs);
     proc.on("error", (err) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(proc);
+      notifySpawnResourceError(err, "app backend spawn");
       reject(err);
     });
     proc.on("close", (code) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(proc);
       resolve({
         stdout,
         stderr,

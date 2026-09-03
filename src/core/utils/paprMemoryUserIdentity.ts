@@ -8,6 +8,8 @@
  * Single-add v2 auth reads metadata — mirror identity there, not just top-level.
  */
 
+import type { MemoryMetadata } from "@papr/memory/resources/memory.js";
+
 export interface PaprMemoryUserIdentity {
   user_id: string;
   external_user_id: string;
@@ -29,6 +31,14 @@ export function spreadPaprMemoryUserIdentity(
   return buildPaprMemoryUserIdentity(userId);
 }
 
+export function mergeUserIdentityIntoMetadata(
+  metadata: MemoryMetadata,
+  userId?: string,
+): MemoryMetadata;
+export function mergeUserIdentityIntoMetadata<M extends Record<string, unknown>>(
+  metadata: M,
+  userId?: string,
+): M;
 export function mergeUserIdentityIntoMetadata<M extends Record<string, unknown>>(
   metadata: M,
   userId?: string,

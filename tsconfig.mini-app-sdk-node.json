@@ -1,0 +1,12 @@
+{
+  "extends": "./tsconfig.gateway.json",
+  "compilerOptions": {
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
+  },
+  "include": [
+    "src/resources/mini-app-sdk/sdk-manifest.ts",
+    "src/resources/mini-app-sdk/papr-auth-ui.ts"
+  ]
+}
