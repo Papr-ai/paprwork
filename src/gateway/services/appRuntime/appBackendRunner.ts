@@ -152,14 +152,22 @@ async function refreshVendoredDbHelper(handlerPath: string): Promise<void> {
     try {
       existing = await fs.readFile(vendoredPath, "utf8");
     } catch {
-      return; // no vendored helper (source-mode handler) — nothing to refresh
+      // No vendored helper at all. This used to return, which meant apps
+      // created before the scaffolding wrote papr_db.py could NEVER import it:
+      // `import papr_db` raised ModuleNotFoundError on every request, because
+      // nothing else puts the helper on a path-mode handler's sys.path.
+      // Creating it here lets those older apps self-heal on next use, the same
+      // way a stale copy is upgraded below.
+      existing = null;
     }
 
-    if (readHelperVersion(existing) >= canonicalVersion) return;
+    if (existing !== null && readHelperVersion(existing) >= canonicalVersion) {
+      return;
+    }
 
     await fs.writeFile(vendoredPath, canonical, "utf8");
     console.log(
-      `[appBackendRunner] Refreshed stale papr_db.py -> v${canonicalVersion} (${vendoredPath})`,
+      `[appBackendRunner] ${existing === null ? "Vendored missing" : "Refreshed stale"} papr_db.py -> v${canonicalVersion} (${vendoredPath})`,
     );
   } catch (error) {
     // Never block handler execution on a refresh failure.
