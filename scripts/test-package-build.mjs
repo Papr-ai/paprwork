@@ -301,6 +301,7 @@ function checkAsarContents(appPath) {
     const requiredUnpackedDirs = [
       'dist/resources/default-apps/home-dashboard/app-id.txt',
       'dist/resources/default-jobs',
+      'dist/resources/mini-app-sdk/papr-sdk.ts',
     ];
     
     let allIncluded = true;

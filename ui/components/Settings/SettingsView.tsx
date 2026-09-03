@@ -1011,6 +1011,37 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.7" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.7</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Mini-App SDK Packaged Fix</strong>
+                <p>
+                  SDK discovery now works when auto-update deltas omit .ts
+                  sources — falls back to compiled papr-*.js or a static
+                  catalog so /__papr__/ routes keep working.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release Packaging Guard</strong>
+                <p>
+                  Package build test now verifies papr-sdk.ts is included in
+                  the ASAR bundle so this regression is caught before ship.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.7"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.6" && (
           <div className="about-card">
             <h3>What's New in v2.5.6</h3>

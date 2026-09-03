@@ -116,10 +116,59 @@ function formatForFile(file: string): MiniAppSdkFormat {
   return IIFE_JS_ROUTE.has(file) ? "iife" : "esm";
 }
 
+/** Static catalog when packaged app is missing copied .ts sources (bad delta update, etc.). */
+function fallbackModulesFromHints(): MiniAppSdkModule[] {
+  return Object.keys(AGENT_HINTS)
+    .filter((file) => file.endsWith(".ts"))
+    .sort()
+    .map((file) => {
+      const format = formatForFile(file);
+      const hints = AGENT_HINTS[file]!;
+      return {
+        file,
+        route: routeForFile(file, format),
+        format,
+        summary: hints.summary,
+        exports: hints.exports,
+        appImportable: !PLATFORM_OR_INTERNAL.has(file),
+      };
+    });
+}
+
+/** Map on-disk SDK entry (.ts or compiled .js) to canonical manifest name (always *.ts). */
+function canonicalSdkFileName(name: string): string | null {
+  if (name.endsWith(".d.ts") || name.endsWith(".js.map")) {
+    return null;
+  }
+  if (name.endsWith(".ts") && !SKIP_DISCOVERY.has(name)) {
+    return name;
+  }
+  // Packaged builds may ship only compiled sdk-manifest.js + papr-auth-ui.js
+  // beside the .ts sources (auto-update deltas sometimes omit the .ts tree).
+  if (name.endsWith(".js") && name.startsWith("papr-")) {
+    return `${name.slice(0, -3)}.ts`;
+  }
+  return null;
+}
+
 function discoverMiniAppSdkModules(): MiniAppSdkModule[] {
-  const files = readdirSync(SDK_DIR)
-    .filter((name) => name.endsWith(".ts") && !SKIP_DISCOVERY.has(name))
-    .sort();
+  const canonicalNames = new Set<string>();
+  for (const name of readdirSync(SDK_DIR)) {
+    const canonical = canonicalSdkFileName(name);
+    if (canonical) {
+      canonicalNames.add(canonical);
+    }
+  }
+
+  const files = [...canonicalNames].sort();
+
+  if (!files.includes("papr-sdk.ts")) {
+    console.warn(
+      `[MiniAppSdk] papr-sdk.ts not found under ${SDK_DIR} — ` +
+        "using static SDK catalog (mini-app /__papr__/ routes may fail until reinstall)",
+    );
+    return fallbackModulesFromHints();
+  }
 
   return files.map((file) => {
     const format = formatForFile(file);
@@ -150,7 +199,10 @@ export function getPrimaryMiniAppSdkModule(): MiniAppSdkModule {
     (module) => module.route === PAPR_SDK_ENTRY_ROUTE,
   );
   if (!primary) {
-    throw new Error("papr-sdk.ts missing from mini-app SDK discovery");
+    throw new Error(
+      "papr-sdk.ts missing from mini-app SDK discovery " +
+        `(scanned ${SDK_DIR}; packaged builds need dist/resources/mini-app-sdk/*.ts or papr-*.js)`,
+    );
   }
   return primary;
 }
