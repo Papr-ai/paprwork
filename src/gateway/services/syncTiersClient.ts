@@ -7,6 +7,7 @@
 
 import type { MemoryObject } from "@papr/memory/resources/shared.js";
 import type Papr from "@papr/memory";
+import { buildPaprMemoryUserIdentity } from "../../core/utils/paprMemoryUserIdentity.js";
 
 /** Wait 30 minutes after a failed tiers fetch before retrying (background paths). */
 export const SYNC_TIERS_FAILURE_BACKOFF_MS = 30 * 60 * 1000;
@@ -115,7 +116,7 @@ export async function fetchSyncTiersThrottled(
     try {
       const tiersResult = await client.sync.getTiers(
         {
-          external_user_id: userId,
+          ...buildPaprMemoryUserIdentity(userId),
           max_tier0: params.max_tier0,
           max_tier1: params.max_tier1,
           include_embeddings: params.include_embeddings,

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { spreadPaprMemoryUserIdentity } from "../../core/utils/paprMemoryUserIdentity.js";
 import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 
 const CACHE_TTL_MS = 30_000;
@@ -10,14 +11,9 @@ let cachedAt = 0;
 /**
  * Parse _User.objectId of the locally-authenticated Papr user.
  *
- * Pass as `user_id` on Papr Memory API calls. Paprwork users ARE real Papr
- * accounts, so sending this as `external_user_id` makes the memory server mint
- * an anonymous shadow DeveloperUser — splitting one human into several
- * identities and breaking feedback authorization.
- *
- * This is the ONLY source of user identity for memory calls. It is read from
- * local login state and is never caller-supplied, so a namespace API key cannot
- * be used to write memories owned by an arbitrary Papr account.
+ * Pass as both `user_id` and `external_user_id` on Papr Memory API calls.
+ * The memory server prefers `user_id` for end_user_id (no shadow DeveloperUser)
+ * while keeping `external_user_id` for backward compatibility.
  *
  * Prefers gateway env (set at spawn); falls back to settings.json after login.
  */
@@ -58,23 +54,14 @@ export function invalidatePaprUserIdCache(): void {
 
 /**
  * Spread into Papr SDK request bodies to scope a call to the logged-in user.
- *
- * Always resolves the acting user locally — callers cannot inject an identity.
- * Returns `{}` when not logged in, so the server falls back to the API key
- * owner rather than writing memories under an unauthenticated id.
+ * Sends both user_id and external_user_id (same Parse objectId).
  */
-export function paprUserScope(): { user_id: string } | Record<string, never> {
-  const userId = getPaprUserId();
-  return userId ? { user_id: userId } : {};
+export function paprUserScope(): ReturnType<typeof spreadPaprMemoryUserIdentity> {
+  return spreadPaprMemoryUserIdentity(getPaprUserId());
 }
 
 /**
- * Guard for call sites that accept a user id from an argument or request body.
- *
- * The Papr API key is scoped to org + namespace, not to a person, so a
- * caller-supplied id would let any holder of the key write memories owned by an
- * arbitrary Papr account. We accept the value only when it matches the locally
- * authenticated user; otherwise we fall back to the local identity.
+ * Accept a caller-supplied id only when it matches the locally authenticated user.
  */
 export function resolveTrustedPaprUserId(
   candidate?: string | null,

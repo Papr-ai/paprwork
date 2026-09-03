@@ -5,6 +5,7 @@ import {
   interruptedTurnNeedsContinue,
   lastUserTurnNeedsContinue,
   mergeHistoryWithLocal,
+  shouldIgnoreDuplicateDoneChunk,
   serverHasCompletedAssistantForStreamingTurn,
 } from "../../lib/agentStreamRecovery";
 
@@ -77,6 +78,57 @@ describe("mergeHistoryWithLocal", () => {
     expect(merged.some((m) => m.id === "a2")).toBe(true);
   });
 
+  it("upgrades local assistant shell when server has sequence and toolCalls", () => {
+    const local: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "stream-local",
+        role: "assistant",
+        content: "Done running the job",
+        toolCalls: [{ id: "t1", toolName: "run_job", args: {}, status: "success" }],
+      },
+    ];
+    const server: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "msg-server",
+        role: "assistant",
+        content: "Done running the job",
+        sequence: [{ type: "tool", data: { name: "run_job" } }],
+        toolCalls: [{ id: "t1", toolName: "run_job", args: {}, status: "success" }],
+      },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged).toHaveLength(2);
+    expect(merged[1]?.id).toBe("msg-server");
+    expect(merged[1]?.sequence).toHaveLength(1);
+  });
+
+  it("inserts missing server assistant in chronological order, not at end", () => {
+    const local: ChatMessage[] = [
+      { id: "a1", role: "assistant", content: "First answer" },
+      { id: "u1", role: "user", content: "Question one" },
+      { id: "u2", role: "user", content: "Question two" },
+    ];
+    const server: ChatMessage[] = [
+      { id: "a1", role: "assistant", content: "First answer" },
+      { id: "u1", role: "user", content: "Question one" },
+      {
+        id: "a2",
+        role: "assistant",
+        content: "Second answer",
+        sequence: [{ type: "text", data: "Second answer" }],
+      },
+      { id: "u2", role: "user", content: "Question two" },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged.map((m) => m.id)).toEqual(["a1", "u1", "a2", "u2"]);
+  });
+
   it("merges persisted attachments from server onto optimistic duplicate user message", () => {
     const local: ChatMessage[] = [
       {
@@ -107,6 +159,56 @@ describe("mergeHistoryWithLocal", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.attachments).toHaveLength(1);
     expect(merged[0]?.attachments?.[0]?.name).toBe("report.pdf");
+  });
+});
+
+describe("shouldIgnoreDuplicateDoneChunk", () => {
+  it("returns false when a new server message follows an older assistant", () => {
+    const messages: ChatMessage[] = [
+      { id: "a-old", role: "assistant", content: "Previous answer" },
+      { id: "u-new", role: "user", content: "Follow up" },
+    ];
+
+    expect(
+      shouldIgnoreDuplicateDoneChunk({
+        finalMessageId: "a-new",
+        messages,
+        hasActiveStreamingMessageId: false,
+        isSending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the same server message is already finalized", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Question" },
+      { id: "a1", role: "assistant", content: "Answer" },
+    ];
+
+    expect(
+      shouldIgnoreDuplicateDoneChunk({
+        finalMessageId: "a1",
+        messages,
+        hasActiveStreamingMessageId: false,
+        isSending: false,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false while a stream is still active", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Question" },
+      { id: "a-old", role: "assistant", content: "Old" },
+    ];
+
+    expect(
+      shouldIgnoreDuplicateDoneChunk({
+        finalMessageId: "a-new",
+        messages,
+        hasActiveStreamingMessageId: true,
+        isSending: false,
+      }),
+    ).toBe(false);
   });
 });
 

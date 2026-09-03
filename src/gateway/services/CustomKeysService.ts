@@ -16,19 +16,6 @@ import type {
   CustomKeyMetadata,
 } from "../../core/storage/CustomKeysStorage.js";
 import { loadCustomKeysMetadataFromFile } from "../utils/customKeysFile.js";
-import { paprApiKeyMatchesActiveWorkspace } from "../../core/utils/paprApiKey.js";
-
-function readEnvKey(name: string): string | null {
-  const value = process.env[name]?.trim();
-  if (!value) return null;
-  if (name === "PAPR_API_KEY" && !paprApiKeyMatchesActiveWorkspace(value)) {
-    console.warn(
-      "[CustomKeysService] Ignoring PAPR_API_KEY env fallback — wrong namespace for active workspace",
-    );
-    return null;
-  }
-  return value;
-}
 
 interface CustomKeyWithValue extends CustomKeyMetadata {
   value: string;

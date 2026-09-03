@@ -78,17 +78,6 @@ function findActiveAppTab(
   return null;
 }
 
-function findAnyOpenAppTab(
-  state: ReturnType<typeof useTabStore.getState>,
-): Tab | null {
-  for (const tab of state.tabs) {
-    if (tab.type === "app" && tab.displayMode !== "child") {
-      return tab;
-    }
-  }
-  return null;
-}
-
 /** Resolve focus for a chat message. */
 export function resolveAgentFocusContext(
   _chatId: string,
@@ -98,8 +87,7 @@ export function resolveAgentFocusContext(
 
   const appTab =
     (chatTab ? findAppTabBesideChat(state, chatTab) : null) ??
-    findActiveAppTab(state) ??
-    findAnyOpenAppTab(state);
+    findActiveAppTab(state);
 
   const { selectedJobId, selectedJobName } = useJobNavigationStore.getState();
 

@@ -18,6 +18,10 @@ import {
   type ExplicitMemoryReadAclInput,
 } from "../../core/utils/memoryAcl.js";
 import { loadSettings } from "../services/settingsStore.js";
+import {
+  mergeUserIdentityIntoMetadata,
+  spreadMemoryScopeUserIdentity,
+} from "../../core/utils/paprMemoryUserIdentity.js";
 import { getPaprUserId } from "./paprUserId.js";
 
 export function getMemoryScopeContext(): MemoryScopeContext {
@@ -96,6 +100,7 @@ export async function buildPaprMemoryWriteScope(input?: {
   explicitReadAcl?: ExplicitMemoryReadAclInput;
 }): Promise<{
   user_id?: string;
+  external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }> {
@@ -115,13 +120,14 @@ export async function buildPaprMemoryWriteScope(input?: {
 
   if (useExplicitRead && input.explicitReadAcl && ctx.userId) {
     policy = applyExplicitReadAclToPolicy(policy, {
-      writerExternalUserId: ctx.userId,
+      writerUserId: ctx.userId,
       explicitRead: input.explicitReadAcl,
     });
   }
 
   return {
     user_id: fields.user_id,
+    external_user_id: fields.external_user_id,
     namespace_id: fields.namespace_id,
     policy,
   };
@@ -132,6 +138,7 @@ export async function buildPaprMemorySearchScope(input?: {
   explicitAudience?: MemoryAudience;
 }): Promise<{
   user_id?: string;
+  external_user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }> {
   const audience =
@@ -147,12 +154,13 @@ export async function paprMemoryScopeSpread(input?: {
   addPolicy?: MemoryAddPolicy;
 }): Promise<{
   user_id?: string;
+  external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }> {
   const scope = await buildPaprMemoryWriteScope(input);
   return {
-    ...(scope.user_id ? { user_id: scope.user_id } : {}),
+    ...spreadMemoryScopeUserIdentity(scope),
     ...(scope.namespace_id ? { namespace_id: scope.namespace_id } : {}),
     ...(scope.policy ? { policy: scope.policy } : {}),
   };
@@ -164,11 +172,12 @@ export async function paprMemorySearchScopeSpread(input?: {
   explicitAudience?: MemoryAudience;
 }): Promise<{
   user_id?: string;
+  external_user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }> {
   const scope = await buildPaprMemorySearchScope(input);
   return {
-    ...(scope.user_id ? { user_id: scope.user_id } : {}),
+    ...spreadMemoryScopeUserIdentity(scope),
     ...(scope.search_acl ? { search_acl: scope.search_acl } : {}),
   };
 }
@@ -180,6 +189,7 @@ export function buildPaprMemoryWriteScopeSync(input: {
   ctx?: MemoryScopeContext;
 }): {
   user_id?: string;
+  external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 } {
@@ -189,7 +199,19 @@ export function buildPaprMemoryWriteScopeSync(input: {
   );
   return {
     user_id: fields.user_id,
+    external_user_id: fields.external_user_id,
     namespace_id: fields.namespace_id,
     policy: mergeMemoryAddPolicy(input.addPolicy, fields.policy),
   };
+}
+
+/** Merge user identity into metadata for single-add (v2 auth reads metadata). */
+export function withMemoryScopeMetadata<M extends Record<string, unknown>>(
+  metadata: M,
+  scope: { user_id?: string; external_user_id?: string },
+): M {
+  return mergeUserIdentityIntoMetadata(
+    metadata,
+    scope.user_id ?? scope.external_user_id,
+  );
 }

@@ -9,7 +9,10 @@ import { useTabStore } from "../stores/tabStore";
 import { gateway } from "../src/lib/gateway";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
-import { chatHasActiveStreamUi, mergeHistoryWithLocal } from "../lib/agentStreamRecovery";
+import {
+  chatHasLiveStreamBlockingHistory,
+  mergeHistoryWithLocal,
+} from "../lib/agentStreamRecovery";
 
 let hasLoadedChatsOnce = false;
 let loadChatsPromise: Promise<void> | null = null;
@@ -102,10 +105,17 @@ export function useChat() {
 
   // Load messages for a chat (loads only recent messages)
   const loadMessages = useCallback(
-    async (chatId: string, limit: number = 30) => {
-      if (chatHasActiveStreamUi(chatId)) {
+    async (
+      chatId: string,
+      limit: number = 30,
+      options?: { force?: boolean },
+    ) => {
+      if (
+        !options?.force &&
+        chatHasLiveStreamBlockingHistory(chatId)
+      ) {
         console.log(
-          `[useChat] Skipping loadMessages for ${chatId} — active or recovering stream`,
+          `[useChat] Skipping loadMessages for ${chatId} — live stream in progress`,
         );
         return;
       }
@@ -136,10 +146,11 @@ export function useChat() {
 
           // A stream may have started while history was loading — never wipe live UI.
           if (
-            existingState.isSending ||
-            existingState.isStreaming ||
-            existingState.messages.some((m) => m.isStreaming) ||
-            chatHasActiveStreamUi(chatId)
+            !options?.force &&
+            (existingState.isSending ||
+              existingState.isStreaming ||
+              existingState.messages.some((m) => m.isStreaming) ||
+              chatHasLiveStreamBlockingHistory(chatId))
           ) {
             const newChatStates = new Map(state.chatStates);
             newChatStates.set(chatId, {

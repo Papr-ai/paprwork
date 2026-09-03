@@ -545,13 +545,21 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 5. get_cloud_sync_status({ appId, jobId })   # confirm fixed
 ```
 
-**Job stuck `pending` on cloud (common):**
+**Job stuck on cloud — two paths (do not conflate):**
 
+**A. Published app `POST /api/jobs/run` (Run now, share-link visitors)** — runs in **Cloud App Host sandbox** on `apps.papr.ai`. Desktop can be asleep. If stuck:
+1. `inspect_cloud_repo({ appId, action: "list", prefix: "jobs/" })` — job code reached GitHub app repo?
+2. Vault keys synced while desktop was awake? Cloud cannot read desktop keychain.
+3. Job type not `local-only` / LinkedIn CDP?
+4. Check Turso/DB via `query_cloud_turso` if job writes to linked DB.
+
+**B. Scheduled jobs / memory scheduler when desktop heartbeat is stale** — may defer to desktop or queue in `pendingCloudRuns`:
 1. Call `get_cloud_sync_status({ appId, jobId, includeJobLogs: true })`
-2. Check `desktopHeartbeat.desktopAwake` — if `false`, cloud triggered the job but desktop gateway is asleep; user must open Paprwork
-3. Check `desktopHeartbeat.pendingCloudRuns` — lists jobs waiting for desktop
-4. Check `jobs.githubRecords` — confirms job definition reached GitHub
-5. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Upload now or `papr_db_push`. `migrationConflict` → `repair_cloud_sync` then push. Legacy CDC shows row-level background sync separately.
+2. Check `desktopHeartbeat.desktopAwake` — if `false` and job is in `pendingCloudRuns`, user must open Paprwork
+3. Check `jobs.githubRecords` — confirms job definition reached GitHub
+4. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Upload now or `papr_db_push`. `migrationConflict` → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`). Legacy CDC shows row-level background sync separately.
+
+**Migration ledger duplicates:** Legacy rows may show both `0001_init` and `0001_init.sql`. Harmless for schema (same migration) but can false-flag `ledgerPaired: false`. Fix: `papr_db_reconcile_sync({ dbId, action: "dedupe_migration_ledger" })` then re-check parity.
 
 **Turso vs local mismatch:** `query_cloud_turso({ appId, alias, sql: "SELECT COUNT(*) FROM your_table" })` and compare to `read_app_data_health` or `papr_db_sync_status` — **never** bash `sqlite3` on registry replica DB files (bash blocks this; WAL wedge risk).
 

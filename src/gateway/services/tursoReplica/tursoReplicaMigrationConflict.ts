@@ -5,6 +5,7 @@
 
 import { createClient } from "@libsql/client";
 import type { AppDataSource } from "../appDataSources.js";
+import { normalizeMigrationIdList } from "../jobs/migrationIdNormalize.js";
 import { getTursoSyncBridge } from "../TursoSyncBridge.js";
 import { queryLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
 
@@ -21,10 +22,11 @@ export interface MigrationPushConflict {
 const SCHEMA_MIGRATIONS_QUERY =
   "SELECT id FROM schema_migrations ORDER BY id ASC";
 
-function normalizeMigrationIds(rows: Record<string, unknown>[]): string[] {
-  return rows
+function migrationIdsFromRows(rows: Record<string, unknown>[]): string[] {
+  const raw = rows
     .map((row) => String(row.id ?? row[0] ?? "").trim())
     .filter((id) => id.length > 0);
+  return normalizeMigrationIdList(raw);
 }
 
 /** Read migration ids from the local replica file (post-pull). */
@@ -38,7 +40,7 @@ export async function readLocalReplicaMigrationIds(
       [],
       { pullBeforeRead: false },
     );
-    return normalizeMigrationIds(result.rows);
+    return migrationIdsFromRows(result.rows);
   } catch {
     return [];
   }
@@ -61,9 +63,7 @@ export async function readRemoteTursoMigrationIds(
 
   try {
     const result = await client.execute(SCHEMA_MIGRATIONS_QUERY);
-    return normalizeMigrationIds(
-      result.rows as Record<string, unknown>[],
-    );
+    return migrationIdsFromRows(result.rows as Record<string, unknown>[]);
   } catch {
     return [];
   } finally {
@@ -79,16 +79,17 @@ export function detectMigrationPushConflict(
   localIds: readonly string[],
   remoteIds: readonly string[],
 ): MigrationPushConflict | null {
-  const remoteSet = new Set(remoteIds);
-  const localSet = new Set(localIds);
-  const localOnlyIds = localIds.filter((id) => !remoteSet.has(id));
-  const remoteOnlyIds = remoteIds.filter((id) => !localSet.has(id));
+  const local = normalizeMigrationIdList(localIds);
+  const remote = normalizeMigrationIdList(remoteIds);
+  const remoteSet = new Set(remote);
+  const localOnlyIds = local.filter((id) => !remoteSet.has(id));
+  const remoteOnlyIds = remote.filter((id) => !local.includes(id));
 
   if (localOnlyIds.length === 0) {
     return null;
   }
 
-  const maxRemote = remoteIds.reduce(
+  const maxRemote = remote.reduce(
     (max, id) => (id > max ? id : max),
     "",
   );
@@ -131,8 +132,9 @@ export function listLocalOnlyMigrationIds(
   localIds: readonly string[],
   remoteIds: readonly string[],
 ): string[] {
-  const remoteSet = new Set(remoteIds);
-  return localIds.filter((id) => !remoteSet.has(id));
+  const local = normalizeMigrationIdList(localIds);
+  const remoteSet = new Set(normalizeMigrationIdList(remoteIds));
+  return local.filter((id) => !remoteSet.has(id));
 }
 
 export function hasLocalOnlyMigrationIds(

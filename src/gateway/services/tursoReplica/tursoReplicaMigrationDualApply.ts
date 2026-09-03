@@ -386,8 +386,10 @@ export async function buildMigrationParityReport(options: {
     replicaMigrationIds,
     cloudMigrationIds,
   );
-  const replicaSet = new Set(replicaMigrationIds);
-  const cloudOnlyIds = cloudMigrationIds.filter((id) => !replicaSet.has(id));
+  const cloudOnlyIds = listLocalOnlyMigrationIds(
+    cloudMigrationIds,
+    replicaMigrationIds,
+  );
 
   const migrationConflict = await checkMigrationPushConflict({
     source: options.source,

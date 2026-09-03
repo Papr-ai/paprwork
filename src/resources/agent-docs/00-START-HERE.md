@@ -92,7 +92,7 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 
 **Vault rule:** Cloud agent jobs use keys from the **cloud vault**, not the desktop keychain. New Platform Connection cookies or Integration Keys only reach cloud after desktop syncs while awake.
 
-**Plan A semantics:** Schema = migration file → `papr_db_apply_migration` (replica → Turso primary → pull). Rows = DML auto-pushes when online. Schema drift → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`).
+**Plan A semantics:** Schema = migration file → `papr_db_apply_migration` (replica → Turso primary → pull). Rows = DML auto-pushes when online. Schema drift → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`). Legacy duplicate ledger ids (`0001_foo` + `0001_foo.sql`) → `papr_db_reconcile_sync({ action: "dedupe_migration_ledger" })`.
 
 ---
 

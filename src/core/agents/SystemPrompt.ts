@@ -2067,7 +2067,7 @@ delegate_task({
 - List each migration file (\`0001_init.sql\`, \`0002_add_notes.sql\`, …) in §2 Shared SQLite
 - Schema path: \`write_file\` migration → \`papr_db_apply_migration({ dbId, migrationId })\` — replica apply → Turso primary (HTTP) → pull align (never DDL via replica push)
 - Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Upload now / \`push_cloud_sync({ appId })\` for git + replica push
-- Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery: \`repair_cloud_sync({ strategy: 'pull' | 'accept_cloud' | 'export_conflicts' })\` — **not** \`merge_lww\` (deprecated; only rebases ledger)
+- Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`, \`dedupe_migration_ledger\` for legacy \`0001_foo\` + \`0001_foo.sql\` duplicates) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery: \`repair_cloud_sync({ strategy: 'pull' | 'accept_cloud' | 'export_conflicts' })\` — **not** \`merge_lww\` (deprecated; only rebases ledger)
 - Offline: \`papr_db_apply_migration\` applies on replica only; run cloud apply when back online
 
 **After approval:** Build yourself — never skip Product Architect for \`create_app\`.
@@ -2282,7 +2282,7 @@ rows = execute(
 con.close()
 \`\`\`
 
-**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip). **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
+**Backend DB rules (Python):** Always \`from papr_db import connect\` — gateway sets \`PAPR_DB_MODE\` to \`local\` (file at \`APP_DB\`) or \`turso\` (HTTP). \`sqlite3.connect()\` only works on desktop. After plain \`INSERT\`, use \`con.lastrowid\` or \`cursor().lastrowid\`. No multi-statement transactions across \`execute()\` calls on cloud (each statement is one HTTP round trip) — **mini-app frontends** use \`/api/db/write-batch\` with \`atomic: true\` for multi-statement writes. **SQL handlers:** use Python + \`papr_db\`; Node/TS backends have no cross-env DB helper — use Python for DB access or call \`/api/db/*\` from the frontend.
 
 \`\`\`javascript
 // Frontend — optional params.sourceId overrides manifest
@@ -2696,6 +2696,11 @@ await window.paprAPI.invoke('chat.open', {
 
 Mini-apps **can** persist to linked job SQLite databases. The gateway splits this across endpoints — **do not** use \`/api/db/query\` for INSERT/UPDATE/DELETE (it returns **403**). **Do not** tell the user that "the DB API disallows writes from apps."
 
+**Bulk DB API (desktop + cloud \`apps.papr.ai\` — same endpoints):**
+- **Reads:** \`POST /api/db/batch\` (aliases: \`query-batch\`, \`read-batch\`) — up to 25 \`SELECT\`/\`WITH\` statements. **Not for writes.**
+- **Writes:** \`POST /api/db/write-batch\` — up to 25 DML statements (\`INSERT\`/\`UPDATE\`/\`DELETE\`/\`REPLACE\`/\`UPSERT\`). Use \`atomic: true\` for one transaction on the same \`sourceId\`.
+- **Python app backends** (\`papr_db.execute\`): each call is one HTTP round trip on cloud — no multi-statement transactions across calls. **Mini-app frontend** batching uses \`/api/db/write-batch\` instead.
+
 | Endpoint | Allowed SQL |
 |----------|-------------|
 | \`GET /api/access?appId=...\` | Caller \`{ mode, isOwner, canRead, canWrite, loggedIn, userId?, email? }\` — gate admin UI + row filters (see Multi-user section) |
@@ -2866,7 +2871,14 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 - \`papr_db_sync_status\` / \`papr_db_migration_parity\` / \`papr_db_reconcile_sync\` / \`repair_cloud_sync\` — **Plan A registry DB sync**. \`papr_db_push\` / \`papr_db_pull\` are recovery-only (hidden from main agent when cloud + replica rollout are on).
 - \`push_cloud_sync({ appId, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — **requires scope** (appId recommended). Git/code + Turso push (replica-aware). **Rejected if called with no appId/jobId/alias/tursoDatabase/tables.** For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Upload now. Use \`targets: ['turso']\` for DB-only; \`papr_db_push({ dbId })\` for a single registry DB. Use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
 
-**Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If \`turso.sources[].migrationConflict\`, use \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` (not \`merge_lww\`) then Upload now. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
+**Cloud job debugging — two paths (do not conflate):**
+
+| Trigger | Where it runs | If stuck |
+|---------|---------------|----------|
+| **Published app** \`POST /api/jobs/run\` (Run now button, share link) | **Cloud App Host sandbox** on \`apps.papr.ai\` — desktop can be asleep | Check job code synced to app repo (\`inspect_cloud_repo\`), vault keys on cloud (not desktop keychain), \`local-only\` / LinkedIn CDP blockers. Re-run from app UI — **do not** tell user to wake desktop for this path. |
+| **Scheduled job** or **memory scheduler** when desktop heartbeat stale | Cloud memory scheduler **or** local \`JobsScheduler\` when awake | \`get_cloud_sync_status({ appId, jobId })\` → \`desktopHeartbeat.desktopAwake\`, \`pendingCloudRuns\` (jobs waiting for desktop gateway). Wake Paprwork if cloud deferred to desktop. |
+
+**Both paths:** If \`turso.sources[].migrationConflict\`, use \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` (not \`merge_lww\`) then Upload now. If sync pending, \`push_cloud_sync({ appId })\`. Agent desktop re-test: \`run_job({ jobId, runtime: "cloud" })\`.
 
 Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`repair_cloud_sync\`, \`papr_db_apply_migration\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
 

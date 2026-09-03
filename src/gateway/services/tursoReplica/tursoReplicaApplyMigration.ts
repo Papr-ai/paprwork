@@ -21,13 +21,18 @@ async function migrationRecordedInLedger(
   source: AppDataSource,
   migrationId: string,
 ): Promise<boolean> {
-  const result = await queryLinkedDbViaTursoReplica(
-    source,
-    "SELECT id FROM schema_migrations WHERE id = ? LIMIT 1",
-    [migrationId],
-    { pullBeforeRead: false },
-  );
-  return result.rows.length > 0;
+  for (const ledgerId of [migrationId, `${migrationId}.sql`]) {
+    const result = await queryLinkedDbViaTursoReplica(
+      source,
+      "SELECT id FROM schema_migrations WHERE id = ? LIMIT 1",
+      [ledgerId],
+      { pullBeforeRead: false },
+    );
+    if (result.rows.length > 0) {
+      return true;
+    }
+  }
+  return false;
 }
 
 async function migrationSchemaSatisfiedOnLocalReplica(

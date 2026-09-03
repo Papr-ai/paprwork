@@ -11,6 +11,7 @@ import {
   type WikiNode,
 } from "./KnowledgeGraphWikiService.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
+import { buildPaprMemoryUserIdentity } from "../../core/utils/paprMemoryUserIdentity.js";
 import {
   fetchSyncTiersThrottled,
   SyncTiersBackoffError,
@@ -388,7 +389,7 @@ export async function fetchMessageRelatedMemories(
 ): Promise<MemoryObject[]> {
   const response = await client.memory.search({
     query: userMessage,
-    external_user_id: userId,
+    ...buildPaprMemoryUserIdentity(userId),
     max_memories: MAX_CATALOG_SEARCH_MEMORIES,
   });
 

@@ -7,6 +7,7 @@
  */
 
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import { buildPaprMemoryUserIdentity } from "../../../core/utils/paprMemoryUserIdentity.js";
 import type { StoredMessage } from "./IStorageProvider.js";
 
 /** Client budget — leave headroom for memory server → Parse wrapper. */
@@ -35,9 +36,11 @@ export interface PaprMessageStoreBody {
     createdAt: string;
     role: "user" | "assistant";
     customMetadata: PaprSyncCustomMetadata;
+    user_id?: string;
+    external_user_id?: string;
   };
-  /** Real Papr _User.objectId — see memoryAcl.ts for why this is not external_user_id. */
   user_id?: string;
+  external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }
@@ -287,7 +290,11 @@ function assembleStoreBody(
   };
 
   if (scope?.userId) {
-    body.user_id = scope.userId;
+    const identity = buildPaprMemoryUserIdentity(scope.userId);
+    body.user_id = identity.user_id;
+    body.external_user_id = identity.external_user_id;
+    body.metadata.user_id = identity.user_id;
+    body.metadata.external_user_id = identity.external_user_id;
   }
   if (scope?.namespaceId) {
     body.namespace_id = scope.namespaceId;

@@ -181,6 +181,26 @@ describe("tursoReplicaMigrationConflict", () => {
 
     expect(conflict).toBeNull();
   });
+
+  it("treats bare id and .sql suffix as the same migration for parity", async () => {
+    const { detectMigrationPushConflict, listLocalOnlyMigrationIds } =
+      await import(
+        "../src/gateway/services/tursoReplica/tursoReplicaMigrationConflict.js"
+      );
+
+    expect(
+      listLocalOnlyMigrationIds(
+        ["0001_init", "0001_init.sql"],
+        ["0001_init"],
+      ),
+    ).toEqual([]);
+    expect(
+      detectMigrationPushConflict(
+        ["0001_init", "0001_init.sql", "0007_foo"],
+        ["0001_init", "0006_bar"],
+      ),
+    ).toBeNull();
+  });
 });
 
 describe("tursoReplicaConnectivity", () => {

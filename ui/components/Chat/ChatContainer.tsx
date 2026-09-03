@@ -39,7 +39,7 @@ import { mapHistoryMessages } from "../../utils/historyMapper";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
-import { chatHasActiveStreamUi, lastUserTurnNeedsContinue } from "../../lib/agentStreamRecovery";
+import { chatHasLiveStreamBlockingHistory } from "../../lib/agentStreamRecovery";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 
@@ -176,6 +176,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   } = useGatewaySupervisorStatus();
   const gatewayConnectionState = useGatewayConnectionState();
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
+  const prevIsSendingRef = useRef(isSending);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
@@ -187,7 +188,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [messageQueue, chatId]
   );
 
-  // Reload history when Gateway becomes ready after a restart (user message with no reply).
+  const syncHistoryFromServer = useCallback(() => {
+    if (chatHasLiveStreamBlockingHistory(chatId)) return;
+    void loadMessages(chatId, 30, { force: true });
+  }, [chatId, loadMessages]);
+
+  // Reload history when Gateway becomes ready after a restart.
   useEffect(() => {
     const wasReady = prevGatewaySupervisorReadyRef.current;
     prevGatewaySupervisorReadyRef.current = gatewaySupervisorReady;
@@ -196,15 +202,23 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       return;
     }
 
-    const chatMessages = useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
-    if (
-      lastUserTurnNeedsContinue(chatMessages) &&
-      !chatHasActiveStreamUi(chatId) &&
-      !isSending
-    ) {
-      void loadMessages(chatId);
+    syncHistoryFromServer();
+  }, [gatewaySupervisorReady, syncHistoryFromServer]);
+
+  // After rate-limit / recovery, in-memory state may be empty shells — force sync.
+  useEffect(() => {
+    if (!needsStreamRecovery) return;
+    syncHistoryFromServer();
+  }, [needsStreamRecovery, syncHistoryFromServer]);
+
+  // Agent finished but UI may have missed done — pull completed turns from DB.
+  useEffect(() => {
+    const wasSending = prevIsSendingRef.current;
+    prevIsSendingRef.current = isSending;
+    if (wasSending && !isSending) {
+      syncHistoryFromServer();
     }
-  }, [gatewaySupervisorReady, chatId, loadMessages, isSending]);
+  }, [isSending, syncHistoryFromServer]);
 
   const gatewayBanner =
     gatewaySupervisorStarting &&
@@ -253,19 +267,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     return () => clearTimeout(timer);
   }, [chatId]); // Re-focus when chatId changes (different chat loaded)
 
-  // Load messages with pagination when chat loads
-  // Uses pagination-aware loadMessages() that loads only recent 30 messages
+  // Always merge server history when this chat opens (unless a live stream is running).
   useEffect(() => {
-    const existingState = useChatStore.getState().chatStates.get(chatId);
-    // Only load if chat has no messages yet and no in-flight stream to preserve
-    if (
-      (existingState?.messages.length || 0) === 0 &&
-      !existingState?.isSending &&
-      !chatHasActiveStreamUi(chatId)
-    ) {
-      loadMessages(chatId);
-    }
-  }, [chatId, loadMessages]);
+    syncHistoryFromServer();
+  }, [chatId, syncHistoryFromServer]);
 
   // Listen for new messages delivered from jobs/sub-agents
   useEffect(() => {

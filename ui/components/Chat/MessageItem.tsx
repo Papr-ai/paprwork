@@ -968,15 +968,14 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             )}
 
             {/* Main message text */}
-            {content &&
-              (isUser || !message.toolCalls || message.toolCalls.length === 0) && (
-                <div className="message-text">
-                  <Markdown>{content}</Markdown>
-                  {message.isStreaming && !message.streamingReasoning && (
-                    <span className="streaming-cursor">▊</span>
-                  )}
-                </div>
-              )}
+            {content && (
+              <div className="message-text">
+                <Markdown>{content}</Markdown>
+                {message.isStreaming && !message.streamingReasoning && (
+                  <span className="streaming-cursor">▊</span>
+                )}
+              </div>
+            )}
           </>
         )}
 

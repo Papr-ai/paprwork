@@ -39,6 +39,7 @@ import {
   interruptedTurnNeedsContinue,
   isResumingStream,
   lastUserTurnNeedsContinue,
+  shouldIgnoreDuplicateDoneChunk,
   markResuming,
   mergeHistoryWithLocal,
   rehydrateStreamingRefsForChat,
@@ -753,40 +754,31 @@ export function useAgent() {
               .chatStates.get(chatId);
 
             // agent:complete (broadcast) can deliver a second done after the stream
-            // chunk already finalized — skip to avoid duplicate assistant cards.
+            // chunk already finalized — skip only when that exact message is saved.
             if (
               finalMessageFromBackend &&
               typeof finalMessageFromBackend.id === "string" &&
-              !streamingMessageIdRef.current.has(chatId) &&
               chatStateForDone &&
-              !chatStateForDone.isSending
+              shouldIgnoreDuplicateDoneChunk({
+                finalMessageId: finalMessageFromBackend.id,
+                messages: chatStateForDone.messages,
+                hasActiveStreamingMessageId:
+                  streamingMessageIdRef.current.has(chatId),
+                isSending: chatStateForDone.isSending,
+              })
             ) {
-              const serverId = finalMessageFromBackend.id;
-              const alreadySaved = chatStateForDone.messages.some(
-                (m) => m.id === serverId && !m.isStreaming,
+              console.log(
+                `[useAgent] Ignoring duplicate done for ${chatId} (stream already finalized)`,
               );
-              const lastAssistant = [...chatStateForDone.messages]
-                .reverse()
-                .find((m) => m.role === "assistant");
-              if (
-                alreadySaved ||
-                (lastAssistant &&
-                  !lastAssistant.isStreaming &&
-                  lastAssistant.id !== serverId)
-              ) {
-                console.log(
-                  `[useAgent] Ignoring duplicate done for ${chatId} (stream already finalized)`,
-                );
-                untrackActiveStream(chatId);
-                setSending(chatId, false);
-                setConnectionPaused(chatId, false);
-                setFinishingWork(chatId, false);
-                setNeedsStreamRecovery(chatId, false);
-                const { setTabStreaming: clearTabStreaming } =
-                  useTabStore.getState();
-                clearTabStreaming(`chat-${chatId}`, false);
-                break;
-              }
+              untrackActiveStream(chatId);
+              setSending(chatId, false);
+              setConnectionPaused(chatId, false);
+              setFinishingWork(chatId, false);
+              setNeedsStreamRecovery(chatId, false);
+              const { setTabStreaming: clearTabStreaming } =
+                useTabStore.getState();
+              clearTabStreaming(`chat-${chatId}`, false);
+              break;
             }
 
             if (
@@ -1200,7 +1192,7 @@ export function useAgent() {
                   streamingContentRef.current.get(chatId) || "",
                 );
                 streamingContentRef.current.set(chatId, cleaned);
-                flushStreamingState(chatId, { isStreaming: true });
+                flushStreamingState(chatId, { isStreaming: false });
               }
               untrackActiveStream(chatId);
               break;

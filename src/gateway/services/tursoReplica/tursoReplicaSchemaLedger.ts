@@ -4,6 +4,7 @@
  */
 
 import type { AppDataSource } from "../appDataSources.js";
+import { normalizeMigrationId } from "../jobs/migrationIdNormalize.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import {
   execLinkedDbViaTursoReplica,
@@ -52,4 +53,48 @@ export async function ensureReplicaSchemaMigrationsLedger(
     await pullLinkedDbViaTursoReplica(source);
   }
   await ensureBaselineOnLocalReplica(source);
+}
+
+/**
+ * Remove legacy duplicate ledger rows where both `0001_foo` and `0001_foo.sql`
+ * exist. Keeps the bare id (canonical form used by papr_db_apply_migration).
+ */
+export async function dedupeReplicaMigrationLedger(
+  source: AppDataSource,
+): Promise<{ removed: string[] }> {
+  if (isTursoReplicaOnline()) {
+    await pullLinkedDbViaTursoReplica(source);
+  }
+
+  const result = await queryLinkedDbViaTursoReplica(
+    source,
+    "SELECT id FROM schema_migrations ORDER BY id ASC",
+    [],
+    { pullBeforeRead: false },
+  );
+  const rawIds = result.rows
+    .map((row) => String(row.id ?? "").trim())
+    .filter((id) => id.length > 0);
+  const rawSet = new Set(rawIds);
+
+  const toRemove: string[] = [];
+  for (const id of rawIds) {
+    if (!id.toLowerCase().endsWith(".sql")) {
+      continue;
+    }
+    const bare = normalizeMigrationId(id);
+    if (rawSet.has(bare)) {
+      toRemove.push(id);
+    }
+  }
+
+  for (const id of toRemove) {
+    await writeLinkedDbViaTursoReplica(
+      source,
+      "DELETE FROM schema_migrations WHERE id = ?",
+      [id],
+    );
+  }
+
+  return { removed: toRemove };
 }

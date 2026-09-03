@@ -213,7 +213,8 @@ export const paprDbReconcileSyncTool = createTool({
     "pull_and_align (pull after cloud migration), " +
     "clear_push_error (clear lastReplicaPushError), " +
     "complete_pairing (mark replica+cloud paired after manual steps), " +
-    "full_parity_check (ledger + wedge report). " +
+    "full_parity_check (ledger + wedge report), " +
+    "dedupe_migration_ledger (remove legacy duplicate ids like 0001_init.sql when 0001_init exists). " +
     "Prefer this over repair_cloud_sync merge_lww for schema issues.",
   inputSchema: z.object({
     dbId: z.string().min(1),
@@ -223,6 +224,7 @@ export const paprDbReconcileSyncTool = createTool({
       "clear_push_error",
       "complete_pairing",
       "full_parity_check",
+      "dedupe_migration_ledger",
     ]),
     applyToken: z.string().optional(),
     migrationId: z.string().optional(),

@@ -57,6 +57,11 @@ export interface DatabaseRecord {
   updatedAt: string;
 }
 
+export interface DatabaseRegistrySaveOptions {
+  /** Local-only bookkeeping (replica push timestamps) — skip memory server upload. */
+  skipCloudUpload?: boolean;
+}
+
 export interface DatabasesRegistryFile {
   version: 1;
   databases: Record<string, DatabaseRecord>;
@@ -186,7 +191,10 @@ export class DatabaseRegistryService {
     return defaultRegistry();
   }
 
-  private async save(state: DatabasesRegistryFile): Promise<void> {
+  private async save(
+    state: DatabasesRegistryFile,
+    options?: DatabaseRegistrySaveOptions,
+  ): Promise<void> {
     if (!this.isWriteContextValid("databases.json save")) {
       return;
     }
@@ -220,20 +228,25 @@ export class DatabaseRegistryService {
       //
       // Durability is unaffected: the file rename above is the source of truth,
       // and a failed upload is retried from the metadata outbox.
-      const updatedAt = new Date().toISOString();
-      void (async () => {
-        try {
-          const { uploadDatabasesRegistryToCloud } = await import(
-            "./syncV3/MetadataRegistryClient.js"
-          );
-          await uploadDatabasesRegistryToCloud(state, updatedAt);
-        } catch (err) {
-          console.warn(
-            "[DatabaseRegistry] cloud upload failed:",
-            (err as Error).message.slice(0, 120),
-          );
-        }
-      })();
+      //
+      // Replica push timestamps are local bookkeeping only — memory server ignores
+      // them, so skip uploading ~50KB full registry snapshots on every row write.
+      if (!options?.skipCloudUpload) {
+        const updatedAt = new Date().toISOString();
+        void (async () => {
+          try {
+            const { uploadDatabasesRegistryToCloud } = await import(
+              "./syncV3/MetadataRegistryClient.js"
+            );
+            await uploadDatabasesRegistryToCloud(state, updatedAt);
+          } catch (err) {
+            console.warn(
+              "[DatabaseRegistry] cloud upload failed:",
+              (err as Error).message.slice(0, 120),
+            );
+          }
+        })();
+      }
     })();
 
     const mine = this.saveLock;
@@ -360,7 +373,7 @@ export class DatabaseRegistryService {
         : {}),
       updatedAt: new Date().toISOString(),
     };
-    await this.save(state);
+    await this.save(state, { skipCloudUpload: true });
   }
 
   getByPath(dbPath: string): DatabaseRecord | undefined {

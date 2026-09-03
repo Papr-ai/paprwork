@@ -18,7 +18,10 @@ vi.mock("../src/core/tools/paprClient.js", () => ({
 }));
 
 vi.mock("../src/gateway/utils/paprUserId.js", () => ({
-  paprUserScope: vi.fn(() => ({ user_id: "user-test-1" })),
+  paprUserScope: vi.fn(() => ({
+    user_id: "user-test-1",
+    external_user_id: "user-test-1",
+  })),
   getPaprUserId: vi.fn(() => "user-test-1"),
   getPaprCallerIdentity: vi.fn(() => ({ userId: "user-test-1" })),
   invalidatePaprUserIdCache: vi.fn(),
@@ -35,10 +38,20 @@ vi.mock("../src/gateway/utils/workspaceContextSchema.js", () => ({
 vi.mock("../src/gateway/utils/memoryScopeResolver.js", () => ({
   buildPaprMemoryWriteScope: vi.fn(async (input?: { addPolicy?: unknown }) => ({
     user_id: "user-test-1",
+    external_user_id: "user-test-1",
     namespace_id: "ns-test-1",
     policy: input?.addPolicy,
   })),
+  paprMemorySearchScopeSpread: vi.fn(async () => ({
+    user_id: "user-test-1",
+    external_user_id: "user-test-1",
+  })),
   resolveExplicitReadAclFromToolArgs: vi.fn(() => undefined),
+  withMemoryScopeMetadata: vi.fn((metadata: Record<string, unknown>) => ({
+    ...metadata,
+    user_id: "user-test-1",
+    external_user_id: "user-test-1",
+  })),
 }));
 
 describe("papr memory CRUD + feedback tools", () => {
@@ -152,6 +165,8 @@ describe("papr memory CRUD + feedback tools", () => {
         graph: { mode: "auto", schema_id: "schema-workspace-context" },
       });
       expect(payload.user_id).toBe("user-test-1");
+      expect(payload.user_id).toBe("user-test-1");
+      expect(payload.external_user_id).toBe("user-test-1");
       expect(payload.namespace_id).toBe("ns-test-1");
 
       expect(result.requested).toBe(2);
@@ -252,7 +267,7 @@ describe("papr memory CRUD + feedback tools", () => {
       expect(payload.feedback_items).toHaveLength(2);
       expect(payload.feedback_items[0]).toMatchObject({
         search_id: "search-1",
-        user_id: "user-test-1",
+        external_user_id: "user-test-1",
         feedbackData: {
           feedbackSource: "inline",
           feedbackType: "thumbs_up",

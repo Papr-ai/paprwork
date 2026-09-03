@@ -34,6 +34,7 @@ describe("memoryScope", () => {
   it("buildMemoryScopeFields scopes namespace memories with ACL", () => {
     expect(buildMemoryScopeFields("namespace", ctx)).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
       namespace_id: "ns-abc",
       policy: {
         acl: {
@@ -47,6 +48,7 @@ describe("memoryScope", () => {
   it("buildMemoryScopeFields scopes org memories with ACL", () => {
     expect(buildMemoryScopeFields("org", ctx)).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
       namespace_id: "ns-abc",
       policy: {
         acl: {
@@ -57,9 +59,10 @@ describe("memoryScope", () => {
     });
   });
 
-  it("buildMemoryScopeFields user scope is user_id only", () => {
+  it("buildMemoryScopeFields user scope sends dual identity", () => {
     expect(buildMemoryScopeFields("user", ctx)).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
     });
   });
 
@@ -68,20 +71,24 @@ describe("memoryScope", () => {
       buildMemoryScopeFields("namespace", { userId: "user-1" }),
     ).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
     });
   });
 
   it("buildMemorySearchScopeFields expands read ACL for namespace/org", () => {
     expect(buildMemorySearchScopeFields("namespace", ctx)).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
       search_acl: { read: ["namespace:ns-abc"] },
     });
     expect(buildMemorySearchScopeFields("org", ctx)).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
       search_acl: { read: ["organization:org-xyz"] },
     });
     expect(buildMemorySearchScopeFields("user", ctx)).toEqual({
       user_id: "user-1",
+      external_user_id: "user-1",
     });
   });
 

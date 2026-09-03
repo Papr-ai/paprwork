@@ -106,8 +106,13 @@ describe("paprSyncPayload", () => {
     const body = buildPaprSyncStoreBody({
       chatId: "582a2781-8091-474b-9300-d63574006442",
       message: makeHeavyMessage(28),
-      externalUserId: "user-abc",
+      userId: "user-abc",
     });
+
+    expect(body.user_id).toBe("user-abc");
+    expect(body.external_user_id).toBe("user-abc");
+    expect(body.metadata.user_id).toBe("user-abc");
+    expect(body.metadata.external_user_id).toBe("user-abc");
 
     expect(measurePaprStoreBodyBytes(body)).toBeLessThanOrEqual(
       PAPR_SYNC_MAX_BYTES,

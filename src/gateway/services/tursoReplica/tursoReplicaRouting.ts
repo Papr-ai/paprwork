@@ -31,14 +31,30 @@ import {
   type TursoLinkedSource,
 } from "../tursoLinkedSources.js";
 import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
+import type { TursoPushScopedOptions } from "../TursoSyncBridge.js";
+import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
+import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
 
-async function noteReplicaLocalMutation(source: AppDataSource): Promise<void> {
+/** One local registry save after a replica write (no cloud upload — timestamps are local-only). */
+async function noteReplicaWriteOutcome(
+  source: AppDataSource,
+  pendingPush: boolean,
+): Promise<void> {
   if (!source.dbId) {
     return;
   }
   const registry = getDatabaseRegistryService();
+  const now = new Date().toISOString();
+  if (pendingPush) {
+    await registry.updateReplicaPushState(source.dbId, {
+      lastReplicaLocalMutationAt: now,
+    });
+    return;
+  }
   await registry.updateReplicaPushState(source.dbId, {
-    lastReplicaLocalMutationAt: new Date().toISOString(),
+    lastReplicaLocalMutationAt: now,
+    lastReplicaPushError: null,
+    lastReplicaPushAt: now,
   });
 }
 
@@ -52,9 +68,6 @@ async function noteReplicaPushSuccess(source: AppDataSource): Promise<void> {
     lastReplicaPushAt: new Date().toISOString(),
   });
 }
-import type { TursoPushScopedOptions } from "../TursoSyncBridge.js";
-import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
-import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
 
 /** SSE + cloud notify after replica sync reaches Turso primary or local pull completes. */
 export function notifyReplicaDbChanged(
@@ -155,9 +168,8 @@ export async function writeLinkedDbViaTursoReplica(
     params,
     writeOptions,
   });
-  await noteReplicaLocalMutation(source);
+  await noteReplicaWriteOutcome(source, result.pendingPush);
   if (!result.pendingPush) {
-    await noteReplicaPushSuccess(source);
     notifyReplicaDbChanged(source);
   }
   return result;
@@ -180,9 +192,8 @@ export async function writeLinkedDbBatchViaTursoReplica(
     tursoDatabase,
     statements,
   });
-  await noteReplicaLocalMutation(source);
+  await noteReplicaWriteOutcome(source, result.pendingPush);
   if (!result.pendingPush) {
-    await noteReplicaPushSuccess(source);
     notifyReplicaDbChanged(source);
   }
   return result;
@@ -207,9 +218,8 @@ export async function execLinkedDbViaTursoReplica(
     sql,
     writeOptions,
   );
-  await noteReplicaLocalMutation(source);
+  await noteReplicaWriteOutcome(source, result.pendingPush);
   if (!result.pendingPush) {
-    await noteReplicaPushSuccess(source);
     notifyReplicaDbChanged(source);
   }
   return result;

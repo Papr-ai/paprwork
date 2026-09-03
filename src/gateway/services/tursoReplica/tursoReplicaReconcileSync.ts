@@ -27,7 +27,8 @@ export type ReconcileSyncAction =
   | "pull_and_align"
   | "clear_push_error"
   | "complete_pairing"
-  | "full_parity_check";
+  | "full_parity_check"
+  | "dedupe_migration_ledger";
 
 export interface ReconcileSyncResult {
   action: ReconcileSyncAction;
@@ -38,6 +39,7 @@ export interface ReconcileSyncResult {
   pushErrorCleared: boolean;
   pairingCompleted: boolean;
   parity?: Awaited<ReturnType<typeof buildMigrationParityReport>>;
+  ledgerDeduped?: string[];
   syncStatus?: Awaited<ReturnType<typeof syncStatusForLinkedDb>>;
 }
 
@@ -150,6 +152,23 @@ export async function reconcileReplicaSync(options: {
       });
       return {
         ...base,
+        parity,
+        syncStatus: await syncStatusForLinkedDb(options.source),
+      };
+    }
+    case "dedupe_migration_ledger": {
+      const { dedupeReplicaMigrationLedger } = await import(
+        "./tursoReplicaSchemaLedger.js"
+      );
+      const { removed } = await dedupeReplicaMigrationLedger(options.source);
+      const parity = await buildMigrationParityReport({
+        source: options.source,
+        migrationRoot: options.migrationRoot,
+        dbId: options.dbId,
+      });
+      return {
+        ...base,
+        ledgerDeduped: removed,
         parity,
         syncStatus: await syncStatusForLinkedDb(options.source),
       };

@@ -17,10 +17,20 @@ vi.mock("../src/core/tools/paprClient.js", () => ({
 }));
 
 vi.mock("../src/gateway/utils/paprUserId.js", () => ({
-  paprUserScope: vi.fn(() => ({ external_user_id: "user-test-1" })),
+  paprUserScope: vi.fn(() => ({
+    user_id: "user-test-1",
+    external_user_id: "user-test-1",
+  })),
   getPaprUserId: vi.fn(() => "user-test-1"),
   getPaprCallerIdentity: vi.fn(() => ({ userId: "user-test-1" })),
   invalidatePaprUserIdCache: vi.fn(),
+}));
+
+vi.mock("../src/gateway/utils/memoryScopeResolver.js", () => ({
+  paprMemorySearchScopeSpread: vi.fn(async () => ({
+    user_id: "user-test-1",
+    external_user_id: "user-test-1",
+  })),
 }));
 
 /**
@@ -139,6 +149,7 @@ describe("papr memory feedback", () => {
     await vi.waitFor(() => {
       expect(mockFeedbackSubmit).toHaveBeenCalledWith({
         search_id: "search-empty",
+        user_id: "user-test-1",
         external_user_id: "user-test-1",
         feedbackData: {
           feedbackSource: "inline",
@@ -160,6 +171,7 @@ describe("papr memory feedback", () => {
 
     expect(mockFeedbackSubmit).toHaveBeenCalledWith({
       search_id: "search-good",
+      user_id: "user-test-1",
       external_user_id: "user-test-1",
       feedbackData: {
         feedbackSource: "inline",

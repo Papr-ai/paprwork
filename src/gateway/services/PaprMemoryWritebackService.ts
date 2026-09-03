@@ -5,8 +5,7 @@
 import Papr from "@papr/memory";
 import { handlePaprToolError } from "../../core/tools/paprClient.js";
 import { getApiKey } from "../utils/keyResolver.js";
-import { paprMemoryScopeSpread } from "../utils/memoryScopeResolver.js";
-import { resolveTrustedPaprUserId } from "../utils/paprUserId.js";
+import { paprMemoryScopeSpread, withMemoryScopeMetadata } from "../utils/memoryScopeResolver.js";
 import type { JobMemoryPolicy } from "./jobs/types.js";
 
 export interface MemoryWritebackInput {
@@ -47,28 +46,24 @@ export async function writeRunMemory(
     const memoryScope = await paprMemoryScopeSpread({
       chatId: input.chatId,
     });
-    // input.userId is caller-supplied. The Papr API key is scoped to
-    // org + namespace (not to a person), so trusting it verbatim would let any
-    // key holder write memories owned by an arbitrary Papr account. Accept it
-    // only when it matches the locally authenticated user.
-    const trustedUserId = resolveTrustedPaprUserId(input.userId);
     await client.memory.add({
       content: compactContent(input),
-      ...(trustedUserId && !memoryScope.user_id
-        ? { user_id: trustedUserId }
-        : memoryScope),
-      metadata: {
-        category: "learning",
-        role: "assistant",
-        customMetadata: {
-          sourceAgentId: input.sourceAgentId,
-          sourceAgentName: input.sourceAgentName,
-          runId: input.runId,
-          jobId: input.jobId,
-          ...(input.chatId ? { chatId: input.chatId } : {}),
-          writebackPolicy: input.policy,
+      ...memoryScope,
+      metadata: withMemoryScopeMetadata(
+        {
+          category: "learning",
+          role: "assistant",
+          customMetadata: {
+            sourceAgentId: input.sourceAgentId,
+            sourceAgentName: input.sourceAgentName,
+            runId: input.runId,
+            jobId: input.jobId,
+            ...(input.chatId ? { chatId: input.chatId } : {}),
+            writebackPolicy: input.policy,
+          },
         },
-      },
+        memoryScope,
+      ),
     });
   } catch (error) {
     if (error instanceof Papr.AuthenticationError) {

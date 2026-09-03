@@ -166,6 +166,8 @@ When a backend handler must **read or write** linked SQLite/Turso databases:
 
 > **Cloud (automatic, ready):** Synced apps auto-publish to `apps.papr.ai`. Use **`attach_database`** / `link_app_data_source` so `data-sources.json` exists (required for cloud `/api/db/*`). `/api/db/*` and `/api/jobs/run` work on cloud; **`window.paprAPI` is desktop-only**. **Never use `/tmp` file IPC between jobs and mini-apps** — use `writeDbIds` + `/api/db/*` with `sourceId` and job `params` instead. See APP_AND_JOBS_GUIDE.md § Mini-app ↔ job communication.
 
+> **Published app Run now:** `POST /api/jobs/run` on `apps.papr.ai` runs in the **cloud sandbox** — desktop can be asleep. Requires synced job code + vault keys. **Scheduled jobs** when desktop heartbeat is stale may show `pendingCloudRuns` — that path may need Paprwork awake. Do not conflate the two when debugging.
+
 ---
 
 ## Job Resilience Quick Reference

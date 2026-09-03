@@ -6,6 +6,7 @@
  */
 
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
+import { buildPaprMemoryUserIdentity } from "./paprMemoryUserIdentity.js";
 
 export type MemoryAudience = "user" | "namespace" | "org";
 
@@ -16,19 +17,15 @@ export interface MemoryScopeContext {
 }
 
 export interface MemoryScopeFields {
-  /**
-   * Real Papr _User.objectId of the acting user.
-   * Sent as `user_id` — NOT `external_user_id`, which would make the memory
-   * server mint an anonymous shadow DeveloperUser for a real Papr account.
-   */
   user_id?: string;
+  external_user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }
 
 export interface MemorySearchScopeFields {
-  /** Real Papr _User.objectId of the acting user. */
   user_id?: string;
+  external_user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }
 
@@ -42,6 +39,13 @@ export function resolveMemoryAudience(input: {
 
 function userWriteAcl(userId: string): string[] {
   return [`user:${userId}`];
+}
+
+function withUserIdentity(userId: string): Pick<
+  MemoryScopeFields,
+  "user_id" | "external_user_id"
+> {
+  return buildPaprMemoryUserIdentity(userId);
 }
 
 export function buildMemoryScopeFields(
@@ -58,7 +62,7 @@ export function buildMemoryScopeFields(
 
   if (audience === "namespace" && namespaceId) {
     return {
-      user_id: userId,
+      ...withUserIdentity(userId),
       namespace_id: namespaceId,
       policy: {
         acl: {
@@ -71,7 +75,7 @@ export function buildMemoryScopeFields(
 
   if (audience === "org" && organizationId) {
     return {
-      user_id: userId,
+      ...withUserIdentity(userId),
       namespace_id: namespaceId,
       policy: {
         acl: {
@@ -82,7 +86,7 @@ export function buildMemoryScopeFields(
     };
   }
 
-  return { user_id: userId };
+  return withUserIdentity(userId);
 }
 
 export function buildMemorySearchScopeFields(
@@ -95,19 +99,19 @@ export function buildMemorySearchScopeFields(
 
   if (audience === "namespace" && namespaceId) {
     return {
-      ...(userId ? { user_id: userId } : {}),
+      ...(userId ? withUserIdentity(userId) : {}),
       search_acl: { read: [`namespace:${namespaceId}`] },
     };
   }
 
   if (audience === "org" && organizationId) {
     return {
-      ...(userId ? { user_id: userId } : {}),
+      ...(userId ? withUserIdentity(userId) : {}),
       search_acl: { read: [`organization:${organizationId}`] },
     };
   }
 
-  return userId ? { user_id: userId } : {};
+  return userId ? withUserIdentity(userId) : {};
 }
 
 export function mergeMemoryAddPolicy(

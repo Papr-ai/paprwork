@@ -49,8 +49,6 @@ function mapMemberForAgent(member: WorkspaceMember): NamespaceUserForAgent {
     email: member.user.email,
     displayName: member.user.displayName,
     role: member.user.role,
-    // Namespace members are real Papr accounts, so share via user: principals
-    // (maps to user_read_access, which the search ACL filter evaluates).
     memoryReadPrincipal: toUserPrincipal(externalUserId),
   };
 }
@@ -85,7 +83,7 @@ export async function listNamespaceUsersForAgent(): Promise<ListNamespaceUsersRe
     organizationId,
     recorderExternalUserId,
     aclHints: {
-      externalUser: "user:{Parse objectId}",
+      externalUser: "external_user:{Parse objectId}",
       ...(namespaceId
         ? { namespace: toNamespacePrincipal(namespaceId) }
         : {}),

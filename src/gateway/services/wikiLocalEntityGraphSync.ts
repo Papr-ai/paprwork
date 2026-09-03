@@ -6,7 +6,11 @@
 import type Papr from "@papr/memory";
 import { getPaprClient } from "../../core/tools/paprClient.js";
 import { buildAddPolicy } from "../utils/paprMemoryPolicy.js";
-import { buildPaprMemoryWriteScope } from "../utils/memoryScopeResolver.js";
+import {
+  buildPaprMemoryWriteScope,
+  withMemoryScopeMetadata,
+} from "../utils/memoryScopeResolver.js";
+import { spreadMemoryScopeUserIdentity } from "../../core/utils/paprMemoryUserIdentity.js";
 import { resolveWorkspaceContextSchemaId } from "../utils/workspaceContextSchema.js";
 
 type GraphEntityLabel = "Person" | "Company" | "Project";
@@ -122,23 +126,24 @@ export async function syncLocalWikiEntityToGraph(
       ]
         .filter(Boolean)
         .join("\n"),
-      ...(memoryScope.user_id
-        ? { user_id: memoryScope.user_id }
-        : {}),
+      ...spreadMemoryScopeUserIdentity(memoryScope),
       ...(memoryScope.namespace_id
         ? { namespace_id: memoryScope.namespace_id }
         : {}),
       ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
-      metadata: {
-        role: "assistant",
-        category: "context",
-        customMetadata: {
-          content_type: "wiki_entity_sync",
-          wiki_entity_id: nodeId,
-          wiki_entity_type: singular,
-          ...(input.appId ? { app_id: input.appId } : {}),
+      metadata: withMemoryScopeMetadata(
+        {
+          role: "assistant",
+          category: "context",
+          customMetadata: {
+            content_type: "wiki_entity_sync",
+            wiki_entity_id: nodeId,
+            wiki_entity_type: singular,
+            ...(input.appId ? { app_id: input.appId } : {}),
+          },
         },
-      },
+        memoryScope,
+      ),
     });
 
     console.log(`[Wiki] Graph sync: ${nodeId} → ${graphLabel}`);

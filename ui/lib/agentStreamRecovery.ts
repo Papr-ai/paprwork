@@ -80,6 +80,25 @@ export function assistantMessageHasContent(message: ChatMessage): boolean {
   return false;
 }
 
+/**
+ * Whether a late `done` / `agent:complete` chunk should be skipped.
+ * Only ignore when the server-assigned message is already in the UI — not merely
+ * because an older assistant message exists (that blocked new responses).
+ */
+export function shouldIgnoreDuplicateDoneChunk(args: {
+  finalMessageId: string;
+  messages: ChatMessage[];
+  hasActiveStreamingMessageId: boolean;
+  isSending: boolean;
+}): boolean {
+  if (args.hasActiveStreamingMessageId || args.isSending) {
+    return false;
+  }
+  return args.messages.some(
+    (m) => m.id === args.finalMessageId && !m.isStreaming,
+  );
+}
+
 /** True when the last visible user turn has no completed assistant response */
 export function lastUserTurnNeedsContinue(messages: ChatMessage[]): boolean {
   for (let i = messages.length - 1; i >= 0; i--) {
@@ -177,6 +196,36 @@ export function serverHasCompletedAssistantForStreamingTurn(
     .some((m) => m.role === "assistant" && !m.isStreaming);
 }
 
+function upgradeAssistantFromServer(
+  local: ChatMessage,
+  serverMsg: ChatMessage,
+): ChatMessage {
+  const localRichness =
+    (local.sequence?.length ?? 0) + (local.toolCalls?.length ?? 0);
+  const serverRichness =
+    (serverMsg.sequence?.length ?? 0) + (serverMsg.toolCalls?.length ?? 0);
+  const shouldUpgrade =
+    serverRichness > localRichness ||
+    (!local.sequence?.length && !!serverMsg.sequence?.length) ||
+    (!local.toolCalls?.length && !!serverMsg.toolCalls?.length);
+
+  if (!shouldUpgrade) {
+    return {
+      ...local,
+      isStreaming: false,
+      streamingContent: undefined,
+      streamingReasoning: undefined,
+    };
+  }
+
+  return {
+    ...serverMsg,
+    isStreaming: false,
+    streamingContent: undefined,
+    streamingReasoning: undefined,
+  };
+}
+
 export function mergeHistoryWithLocal(
   localMessages: ChatMessage[],
   serverMessages: ChatMessage[],
@@ -194,59 +243,99 @@ export function mergeHistoryWithLocal(
     base = localMessages.filter((m) => m.id !== streamingMessageId);
   }
 
-  const localIds = new Set(base.map((m) => m.id));
-  const merged = [...base];
+  const merged: ChatMessage[] = [];
+  const consumedLocalIds = new Set<string>();
 
+  // Server list is chronological — walk it so missing middle turns land in order.
   for (const serverMsg of serverMessages) {
-    if (localIds.has(serverMsg.id)) continue;
+    const localById = base.find((m) => m.id === serverMsg.id);
+    if (localById) {
+      merged.push(
+        localById.role === "assistant"
+          ? upgradeAssistantFromServer(localById, serverMsg)
+          : localById,
+      );
+      consumedLocalIds.add(localById.id);
+      continue;
+    }
 
     if (serverMsg.role === "user") {
-      const localIdx = merged.findIndex(
+      const localDup = base.find(
         (m) =>
           m.role === "user" &&
+          !consumedLocalIds.has(m.id) &&
           m.content.trim() === serverMsg.content.trim(),
       );
-      if (localIdx >= 0) {
-        const local = merged[localIdx];
-        if (
-          serverMsg.attachments?.length &&
-          !local.attachments?.length
-        ) {
-          merged[localIdx] = {
-            ...local,
-            attachments: serverMsg.attachments,
-          };
-        }
+      if (localDup) {
+        merged.push({
+          ...localDup,
+          ...(serverMsg.attachments?.length && !localDup.attachments?.length
+            ? { attachments: serverMsg.attachments }
+            : {}),
+        });
+        consumedLocalIds.add(localDup.id);
         continue;
       }
     }
 
     if (serverMsg.role === "assistant") {
-      const duplicateAssistant = merged.some(
+      const localDup = base.find(
         (m) =>
           m.role === "assistant" &&
           !m.isStreaming &&
+          !consumedLocalIds.has(m.id) &&
           m.content.trim() === serverMsg.content.trim() &&
           serverMsg.content.trim().length > 0,
       );
-      if (duplicateAssistant) continue;
+      if (localDup) {
+        merged.push(upgradeAssistantFromServer(localDup, serverMsg));
+        consumedLocalIds.add(localDup.id);
+        continue;
+      }
     }
 
     merged.push(serverMsg);
-    localIds.add(serverMsg.id);
+  }
+
+  // Optimistic user sends + in-flight streaming placeholders not on server yet.
+  for (const localMsg of base) {
+    if (consumedLocalIds.has(localMsg.id)) continue;
+    merged.push(localMsg);
   }
 
   return merged;
 }
 
-/** True when chat has an active or interrupted stream worth preserving */
+/**
+ * True when a live stream is in flight and applying server history would wipe
+ * partial UI state. Does NOT treat needsStreamRecovery as blocking — recovery
+ * mode needs a server reload to repopulate missing assistant turns.
+ */
+export function chatHasLiveStreamBlockingHistory(chatId: string): boolean {
+  const chatState = useChatStore.getState().chatStates.get(chatId);
+  if (!chatState) return false;
+
+  const hasActiveRequest =
+    activeStreamRequests.has(chatId) || isResumingStream(chatId);
+
+  if (chatState.isSending && hasActiveRequest) return true;
+  if (hasActiveRequest && chatState.connectionPaused === true) return true;
+  if (
+    hasActiveRequest &&
+    chatState.messages.some((m) => m.isStreaming) === true
+  ) {
+    return true;
+  }
+
+  return false;
+}
+
+/** True when chat has an active or interrupted stream worth preserving in UI */
 export function chatHasActiveStreamUi(chatId: string): boolean {
   const chatState = useChatStore.getState().chatStates.get(chatId);
   if (!chatState) return false;
   return (
-    activeStreamRequests.has(chatId) ||
-    chatState.isSending ||
-    chatState.connectionPaused === true ||
+    chatHasLiveStreamBlockingHistory(chatId) ||
     chatState.needsStreamRecovery === true ||
     chatState.messages.some((m) => m.isStreaming) === true
   );

@@ -37,6 +37,24 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 
 ---
 
+## Q: Published app "Run now" — does desktop need to be awake?
+
+**No.** When a visitor or owner clicks **Run now** in a published mini-app (or share link), the app calls `POST /api/jobs/run` on **Cloud App Host** (`apps.papr.ai`). That runs python/node/bash/agent jobs in a **cloud sandbox** — same job types as desktop, different runtime.
+
+| Requirement | Why |
+|-------------|-----|
+| Job code in **per-app GitHub repo** (`jobs/{jobId}/`) | Cloud reads from synced repo, not local `$PAPR_HOME/Jobs/` |
+| Integration keys in **cloud vault** | Desktop keychain is unavailable when Mac is asleep |
+| Job not `local-only` / LinkedIn CDP | Requires desktop browser session |
+
+**Do not** tell users to wake Paprwork for published-app Run now failures — debug with `inspect_cloud_repo`, vault/catalog keys, and `query_cloud_turso`.
+
+**Different path — scheduled jobs:** Memory scheduler + `desktopHeartbeat` / `pendingCloudRuns` applies when **cron/interval** jobs defer to desktop or queue while asleep. See scheduler section below.
+
+**Bulk DB from mini-apps (desktop + cloud):** `POST /api/db/batch` = reads only; `POST /api/db/write-batch` = up to 25 writes (optional `atomic: true`). Same endpoints on `apps.papr.ai`.
+
+---
+
 ## Q: Do users/agents need to do anything for cloud agent jobs?
 
 **Mostly no — per run.** Once infrastructure is wired:

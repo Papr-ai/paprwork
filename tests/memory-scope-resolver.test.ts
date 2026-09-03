@@ -56,6 +56,7 @@ describe("memoryScopeResolver chat scope", () => {
     const { buildPaprMemoryWriteScope } = await loadResolver();
     const scope = await buildPaprMemoryWriteScope({ chatId: "chat-no-scope" });
     expect(scope.user_id).toBe("user-1");
+    expect(scope.external_user_id).toBe("user-1");
     expect(scope.policy?.acl?.read).toBeUndefined();
   });
 

@@ -1,18 +1,9 @@
 /**
  * Papr Memory ACL helpers.
  *
- * Paprwork users ARE real Papr accounts, so we send Parse _User.objectId as
- * `user_id` (not `external_user_id`). Sending it as external_user_id makes the
- * memory server mint an anonymous shadow DeveloperUser, which splits one human
- * into several identities and breaks feedback authorization.
- *
- * ACL principals therefore use the `user:{objectId}` prefix, which maps to
- * user_read_access / user_write_access — the fields the search filter actually
- * evaluates. `external_user:` maps to external_user_read_access, which is NOT
- * part of the ACL OR-branch (that filter is commented out server-side).
- *
- * `external_user_id` remains supported by the memory server for third-party SDK
- * developers whose end users have no Papr account. It is not used by Paprwork.
+ * Paprwork users are real Papr accounts — use Parse _User.objectId with the
+ * `user:{objectId}` principal prefix for ACL fields the search filter indexes.
+ * Also send `user_id` + `external_user_id` on request bodies (dual-send).
  */
 
 import type { MemoryAddPolicy } from "@papr/memory/resources/shared.js";
@@ -25,7 +16,7 @@ export const ORGANIZATION_PRINCIPAL_PREFIX = "organization:" as const;
 const PRINCIPAL_PATTERN =
   /^(user|external_user|namespace|organization):[A-Za-z0-9_-]+$/;
 
-/** Strip a `user:` / `external_user:` prefix if a full principal was pasted. */
+/** Strip `user:` / `external_user:` prefix if a full principal was pasted. */
 export function normalizeExternalUserId(value: string): string {
   const trimmed = value.trim();
   if (trimmed.startsWith(EXTERNAL_USER_PRINCIPAL_PREFIX)) {
@@ -37,10 +28,6 @@ export function normalizeExternalUserId(value: string): string {
   return trimmed;
 }
 
-/**
- * Build a `user:{objectId}` principal for a real Papr account.
- * Accepts a bare objectId or an already-prefixed principal.
- */
 export function toUserPrincipal(userId: string): string {
   const id = normalizeExternalUserId(userId);
   if (!id) {
@@ -49,10 +36,7 @@ export function toUserPrincipal(userId: string): string {
   return `${USER_PRINCIPAL_PREFIX}${id}`;
 }
 
-/**
- * Build an `external_user:{id}` principal.
- * Retained for third-party SDK end users; Paprwork uses toUserPrincipal.
- */
+/** Third-party SDK end users; Paprwork uses toUserPrincipal for real accounts. */
 export function toExternalUserPrincipal(externalUserId: string): string {
   const id = normalizeExternalUserId(externalUserId);
   if (!id) {
@@ -150,7 +134,6 @@ export function buildExplicitReadPrincipals(
   return dedupeReadPrincipals(read);
 }
 
-/** Writer keeps write access via their real Papr account principal. */
 export function buildWriterWriteAcl(writerUserId: string): string[] {
   return [toUserPrincipal(writerUserId)];
 }
@@ -159,8 +142,7 @@ export function buildWriterWriteAcl(writerUserId: string): string[] {
 export function applyExplicitReadAclToPolicy(
   basePolicy: MemoryAddPolicy | undefined,
   input: {
-    /** Real Papr _User.objectId of the acting user. */
-    writerExternalUserId: string;
+    writerUserId: string;
     explicitRead: ExplicitMemoryReadAclInput;
   },
 ): MemoryAddPolicy {
@@ -174,7 +156,7 @@ export function applyExplicitReadAclToPolicy(
     acl: {
       ...(basePolicy?.acl ?? {}),
       read,
-      write: buildWriterWriteAcl(input.writerExternalUserId),
+      write: buildWriterWriteAcl(input.writerUserId),
     },
   };
 }

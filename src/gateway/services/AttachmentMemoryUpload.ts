@@ -63,9 +63,7 @@ export async function uploadAttachmentToMemory(
 
   const response = await client.document.upload({
     file: createReadStream(resolvedPath),
-    ...(memoryScope.user_id
-      ? { user_id: memoryScope.user_id }
-      : {}),
+    ...memoryScope,
     ...(memoryScope.namespace_id ? { namespace_id: memoryScope.namespace_id } : {}),
     ...(memoryScope.policy
       ? { policy: JSON.stringify(memoryScope.policy) }
