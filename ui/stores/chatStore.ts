@@ -17,6 +17,13 @@ import type { MemoryAudience } from "../constants/memoryScope";
 import type { ToolCall } from "../types/core";
 import { gateway } from "../src/lib/gateway";
 import { trackEvent } from "../lib/telemetry";
+import {
+  readChatModel,
+  readNewChatDefaultModel,
+  renameChatModel,
+  writeChatModel,
+  writeNewChatDefaultModel,
+} from "../utils/chatModelMemory";
 
 // Re-export types for backward compatibility
 export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem, MessageAttachment };
@@ -79,7 +86,10 @@ interface ChatStore {
 
   // Model selection per chat
   setLastSelectedModel: (chatId: string, modelId: string) => void;
+  /** The model this chat is on, or undefined — never another chat's model. */
   getLastSelectedModel: (chatId: string) => string | undefined;
+  /** Seed for chats with no history of their own. */
+  getDefaultModelForNewChat: () => string | undefined;
 
   // ──────────────────────────────────────────────────────────────────────
   // Live streaming slice (ephemeral, separate from chatStates.messages)
@@ -291,6 +301,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   migrateChatId: (oldChatId, newChatId) =>
     set((state) => {
       if (oldChatId === newChatId) return state;
+
+      // Carry the persisted model across the rename, or the chat loses it the
+      // moment its first message gives it a permanent id.
+      renameChatModel(oldChatId, newChatId);
 
       const oldState = state.chatStates.get(oldChatId);
       const newChatStates = new Map(state.chatStates);
@@ -555,32 +569,34 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         } catch { /* ignore */ }
       }
 
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.setItem("paprwork_last_model_id", modelId);
-          // Also save to Gateway settings for reliable persistence
-          gateway.send('settings:save-ui-preferences', { lastModelId: modelId }).catch(() => {});
-        } catch {
-          /* ignore */
-        }
+      // Two separate facts: this chat is on this model, and a new chat should
+      // start here. Keeping them apart is what stops one chat's pick from
+      // becoming another chat's model.
+      writeChatModel(chatId, modelId);
+      writeNewChatDefaultModel(modelId);
+      try {
+        gateway
+          .send("settings:save-ui-preferences", { lastModelId: modelId })
+          .catch(() => {});
+      } catch {
+        /* ignore */
       }
       return { chatStates: newChatStates };
     }),
 
+  /**
+   * The model *this* chat is on — never another chat's. Returns undefined when
+   * the chat has no selection of its own; callers decide what to fall back to
+   * (see ChatContainer, which prefers the chat's own history over any global).
+   */
   getLastSelectedModel: (chatId) => {
-    const state = get();
-    const fromChat = state.chatStates.get(chatId)?.lastSelectedModelId;
+    const fromChat = get().chatStates.get(chatId)?.lastSelectedModelId;
     if (fromChat) return fromChat;
-    if (typeof window !== "undefined") {
-      try {
-        const persisted = localStorage.getItem("paprwork_last_model_id");
-        if (persisted) return persisted;
-      } catch {
-        /* ignore */
-      }
-    }
-    return undefined;
+    return readChatModel(chatId);
   },
+
+  /** What a brand-new chat should open on: the last model picked anywhere. */
+  getDefaultModelForNewChat: () => readNewChatDefaultModel(),
 
   // Load UI preferences from settings (called on app mount)
   loadUIPreferences: async () => {

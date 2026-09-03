@@ -4887,6 +4887,26 @@ Head-of-line blocking with a poison pill at the front: the queue could only grow
 **Prevention:** A turn-end policy needs a third option. "Summarize and stop" and "do nothing" both end the turn, so with only those two the gateway cannot represent "keep going" — and a terminal prompt asserting completion must never be sent without checking whether the work is actually complete.
 **Related:** Issue 30 (GPT-5.4 duplicate plans — tool-level enforcement), Issue 49 (send button stuck), Enhancement 17 (GPT-5.4 context limit)
 **See:** `docs/PLAN_AWARE_TURN_CONTINUATION.md`
+### Issue 74: Model Selection Leaking Across Chats ✅ FIXED
+**Added:** 2026-09-03
+**Problem:** Returning to an Opus 5 chat showed — and ran — Claude Fable 5.1, in a chat where Fable had never been used. Not cosmetic: the picker value is sent as `config.model`, so the wrong model answered.
+**Evidence:** In one real chat, 32 assistant turns ran on `claude-opus-5` and 2 on `claude-fable-5`, *interleaved* rather than appended (so not a user switching midway). Across 30 days, 16 of 288 chats had more than one model answer, including cross-provider pairs like `claude-opus-5` + `gpt-5-6-sol-high`.
+**Root Cause:** `getLastSelectedModel(chatId)` fell through to a single global `localStorage["paprwork_last_model_id"]` when the chat had no in-memory entry — returning **another chat's** model. Per-chat selection lived only in a Zustand map with no `persist`, so three ordinary events emptied it: app restart, `resetForWorkspaceSwitch()`, and any chat that never touched the picker (`defaultChatState` omits `lastSelectedModelId`). Chat tabs also unmount on switch-away, so every return re-ran hydration and re-read the global.
+**Solution:** Separate the two conflated questions. "Which model is *this chat* on" is now persisted per `chatId` (bounded, LRU); "which model should a *new chat* start on" stays global, because there that is correct. Precedence: this chat's explicit pick → the model that last answered **in this chat** (from `messages.model`, server-side truth, no schema change) → global (**new chats only**) → app defaults. `hasHistory` comes from `messageCount`, so a reopened chat never flashes another chat's model while history loads.
+**Files Created:**
+- `ui/utils/chatModelMemory.ts` — durable per-chat store with rename/forget
+- `ui/utils/resolveChatModel.ts` — pure precedence rule + history lookup
+- `tests/chat-model-scoping.test.ts` — 21 tests
+- `docs/PER_CHAT_MODEL_SCOPING.md` — complete documentation
+**Files Changed:**
+- `ui/stores/chatStore.ts` — global fallback removed; `getDefaultModelForNewChat` added; selection carried across temp→permanent id rename
+- `ui/components/Chat/ChatContainer.tsx` — hydration uses the precedence rule
+- `ui/utils/historyMapper.ts`, `ui/types/chat.ts` — carry `model` per message
+- `ui/hooks/useChat.ts` — forget a deleted chat's model
+- `ui/App.tsx` — boot seeds the new-chat default, not per-chat state
+**Prevention:** A read for a specific key must not fall back to a global value — returning *something* looks robust but silently answers a question that was not asked. If per-entity state is worth reading after a restart, persist it per entity; an in-memory map plus a global fallback degrades into the global on every restart.
+**Related:** Fable 5.1 producing no output at all is a separate defect (AI SDK v6 `maxOutputTokens` rename + Anthropic `display: "summarized"` adaptive thinking) — see PR #140.
+**See:** `docs/PER_CHAT_MODEL_SCOPING.md`
 
 ---
 
