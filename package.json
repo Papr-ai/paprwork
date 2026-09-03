@@ -194,7 +194,7 @@
     "@google-cloud/pubsub": "^5.2.0",
     "@libsql/client": "^0.14.0",
     "@mariozechner/pi-ai": "^0.64.0",
-    "@mastra/core": "^1.4.0",
+    "@mastra/core": "^1.64.0",
     "@papr/memory": "^2.7.0",
     "@tiptap/extension-bubble-menu": "^3.19.0",
     "@tiptap/extension-placeholder": "^3.19.0",
