@@ -452,6 +452,7 @@ function buildSummaryLine(opts: {
   lastUploadedAt: string | null;
   publishStatus?: AppCloudPublishStatus;
   publishDetail?: string | null;
+  publishNotConfigured?: boolean;
   gitRemoteRequiresReview?: boolean;
   gitRemoteMetadataSync?: boolean;
   uploadLabel?: string | null;
@@ -471,6 +472,7 @@ function buildSummaryLine(opts: {
     lastUploadedAt,
     publishStatus,
     publishDetail,
+    publishNotConfigured,
     gitRemoteRequiresReview,
     gitRemoteMetadataSync,
     uploadLabel,
@@ -531,6 +533,13 @@ function buildSummaryLine(opts: {
   if (parts.length === 0) {
     if (overall === "synced") {
       const relative = formatLastUploadedAt(lastUploadedAt);
+      // Uploaded but never published: say so, so "synced" is not misread as
+      // "shared with people".
+      if (publishNotConfigured) {
+        return relative
+          ? `Uploaded ${relative} · not shared yet`
+          : "Uploaded to your private cloud repo · not shared yet";
+      }
       return relative
         ? `Last uploaded ${relative}`
         : "Everything for this app matches the web";
@@ -836,12 +845,18 @@ export function deriveAppCloudSyncStatus(
   const publishDetail = items.publish?.detail ?? null;
   const publishLabel = publishDetailLabel(publishStatus, publishDetail);
   const cloudPublishing = publishStatus === "republishing";
+  // Never published: there is no web layer to keep in sync, so publish state
+  // must not hold the app at "needs sync". Upload now puts code in the cloud
+  // repo; publishing is a separate, explicit action.
+  const publishNotConfigured = !publishLive && publishedAt == null;
   const publishLayerSynced =
-    publishLive && publishStatus === "synced" && !cloudPublishing;
+    publishNotConfigured ||
+    (publishLive && publishStatus === "synced" && !cloudPublishing);
   const publishBlocksWeb =
-    publishStatus === "drift" ||
-    publishStatus === "error" ||
-    (publishStatus === "not_web_ready" && !publishLive);
+    !publishNotConfigured &&
+    (publishStatus === "drift" ||
+      publishStatus === "error" ||
+      (publishStatus === "not_web_ready" && !publishLive));
 
   const uploadStatus = items.upload?.status;
   const uploadLabel = items.upload?.label ?? null;
@@ -1001,6 +1016,7 @@ export function deriveAppCloudSyncStatus(
           lastUploadedAt,
           publishStatus,
           publishDetail,
+          publishNotConfigured,
           gitRemoteRequiresReview,
           gitRemoteMetadataSync,
           uploadLabel,
