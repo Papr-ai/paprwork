@@ -683,6 +683,17 @@ export async function* createPiCodexStreamWithToolLoop(
 
               if (event.reason === "toolUse") continue;
 
+              // Anthropic can hit maxTokens mid-turn after streaming complete tool_use
+              // blocks. Do not yield finish here — orchestrator would terminate and
+              // orphan them. shouldDrainOrphanedTools executes pending calls below.
+              if (event.reason === "length" && toolCallsThisTurn.length > 0) {
+                console.warn(
+                  `[PiCodexToolLoop] ⚠️ Model hit maxTokens mid-turn with ${toolCallsThisTurn.length} pending tool call(s). ` +
+                    `Skipping finish yield; draining pending tools instead.`,
+                );
+                continue;
+              }
+
               const finishChunk = adaptPiStreamToAISDKEvent(
                 event,
                 accumulatedBilling,
