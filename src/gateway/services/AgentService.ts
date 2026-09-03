@@ -12,7 +12,7 @@
 import { resolvePaprUserDataPath } from "../../core/utils/paprWorkspace.js";
 import { v4 as uuidv4 } from "uuid";
 import { streamText, generateObject, jsonSchema } from "ai";
-import type { LanguageModel, ToolSet, StepResult } from "ai";
+import type { LanguageModel, ModelMessage, ToolSet, StepResult } from "ai";
 import { ToolRegistry } from "../../core/agents/ToolRegistry.js";
 import {
   initializeMemorySearchGate,
@@ -1738,6 +1738,32 @@ export class AgentService {
           maxSteps,
           piHistoryTrimBounds,
           piToolContext,
+          // Resume the loop when the model stops with plan work outstanding.
+          async (stopInfo) => {
+            const { decideTurnEnd, buildPlanContinuationNudge } = await import(
+              "./agent/turnContinuation.js"
+            );
+            const planState = await this.loadPendingPlanState(chatId);
+            const decision = decideTurnEnd({
+              pendingPlanSteps: planState.pendingSteps,
+              trailingText: stopInfo.trailingText,
+              endsOnToolWithoutText: stopInfo.trailingText.trim().length === 0,
+              toolCallCount: stopInfo.totalToolCalls,
+              aborted: abortController.signal.aborted,
+              hasInterruptedTools: false,
+              continuationsUsed: stopInfo.continuationsUsed,
+            });
+            if (decision.action !== "continue") {
+              return null;
+            }
+            return {
+              nudge: buildPlanContinuationNudge({
+                pendingSteps: planState.pendingSteps,
+                nextStepDescription: planState.nextStepDescription,
+              }),
+              pendingSteps: planState.pendingSteps,
+            };
+          },
         );
         piWrapUpContext = piContext;
         piWrapUpDeps = {
@@ -2055,18 +2081,142 @@ export class AgentService {
         return;
       }
 
+      // pi-ai resumes a stopped-mid-plan turn inside its own tool loop. The AI
+      // SDK route has no in-loop hook, so resume here instead. Plan state is
+      // re-read each attempt, so finishing the plan ends the loop immediately.
+      if (
+        !usePiAi &&
+        aiSdkStreamResult &&
+        !abortController.signal.aborted &&
+        !options?._isWrapUpContinuation
+      ) {
+        const {
+          decideTurnEnd,
+          buildPlanContinuationNudge,
+          trailingTextAfterLastTool,
+          MAX_PLAN_CONTINUATIONS_PER_TURN,
+        } = await import("./agent/turnContinuation.js");
+        const { runAiSdkPlanContinuation, mergeContinuationIntoState } =
+          await import("./agent/wrapUpContinuation.js");
+
+        // Widened from the SDK's narrower assistant|tool response type so the
+        // continuation's own messages can be threaded back in.
+        let continuationMessages: ModelMessage[] = (
+          await aiSdkStreamResult.response
+        ).messages;
+
+        for (
+          let attempt = 0;
+          attempt < MAX_PLAN_CONTINUATIONS_PER_TURN;
+          attempt++
+        ) {
+          const planState = await this.loadPendingPlanState(chatId);
+          const decision = decideTurnEnd({
+            pendingPlanSteps: planState.pendingSteps,
+            trailingText: trailingTextAfterLastTool(sequence),
+            endsOnToolWithoutText:
+              sequenceEndsWithToolWithoutTrailingText(sequence),
+            toolCallCount: toolCalls.length,
+            aborted: abortController.signal.aborted,
+            hasInterruptedTools: false,
+            continuationsUsed: attempt,
+          });
+
+          if (decision.action !== "continue") {
+            break;
+          }
+
+          console.warn(
+            `[TurnEnd:plan-continuation] ${JSON.stringify({
+              ts: new Date().toISOString(),
+              chatId,
+              route: "ai-sdk",
+              pendingSteps: planState.pendingSteps,
+              continuation: attempt + 1,
+            })}`,
+          );
+
+          try {
+            const continuationIterator = runAiSdkPlanContinuation({
+              messages: continuationMessages,
+              nudge: buildPlanContinuationNudge({
+                pendingSteps: planState.pendingSteps,
+                nextStepDescription: planState.nextStepDescription,
+              }),
+              streamTextOptions: streamTextOptions as {
+                model: LanguageModel;
+                [key: string]: unknown;
+              },
+              chatId,
+              apiKeys: getApiKeysForSanitization(),
+              provider: config.provider,
+              abortSignal: abortController.signal,
+            });
+
+            let continuationResult: Awaited<
+              ReturnType<typeof continuationIterator.next>
+            >["value"] = null;
+            while (true) {
+              const nextChunk = await continuationIterator.next();
+              if (nextChunk.done) {
+                continuationResult = nextChunk.value;
+                break;
+              }
+              yield nextChunk.value;
+            }
+
+            if (!continuationResult) {
+              break;
+            }
+
+            const merged = mergeContinuationIntoState(
+              { assistantText, thinkingText, toolCalls, toolResults, sequence },
+              continuationResult.state,
+            );
+            assistantText = merged.assistantText;
+            thinkingText = merged.thinkingText;
+            toolCalls = merged.toolCalls;
+            toolResults = merged.toolResults;
+            sequence = merged.sequence;
+            continuationMessages = continuationResult.messages;
+          } catch (continuationError) {
+            console.warn(
+              `[AgentService] Plan continuation failed for ${chatId}:`,
+              continuationError,
+            );
+            break;
+          }
+        }
+      }
+
       // After the assistant stream fully finishes: if the turn ended on tool(s)
       // without trailing user text, one text-only summary step for the user.
-      if (
-        shouldRequestWrapUpSummary({
-          sequence,
-          toolCallCount: toolCalls.length,
-          aborted: abortController.signal.aborted,
-          isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
-        })
-      ) {
+      //
+      // The wording depends on plan state. The default wrap-up asserts "this
+      // turn is complete"; sending that while steps are still pending reports
+      // unfinished work to the user as done, so pending steps switch it to an
+      // honest status request instead.
+      const { WRAP_UP_WITH_PLAN_INCOMPLETE } = await import(
+        "./agent/wrapUpContinuation.js"
+      );
+      const turnEndPlanState = await this.loadPendingPlanState(chatId);
+      const wrapUpNeeded = shouldRequestWrapUpSummary({
+        sequence,
+        toolCallCount: toolCalls.length,
+        aborted: abortController.signal.aborted,
+        isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+      });
+      const wrapUpMessage =
+        turnEndPlanState.pendingSteps > 0
+          ? WRAP_UP_WITH_PLAN_INCOMPLETE
+          : undefined;
+
+      if (wrapUpNeeded) {
         console.log(
-          `[AgentService] Running wrap-up summary for ${chatId} — tools completed without a user-facing reply`,
+          `[AgentService] Running wrap-up summary for ${chatId} — tools completed without a user-facing reply` +
+            (wrapUpMessage
+              ? ` (${turnEndPlanState.pendingSteps} plan step(s) still pending — asking for status, not completion)`
+              : ""),
         );
 
         yield {
@@ -2093,6 +2243,7 @@ export class AgentService {
               chatId,
               apiKeys: getApiKeysForSanitization(),
               abortSignal: abortController.signal,
+              wrapUpMessage,
             });
             while (true) {
               const wrapUpNext = await wrapUpIterator.next();
@@ -2113,6 +2264,7 @@ export class AgentService {
               apiKeys: getApiKeysForSanitization(),
               provider: config.provider,
               abortSignal: abortController.signal,
+              wrapUpMessage,
             });
             while (true) {
               const wrapUpNext = await wrapUpIterator.next();
@@ -2170,23 +2322,11 @@ export class AgentService {
           aborted: abortController.signal.aborted,
           isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
         });
-        let activePlanCount = 0;
-        let activePlanPendingSteps = 0;
-        try {
-          const { getPlanService } = await import("./PlanService.js");
-          const plans = await getPlanService().getActivePlansForChat(chatId);
-          activePlanCount = plans.length;
-          activePlanPendingSteps = plans.reduce(
-            (sum, plan) =>
-              sum +
-              plan.steps.filter(
-                (s) => s.status !== "completed" && s.status !== "skipped",
-              ).length,
-            0,
-          );
-        } catch {
-          // Plan lookup is best-effort for diagnostics only.
-        }
+        // Re-read: a continuation step may have completed steps since the
+        // pre-wrap-up snapshot.
+        const finalPlanState = await this.loadPendingPlanState(chatId);
+        const activePlanCount = finalPlanState.planCount;
+        const activePlanPendingSteps = finalPlanState.pendingSteps;
         logAgentTurnEnd({
           chatId,
           route: usePiAi ? "pi-ai" : "ai-sdk",
@@ -4485,6 +4625,38 @@ ${last15.substring(0, 8_000)}`;
     } catch (error) {
       console.warn("[AgentService] Failed to load active plans:", error);
       return undefined;
+    }
+  }
+
+  /**
+   * Unfinished plan work for this chat. Drives turn-end policy: a model that
+   * stops while steps are pending is usually mid-task, not done.
+   */
+  private async loadPendingPlanState(chatId: string): Promise<{
+    planCount: number;
+    pendingSteps: number;
+    nextStepDescription?: string;
+  }> {
+    try {
+      const { getPlanService } = await import("./PlanService.js");
+      const plans = await getPlanService().getActivePlansForChat(chatId);
+      const unfinished = plans.flatMap((plan) =>
+        plan.steps.filter(
+          (step) => step.status !== "completed" && step.status !== "skipped",
+        ),
+      );
+      // Prefer the step the model said it was working on.
+      const next =
+        unfinished.find((step) => step.status === "in_progress") ??
+        unfinished[0];
+      return {
+        planCount: plans.length,
+        pendingSteps: unfinished.length,
+        nextStepDescription: next?.description,
+      };
+    } catch {
+      // Best-effort: an unavailable PlanService must not change turn behavior.
+      return { planCount: 0, pendingSteps: 0 };
     }
   }
 

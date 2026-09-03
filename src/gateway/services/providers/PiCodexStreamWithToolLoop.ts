@@ -14,7 +14,11 @@
  */
 
 import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
-import { applyForcedTextOnlyWrapUpStep, WRAP_UP_AFTER_TOOLS_NO_TEXT } from "../agent/wrapUpContinuation.js";
+import {
+  applyForcedTextOnlyWrapUpStep,
+  applyPlanContinuationStep,
+  WRAP_UP_AFTER_TOOLS_NO_TEXT,
+} from "../agent/wrapUpContinuation.js";
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
@@ -373,6 +377,17 @@ export async function* createPiCodexStreamWithToolLoop(
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
   },
+  /**
+   * Consulted when the model stops on its own. Returning a nudge keeps the loop
+   * running with tools intact, which is how a turn that stopped mid-plan gets
+   * resumed. Owned by AgentService so this layer stays free of PlanService.
+   */
+  resolveModelStop?: (info: {
+    trailingText: string;
+    step: number;
+    totalToolCalls: number;
+    continuationsUsed: number;
+  }) => Promise<{ nudge: string; pendingSteps: number } | null>,
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
@@ -412,6 +427,10 @@ export async function* createPiCodexStreamWithToolLoop(
   let turnEndLogged = false;
   let lastModelFinishReason: string | null = null;
   let streamedTextChars = 0;
+
+  /** Text streamed during the current step — i.e. after the previous step's tools. */
+  let stepText = "";
+  let planContinuationsUsed = 0;
 
   const emitTurnEnd = (
     reason: PiTurnEndReason,
@@ -569,6 +588,7 @@ export async function* createPiCodexStreamWithToolLoop(
       toolCallsThisTurn.length = 0;
       lastFinishReason = null;
       finalMessage = null;
+      stepText = "";
 
       let capacityError: unknown | null = null;
       let shouldRetryCapacity = false;
@@ -732,6 +752,7 @@ export async function* createPiCodexStreamWithToolLoop(
               const delta = (chunk as { text?: string }).text;
               if (typeof delta === "string") {
                 streamedTextChars += delta.length;
+                stepText += delta;
               }
             }
             if (chunk) yield chunk;
@@ -1021,8 +1042,59 @@ export async function* createPiCodexStreamWithToolLoop(
         continue stepLoop;
       }
     } else {
-      // Model stopped without pending tools — turn is done; post-stream wrap-up
-      // in AgentService adds user text if the sequence ends on tool(s).
+      // Model stopped without pending tools. If an active plan still has
+      // pending steps this is usually a stop mid-work, not a finished turn —
+      // resume the loop (tools intact) instead of ending. Bounded by
+      // MAX_PLAN_CONTINUATIONS_PER_TURN in the resolver.
+      if (
+        resolveModelStop &&
+        lastFinishReason !== "length" &&
+        !textOnlyWrapUpStepUsed &&
+        !streamOptions.signal?.aborted &&
+        finalMessage != null
+      ) {
+        let continuation: { nudge: string; pendingSteps: number } | null = null;
+        try {
+          continuation = await resolveModelStop({
+            trailingText: stepText,
+            step,
+            totalToolCalls,
+            continuationsUsed: planContinuationsUsed,
+          });
+        } catch (err) {
+          // Never let the policy check break a turn that already succeeded.
+          console.warn(
+            `[PiCodexToolLoop] Plan continuation check failed:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+
+        if (continuation) {
+          planContinuationsUsed += 1;
+          console.warn(
+            `[TurnEnd:plan-continuation] ${JSON.stringify({
+              ts: new Date().toISOString(),
+              chatId: toolContext?.chatId ?? null,
+              sessionId: streamOptions.sessionId,
+              step,
+              totalToolCalls,
+              pendingSteps: continuation.pendingSteps,
+              continuation: planContinuationsUsed,
+              trailingTextChars: stepText.trim().length,
+            })}`,
+          );
+          // The assistant's own closing text must land in context before the
+          // nudge, or the resumed step cannot see what it just said.
+          appendToolTurnToContext(context, finalMessage, [], cumulativeTokens);
+          applyPlanContinuationStep(context, continuation.nudge);
+          stripAllAssistantReasoning(context.messages as unknown[]);
+          step++;
+          continue stepLoop;
+        }
+      }
+
+      // Turn is done; post-stream wrap-up in AgentService adds user text if the
+      // sequence ends on tool(s).
       emitTurnEnd(
         lastFinishReason === "length" ? "model_length" : "model_stop",
       );
