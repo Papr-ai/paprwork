@@ -2,14 +2,13 @@
  * Plan A migrations via local Turso Sync replica: exec → push (Turso-native path).
  */
 
-import Database from "better-sqlite3";
 import type { AppDataSource } from "../appDataSources.js";
 import { readMigrationSql } from "../jobs/jobMigrationManifest.js";
 import {
   isDuplicateColumnError,
   splitSqlStatements,
 } from "../jobs/migrationSqlHelpers.js";
-import { migrationSatisfiedOnLocal } from "../jobs/jobMigrationLedgerSync.js";
+import { migrationSatisfiedOnReplica } from "./tursoReplicaMigrationVerify.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import {
   execLinkedDbViaTursoReplica,
@@ -36,12 +35,7 @@ async function migrationSchemaSatisfiedOnLocalReplica(
   migrationRoot: string,
   migrationId: string,
 ): Promise<boolean> {
-  const db = new Database(source.dbPath, { readonly: true });
-  try {
-    return await migrationSatisfiedOnLocal(db, migrationRoot, migrationId);
-  } finally {
-    db.close();
-  }
+  return migrationSatisfiedOnReplica(source, migrationRoot, migrationId);
 }
 
 async function migrationAlreadyApplied(
@@ -111,8 +105,9 @@ export async function applyRegistryMigrationViaLocalReplica(
   );
   if (!schemaOk) {
     throw new Error(
-      `Migration ${migrationId} finished but schema verification failed — ` +
-        "ledger not updated. Re-run after fixing migration SQL.",
+      `Migration ${migrationId} may have applied on the replica backend but ledger was not updated — ` +
+        "schema verification against the replica handle failed. " +
+        "Run papr_db_migration_parity (checks replica vs cloud tables, not just ledgers).",
     );
   }
 

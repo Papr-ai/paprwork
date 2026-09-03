@@ -17,7 +17,8 @@ import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { resolveAgentFocusContext } from "../utils/agentFocusContext";
-import { isAppTabMergedWithChat } from "../utils/appTabMerge";
+import { isAppTabMergedWithChat, isPlatformTabMergedWithChat } from "../utils/appTabMerge";
+import { openPlatformBrowserTab } from "../lib/openPlatformBrowserTab";
 import {
   isAppAutoOpenToolName,
   isUserOnChatTab,
@@ -631,6 +632,51 @@ export function useAgent() {
                   console.warn(
                     "[useAgent] Could not parse tool result for auto-open:",
                     parseErr,
+                  );
+                }
+              }
+
+              // Merge platform browser beside chat when prepare_browser succeeds (embedded tab only)
+              if (
+                existingCall.toolName === "connect_platform" &&
+                (existingCall.args as Record<string, unknown> | undefined)
+                  ?.action === "prepare_browser" &&
+                !payload.error &&
+                parsedResultForAutoOpen?.success !== false &&
+                parsedResultForAutoOpen?.data?.browserMode !== "real_chrome"
+              ) {
+                try {
+                  const platformArg = (
+                    existingCall.args as Record<string, unknown> | undefined
+                  )?.platform;
+                  const platformId =
+                    typeof platformArg === "string" && platformArg.trim().length > 0
+                      ? platformArg.trim()
+                      : "linkedin";
+                  const chatTabId = `chat-${chatId}`;
+                  const { activeTabId, getTab, switchToTab } =
+                    useTabStore.getState();
+                  const platformTabId = `platform-${platformId}`;
+                  const autoSwitch = isUserOnChatTab(
+                    chatTabId,
+                    activeTabId,
+                    getTab,
+                  );
+
+                  if (isPlatformTabMergedWithChat(chatTabId, platformTabId)) {
+                    if (autoSwitch) {
+                      switchToTab(chatTabId);
+                    }
+                  } else {
+                    openPlatformBrowserTab(platformId, {
+                      mergeWithChatTabId: chatTabId,
+                      autoSwitch,
+                    });
+                  }
+                } catch (platformMergeErr) {
+                  console.warn(
+                    "[useAgent] Could not merge platform browser with chat:",
+                    platformMergeErr,
                   );
                 }
               }

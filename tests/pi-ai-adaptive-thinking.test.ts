@@ -2,13 +2,14 @@ import { describe, expect, it } from "vitest";
 import {
   augmentPiAiAnthropicStreamOptions,
   buildAdaptiveThinkingOnPayload,
+  CLAUDE_CODE_OAUTH_USER_AGENT_VERSION,
   mapPiAiReasoningToAnthropicEffort,
   requiresPiAiAdaptiveThinkingOverride,
 } from "../src/gateway/services/providers/piAiAnthropicAdaptiveThinking.js";
 
 describe("piAiAnthropicAdaptiveThinking", () => {
-  it("detects Fable 5, Opus 5, and Sonnet 5 as override models", () => {
-    expect(requiresPiAiAdaptiveThinkingOverride("claude-fable-5")).toBe(true);
+  it("detects Fable 5.1, Opus 5, and Sonnet 5 as override models", () => {
+    expect(requiresPiAiAdaptiveThinkingOverride("claude-fable-5-1")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-5")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-4-8")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-sonnet-5")).toBe(true);
@@ -19,7 +20,7 @@ describe("piAiAnthropicAdaptiveThinking", () => {
 
   it("maps xhigh to max for frontier adaptive models", () => {
     expect(
-      mapPiAiReasoningToAnthropicEffort("xhigh", "claude-fable-5"),
+      mapPiAiReasoningToAnthropicEffort("xhigh", "claude-fable-5-1"),
     ).toBe("max");
     expect(
       mapPiAiReasoningToAnthropicEffort("xhigh", "claude-sonnet-4-6"),
@@ -28,19 +29,19 @@ describe("piAiAnthropicAdaptiveThinking", () => {
 
   it("patches payload to adaptive summarized thinking", async () => {
     const onPayload = buildAdaptiveThinkingOnPayload(
-      "claude-fable-5",
+      "claude-fable-5-1",
       "medium",
     );
     expect(onPayload).toBeDefined();
 
     const patched = await onPayload!(
       {
-        model: "claude-fable-5",
+        model: "claude-fable-5-1",
         max_tokens: 8192,
         messages: [],
         thinking: { type: "enabled", budget_tokens: 8192 },
       },
-      { id: "claude-fable-5" },
+      { id: "claude-fable-5-1" },
     );
 
     expect(patched?.thinking).toEqual({
@@ -58,7 +59,7 @@ describe("piAiAnthropicAdaptiveThinking", () => {
     };
 
     const fableOpts = augmentPiAiAnthropicStreamOptions(
-      "claude-fable-5",
+      "claude-fable-5-1",
       "medium",
       base,
     );
@@ -72,9 +73,9 @@ describe("piAiAnthropicAdaptiveThinking", () => {
     expect(sonnetOpts.onPayload).toBeUndefined();
   });
 
-  it("reports a Claude Code version new enough for Opus 5 on OAuth", () => {
+  it("reports a Claude Code version new enough for Fable 5.1 on OAuth", () => {
     const opts = augmentPiAiAnthropicStreamOptions(
-      "claude-opus-5",
+      "claude-fable-5-1",
       "medium",
       {
         apiKey: "sk-ant-oat01-test",
@@ -82,7 +83,9 @@ describe("piAiAnthropicAdaptiveThinking", () => {
         reasoning: "medium",
       },
     );
-    expect(opts.headers?.["user-agent"]).toBe("claude-cli/2.1.226");
+    expect(opts.headers?.["user-agent"]).toBe(
+      `claude-cli/${CLAUDE_CODE_OAUTH_USER_AGENT_VERSION}`,
+    );
   });
 
   it("does not spoof Claude Code headers for direct API keys", () => {

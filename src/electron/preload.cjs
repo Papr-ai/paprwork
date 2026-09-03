@@ -368,6 +368,31 @@ contextBridge.exposeInMainWorld("electronAPI", {
       ipcRenderer.invoke("agent-preview:capture-thumbnail", webviewId),
   },
 
+  platformBrowser: {
+    setBounds: (payload) =>
+      ipcRenderer.invoke("platform-browser:set-bounds", payload),
+    openLogin: (platformId) =>
+      ipcRenderer.invoke("platform-browser:open-login", { platformId }),
+    getState: (platformId) =>
+      ipcRenderer.invoke("platform-browser:get-state", { platformId }),
+    reload: (platformId) =>
+      ipcRenderer.invoke("platform-browser:reload", { platformId }),
+    onUrlChanged: (callback) => {
+      const wrapper = (_event, data) => callback(data);
+      ipcRenderer.on("platform-browser:url-changed", wrapper);
+      return () => {
+        ipcRenderer.removeListener("platform-browser:url-changed", wrapper);
+      };
+    },
+    onRedirectLoop: (callback) => {
+      const wrapper = (_event, data) => callback(data);
+      ipcRenderer.on("platform-browser:redirect-loop", wrapper);
+      return () => {
+        ipcRenderer.removeListener("platform-browser:redirect-loop", wrapper);
+      };
+    },
+  },
+
   // App metadata
   getAppVersion: () => ipcRenderer.invoke("app:get-version"),
 
@@ -387,6 +412,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 console.log("[Preload] Initializing chat listener");
 ipcRenderer.on("chat:open", (_event, data) => {
   window.dispatchEvent(new CustomEvent('papr-chat-open', { detail: data }));
+});
+
+ipcRenderer.on("platform-browser:open-tab", (_event, data) => {
+  window.dispatchEvent(
+    new CustomEvent("papr-platform-browser-open", { detail: data }),
+  );
 });
 
 // Initialize system power state listeners (forward to DOM events)

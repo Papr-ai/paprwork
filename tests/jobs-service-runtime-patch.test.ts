@@ -78,6 +78,7 @@ describe("JobsService.applyCloudRunPatch", () => {
 
     jobsService = new JobsService();
     await jobsService.initialize();
+    await jobsService.waitForStartupMaintenance();
   });
 
   afterEach(async () => {

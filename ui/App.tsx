@@ -42,6 +42,7 @@ import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
 import {
   attachWorkspaceSwitchBroadcastListener,
+  isWorkspaceSwitchReloading,
   parseWorkspaceKeyFromSwitchEvent,
   parseWorkspaceSwitchLabels,
   reloadUiForWorkspaceSwitch,
@@ -237,6 +238,9 @@ export function App() {
   useEffect(() => {
     attachWorkspaceSwitchBroadcastListener();
     const onWorkspaceChanged = (event: Event) => {
+      if (isWorkspaceSwitchReloading()) {
+        return;
+      }
       const detail = (event as CustomEvent).detail;
       const targetWorkspaceKey = parseWorkspaceKeyFromSwitchEvent(detail);
       const { organizationName, namespaceName } = parseWorkspaceSwitchLabels(detail);
@@ -277,7 +281,7 @@ export function App() {
         /* noop */
       }
       void reloadUiForWorkspaceSwitch({
-        waitForGateway: true,
+        waitForGateway: false,
         targetWorkspaceKey,
         organizationName,
         namespaceName,
@@ -303,7 +307,7 @@ export function App() {
         }
         const { pointer } = workspace;
         void reloadUiForWorkspaceSwitch({
-          waitForGateway: true,
+          waitForGateway: false,
           targetWorkspaceKey: buildWorkspaceUiCacheKey(
             pointer.organizationId,
             pointer.namespaceId,
@@ -533,6 +537,23 @@ export function App() {
     window.addEventListener("papr-chat-open", handleChatOpen);
     return () => window.removeEventListener("papr-chat-open", handleChatOpen);
   }, [createChat, createTab, switchToTab]);
+
+  useEffect(() => {
+    const handlePlatformBrowserOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ platformId?: string; chatTabId?: string }>)
+        .detail;
+      const platformId = detail?.platformId ?? "linkedin";
+      import("./lib/openPlatformBrowserTab").then(({ openPlatformBrowserTab }) => {
+        openPlatformBrowserTab(platformId, {
+          mergeWithChatTabId: detail?.chatTabId,
+        });
+      });
+    };
+
+    window.addEventListener("papr-platform-browser-open", handlePlatformBrowserOpen);
+    return () =>
+      window.removeEventListener("papr-platform-browser-open", handlePlatformBrowserOpen);
+  }, []);
 
   // Show authentication wall IMMEDIATELY if required (before loading anything else)
   if (REQUIRE_PAPR_AUTH && !authChecked) {

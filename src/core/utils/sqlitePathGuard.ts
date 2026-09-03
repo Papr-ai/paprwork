@@ -159,3 +159,101 @@ export function formatSqlitePathWarningBlock(warnings: string[]): string {
     "\n"
   );
 }
+
+function hasRegistryWriteTargets(ctx: SqlitePathGuardContext): {
+  appDb?: string;
+  paprPaths: string[];
+} {
+  const env = ctx.env ?? process.env;
+  const appDb =
+    ctx.appDb ??
+    (typeof env.APP_DB === "string" ? env.APP_DB : undefined);
+  const paprPaths = collectPaprDbPathsFromEnv(env).map(normalizeDbPath);
+  const hasWriteTargets =
+    Boolean(appDb) ||
+    Boolean(env.PAPR_WRITE_DB_IDS) ||
+    paprPaths.length > 0;
+  if (!hasWriteTargets) {
+    return { paprPaths: [] };
+  }
+  return { appDb, paprPaths };
+}
+
+function commandReferencesJobDbScratch(command: string): boolean {
+  if (/\$JOB_DB\b|environ\[['"]JOB_DB['"]\]|getenv\(['"]JOB_DB['"]\)/i.test(
+    command,
+  )) {
+    return true;
+  }
+  return false;
+}
+
+function commandReferencesRegistryDb(
+  command: string,
+  appDb?: string,
+  paprPaths: string[] = [],
+): boolean {
+  if (/\$APP_DB\b|PAPR_DB_|environ\[['"]APP_DB['"]\]/i.test(command)) {
+    return true;
+  }
+  if (appDb) {
+    const normalizedAppDb = normalizeDbPath(appDb);
+    for (const target of extractSqliteDbPaths(command)) {
+      if (normalizeDbPath(target) === normalizedAppDb) {
+        return true;
+      }
+    }
+  }
+  for (const target of extractSqliteDbPaths(command)) {
+    if (paprPaths.includes(normalizeDbPath(target))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Block sqlite writes to $JOB_DB when the job has registry write targets injected.
+ * Agent jobs often default to JOB_DB; mini-apps only read registry DBs via sourceId.
+ */
+export function detectScratchDbWriteWhenRegistryExpected(
+  command: string,
+  ctx: SqlitePathGuardContext = {},
+): { message: string } | null {
+  const { appDb, paprPaths } = hasRegistryWriteTargets(ctx);
+  if (paprPaths.length === 0 && !appDb) {
+    return null;
+  }
+  if (!commandHasSqliteWrite(command)) {
+    return null;
+  }
+  if (commandReferencesRegistryDb(command, appDb, paprPaths)) {
+    return null;
+  }
+
+  const env = ctx.env ?? process.env;
+  const jobDbPath =
+    ctx.jobDb ?? (typeof env.JOB_DB === "string" ? env.JOB_DB : undefined);
+  const normalizedJobDb = jobDbPath ? normalizeDbPath(jobDbPath) : undefined;
+
+  const writesJobDb =
+    commandReferencesJobDbScratch(command) ||
+    (normalizedJobDb !== undefined &&
+      extractSqliteDbPaths(command).some(
+        (target) => normalizeDbPath(target) === normalizedJobDb,
+      ));
+
+  if (!writesJobDb) {
+    return null;
+  }
+
+  const primaryTarget =
+    appDb ?? paprPaths[0] ?? "PAPR_DB_* from writeDbIds";
+  return {
+    message:
+      `Blocked: sqlite write targets $JOB_DB (job scratch) but this job has registry write databases. ` +
+      `Mini-apps read registry DBs via /api/db/query + sourceId — data in $JOB_DB is invisible to the app. ` +
+      `Use papr_db.connect() / papr_db_exec, or sqlite3 on $APP_DB / PAPR_DB_* instead. ` +
+      `Primary write target: ${primaryTarget}. $JOB_DB is for run logs and temp tables only.`,
+  };
+}

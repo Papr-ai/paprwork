@@ -24,6 +24,58 @@
   line-height: 1.5;
 }
 
+.connected-platforms-add-site {
+  margin-bottom: 24px;
+  padding: 16px 20px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+}
+
+.connected-platforms-add-site h3 {
+  margin: 0 0 12px 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.connected-platforms-add-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.connected-platforms-input {
+  flex: 1 1 220px;
+  min-width: 180px;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-bg-primary);
+  color: var(--color-text-primary);
+  font-size: 14px;
+}
+
+.connected-platforms-input-name {
+  flex: 0 1 180px;
+}
+
+.connected-platforms-add-hint {
+  margin: 10px 0 0;
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+
+.connected-platform-badge {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: var(--color-bg-tertiary, rgba(127, 127, 127, 0.15));
+  color: var(--color-text-secondary);
+}
+
 .connected-platforms-loading {
   padding: 40px;
   text-align: center;

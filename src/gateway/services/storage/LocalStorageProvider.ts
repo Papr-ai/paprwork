@@ -82,49 +82,21 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async initialize(): Promise<void> {
-    console.log("[LocalStorageProvider] Ensuring directory exists...");
-    // Ensure directory exists
     await fs.ensureDir(path.dirname(this.dbPath));
-    console.log(`[LocalStorageProvider] Opening database: ${this.dbPath}`);
-
-    // Initialize SQLite database
     this.db = new Database(this.dbPath);
-    console.log("[LocalStorageProvider] Database opened");
 
-    // Performance optimizations for SQLite
-    // WAL mode for better concurrency (reduces locking)
     this.db.pragma("journal_mode = WAL");
-    console.log("[LocalStorageProvider] WAL mode enabled");
-
-    // NORMAL synchronous mode for better write performance
-    // This is safe with WAL mode (data integrity maintained)
-    // Trade-off: Slight risk of database corruption if OS crashes, but much faster writes
     this.db.pragma("synchronous = NORMAL");
-    console.log("[LocalStorageProvider] Synchronous mode set to NORMAL");
-
-    // Increase cache size to 10MB (default is 2MB)
-    // More cache = fewer disk reads, especially helpful on Windows
-    this.db.pragma("cache_size = -10000"); // Negative value = KB (10MB)
-    console.log("[LocalStorageProvider] Cache size increased to 10MB");
-
-    // Use memory-mapped I/O for faster reads (30MB)
-    // This is especially beneficial on Windows where file I/O is slower
-    this.db.pragma("mmap_size = 30000000"); // 30MB
-    console.log("[LocalStorageProvider] Memory-mapped I/O enabled (30MB)");
-
-    // Set temp store to memory (faster for sorting/grouping operations)
+    this.db.pragma("cache_size = -10000");
+    this.db.pragma("mmap_size = 30000000");
     this.db.pragma("temp_store = MEMORY");
-    console.log("[LocalStorageProvider] Temp store set to MEMORY");
 
-    // Create schema
-    console.log("[LocalStorageProvider] Creating schema...");
     this.createSchema();
-    console.log("[LocalStorageProvider] Schema created");
-
-    // Initialize PAPR folder structure
-    console.log("[LocalStorageProvider] Initializing chat exporter...");
     await this.exporter.initialize();
-    console.log("[LocalStorageProvider] Chat exporter initialized");
+
+    if (process.env.PAPR_DEBUG_STARTUP === "1") {
+      console.log(`[LocalStorageProvider] Opened ${this.dbPath} (WAL, 10MB cache)`);
+    }
 
     scheduleContextStatsRebuild(this.db);
     scheduleContextFootprintBackfill(this.db, {

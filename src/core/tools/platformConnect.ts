@@ -1,8 +1,8 @@
 /**
  * Platform Connect Tool
  *
- * Agent tool for checking status or triggering connections to social platforms.
- * Wraps PlatformSessionService - delegates actual browser/cookie handling to the service.
+ * Agent tool for Platform Connections (built-in social sites + registered login sites).
+ * Wraps PlatformSessionService - delegates browser/cookie handling to the service.
  *
  * SECURITY: Never returns raw cookie values. Jobs access cookies via ${KEY_NAME} substitution.
  */
@@ -11,82 +11,175 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { ToolResult } from "../types/index.js";
 import { getPlaywrightCookieDomain } from "../../gateway/services/platforms/platformCookieUtils.js";
-
-const PLATFORM_IDS = [
-  // Social
-  "linkedin",
-  "instagram",
-  "reddit",
-  "facebook",
-  "tiktok",
-  "twitter",
-  "telegram",
-] as const;
-
-type PlatformId = (typeof PLATFORM_IDS)[number];
+import type { PlatformId } from "../../gateway/services/platforms/platformRegistry.js";
 
 export const connectPlatformTool = createTool({
   id: "connect_platform",
-  description: `Check status or manage connections for social platforms (LinkedIn, Instagram, Reddit, Facebook, TikTok, Twitter, Telegram).
+  description: `Check status or manage Platform Connections (built-in social sites + user/agent-registered login sites).
 
 Use this to:
-- Check if a platform is connected: action="status"
-- **Automate with agent browser tools: action="prepare_browser"** (desktop LinkedIn: real Chrome profile; others: session cookies → browser_snapshot/browser_navigate)
+- Register a login-required site: action="register" with url — then request_connect
+- Check if connected: action="status"
+- **Automate with agent browser tools: action="prepare_browser"** (desktop: real Chrome window outside Papr when installed; embedded tab fallback)
 - Ask user to connect: action="request_connect"
+- Remove a custom site: action="unregister"
 - Open a visible window for the user: action="browse" (NOT for agent automation)
-- Disconnect / refresh sessions
+
+Built-in: linkedin, instagram, reddit, facebook, tiktok, twitter, telegram
+Custom sites get ids like site-notion-so — register first, then prepare_browser.
 
 IMPORTANT:
-- Social Login stores session cookies in keychain (e.g. LINKEDIN_LI_AT)
-- **For reading feeds/messages/profiles:** ALWAYS prepare_browser → browser_snapshot/browser_navigate FIRST
-- Do NOT use LinkedIn Voyager/internal GraphQL/REST via bash/curl — stale queryIds, 302 bot blocks, high account risk
-- Do NOT use bird CLI for LinkedIn; bird is X/Twitter fallback only after prepare_browser fails
-- browse opens a separate visible window the agent CANNOT control
-- Jobs access cookies via \${LINKEDIN_LI_AT} substitution for approved scheduled scripts — not ad-hoc API scraping in chat`,
-
-  inputSchema: z.object({
-    platform: z
-      .enum(PLATFORM_IDS)
-      .describe("The social platform to connect to"),
-    action: z
-      .enum([
-        "status",
-        "connect",
-        "disconnect",
-        "refresh",
-        "get_cookies",
-        "browse",
-        "prepare_browser",
-        "get_rate_limits",
-        "request_connect",
-      ])
-      .default("status")
-      .describe(
-        "Action: status, connect, disconnect, refresh, prepare_browser (desktop LinkedIn: real Chrome profile; others: inject cookies — USE THIS for automation), browse (visible window for user only), get_rate_limits, request_connect",
-      ),
-    reason: z
-      .string()
-      .optional()
-      .describe("For request_connect: explain why you need this platform connected (shown to user in modal)"),
-    url: z
-      .string()
-      .url()
-      .optional()
-      .describe("For prepare_browser: optional starting URL (defaults to platform home)"),
-  }),
+- **LinkedIn:** user must sign in in Papr-managed Chrome (never import from personal Chrome)
+- **Other platforms:** may connect instantly if already logged into personal Chrome; otherwise Papr Chrome opens for sign-in
+- **Connected = keychain cookies** (LINKEDIN_LI_AT, REDDIT_REDDIT_SESSION, TWITTER_AUTH_TOKEN, …) — usable in jobs and cloud when pushed to **cloud vault** (desktop awake + Cloud Sync on)
+- **Job automation split:**
+  - **LinkedIn jobs:** Python → requirements: ["linkedin-api", "playwright"] + papr_platform_browser (CDP to Papr Chrome :9222). Agent → prepare_browser + browser_*
+  - **X, Reddit, Instagram, … jobs:** Python/bash → \${PLATFORM_*} cookie keys + headless Playwright / requests / curl. Do NOT use reddit-api/x-api CDP. Papr Chrome is sign-in only, not job runtime. Cloud: vault keys + headless Playwright.
+- **Agent/subagent jobs + chat:** prepare_browser → browser_* (headless with keychain cookies in cloud; real Chrome on desktop when installed)
+- **API discovery:** after prepare_browser use browser_network_logs + browser_console_logs
+- Prefer browser_* over bash/curl for LinkedIn (tip appended if curl used). For Reddit/X scraper jobs, prefer \${KEY} + headless Playwright over browser_*.`,
+  inputSchema: z
+    .object({
+      platform: z
+        .string()
+        .optional()
+        .describe("Platform id (built-in or registered custom site, e.g. site-notion-so)"),
+      action: z
+        .enum([
+          "status",
+          "connect",
+          "disconnect",
+          "refresh",
+          "get_cookies",
+          "browse",
+          "prepare_browser",
+          "get_rate_limits",
+          "request_connect",
+          "register",
+          "unregister",
+        ])
+        .default("status"),
+      reason: z
+        .string()
+        .optional()
+        .describe("For request_connect: shown to user in connect modal"),
+      url: z
+        .string()
+        .optional()
+        .describe("For register: site URL. For prepare_browser: optional start URL"),
+      name: z
+        .string()
+        .optional()
+        .describe("For register: display name (defaults to hostname)"),
+    })
+    .superRefine((value, ctx) => {
+      if (value.action === "register") {
+        if (!value.url?.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: "url is required for register",
+            path: ["url"],
+          });
+        }
+        return;
+      }
+      if (!value.platform?.trim()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "platform is required for this action",
+          path: ["platform"],
+        });
+      }
+    }),
 
   execute: async (inputData): Promise<ToolResult> => {
     const args = (inputData as { context?: typeof inputData }).context || inputData;
-    const { platform, action, reason, url } = args as {
-      platform: PlatformId;
+    const { platform, action, reason, url, name } = args as {
+      platform?: string;
       action: string;
       reason?: string;
       url?: string;
+      name?: string;
     };
     const startTime = performance.now();
 
     try {
-      // Import the service (lazy to avoid circular deps)
+      if (action === "register") {
+        const { registerCustomPlatformConnection } = await import(
+          "../../gateway/services/platforms/customPlatformConnections.js"
+        );
+        const { refreshCustomPlatformConfigCache } = await import(
+          "../../gateway/services/platforms/platformRegistry.js"
+        );
+
+        const record = await registerCustomPlatformConnection({
+          url: url ?? "",
+          name,
+          registeredBy: "agent",
+        });
+        await refreshCustomPlatformConfigCache();
+
+        return {
+          success: true,
+          data: {
+            platformId: record.id,
+            name: record.name,
+            homeUrl: record.homeUrl,
+            message:
+              `Registered ${record.name} as Platform Connection "${record.id}". ` +
+              `Use request_connect so the user can log in, then prepare_browser.`,
+            nextSteps: [
+              `connect_platform({ platform: "${record.id}", action: "request_connect", reason: "..." })`,
+              `connect_platform({ platform: "${record.id}", action: "prepare_browser" })`,
+            ],
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      if (action === "unregister") {
+        const platformId = platform ?? "";
+        const { unregisterCustomPlatformConnection } = await import(
+          "../../gateway/services/platforms/customPlatformConnections.js"
+        );
+        const { refreshCustomPlatformConfigCache, getPlatformConfig } = await import(
+          "../../gateway/services/platforms/platformRegistry.js"
+        );
+        const config = getPlatformConfig(platformId);
+        if (!config?.isCustom) {
+          return {
+            success: false,
+            data: {
+              platformId,
+              message: "Only custom Platform Connections can be unregistered.",
+            },
+            duration: performance.now() - startTime,
+            timestamp: new Date().toISOString(),
+          };
+        }
+
+        const { getPlatformSessionService } = await import(
+          "../../gateway/services/platforms/PlatformSessionService.js"
+        );
+        const sessionService = getPlatformSessionService();
+        await sessionService.initialize();
+        await sessionService.disconnect(platformId);
+        await unregisterCustomPlatformConnection(platformId);
+        await refreshCustomPlatformConfigCache();
+
+        return {
+          success: true,
+          data: {
+            platformId,
+            message: `Removed Platform Connection ${config.name}.`,
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      const platformId = platform ?? "";
       const { getPlatformSessionService } = await import(
         "../../gateway/services/platforms/PlatformSessionService.js"
       );
@@ -100,33 +193,45 @@ IMPORTANT:
       const sessionService = getPlatformSessionService();
       await sessionService.initialize();
 
-      const config = getPlatformConfig(platform);
+      const config = getPlatformConfig(platformId);
       if (!config) {
-        throw new Error(`Unknown platform: ${platform}`);
+        return {
+          success: false,
+          data: {
+            platform: platformId,
+            action,
+            message:
+              `Unknown platform "${platformId}". Use action="register" with url for custom sites.`,
+          },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
       }
 
       switch (action) {
         case "status": {
-          const status = await sessionService.getStatus(platform);
-          const keyNames = getAllPlatformKeyNames(platform);
+          const status = await sessionService.getStatus(platformId);
+          const keyNames = getAllPlatformKeyNames(platformId);
           const r = config.rateLimits;
 
           return {
             success: true,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               status: status.status,
               connectedAt: status.connectedAt,
               lastRefreshedAt: status.lastRefreshedAt,
               expiresAt: status.expiresAt,
               error: status.error,
+              isCustom: config.isCustom,
               keyNames,
               usage:
                 status.status === "connected"
-                  ? `Use \${${keyNames[0]}} in job commands to reference the session cookie`
-                  : `Not connected. Use action="connect" or direct user to Settings → Platforms`,
-              // Always include rate limits so agent knows the safe limits
+                  ? config.isCustom
+                    ? `Job keys use prefix ${config.keyPrefix}_ — list keys in Settings`
+                    : `Use \${${keyNames[0]}} in job commands`
+                  : `Not connected. Use request_connect or Settings → Platform Connections`,
               rateLimits: {
                 dailyViews: r.dailyViews,
                 dailyMessages: r.dailyMessages,
@@ -135,7 +240,7 @@ IMPORTANT:
                 hourlyActions: r.hourlyActions,
                 actionDelay: `${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s`,
               },
-              rateLimitWarning: `IMPORTANT: Stay within ${r.dailyViews} views, ${r.dailyMessages} messages, ${r.dailyConnections} connections per day. Wait ${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s between actions. ${r.notes}`,
+              rateLimitWarning: `Stay within ${r.dailyViews} views/day. Wait ${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s between actions. ${r.notes}`,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -143,16 +248,15 @@ IMPORTANT:
         }
 
         case "connect": {
-          // Check current status first
-          const currentStatus = await sessionService.getStatus(platform);
+          const currentStatus = await sessionService.getStatus(platformId);
           if (currentStatus.status === "connected") {
             return {
               success: true,
               data: {
                 platform: config.name,
-                platformId: platform,
+                platformId,
                 status: "already_connected",
-                message: `${config.name} is already connected. Use action="refresh" to refresh the session or action="disconnect" to remove it.`,
+                message: `${config.name} is already connected. Use refresh or disconnect.`,
                 expiresAt: currentStatus.expiresAt,
               },
               duration: performance.now() - startTime,
@@ -160,28 +264,14 @@ IMPORTANT:
             };
           }
 
-          // Note: This opens a browser and blocks until user logs in or timeout
-          // We inform the user what's happening
-          // Note: The tool returns immediately with instructions
-          // The actual browser connection happens asynchronously via UI
-          // To trigger connect programmatically, call sessionService.connect() directly
           return {
             success: true,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               status: "awaiting_user_action",
-              message: `To connect ${config.name}, the user should go to Settings → Platforms and click Connect. This opens a browser window where they can log in normally (2FA supported). Session cookies will be captured automatically and stored securely.`,
-              instructions: [
-                "1. Direct user to Settings → Platforms",
-                "2. Click Connect on the platform card",
-                `3. A ${config.name} login page will open in a browser window`,
-                "4. User logs in with their account (2FA is supported)",
-                "5. Once logged in, cookies are captured automatically",
-                "6. The connection status will update to 'connected'",
-              ],
-              settingsPath: "Settings → Platforms",
-              alternative: "User can also use shell.openExternal to open the settings if needed",
+              message: `Ask the user to open Settings → Platform Connections and click Connect for ${config.name}.`,
+              settingsPath: "Settings → Platform Connections",
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -189,16 +279,16 @@ IMPORTANT:
         }
 
         case "disconnect": {
-          const result = await sessionService.disconnect(platform);
+          const result = await sessionService.disconnect(platformId);
           return {
             success: true,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               status: result.status,
               message:
                 result.status === "disconnected"
-                  ? `${config.name} has been disconnected. Session cookies removed from keychain.`
+                  ? `${config.name} disconnected.`
                   : `Failed to disconnect: ${result.error}`,
             },
             duration: performance.now() - startTime,
@@ -207,15 +297,15 @@ IMPORTANT:
         }
 
         case "refresh": {
-          const currentStatus = await sessionService.getStatus(platform);
+          const currentStatus = await sessionService.getStatus(platformId);
           if (currentStatus.status !== "connected" && currentStatus.status !== "needs_reauth") {
             return {
               success: false,
               data: {
                 platform: config.name,
-                platformId: platform,
+                platformId,
                 status: currentStatus.status,
-                message: `Cannot refresh - ${config.name} is not connected. Use action="connect" first.`,
+                message: `${config.name} is not connected.`,
               },
               duration: performance.now() - startTime,
               timestamp: new Date().toISOString(),
@@ -223,19 +313,19 @@ IMPORTANT:
           }
 
           const sessionKeeper = getSessionKeeperService();
-          const result = await sessionKeeper.forceRefresh(platform);
+          const result = await sessionKeeper.forceRefresh(platformId);
 
           return {
             success: result.status === "connected",
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               status: result.status,
               lastRefreshedAt: result.lastRefreshedAt,
               message:
                 result.status === "connected"
-                  ? `${config.name} session refreshed successfully.`
-                  : `Refresh failed: ${result.error}. User may need to reconnect via Settings → Platforms.`,
+                  ? `${config.name} session refreshed.`
+                  : `Refresh failed: ${result.error}`,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -243,12 +333,26 @@ IMPORTANT:
         }
 
         case "get_cookies": {
-          // Get cookie values and return in CDP-compatible format for browser injection
+          if (platformId === "linkedin") {
+            return {
+              success: false,
+              data: {
+                platform: config.name,
+                platformId,
+                message:
+                  "Do not export LinkedIn cookies for HTTP/curl replay — PerimeterX will invalidate the session. " +
+                  "Use connect_platform action=\"prepare_browser\" then browser_navigate / browser_snapshot / browser_test_script.",
+              },
+              duration: performance.now() - startTime,
+              timestamp: new Date().toISOString(),
+            };
+          }
+
           const { getCustomKeysService } = await import(
             "../../gateway/services/CustomKeysService.js"
           );
           const keysService = getCustomKeysService();
-          
+
           const cookies: Array<{
             name: string;
             value: string;
@@ -257,49 +361,71 @@ IMPORTANT:
             secure: boolean;
             httpOnly: boolean;
           }> = [];
-          
-          for (const cookieName of config.requiredCookies) {
-            const keyName = `${config.keyPrefix}_${cookieName.toUpperCase()}`;
-            try {
-              const value = await keysService.getKeyByName(keyName);
-              if (value) {
-                cookies.push({
-                  name: cookieName,
-                  value,
-                  domain: getPlaywrightCookieDomain(config, cookieName),
-                  path: "/",
-                  secure: true,
-                  httpOnly: true,
-                });
+
+          if (config.isCustom) {
+            const prefix = `${config.keyPrefix}_`;
+            const keys = await keysService.listKeys();
+            for (const key of keys) {
+              if (!key.name.startsWith(prefix)) continue;
+              const cookieName = key.name.slice(prefix.length);
+              try {
+                const value = await keysService.getKeyByName(key.name);
+                if (value) {
+                  cookies.push({
+                    name: cookieName,
+                    value,
+                    domain: config.cookieDomain,
+                    path: "/",
+                    secure: true,
+                    httpOnly: true,
+                  });
+                }
+              } catch {
+                /* skip missing key */
               }
-            } catch {
-              // Key not found
+            }
+          } else {
+            for (const cookieName of config.requiredCookies) {
+              const keyName = `${config.keyPrefix}_${cookieName.toUpperCase()}`;
+              try {
+                const value = await keysService.getKeyByName(keyName);
+                if (value) {
+                  cookies.push({
+                    name: cookieName,
+                    value,
+                    domain: getPlaywrightCookieDomain(config, cookieName),
+                    path: "/",
+                    secure: true,
+                    httpOnly: true,
+                  });
+                }
+              } catch {
+                /* Key not found */
+              }
             }
           }
-          
+
           if (cookies.length === 0) {
             return {
               success: false,
               data: {
                 platform: config.name,
-                platformId: platform,
-                message: `No cookies found for ${config.name}. Use action="connect" first or check Settings → Platforms.`,
+                platformId,
+                message: `No cookies found. Connect via Platform Connections first.`,
               },
               duration: performance.now() - startTime,
               timestamp: new Date().toISOString(),
             };
           }
-          
+
           const r = config.rateLimits;
           return {
             success: true,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               cookies,
-              cdpUsage: `Use browser_cdp with method "Network.setCookies" and params: { cookies: ${JSON.stringify(cookies)} }`,
-              message: `Retrieved ${cookies.length} cookies for ${config.name}. Inject into browser using CDP Network.setCookies.`,
-              // Always include rate limits when providing cookies for automation
+              message: `Retrieved ${cookies.length} cookies for ${config.name}.`,
               rateLimits: {
                 dailyViews: r.dailyViews,
                 dailyMessages: r.dailyMessages,
@@ -308,7 +434,6 @@ IMPORTANT:
                 hourlyActions: r.hourlyActions,
                 actionDelay: `${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s`,
               },
-              rateLimitWarning: `⚠️ RATE LIMITS: Max ${r.dailyViews} views, ${r.dailyMessages} messages, ${r.dailyConnections} connections/day. Wait ${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s between actions. ${r.notes}`,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -316,15 +441,15 @@ IMPORTANT:
         }
 
         case "prepare_browser": {
-          const currentStatus = await sessionService.getStatus(platform);
+          const currentStatus = await sessionService.getStatus(platformId);
           if (currentStatus.status !== "connected") {
             return {
               success: false,
               data: {
                 platform: config.name,
-                platformId: platform,
+                platformId,
                 status: currentStatus.status,
-                message: `${config.name} is not connected. Use action="request_connect" first.`,
+                message: `${config.name} is not connected. Use request_connect first.`,
               },
               duration: performance.now() - startTime,
               timestamp: new Date().toISOString(),
@@ -332,33 +457,39 @@ IMPORTANT:
           }
 
           const { preparePlatformBrowserSession } = await import("./browser.js");
-          const result = await preparePlatformBrowserSession(platform, url);
+          const result = await preparePlatformBrowserSession(platformId, url);
           const r = config.rateLimits;
 
           return {
             success: result.success,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               url: result.url,
               title: result.title,
               message: result.message,
               error: result.error,
+              browserMode: result.browserMode,
+              doNotUse:
+                result.success
+                  ? result.browserMode === "real_chrome"
+                    ? "Automation runs in the real Chrome window outside Papr — use browser_* tools, not bash/curl."
+                    : "Prefer browser_* on this tab over bash/curl cookie replay (often empty CSRF/Voyager results)."
+                  : undefined,
               nextSteps: result.success
                 ? [
-                    "browser_snapshot — read current page",
-                    "browser_navigate — go to specific pages (session persists)",
+                    "browser_snapshot — read page HTML (how you see the UI)",
+                    "browser_network_logs({ limit: 100 }) — network tab (xhr/fetch URLs, status)",
+                    "browser_console_logs({ limit: 50 }) — JS errors",
+                    "browser_navigate — go to other URLs (auto settle wait after each navigation)",
+                    "browser_click / browser_type — interact via CSS selectors from snapshot",
+                    "page_wait_for({ target: 'browser', time: 3 }) — extra wait if SPA still loading",
                     "browser_test_script — extract structured data",
-                    ...(platform === "linkedin"
-                      ? ["Desktop: real Chrome profile — stay logged into LinkedIn in Google Chrome"]
-                      : []),
                   ]
-                : currentStatus.status === "connected"
-                  ? [
-                      "Try connect_platform action=\"refresh\" first",
-                      "If Settings shows Connected, retry prepare_browser — do NOT request_connect",
-                    ]
-                  : ["connect_platform action=\"request_connect\" only if Settings shows Not connected"],
+                : [
+                    "Try connect_platform action=\"refresh\" first",
+                    "If Settings shows Connected, retry prepare_browser",
+                  ],
               rateLimits: result.success
                 ? {
                     dailyViews: r.dailyViews,
@@ -369,9 +500,6 @@ IMPORTANT:
                     actionDelay: `${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s`,
                   }
                 : undefined,
-              rateLimitWarning: result.success
-                ? `Stay within ${r.dailyViews} views/day. Wait ${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s between actions.`
-                : undefined,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -379,31 +507,26 @@ IMPORTANT:
         }
 
         case "browse": {
-          // Visible browser for the USER — agent browser_* tools cannot attach to this window
-          const result = await sessionService.openAuthenticatedBrowser(platform, url);
+          const result = await sessionService.openAuthenticatedBrowser(platformId, url);
           const r = config.rateLimits;
 
           return {
             success: result.success,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               message: result.message,
               error: result.error,
-              hint: result.success
-                ? "This opens a visible window for the user. For agent automation, use action=\"prepare_browser\" instead, then browser_snapshot/browser_navigate."
-                : undefined,
-              // Always include rate limits when browsing
-              rateLimits: result.success ? {
-                dailyViews: r.dailyViews,
-                dailyMessages: r.dailyMessages,
-                dailyConnections: r.dailyConnections,
-                dailyPosts: r.dailyPosts,
-                hourlyActions: r.hourlyActions,
-                actionDelay: `${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s`,
-              } : undefined,
-              rateLimitWarning: result.success
-                ? `⚠️ RATE LIMITS: Max ${r.dailyViews} views, ${r.dailyMessages} messages, ${r.dailyConnections} connections/day. Wait ${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s between actions. ${r.notes}`
+              hint: "For agent automation use prepare_browser instead.",
+              rateLimits: result.success
+                ? {
+                    dailyViews: r.dailyViews,
+                    dailyMessages: r.dailyMessages,
+                    dailyConnections: r.dailyConnections,
+                    dailyPosts: r.dailyPosts,
+                    hourlyActions: r.hourlyActions,
+                    actionDelay: `${r.minActionDelayMs / 1000}-${r.maxActionDelayMs / 1000}s`,
+                  }
                 : undefined,
             },
             duration: performance.now() - startTime,
@@ -412,25 +535,14 @@ IMPORTANT:
         }
 
         case "get_rate_limits": {
-          // Return rate limits for safe automation
           const rateLimits = config.rateLimits;
-          
           return {
             success: true,
             data: {
               platform: config.name,
-              platformId: platform,
-              rateLimits: {
-                dailyViews: rateLimits.dailyViews,
-                dailyMessages: rateLimits.dailyMessages,
-                dailyConnections: rateLimits.dailyConnections,
-                dailyPosts: rateLimits.dailyPosts,
-                hourlyActions: rateLimits.hourlyActions,
-                minActionDelayMs: rateLimits.minActionDelayMs,
-                maxActionDelayMs: rateLimits.maxActionDelayMs,
-              },
-              notes: rateLimits.notes,
-              message: `Rate limits for ${config.name}: ${rateLimits.dailyViews} views/day, ${rateLimits.dailyMessages} messages/day, ${rateLimits.dailyConnections} connections/day. Delay ${rateLimits.minActionDelayMs / 1000}-${rateLimits.maxActionDelayMs / 1000}s between actions. These are safe defaults - override only if the use case warrants it and inform the user of risks.`,
+              platformId,
+              rateLimits,
+              message: `Rate limits for ${config.name}: ${rateLimits.dailyViews} views/day.`,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -438,47 +550,40 @@ IMPORTANT:
         }
 
         case "request_connect": {
-          const currentStatus = await sessionService.getStatus(platform);
+          const currentStatus = await sessionService.getStatus(platformId);
           if (currentStatus.status === "connected") {
             return {
               success: true,
               data: {
                 platform: config.name,
-                platformId: platform,
+                platformId,
                 status: "already_connected",
-                message: `${config.name} is already connected. Use action="prepare_browser" to start browsing.`,
-                expiresAt: currentStatus.expiresAt,
-                lastRefreshedAt: currentStatus.lastRefreshedAt,
+                message: `${config.name} is already connected. Use prepare_browser.`,
               },
               duration: performance.now() - startTime,
               timestamp: new Date().toISOString(),
             };
           }
 
-          // Show branded modal to user requesting connection
-          const { broadcast } = await import(
-            "../../gateway/websocket/index.js"
-          );
-
+          const { broadcast } = await import("../../gateway/websocket/index.js");
           const requestId = crypto.randomUUID();
 
           broadcast({
             type: "platform:connect-request",
             data: {
-              platformId: platform,
+              platformId,
               reason: reason || `To access your ${config.name} account`,
               requestId,
             },
           });
-          
+
           return {
             success: true,
             data: {
               platform: config.name,
-              platformId: platform,
+              platformId,
               requestId,
-              message: `Connection request sent to user. A branded modal is now showing asking them to connect ${config.name}. Wait for them to complete the login flow.`,
-              hint: "The user will see a modal with a 'Connect' button. Once they log in, you can use other actions like 'browse' or 'get_cookies' to interact with their account.",
+              message: `Connection request sent. User will see a Connect modal for ${config.name}.`,
             },
             duration: performance.now() - startTime,
             timestamp: new Date().toISOString(),
@@ -506,10 +611,6 @@ IMPORTANT:
   },
 });
 
-/**
- * Programmatically trigger a platform connect flow
- * Can be called directly if needed for automation
- */
 export async function handleConnectTrigger(
   platform: string,
 ): Promise<{ status: string; error?: string }> {

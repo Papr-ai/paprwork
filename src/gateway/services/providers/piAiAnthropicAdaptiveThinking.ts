@@ -1,5 +1,5 @@
 /**
- * pi-ai 0.64 lacks registry entries for Claude Fable 5 / Opus 5 and treats them
+ * pi-ai 0.64 lacks registry entries for Claude Fable 5.1 / Opus 5 and treats them
  * as budget-based thinking models. Anthropic requires adaptive thinking for these
  * models, and Fable/Opus 5 stream empty thinking deltas unless display=summarized.
  *
@@ -46,6 +46,9 @@ export interface PiAiAnthropicStreamOptions {
     | undefined
     | Promise<AnthropicMessagesParams | undefined>;
 }
+
+/** Minimum Claude Code CLI version Anthropic accepts for OAuth-backed frontier models. */
+export const CLAUDE_CODE_OAUTH_USER_AGENT_VERSION = "2.1.251";
 
 /** Models pi-ai misconfigures (budget thinking) but Anthropic requires adaptive-only. */
 export function requiresPiAiAdaptiveThinkingOverride(modelId: string): boolean {
@@ -122,7 +125,7 @@ export function augmentPiAiAnthropicStreamOptions(
   const headers = isOAuth
     ? {
         ...base.headers,
-        "user-agent": "claude-cli/2.1.226",
+        "user-agent": `claude-cli/${CLAUDE_CODE_OAUTH_USER_AGENT_VERSION}`,
       }
     : base.headers;
 

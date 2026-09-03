@@ -28,12 +28,11 @@ const dbRefSchema = z.object({
 export const paprDbSyncStatusTool = createTool({
   id: "papr_db_sync_status",
   description:
-    "Plan A Turso replica sync status for a registry database. " +
-    "Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. " +
-    "When sidecarWedge is true, pull/push/migration will fail until sidecars are reset. " +
-    "Only repair_cloud_sync accept_cloud resets them - 'pull' and 'merge_lww' do NOT, and may report success while doing nothing. " +
-    "accept_cloud reseeds local from the Turso primary, so confirm cloud is not missing local-only rows before using it. " +
-    "Requires PAPR_TURSO_REPLICA_SYNC and Papr cloud sync enabled.",
+    "Plan A sync status for a registry database. Two tiers only: " +
+    "**replica** (embedded @tursodatabase/sync handle on desktop) and **cloud** (Turso primary). " +
+    "Returns online, syncMode, pendingPush, sidecarWedge, cutoverBlocked, lastPushError. " +
+    "When sidecarWedge is true, use papr_db_reconcile_sync repair_sidecar_wedge. " +
+    "Never sqlite3 the data.db path — that reads the on-disk file, not the replica handle.",
   inputSchema: dbRefSchema,
   execute: async (input) => {
     const args = unwrapContext(input);
@@ -125,11 +124,11 @@ export const paprDbApplyMigrationTool = createTool({
   id: "papr_db_apply_migration",
   description:
     "Apply migrations/{id}.sql to a registry database (Plan A schema path). " +
-    "When cloud sync is on: executes on Turso primary (memory-server credentials), " +
-    "records schema_migrations, then pull() local replica. Updates __papr__/app-meta.json " +
-    "requiredSchemaVersion for the schema-owner app. " +
-    "Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Upload now " +
-    "(manual upload mode) so apps.papr.ai serves the new bundle.",
+    "Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. " +
+    "Never pushes DDL via replica push — avoids schema drift on Turso. " +
+    "Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. " +
+    "Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Upload now. " +
+    "For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
   inputSchema: paprDbApplyMigrationSchema,
   execute: async (input) => {
     const args = unwrapContext(input);
@@ -141,16 +140,110 @@ export const paprDbApplyMigrationTool = createTool({
   },
 });
 
+export const paprDbApplyMigrationReplicaTool = createTool({
+  id: "papr_db_apply_migration_replica",
+  description:
+    "Apply migrations/{id}.sql on the embedded replica only (no push to Turso primary). " +
+    "Returns applyToken and sqlChecksum — pass both to papr_db_apply_migration_cloud. " +
+    "Use when debugging split-brain or when cloud apply must be verified separately.",
+  inputSchema: paprDbApplyMigrationSchema,
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { paprDbApplyMigrationReplica } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    const data = await paprDbApplyMigrationReplica(args);
+    return { success: true, data };
+  },
+});
+
+const paprDbApplyMigrationCloudSchema = paprDbApplyMigrationSchema.extend({
+  applyToken: z
+    .string()
+    .min(1)
+    .describe("Token from papr_db_apply_migration_replica"),
+});
+
+export const paprDbApplyMigrationCloudTool = createTool({
+  id: "papr_db_apply_migration_cloud",
+  description:
+    "Apply the same migration on Turso primary via HTTP. Requires applyToken from " +
+    "papr_db_apply_migration_replica (checksum must match). Then run " +
+    "papr_db_reconcile_sync({ action: 'pull_and_align' }) to align replica frames.",
+  inputSchema: paprDbApplyMigrationCloudSchema,
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { paprDbApplyMigrationCloud } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    const data = await paprDbApplyMigrationCloud(args);
+    return { success: true, data };
+  },
+});
+
+export const paprDbMigrationParityTool = createTool({
+  id: "papr_db_migration_parity",
+  description:
+    "Compare **replica** vs **cloud** for a registry DB: migration ledgers AND user table lists. " +
+    "ledgerPaired can be true while schemaPaired is false (split-brain — the bug merge_lww hides). " +
+    "Inspect replicaOnlyTables / cloudOnlyTables before declaring recovery done.",
+  inputSchema: z.object({
+    dbId: z.string().min(1),
+  }),
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { paprDbMigrationParity } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    const data = await paprDbMigrationParity(args);
+    return { success: true, data };
+  },
+});
+
+export const paprDbReconcileSyncTool = createTool({
+  id: "papr_db_reconcile_sync",
+  description:
+    "Repair Plan A replica sync without pushing DDL. Actions: " +
+    "repair_sidecar_wedge (reset corrupt sidecars + pull), " +
+    "pull_and_align (pull after cloud migration), " +
+    "clear_push_error (clear lastReplicaPushError), " +
+    "complete_pairing (mark replica+cloud paired after manual steps), " +
+    "full_parity_check (ledger + wedge report). " +
+    "Prefer this over repair_cloud_sync merge_lww for schema issues.",
+  inputSchema: z.object({
+    dbId: z.string().min(1),
+    action: z.enum([
+      "repair_sidecar_wedge",
+      "pull_and_align",
+      "clear_push_error",
+      "complete_pairing",
+      "full_parity_check",
+    ]),
+    applyToken: z.string().optional(),
+    migrationId: z.string().optional(),
+  }),
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { paprDbReconcileSync } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    const data = await paprDbReconcileSync(args);
+    return { success: true, data };
+  },
+});
+
 export const repairCloudSyncTool = createTool({
   id: "repair_cloud_sync",
   description:
     "Repair Plan A Turso replica sync for a registry database. " +
-    "Use when push fails with MIGRATION_CONFLICT or local/cloud schema diverged. " +
-    "Strategies: pull (refresh from cloud), push (pull-first then push), " +
+    "Use when row push fails or local/cloud data diverged. " +
+    "For schema/migration issues prefer papr_db_migration_parity + papr_db_reconcile_sync " +
+    "and explicit papr_db_apply_migration_replica/cloud — NOT merge_lww. " +
+    "Strategies: pull (refresh from cloud), push (pull-first then push rows), " +
     "accept_cloud (reseed local from Turso primary — NEVER when local has more rows than Turso), " +
-    "merge_lww (pull → push → rebase cloud-ahead migrations → retry), " +
+    "merge_lww (DEPRECATED — only rebases ledger via DELETE; use papr_db_reconcile_sync instead), " +
     "force_local (replica WAL push — does NOT upload rows inserted via bash/sqlite3), " +
-    "bootstrap_remote (full table snapshot from local file to Turso primary, then reseed replica — use when local is authoritative but Turso is empty/stale), " +
+    "bootstrap_remote (full table snapshot from local file to Turso primary, then reseed replica), " +
     "export_conflicts (inspect migration ledger conflicts without changing data).",
   inputSchema: z.object({
     dbId: z.string().min(1).describe("Registry dbId"),
@@ -164,7 +257,9 @@ export const repairCloudSyncTool = createTool({
         "bootstrap_remote",
         "export_conflicts",
       ])
-      .describe("Repair action"),
+      .describe(
+        "Repair action. Avoid merge_lww for schema fixes — use papr_db_reconcile_sync.",
+      ),
   }),
   execute: async (input) => {
     const args = unwrapContext(input);
@@ -182,5 +277,9 @@ export const paprDbTools = [
   paprDbPullTool,
   paprDbExecTool,
   paprDbApplyMigrationTool,
+  paprDbApplyMigrationReplicaTool,
+  paprDbApplyMigrationCloudTool,
+  paprDbMigrationParityTool,
+  paprDbReconcileSyncTool,
   repairCloudSyncTool,
 ];

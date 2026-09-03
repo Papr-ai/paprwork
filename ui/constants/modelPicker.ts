@@ -36,6 +36,9 @@ export function migratePickerModelId(modelId: string): string {
   if (modelId === "claude-opus-4-8") {
     return "claude-opus-5";
   }
+  if (modelId === "claude-fable-5") {
+    return "claude-fable-5-1";
+  }
   return modelId;
 }
 
@@ -43,7 +46,7 @@ export function migratePickerModelId(modelId: string): string {
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-sonnet-5",
   "claude-opus-5",
-  "claude-fable-5",
+  "claude-fable-5-1",
   "gpt-5-6-sol",
   "glm-5.2-max",
   "qwen/qwen3-32b",

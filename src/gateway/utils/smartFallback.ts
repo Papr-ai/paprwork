@@ -106,7 +106,7 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["reasoning", "agentic", "coding", "tool-use"],
   },
-  "claude-fable-5": {
+  "claude-fable-5-1": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
     speed: "slow",
@@ -328,8 +328,8 @@ export function getUpgradeModelForTask(
       general: "gpt-5.3-codex",
     },
     anthropic: {
-      reasoning: "claude-fable-5",
-      coding: "claude-fable-5",
+      reasoning: "claude-fable-5-1",
+      coding: "claude-fable-5-1",
       writing: "claude-sonnet-5",
       general: "claude-sonnet-5",
     },

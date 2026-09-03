@@ -1,12 +1,10 @@
 /**
- * ConnectedPlatformsTab - Social Login for job automation
- *
- * Allows users to connect social platforms (LinkedIn, Instagram, Reddit, etc.)
- * with one click. Sessions are automatically refreshed in the background.
+ * ConnectedPlatformsTab - Platform Connections for authenticated automation
  */
 
 import { useState, useEffect, useCallback } from "react";
 import { gateway } from "../../src/lib/gateway";
+import { openPlatformBrowserTab } from "../../lib/openPlatformBrowserTab";
 import "./ConnectedPlatformsTab.css";
 
 type PlatformStatus =
@@ -30,6 +28,9 @@ interface PlatformInfo {
   name: string;
   notes?: string;
   status: PlatformSessionState;
+  isCustom?: boolean;
+  homeUrl?: string;
+  registeredBy?: "user" | "agent";
 }
 
 function formatRelativeTime(dateStr: string | undefined): string {
@@ -90,7 +91,12 @@ export function ConnectedPlatformsTab() {
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [waitingForLogin, setWaitingForLogin] = useState<Set<string>>(new Set());
+  const [externalChromeLogin, setExternalChromeLogin] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
+  const [connectNotice, setConnectNotice] = useState<string | null>(null);
+  const [newSiteUrl, setNewSiteUrl] = useState("");
+  const [newSiteName, setNewSiteName] = useState("");
+  const [registerLoading, setRegisterLoading] = useState(false);
 
   const loadPlatforms = useCallback(async () => {
     try {
@@ -131,10 +137,17 @@ export function ConnectedPlatformsTab() {
             next.delete(statusData.platformId);
             return next;
           });
+          setExternalChromeLogin((prev) => {
+            const next = new Set(prev);
+            next.delete(statusData.platformId);
+            return next;
+          });
         }
         
-        // Also reload to get fresh data
-        setTimeout(() => loadPlatforms(), 500);
+        // Also reload to get fresh data (skip immediate re-validation right after connect)
+        if (statusData.status !== "connected") {
+          setTimeout(() => loadPlatforms(), 500);
+        }
       }
     };
 
@@ -146,18 +159,83 @@ export function ConnectedPlatformsTab() {
     };
   }, [loadPlatforms]);
 
+  const handleRegisterSite = useCallback(async () => {
+    const url = newSiteUrl.trim();
+    if (!url) return;
+
+    setRegisterLoading(true);
+    setError(null);
+    try {
+      const response = await gateway.send("platform:register", {
+        url,
+        name: newSiteName.trim() || undefined,
+      });
+      if (!response.success) {
+        throw new Error(response.error || "Failed to register site");
+      }
+      setNewSiteUrl("");
+      setNewSiteName("");
+      await loadPlatforms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to register site");
+    } finally {
+      setRegisterLoading(false);
+    }
+  }, [loadPlatforms, newSiteName, newSiteUrl]);
+
+  const handleRemoveSite = useCallback(
+    async (platformId: string) => {
+      setActionLoading(platformId);
+      setError(null);
+      try {
+        const response = await gateway.send("platform:unregister", { platformId });
+        if (!response.success) {
+          throw new Error(response.error || "Failed to remove site");
+        }
+        await loadPlatforms();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to remove site");
+      } finally {
+        setActionLoading(null);
+      }
+    },
+    [loadPlatforms],
+  );
+
   const handleConnect = async (platformId: string) => {
     setActionLoading(platformId);
     setError(null);
+    setConnectNotice(null);
 
     try {
       const response = await gateway.send("platform:connect", { platformId });
+      if (!response.success) {
+        throw new Error(response.error || "Failed to connect");
+      }
+
       const data = response.data as {
         waitingForConfirmation?: boolean;
         status?: string;
+        externalChrome?: boolean;
+        chromeWindowOpened?: boolean;
+        message?: string;
+        error?: string;
       };
 
+      if (data?.error && data.status === "disconnected") {
+        setError(data.error);
+        setActionLoading(null);
+        return;
+      }
+
+      if (data?.message) {
+        setConnectNotice(data.message);
+      }
+
       if (data?.status === "connected") {
+        if (data.chromeWindowOpened) {
+          setExternalChromeLogin((prev) => new Set(prev).add(platformId));
+        }
         await loadPlatforms();
         setActionLoading(null);
         return;
@@ -166,6 +244,11 @@ export function ConnectedPlatformsTab() {
       // If waiting for Chrome login, show check-now UI while background polling runs
       if (data?.waitingForConfirmation) {
         setWaitingForLogin((prev) => new Set(prev).add(platformId));
+        if (data.externalChrome) {
+          setExternalChromeLogin((prev) => new Set(prev).add(platformId));
+        } else {
+          openPlatformBrowserTab(platformId);
+        }
         // Update local state to show connecting
         setPlatforms((prev) =>
           prev.map((p) =>
@@ -186,6 +269,7 @@ export function ConnectedPlatformsTab() {
   const handleConfirmLogin = async (platformId: string) => {
     setActionLoading(platformId);
     setError(null);
+    setConnectNotice(null);
 
     try {
       const response = await gateway.send("platform:confirm-login", { platformId });
@@ -194,6 +278,11 @@ export function ConnectedPlatformsTab() {
       if (data?.status === "connected") {
         // Success! Remove from waiting list
         setWaitingForLogin((prev) => {
+          const next = new Set(prev);
+          next.delete(platformId);
+          return next;
+        });
+        setExternalChromeLogin((prev) => {
           const next = new Set(prev);
           next.delete(platformId);
           return next;
@@ -213,6 +302,11 @@ export function ConnectedPlatformsTab() {
 
   const handleCancelLogin = (platformId: string) => {
     setWaitingForLogin((prev) => {
+      const next = new Set(prev);
+      next.delete(platformId);
+      return next;
+    });
+    setExternalChromeLogin((prev) => {
       const next = new Set(prev);
       next.delete(platformId);
       return next;
@@ -268,16 +362,53 @@ export function ConnectedPlatformsTab() {
   return (
     <div className="connected-platforms-tab">
       <div className="connected-platforms-header">
-        <h2>Social Login</h2>
+        <h2>Platform Connections</h2>
         <p className="connected-platforms-description">
-          Connect your social accounts for automated posting, messaging, and data collection.
-          Sessions are automatically refreshed in the background.
+          Connect sites that need login — social platforms and any custom web app.
+          Sessions stay in an in-app tab; the agent reuses them for automation.
+        </p>
+      </div>
+
+      <div className="connected-platforms-add-site">
+        <h3>Add a site</h3>
+        <div className="connected-platforms-add-form">
+          <input
+            type="url"
+            className="connected-platforms-input"
+            placeholder="https://app.example.com"
+            value={newSiteUrl}
+            onChange={(event) => setNewSiteUrl(event.target.value)}
+          />
+          <input
+            type="text"
+            className="connected-platforms-input connected-platforms-input-name"
+            placeholder="Display name (optional)"
+            value={newSiteName}
+            onChange={(event) => setNewSiteName(event.target.value)}
+          />
+          <button
+            type="button"
+            className="connected-platform-btn connected-platform-btn-primary"
+            onClick={() => void handleRegisterSite()}
+            disabled={registerLoading || !newSiteUrl.trim()}
+          >
+            {registerLoading ? "Adding..." : "Add site"}
+          </button>
+        </div>
+        <p className="connected-platforms-add-hint">
+          Papr opens Google Chrome outside the app (Chrome Manager style) for login and automation.
         </p>
       </div>
 
       {error && (
         <div className="connected-platforms-error">
           {error}
+        </div>
+      )}
+
+      {connectNotice && (
+        <div className="connected-platforms-note connected-platforms-connect-notice">
+          {connectNotice}
         </div>
       )}
 
@@ -289,12 +420,16 @@ export function ConnectedPlatformsTab() {
           const needsReauth =
             status.status === "expired" || status.status === "needs_reauth";
           const isWaitingForLogin = waitingForLogin.has(platform.id);
+          const usesExternalChrome = externalChromeLogin.has(platform.id);
 
           return (
             <div key={platform.id} className="connected-platform-card">
               <div className="connected-platform-info">
                 <div className="connected-platform-header">
                   <span className="connected-platform-name">{platform.name}</span>
+                  {platform.isCustom && (
+                    <span className="connected-platform-badge">Custom</span>
+                  )}
                   <span
                     className="connected-platform-status"
                     style={{ color: getStatusColor(status.status) }}
@@ -303,7 +438,7 @@ export function ConnectedPlatformsTab() {
                       className="connected-platform-status-dot"
                       style={{ backgroundColor: getStatusColor(status.status) }}
                     />
-                    {isWaitingForLogin ? "Checking Chrome for login..." : getStatusLabel(status.status)}
+                    {isWaitingForLogin ? "Waiting for sign-in..." : getStatusLabel(status.status)}
                   </span>
                 </div>
 
@@ -321,11 +456,25 @@ export function ConnectedPlatformsTab() {
 
                 {isWaitingForLogin && (
                   <div className="connected-platform-waiting-info">
-                    <strong>Log in using Chrome</strong> if you aren't already.
-                    <br />
-                    <span className="connected-platform-waiting-note">
-                      We check Chrome automatically every few seconds. Google sign-in and 2FA work normally.
-                    </span>
+                    {usesExternalChrome ? (
+                      <>
+                        <strong>Log in in the Chrome window</strong> that opened outside Papr.
+                        <br />
+                        <span className="connected-platform-waiting-note">
+                          Passkeys and Google/Apple sign-in work in real Chrome. We detect login
+                          automatically — click Check now when finished.
+                        </span>
+                      </>
+                    ) : (
+                      <>
+                        <strong>Log in in the {platform.name} tab</strong> that opened in Papr.
+                        <br />
+                        <span className="connected-platform-waiting-note">
+                          If you&apos;re already logged into Chrome, Papr imports those cookies first.
+                          Otherwise finish sign-in in the Papr tab — we detect it automatically.
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -335,7 +484,11 @@ export function ConnectedPlatformsTab() {
                   </div>
                 )}
 
-                {platform.notes && !isConnected && !isWaitingForLogin && (
+                {platform.homeUrl && (
+                  <div className="connected-platform-notes">{platform.homeUrl}</div>
+                )}
+
+                {platform.notes && !isConnected && !isWaitingForLogin && !platform.homeUrl && (
                   <div className="connected-platform-notes">
                     {platform.notes}
                   </div>
@@ -352,6 +505,15 @@ export function ConnectedPlatformsTab() {
                     >
                       {isLoading ? "..." : "Refresh"}
                     </button>
+                    {platform.isCustom && (
+                      <button
+                        className="connected-platform-btn connected-platform-btn-danger"
+                        onClick={() => void handleRemoveSite(platform.id)}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? "..." : "Remove"}
+                      </button>
+                    )}
                     <button
                       className="connected-platform-btn connected-platform-btn-danger"
                       onClick={() => handleDisconnect(platform.id)}
@@ -363,13 +525,22 @@ export function ConnectedPlatformsTab() {
                 )}
 
                 {needsReauth && !isWaitingForLogin && (
-                  <button
-                    className="connected-platform-btn connected-platform-btn-primary"
-                    onClick={() => handleConnect(platform.id)}
-                    disabled={isLoading}
-                  >
-                    {isLoading ? "Connecting..." : "Reconnect"}
-                  </button>
+                  <>
+                    <button
+                      className="connected-platform-btn connected-platform-btn-primary"
+                      onClick={() => handleConnect(platform.id)}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? "Connecting..." : "Reconnect"}
+                    </button>
+                    <button
+                      className="connected-platform-btn connected-platform-btn-secondary"
+                      onClick={() => handleConfirmLogin(platform.id)}
+                      disabled={isLoading}
+                    >
+                      {isLoading ? "Checking..." : "Check now"}
+                    </button>
+                  </>
                 )}
 
                 {status.status === "disconnected" && !isWaitingForLogin && (
@@ -418,14 +589,20 @@ export function ConnectedPlatformsTab() {
       <div className="connected-platforms-footer">
         <h3>How it works</h3>
         <ol className="connected-platforms-steps">
-          <li>Click <strong>Connect</strong> — if you're already logged into Chrome, it connects instantly</li>
-          <li>Otherwise Chrome opens — log in normally (Google, 2FA, etc.)</li>
-          <li>Papr Work reads cookies from Chrome and stores them securely</li>
-          <li>Session Keeper re-reads Chrome periodically to keep cookies fresh</li>
-          <li>No Chrome? We fall back to a built-in browser window instead</li>
+          <li>
+            <strong>LinkedIn:</strong> Connect opens Papr-managed Chrome — sign in there (we never import from your personal Chrome)
+          </li>
+          <li>
+            <strong>Other platforms:</strong> if you&apos;re already logged into Google Chrome, Papr imports cookies and connects instantly; otherwise Papr Chrome opens for sign-in
+          </li>
+          <li>
+            <strong>Multiple platforms:</strong> one Papr Chrome window — each platform gets its own tab (connecting Reddit won&apos;t replace your LinkedIn tab)
+          </li>
+          <li>Papr stores sessions securely and refreshes them in the background</li>
+          <li>The agent uses Papr-managed Chrome for automation (LinkedIn always; others when a live browser is needed)</li>
         </ol>
         <p className="connected-platforms-note">
-          <strong>Note:</strong> Chrome is required for the preferred login flow. Safari-only users get the Playwright fallback.
+          <strong>Note:</strong> LinkedIn requires sign-in in Papr&apos;s Chrome window. X, Reddit, and others can connect instantly when you&apos;re already logged into your regular Chrome.
         </p>
       </div>
     </div>

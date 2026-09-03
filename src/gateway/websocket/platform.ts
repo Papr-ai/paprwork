@@ -16,24 +16,35 @@ import {
   getSessionKeeperService,
 } from "../services/platforms/SessionKeeperService.js";
 import {
-  type PlatformId,
   getPlatformConfig,
   getAllPlatformIds,
 } from "../services/platforms/platformRegistry.js";
 
 interface PlatformConnectPayload {
-  platformId: PlatformId;
+  platformId: string;
 }
 
 interface PlatformStatusPayload {
-  platformId?: PlatformId;
+  platformId?: string;
+}
+
+interface PlatformRegisterPayload {
+  url: string;
+  name?: string;
+}
+
+interface PlatformUnregisterPayload {
+  platformId: string;
 }
 
 export interface PlatformInfo {
-  id: PlatformId;
+  id: string;
   name: string;
   notes?: string;
   status: PlatformSessionState;
+  isCustom?: boolean;
+  homeUrl?: string;
+  registeredBy?: "user" | "agent";
 }
 
 export async function setupPlatformHandlers(
@@ -52,12 +63,18 @@ export async function setupPlatformHandlers(
           const config = getPlatformConfig(platformId);
           if (!config) continue;
 
-          const status = await sessionService.getStatus(platformId);
+          const status =
+            platformId === "linkedin"
+              ? await sessionService.getStatusWithLiveValidation(platformId)
+              : await sessionService.getStatus(platformId);
           platforms.push({
             id: platformId,
             name: config.name,
             notes: config.notes,
             status,
+            isCustom: config.isCustom,
+            homeUrl: config.isCustom ? config.homeUrl : undefined,
+            registeredBy: config.registeredBy,
           });
         }
 
@@ -75,7 +92,10 @@ export async function setupPlatformHandlers(
         await sessionService.initialize();
 
         if (payload.platformId) {
-          const status = await sessionService.getStatus(payload.platformId);
+          const status =
+            payload.platformId === "linkedin"
+              ? await sessionService.getStatusWithLiveValidation(payload.platformId)
+              : await sessionService.getStatus(payload.platformId);
           sendResponse(ws, {
             id: message.id,
             success: true,
@@ -119,9 +139,13 @@ export async function setupPlatformHandlers(
             ...result,
             message:
               result.status === "connected"
-                ? `Connected to ${config.name}`
+                ? result.chromeWindowOpened
+                  ? `Connected to ${config.name}. A Chrome window opened with your session.`
+                  : `Connected to ${config.name}`
                 : result.waitingForConfirmation
-                  ? `Checking Chrome for ${config.name}. If needed, log in there — we'll detect it automatically.`
+                  ? result.externalChrome
+                    ? `A Chrome window opened for ${config.name}. Log in there (passkeys work), then click Check now.`
+                    : `Checking Chrome for ${config.name}. If needed, log in there — we'll detect it automatically.`
                   : result.error || `Connecting to ${config.name}`,
           },
         });
@@ -197,6 +221,70 @@ export async function setupPlatformHandlers(
           id: message.id,
           success: true,
           data: result,
+        });
+        break;
+      }
+
+      case "platform:register": {
+        const payload = message.payload as PlatformRegisterPayload;
+        if (!payload.url?.trim()) {
+          sendError(ws, message.id, "url is required");
+          return;
+        }
+
+        const {
+          registerCustomPlatformConnection,
+        } = await import("../services/platforms/customPlatformConnections.js");
+        const { refreshCustomPlatformConfigCache } = await import(
+          "../services/platforms/platformRegistry.js"
+        );
+
+        const record = await registerCustomPlatformConnection({
+          url: payload.url,
+          name: payload.name,
+          registeredBy: "user",
+        });
+        await refreshCustomPlatformConfigCache();
+
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: record,
+        });
+        break;
+      }
+
+      case "platform:unregister": {
+        const payload = message.payload as PlatformUnregisterPayload;
+        if (!payload.platformId) {
+          sendError(ws, message.id, "platformId is required");
+          return;
+        }
+
+        const config = getPlatformConfig(payload.platformId);
+        if (!config?.isCustom) {
+          sendError(ws, message.id, "Only custom platform connections can be removed");
+          return;
+        }
+
+        const sessionService = getPlatformSessionService();
+        await sessionService.initialize();
+        await sessionService.disconnect(payload.platformId);
+
+        const {
+          unregisterCustomPlatformConnection,
+        } = await import("../services/platforms/customPlatformConnections.js");
+        const { refreshCustomPlatformConfigCache } = await import(
+          "../services/platforms/platformRegistry.js"
+        );
+
+        const removed = await unregisterCustomPlatformConnection(payload.platformId);
+        await refreshCustomPlatformConfigCache();
+
+        sendResponse(ws, {
+          id: message.id,
+          success: removed,
+          data: { platformId: payload.platformId, removed },
         });
         break;
       }

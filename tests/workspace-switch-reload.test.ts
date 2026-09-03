@@ -168,9 +168,9 @@ describe("reloadUiForWorkspaceSwitch", () => {
     await vi.runAllTimersAsync();
     await reloadPromise;
 
-    expect(useTabStore.getState().tabs).toHaveLength(2);
+    expect(useTabStore.getState().tabs).toHaveLength(1);
     expect(useTabStore.getState().tabs.some((tab) => tab.title === "Hi")).toBe(true);
-    expect(useTabStore.getState().activeTabId).toBe("settings-settings");
+    expect(useTabStore.getState().activeTabId).toBe("tab-chat-1");
 
     const tabsIndex = callOrder.indexOf("app:load_tabs");
     const chatIndex = callOrder.indexOf("chat:list");
@@ -190,7 +190,7 @@ describe("reloadUiForWorkspaceSwitch", () => {
       if (type === "app:load_tabs") {
         loadTabsCalls += 1;
         if (loadTabsCalls === 1) {
-          return { success: true, data: [] };
+          throw new Error("AppStateStorage not ready");
         }
         return {
           success: true,
@@ -228,13 +228,8 @@ describe("reloadUiForWorkspaceSwitch", () => {
       return { success: true, data: undefined };
     });
 
-    const reloadPromise = reloadUiForWorkspaceSwitch();
-    await vi.runAllTimersAsync();
+    const reloadPromise = reloadUiForWorkspaceSwitch({ waitForGateway: true });
     await reloadPromise;
-
-    expect(useTabStore.getState().tabs.filter((t) => t.type !== "settings")).toHaveLength(
-      0,
-    );
 
     attachWorkspaceSwitchBroadcastListener();
     window.dispatchEvent(
@@ -457,6 +452,20 @@ describe("reloadUiForWorkspaceSwitch", () => {
     ).toBe(true);
   });
 
+  it("cold boot reload does not show the workspace switch overlay", async () => {
+    stubWindowForReload();
+
+    await reloadUiForWorkspaceSwitch({
+      waitForGateway: false,
+      targetWorkspaceKey: buildWorkspaceUiCacheKey("org-a", "ns-a"),
+      organizationName: "Acme",
+      namespaceName: "Production",
+    });
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(false);
+    expect(isWorkspaceSwitchReloading()).toBe(false);
+  });
+
   it("prepareWorkspaceSwitchReload shows overlay before gateway switch completes", async () => {
     vi.useFakeTimers();
     stubWindowForReload();
@@ -475,6 +484,59 @@ describe("reloadUiForWorkspaceSwitch", () => {
 
     expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(true);
     expect(getWorkspaceSwitchOverlaySnapshot().organizationName).toBe("Acme");
+  });
+
+  it("catch-up does not complete reload while gateway is still idle before switch starts", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ active: false, phase: "idle" }),
+    } as Response);
+
+    const targetKey = buildWorkspaceUiCacheKey("org-new", "ns-new");
+    const reloadPromise = reloadUiForWorkspaceSwitch({
+      waitForGateway: true,
+      targetWorkspaceKey: targetKey,
+      organizationName: "Acme",
+      namespaceName: "Production",
+    });
+    await reloadPromise;
+    await vi.advanceTimersByTimeAsync(500);
+    await Promise.resolve();
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(true);
+    expect(isWorkspaceSwitchReloading()).toBe(true);
+  });
+
+  it("catch-up completes reload when gateway switch-status matches target workspace", async () => {
+    vi.useFakeTimers();
+    stubWindowForReload();
+    attachWorkspaceSwitchBroadcastListener();
+
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        active: false,
+        phase: "complete",
+        organizationId: "org-new",
+        namespaceId: "ns-new",
+      }),
+    } as Response);
+
+    const targetKey = buildWorkspaceUiCacheKey("org-new", "ns-new");
+    const reloadPromise = reloadUiForWorkspaceSwitch({
+      waitForGateway: true,
+      targetWorkspaceKey: targetKey,
+    });
+    await reloadPromise;
+    await vi.runAllTimersAsync();
+    await Promise.resolve();
+
+    expect(getWorkspaceSwitchOverlaySnapshot().active).toBe(false);
+    expect(isWorkspaceSwitchReloading()).toBe(false);
   });
 
   it("catch-up completes reload when gateway switch-status is already complete", async () => {

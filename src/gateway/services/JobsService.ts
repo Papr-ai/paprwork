@@ -125,6 +125,12 @@ export { STANDALONE_APP_ID } from "./jobs/appIds.js";
 
 let jobsServiceInstance: JobsService | null = null;
 
+function logJobsStartupStep(phase: "Init" | "Maintenance", label: string): void {
+  if (process.env.PAPR_DEBUG_STARTUP === "1") {
+    console.log(`[JobsService] ${phase}: ${label}…`);
+  }
+}
+
 export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
@@ -134,6 +140,8 @@ export class JobsService {
   private executors: IJobExecutor[];
   private initialized: boolean;
   private initPromise: Promise<void> | null = null;
+  /** Background migrations/hydration — await before home repair or scheduler start. */
+  private startupMaintenancePromise: Promise<void> | null = null;
   private saveLock: Promise<void> | null = null; // Prevent concurrent saves
   /** Set when startup reconcile deletes jobs; triggers one batched cloud push after init. */
   private deferredDeleteCloudPush = false;
@@ -197,6 +205,7 @@ export class JobsService {
   /** Reload index from disk after PAPR_HOME changes (cloud agent gateway). */
   async resetForWorkspaceReload(): Promise<void> {
     this.initialized = false;
+    this.startupMaintenancePromise = null;
     this.jobs.clear();
     this.boundPaprDir = null;
     this.boundWriteGeneration = null;
@@ -523,66 +532,106 @@ export class JobsService {
     if (this.initialized) {
       return;
     }
-    const step = (label: string) =>
-      console.log(`[JobsService] Init: ${label}…`);
-    step("bind workspace");
+    await this.runCoreInitialize();
+    this.startupMaintenancePromise = this.runDeferredStartupMaintenance();
+    void this.startupMaintenancePromise.catch((err) => {
+      console.warn(
+        "[JobsService] Deferred startup maintenance failed:",
+        err instanceof Error ? err.message : err,
+      );
+    });
+  }
+
+  /** Fast path — registry loaded and scheduler-safe before gateway routes register. */
+  private async runCoreInitialize(): Promise<void> {
+    const startedAt = performance.now();
+    logJobsStartupStep("Init", "bind workspace");
     this.bindWorkspaceWriteContext();
-    step("legacy migration");
+    logJobsStartupStep("Init", "legacy migration");
     await this.migrateLegacyIfNeeded();
-    step("ensure directories");
+    logJobsStartupStep("Init", "ensure directories");
     await fs.mkdir(this.jobsRootDir, { recursive: true });
     await fs.mkdir(path.dirname(this.jobsIndexPath), { recursive: true });
-    step("load jobs index");
-    await this.loadJobs(); // Load existing jobs FIRST
-    step("filter tombstones");
+    logJobsStartupStep("Init", "load jobs index");
+    await this.loadJobs();
+    logJobsStartupStep("Init", "filter tombstones");
     await this.filterTombstonedJobsFromRegistry();
-    step("migrate Home Daily Brief");
-    await this.migrateLegacyHomeDailyBriefJobIfNeeded();
-    step("migrate job runtime files");
-    await this.migrateAndHydrateJobRuntimeFiles();
-    step("hydrate runtime from cloud");
-    await this.hydrateJobRuntimeFromCloud();
-    step("backfill app ids (pass 1)");
-    await this.backfillJobAppIds();
-    step("prune stale entries");
-    await this.pruneStaleJobEntries(); // Remove index entries whose folders were deleted (e.g. bash rm)
-    step("install default jobs");
-    await this.installDefaultJobs(); // Optional extra bundled jobs (Home uses default-job.json)
-    step("install workspace chat job");
-    await this.installWorkspaceChatJob();
-    step("sync Home Daily Brief bundle");
-    await this.syncHomeDailyBriefFromBundle(); // Patch Home Daily Brief prompt from bundle
-    step("reconcile duplicate Home Daily Brief");
-    await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
-    step("filter tombstones after hydrate");
-    await this.filterTombstonedJobsFromRegistry();
-    step("backfill app ids (pass 2)");
-    await this.backfillJobAppIds();
 
-    step("run history");
+    logJobsStartupStep("Init", "run history");
     const runHistory = getJobRunHistory();
     await runHistory.initialize();
 
-    step("reconcile interrupted jobs");
+    logJobsStartupStep("Init", "reconcile interrupted jobs");
     await this.reconcileInterruptedJobs();
 
-    step("reconcile stale running jobs");
+    logJobsStartupStep("Init", "reconcile stale running jobs");
     await this.reconcileStaleRunningJobs(30_000);
 
-    step("reconcile schedule states");
+    logJobsStartupStep("Init", "reconcile schedule states");
     await this.reconcileScheduleStates();
 
-    step("migrate unlinked jobs");
-    await this.migrateUnlinkedJobsToLocalOnly();
-
-    void this.rebuildGraph();
-
     this.initialized = true;
-    console.log(`[JobsService] Init complete (${this.jobs.size} jobs in registry)`);
+    const elapsedMs = Math.round(performance.now() - startedAt);
+    console.log(
+      `[JobsService] Core init complete (${this.jobs.size} jobs, ${elapsedMs}ms; maintenance in background)`,
+    );
+  }
 
-    if (this.deferredDeleteCloudPush) {
-      this.deferredDeleteCloudPush = false;
-      void this.flushDeferredDeleteCloudPush();
+  /** Migrations, cloud hydration, and bundled job installs — safe to defer. */
+  private async runDeferredStartupMaintenance(): Promise<void> {
+    const startedAt = performance.now();
+    try {
+      logJobsStartupStep("Maintenance", "migrate Home Daily Brief");
+      await this.migrateLegacyHomeDailyBriefJobIfNeeded();
+      logJobsStartupStep("Maintenance", "migrate job runtime files");
+      await this.migrateAndHydrateJobRuntimeFiles();
+      logJobsStartupStep("Maintenance", "hydrate runtime from cloud");
+      await this.hydrateJobRuntimeFromCloud();
+      logJobsStartupStep("Maintenance", "backfill app ids (pass 1)");
+      await this.backfillJobAppIds();
+      logJobsStartupStep("Maintenance", "prune stale entries");
+      await this.pruneStaleJobEntries();
+      logJobsStartupStep("Maintenance", "install default jobs");
+      await this.installDefaultJobs();
+      logJobsStartupStep("Maintenance", "install workspace chat job");
+      await this.installWorkspaceChatJob();
+      logJobsStartupStep("Maintenance", "sync Home Daily Brief bundle");
+      await this.syncHomeDailyBriefFromBundle();
+      logJobsStartupStep("Maintenance", "reconcile duplicate Home Daily Brief");
+      await this.reconcileDuplicateHomeDailyBriefJobsIfNeeded();
+      logJobsStartupStep("Maintenance", "filter tombstones after hydrate");
+      await this.filterTombstonedJobsFromRegistry();
+      logJobsStartupStep("Maintenance", "backfill app ids (pass 2)");
+      await this.backfillJobAppIds();
+      logJobsStartupStep("Maintenance", "migrate unlinked jobs");
+      await this.migrateUnlinkedJobsToLocalOnly();
+
+      void this.rebuildGraph();
+
+      const elapsedMs = Math.round(performance.now() - startedAt);
+      if (process.env.PAPR_DEBUG_STARTUP === "1") {
+        console.log(
+          `[JobsService] Startup maintenance complete (${this.jobs.size} jobs, ${elapsedMs}ms)`,
+        );
+      }
+
+      if (this.deferredDeleteCloudPush) {
+        this.deferredDeleteCloudPush = false;
+        void this.flushDeferredDeleteCloudPush();
+      }
+    } catch (err) {
+      console.warn(
+        "[JobsService] Startup maintenance error:",
+        err instanceof Error ? err.message : err,
+      );
+      throw err;
+    }
+  }
+
+  /** Await background migrations before home repair, bundled jobs, or scheduler start. */
+  async waitForStartupMaintenance(): Promise<void> {
+    if (this.startupMaintenancePromise) {
+      await this.startupMaintenancePromise;
     }
   }
 

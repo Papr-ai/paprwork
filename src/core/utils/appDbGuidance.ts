@@ -20,6 +20,9 @@ const CHATS_DB_RE = /(?:~\/\.paprwork(?:-v2)?\/|\.paprwork(?:-v2)?\/).*chats\.db
 const LEGACY_JOBS_DIR_RE = /\/Papr\/jobs\//i;
 const JOBS_JSON_SQLITE_RE = /jobs\.json/i;
 
+const PERSIST_INTENT_RE =
+  /\b(save|store|persist|write|insert|update|database|table|rows|results|insights|sync|record)\b/i;
+
 export function buildAppDbBashGuidance(command: string): string | undefined {
   const hints: string[] = [];
 
@@ -74,6 +77,8 @@ export function buildAppDbJobReminder(
     cmd.includes("APP_DB") ||
     cmd.includes("PAPR_DB_");
 
+  const isAgentJob = jobType === "agent" || jobType === "subagent";
+
   if (mentionsJobDb && !mentionsWriteDb && writeDbIds.length > 0) {
     return (
       `⚠️ APP DB REMINDER: Job has writeDbIds but command references JOB_DB without PAPR_DB_* / APP_DB. ` +
@@ -82,8 +87,33 @@ export function buildAppDbJobReminder(
   }
 
   if (
+    isAgentJob &&
+    writeDbIds.length > 0 &&
+    PERSIST_INTENT_RE.test(command) &&
+    !mentionsWriteDb
+  ) {
+    return (
+      `⚠️ APP DB REMINDER: Agent job will persist data — use PAPR_DB_* / APP_DB at runtime (papr_db_exec or sqlite3), NOT $JOB_DB. ` +
+      `writeDbIds: ${writeDbIds.join(", ")}. $JOB_DB is scratch only and invisible to mini-apps. ${APP_DB_QUICK_REFERENCE}`
+    );
+  }
+
+  if (
+    isAgentJob &&
+    linkedAppIds.length > 0 &&
     writeDbIds.length === 0 &&
-    (jobType === "agent" || jobType === "subagent") &&
+    PERSIST_INTENT_RE.test(command)
+  ) {
+    return (
+      `⚠️ APP DB REMINDER: App-linked agent job implies persisting data but has no writeDbIds. ` +
+      `create_database → attach_database → create_job({ writeDbIds: [dbId] }). ` +
+      `Without writeDbIds the agent may write to $JOB_DB scratch, which the mini-app cannot read. ${APP_DB_QUICK_REFERENCE}`
+    );
+  }
+
+  if (
+    writeDbIds.length === 0 &&
+    isAgentJob &&
     !mentionsWriteDb &&
     /\b(INSERT|UPDATE|DELETE|CREATE TABLE|sqlite3)\b/i.test(command)
   ) {

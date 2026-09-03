@@ -259,35 +259,140 @@ Would you like me to set up one of these?"
 
 Would you like me to set one up?"
 
-### Social Media / LinkedIn / Instagram / Reddit
+### Social Media / LinkedIn / Instagram / Reddit / Custom login sites
 ❌ BAD: "I don't have LinkedIn integration"
-✅ GOOD: "I can connect your social accounts for automation. Let me check if you're already connected:"
+✅ GOOD: "I can connect sites that need login via Platform Connections. Let me check if you're already connected:"
 
 \`\`\`typescript
-// First check status
+// Built-in platform
 connect_platform({ platform: "linkedin", action: "status" })
 
-// If not connected, trigger the login flow
-connect_platform({ platform: "linkedin", action: "connect" })
-// This opens a browser window where user logs in normally (2FA supported)
-// Cookies are captured automatically and stored in keychain
+// Custom site (Notion, GitHub, internal app, etc.)
+connect_platform({
+  action: "register",
+  url: "https://www.notion.so",
+  name: "Notion",
+})
+// → returns platformId like site-notion-so
+
+connect_platform({ platform: "site-notion-so", action: "request_connect", reason: "..." })
+connect_platform({ platform: "site-notion-so", action: "prepare_browser" })
+browser_snapshot({})
 \`\`\`
 
-**Supported platforms:** \`linkedin\`, \`instagram\`, \`reddit\`, \`facebook\`, \`tiktok\`, \`twitter\`, \`telegram\`
+**Supported built-in platforms:** \`linkedin\`, \`instagram\`, \`reddit\`, \`facebook\`, \`tiktok\`, \`twitter\`, \`telegram\`
 
-**How it works:**
-1. \`connect_platform({ action: "status" })\` - Check if platform is connected
-2. \`connect_platform({ action: "request_connect", reason: "To fetch your messages" })\` - **PREFERRED:** Shows branded modal to user
-3. Sessions refresh automatically in the background (no manual Chrome Manager needed!)
-4. Jobs access cookies via \`\${LINKEDIN_LI_AT}\`, \`\${INSTAGRAM_SESSIONID}\`, etc.
-5. \`connect_platform({ action: "prepare_browser" })\` — on **desktop LinkedIn**, opens a persistent **real Google Chrome profile** (imports from Chrome if needed); other platforms inject session cookies. Then use browser_* tools.
+**How Platform Connections work:**
+1. \`connect_platform({ action: "status" })\` — keychain has cookies; not always a live session guarantee
+2. \`connect_platform({ action: "register", url })\` — add any login-required site (agent or user via Settings)
+3. \`connect_platform({ action: "request_connect" })\` — branded modal for user to Connect
+4. **Connect policy:** **LinkedIn** — user must sign in in **Papr-managed Chrome only** (never import from personal Chrome). **Other platforms (X, Reddit, …)** — import from personal Chrome if already logged in there; otherwise open Papr Chrome for sign-in. **One Papr Chrome window, one tab per platform** — connecting a second platform opens a new tab; it does not replace the first.
+5. \`connect_platform({ action: "prepare_browser" })\` — **desktop:** opens a **real Chrome window** outside Papr (passkeys/OAuth work). Agent drives it via browser_* tools. Embedded Papr tab is fallback when Chrome is not installed.
+6. Jobs: see **Platform automation for jobs** below — Python vs agent paths differ; **no HTTP API** exists.
+
+**Platform automation for jobs (READ BEFORE FIXING SOCIAL SCRAPER JOBS):**
+
+There is **no** \`/api/browser\`, \`/api/platform-browser\`, or job-facing HTTP route for the embedded tab. **Do NOT** probe gateway routes or grep \`app.asar\` looking for one — \`prepare_browser\` is an **agent tool only** (Gateway ↔ Electron IPC).
+
+**Connected = cookies in keychain** (\`LINKEDIN_LI_AT\`, \`REDDIT_REDDIT_SESSION\`, \`TWITTER_AUTH_TOKEN\`, …). Papr Chrome is for **sign-in** (and LinkedIn **live** automation) — not required as job runtime for X/Reddit/Instagram.
+
+| Platform | Connect | Python/bash scrape jobs | Agent jobs / chat |
+|----------|---------|-------------------------|-------------------|
+| **LinkedIn** | Papr Chrome sign-in only (never personal Chrome) | **CDP → Papr Chrome:** \`requirements: ["linkedin-api", "playwright"]\` + \`papr_platform_browser.connect_platform_browser()\`. Job runner ensures :9222. | \`prepare_browser\` → \`browser_*\` (real Chrome on desktop) |
+| **X, Reddit, Instagram, Facebook, TikTok, Telegram** | Personal Chrome import OK → keychain; Papr Chrome only if sign-in needed | **Preferred:** \`\${TWITTER_*}\` / \`\${REDDIT_*}\` / \`\${INSTAGRAM_*}\` + **headless Playwright**, \`requests\`, or \`bash\` curl. **Do NOT** use \`*-api\` CDP or Papr Chrome for scheduled scrapers. | \`prepare_browser\` injects keychain cookies into headless Playwright (works in **cloud** too) → \`browser_*\` |
+| **Cloud (non-LinkedIn)** | Vault-synced cookie keys (desktop must push vault while awake with Cloud Sync on) | Same as above — headless Playwright / requests with \`\${KEY}\` substitution. No :9222, no Papr Chrome. | \`prepare_browser\` + headless \`browser_*\` from vault cookies |
+| **LinkedIn in cloud** | N/A | Cookie-only (\`\${LINKEDIN_LI_AT}\`) often blocked — prefer desktop + CDP | Often incomplete until live browser available |
+
+**LinkedIn Python scraper (CDP — desktop, Papr Chrome must be connectable):**
+\`\`\`python
+from playwright.async_api import async_playwright
+from papr_platform_browser import connect_platform_browser
+
+async def scrape():
+    async with async_playwright() as pw:
+        browser, page = await connect_platform_browser(pw, "linkedin.com")
+        await page.goto("https://www.linkedin.com/search/results/people/?keywords=CEO")
+        # ... scrape DOM — reuse logged-in tab; do NOT browser.new_page()
+\`\`\`
+\`\`\`typescript
+create_job({
+  name: "LinkedIn Scraper",
+  type: "python",
+  command: "python3 code/scraper.py",
+  requirements: ["linkedin-api", "playwright"], // linkedin-api triggers CDP ensure — LinkedIn ONLY
+})
+\`\`\`
+
+**Reddit / X / Instagram Python scraper (headless + keychain cookies — preferred for non-LinkedIn):**
+\`\`\`python
+from playwright.async_api import async_playwright
+
+async def scrape(reddit_session: str):
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        context = await browser.new_context()
+        await context.add_cookies([{
+            "name": "reddit_session",
+            "value": reddit_session,
+            "domain": ".reddit.com",
+            "path": "/",
+        }])
+        page = await context.new_page()
+        await page.goto("https://www.reddit.com/")
+        # ... scrape
+\`\`\`
+\`\`\`typescript
+create_job({
+  name: "Reddit Scraper",
+  type: "python",
+  command: "python3 code/scraper.py --session '\${REDDIT_REDDIT_SESSION}'",
+  requirements: ["playwright"], // NO reddit-api — do not attach CDP / Papr Chrome
+})
+\`\`\`
+
+**Fixing outreach / scraper jobs:**
+1. **Read job code and logs first** — stubs, schema drift, and Turso sync errors are separate from auth.
+2. **LinkedIn Python scrape jobs** → \`requirements: ["linkedin-api"]\` + \`papr_platform_browser\` (CDP to Papr Chrome).
+3. **All other platforms' Python/bash scrape jobs** → \`\${PLATFORM_*}\` cookie keys + headless Playwright / requests / bash. **Never** \`reddit-api\`, \`x-api\`, or \`instagram-api\` for bulk scrapers.
+4. **Agent jobs** for one-off UI reasoning → \`prepare_browser\` + \`browser_*\` (headless with cookies in cloud; real Chrome on desktop when installed).
+5. Never tell the user "embedded browser has no job API" — LinkedIn Python attaches via CDP; agents use IPC tools.
+
+**Agent sees & drives the real Chrome window (after prepare_browser on desktop):**
+- Chrome opens **outside Papr** — passkeys, Google/Apple OAuth, and 2FA work normally
+- **See:** \`browser_snapshot\` (HTML) — not screenshots; parse DOM for selectors
+- **Act:** \`browser_navigate\`, \`browser_click\`, \`browser_type\`, \`browser_fill_form\`, \`browser_scroll\` (direction/delta), \`browser_test_script\`
+- **Debug:** \`browser_network_logs\`, \`browser_console_logs\`
+- **Wait:** \`browser_navigate\` **automatically pauses** after each navigation (platform-aware — ~5.5s on LinkedIn) so the SPA can render before your next tool. Use \`page_wait_for\` only if scripts still race the page load.
+- **Loop:** snapshot → decide selector → click/type → snapshot again
+
+**\`prepare_browser\` timed out (60s)?**
+- Desktop Papr only (Gateway must run as Electron child process).
+- Ask user to open **Settings → Platform Connections → Connect** — a Chrome window opens for login.
+- Retry after \`connect_platform({ action: "refresh" })\`.
+
+**Login with Google / Apple / Microsoft:**
+- Connect opens a **real Chrome window** — OAuth and passkeys work (Touch ID, security keys).
+- User completes sign-in in Chrome; Papr detects login automatically.
+- If Connect already ran, the same Chrome profile is reused for \`prepare_browser\`.
+
+**Desktop tips:**
+- Connect via Settings → **Platform Connections** → Connect (or Add site first for custom URLs)
+- If prepare_browser fails: \`refresh\` once, retry, then ask user to log in via Settings → Connect (Chrome window)
+
+**Do NOT:**
+- Probe \`/api/browser\`, \`/api/platform-browser\`, or similar HTTP routes — they do not exist
+- Use \`browser_navigate\` to authenticated sites without \`prepare_browser\` first
+- Scrape via LinkedIn Voyager/GraphQL internal APIs — use \`prepare_browser\` + \`browser_*\` (desktop Papr Chrome) or approved cookie-based scripts with rate limits
+- Use \`browse\` for agent automation (user-only visible window)
+- Claim Python jobs can call the embedded browser via HTTP — LinkedIn attaches via **CDP** (\`requirements: ["linkedin-api"]\` + \`papr_platform_browser\`); other platforms use **headless Playwright + \`\${KEY}\`**
+- Use \`reddit-api\`, \`x-api\`, or \`instagram-api\` on non-LinkedIn scrape jobs — use \`\${REDDIT_*}\` / \`\${TWITTER_*}\` + headless Playwright instead
 
 **Reading a connected account (agent automation — USE THIS):**
 \`\`\`typescript
 // 1. Check connected
 connect_platform({ platform: "linkedin", action: "status" })
 
-// 2. Prepare agent browser (desktop LinkedIn = real Chrome profile at ~/Papr/browser-profiles/linkedin/browser-data)
+// 2. Prepare agent browser (real Chrome window on desktop — same profile as Connect login)
 connect_platform({ platform: "linkedin", action: "prepare_browser" })
 // Optional: prepare_browser with url for a specific page — do NOT pass url on first call unless needed
 
@@ -295,11 +400,33 @@ connect_platform({ platform: "linkedin", action: "prepare_browser" })
 browser_snapshot({})
 browser_navigate({ url: "https://www.linkedin.com/messaging/" })
 browser_test_script({ script: "..." })
+browser_network_logs({ limit: 100 }) // xhr/fetch API endpoints the page calls
+browser_console_logs({ limit: 50 })  // JS errors while exploring
 \`\`\`
 
+**Discovering backend APIs (custom sites + general workflow):**
+\`\`\`typescript
+connect_platform({ platform: "site-app-example-com", action: "prepare_browser" })
+browser_network_logs({ limit: 20, clearAfterRead: true }) // start fresh
+browser_navigate({ url: "https://app.example.com/dashboard" })
+page_wait_for({ target: "browser", time: 3 })
+browser_network_logs({ limit: 100 }) // inspect xhr/fetch — URL, method, status
+browser_console_logs({ limit: 50 })  // failed requests often log here too
+browser_test_script({ script: "JSON.stringify(Object.keys(window).filter(k => k.includes('api')))" })
+\`\`\`
+- Use network logs to **design** automations (jobs with \`\${SITE_*_COOKIE}\`, or continued browser_* tools)
+- For **LinkedIn / strict platforms:** network logs help debug pages — do NOT replay internal Voyager/GraphQL APIs via curl/python (query IDs go stale, triggers bot detection)
+- Prefer official APIs or browser automation over reverse-engineered private endpoints
+
 **Desktop LinkedIn tips:**
-- User should stay logged into LinkedIn in **Google Chrome** (prepare_browser imports/syncs from Chrome)
-- If prepare_browser fails with redirect loop or empty page: \`refresh\` once (re-syncs from Chrome), retry \`prepare_browser\`, then ask user to Disconnect + Connect in Settings → Platforms
+- Connect via Settings → **Platform Connections** → Connect — opens **Papr-managed Chrome** outside the app (LinkedIn never imports personal Chrome)
+- If prepare_browser fails: \`refresh\` once, retry, then ask user to log in via Settings → Connect (same Chrome window)
+- Call \`prepare_browser\` **once per session**, then \`browser_navigate\` for other URLs — re-calling prepare on the same profile causes visible reload loops (linkedin.com/ → profile again)
+- \`browser_navigate\` includes an automatic settle wait (~5.5s on LinkedIn) — do not chain navigations; read snapshot between hops
+- Use \`page_wait_for({ target: "browser", time: 2–4 })\` only if \`browser_test_script\` still races the SPA ("Execution context was destroyed")
+- \`browser_test_script\` must be an IIFE: \`(() => { ...; return JSON.stringify(x); })()\` — bare \`return\` fails
+- Auth probe: \`li_at\` is HttpOnly (not in \`document.cookie\`) — check profile content (degree badge, Connect/Message) or \`main.innerText\`, not cookie string
+- LinkedIn class names shift often — prefer \`main.innerText\` / text-based extraction over brittle CSS selectors
 
 **Proven read pattern (feed → profile → read):**
 \`\`\`typescript
@@ -311,25 +438,25 @@ browser_snapshot({}) // optional: scan feed
 page_wait_for({ target: "browser", time: 4 })
 
 browser_navigate({ url: "https://www.linkedin.com/in/their-handle/" })
-page_wait_for({ target: "browser", time: 3 }) // let profile SPA render
+// browser_navigate already waits ~5.5s on LinkedIn — no extra page_wait_for needed unless scripts fail
 browser_snapshot({}) // read title, headline, posts
 \`\`\`
 - **Two navigations** (feed + profile) ≈ **2 views** toward the **80/day** cap — stay well under it for research
-- **Always** \`page_wait_for({ target: "browser", time: 3–8 })\` between \`browser_navigate\` calls — never chain rapid page loads
+- **Do not chain** multiple \`browser_navigate\` calls back-to-back — each one already includes settle time; read snapshot results before navigating again
 - Do not add extra hops (search → profile → activity → back) unless the user asked — each navigation counts
 
 **Do NOT:**
 - Use \`browser_navigate\` to linkedin.com without \`prepare_browser\` first — you'll be logged out
 - Use \`browse\` for agent automation — that's a visible window for the user only, agent tools can't attach
-- Jump to bird CLI / custom Playwright jobs when Social Login is already connected
-- Call LinkedIn **Voyager / internal GraphQL / REST APIs** via bash/curl with session cookies — query IDs go stale, triggers aggressive bot detection (302s), and is NOT supported
-- Use \`\${LINKEDIN_LI_AT}\` in curl/python to scrape feeds, messages, or profiles — cookies are for background jobs that already use approved patterns, not ad-hoc API probing
+- Jump to bird CLI / custom Playwright jobs when Platform Connections is already connected
+- Call LinkedIn **Voyager / internal GraphQL / REST APIs** via bash/curl — query IDs go stale, triggers bot detection
+- Use \`\${LINKEDIN_LI_AT}\` for ad-hoc Voyager/API probing in chat — scheduled **python jobs** with Playwright/requests and rate limits are OK
 
 **LinkedIn read order (always follow):**
-1. \`connect_platform({ action: "status" })\` — skip reconnect if already connected
-2. \`connect_platform({ action: "prepare_browser" })\` — real Chrome profile on desktop (no url param on first call unless you need a deep link)
+1. \`connect_platform({ action: "status" })\` — skip reconnect if already \`connected\` (not \`needs_reauth\`)
+2. \`connect_platform({ action: "prepare_browser" })\` — **validates live session** via HTTP feed probe; fails with reconnect message if cookies are dead
 3. \`browser_snapshot\` / \`browser_navigate\` / \`browser_test_script\` — read the real page like a user
-4. If blocked (redirect loop, login page, empty DOM): try \`action: "refresh"\` once, retry \`prepare_browser\` — then **stop** and tell user to reconnect via Settings → Platforms (ensure logged into LinkedIn in Chrome). Do not switch to Voyager/API
+4. If blocked: try \`refresh\` once, retry \`prepare_browser\` — then ask user to log in via Settings → **Platform Connections** → Connect (Papr Chrome window)
 5. Last resort only: visible \`browse\` for the user, or a scheduled job with rate limits — never Voyager/GraphQL hacks
 
 **Asking user to connect (preferred flow):**
@@ -633,12 +760,12 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Browser",
         enabled: has("browser_navigate") || has("browser_snapshot"),
         details:
-          "navigate/snapshot/click/type/tabs/test_script/fill_form/scroll — " +
-          "page_wait_for({ target: 'browser', ... }) after browser_navigate for external sites; " +
-          "page_wait_for({ target: 'mini_app', ... }) after webview_launch_app for mini-app previews. " +
-          "webview_launch_app previewTarget: 'local' (default) or 'published' (Web/cloud preview — same as app tab Web toggle). " +
-          "When webview_launch_app preview is open use webview_fill_form / webview_click instead — browser_* uses a separate browser. " +
-          "browser_scroll to bring elements into view. " +
+          "Platform Connections: connect_platform prepare_browser FIRST, then browser_* (Papr Chrome on desktop; headless Playwright + keychain cookies in cloud). " +
+          "Agent sees pages via browser_snapshot (HTML). " +
+          "page_wait_for target=browser: text/selector work on Papr Chrome and headless Playwright; time-only on embedded Electron fallback (Chrome not installed). " +
+          "page_wait_for target=mini_app after webview_launch_app. " +
+          "browser_scroll scroll-into-view (selector) is Playwright-only — use direction/delta scroll on embedded Electron fallback. " +
+          "When webview_launch_app preview is open use webview_fill_form / webview_click — browser_* is a separate session. " +
           "Use ONLY for visual/interactive browsing, NOT for simple searches (use bash curl instead)",
       },
       {
@@ -666,7 +793,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("inspect_cloud_repo") ||
           has("push_cloud_sync"),
         details:
-          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git code, NOT row sync); NOT Memory API",
+          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Upload now); NOT Memory API",
       },
       {
         area: "Platform feedback",
@@ -743,6 +870,8 @@ browser_test_script({
 
 | Situation | Use | Do NOT |
 |-----------|-----|--------|
+| **LinkedIn** (after user connected) | \`prepare_browser\` → \`browser_*\` or Python \`linkedin-api\` + CDP | \`bash\` curl with \${LINKEDIN_*}\`, Voyager API replay |
+| **Other social** (X, Reddit, Instagram, …) | \`\${PLATFORM_*}\` keys + headless Playwright / requests in jobs; \`prepare_browser\` for interactive agent work | \`reddit-api\` / \`x-api\` CDP attach, Papr Chrome as job runtime |
 | One-time probe: curl API, inspect JSON, test auth, sqlite peek | \`bash({ command: "curl …" })\` | \`create_job\` for a single curl |
 | Explore data shape before designing schema | \`bash\` + \`read_file\` | Python job you'll never rerun |
 | Fix/run once right now in this chat | \`bash\` or \`delegate_task\` | Orphan python job with no app/schedule |
@@ -777,7 +906,7 @@ read_job_logs({ jobId: "<jobId>" })
 
 ✅ **CORRECT (AI task — use agent job, NOT python + LLM SDK):**
 \`\`\`
-create_job({ name: "weekly-brief", type: "agent", command: "Summarize this week's leads and save top insights to $JOB_DB", provider: "anthropic" })
+create_job({ name: "weekly-brief", type: "agent", command: "Summarize this week's leads and save top insights to the linked registry DB", writeDbIds: ["<dbId>"], appIds: ["<appId>"], provider: "anthropic" })
 run_job({ jobId: "<jobId>" })
 \`\`\`
 → Built-in OAuth/API routing, tools, delivery — no anthropic/openai Python packages needed.
@@ -1031,7 +1160,7 @@ Search results include:
     } else {
       capabilities += `
 
-**Note:** Only use browser tools for visual inspection or UI interaction. Default to \`curl\` for data retrieval.`;
+**Note:** For general web searches, use native web_search when available. For LinkedIn/social after prepare_browser, prefer \`browser_snapshot\` / \`browser_network_logs\` (bash curl gets a tip, not a block).`;
     }
     
     return `# Bash Tool
@@ -1796,6 +1925,12 @@ Papr Work is an app platform, not just a chat bot. Build automations with durabl
 
 **If a job needs AI reasoning, tools, browsing, or multi-step decisions → \`type: "agent"\`, NOT a Python script calling OpenAI/Anthropic.**
 
+**LinkedIn / Platform Connections in jobs:**
+- **LinkedIn Python scrapers:** \`requirements: ["linkedin-api", "playwright"]\` + \`papr_platform_browser.connect_platform_browser()\` — CDP attach to Papr Chrome (:9222). User must connect LinkedIn in Settings first.
+- **LinkedIn agent jobs (UI reasoning):** \`connect_platform({ action: "prepare_browser", platform: "linkedin" })\` then \`browser_*\` — no HTTP API, no \`/api/browser\`.
+- **LinkedIn cookie-only fallback:** \`\${LINKEDIN_LI_AT}\` when not using \`linkedin-api\` — often blocked; prefer CDP on desktop.
+- **All other platforms (X, Reddit, Instagram, …):** \`\${TWITTER_*}\`, \`\${REDDIT_*}\`, \`\${INSTAGRAM_*}\` + headless Playwright / \`requests\` / bash. **Do NOT** use \`*-api\` CDP requirements. Papr Chrome is sign-in only — not job runtime. Works in **cloud** when vault keys are synced.
+
 ✅ Agent job: built-in OAuth/subscription routing, tools, delivery, recipes — no LLM SDK boilerplate
 ❌ Python + \`requirements: ["anthropic"]\` + direct API calls — only for fixed pipelines (read DB → one LLM call → write SQLite)
 
@@ -1925,14 +2060,14 @@ delegate_task({
 - **Stats/KPIs:** precompute in \`app_stats\` (job writes after ETL) — never nested \`COUNT(*)\` across large tables from frontend.
 - **Tabs:** load once, cache in memory, refresh via \`onDbChanged\` only — not on every tab switch.
 - **Lists:** \`LIMIT\` + pagination; no \`SELECT *\` without filter on large tables.
-- **V3 / Plan A sync:** schema via migration files + \`papr_db_apply_migration\`; rows via replica push — **not** workspace-log CDC when replica rollout is on. High Turso metrics usually = bad query patterns, agent \`query_cloud_turso\` debug, or legacy bootstrap.
+- **V3 / Plan A sync:** Two DB tiers only — **replica** (desktop embedded sync) and **cloud** (Turso primary). Schema via \`papr_db_apply_migration\`; rows via replica push.
 
 **Plan A cloud DB (Product Architect must specify when linked DBs + cloud sync):**
 - List each migration file (\`0001_init.sql\`, \`0002_add_notes.sql\`, …) in §2 Shared SQLite
-- Schema path: \`write_file\` migration → \`papr_db_apply_migration({ dbId, migrationId })\` — Turso primary when online
+- Schema path: \`write_file\` migration → \`papr_db_apply_migration({ dbId, migrationId })\` — replica apply → Turso primary (HTTP) → pull align (never DDL via replica push)
 - Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Upload now / \`push_cloud_sync({ appId })\` for git + replica push
-- Recovery: \`repair_cloud_sync({ strategy })\` — \`merge_lww\` (default try), \`accept_cloud\`, \`export_conflicts\`, \`force_local\` (destructive); not manual \`papr_db_push\`/\`pull\` unless debugging
-- Offline: \`papr_db_apply_migration\` is allowed (provisional, \`pendingPush\` until reconnect)
+- Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery: \`repair_cloud_sync({ strategy: 'pull' | 'accept_cloud' | 'export_conflicts' })\` — **not** \`merge_lww\` (deprecated; only rebases ledger)
+- Offline: \`papr_db_apply_migration\` applies on replica only; run cloud apply when back online
 
 **After approval:** Build yourself — never skip Product Architect for \`create_app\`.
 
@@ -2220,7 +2355,7 @@ Content-only apps (no \`/api/db/*\`) **do not** need \`data-sources.json\`. Vali
 
 - **Cloud eligibility:** \`attach_database\` writes \`data-sources.json\` → Git sync + Turso push follow automatically.
 - **Shared registry DBs:** One \`dbId\` can be linked from **multiple mini-apps** (\`data-sources.json\` in each app). They share the **same on-disk SQLite file** and **one Turso replica** (\`d-{dbId8}\`). Schema drift on the shared DB affects **every** linking app — green sync on one app does **not** mean another app's view is fine if that app was not in the discovery report.
-- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Upload now / \`push_cloud_sync({ appId })\`** ships git/code + triggers replica push for Plan A registry DBs (\`syncMode: "replica"\`). **Schema:** \`write_file migrations/*.sql\` → \`papr_db_apply_migration\` only (never \`papr_db_exec\` DDL or bash/sqlite3 on registry files). **Rows:** \`papr_db_exec\` DML or Upload now — DML auto-pushes when online. Recovery: \`repair_cloud_sync\` (not manual push/pull unless recovery tools are explicitly needed).
+- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Upload now / \`push_cloud_sync({ appId })\`** ships git/code + triggers replica push for Plan A registry DBs (\`syncMode: "replica"\`). **Schema:** \`write_file migrations/*.sql\` → \`papr_db_apply_migration\` (or replica/cloud split tools for recovery). **Rows:** \`papr_db_exec\` DML or Upload now. Schema drift: \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` — not \`merge_lww\`.
 - **Cloud agent bookends:** Memory \`cloud_agent_run_prepare\` returns \`tursoSources[]\` for each write target; gateway pulls/pushes by \`syncKey\` (dbId).
 
 ## Multi-user, owner access, and data isolation (do not conflate)
@@ -2645,7 +2780,7 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 - Import \`subscribeJobEvents\` from \`/__papr__/papr-job-events.ts\` only — **never** copy or shim locally; esbuild leaves it external, gateway/cloud serves it at runtime
 - SSE endpoint: \`/api/jobs/events\` — works on desktop gateway **and** cloud \`apps.papr.ai\`
 - **Initial load:** call \`loadData()\` once on page load, then \`onDbChanged\` for live refresh after job writes
-- **Turso (cloud data):** Linked job DBs auto-sync to Turso when \`create_job({ appIds })\` links them — file watcher + debounced push + Sync now. Web apps read the same \`/api/db/query\` against Turso; no agent action needed for sync
+- **Turso (cloud data):** Registry DBs linked via \`attach_database\` / \`data-sources.json\` sync to Turso (Plan A replica). DML auto-pushes when online; Upload now / \`push_cloud_sync({ appId })\` for manual flush. Published apps on \`apps.papr.ai\` read Turso directly — no extra agent step for web readers
 
 **Decision tree — pick the right callback (never poll):**
 | Job output model | Subscribe callback | App refresh |
@@ -2727,10 +2862,10 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 - **Namespace git trap (REQUIRED):** Never run \`git ls-files apps/\`, \`git status apps/{id}\`, or \`git ls-tree ... apps/\` to check whether an app uploaded. Sync V3 pushes app code to a **separate per-app repo** (\`papr-work/app-{appId}\`), not the namespace monorepo. Untracked files under \`apps/{id}/\` locally do **not** mean cloud is empty.
 - \`inspect_cloud_repo({ appId, action: "read"|"list", ... })\` — **check app repo** — read/list the per-app writer repo (\`dist/\`, \`backend/\`, \`jobs/\` at repo root). Requires \`appId\` for list. Path \`dist/app.js\` not \`apps/{id}/dist/app.js\`.
 - \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica
-- \`papr_db_sync_status\` / \`repair_cloud_sync\` — **Plan A registry DB sync** (replica path). \`papr_db_push\` / \`papr_db_pull\` are recovery-only (hidden from main agent when cloud + replica rollout are on).
+- \`papr_db_sync_status\` / \`papr_db_migration_parity\` / \`papr_db_reconcile_sync\` / \`repair_cloud_sync\` — **Plan A registry DB sync**. \`papr_db_push\` / \`papr_db_pull\` are recovery-only (hidden from main agent when cloud + replica rollout are on).
 - \`push_cloud_sync({ appId, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — **requires scope** (appId recommended). Git/code + Turso push (replica-aware). **Rejected if called with no appId/jobId/alias/tursoDatabase/tables.** For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Upload now. Use \`targets: ['turso']\` for DB-only; \`papr_db_push({ dbId })\` for a single registry DB. Use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
 
-**Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If \`turso.sources[].migrationConflict\`, use \`repair_cloud_sync\` then Upload now. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
+**Cloud job debugging:** Job stuck \`pending\` on apps.papr.ai → \`get_cloud_sync_status({ appId, jobId })\` → check \`desktopHeartbeat.desktopAwake\` and \`pendingCloudRuns\`. If desktop asleep, user must wake Paprwork. If \`turso.sources[].migrationConflict\`, use \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` (not \`merge_lww\`) then Upload now. If sync pending, \`push_cloud_sync({ appId })\` then \`run_job({ jobId })\`.
 
 Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`repair_cloud_sync\`, \`papr_db_apply_migration\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
 

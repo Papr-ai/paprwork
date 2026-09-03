@@ -6,6 +6,7 @@ import {
   getPlaywrightCookieDomain,
   hasRequiredPlaywrightCookies,
   repairPlaywrightCookieDomains,
+  syncPlaywrightCookieValuesFromKeychain,
 } from "../src/gateway/services/platforms/platformCookieUtils.js";
 import type { PlatformConfig } from "../src/gateway/services/platforms/platformRegistry.js";
 
@@ -110,5 +111,20 @@ describe("platformCookieUtils", () => {
     expect(cookies.find((c) => c.name === "JSESSIONID")?.domain).toBe(
       ".www.linkedin.com",
     );
+  });
+
+  it("syncPlaywrightCookieValuesFromKeychain prefers fresher keychain values", () => {
+    const cookies = buildPlaywrightCookiesFromKeychainValues(linkedinConfig, {
+      li_at: "stale-token",
+      JSESSIONID: "old-session",
+    });
+    const { cookies: synced, valuesChanged } = syncPlaywrightCookieValuesFromKeychain(
+      cookies,
+      { li_at: "fresh-token", JSESSIONID: "old-session" },
+    );
+
+    expect(valuesChanged).toBe(true);
+    expect(synced.find((c) => c.name === "li_at")?.value).toBe("fresh-token");
+    expect(synced.find((c) => c.name === "JSESSIONID")?.value).toBe("old-session");
   });
 });

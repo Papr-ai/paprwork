@@ -312,7 +312,7 @@ if (!results.every((r: { ok: boolean }) => r.ok)) {
 
 ## Cloud hosting (automatic — ready)
 
-When **Cloud Sync** is enabled (default), Paprwork syncs mini-apps to a private GitHub repo and linked job SQLite databases to Turso (one database per job). **Cloud publishing is also on by default**: after sync, each mini-app is automatically published to **`https://apps.papr.ai`** with **private** access (Papr account required). This pipeline is **production-ready** — agents do not run a separate deploy.
+When **Cloud Sync** is enabled (default), Paprwork syncs mini-app source to **per-app GitHub repos** (Sync V3) and **registry linked databases** to Turso via Plan A replica sync (`attach_database` / `data-sources.json`). **Cloud publishing is also on by default**: after sync, each mini-app is automatically published to **`https://apps.papr.ai`** with **private** access (Papr account required). This pipeline is **production-ready** — agents do not run a separate deploy.
 
 ### What happens automatically
 
@@ -553,7 +553,7 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 4. Check `jobs.githubRecords` — confirms job definition reached GitHub
 5. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Upload now or `papr_db_push`. `migrationConflict` → `repair_cloud_sync` then push. Legacy CDC shows row-level background sync separately.
 
-**Turso vs local mismatch:** `query_cloud_turso({ jobId, sql: "SELECT COUNT(*) FROM your_table" })` and compare to local `bash` sqlite3 query.
+**Turso vs local mismatch:** `query_cloud_turso({ appId, alias, sql: "SELECT COUNT(*) FROM your_table" })` and compare to `read_app_data_health` or `papr_db_sync_status` — **never** bash `sqlite3` on registry replica DB files (bash blocks this; WAL wedge risk).
 
 **Do NOT use** `turso` CLI, `apps.papr.ai/api/db/query` from bash, or Memory API for cloud ops debugging — use the tools above (they use Papr credentials correctly).
 

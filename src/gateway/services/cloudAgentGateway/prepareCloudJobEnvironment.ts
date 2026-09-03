@@ -32,6 +32,7 @@ export async function prepareCloudJobEnvironment(
 
   await initializeJobsService();
   const jobsService = getJobsService();
+  await jobsService.waitForStartupMaintenance();
   const job = await jobsService.getJob(jobId);
   if (!job) {
     throw new Error(`Job not found in cloned workspace: ${jobId}`);

@@ -17,10 +17,26 @@ const {
   registerGeolocationPermissionHandlers,
 } = require("./geolocationPermission.cjs");
 const { registerCloudPreviewSessionIPC } = require("./ipc/cloudPreviewSession.cjs");
+const {
+  registerPlatformBrowserIPC,
+  handlePlatformBrowserRequest,
+  isRequestPlatformBrowserMessage,
+  openAuthBrowser,
+} = require("./ipc/platformBrowser.cjs");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
 app.setName("Papr Work");
+
+// Real Chrome owns port 9222 for platform jobs + agent automation.
+// Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
+if (process.env.PAPR_PLATFORM_EMBEDDED_CDP === "1") {
+  const platformCdpPort = process.env.PAPR_PLATFORM_CDP_PORT || "9222";
+  app.commandLine.appendSwitch("remote-debugging-port", platformCdpPort);
+  console.log(
+    `[Electron] Embedded platform CDP enabled at http://127.0.0.1:${platformCdpPort}`,
+  );
+}
 
 // Import ESM modules dynamically
 let CustomKeysStorage;
@@ -1517,6 +1533,28 @@ class GatewayProcessSupervisor {
             });
           }
         }
+      } else if (isRequestPlatformBrowserMessage(msg)) {
+        try {
+          const response = await handlePlatformBrowserRequest(msg.request);
+          if (proc === this.process) {
+            proc.send({
+              type: "PLATFORM_BROWSER_RESPONSE",
+              requestId: msg.requestId,
+              response,
+            });
+          }
+        } catch (error) {
+          if (proc === this.process) {
+            proc.send({
+              type: "PLATFORM_BROWSER_RESPONSE",
+              requestId: msg.requestId,
+              response: {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+              },
+            });
+          }
+        }
       } else if (msg.type === "CUSTOM_KEYS_LIST") {
         try {
           const organizationId = this.getActiveOrganizationId?.()?.trim();
@@ -2428,6 +2466,8 @@ app.whenReady().then(async () => {
     captureWebviewThumbnail(webviewId),
   );
 
+  registerPlatformBrowserIPC(ipcMain, () => mainWindow);
+
   // Which credential to use when a provider has both OAuth and an API key.
   // Lives in main because main decides which tokens the gateway ever sees.
   ipcMain.handle("provider-auth:get-preference", (_event, provider) => {
@@ -2542,6 +2582,9 @@ app.whenReady().then(async () => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);
       }
+    },
+    openAuthInAppBrowser: async (url) => {
+      await openAuthBrowser(url);
     },
   });
 

@@ -37,6 +37,23 @@ const Data = {
     if (!r.ok) throw new Error(data?.error || 'Database query failed');
     return data?.rows || [];
   },
+  isBriefDateKey(date) {
+    return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+  },
+  parseBriefJson(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed === '{}') return null;
+    try {
+      const brief = JSON.parse(trimmed);
+      if (!brief || typeof brief !== 'object') return null;
+      if (!brief.hero || typeof brief.hero !== 'object' || !brief.hero.title) return null;
+      if (!Array.isArray(brief.sections) || brief.sections.length === 0) return null;
+      return brief;
+    } catch {
+      return null;
+    }
+  },
   loadError(message) {
     return {
       _loadError: true,
@@ -59,12 +76,24 @@ const Data = {
     };
   },
   async load(date) {
-    const sql = date
-      ? `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`
-      : `SELECT brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
     try {
-      const rows = await this.query(sql);
-      if (rows[0]?.brief_json) return JSON.parse(rows[0].brief_json);
+      if (date) {
+        if (!this.isBriefDateKey(date)) return Data.sample();
+        const rows = await this.query(
+          `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`,
+        );
+        const brief = this.parseBriefJson(rows[0]?.brief_json);
+        return brief ?? Data.sample();
+      }
+
+      const rows = await this.query(
+        'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 15',
+      );
+      for (const row of rows) {
+        if (!this.isBriefDateKey(row.date)) continue;
+        const brief = this.parseBriefJson(row.brief_json);
+        if (brief) return brief;
+      }
       return Data.sample();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
@@ -74,8 +103,12 @@ const Data = {
   },
   async dates() {
     try {
-      const rows = await this.query('SELECT DISTINCT date FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30');
-      return rows.map(r => r.date);
+      const rows = await this.query(
+        'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30',
+      );
+      return rows
+        .filter((row) => this.isBriefDateKey(row.date) && this.parseBriefJson(row.brief_json))
+        .map((row) => row.date);
     } catch(e) { return []; }
   },
   sample() {

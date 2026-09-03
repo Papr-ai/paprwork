@@ -35,9 +35,29 @@ export async function fetchGatewayWorkspaceSwitchStatus(): Promise<GatewayWorksp
   }
 }
 
-/** True when the gateway is not actively switching and the last switch finished. */
+export interface GatewaySwitchCompleteOptions {
+  targetOrganizationId?: string;
+  targetNamespaceId?: string;
+}
+
+/**
+ * True when the gateway finished switching to the expected workspace.
+ * Ignores `idle` (no switch yet) so catch-up polling does not dismiss the
+ * overlay before Settings IPC starts the gateway switch.
+ */
 export function isGatewayWorkspaceSwitchComplete(
   status: GatewayWorkspaceSwitchStatus,
+  options?: GatewaySwitchCompleteOptions,
 ): boolean {
-  return !status.active && (status.phase === "complete" || status.phase === "idle");
+  if (status.active || status.phase !== "complete") {
+    return false;
+  }
+
+  const targetOrg = options?.targetOrganizationId;
+  const targetNs = options?.targetNamespaceId;
+  if (targetOrg && targetNs) {
+    return status.organizationId === targetOrg && status.namespaceId === targetNs;
+  }
+
+  return true;
 }

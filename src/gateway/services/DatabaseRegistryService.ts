@@ -190,12 +190,20 @@ export class DatabaseRegistryService {
     if (!this.isWriteContextValid("databases.json save")) {
       return;
     }
-    if (this.saveLock) {
-      await this.saveLock;
-    }
+    // Chain onto whatever is in flight instead of `if (lock) await lock`.
+    // Two callers arriving while saveLock was null both skipped the await and
+    // both assigned, so they ran concurrently — and with a tmp name built only
+    // from pid+ms they collided on the SAME file. The loser's rename then hit
+    // "ENOENT: rename databases.json.tmp-... -> databases.json", which is what
+    // crashed sequence editing (delete step + add step + change delay fire
+    // several /api/db/write calls in the same millisecond).
+    const previous = this.saveLock ?? Promise.resolve();
 
     this.saveLock = (async () => {
-      const tmpPath = `${this.registryPath}.tmp-${process.pid}-${Date.now()}`;
+      await previous.catch(() => {});
+      // Random suffix: pid+ms is not unique within a single process tick.
+      const unique = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const tmpPath = `${this.registryPath}.tmp-${unique}`;
       await fs.promises.mkdir(path.dirname(this.registryPath), {
         recursive: true,
       });
@@ -203,24 +211,38 @@ export class DatabaseRegistryService {
       await fs.promises.rename(tmpPath, this.registryPath);
       this.cache = state;
 
+      // Cloud upload is deliberately NOT awaited. It fetches the memory server
+      // with a 15s timeout, and awaiting it made every registry save — i.e.
+      // every /api/app/backend write that touches a linked DB — block on a
+      // network round trip. In the app that surfaced as "Adding..." hanging for
+      // seconds and deletes reporting "Could not delete" after the write had
+      // already succeeded on disk.
+      //
+      // Durability is unaffected: the file rename above is the source of truth,
+      // and a failed upload is retried from the metadata outbox.
       const updatedAt = new Date().toISOString();
-      try {
-        const { uploadDatabasesRegistryToCloud } = await import(
-          "./syncV3/MetadataRegistryClient.js"
-        );
-        await uploadDatabasesRegistryToCloud(state, updatedAt);
-      } catch (err) {
-        console.warn(
-          "[DatabaseRegistry] cloud upload failed:",
-          (err as Error).message.slice(0, 120),
-        );
-      }
+      void (async () => {
+        try {
+          const { uploadDatabasesRegistryToCloud } = await import(
+            "./syncV3/MetadataRegistryClient.js"
+          );
+          await uploadDatabasesRegistryToCloud(state, updatedAt);
+        } catch (err) {
+          console.warn(
+            "[DatabaseRegistry] cloud upload failed:",
+            (err as Error).message.slice(0, 120),
+          );
+        }
+      })();
     })();
 
+    const mine = this.saveLock;
     try {
-      await this.saveLock;
+      await mine;
     } finally {
-      this.saveLock = null;
+      // Only clear the tail. Unconditional `= null` let a later caller chain
+      // onto a lock this one had already dropped, reopening the same race.
+      if (this.saveLock === mine) this.saveLock = null;
     }
   }
 

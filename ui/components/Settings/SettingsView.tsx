@@ -88,7 +88,7 @@ const SETTINGS_NAV: SettingsNavItem[] = [
   },
   {
     id: "platforms",
-    label: "Social Login",
+    label: "Platform Connections",
     icon: (
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
@@ -1010,6 +1010,51 @@ function AboutTab() {
             </button>
           </div>
         </div>
+
+        {currentVersion === "2.5.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>LinkedIn &amp; Platform Browser Auth</strong>
+                <p>
+                  Real Chrome profile login for connected platforms with
+                  embedded browser tabs, CDP bridge, and improved LinkedIn
+                  session validation.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Replica Migration Dual-Apply</strong>
+                <p>
+                  Safer schema migrations with pairing, verification, and
+                  reconcile sync so replica and primary stay aligned.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Daily Brief Write Guard</strong>
+                <p>
+                  Protected daily brief payloads with deduplication and safer
+                  home dashboard brief persistence.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Switch &amp; Auth UI</strong>
+                <p>
+                  Papr auth browser tab, improved workspace switch reload, and
+                  custom platform connection support.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-link whats-new-list__link"
+            >
+              View full release notes
+            </a>
+          </div>
+        )}
 
         {currentVersion === "2.5.4" && (
           <div className="about-card">

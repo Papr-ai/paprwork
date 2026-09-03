@@ -29,6 +29,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
     namespaceName,
     workspaceName,
     loadProfile,
+    setProfile,
   } = useProfileStore();
   const displayName = name.trim() || "Your account";
   const workspaceLabel =
@@ -53,11 +54,27 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       void loadProfile({ force: true, throttle: true });
     };
 
+    const applyWorkspaceLabels = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        organizationName?: string;
+        namespaceName?: string;
+      };
+      if (!detail?.organizationName && !detail?.namespaceName) {
+        return;
+      }
+      setProfile({
+        organizationName: detail.organizationName,
+        namespaceName: detail.namespaceName,
+      });
+    };
+
     window.addEventListener("papr-auth-success", refresh);
     window.addEventListener("papr-logout-success", refresh);
     window.addEventListener("papr-organization-changed", refresh);
     window.addEventListener("papr-namespace-changed", refresh);
     window.addEventListener("papr-workspace-reload", refresh);
+    window.addEventListener("papr-workspace-switch-complete", refresh);
+    window.addEventListener("papr-workspace-labels-updated", applyWorkspaceLabels);
     window.electronAPI.papr.onLoginSuccess(refresh);
     window.electronAPI.papr.onLogoutSuccess(refresh);
     window.electronAPI.papr.onOrganizationChanged(refresh);
@@ -70,6 +87,8 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       window.removeEventListener("papr-organization-changed", refresh);
       window.removeEventListener("papr-namespace-changed", refresh);
       window.removeEventListener("papr-workspace-reload", refresh);
+      window.removeEventListener("papr-workspace-switch-complete", refresh);
+      window.removeEventListener("papr-workspace-labels-updated", applyWorkspaceLabels);
       window.electronAPI.papr.removeLoginSuccessListener(refresh);
       window.electronAPI.papr.removeLogoutSuccessListener(refresh);
       window.electronAPI.papr.removeOrganizationChangedListener(refresh);
@@ -78,7 +97,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
         refreshFromCacheUpdate,
       );
     };
-  }, [loadProfile]);
+  }, [loadProfile, setProfile]);
 
   return (
     <div className="profile-footer">

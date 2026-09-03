@@ -18,11 +18,13 @@ describe("shouldUseRealChromeProfile", () => {
     vi.unstubAllEnvs();
   });
 
-  it("returns true for linkedin on desktop when Chrome is installed", async () => {
+  it("returns true for built-in platforms on desktop when Chrome is installed", async () => {
     const { shouldUseRealChromeProfile } = await import(
       "../src/gateway/services/platforms/platformAgentBrowser.js"
     );
     expect(shouldUseRealChromeProfile("linkedin")).toBe(true);
+    expect(shouldUseRealChromeProfile("instagram")).toBe(true);
+    expect(shouldUseRealChromeProfile("reddit")).toBe(true);
   });
 
   it("returns false for linkedin in cloud agent mode", async () => {
@@ -33,11 +35,11 @@ describe("shouldUseRealChromeProfile", () => {
     expect(shouldUseRealChromeProfile("linkedin")).toBe(false);
   });
 
-  it("returns false for non-linkedin platforms", async () => {
+  it("returns false for unknown platforms", async () => {
     const { shouldUseRealChromeProfile } = await import(
       "../src/gateway/services/platforms/platformAgentBrowser.js"
     );
-    expect(shouldUseRealChromeProfile("instagram")).toBe(false);
+    expect(shouldUseRealChromeProfile("not-a-platform")).toBe(false);
   });
 
   it("returns false when Chrome is not installed", async () => {

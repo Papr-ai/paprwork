@@ -91,16 +91,21 @@ export function repairPlaywrightCookieDomains(
   config: PlatformConfig,
   keychainValues: Record<string, string>,
 ): { cookies: Cookie[]; repaired: boolean } {
+  const { cookies: valueSynced, valuesChanged } = syncPlaywrightCookieValuesFromKeychain(
+    cookies,
+    keychainValues,
+  );
+
   if (!config.cookieDomainOverrides || Object.keys(keychainValues).length === 0) {
-    return { cookies, repaired: false };
+    return { cookies: valueSynced, repaired: valuesChanged };
   }
 
   for (const [name, expectedDomain] of Object.entries(config.cookieDomainOverrides)) {
-    const cookie = cookies.find((c) => c.name.toLowerCase() === name.toLowerCase());
+    const cookie = valueSynced.find((c) => c.name.toLowerCase() === name.toLowerCase());
     if (cookie && cookie.domain !== expectedDomain) {
       return {
         cookies: buildPlaywrightCookiesFromKeychainValues(config, {
-          ...Object.fromEntries(cookies.map((c) => [c.name, c.value])),
+          ...Object.fromEntries(valueSynced.map((c) => [c.name, c.value])),
           ...keychainValues,
         }),
         repaired: true,
@@ -108,5 +113,34 @@ export function repairPlaywrightCookieDomains(
     }
   }
 
-  return { cookies, repaired: false };
+  return { cookies: valueSynced, repaired: valuesChanged };
+}
+
+/** Prefer fresher keychain values over stale cookies.json entries (SessionKeeper updates keychain first). */
+export function syncPlaywrightCookieValuesFromKeychain(
+  cookies: Cookie[],
+  keychainValues: Record<string, string>,
+): { cookies: Cookie[]; valuesChanged: boolean } {
+  if (Object.keys(keychainValues).length === 0) {
+    return { cookies, valuesChanged: false };
+  }
+
+  let valuesChanged = false;
+  const synced = cookies.map((cookie) => {
+    const keychainValue =
+      keychainValues[cookie.name] ??
+      keychainValues[cookie.name.toLowerCase()] ??
+      keychainValues[
+        Object.keys(keychainValues).find(
+          (key) => key.toLowerCase() === cookie.name.toLowerCase(),
+        ) ?? ""
+      ];
+    if (keychainValue && keychainValue !== cookie.value) {
+      valuesChanged = true;
+      return { ...cookie, value: keychainValue };
+    }
+    return cookie;
+  });
+
+  return { cookies: synced, valuesChanged };
 }

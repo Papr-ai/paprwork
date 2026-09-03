@@ -27,6 +27,7 @@ the row back through the query endpoint.
 import datetime
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -108,8 +109,15 @@ def main():
     except Exception as e:
         die(f"could not read brief JSON from {sys.argv[1]}: {e}")
 
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", DATE_KEY):
+        die(f"invalid BRIEF_DATE_KEY {DATE_KEY!r} — must be YYYY-MM-DD (no test suffixes)")
+
     if not isinstance(brief, dict) or not brief.get("sections"):
         die("brief JSON must be an object with a non-empty 'sections' array")
+
+    hero = brief.get("hero")
+    if not isinstance(hero, dict) or not str(hero.get("title", "")).strip():
+        die("brief JSON must include hero.title")
 
     call(
         "write",

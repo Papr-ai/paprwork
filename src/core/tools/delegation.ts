@@ -26,7 +26,7 @@ const SUBAGENT_MODEL_IDS = [
   "claude-sonnet-4-5",
   "claude-opus-4-6",
   "claude-opus-5",
-  "claude-fable-5",
+  "claude-fable-5-1",
   "gemini-2.5-flash",
   "gemini-2.5-flash-lite",
   "gemini-3.1-flash-lite",

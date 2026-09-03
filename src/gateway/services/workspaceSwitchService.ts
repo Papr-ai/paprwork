@@ -16,6 +16,7 @@ import {
 } from "./AppService.js";
 import {
   initializeJobsService,
+  getJobsService,
   resetJobsServiceSingletonForTests,
 } from "./JobsService.js";
 import {
@@ -315,6 +316,7 @@ async function initializeWorkspaceServicesPhased(input?: {
 
   input?.onPhase?.("services");
   await initializeJobsService();
+  await getJobsService().waitForStartupMaintenance();
   await initializePathBoundServices();
   if (input?.isStale?.()) {
     return;

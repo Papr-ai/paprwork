@@ -251,6 +251,45 @@ export async function applyMigrationSqlFileToTursoPrimary(
   await applyMigrationToRemote(remote, migrationRoot, migrationId);
 }
 
+/** Apply migration on Turso primary and record in remote schema_migrations ledger. */
+export async function applyAndRecordMigrationOnTursoPrimary(
+  remote: Client,
+  migrationRoot: string,
+  migrationId: string,
+): Promise<{ applied: boolean }> {
+  const normalizedId = migrationId.replace(/\.sql$/, "");
+  const remoteApplied = await listRemoteAppliedMigrationIds(remote);
+  if (remoteApplied.has(normalizedId)) {
+    const satisfied = await migrationSatisfiedOnRemote(
+      remote,
+      migrationRoot,
+      normalizedId,
+    );
+    if (satisfied) {
+      return { applied: false };
+    }
+  }
+  await applyMigrationToRemote(remote, migrationRoot, normalizedId);
+  await recordRemoteMigrationApplied(remote, normalizedId);
+  return { applied: true };
+}
+
+export async function openTursoPrimaryClient(
+  tursoDatabase: string,
+): Promise<Client> {
+  const { getTursoSyncBridge } = await import("../TursoSyncBridge.js");
+  const bridge = getTursoSyncBridge();
+  if (!bridge?.enabled) {
+    throw new Error("Turso sync bridge not available — sign in to Papr");
+  }
+  const creds = await bridge.fetchCredentials(tursoDatabase);
+  const { createClient } = await import("@libsql/client");
+  return createClient({
+    url: creds.tursoUrl,
+    authToken: creds.authToken,
+  });
+}
+
 export { executeRemoteSqlIdempotent, applyMigrationToRemote };
 
 /** @deprecated Use applyPendingDatabaseMigrationsToTurso */

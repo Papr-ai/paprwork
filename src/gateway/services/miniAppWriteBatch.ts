@@ -10,6 +10,7 @@ import {
   writeLinkedDbRowLocalFirst,
 } from "./syncV3/localFirstDbWrite.js";
 import { assertReplaySafeRowSql } from "./syncV3/replaySafeSql.js";
+import { assertValidHomeBriefWrite } from "./dailyBriefWriteGuard.js";
 
 export interface MiniAppWriteBatchStatement {
   sourceId?: string;
@@ -66,6 +67,7 @@ export async function executeMiniAppWriteBatch(input: {
     }
     assertReplaySafeRowSql(stmt.sql);
     const source = await resolveLinkedSource(appId, stmt.sourceId, stmt.sql, "write");
+    assertValidHomeBriefWrite(appId, source, stmt.sql, stmt.params);
     resolved.push({ source, sql: stmt.sql, params: stmt.params });
   }
 

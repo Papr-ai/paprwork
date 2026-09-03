@@ -18,6 +18,7 @@ export type TabType =
   | "skills"
   | "memory"
   | "settings"
+  | "platform"
   | "getting-started"
   | "chatgpt-conv-history";
 

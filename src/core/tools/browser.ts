@@ -6,18 +6,37 @@ import { isCloudAgentGatewayMode } from "../utils/paprRoot.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
 import { getBrowserToolWebviewBlockReason } from "./webviewSessionGuard.js";
+import { detectManualAuthCheckpoint } from "../utils/platformBrowserBashGuard.js";
 
-// Track if we've already tried installing Playwright browsers
-let playwrightInstallAttempted = false;
+import { EmbeddedBrowserPageAdapter } from "../../gateway/services/platforms/embeddedBrowserPageAdapter.js";
+
+type BrowserPage = Page | EmbeddedBrowserPageAdapter;
 
 interface BrowserSessionState {
-  page: Page;
+  page: BrowserPage;
   consoleLogs: BrowserConsoleLog[];
   networkLogs: BrowserNetworkLog[];
   browser?: Browser;
   persistentContext?: BrowserContext;
   platformId?: string;
+  embeddedPlatformId?: string;
 }
+
+function isPlaywrightPage(page: BrowserPage): page is Page {
+  return !(page instanceof EmbeddedBrowserPageAdapter);
+}
+
+function requirePlaywrightPage(session: BrowserSessionState): Page {
+  if (session.embeddedPlatformId || !isPlaywrightPage(session.page)) {
+    throw new Error(
+      "This browser action requires the Playwright session. On desktop, use browser_snapshot, browser_navigate, browser_click, or browser_type with the real Chrome window opened by prepare_browser.",
+    );
+  }
+  return session.page;
+}
+
+// Track if we've already tried installing Playwright browsers
+let playwrightInstallAttempted = false;
 
 export interface BrowserConsoleLog {
   type: string;
@@ -75,11 +94,13 @@ async function closeActiveBrowserSession(): Promise<void> {
     return;
   }
   try {
-    if (browserSession.persistentContext) {
-      const { closeRealChromePlatformSession } = await import(
-        "../../gateway/services/platforms/platformAgentBrowser.js"
+    if (browserSession.embeddedPlatformId) {
+      const { clearEmbeddedPlatformSession } = await import(
+        "../../gateway/services/platforms/embeddedBrowserPageAdapter.js"
       );
-      await closeRealChromePlatformSession();
+      clearEmbeddedPlatformSession();
+    } else if (browserSession.persistentContext) {
+      // Papr Chrome keeps running with per-platform tabs — only clear tool binding.
     } else if (browserSession.browser) {
       await browserSession.browser.close();
     }
@@ -157,6 +178,32 @@ async function assertBrowserToolAllowed(toolName: string): Promise<void> {
   }
 }
 
+async function fetchEmbeddedPlatformLogs(
+  platformId: string,
+  kind: "get_console_logs" | "get_network_logs",
+  limit: number,
+  clearAfterRead?: boolean,
+): Promise<{ count: number; logs: BrowserConsoleLog[] | BrowserNetworkLog[] }> {
+  const { requestPlatformBrowser } = await import(
+    "../../gateway/utils/platformBrowserBridge.js"
+  );
+  const response = await requestPlatformBrowser({
+    action: kind,
+    payload: { platformId, limit, clearAfterRead: clearAfterRead ?? false },
+  });
+  if (!response.success) {
+    throw new Error(response.error ?? `Failed to read platform browser ${kind}`);
+  }
+  const data = response.data as {
+    count?: number;
+    logs?: BrowserConsoleLog[] | BrowserNetworkLog[];
+  };
+  return {
+    count: data.count ?? data.logs?.length ?? 0,
+    logs: data.logs ?? [],
+  };
+}
+
 /**
  * Check if an error indicates Playwright package or browser is missing
  */
@@ -181,11 +228,12 @@ export interface PlatformBrowserPrepareResult {
   title: string;
   message: string;
   error?: string;
+  browserMode?: "real_chrome" | "embedded";
 }
 
 /**
  * Prepare a connected platform session for agent browser automation.
- * Desktop LinkedIn uses a persistent real Chrome profile; other platforms use headless inject.
+ * Desktop uses a persistent real Chrome window when Google Chrome is installed.
  */
 export async function preparePlatformBrowserSession(
   platformId: string,
@@ -223,14 +271,14 @@ export async function preparePlatformBrowserSession(
       url: "",
       title: "",
       message: `${config.name} is not connected.`,
-      error: `Status: ${status.status}. Use connect_platform request_connect or Settings → Social Login.`,
+      error: `Status: ${status.status}. Use connect_platform request_connect or Settings → Platform Connections.`,
     };
   }
 
   if (shouldUseRealChromeProfile(platformId)) {
     await closeActiveBrowserSession();
     const result = await prepareRealChromePlatformSession(
-      platformId,
+      platformId as PlatformId,
       config,
       targetUrl,
     );
@@ -250,6 +298,30 @@ export async function preparePlatformBrowserSession(
     return result;
   }
 
+  const { shouldUseEmbeddedPlatformBrowser, prepareEmbeddedPlatformSession } =
+    await import("../../gateway/services/platforms/platformEmbeddedBrowser.js");
+
+  if (shouldUseEmbeddedPlatformBrowser(platformId)) {
+    await closeActiveBrowserSession();
+    const result = await prepareEmbeddedPlatformSession(
+      platformId as PlatformId,
+      targetUrl,
+    );
+    if (result.success) {
+      const { bindEmbeddedPlatformSession } = await import(
+        "../../gateway/services/platforms/embeddedBrowserPageAdapter.js"
+      );
+      browserSession = {
+        page: bindEmbeddedPlatformSession(platformId as PlatformId),
+        consoleLogs: [],
+        networkLogs: [],
+        platformId,
+        embeddedPlatformId: platformId,
+      };
+    }
+    return { ...result, browserMode: "embedded" };
+  }
+
   const cookies = await sessionService.getSessionCookiesForBrowser(platformId as PlatformId);
   if (cookies.length === 0) {
     return {
@@ -257,33 +329,42 @@ export async function preparePlatformBrowserSession(
       url: "",
       title: "",
       message: `No session cookies found for ${config.name}.`,
-      error: "Reconnect via Settings → Social Login.",
+      error: "Reconnect via Settings → Platform Connections.",
     };
   }
 
   await closeActiveBrowserSession();
   const session = await getBrowserSession();
-  const context = session.page.context();
+  if (session.embeddedPlatformId) {
+    throw new Error("Headless cookie injection is not used for embedded platform sessions");
+  }
+  const page = requirePlaywrightPage(session);
+  const context = page.context();
   await context.clearCookies();
   await context.addCookies(cookies);
 
   const destination = targetUrl ?? config.homeUrl;
   const landingUrl = config.prepareNavigationUrl ?? destination;
 
-  await session.page.goto(landingUrl, {
+  await page.goto(landingUrl, {
     waitUntil: "domcontentloaded",
     timeout: PLATFORM_NAVIGATION_TIMEOUT_MS,
   });
 
   if (destination !== landingUrl) {
-    await session.page.goto(destination, {
+    await page.goto(destination, {
       waitUntil: "domcontentloaded",
       timeout: PLATFORM_NAVIGATION_TIMEOUT_MS,
     });
   }
 
-  const currentUrl = session.page.url();
-  const title = await session.page.title();
+  const { waitForPlaywrightPageSettle } = await import(
+    "../../gateway/services/platforms/platformBrowserSettle.js"
+  );
+  await waitForPlaywrightPageSettle(page, page.url(), { platformId });
+
+  const currentUrl = page.url();
+  const title = await page.title();
 
   const authenticated = config.successUrlPattern.test(currentUrl);
   const loggedOut =
@@ -294,14 +375,25 @@ export async function preparePlatformBrowserSession(
 
   if (loggedOut) {
     const cookieDomains = cookies.map((c) => `${c.name}@${c.domain}`).join(", ");
+    if (platformId === "linkedin") {
+      await sessionService.markNeedsReauth(
+        platformId as PlatformId,
+        "redirected to login",
+      );
+    }
     return {
       success: false,
       url: currentUrl,
       title,
-      message: `${config.name} session expired — redirected to login.`,
+      message:
+        platformId === "linkedin"
+          ? "LinkedIn rejected the saved session. Reconnect LinkedIn in Settings → Platforms, then run again."
+          : `${config.name} session expired — redirected to login.`,
       error:
-        `Reconnect via Settings → Social Login, or try connect_platform action="refresh" then prepare_browser again. ` +
-        `Injected cookies: ${cookieDomains}. Do NOT fall back to Voyager/GraphQL API calls.`,
+        platformId === "linkedin"
+          ? "LinkedIn rejected the saved session. Reconnect LinkedIn in Settings → Platforms, then run again."
+          : `Reconnect via Settings → Platform Connections, or try connect_platform action="refresh" then prepare_browser again. ` +
+            `Injected cookies: ${cookieDomains}. Do NOT fall back to Voyager/GraphQL API calls.`,
     };
   }
 
@@ -317,6 +409,24 @@ export async function preparePlatformBrowserSession(
 
 async function getBrowserSession(): Promise<BrowserSessionState> {
   if (browserSession) {
+    return browserSession;
+  }
+
+  const { getActiveEmbeddedPlatformId } = await import(
+    "../../gateway/services/platforms/embeddedBrowserPageAdapter.js"
+  );
+  const embeddedPlatformId = getActiveEmbeddedPlatformId();
+  if (embeddedPlatformId) {
+    const { bindEmbeddedPlatformSession } = await import(
+      "../../gateway/services/platforms/embeddedBrowserPageAdapter.js"
+    );
+    browserSession = {
+      page: bindEmbeddedPlatformSession(embeddedPlatformId),
+      consoleLogs: [],
+      networkLogs: [],
+      platformId: embeddedPlatformId,
+      embeddedPlatformId,
+    };
     return browserSession;
   }
 
@@ -368,7 +478,6 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
 
   const launchOptions: Parameters<typeof module.chromium.launch>[0] = {
     headless: true,
-    args: ["--disable-blink-features=AutomationControlled"],
   };
   if (isCloudAgentGatewayMode() || process.env.PLAYWRIGHT_DOCKER === "1") {
     launchOptions.args = [
@@ -426,8 +535,6 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
     }
   }
   const context = await browser.newContext({
-    userAgent:
-      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     viewport: { width: 1280, height: 900 },
     locale: "en-US",
   });
@@ -517,7 +624,8 @@ function sanitizeBrowserData(data: unknown): unknown {
 
 export const browserNavigateTool = createTool({
   id: "browser_navigate",
-  description: "Navigate the browser session to a URL",
+  description:
+    "Navigate the browser session to a URL. Automatically waits for the page to settle after navigation (platform-aware pacing for LinkedIn/social — ~4s on LinkedIn). For LinkedIn/social/custom sites: call connect_platform prepare_browser FIRST (Papr Chrome on desktop; headless Playwright with keychain cookies otherwise). Then navigate/snapshot/click.",
   inputSchema: navigateSchema,
   execute: async (input) => {
     const args =
@@ -528,20 +636,58 @@ export const browserNavigateTool = createTool({
     await session.page.goto(args.url, { waitUntil: "domcontentloaded" });
     const url = session.page.url();
     const title = await session.page.title();
+
+    let settleWaitMs = 0;
+    let contentReady = false;
+    if (isPlaywrightPage(session.page)) {
+      const { waitForPlaywrightPageSettle } = await import(
+        "../../gateway/services/platforms/platformBrowserSettle.js"
+      );
+      const settle = await waitForPlaywrightPageSettle(session.page, url, {
+        platformId: session.platformId,
+      });
+      settleWaitMs = settle.waitedMs;
+      contentReady = settle.contentReady;
+    } else {
+      const { sleepForNavigationSettle } = await import(
+        "../../gateway/services/platforms/platformBrowserSettle.js"
+      );
+      const settle = await sleepForNavigationSettle(url, session.platformId);
+      settleWaitMs = settle.waitedMs;
+    }
+
     const ctx = `url: ${url}`;
     return sanitizeBrowserData({
       success: true,
       data: {
         url: wrapUntrustedContent("browser", ctx, url),
         title: wrapUntrustedContent("browser", ctx, title),
+        settleWaitMs,
+        contentReady,
+        ...(contentReady
+          ? {}
+          : {
+              note:
+                "Page may still be rendering. Wait with page_wait_for({ target: 'browser', time: 2 }) before browser_test_script if scripts fail.",
+            }),
       },
-    }) as { success: boolean; data: { url: string; title: string } };
+    }) as {
+      success: boolean;
+      data: {
+        url: string;
+        title: string;
+        settleWaitMs: number;
+        contentReady: boolean;
+        note?: string;
+      };
+    };
   },
 });
 
 export const browserSnapshotTool = createTool({
   id: "browser_snapshot",
-  description: "Capture a compact HTML snapshot from current page",
+  description:
+    "How the agent SEES the page: returns HTML (truncated). After prepare_browser, read LinkedIn/social UIs here, find CSS selectors, then browser_click/browser_type. Primary vision tool — not screenshots.",
   inputSchema: snapshotSchema,
   execute: async (input) => {
     const args =
@@ -558,16 +704,18 @@ export const browserSnapshotTool = createTool({
         ? `${html.slice(0, maxChars)}\n<!-- truncated -->`
         : html;
     const ctx = `url: ${url}`;
+    const manualAuthTip = detectManualAuthCheckpoint(rawHtml);
     return sanitizeBrowserData({
       success: true,
       data: {
         url: wrapUntrustedContent("browser", ctx, url),
         title: wrapUntrustedContent("browser", ctx, title),
         html: wrapUntrustedContent("browser", ctx, rawHtml),
+        ...(manualAuthTip ? { manualAuthTip } : {}),
       },
     }) as {
       success: boolean;
-      data: { url: string; title: string; html: string };
+      data: { url: string; title: string; html: string; manualAuthTip?: string };
     };
   },
 });
@@ -616,6 +764,22 @@ export const browserTabsTool = createTool({
     }
 
     const session = await getBrowserSession();
+    if (session.embeddedPlatformId) {
+      return {
+        success: true,
+        data: {
+          count: 1,
+          pages: [
+            {
+              index: 0,
+              title: await session.page.title(),
+              url: session.page.url(),
+            },
+          ],
+        },
+      };
+    }
+
     const pages = session.persistentContext
       ? session.persistentContext.pages()
       : (session.browser?.contexts().flatMap((context) => context.pages()) ?? [session.page]);
@@ -638,7 +802,8 @@ export const browserTabsTool = createTool({
 
 export const browserConsoleLogsTool = createTool({
   id: "browser_console_logs",
-  description: "Read browser console logs from current session",
+  description:
+    "Read browser console logs from the current session. Works after prepare_browser (Papr Chrome, headless Playwright, or embedded Electron fallback). Use to debug JS errors while reverse-engineering site APIs.",
   inputSchema: browserLogsSchema,
   execute: async (input) => {
     const args =
@@ -647,6 +812,23 @@ export const browserConsoleLogsTool = createTool({
     await requestBrowserPermission("console_logs");
     const session = await getBrowserSession();
     const limit = args.limit ?? 50;
+
+    if (session.embeddedPlatformId) {
+      const data = await fetchEmbeddedPlatformLogs(
+        session.embeddedPlatformId,
+        "get_console_logs",
+        limit,
+        args.clearAfterRead,
+      );
+      return sanitizeBrowserData({
+        success: true,
+        data,
+      }) as {
+        success: boolean;
+        data: { count: number; logs: BrowserConsoleLog[] };
+      };
+    }
+
     const logs = session.consoleLogs.slice(-limit);
     if (args.clearAfterRead) {
       session.consoleLogs.splice(0, session.consoleLogs.length);
@@ -666,7 +848,8 @@ export const browserConsoleLogsTool = createTool({
 
 export const browserNetworkLogsTool = createTool({
   id: "browser_network_logs",
-  description: "Read browser network response logs from current session",
+  description:
+    "Network tab for the current browser session — xhr/fetch URLs, methods, status codes. After prepare_browser on LinkedIn/social, use this (NOT bash curl) to discover APIs and debug empty pages. Works on Papr Chrome, headless Playwright, and embedded Electron fallback.",
   inputSchema: browserLogsSchema,
   execute: async (input) => {
     const args =
@@ -675,6 +858,23 @@ export const browserNetworkLogsTool = createTool({
     await requestBrowserPermission("network_logs");
     const session = await getBrowserSession();
     const limit = args.limit ?? 50;
+
+    if (session.embeddedPlatformId) {
+      const data = await fetchEmbeddedPlatformLogs(
+        session.embeddedPlatformId,
+        "get_network_logs",
+        limit,
+        args.clearAfterRead,
+      );
+      return sanitizeBrowserData({
+        success: true,
+        data,
+      }) as {
+        success: boolean;
+        data: { count: number; logs: BrowserNetworkLog[] };
+      };
+    }
+
     const logs = session.networkLogs.slice(-limit);
     if (args.clearAfterRead) {
       session.networkLogs.splice(0, session.networkLogs.length);
@@ -775,7 +975,8 @@ export async function runBrowserWait(
     }
 
     if (args.text) {
-      await session.page.waitForFunction(
+      const page = requirePlaywrightPage(session);
+      await page.waitForFunction(
         (text: string) => {
           // @ts-expect-error - runs in browser context
           return document.body?.innerText?.includes(text) ?? false;
@@ -787,7 +988,8 @@ export async function runBrowserWait(
     }
 
     if (args.textGone) {
-      await session.page.waitForFunction(
+      const page = requirePlaywrightPage(session);
+      await page.waitForFunction(
         (text: string) => {
           // @ts-expect-error - runs in browser context
           return !document.body?.innerText?.includes(text);
@@ -799,7 +1001,8 @@ export async function runBrowserWait(
     }
 
     if (args.selector) {
-      await session.page.waitForSelector(args.selector, {
+      const page = requirePlaywrightPage(session);
+      await page.waitForSelector(args.selector, {
         timeout: timeoutMs,
       });
       return {
@@ -888,7 +1091,8 @@ export const browserScrollTool = createTool({
     const session = await getBrowserSession();
 
     if (args.selector) {
-      await session.page.locator(args.selector).scrollIntoViewIfNeeded();
+      const page = requirePlaywrightPage(session);
+      await page.locator(args.selector).scrollIntoViewIfNeeded();
       return {
         success: true,
         data: { scrolledToElement: args.selector },
@@ -916,13 +1120,20 @@ export const browserScrollTool = createTool({
       }
     }
 
-    await session.page.evaluate(
-      ({ x, y }: { x: number; y: number }) => {
-        // @ts-expect-error - This function runs in browser context
-        window.scrollBy(x, y);
-      },
-      { x: deltaX, y: deltaY },
-    );
+    if (session.embeddedPlatformId) {
+      await session.page.evaluate(
+        `window.scrollBy(${deltaX}, ${deltaY}); return { deltaX: ${deltaX}, deltaY: ${deltaY} };`,
+      );
+    } else {
+      const page = requirePlaywrightPage(session);
+      await page.evaluate(
+        ({ x, y }: { x: number; y: number }) => {
+          // @ts-expect-error - This function runs in browser context
+          window.scrollBy(x, y);
+        },
+        { x: deltaX, y: deltaY },
+      );
+    }
 
     return {
       success: true,

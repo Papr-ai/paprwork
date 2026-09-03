@@ -9,7 +9,7 @@ import {
   type DatabaseRecord,
 } from "../DatabaseRegistryService.js";
 import { getTursoReplicaService } from "./TursoReplicaService.js";
-import type { TursoReplicaPushResponse, TursoReplicaWriteResult } from "./tursoReplicaTypes.js";
+import type { TursoReplicaPushResponse, TursoReplicaWriteResult, TursoReplicaWriteOptions } from "./tursoReplicaTypes.js";
 import {
   isTursoReplicaOnline,
   isTursoReplicaSyncFeatureEnabled,
@@ -138,6 +138,7 @@ export async function writeLinkedDbViaTursoReplica(
   source: AppDataSource,
   sql: string,
   params?: unknown[],
+  writeOptions?: TursoReplicaWriteOptions,
 ): Promise<TursoReplicaWriteResult> {
   const tursoDatabase = resolveTursoDatabaseNameForSource(source);
   if (!tursoDatabase) {
@@ -152,6 +153,7 @@ export async function writeLinkedDbViaTursoReplica(
     tursoDatabase,
     sql,
     params,
+    writeOptions,
   });
   await noteReplicaLocalMutation(source);
   if (!result.pendingPush) {
@@ -189,6 +191,7 @@ export async function writeLinkedDbBatchViaTursoReplica(
 export async function execLinkedDbViaTursoReplica(
   source: AppDataSource,
   sql: string,
+  writeOptions?: TursoReplicaWriteOptions,
 ): Promise<{ pendingPush: boolean }> {
   const tursoDatabase = resolveTursoDatabaseNameForSource(source);
   if (!tursoDatabase) {
@@ -198,7 +201,12 @@ export async function execLinkedDbViaTursoReplica(
   }
 
   const replica = getTursoReplicaService();
-  const result = await replica.runExec(source.dbPath, tursoDatabase, sql);
+  const result = await replica.runExec(
+    source.dbPath,
+    tursoDatabase,
+    sql,
+    writeOptions,
+  );
   await noteReplicaLocalMutation(source);
   if (!result.pendingPush) {
     await noteReplicaPushSuccess(source);

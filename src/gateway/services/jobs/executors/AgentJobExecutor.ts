@@ -420,13 +420,20 @@ export class AgentJobExecutor implements IJobExecutor {
     const { getPaprRoot } = await import("../../../../core/utils/paprRoot.js");
     envLines.push(`PAPR_HOME="${getPaprRoot()}"`);
 
-    const ownDbPath = await jobsService.getJobDatabasePath(params.job.id);
-    envLines.push(`JOB_DIR="${params.jobDir}"`);
-    if (ownDbPath) envLines.push(`JOB_DB="${ownDbPath}"`);
-
     const writeTargets = await resolveJobWriteTargets(params.job);
     if (writeTargets.length > 0) {
       envLines.push(...jobWriteDatabasePromptLines(writeTargets));
+      envLines.push(
+        "AGENT JOB: Persist UI-facing rows via papr_db.connect() / papr_db_exec or sqlite3 on PAPR_DB_* / APP_DB — NOT $JOB_DB.",
+      );
+    }
+
+    const ownDbPath = await jobsService.getJobDatabasePath(params.job.id);
+    envLines.push(`JOB_DIR="${params.jobDir}"`);
+    if (ownDbPath) {
+      envLines.push(
+        `JOB_DB="${ownDbPath}"  (scratch only — run logs, temp tables; NOT mini-app registry data)`,
+      );
     }
 
     for (const dep of params.job.dependsOn ?? []) {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   buildSqlitePathWarnings,
   commandHasSqliteWrite,
+  detectScratchDbWriteWhenRegistryExpected,
   extractSqliteDbPaths,
 } from "../src/core/utils/sqlitePathGuard.js";
 
@@ -82,5 +83,34 @@ describe("sqlitePathGuard", () => {
     );
     expect(warnings.length).toBeGreaterThan(0);
     expect(warnings[0]).toContain("non-canonical");
+  });
+
+  test("blocks scratch JOB_DB writes when registry write targets exist", () => {
+    const jobDb = "/Users/test/Papr/Jobs/job-1/data/data.db";
+    const registryDb = "/Users/test/Papr/data/databases/metrics/data.db";
+    const block = detectScratchDbWriteWhenRegistryExpected(
+      `sqlite3 "$JOB_DB" "INSERT INTO leads VALUES (1, 'x')"`,
+      {
+        appDb: registryDb,
+        jobDb,
+        env: { APP_DB: registryDb, JOB_DB: jobDb },
+      },
+    );
+    expect(block?.message).toContain("Blocked");
+    expect(block?.message).toContain("registry");
+  });
+
+  test("allows registry writes when PAPR_DB path is used", () => {
+    const jobDb = "/Users/test/Papr/Jobs/job-1/data/data.db";
+    const registryDb = "/Users/test/Papr/data/databases/metrics/data.db";
+    const block = detectScratchDbWriteWhenRegistryExpected(
+      `sqlite3 "${registryDb}" "INSERT INTO leads VALUES (1, 'x')"`,
+      {
+        appDb: registryDb,
+        jobDb,
+        env: { APP_DB: registryDb, JOB_DB: jobDb },
+      },
+    );
+    expect(block).toBeNull();
   });
 });

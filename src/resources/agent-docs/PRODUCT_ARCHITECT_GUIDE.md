@@ -22,6 +22,10 @@ list_jobs()
 
 Also check `$PAPR_HOME/workspace/BRAND.md` when UI is involved.
 
+For **cloud sync / apps.papr.ai / asleep scheduling:** read `CLOUD_VS_DESKTOP_GUIDE.md`.
+
+For **LinkedIn / social platform scraping:** read `read_skill({ skillId: "preloaded-social-media-auth" })`.
+
 ## When This Is Needed
 
 - **Every new mini-app** (\`create_app\`) — tool-enforced; includes simple todo/CRUD apps
@@ -158,7 +162,7 @@ Copy this checklist into every brief when the app uses backend handlers and/or l
 | **DB reads** | `POST /api/db/query` with `{ sourceId, sql, params }` — field is **`sql`**, not `query` |
 | **DB writes** | `POST /api/db/write` — not `/api/db/query` for mutations |
 | **Plan A schema** (cloud sync on) | `migrations/{id}.sql` in brief → builder runs `write_file` + `papr_db_apply_migration({ dbId, migrationId })` on Turso primary — **never** `papr_db_exec` DDL or bash/sqlite3 on registry DB files |
-| **Plan A rows** | `papr_db_exec` DML, `/api/db/write`, or job SQL via `$PAPR_DB_*`; Upload now ships git + replica push |
+| **Plan A rows** | `papr_db_exec` DML, `/api/db/write`, or job SQL via `$PAPR_DB_*`; Upload now / `push_cloud_sync({ appId })` = git + Turso ordered flush |
 | **Scaffold** | Extend `backend/ping.py` pattern — do not replace with stdin handlers |
 
 List any app-specific handler names from §2 here (e.g. `meeting-start`, `agenda-manage`) so the builder wires the correct actions.
@@ -194,7 +198,21 @@ Job write  →  onDbChanged → reload affected queries only
 - 5+ raw `/api/db/query` calls without backend handlers
 - `setInterval` + `/api/db/query` (polling)
 
-**Sync note (Plan A — cloud sync on):** Registry DB **schema** = migration files + `papr_db_apply_migration` (Turso primary when online). **Rows** = local replica → `push()` to Turso (auto when online). Git Upload ships migration **files** for collaboration — it does not execute schema. Legacy workspace-log CDC is off when `PAPR_TURSO_REPLICA_SYNC=replica-records`. High Turso read spikes usually come from **bad app query patterns**, **agent debug tools** (`query_cloud_turso`), or **legacy bootstrap** — not routine replica push/pull.
+**Sync note (Plan A — cloud sync on):** Three lanes — do not conflate: **(1) Git (Sync V3)** per-app GitHub repo for app source + `jobs/{id}/`; **(2) Turso (Plan A)** registry DB schema + rows via `attach_database` / `data-sources.json`; **(3) Vault** Integration Keys + platform cookies (cloud jobs read vault, not desktop keychain). Registry DB **schema** = migration files + `papr_db_apply_migration` (Turso primary when online). **Rows** = local replica → `push()` to Turso (auto when online). **Upload now** / `push_cloud_sync({ appId })` = git + Turso ordered flush (same engine). Git Upload ships migration **files** for collaboration — it does not execute schema. Debug start: `get_cloud_sync_status({ appId?, jobId? })`. High Turso read spikes usually come from **bad app query patterns**, **agent debug tools** (`query_cloud_turso`), or **legacy bootstrap** — not routine replica push/pull.
+
+### 9. Platform Connections (when jobs scrape social / login sites)
+
+Architect must specify the **job runtime path** per platform — do not mix LinkedIn CDP with non-LinkedIn patterns.
+
+| Platform | Connect (user) | Python/bash scrape job | Cloud notes |
+|----------|----------------|------------------------|-------------|
+| **LinkedIn** | Papr Chrome sign-in only (never personal Chrome) | `requirements: ["linkedin-api", "playwright"]` + `papr_platform_browser` (CDP :9222) | CDP requires desktop Papr Chrome running |
+| **X, Reddit, Instagram, …** | Personal Chrome → keychain OK | `\${TWITTER_*}` / `\${REDDIT_*}` / `\${INSTAGRAM_*}` + headless Playwright or requests — **no** `reddit-api` / `x-api` CDP | Vault-synced cookie keys + headless Playwright |
+| **Agent UI work** | `connect_platform` → `prepare_browser` | N/A — use `browser_*` tools in chat/agent jobs | Headless with vault cookies in cloud |
+
+**Do NOT architect:** separate Auth + Chrome Manager jobs, `~/.papr-linkedin/auth.json`, or `reddit-api`/`x-api` requirements for bulk scrapers. Papr Chrome is sign-in UI only for non-LinkedIn platforms — not scheduled job runtime.
+
+Reference: `preloaded-social-media-auth` skill.
 
 ## Paprwork Rules (non-negotiable)
 

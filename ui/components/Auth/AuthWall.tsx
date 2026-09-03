@@ -15,7 +15,9 @@ import {
   OrgNamespaceSetup,
   type OrgNamespaceSetupRequest,
 } from "./OrgNamespaceSetup";
+import { PaprAuthBrowser } from "./PaprAuthBrowser";
 import "./AuthWall.css";
+import "./PaprAuthBrowser.css";
 
 interface AuthWallProps {
   onAuthenticated: () => void;
@@ -312,12 +314,11 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
             <div className="auth-wall-waiting">
               <div className="auth-wall-spinner" />
               <p className="auth-wall-status">
-                Finish signing in in your browser, then return to Papr Work
+                Finish signing in below — Google and email login work here in Papr Work
               </p>
               <p className="auth-wall-hint">
-                If your browser asks to open Papr Work, choose <strong>Open</strong> or{" "}
-                <strong>Allow</strong>. Otherwise, switch back to the Papr Work app on your
-                computer.
+                If Papr Work asks to open a link, choose <strong>Open</strong> or{" "}
+                <strong>Allow</strong>. You can also use the verification code if needed.
               </p>
 
               {showRefresh && (
@@ -396,45 +397,51 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
       </div>
 
       <div className="auth-wall-right">
-        <div className="auth-wall-branding">
-          <div className="auth-wall-papr-logo">
-            <img
-              src="/images/papr-logo.svg"
-              alt="Papr Logo"
-              className="auth-wall-logo-icon"
-            />
-            <img
-              src="/images/papr typefont.svg"
-              alt="Papr"
-              className="auth-wall-logo-text"
-            />
+        {isAuthenticating ? (
+          <div className="auth-wall__browser-panel">
+            <PaprAuthBrowser visible={isAuthenticating} />
           </div>
+        ) : (
+          <div className="auth-wall-branding">
+            <div className="auth-wall-papr-logo">
+              <img
+                src="/images/papr-logo.svg"
+                alt="Papr Logo"
+                className="auth-wall-logo-icon"
+              />
+              <img
+                src="/images/papr typefont.svg"
+                alt="Papr"
+                className="auth-wall-logo-text"
+              />
+            </div>
 
-          <div className="auth-wall-fold">
-            <svg viewBox="0 0 300 270" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M300 262C300 266.418 296.418 270 292 270L54.5454 270L300 0L300 262Z"
-                fill="#0080FF"
-              />
-              <path
-                opacity="0.04"
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M54.5454 40.5L54.5454 67.5L300 3.05176e-05L54.5454 40.5Z"
-                fill="#212721"
-              />
-              <path
-                opacity="0.48"
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M54.5455 270L0 81L300 0L54.5455 270Z"
-                fill="#0080FF"
-              />
-            </svg>
+            <div className="auth-wall-fold">
+              <svg viewBox="0 0 300 270" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M300 262C300 266.418 296.418 270 292 270L54.5454 270L300 0L300 262Z"
+                  fill="#0080FF"
+                />
+                <path
+                  opacity="0.04"
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M54.5454 40.5L54.5454 67.5L300 3.05176e-05L54.5454 40.5Z"
+                  fill="#212721"
+                />
+                <path
+                  opacity="0.48"
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M54.5455 270L0 81L300 0L54.5455 270Z"
+                  fill="#0080FF"
+                />
+              </svg>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );

@@ -40,6 +40,7 @@ async function setupService(): Promise<JobsService> {
   resetJobsServiceSingletonForTests();
   const service = new JobsService();
   await service.initialize();
+  await service.waitForStartupMaintenance();
   return service;
 }
 

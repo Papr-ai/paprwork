@@ -1516,7 +1516,9 @@ export class AgentService {
             // Map model ID to display name and pricing
             const modelInfo = piModelId.includes("fable")
               ? {
-                  name: "Claude Fable 5",
+                  name: piModelId.includes("fable-5-1")
+                    ? "Claude Fable 5.1"
+                    : "Claude Fable 5",
                   inputCost: 10.0,
                   outputCost: 50.0,
                   contextWindow: 1000000,

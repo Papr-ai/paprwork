@@ -16,6 +16,7 @@ import {
 import { STANDALONE_APP_ID } from "../appIds.js";
 import { jobSdkEnv } from "../jobSdkEnv.js";
 import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
+import { ensurePlatformCdpEnvForJob, jobNeedsPlatformCdp } from "../../../utils/platformCdpBridge.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -68,6 +69,16 @@ export class CommandJobExecutor implements IJobExecutor {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    let platformCdpEnv: Record<string, string> = {};
+    if (jobNeedsPlatformCdp(params.job)) {
+      try {
+        platformCdpEnv = await ensurePlatformCdpEnvForJob(params.job);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Platform browser CDP setup failed: ${message}`);
+      }
+    }
+
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const [shellPath, shellArgs] = getShellCommand(finalCommand);
 
@@ -93,6 +104,7 @@ export class CommandJobExecutor implements IJobExecutor {
         ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
         : {}),
       ...dbProxy.env,
+      ...platformCdpEnv,
       ...(runtimeParamsForJobEnv(params.runtimeParams)),
     };
     

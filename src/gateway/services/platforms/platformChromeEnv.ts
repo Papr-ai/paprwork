@@ -6,22 +6,31 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { execSync } from "node:child_process";
 
-export function isGoogleChromeInstalled(): boolean {
+const MACOS_CHROME_PATH = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+
+export function getGoogleChromeExecutablePath(): string | null {
   if (process.platform === "darwin") {
-    return existsSync("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome");
+    return existsSync(MACOS_CHROME_PATH) ? MACOS_CHROME_PATH : null;
   }
   if (process.platform === "win32") {
     const localAppData = process.env.LOCALAPPDATA ?? "";
     const programFiles = process.env.ProgramFiles ?? "C:\\Program Files";
-    return (
-      existsSync(join(localAppData, "Google", "Chrome", "Application", "chrome.exe")) ||
-      existsSync(join(programFiles, "Google", "Chrome", "Application", "chrome.exe"))
-    );
+    const candidates = [
+      join(localAppData, "Google", "Chrome", "Application", "chrome.exe"),
+      join(programFiles, "Google", "Chrome", "Application", "chrome.exe"),
+    ];
+    return candidates.find((path) => existsSync(path)) ?? null;
   }
   try {
-    execSync("which google-chrome || which google-chrome-stable", { stdio: "ignore" });
-    return true;
+    const stdout = execSync("which google-chrome || which google-chrome-stable", {
+      encoding: "utf8",
+    }).trim();
+    return stdout.length > 0 ? stdout : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+export function isGoogleChromeInstalled(): boolean {
+  return getGoogleChromeExecutablePath() !== null;
 }

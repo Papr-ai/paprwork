@@ -65,10 +65,15 @@ export interface PlatformConfig {
   notes?: string;
   /** Rate limits for safe automation (agent uses these by default) */
   rateLimits: PlatformRateLimits;
+  /** User/agent-registered site (not a built-in social platform) */
+  isCustom?: boolean;
+  /** Hostname used for custom login detection */
+  originHost?: string;
+  registeredBy?: "user" | "agent";
+  registeredAt?: string;
 }
 
-export type PlatformId =
-  // Social
+export type BuiltinPlatformId =
   | "linkedin"
   | "instagram"
   | "reddit"
@@ -77,7 +82,10 @@ export type PlatformId =
   | "twitter"
   | "telegram";
 
-export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
+/** Built-in social platform or user/agent-registered custom site id (e.g. site-notion-so). */
+export type PlatformId = BuiltinPlatformId | string;
+
+export const PLATFORM_REGISTRY: Record<BuiltinPlatformId, PlatformConfig> = {
   linkedin: {
     id: "linkedin",
     name: "LinkedIn",
@@ -94,7 +102,6 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
       li_at: ".linkedin.com",
       JSESSIONID: ".www.linkedin.com",
     },
-    prepareNavigationUrl: "https://www.linkedin.com/",
     rotatesTokens: true,
     notes:
       "LinkedIn rotates session tokens frequently. The session keeper refreshes every 5 minutes to capture new tokens.",
@@ -262,20 +269,38 @@ export const PLATFORM_REGISTRY: Record<PlatformId, PlatformConfig> = {
 
 };
 
+let customPlatformConfigCache = new Map<string, PlatformConfig>();
+
+export function setCustomPlatformConfigCache(configs: PlatformConfig[]): void {
+  customPlatformConfigCache = new Map(configs.map((config) => [config.id, config]));
+}
+
 /**
- * Get platform config by ID
+ * Get platform config by ID (built-in registry + user/agent-registered sites).
  */
 export function getPlatformConfig(
   platformId: string,
 ): PlatformConfig | undefined {
-  return PLATFORM_REGISTRY[platformId as PlatformId];
+  const builtin = PLATFORM_REGISTRY[platformId as BuiltinPlatformId];
+  return builtin ?? customPlatformConfigCache.get(platformId);
 }
 
 /**
- * Get all platform IDs
+ * Get all platform IDs (built-in + custom connections).
  */
-export function getAllPlatformIds(): PlatformId[] {
-  return Object.keys(PLATFORM_REGISTRY) as PlatformId[];
+export function getAllPlatformIds(): string[] {
+  const builtin = Object.keys(PLATFORM_REGISTRY);
+  const custom = [...customPlatformConfigCache.keys()].filter(
+    (id) => !(id in PLATFORM_REGISTRY),
+  );
+  return [...builtin, ...custom];
+}
+
+export async function refreshCustomPlatformConfigCache(): Promise<void> {
+  const { listCustomPlatformConnections, customRecordToPlatformConfig } =
+    await import("./customPlatformConnections.js");
+  const records = await listCustomPlatformConnections();
+  setCustomPlatformConfigCache(records.map(customRecordToPlatformConfig));
 }
 
 /**
@@ -301,6 +326,9 @@ export function getAllPlatformKeyNames(platformId: string): string[] {
   const config = getPlatformConfig(platformId);
   if (!config) {
     throw new Error(`Unknown platform: ${platformId}`);
+  }
+  if (config.isCustom) {
+    return [`${config.keyPrefix}_<COOKIE_NAME>`];
   }
   return config.requiredCookies.map((cookie) =>
     getPlatformKeyName(platformId, cookie),

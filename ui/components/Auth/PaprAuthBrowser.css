@@ -1,0 +1,28 @@
+.papr-auth-browser {
+  width: 100%;
+  min-height: 420px;
+  height: 100%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: var(--surface-secondary, #f5f5f7);
+}
+
+.auth-wall__browser-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  width: 100%;
+  max-width: 520px;
+}
+
+.auth-wall__browser-panel .papr-auth-browser {
+  min-height: 480px;
+}
+
+.papr-login-auth-browser {
+  margin-top: 16px;
+  min-height: 420px;
+  border: 1px solid var(--border-subtle, rgba(0, 0, 0, 0.08));
+  border-radius: 12px;
+  overflow: hidden;
+}

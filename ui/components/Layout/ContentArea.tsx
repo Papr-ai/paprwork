@@ -26,6 +26,7 @@ import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import { OnboardingView } from "../Onboarding/OnboardingView";
 import { MemoryView } from "../Memory/MemoryView";
+import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
 import { gateway } from "../../src/lib/gateway";
 import "./ContentArea.css";
 
@@ -381,6 +382,13 @@ export function ContentArea() {
         return <MemoryView />;
       case "settings":
         return <SettingsView />;
+      case "platform":
+        return (
+          <PlatformBrowserTab
+            platformId={tab.entityId}
+            isActive={visiblePaneTabIds.has(tabId)}
+          />
+        );
       case "chatgpt-conv-history":
         return <ChatGPTConvHistoryView />;
       default:

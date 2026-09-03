@@ -56,3 +56,8 @@ export interface TursoReplicaWriteResult {
   pendingPush: boolean;
   backend: "turso-replica";
 }
+
+/** When pushAfterWrite is false, apply on replica only — no pull/push to Turso primary. */
+export interface TursoReplicaWriteOptions {
+  pushAfterWrite?: boolean;
+}

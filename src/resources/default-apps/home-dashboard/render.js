@@ -21,8 +21,9 @@ function reviewIcons(item) {
 }
 const R = {
   hero(h) {
-    const stats = (h.stats||[]).map(s => `<div class="stat"><div class="stat-num">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('');
-    return `<div class="hero-date">${h.date}</div><h1 class="hero-title">${h.title || 'Daily Brief'}</h1><div class="hero-stats">${stats}</div>`;
+    const hero = h && typeof h === 'object' ? h : { date: '', title: 'Daily Brief', stats: [] };
+    const stats = (hero.stats||[]).map(s => `<div class="stat"><div class="stat-num">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('');
+    return `<div class="hero-date">${hero.date || ''}</div><h1 class="hero-title">${hero.title || 'Daily Brief'}</h1><div class="hero-stats">${stats}</div>`;
   },
   timeline(items) {
     return items.map((m,i) => {

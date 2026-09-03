@@ -5,6 +5,7 @@
 import Database from "better-sqlite3";
 import { existsSync } from "fs";
 import { todayBriefDateKey } from "../../../core/utils/briefDateKey.js";
+import { parseDailyBriefPayload } from "../../../core/utils/dailyBriefPayload.js";
 import { DEFAULT_HOME_DAILY_BRIEF_JOB_NAME } from "../defaultHomeBundle.js";
 import type { JobRecord } from "./types.js";
 
@@ -43,20 +44,28 @@ export function verifyDailyBriefRowForToday(dbPath: string): {
 
     const row = db
       .prepare(
-        "SELECT date, length(brief_json) AS jsonLen FROM briefs WHERE date = ? LIMIT 1",
+        "SELECT date, brief_json FROM briefs WHERE date = ? LIMIT 1",
       )
-      .get(today) as { date: string; jsonLen: number } | undefined;
+      .get(today) as { date: string; brief_json: string } | undefined;
 
-    if (!row || !row.jsonLen || row.jsonLen <= 0) {
+    if (!row?.brief_json?.trim()) {
       return {
         ok: false,
         message: `No brief row for today (${today}) in ${dbPath}`,
       };
     }
 
+    const payload = parseDailyBriefPayload(row.brief_json);
+    if (!payload) {
+      return {
+        ok: false,
+        message: `Brief row for ${today} is invalid (missing hero.title or sections)`,
+      };
+    }
+
     return {
       ok: true,
-      message: `Daily Brief row verified for ${today} (${row.jsonLen} bytes)`,
+      message: `Daily Brief row verified for ${today} (${row.brief_json.length} bytes)`,
     };
   } catch (err) {
     return {

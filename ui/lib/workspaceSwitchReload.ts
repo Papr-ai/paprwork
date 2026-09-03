@@ -37,10 +37,15 @@ import {
   buildWorkspaceUiCacheKey,
   clearWorkspaceUiCacheForTests,
   getActiveWorkspaceUiCacheKey,
+  parseWorkspaceUiCacheKey,
   readWorkspaceUiCache,
   setActiveWorkspaceUiCacheKey,
   writeWorkspaceUiCache,
 } from "./workspaceUiCache";
+import {
+  readProfileSidebarCache,
+  writeProfileSidebarCache,
+} from "../utils/profileSidebarCache";
 import {
   fetchGatewayWorkspaceSwitchStatus,
   isGatewayWorkspaceSwitchComplete,
@@ -335,6 +340,44 @@ async function applyWorkspaceTabsAfterGatewayReady(
   }
 }
 
+function getSwitchCompleteOptionsForGeneration(
+  generation: number,
+): { targetOrganizationId?: string; targetNamespaceId?: string } {
+  const targetWorkspaceKey = reloadTargetWorkspaceKeyByGeneration.get(generation);
+  if (!targetWorkspaceKey) {
+    return {};
+  }
+  const parsed = parseWorkspaceUiCacheKey(targetWorkspaceKey);
+  if (!parsed) {
+    return {};
+  }
+  return {
+    targetOrganizationId: parsed.organizationId,
+    targetNamespaceId: parsed.namespaceId,
+  };
+}
+
+function applySwitchLabelsToProfileCache(
+  labels: { organizationName?: string; namespaceName?: string } | undefined,
+): void {
+  if (!labels?.organizationName && !labels?.namespaceName) {
+    return;
+  }
+  const existing = readProfileSidebarCache();
+  writeProfileSidebarCache({
+    name: existing?.name ?? "",
+    email: existing?.email ?? "",
+    imageUrl: existing?.imageUrl ?? "",
+    plan: existing?.plan ?? "",
+    organizationName: labels.organizationName ?? existing?.organizationName ?? "",
+    namespaceName: labels.namespaceName ?? existing?.namespaceName ?? "",
+    workspaceName: existing?.workspaceName ?? "",
+  });
+  window.dispatchEvent(
+    new CustomEvent("papr-workspace-labels-updated", { detail: labels }),
+  );
+}
+
 async function completeWorkspaceSwitchReload(generation: number): Promise<void> {
   if (generation !== workspaceReloadGeneration) {
     return;
@@ -344,6 +387,8 @@ async function completeWorkspaceSwitchReload(generation: number): Promise<void> 
     return;
   }
   endWorkspaceSwitchOverlay();
+  applySwitchLabelsToProfileCache(reloadLabelsByGeneration.get(generation));
+  window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
   window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
   scheduleDeferredWorkspaceWarmup();
 }
@@ -359,7 +404,13 @@ async function catchUpWorkspaceSwitchCompleteIfNeeded(
   }
 
   const status = await fetchGatewayWorkspaceSwitchStatus();
-  if (!status || !isGatewayWorkspaceSwitchComplete(status)) {
+  if (
+    !status ||
+    !isGatewayWorkspaceSwitchComplete(
+      status,
+      getSwitchCompleteOptionsForGeneration(generation),
+    )
+  ) {
     return;
   }
 
@@ -556,7 +607,10 @@ async function reloadUiForWorkspaceSwitchInner(
   window.dispatchEvent(new CustomEvent("papr-workspace-switch-start"));
   const targetWorkspaceKey = reloadTargetWorkspaceKeyByGeneration.get(generation);
   const labels = reloadLabelsByGeneration.get(generation);
-  beginWorkspaceSwitchOverlay(labels);
+  if (waitForGateway) {
+    beginWorkspaceSwitchOverlay(labels);
+    applySwitchLabelsToProfileCache(labels);
+  }
   try {
     attachWorkspaceSwitchBroadcastListener();
     clearLegacyGlobalTabCache();
@@ -603,27 +657,20 @@ async function reloadUiForWorkspaceSwitchInner(
       void catchUpWorkspaceSwitchCompleteIfNeeded(generation);
       scheduleSwitchStatusCatchUp(generation);
     } else {
-      const tabsLoaded = await restoreWorkspaceTabsAndEntities(
-        generation,
-        targetWorkspaceKey,
-      );
+      await restoreWorkspaceTabsAndEntities(generation, targetWorkspaceKey);
       if (generation !== workspaceReloadGeneration) {
         return;
       }
-      if (tabsLoaded === 0) {
-        awaitingSwitchTabRecovery = generation;
-        console.log(
-          "[WorkspaceSwitch] No tabs loaded yet — will retry when gateway switch completes",
-        );
-      } else {
-        awaitingSwitchTabRecovery = null;
-      }
+      awaitingSwitchTabRecovery = null;
+      endWorkspaceSwitchOverlay();
+      window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
+      window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
     }
 
-    // Stay on Settings (Profile / namespace picker) — workspace tabs load into the tab bar next.
-    ensureSettingsTab({ section: "profile" });
-
-    window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
+    // User-initiated switch from Settings — stay on Profile while tabs reload.
+    if (waitForGateway) {
+      ensureSettingsTab({ section: "profile" });
+    }
   } finally {
     workspaceSwitchReloading = false;
   }

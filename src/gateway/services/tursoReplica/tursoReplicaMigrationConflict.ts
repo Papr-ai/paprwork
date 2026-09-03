@@ -107,8 +107,8 @@ export function detectMigrationPushConflict(
     code: MIGRATION_CONFLICT_CODE,
     message:
       `${MIGRATION_CONFLICT_CODE}: Cloud schema is ahead (${aheadLabel}). ` +
-      `Local offline migration(s) ${cloudAheadIds.join(", ")} must be rebased — ` +
-      "use repair_cloud_sync({ strategy: 'accept_cloud' }) or skip/rebase before push.",
+      `Replica migration(s) ${cloudAheadIds.join(", ")} must be rebased — ` +
+      "use papr_db_migration_parity + papr_db_reconcile_sync or accept_cloud before push.",
     localOnlyIds,
     remoteOnlyIds,
     cloudAheadIds,

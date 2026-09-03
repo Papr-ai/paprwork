@@ -63,7 +63,8 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
   "claude-opus-4-8": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5
   "claude-opus-5": { input: 5.0, output: 25.0 },
-  "claude-fable-5": { input: 10.0, output: 50.0 },
+  "claude-fable-5-1": { input: 10.0, output: 50.0 },
+  "claude-fable-5": { input: 10.0, output: 50.0 }, // deprecated — migrated to fable-5-1
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
   // Source: https://ai.google.dev/gemini-api/docs/pricing

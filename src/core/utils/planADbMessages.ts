@@ -7,14 +7,14 @@ export const SCHEMA_VIA_MIGRATION_MSG =
 
 export const SCHEMA_REQUIRES_ONLINE_MSG =
   "Plan A (cloud sync): raw DDL via papr_db_exec requires Turso primary (online). " +
-  "Schema migrations may be applied offline (provisional, pendingPush) via papr_db_apply_migration. " +
-  "If cloud schema is ahead after reconnect, use repair_cloud_sync({ strategy: 'merge_lww' | 'accept_cloud' }).";
+  "Schema migrations: papr_db_apply_migration (replica → Turso primary HTTP → pull). " +
+  "If cloud schema diverged, use papr_db_migration_parity + papr_db_reconcile_sync — not merge_lww.";
 
 export const REPLICA_BASH_SQLITE_MSG =
-  "Plan A (cloud sync): do not open replica-managed database files with sqlite3 or Python sqlite. " +
-  "Even a plain SELECT opens the file read-write and truncates the WAL on close, which wedges sync in both directions. " +
-  "Use papr_db_apply_migration for schema, papr_db_exec or /api/db/write for rows, and query_cloud_turso or papr_db_sync_status to inspect. " +
-  'If you must read the local file, open it read-only: sqlite3 "file:/path/data.db?mode=ro" "SELECT ..."';
+  "Plan A: registry DBs have two tiers — **replica** (desktop embedded sync handle) and **cloud** (Turso primary). " +
+  "Do not open data.db with sqlite3 or Python sqlite — even SELECT wedges sync. " +
+  "Inspect replica: papr_db_exec / app backend (backend turso-replica). Inspect cloud: query_cloud_turso. " +
+  'Emergency read-only file peek: sqlite3 "file:/path/data.db?mode=ro" — NOT authoritative for replica state.';
 
 export function isPlanACloudEnvFromProcessEnv(
   env: NodeJS.ProcessEnv = process.env,

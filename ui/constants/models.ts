@@ -20,7 +20,7 @@ export interface AIModel {
 }
 
 export const CHAT_MODELS: AIModel[] = [
-  // Anthropic — weakest to strongest (Haiku → Sonnet → Opus → Fable 5)
+  // Anthropic — weakest to strongest (Haiku → Sonnet → Opus → Fable 5.1)
   {
     id: "claude-haiku-4-5",
     name: "Claude Haiku 4.5",
@@ -102,11 +102,11 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-fable-5",
-    name: "Claude Fable 5",
+    id: "claude-fable-5-1",
+    name: "Claude Fable 5.1",
     provider: "anthropic",
     description:
-      "Most capable Claude — adaptive thinking, 1M context, long-horizon agentic work",
+      "Most capable Claude — adaptive thinking, 1M context, long-horizon agentic coding and research",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,

@@ -90,7 +90,7 @@ You're not in a web chat. You're in a native desktop app with Jobs, Skills, and 
 Each conversation is a fresh start. Make it count.`;
 
 interface ArtifactContext {
-  type: "document" | "app";
+  type: "document" | "app" | "platform";
   id: string;
   title: string;
 }
@@ -107,6 +107,8 @@ function findMergedArtifact(chatId: string): ArtifactContext | null {
       return { type: "document", id: tab.entityId, title: tab.title };
     if (tab.type === "app")
       return { type: "app", id: tab.entityId, title: tab.title };
+    if (tab.type === "platform")
+      return { type: "platform", id: tab.entityId, title: tab.title };
     return null;
   };
 
@@ -457,7 +459,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       const mergedArtifact = findMergedArtifact(chatId);
 
       const idKey =
-        mergedArtifact?.type === "document" ? "documentId" : "appId";
+        mergedArtifact?.type === "document"
+          ? "documentId"
+          : mergedArtifact?.type === "platform"
+            ? "platformId"
+            : "appId";
       const mergedContext = mergedArtifact
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";
@@ -710,7 +716,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     try {
       const mergedArtifact = findMergedArtifact(chatId);
       const idKey =
-        mergedArtifact?.type === "document" ? "documentId" : "appId";
+        mergedArtifact?.type === "document"
+          ? "documentId"
+          : mergedArtifact?.type === "platform"
+            ? "platformId"
+            : "appId";
       const mergedContext = mergedArtifact
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";

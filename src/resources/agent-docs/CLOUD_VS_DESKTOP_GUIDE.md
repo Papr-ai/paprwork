@@ -7,6 +7,13 @@
 
 Use this guide when users ask about running jobs while their Mac is asleep, what syncs automatically, and what still requires the local app.
 
+**Canonical terms (use consistently):**
+- **Cloud Sync** — Settings toggle; enables git push, Turso replica sync, vault push, and auto-publish
+- **Upload now** — UI button; same engine as `push_cloud_sync({ appId })` (git **+** Turso ordered flush)
+- **Cloud vault** — Integration Keys + platform cookies on the memory server; cloud jobs read vault, **not** desktop keychain
+- **Plan A replica** — Registry DB sync mode (`syncMode: "replica"`); Turso primary is authority; desktop tails frames via `papr_db_pull`
+- **Sync V3** — Per-app GitHub writer repo for app source (not namespace monorepo `apps/` paths)
+
 ---
 
 ## Architecture in one sentence
@@ -48,7 +55,7 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 **Prerequisites (one-time / while awake):**
 
 - Cloud Sync enabled; workspace pushed to GitHub cloud repo
-- Vault sync: LLM keys + Papr API key available in cloud vault
+- **Vault sync:** Integration Keys and Platform Connection cookies push to the **cloud vault** when desktop syncs while awake — cloud jobs cannot read local keychain directly
 - Production: `CLOUD_AGENT_GATEWAY_URL` + matching `PAPR_CLOUD_AGENT_GATEWAY_KEY` on memory server; gateway deployed to Cloud Run
 - Job definition + code already in cloud git repo (not only on local disk)
 

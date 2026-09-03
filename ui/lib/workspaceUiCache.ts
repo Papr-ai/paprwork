@@ -27,6 +27,22 @@ export function buildWorkspaceUiCacheKey(
   return `${organizationId}:${namespaceId}`;
 }
 
+/** Parse a workspace UI cache key back into org + namespace ids. */
+export function parseWorkspaceUiCacheKey(
+  key: string,
+): { organizationId: string; namespaceId: string } | null {
+  const separator = key.indexOf(":");
+  if (separator <= 0 || separator >= key.length - 1) {
+    return null;
+  }
+  const organizationId = key.slice(0, separator);
+  const namespaceId = key.slice(separator + 1);
+  if (!organizationId || !namespaceId) {
+    return null;
+  }
+  return { organizationId, namespaceId };
+}
+
 let activeWorkspaceKey: string | null = null;
 
 export function getActiveWorkspaceUiCacheKey(): string | null {

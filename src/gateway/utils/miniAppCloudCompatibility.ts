@@ -72,9 +72,9 @@ const APP_PATTERNS: PatternRule[] = [
     pattern:
       /(?:puppeteer\.connect|connectOverCDP|:9222\b|chrome-manager|linkedin-chrome-shared)/i,
     message:
-      "Attaches to the user's local Chrome via CDP (:9222) — requires Paprwork desktop with that Chrome profile open.",
+      "Attaches to Papr-managed Chrome via CDP (:9222) — LinkedIn desktop jobs only; requires Paprwork desktop with Platform Connections connected.",
     remediation:
-      "Use cloud agent jobs with Playwright (ephemeral browser in cloud), or API-first integrations. Local CDP cannot run on apps.papr.ai.",
+      "Use cloud agent jobs with headless Playwright + vault cookie keys for non-LinkedIn platforms. LinkedIn CDP does not run on apps.papr.ai.",
   },
   {
     category: "absolute-path",
@@ -110,9 +110,9 @@ const JOB_PATTERNS: PatternRule[] = [
     severity: "error",
     pattern:
       /(?:puppeteer\.connect|connectOverCDP|browserURL.*9222|:9222\b|chrome-manager|linkedin-chrome-shared|Launching Chrome)/i,
-    message: "Job attaches to the user's local Chrome via CDP — requires Paprwork desktop with Chrome Manager.",
+    message: "Job attaches to Papr-managed Chrome via CDP (:9222) — LinkedIn desktop only; requires Paprwork desktop with Platform Connections connected.",
     remediation:
-      "Use cloud agent jobs with Playwright, or API-first flows. CDP to localhost:9222 does not run on apps.papr.ai.",
+      "For non-LinkedIn platforms use headless Playwright + vault cookie keys. LinkedIn CDP to localhost:9222 does not run on apps.papr.ai.",
   },
   {
     category: "localhost-gateway",

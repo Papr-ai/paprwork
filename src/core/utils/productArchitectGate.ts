@@ -30,7 +30,8 @@ export const PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION =
   "- Frontend DB reads: POST /api/db/query with { sourceId, sql, params } — field name is sql, not query\n" +
   "- Frontend DB writes: POST /api/db/write (not /api/db/query for INSERT/UPDATE/DELETE)\n" +
   "- Plan A schema (cloud sync on): write_file migrations/{id}.sql → papr_db_apply_migration({ dbId, migrationId }) — Turso primary when online; never papr_db_exec DDL or bash/sqlite3 on registry DB files\n" +
-  "- Plan A rows: papr_db_exec DML or /api/db/write; Upload now / push_cloud_sync({ appId }) ships git + replica push — not legacy CDC\n" +
+  "- Plan A rows: papr_db_exec DML or /api/db/write; Upload now / push_cloud_sync({ appId }) ships git + Turso ordered flush — not legacy CDC\n" +
+  "- Platform scrape jobs: LinkedIn only → linkedin-api + CDP (desktop); X/Reddit/Instagram → \\${KEY} + headless Playwright — never reddit-api/x-api CDP; cloud uses vault-synced cookies\n" +
   "- Extend backend/ping.py scaffold pattern — do not replace with stdin-based handlers";
 
 /** Returned on create_app after product-architect gate passes — reminds builder of platform contracts. */

@@ -3,70 +3,148 @@ id: preloaded-social-media-auth
 name: Social Media Authentication
 description: Rate limiting guidelines and best practices for social media automation jobs using Connected Platforms.
 ---
-# Social Media Automation Guide
+# Social Media & Platform Connections Guide
 
-This guide covers rate limiting, best practices, and usage patterns for social media automation.
+Use **Settings → Platform Connections** or the `connect_platform` tool for built-in social sites and custom login-required URLs.
 
-## Connecting Platforms
-
-Use the Connected Platforms feature (Settings → Platforms) or the `connect_platform` tool:
+## Register a custom site (agent)
 
 ```typescript
-// Check if LinkedIn is connected
-connect_platform({ platform: "linkedin", action: "status" })
+connect_platform({
+  action: "register",
+  url: "https://app.example.com",
+  name: "Example App",
+})
+// → platformId like site-app-example-com
 
-// Trigger connection (opens browser for login)
-connect_platform({ platform: "linkedin", action: "connect" })
-
-// Force refresh if session is stale
-connect_platform({ platform: "linkedin", action: "refresh" })
+connect_platform({ platform: "site-app-example-com", action: "request_connect", reason: "..." })
+connect_platform({ platform: "site-app-example-com", action: "prepare_browser" })
+browser_snapshot({})
 ```
 
-**Supported platforms:** `linkedin`, `instagram`, `reddit`, `facebook`, `tiktok`, `twitter`
-
-Sessions refresh automatically in the background - no manual Chrome Manager jobs needed!
-
-## Reading connected accounts (agent — browser first)
-
-When the agent needs to read feeds, messages, or profiles from a connected platform:
+## Built-in platforms
 
 ```typescript
 connect_platform({ platform: "linkedin", action: "status" })
+connect_platform({ platform: "reddit", action: "status" })
 connect_platform({ platform: "linkedin", action: "prepare_browser" })
 browser_snapshot({})
-browser_navigate({ url: "https://www.linkedin.com/messaging/" })
 ```
 
-**Desktop LinkedIn:** `prepare_browser` launches a **persistent real Google Chrome profile** (not headless cookie injection). On first use it imports cookies from your Chrome login into `~/Papr/browser-profiles/linkedin/browser-data`. Stay logged into LinkedIn in Chrome for best results.
+**Connect vs job runtime:**
+- **Connected** = required cookies saved to **keychain** (and `cookies.json`). Jobs use `${KEY_NAME}` substitution. Cloud jobs read from **cloud vault** — desktop must push vault while awake (Cloud Sync on).
+- **Papr Chrome** (desktop) = sign-in UI. **LinkedIn always.** Other platforms only when personal Chrome has no session. **Not required as job runtime** for X/Reddit/Instagram scrapers.
 
-**Cloud / other platforms:** Still use headless Playwright with session cookies until a cloud strategy is defined.
+**Desktop:** `prepare_browser` uses real Papr-managed Chrome when installed (headless Playwright + keychain cookies in cloud). Then use browser_* tools.
 
-## LinkedIn agent reads (proven pattern)
+## Job automation by platform (READ THIS)
 
-Use this for profile research — feed first, then one profile, with seconds between navigations:
+| Platform | Connect | Python/bash scrape jobs | Agent jobs / chat |
+|----------|---------|-------------------------|-------------------|
+| **LinkedIn** | Papr Chrome sign-in only | `requirements: ["linkedin-api", "playwright"]` + `papr_platform_browser.connect_platform_browser()` (CDP :9222) | `prepare_browser` → `browser_*` |
+| **X, Reddit, Instagram, …** | Personal Chrome import OK → keychain | **`${TWITTER_*}` / `${REDDIT_*}` / `${INSTAGRAM_*}` + headless Playwright, requests, or bash curl.** Do **NOT** use `reddit-api`, `x-api`, or Papr Chrome CDP. | `prepare_browser` (headless in cloud) → `browser_*` |
+| **Cloud (non-LinkedIn)** | Vault-synced keys | Same — headless + `${KEY}`. No :9222. | `prepare_browser` + headless `browser_*` |
+
+## Agent browser automation (chat + agent jobs)
+
+**Flow:** `prepare_browser` → `browser_snapshot` (see HTML) → `browser_click` / `browser_type` → repeat.
+
+| Tool | Purpose |
+|------|---------|
+| `browser_snapshot` | **How you see the page** — returns HTML; find CSS selectors here |
+| `browser_navigate` | Go to a URL (logged-in session persists) |
+| `browser_click` / `browser_type` / `browser_fill_form` | Interact with elements |
+| `browser_scroll` | Scroll by direction/delta (scroll-into-view selector fails on embedded Electron fallback only) |
+| `browser_test_script` | Run JS on page, return data |
+| `browser_network_logs` / `browser_console_logs` | Debug APIs and JS errors |
+| `page_wait_for({ target: "browser", time: N })` | Wait for SPA render — works everywhere; on embedded Electron fallback use **time only** (no text/selector) |
+
+**Embedded Electron fallback only** (Google Chrome not installed): `page_wait_for` with `text` or `selector` fails — use snapshot + click instead. Papr Chrome and headless Playwright support text/selector waits.
+
+**Prefer browser tools** over bash/curl for LinkedIn/social (curl still works but often returns empty — a tip is appended).
+
+**Passkey / 2FA:** Connect and `prepare_browser` on desktop open **Papr-managed Chrome** — passkeys, Touch ID, and OAuth work normally. Embedded Electron fallback (no Chrome installed) cannot show passkeys — user must click **Try another way** → password/SMS.
+
+**No HTTP API** — no `/api/browser`. Desktop Papr only (IPC).
+
+| Runtime | LinkedIn | X, Reddit, Instagram, … |
+|---------|----------|-------------------------|
+| **Python scrape job** | `requirements: ["linkedin-api", "playwright"]` → `papr_platform_browser.connect_platform_browser()` (CDP to Papr Chrome :9222) | `${REDDIT_REDDIT_SESSION}`, `${TWITTER_AUTH_TOKEN}`, etc. + **headless Playwright** or `requests`/`curl`. **No `*-api` CDP.** |
+| **Agent/subagent job** | `prepare_browser` + `browser_*` | `prepare_browser` + `browser_*` (cookies from keychain; headless in cloud) |
+| **Cloud jobs** | Cookie-only often blocked | Vault keys + headless Playwright ✅ |
+| **HTTP / mini-app** | No `/api/browser` | No `/api/browser` |
+
+**There is no job-facing HTTP API for platform browsers.** Agents use IPC tools; LinkedIn Python jobs use CDP; other platforms use `${KEY}` + headless Playwright.
+
+**LinkedIn Python scraper (CDP — desktop only):**
+```python
+from playwright.async_api import async_playwright
+from papr_platform_browser import connect_platform_browser
+
+async with async_playwright() as pw:
+    browser, page = await connect_platform_browser(pw, "linkedin.com")
+    await page.goto("https://www.linkedin.com/feed/")
+    # scrape — reuse logged-in tab; never browser.new_page()
+```
 
 ```typescript
-connect_platform({ platform: "linkedin", action: "status" })
-connect_platform({ platform: "linkedin", action: "prepare_browser" }) // feed — no url param
-browser_snapshot({}) // optional
-
-page_wait_for({ target: "browser", time: 4 }) // 3–8s before next page (required)
-
-browser_navigate({ url: "https://www.linkedin.com/in/handle/" })
-page_wait_for({ target: "browser", time: 3 })
-browser_snapshot({})
+create_job({
+  name: "LinkedIn Scraper",
+  type: "python",
+  command: "python3 code/scraper.py",
+  requirements: ["linkedin-api", "playwright"],
+})
 ```
 
-- **Rate budget:** ~2 views per person (feed + profile) toward **80 views/day** — do not chain extra navigations
-- **Pacing:** always `page_wait_for({ target: "browser", time: 3–8 })` between `browser_navigate` calls
-- **Avoid redirect loops:** never skip `prepare_browser`; do not hit linkedin.com URLs before prepare
+**Reddit / X Python scraper (headless + keychain — preferred for non-LinkedIn):**
+```python
+from playwright.async_api import async_playwright
 
-**Do NOT:**
-- Call LinkedIn Voyager / internal GraphQL / REST APIs via bash/curl with `${LINKEDIN_*}` cookies
-- Reverse-engineer `/voyager/api/` endpoints — query IDs go stale and LinkedIn returns 302 bot blocks
-- Use bird CLI for LinkedIn (bird is X/Twitter only)
+async def scrape(session: str):
+    async with async_playwright() as pw:
+        browser = await pw.chromium.launch(headless=True)
+        context = await browser.new_context()
+        await context.add_cookies([{
+            "name": "reddit_session",
+            "value": session,
+            "domain": ".reddit.com",
+            "path": "/",
+        }])
+        page = await context.new_page()
+        await page.goto("https://www.reddit.com/")
+```
 
-If `prepare_browser` fails: try `action: "refresh"` once, retry — then stop and tell the user. Do not keep probing.
+```typescript
+create_job({
+  name: "Reddit Scraper",
+  type: "python",
+  command: "python3 code/scraper.py --session '${REDDIT_REDDIT_SESSION}'",
+  requirements: ["playwright"], // NO reddit-api
+})
+```
+
+**Papr Chrome on :9222:** Used for LinkedIn CDP jobs and desktop sign-in. Do not require it for Reddit/X/Instagram scheduled scrapers.
+
+**OAuth login (Google/Apple/Microsoft on LinkedIn):** Connect opens real Papr Chrome — passkeys and OAuth work normally.
+
+**If `prepare_browser` times out:** confirm desktop Papr, Platform Connections connected, retry after `connect_platform({ action: "refresh" })`.
+
+## Discovering backend APIs
+
+After `prepare_browser`, use DevTools-style logs (`browser_network_logs`, `browser_console_logs`) on Papr Chrome, headless Playwright, or embedded Electron fallback:
+
+```typescript
+connect_platform({ platform: "site-app-example-com", action: "prepare_browser" })
+browser_network_logs({ limit: 20, clearAfterRead: true })
+browser_navigate({ url: "https://app.example.com/dashboard" })
+page_wait_for({ target: "browser", time: 3 })
+browser_network_logs({ limit: 100 }) // filter resourceType xhr/fetch
+browser_console_logs({ limit: 50 })
+```
+
+Use discovered endpoints to design Python/bash jobs with `${SITE_*_COOKIE}` keys, or keep using browser_* tools.
+
+**LinkedIn / strict platforms:** network logs help debug UI flows — do **not** replay internal Voyager/GraphQL APIs via curl (stale query IDs, bot detection).
 
 ## Cookie Key Names
 
@@ -79,8 +157,11 @@ Use these in job commands with `${KEY_NAME}` substitution:
 | Facebook | `FACEBOOK_C_USER`, `FACEBOOK_XS` |
 | TikTok | `TIKTOK_SESSIONID`, `TIKTOK_SID_TT` |
 | Reddit | `REDDIT_REDDIT_SESSION`, `REDDIT_TOKEN_V2` |
+| X/Twitter | `TWITTER_AUTH_TOKEN`, `TWITTER_CT0` |
 
-**For X/Twitter:** Use the `bird` CLI tool instead - it handles cookies automatically.
+**For X/Twitter jobs:** Prefer `${TWITTER_AUTH_TOKEN}` + headless Playwright or the `bird` CLI (reads stored cookies). Do not use `x-api` CDP for scrapers.
+
+**For Reddit/Instagram jobs:** Pass cookie keys as CLI args (`'${REDDIT_REDDIT_SESSION}'`) and launch headless Playwright — do not use `reddit-api` / `instagram-api` CDP.
 
 ## CRITICAL: Rate Limiting Required
 

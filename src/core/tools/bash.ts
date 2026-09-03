@@ -26,6 +26,7 @@ import {
 } from "../utils/appDbGuidance.js";
 import {
   buildSqlitePathWarnings,
+  detectScratchDbWriteWhenRegistryExpected,
   formatSqlitePathWarningBlock,
 } from "../utils/sqlitePathGuard.js";
 import { getJobToolEnv } from "./context.js";
@@ -59,6 +60,29 @@ function jobDbSchemaDdlBlockResult(
         command,
         duration: 0,
         _schemaMigrationReminder: replicaBlock.message,
+      },
+    };
+  }
+
+  const scratchWriteBlock = detectScratchDbWriteWhenRegistryExpected(command, {
+    appDb:
+      typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
+    jobDb:
+      typeof mergedEnv.JOB_DB === "string" ? mergedEnv.JOB_DB : undefined,
+    env: mergedEnv,
+  });
+  if (scratchWriteBlock) {
+    return {
+      success: false,
+      error: scratchWriteBlock.message,
+      type: "validation_error",
+      data: {
+        stdout: "",
+        stderr: scratchWriteBlock.message,
+        exitCode: 1,
+        command,
+        duration: 0,
+        _schemaMigrationReminder: scratchWriteBlock.message,
       },
     };
   }
@@ -104,6 +128,10 @@ import { getShellCommand } from "../utils/platform.js";
 import { classifyChildProcessError } from "../utils/childProcessErrors.js";
 import { execShellCommand } from "../utils/shellExec.js";
 import { SPAWN_STDIO_IGNORE_IN } from "../utils/spawnStdio.js";
+import {
+  detectPlatformBrowserBashTip,
+  formatPlatformBrowserBashTip,
+} from "../utils/platformBrowserBashGuard.js";
 
 function destroyChildProcessStreams(proc: ChildProcess | null): void {
   if (!proc) return;
@@ -722,6 +750,11 @@ export async function executeBashCommand(
 
     if (detectNamespaceGitTrapCommand(command)) {
       sanitizedStdout = buildNamespaceGitTrapWarning() + sanitizedStdout;
+    }
+
+    const platformBashTip = detectPlatformBrowserBashTip(command);
+    if (platformBashTip) {
+      sanitizedStdout += formatPlatformBrowserBashTip(platformBashTip);
     }
 
     void import("../../gateway/services/toolCapture/ToolCaptureService.js")

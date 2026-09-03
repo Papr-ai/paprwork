@@ -29,7 +29,7 @@ describe("settingsStore patchSettings", () => {
     await Promise.all([
       patchSettings({
         uiPreferences: {
-          enabledPickerModelIds: ["claude-sonnet-5", "claude-fable-5"],
+          enabledPickerModelIds: ["claude-sonnet-5", "claude-fable-5-1"],
         },
       }),
       patchSettings({
@@ -46,7 +46,7 @@ describe("settingsStore patchSettings", () => {
 
     expect(settings.uiPreferences.enabledPickerModelIds).toEqual([
       "claude-sonnet-5",
-      "claude-fable-5",
+      "claude-fable-5-1",
     ]);
     expect(settings.uiPreferences.lastModelId).toBe("claude-sonnet-5");
   });

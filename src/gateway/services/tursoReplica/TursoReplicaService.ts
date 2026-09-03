@@ -15,6 +15,7 @@ import type {
   TursoReplicaPushResponse,
   TursoReplicaSyncStatus,
   TursoReplicaWriteResult,
+  TursoReplicaWriteOptions,
   DatabaseSyncMode,
   TursoReplicaDatabaseStats,
 } from "./tursoReplicaTypes.js";
@@ -77,6 +78,7 @@ interface RunWriteParams {
   tursoDatabase: string;
   sql: string;
   params?: unknown[];
+  writeOptions?: TursoReplicaWriteOptions;
 }
 
 function normalizeReplicaRows(rows: unknown[]): Record<string, unknown>[] {
@@ -138,6 +140,7 @@ export class TursoReplicaService {
       localPath: params.localPath,
       tursoDatabase: params.tursoDatabase,
       statements: [{ sql: params.sql, params: params.params }],
+      writeOptions: params.writeOptions,
     });
   }
 
@@ -145,7 +148,9 @@ export class TursoReplicaService {
     localPath: string;
     tursoDatabase: string;
     statements: ReadonlyArray<{ sql: string; params?: unknown[] }>;
+    writeOptions?: TursoReplicaWriteOptions;
   }): Promise<TursoReplicaWriteResult> {
+    const pushAfterWrite = options.writeOptions?.pushAfterWrite !== false;
     return this.withSerializedPath(options.localPath, async () => {
       const online = isTursoReplicaOnline();
       const handle = await this.getOrOpen({
@@ -162,7 +167,7 @@ export class TursoReplicaService {
       }
 
       let pendingPush = false;
-      if (online) {
+      if (online && pushAfterWrite) {
         try {
           await this.pullAndPushReplicaWithRecovery(
             options.localPath,
@@ -192,7 +197,9 @@ export class TursoReplicaService {
     localPath: string,
     tursoDatabase: string,
     sql: string,
+    writeOptions?: TursoReplicaWriteOptions,
   ): Promise<{ pendingPush: boolean }> {
+    const pushAfterWrite = writeOptions?.pushAfterWrite !== false;
     return this.withSerializedPath(localPath, async () => {
       const online = isTursoReplicaOnline();
       const handle = await this.getOrOpen({
@@ -204,7 +211,7 @@ export class TursoReplicaService {
       await handle.db.exec(sql);
 
       let pendingPush = false;
-      if (online) {
+      if (online && pushAfterWrite) {
         try {
           await this.pullAndPushReplicaWithRecovery(
             localPath,

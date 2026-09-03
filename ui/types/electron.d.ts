@@ -527,6 +527,34 @@ export interface ElectronAPI {
     }>;
   };
 
+  platformBrowser?: {
+    setBounds: (payload: {
+      platformId: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      visible: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
+    openLogin: (platformId: string) => Promise<{
+      success: boolean;
+      data?: { platformId: string; url: string };
+      error?: string;
+    }>;
+    getState: (platformId: string) => Promise<{
+      success: boolean;
+      data?: { url: string; title: string };
+      error?: string;
+    }>;
+    reload: (platformId: string) => Promise<{ success: boolean; error?: string }>;
+    onUrlChanged: (
+      callback: (data: { platformId: string; url: string; title: string }) => void,
+    ) => () => void;
+    onRedirectLoop: (
+      callback: (data: { platformId: string; url: string }) => void,
+    ) => () => void;
+  };
+
   // App metadata
   getAppVersion: () => Promise<string>;
 

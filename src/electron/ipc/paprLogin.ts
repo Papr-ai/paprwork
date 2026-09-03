@@ -217,6 +217,7 @@ type LoginTelemetryTracker = (
 ) => void;
 
 let trackLoginEvent: LoginTelemetryTracker | undefined;
+let openAuthInAppBrowser: ((url: string) => Promise<void>) | undefined;
 let loginCompletionInFlight = false;
 
 interface PendingOrgSetupContext {
@@ -3489,9 +3490,11 @@ export function initializePaprLoginIPC(
   settingsStorage: SettingsStorage,
   options?: {
     trackLoginEvent?: LoginTelemetryTracker;
+    openAuthInAppBrowser?: (url: string) => Promise<void>;
   },
 ) {
   trackLoginEvent = options?.trackLoginEvent;
+  openAuthInAppBrowser = options?.openAuthInAppBrowser;
   void restorePkceFromDisk();
   registerPaprWorkspaceHandlers();
   // Check if user is already logged in
@@ -3804,7 +3807,11 @@ export function initializePaprLoginIPC(
       console.log(`[PaprLogin] Starting Auth0 flow (mode=${authMode}, source=${loginSource})`);
       loginBrowserOpenedAt = Date.now();
       trackLoginStarted(authMode, loginSource);
-      await shell.openExternal(authUrl.toString());
+      if (openAuthInAppBrowser) {
+        await openAuthInAppBrowser(authUrl.toString());
+      } else {
+        await shell.openExternal(authUrl.toString());
+      }
       trackLoginStep("browser_opened", { mode: authMode, source: loginSource });
 
       return { success: true };

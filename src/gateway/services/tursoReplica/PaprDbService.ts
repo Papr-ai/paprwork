@@ -24,7 +24,16 @@ import {
   writeLinkedDbViaTursoReplica,
   execLinkedDbViaTursoReplica,
 } from "./tursoReplicaRouting.js";
-import { applyRegistryMigrationViaLocalReplica } from "./tursoReplicaApplyMigration.js";
+import {
+  applyRegistryMigrationDualPath,
+  applyRegistryMigrationOnCloudPrimary,
+  applyRegistryMigrationOnReplicaOnly,
+  buildMigrationParityReport,
+} from "./tursoReplicaMigrationDualApply.js";
+import {
+  reconcileReplicaSync,
+  type ReconcileSyncAction,
+} from "./tursoReplicaReconcileSync.js";
 import { ensureReplicaSchemaMigrationsLedger } from "./tursoReplicaSchemaLedger.js";
 import type { TursoReplicaSyncStatus } from "./tursoReplicaTypes.js";
 import {
@@ -220,6 +229,10 @@ export async function repairCloudSync(options: {
       };
     }
     case "merge_lww": {
+      console.warn(
+        "[PaprDbService] merge_lww is deprecated for schema recovery — " +
+          "use papr_db_migration_parity + papr_db_reconcile_sync instead.",
+      );
       await paprDbPull({ dbId: options.dbId });
       let push = await paprDbPush({ dbId: options.dbId });
       let rebasedMigrationIds: string[] | undefined;
@@ -468,6 +481,11 @@ export async function paprDbApplyMigration(options: {
   migrationId: string;
   pendingPush: boolean;
   backend: "turso-replica" | "legacy-local";
+  applyToken?: string;
+  replicaApplied?: boolean;
+  cloudApplied?: boolean;
+  paired?: boolean;
+  pulled?: boolean;
 }> {
   await initializeDatabaseRegistry();
   const source = resolveSource({ dbId: options.dbId });
@@ -502,13 +520,13 @@ export async function paprDbApplyMigration(options: {
 
   assertPaprDbMigrationApplyAllowed();
 
-  const result = await applyRegistryMigrationViaLocalReplica(
+  const result = await applyRegistryMigrationDualPath(
     source,
     migrationRoot,
     migrationFileName,
   );
   await clearReplicaPushErrorOnSuccess(source);
-  if (result.applied) {
+  if (result.applied || result.replicaApplied) {
     const { afterRegistryMigrationApplied } = await import(
       "./tursoReplicaPostMigration.js"
     );
@@ -522,7 +540,112 @@ export async function paprDbApplyMigration(options: {
   return {
     applied: result.applied,
     migrationId: result.migrationId,
-    pendingPush: result.pendingPush,
+    pendingPush: !result.paired && !result.pulled,
     backend: "turso-replica",
+    applyToken: result.applyToken,
+    replicaApplied: result.replicaApplied,
+    cloudApplied: result.cloudApplied,
+    paired: result.paired,
+    pulled: result.pulled,
   };
+}
+
+export async function paprDbApplyMigrationReplica(options: {
+  dbId: string;
+  migrationId: string;
+}): Promise<{
+  applied: boolean;
+  migrationId: string;
+  pendingPush: boolean;
+  applyToken: string;
+  sqlChecksum: string;
+}> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  const migrationFileName = options.migrationId.endsWith(".sql")
+    ? options.migrationId
+    : `${options.migrationId}.sql`;
+
+  assertPaprDbMigrationApplyAllowed();
+  await ensureReplicaSchemaMigrationsLedger(source);
+
+  return applyRegistryMigrationOnReplicaOnly(
+    source,
+    migrationRoot,
+    migrationFileName,
+  );
+}
+
+export async function paprDbApplyMigrationCloud(options: {
+  dbId: string;
+  migrationId: string;
+  applyToken: string;
+}): Promise<{
+  applied: boolean;
+  migrationId: string;
+  paired: boolean;
+  applyToken: string;
+}> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  const migrationFileName = options.migrationId.endsWith(".sql")
+    ? options.migrationId
+    : `${options.migrationId}.sql`;
+
+  assertPaprDbMigrationApplyAllowed();
+
+  const result = await applyRegistryMigrationOnCloudPrimary(
+    source,
+    migrationRoot,
+    migrationFileName,
+    options.applyToken,
+  );
+  await clearReplicaPushErrorOnSuccess(source);
+  return result;
+}
+
+export async function paprDbMigrationParity(options: {
+  dbId: string;
+}): Promise<Awaited<ReturnType<typeof buildMigrationParityReport>>> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  return buildMigrationParityReport({
+    source,
+    migrationRoot,
+    dbId: options.dbId,
+  });
+}
+
+export async function paprDbReconcileSync(options: {
+  dbId: string;
+  action: ReconcileSyncAction;
+  applyToken?: string;
+  migrationId?: string;
+}): Promise<Awaited<ReturnType<typeof reconcileReplicaSync>>> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  return reconcileReplicaSync({
+    source,
+    dbId: options.dbId,
+    migrationRoot,
+    action: options.action,
+    applyToken: options.applyToken,
+    migrationId: options.migrationId,
+  });
 }

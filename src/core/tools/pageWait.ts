@@ -71,8 +71,11 @@ export const pageWaitForTool = createTool({
   description:
     "Wait for page content. Pick target based on what you are testing:\n" +
     "• target='mini_app' — AFTER webview_launch_app when verifying a Papr mini-app preview\n" +
-    "• target='browser' — AFTER browser_navigate when testing external sites\n" +
-    "Examples: page_wait_for({ target: 'mini_app', time: 2 }); page_wait_for({ target: 'browser', text: 'Sign in' })",
+    "• target='browser' — AFTER browser_navigate or prepare_browser (Papr Chrome, headless Playwright, or embedded Electron fallback)\n" +
+    "EMBEDDED ELECTRON FALLBACK ONLY (when Google Chrome is not installed): use ONLY time — page_wait_for({ target: 'browser', time: 3 }). " +
+    "text/textGone/selector require Playwright and FAIL on the embedded fallback — use browser_snapshot then browser_click instead.\n" +
+    "On Papr Chrome and headless Playwright, text/selector waits work normally.\n" +
+    "Examples: page_wait_for({ target: 'mini_app', time: 2 }); page_wait_for({ target: 'browser', time: 4 })",
   inputSchema: pageWaitSchema,
   execute: async (input) => {
     const parsed = pageWaitSchema.safeParse(unwrapInput(input));

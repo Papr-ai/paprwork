@@ -26,6 +26,7 @@ import {
 import { getPaprWorkspacePathsForAgent } from "../utils/paprAgentPaths.js";
 import { validateMiniAppIcon } from "../utils/miniAppIconValidation.js";
 import { getPaprBundlesDir } from "../utils/paprRoot.js";
+import { platformIdsFromRequirements } from "../../gateway/utils/platformCdpBridge.js";
 import {
   getCloudAppPublishTool,
   publishCloudAppTool,
@@ -192,6 +193,33 @@ const BASH_FIRST_REMINDER =
   "⚠️ ONE-OFF WORK: This looks like a quick one-time task with no schedule, no app wiring, and no pipeline. " +
   "Prefer bash({ command: '…' }) for probes and single runs — only keep this job if the user will rerun it, " +
   "needs a schedule, or a mini-app button depends on it.";
+
+const LINKEDIN_CDP_REMINDER =
+  "⚠️ LINKEDIN CDP JOB: Attach to Papr-managed Chrome (Playwright connect_over_cdp on :9222). " +
+  "Python: from papr_platform_browser import connect_platform_browser → browser, page = await connect_platform_browser(pw, 'linkedin.com'). " +
+  "Never browser.new_page(). User must connect LinkedIn in Settings first.";
+
+const NON_LINKEDIN_CDP_WARNING =
+  "⚠️ NON-LINKEDIN CDP: reddit-api/x-api/instagram-api attach Papr Chrome on desktop — avoid for scrapers. " +
+  "Prefer ${REDDIT_*}/${TWITTER_*}/${INSTAGRAM_*} cookie keys in command + headless Playwright or requests (works in cloud). " +
+  "Only keep *-api if you explicitly need a live desktop tab.";
+
+function buildPlatformCdpReminder(
+  jobType: string,
+  requirements?: string[],
+): string | undefined {
+  if (jobType !== "python" && jobType !== "node") {
+    return undefined;
+  }
+  const platformIds = platformIdsFromRequirements(requirements);
+  if (platformIds.length === 0) {
+    return undefined;
+  }
+  if (platformIds.includes("linkedin")) {
+    return LINKEDIN_CDP_REMINDER;
+  }
+  return NON_LINKEDIN_CDP_WARNING;
+}
 
 type AppValidationIssue = {
   file: string;
@@ -385,7 +413,7 @@ const AGENT_JOB_LLM_REMINDER =
   "Prefer type: \"agent\" — built-in OAuth/API routing, full tool access (bash, files, browser), " +
   "delivery, recipes, and no LLM SDK boilerplate. " +
   "Script jobs with LLM SDKs are ONLY for fixed pipelines: read known data → single LLM call → write SQLite (no tools/exploration). " +
-  "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to $JOB_DB\", provider: \"anthropic\" }) " +
+  "Example: create_job({ type: \"agent\", command: \"Analyze leads and save top 5 to registry DB\", writeDbIds: [dbId], provider: \"anthropic\" }) " +
   "Read: read_skill({ skillId: \"preloaded-agent-job-output-guide\" })";
 
 function isScriptJobType(type: string): boolean {
@@ -569,7 +597,10 @@ const createJobSchemaCore = z
     .array(z.string().min(1))
     .optional()
     .describe(
-      "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']",
+      "Python/Node packages to install before running. Creates a venv automatically. Example: ['anthropic', 'requests', 'sqlite-utils']. " +
+        "Platform automation: **LinkedIn ONLY** — include linkedin-api + playwright; script uses papr_platform_browser.connect_platform_browser() (CDP to Papr Chrome :9222). " +
+        "**X, Reddit, Instagram, etc.** — use ${TWITTER_*}/${REDDIT_*}/${INSTAGRAM_*} cookie keys in command + headless Playwright or requests; do NOT add reddit-api/x-api/instagram-api (no CDP). " +
+        "Custom sites: platform:site-id + playwright only when CDP to a live desktop tab is explicitly needed.",
     ),
   dependsOn: z
     .array(dependencySchema)
@@ -617,7 +648,7 @@ const createJobSchemaCore = z
       "claude-sonnet-5",
       "claude-opus-4-6",
       "claude-opus-5",
-      "claude-fable-5",
+      "claude-fable-5-1",
       // OpenAI
       "gpt-5-6-luna",
       "gpt-5-6-terra",
@@ -1110,6 +1141,7 @@ export const createJobTool = createTool({
       { skipMissingFile: true },
     );
     const scriptPathReminder = buildJobScriptPathReminder(scriptPathIssues);
+    const platformCdpReminder = buildPlatformCdpReminder(args.type, args.requirements);
 
     return {
       success: true,
@@ -1119,6 +1151,7 @@ export const createJobTool = createTool({
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
       ...(bashFirstReminder ? { _bashFirstReminder: bashFirstReminder } : {}),
+      ...(platformCdpReminder ? { _platformCdpReminder: platformCdpReminder } : {}),
       ...(scheduleRiskWarning ? { _scheduleRiskWarning: scheduleRiskWarning } : {}),
       ...(scheduleApprovalNote
         ? { _scheduleApprovalNote: scheduleApprovalNote }
@@ -1876,7 +1909,7 @@ const updateJobSchema = z.object({
       "claude-sonnet-5",
       "claude-opus-4-6",
       "claude-opus-5",
-      "claude-fable-5",
+      "claude-fable-5-1",
       // OpenAI
       "gpt-5-6-luna",
       "gpt-5-6-terra",

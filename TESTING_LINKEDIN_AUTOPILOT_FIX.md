@@ -1,5 +1,7 @@
 # Testing the LinkedIn Autopilot Filter Fix
 
+> **DEPRECATED (2026-09):** References legacy Chrome Manager jobs. Current LinkedIn automation uses Platform Connections + `linkedin-api` CDP (see `social-media-auth.md`).
+
 ## Current State
 
 **Job Graph (stale):**

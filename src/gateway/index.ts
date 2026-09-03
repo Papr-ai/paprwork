@@ -210,7 +210,7 @@ async function initializeServices(): Promise<void> {
 
     console.log("[Gateway] Initializing JobsService...");
     await initializeJobsService();
-    console.log("[Gateway] JobsService initialized");
+    console.log("[Gateway] JobsService core ready (maintenance in background)");
 
     if (
       process.env.CLOUD_SYNC_ENABLED !== "false" &&
@@ -221,12 +221,6 @@ async function initializeServices(): Promise<void> {
         "[Gateway] TursoSyncBridge initialized (replica credentials ready)",
       );
     }
-
-    // Now that JobsService is ready, install any default jobs deferred by AppService
-    const { getAppService } = await import("./services/AppService.js");
-    const appService = getAppService();
-    await appService.installPendingDefaultJobs();
-    await appService.repairHomeAndWorkspaceOnStartup();
 
     console.log("[Gateway] Initializing SkillService...");
     await initializeSkillService();
@@ -243,12 +237,6 @@ async function initializeServices(): Promise<void> {
     console.log("[Gateway] Initializing PlanService...");
     await initializePlanService();
     console.log("[Gateway] PlanService initialized");
-
-    // Register built-in sleep job (depends on JobsService being initialized)
-    const { getWorkspaceService } =
-      await import("./services/WorkspaceService.js");
-    await getWorkspaceService().ensureSleepJob();
-    await getWorkspaceService().ensureWikiWriterJob();
 
     const { startAppRepoRevisionSubscriber } = await import(
       "./services/syncV3/appRepoRevisionSubscriber.js"
@@ -968,6 +956,10 @@ async function startGateway(): Promise<void> {
           "./services/syncV3/replaySafeSql.js"
         );
         assertReplaySafeRowSql(sql);
+        const { assertValidHomeBriefWrite } = await import(
+          "./services/dailyBriefWriteGuard.js"
+        );
+        assertValidHomeBriefWrite(appId, source, sql, params);
         const result = await writeLinkedDbRowLocalFirst(
           dbPool,
           dbRouter,
@@ -2932,6 +2924,26 @@ async function startGateway(): Promise<void> {
     gatewayReady = true;
     console.log("[Gateway] All routes registered — gateway fully ready");
 
+    if (!isCloudAgentGatewayMode()) {
+      void import("./services/jobs/deferredStartupBootstrap.js")
+        .then(({ runDeferredJobsWorkspaceBootstrap }) =>
+          runDeferredJobsWorkspaceBootstrap(),
+        )
+        .then(() => {
+          getJobsScheduler().start();
+          return import("./services/platforms/SessionKeeperService.js");
+        })
+        .then(({ getSessionKeeperService }) => {
+          getSessionKeeperService().start();
+        })
+        .catch((err) => {
+          console.warn(
+            "[Gateway] Deferred jobs bootstrap failed (scheduler not started):",
+            err instanceof Error ? err.message : err,
+          );
+        });
+    }
+
     // Cloud services start AFTER the HTTP server is listening.
     // Staggered to avoid thundering herd on memory.papr.ai at startup.
     // Skipped in cloud_agent mode (Cloud Run agent gateway is stateless per-run).
@@ -3254,14 +3266,8 @@ async function startGateway(): Promise<void> {
       }
     });
     
-    if (!isCloudAgentGatewayMode()) {
-      getJobsScheduler().start();
-      
-      // Start session keeper for Connected Platforms
-      const { getSessionKeeperService } = await import("./services/platforms/SessionKeeperService.js");
-      getSessionKeeperService().start();
-    }
-    
+    // Scheduler + session keeper start after deferred jobs bootstrap (see gatewayReady block).
+
     // Start code indexing after a delay (non-blocking)
     console.log('[Gateway] Scheduling code indexing check in 3 seconds...');
     setTimeout(async () => {

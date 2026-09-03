@@ -1,5 +1,9 @@
 # LinkedIn Authentication Testing Guide
 
+> **DEPRECATED (2026-09):** Describes the legacy Auth + Chrome Manager + `~/.papr-linkedin/auth.json` pattern.
+> **Current architecture:** Settings → **Platform Connections** → Connect (Papr Chrome) + `requirements: ["linkedin-api"]` CDP jobs.
+> See `src/resources/skills/social-media-auth.md` and the Platform Connections section in `SystemPrompt.ts`.
+
 **Date:** 2026-04-08  
 **Purpose:** Verify the updated social-media-auth skill correctly guides agent to set up LinkedIn authentication with cookie rotation handling
 

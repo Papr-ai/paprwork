@@ -66,7 +66,9 @@ function persistProfileSnapshot(state: {
   writeProfileSidebarCache(state);
 }
 
-async function fetchProfileContext(): Promise<{
+async function fetchProfileContext(options?: {
+  bypassSwitchGuard?: boolean;
+}): Promise<{
   name: string;
   email: string;
   imageUrl: string;
@@ -82,7 +84,7 @@ async function fetchProfileContext(): Promise<{
   };
 }> {
   const sidebarCache = readProfileSidebarCache();
-  if (isWorkspaceSwitchReloading() && sidebarCache) {
+  if (!options?.bypassSwitchGuard && isWorkspaceSwitchReloading() && sidebarCache) {
     return {
       name: sidebarCache.name,
       email: sidebarCache.email,
@@ -279,7 +281,9 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
 
     refreshInFlight = (async () => {
       try {
-        const { pendingImageSync, ...snapshot } = await fetchProfileContext();
+        const { pendingImageSync, ...snapshot } = await fetchProfileContext({
+          bypassSwitchGuard: force,
+        });
         set({ ...snapshot, loaded: true });
         persistProfileSnapshot(snapshot);
 
