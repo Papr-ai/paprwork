@@ -29,6 +29,7 @@ import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
 import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
 import { useChatStore } from "./stores/chatStore";
+import { writeNewChatDefaultModel } from "./utils/chatModelMemory";
 import {
   initializeAmplitudeBrowser,
   setTelemetryPaprUserId,
@@ -132,9 +133,10 @@ export function App() {
         if (response.success && response.data?.uiPreferences) {
           const { lastModelId } = response.data.uiPreferences;
           
-          // Populate localStorage for fast access (model selection only)
+          // Seeds *new* chats only. Existing chats resolve their own model from
+          // their per-chat selection or their history, never from this value.
           if (lastModelId) {
-            localStorage.setItem("paprwork_last_model_id", lastModelId);
+            writeNewChatDefaultModel(lastModelId);
           }
           
           console.log('[App] UI preferences loaded from settings:', { lastModelId });

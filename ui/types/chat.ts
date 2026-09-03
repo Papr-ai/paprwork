@@ -47,6 +47,11 @@ export interface ChatMessage extends CoreMessage {
   streamingContent?: string;
   /** Context files/docs attached when the user sent this message */
   attachments?: MessageAttachment[];
+  /**
+   * Model that produced this assistant message, as persisted by the gateway.
+   * Read back to restore a chat's own model on reopen.
+   */
+  model?: string;
 
   // V1-style sequence for interleaving text and tool calls
   sequence?: SequenceItem[];
