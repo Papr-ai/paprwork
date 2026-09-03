@@ -33,6 +33,10 @@ import {
 import { shouldSkipMigrationForRemoteLedger } from "./migrationLedgerPolicy.js";
 import { listAppliedMigrationIdsReadOnly } from "./schemaMigrationsLedger.js";
 
+// Kept in sync with schemaDriftHeal.ts / shipSchemaMigrationLog.ts, which each
+// declare their own copy rather than sharing one constant.
+const SCHEMA_DRIFT_HEAL_PREFIX = "__schema_drift_heal__";
+
 export {
   REMOTE_SCHEMA_MIGRATIONS_TABLE,
   ensureRemoteSchemaMigrationsTable,
@@ -155,6 +159,20 @@ async function applyMigrationToRemote(
     if (await migrationSatisfiedOnRemote(remote, migrationRoot, migrationId)) {
       console.warn(
         `[MigrationTurso] ${migrationId} SQL file missing but remote schema already satisfied — skipping replay`,
+      );
+      return;
+    }
+    // Schema-drift-heal migrations are synthetic: schemaDriftHeal.ts mints the
+    // id and ships its ops through the manifest, so a .sql file NEVER exists on
+    // disk for them. When the manifest entry is missing (pruned, or written on
+    // another device) this threw "Migration SQL missing", permanently blocking
+    // replica cutover — and because the databases registry uploads for the
+    // whole namespace at once, one such database failed cloud sync for EVERY
+    // app in the workspace. The ops were already applied remotely when the heal
+    // shipped, so replaying nothing is correct.
+    if (migrationId.startsWith(SCHEMA_DRIFT_HEAL_PREFIX)) {
+      console.warn(
+        `[MigrationTurso] ${migrationId} is a synthetic drift-heal id with no manifest ops — treating as no-op`,
       );
       return;
     }
