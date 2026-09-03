@@ -97,6 +97,25 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     }
   }, [isAuthenticating]);
 
+  // Register IPC-to-DOM bridge listeners so deep link callbacks reach us.
+  // Without this, preload.cjs never dispatches the DOM events AuthWall listens for.
+  useEffect(() => {
+    const successCb = () => {
+      console.log('[AuthWall] Login success via IPC bridge');
+    };
+    const errorCb = (data: { error: string }) => {
+      console.log('[AuthWall] Login error via IPC bridge:', data?.error);
+    };
+
+    window.electronAPI.papr.onLoginSuccess(successCb);
+    window.electronAPI.papr.onLoginError(errorCb);
+
+    return () => {
+      window.electronAPI.papr.removeLoginSuccessListener?.(successCb);
+      window.electronAPI.papr.removeLoginErrorListener?.(errorCb);
+    };
+  }, []);
+
   // Check if user is already authenticated
   useEffect(() => {
     void checkAuthentication();

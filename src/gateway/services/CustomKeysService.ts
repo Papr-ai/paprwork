@@ -4,6 +4,10 @@
  * Provides access to securely stored custom API keys.
  * In production, communicates with Electron main process via IPC.
  * In development, uses a local fallback (not secure, for testing only).
+ *
+ * Keys are stored in Apple Keychain (macOS) via Electron's safeStorage.
+ * This service NEVER falls back to process.env for stored keys —
+ * only the secure IPC path is used.
  */
 
 import { randomUUID } from "node:crypto";
@@ -78,6 +82,11 @@ export class CustomKeysService {
     await this.waitForIpc();
     
     this.ipcAvailable = this.checkIpcAvailable();
+
+    // Register the IPC dispatcher EAGERLY so that INVALIDATE_KEY_CACHE
+    // messages are never missed, even if no key has been fetched yet.
+    this.ensureIpcDispatcher();
+
     console.log(
       `[CustomKeysService] Initialized (IPC: ${this.ipcAvailable ? "available" : "unavailable"})`
     );
@@ -125,15 +134,8 @@ export class CustomKeysService {
       return false;
     }
 
-    // Check if process.send exists (means we were spawned with IPC)
     const hasSend = typeof process.send === "function";
-    // Check if IPC channel is connected (will be false if disconnected)
     const isConnected = process.connected === true;
-    
-    /*console.log(
-      `[CustomKeysService] IPC availability check:`,
-      `hasSend=${hasSend}, isConnected=${isConnected}, connected=${process.connected}`
-    );*/
     
     if (!hasSend) {
       console.warn("[CustomKeysService] No process.send - not spawned with IPC");
@@ -182,6 +184,9 @@ export class CustomKeysService {
       const msg = message as CustomKeysIpcMessage;
 
       if (msg.type === "INVALIDATE_KEY_CACHE") {
+        // Always clear ALL caches on invalidation. A key add/delete/update
+        // affects both the value cache AND the list cache (the list metadata
+        // includes the key's id, name, permission, timestamps).
         this.invalidateCache();
         return;
       }
@@ -245,17 +250,24 @@ export class CustomKeysService {
     this.changeListeners.push(listener);
   }
 
+  /**
+   * Invalidate caches. When a specific keyName is provided, clears both
+   * the value cache for that key AND the list cache (since add/delete/update
+   * operations change the list metadata too).
+   */
   invalidateCache(keyName?: string): void {
     if (keyName) {
       this.valueCache.delete(keyName);
       this.valueInFlight.delete(keyName);
     } else {
-      this.listKeysCache = null;
-      this.listKeysCacheAt = 0;
-      this.listKeysInFlight = null;
       this.valueCache.clear();
       this.valueInFlight.clear();
     }
+
+    // Always clear the list cache — add/delete/update affects list metadata
+    this.listKeysCache = null;
+    this.listKeysCacheAt = 0;
+    this.listKeysInFlight = null;
 
     void import("../../core/tools/bash.js")
       .then(({ invalidateCustomKeysCache }) => {
@@ -350,7 +362,11 @@ export class CustomKeysService {
   }
 
   /**
-   * Get a custom key value by name
+   * Get a custom key value by name.
+   *
+   * SECURITY: Only reads from Apple Keychain via Electron IPC.
+   * Does NOT fall back to process.env — environment variables should
+   * never silently override securely stored keys.
    */
   async getKeyByName(name: string): Promise<string | null> {
     if (!this.initialized) {
@@ -367,15 +383,17 @@ export class CustomKeysService {
     }
 
     if (!this.ipcAvailable) {
-      console.warn(`[CustomKeysService] No IPC - checking env for ${name}`);
-      return readEnvKey(name);
+      console.warn(
+        `[CustomKeysService] No IPC available — cannot retrieve key "${name}" from secure storage`,
+      );
+      return null;
     }
 
     const request = (async () => {
       try {
         const response = await this.sendIpcRequest(
           { type: "CUSTOM_KEYS_GET_BY_NAME", name },
-          "Custom key get request timed out",
+          `Secure key retrieval timed out for "${name}"`,
         );
         const value = response.value ?? null;
         this.valueCache.set(name, { value, cachedAt: Date.now() });
@@ -383,38 +401,36 @@ export class CustomKeysService {
       } catch (error) {
         if (error instanceof Error && error.message === "IPC channel closed") {
           console.warn(
-            `[CustomKeysService] IPC channel closed - checking env for ${name}`,
+            `[CustomKeysService] IPC channel closed — cannot retrieve key "${name}" from secure storage`,
           );
-          return readEnvKey(name);
+          return null;
         }
 
-        // IPC timeout: reuse REQUEST_KEYS (works even when CUSTOM_KEYS_GET_BY_NAME stalls)
+        // IPC timeout: try the REQUEST_KEYS path as a fallback
+        // (still goes through IPC to Electron main — no env var fallback)
         try {
           const { resolveKeysViaIpc } = await import("../utils/keyResolver.js");
           const resolved = await resolveKeysViaIpc([name], process);
           const value = resolved[name] ?? null;
           if (value) {
             console.warn(
-              `[CustomKeysService] IPC get timed out for "${name}" — resolved via REQUEST_KEYS`,
+              `[CustomKeysService] Primary IPC timed out for "${name}" — resolved via REQUEST_KEYS`,
             );
             this.valueCache.set(name, { value, cachedAt: Date.now() });
             return value;
           }
         } catch (fallbackError) {
           console.warn(
-            `[CustomKeysService] REQUEST_KEYS fallback failed for "${name}":`,
+            `[CustomKeysService] REQUEST_KEYS fallback also failed for "${name}":`,
             fallbackError,
           );
         }
 
-        const envValue = readEnvKey(name);
-        if (envValue) {
-          this.valueCache.set(name, { value: envValue, cachedAt: Date.now() });
-          return envValue;
-        }
-
-        console.error(`[CustomKeysService] Failed to get key "${name}":`, error);
-        throw error;
+        console.error(
+          `[CustomKeysService] Failed to retrieve key "${name}" from secure storage:`,
+          error,
+        );
+        return null;
       } finally {
         this.valueInFlight.delete(name);
       }
@@ -445,6 +461,7 @@ export class CustomKeysService {
       throw new Error("Custom key add response missing key payload");
     }
 
+    // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(input.name);
     return response.key;
   }
@@ -472,6 +489,7 @@ export class CustomKeysService {
       "Custom key delete request timed out",
     );
 
+    // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(name);
   }
 }

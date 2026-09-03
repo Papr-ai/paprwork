@@ -1540,7 +1540,7 @@ $PAPR_HOME/Jobs/{jobId}/
 
 **IMPORTANT: For Python scripts with API keys:**
 - Type: `python` (NOT `bash`)
-- Command: `python3 code/main.py --token ${KEY_NAME}`
+- Command: `python3 code/main.py` with `requiredKeys: ["KEY_NAME"]`.
 - The script uses argparse to receive the key
 
 ### Python Job: Auto Venv + Requirements

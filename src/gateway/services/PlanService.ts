@@ -30,6 +30,20 @@ export interface Plan {
   sourceAgentId?: string;
   sourceAgentName?: string;
 }
+export interface PlanMetrics {
+  model?: string;
+  provider?: string;
+  tokensInput?: number;
+  tokensOutput?: number;
+  tokensTotal?: number;
+  costUsd?: number;
+  wallTimeMs?: number;
+  startedAt?: string;
+  completedAt?: string;
+  useMemory?: boolean;
+  workItemCategory?: string;
+}
+
 
 let planServiceInstance: PlanService | null = null;
 
@@ -103,6 +117,30 @@ export class PlanService {
       `);
     } catch (error) {
       // Index may already exist
+    }
+
+    // --- Daily Do execution tracking migration (v2) ---
+    // Track token spend, model, cost, timing per plan for PostHog A/B comparison
+    const executionColumns = [
+      { col: "model", type: "TEXT" },           // e.g. "claude-opus-4-0"
+      { col: "provider", type: "TEXT" },         // e.g. "anthropic"
+      { col: "tokens_input", type: "INTEGER DEFAULT 0" },
+      { col: "tokens_output", type: "INTEGER DEFAULT 0" },
+      { col: "tokens_total", type: "INTEGER DEFAULT 0" },
+      { col: "cost_usd", type: "REAL DEFAULT 0" },
+      { col: "wall_time_ms", type: "INTEGER DEFAULT 0" },
+      { col: "started_at", type: "TEXT" },       // ISO 8601 when first step started
+      { col: "completed_at", type: "TEXT" },     // ISO 8601 when plan completed
+      { col: "use_memory", type: "INTEGER" },    // 1=Papr Memory, 0=naive (A/B flag)
+      { col: "work_item_category", type: "TEXT" }, // investor_dd, customer_work, etc.
+    ];
+    for (const { col, type } of executionColumns) {
+      try {
+        this.db.exec(`ALTER TABLE plans ADD COLUMN ${col} ${type};`);
+        console.log(`[PlanService] Added ${col} column`);
+      } catch (error) {
+        // Column already exists, ignore
+      }
     }
 
     this.initialized = true;
@@ -190,6 +228,9 @@ export class PlanService {
         plan_id: planId,
         completed_steps: completedCount,
         total_steps: steps.length,
+        // --- Daily Do: running totals for live dashboards ---
+        tokens_total: (this.db?.prepare("SELECT tokens_total FROM plans WHERE plan_id = ?").get(planId) as any)?.tokens_total ?? 0,
+        cost_usd: (this.db?.prepare("SELECT cost_usd FROM plans WHERE plan_id = ?").get(planId) as any)?.cost_usd ?? 0,
       });
     }).catch(() => {});
 
@@ -222,6 +263,13 @@ export class PlanService {
       import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
         getGatewayTelemetry().trackFireAndForget("paprwork_plan_completed", {
           plan_id: planId,
+          // --- Daily Do execution metrics ---
+          model: (this.db?.prepare("SELECT model FROM plans WHERE plan_id = ?").get(planId) as any)?.model,
+          tokens_total: (this.db?.prepare("SELECT tokens_total FROM plans WHERE plan_id = ?").get(planId) as any)?.tokens_total,
+          cost_usd: (this.db?.prepare("SELECT cost_usd FROM plans WHERE plan_id = ?").get(planId) as any)?.cost_usd,
+          wall_time_ms: (this.db?.prepare("SELECT wall_time_ms FROM plans WHERE plan_id = ?").get(planId) as any)?.wall_time_ms,
+          use_memory: (this.db?.prepare("SELECT use_memory FROM plans WHERE plan_id = ?").get(planId) as any)?.use_memory === 1,
+          work_item_category: (this.db?.prepare("SELECT work_item_category FROM plans WHERE plan_id = ?").get(planId) as any)?.work_item_category,
         });
       }).catch(() => {});
     }
@@ -364,6 +412,44 @@ export class PlanService {
       completed: row.completed || 0,
       cancelled: row.cancelled || 0,
     };
+  }
+
+
+  /**
+   * Update plan execution metrics (tokens, cost, time, model).
+   * Called by the agent runtime as plan steps execute.
+   * Token counts are ADDITIVE (+=) so you can call this after each tool call.
+   * startedAt uses COALESCE (only sets on first call).
+   */
+  async updatePlanMetrics(
+    planId: string,
+    metrics: PlanMetrics,
+  ): Promise<void> {
+    if (!this.db) throw new Error("PlanService not initialized");
+
+    const sets: string[] = [];
+    const values: any[] = [];
+
+    if (metrics.model !== undefined) { sets.push("model = ?"); values.push(metrics.model); }
+    if (metrics.provider !== undefined) { sets.push("provider = ?"); values.push(metrics.provider); }
+    if (metrics.tokensInput !== undefined) { sets.push("tokens_input = tokens_input + ?"); values.push(metrics.tokensInput); }
+    if (metrics.tokensOutput !== undefined) { sets.push("tokens_output = tokens_output + ?"); values.push(metrics.tokensOutput); }
+    if (metrics.tokensTotal !== undefined) { sets.push("tokens_total = tokens_total + ?"); values.push(metrics.tokensTotal); }
+    if (metrics.costUsd !== undefined) { sets.push("cost_usd = cost_usd + ?"); values.push(metrics.costUsd); }
+    if (metrics.wallTimeMs !== undefined) { sets.push("wall_time_ms = wall_time_ms + ?"); values.push(metrics.wallTimeMs); }
+    if (metrics.startedAt !== undefined) { sets.push("started_at = COALESCE(started_at, ?)"); values.push(metrics.startedAt); }
+    if (metrics.completedAt !== undefined) { sets.push("completed_at = ?"); values.push(metrics.completedAt); }
+    if (metrics.useMemory !== undefined) { sets.push("use_memory = ?"); values.push(metrics.useMemory ? 1 : 0); }
+    if (metrics.workItemCategory !== undefined) { sets.push("work_item_category = ?"); values.push(metrics.workItemCategory); }
+
+    if (sets.length === 0) return;
+
+    sets.push("updated_at = ?");
+    values.push(new Date().toISOString());
+    values.push(planId);
+
+    const sql = `UPDATE plans SET ${sets.join(", ")} WHERE plan_id = ?`;
+    this.db.prepare(sql).run(...values);
   }
 
   /**

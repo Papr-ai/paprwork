@@ -983,9 +983,31 @@ async function createMainWindow() {
     }
   });
 
-  mainWindow.loadURL(uiUrl).catch((err) => {
-    console.error("[Electron] loadURL failed:", err);
-  });
+  // Load UI with retry logic — in dev mode, Vite may not be ready yet
+  // when concurrently spawns both processes in parallel.
+  const loadUIWithRetry = async (attempt = 1, maxAttempts = 30) => {
+    try {
+      await mainWindow.loadURL(uiUrl);
+      console.log(`[Electron] UI loaded successfully on attempt ${attempt}`);
+    } catch (err) {
+      const isConnectionError =
+        err?.code === "ERR_FAILED" ||
+        err?.code === "ERR_CONNECTION_REFUSED" ||
+        err?.errno === -2 ||
+        err?.errno === -102;
+
+      if (isConnectionError && attempt < maxAttempts) {
+        const delayMs = Math.min(500 * attempt, 2000);
+        console.log(
+          `[Electron] UI not ready yet (${err?.code || "unknown"}), retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})...`,
+        );
+        setTimeout(() => loadUIWithRetry(attempt + 1, maxAttempts), delayMs);
+      } else {
+        console.error("[Electron] loadURL failed:", err);
+      }
+    }
+  };
+  loadUIWithRetry();
 
   // Track page load timing
   mainWindow.webContents.on('did-start-loading', () => {

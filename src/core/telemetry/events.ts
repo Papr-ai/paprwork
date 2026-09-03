@@ -87,6 +87,12 @@ export const AmplitudeEvents = {
   PLAN_COMPLETED: "paprwork_plan_completed",
   PLAN_DELETED: "paprwork_plan_deleted",
 
+  // Daily Do Execution Events (A/B: with-memory vs without-memory)
+  DAILY_DO_EXECUTION_STARTED: "daily_do_execution_started",
+  DAILY_DO_EXECUTION_COMPLETED: "daily_do_execution_completed",
+  DAILY_DO_CONTEXT_ASSEMBLED: "daily_do_context_assembled",
+  DAILY_DO_QUALITY_SCORED: "daily_do_quality_scored",
+
   // Settings Events
   SETTINGS_OPENED: "paprwork_settings_opened",
   PROVIDER_CONFIGURED: "paprwork_provider_configured",

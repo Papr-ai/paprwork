@@ -1959,7 +1959,8 @@ create_sub_agent({
 create_job({
   name: "API Job",
   type: "python",
-  command: "python3 code/main.py --api-key \${OPENAI_API_KEY} --secret \${STRIPE_KEY}",
+  command: "python3 code/main.py",
+  requiredKeys: ["OPENAI_API_KEY", "STRIPE_KEY"],
   requirements: ["requests"]
 })
 \`\`\`
@@ -1980,7 +1981,7 @@ args = parser.parse_args()
 api_key = "\${OPENAI_API_KEY}"  # This will NOT be substituted!
 \`\`\`
 
-**Pattern:** Put \`\${KEY_NAME}\` in the \`command\` field of \`create_job\`, then accept values via CLI arguments (argparse/process.argv) in the script.
+**Pattern:** Declare \`requiredKeys: ["KEY_NAME"]\` in \`create_job\`, keep the command free of secret arguments, and read values from \`os.environ\` / \`process.env\` in the script.
 
 **For complete architecture, mini-app REST API reference, and delivery patterns, read:**
 \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\``;

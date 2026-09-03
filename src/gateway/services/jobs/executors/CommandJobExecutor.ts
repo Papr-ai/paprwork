@@ -54,18 +54,20 @@ export class CommandJobExecutor implements IJobExecutor {
         ? this.wrapWithVenv(command, params.jobDir)
         : command;
 
-    // ── Substitute custom API keys (${KEY_NAME} syntax) ───────────────────────
-    // Jobs bypass the bash tool, so we need to substitute keys here
-    // For "ask" keys, requests permission before substituting
+    // ── Resolve custom API keys ───────────────────────────────────────────────
+    // SECURITY: Jobs receive secrets as child-process env vars only.
+    // Secrets are never substituted into the command string.
     let sanitizationValues: string[] = [];
+    const keyEnvVars: Record<string, string> = {};
     try {
-      const result = await this.substituteCustomKeys(finalCommand, params);
+      const result = await this.resolveCustomKeys(finalCommand, params);
       finalCommand = result.command;
       sanitizationValues = result.sanitizationValues;
-      // Do NOT inject customKeys into env - that's a security risk!
+      // Inject resolved keys as env vars to child process
+      Object.assign(keyEnvVars, result.keyEnvVars);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to substitute API keys: ${message}`);
+      throw new Error(`Failed to resolve API keys: ${message}`);
     }
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -106,6 +108,7 @@ export class CommandJobExecutor implements IJobExecutor {
       ...dbProxy.env,
       ...platformCdpEnv,
       ...(runtimeParamsForJobEnv(params.runtimeParams)),
+      ...keyEnvVars,
     };
     
     // ── Plan A: block sqlite3 writes to registry DB paths ─────────────────────
@@ -143,23 +146,25 @@ export class CommandJobExecutor implements IJobExecutor {
   }
 
   /**
-   * Substitute custom API keys in command (${KEY_NAME} syntax).
-   * Loads keys from both environment AND CustomKeysStorage.
-   * For keys with permission "ask", requests user approval before substituting.
+   * Resolve custom API keys referenced in the command template.
+   * Keys are returned as env vars for child process injection.
+   * For keys with permission "ask", requests user approval before injection.
    *
-   * SECURITY: Keys are ONLY substituted in command string, NOT injected into env.
+   * SECURITY: Keys are injected as env vars to the child process.
+   * They are NEVER substituted into the command string.
    *
-   * @returns Object with substituted command
+   * @returns Object with sanitized command and key env vars
    * @throws Error if permission denied for an "ask" key
    */
-  private async substituteCustomKeys(
+  private async resolveCustomKeys(
     command: string,
     params: ExecutorLaunchParams,
-  ): Promise<{ command: string; sanitizationValues: string[] }> {
+  ): Promise<{ command: string; keyEnvVars: Record<string, string>; sanitizationValues: string[] }> {
     const customKeys: Record<string, string> = {};
     const job = params.job;
+    const requiredKeys = new Set(job.requiredKeys ?? []);
 
-    // 1. Add keys from environment
+    // 1. Add keys from environment only when explicitly required or referenced
     const commonKeyVars = [
       "OPENAI_API_KEY",
       "ANTHROPIC_API_KEY",
@@ -169,6 +174,7 @@ export class CommandJobExecutor implements IJobExecutor {
       "GITLAB_TOKEN",
     ];
     for (const varName of commonKeyVars) {
+      if (!requiredKeys.has(varName) && !command.includes(`\${${varName}}`)) continue;
       const value = process.env[varName];
       if (value) customKeys[varName] = value;
     }
@@ -182,7 +188,7 @@ export class CommandJobExecutor implements IJobExecutor {
       const storedKeys = await service.listKeys();
 
       for (const keyMeta of storedKeys) {
-        if (!command.includes(`\${${keyMeta.name}}`)) continue;
+        if (!requiredKeys.has(keyMeta.name) && !command.includes(`\${${keyMeta.name}}`)) continue;
 
         const value = await service.getKeyByName(keyMeta.name);
         if (!value) continue;
@@ -228,20 +234,36 @@ export class CommandJobExecutor implements IJobExecutor {
       );
     }
 
-    // 4. Substitute ${KEY_NAME} with actual values
-    let result = command;
-    if (command.includes("${")) {
-      for (const [name, value] of Object.entries(customKeys)) {
-        if (value && value.length > 0) {
-          const regex = new RegExp(`\\$\\{${this.escapeRegex(name)}\\}`, "g");
-          result = result.replace(regex, value);
-        }
+    for (const keyName of requiredKeys) {
+      if (!customKeys[keyName]) {
+        throw new Error(
+          `Required API key "${keyName}" is missing. Add it in Settings → API Keys → Custom API Keys.`,
+        );
       }
     }
+
+    // 4. Strip ${KEY_NAME} placeholders — keys are injected via env vars
+    // The command seen by the agent/logs shows placeholders, never values
+    let result = command;
+    if (command.includes("${")) {
+      for (const name of Object.keys(customKeys)) {
+        // Remove --flag "${KEY_NAME}" arg pairs
+        const flagRe = new RegExp(
+          `\\s+--[a-z][-a-z]*\\s+["']?\\$\\{${this.escapeRegex(name)}\\}["']?`, "g",
+        );
+        if (flagRe.test(result)) {
+          result = result.replace(flagRe, "");
+        } else {
+          const re = new RegExp(`["']?\\$\\{${this.escapeRegex(name)}\\}["']?`, "g");
+          result = result.replace(re, "");
+        }
+      }
+      result = result.replace(/  +/g, " ").trim();
+    }
     const sanitizationValues = Object.values(customKeys).filter(
-      (value) => value.length > 0,
+      (v) => v && v.length > 0,
     );
-    return { command: result, sanitizationValues };
+    return { command: result, keyEnvVars: customKeys, sanitizationValues };
   }
 
   /**

@@ -39,10 +39,45 @@ export function sanitizeError(text: string, apiKeys: string[]): string {
 
   for (const key of apiKeys) {
     if (key && key.length > 0) {
-      // Replace all occurrences (case-sensitive)
+      // Replace all exact occurrences (case-sensitive)
       const regex = new RegExp(escapeRegex(key), "g");
       sanitized = sanitized.replace(regex, "***");
+
+      // Also redact common partial-leak log formats such as
+      // "starts vcp_abc123..." or "prefix: sk-abc123". Exact-value
+      // redaction cannot catch these because the full secret is absent.
+      const visiblePrefix = key.slice(0, Math.min(12, key.length));
+      if (visiblePrefix.length >= 6) {
+        sanitized = sanitized.replace(
+          new RegExp(escapeRegex(visiblePrefix) + "[A-Za-z0-9_\\-]*\\.\\.\\.", "g"),
+          "***REDACTED_SECRET_PREFIX***",
+        );
+      }
     }
+  }
+
+  return redactLikelySecrets(sanitized);
+}
+
+/**
+ * Pattern-based defense-in-depth redaction for common provider token formats.
+ * This catches secrets even when the exact value is not present in apiKeys.
+ */
+export function redactLikelySecrets(text: string): string {
+  let sanitized = text;
+  const patterns: RegExp[] = [
+    /\bvcp_[A-Za-z0-9]{6,}(?:\.\.\.)?/g, // Vercel tokens / prefixes
+    /\bsk-ant-[A-Za-z0-9_\-]{10,}(?:\.\.\.)?/g, // Anthropic
+    /\bsk-[A-Za-z0-9_\-]{10,}(?:\.\.\.)?/g, // OpenAI-style
+    /\bghp_[A-Za-z0-9]{10,}(?:\.\.\.)?/g, // GitHub classic PAT
+    /\bgithub_pat_[A-Za-z0-9_]{10,}(?:\.\.\.)?/g, // GitHub fine-grained PAT
+    /\bglpat-[A-Za-z0-9_\-]{10,}(?:\.\.\.)?/g, // GitLab
+    /\bxox[baprs]-[A-Za-z0-9\-]{10,}(?:\.\.\.)?/g, // Slack
+    /\bAIza[0-9A-Za-z_\-]{10,}(?:\.\.\.)?/g, // Google API keys
+  ];
+
+  for (const pattern of patterns) {
+    sanitized = sanitized.replace(pattern, "***REDACTED_SECRET***");
   }
 
   return sanitized;

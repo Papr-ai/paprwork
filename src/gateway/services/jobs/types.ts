@@ -37,6 +37,8 @@ export interface JobRecord {
   /** Free-form folder label for grouping related jobs (e.g. "ingestion", "reporting"). Agent-assigned. */
   folder?: string;
   command?: string;
+  /** Custom API key names from Settings to inject as child-process env vars. */
+  requiredKeys?: string[];
   requirements?: string[];
   dependsOn?: JobDependency[];
   /** Job IDs this job calls at runtime via /api/jobs/run (for visualization only - not enforced) */
@@ -99,6 +101,8 @@ export interface CreateJobInput {
   writeDbIds?: string[];
   folder?: string;
   command?: string;
+  /** Custom API key names from Settings to inject as child-process env vars. */
+  requiredKeys?: string[];
   requirements?: string[];
   dependsOn?: JobDependency[];
   /** Job IDs this job calls at runtime via /api/jobs/run (for visualization - shows dashed arrows in graph) */

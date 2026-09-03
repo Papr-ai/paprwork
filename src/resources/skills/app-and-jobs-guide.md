@@ -429,7 +429,7 @@ Mini-apps run in sandboxed iframes with restricted permissions:
 |------|---------|---------|
 | `python` | Scripts with logic, API calls, data processing, ML | `command: "python3 code/main.py --token ${GITHUB_TOKEN}"` |
 | `bash` | Simple shell one-liners | `command: "curl -H 'Authorization: Bearer ${KEY}' ..."` |
-| `node` | Node.js/TypeScript scripts | `command: "node code/main.js --api-key ${KEY}"` |
+| `node` | Node.js/TypeScript scripts | `command: "node code/main.js", requiredKeys: ["KEY"]` |
 
 **Use `type: "python"` when:** The job has multi-step logic, API calls, data processing, or needs pip packages. Pass API keys as CLI arguments in the command.
 
@@ -701,11 +701,11 @@ When a job will be triggered by a button click:
 
 | Layer | Set by | Available in job |
 |-------|--------|-------------------|
-| API keys (custom from Settings) | `create_job` command | Pass as CLI args: `--token ${KEY_NAME}` |
+| API keys (custom from Settings) | `create_job` command | Declare `requiredKeys: ["KEY_NAME"]` and read `os.environ["KEY_NAME"]` / `process.env.KEY_NAME`. |
 | Job config env (`SUBREDDIT=python`) | `create_job` / `update_job` | `os.environ`, `$VAR` |
 | Runtime params (`THREAD_ID=abc123`) | `params` in `/api/jobs/run` | `os.environ.get('THREAD_ID')`, `$THREAD_ID` |
 
-Runtime params: `os.environ.get('THREAD_ID')`. API keys: pass via CLI args, parse with `argparse`.
+Runtime params: `os.environ.get('THREAD_ID')`. API keys: declare requiredKeys and read from os.environ/process.env; never pass secrets as CLI args.
 
 ---
 
@@ -885,7 +885,7 @@ create_job({ type: "bash", command: "pip3 install requests && python3 fetch.py" 
 
 // ❌ Using os.getenv for custom API keys
 // Python: token = os.getenv('GITHUB_TOKEN')
-// → Custom keys from Settings are NOT in env. Pass as CLI args.
+// → Custom keys from Settings are injected into job env when declared in requiredKeys. Do not pass secrets as CLI args.
 
 // ❌ Building a separate HTTP server job as a bridge
 create_job({ name: "api-bridge", type: "node", command: "node server.js" })

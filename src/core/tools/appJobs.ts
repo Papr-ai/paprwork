@@ -593,6 +593,12 @@ const createJobSchemaCore = z
         "Use list_job_folders first to see existing groups. Same name = same folder.",
     ),
   command: z.string().optional(),
+  requiredKeys: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Custom API key names from Settings to inject into the job process as environment variables. Use this instead of passing secrets as CLI args. Example: ['VERCEL_API_KEY']",
+    ),
   requirements: z
     .array(z.string().min(1))
     .optional()
@@ -1040,6 +1046,7 @@ export const createJobTool = createTool({
       writeDbIds: args.writeDbIds,
       folder: args.folder,
       command: args.command,
+      requiredKeys: args.requiredKeys,
       requirements: args.requirements,
       dependsOn: args.dependsOn?.map((dependency) => ({
         jobId: dependency.jobId,
@@ -1080,13 +1087,11 @@ export const createJobTool = createTool({
     const isScriptJob = ["python", "node", "bash", "shell", "swift"].includes(
       args.type,
     );
-    const commandUsesKeySubstitution = args.command?.includes("${");
-
     const keyReminder =
-      isScriptJob && !commandUsesKeySubstitution
-        ? `⚠️ API KEY REMINDER: If this job uses custom API keys from Settings, you MUST pass them as CLI args using \${KEY_NAME} in the command field. ` +
-          `Example: command: "python3 code/main.py --api-key \${MY_KEY}" + argparse in script. ` +
-          `Do NOT use os.environ.get() or process.env — custom keys are NOT available as environment variables. ` +
+      isScriptJob && (args.requiredKeys?.length ?? 0) === 0
+        ? `🔐 API KEY REMINDER: If this job uses custom API keys from Settings, declare them with requiredKeys and read them from environment variables. ` +
+          `Example: requiredKeys: ["MY_KEY"], command: "python3 code/main.py", Python: os.environ.get("MY_KEY"). ` +
+          `Do NOT pass secrets as CLI args; command-line arguments can appear in process listings, logs, and model/tool context. ` +
           `Load the guide: read_skill({ skillId: "preloaded-api-key-testing" })`
         : undefined;
 
@@ -1200,10 +1205,9 @@ function shouldSuggestBashInstead(args: CreateJobArgs): boolean {
 }
 
 /**
- * Scan job source files for the anti-pattern of using os.environ/process.env
- * to access custom API keys. Custom keys from Settings are stored in the system
- * keychain and are NOT available as environment variables in job processes.
- * They must be passed via CLI arguments using ${KEY_NAME} in the command field.
+ * Scan job source files for likely secret handling mistakes.
+ * Preferred pattern: declare requiredKeys on the job and read those keys from
+ * os.environ / process.env. Secrets must never be passed as CLI arguments.
  */
 async function scanJobSourceForEnvKeyAntiPattern(
   jobId: string,
@@ -1286,7 +1290,7 @@ async function scanJobSourceForEnvKeyAntiPattern(
             if (!inheritedEnvKeys.has(key) && looksLikeApiKey(key)) {
               warnings.push(
                 `${relPath}: \`${match[0]}\` — "${key}" is a custom key from Settings and is NOT available as an env var. ` +
-                  `Fix: pass it via CLI arg in the job command using \${${key}} and read from process.argv.`,
+                  `Fix: add it to requiredKeys and read from env; do not pass it as a CLI argument.`,
               );
             }
           }
@@ -1529,10 +1533,10 @@ export const runJobTool = createTool({
           ? {
               _envKeyWarnings: envKeyWarnings,
               _keyPatternReminder:
-                `⚠️ DETECTED: Source files use os.environ/process.env for custom API keys that are NOT available as env vars. ` +
-                `Custom keys from Settings must be passed via CLI args using \${KEY_NAME} in the job command field. ` +
-                `This job will likely fail with None/undefined for those keys. ` +
-                `Fix: update_job to add \${KEY_NAME} to the command, update the script to use argparse/process.argv. ` +
+                `⚠️ DETECTED: Source files read custom API keys from os.environ/process.env. ` +
+                `That is correct only when the job declares those names in requiredKeys. ` +
+                `Custom keys from Settings are injected as env vars through requiredKeys; do not pass secrets as CLI args. ` +
+                `Fix: update_job({ jobId, requiredKeys: ["KEY_NAME"] }) and keep command free of secret args. ` +
                 `Read: read_skill({ skillId: "preloaded-api-key-testing" })`,
             }
           : {}),
@@ -1848,6 +1852,12 @@ const updateJobSchema = z.object({
     .string()
     .optional()
     .describe("New command to run (e.g. 'python3 selector.py')"),
+  requiredKeys: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Replace custom API key names to inject as env vars. Pass [] to clear. Do not pass secrets as CLI args.",
+    ),
   requirements: z
     .array(z.string().min(1))
     .optional()

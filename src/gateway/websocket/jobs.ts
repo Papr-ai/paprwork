@@ -22,6 +22,7 @@ interface CreateJobPayload {
   appIds: string[];
   folder?: string;
   command?: string;
+  requiredKeys?: string[];
   dependsOn?: JobDependency[];
   retries?: JobRetryPolicy;
   deliver?: JobDelivery;

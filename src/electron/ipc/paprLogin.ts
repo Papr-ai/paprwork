@@ -3407,25 +3407,70 @@ async function completePaprAuthCallback(
   const profileImage =
     typeof claims.picture === "string" ? claims.picture : undefined;
 
-  if (!parseSessionToken || !objectId) {
-    throw new Error(
-      "Your account setup didn't finish. If you just signed up, wait a moment and try Sign in again.",
-    );
+  let finalSessionToken = parseSessionToken;
+  let finalObjectId = objectId;
+
+  if (!finalSessionToken || !finalObjectId) {
+    console.log("[PaprLogin] Claims missing on first token — likely a new signup. Retrying after delay...");
+
+    if (!tokens.refresh_token) {
+      throw new Error(
+        "Account setup is still in progress. Please wait a few seconds, then click 'Sign in' to try again.",
+      );
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+
+    console.log("[PaprLogin] Refreshing token to get updated claims...");
+    const refreshResponse = await fetch(`https://${AUTH0_DOMAIN}/oauth/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        grant_type: "refresh_token",
+        client_id: AUTH0_CLIENT_ID,
+        refresh_token: tokens.refresh_token,
+      }),
+    });
+
+    if (refreshResponse.ok) {
+      const refreshedTokens = (await refreshResponse.json()) as {
+        id_token?: string;
+        refresh_token?: string;
+      };
+
+      if (refreshedTokens.id_token) {
+        const refreshedClaims = decodeIdToken(refreshedTokens.id_token);
+        finalSessionToken = refreshedClaims["https://papr.scope.com/sessionToken"];
+        finalObjectId = refreshedClaims["https://papr.scope.com/objectId"];
+
+        if (refreshedTokens.refresh_token) {
+          tokens.refresh_token = refreshedTokens.refresh_token;
+        }
+      }
+    }
+
+    if (!finalSessionToken || !finalObjectId) {
+      throw new Error(
+        "Account setup is still in progress. Please wait a moment and click 'Sign in' to try again.",
+      );
+    }
+
+    console.log("[PaprLogin] Claims obtained after refresh retry");
   }
 
-  console.log(`[PaprLogin] Authenticated user: ${email} (${objectId})`);
-  trackLoginStep("user_claims_decoded", { user_id: objectId });
+  console.log(`[PaprLogin] Authenticated user: ${email} (${finalObjectId})`);
+  trackLoginStep("user_claims_decoded", { user_id: finalObjectId });
 
   let workspaceInfo: SelectedWorkspaceInfo = {};
   try {
-    workspaceInfo = await getSelectedWorkspaceInfo(parseSessionToken, objectId);
+    workspaceInfo = await getSelectedWorkspaceInfo(finalSessionToken, finalObjectId);
   } catch (e) {
     console.warn("[PaprLogin] Could not fetch workspace info:", e);
   }
 
   const { plan, defaults } = await assessProvisioningNeeds(
-    parseSessionToken,
-    objectId,
+    finalSessionToken,
+    finalObjectId,
     email || "user",
     displayName,
     workspaceInfo,
@@ -3433,9 +3478,9 @@ async function completePaprAuthCallback(
 
   if (isProvisioningSetupRequired(plan)) {
     pendingOrgSetup = {
-      parseSessionToken,
+      parseSessionToken: finalSessionToken,
       refreshToken: tokens.refresh_token,
-      objectId,
+      objectId: finalObjectId,
       email: email || "",
       displayName: displayName || "",
       profileImage,
@@ -3460,15 +3505,15 @@ async function completePaprAuthCallback(
       success: true,
       email: email || "",
       name: displayName || "",
-      userId: objectId,
+      userId: finalObjectId,
     };
   }
 
   return await finalizeLoginWithProvisioning(
     {
-      parseSessionToken,
+      parseSessionToken: finalSessionToken,
       refreshToken: tokens.refresh_token,
-      objectId,
+      objectId: finalObjectId,
       email: email || "",
       displayName: displayName || "",
       profileImage,

@@ -1709,6 +1709,7 @@ export class JobsService {
       writeDbIds: input.writeDbIds,
       folder: input.folder,
       command: input.command,
+      requiredKeys: input.requiredKeys ?? [],
       requirements: input.requirements,
       dependsOn: input.dependsOn ?? [],
       retries: input.retries ?? { maxAttempts: 1, backoffMs: 1000 },
