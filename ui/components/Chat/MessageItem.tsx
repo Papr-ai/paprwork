@@ -867,103 +867,121 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                   isStreaming={message.isStreaming}
                   narration={content} // Show agent's explanation after tool calls
                 />
-                {/* JobStatusCard for run_job (fallback when no sequence) */}
-                {message.toolCalls.map((tc) => {
-                  if (tc.toolName !== "run_job") return null;
-                  if (tc.result && tc.status === "success") {
-                    const jobData = parseJobStatusFromToolResult(
-                      tc.toolName,
-                      tc.result,
-                    );
-                    return jobData ? (
-                      <JobStatusCard
-                        key={`job-fallback-${jobData.jobId}`}
-                        data={jobData}
-                      />
-                    ) : null;
-                  }
-                  if (tc.status === "calling" && tc.args?.jobId) {
-                    const jobId = tc.args.jobId as string;
-                    const jobName = getJobName(jobId) || jobId;
-                    return (
-                      <JobStatusCard
-                        key={`job-fallback-${jobId}`}
-                        data={{
-                          type: "job_status",
-                          jobId,
-                          jobName,
-                          runId: "running",
-                          status: "running",
-                          startedAt: new Date().toISOString(),
-                        }}
-                      />
-                    );
-                  }
-                  return null;
-                })}
-                {message.toolCalls.map((tc) => {
-                  if (tc.toolName !== "delegate_task") return null;
+                {/* Job cards for run_job (fallback when no sequence) — one per
+                    jobId, latest state wins. A message can call run_job twice
+                    on the same job (a retry, or a finished run followed by an
+                    in-flight one); rendering both emitted two cards under one
+                    key, which React may drop, with contradictory status. The
+                    sequence path above already dedupes via addedJobIds. */}
+                {(() => {
+                  const jobMap = new Map<
+                    string,
+                    Parameters<typeof JobStatusCard>[0]["data"]
+                  >();
+                  message.toolCalls.forEach((tc) => {
+                    if (tc.toolName !== "run_job") return;
+                    if (tc.result && tc.status === "success") {
+                      const jobData = parseJobStatusFromToolResult(
+                        tc.toolName,
+                        tc.result,
+                      );
+                      if (jobData) jobMap.set(jobData.jobId, jobData);
+                      return;
+                    }
+                    if (tc.status === "calling" && tc.args?.jobId) {
+                      const jobId = tc.args.jobId as string;
+                      jobMap.set(jobId, {
+                        type: "job_status",
+                        jobId,
+                        jobName: getJobName(jobId) || jobId,
+                        runId: "running",
+                        status: "running",
+                        startedAt: new Date().toISOString(),
+                      });
+                    }
+                  });
+                  return Array.from(jobMap.entries()).map(([jobId, data]) => (
+                    <JobStatusCard key={`job-fallback-${jobId}`} data={data} />
+                  ));
+                })()}
+                {/* Delegation cards — one per delegationId, latest state wins.
+                    The in-flight branch identifies a card by the chat's
+                    subagent job, which is the same value for every concurrent
+                    delegate_task, so two would otherwise share one key. */}
+                {(() => {
+                  const delegationMap = new Map<
+                    string,
+                    React.ComponentProps<typeof MiniChatCard>
+                  >();
 
-                  if (tc.result) {
-                    const delegationData = parseDelegationFromToolResult(
-                      tc.toolName,
-                      tc.result,
-                    );
-                    if (!delegationData) return null;
-                    const miniStatus =
-                      delegationData.status === "pending" ||
-                      delegationData.status === "running"
-                        ? "active"
-                        : delegationData.status === "completed"
-                          ? "completed"
-                          : "failed";
-                    return (
+                  message.toolCalls.forEach((tc, index) => {
+                    if (tc.toolName !== "delegate_task") return;
+
+                    if (tc.result) {
+                      const delegationData = parseDelegationFromToolResult(
+                        tc.toolName,
+                        tc.result,
+                      );
+                      if (!delegationData) return;
+                      const miniStatus =
+                        delegationData.status === "pending" ||
+                        delegationData.status === "running"
+                          ? "active"
+                          : delegationData.status === "completed"
+                            ? "completed"
+                            : "failed";
+                      delegationMap.set(delegationData.id, {
+                        delegationId: delegationData.id,
+                        subAgentName:
+                          delegationData.agentName ?? delegationData.agentId,
+                        task: delegationData.task,
+                        status: miniStatus,
+                        context: delegationData.context,
+                        resultText: delegationData.resultText,
+                        error: delegationData.error,
+                        subAgentIcon: delegationData.agentIcon,
+                        defaultExpanded: false,
+                      });
+                      return;
+                    }
+
+                    if (tc.status === "calling") {
+                      const task = (tc.args?.task as string) || "Delegated task";
+                      const requestedAgentId = tc.args?.useAgentId as
+                        | string
+                        | undefined;
+                      const { agentId, agentName } =
+                        resolveDelegationAgentDisplay(
+                          requestedAgentId,
+                          subagentJobForChat,
+                          getAgentName,
+                        );
+                      const jobIdFromStore = subagentJobForChat?.jobId;
+                      // Index, not Date.now(): a timestamp changes on every
+                      // render, remounting the card and dropping its state.
+                      const placeholderId =
+                        jobIdFromStore || tc.id || `delegation-${index}`;
+                      if (!chatId && !jobIdFromStore) return;
+                      delegationMap.set(placeholderId, {
+                        delegationId: placeholderId,
+                        subAgentName: agentName ?? agentId,
+                        task,
+                        status: "active",
+                        context: (tc.args?.context as string) || undefined,
+                        defaultExpanded: false,
+                      });
+                    }
+                  });
+
+                  return Array.from(delegationMap.entries()).map(
+                    ([delegationId, props]) => (
                       <MiniChatCard
-                        key={`delegation-fallback-${delegationData.id}`}
-                        delegationId={delegationData.id}
-                        subAgentName={
-                          delegationData.agentName ?? delegationData.agentId
-                        }
-                        task={delegationData.task}
-                        status={miniStatus}
-                        context={delegationData.context}
-                        resultText={delegationData.resultText}
-                        error={delegationData.error}
-                        subAgentIcon={delegationData.agentIcon}
-                        defaultExpanded={false}
+                        key={`delegation-fallback-${delegationId}`}
+                        {...props}
                       />
-                    );
-                  }
-
-                  if (tc.status === "calling") {
-                    const task = (tc.args?.task as string) || "Delegated task";
-                    const requestedAgentId = tc.args?.useAgentId as
-                      | string
-                      | undefined;
-                    const { agentId, agentName } = resolveDelegationAgentDisplay(
-                      requestedAgentId,
-                      subagentJobForChat,
-                      getAgentName,
-                    );
-                    const jobIdFromStore = subagentJobForChat?.jobId;
-                    const placeholderId =
-                      jobIdFromStore || tc.id || `delegation-${Date.now()}`;
-                    if (!chatId && !jobIdFromStore) return null;
-                    return (
-                      <MiniChatCard
-                        key={`delegation-fallback-${placeholderId}`}
-                        delegationId={placeholderId}
-                        subAgentName={agentName ?? agentId}
-                        task={task}
-                        status="active"
-                        context={(tc.args?.context as string) || undefined}
-                        defaultExpanded={false}
-                      />
-                    );
-                  }
-
-                  return null;
-                })}
+                    ),
+                  );
+                })()}
               </>
             )}
 
