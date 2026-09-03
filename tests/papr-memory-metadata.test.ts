@@ -11,7 +11,7 @@ import type { StoredMessage } from "../src/gateway/services/storage/IStorageProv
 vi.mock("../src/gateway/utils/paprUserId.js", () => ({
   getPaprUserId: vi.fn(() => "WkPutXGdqg"),
   invalidatePaprUserIdCache: vi.fn(),
-  paprUserScope: vi.fn(() => ({ external_user_id: "WkPutXGdqg" })),
+  paprUserScope: vi.fn(() => ({ user_id: "WkPutXGdqg" })),
 }));
 
 type MessageStoreCall = {
@@ -20,7 +20,7 @@ type MessageStoreCall = {
   sessionId: string;
   process_messages: boolean;
   user_id?: string;
-  external_user_id?: string;
+  user_id?: string;
   metadata: {
     conversationId: string;
     createdAt: string;
@@ -31,7 +31,7 @@ type MessageStoreCall = {
 
 vi.mock("../src/gateway/utils/memoryScopeResolver.js", () => ({
   buildPaprMemoryWriteScope: vi.fn().mockResolvedValue({
-    external_user_id: "WkPutXGdqg",
+    user_id: "WkPutXGdqg",
     namespace_id: undefined,
     policy: undefined,
   }),
@@ -98,7 +98,7 @@ describe("PAPR Memory Metadata Enhancement", () => {
     mockStore.mockClear();
   });
 
-  it("should send top-level external_user_id when papr user is available", async () => {
+  it("should send top-level user_id when papr user is available", async () => {
     const message: StoredMessage = {
       id: "msg-user-id",
       chat_id: "chat-123",
@@ -112,7 +112,7 @@ describe("PAPR Memory Metadata Enhancement", () => {
 
     expect(mockStore).toHaveBeenCalledWith(
       expect.objectContaining({
-        external_user_id: "WkPutXGdqg",
+        user_id: "WkPutXGdqg",
       }),
     );
   });

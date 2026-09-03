@@ -277,10 +277,34 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
         publishOptions.requireSignIn = true;
       }
 
+      // Captured before publishing so the event can distinguish a brand-new
+      // published app from a re-publish. getPublishConfig always resolves to a
+      // config object (unpublished apps come back with enabled: false), so the
+      // enabled flag is the signal here, not the presence of the object.
+      const wasAlreadyPublished = await publishService
+        .getPublishConfig(args.appId)
+        .then((prior) => prior.enabled)
+        .catch(() => false);
+
       const config = await publishService.publishOrUpdateSharing(
         args.appId,
         publishOptions,
       );
+
+      // Publishing was previously invisible in analytics: live apps could only
+      // be inferred from cloud visitor traffic, so an app that was published
+      // but never visited did not exist in the data. That made the
+      // publish -> visitor funnel impossible to measure.
+      void import("../../gateway/services/gatewayTelemetry.js")
+        .then(({ getGatewayTelemetry }) => {
+          getGatewayTelemetry().trackFireAndForget("paprwork_app_published", {
+            app_id: args.appId,
+            slug: config.slug ?? "",
+            visibility: config.loginAccess ?? "unknown",
+            is_first_publish: !wasAlreadyPublished,
+          });
+        })
+        .catch(() => {});
 
       const prefs = getAppPublishPrefs(args.appId);
       const sharing = resolveSharingSettings({

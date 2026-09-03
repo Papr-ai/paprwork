@@ -3,6 +3,11 @@
  * Central registry of all tracked events with their properties
  */
 
+import type {
+  JobAgentKind,
+  JobRunTelemetryDimensions,
+} from "./jobRunTelemetry.js";
+
 // ============================================
 // Event Names (Centralized)
 // ============================================
@@ -71,6 +76,7 @@ export const AmplitudeEvents = {
   APP_CREATED: "paprwork_app_created",
   APP_OPENED: "paprwork_app_opened",
   APP_CLOSED: "paprwork_app_closed",
+  APP_PUBLISHED: "paprwork_app_published",
   APP_EDITED: "paprwork_app_edited",
   APP_DELETED: "paprwork_app_deleted",
   HOME_APP_SET: "paprwork_home_app_set",
@@ -234,45 +240,83 @@ export interface BrowserActionProperties extends BaseEventProperties {
 
 export interface JobCreatedProperties extends BaseEventProperties {
   job_id: string;
-  job_type: "python" | "node" | "bash" | "shell" | "agent" | "subagent" | "swift";
+  job_type:
+    | "python"
+    | "node"
+    | "bash"
+    | "shell"
+    | "agent"
+    | "subagent"
+    | "swift";
   has_schedule: boolean;
   has_dependencies: boolean;
   schedule_type?: "interval" | "cron" | "at_time";
+  /**
+   * Owning mini-app. Without this, "agents per app" — the shape of a Paprwork
+   * app like My Papr Books — cannot be computed from create events.
+   */
+  app_id?: string;
+  app_count?: number;
+  is_standalone?: boolean;
+  agent_kind?: JobAgentKind;
+  is_agent?: boolean;
 }
 
-export interface JobCompletedProperties extends BaseEventProperties {
-  job_id: string;
-  job_type: string;
-  duration_ms: number;
+export interface JobCompletedProperties
+  extends BaseEventProperties,
+    JobRunTelemetryDimensions {
   exit_code?: number;
-  had_retry: boolean;
+  had_retry?: boolean;
   output_size_bytes?: number;
-  scheduled: boolean;
+  attempts?: number;
 }
 
-export interface JobFailedProperties extends BaseEventProperties {
-  job_id: string;
-  job_type: string;
+export interface JobFailedProperties
+  extends BaseEventProperties,
+    JobRunTelemetryDimensions {
   error_type: string;
   error_message?: string;
-  attempt_number: number;
-  max_attempts: number;
+  exit_code?: number;
+  attempts?: number;
+  retry_class?: string;
+  failure_hint?: string;
 }
+
+/**
+ * How a mini-app came into existence. Without this an automation loop that
+ * creates hundreds of apps is indistinguishable from real builder activity —
+ * one such loop produced 1,309 "apps created" in a single week.
+ */
+export type AppCreationSource = "agent" | "user" | "community_install";
+
+/** Local preview inside Paprwork vs the published cloud app. */
+export type AppSurface = "local" | "cloud";
 
 export interface AppCreatedProperties extends BaseEventProperties {
   app_id: string;
   has_icon: boolean;
   has_data_sources: boolean;
+  creation_source: AppCreationSource;
 }
 
 export interface AppOpenedProperties extends BaseEventProperties {
   app_id: string;
   open_source: "tab" | "home_button";
+  surface: AppSurface;
 }
 
 export interface AppClosedProperties extends BaseEventProperties {
   app_id: string;
   time_open_ms: number;
+  surface: AppSurface;
+}
+
+export interface AppPublishedProperties extends BaseEventProperties {
+  app_id: string;
+  /** Published slug, so desktop builds join to cloud visitor events. */
+  slug: string;
+  visibility: string;
+  is_first_publish: boolean;
 }
 
 export interface PlanCreatedProperties extends BaseEventProperties {
@@ -357,7 +401,9 @@ export interface SyncV3MetricProperties extends BaseEventProperties {
 // Type Guards
 // ============================================
 
-export function isValidEventName(name: string): name is keyof typeof AmplitudeEvents {
+export function isValidEventName(
+  name: string,
+): name is keyof typeof AmplitudeEvents {
   return Object.values(AmplitudeEvents).includes(name as any);
 }
 

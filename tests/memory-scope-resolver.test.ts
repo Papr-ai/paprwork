@@ -55,7 +55,7 @@ describe("memoryScopeResolver chat scope", () => {
   it("falls back to settings default when chat has no scope", async () => {
     const { buildPaprMemoryWriteScope } = await loadResolver();
     const scope = await buildPaprMemoryWriteScope({ chatId: "chat-no-scope" });
-    expect(scope.external_user_id).toBe("user-1");
+    expect(scope.user_id).toBe("user-1");
     expect(scope.policy?.acl?.read).toBeUndefined();
   });
 
@@ -68,8 +68,8 @@ describe("memoryScopeResolver chat scope", () => {
         shareWithUserIds: ["attendee-1"],
       },
     });
-    expect(scope.policy?.acl?.read).toEqual(["external_user:attendee-1"]);
-    expect(scope.policy?.acl?.write).toEqual(["external_user:user-1"]);
+    expect(scope.policy?.acl?.read).toEqual(["user:attendee-1"]);
+    expect(scope.policy?.acl?.write).toEqual(["user:user-1"]);
     expect(scope.policy?.acl?.read).not.toContain("namespace:ns-abc");
   });
 });

@@ -33,12 +33,12 @@ describe("memoryScope", () => {
 
   it("buildMemoryScopeFields scopes namespace memories with ACL", () => {
     expect(buildMemoryScopeFields("namespace", ctx)).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
       namespace_id: "ns-abc",
       policy: {
         acl: {
           read: ["namespace:ns-abc"],
-          write: ["external_user:user-1", "namespace:ns-abc"],
+          write: ["user:user-1", "namespace:ns-abc"],
         },
       },
     });
@@ -46,20 +46,20 @@ describe("memoryScope", () => {
 
   it("buildMemoryScopeFields scopes org memories with ACL", () => {
     expect(buildMemoryScopeFields("org", ctx)).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
       namespace_id: "ns-abc",
       policy: {
         acl: {
           read: ["organization:org-xyz"],
-          write: ["external_user:user-1", "organization:org-xyz"],
+          write: ["user:user-1", "organization:org-xyz"],
         },
       },
     });
   });
 
-  it("buildMemoryScopeFields user scope is external_user_id only", () => {
+  it("buildMemoryScopeFields user scope is user_id only", () => {
     expect(buildMemoryScopeFields("user", ctx)).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
     });
   });
 
@@ -67,21 +67,21 @@ describe("memoryScope", () => {
     expect(
       buildMemoryScopeFields("namespace", { userId: "user-1" }),
     ).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
     });
   });
 
   it("buildMemorySearchScopeFields expands read ACL for namespace/org", () => {
     expect(buildMemorySearchScopeFields("namespace", ctx)).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
       search_acl: { read: ["namespace:ns-abc"] },
     });
     expect(buildMemorySearchScopeFields("org", ctx)).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
       search_acl: { read: ["organization:org-xyz"] },
     });
     expect(buildMemorySearchScopeFields("user", ctx)).toEqual({
-      external_user_id: "user-1",
+      user_id: "user-1",
     });
   });
 
@@ -93,7 +93,7 @@ describe("memoryScope", () => {
       {
         acl: {
           read: ["namespace:ns-abc"],
-          write: ["external_user:user-1"],
+          write: ["user:user-1"],
         },
       },
     );
@@ -101,7 +101,7 @@ describe("memoryScope", () => {
       transform_embedding: { mode: "auto", domain_id: "general" },
       acl: {
         read: ["namespace:ns-abc"],
-        write: ["external_user:user-1"],
+        write: ["user:user-1"],
       },
     });
   });

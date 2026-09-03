@@ -2073,6 +2073,9 @@ export class AppService {
         app_name: uniqueTitle.length > 80 ? `${uniqueTitle.slice(0, 79)}…` : uniqueTitle,
         has_icon: !!app.icon,
         file_count: files.length,
+        // Separates real builder activity from agent/automation output, which
+        // can create apps in bulk and otherwise inflates app-count metrics.
+        creation_source: createdByAgentId ? "agent" : "user",
       });
     }).catch(() => {});
 

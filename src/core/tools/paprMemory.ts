@@ -27,15 +27,15 @@ const memoryReadAclToolFields = {
     .array(z.string().min(1))
     .optional()
     .describe(
-      "Optional read ACL principals. Use external_user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
+      "Optional read ACL principals. Use user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
         "When set, overrides the chat Team/Org scope for read access. Writer always keeps write ACL.",
     ),
   shareWithUserIds: z
     .array(z.string().min(1))
     .optional()
     .describe(
-      "Parse objectIds (same as external_user_id / list_namespace_users.externalUserId) to grant read access. " +
-        "Converted to external_user:{id} ACL principals automatically.",
+      "Parse objectIds (same as list_namespace_users.externalUserId) to grant read access. " +
+        "Converted to user:{id} ACL principals automatically.",
     ),
   shareWithTeam: z
     .boolean()
@@ -54,7 +54,7 @@ const memoryReadAclToolFields = {
 const addMemorySchema = z
   .object({
     content: z.string().min(1),
-    // Writer resolved at runtime via getPaprUserId() — passed as external_user_id (Parse objectId).
+    // Writer resolved at runtime via getPaprUserId() — passed as user_id (Parse objectId).
     role: z.enum(["user", "assistant"]).optional(),
     category: z
       .enum([
@@ -527,7 +527,7 @@ export const addAgentMemoryTool = createTool({
   description:
     "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). " +
     "For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. " +
-    "Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id.",
+    "Uses the acting Papr user_id (Parse objectId) — never a caller-supplied id.",
   inputSchema: addMemorySchema,
   execute: async (args) => {
     try {
@@ -565,8 +565,8 @@ export const addAgentMemoryTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        ...(memoryScope.external_user_id
-          ? { external_user_id: memoryScope.external_user_id }
+        ...(memoryScope.user_id
+          ? { user_id: memoryScope.user_id }
           : {}),
         ...(memoryScope.namespace_id
           ? { namespace_id: memoryScope.namespace_id }
@@ -598,7 +598,7 @@ export const listNamespaceUsersTool = createTool({
   id: "list_namespace_users",
   description:
     "List Papr users in the active workspace/namespace team. Returns Parse objectIds as externalUserId " +
-    "and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory and create_entities ACL. " +
+    "and ready-to-use memoryReadPrincipal values (user:{objectId}) for add_agent_memory and create_entities ACL. " +
     "Call before sharing memories with specific attendees.",
   inputSchema: listNamespaceUsersSchema,
   execute: async (args) => {
@@ -622,8 +622,8 @@ export const listNamespaceUsersTool = createTool({
           ...result,
           members,
           idGuidance: {
-            bodyField: "external_user_id",
-            aclPrefix: "external_user:",
+            bodyField: "user_id",
+            aclPrefix: "user:",
             examplePrincipal: members[0]?.memoryReadPrincipal,
           },
         },
@@ -726,8 +726,8 @@ export const searchAgentMemoryTool = createTool({
       const { data: response, response: httpResponse } = await client.memory
         .search({
           query: args.query!,
-          ...(memorySearchScope.external_user_id
-            ? { external_user_id: memorySearchScope.external_user_id }
+          ...(memorySearchScope.user_id
+            ? { user_id: memorySearchScope.user_id }
             : {}),
           ...(memorySearchScope.search_acl
             ? { search_acl: memorySearchScope.search_acl }
@@ -1416,8 +1416,8 @@ export const addAgentMemoryBatchTool = createTool({
           ? { skip_background_processing: args.skipBackgroundProcessing }
           : {}),
         ...(args.batchSize !== undefined ? { batch_size: args.batchSize } : {}),
-        ...(memoryScope.external_user_id
-          ? { external_user_id: memoryScope.external_user_id }
+        ...(memoryScope.user_id
+          ? { user_id: memoryScope.user_id }
           : {}),
         ...(memoryScope.namespace_id
           ? { namespace_id: memoryScope.namespace_id }
@@ -1625,8 +1625,8 @@ export const createEntitiesAndRelationshipsTool = createTool({
 
       const response = await client.memory.add({
         content: args.content,
-        ...(memoryScope.external_user_id
-          ? { external_user_id: memoryScope.external_user_id }
+        ...(memoryScope.user_id
+          ? { user_id: memoryScope.user_id }
           : {}),
         ...(memoryScope.namespace_id
           ? { namespace_id: memoryScope.namespace_id }

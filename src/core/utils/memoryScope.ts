@@ -16,13 +16,19 @@ export interface MemoryScopeContext {
 }
 
 export interface MemoryScopeFields {
-  external_user_id?: string;
+  /**
+   * Real Papr _User.objectId of the acting user.
+   * Sent as `user_id` — NOT `external_user_id`, which would make the memory
+   * server mint an anonymous shadow DeveloperUser for a real Papr account.
+   */
+  user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }
 
 export interface MemorySearchScopeFields {
-  external_user_id?: string;
+  /** Real Papr _User.objectId of the acting user. */
+  user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }
 
@@ -35,7 +41,7 @@ export function resolveMemoryAudience(input: {
 }
 
 function userWriteAcl(userId: string): string[] {
-  return [`external_user:${userId}`];
+  return [`user:${userId}`];
 }
 
 export function buildMemoryScopeFields(
@@ -52,7 +58,7 @@ export function buildMemoryScopeFields(
 
   if (audience === "namespace" && namespaceId) {
     return {
-      external_user_id: userId,
+      user_id: userId,
       namespace_id: namespaceId,
       policy: {
         acl: {
@@ -65,7 +71,7 @@ export function buildMemoryScopeFields(
 
   if (audience === "org" && organizationId) {
     return {
-      external_user_id: userId,
+      user_id: userId,
       namespace_id: namespaceId,
       policy: {
         acl: {
@@ -76,7 +82,7 @@ export function buildMemoryScopeFields(
     };
   }
 
-  return { external_user_id: userId };
+  return { user_id: userId };
 }
 
 export function buildMemorySearchScopeFields(
@@ -89,19 +95,19 @@ export function buildMemorySearchScopeFields(
 
   if (audience === "namespace" && namespaceId) {
     return {
-      ...(userId ? { external_user_id: userId } : {}),
+      ...(userId ? { user_id: userId } : {}),
       search_acl: { read: [`namespace:${namespaceId}`] },
     };
   }
 
   if (audience === "org" && organizationId) {
     return {
-      ...(userId ? { external_user_id: userId } : {}),
+      ...(userId ? { user_id: userId } : {}),
       search_acl: { read: [`organization:${organizationId}`] },
     };
   }
 
-  return userId ? { external_user_id: userId } : {};
+  return userId ? { user_id: userId } : {};
 }
 
 export function mergeMemoryAddPolicy(

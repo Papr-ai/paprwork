@@ -95,7 +95,7 @@ export async function buildPaprMemoryWriteScope(input?: {
   /** When set, replaces chat/settings read ACL (writer still gets write ACL). */
   explicitReadAcl?: ExplicitMemoryReadAclInput;
 }): Promise<{
-  external_user_id?: string;
+  user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }> {
@@ -121,7 +121,7 @@ export async function buildPaprMemoryWriteScope(input?: {
   }
 
   return {
-    external_user_id: fields.external_user_id,
+    user_id: fields.user_id,
     namespace_id: fields.namespace_id,
     policy,
   };
@@ -131,7 +131,7 @@ export async function buildPaprMemorySearchScope(input?: {
   chatId?: string;
   explicitAudience?: MemoryAudience;
 }): Promise<{
-  external_user_id?: string;
+  user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }> {
   const audience =
@@ -146,15 +146,13 @@ export async function paprMemoryScopeSpread(input?: {
   explicitAudience?: MemoryAudience;
   addPolicy?: MemoryAddPolicy;
 }): Promise<{
-  external_user_id?: string;
+  user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 }> {
   const scope = await buildPaprMemoryWriteScope(input);
   return {
-    ...(scope.external_user_id
-      ? { external_user_id: scope.external_user_id }
-      : {}),
+    ...(scope.user_id ? { user_id: scope.user_id } : {}),
     ...(scope.namespace_id ? { namespace_id: scope.namespace_id } : {}),
     ...(scope.policy ? { policy: scope.policy } : {}),
   };
@@ -165,14 +163,12 @@ export async function paprMemorySearchScopeSpread(input?: {
   chatId?: string;
   explicitAudience?: MemoryAudience;
 }): Promise<{
-  external_user_id?: string;
+  user_id?: string;
   search_acl?: { read: string[]; write?: string[] };
 }> {
   const scope = await buildPaprMemorySearchScope(input);
   return {
-    ...(scope.external_user_id
-      ? { external_user_id: scope.external_user_id }
-      : {}),
+    ...(scope.user_id ? { user_id: scope.user_id } : {}),
     ...(scope.search_acl ? { search_acl: scope.search_acl } : {}),
   };
 }
@@ -183,7 +179,7 @@ export function buildPaprMemoryWriteScopeSync(input: {
   addPolicy?: MemoryAddPolicy;
   ctx?: MemoryScopeContext;
 }): {
-  external_user_id?: string;
+  user_id?: string;
   namespace_id?: string;
   policy?: MemoryAddPolicy;
 } {
@@ -192,7 +188,7 @@ export function buildPaprMemoryWriteScopeSync(input: {
     input.ctx ?? getMemoryScopeContext(),
   );
   return {
-    external_user_id: fields.external_user_id,
+    user_id: fields.user_id,
     namespace_id: fields.namespace_id,
     policy: mergeMemoryAddPolicy(input.addPolicy, fields.policy),
   };

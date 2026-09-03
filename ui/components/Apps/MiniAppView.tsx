@@ -288,7 +288,11 @@ export function MiniAppView({
   }, [triggerReload, isPublishedPreview, iframeSrc]);
 
   useEffect(() => {
-    trackEvent("paprwork_app_opened", { app_id: appId } as Record<string, unknown>);
+    const surface = isPublishedPreview ? "cloud" : "local";
+    trackEvent("paprwork_app_opened", {
+      app_id: appId,
+      surface,
+    } as Record<string, unknown>);
     // Track activation: result inspected (first time opening a created app)
     if (!localStorage.getItem("papr-activation-result-inspected")) {
       localStorage.setItem("papr-activation-result-inspected", "true");
@@ -304,7 +308,20 @@ export function MiniAppView({
         trackEvent("paprwork_activation_repeat_value", { apps_count: inspectedApps.length } as Record<string, unknown>);
       }
     }
-  }, [appId]);
+
+    // Time spent is the one engagement question the desktop could not answer:
+    // paprwork_app_closed was declared but never fired, so every app session
+    // had an open with no close. Cleanup runs on unmount and on app switch,
+    // which is exactly the close boundary we want.
+    const openedAt = Date.now();
+    return () => {
+      trackEvent("paprwork_app_closed", {
+        app_id: appId,
+        time_open_ms: Date.now() - openedAt,
+        surface,
+      } as Record<string, unknown>);
+    };
+  }, [appId, isPublishedPreview]);
 
   // Inject paprAPI + runtime console forwarding for local preview only
   useEffect(() => {

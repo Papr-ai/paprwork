@@ -8,9 +8,17 @@ let cachedUserId: string | undefined;
 let cachedAt = 0;
 
 /**
- * Parse _User.objectId from Papr login — your app's user identifier.
- * Pass as `external_user_id` on Papr Memory API calls (NOT `user_id`, which is
- * Papr's internal user record and rejects unknown IDs).
+ * Parse _User.objectId of the locally-authenticated Papr user.
+ *
+ * Pass as `user_id` on Papr Memory API calls. Paprwork users ARE real Papr
+ * accounts, so sending this as `external_user_id` makes the memory server mint
+ * an anonymous shadow DeveloperUser — splitting one human into several
+ * identities and breaking feedback authorization.
+ *
+ * This is the ONLY source of user identity for memory calls. It is read from
+ * local login state and is never caller-supplied, so a namespace API key cannot
+ * be used to write memories owned by an arbitrary Papr account.
+ *
  * Prefers gateway env (set at spawn); falls back to settings.json after login.
  */
 export function getPaprUserId(): string | undefined {
@@ -48,10 +56,41 @@ export function invalidatePaprUserIdCache(): void {
   cachedAt = 0;
 }
 
-/** Spread into Papr SDK request bodies when the logged-in user should be scoped. */
-export function paprUserScope(): { external_user_id: string } | Record<string, never> {
+/**
+ * Spread into Papr SDK request bodies to scope a call to the logged-in user.
+ *
+ * Always resolves the acting user locally — callers cannot inject an identity.
+ * Returns `{}` when not logged in, so the server falls back to the API key
+ * owner rather than writing memories under an unauthenticated id.
+ */
+export function paprUserScope(): { user_id: string } | Record<string, never> {
   const userId = getPaprUserId();
-  return userId ? { external_user_id: userId } : {};
+  return userId ? { user_id: userId } : {};
+}
+
+/**
+ * Guard for call sites that accept a user id from an argument or request body.
+ *
+ * The Papr API key is scoped to org + namespace, not to a person, so a
+ * caller-supplied id would let any holder of the key write memories owned by an
+ * arbitrary Papr account. We accept the value only when it matches the locally
+ * authenticated user; otherwise we fall back to the local identity.
+ */
+export function resolveTrustedPaprUserId(
+  candidate?: string | null,
+): string | undefined {
+  const localUserId = getPaprUserId();
+  const requested = candidate?.trim();
+
+  if (!requested || !localUserId || requested === localUserId) {
+    return localUserId;
+  }
+
+  console.warn(
+    `[paprUserId] Ignoring caller-supplied user_id "${requested}" — ` +
+      `does not match authenticated user. Using local identity instead.`,
+  );
+  return localUserId;
 }
 
 /** Caller identity for GET /api/access and verified job params on desktop. */

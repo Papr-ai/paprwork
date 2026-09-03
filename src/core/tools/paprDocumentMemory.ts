@@ -215,8 +215,8 @@ export const uploadDocumentToMemoryTool = createTool({
 
       const response = await client.document.upload({
         file: createReadStream(resolvedPath),
-        ...(memoryScope.external_user_id
-          ? { external_user_id: memoryScope.external_user_id }
+        ...(memoryScope.user_id
+          ? { user_id: memoryScope.user_id }
           : {}),
         ...(memoryScope.namespace_id
           ? { namespace_id: memoryScope.namespace_id }

@@ -3,6 +3,7 @@ import { sanitizeTelemetryProperties } from "../../core/telemetry/sanitizeTeleme
 import { isTelemetrySendingEnabled } from "../../core/telemetry/telemetryEnv.js";
 import { mergeTelemetryEnvelope } from "../../core/telemetry/telemetryProductContext.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 
 const TELEMETRY_PATH = "/v1/telemetry/events";
 const REQUEST_TIMEOUT_MS = 5000;
@@ -58,6 +59,8 @@ export async function forwardRendererTelemetry(
     (typeof body.papr_account_id === "string" ? body.papr_account_id.trim() : "") ||
     (typeof body.papr_user_id === "string" ? body.papr_user_id.trim() : "");
   const effectivePaprUserId = rendererAccountId || getPaprUserId() || "";
+  // Read once per batch: all events in one POST share the active workspace.
+  const workspacePointer = readActiveWorkspacePointer();
 
   if (!Array.isArray(body.events) || body.events.length === 0) {
     return { status: 400, error: "events required" };
@@ -111,7 +114,11 @@ export async function forwardRendererTelemetry(
         platform: process.platform,
         ...propsIn,
       },
-      { paprAccountId: effectivePaprUserId },
+      {
+        paprAccountId: effectivePaprUserId,
+        namespaceId: workspacePointer?.namespaceId,
+        organizationId: workspacePointer?.organizationId,
+      },
     );
     const safeProps = sanitizeTelemetryProperties(merged);
 
