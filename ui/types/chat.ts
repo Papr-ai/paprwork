@@ -70,6 +70,8 @@ export interface ChatState {
   isStreaming: boolean;
   /** True when gateway disconnected mid-stream — Working card shows reconnecting */
   connectionPaused?: boolean;
+  /** Waiting for a chat-pool agent slot — no model work has started yet */
+  isWaitingForAgentSlot?: boolean;
   /** Post-tool text summary in progress (wrap-up continuation). */
   isFinishingWork?: boolean;
   /** Auto-resume failed — user can tap Continue to retry stream recovery */

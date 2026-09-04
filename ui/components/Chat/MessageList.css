@@ -60,6 +60,18 @@
   gap: 12px;
 }
 
+.agent-waiting-indicator {
+  display: flex;
+  align-items: center;
+  padding: 12px 0;
+  gap: 12px;
+}
+
+.agent-waiting-indicator__label {
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+}
+
 .loading-older-indicator {
   display: flex;
   align-items: center;

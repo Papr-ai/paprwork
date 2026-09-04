@@ -156,6 +156,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const messages = chatState?.messages ?? EMPTY_MESSAGES;
   const chatIsLoading = chatState?.isLoading ?? false;
   const isSending = chatState?.isSending ?? false;
+  const isWaitingForAgentSlot = chatState?.isWaitingForAgentSlot ?? false;
   const connectionPaused = chatState?.connectionPaused ?? false;
   const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
   const streamRecoveryReason = chatState?.streamRecoveryReason ?? "connection";
@@ -875,6 +876,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         messages={messages}
         isLoading={chatIsLoading}
         isSending={isSending || isWaitingForModel}
+        isWaitingForAgentSlot={isWaitingForAgentSlot}
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
       />

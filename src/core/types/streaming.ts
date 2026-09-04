@@ -16,6 +16,8 @@ export type StreamChunkType =
   | "compression-start" // Context overflow — summarization in progress
   | "compression-complete" // Summarization finished, stream will retry
   | "wrap-up-start" // Post-tool text summary in progress
+  | "concurrency-queued" // Waiting for an agent stream slot
+  | "concurrency-acquired" // Slot acquired — model work starting
   | "error"
   | "done";
 
@@ -99,6 +101,16 @@ export interface DonePayload {
     output: number;
     total: number;
   };
+}
+
+/**
+ * Emitted while waiting for a concurrency pool slot (no model work yet).
+ */
+export interface ConcurrencyQueuePayload {
+  pool: "chat" | "job";
+  activeCount: number;
+  maxConcurrent: number;
+  waitingCount: number;
 }
 
 /**

@@ -73,6 +73,7 @@ export function useAgent() {
   const updateStreamingMessage = useChatStore((s) => s.updateStreamingMessage);
   const finalizeStreamingMessage = useChatStore((s) => s.finalizeStreamingMessage);
   const setSending = useChatStore((s) => s.setSending);
+  const setWaitingForAgentSlot = useChatStore((s) => s.setWaitingForAgentSlot);
   const setConnectionPaused = useChatStore((s) => s.setConnectionPaused);
   const setFinishingWork = useChatStore((s) => s.setFinishingWork);
   const setNeedsStreamRecovery = useChatStore((s) => s.setNeedsStreamRecovery);
@@ -200,6 +201,14 @@ export function useAgent() {
       }
 
       switch (chunk.type) {
+        case "concurrency-queued":
+          setWaitingForAgentSlot(chatId, true);
+          break;
+
+        case "concurrency-acquired":
+          setWaitingForAgentSlot(chatId, false);
+          break;
+
         case "reasoning-delta":
           {
             // Append reasoning delta to ref (always immediate)
@@ -1375,6 +1384,7 @@ export function useAgent() {
       updateStreamingMessage,
       finalizeStreamingMessage,
       setSending,
+      setWaitingForAgentSlot,
       setConnectionPaused,
       setFinishingWork,
       setNeedsStreamRecovery,
