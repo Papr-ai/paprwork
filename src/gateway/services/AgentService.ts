@@ -1839,7 +1839,11 @@ export class AgentService {
           console.log(`${'─'.repeat(80)}`);
         });
         console.log(`\nTools available: ${Object.keys(streamTextOptions.tools || {}).length}`);
-        console.log(`Max tokens: ${streamTextOptions.maxTokens}`);
+        // Read the field the SDK actually honours. This line used to print
+        // `maxTokens`, the pre-v6 name, so it reported the cap we intended
+        // while the request went out with the provider default of 4096 — the
+        // reason this bug stayed invisible in the logs for so long.
+        console.log(`Max output tokens: ${streamTextOptions.maxOutputTokens}`);
         console.log(`Max steps: ${streamTextOptions.stopWhen ? 'custom' : 'default'}`);
         console.log(`${'='.repeat(80)}\n`);
         
