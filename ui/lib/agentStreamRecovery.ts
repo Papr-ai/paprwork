@@ -297,13 +297,39 @@ export function mergeHistoryWithLocal(
     merged.push(serverMsg);
   }
 
-  // Optimistic user sends + in-flight streaming placeholders not on server yet.
-  for (const localMsg of base) {
-    if (consumedLocalIds.has(localMsg.id)) continue;
-    merged.push(localMsg);
+  // Locals the server list didn't account for. Usually optimistic sends and
+  // in-flight placeholders, which belong at the end — but the server list is a
+  // *window* (loadMessages asks for the newest N), so once pagination has
+  // pulled older turns into the store those fall outside the window too, and
+  // appending them would drop the earlier half of the conversation below its
+  // own latest message.
+  //
+  // Position decides which side, not time: server-mapped messages carry no
+  // timestamp at all (see mapHistoryMessages). Both lists are chronological, so
+  // a leftover sitting before the first message the window claimed is older
+  // than the window, and anything after it is newer.
+  let firstConsumedIndex = -1;
+  for (let i = 0; i < base.length; i++) {
+    if (consumedLocalIds.has(base[i].id)) {
+      firstConsumedIndex = i;
+      break;
+    }
   }
 
-  return merged;
+  const beforeWindow: ChatMessage[] = [];
+  const afterWindow: ChatMessage[] = [];
+  base.forEach((localMsg, index) => {
+    if (consumedLocalIds.has(localMsg.id)) return;
+    // With nothing consumed there is no window to sit outside of, so keep the
+    // original append-at-the-end behaviour rather than guessing.
+    if (firstConsumedIndex !== -1 && index < firstConsumedIndex) {
+      beforeWindow.push(localMsg);
+    } else {
+      afterWindow.push(localMsg);
+    }
+  });
+
+  return [...beforeWindow, ...merged, ...afterWindow];
 }
 
 /**

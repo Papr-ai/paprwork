@@ -4856,4 +4856,30 @@ Head-of-line blocking with a poison pill at the front: the queue could only grow
 
 ---
 
+### Issue 76: History Sync Drops Paginated Turns Below the Newest Message ✅ FIXED
+**Added:** 2026-09-03
+**Problem:** In a long chat, the newest reply would appear part-way up the transcript with a block of *older* turns rendered beneath it. Scrolling to the bottom showed old messages; the actual latest answer sat above them.
+**Root Cause:** `mergeHistoryWithLocal` treats the server list as the spine, walks it in order, then appends any local message the server list didn't account for — on the assumption those are optimistic sends that outran the server:
+
+```300:304:ui/lib/agentStreamRecovery.ts
+  // Optimistic user sends + in-flight streaming placeholders not on server yet.
+  for (const localMsg of base) {
+    if (consumedLocalIds.has(localMsg.id)) continue;
+    merged.push(localMsg);
+  }
+```
+
+That assumption holds only while the server list is the *whole* history. It isn't: every sync fetches a **window** — `loadMessages(chatId, 30)`, and `LocalStorageProvider` reads `ORDER BY timestamp DESC LIMIT 30` then reverses, so it returns the newest 30. Once `loadOlderMessages` has paginated earlier turns into the store (it *prepends* them), those older turns are outside the window, land in the leftover loop, and get appended **after** the newest message. A 50-message store merged against a 30-message window comes back as `[newest 30, oldest 20]`.
+**Trigger is routine:** the sync fires on the `isSending` true→false transition, i.e. at the end of **every turn**. Scroll up in a long chat, send one message, and the transcript reorders itself. 56 chats in the local DB exceed 30 messages (largest: 517), so the precondition is near-permanent.
+**Solution:** Decide the side by **position, not time**. Server-mapped messages carry no `timestamp` at all (`mapHistoryMessages` never sets one) and local ones are inconsistent (`ChatContainer` writes a number where the type says string), so a timestamp comparison would have been a silent no-op. Both lists are chronological, so a leftover sitting before the first local message the window claimed is older than the window and belongs in front of it; anything after belongs behind. With nothing consumed there is no window to sit outside of, so the original append-at-the-end behaviour is kept rather than guessed at.
+**Also fixed by the same change:** `useAgent`'s stream-recovery path calls the same helper with the same `limit: 30`, so it had the identical defect.
+**Files Created:**
+- `tests/chat-history-merge-order.test.ts` — 6 tests, written failing first: the 50-vs-30 pagination case, an optimistic send still landing last, older and newer strays on their own sides, and the gap-filling the merge already did surviving the change
+**Files Changed:**
+- `ui/lib/agentStreamRecovery.ts` — leftover placement in `mergeHistoryWithLocal`
+**Prevention:** When one list is used as the ordering spine for another, state whether it is the complete set or a window — and if it is a window, "not found in it" cannot mean "newer than it." Reach for a field only after checking it is actually populated: the timestamp on these messages looks authoritative in the type and is absent at runtime.
+**Related:** Issue 75 (chat pane stranded after a store wipe — the same reload path, a different failure)
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
