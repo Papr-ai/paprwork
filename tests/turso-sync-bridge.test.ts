@@ -98,6 +98,21 @@ describe("tursoSyncBridgeCore", () => {
     ]);
   });
 
+  it("filterSyncableTables treats any _-prefixed table as local scratch", () => {
+    // Ad hoc backups (CREATE TABLE _x AS SELECT …) never carry a PRIMARY KEY,
+    // so they can't be synced anyway; the underscore is the documented opt-out.
+    expect(
+      filterSyncableTables([
+        "leads",
+        "_test_backup",
+        "_leads_backup",
+        "__tmp",
+        "leads_backup",
+        "a_b_c",
+      ]),
+    ).toEqual(["leads", "leads_backup", "a_b_c"]);
+  });
+
   it("quoteIdent escapes double quotes", () => {
     expect(quoteIdent('foo"bar')).toBe('"foo""bar"');
   });
