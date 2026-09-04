@@ -205,7 +205,7 @@
     "@tiptap/react": "^3.19.0",
     "@tiptap/starter-kit": "^3.19.0",
     "@tiptap/suggestion": "^3.19.0",
-    "@tursodatabase/sync": "^0.7.5",
+    "@tursodatabase/sync": "^0.7.2",
     "@types/react-syntax-highlighter": "^15.5.13",
     "ai": "^6.0.89",
     "better-sqlite3": "^12.6.2",
