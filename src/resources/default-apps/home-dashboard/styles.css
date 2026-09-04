@@ -260,3 +260,25 @@ main.turn-in { animation: briefIn .24s ease; }
 @keyframes spin {
   to { transform: rotate(360deg); }
 }
+
+/* ── Goals strip (big rocks from IDENTITY.md) ─────────────────────────── */
+.goals { margin: 0 0 28px; }
+.goals-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.goals-head .section-title { margin: 0; }
+.goals-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.goal { padding: 12px 14px; border-radius: 12px; background: var(--card-bg, rgba(255,255,255,0.6)); border: 1px solid var(--card-border, rgba(0,0,0,0.06)); border-left: 3px solid var(--muted); backdrop-filter: blur(20px); }
+.goal.on-track { border-left-color: #22c55e; }
+.goal.at-risk { border-left-color: #f59e0b; }
+.goal.blocked { border-left-color: #ef4444; }
+.goal.done { border-left-color: #94a3b8; opacity: 0.7; }
+.goal-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.goal-id { font-size: 11px; font-weight: 700; letter-spacing: 0.06em; color: var(--muted); }
+.goal-title { font-size: 14px; font-weight: 600; flex: 1; }
+.goal-status { font-size: 11px; color: var(--muted); }
+.goal-next { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
+.goals-empty { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 20px; border-radius: 12px; background: var(--banner-bg); border: 1px solid var(--banner-border); backdrop-filter: blur(20px); animation: bannerSlideIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+.goals-empty-text { display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
+.goals-empty-text span { color: var(--muted); }
+.goals-btn { flex-shrink: 0; padding: 8px 14px; border-radius: 999px; border: none; background: #0080FF; color: #fff; font-weight: 600; font-size: 13px; cursor: pointer; }
+.goals-btn:hover { filter: brightness(1.08); }
+.goals-btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--card-border, rgba(0,0,0,0.1)); font-weight: 500; }

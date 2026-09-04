@@ -1,4 +1,4 @@
-<!-- sleep-prompt-version: 16 -->
+<!-- sleep-prompt-version: 17 -->
 
 # Sleep Cycle
 
@@ -143,6 +143,16 @@ Distill **actionable, durable** learnings only:
 | `TOOLS.md` | New integrations, API endpoints, MCP servers added |
 | `workspace.md` | Current focus, sprint goals, project notes |
 
+**4a. Goals — maintain `IDENTITY.md` → `## Goals` every run (required).**
+
+The Daily Brief is only as good as this list; it is the lens the brief uses to decide what matters. Each run:
+
+1. Read the current `## Goals` block and the **User goals / use cases** in preloaded context (Papr Memory `Goal` records).
+2. **Add** a goal when the user has stated an outcome they are working toward (≥2 chat mentions, or one explicit statement like "my priority this quarter is…", or a Papr Memory Goal record). Write it as an **outcome** with a next milestone and date, using the format in the template.
+3. **Update status** from evidence: a milestone reached → advance it; a deadline passed with no evidence → `at-risk`; user says it's done → `done` (keep for 7 days, then remove).
+4. **Never** record tooling, Papr maintenance, job repairs, or app polish as a goal. "Fix LinkedIn sync" is not a goal. "Book 10 outbound meetings via LinkedIn by Oct 1" is. If the user's *only* stated goals are engineering deliverables for their own product, record the **product outcome** (ship X to customers by date), not the task list.
+5. Keep 3–7 goals, ordered by what the user treats as most important. If evidence is thin, leave the placeholder note in place — the brief handles "no goals yet" honestly. Do not invent goals.
+
 **Rules:**
 - Only add facts the user **explicitly stated or demonstrated repeatedly** (≥ 2 occurrences).
 - Do not invent, speculate, or store one-off casual mentions.
@@ -165,9 +175,16 @@ Finally, write today's summary:
 # $PAPR_HOME/workspace/memory/YYYY-MM-DD.md
 ```
 
-Include:
-- **Activity summary** — what happened across chats, jobs, apps
-- **Key decisions or insights** — what was decided, learned, or changed
+The daily log has two audiences: the Wiki Writer (entity detail) and the Daily Brief (what the user should do tomorrow). Keep the user's own work **separate from** system/tooling work so the brief can find it. Use these sections, in this order:
+
+- **`## User Work`** — what the *user* did or decided today toward their goals: conversations with people, deals, customers, decisions made, deliverables sent, meetings held. Reference the goal id from `IDENTITY.md` when one applies (e.g. `(G2)`). Building or fixing Papr apps/jobs does **not** go here unless the user made a product/business decision (e.g. "decided to kill Reddit research" belongs here; "fixed Reddit 403" does not).
+- **`## Commitments`** — promises with a direction, an owner, and a date. Extract from chats, meeting notes, and transcripts. Two lists:
+  - `### Made by user` — `- [ ] <what> → <to whom> (by <date>) — src: <chat/meeting, date>`
+  - `### Owed to user` — `- [ ] <what> ← <from whom> (expected <date>; last touch <date>) — src: …`
+  Only record what was actually said or written. Carry forward unresolved commitments from the previous log; mark `[x]` when evidence shows they were met. This is the brief's "waiting on" source — it is worth more than any open-items list.
+- **`## Decisions Pending`** — choices only the user can make that are blocking progress (e.g. "keep or kill X", "which pricing tier for Y"). One line each, with what's blocked and the goal it affects.
+- **`## System Work`** — everything about Papr itself: jobs run/failed, app builds, sync issues, agent fixes, learnings. Keep it factual and brief. The brief will use at most one line from this section.
+- **Key decisions or insights** — what was decided, learned, or changed (durable, workspace-file-worthy)
 - **Active entities today** — list every person, company, and project that came up. **Discovery first, footprint second:**
 
   **Step A — Build the candidate list** from Step 1F + Step 2 (graph, memory search, chat grep, existing entity files). Do not skip entities just because you have not scanned job databases yet.
@@ -217,7 +234,7 @@ Include:
   **Rules:**
   - **Always list the entity** even when no job database or graph footprint exists. Thin evidence is valid — note `Confidence: 0.5` and what was mentioned.
   - The footprint enriches Wiki Writer; it is not permission to omit an entity from the daily log.
-- **What to watch tomorrow** — open items, follow-ups, things to track
+- **`## What to Watch Tomorrow`** — split into `### User` (follow-ups, deadlines, people to reach — each tied to a goal id where possible) and `### System` (agent/tooling). Each line carries a `[user]` or `[agent]` tag. If nothing user-facing is pending, write "Nothing pressing for the user" rather than padding the list with tooling.
 
 Use `add_agent_memory` to persist the daily log to Papr Memory. **Graph indexing is automatic** — `add_agent_memory` uses `mode: auto` with the WorkspaceContext schema, so people, companies, projects, and meetings mentioned in the log are extracted into the knowledge graph without extra steps.
 
