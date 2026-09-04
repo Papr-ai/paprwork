@@ -61,6 +61,7 @@ interface ChatStore {
   getChatMemoryScope: (chatId: string) => MemoryAudience;
   setLoading: (loading: boolean) => void;
   setSending: (chatId: string, sending: boolean) => void;
+  setWaitingForAgentSlot: (chatId: string, waiting: boolean) => void;
   setConnectionPaused: (chatId: string, paused: boolean) => void;
   setFinishingWork: (chatId: string, finishing: boolean) => void;
   setNeedsStreamRecovery: (
@@ -421,6 +422,21 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       newChatStates.set(chatId, {
         ...chatState,
         isSending: sending,
+        ...(sending ? {} : { isWaitingForAgentSlot: false }),
+      });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setWaitingForAgentSlot: (chatId, waiting) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        isWaitingForAgentSlot: waiting,
       });
 
       return { chatStates: newChatStates };
