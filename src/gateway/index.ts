@@ -2213,6 +2213,21 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Structured view of IDENTITY.md → ## Goals for the Home app (read-only;
+    // goals are edited through chat so the agent keeps IDENTITY.md canonical).
+    app.get("/api/workspace/goals", async (_req, res) => {
+      try {
+        const { readWorkspaceGoals } = await import(
+          "./services/workspaceGoals.js"
+        );
+        res.json(await readWorkspaceGoals());
+      } catch (error) {
+        res.status(500).json({
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    });
+
     app.get("/api/workspace/active", (_req, res) => {
       const pointer = readActiveWorkspacePointer();
       if (!pointer) {

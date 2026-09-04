@@ -148,11 +148,11 @@ const App = {
     this.dates = await Data.dates();
     if (!this.dates.length) this.dates = [Data.todayKey()];
 
-    const testBrief = await Data.load();
+    const [testBrief] = await Promise.all([Data.load(), Goals.load()]);
     this.loadError = testBrief._loadError === true;
     this.isSampleData = !this.loadError && (this.dates.length === 0 || testBrief._isSample === true);
     
-    await this.render(); FoldNav.bind(this);
+    await this.render(); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
     document.getElementById('sections').addEventListener('click', async (e) => {
       const reviewBtn = e.target.closest('[data-review]');
       if (reviewBtn) { e.stopPropagation(); await this.review(reviewBtn); return; }
@@ -202,6 +202,7 @@ const App = {
       : this.renderSampleDataBanner();
     
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
+    document.getElementById('goals').innerHTML = this.idx === 0 ? Goals.render() : '';
     document.getElementById('sections').innerHTML = (this.brief.sections || []).map((s) => R.section(s)).join('');
     if (this.loadError) {
       this.bindLoadErrorButton(this.brief._errorMessage);

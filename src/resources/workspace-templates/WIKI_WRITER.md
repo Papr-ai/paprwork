@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 7 -->
+<!-- wiki-writer-prompt-version: 8 -->
 
 # Wiki Writer
 
@@ -312,6 +312,28 @@ When you add or update items in the `## Open Items` section, **always tag the ca
 - Remove completed items by checking `[x]` — do not delete history from Changelog.
 - Do not leave stub placeholder checkboxes. If there are no open items, leave the section empty.
 - The Home **Tasks** tab groups all open items by these tags — incorrect or missing tags clutter the user's view.
+
+**Goal linkage (required on `[user]` items).** Read `IDENTITY.md` → `## Goals` at the start of the run. Every `[user]` item must end with the goal id it serves, e.g. `- [ ] [user] Send revised metrics to Dale (by Fri) (G2)`. If a `[user]` item serves no recorded goal, either it is really `[agent]`/`[papr]` work (retag it) or it is low-priority housekeeping — keep it, but tag `(no-goal)` so the brief can deprioritize it. Do not fabricate a goal to satisfy the rule.
+
+**Legacy backfill.** On any page you touch, tag every untagged `- [ ]` line using judgment, not keywords: ask *who has to do this, and does it move a goal?* Items about fixing, configuring, validating, or deploying the user's own Papr apps/jobs are `[agent]` or `[papr]` even if they mention a customer's name. Only work the user must personally perform toward a goal — a call, a decision, a deliverable, a follow-up with a person — is `[user]`.
+
+### Step 3G: Commitments — track promises on people and company pages
+
+People and company pages get a `## Commitments` section (create it when the first commitment appears). Source: the daily log's `## Commitments` section plus meeting/transcript data you query in Step 2.
+
+```markdown
+## Commitments
+
+### User owes them
+- [ ] Revised MyAdvice metrics (by 2026-09-05) — src: chat "RR sync" 2026-09-01 (G2)
+
+### They owe user
+- [ ] Signed MSA ← Justin (expected 2026-08-30; last touch 2026-08-26) — src: meeting "GTMU kickoff" 2026-08-26 (G1)
+```
+
+- Record only commitments that were actually said or written. Include date promised and, for items owed to the user, the last touch date so the brief can compute how long it has been waiting.
+- Mark `[x]` when evidence shows the commitment was met; move it to Changelog with the date.
+- Do not duplicate a commitment as an Open Item — it lives in one place.
 
 ### Step 4: Quality checks
 
