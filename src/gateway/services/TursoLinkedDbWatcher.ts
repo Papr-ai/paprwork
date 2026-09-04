@@ -9,7 +9,7 @@
 
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
-import chokidar, { type FSWatcher } from "chokidar";
+import { TreeWatcher } from "./TreeWatcher.js";
 import { discoverTursoLinkedSources, linkedSourceSyncKey } from "./tursoLinkedSources.js";
 import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import {
@@ -29,7 +29,7 @@ import {
 } from "./tursoSyncState.js";
 import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
 
-let watcher: FSWatcher | null = null;
+let watcher: TreeWatcher | null = null;
 
 interface WatchedDbDir {
   syncKey: string;
@@ -247,20 +247,15 @@ export async function startTursoLinkedDbWatcher(
     return;
   }
 
-  watcher = chokidar.watch(watchDirs, {
-    depth: 0,
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 2_000, pollInterval: 250 },
-  });
-
-  watcher
-    .on("add", handleDbChange)
-    .on("change", handleDbChange)
-    .on("unlink", handleDbChange);
-
-  await new Promise<void>((resolve, reject) => {
-    watcher!.once("ready", () => resolve());
-    watcher!.once("error", (err) => reject(err));
+  // One non-recursive OS watch per linked data dir (was chokidar depth:0 —
+  // which still opened one kqueue fd per file in each dir).
+  watcher = new TreeWatcher({
+    roots: watchDirs,
+    recursive: false,
+    settleMs: 2_000, // was awaitWriteFinish.stabilityThreshold
+    onEvent: (event) => handleDbChange(event.path),
+    onError: (err, root) =>
+      console.warn(`[TursoLinkedDbWatcher] Watch error for ${root}:`, err?.message ?? String(err)),
   });
 
   console.log(

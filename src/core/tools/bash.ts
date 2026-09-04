@@ -381,32 +381,79 @@ async function executeBackgroundedCommand(
 ): Promise<ToolResult<BashOutput>> {
   return new Promise((resolve) => {
     const [shellPath, shellArgs] = getShellCommand(command);
-    
+
     // Spawn detached with stdio ignored to prevent hanging on orphaned pipes
     const proc = spawn(shellPath, shellArgs, {
       cwd: cwd || process.cwd(),
       env: Object.keys(env).length > 0 ? { ...process.env, ...env } : process.env,
       detached: true,
-      stdio: 'ignore', // Critical: don't inherit stdio pipes
+      stdio: "ignore", // Critical: don't inherit stdio pipes
     });
 
-    // Unref so parent doesn't wait for child
-    proc.unref();
+    let settled = false;
+    const finish = (result: ToolResult<BashOutput>): void => {
+      if (settled) return;
+      settled = true;
+      resolve(result);
+    };
 
-    const duration = Date.now() - startTime;
-    const pid = proc.pid;
-
-    // Return immediately - the process is now fully detached
-    resolve({
-      success: true,
-      data: {
-        stdout: `Background process started (PID: ${pid})\nNote: Use Job system for monitoring long-running processes.`,
-        stderr: '',
-        exitCode: 0,
-        command: sanitizeError(originalCommand, apiKeys),
-        duration,
-      },
+    proc.on("error", (err) => {
+      notifySpawnResourceError(err, "bash background spawn");
+      const classified = classifyChildProcessError(err);
+      finish({
+        success: false,
+        error: classified?.message ?? (err as Error).message,
+        type: classified?.type ?? "spawn_error",
+        data: {
+          stdout: "",
+          stderr: classified?.message ?? (err as Error).message,
+          exitCode: -1,
+          command: sanitizeError(originalCommand, apiKeys),
+          duration: Date.now() - startTime,
+          ...(classified?.agentHint ? { _processHint: classified.agentHint } : {}),
+        },
+      });
     });
+
+    const reportStarted = (): void => {
+      proc.unref();
+      const pid = proc.pid;
+      if (pid === undefined) {
+        finish({
+          success: false,
+          error: "Background process failed to start (no PID assigned)",
+          type: "spawn_error",
+          data: {
+            stdout: "",
+            stderr: "Background process failed to start (no PID assigned)",
+            exitCode: -1,
+            command: sanitizeError(originalCommand, apiKeys),
+            duration: Date.now() - startTime,
+          },
+        });
+        return;
+      }
+
+      finish({
+        success: true,
+        data: {
+          stdout:
+            `Background process started (PID: ${pid})\n` +
+            "Note: Use Job system for monitoring long-running processes.",
+          stderr: "",
+          exitCode: 0,
+          command: sanitizeError(originalCommand, apiKeys),
+          duration: Date.now() - startTime,
+        },
+      });
+    };
+
+    // spawn may succeed synchronously (pid set) or emit 'spawn' async
+    if (proc.pid !== undefined) {
+      reportStarted();
+    } else {
+      proc.on("spawn", reportStarted);
+    }
   });
 }
 

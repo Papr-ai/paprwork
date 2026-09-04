@@ -6,27 +6,16 @@ const { pushLinkedSourceToCloud } = vi.hoisted(() => ({
   pushLinkedSourceToCloud: vi.fn(),
 }));
 
-vi.mock("chokidar", () => ({
-  default: {
-    watch: vi.fn(() => {
-      const emitter = {
-        on: vi.fn((event: string, handler: (path: string) => void) => {
-          if (event === "add" || event === "change" || event === "unlink") {
-            changeHandlers.push(handler);
-          }
-          return emitter;
-        }),
-        once: vi.fn((event: string, handler: () => void) => {
-          if (event === "ready") {
-            queueMicrotask(handler);
-          }
-          return emitter;
-        }),
-        close: vi.fn().mockResolvedValue(undefined),
-      };
-      return emitter;
-    }),
-  },
+vi.mock("../src/gateway/services/TreeWatcher.js", () => ({
+  TreeWatcher: vi.fn().mockImplementation((options: { onEvent: (e: { type: string; path: string; root: string }) => void }) => {
+    changeHandlers.push((p: string) =>
+      options.onEvent({ type: "change", path: p, root: p.replace(/\/[^/]+$/, "") }),
+    );
+    return {
+      rootCount: 1,
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+  }),
 }));
 
 vi.mock(

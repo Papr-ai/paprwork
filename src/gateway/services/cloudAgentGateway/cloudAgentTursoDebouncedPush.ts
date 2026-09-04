@@ -4,7 +4,7 @@
  */
 
 import path from "path";
-import chokidar, { type FSWatcher } from "chokidar";
+import { TreeWatcher } from "../TreeWatcher.js";
 import { ensureLocalDbChangeLogReady } from "../tursoSyncBridgeCore.js";
 import {
   pushLinkedSourceToCloud,
@@ -78,7 +78,7 @@ export async function startCloudAgentTursoDebouncedPush(
   const maxWaitTimers = new Map<string, NodeJS.Timeout>();
   const firstDirtyAtMs = new Map<string, number>();
   const pushInFlight = new Map<string, Promise<void>>();
-  let watcher: FSWatcher | null = null;
+  let watcher: TreeWatcher | null = null;
   let stopped = false;
 
   async function executePush(target: TursoBookendTarget): Promise<void> {
@@ -182,20 +182,13 @@ export async function startCloudAgentTursoDebouncedPush(
     schedulePush(target);
   }
 
-  watcher = chokidar.watch(watchDirs, {
-    depth: 0,
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 2_000, pollInterval: 250 },
-  });
-
-  watcher
-    .on("add", handleDbChange)
-    .on("change", handleDbChange)
-    .on("unlink", handleDbChange);
-
-  await new Promise<void>((resolve, reject) => {
-    watcher!.once("ready", () => resolve());
-    watcher!.once("error", (err) => reject(err));
+  watcher = new TreeWatcher({
+    roots: watchDirs,
+    recursive: false,
+    settleMs: 2_000, // was awaitWriteFinish.stabilityThreshold
+    onEvent: (event) => handleDbChange(event.path),
+    onError: (err, root) =>
+      console.warn(`[CloudTursoDebouncedPush] Watch error for ${root}:`, err?.message ?? String(err)),
   });
 
   console.log(

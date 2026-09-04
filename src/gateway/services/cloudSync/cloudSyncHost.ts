@@ -2,7 +2,7 @@
  * Host bridge factories — wire CloudSyncService internals to extracted modules.
  */
 
-import type { FSWatcher } from "chokidar";
+import type { TreeWatcher } from "../TreeWatcher.js";
 import type { CloudSyncService } from "../CloudSyncService.js";
 import type { CloudSyncGitRemoteHost } from "./cloudSyncGitRemoteReview.js";
 import {
@@ -52,7 +52,7 @@ export interface CloudSyncInternals {
   queuePausedUntilMs: number;
   lastHygieneAtMs: number;
   lastFinalizedAppIds: string[];
-  watcher: FSWatcher | null;
+  watcher: TreeWatcher | null;
   stateManager: SyncStateManager;
   state: {
     status: SyncStatus;

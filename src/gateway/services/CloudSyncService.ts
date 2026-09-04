@@ -11,7 +11,7 @@
 
 import * as path from "path";
 import * as fs from "fs";
-import type { FSWatcher } from "chokidar";
+import type { TreeWatcher } from "./TreeWatcher.js";
 import { SyncStateManager, type QueueItem } from "./cloudSync/syncState.js";
 import { buildGitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
 import { shouldAutoUploadRelativePath } from "./cloudUploadMode.js";
@@ -93,7 +93,7 @@ import { classifyRepoSize, measureGitDirBytes } from "./cloudSync/repoHygiene.js
 interface SyncState extends Omit<CloudSyncPublicState, "queueRemaining" | "queueTotal" | "manualFlushErrors"> {}
 
 export class CloudSyncService implements CloudSyncInternals {
-  watcher: FSWatcher | null = null;
+  watcher: TreeWatcher | null = null;
   pushTimer: ReturnType<typeof setTimeout> | null = null;
   queueTimer: ReturnType<typeof setTimeout> | null = null;
   pullTimer: ReturnType<typeof setTimeout> | null = null;

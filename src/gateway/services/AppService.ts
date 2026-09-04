@@ -4,7 +4,7 @@
  */
 
 import { existsSync, promises as fs } from "fs";
-import chokidar, { type FSWatcher } from "chokidar";
+import { TreeWatcher } from "./TreeWatcher.js";
 import path from "path";
 import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
 import { isCloudPrepGitSyncArtifact } from "./cloudSync/syncState.js";
@@ -278,7 +278,14 @@ export class AppService {
   private legacyAppsIndexPath: string;
   private apps: Map<string, MiniApp>;
   private initialized: boolean;
-  private watchers: Map<string, FSWatcher>;
+  /**
+   * App ids whose directories are routed for hot-reload. One recursive
+   * TreeWatcher on appsDir serves all of them — never one fd per file/app
+   * (per-file kqueue watchers pushed fd numbers past OPEN_MAX and broke
+   * posix_spawn with EBADF).
+   */
+  private watchedAppIds: Set<string>;
+  private treeWatcher: TreeWatcher | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout>;
   private reloadBroadcastTimers: Map<string, NodeJS.Timeout>;
   private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
@@ -338,7 +345,7 @@ export class AppService {
     );
     this.apps = new Map();
     this.initialized = false;
-    this.watchers = new Map();
+    this.watchedAppIds = new Set();
     this.debounceTimers = new Map();
     this.reloadBroadcastTimers = new Map();
     this.buildInFlight = new Map();
@@ -381,10 +388,7 @@ export class AppService {
     }
     this.debounceTimers.clear();
     this.buildInFlight.clear();
-    for (const watcher of this.watchers.values()) {
-      await watcher.close();
-    }
-    this.watchers.clear();
+    await this.closeTreeWatcher();
     this.initialized = false;
     this.loadedPaprRoot = null;
     this.boundPaprDir = null;
@@ -2987,20 +2991,75 @@ export class AppService {
   }
 
   /**
-   * Start watching all app directories for file changes
+   * Start routing file changes for all known apps.
+   *
+   * Opens ONE recursive OS watch on appsDir (FSEvents on macOS) and routes each
+   * event to the owning app by its first path segment. Per-app semantics
+   * (debounce, build, validate, reload broadcast, Sync V3 flush) are unchanged
+   * — they were always keyed on appId in handleFileChange, never on the watcher.
    */
   private async startWatchingApps(): Promise<void> {
-    const appIds = [...this.apps.values()].map((app) => app.id);
-    const batchSize = 16;
-    for (let index = 0; index < appIds.length; index += batchSize) {
-      const batch = appIds.slice(index, index + batchSize);
-      await Promise.all(batch.map((appId) => this.watchApp(appId)));
+    for (const app of this.apps.values()) {
+      await this.watchApp(app.id);
     }
-    console.log(`[AppService] Started watching ${this.watchers.size} app directories`);
+    console.log(
+      `[AppService] Routing file changes for ${this.watchedAppIds.size} app directories (1 tree watcher)`,
+    );
+  }
+
+  private ensureTreeWatcher(): boolean {
+    if (this.disposed) return false;
+    if (this.treeWatcher) return true;
+    if (!existsSync(this.appsDir)) return false;
+
+    try {
+      this.treeWatcher = new TreeWatcher({
+        roots: [this.appsDir],
+        recursive: true,
+        settleMs: 200, // was chokidar awaitWriteFinish.stabilityThreshold
+        ignore: shouldIgnoreAppWatchPath,
+        onEvent: (event) => {
+          // unlink is not routed: the old per-app watcher only subscribed to
+          // add/change, and a rebuild on delete would race the deleteApp rm.
+          if (event.type === "unlink") return;
+          const rel = path.relative(this.appsDir, event.path);
+          const sep = rel.indexOf(path.sep);
+          if (sep <= 0) return;
+          const appId = rel.slice(0, sep);
+          if (!this.watchedAppIds.has(appId)) return;
+          this.handleFileChange(appId, rel.slice(sep + 1));
+        },
+        onError: (error) => {
+          // Log the message, not the object. Watcher errors carry non-cloneable
+          // fields (fs handles, syscall metadata); passing the raw object to a
+          // reporter that serializes stdout across a process boundary throws
+          // inside the serializer and takes down the whole run.
+          console.error("[AppService] Tree watcher error:", error?.message ?? String(error));
+        },
+      });
+      if (this.treeWatcher.rootCount === 0) {
+        this.treeWatcher = null;
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error("[AppService] Failed to start tree watcher:", (error as Error)?.message);
+      this.treeWatcher = null;
+      return false;
+    }
+  }
+
+  private async closeTreeWatcher(): Promise<void> {
+    const watcher = this.treeWatcher;
+    this.treeWatcher = null;
+    if (watcher) {
+      await watcher.close();
+    }
   }
 
   /**
-   * Watch a specific app directory for file changes
+   * Route file changes for a specific app. Idempotent and fd-free: the tree
+   * watcher already covers new subdirectories, so this only registers the id.
    */
   private async watchApp(appId: string): Promise<void> {
     if (this.disposed) return;
@@ -3015,63 +3074,19 @@ export class AppService {
     // Re-check after the await: cleanup() may have run while we were resolving.
     if (this.disposed) return;
 
-    // Don't create duplicate watchers
-    if (this.watchers.has(appId)) {
-      return;
-    }
-
-    try {
-      const watcher = chokidar.watch(appPath, {
-        persistent: true,
-        ignoreInitial: true,
-        ignored: shouldIgnoreAppWatchPath,
-        awaitWriteFinish: {
-          stabilityThreshold: 200, // Wait 200ms after last change
-          pollInterval: 100,
-        },
-      });
-
-      watcher.on("change", (filePath) => {
-        const filename = path.relative(appPath, filePath);
-        this.handleFileChange(appId, filename);
-      });
-
-      watcher.on("add", (filePath) => {
-        const filename = path.relative(appPath, filePath);
-        this.handleFileChange(appId, filename);
-      });
-
-      watcher.on("error", (error) => {
-        // Log the message, not the object. Watcher errors carry non-cloneable
-        // fields (fs handles, syscall metadata); passing the raw object to a
-        // reporter that serializes stdout across a process boundary throws
-        // inside the serializer and takes down the whole run.
-        console.error(
-          `[AppService] Watcher error for app ${appId}:`,
-          (error as Error)?.message ?? String(error),
-        );
-        this.watchers.delete(appId);
-      });
-
-      this.watchers.set(appId, watcher);
-    } catch (error) {
-      console.error(`[AppService] Failed to watch app ${appId}:`, error);
-    }
+    if (!this.ensureTreeWatcher()) return;
+    this.watchedAppIds.add(appId);
   }
 
   /**
-   * Stop watching a specific app directory
+   * Stop routing changes for a specific app
    */
   private unwatchApp(appId: string): void {
-    const watcher = this.watchers.get(appId);
-    if (watcher) {
-      watcher.close();
-      this.watchers.delete(appId);
-    }
+    this.watchedAppIds.delete(appId);
 
     // Clear any pending debounce timers for this app
     for (const [key, timer] of this.debounceTimers.entries()) {
-      if (key.startsWith(`${appId}:`)) {
+      if (key === appId || key.startsWith(`${appId}:`)) {
         clearTimeout(timer);
         this.debounceTimers.delete(key);
       }
@@ -4474,9 +4489,14 @@ export class AppService {
     return app;
   }
 
-  /** Active per-app chokidar watchers (for diagnostics). */
+  /** Apps routed for hot-reload (for diagnostics). OS watch handles: 1. */
   getActiveWatcherCount(): number {
-    return this.watchers.size;
+    return this.treeWatcher ? this.watchedAppIds.size : 0;
+  }
+
+  /** OS-level watch handles held by AppService (constant, not per app/file). */
+  getTreeWatcherRootCount(): number {
+    return this.treeWatcher?.rootCount ?? 0;
   }
 
   /**
@@ -4484,7 +4504,7 @@ export class AppService {
    * Watchers are re-established by {@link reestablishAppWatchers}.
    */
   async releaseWatchersForFdRecovery(): Promise<number> {
-    const count = this.watchers.size;
+    const count = this.getActiveWatcherCount();
     if (count === 0) {
       return 0;
     }
@@ -4494,8 +4514,8 @@ export class AppService {
     }
     this.debounceTimers.clear();
 
-    await Promise.all([...this.watchers.values()].map((watcher) => watcher.close()));
-    this.watchers.clear();
+    await this.closeTreeWatcher();
+    this.watchedAppIds.clear();
     return count;
   }
 
@@ -4514,12 +4534,12 @@ export class AppService {
    */
   cleanup(): void {
     this.disposed = true;
-    console.log(`[AppService] Cleaning up ${this.watchers.size} watchers`);
+    console.log(
+      `[AppService] Cleaning up watcher (${this.watchedAppIds.size} apps routed)`,
+    );
 
-    for (const [_appId, watcher] of this.watchers.entries()) {
-      void watcher.close();
-    }
-    this.watchers.clear();
+    void this.closeTreeWatcher();
+    this.watchedAppIds.clear();
 
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);

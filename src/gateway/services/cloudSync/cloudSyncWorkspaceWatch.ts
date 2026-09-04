@@ -4,12 +4,19 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import chokidar, { type FSWatcher } from "chokidar";
+import { TreeWatcher } from "../TreeWatcher.js";
 import { shouldAutoUploadRelativePath } from "../cloudUploadMode.js";
 import { ensureWorkspaceGitignore } from "./workspaceGitignore.js";
 import type { SyncStateManager } from "./syncState.js";
 
 export const INSTANT_DIRS = ["workspace", "data"] as const;
+
+/** Mirrors the old chokidar `ignored` list: .git trees and SQLite files/sidecars. */
+export function isIgnoredWorkspaceWatchPath(absPath: string): boolean {
+  const normalized = absPath.replace(/\\/g, "/");
+  if (normalized.includes("/.git/")) return true;
+  return /\.db(-wal|-shm|-changes|-journal)?$/.test(normalized);
+}
 
 export interface CloudSyncWorkspaceWatchHost {
   getPaprDir(): string;
@@ -18,7 +25,7 @@ export interface CloudSyncWorkspaceWatchHost {
   getStateManager(): SyncStateManager;
   clearPushTimer(): void;
   schedulePushTimer(callback: () => void, delayMs: number): void;
-  setWatcher(watcher: FSWatcher | null): void;
+  setWatcher(watcher: TreeWatcher | null): void;
 }
 
 export function getChangedInstantPaths(
@@ -77,13 +84,7 @@ export function startWorkspaceWatcher(host: CloudSyncWorkspaceWatchHost): void {
     return;
   }
 
-  console.log(`[CloudSync] Watching ${watchPaths.length} dirs (workspace, data)`);
-  const watcher = chokidar.watch(watchPaths, {
-    ignored: ["**/.git/**", "**/*.db", "**/*.db-wal", "**/*.db-shm"],
-    persistent: true,
-    ignoreInitial: true,
-    awaitWriteFinish: { stabilityThreshold: 1000, pollInterval: 100 },
-  });
+  console.log(`[CloudSync] Watching ${watchPaths.length} dirs (workspace, data) — 1 OS watch per root`);
 
   const scheduleDebounce = () => {
     host.clearPushTimer();
@@ -92,15 +93,18 @@ export function startWorkspaceWatcher(host: CloudSyncWorkspaceWatchHost): void {
     }, host.getPushDebounceMs());
   };
 
-  watcher
-    .on("add", () => scheduleDebounce())
-    .on("change", () => scheduleDebounce())
-    .on("unlink", () => scheduleDebounce())
-    .on("error", (err) => {
+  const watcher = new TreeWatcher({
+    roots: watchPaths,
+    recursive: true,
+    settleMs: 1000, // was chokidar awaitWriteFinish.stabilityThreshold
+    ignore: isIgnoredWorkspaceWatchPath,
+    onEvent: () => scheduleDebounce(),
+    onError: (err) => {
       if (!String(err).includes("EMFILE")) {
-        console.error("[CloudSync] Watcher error:", err);
+        console.error("[CloudSync] Watcher error:", err?.message ?? String(err));
       }
-    });
+    },
+  });
 
   host.setWatcher(watcher);
 }
