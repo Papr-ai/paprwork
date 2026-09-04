@@ -109,10 +109,16 @@ function warnCdcDisabledOnce(tableName: string): void {
     return;
   }
   cdcDisabledWarned.add(tableName);
+  const t = quoteIdent(tableName);
+  const tNew = quoteIdent(`${tableName}_new`);
   console.warn(
-    `[TursoSyncLog] "${tableName}" has no PRIMARY KEY — change capture is disabled ` +
-      `for it, so local inserts and deletes will never reach Turso. ` +
-      `Add a PRIMARY KEY (or let schema drift heal restore it) to re-enable sync.`,
+    `[TursoSyncLog] ${t} has no PRIMARY KEY — change capture is disabled, so local ` +
+      `inserts/updates/deletes will never reach Turso. This usually comes from ` +
+      `CREATE TABLE … AS SELECT, which drops constraints. To fix, rebuild with a key:\n` +
+      `  CREATE TABLE ${tNew} (id INTEGER PRIMARY KEY, …);\n` +
+      `  INSERT INTO ${tNew} SELECT * FROM ${t};\n` +
+      `  DROP TABLE ${t}; ALTER TABLE ${tNew} RENAME TO ${t};\n` +
+      `Or rename it with a leading underscore (_${tableName}) to mark it as local scratch.`,
   );
 }
 

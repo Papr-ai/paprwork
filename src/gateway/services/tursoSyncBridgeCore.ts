@@ -169,6 +169,11 @@ export const SQLITE_RECOVERY_TABLE = "lost_and_found";
 
 export function isScratchTable(tableName: string): boolean {
   return (
+    // Leading underscore = local scratch by convention (e.g. `_leads_backup`
+    // from an ad hoc CREATE TABLE … AS SELECT). Never synced, never warned
+    // about. Generalises the explicit `_papr_*` checks below, which stay for
+    // readability and as documentation of what the platform itself owns.
+    tableName.startsWith("_") ||
     JOB_BASELINE_TABLES.has(tableName) ||
     tableName === SYNC_REGISTRY_TABLE ||
     tableName === SYNC_META_TABLE ||
