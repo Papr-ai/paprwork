@@ -12,6 +12,7 @@ import type {
   StreamingState,
   SequenceItem,
   StreamRecoveryReason,
+  MessageAttachment,
 } from "../types/chat";
 import type { MemoryAudience } from "../constants/memoryScope";
 import type { ToolCall } from "../types/core";
@@ -602,12 +603,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   loadUIPreferences: async () => {
     try {
       const response = await gateway.send('settings:get', {});
-      if (response.success && response.data?.uiPreferences) {
-        const { lastModelId } = response.data.uiPreferences;
-        if (lastModelId) {
-          // Store in localStorage for fast access
-          localStorage.setItem("paprwork_last_model_id", lastModelId);
-        }
+      // `GatewayResponse.data` is `unknown` by design; narrow it the same way
+      // the other settings:get callers do rather than widening the response.
+      const uiPreferences = response.success
+        ? (response.data as { uiPreferences?: { lastModelId?: string } })
+            ?.uiPreferences
+        : undefined;
+      const lastModelId = uiPreferences?.lastModelId;
+      if (lastModelId) {
+        // Seeds *new* chats only. An existing chat resolves its own model from
+        // its per-chat selection or its history — see resolveChatModelId.
+        writeNewChatDefaultModel(lastModelId);
       }
     } catch (error) {
       console.error('[ChatStore] Failed to load UI preferences:', error);
