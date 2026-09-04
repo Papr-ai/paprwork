@@ -37,6 +37,7 @@ import {
 import { artifactsToMessageAttachments } from "../../utils/messageAttachments";
 import { mapHistoryMessages } from "../../utils/historyMapper";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import { chatHasLiveStreamBlockingHistory } from "../../lib/agentStreamRecovery";
@@ -271,6 +272,19 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   useEffect(() => {
     syncHistoryFromServer();
   }, [chatId, syncHistoryFromServer]);
+
+  // The effect above only re-runs when chatId changes, so a store wipe while
+  // this pane stays mounted leaves it on the welcome screen until the user
+  // switches tabs and forces a remount. See shouldRehydrateAfterStoreWipe.
+  const hasChatState = chatState !== undefined;
+  const prevHasChatStateRef = useRef(hasChatState);
+  useEffect(() => {
+    const hadEntry = prevHasChatStateRef.current;
+    prevHasChatStateRef.current = hasChatState;
+    if (shouldRehydrateAfterStoreWipe({ chatId, hadEntry, hasEntry: hasChatState })) {
+      syncHistoryFromServer();
+    }
+  }, [hasChatState, chatId, syncHistoryFromServer]);
 
   // Listen for new messages delivered from jobs/sub-agents
   useEffect(() => {

@@ -4856,6 +4856,32 @@ Head-of-line blocking with a poison pill at the front: the queue could only grow
 
 ---
 
+### Issue 75: Open Chat Reverts to Empty "New Chat" Until You Switch Tabs ✅ FIXED
+**Added:** 2026-09-03
+**Problem:** An open conversation would spontaneously render the empty "What would you like to build?" welcome screen, as if the chat had been replaced by a new one. Switching to another tab and back brought the whole conversation straight back.
+**Root Cause:** `ChatContainer` hydrates its messages in an effect keyed on `chatId`:
+
+```300:303:ui/components/Chat/ChatContainer.tsx
+  useEffect(() => {
+    syncHistoryFromServer();
+  }, [chatId, syncHistoryFromServer]);
+```
+
+`resetForWorkspaceSwitch()` clears **every** entry (`chatStates: new Map()`) and the workspace reload restores tabs — via `hydrateWorkspaceFromCache` — without restoring message bodies. So the pane can outlive its own state: same `chatId`, no entry, effect never re-runs. `MessageList` renders `WelcomeMessage` whenever `filteredMessages.length === 0 && !isLoading`, so the pane sits there indefinitely. The recovery the user found is that same mechanism in reverse: inactive chat tabs are unmounted (`ContentArea` renders only the active pane, and unlike app tabs there is no chat keep-alive host), so switching away and back **remounts** the pane and re-runs the hydration effect.
+**Not the cause (checked):** the history fetch was healthy — `gateway.send` rejects on `success: false`/timeout, so a failed load would log `Failed to load messages`, and neither that nor `Request failed - Type: agent:history` appears anywhere in the captured logs. Worth knowing for future triage: the log pipeline forwards renderer **warnings and errors only**, so `console.log` lines such as `[WorkspaceSwitch]` never appear and their absence proves nothing.
+**Solution:** Recover when the entry disappears from under a mounted pane, rather than chasing each event that might clear it — the stranding is identical whatever wipes the store. `shouldRehydrateAfterStoreWipe()` fires on the present → absent transition only:
+- **Absence, not emptiness, is the signal.** A new chat is created holding `messages: []`, so keying off an empty array would fight every genuinely empty chat; only a wipe removes the entry outright.
+- **Cannot loop.** `loadMessages` always writes an entry back in its `finally`, which flips the flag and ends the sequence.
+- **Temp ids are skipped.** `migrateChatId` deletes the temp entry and then `await`s before the tab switches to the permanent id, so the pane can legitimately render with a temp id and no entry — and no temp chat exists server-side to load.
+- **Safe across a real workspace switch.** If the chat belongs to the workspace being left, the reload returns nothing and the pane correctly stays empty.
+**Files Created:**
+- `ui/utils/chatStateRecovery.ts` — the predicate
+- `tests/chat-state-recovery.test.ts` — 6 tests, including one pinning that `resetForWorkspaceSwitch` *removes* entries rather than writing empty ones (the invariant that absence-as-signal depends on; if that ever changed, the recovery would silently stop firing)
+**Files Changed:**
+- `ui/components/Chat/ChatContainer.tsx` — transition effect beside the existing hydration effect
+**Prevention:** A component that loads its data once, keyed on its own identity, is stranded by anything that clears that data without changing the identity. Either re-hydrate on the disappearance or have the wipe re-seed what it clears. Separately: know which console levels your log pipeline captures before reading absence as evidence.
+**Related:** Issue 72 (workspace switch regressions), Issue 74 (model selection leaking across chats — same `resetForWorkspaceSwitch` wipe, different casualty)
+
 ### Issue 76: History Sync Drops Paginated Turns Below the Newest Message ✅ FIXED
 **Added:** 2026-09-03
 **Problem:** In a long chat, the newest reply would appear part-way up the transcript with a block of *older* turns rendered beneath it. Scrolling to the bottom showed old messages; the actual latest answer sat above them.
