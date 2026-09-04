@@ -112,7 +112,7 @@ describe("checkMissingTablesOnPrimaryDb", () => {
       ],
     ]);
 
-    const issues = checkMissingTablesOnPrimaryDb(dbPath, files);
+    const issues = await checkMissingTablesOnPrimaryDb(dbPath, files);
     expect(
       issues.some(
         (i) =>

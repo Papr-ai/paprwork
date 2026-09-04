@@ -74,19 +74,17 @@ function schedulerTreatsAsPermanent(error: unknown): boolean {
 describe("validateJobAgainstAppDatabase with an unusable database", () => {
   it.skipIf(!canUseBetterSqlite)(
     "returns an issue instead of throwing for a non-SQLite file",
-    () => {
+    async () => {
       // The exact production shape: a Python one-liner written where a DB belongs.
       const dbPath = notADatabase(
         "print('Use sync_reminders.py and sync calendar.json')\n",
       );
 
-      let issues: ReturnType<typeof validateJobAgainstAppDatabase> = [];
-      expect(() => {
-        issues = validateJobAgainstAppDatabase({
-          databasePath: dbPath,
-          command: `sqlite3 "$APP_DB" 'SELECT 1'`,
-        });
-      }).not.toThrow();
+      let issues: Awaited<ReturnType<typeof validateJobAgainstAppDatabase>> = [];
+      issues = await validateJobAgainstAppDatabase({
+        databasePath: dbPath,
+        command: `sqlite3 "$APP_DB" 'SELECT 1'`,
+      });
 
       expect(
         issues.some((issue) => issue.rule === "primary-database-unopenable"),
@@ -97,8 +95,8 @@ describe("validateJobAgainstAppDatabase with an unusable database", () => {
 
   it.skipIf(!canUseBetterSqlite)(
     "surfaces a remediation the user can act on",
-    () => {
-      const issues = validateJobAgainstAppDatabase({
+    async () => {
+      const issues = await validateJobAgainstAppDatabase({
         databasePath: notADatabase("not sqlite at all"),
         command: "python3 code/ingest.py",
       });
@@ -111,7 +109,7 @@ describe("validateJobAgainstAppDatabase with an unusable database", () => {
 
   it.skipIf(!canUseBetterSqlite)(
     "does not throw for a binary file with a corrupt SQLite header",
-    () => {
+    async () => {
       const dbPath = path.join(tempDir(), "data.db");
       // Valid-looking prefix, garbage after — opens, fails on first read.
       const buffer = Buffer.alloc(4096);
@@ -119,25 +117,25 @@ describe("validateJobAgainstAppDatabase with an unusable database", () => {
       buffer.fill(0xff, 16);
       writeFileSync(dbPath, buffer);
 
-      expect(() =>
+      await expect(
         validateJobAgainstAppDatabase({
           databasePath: dbPath,
           command: `sqlite3 "$APP_DB" 'SELECT 1'`,
         }),
-      ).not.toThrow();
+      ).resolves.toBeDefined();
     },
   );
 
   it.skipIf(!canUseBetterSqlite)(
     "still validates healthy databases normally",
-    () => {
+    async () => {
       const dbPath = path.join(tempDir(), "data.db");
       const db = new Database(dbPath);
       db.exec("CREATE TABLE runs (id INTEGER PRIMARY KEY, status TEXT)");
       db.close();
 
       // Sanity: the new try/catch must not swallow real schema drift.
-      const drift = validateJobAgainstAppDatabase({
+      const drift = await validateJobAgainstAppDatabase({
         databasePath: dbPath,
         command: `sqlite3 "$APP_DB" 'INSERT INTO missing_table(id) VALUES (1)'`,
       });
@@ -145,7 +143,7 @@ describe("validateJobAgainstAppDatabase with an unusable database", () => {
         true,
       );
 
-      const clean = validateJobAgainstAppDatabase({
+      const clean = await validateJobAgainstAppDatabase({
         databasePath: dbPath,
         command: `sqlite3 "$APP_DB" 'UPDATE runs SET status = ? WHERE id = 1'`,
       });

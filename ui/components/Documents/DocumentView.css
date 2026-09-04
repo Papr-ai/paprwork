@@ -7,6 +7,11 @@
   overflow: hidden;
 }
 
+/* Limit layout/paint invalidation to the doc pane when chat resizes beside it. */
+.content-area--split .content-pane--right .document-view {
+  contain: layout paint;
+}
+
 /* Loading & Error states */
 
 .document-view--loading,

@@ -468,19 +468,44 @@ export class AgentService {
 
     // Register ownership before waiting so stop/replacement can abort a queued stream.
     this.sessionManager.setAbortController(chatId, abortController);
-    this.sessionManager.setStreaming(chatId, true);
 
     if (!skipConcurrencyGate) {
       const { getAgentStreamConcurrencyGate } = await import(
         "./agent/agentStreamConcurrency.js"
       );
+      const gate = getAgentStreamConcurrencyGate();
       try {
-        const priority = chatId.startsWith("job:") ? "background" : "foreground";
-        concurrencyLease = await getAgentStreamConcurrencyGate().acquire(
+        for await (const event of gate.acquireWithEvents(
           chatId,
           abortController.signal,
-          priority,
-        );
+        )) {
+          if (event.type === "queued") {
+            yield {
+              type: "concurrency-queued",
+              chatId,
+              payload: {
+                pool: event.pool,
+                activeCount: event.activeCount,
+                maxConcurrent: event.maxConcurrent,
+                waitingCount: event.waitingCount,
+              },
+              timestamp: new Date().toISOString(),
+            } as StreamChunk & { chatId: string };
+            continue;
+          }
+          concurrencyLease = event.lease;
+          yield {
+            type: "concurrency-acquired",
+            chatId,
+            payload: {
+              pool: event.pool,
+              activeCount: event.activeCount,
+              maxConcurrent: event.maxConcurrent,
+              waitingCount: 0,
+            },
+            timestamp: new Date().toISOString(),
+          } as StreamChunk & { chatId: string };
+        }
       } catch (concurrencyError) {
         const message =
           concurrencyError instanceof Error
@@ -502,6 +527,9 @@ export class AgentService {
         return;
       }
     }
+
+    // Mark streaming only after a slot is acquired — pi-ai / AI SDK work has not started yet.
+    this.sessionManager.setStreaming(chatId, true);
     clearInFlightToolResults(chatId);
 
     // Track response state for error recovery

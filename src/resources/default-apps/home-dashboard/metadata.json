@@ -1,11 +1,11 @@
 {
   "id": "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c",
   "title": "Home",
-  "description": "Your daily command center — meetings, priorities, OKRs, and action items. Powered by overnight agent collaboration.",
+  "description": "Your daily command center \u2014 meetings, priorities, OKRs, and action items. Powered by overnight agent collaboration.",
   "type": "app",
   "isDefault": true,
   "defaultHomeApp": true,
-  "version": 12,
+  "version": 13,
   "createdAt": "2026-03-30T08:07:26.882Z",
   "favorite": false
 }

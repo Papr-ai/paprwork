@@ -31,7 +31,7 @@ interface DocumentViewProps {
   documentId: string;
 }
 
-export function DocumentView({ documentId }: DocumentViewProps) {
+function DocumentViewInner({ documentId }: DocumentViewProps) {
   const {
     document,
     loading,
@@ -471,6 +471,8 @@ export function DocumentView({ documentId }: DocumentViewProps) {
     </div>
   );
 }
+
+export const DocumentView = React.memo(DocumentViewInner);
 
 // ===== Bubble menu button =====
 

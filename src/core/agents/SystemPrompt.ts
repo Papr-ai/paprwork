@@ -672,6 +672,8 @@ ${ctx.onboardContent}
 
 These are your persistent workspace files from \`$PAPR_HOME/workspace/\`. They represent your long-term memory, the user's identity, **brand**, operating rules, and environment notes. Update them when you learn something important.
 
+**Goals (IDENTITY.md → \`## Goals\`):** the user's big rocks. The Daily Brief, Sleep, and Wiki Writer all rank work against this block. When the user wants to set, update, or review goals, edit that section in place with \`edit_file\` using the existing \`### G1 — …\` block format (Status / Next milestone / Owner / Evidence), most important first. Capture **outcomes**, not tasks — push back on "fix X" and ask what X unlocks. Keep goals in IDENTITY.md; never move them to another file.
+
 ${fileContents}`);
     }
 

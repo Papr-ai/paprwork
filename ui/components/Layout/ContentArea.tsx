@@ -30,6 +30,8 @@ import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
 import { gateway } from "../../src/lib/gateway";
 import "./ContentArea.css";
 
+const MemoChatContainer = React.memo(ChatContainer);
+
 function isAppTab(tab: Tab | undefined): tab is Tab {
   return tab?.type === "app";
 }
@@ -352,7 +354,7 @@ export function ContentArea() {
 
     switch (tab.type) {
       case "chat":
-        return <ChatContainer chatId={tab.entityId} />;
+        return <MemoChatContainer chatId={tab.entityId} />;
       case "document":
         return <DocumentView documentId={tab.entityId} />;
       case "documents":

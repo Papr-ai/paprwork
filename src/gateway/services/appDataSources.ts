@@ -6,9 +6,10 @@
  * Those act only as a fallback when sourceId is omitted — never written on new saves.
  */
 
-import { existsSync } from "fs";
+import { existsSync, statSync } from "fs";
 import path from "path";
 import Database from "better-sqlite3";
+import { isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
 
 /** @deprecated Ignored on new links. Parsed only for legacy files. */
 export type AppDataSourceRole = "primary" | "readonly" | "scratch";
@@ -336,6 +337,14 @@ export function assertWritableSource(
 /** True when the DB is missing, empty, or only has job infrastructure tables. */
 export function dbHasOnlyBaselineTables(dbPath: string): boolean {
   try {
+    if (!existsSync(dbPath)) {
+      return true;
+    }
+    // Replica-managed registry DBs cannot be opened reliably with better-sqlite3.
+    // A non-empty file means user/app data lives here (not scratch baseline).
+    if (isReplicaManagedDbPath(dbPath)) {
+      return statSync(dbPath).size === 0;
+    }
     const db = new Database(dbPath, { readonly: true });
     const tables = db
       .prepare(

@@ -5,13 +5,13 @@
  * No namespace monorepo git commit or push.
  *
  * Pull: ff-only namespace git for legacy read + Turso/workspace-log materialize.
- * Watch: chokidar on workspace/ + data/ (hash-gated local sync state).
+ * Watch: one recursive OS watch (TreeWatcher) on workspace/ + data/ (hash-gated local sync state).
  * Queue: auto-upload apps and linked jobs via Sync V3 flush (no git push).
  */
 
 import * as path from "path";
 import * as fs from "fs";
-import type { FSWatcher } from "chokidar";
+import type { TreeWatcher } from "./TreeWatcher.js";
 import { SyncStateManager, type QueueItem } from "./cloudSync/syncState.js";
 import { buildGitHubSyncItemsReport } from "./cloudSync/syncItemStatus.js";
 import { shouldAutoUploadRelativePath } from "./cloudUploadMode.js";
@@ -93,7 +93,7 @@ import { classifyRepoSize, measureGitDirBytes } from "./cloudSync/repoHygiene.js
 interface SyncState extends Omit<CloudSyncPublicState, "queueRemaining" | "queueTotal" | "manualFlushErrors"> {}
 
 export class CloudSyncService implements CloudSyncInternals {
-  watcher: FSWatcher | null = null;
+  watcher: TreeWatcher | null = null;
   pushTimer: ReturnType<typeof setTimeout> | null = null;
   queueTimer: ReturnType<typeof setTimeout> | null = null;
   pullTimer: ReturnType<typeof setTimeout> | null = null;
@@ -671,7 +671,7 @@ export class CloudSyncService implements CloudSyncInternals {
     return classifyRepoSize(measureGitDirBytes(this.paprDir));
   }
 
-  /** Whether the workspace/data chokidar watcher is still running. */
+  /** Whether the workspace/data tree watcher is still running. */
   hasActiveWatcher(): boolean {
     return this.watcher !== null;
   }

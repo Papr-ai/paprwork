@@ -19,6 +19,7 @@ interface MessageListProps {
   messages: ChatMessage[];
   isLoading?: boolean;
   isSending?: boolean;
+  isWaitingForAgentSlot?: boolean;
   /** When set, file drops on the list attach the same way as Add context → file upload */
   onFilesDropped?: (files: File[]) => void;
   /** Called when user scrolls to the top (for loading older messages) */
@@ -37,6 +38,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   messages,
   isLoading,
   isSending,
+  isWaitingForAgentSlot,
   onFilesDropped,
   onLoadOlder,
 }) => {
@@ -294,7 +296,61 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isSending && !filteredMessages.some((m) => m.isStreaming) && (
+      {isWaitingForAgentSlot &&
+        isSending &&
+        !filteredMessages.some((m) => m.isStreaming) && (
+        <div className="message-item">
+          <div className="message-avatar-container">
+            <div className="message-avatar-assistant">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 105 124"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="message-avatar-icon"
+              >
+                <path
+                  d="M27.9998 101.5C-11.5 158 6.99988 51 43.4008 60.5002C99.2884 75.0861 115.18 20.7781 83.6804 8.27816C40.2693 -8.94844 51.9998 65 27.9998 101.5Z"
+                  stroke="url(#papr-gradient-waiting)"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <defs>
+                  <linearGradient
+                    id="papr-gradient-waiting"
+                    x1="17.2207"
+                    y1="89.4214"
+                    x2="68.8959"
+                    y2="35.8394"
+                    gradientUnits="userSpaceOnUse"
+                  >
+                    <stop stopColor="#0060E0" />
+                    <stop offset="0.6" stopColor="#00ACFA" />
+                    <stop offset="1" stopColor="#0BCDFF" />
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+          </div>
+          <div className="message-content">
+            <div className="agent-waiting-indicator">
+              <span className="agent-waiting-indicator__label">
+                Waiting for agent slot…
+              </span>
+              <div className="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isSending &&
+        !isWaitingForAgentSlot &&
+        !filteredMessages.some((m) => m.isStreaming) && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">

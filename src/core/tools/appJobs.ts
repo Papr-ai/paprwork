@@ -1449,7 +1449,17 @@ export const runJobTool = createTool({
     const jobsService = getJobsService();
     await jobsService.initialize();
 
-    const existingJob = await jobsService.getJob(args.jobId);
+    let existingJob = await jobsService.getJob(args.jobId);
+
+    // A job flagged `running` with no tracked process is a phantom left by a
+    // failed spawn (#139). Clear it here so the retry does not bounce off
+    // "Job is already running" until the 20s stale watchdog fires.
+    if (existingJob?.status === "running") {
+      const cleared = await jobsService.clearStaleRunningState(args.jobId);
+      if (cleared) {
+        existingJob = await jobsService.getJob(args.jobId);
+      }
+    }
 
     const appDbJobReminder =
       existingJob?.appIds && existingJob.appIds.length > 0

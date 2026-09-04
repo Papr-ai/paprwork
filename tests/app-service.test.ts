@@ -33,7 +33,7 @@ describe("AppService", () => {
 
   afterEach(async () => {
     // Stop watchers and pending timers before the temp dir goes away. Without
-    // this, chokidar keeps firing on deleted paths and the debounced reload
+    // this, the tree watcher keeps firing on deleted paths and the debounced reload
     // broadcast outlives the test run.
     appService.cleanup();
     if (originalHome === undefined) {

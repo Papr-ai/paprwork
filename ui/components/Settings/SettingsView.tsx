@@ -1011,6 +1011,53 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.8" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.8</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Turso Scratch Tables &amp; Sync Hardening</strong>
+                <p>
+                  Tables prefixed with _ are treated as local-only scratch
+                  (backups, temp data). No-PK warnings now include a clear
+                  rebuild recipe instead of misleading drift-heal advice.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Goals &amp; Home Brief</strong>
+                <p>
+                  Goals in IDENTITY.md now drive the Home brief, Sleep job,
+                  and Wiki Writer for personalized daily updates.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent &amp; Chat Improvements</strong>
+                <p>
+                  Separate chat and job concurrency pools with waiting-for-slot
+                  UI, per-chat model selection, and improved chat history
+                  dropdown.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Database Validation &amp; Stability</strong>
+                <p>
+                  Replica-safe registry schema reads, data contract enforcement,
+                  honest job run status, FSEvents tree watchers, and Claude
+                  Opus/Fable 5.1 API-key fixes.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.8"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.7" && (
           <div className="about-card">
             <h3>What's New in v2.5.7</h3>

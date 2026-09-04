@@ -54,7 +54,7 @@ export function classifyError(error: unknown): ErrorType {
 
   const codeStr = typeof code === "string" ? code : undefined;
   if (codeStr === "EBADF" || codeStr === "EMFILE" || codeStr === "ENFILE") {
-    return "permanent";
+    return "transient";
   }
   if (
     msg.includes("ebadf") ||
@@ -63,7 +63,7 @@ export function classifyError(error: unknown): ErrorType {
     msg.includes("could not open process pipes") ||
     msg.includes("too many open files")
   ) {
-    return "permanent";
+    return "transient";
   }
 
   // Default to transient (safer to retry than give up)
@@ -107,7 +107,7 @@ export function getErrorClassificationReason(error: unknown): string {
     msg.includes("emfile") ||
     msg.includes("could not open process pipes")
   ) {
-    return "Process spawn resource error (permanent error, no retry)";
+    return "Process spawn resource error (will retry with backoff)";
   }
 
   return "Unknown error (will retry)";
