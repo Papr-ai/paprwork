@@ -3,8 +3,11 @@
  * no job database is linked via data-sources.json.
  */
 
-import Database from "better-sqlite3";
 import { existsSync } from "fs";
+import {
+  readRegistryDatabaseSchema,
+  type RegistryDbSchemaReadInput,
+} from "./jobs/registryDbSchemaReader.js";
 import {
   extractPrimaryTable,
   JOB_BASELINE_TABLES,
@@ -194,36 +197,39 @@ export function extractReferencedAppTables(
   return byFile;
 }
 
-function listTablesOnDb(dbPath: string): Set<string> {
+async function listTablesOnDb(
+  dbPath: string,
+  context?: Omit<RegistryDbSchemaReadInput, "dbPath">,
+): Promise<Set<string>> {
   if (!existsSync(dbPath)) {
     return new Set();
   }
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    const rows = db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-      )
-      .all() as Array<{ name: string }>;
-    return new Set(rows.map((row) => row.name));
-  } finally {
-    db.close();
+  const read = await readRegistryDatabaseSchema({
+    dbPath,
+    ...context,
+  });
+  if (!read.ok) {
+    return new Set();
   }
+  return new Set(
+    [...read.schema.tables].filter((name) => !name.startsWith("sqlite_")),
+  );
 }
 
 /**
  * Warn when app SQL references tables missing from the primary linked DB.
  */
-export function checkMissingTablesOnPrimaryDb(
+export async function checkMissingTablesOnPrimaryDb(
   primaryDbPath: string,
   fileContents: Map<string, string>,
-): ValidationIssue[] {
+  context?: Omit<RegistryDbSchemaReadInput, "dbPath">,
+): Promise<ValidationIssue[]> {
   const referenced = extractReferencedAppTables(fileContents);
   if (referenced.size === 0) {
     return [];
   }
 
-  const existing = listTablesOnDb(primaryDbPath);
+  const existing = await listTablesOnDb(primaryDbPath, context);
   const issues: ValidationIssue[] = [];
   const missingGlobal = new Set<string>();
 

@@ -82,8 +82,10 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     },
     ref,
   ) => {
-    // Get draft message from store
-    const draftMessage = useChatStore((state) => state.getDraftMessage(chatId));
+    // Draft lives outside chatStates so debounced saves do not re-render MessageList.
+    const draftMessage = useChatStore(
+      (state) => state.draftByChatId.get(chatId) ?? "",
+    );
     const setDraftMessage = useChatStore((state) => state.setDraftMessage);
     const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
 
@@ -106,6 +108,26 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const modelPickerDropdownRef = useRef<HTMLDivElement>(null);
     const contextDropdownRef = useRef<HTMLDivElement>(null);
     const lastSendAttemptRef = useRef<number>(0);
+    const resizeRafRef = useRef<number | null>(null);
+
+    const scheduleTextareaResize = useCallback(() => {
+      if (resizeRafRef.current != null) return;
+      resizeRafRef.current = requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        const el = textareaRef.current;
+        if (!el) return;
+        el.style.height = "auto";
+        el.style.height = `${Math.min(el.scrollHeight, 200)}px`;
+      });
+    }, []);
+
+    useEffect(() => {
+      return () => {
+        if (resizeRafRef.current != null) {
+          cancelAnimationFrame(resizeRafRef.current);
+        }
+      };
+    }, []);
 
     // Use first model as default if none selected
     const currentModel = selectedModel || CHAT_MODELS[0];
@@ -364,11 +386,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         setSlashQuery("");
       }
 
-      // Auto-resize textarea
-      if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
-        textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
-      }
+      // Auto-resize textarea (deferred to next frame to avoid blocking input paint)
+      scheduleTextareaResize();
     };
 
     // Handle blur - only hide if clicking outside the entire input bar
@@ -378,7 +397,6 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       if (!relatedTarget || !inputBarRef.current?.contains(relatedTarget)) {
         setIsFocused(false);
         setShowModelPicker(false);
-        setShowChatHistory(false);
         setShowContextDropdown(false);
       }
     };
@@ -416,20 +434,22 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                 onRemove={handleRemoveArtifact}
                 onAddClick={() => {
                   setShowModelPicker(false);
-                  setShowChatHistory(false);
                   setShowContextDropdown(!showContextDropdown);
                 }}
                 addButtonRef={contextAddBtnRef}
               />
-              <ContextDropdown
-                chatId={chatId}
-                isOpen={showContextDropdown}
-                onClose={() => setShowContextDropdown(false)}
-                onSelectArtifact={handleSelectArtifact}
-                selectedIds={selectedArtifacts.map((a) => a.id)}
-                dropdownRef={contextDropdownRef}
-              />
             </div>
+          )}
+
+          {showContextDropdown && (
+            <ContextDropdown
+              chatId={chatId}
+              isOpen={showContextDropdown}
+              onClose={() => setShowContextDropdown(false)}
+              onSelectArtifact={handleSelectArtifact}
+              selectedIds={selectedArtifacts.map((a) => a.id)}
+              dropdownRef={contextDropdownRef}
+            />
           )}
 
           {/* Input row */}
@@ -463,7 +483,6 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setShowModelPicker(!showModelPicker);
-                    setShowChatHistory(false);
                     setShowContextDropdown(false);
                   }}
                 >

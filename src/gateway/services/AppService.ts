@@ -3602,7 +3602,10 @@ export class AppService {
     const primary = await this.getPrimaryDataSource(appId);
     if (primary?.dbPath) {
       issues.push(
-        ...checkMissingTablesOnPrimaryDb(primary.dbPath, fileContents),
+        ...(await checkMissingTablesOnPrimaryDb(primary.dbPath, fileContents, {
+          dbId: primary.dbId,
+          alias: primary.alias,
+        })),
       );
     }
 

@@ -39,6 +39,9 @@ interface ChatStore {
   // Per-chat state for parallel streaming (keyed by chatId)
   chatStates: Map<string, ChatState>;
 
+  /** Input drafts — isolated from chatStates so typing does not re-render MessageList. */
+  draftByChatId: Map<string, string>;
+
   // UI state (global - only for non-chat-specific loading/errors)
   isLoading: boolean;
   error: string | null;
@@ -149,6 +152,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   chats: [],
   memoryScopeByChatId: new Map(),
   chatStates: new Map(),
+  draftByChatId: new Map(),
   streamingState: new Map(),
   isLoading: false,
   error: null,
@@ -405,6 +409,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       chats: [],
       memoryScopeByChatId: new Map(),
       chatStates: new Map(),
+      draftByChatId: new Map(),
       streamingState: new Map(),
       isLoading: false,
       error: null,
@@ -545,29 +550,28 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
-  // Draft message management
+  // Draft message management (separate map — avoids invalidating message list on save)
   setDraftMessage: (chatId, draft) =>
     set((state) => {
-      const chatState = state.chatStates.get(chatId) || { ...defaultChatState };
-      const newChatStates = new Map(state.chatStates);
-      newChatStates.set(chatId, { ...chatState, draftMessage: draft });
-      return { chatStates: newChatStates };
+      const prev = state.draftByChatId.get(chatId) ?? "";
+      if (prev === draft) return state;
+      const draftByChatId = new Map(state.draftByChatId);
+      if (draft) {
+        draftByChatId.set(chatId, draft);
+      } else {
+        draftByChatId.delete(chatId);
+      }
+      return { draftByChatId };
     }),
 
-  getDraftMessage: (chatId) => {
-    const state = get();
-    const chatState = state.chatStates.get(chatId);
-    return chatState?.draftMessage || "";
-  },
+  getDraftMessage: (chatId) => get().draftByChatId.get(chatId) ?? "",
 
   clearDraftMessage: (chatId) =>
     set((state) => {
-      const chatState = state.chatStates.get(chatId);
-      if (!chatState) return state;
-
-      const newChatStates = new Map(state.chatStates);
-      newChatStates.set(chatId, { ...chatState, draftMessage: "" });
-      return { chatStates: newChatStates };
+      if (!state.draftByChatId.has(chatId)) return state;
+      const draftByChatId = new Map(state.draftByChatId);
+      draftByChatId.delete(chatId);
+      return { draftByChatId };
     }),
 
   setLastSelectedModel: (chatId, modelId) =>

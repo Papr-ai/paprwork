@@ -29,26 +29,26 @@ describe("dailyBriefVerification", () => {
     }
   });
 
-  test("passes when today's row exists", () => {
+  test("passes when today's row exists", async () => {
     const today = todayUtcDateKey();
     const dbPath = createTestDb(`
       CREATE TABLE briefs (date TEXT, brief_json TEXT);
-      INSERT INTO briefs VALUES ('${today}', '{"hero":{}}');
+      INSERT INTO briefs VALUES ('${today}', '{"hero":{"title":"Morning"},"sections":[{"type":"priorities"}]}');
     `);
     dbPaths.push(dbPath);
 
-    const result = verifyDailyBriefRowForToday(dbPath);
+    const result = await verifyDailyBriefRowForToday(dbPath);
     expect(result.ok).toBe(true);
   });
 
-  test("fails when today's row missing", () => {
+  test("fails when today's row missing", async () => {
     const dbPath = createTestDb(`
       CREATE TABLE briefs (date TEXT, brief_json TEXT);
-      INSERT INTO briefs VALUES ('2020-01-01', '{"hero":{}}');
+      INSERT INTO briefs VALUES ('2020-01-01', '{"hero":{"title":"Old"},"sections":[{"type":"priorities"}]}');
     `);
     dbPaths.push(dbPath);
 
-    const result = verifyDailyBriefRowForToday(dbPath);
+    const result = await verifyDailyBriefRowForToday(dbPath);
     expect(result.ok).toBe(false);
   });
 });

@@ -46,7 +46,7 @@ describe("dataContract", () => {
     expect(defaultContract.enforceOnFailure).toBeUndefined();
   });
 
-  test("passes when tables meet minRows and enums", () => {
+  test("passes when tables meet minRows and enums", async () => {
     const dbPath = createTestDb(`
       CREATE TABLE report_evidence (
         id INTEGER PRIMARY KEY,
@@ -78,12 +78,12 @@ describe("dataContract", () => {
       },
     };
 
-    const result = validateDatabaseAgainstContract(dbPath, contract);
+    const result = await validateDatabaseAgainstContract(dbPath, contract);
     expect(result.passed).toBe(true);
     expect(result.violations).toHaveLength(0);
   });
 
-  test("fails on invalid enum values", () => {
+  test("fails on invalid enum values", async () => {
     const dbPath = createTestDb(`
       CREATE TABLE report_evidence (section_kind TEXT);
       INSERT INTO report_evidence VALUES ('report'), ('findings');
@@ -99,14 +99,14 @@ describe("dataContract", () => {
       },
     };
 
-    const result = validateDatabaseAgainstContract(dbPath, contract);
+    const result = await validateDatabaseAgainstContract(dbPath, contract);
     expect(result.passed).toBe(false);
     expect(result.violations.some((v) => v.message.includes("report"))).toBe(
       true,
     );
   });
 
-  test("applies job-specific minRows checks", () => {
+  test("applies job-specific minRows checks", async () => {
     const dbPath = createTestDb(`
       CREATE TABLE report_content (id INTEGER PRIMARY KEY);
       INSERT INTO report_content VALUES (1);
@@ -122,18 +122,18 @@ describe("dataContract", () => {
       },
     };
 
-    const fail = validateDatabaseAgainstContract(dbPath, contract, {
+    const fail = await validateDatabaseAgainstContract(dbPath, contract, {
       jobName: "Report Generator",
     });
     expect(fail.passed).toBe(false);
 
-    const skip = validateDatabaseAgainstContract(dbPath, contract, {
+    const skip = await validateDatabaseAgainstContract(dbPath, contract, {
       jobName: "Other Job",
     });
     expect(skip.passed).toBe(true);
   });
 
-  test("fails when required column missing", () => {
+  test("fails when required column missing", async () => {
     const dbPath = createTestDb(`
       CREATE TABLE perspective_scores (score INTEGER);
     `);
@@ -148,12 +148,12 @@ describe("dataContract", () => {
       },
     };
 
-    const result = validateDatabaseAgainstContract(dbPath, contract);
+    const result = await validateDatabaseAgainstContract(dbPath, contract);
     expect(result.passed).toBe(false);
     expect(result.violations[0].message).toContain("agent_notes");
   });
 
-  test("requireTodayRow fails when today's brief missing", () => {
+  test("requireTodayRow fails when today's brief missing", async () => {
     const dbPath = createTestDb(`
       CREATE TABLE briefs (date TEXT, brief_json TEXT);
       INSERT INTO briefs VALUES ('2020-01-01', '{}');
@@ -170,7 +170,7 @@ describe("dataContract", () => {
       },
     };
 
-    const result = validateDatabaseAgainstContract(dbPath, contract, {
+    const result = await validateDatabaseAgainstContract(dbPath, contract, {
       jobName: "Daily Brief Generator",
     });
     expect(result.passed).toBe(false);

@@ -1686,12 +1686,15 @@ export class JobsService {
 
     for (const target of writeTargets) {
       issues.push(
-        ...validateJobAgainstAppDatabase({
+        ...(await validateJobAgainstAppDatabase({
           command: job.command,
           databasePath: target.dbPath,
+          dbId: target.dbId,
+          alias: target.alias,
+          syncMode: target.syncMode,
           contract,
           jobType: job.type,
-        }),
+        })),
       );
     }
     return issues;

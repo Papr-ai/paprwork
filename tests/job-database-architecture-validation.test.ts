@@ -22,32 +22,32 @@ afterEach(() => {
 });
 
 describe("validateJobAgainstAppDatabase", () => {
-  it("reports missing primary database path instead of throwing", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("reports missing primary database path instead of throwing", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: path.join(tmpdir(), "missing", "data.db"),
       command: `sqlite3 "$APP_DB" 'SELECT 1'`,
     });
     expect(issues.some((issue) => issue.rule === "primary-database-missing")).toBe(true);
   });
 
-  it("finds missing referenced tables", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("finds missing referenced tables", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: fixture(),
       command: `sqlite3 "$APP_DB" 'INSERT INTO blog_picks(title) VALUES (?)'`,
     });
     expect(issues.some((issue) => issue.rule === "job-table-missing-on-primary")).toBe(true);
   });
 
-  it("finds INSERT and UPDATE column drift", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("finds INSERT and UPDATE column drift", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: fixture(),
       command: `sqlite3 "$APP_DB" 'UPDATE user_settings SET business_focus = ? WHERE id = 1'`,
     });
     expect(issues.some((issue) => issue.rule === "job-column-missing-on-primary")).toBe(true);
   });
 
-  it("validates required contract tables and columns", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("validates required contract tables and columns", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: fixture(),
       command: "SELECT 1",
       contract: {
@@ -62,8 +62,8 @@ describe("validateJobAgainstAppDatabase", () => {
     );
   });
 
-  it("allows a migration job to create contracted schema", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("allows a migration job to create contracted schema", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: fixture(),
       command: `sqlite3 "$APP_DB" 'ALTER TABLE user_settings ADD COLUMN tone TEXT; CREATE TABLE IF NOT EXISTS blog_picks (id INTEGER PRIMARY KEY)'`,
       contract: {
@@ -76,8 +76,8 @@ describe("validateJobAgainstAppDatabase", () => {
     expect(issues).toHaveLength(0);
   });
 
-  it("accepts matching APP_DB writes with a matching contract", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("accepts matching APP_DB writes with a matching contract", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: fixture(),
       command: `sqlite3 "$APP_DB" 'UPDATE user_settings SET niche = ?, audience = ? WHERE id = 1'`,
       contract: {
@@ -89,7 +89,7 @@ describe("validateJobAgainstAppDatabase", () => {
     expect(issues).toHaveLength(0);
   });
 
-  it("ignores SQL-like prose in agent job commands", () => {
+  it("ignores SQL-like prose in agent job commands", async () => {
     const dbPath = fixture();
     const proseCommand = [
       "Score each deck dimension 1-5.",
@@ -97,7 +97,7 @@ describe("validateJobAgainstAppDatabase", () => {
       "Redirect stderr into a file before running python3 score.py.",
       "Never INSERT INTO a temp table without cleaning up.",
     ].join(" ");
-    const issues = validateJobAgainstAppDatabase({
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: dbPath,
       command: proseCommand,
       jobType: "agent",
@@ -105,8 +105,8 @@ describe("validateJobAgainstAppDatabase", () => {
     expect(issues.filter((issue) => issue.severity === "error")).toHaveLength(0);
   });
 
-  it("extracts sqlite3 SQL and ignores surrounding prose for script jobs", () => {
-    const issues = validateJobAgainstAppDatabase({
+  it("extracts sqlite3 SQL and ignores surrounding prose for script jobs", async () => {
+    const issues = await validateJobAgainstAppDatabase({
       databasePath: fixture(),
       command: [
         "# DO UPDATE to make reruns idempotent — not SQL",
