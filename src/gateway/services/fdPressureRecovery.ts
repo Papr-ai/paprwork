@@ -21,8 +21,12 @@ function readCriticalThreshold(): number {
 }
 
 /**
- * Release watcher-backed fds and re-open them. Returns true when pressure dropped
- * below the critical threshold (or was never critical).
+ * Drop fd-heavy handles (code indexer, Turso replica connections) and re-arm
+ * app change routing. Returns true when the HIGHEST fd number dropped below
+ * the critical threshold (or was never critical).
+ *
+ * Since the tree-watcher migration, watchers hold a constant handful of fds;
+ * the remaining pressure sources are SQLite/Turso handles and sockets.
  */
 export async function attemptFdPressureRecovery(reason: string): Promise<boolean> {
   if (recoveryInFlight) {
@@ -77,6 +81,8 @@ export async function attemptFdPressureRecovery(reason: string): Promise<boolean
         `released ${releasedWatchers} app watcher(s), recovered=${recovered}`,
     );
 
+    // Re-establish app change routing. With the tree watcher this is one OS
+    // handle, so it never lands back in the high-fd range that broke spawn.
     if (releasedWatchers > 0) {
       try {
         const { getAppService } = await import("./AppService.js");

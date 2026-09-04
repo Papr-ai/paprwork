@@ -1,5 +1,5 @@
 /**
- * Snapshot chokidar / watcher-backed resources before and after workspace switch.
+ * Snapshot watcher-backed resources before and after workspace switch.
  */
 
 import { getAppService } from "./AppService.js";

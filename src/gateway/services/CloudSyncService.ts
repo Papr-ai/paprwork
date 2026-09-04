@@ -5,7 +5,7 @@
  * No namespace monorepo git commit or push.
  *
  * Pull: ff-only namespace git for legacy read + Turso/workspace-log materialize.
- * Watch: chokidar on workspace/ + data/ (hash-gated local sync state).
+ * Watch: one recursive OS watch (TreeWatcher) on workspace/ + data/ (hash-gated local sync state).
  * Queue: auto-upload apps and linked jobs via Sync V3 flush (no git push).
  */
 
@@ -671,7 +671,7 @@ export class CloudSyncService implements CloudSyncInternals {
     return classifyRepoSize(measureGitDirBytes(this.paprDir));
   }
 
-  /** Whether the workspace/data chokidar watcher is still running. */
+  /** Whether the workspace/data tree watcher is still running. */
   hasActiveWatcher(): boolean {
     return this.watcher !== null;
   }

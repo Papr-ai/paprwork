@@ -1334,6 +1334,41 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Explicit escape hatch for a phantom `running` flag (no tracked process
+    // after a failed spawn). Refuses when the job is genuinely running.
+    app.post("/api/jobs/clear-stale", async (req, res) => {
+      try {
+        const { jobId } = req.body as { jobId?: string };
+        if (!jobId) {
+          res.status(400).json({ error: "jobId is required" });
+          return;
+        }
+        const jobsService = getJobsService();
+        const job = await jobsService.getJob(jobId);
+        if (!job) {
+          res.status(404).json({ error: `Job not found: ${jobId}` });
+          return;
+        }
+        const cleared = await jobsService.clearStaleRunningState(jobId);
+        const snapshot = await jobsService.getJob(jobId);
+        res.status(cleared ? 200 : 409).json({
+          jobId,
+          cleared,
+          status: snapshot?.status ?? job.status,
+          ...(cleared
+            ? {}
+            : {
+                reason:
+                  job.status === "running"
+                    ? "job has an active process or agent run"
+                    : `job is not running (status: ${job.status})`,
+              }),
+        });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     registerPaprMiniAppSdkRoutes(app);
 
     app.get("/api/access", async (req, res) => {

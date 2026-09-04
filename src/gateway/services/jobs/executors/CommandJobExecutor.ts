@@ -125,11 +125,20 @@ export class CommandJobExecutor implements IJobExecutor {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
-    const proc = spawn(shellPath, shellArgs, {
-      cwd: params.jobDir,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    // spawn() throws SYNCHRONOUSLY for EBADF/EMFILE on macOS (posix_spawn
+    // file-action setup fails before a child exists). Release the DB proxy
+    // lease ourselves — the "error" listener below is never attached.
+    let proc: ReturnType<typeof spawn>;
+    try {
+      proc = spawn(shellPath, shellArgs, {
+        cwd: params.jobDir,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (spawnError) {
+      dbProxy.release();
+      throw spawnError;
+    }
 
     // Revoke the proxy session with the process rather than on a timer, so a
     // finished job cannot keep writing. "close" (not "exit") waits for stdio,

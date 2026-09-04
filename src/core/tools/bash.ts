@@ -1030,7 +1030,7 @@ export async function executeBashCommandStreaming(
       }
 
       if (exitCode === 0) {
-        // App file edits: AppService chokidar watcher handles debounced rebuild + reload.
+        // App file edits: AppService tree watcher handles debounced rebuild + reload.
 
         void import("../../gateway/services/toolCapture/ToolCaptureService.js")
           .then(({ scheduleBashCapture }) =>

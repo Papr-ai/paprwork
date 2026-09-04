@@ -145,6 +145,8 @@ export class JobsService {
   private running: Map<string, ChildProcess>;
   /** In-flight agent/subagent runs (not backed by ChildProcess). */
   private agentRuns: Map<string, { runId: string; startedAtMs: number }>;
+  /** Runs whose process failed to launch at all (spawn EBADF/ENOENT/…). */
+  private launchFailures: Map<string, { runId: string; error: string }>;
   private jobDatabase: JobDatabase;
   private executors: IJobExecutor[];
   private initialized: boolean;
@@ -170,6 +172,7 @@ export class JobsService {
     this.jobs = new Map();
     this.running = new Map();
     this.agentRuns = new Map();
+    this.launchFailures = new Map();
     this.jobDatabase = new JobDatabase();
     this.executors = [
       new CommandJobExecutor(["shell", "bash", "node", "python", "swift"]),
@@ -906,6 +909,17 @@ export class JobsService {
     await this.hydrateJobsFromRuntimeFiles();
     await this.pruneStaleJobEntries();
     await this.reconcileRegistryAfterSync();
+    // Explicit reload is a user signal: drop phantom `running` flags now
+    // instead of waiting for the periodic stale watchdog (#139 bug 3).
+    let clearedPhantom = 0;
+    for (const [jobId, job] of this.jobs.entries()) {
+      if (job.status !== "running") continue;
+      if (this.running.has(jobId) || this.agentRuns.has(jobId)) continue;
+      if (await this.clearStaleRunningState(jobId)) clearedPhantom += 1;
+    }
+    if (clearedPhantom > 0) {
+      console.log(`[JobsService] Cleared ${clearedPhantom} phantom running job(s) on reload`);
+    }
     console.log(`[JobsService] Reloaded ${this.jobs.size} jobs from disk`);
 
     void import("./JobsScheduler.js")
@@ -2521,6 +2535,7 @@ export class JobsService {
       );
     }
     this.running.set(job.id, proc);
+    this.launchFailures.delete(job.id);
 
     const MAX_OUTPUT_BYTES = 32 * 1024; // 32KB cap
     const outputChunks: string[] = [];
@@ -2673,7 +2688,19 @@ export class JobsService {
 
       const maxAttempts = Math.max(1, job.retries?.maxAttempts ?? 1);
       const backoffMs = Math.max(0, job.retries?.backoffMs ?? 1000);
-      const runSessionStartedAt = new Date().toISOString();
+      // Stale-running anchor. If the job is still flagged `running` from a
+      // previous session whose process never launched (spawn EBADF), keep the
+      // OLD anchor: re-stamping it on every retry restarted the 20s stale
+      // watchdog and kept the job wedged forever (#139 bug 3).
+      const priorSnapshot = this.jobs.get(job.id);
+      const priorPhantomRunning =
+        priorSnapshot?.status === "running" &&
+        !this.running.has(job.id) &&
+        !this.agentRuns.has(job.id) &&
+        typeof priorSnapshot.runSessionStartedAt === "string";
+      const runSessionStartedAt = priorPhantomRunning
+        ? (priorSnapshot!.runSessionStartedAt as string)
+        : new Date().toISOString();
 
       for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         const attemptStart = performance.now();
@@ -2707,6 +2734,10 @@ export class JobsService {
           if (isSpawnResourceError(err)) {
             notifySpawnResourceError(err, `job ${job.id} runSingleAttempt`);
           }
+          // The process never existed. Persist that immediately so
+          // startJobRunForApi (and the UI) can report "failed to start" instead
+          // of an optimistic "running" (#139 bug 2).
+          this.launchFailures.set(job.id, { runId, error: message });
           result = { exitCode: 1, errorMessage: message };
         }
         const status: JobStatus =
@@ -3019,6 +3050,7 @@ export class JobsService {
     runtimeParams?: Record<string, string>,
   ): Promise<{ jobId: string; status: JobStatus; error?: string }> {
     await this.preflightJobRun(jobId);
+    this.launchFailures.delete(jobId);
 
     const runPromise = this.runJob(jobId, runtimeParams).catch(
       async (err: unknown) => {
@@ -3034,37 +3066,75 @@ export class JobsService {
       },
     );
 
+    // "running" is persisted BEFORE the executor spawns. Returning on that
+    // write alone reported 200 { status: "running" } for jobs whose spawn
+    // failed milliseconds later (#139 bug 2). Wait until either the process
+    // is actually tracked (spawn succeeded) or the launch is known to have
+    // failed / the run already finished.
     const deadline = Date.now() + 12_000;
     while (Date.now() < deadline) {
+      const launchFailure = this.launchFailures.get(jobId);
+      if (launchFailure) {
+        void runPromise.catch(() => undefined);
+        return { jobId, status: "failed", error: launchFailure.error };
+      }
       const job = await this.getJob(jobId);
       if (!job) {
         break;
       }
       if (job.status === "failed" && job.error) {
+        void runPromise.catch(() => undefined);
         return { jobId, status: "failed", error: job.error };
       }
       if (job.status === "completed") {
         void runPromise.catch(() => undefined);
         return { jobId, status: "completed" };
       }
-      if (job.status === "running" && job.currentExecutionId) {
-        await new Promise((resolve) => setTimeout(resolve, 400));
-        const again = await this.getJob(jobId);
-        if (again?.status === "failed") {
-          return {
-            jobId,
-            status: "failed",
-            error: again.error ?? "Job failed to start",
-          };
-        }
+      const tracked = this.running.has(jobId) || this.agentRuns.has(jobId);
+      if (job.status === "running" && job.currentExecutionId && tracked) {
         void runPromise.catch(() => undefined);
         return { jobId, status: "running" };
       }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
 
+    // Deadline hit without a tracked process: dependency chain or key prompt
+    // may still be in progress. Report honestly rather than guessing.
+    const snapshot = await this.getJob(jobId);
     void runPromise.catch(() => undefined);
-    return { jobId, status: "running" };
+    if (snapshot?.status === "failed") {
+      return { jobId, status: "failed", error: snapshot.error ?? "Job failed to start" };
+    }
+    return { jobId, status: snapshot?.status ?? "running" };
+  }
+
+  /**
+   * Explicitly clear a phantom `running` flag (no tracked process, no agent
+   * run) so a job can be re-run without waiting for the stale watchdog.
+   * Returns false when the job is genuinely running or not `running` at all.
+   */
+  async clearStaleRunningState(jobId: string): Promise<boolean> {
+    const job = this.jobs.get(jobId);
+    if (!job || job.status !== "running") {
+      return false;
+    }
+    if (this.running.has(jobId) || this.agentRuns.has(jobId)) {
+      return false;
+    }
+    await this.appendLog(
+      jobId,
+      "Stale running state cleared explicitly: no active process or agent run was tracked.",
+    );
+    await this.setJobStatus(jobId, "failed", {
+      error:
+        "Stale running state — no process was tracked for this run. Run again if needed.",
+      currentExecutionId: undefined,
+      currentAttempt: undefined,
+      maxAttempts: undefined,
+      runSessionStartedAt: undefined,
+    });
+    this.launchFailures.delete(jobId);
+    return true;
   }
 
   /** Run on Papr Cloud (memory server) while desktop is awake — for testing cloud execution. */
