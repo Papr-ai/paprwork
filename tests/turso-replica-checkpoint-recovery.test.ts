@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installInProcessSyncWorker } from "./helpers/inProcessSyncWorker.js";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -32,6 +33,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -66,6 +68,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -117,6 +120,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -170,6 +174,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -213,6 +218,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
         stats: vi.fn(async () => ({ cdcOperations: 2 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),

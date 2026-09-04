@@ -116,6 +116,9 @@ export const AmplitudeEvents = {
 
   // Sync V3 cutover metrics (Phase 0 — auto-rollback triggers)
   SYNC_V3_METRIC: "paprwork_sync_v3_metric",
+
+  // Plan A: the @tursodatabase/sync worker child died (native panic). Gateway survived.
+  TURSO_SYNC_WORKER_CRASH: "paprwork_turso_sync_worker_crash",
 } as const;
 
 // ============================================

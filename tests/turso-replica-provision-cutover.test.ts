@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installInProcessSyncWorker } from "./helpers/inProcessSyncWorker.js";
 
 describe("attachTursoReplicaInPlaceForCutover", () => {
   afterEach(() => {
@@ -44,6 +45,7 @@ describe("attachTursoReplicaInPlaceForCutover", () => {
         return { exec, pull, push, close };
       }),
     }));
+    installInProcessSyncWorker();
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaFileGuard.js", () => ({
       removeTursoReplicaLocalFiles: removeAll,
       removeTursoReplicaSidecarsOnly: removeSidecars,
@@ -115,6 +117,7 @@ describe("provisionTursoReplicaForCutover", () => {
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaConnect.js", () => ({
       connectTursoReplica: vi.fn(async () => ({ exec, pull, push, close })),
     }));
+    installInProcessSyncWorker();
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaFileGuard.js", () => ({
       removeTursoReplicaLocalFiles: vi.fn(),
     }));
@@ -168,6 +171,7 @@ describe("provisionTursoReplicaForCutover", () => {
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaConnect.js", () => ({
       connectTursoReplica: vi.fn(async () => ({ exec, pull, push, close })),
     }));
+    installInProcessSyncWorker();
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaFileGuard.js", () => ({
       removeTursoReplicaLocalFiles: vi.fn(),
     }));

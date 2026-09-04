@@ -1,31 +1,34 @@
 /**
- * Plan A — Turso Sync replica connections (one open Database per local db path).
+ * Plan A — Turso Sync replica operations.
+ *
+ * This service never loads `@tursodatabase/sync`. Every operation is forwarded to the sync
+ * worker child process (see TursoReplicaSyncWorkerClient), which owns the native engine and
+ * the open Database handles. A Rust panic in the engine kills the worker, surfaces here as
+ * a normal `TursoSyncWorkerCrashError`, and is repaired by resetting sync sidecars — the
+ * gateway process cannot be taken down by this module.
+ *
+ * Public API is unchanged from the in-process implementation.
  */
 
 import * as fs from "fs";
 import * as path from "path";
-import type { Database } from "@tursodatabase/sync";
 import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
-import {
-  connectTursoReplica,
-  isTursoHostNotReadyError,
-} from "./tursoReplicaConnect.js";
 import type {
   TursoReplicaPushResponse,
   TursoReplicaSyncStatus,
   TursoReplicaWriteResult,
   TursoReplicaWriteOptions,
   DatabaseSyncMode,
-  TursoReplicaDatabaseStats,
 } from "./tursoReplicaTypes.js";
 import {
   isTursoReplicaOnline,
   isTursoReplicaSyncFeatureEnabled,
-  isTursoSyncIsolationEnabled,
 } from "../../utils/tursoReplicaEnabled.js";
-import { runIsolatedReplicaSync } from "./tursoReplicaIsolatedSync.js";
-import { shutdownTursoReplicaSyncWorker } from "./TursoReplicaSyncWorkerClient.js";
+import {
+  getTursoReplicaSyncWorkerClient,
+  shutdownTursoReplicaSyncWorker,
+} from "./TursoReplicaSyncWorkerClient.js";
 import {
   markTursoReplicaReachable,
   noteTursoReplicaTransportError,
@@ -45,11 +48,12 @@ import {
   repairReplicaSidecarsOnCheckpointError,
   resetReplicaSidecars,
 } from "./tursoReplicaSidecarWedge.js";
+import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
 
-const REPLICA_STATUS_OPEN_TIMEOUT_MS = 12_000;
-const REPLICA_PULL_TIMEOUT_MS = 15_000;
+const REPLICA_STATUS_TIMEOUT_MS = 12_000;
+const REPLICA_SYNC_TIMEOUT_MS = 15_000;
+const REPLICA_QUERY_TIMEOUT_MS = 30_000;
 const REPLICA_OPERATION_TIMEOUT_MS = 30_000;
-const REPLICA_CONNECT_TIMEOUT_MS = 20_000;
 
 function withTimeout<T>(
   promise: Promise<T>,
@@ -73,18 +77,19 @@ function withTimeout<T>(
   });
 }
 
-interface OpenReplicaHandle {
-  db: Database;
-  tursoDatabase: string;
-  localPath: string;
-}
-
 interface RunWriteParams {
   localPath: string;
   tursoDatabase: string;
   sql: string;
   params?: unknown[];
   writeOptions?: TursoReplicaWriteOptions;
+}
+
+interface OpenSpec {
+  localPath: string;
+  tursoUrl: string;
+  authToken: string;
+  bootstrapIfEmpty: boolean;
 }
 
 function normalizeReplicaRows(rows: unknown[]): Record<string, unknown>[] {
@@ -103,29 +108,6 @@ function normalizeDbPath(dbPath: string): string {
   return path.normalize(dbPath);
 }
 
-function extractWriteMetrics(runResult: unknown): {
-  changes: number;
-  lastInsertRowid: number;
-} {
-  if (runResult && typeof runResult === "object") {
-    const row = runResult as Record<string, unknown>;
-    const changes =
-      typeof row.changes === "number"
-        ? row.changes
-        : typeof row.rowsAffected === "number"
-          ? row.rowsAffected
-          : 0;
-    const lastInsertRowid =
-      typeof row.lastInsertRowid === "number"
-        ? row.lastInsertRowid
-        : typeof row.lastInsertRowid === "bigint"
-          ? Number(row.lastInsertRowid)
-          : 0;
-    return { changes, lastInsertRowid };
-  }
-  return { changes: 0, lastInsertRowid: 0 };
-}
-
 function formatReplicaPushError(message: string): string {
   if (message.includes("target_pull_gen > source_pull_gen")) {
     return (
@@ -137,9 +119,11 @@ function formatReplicaPushError(message: string): string {
 }
 
 export class TursoReplicaService {
-  private readonly openByPath = new Map<string, OpenReplicaHandle>();
-  private readonly connectPromises = new Map<string, Promise<OpenReplicaHandle>>();
   private readonly operationChains = new Map<string, Promise<unknown>>();
+  /** Paths the worker has been asked to open at least once this process (for drain logging). */
+  private readonly touchedPaths = new Set<string>();
+
+  // ---- writes ---------------------------------------------------------------------------
 
   async runWrite(params: RunWriteParams): Promise<TursoReplicaWriteResult> {
     return this.runStatements({
@@ -158,44 +142,19 @@ export class TursoReplicaService {
   }): Promise<TursoReplicaWriteResult> {
     const pushAfterWrite = options.writeOptions?.pushAfterWrite !== false;
     return this.withSerializedPath(options.localPath, async () => {
-      const online = isTursoReplicaOnline();
-      if (online) {
-        await this.ensureSyncableSidecars(options.localPath, "write sync");
-      }
-      const handle = await this.getOrOpen({
-        localPath: options.localPath,
-        tursoDatabase: options.tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(options.localPath),
+      const spec = await this.openSpec(options.localPath, options.tursoDatabase);
+      const client = getTursoReplicaSyncWorkerClient();
+
+      const metrics = await client.write({
+        ...spec,
+        statements: options.statements.map((s) => ({ sql: s.sql, params: s.params })),
+        timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
       });
 
-      let lastMetrics = { changes: 0, lastInsertRowid: 0 };
-      for (const statement of options.statements) {
-        const stmt = await handle.db.prepare(statement.sql);
-        const runResult = await stmt.run(...(statement.params ?? []));
-        lastMetrics = extractWriteMetrics(runResult);
-      }
-
-      let pendingPush = false;
-      if (online && pushAfterWrite) {
-        try {
-          await this.pullAndPushReplicaWithRecovery(
-            options.localPath,
-            options.tursoDatabase,
-            handle,
-          );
-        } catch (error) {
-          noteTursoReplicaTransportError(error);
-          throw new Error(
-            `Turso replica push failed: ${(error as Error).message}`,
-          );
-        }
-      } else {
-        pendingPush = true;
-      }
-
+      const pendingPush = await this.syncAfterWrite(spec, pushAfterWrite);
       return {
-        changes: lastMetrics.changes,
-        lastInsertRowid: lastMetrics.lastInsertRowid,
+        changes: metrics.changes,
+        lastInsertRowid: metrics.lastInsertRowid,
         pendingPush,
         backend: "turso-replica",
       };
@@ -210,39 +169,31 @@ export class TursoReplicaService {
   ): Promise<{ pendingPush: boolean }> {
     const pushAfterWrite = writeOptions?.pushAfterWrite !== false;
     return this.withSerializedPath(localPath, async () => {
-      const online = isTursoReplicaOnline();
-      if (online) {
-        await this.ensureSyncableSidecars(localPath, "exec sync");
-      }
-      const handle = await this.getOrOpen({
-        localPath,
-        tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(localPath),
+      const spec = await this.openSpec(localPath, tursoDatabase);
+      await getTursoReplicaSyncWorkerClient().exec({
+        ...spec,
+        sql,
+        timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
       });
-
-      await handle.db.exec(sql);
-
-      let pendingPush = false;
-      if (online && pushAfterWrite) {
-        try {
-          await this.pullAndPushReplicaWithRecovery(
-            localPath,
-            tursoDatabase,
-            handle,
-          );
-        } catch (error) {
-          noteTursoReplicaTransportError(error);
-          throw new Error(
-            `Turso replica push failed: ${(error as Error).message}`,
-          );
-        }
-      } else {
-        pendingPush = true;
-      }
-
+      const pendingPush = await this.syncAfterWrite(spec, pushAfterWrite);
       return { pendingPush };
     });
   }
+
+  private async syncAfterWrite(spec: OpenSpec, pushAfterWrite: boolean): Promise<boolean> {
+    if (!isTursoReplicaOnline() || !pushAfterWrite) {
+      return true;
+    }
+    try {
+      await this.syncWithRecovery(spec, "pullPush");
+      return false;
+    } catch (error) {
+      noteTursoReplicaTransportError(error);
+      throw new Error(`Turso replica push failed: ${(error as Error).message}`);
+    }
+  }
+
+  // ---- sync -----------------------------------------------------------------------------
 
   async push(
     localPath: string,
@@ -251,33 +202,14 @@ export class TursoReplicaService {
   ): Promise<TursoReplicaPushResponse> {
     try {
       await this.withSerializedPath(localPath, async () => {
-        if (isTursoReplicaOnline()) {
-          await this.ensureSyncableSidecars(localPath, "push");
-          if (isTursoSyncIsolationEnabled()) {
-            await this.syncOutOfProcess(
-              localPath,
-              tursoDatabase,
-              options?.pullBeforePush === false ? "push" : "pullPush",
-            );
-            return;
-          }
+        if (!isTursoReplicaOnline()) {
+          return;
         }
-        const handle = await this.getOrOpen({
-          localPath,
-          tursoDatabase,
-          bootstrapIfEmpty: !fs.existsSync(localPath),
-        });
-        if (isTursoReplicaOnline()) {
-          if (options?.pullBeforePush === false) {
-            await this.pushOnlyWithRecovery(localPath, tursoDatabase, handle);
-          } else {
-            await this.pullAndPushReplicaWithRecovery(
-              localPath,
-              tursoDatabase,
-              handle,
-            );
-          }
-        }
+        const spec = await this.openSpec(localPath, tursoDatabase);
+        await this.syncWithRecovery(
+          spec,
+          options?.pullBeforePush === false ? "push" : "pullPush",
+        );
       });
       return { ok: true };
     } catch (error) {
@@ -288,62 +220,60 @@ export class TursoReplicaService {
 
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
     return this.withSerializedPath(localPath, async () => {
-      try {
-        await this.ensureSyncableSidecars(localPath, "pull");
-        if (isTursoSyncIsolationEnabled()) {
-          return await this.syncOutOfProcess(localPath, tursoDatabase, "pull");
-        }
-        const handle = await this.getOrOpen({
-          localPath,
-          tursoDatabase,
-          bootstrapIfEmpty: !fs.existsSync(localPath),
-        });
-        const pulled = await withTimeout(
-          handle.db.pull(),
-          REPLICA_PULL_TIMEOUT_MS,
-          "replica pull",
-        );
-        markTursoReplicaReachable();
-        return pulled;
-      } catch (error) {
-        if (!isReplicaCheckpointWalError((error as Error).message)) {
-          throw error;
-        }
-        await this.recoverSidecarsAfterCheckpointError(localPath);
-        const handle = await this.getOrOpen({
-          localPath,
-          tursoDatabase,
-          bootstrapIfEmpty: !fs.existsSync(localPath),
-        });
-        const pulled = await withTimeout(
-          handle.db.pull(),
-          REPLICA_PULL_TIMEOUT_MS,
-          "replica pull after sidecar recovery",
-        );
-        markTursoReplicaReachable();
-        return pulled;
-      }
+      const spec = await this.openSpec(localPath, tursoDatabase);
+      return this.syncWithRecovery(spec, "pull");
     });
   }
 
-  async readCdcOperations(
-    localPath: string,
-    tursoDatabase: string,
-  ): Promise<number> {
+  /**
+   * pull/push against the worker. Engine *errors* (not panics) about an unsatisfiable
+   * checkpoint are recovered by resetting the sidecars and retrying once. Panics are
+   * handled below us in the worker client.
+   */
+  private async syncWithRecovery(
+    spec: OpenSpec,
+    op: "pull" | "push" | "pullPush",
+  ): Promise<boolean> {
+    const client = getTursoReplicaSyncWorkerClient();
+    const run = () =>
+      withTimeout(
+        client.sync({ ...spec, timeoutMs: REPLICA_SYNC_TIMEOUT_MS }, op),
+        REPLICA_SYNC_TIMEOUT_MS + 1_000,
+        `replica ${op}`,
+      );
+    try {
+      const pulled = await run();
+      markTursoReplicaReachable();
+      return pulled;
+    } catch (error) {
+      if (!isReplicaCheckpointWalError((error as Error).message)) {
+        throw error;
+      }
+      await client.close(spec.localPath);
+      if (repairReplicaSidecarsOnCheckpointError(spec.localPath)) {
+        console.warn(
+          `[TursoReplicaService] Reset sync sidecars after checkpoint error: ${spec.localPath}`,
+        );
+      }
+      const pulled = await run();
+      markTursoReplicaReachable();
+      return pulled;
+    }
+  }
+
+  async readCdcOperations(localPath: string, tursoDatabase: string): Promise<number> {
     if (!isTursoReplicaSyncFeatureEnabled() || !fs.existsSync(localPath)) {
       return 0;
     }
     try {
       return await this.withSerializedPath(localPath, async () => {
-        const handle = await this.getOrOpen({
-          localPath,
-          tursoDatabase,
+        const spec = await this.openSpec(localPath, tursoDatabase, {
           bootstrapIfEmpty: false,
         });
-        const stats = await handle.db.stats();
-        return stats && typeof stats === "object" && "cdcOperations" in stats
-          ? Number((stats as TursoReplicaDatabaseStats).cdcOperations)
-          : 0;
+        return getTursoReplicaSyncWorkerClient().stats({
+          ...spec,
+          timeoutMs: REPLICA_STATUS_TIMEOUT_MS,
+        });
       });
     } catch {
       return 0;
@@ -357,6 +287,8 @@ export class TursoReplicaService {
     void tursoDatabase;
   }
 
+  // ---- reads ----------------------------------------------------------------------------
+
   async runQuery(options: {
     localPath: string;
     tursoDatabase: string;
@@ -366,44 +298,20 @@ export class TursoReplicaService {
   }): Promise<import("../DbQueryPool.js").QueryResult> {
     return this.withSerializedPath(options.localPath, async () => {
       const executeRead = async (pullFirst: boolean) => {
-        const shouldPull = isTursoReplicaOnline() && pullFirst;
-        const isolated = isTursoSyncIsolationEnabled();
-
-        // Isolated sync has to run before we take a handle — the worker needs the files.
-        if (shouldPull && isolated) {
-          await this.syncOutOfProcess(
-            options.localPath,
-            options.tursoDatabase,
-            "pull",
-          );
+        const spec = await this.openSpec(options.localPath, options.tursoDatabase);
+        const client = getTursoReplicaSyncWorkerClient();
+        if (isTursoReplicaOnline() && pullFirst) {
+          await this.syncWithRecovery(spec, "pull");
         }
-
-        const handle = await this.getOrOpen({
-          localPath: options.localPath,
-          tursoDatabase: options.tursoDatabase,
-          bootstrapIfEmpty: !fs.existsSync(options.localPath),
+        const { rows: rawRows } = await client.query({
+          ...spec,
+          sql: options.sql,
+          params: options.params,
+          timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
         });
-
-        if (shouldPull && !isolated) {
-          await withTimeout(
-            handle.db.pull(),
-            REPLICA_PULL_TIMEOUT_MS,
-            "replica pull before read",
-          );
-        }
-
-        const stmt = await handle.db.prepare(options.sql);
-        const rawRows = await stmt.all(...(options.params ?? []));
-        const rows = normalizeReplicaRows(
-          Array.isArray(rawRows) ? rawRows : [],
-        );
+        const rows = normalizeReplicaRows(rawRows);
         const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
-
-        return {
-          rows,
-          columns,
-          count: rows.length,
-        };
+        return { rows, columns, count: rows.length };
       };
 
       try {
@@ -413,24 +321,14 @@ export class TursoReplicaService {
         if (!isReplicaReadTransportError(message)) {
           throw error;
         }
-
         console.warn(
           `[TursoReplicaService] Read wedge on ${options.tursoDatabase} — ` +
             `recovering: ${message.slice(0, 160)}`,
         );
-        await this.close(options.localPath);
-        if (repairReplicaSidecarWedge(options.localPath)) {
-          console.warn(
-            `[TursoReplicaService] Reset wedged sync sidecars during read recovery: ${options.localPath}`,
-          );
-        }
-
+        await this.recoverReadWedge(options.localPath);
         try {
-          await this.pullForRecovery(
-            options.localPath,
-            options.tursoDatabase,
-            "replica recovery pull",
-          );
+          const spec = await this.openSpec(options.localPath, options.tursoDatabase);
+          await this.syncWithRecovery(spec, "pull");
           await drainInboundReplicaCdcIfCaughtUp({
             source: {
               id: options.tursoDatabase,
@@ -458,53 +356,35 @@ export class TursoReplicaService {
   ): Promise<import("../DbQueryPool.js").SchemaResult> {
     return this.withSerializedPath(localPath, async () => {
       const executeSchema = async (pullFirst: boolean) => {
-        const shouldPull = isTursoReplicaOnline() && pullFirst;
-        const isolated = isTursoSyncIsolationEnabled();
-
-        if (shouldPull && isolated) {
-          await this.syncOutOfProcess(localPath, tursoDatabase, "pull");
+        const spec = await this.openSpec(localPath, tursoDatabase);
+        const client = getTursoReplicaSyncWorkerClient();
+        if (isTursoReplicaOnline() && pullFirst) {
+          await this.syncWithRecovery(spec, "pull");
         }
+        const query = (sql: string) =>
+          client.query({ ...spec, sql, timeoutMs: REPLICA_QUERY_TIMEOUT_MS });
 
-        const handle = await this.getOrOpen({
-          localPath,
-          tursoDatabase,
-          bootstrapIfEmpty: !fs.existsSync(localPath),
-        });
-
-        if (shouldPull && !isolated) {
-          await withTimeout(
-            handle.db.pull(),
-            REPLICA_PULL_TIMEOUT_MS,
-            "replica pull before schema",
-          );
-        }
-
-        const listStmt = await handle.db.prepare(
+        const { rows: tableRows } = await query(
           "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
         );
-        const tableRows = await listStmt.all();
-        const tableNames = normalizeReplicaRows(
-          Array.isArray(tableRows) ? tableRows : [],
-        )
+        const tableNames = normalizeReplicaRows(tableRows)
           .map((row) => String(row.name ?? ""))
           .filter((name) => name.length > 0);
 
         const tables: import("../DbQueryPool.js").SchemaTable[] = [];
         for (const tableName of tableNames) {
-          const infoStmt = await handle.db.prepare(
+          const { rows: colRows } = await query(
             `PRAGMA table_info(${quoteIdent(tableName)})`,
           );
-          const colRows = await infoStmt.all();
-          const columns = normalizeReplicaRows(
-            Array.isArray(colRows) ? colRows : [],
-          ).map((column) => ({
-            name: String(column.name ?? ""),
-            type: String(column.type ?? ""),
-            pk: Number(column.pk ?? 0) === 1,
-          }));
-          tables.push({ table: tableName, columns });
+          tables.push({
+            table: tableName,
+            columns: normalizeReplicaRows(colRows).map((column) => ({
+              name: String(column.name ?? ""),
+              type: String(column.type ?? ""),
+              pk: Number(column.pk ?? 0) === 1,
+            })),
+          });
         }
-
         return { tables };
       };
 
@@ -515,19 +395,10 @@ export class TursoReplicaService {
         if (!isReplicaReadTransportError(message)) {
           throw error;
         }
-
-        await this.close(localPath);
-        if (repairReplicaSidecarWedge(localPath)) {
-          console.warn(
-            `[TursoReplicaService] Reset wedged sync sidecars during schema recovery: ${localPath}`,
-          );
-        }
+        await this.recoverReadWedge(localPath);
         try {
-          await this.pullForRecovery(
-            localPath,
-            tursoDatabase,
-            "replica recovery pull",
-          );
+          const spec = await this.openSpec(localPath, tursoDatabase);
+          await this.syncWithRecovery(spec, "pull");
           return await executeSchema(false);
         } catch {
           throw error;
@@ -535,6 +406,17 @@ export class TursoReplicaService {
       }
     });
   }
+
+  private async recoverReadWedge(localPath: string): Promise<void> {
+    await getTursoReplicaSyncWorkerClient().close(localPath);
+    if (repairReplicaSidecarWedge(localPath)) {
+      console.warn(
+        `[TursoReplicaService] Reset wedged sync sidecars during read recovery: ${localPath}`,
+      );
+    }
+  }
+
+  // ---- status ---------------------------------------------------------------------------
 
   async syncStatus(options: {
     localPath: string;
@@ -545,52 +427,27 @@ export class TursoReplicaService {
     lastPushError?: string | null;
     lastReplicaPushAt?: string | null;
     lastReplicaLocalMutationAt?: string | null;
-    /** When set, attempt ledger-gated inbound CDC drain before reporting pending. */
+    /** Accepted for API compatibility; inbound drain is driven by callers. */
     source?: AppDataSource;
   }): Promise<TursoReplicaSyncStatus> {
     const online = isTursoReplicaOnline();
     const syncMode = options.syncMode ?? "legacy";
-    let stats = null;
     let pendingOps = 0;
-    let handle: OpenReplicaHandle | null = null;
 
     if (isTursoReplicaSyncFeatureEnabled() && fs.existsSync(options.localPath)) {
-      try {
-        await this.withSerializedPath(options.localPath, async () => {
-          handle = await withTimeout(
-            this.getOrOpen({
-              localPath: options.localPath,
-              tursoDatabase: options.tursoDatabase,
-              bootstrapIfEmpty: false,
-              syncOnOpen: false,
-            }),
-            REPLICA_STATUS_OPEN_TIMEOUT_MS,
-            "replica sync status open",
-          );
-          stats = await handle.db.stats();
-          pendingOps =
-            stats && typeof stats === "object" && "cdcOperations" in stats
-              ? Number((stats as TursoReplicaDatabaseStats).cdcOperations)
-              : 0;
-        });
-      } catch {
-        /* status best-effort */
-      }
+      pendingOps = await this.readCdcOperations(options.localPath, options.tursoDatabase);
     }
 
     const lastPushError = options.lastPushError ?? null;
     const migrationConflict =
       lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
 
-    const pushAtMs = options.lastReplicaPushAt
-      ? Date.parse(options.lastReplicaPushAt)
-      : 0;
+    const pushAtMs = options.lastReplicaPushAt ? Date.parse(options.lastReplicaPushAt) : 0;
     const mutationAtMs = options.lastReplicaLocalMutationAt
       ? Date.parse(options.lastReplicaLocalMutationAt)
       : 0;
     const pushCoversLocalMutations =
-      pushAtMs > 0 &&
-      (mutationAtMs === 0 || pushAtMs >= mutationAtMs);
+      pushAtMs > 0 && (mutationAtMs === 0 || pushAtMs >= mutationAtMs);
 
     let pendingPush = pendingOps > 0 || Boolean(lastPushError);
     if (
@@ -613,191 +470,73 @@ export class TursoReplicaService {
       cutoverBlocked: options.cutoverBlocked ?? false,
       cutoverBlockReason: options.cutoverBlockReason ?? null,
       sidecarWedge: detectReplicaSidecarWedge(options.localPath),
-      stats,
+      stats: pendingOps > 0 || fs.existsSync(options.localPath)
+        ? { cdcOperations: pendingOps }
+        : null,
     };
   }
 
+  // ---- lifecycle ------------------------------------------------------------------------
+
+  /** Ask the worker to release its handle for this path (callers that need the files). */
   async close(localPath: string): Promise<void> {
     const key = normalizeDbPath(localPath);
-    const handle = this.openByPath.get(key);
-    if (!handle) {
-      return;
-    }
-    this.openByPath.delete(key);
-    this.connectPromises.delete(key);
-    await handle.db.close();
+    this.touchedPaths.delete(key);
+    await getTursoReplicaSyncWorkerClient().close(localPath);
   }
 
   getOpenConnectionCount(): number {
-    return this.openByPath.size;
+    return this.touchedPaths.size;
   }
 
   async closeAll(): Promise<void> {
-    const paths = [...this.openByPath.keys()];
-    for (const key of paths) {
-      const handle = this.openByPath.get(key);
-      if (handle) {
-        await handle.db.close();
-      }
-    }
-    this.openByPath.clear();
-    this.connectPromises.clear();
+    this.touchedPaths.clear();
     this.operationChains.clear();
+    await shutdownTursoReplicaSyncWorker();
   }
 
-  /** Pull remote generation before push — avoids target_pull_gen > source_pull_gen drift. */
-  private async pullAndPushReplica(handle: OpenReplicaHandle): Promise<void> {
-    await withTimeout(
-      handle.db.pull(),
-      REPLICA_PULL_TIMEOUT_MS,
-      "replica pull before push",
-    );
-    await withTimeout(
-      handle.db.push(),
-      REPLICA_PULL_TIMEOUT_MS,
-      "replica push",
-    );
-    markTursoReplicaReachable();
-  }
+  // ---- internals ------------------------------------------------------------------------
 
-  private async pullAndPushReplicaWithRecovery(
+  private async openSpec(
     localPath: string,
     tursoDatabase: string,
-    handle: OpenReplicaHandle,
-  ): Promise<void> {
-    if (isTursoSyncIsolationEnabled()) {
-      // Releases `handle` — callers must not use it after this point.
-      await this.syncOutOfProcess(localPath, tursoDatabase, "pullPush");
-      return;
+    overrides?: { bootstrapIfEmpty?: boolean },
+  ): Promise<OpenSpec> {
+    const bridge = ensureTursoSyncBridge();
+    if (!bridge.enabled) {
+      throw new Error("Turso sync bridge not available — sign in to Papr");
     }
-    try {
-      await this.pullAndPushReplica(handle);
-    } catch (error) {
-      if (!isReplicaCheckpointWalError((error as Error).message)) {
-        throw error;
-      }
-      await this.recoverSidecarsAfterCheckpointError(localPath);
-      const fresh = await this.getOrOpen({
-        localPath,
-        tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(localPath),
-      });
-      await this.pullAndPushReplica(fresh);
-    }
-  }
-
-  private async pushOnlyWithRecovery(
-    localPath: string,
-    tursoDatabase: string,
-    handle: OpenReplicaHandle,
-  ): Promise<void> {
-    if (isTursoSyncIsolationEnabled()) {
-      // Releases `handle` — callers must not use it after this point.
-      await this.syncOutOfProcess(localPath, tursoDatabase, "push");
-      return;
-    }
-    try {
-      await withTimeout(
-        handle.db.push(),
-        REPLICA_PULL_TIMEOUT_MS,
-        "replica push",
-      );
-      markTursoReplicaReachable();
-    } catch (error) {
-      if (!isReplicaCheckpointWalError((error as Error).message)) {
-        throw error;
-      }
-      await this.recoverSidecarsAfterCheckpointError(localPath);
-      const fresh = await this.getOrOpen({
-        localPath,
-        tursoDatabase,
-        bootstrapIfEmpty: !fs.existsSync(localPath),
-      });
-      await withTimeout(
-        fresh.db.push(),
-        REPLICA_PULL_TIMEOUT_MS,
-        "replica push after sidecar recovery",
-      );
-      markTursoReplicaReachable();
-    }
-  }
-
-  /**
-   * Precondition for every sync call: the watermark in `-info` must name a frame the `-wal`
-   * actually holds.
-   *
-   * An unsatisfiable watermark makes the engine abort the process from Rust, so there is no
-   * error to recover from afterwards — the check has to happen before pull()/push() is reached.
-   * Closing first matters: the repair unlinks the `-wal` the open handle is holding.
-   */
-  private async ensureSyncableSidecars(
-    localPath: string,
-    context: string,
-  ): Promise<boolean> {
+    // Cheap, file-only precheck for the one corruption shape we can see from outside: an
+    // `-info` watermark past the end of `-wal`. Catching it here saves a worker crash +
+    // respawn. Anything we *can't* see is caught by the worker crash policy instead.
+    const key = normalizeDbPath(localPath);
     const report = inspectReplicaSidecarWedge(localPath);
-    if (!report.wedged) {
-      return false;
-    }
-    await this.close(localPath);
-    resetReplicaSidecars(localPath);
-    console.warn(
-      `[TursoReplicaService] Reset wedged sync sidecars before ${context}: ` +
-        `${localPath} — ${describeReplicaSidecarWedge(report)}`,
-    );
-    return true;
-  }
-
-  /**
-   * Hand this replica's sync to the worker process.
-   *
-   * Our handle is closed first and deliberately not reopened: the worker owns the replica
-   * files for the duration, and the next read/write reopens lazily through getOrOpen(). Any
-   * handle the caller was holding is stale once this returns.
-   */
-  private async syncOutOfProcess(
-    localPath: string,
-    tursoDatabase: string,
-    op: "pull" | "push" | "pullPush",
-  ): Promise<boolean> {
-    await this.close(localPath);
-    const pulled = await runIsolatedReplicaSync({
-      op,
-      localPath,
-      tursoDatabase,
-    });
-    markTursoReplicaReachable();
-    return pulled;
-  }
-
-  /**
-   * Pull after a read wedge. Worth isolating: the replica just failed a read, so this is
-   * the pull most likely to hand the engine an inconsistent WAL.
-   */
-  private async pullForRecovery(
-    localPath: string,
-    tursoDatabase: string,
-    label: string,
-  ): Promise<void> {
-    if (isTursoSyncIsolationEnabled()) {
-      await this.syncOutOfProcess(localPath, tursoDatabase, "pull");
-      return;
-    }
-    const handle = await this.getOrOpen({
-      localPath,
-      tursoDatabase,
-      bootstrapIfEmpty: !fs.existsSync(localPath),
-    });
-    await withTimeout(handle.db.pull(), REPLICA_PULL_TIMEOUT_MS, label);
-  }
-
-  private async recoverSidecarsAfterCheckpointError(
-    localPath: string,
-  ): Promise<void> {
-    await this.close(localPath);
-    if (repairReplicaSidecarsOnCheckpointError(localPath)) {
+    if (report.wedged) {
+      if (this.touchedPaths.has(key)) {
+        await getTursoReplicaSyncWorkerClient().close(localPath);
+      }
+      resetReplicaSidecars(localPath);
       console.warn(
-        `[TursoReplicaService] Reset sync sidecars after checkpoint error: ${localPath}`,
+        `[TursoReplicaService] Reset wedged sync sidecars before open: ${localPath} — ` +
+          describeReplicaSidecarWedge(report),
       );
+    }
+
+    const localReplicaExists = fs.existsSync(localPath);
+    try {
+      const creds = await bridge.resolveCredentialsForReplicaOpen(tursoDatabase, {
+        localReplicaExists,
+      });
+      this.touchedPaths.add(key);
+      return {
+        localPath,
+        tursoUrl: creds.tursoUrl,
+        authToken: creds.authToken,
+        bootstrapIfEmpty: overrides?.bootstrapIfEmpty ?? !localReplicaExists,
+      };
+    } catch (error) {
+      noteTursoReplicaTransportError(error);
+      throw error;
     }
   }
 
@@ -807,116 +546,14 @@ export class TursoReplicaService {
   ): Promise<T> {
     const key = normalizeDbPath(localPath);
     const prev = this.operationChains.get(key) ?? Promise.resolve();
-
     const run = () =>
       withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica operation (${key})`);
-
     const next = prev.then(run, run);
     this.operationChains.set(
       key,
       next.catch(() => undefined),
     );
     return next;
-  }
-
-  private async getOrOpen(options: {
-    localPath: string;
-    tursoDatabase: string;
-    bootstrapIfEmpty?: boolean;
-    clientName?: string;
-    /** Pull remote frames once when opening (read/status paths). Writes pull in pullAndPushReplica. */
-    syncOnOpen?: boolean;
-    /** Optional source for inbound CDC drain after syncOnOpen pull. */
-    inboundDrainSource?: AppDataSource;
-  }): Promise<OpenReplicaHandle> {
-    const key = normalizeDbPath(options.localPath);
-    const existing = this.openByPath.get(key);
-    if (existing) {
-      return existing;
-    }
-
-    const inFlight = this.connectPromises.get(key);
-    if (inFlight) {
-      return inFlight;
-    }
-
-    const promise = this.openConnection(options);
-    this.connectPromises.set(key, promise);
-    try {
-      const handle = await promise;
-      this.openByPath.set(key, handle);
-      return handle;
-    } finally {
-      this.connectPromises.delete(key);
-    }
-  }
-
-  private async openConnection(options: {
-    localPath: string;
-    tursoDatabase: string;
-    bootstrapIfEmpty?: boolean;
-    clientName?: string;
-    syncOnOpen?: boolean;
-    inboundDrainSource?: AppDataSource;
-  }): Promise<OpenReplicaHandle> {
-    const bridge = ensureTursoSyncBridge();
-    if (!bridge.enabled) {
-      throw new Error("Turso sync bridge not available — sign in to Papr");
-    }
-
-    // Cold path (startup, reconnect, post-close): sidecars left by an unclean shutdown are
-    // repaired here, before the engine can be handed an unsatisfiable watermark.
-    await this.ensureSyncableSidecars(options.localPath, "connect");
-
-    const localReplicaExists = fs.existsSync(options.localPath);
-    const bootstrapIfEmpty =
-      options.bootstrapIfEmpty ?? !localReplicaExists;
-
-    try {
-      const creds = await bridge.resolveCredentialsForReplicaOpen(
-        options.tursoDatabase,
-        { localReplicaExists },
-      );
-      const db = await withTimeout(
-        connectTursoReplica({
-          localPath: options.localPath,
-          tursoUrl: creds.tursoUrl,
-          authToken: creds.authToken,
-          bootstrapIfEmpty,
-          clientName: options.clientName,
-        }),
-        REPLICA_CONNECT_TIMEOUT_MS,
-        "replica connect",
-      );
-      if (
-        options.syncOnOpen &&
-        isTursoReplicaOnline() &&
-        localReplicaExists &&
-        bootstrapIfEmpty !== true
-      ) {
-        await withTimeout(
-          db.pull(),
-          REPLICA_PULL_TIMEOUT_MS,
-          "replica pull on open",
-        );
-        if (options.inboundDrainSource) {
-          await drainInboundReplicaCdcIfCaughtUp({
-            source: options.inboundDrainSource,
-            tursoDatabase: options.tursoDatabase,
-          });
-        }
-      }
-      markTursoReplicaReachable();
-
-      return {
-        db,
-        tursoDatabase: options.tursoDatabase,
-        localPath: normalizeDbPath(options.localPath),
-      };
-    } catch (error) {
-      noteTursoReplicaTransportError(error);
-      throw error;
-    }
   }
 }
 
@@ -929,10 +566,10 @@ export function getTursoReplicaService(): TursoReplicaService {
   return serviceInstance;
 }
 
-/** Close all embedded replica handles (workspace switch, gateway shutdown). */
+/** Stop the worker (releases every replica file) — workspace switch, gateway shutdown. */
 export async function drainTursoReplicaConnections(context: string): Promise<void> {
-  // The worker can hold replica files while the parent holds none — under isolation that
-  // is the normal resting state — so stop it before the open-handle short-circuit below.
+  // The worker may hold files even if this process never tracked a path (e.g. provision
+  // ran directly against the client), so it is always stopped.
   await shutdownTursoReplicaSyncWorker();
 
   if (!serviceInstance) {
@@ -944,13 +581,14 @@ export async function drainTursoReplicaConnections(context: string): Promise<voi
   }
   await serviceInstance.closeAll();
   console.log(
-    `[TursoReplica] Drained ${openCount} open replica connection(s) (${context})`,
+    `[TursoReplica] Drained ${openCount} replica connection(s) (${context})`,
   );
 }
 
 export function resetTursoReplicaServiceForTests(): void {
-  void drainTursoReplicaConnections("test reset");
+  // Drop the instance first so the drain below cannot call back into a spied closeAll.
   serviceInstance = null;
+  void shutdownTursoReplicaSyncWorker();
 }
 
 export { isTursoHostNotReadyError };

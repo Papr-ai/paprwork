@@ -1,25 +1,21 @@
 /**
- * Turso Sync connect helpers — provisioning retry (Turso host race after token mint).
+ * Turso Sync connect helper — WORKER PROCESS ONLY.
+ *
+ * This is the single runtime import of `@tursodatabase/sync` in the codebase. It must only
+ * be reached from tursoReplicaSyncWorkerEntry.ts; the gateway process talks to the engine
+ * through TursoReplicaSyncWorkerClient. See tests/turso-native-import-guard.test.ts.
  */
 
 import { connect, type Database } from "@tursodatabase/sync";
 import type { DatabaseOpts } from "@tursodatabase/sync";
 import type { TursoReplicaConnectOptions } from "./tursoReplicaTypes.js";
+import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
 
 const RETRY_DELAYS_MS = [0, 1500, 3000, 5000, 8000] as const;
 
 export type PaprTursoSyncConnectOpts = DatabaseOpts & {
   bootstrapIfEmpty?: boolean;
 };
-
-export function isTursoHostNotReadyError(error: unknown): boolean {
-  const msg = error instanceof Error ? error.message : String(error);
-  return (
-    msg.includes("404") ||
-    msg.includes("Host not found") ||
-    msg.includes("not found")
-  );
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -59,3 +55,5 @@ export async function connectTursoReplica(
   }
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
+
+export { isTursoHostNotReadyError };

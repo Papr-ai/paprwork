@@ -17,7 +17,7 @@ import {
   isTursoReplicaOnline,
   isTursoReplicaSyncFeatureEnabled,
 } from "../../utils/tursoReplicaEnabled.js";
-import { connectTursoReplica } from "./tursoReplicaConnect.js";
+import { getTursoReplicaSyncWorkerClient } from "./TursoReplicaSyncWorkerClient.js";
 import { ensureReplicaSchemaMigrationsLedger } from "./tursoReplicaSchemaLedger.js";
 import {
   removeTursoReplicaLocalFiles,
@@ -50,25 +50,39 @@ function recordAsDataSource(record: DatabaseRecord): AppDataSource {
 
 type ProvisionTursoReplicaMode = "new" | "legacy_cutover";
 
-async function syncReplicaAfterConnect(
-  db: Awaited<ReturnType<typeof connectTursoReplica>>,
-  mode: ProvisionTursoReplicaMode,
-): Promise<void> {
-  await db.exec("SELECT 1");
-  if (!isTursoReplicaOnline()) {
-    return;
+const PROVISION_TIMEOUT_MS = 60_000;
+
+/**
+ * Open the replica in the sync worker, verify it answers, and reconcile with Turso.
+ * The handle is released afterwards so the caller may touch the files directly.
+ */
+async function openAndSyncReplicaViaWorker(options: {
+  localPath: string;
+  tursoUrl: string;
+  authToken: string;
+  bootstrapIfEmpty: boolean;
+  mode: ProvisionTursoReplicaMode;
+}): Promise<void> {
+  const client = getTursoReplicaSyncWorkerClient();
+  const spec = {
+    localPath: options.localPath,
+    tursoUrl: options.tursoUrl,
+    authToken: options.authToken,
+    bootstrapIfEmpty: options.bootstrapIfEmpty,
+    timeoutMs: PROVISION_TIMEOUT_MS,
+  };
+  try {
+    await client.exec({ ...spec, sql: "SELECT 1" });
+    if (!isTursoReplicaOnline()) {
+      return;
+    }
+    // Legacy cutover seeds Turso via libsql batch insert, then replaces the local
+    // file with a fresh @tursodatabase/sync replica. push() on that empty replica
+    // often fails checkpoint (watermark ahead of WAL). Remote is authoritative — pull only.
+    await client.sync(spec, options.mode === "legacy_cutover" ? "pull" : "pullPush");
+  } finally {
+    await client.close(options.localPath);
   }
-
-  await db.pull();
-
-  // Legacy cutover seeds Turso via libsql batch insert, then replaces the local
-  // file with a fresh @tursodatabase/sync replica. push() on that empty replica
-  // often fails checkpoint (watermark ahead of WAL). Remote is authoritative — pull only.
-  if (mode === "legacy_cutover") {
-    return;
-  }
-
-  await db.push();
 }
 
 async function provisionTursoReplicaCore(
@@ -86,18 +100,13 @@ async function provisionTursoReplicaCore(
   await fs.promises.mkdir(path.dirname(record.localPath), { recursive: true });
   removeTursoReplicaLocalFiles(record.localPath);
 
-  const db = await connectTursoReplica({
+  await openAndSyncReplicaViaWorker({
     localPath: record.localPath,
     tursoUrl: creds.tursoUrl,
     authToken: creds.authToken,
     bootstrapIfEmpty: true,
+    mode,
   });
-
-  try {
-    await syncReplicaAfterConnect(db, mode);
-  } finally {
-    await db.close();
-  }
 
   const source = recordAsDataSource(record);
   await ensureReplicaSchemaMigrationsLedger(source);
@@ -172,18 +181,13 @@ export async function attachTursoReplicaInPlaceForCutover(
   const tursoDatabase = tursoNameForRecord(record);
   const creds = await bridge.fetchCredentials(tursoDatabase);
 
-  const db = await connectTursoReplica({
+  await openAndSyncReplicaViaWorker({
     localPath: record.localPath,
     tursoUrl: creds.tursoUrl,
     authToken: creds.authToken,
     bootstrapIfEmpty: false,
+    mode: "legacy_cutover",
   });
-
-  try {
-    await syncReplicaAfterConnect(db, "legacy_cutover");
-  } finally {
-    await db.close();
-  }
 
   await ensureReplicaSchemaMigrationsLedger(recordAsDataSource(record));
 }

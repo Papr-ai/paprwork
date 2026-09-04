@@ -1,13 +1,13 @@
 /**
- * Parent-side driver for the out-of-process Turso sync worker.
+ * Parent-side driver for the Turso sync worker.
  *
- * Owns one child process for the whole gateway. Requests run one at a time: the worker opens
- * the replica, syncs, and closes it before replying, which keeps the "one sync engine per
- * replica path" invariant even though two processes are involved.
+ * Owns one child process for the whole gateway. The child is the only process that loads
+ * `@tursodatabase/sync`; it keeps a Database handle per replica path and serves every
+ * replica operation over NDJSON.
  *
  * A native panic kills the child rather than the app. In-flight requests are rejected with
- * {@link TursoSyncWorkerCrashError} so the caller can repair the replica and retry; the next
- * request spawns a fresh worker.
+ * {@link TursoSyncWorkerCrashError}; the next request spawns a fresh worker. Crash policy
+ * (sidecar reset + one retry) lives in `send()` so every caller gets it for free.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -15,11 +15,21 @@ import { randomUUID } from "node:crypto";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  IDEMPOTENT_WORKER_OPS,
   TursoSyncWorkerCrashError,
+  isTursoSyncWorkerCrash,
+  type TursoSyncWorkerLine,
   type TursoSyncWorkerOp,
+  type TursoSyncWorkerOpenSpec,
+  type TursoSyncWorkerPullResult,
+  type TursoSyncWorkerQueryResult,
   type TursoSyncWorkerRequest,
-  type TursoSyncWorkerResponse,
+  type TursoSyncWorkerResult,
+  type TursoSyncWorkerStatement,
+  type TursoSyncWorkerStatsResult,
+  type TursoSyncWorkerWriteResult,
 } from "./tursoReplicaSyncWorkerProtocol.js";
+import { resetReplicaSidecars } from "./tursoReplicaSidecarWedge.js";
 
 const WORKER_BOOT_TIMEOUT_MS = 20_000;
 const STDERR_RING_BYTES = 4_000;
@@ -34,23 +44,30 @@ export interface TursoSyncWorkerCommand {
   args: string[];
 }
 
-export interface RunSyncOptions {
+export interface SendOptions extends TursoSyncWorkerOpenSpec {
   op: TursoSyncWorkerOp;
-  localPath: string;
-  tursoUrl: string;
-  authToken: string;
-  clientName?: string;
-  bootstrapIfEmpty: boolean;
   timeoutMs: number;
+  sql?: string;
+  params?: unknown[];
+  statements?: TursoSyncWorkerStatement[];
+  /**
+   * Override the default crash policy (retry idempotent ops once after a sidecar reset).
+   * `never`: surface the crash immediately.
+   */
+  retryOnCrash?: "auto" | "never";
 }
 
 interface PendingRequest {
   op: TursoSyncWorkerOp;
   localPath: string;
-  resolve: (pulled: boolean) => void;
+  started: boolean;
+  resolve: (result: TursoSyncWorkerResult) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
 }
+
+/** Called on every worker crash. Wire telemetry here — this is the one place crashes surface. */
+export type TursoSyncWorkerCrashListener = (error: TursoSyncWorkerCrashError) => void;
 
 function defaultWorkerCommand(): TursoSyncWorkerCommand {
   // The gateway always runs from dist/, so the compiled worker is a sibling of this module.
@@ -70,12 +87,103 @@ export class TursoReplicaSyncWorkerClient {
   private stderrRing = "";
   private shuttingDown = false;
   private readonly pending = new Map<string, PendingRequest>();
+  private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
 
   constructor(
     private readonly resolveCommand: () => TursoSyncWorkerCommand = defaultWorkerCommand,
   ) {}
 
-  async runSync(options: RunSyncOptions): Promise<boolean> {
+  onCrash(listener: TursoSyncWorkerCrashListener): () => void {
+    this.crashListeners.add(listener);
+    return () => this.crashListeners.delete(listener);
+  }
+
+  // ---- typed helpers -------------------------------------------------------------------
+
+  async query(
+    options: Omit<SendOptions, "op" | "statements">,
+  ): Promise<TursoSyncWorkerQueryResult> {
+    return (await this.send({ ...options, op: "query" })) as TursoSyncWorkerQueryResult;
+  }
+
+  async write(
+    options: Omit<SendOptions, "op" | "sql" | "params">,
+  ): Promise<TursoSyncWorkerWriteResult> {
+    return (await this.send({ ...options, op: "write" })) as TursoSyncWorkerWriteResult;
+  }
+
+  async exec(options: Omit<SendOptions, "op" | "params" | "statements">): Promise<void> {
+    await this.send({ ...options, op: "exec" });
+  }
+
+  async sync(
+    options: Omit<SendOptions, "op" | "sql" | "params" | "statements">,
+    op: "pull" | "push" | "pullPush",
+  ): Promise<boolean> {
+    const result = (await this.send({ ...options, op })) as TursoSyncWorkerPullResult;
+    return Boolean(result.pulled);
+  }
+
+  async stats(
+    options: Omit<SendOptions, "op" | "sql" | "params" | "statements">,
+  ): Promise<number> {
+    const result = (await this.send({ ...options, op: "stats" })) as TursoSyncWorkerStatsResult;
+    return Number(result.cdcOperations ?? 0);
+  }
+
+  async connect(
+    options: Omit<SendOptions, "op" | "sql" | "params" | "statements">,
+  ): Promise<void> {
+    await this.send({ ...options, op: "connect" });
+  }
+
+  async close(localPath: string): Promise<void> {
+    if (!this.child) {
+      return;
+    }
+    await this.send({
+      op: "close",
+      localPath,
+      tursoUrl: "",
+      authToken: "",
+      bootstrapIfEmpty: false,
+      timeoutMs: 10_000,
+      retryOnCrash: "never",
+    });
+  }
+
+  // ---- core ----------------------------------------------------------------------------
+
+  /**
+   * Send one request. On a worker crash where the engine was operating on this path:
+   * reset the path's sync sidecars (keeps data.db), then retry once if the op is idempotent.
+   * Anything else surfaces as an error to the caller. The gateway never dies here.
+   */
+  async send(options: SendOptions): Promise<TursoSyncWorkerResult> {
+    try {
+      return await this.sendOnce(options);
+    } catch (error) {
+      if (!isTursoSyncWorkerCrash(error)) {
+        throw error;
+      }
+      if (error.engineWasRunning) {
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${error.op} on ${error.localPath} — ` +
+            `resetting sync sidecars. ${error.stderrTail.slice(-200)}`,
+        );
+        resetReplicaSidecars(error.localPath);
+      }
+      const retry =
+        (options.retryOnCrash ?? "auto") === "auto" &&
+        IDEMPOTENT_WORKER_OPS.has(options.op);
+      if (!retry) {
+        throw error;
+      }
+      return await this.sendOnce(options);
+    }
+  }
+
+  private async sendOnce(options: SendOptions): Promise<TursoSyncWorkerResult> {
     await this.ensureBooted();
     const child = this.child;
     if (!child?.stdin?.writable) {
@@ -91,9 +199,12 @@ export class TursoReplicaSyncWorkerClient {
       authToken: options.authToken,
       clientName: options.clientName,
       bootstrapIfEmpty: options.bootstrapIfEmpty,
+      sql: options.sql,
+      params: options.params,
+      statements: options.statements,
     };
 
-    return new Promise<boolean>((resolve, reject) => {
+    return new Promise<TursoSyncWorkerResult>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         // A wedged engine can hang instead of aborting; drop the worker so the next
@@ -110,6 +221,7 @@ export class TursoReplicaSyncWorkerClient {
       this.pending.set(id, {
         op: options.op,
         localPath: options.localPath,
+        started: false,
         resolve,
         reject,
         timer,
@@ -244,22 +356,20 @@ export class TursoReplicaSyncWorkerClient {
   }
 
   private dispatchLine(line: string, onReady: () => void): void {
-    let parsed: (TursoSyncWorkerResponse & { ready?: boolean }) | null = null;
+    let parsed: TursoSyncWorkerLine | null = null;
     try {
-      parsed = JSON.parse(line) as TursoSyncWorkerResponse & {
-        ready?: boolean;
-      };
+      parsed = JSON.parse(line) as TursoSyncWorkerLine;
     } catch {
       // Anything the SDK prints on stdout would land here; ignore rather than desync.
       return;
     }
 
-    if (parsed?.ready === true) {
+    if ("ready" in parsed && parsed.ready === true) {
       onReady();
       return;
     }
 
-    const id = typeof parsed?.id === "string" ? parsed.id : null;
+    const id = "id" in parsed && typeof parsed.id === "string" ? parsed.id : null;
     if (!id) {
       return;
     }
@@ -267,11 +377,19 @@ export class TursoReplicaSyncWorkerClient {
     if (!pending) {
       return;
     }
+
+    if ("started" in parsed) {
+      pending.started = true;
+      return;
+    }
+    if (!("ok" in parsed)) {
+      return;
+    }
+
     clearTimeout(pending.timer);
     this.pending.delete(id);
-
     if (parsed.ok === true) {
-      pending.resolve(Boolean(parsed.pulled));
+      pending.resolve(parsed.result ?? {});
     } else {
       pending.reject(new Error(parsed.error || "Turso sync worker error"));
     }
@@ -298,15 +416,22 @@ export class TursoReplicaSyncWorkerClient {
     for (const [id, pending] of this.pending.entries()) {
       clearTimeout(pending.timer);
       this.pending.delete(id);
-      pending.reject(
-        new TursoSyncWorkerCrashError({
-          op: pending.op,
-          localPath: pending.localPath,
-          exitCode: code,
-          signal,
-          stderr,
-        }),
-      );
+      const error = new TursoSyncWorkerCrashError({
+        op: pending.op,
+        localPath: pending.localPath,
+        exitCode: code,
+        signal,
+        engineWasRunning: pending.started,
+        stderr,
+      });
+      for (const listener of this.crashListeners) {
+        try {
+          listener(error);
+        } catch {
+          /* listener must not break recovery */
+        }
+      }
+      pending.reject(error);
     }
   }
 
@@ -321,9 +446,43 @@ export class TursoReplicaSyncWorkerClient {
 
 let clientInstance: TursoReplicaSyncWorkerClient | null = null;
 
+/**
+ * Report a worker crash to Amplitude. This is the only place engine panics become visible
+ * in the field — before the worker split they took the gateway down silently.
+ * No paths or user data: just the op, how it died, and the panic signature.
+ */
+function reportWorkerCrash(error: TursoSyncWorkerCrashError): void {
+  void import("../gatewayTelemetry.js")
+    .then(({ getGatewayTelemetry }) =>
+      import("../../../core/telemetry/events.js").then(({ AmplitudeEvents }) => {
+        getGatewayTelemetry().trackFireAndForget(AmplitudeEvents.TURSO_SYNC_WORKER_CRASH, {
+          op: error.op,
+          signal: error.signal ?? "",
+          exit_code: error.exitCode ?? -1,
+          engine_was_running: error.engineWasRunning,
+          // First line of the Rust panic message, e.g. "thread '<unnamed>' panicked at ..."
+          panic_signature: extractPanicSignature(error.stderrTail),
+        });
+      }),
+    )
+    .catch(() => {
+      /* telemetry must never break recovery */
+    });
+}
+
+function extractPanicSignature(stderr: string): string {
+  const lines = stderr.split("\n").filter((l) => l.trim());
+  const line =
+    lines.find((l) => /panicked at|assertion|unwrap\(\)|index out of bounds/i.test(l)) ??
+    lines[lines.length - 1] ??
+    "";
+  return line.trim().slice(0, 200);
+}
+
 export function getTursoReplicaSyncWorkerClient(): TursoReplicaSyncWorkerClient {
   if (!clientInstance) {
     clientInstance = new TursoReplicaSyncWorkerClient();
+    clientInstance.onCrash(reportWorkerCrash);
   }
   return clientInstance;
 }

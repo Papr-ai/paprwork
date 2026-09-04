@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { installInProcessSyncWorker } from "./helpers/inProcessSyncWorker.js";
 import type { AppDataSource } from "../src/gateway/services/appDataSources.js";
 import { tursoReplicaBridgeMock } from "./helpers/tursoReplicaBridgeMock.js";
 
@@ -257,6 +258,7 @@ describe("TursoReplicaService.runWrite", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -315,6 +317,7 @@ describe("TursoReplicaService.push", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -357,6 +360,7 @@ describe("TursoReplicaService.syncStatus", () => {
         stats: vi.fn(async () => ({ cdcOperations: 0 })),
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
@@ -406,6 +410,7 @@ describe("TursoReplicaService.syncStatus", () => {
         stats,
       })),
     }));
+    installInProcessSyncWorker();
 
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () =>
       tursoReplicaBridgeMock(),
