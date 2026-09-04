@@ -36,6 +36,10 @@ import {
 } from "../../stores/artifactsStore";
 import { artifactsToMessageAttachments } from "../../utils/messageAttachments";
 import { mapHistoryMessages } from "../../utils/historyMapper";
+import {
+  findHistoryModelId,
+  resolveChatModelId,
+} from "../../utils/resolveChatModel";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import "./ChatContainer.css";
@@ -235,11 +239,33 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const isWaitingForModel = selectedModel.provider === 'ollama' && installing === selectedModel.id;
 
+  /** Model that last answered in *this* chat — the durable per-chat record. */
+  const historyModelId = useMemo(() => findHistoryModelId(messages), [messages]);
+
+  /**
+   * Does this chat already hold a conversation? Answered from chat metadata so
+   * it is known before history finishes loading; an existing chat must never be
+   * seeded from the global "last model picked anywhere".
+   */
+  const chatHasHistory = useChatStore((state) => {
+    const known = state.chats.find((chat) => chat.id === chatId);
+    if (known) return known.messageCount > 0;
+    return (state.chatStates.get(chatId)?.messages.length ?? 0) > 0;
+  });
+
   // When chatId or auth status changes: pick best default
-  // Priority: last selected (persisted in localStorage) > default order (sonnet-5 → gpt-5-6-sol → gemini-3-flash) > first available
+  // Priority: this chat's own selection > this chat's own history > global
+  // default (new chats only) > default order (sonnet-5 → gpt-5-6-sol →
+  // gemini-3-flash) > first available
   useEffect(() => {
     setSelectedModel((prev) => {
-      const lastId = useChatStore.getState().getLastSelectedModel(chatId);
+      const store = useChatStore.getState();
+      const lastId = resolveChatModelId({
+        perChatModelId: store.getLastSelectedModel(chatId),
+        historyModelId,
+        newChatDefaultModelId: store.getDefaultModelForNewChat(),
+        hasHistory: chatHasHistory,
+      });
       if (lastId) {
         const migratedId = migratePickerModelId(lastId);
         const lastModel = getModelById(migratedId);
@@ -257,7 +283,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       if (!isModelAvailable(prev)) return fallbackModel;
       return prev;
     });
-  }, [chatId, authStatus, pickerModels]);
+    // historyModelId is a dependency because history arrives after mount: a
+    // chat reopened before its messages load must correct itself once they do.
+    // Re-running is safe — an explicit per-chat pick outranks history, so this
+    // cannot walk back a selection the user just made.
+  }, [chatId, authStatus, pickerModels, historyModelId, chatHasHistory]);
 
   // Focus input when this chat's container mounts
   useEffect(() => {

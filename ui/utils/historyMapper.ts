@@ -182,6 +182,12 @@ export function mapHistoryMessages(
       reasoning,
       toolCalls,
       sequence: sequenceRaw, // Include sequence for interleaved rendering
+      // Which model actually answered. This is the durable record of what a
+      // chat was running on, so reopening it can restore that model instead of
+      // inheriting whatever was last picked in some other chat.
+      ...(typeof candidate.model === "string" && candidate.model
+        ? { model: candidate.model }
+        : {}),
       // Persisted by the gateway when a turn never finished. Carrying it through
       // keeps an interrupted turn labelled as such after a reload, instead of
       // reappearing as a finished answer.
