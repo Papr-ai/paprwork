@@ -90,6 +90,9 @@ body.platform-darwin .app-layout__sidebar-toggle {
 .app-layout__topbar {
   width: 100%;
   flex-shrink: 0;
+  position: relative;
+  z-index: 200;
+  overflow: visible;
 }
 
 .app-layout__content {

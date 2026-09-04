@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   padding: 0 8px;
-  overflow: hidden;
+  overflow: visible;
   gap: 8px;
   -webkit-user-select: none;
   user-select: none;
@@ -136,14 +136,22 @@ body:not(.platform-darwin) .tab-bar__tabs {
   }
 }
 
-.tab-bar__new-btn {
+.tab-bar__actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-left: 4px;
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+
+.tab-bar__action-btn {
   width: 24px;
   height: 24px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  /* Make new tab button clickable (override parent drag) */
-  -webkit-app-region: no-drag;
   justify-content: center;
   background: transparent;
   border: none;
@@ -151,18 +159,18 @@ body:not(.platform-darwin) .tab-bar__tabs {
   color: var(--text-tertiary);
   cursor: pointer;
   transition: color 0.15s var(--ease);
-  margin: 0 4px;
 }
 
-.tab-bar__new-btn:hover {
+.tab-bar__action-btn:hover {
+  background: var(--hover-bg);
   color: var(--text-primary);
 }
 
-.tab-bar__new-btn:active {
+.tab-bar__action-btn:active {
   opacity: 0.6;
 }
 
-.tab-bar__new-btn svg {
+.tab-bar__action-btn svg {
   width: 14px;
   height: 14px;
 }

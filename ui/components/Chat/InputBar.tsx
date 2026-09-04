@@ -16,7 +16,6 @@ import {
 import { CHAT_MODELS } from "../../constants/models";
 import type { AIModel } from "../../constants/models";
 import { ModelPickerDropdown } from "./ModelPickerDropdown";
-import { ChatHistoryDropdown } from "./ChatHistoryDropdown";
 import { ChatMemoryScopeSelector } from "./ChatMemoryScopeSelector";
 import { ContextDropdown } from "./ContextDropdown";
 import { ContextPills } from "./ContextPills";
@@ -94,7 +93,6 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const [message, setMessage] = useState(draftMessage);
     const [isFocused, setIsFocused] = useState(false);
     const [showModelPicker, setShowModelPicker] = useState(false);
-    const [showChatHistory, setShowChatHistory] = useState(false);
     const [showContextDropdown, setShowContextDropdown] = useState(false);
     const [showSlashMenu, setShowSlashMenu] = useState(false);
     const [slashQuery, setSlashQuery] = useState("");
@@ -104,10 +102,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inputBarRef = useRef<HTMLDivElement>(null);
     const modelSelectorBtnRef = useRef<HTMLButtonElement>(null);
-    const chatHistoryBtnRef = useRef<HTMLButtonElement>(null);
     const contextAddBtnRef = useRef<HTMLButtonElement>(null);
     const modelPickerDropdownRef = useRef<HTMLDivElement>(null);
-    const chatHistoryDropdownRef = useRef<HTMLDivElement>(null);
     const contextDropdownRef = useRef<HTMLDivElement>(null);
     const lastSendAttemptRef = useRef<number>(0);
 
@@ -216,13 +212,6 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       () => setShowModelPicker(false),
       modelSelectorBtnRef,
       modelPickerDropdownRef,
-    );
-
-    useDismissOnOutsideClick(
-      showChatHistory,
-      () => setShowChatHistory(false),
-      chatHistoryBtnRef,
-      chatHistoryDropdownRef,
     );
 
     useDismissOnOutsideClick(
@@ -489,43 +478,6 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                     />
                   </svg>
                 </button>
-                <button
-                  ref={chatHistoryBtnRef}
-                  type="button"
-                  className="chat-history-btn"
-                  title="Chat history"
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    setShowChatHistory(!showChatHistory);
-                    setShowModelPicker(false);
-                    setShowContextDropdown(false);
-                  }}
-                >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <circle
-                      cx="12"
-                      cy="12"
-                      r="10"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                    />
-                    <path
-                      d="M12 6v6l4 2"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </button>
-
-                {/* Chat History Dropdown */}
-                {showChatHistory && (
-                  <ChatHistoryDropdown
-                    onClose={() => setShowChatHistory(false)}
-                    dropdownRef={chatHistoryDropdownRef}
-                  />
-                )}
-
                 {/* Model Picker Dropdown */}
                 {showModelPicker && (
                   <ModelPickerDropdown

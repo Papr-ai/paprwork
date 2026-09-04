@@ -1,14 +1,16 @@
 /**
- * ChatHistoryDropdown - Compact chat history selector
- * Shows list of chats grouped by date (Today, Yesterday, etc.)
+ * ChatHistoryDropdown - Recent chats and apps for quick navigation
  */
 
-import React, { useMemo } from "react";
+import React, { useEffect, useMemo } from "react";
 import { useChatStore } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
+import { useArtifactsStore, type Artifact } from "../../stores/artifactsStore";
 import { useChat } from "../../hooks/useChat";
+import { useArtifacts } from "../../hooks/useArtifacts";
 import type { ChatMetadata } from "../../types/chat";
 import { isUserFacingChatId } from "../../utils/chatVisibility";
+import { gateway } from "../../src/lib/gateway";
 import "./ChatHistoryDropdown.css";
 
 interface ChatHistoryDropdownProps {
@@ -16,7 +18,6 @@ interface ChatHistoryDropdownProps {
   dropdownRef?: React.RefObject<HTMLDivElement | null>;
 }
 
-// Group chats by date
 function groupChatsByDate(
   chats: ChatMetadata[],
 ): Record<string, ChatMetadata[]> {
@@ -60,7 +61,6 @@ function groupChatsByDate(
     }
   });
 
-  // Remove empty groups
   Object.keys(groups).forEach((key) => {
     if (groups[key].length === 0) {
       delete groups[key];
@@ -70,13 +70,10 @@ function groupChatsByDate(
   return groups;
 }
 
-// Format relative time (14m, 3h, 5h, 12h, etc.)
 function formatRelativeTime(dateString: string): string {
   if (!dateString) return "";
 
   const date = new Date(dateString);
-
-  // Check if date is valid
   if (isNaN(date.getTime())) {
     return "";
   }
@@ -89,13 +86,124 @@ function formatRelativeTime(dateString: string): string {
 
   if (diffMins < 1) {
     return "now";
-  } else if (diffMins < 60) {
-    return `${diffMins}m`;
-  } else if (diffHours < 24) {
-    return `${diffHours}h`;
-  } else {
-    return `${diffDays}d`;
   }
+  if (diffMins < 60) {
+    return `${diffMins}m`;
+  }
+  if (diffHours < 24) {
+    return `${diffHours}h`;
+  }
+  return `${diffDays}d`;
+}
+
+function renderAppIcon(icon: string | undefined): React.ReactNode {
+  if (!icon) {
+    return (
+      <span className="chat-history-item-icon chat-history-item-icon--fallback">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+          <rect
+            x="3"
+            y="3"
+            width="7"
+            height="7"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <rect
+            x="14"
+            y="3"
+            width="7"
+            height="7"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <rect
+            x="3"
+            y="14"
+            width="7"
+            height="7"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+          <rect
+            x="14"
+            y="14"
+            width="7"
+            height="7"
+            rx="1"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          />
+        </svg>
+      </span>
+    );
+  }
+
+  const trimmedIcon = icon.trim();
+  if (trimmedIcon.startsWith("<")) {
+    return (
+      <span
+        className="chat-history-item-icon chat-history-item-icon--svg"
+        dangerouslySetInnerHTML={{ __html: trimmedIcon }}
+      />
+    );
+  }
+
+  const isEmoji =
+    trimmedIcon.length <= 4 && /[\p{Emoji}]/u.test(trimmedIcon);
+  if (isEmoji) {
+    return (
+      <span className="chat-history-item-icon chat-history-item-icon--emoji">
+        {trimmedIcon}
+      </span>
+    );
+  }
+
+  return (
+    <span className="chat-history-item-icon chat-history-item-icon--fallback">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
+        <rect
+          x="3"
+          y="3"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="14"
+          y="3"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="3"
+          y="14"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+        <rect
+          x="14"
+          y="14"
+          width="7"
+          height="7"
+          rx="1"
+          stroke="currentColor"
+          strokeWidth="1.5"
+        />
+      </svg>
+    </span>
+  );
 }
 
 export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
@@ -103,11 +211,16 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
   dropdownRef,
 }) => {
   const { chats } = useChatStore();
+  const artifacts = useArtifactsStore((state) => state.artifacts);
+  const { loadArtifacts } = useArtifacts("apps");
   const { createTab } = useTabStore();
   const { loadMessages } = useChat();
   const [searchQuery, setSearchQuery] = React.useState("");
 
-  // Filter and sort chats based on search
+  useEffect(() => {
+    void loadArtifacts();
+  }, [loadArtifacts]);
+
   const groupedChats = useMemo(() => {
     const filtered = chats
       .filter((chat) => isUserFacingChatId(chat.id))
@@ -123,21 +236,54 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
     return groupChatsByDate(sorted);
   }, [chats, searchQuery]);
 
-  const handleChatSelect = async (chatId: string, title: string) => {
-    // Load messages for this chat first
-    await loadMessages(chatId);
+  const recentApps = useMemo(() => {
+    const query = searchQuery.toLowerCase();
+    return artifacts
+      .filter((artifact) => artifact.type === "app")
+      .filter((artifact) => (artifact.status ?? "active") !== "archived")
+      .filter((artifact) => Boolean(artifact.lastOpenedAt))
+      .filter((artifact) => artifact.title.toLowerCase().includes(query))
+      .sort(
+        (a, b) =>
+          new Date(b.lastOpenedAt ?? b.updatedAt).getTime() -
+          new Date(a.lastOpenedAt ?? a.updatedAt).getTime(),
+      );
+  }, [artifacts, searchQuery]);
 
-    // Then create/switch to the tab
+  const handleChatSelect = async (chatId: string, title: string) => {
+    await loadMessages(chatId);
     createTab("chat", chatId, title);
     onClose();
   };
+
+  const handleAppSelect = (app: Artifact) => {
+    createTab(
+      "app",
+      app.id,
+      app.title,
+      app.icon ? { icon: app.icon } : {},
+    );
+    void gateway
+      .send("app:update", {
+        appId: app.id,
+        lastOpenedAt: new Date().toISOString(),
+        openCount: (app.openCount ?? 0) + 1,
+      })
+      .then(() => loadArtifacts())
+      .catch(() => {});
+    onClose();
+  };
+
+  const hasChatResults = Object.keys(groupedChats).length > 0;
+  const hasAppResults = recentApps.length > 0;
+  const hasResults = hasChatResults || hasAppResults;
 
   return (
     <div className="chat-history-dropdown" ref={dropdownRef}>
       <div className="chat-history-search">
         <input
           type="text"
-          placeholder="Search..."
+          placeholder="Search chats and apps..."
           className="chat-history-search-input"
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -146,30 +292,82 @@ export const ChatHistoryDropdown: React.FC<ChatHistoryDropdownProps> = ({
       </div>
 
       <div className="chat-history-list">
-        {Object.keys(groupedChats).length === 0 ? (
+        {!hasResults ? (
           <div className="chat-history-empty">
-            {searchQuery ? "No chats found" : "No chat history yet"}
+            {searchQuery ? "No results found" : "No recent history yet"}
           </div>
         ) : (
-          Object.entries(groupedChats).map(([group, groupChats]) => (
-            <div key={group} className="chat-history-group">
-              <div className="chat-history-group-label">{group}</div>
-              {groupChats.map((chat) => (
-                <button
-                  key={chat.id}
-                  className="chat-history-item"
-                  onClick={() => handleChatSelect(chat.id, chat.title)}
-                >
-                  <div className="chat-history-item-content">
-                    <div className="chat-history-item-title">{chat.title}</div>
-                    <div className="chat-history-item-time">
-                      {formatRelativeTime(chat.updatedAt || chat.createdAt)}
-                    </div>
+          <>
+            {hasChatResults && (
+              <div className="chat-history-section">
+                <div className="chat-history-section-label">Chats</div>
+                {Object.entries(groupedChats).map(([group, groupChats]) => (
+                  <div key={group} className="chat-history-group">
+                    <div className="chat-history-group-label">{group}</div>
+                    {groupChats.map((chat) => (
+                      <button
+                        key={chat.id}
+                        type="button"
+                        className="chat-history-item"
+                        onClick={() => handleChatSelect(chat.id, chat.title)}
+                      >
+                        <div className="chat-history-item-content">
+                          <span className="chat-history-item-icon chat-history-item-icon--chat">
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                            >
+                              <path
+                                d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
+                                stroke="currentColor"
+                                strokeWidth="1.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                              />
+                            </svg>
+                          </span>
+                          <div className="chat-history-item-title">
+                            {chat.title}
+                          </div>
+                          <div className="chat-history-item-time">
+                            {formatRelativeTime(
+                              chat.updatedAt || chat.createdAt,
+                            )}
+                          </div>
+                        </div>
+                      </button>
+                    ))}
                   </div>
-                </button>
-              ))}
-            </div>
-          ))
+                ))}
+              </div>
+            )}
+
+            {hasAppResults && (
+              <div className="chat-history-section">
+                <div className="chat-history-section-label">Apps</div>
+                {recentApps.map((app) => (
+                  <button
+                    key={app.id}
+                    type="button"
+                    className="chat-history-item"
+                    onClick={() => handleAppSelect(app)}
+                  >
+                    <div className="chat-history-item-content">
+                      {renderAppIcon(app.icon)}
+                      <div className="chat-history-item-title">{app.title}</div>
+                      <div className="chat-history-item-time">
+                        {formatRelativeTime(
+                          app.lastOpenedAt ?? app.updatedAt,
+                        )}
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>

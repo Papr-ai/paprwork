@@ -4,10 +4,10 @@
 
 .chat-history-dropdown {
   position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
+  top: calc(100% + 8px);
+  right: 0;
   width: 320px;
-  max-height: 400px;
+  max-height: 420px;
   background: var(--popover-bg);
   border: 1px solid var(--border-color);
   border-radius: 8px;
@@ -57,8 +57,25 @@
   font-size: 13px;
 }
 
+.chat-history-section {
+  padding: 4px 0;
+}
+
+.chat-history-section:not(:last-child) {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.chat-history-section-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-primary);
+  padding: 8px 12px 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
 .chat-history-group {
-  padding: 8px 0;
+  padding: 4px 0 8px;
 }
 
 .chat-history-group:not(:last-child) {
@@ -109,4 +126,24 @@
   font-size: 11px;
   color: var(--text-secondary);
   flex-shrink: 0;
+}
+
+.chat-history-item-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.chat-history-item-icon--emoji {
+  font-size: 13px;
+  line-height: 1;
+}
+
+.chat-history-item-icon--svg svg {
+  width: 14px;
+  height: 14px;
 }
