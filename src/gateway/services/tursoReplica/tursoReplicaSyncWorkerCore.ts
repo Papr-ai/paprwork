@@ -12,6 +12,7 @@ import type {
   TursoSyncWorkerRequest,
   TursoSyncWorkerResult,
 } from "./tursoReplicaSyncWorkerProtocol.js";
+import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
 
 type Db = Awaited<ReturnType<typeof connectTursoReplica>>;
 
@@ -24,24 +25,24 @@ interface Handle {
 
 export type WorkerLogger = (message: string) => void;
 
+function isInteractiveWorkerOp(op: TursoSyncWorkerRequest["op"]): boolean {
+  return op === "query" || op === "write" || op === "exec" || op === "connect" || op === "close";
+}
+
 export class TursoSyncWorkerCore {
   private readonly handles = new Map<string, Handle>();
-  private readonly chains = new Map<string, Promise<void>>();
+  private readonly scheduler = new TursoReplicaPathScheduler();
 
   constructor(private readonly log: WorkerLogger = () => {}) {}
 
-  /** Serialise per path; different paths run concurrently. */
+  /** Serialise per path; interactive ops preempt queued pull/push. */
   run(request: TursoSyncWorkerRequest): Promise<TursoSyncWorkerResult> {
-    const prev = this.chains.get(request.localPath) ?? Promise.resolve();
-    const task = prev.then(() => this.handle(request));
-    this.chains.set(
-      request.localPath,
-      task.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
-    return task;
+    const queuedAt = Date.now();
+    const runTask = () => this.handle(request, queuedAt);
+    if (isInteractiveWorkerOp(request.op)) {
+      return this.scheduler.runInteractive(request.localPath, runTask);
+    }
+    return this.scheduler.runBackground(request.localPath, runTask);
   }
 
   async closeAll(): Promise<void> {
@@ -52,10 +53,17 @@ export class TursoSyncWorkerCore {
     return this.handles.size;
   }
 
-  private async handle(request: TursoSyncWorkerRequest): Promise<TursoSyncWorkerResult> {
+  private async handle(
+    request: TursoSyncWorkerRequest,
+    queuedAt: number,
+  ): Promise<TursoSyncWorkerResult> {
+    const startedAt = Date.now();
+    const hadHandle = this.handles.has(request.localPath);
+    let outcome = "ok";
     try {
       return await this.execute(request);
     } catch (error) {
+      outcome = "error";
       // An engine error may leave the handle poisoned; drop it so the next request reopens.
       if (request.op !== "close") {
         await this.closeHandle(request.localPath);
@@ -63,6 +71,11 @@ export class TursoSyncWorkerCore {
       throw error;
     } finally {
       this.armIdleClose(request.localPath);
+      const now = Date.now();
+      this.log(
+        `op=${request.op} ${outcome} queueMs=${startedAt - queuedAt} execMs=${now - startedAt} ` +
+          `opened=${!hadHandle} path=${request.localPath}`,
+      );
     }
   }
 

@@ -10,15 +10,17 @@ Act as the user's chief of staff: produce one daily brief row in the Home app's 
 - No priority, alert, or hero stat is about Papr infrastructure: job runs/failures, sync, Turso, schema, scrapers, API keys, app polish, or agent tasks.
 - When `IDENTITY.md` has no goals, the brief says so in `hero.subtitle` and does not rank open items as priorities.
 - When a "Waiting On" or "Decisions Pending" section is present, each item cites a person and a date/age that exists in the daily log or an entity page.
+- `save_brief.py --reviews` was run before ranking, and no item the user marked `complete` or `irrelevant` (nor a near-duplicate, nor anything covered by the generalised rule in an irrelevance note) appears in the brief.
 
 ## Quality Rubric
 
 | Criterion | Weight |
 |-----------|--------|
 | Goal-traceable priorities: ≤3 items, each tied to a real goal id; zero Papr-infrastructure items anywhere except the Overnight line | 0.30 |
-| Actionability: each priority/waiting-on/decision names the person or artifact, the action, and why today (deadline, age, unblocks) | 0.20 |
-| Grounded: every claim traces to the daily log, an entity page, or live data — no invented meetings, numbers, or commitments | 0.20 |
-| Chief-of-staff coverage: uses Commitments (waiting on / owed) and Decisions Pending when evidence exists; honest "quiet day" when it does not | 0.15 |
+| Respects feedback: nothing the user marked complete/irrelevant in `brief_reviews` (or an obvious sibling under the rule in their note) is resurfaced | 0.15 |
+| Actionability: each priority/waiting-on/decision names the person or artifact, the action, and why today (deadline, age, unblocks) | 0.15 |
+| Grounded: every claim traces to the daily log, an entity page, or live data — no invented meetings, numbers, or commitments | 0.15 |
+| Chief-of-staff coverage: uses Commitments (waiting on / owed) and Decisions Pending when evidence exists; honest "quiet day" when it does not | 0.10 |
 | Saved correctly via `save_brief.py` with confirmed `SUCCESS:` line; valid JSON in the documented shape | 0.15 |
 
 A brief scoring below the threshold is most often one whose priorities are chores — ranking "fix", "validate", "configure", or "deploy" tasks for the user's own tooling. Score those as failing on the first criterion regardless of how well they are saved.
@@ -31,6 +33,8 @@ A brief scoring below the threshold is most often one whose priorities are chore
 - Filling 3 priority slots when only one thing genuinely moves a goal.
 - Inventing goals to satisfy the goal-id rule when `IDENTITY.md` has none.
 - Ranking untagged, `[agent]`, `[papr]`, or `(no-goal)` open items as priorities.
+- Resurfacing an item the user checked off or dismissed, or treating an irrelevance note as applying only to that one exact title.
+- Skipping `save_brief.py --reviews` (or reading `brief_reviews` via sqlite3).
 - Writing `briefs` via `sqlite3`, a hand-rolled `/api/db/write` call, or `$JOB_DB`; claiming success without the `SUCCESS:` line.
 
 ## Edge Cases

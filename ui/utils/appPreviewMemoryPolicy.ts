@@ -1,7 +1,7 @@
 import type { Tab } from "../types/tabs";
 
 /** Max app preview iframes kept in memory when only one pane is visible. */
-export const MAX_MOUNTED_APP_PREVIEWS = 3;
+export const MAX_MOUNTED_APP_PREVIEWS = 7;
 
 /** Never cap below visible panes + one warm hidden tab (split view). */
 export function effectiveMaxMountedAppPreviews(visibleAppTabCount: number): number {

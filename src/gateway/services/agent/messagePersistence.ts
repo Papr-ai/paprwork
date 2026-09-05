@@ -96,14 +96,6 @@ export function createAssistantStoredMessage(args: {
     toolCalls:
       args.toolCalls.length > 0
         ? args.toolCalls.map((toolCall) => {
-            // Debug: Log what we're saving
-            console.log(`[MessagePersistence] Saving tool call:`, {
-              id: toolCall.toolCallId,
-              name: toolCall.toolName,
-              hasArgs: !!toolCall.args,
-              argsKeys: toolCall.args ? Object.keys(toolCall.args) : [],
-            });
-            
             return {
               id: toolCall.toolCallId,
               name: toolCall.toolName,

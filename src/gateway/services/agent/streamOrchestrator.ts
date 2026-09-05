@@ -389,7 +389,17 @@ export async function* orchestrateModelStream(
   fullStream: AsyncIterable<unknown>,
   chatId: string,
   apiKeys: string[],
-  streamOptions?: { textBufferMin?: number },
+  streamOptions?: {
+    textBufferMin?: number;
+    /**
+     * Caller-owned sequence array. When provided the orchestrator pushes into
+     * it directly so abort/checkpoint paths see the live interleaved order
+     * even if the generator never returns (user stop, new message, crash).
+     * Without this, an interrupted message persisted with sequence=[] and the
+     * UI fell back to the legacy layout (narration duplicated).
+     */
+    sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
+  },
 ): AsyncGenerator<ChatStreamChunk, StreamOrchestratorResult> {
   const TEXT_BUFFER_MIN = streamOptions?.textBufferMin ?? 50;
   const REASONING_BUFFER_MIN = 1; // Stream reasoning in real-time (no batching)
@@ -418,7 +428,8 @@ export async function* orchestrateModelStream(
   }> = [];
 
   // Build V1-style sequence for interleaving text and tool calls
-  const sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
+  const sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> =
+    streamOptions?.sequence ?? [];
   let currentTextSegment = ""; // Accumulate text between tool calls
 
   function* flushToolResultBuffer(): Generator<ChatStreamChunk> {
@@ -899,6 +910,13 @@ export async function* orchestrateModelStream(
     // catch/saveMessage path persists them. Yields are not safe in finally
     // (would re-enter the generator), so we just push to the result array.
     drainBufferIntoToolResults();
+    // Same for the trailing narration segment: on abort the normal post-loop
+    // push below never runs, so flush it here so the caller-owned sequence
+    // holds the text that streamed after the last tool call.
+    if (currentTextSegment.trim()) {
+      sequence.push({ type: "text", data: currentTextSegment.trim() });
+      currentTextSegment = "";
+    }
   }
 
   // Flush any remaining tool results (e.g. stream ended after last tool-result)

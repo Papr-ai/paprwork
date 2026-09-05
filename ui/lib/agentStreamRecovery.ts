@@ -226,6 +226,31 @@ function upgradeAssistantFromServer(
   };
 }
 
+/**
+ * Match server rows to optimistic locals by content only within the server
+ * window. Older paginated turns can repeat the same text; matching them pulls
+ * firstConsumedIndex forward and drops the earlier half of the chat below its
+ * own latest message.
+ */
+function findLocalContentDuplicate(
+  base: ChatMessage[],
+  serverMsg: ChatMessage,
+  consumedLocalIds: Set<string>,
+  role: "user" | "assistant",
+  windowStartIndex: number,
+): ChatMessage | undefined {
+  for (let i = base.length - 1; i >= windowStartIndex; i--) {
+    const localMsg = base[i];
+    if (localMsg.role !== role) continue;
+    if (consumedLocalIds.has(localMsg.id)) continue;
+    if (role === "assistant" && localMsg.isStreaming) continue;
+    if (localMsg.content.trim() !== serverMsg.content.trim()) continue;
+    if (serverMsg.content.trim().length === 0) continue;
+    return localMsg;
+  }
+  return undefined;
+}
+
 export function mergeHistoryWithLocal(
   localMessages: ChatMessage[],
   serverMessages: ChatMessage[],
@@ -245,6 +270,7 @@ export function mergeHistoryWithLocal(
 
   const merged: ChatMessage[] = [];
   const consumedLocalIds = new Set<string>();
+  const windowStartIndex = Math.max(0, base.length - serverMessages.length);
 
   // Server list is chronological — walk it so missing middle turns land in order.
   for (const serverMsg of serverMessages) {
@@ -260,11 +286,12 @@ export function mergeHistoryWithLocal(
     }
 
     if (serverMsg.role === "user") {
-      const localDup = base.find(
-        (m) =>
-          m.role === "user" &&
-          !consumedLocalIds.has(m.id) &&
-          m.content.trim() === serverMsg.content.trim(),
+      const localDup = findLocalContentDuplicate(
+        base,
+        serverMsg,
+        consumedLocalIds,
+        "user",
+        windowStartIndex,
       );
       if (localDup) {
         merged.push({
@@ -279,13 +306,12 @@ export function mergeHistoryWithLocal(
     }
 
     if (serverMsg.role === "assistant") {
-      const localDup = base.find(
-        (m) =>
-          m.role === "assistant" &&
-          !m.isStreaming &&
-          !consumedLocalIds.has(m.id) &&
-          m.content.trim() === serverMsg.content.trim() &&
-          serverMsg.content.trim().length > 0,
+      const localDup = findLocalContentDuplicate(
+        base,
+        serverMsg,
+        consumedLocalIds,
+        "assistant",
+        windowStartIndex,
       );
       if (localDup) {
         merged.push(upgradeAssistantFromServer(localDup, serverMsg));
@@ -604,4 +630,92 @@ export function scheduleStreamResumeRetry(
 
   const timer = setTimeout(tick, 1000);
   resumeRetryTimers.set(chatId, timer);
+}
+
+export const MAX_AUTO_CONTINUE_ATTEMPTS = 3;
+
+/** Attempts keyed by visible user turn id (resets when the user sends a new message). */
+const autoContinueAttemptsByTurn = new Map<string, number>();
+
+function autoContinueTurnKey(chatId: string, turnId: string): string {
+  return `${chatId}:${turnId}`;
+}
+
+/** Last visible (non-hidden-continue) user message — scopes auto-continue retries. */
+export function findLastVisibleUserMessage(
+  messages: ChatMessage[],
+): ChatMessage | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+    if (isHiddenContinueUserMessage(message.content)) continue;
+    return message;
+  }
+  return undefined;
+}
+
+export function assistantMessageWasStopped(message: ChatMessage): boolean {
+  if (!message.sequence) return false;
+  return message.sequence.some(
+    (item) =>
+      item.type === "tool" &&
+      ((item.data as { status?: string; error?: string }).status === "stopped" ||
+        (item.data as { error?: string }).error === "Stopped by user"),
+  );
+}
+
+export function resetAutoContinueAttempts(chatId: string): void {
+  for (const key of autoContinueAttemptsByTurn.keys()) {
+    if (key.startsWith(`${chatId}:`)) {
+      autoContinueAttemptsByTurn.delete(key);
+    }
+  }
+}
+
+export function getAutoContinueAttempts(
+  chatId: string,
+  messages: ChatMessage[],
+): number {
+  const turn = findLastVisibleUserMessage(messages);
+  if (!turn) return 0;
+  return autoContinueAttemptsByTurn.get(autoContinueTurnKey(chatId, turn.id)) ?? 0;
+}
+
+export function recordAutoContinueAttempt(
+  chatId: string,
+  messages: ChatMessage[],
+): number {
+  const turn = findLastVisibleUserMessage(messages);
+  if (!turn) return 0;
+  const key = autoContinueTurnKey(chatId, turn.id);
+  const next = (autoContinueAttemptsByTurn.get(key) ?? 0) + 1;
+  autoContinueAttemptsByTurn.set(key, next);
+  return next;
+}
+
+/** True when the UI shows "Interrupted" and we should auto-send a hidden continue. */
+export function shouldAutoContinueInterruptedTurn(args: {
+  chatId: string;
+  messages: ChatMessage[];
+  isSending: boolean;
+  connectionPaused: boolean;
+  needsStreamRecovery: boolean;
+  gatewayReady: boolean;
+}): boolean {
+  if (
+    args.isSending ||
+    args.connectionPaused ||
+    args.needsStreamRecovery ||
+    !args.gatewayReady
+  ) {
+    return false;
+  }
+
+  const lastAssistant = [...args.messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  if (!lastAssistant?.interrupted) return false;
+  if (assistantMessageWasStopped(lastAssistant)) return false;
+
+  return getAutoContinueAttempts(args.chatId, args.messages) < MAX_AUTO_CONTINUE_ATTEMPTS;
 }

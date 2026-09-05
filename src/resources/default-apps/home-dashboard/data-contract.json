@@ -3,9 +3,63 @@
   "enforceOnFailure": true,
   "tables": {
     "briefs": {
-      "requiredColumns": ["date", "brief_json"],
+      "requiredColumns": [
+        "date",
+        "brief_json"
+      ],
       "writers": [],
-      "readers": ["bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"]
+      "readers": [
+        "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
+      ]
+    },
+    "brief_reviews": {
+      "requiredColumns": [
+        "item_key",
+        "brief_date",
+        "title",
+        "status"
+      ],
+      "writers": [
+        "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
+      ],
+      "readers": [
+        "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
+      ]
+    },
+    "goals": {
+      "requiredColumns": [
+        "id",
+        "title",
+        "level",
+        "status"
+      ],
+      "writers": [],
+      "readers": [
+        "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
+      ]
+    },
+    "tasks": {
+      "requiredColumns": [
+        "id",
+        "title",
+        "status",
+        "owner"
+      ],
+      "writers": [],
+      "readers": [
+        "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
+      ]
+    },
+    "goal_entities": {
+      "requiredColumns": [
+        "id",
+        "goal_id",
+        "entity_ref"
+      ],
+      "writers": [],
+      "readers": [
+        "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c"
+      ]
     }
   },
   "jobs": {

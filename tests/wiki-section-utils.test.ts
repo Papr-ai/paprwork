@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
+import {canonicalSectionTitle,
+  normalizeEntitySections,
   collectOpenItemsAcrossEntities,
   formatLastUpdated,
   formatUpdatedAt,
@@ -14,8 +15,7 @@ import {
   parseWikiEntityRef,
   sortWikiNodesByUpdatedAt,
   splitEntityMentions,
-  wikiNodeUpdatedAtMs,
-} from "../ui/utils/wikiSectionUtils";
+  wikiNodeUpdatedAtMs, canonicalSectionTitle, normalizeEntitySections } from "../ui/utils/wikiSectionUtils";
 import type { WikiNode } from "../ui/types/wiki";
 
 describe("wikiSectionUtils", () => {
@@ -230,6 +230,61 @@ describe("wikiSectionUtils", () => {
     expect(sorted[0].label).toBe("New");
     expect(wikiNodeUpdatedAtMs(sorted[0])).toBeGreaterThan(
       wikiNodeUpdatedAtMs(sorted[1]),
+    );
+  });
+});
+
+describe("legacy section aliasing (Wiki Writer ≤v8 pages must still render)", () => {
+  it("maps legacy headings onto canonical sections", () => {
+    expect(canonicalSectionTitle("Overview")).toBe("Context & Background");
+    expect(canonicalSectionTitle("Key Facts")).toBe("Key Details");
+    expect(canonicalSectionTitle("Timeline")).toBe("Key Interactions");
+    expect(canonicalSectionTitle("Sources")).toBe("Key Interactions");
+    expect(canonicalSectionTitle("Related Entities")).toBe("Key Details");
+    expect(canonicalSectionTitle("Update: July 14, 2026 — Cloud Deployment Unblocked")).toBe("Key Interactions");
+    expect(canonicalSectionTitle("Key Interactions")).toBe("Key Interactions");
+    expect(canonicalSectionTitle("The Bug")).toBeNull();
+  });
+
+  it("folds legacy sections into renderable ones without losing content", () => {
+    const out = normalizeEntitySections({
+      Overview: "Home is the daily-brief dashboard.",
+      "Key Facts": "| Field | Value |\n|---|---|\n| App ID | abc |",
+      Details: "### Root cause\nsave_brief.py used the wrong sourceId.",
+      Timeline: "- **2026-09-01** — fixed",
+      Sources: "- Daily log: memory/2026-09-01.md",
+      "Open Items": "- [ ] [user] Confirm brief (G1)",
+      "The Bug": "free-form heading nobody mapped",
+    });
+    expect(Object.keys(out).sort()).toEqual(
+      ["Context & Background", "Key Details", "Key Interactions", "Open Items"].sort(),
+    );
+    expect(out["Context & Background"]).toContain("Home is the daily-brief dashboard.");
+    expect(out["Context & Background"]).toContain("### The Bug");
+    expect(out["Key Details"]).toContain("| App ID | abc |");
+    expect(out["Key Interactions"]).toContain("### Details");
+    expect(out["Key Interactions"]).toContain("### Timeline");
+    expect(out["Key Interactions"]).toContain("### Sources");
+    // Open Items is index-addressed for check-off writes — must be passed through untouched.
+    expect(out["Open Items"]).toBe("- [ ] [user] Confirm brief (G1)");
+  });
+
+  it("never folds foreign content into Open Items", () => {
+    const out = normalizeEntitySections({
+      "Open Items": "- [ ] [user] a",
+      Commitments: "- [ ] owed to user: MSA from Justin",
+    });
+    expect(out["Open Items"]).toBe("- [ ] [user] a");
+    expect(out["Key Interactions"]).toContain("MSA from Justin");
+  });
+
+  it("canonical content stays first when a legacy section folds into it", () => {
+    const out = normalizeEntitySections({
+      "Key Interactions": "- **2026-09-04** — canonical entry",
+      Timeline: "- **2026-07-27** — legacy entry",
+    });
+    expect(out["Key Interactions"].indexOf("canonical entry")).toBeLessThan(
+      out["Key Interactions"].indexOf("legacy entry"),
     );
   });
 });

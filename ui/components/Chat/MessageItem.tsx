@@ -62,6 +62,8 @@ function resolveDelegationAgentDisplay(
 import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { getAssistantCopyText } from "../../utils/getAssistantCopyText";
+import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
+import { AgentLoadingDots } from "./AgentLoadingDots";
 import "./MessageItem.css";
 
 interface MessageItemProps {
@@ -692,7 +694,10 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
 
   // Check if message has V1-style sequence
   const hasSequence = message.sequence && message.sequence.length > 0;
-
+  const showStreamingPlaceholder =
+    !isUser &&
+    !!message.isStreaming &&
+    !assistantMessageHasVisibleContent(message);
 
   return (
     <div
@@ -763,6 +768,8 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
         {isUser && message.attachments && message.attachments.length > 0 && (
           <MessageAttachments attachments={message.attachments} />
         )}
+
+        {showStreamingPlaceholder ? <AgentLoadingDots /> : null}
 
         {/* V1-STYLE SEQUENCE RENDERING */}
         {hasSequence && !isUser ? (

@@ -1011,6 +1011,53 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.5.9" && (
+          <div className="about-card">
+            <h3>What's New in v2.5.9</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Gemini 3.8 Flash &amp; Flash Line Updates</strong>
+                <p>
+                  Added Gemini 3.5 Flash-Lite through 3.8 Flash to the model
+                  picker. Gemini 3.8 Flash is the new recommended Google default
+                  with intro pricing through end of 2026.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Goals, Tasks &amp; Home Dashboard</strong>
+                <p>
+                  Workspace goals and tasks now project into the Home dashboard
+                  with brief reviews, goal entities, and improved chief-of-staff
+                  daily brief flow.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; Streaming Reliability</strong>
+                <p>
+                  Fixed paginated history merge order, assistant message
+                  visibility during streaming, and chat recovery after store
+                  wipes. Cleaner loading indicators while the agent works.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso &amp; Gateway Performance</strong>
+                <p>
+                  Local DB read cache, replica background recovery, sync items
+                  cache, and faster gateway startup for large workspaces.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.5.9"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.8" && (
           <div className="about-card">
             <h3>What's New in v2.5.8</h3>

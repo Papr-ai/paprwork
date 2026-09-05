@@ -71,6 +71,8 @@ interface MiniAppPublishBarProps {
   linkedJobCount?: number;
   onTrackPullComplete?: () => void;
   onRefreshPreview?: () => void;
+  /** False when preview tab is backgrounded (LRU keep-alive). Pauses sync polling. */
+  previewTabVisible?: boolean;
 }
 
 const ACCESS_OPTIONS: {
@@ -263,6 +265,7 @@ export function MiniAppPublishBar({
   linkedJobCount = 0,
   onTrackPullComplete,
   onRefreshPreview,
+  previewTabVisible = true,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
@@ -304,7 +307,10 @@ export function MiniAppPublishBar({
     bumpQueue: webSyncBumpQueue,
     pullUpdates: webSyncPullUpdates,
     applyRemoteUpdates: webSyncApplyRemoteUpdates,
-  } = useAppCloudSyncStatus(appId, { enabled: workspaceMode === "preview" });
+  } = useAppCloudSyncStatus(appId, {
+    enabled: workspaceMode === "preview",
+    previewTabVisible,
+  });
 
   useEffect(() => {
     const mergeRequired = webSyncStatus?.gitRemoteRequiresReview === true;

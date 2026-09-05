@@ -33,6 +33,7 @@ import { resetReplicaSidecars } from "./tursoReplicaSidecarWedge.js";
 
 const WORKER_BOOT_TIMEOUT_MS = 20_000;
 const STDERR_RING_BYTES = 4_000;
+const TIMING_RING_LINES = 400;
 /**
  * An abort dumps a full native + JS stack across many chunks. Forward the first few for
  * diagnosis and keep the rest in the ring buffer only, so one crash cannot flood the log.
@@ -85,6 +86,8 @@ export class TursoReplicaSyncWorkerClient {
   private booted: Promise<void> | null = null;
   private stdoutBuffer = "";
   private stderrRing = "";
+  /** Per-op timing lines from the worker (`op=… queueMs=… execMs=…`), newest last. */
+  private readonly timingRing: string[] = [];
   private shuttingDown = false;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
@@ -96,6 +99,11 @@ export class TursoReplicaSyncWorkerClient {
   onCrash(listener: TursoSyncWorkerCrashListener): () => void {
     this.crashListeners.add(listener);
     return () => this.crashListeners.delete(listener);
+  }
+
+  /** Recent worker op timings for diagnostics (see /api/debug/turso-worker-timings). */
+  getRecentTimings(): string[] {
+    return [...this.timingRing];
   }
 
   // ---- typed helpers -------------------------------------------------------------------
@@ -301,6 +309,22 @@ export class TursoReplicaSyncWorkerClient {
         this.stderrRing = (this.stderrRing + text).slice(-STDERR_RING_BYTES);
         if (text.trim().length === 0) {
           return;
+        }
+        // Timing lines are high-volume diagnostics: keep them in a ring, never count them
+        // against the stderr chunk cap that guards against a chatty crashing engine.
+        const timingLines = text
+          .split("\n")
+          .filter((l) => l.includes(" queueMs="));
+        if (timingLines.length > 0) {
+          for (const l of timingLines) {
+            this.timingRing.push(`${new Date().toISOString()} ${l.replace("[TursoSyncWorker] ", "")}`);
+          }
+          while (this.timingRing.length > TIMING_RING_LINES) {
+            this.timingRing.shift();
+          }
+          if (timingLines.length === text.trim().split("\n").length) {
+            return;
+          }
         }
         stderrChunksLogged += 1;
         if (stderrChunksLogged <= STDERR_LOG_CHUNK_LIMIT) {

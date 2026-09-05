@@ -37,7 +37,7 @@ import {
 import { WikiTasksView } from "./WikiTasksView";
 import { HomeTodayView } from "./HomeTodayView";
 import { RelatedMemoriesPanel } from "./WikiRelatedMemories";
-import { entityUpdatedAt, KEY_DETAIL_HIDDEN_KEYS, parseDailyLogDate, sortWikiNodesByUpdatedAt } from "../../utils/wikiSectionUtils";
+import { entityUpdatedAt, KEY_DETAIL_HIDDEN_KEYS, normalizeEntitySections, parseDailyLogDate, sortWikiNodesByUpdatedAt } from "../../utils/wikiSectionUtils";
 import { getActiveWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
 import "./WikiLibrary.css";
 
@@ -750,7 +750,7 @@ const SECTION_ICONS: Record<string, string> = {
 };
 
 function displaySectionsFor(node: WikiNode): Record<string, string> {
-  const sections = { ...(node.sections ?? {}) };
+  const sections = normalizeEntitySections(node.sections ?? {});
   if (!sections["Context & Background"] && node.description)
     sections["Context & Background"] = node.description;
   if (!sections["Key Details"]) {

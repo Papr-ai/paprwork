@@ -16,10 +16,28 @@ import {
 } from "./tursoReplica/tursoReplicaRouting.js";
 
 const DEFAULT_APP_OPEN_DEBOUNCE_MS = 3_000;
+/**
+ * Skip app-open reconciles when this app was reconciled recently. Tab focus / keep-alive
+ * eviction remounts the preview far more often than cloud data changes, and the
+ * sync-index heartbeat + db-changed SSE already keep the replica current between opens.
+ */
+const DEFAULT_APP_OPEN_COOLDOWN_MS = 60_000;
 
 const appOpenTimers = new Map<string, NodeJS.Timeout>();
 const appOpenInFlight = new Set<string>();
+const appOpenLastReconciledAt = new Map<string, number>();
 const dbIdPullInFlight = new Set<string>();
+
+function cooldownMs(): number {
+  const raw = process.env.TURSO_PULL_APP_OPEN_COOLDOWN_MS;
+  if (!raw) {
+    return DEFAULT_APP_OPEN_COOLDOWN_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_APP_OPEN_COOLDOWN_MS;
+}
 
 function debounceMs(): number {
   const raw = process.env.TURSO_PULL_APP_OPEN_DEBOUNCE_MS;
@@ -40,6 +58,11 @@ export function scheduleTursoPullForAppOpen(appId: string): void {
 
   const trimmed = appId.trim();
   if (!trimmed) {
+    return;
+  }
+
+  const lastAt = appOpenLastReconciledAt.get(trimmed);
+  if (lastAt !== undefined && Date.now() - lastAt < cooldownMs()) {
     return;
   }
 
@@ -77,6 +100,7 @@ async function flushTursoPullForAppOpen(appId: string): Promise<void> {
       { appId },
       { trigger: "app_open" },
     );
+    appOpenLastReconciledAt.set(appId, Date.now());
   } catch (error) {
     console.warn(
       `[TursoPullScheduler] App-open pull failed for ${appId}:`,
@@ -155,5 +179,6 @@ export function resetTursoPullSchedulerForTests(): void {
   }
   appOpenTimers.clear();
   appOpenInFlight.clear();
+  appOpenLastReconciledAt.clear();
   dbIdPullInFlight.clear();
 }

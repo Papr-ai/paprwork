@@ -154,10 +154,34 @@ export function recordHasRuntimeFields(record: Record<string, unknown>): boolean
   return JOB_RUNTIME_FIELD_KEYS.some((key) => record[key] !== undefined);
 }
 
-/** Stable SHA256 of config JSON for content-hash comparisons. */
+/**
+ * Deterministic JSON with keys sorted at EVERY depth.
+ *
+ * Do NOT use `JSON.stringify(value, Object.keys(value).sort())` — the second
+ * argument is an array *replacer*, not a sort order. It acts as a key allowlist
+ * applied at every nesting level, so nested objects (schedule.cron,
+ * retries.maxAttempts, dependsOn[].jobId) collapse to `{}` and config edits
+ * hash identically.
+ */
+function stableJsonStringify(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(stableJsonStringify).join(",")}]`;
+  }
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([k, v]) => `${JSON.stringify(k)}:${stableJsonStringify(v)}`);
+  return `{${entries.join(",")}}`;
+}
+
+/** Stable SHA256 of config JSON (key-order independent, all depths). */
 export function hashJobConfigContent(config: JobConfigSlice): string {
-  const stable = JSON.stringify(config, Object.keys(config).sort());
-  return createHash("sha256").update(stable).digest("hex");
+  return createHash("sha256")
+    .update(stableJsonStringify(config))
+    .digest("hex");
 }
 
 export function parseJobStatus(value: string): JobStatus {

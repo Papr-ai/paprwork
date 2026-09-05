@@ -121,6 +121,42 @@ describe("MessageList", () => {
       const streamingMessage = screen.getByText(/This is a streaming response/);
       expect(streamingMessage).toBeDefined();
     });
+
+    it("shows loading dots inside empty streaming assistant shell", () => {
+      const streamingMessages = [
+        {
+          id: "user-1",
+          role: "user" as const,
+          content: "Hello",
+        },
+        {
+          id: "assistant-stream",
+          role: "assistant" as const,
+          content: "",
+          isStreaming: true,
+          sequence: [],
+          toolCalls: [],
+        },
+      ];
+
+      render(
+        <MessageList chatId="test-chat" messages={streamingMessages} isSending={true} />,
+      );
+
+      expect(screen.getByTestId("agent-loading-indicator")).toBeDefined();
+    });
+
+    it("shows list-level loading dots before streaming assistant message exists", () => {
+      render(
+        <MessageList
+          chatId="test-chat"
+          messages={[{ id: "user-1", role: "user", content: "Hello" }]}
+          isSending={true}
+        />,
+      );
+
+      expect(screen.getByTestId("agent-loading-indicator")).toBeDefined();
+    });
   });
 
   describe("Message Timestamps", () => {

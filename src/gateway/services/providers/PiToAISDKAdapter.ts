@@ -45,6 +45,13 @@ type OurChunk =
 export async function* adaptPiStreamToAISDK(
   piStream: AsyncIterable<AssistantMessageEvent>,
 ): AsyncGenerator<OurChunk> {
+  // pi-ai's contract: every stream ends with exactly one terminal event —
+  // `done` (stop | length | toolUse) or `error` (aborted | error). If the
+  // iterator ends without either, the provider closed the socket gracefully
+  // mid-turn (idle timeout, proxy close). Without this guard the caller
+  // cannot distinguish that from a real completion: the message is saved as
+  // complete with incomplete=0 and zero usage, and the turn is silently lost.
+  let terminated = false;
   try {
     for await (const event of piStream) {
       switch (event.type) {
@@ -81,6 +88,7 @@ export async function* adaptPiStreamToAISDK(
           break;
         }
         case "done": {
+          terminated = true;
           const reason = event.reason ?? "stop";
           const finishReason =
             reason === "toolUse"
@@ -92,6 +100,7 @@ export async function* adaptPiStreamToAISDK(
           break;
         }
         case "error": {
+          terminated = true;
           yield {
             type: "error",
             error:
@@ -106,6 +115,15 @@ export async function* adaptPiStreamToAISDK(
       }
     }
   } catch (error) {
+    terminated = true;
     yield { type: "error", error };
+  }
+
+  if (!terminated) {
+    yield {
+      type: "error",
+      error:
+        "STREAM_ENDED_EARLY: provider closed the stream without a done/error event",
+    };
   }
 }

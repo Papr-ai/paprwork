@@ -71,10 +71,15 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gemini-2.5-flash-lite": { input: 0.15, output: 0.6 },
   "gemini-2.5-flash": { input: 0.3, output: 1.2 },
   "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
   "gemini-3.5-flash": { input: 1.5, output: 9.0 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.7-flash": { input: 1.5, output: 7.5 },
+  // Intro pricing through 2026-12-31; standard $1.50/$7.50 from 2027-01-01
+  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
-  "gemini-3-flash-preview": { input: 0.6, output: 2.4 },
+  "gemini-3-flash-preview": { input: 0.5, output: 3.0 },
   "gemini-3-pro-preview": { input: 2.5, output: 10.0 },
 
   // Ollama (local inference — no per-token API charge)

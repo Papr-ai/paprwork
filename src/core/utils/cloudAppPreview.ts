@@ -167,7 +167,7 @@ export function buildPreviewLandingHtml(
     h1 { margin: 0; font-size: 26px; line-height: 1.15; font-weight: 600; color: #1d1d1f; }
     .app-description { margin: 0 0 32px; color: #6e6e73; line-height: 1.45; font-size: 15px; font-style: italic; }
     .gate-status { margin: 0; font-size: 15px; font-weight: 600; color: #1d1d1f; line-height: 1.4; }
-    .gate-detail { margin: 12px 0 0; color: #515154; line-height: 1.55; font-size: 14px; text-align: left; }
+    .gate-detail { margin: 12px 0 0; color: #515154; line-height: 1.55; font-size: 14px; }
     .gate-actions { margin-top: 32px; display: flex; flex-direction: column; align-items: center; gap: 12px; }
     .btn { display: inline-flex; align-items: center; justify-content: center; min-width: 220px; padding: 10px 20px; border-radius: 6px; text-decoration: none; font-weight: 500; font-size: 14px; transition: opacity 0.15s, transform 0.15s, box-shadow 0.15s; }
     .btn--primary { background: #0060e0; color: #fff; border: 1px solid #0060e0; }

@@ -11,6 +11,23 @@ import {
 } from "./tursoTableFingerprint.js";
 import { maxSyncLogId } from "./tursoSyncLog.js";
 import Database from "better-sqlite3";
+import { isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
+
+/**
+ * Never let a legacy better-sqlite3 open block the gateway event loop. The default busy
+ * timeout is 5000ms and it is a *synchronous sleep* on the main thread — one contended
+ * file freezes every WS/HTTP request for 5s. Fail fast instead; callers treat errors as
+ * "unknown, do the full check".
+ */
+const LEGACY_PROBE_BUSY_TIMEOUT_MS = 100;
+
+function isReplicaManagedSafe(dbPath: string): boolean {
+  try {
+    return isReplicaManagedDbPath(dbPath);
+  } catch {
+    return false;
+  }
+}
 
 export const TURSO_SYNC_STATE_FILENAME = ".turso-sync-state.json";
 
@@ -421,9 +438,21 @@ export function isLinkedSourceDirtyFastIgnoringFlag(
   }
 
   const lastPushed = prev.lastPushedLogId ?? 0;
+
+  // Plan A replica files are owned by the sync worker's engine, which holds a lock the
+  // legacy engine cannot share. Opening here would spin in SQLite's busy handler on the
+  // main thread. Replica dirtiness comes from syncStatusForLinkedDb (worker stats).
+  if (isReplicaManagedSafe(normalizedPath)) {
+    return null;
+  }
+
   let db: Database.Database | undefined;
   try {
-    db = new Database(normalizedPath, { readonly: true, fileMustExist: true });
+    db = new Database(normalizedPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: LEGACY_PROBE_BUSY_TIMEOUT_MS,
+    });
     const maxId = maxSyncLogId(db);
     if (maxId > lastPushed) {
       return true;

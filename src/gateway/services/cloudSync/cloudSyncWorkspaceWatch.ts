@@ -98,7 +98,17 @@ export function startWorkspaceWatcher(host: CloudSyncWorkspaceWatchHost): void {
     recursive: true,
     settleMs: 1000, // was chokidar awaitWriteFinish.stabilityThreshold
     ignore: isIgnoredWorkspaceWatchPath,
-    onEvent: () => scheduleDebounce(),
+    onEvent: (event) => {
+      scheduleDebounce();
+      // Goals/tasks projection: IDENTITY.md, goals/archive.md, entities/*.md edits
+      // (main agent in chat, user in editor) re-project into the Home DB.
+      const rel = path.relative(path.join(paprDir, "workspace"), event.path);
+      if (!rel.startsWith("..")) {
+        void import("../goalsTasksProjection.js").then(({ isGoalsTasksSourcePath, scheduleGoalsTasksProjection }) => {
+          if (isGoalsTasksSourcePath(rel)) scheduleGoalsTasksProjection(`watch ${rel}`);
+        });
+      }
+    },
     onError: (err) => {
       if (!String(err).includes("EMFILE")) {
         console.error("[CloudSync] Watcher error:", err?.message ?? String(err));

@@ -9,6 +9,7 @@ import { getDatabaseRegistryService } from "../DatabaseRegistryService.js";
 import type { AppDataSource } from "../appDataSources.js";
 import { paprDbApplyMigration } from "./PaprDbService.js";
 import { queryLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
+import { migrationSatisfiedOnReplica } from "./tursoReplicaMigrationVerify.js";
 
 function recordAsSource(record: DatabaseRecord): AppDataSource {
   return {
@@ -68,8 +69,15 @@ export async function applyReplicaRegistryDatabaseMigrations(
 
   for (const fileName of files) {
     const bareId = fileName.replace(/\.sql$/, "");
-    if (appliedIds.has(fileName) || appliedIds.has(bareId)) {
-      continue;
+    const ledgerSaysApplied = appliedIds.has(fileName) || appliedIds.has(bareId);
+    if (ledgerSaysApplied) {
+      const satisfied = await migrationSatisfiedOnReplica(source, migrationRoot, bareId);
+      if (satisfied) {
+        continue;
+      }
+      console.warn(
+        `[TursoReplica] Migration ${bareId} is in schema_migrations but missing on the replica handle — re-applying`,
+      );
     }
 
     const result = await paprDbApplyMigration({

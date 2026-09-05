@@ -10,6 +10,9 @@
 import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
 
+/** Wait for sync-engine write lock to clear before failing local reads. */
+const LOCAL_READ_BUSY_TIMEOUT_MS = 3_000;
+
 // ── Message protocol ──────────────────────────────────────────────────────
 
 export interface DbWorkerWriteBatchStatement {
@@ -50,15 +53,26 @@ export interface DbWorkerResponse {
  * silently swallow real corruption — SQLITE_CORRUPT still propagates.
  */
 function openDb(dbPath: string, readonly: boolean): Database.Database {
+  const openOptions: Database.Options = {
+    readonly,
+    fileMustExist: true,
+    ...(readonly ? { timeout: LOCAL_READ_BUSY_TIMEOUT_MS } : {}),
+  };
   try {
-    return new Database(dbPath, { readonly, fileMustExist: true });
+    const db = new Database(dbPath, openOptions);
+    if (readonly) {
+      db.pragma(`busy_timeout = ${LOCAL_READ_BUSY_TIMEOUT_MS}`);
+    }
+    return db;
   } catch (err) {
     const code = (err as { code?: string }).code ?? "";
     const recoverable =
       readonly && (code === "SQLITE_IOERR" || code === "SQLITE_CANTOPEN" || code === "SQLITE_READONLY");
     if (!recoverable) throw err;
     // Read-write open lets SQLite rebuild the -shm sidecar from the -wal.
-    return new Database(dbPath, { readonly: false, fileMustExist: true });
+    const db = new Database(dbPath, { readonly: false, fileMustExist: true });
+    db.pragma(`busy_timeout = ${LOCAL_READ_BUSY_TIMEOUT_MS}`);
+    return db;
   }
 }
 

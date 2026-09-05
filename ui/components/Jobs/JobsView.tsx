@@ -474,7 +474,7 @@ export function JobsView() {
       });
       return `After ${depNames.join(", ")}`;
     }
-    return "";
+    return "Manual";
   };
 
   const renderJobRow = (

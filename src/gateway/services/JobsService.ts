@@ -5,7 +5,11 @@ import type { ChildProcess } from "child_process";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
 import Database from "better-sqlite3";
-import { writeJsonAtomic, parseJsonTolerant } from "../../core/utils/atomicJsonWrite.js";
+import {
+  writeJsonAtomic,
+  writeFileAtomic,
+  parseJsonTolerant,
+} from "../../core/utils/atomicJsonWrite.js";
 import { JobDatabase } from "./jobs/JobDatabase.js";
 import {
   formatJobArchitectureErrors,
@@ -429,6 +433,7 @@ export class JobsService {
       appIds?: string[];
       name?: string;
       recipe?: JobRecord["recipe"];
+      retries?: JobRecord["retries"];
     };
     try {
       bundledDef = JSON.parse(
@@ -474,8 +479,14 @@ export class JobsService {
     const recipeChanged =
       bundledRecipe !== undefined &&
       JSON.stringify(bundledRecipe) !== JSON.stringify(job.recipe ?? null);
+    // Retries only fill a gap: an install that never had a retry policy gets
+    // the bundled one (so transient model-stream drops are retried), but a
+    // user-tuned policy is left alone.
+    const bundledRetries = bundledDef.retries;
+    const retriesChanged =
+      bundledRetries !== undefined && !job.retries;
 
-    if (!commandChanged && !appIdsChanged && !recipeChanged) {
+    if (!commandChanged && !appIdsChanged && !recipeChanged && !retriesChanged) {
       return;
     }
 
@@ -484,6 +495,7 @@ export class JobsService {
       ...(commandChanged ? { command: normalizedCommand } : {}),
       ...(appIdsChanged ? { appIds: nextAppIds } : {}),
       ...(recipeChanged ? { recipe: bundledRecipe } : {}),
+      ...(retriesChanged ? { retries: bundledRetries } : {}),
       updatedAt: new Date().toISOString(),
     };
 
@@ -1060,7 +1072,20 @@ export class JobsService {
     const jobDir = this.getJobDir(job.id);
     await fs.mkdir(jobDir, { recursive: true });
     const { config, runtime } = splitJobRecord(job);
-    await writeJsonAtomic(path.join(jobDir, "job.json"), config);
+    // Runtime-only updates (scheduled runs, status changes) must NOT touch
+    // job.json — cloud sync hashes mtime:size, so an identical rewrite marks
+    // the job "outdated" forever. Skip the write when config bytes are unchanged.
+    const configPath = path.join(jobDir, "job.json");
+    const configJson = JSON.stringify(config, null, 2);
+    let existingConfigJson: string | null = null;
+    try {
+      existingConfigJson = await fs.readFile(configPath, "utf8");
+    } catch {
+      existingConfigJson = null;
+    }
+    if (existingConfigJson !== configJson) {
+      await writeFileAtomic(configPath, configJson);
+    }
     await writeJsonAtomic(path.join(jobDir, JOB_RUNTIME_FILE_NAME), runtime);
   }
 
@@ -2101,6 +2126,22 @@ export class JobsService {
         .then(({ uploadJobRuntimePatch }) =>
           uploadJobRuntimePatch(jobRecordToRuntimePatch(next, "desktop")),
         )
+        .catch(() => {
+          /* non-fatal */
+        });
+    }
+
+    // Sleep / Wiki Writer are the writers of IDENTITY.md goals and entity Open
+    // Items — re-project them into the Home DB (goals / tasks tables) once done.
+    if (status === "completed") {
+      void import("./SleepCycleService.js")
+        .then(async ({ isSleepCycleJobName }) => {
+          const { isWikiWriterJobName } = await import("./WikiWriterService.js");
+          if (isSleepCycleJobName(next.name) || isWikiWriterJobName(next.name)) {
+            const { projectGoalsAndTasks } = await import("./goalsTasksProjection.js");
+            await projectGoalsAndTasks(`after ${next.name}`);
+          }
+        })
         .catch(() => {
           /* non-fatal */
         });

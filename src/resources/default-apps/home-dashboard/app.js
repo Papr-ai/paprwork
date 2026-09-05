@@ -4,8 +4,8 @@ const App = {
   isSampleData: false, // Track if showing sample data
   loadError: false,
   fmtDate(d) { return new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); },
-  loadState() { try { return JSON.parse(localStorage.getItem(this.storeKey) || '{}'); } catch { return {}; } },
-  saveState(s) { localStorage.setItem(this.storeKey, JSON.stringify(s)); },
+  loadState() { return Reviews.cache(); },
+  saveState(s) { Reviews.setCache(s); },
   hash(s) { let h = 0; for (let i = 0; i < s.length; i++) h = ((h << 5) - h + s.charCodeAt(i)) | 0; return `i${Math.abs(h)}`; },
   decorate(brief, date) {
     const state = this.loadState(), reviewed = [];
@@ -70,6 +70,10 @@ const App = {
       btn.innerHTML = '<div class="spinner"></div>Working...';
       const deadline = Date.now() + 5 * 60 * 1000;
       while (Date.now() < deadline) {
+        if (window.PaprPreview && !window.PaprPreview.isVisible()) {
+          await new Promise((r) => setTimeout(r, 1000));
+          continue;
+        }
         await new Promise((r) => setTimeout(r, 3000));
         const statusRes = await fetch(`/api/jobs/status/${jobId}`);
         if (!statusRes.ok) continue;
@@ -148,7 +152,7 @@ const App = {
     this.dates = await Data.dates();
     if (!this.dates.length) this.dates = [Data.todayKey()];
 
-    const [testBrief] = await Promise.all([Data.load(), Goals.load()]);
+    const [testBrief] = await Promise.all([Data.load(), Goals.load(), Reviews.hydrate()]);
     this.loadError = testBrief._loadError === true;
     this.isSampleData = !this.loadError && (this.dates.length === 0 || testBrief._isSample === true);
     
@@ -212,14 +216,22 @@ const App = {
   async review(btn) {
     const id = btn.dataset.id, next = btn.dataset.review, title = btn.dataset.title || 'this item';
     const state = this.loadState();
+    const item = Reviews.findItem(this.brief, id) || { title };
+    const briefDate = this.dates[this.idx] || Data.todayKey();
+    let note;
     if (next === 'irrelevant') {
       const { askText } = await import('/__papr__/papr-dialog.ts');
-      const note = await askText(`Why is "${title}" irrelevant? This note will be saved for later.`, '', state[id]?.note || '', 'Save');
+      note = await askText(`Why is "${title}" irrelevant? Tomorrow's brief will use this to avoid similar items.`, '', state[id]?.note || '', 'Save');
       if (!note) return;
       state[id] = { status: 'irrelevant', note, at: new Date().toISOString() };
     } else if (next === 'complete') state[id] = { status: 'complete', at: new Date().toISOString() };
     else if (next === 'active') delete state[id];
     this.saveState(state); await this.render();
+    // Write-through to the Home DB so the brief job + Sleep can act on it.
+    try {
+      if (next === 'active') await Reviews.remove(id, item);
+      else await Reviews.upsert(id, item, briefDate, next, note);
+    } catch (err) { console.warn('[home] review persist failed (cached locally):', err?.message || err); }
   },
   async turn(dir) {
     if (this.turning) return;

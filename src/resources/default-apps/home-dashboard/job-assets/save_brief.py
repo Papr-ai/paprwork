@@ -99,9 +99,64 @@ def call(endpoint, sql, params):
     return parsed
 
 
+def print_reviews(days=30):
+    """--reviews: dump the user's check/x feedback on past brief items as JSON.
+
+    Read by the brief prompt before ranking so dismissed items (and their
+    siblings under the note's rule) are never resurfaced. Goes through the
+    same gateway path as the save, so it resolves the right sourceId.
+    """
+    try:
+        result = call(
+            "query",
+            "SELECT brief_date, section, item_type, title, status, note, updated_at "
+            "FROM brief_reviews WHERE updated_at >= datetime('now', ?) "
+            "ORDER BY updated_at DESC",
+            [f"-{int(days)} days"],
+        )
+    except SystemExit:
+        # Pre-migration install: table missing. No feedback yet is a valid state.
+        print("[]")
+        return
+    rows = result.get("rows") or []
+    print(json.dumps(rows, ensure_ascii=False, indent=2))
+
+
+def print_tasks():
+    """--tasks: open tasks (L3 goals + entity Open Items) with their goal chain.
+
+    Projected by the gateway from IDENTITY.md and entity pages; this is the
+    candidate pool for today's priorities. Each row carries `id` — put it on
+    the brief item as `task_id` so a check in Home completes the task.
+    """
+    try:
+        result = call(
+            "query",
+            "SELECT t.id, t.title, t.owner, t.due, t.goal_id, t.entity_ref, t.source, "
+            "g.title AS goal_title, g.level AS goal_level, g.parent_id AS goal_parent, "
+            "g.status AS goal_status, g.confidence AS goal_confidence, g.priority AS goal_priority "
+            "FROM tasks t LEFT JOIN goals g ON g.id = t.goal_id "
+            "WHERE t.status = 'open' "
+            "ORDER BY CASE WHEN t.due IS NULL THEN 1 ELSE 0 END, t.due, COALESCE(g.priority, 99), t.title",
+            [],
+        )
+    except SystemExit:
+        print("[]")
+        return
+    print(json.dumps(result.get("rows") or [], ensure_ascii=False, indent=2))
+
+
 def main():
+    if len(sys.argv) >= 2 and sys.argv[1] == "--tasks":
+        print_tasks()
+        return
+    if len(sys.argv) >= 2 and sys.argv[1] == "--reviews":
+        days = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else 30
+        print_reviews(days)
+        return
+
     if len(sys.argv) < 2:
-        die("usage: save_brief.py <brief.json>")
+        die("usage: save_brief.py <brief.json> | save_brief.py --reviews [days] | save_brief.py --tasks")
 
     try:
         with open(sys.argv[1]) as f:

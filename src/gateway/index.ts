@@ -111,6 +111,18 @@ import {
   setCachedCloudLinkSyncReport,
 } from "./services/syncItemsCache.js";
 import {
+  getCachedTursoSyncItemsReport,
+  invalidateTursoSyncItemsCache,
+  setCachedTursoSyncItemsReport,
+  tursoSyncItemsCacheKey,
+} from "./services/tursoSyncItemsCache.js";
+import {
+  buildLocalDbReadCacheKey,
+  getCachedLocalDbReadResult,
+  invalidateLocalDbReadCacheForApp,
+  setCachedLocalDbReadResult,
+} from "./services/appRuntime/localDbReadCache.js";
+import {
   getCloudAppPublishService,
 } from "./services/CloudAppPublishService.js";
 import { getCloudAppInstallService } from "./services/CloudAppInstallService.js";
@@ -746,6 +758,14 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Diagnostics: per-op worker timings (queue wait vs engine time) for replica stalls.
+    app.get("/api/debug/turso-worker-timings", async (_req, res) => {
+      const { getTursoReplicaSyncWorkerClient } = await import(
+        "./services/tursoReplica/TursoReplicaSyncWorkerClient.js"
+      );
+      res.json({ timings: getTursoReplicaSyncWorkerClient().getRecentTimings() });
+    });
+
     app.post("/api/apps/:appId/normalize-databases", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -808,11 +828,31 @@ async function startGateway(): Promise<void> {
           return;
         }
 
+        const sourceKey = source.alias ?? source.dbPath;
+        let cacheKey: string | undefined;
+        if (isLoopbackRequest(req)) {
+          cacheKey = buildLocalDbReadCacheKey({
+            appId,
+            sourceKey,
+            sql,
+            params,
+          });
+          const cached = getCachedLocalDbReadResult(cacheKey);
+          if (cached) {
+            res.json(cached);
+            return;
+          }
+        }
+
         const result = await dbRouter.query(appId, source, sql, params);
         console.log(
           `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
-        res.json({ ...result, source: source.alias });
+        const payload = { ...result, source: source.alias };
+        if (cacheKey) {
+          setCachedLocalDbReadResult(cacheKey, payload, appId);
+        }
+        res.json(payload);
       } catch (err) {
         const message = (err as Error).message;
         console.error("[Gateway] /api/db/query error:", err);
@@ -971,6 +1011,8 @@ async function startGateway(): Promise<void> {
         console.log(
           `[Gateway] /api/db/write app=${appId} source=${source.alias} changes=${result.changes}`,
         );
+        invalidateLocalDbReadCacheForApp(appId);
+        invalidateTursoSyncItemsCache(appId);
         res.json(result);
       } catch (err) {
         const e = err as Error & { status?: number; name?: string };
@@ -1032,6 +1074,8 @@ async function startGateway(): Promise<void> {
         console.log(
           `[Gateway] /api/db/write-batch app=${appId} count=${statements.length} atomic=${payload.atomic}`,
         );
+        invalidateLocalDbReadCacheForApp(appId);
+        invalidateTursoSyncItemsCache(appId);
         res.json(payload);
       } catch (err) {
         const e = err as Error & { status?: number };
@@ -2228,6 +2272,41 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Unified tasks (L3 goals + entity Open Items), projected into the Home DB.
+    app.get("/api/workspace/tasks", async (req, res) => {
+      try {
+        const status = typeof req.query.status === "string" ? req.query.status : "open";
+        const { readWorkspaceTasks } = await import("./services/workspaceTasks.js");
+        res.json(await readWorkspaceTasks({ status }));
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Complete / reopen a task: edits the source markdown (entity Open Item
+    // checkbox or L3 goal block), then re-projects. One check → every agent sees it.
+    app.post("/api/workspace/tasks/:taskId/done", async (req, res) => {
+      try {
+        const body = (req.body ?? {}) as { done?: boolean; outcome?: string };
+        const { setTaskDone } = await import("./services/workspaceTasks.js");
+        const result = await setTaskDone(String(req.params.taskId), body.done !== false, body.outcome);
+        res.status(result.ok ? 200 : 404).json(result);
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Re-project IDENTITY.md goals + entity Open Items into the Home DB now
+    // (agents call this after editing goals in chat; Sleep/Wiki trigger it on completion).
+    app.post("/api/workspace/project", async (_req, res) => {
+      try {
+        const { projectGoalsAndTasks } = await import("./services/goalsTasksProjection.js");
+        res.json(await projectGoalsAndTasks("api"));
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
     app.get("/api/workspace/active", (_req, res) => {
       const pointer = readActiveWorkspacePointer();
       if (!pointer) {
@@ -2310,10 +2389,20 @@ async function startGateway(): Promise<void> {
         }
 
         const github = sync.getGitHubSyncItemsReport();
-        const turso = await buildTursoSyncItemsReport(
-          getPaprAppsRoot(),
-          appId,
-        );
+        const tursoCacheKey = tursoSyncItemsCacheKey(appId);
+        let turso = !forceRefresh
+          ? getCachedTursoSyncItemsReport(tursoCacheKey)
+          : null;
+        let tursoFromCache = turso !== null;
+        if (!turso) {
+          turso = await buildTursoSyncItemsReport(getPaprAppsRoot(), appId, {
+            liveReplicaProbe: forceRefresh,
+          });
+          if (!forceRefresh) {
+            setCachedTursoSyncItemsReport(tursoCacheKey, turso);
+          }
+          tursoFromCache = false;
+        }
 
         let publish = null;
         if (appId) {
@@ -2400,6 +2489,7 @@ async function startGateway(): Promise<void> {
           enabled: true,
           github,
           turso,
+          tursoCached: tursoFromCache,
           publish,
           upload,
           appSync,
@@ -3144,9 +3234,28 @@ async function startGateway(): Promise<void> {
         void import(
           "./services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js"
         )
-          .then(({ repairAllReplicaMigrationAuthorityOnStartup }) =>
-            repairAllReplicaMigrationAuthorityOnStartup(),
-          )
+          .then(({ repairAllReplicaMigrationAuthorityOnStartup }) => {
+            const delayMs = Number(
+              process.env.TURSO_MIGRATION_REPAIR_STARTUP_DELAY_MS ?? 120_000,
+            );
+            const run = () => {
+              void repairAllReplicaMigrationAuthorityOnStartup().catch((err) =>
+                console.warn(
+                  "[Gateway] Replica migration repair startup failed (non-fatal):",
+                  (err as Error).message.slice(0, 120),
+                ),
+              );
+            };
+            if (delayMs <= 0) {
+              run();
+              return;
+            }
+            console.log(
+              `[Gateway] Deferring replica migration repair for ${delayMs}ms ` +
+                "(interactive app reads take priority)",
+            );
+            setTimeout(run, delayMs);
+          })
           .catch((err) =>
             console.warn(
               "[Gateway] Replica migration repair startup failed (non-fatal):",

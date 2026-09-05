@@ -647,10 +647,12 @@ export class AgentService {
       }, 5_000); // 5s debounce
     };
 
-    /** Immediate checkpoint (first tool result, or before long-running tool) */
+    /** Immediate checkpoint (first tool-call) — deferred so SQLite does not block yield/broadcast */
     const immediateCheckpoint = (): void => {
       if (checkpointTimer) clearTimeout(checkpointTimer);
-      void persistCheckpoint();
+      setImmediate(() => {
+        void persistCheckpoint();
+      });
     };
 
     const persistIncompleteAssistant = async (params: {
@@ -1895,14 +1897,18 @@ export class AgentService {
 
       const apiKeys = getApiKeysForSanitization();
       t = performance.now();
-      const streamIterator = orchestrateModelStream(
-        fullStream,
-        chatId,
-        apiKeys,
-        config.provider === "groq" || config.provider === "moonshot"
+      // Hand the orchestrator our own `sequence` array so it is populated live.
+      // Abort/checkpoint paths (persistIncompleteAssistant) read this variable;
+      // previously it stayed [] until the generator returned, so any interrupted
+      // turn was saved with sequence=NULL and the UI rendered the legacy
+      // duplicate-narration layout.
+      sequence = [];
+      const streamIterator = orchestrateModelStream(fullStream, chatId, apiKeys, {
+        sequence,
+        ...(config.provider === "groq" || config.provider === "moonshot"
           ? { textBufferMin: 1 }
-          : undefined,
-      );
+          : {}),
+      });
 
       let firstChunkReceived = false;
       let contextLengthErrorMessage: string | null = null;
@@ -4260,7 +4266,7 @@ ${last15.substring(0, 8_000)}`;
       openai: "gpt-5-6-sol",
       "openai-codex": "gpt-5.3-codex",
       anthropic: "claude-sonnet-5",
-      google: "gemini-3.5-flash",
+      google: "gemini-3.8-flash",
       ollama: "qwen3.5:latest",
       cursor: "composer-2.5",
       zai: "glm-5.2",

@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 8 -->
+<!-- wiki-writer-prompt-version: 11 -->
 
 # Wiki Writer
 
@@ -149,6 +149,7 @@ id: { slug }
 name: { Entity Name }
 description: One-line summary shown on the card.
 status: active
+goals: [G3]            # goal ids this entity serves (Step 3E1); omit when none
 image: ../assets/{type}/{slug}.png
 website: https://example.com
 linkedin: https://www.linkedin.com/company/example/
@@ -159,12 +160,13 @@ updated_at: YYYY-MM-DD
 
 > One-line summary of who/what this entity is.
 
-## Overview
+## Context & Background
 
-Narrative paragraph(s) about this entity — what they do, why they matter,
-how they relate to the user's work. Write in third person, encyclopedic tone.
+Narrative paragraph(s) — what this entity is, why it matters, how it relates to the
+user's work. Third person, encyclopedic tone. Fold in the graph node's `description`
+and anything the Papr Memory graph knows (relationships, linked projects/people).
 
-## Key Facts
+## Key Details
 
 | Field  | Value                      |
 | ------ | -------------------------- |
@@ -172,36 +174,37 @@ how they relate to the user's work. Write in third person, encyclopedic tone.
 | Role   | ...                        |
 | Since  | first mention date         |
 | Status | Active / Inactive          |
+| Graph  | `<graph node id>` (Person/Company/Project) — link to the Papr Memory node |
 
-## Details
+Add rows for whatever the data footprint gives you: app id, job ids, DB ids, deal
+stage, ARR, headcount, domain — facts, one per row.
 
-### {Relevant Section}
+## Key Interactions
 
-Deep content synthesized from databases, memory, and chat history.
-Include evidence, scores, quotes, and analysis — not just surface summaries.
+- **YYYY-MM-DD** — what happened, who was involved, what changed. Cite the source.
+  > "verbatim quote from the source" — Chats/<title>.txt
 
-### {Another Section}
+Newest first. This is the entity's timeline; every entry carries a verified quote
+(see Evidence rules below). Merge, do not duplicate, entries already present.
 
-...
+## Decisions & Insights
 
-## Related Entities
+- **Decision or insight (YYYY-MM-DD)** — one line of rationale. Cite the source.
+  > "verbatim quote" — workspace/memory/YYYY-MM-DD.md
 
-| Entity | Type           | Relationship                | File                               |
-| ------ | -------------- | --------------------------- | ---------------------------------- |
-| {Name} | Person/Company | role/connection description | [`{slug}.md`](../{type}/{slug}.md) |
+Durable, still-true things. Superseded decisions move to Changelog.
 
-## Timeline
+## Open Items
 
-- **YYYY-MM-DD** — what happened (source: chat/job/memory)
+- [ ] [user] Task text (by <date>) (G2)
+- [ ] [agent] Task text
 
-## Sources
+## Changelog
 
-- Chat: "{chat title}" (YYYY-MM-DD)
-- Job: {job name} — {table} ({N} rows)
-- Memory: {memory search result reference}
+- **YYYY-MM-DD** — what changed on this page and why (source).
 ```
 
-**C. Query the graph for relationships** to populate the Related Entities section (prefer `id: { eq: "..." }` when you have a graph id):
+**C. Query the graph for relationships** — pull everything the Papr Memory node knows and fold it into the page (prefer `id: { eq: "..." }` when you have a graph id). Relationships go into **Key Details** rows (e.g. `| Works at | [Papr](../companies/papr.md) |`) and into **Context & Background** prose; there is no separate Related Entities section.
 
 ```
 # For a company — find linked people (when you have company id):
@@ -233,7 +236,7 @@ ls $PAPR_HOME/workspace/entities/people/*.md 2>/dev/null
 ls $PAPR_HOME/workspace/entities/companies/*.md 2>/dev/null
 ```
 
-For each related entity that has a file, add a row to the Related Entities table with a relative markdown link: `[slug.md](../type/slug.md)`.
+For each related entity that has a file, link it from **Key Details** (one row per relationship) or inline in **Context & Background** with a relative markdown link: `[Name](../type/slug.md)`.
 
 Also scan for entity files that mention the current entity:
 
@@ -288,6 +291,24 @@ for **every new company** — it takes one command.
 
    scraping them violates LinkedIn's terms.
 
+### Step 3E1: `goals:` frontmatter — link every entity to the goals it serves
+
+Goals in `IDENTITY.md` → `## Goals` name the entities they run through (`- Entities: projects/x, people/y`). Mirror that on the entity side so the link is visible from either end:
+- Read the current tree once: `curl -s http://localhost:18789/api/workspace/goals` → `entityLinks` is `{ G3: ["projects/rr-partnership", "people/justin-jones"], … }`.
+- On every page you touch, set frontmatter `goals: [G3, G7]` = every goal whose `Entities:` names this page **plus** any goal this page clearly serves from its own content (a project page whose work is the L2's milestone; a person who is the counterparty of an L3). Keep ids only — never titles.
+- If you add a goal on the entity side that the goal's own `Entities:` line lacks, note it in the daily log `## Decisions Pending` ("projects/x serves G3 — add to G3 Entities?") so Sleep confirms it next run. Do not edit IDENTITY.md yourself.
+- Why it matters: an untagged `- [ ]` on a page with exactly **one** goal inherits it automatically in the tasks table; a page with two goals gives no inheritance, so tag those items `(Gn)` explicitly.
+- Do not put `goals:` on `entities/apps/*` pages unless the app *is* the product outcome (e.g. the thing being shipped to customers) — tooling pages must not pull maintenance items into goal traceability.
+
+### Step 3E2: Open Items are the task system — treat them as records, not prose
+
+Every `- [ ]` / `- [x]` line under `## Open Items` is projected by the gateway into the Home DB `tasks` table (id = hash of entity + normalized title; goal from the `(Gn)` tag; owner from the `[user]`/`[agent]` tag; due from a `(by YYYY-MM-DD)` suffix). The Daily Brief picks the user's priorities from that table and a check in Home ticks the checkbox here. So:
+- **Never reword an existing open item** — its id is derived from the title; rewording orphans the task and drops its history. Fix typos only if the item was created this run.
+- **Never remove a ticked `[x]` item in the same run it was ticked** — leave it for 7 days so the brief can acknowledge it, then move it to Changelog.
+- **Do not duplicate an L3 goal from IDENTITY.md as an Open Item** (it is already a task via `goal:G<n>`). Link instead: `- [ ] [user] … (G7)` only when the item is *distinct* work under that goal.
+- Read the current task state before editing a page so you do not re-open something the user completed: `curl -s "http://localhost:18789/api/workspace/tasks?status=all"` and filter `entity_ref` to this page.
+- A user-owned open item needs a `(Gn)` tag or `(no-goal)`; a due date goes in the title as `(by YYYY-MM-DD)`.
+
 ### Step 3F: Open Items — categorize every checkbox
 
 When you add or update items in the `## Open Items` section, **always tag the category** immediately after the checkbox:
@@ -335,20 +356,30 @@ People and company pages get a `## Commitments` section (create it when the firs
 - Mark `[x]` when evidence shows the commitment was met; move it to Changelog with the date.
 - Do not duplicate a commitment as an Open Item — it lives in one place.
 
+### Step 3H: Write structured facts back to the Papr Memory graph
+
+The wiki page is prose; the graph is the queryable index. After updating a page, push the **new** durable facts back so other agents and the Home brief can find them without reading markdown:
+
+- New decisions from **Decisions & Insights** → `create_entities` with a `Decision` node (`name`, `description`, `date`) linked to the entity (`Project`/`Company`/`Person`) it belongs to.
+- New `[user]` items in **Open Items** → `Task` node (`title`, `status: open`, `due` if known) linked to the entity and, when present, to the goal id in its `description`.
+- New commitments (Step 3G) → `Task` node with `description` starting `Owed to user:` or `User owes:` linked to the Person/Company.
+- Only write facts that are **new this run** (compare against the Changelog). Use the WorkspaceContext schema (`list_schemas` → id) and the node ids you fetched in Step 1B. If `create_entities` fails, note it in the run log and continue — the page is still the source of truth.
+
 ### Step 4: Quality checks
 
 Before finishing:
 
 - **MANDATORY:** Every entity listed in today's daily log "Active entities today" section MUST have a file under `$PAPR_HOME/workspace/entities/{type}/`. If missing, create a stub with `write_file` before ending the run. Daily log mentions alone do not create Memory library cards. Group related apps under projects when the data supports it — avoid duplicate near-miss names.
 - **Reconcile people from company pages:** When you create or update a **company** page that lists people in prose, a table, or an `employeesPerson` section, ensure **each named person** has a file in `entities/people/`. Create stubs for any missing person pages and add reciprocal links in both directions. This catches people who only appear in company tables (e.g. a CSM roster) but never in the daily log.
-- Every entity file should have an **Overview**, **Key Facts**, and **Related Entities** section at minimum
+- **Section names are a contract with the Memory wiki UI.** Only these `##` headings render: `Context & Background`, `Key Details`, `Key Interactions`, `Decisions & Insights`, `Open Items`, `Changelog`. Anything else (`Overview`, `Details`, `Timeline`, `Sources`, `Related Entities`, ad-hoc `## Update: …`) is **invisible to the user**. Every page must have at least `Context & Background`, `Key Details`, and `Key Interactions`.
+- **Migrate legacy pages on touch.** When you open a page that still uses old headings, fold them in before adding new content: `Overview`/`Background` → `Context & Background`; `Key Facts` → `Key Details`; `Timeline`/`Details`/`Key Interactions`-like content → `Key Interactions` (dated, newest first); `Related Entities` → `Key Details` rows; `Sources` → cite inline on the entries that used them, then delete the section. Never leave content under a heading the UI cannot render.
 - **Every file starts with YAML frontmatter** (`id`, `name`, `description`). Without it the Memory library shows a bare gradient card with no summary
 - **Every company has `website:` and `image:`** — run the logo fetch in Step 3E. Verify with `file` that the download is a real image, not an HTML redirect stub
-- **Related Entities** should have working relative links to actual files (verify the files exist before linking)
-- Scores, metrics, and quotes should include the source (which job/table/chat they came from)
+- Relationship links (in **Key Details** rows or inline prose) must point to files that actually exist — verify before linking
+- **Evidence on every Key Interaction and Decision.** Each entry ends with a verbatim quote and source path (`> "…" — Chats/<title>.txt` or `— Jobs/<id>/logs/run.log` or `— workspace/memory/<date>.md`). Quotes must be exact substrings (8–25 words, avoid quote marks/apostrophes). Batch all quotes for the run into one JSON file and verify **once** with `python3 "$PAPR_HOME/workspace/verify_quotes.py" /tmp/wiki_claims.json` (see SLEEP.md Step 6 for the format). Drop any entry whose quote fails; do not paraphrase a quote to make it pass. Scores and metrics cite the job/table they came from.
 - Don't leave placeholder text — if you don't have data for a section, omit it
 - Keep files under 300 lines. For entities with very rich data, focus on the most important/recent information
-- Update the Timeline section with today's activity
+- Add today's activity to **Key Interactions** (newest first) and note what changed on the page in **Changelog**
 - Remove stale or contradicted information when you find newer evidence
 
 ### Step 5: Handle deletions

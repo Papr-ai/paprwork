@@ -23,7 +23,10 @@ import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
 import type { HistoryTrimBounds } from "../agent/midTurnContextTrim.js";
-import { stripAllAssistantReasoning } from "../agent/compactToolResults.js";
+import {
+  estimateMessagesTokens,
+  stripAllAssistantReasoning,
+} from "../agent/compactToolResults.js";
 import {
   checkPiStreamMemory,
   PI_PROCESS_MEMORY_BACKSTOP_BYTES,
@@ -415,9 +418,8 @@ export async function* createPiCodexStreamWithToolLoop(
   const REPETITION_THRESHOLD = 5; // Same tool+args 5+ times in recent window → warn
   const REPETITION_ABORT_THRESHOLD = 8; // Hard abort on identical tool+args loops only
 
-  // Estimate initial context tokens
-  const initialContextStr = JSON.stringify(context.messages);
-  cumulativeTokens = Math.ceil(initialContextStr.length / 4);
+  // Fast char-based estimate — avoid JSON.stringify on 100K+ token contexts.
+  cumulativeTokens = estimateMessagesTokens(context.messages);
 
   console.log(
     `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens ` +
@@ -567,6 +569,7 @@ export async function* createPiCodexStreamWithToolLoop(
       context.messages,
       historyTrimBounds,
       memoryPressure,
+      { skipStaleToolCompaction: step === 0 },
     );
 
     const toolCallsThisTurn: ToolCallAccum[] = [];

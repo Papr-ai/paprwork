@@ -311,11 +311,23 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gemini-3.1-flash-lite",
     name: "Gemini 3.1 Flash-Lite",
     description:
-      "Most cost-efficient Gemini 3 — high-volume tasks, translation, moderation",
+      "Cost-efficient Gemini 3 — consider Gemini 3.5 Flash-Lite for new projects",
     provider: "google",
     group: "Google",
     supportsThinking: true,
     defaultThinkingBudget: 3000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.5-flash-lite",
+    name: "Gemini 3.5 Flash-Lite",
+    description:
+      "Fastest, lowest-cost 3.5 tier — high-volume automation and subagents",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 2000,
     maxTokens: 65536,
     requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
   },
@@ -335,7 +347,55 @@ export const CHAT_MODELS: AIModel[] = [
     id: "gemini-3.5-flash",
     name: "Gemini 3.5 Flash",
     description:
-      "GA flagship flash — agentic loops, coding, long-horizon tool use (recommended)",
+      "Previous-gen flagship flash — consider Gemini 3.6 Flash for agentic work",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3-flash-preview",
+    name: "Gemini 3 Flash (Preview)",
+    description:
+      "Preview flash — fast frontier intelligence at lower cost than 3.5 Flash",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 8000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.6-flash",
+    name: "Gemini 3.6 Flash",
+    description:
+      "Previous-gen flash — consider Gemini 3.8 Flash for latest agentic coding",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    description:
+      "Previous-gen flash — consider Gemini 3.8 Flash for best reasoning and coding",
+    provider: "google",
+    group: "Google",
+    supportsThinking: true,
+    defaultThinkingBudget: 10000,
+    maxTokens: 65536,
+    requiresApiKey: "GOOGLE_GENERATIVE_AI_API_KEY",
+  },
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description:
+      "Latest GA flash — best reasoning, software engineering, and agentic work (recommended)",
     provider: "google",
     group: "Google",
     supportsThinking: true,
@@ -560,7 +620,7 @@ export const MID_TIER_MODEL_IDS = [
   "gpt-5-6-terra", // OpenAI balanced
   "gpt-5.4-mini", // OpenAI mini
   "gpt-5.3-codex", // OpenAI Codex (API key only)
-  "gemini-3.5-flash", // Google mid
+  "gemini-3.8-flash", // Google mid
 ];
 
 /** Default model IDs when no saved preference - first available wins */
@@ -568,7 +628,7 @@ export const DEFAULT_MODEL_IDS = [
   "claude-sonnet-5", // Anthropic
   "claude-sonnet-4-6", // Anthropic legacy
   "gpt-5-6-sol", // OpenAI latest
-  "gemini-3.5-flash", // Google
+  "gemini-3.8-flash", // Google
 ];
 
 export {

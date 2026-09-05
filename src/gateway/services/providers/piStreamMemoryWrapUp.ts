@@ -63,6 +63,7 @@ export function applyMidTurnContextShaping(
   messages: unknown[],
   historyTrimBounds: HistoryTrimBounds | undefined,
   memoryPressure: boolean,
+  opts?: { skipStaleToolCompaction?: boolean },
 ): void {
   if (memoryPressure) {
     const stats = compactMidTurnContextForMemoryPressure(messages);
@@ -73,7 +74,9 @@ export function applyMidTurnContextShaping(
     );
   } else {
     compactStaleAssistantReasoning(messages);
-    compactStaleToolResults(messages);
+    if (!opts?.skipStaleToolCompaction) {
+      compactStaleToolResults(messages);
+    }
   }
 
   if (historyTrimBounds) {

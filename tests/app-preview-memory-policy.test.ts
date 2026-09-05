@@ -41,7 +41,7 @@ describe("selectMountedAppTabIds", () => {
       ["d", 500],
     ]);
 
-    expect(effectiveMaxMountedAppPreviews(visible.size)).toBe(4);
+    expect(effectiveMaxMountedAppPreviews(visible.size)).toBe(7);
     const mounted = selectMountedAppTabIds(tabs, visible, lastActive);
     expect(mounted.has("a")).toBe(true);
     expect(mounted.has("b")).toBe(true);

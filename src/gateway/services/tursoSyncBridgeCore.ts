@@ -955,7 +955,7 @@ export function localDbHasSyncableUserTables(localDbPath: string): boolean {
   }
   const openReadonly = isReplicaManagedDbPathSync(normalized);
   const localDb = openReadonly
-    ? new Database(normalized, { readonly: true, fileMustExist: true })
+    ? new Database(normalized, { readonly: true, fileMustExist: true, timeout: 100 })
     : openWritableLocalJobDb(normalized);
   try {
     return filterSyncableTables(listUserTables(localDb)).length > 0;

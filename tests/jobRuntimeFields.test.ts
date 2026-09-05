@@ -80,6 +80,63 @@ describe("jobRuntimeFields", () => {
     expect(a.length).toBe(64);
   });
 
+  test("hashJobConfigContent ignores top-level key order", () => {
+    const { config } = splitJobRecord(sampleJob());
+    const reordered = Object.fromEntries(
+      Object.entries(config).reverse(),
+    ) as typeof config;
+    expect(hashJobConfigContent(reordered)).toBe(hashJobConfigContent(config));
+  });
+
+  // Regression: a JSON.stringify array replacer flattened nested objects to {},
+  // so schedule/retries/dependsOn edits hashed identically and would be
+  // silently dropped by any content-hash write guard.
+  test("hashJobConfigContent detects nested config changes", () => {
+    const base = splitJobRecord(
+      sampleJob({
+        schedule: { enabled: true, cron: "0 14 * * *" },
+        retries: { maxAttempts: 3, backoffMs: 1000 },
+        dependsOn: [
+          { jobId: "upstream", onStatus: "completed", autoTrigger: true },
+        ],
+      }),
+    ).config;
+    const baseHash = hashJobConfigContent(base);
+
+    const cronChanged = splitJobRecord(
+      sampleJob({
+        schedule: { enabled: true, cron: "0 3 * * *" },
+        retries: { maxAttempts: 3, backoffMs: 1000 },
+        dependsOn: [
+          { jobId: "upstream", onStatus: "completed", autoTrigger: true },
+        ],
+      }),
+    ).config;
+    expect(hashJobConfigContent(cronChanged)).not.toBe(baseHash);
+
+    const retriesChanged = splitJobRecord(
+      sampleJob({
+        schedule: { enabled: true, cron: "0 14 * * *" },
+        retries: { maxAttempts: 5, backoffMs: 1000 },
+        dependsOn: [
+          { jobId: "upstream", onStatus: "completed", autoTrigger: true },
+        ],
+      }),
+    ).config;
+    expect(hashJobConfigContent(retriesChanged)).not.toBe(baseHash);
+
+    const dependencyChanged = splitJobRecord(
+      sampleJob({
+        schedule: { enabled: true, cron: "0 14 * * *" },
+        retries: { maxAttempts: 3, backoffMs: 1000 },
+        dependsOn: [
+          { jobId: "upstream", onStatus: "completed", autoTrigger: false },
+        ],
+      }),
+    ).config;
+    expect(hashJobConfigContent(dependencyChanged)).not.toBe(baseHash);
+  });
+
   test("jobRecordToRuntimePatch includes runtime fields for cloud upsert", () => {
     const job = sampleJob();
     const patch = jobRecordToRuntimePatch(job, "desktop");

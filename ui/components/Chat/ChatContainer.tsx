@@ -44,7 +44,7 @@ import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
-import { chatHasLiveStreamBlockingHistory } from "../../lib/agentStreamRecovery";
+import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn } from "../../lib/agentStreamRecovery";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 
@@ -163,7 +163,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const error = useChatStore((state) => state.error);
 
-  const { sendMessage, interruptActiveStream, retryStreamRecovery } = useAgent();
+  const { sendMessage, interruptActiveStream, retryStreamRecovery, autoContinueInterruptedTurn } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
@@ -183,6 +183,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const gatewayConnectionState = useGatewayConnectionState();
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
   const prevIsSendingRef = useRef(isSending);
+  const autoContinueInFlightRef = useRef(false);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
@@ -194,10 +195,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [messageQueue, chatId]
   );
 
-  const syncHistoryFromServer = useCallback(() => {
-    if (chatHasLiveStreamBlockingHistory(chatId)) return;
-    void loadMessages(chatId, 30, { force: true });
-  }, [chatId, loadMessages]);
+  const syncHistoryFromServer = useCallback(
+    (options?: { force?: boolean }) => {
+      if (chatHasLiveStreamBlockingHistory(chatId)) return;
+      void loadMessages(
+        chatId,
+        30,
+        options?.force ? { force: true } : undefined,
+      );
+    },
+    [chatId, loadMessages],
+  );
 
   // Reload history when Gateway becomes ready after a restart.
   useEffect(() => {
@@ -208,16 +216,17 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       return;
     }
 
-    syncHistoryFromServer();
+    syncHistoryFromServer({ force: true });
   }, [gatewaySupervisorReady, syncHistoryFromServer]);
 
   // After rate-limit / recovery, in-memory state may be empty shells — force sync.
   useEffect(() => {
     if (!needsStreamRecovery) return;
-    syncHistoryFromServer();
+    syncHistoryFromServer({ force: true });
   }, [needsStreamRecovery, syncHistoryFromServer]);
 
-  // Agent finished but UI may have missed done — pull completed turns from DB.
+  // Agent finished — refresh from DB, but respect streaming guards (no force).
+  // force:true bypasses those guards and reorders paginated history (Issue 76).
   useEffect(() => {
     const wasSending = prevIsSendingRef.current;
     prevIsSendingRef.current = isSending;
@@ -225,6 +234,58 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       syncHistoryFromServer();
     }
   }, [isSending, syncHistoryFromServer]);
+
+  // Auto-continue interrupted turns (provider drop, gateway abort, etc.) up to 3 times.
+  useEffect(() => {
+    if (autoContinueInFlightRef.current) return;
+    if (
+      !shouldAutoContinueInterruptedTurn({
+        chatId,
+        messages,
+        isSending: isSending || isWaitingForAgentSlot,
+        connectionPaused,
+        needsStreamRecovery,
+        gatewayReady: gatewaySupervisorReady,
+      })
+    ) {
+      return;
+    }
+
+    const mergedArtifact = findMergedArtifact(chatId);
+    const idKey =
+      mergedArtifact?.type === "document"
+        ? "documentId"
+        : mergedArtifact?.type === "platform"
+          ? "platformId"
+          : "appId";
+    const mergedContext = mergedArtifact
+      ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
+      : "";
+
+    const config = {
+      provider: selectedModel.provider,
+      model: selectedModel.id,
+      systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
+      reasoning: selectedModel.reasoning,
+      thinkingBudget: selectedModel.defaultThinkingBudget,
+      maxTokens: selectedModel.maxTokens,
+    };
+
+    autoContinueInFlightRef.current = true;
+    void autoContinueInterruptedTurn(chatId, config, messages).finally(() => {
+      autoContinueInFlightRef.current = false;
+    });
+  }, [
+    autoContinueInterruptedTurn,
+    chatId,
+    connectionPaused,
+    gatewaySupervisorReady,
+    isSending,
+    isWaitingForAgentSlot,
+    messages,
+    needsStreamRecovery,
+    selectedModel,
+  ]);
 
   const gatewayBanner =
     gatewaySupervisorStarting &&

@@ -34,7 +34,6 @@ import {
   noteTursoReplicaTransportError,
 } from "../../utils/tursoReplicaConnectivity.js";
 import { MIGRATION_CONFLICT_CODE } from "./tursoReplicaMigrationConflict.js";
-import { drainInboundReplicaCdcIfCaughtUp } from "./tursoReplicaInboundDrain.js";
 import type { AppDataSource } from "../appDataSources.js";
 import {
   isReplicaCheckpointWalError,
@@ -49,6 +48,11 @@ import {
   resetReplicaSidecars,
 } from "./tursoReplicaSidecarWedge.js";
 import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
+import {
+  noteReplicaReadPathFailure,
+  scheduleReplicaBackgroundWedgeRecovery,
+} from "./tursoReplicaBackgroundRecovery.js";
+import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
 
 const REPLICA_STATUS_TIMEOUT_MS = 12_000;
 const REPLICA_SYNC_TIMEOUT_MS = 15_000;
@@ -119,7 +123,7 @@ function formatReplicaPushError(message: string): string {
 }
 
 export class TursoReplicaService {
-  private readonly operationChains = new Map<string, Promise<unknown>>();
+  private readonly pathScheduler = new TursoReplicaPathScheduler();
   /** Paths the worker has been asked to open at least once this process (for drain logging). */
   private readonly touchedPaths = new Set<string>();
 
@@ -141,7 +145,7 @@ export class TursoReplicaService {
     writeOptions?: TursoReplicaWriteOptions;
   }): Promise<TursoReplicaWriteResult> {
     const pushAfterWrite = options.writeOptions?.pushAfterWrite !== false;
-    return this.withSerializedPath(options.localPath, async () => {
+    return this.withInteractivePath(options.localPath, async () => {
       const spec = await this.openSpec(options.localPath, options.tursoDatabase);
       const client = getTursoReplicaSyncWorkerClient();
 
@@ -168,7 +172,7 @@ export class TursoReplicaService {
     writeOptions?: TursoReplicaWriteOptions,
   ): Promise<{ pendingPush: boolean }> {
     const pushAfterWrite = writeOptions?.pushAfterWrite !== false;
-    return this.withSerializedPath(localPath, async () => {
+    return this.withInteractivePath(localPath, async () => {
       const spec = await this.openSpec(localPath, tursoDatabase);
       await getTursoReplicaSyncWorkerClient().exec({
         ...spec,
@@ -201,7 +205,7 @@ export class TursoReplicaService {
     options?: { pullBeforePush?: boolean },
   ): Promise<TursoReplicaPushResponse> {
     try {
-      await this.withSerializedPath(localPath, async () => {
+      await this.withBackgroundPath(localPath, async () => {
         if (!isTursoReplicaOnline()) {
           return;
         }
@@ -219,7 +223,7 @@ export class TursoReplicaService {
   }
 
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
-    return this.withSerializedPath(localPath, async () => {
+    return this.withBackgroundPath(localPath, async () => {
       const spec = await this.openSpec(localPath, tursoDatabase);
       return this.syncWithRecovery(spec, "pull");
     });
@@ -266,7 +270,7 @@ export class TursoReplicaService {
       return 0;
     }
     try {
-      return await this.withSerializedPath(localPath, async () => {
+      return await this.withBackgroundPath(localPath, async () => {
         const spec = await this.openSpec(localPath, tursoDatabase, {
           bootstrapIfEmpty: false,
         });
@@ -296,7 +300,7 @@ export class TursoReplicaService {
     params?: unknown[];
     pullBeforeRead?: boolean;
   }): Promise<import("../DbQueryPool.js").QueryResult> {
-    return this.withSerializedPath(options.localPath, async () => {
+    return this.withInteractivePath(options.localPath, async () => {
       const executeRead = async (pullFirst: boolean) => {
         const spec = await this.openSpec(options.localPath, options.tursoDatabase);
         const client = getTursoReplicaSyncWorkerClient();
@@ -323,26 +327,19 @@ export class TursoReplicaService {
         }
         console.warn(
           `[TursoReplicaService] Read wedge on ${options.tursoDatabase} — ` +
-            `recovering: ${message.slice(0, 160)}`,
+            `deferring recovery: ${message.slice(0, 160)}`,
         );
-        await this.recoverReadWedge(options.localPath);
+        noteReplicaReadPathFailure(options.localPath);
+        scheduleReplicaBackgroundWedgeRecovery(
+          this,
+          options.localPath,
+          options.tursoDatabase,
+        );
         try {
-          const spec = await this.openSpec(options.localPath, options.tursoDatabase);
-          await this.syncWithRecovery(spec, "pull");
-          await drainInboundReplicaCdcIfCaughtUp({
-            source: {
-              id: options.tursoDatabase,
-              type: "sqlite",
-              alias: options.tursoDatabase,
-              dbPath: options.localPath,
-              tables: [],
-              linkedAt: new Date().toISOString(),
-            },
-            tursoDatabase: options.tursoDatabase,
-          });
+          await this.recoverReadWedge(options.localPath);
           return await executeRead(false);
-        } catch (recoveryError) {
-          noteTursoReplicaTransportError(recoveryError);
+        } catch (retryError) {
+          noteTursoReplicaTransportError(retryError);
           throw error;
         }
       }
@@ -354,7 +351,7 @@ export class TursoReplicaService {
     tursoDatabase: string,
     options?: { pullBeforeRead?: boolean },
   ): Promise<import("../DbQueryPool.js").SchemaResult> {
-    return this.withSerializedPath(localPath, async () => {
+    return this.withInteractivePath(localPath, async () => {
       const executeSchema = async (pullFirst: boolean) => {
         const spec = await this.openSpec(localPath, tursoDatabase);
         const client = getTursoReplicaSyncWorkerClient();
@@ -395,10 +392,14 @@ export class TursoReplicaService {
         if (!isReplicaReadTransportError(message)) {
           throw error;
         }
-        await this.recoverReadWedge(localPath);
+        console.warn(
+          `[TursoReplicaService] Schema read wedge on ${tursoDatabase} — ` +
+            `deferring recovery: ${message.slice(0, 160)}`,
+        );
+        noteReplicaReadPathFailure(localPath);
+        scheduleReplicaBackgroundWedgeRecovery(this, localPath, tursoDatabase);
         try {
-          const spec = await this.openSpec(localPath, tursoDatabase);
-          await this.syncWithRecovery(spec, "pull");
+          await this.recoverReadWedge(localPath);
           return await executeSchema(false);
         } catch {
           throw error;
@@ -414,6 +415,21 @@ export class TursoReplicaService {
         `[TursoReplicaService] Reset wedged sync sidecars during read recovery: ${localPath}`,
       );
     }
+  }
+
+  async recoverReadWedgeForBackground(localPath: string): Promise<void> {
+    return this.withInteractivePath(localPath, () => this.recoverReadWedge(localPath));
+  }
+
+  /** Background recovery lane — pull after sidecar reset. */
+  async pullForBackgroundRecovery(
+    localPath: string,
+    tursoDatabase: string,
+  ): Promise<boolean> {
+    return this.withBackgroundPath(localPath, async () => {
+      const spec = await this.openSpec(localPath, tursoDatabase);
+      return this.syncWithRecovery(spec, "pull");
+    });
   }
 
   // ---- status ---------------------------------------------------------------------------
@@ -491,7 +507,7 @@ export class TursoReplicaService {
 
   async closeAll(): Promise<void> {
     this.touchedPaths.clear();
-    this.operationChains.clear();
+    this.pathScheduler.clear();
     await shutdownTursoReplicaSyncWorker();
   }
 
@@ -540,20 +556,24 @@ export class TursoReplicaService {
     }
   }
 
-  private async withSerializedPath<T>(
+  private async withInteractivePath<T>(
     localPath: string,
     fn: () => Promise<T>,
   ): Promise<T> {
     const key = normalizeDbPath(localPath);
-    const prev = this.operationChains.get(key) ?? Promise.resolve();
-    const run = () =>
-      withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica operation (${key})`);
-    const next = prev.then(run, run);
-    this.operationChains.set(
-      key,
-      next.catch(() => undefined),
+    return this.pathScheduler.runInteractive(key, () =>
+      withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica interactive (${key})`),
     );
-    return next;
+  }
+
+  private async withBackgroundPath<T>(
+    localPath: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = normalizeDbPath(localPath);
+    return this.pathScheduler.runBackground(key, () =>
+      withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica background (${key})`),
+    );
   }
 }
 

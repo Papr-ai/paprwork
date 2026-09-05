@@ -164,7 +164,7 @@ async function waitForGitSyncReady(): Promise<GitSyncStatus> {
 
 export function useAppCloudSyncStatus(
   appId: string,
-  options?: { enabled?: boolean },
+  options?: { enabled?: boolean; previewTabVisible?: boolean },
 ): {
   status: AppCloudSyncStatus | null;
   gitSyncEnabled: boolean | null;
@@ -182,6 +182,7 @@ export function useAppCloudSyncStatus(
   applyRemoteUpdates: () => Promise<void>;
 } {
   const active = options?.enabled !== false;
+  const previewTabVisible = options?.previewTabVisible !== false;
   const initialItems = readInitialSyncItems(appId);
   const initialStatus = initialItems
     ? deriveAppCloudSyncStatus(
@@ -399,7 +400,7 @@ export function useAppCloudSyncStatus(
   }, [active, appId, refresh]);
 
   useEffect(() => {
-    if (!active) return;
+    if (!active || !previewTabVisible) return;
     const intervalMs =
       pushing ||
       pulling ||
@@ -414,7 +415,18 @@ export function useAppCloudSyncStatus(
       void refresh();
     }, intervalMs);
     return () => clearInterval(timer);
-  }, [active, refresh, pushing, pulling, applyingUpdates, status?.overall, status?.uploadQueued, status?.publishStatus, status?.globallySyncing]);
+  }, [
+    active,
+    previewTabVisible,
+    refresh,
+    pushing,
+    pulling,
+    applyingUpdates,
+    status?.overall,
+    status?.uploadQueued,
+    status?.publishStatus,
+    status?.globallySyncing,
+  ]);
 
   return {
     status,

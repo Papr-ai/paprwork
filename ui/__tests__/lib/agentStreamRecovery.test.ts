@@ -5,6 +5,9 @@ import {
   interruptedTurnNeedsContinue,
   lastUserTurnNeedsContinue,
   mergeHistoryWithLocal,
+  recordAutoContinueAttempt,
+  resetAutoContinueAttempts,
+  shouldAutoContinueInterruptedTurn,
   shouldIgnoreDuplicateDoneChunk,
   serverHasCompletedAssistantForStreamingTurn,
 } from "../../lib/agentStreamRecovery";
@@ -159,6 +162,25 @@ describe("mergeHistoryWithLocal", () => {
     expect(merged).toHaveLength(1);
     expect(merged[0]?.attachments).toHaveLength(1);
     expect(merged[0]?.attachments?.[0]?.name).toBe("report.pdf");
+  });
+
+  it("does not reorder paginated history when duplicate assistant text appears twice", () => {
+    const shared = "OK";
+    const local: ChatMessage[] = [
+      { id: "m01", role: "user", content: "first" },
+      { id: "old-a", role: "assistant", content: shared },
+      ...Array.from({ length: 47 }, (_, i) => ({
+        id: `m${String(i + 2).padStart(2, "0")}`,
+        role: (i % 2 === 0 ? "user" : "assistant") as "user" | "assistant",
+        content: `body ${i + 2}`,
+      })),
+      { id: "m49", role: "assistant", content: shared },
+    ];
+    const serverWindow = local.slice(-30).map((m) => ({ ...m }));
+
+    expect(mergeHistoryWithLocal(local, serverWindow).map((m) => m.id)).toEqual(
+      local.map((m) => m.id),
+    );
   });
 });
 
@@ -322,5 +344,87 @@ describe("finalizeStreamingMessages", () => {
     ];
 
     expect(finalizeStreamingMessages(messages)[0]?.interrupted).toBeUndefined();
+  });
+});
+
+describe("autoContinueInterruptedTurn helpers", () => {
+  const interruptedAssistant: ChatMessage = {
+    id: "a1",
+    role: "assistant",
+    content: "Partial",
+    interrupted: true,
+    sequence: [
+      { type: "tool", data: { toolName: "bash", status: "success" } },
+    ],
+  };
+
+  beforeEach(() => {
+    resetAutoContinueAttempts("chat-1");
+  });
+
+  it("allows auto-continue when the last assistant turn was interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      interruptedAssistant,
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks auto-continue after three attempts for the same user turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      interruptedAssistant,
+    ];
+
+    recordAutoContinueAttempt("chat-1", messages);
+    recordAutoContinueAttempt("chat-1", messages);
+    recordAutoContinueAttempt("chat-1", messages);
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto-continue user-stopped turns", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      {
+        ...interruptedAssistant,
+        sequence: [
+          {
+            type: "tool",
+            data: { toolName: "bash", status: "stopped", error: "Stopped by user" },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
   });
 });

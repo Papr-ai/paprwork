@@ -39,6 +39,18 @@ export function migratePickerModelId(modelId: string): string {
   if (modelId === "claude-fable-5") {
     return "claude-fable-5-1";
   }
+  if (modelId === "gemini-3.1-flash-lite") {
+    return "gemini-3.5-flash-lite";
+  }
+  if (modelId === "gemini-3.5-flash") {
+    return "gemini-3.8-flash";
+  }
+  if (
+    modelId === "gemini-3.6-flash" ||
+    modelId === "gemini-3.7-flash"
+  ) {
+    return "gemini-3.8-flash";
+  }
   return modelId;
 }
 
@@ -50,8 +62,8 @@ export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gpt-5-6-sol",
   "glm-5.2-max",
   "qwen/qwen3-32b",
-  "gemini-3.1-flash-lite",
-  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
   "gemini-3.1-pro-preview",
 ];
 
@@ -80,6 +92,32 @@ export const PRE_FABLE_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gemini-3.1-pro-preview",
 ];
 
+/** Pre-Gemini-3.8 defaults (3.6 era) — upgrade saved picker preferences on next load. */
+export const PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Gemini-3.6 defaults — upgrade saved picker preferences on next load. */
+export const PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "glm-5.2-max",
+  "qwen/qwen3-32b",
+  "gemini-3.1-flash-lite",
+  "gemini-3.5-flash",
+  "gemini-3.1-pro-preview",
+];
+
 function sameModelIdSet(
   a: readonly string[],
   b: readonly string[],
@@ -92,7 +130,7 @@ function sameModelIdSet(
 /** Non-Anthropic defaults — if all missing from a short list, settings were likely clobbered. */
 const CROSS_PROVIDER_DEFAULT_MARKERS: readonly string[] = [
   "gpt-5-6-sol",
-  "gemini-3.5-flash",
+  "gemini-3.8-flash",
   "glm-5.2-max",
   "qwen/qwen3-32b",
 ];
@@ -126,6 +164,22 @@ export function migrateEnabledPickerModelIds(
   enabledIds: string[] | null | undefined,
 ): string[] {
   if (!enabledIds || enabledIds.length === 0) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_FABLE_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  if (sameModelIdSet(enabledIds, LEGACY_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 

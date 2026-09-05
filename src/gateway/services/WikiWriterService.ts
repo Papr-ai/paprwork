@@ -18,6 +18,7 @@ import {
   validateJobArchitecture,
 } from "./jobs/jobArchitectureValidation.js";
 import { normalizePortableJobPrompt } from "./jobs/normalizePortableJobPrompt.js";
+import { installVerifyQuotesHelper } from "./SleepCycleService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,7 +27,7 @@ export const WIKI_WRITER_JOB_NAMES = [
   "Wiki Writer",
   "wiki-writer",
 ] as const;
-export const WIKI_WRITER_PROMPT_VERSION = 8;
+export const WIKI_WRITER_PROMPT_VERSION = 11;
 
 export const WIKI_WRITER_JOB_DEFAULTS = {
   provider: "anthropic" as const,
@@ -87,6 +88,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 async function readWikiWriterPrompt(): Promise<string> {
+  await installVerifyQuotesHelper();
   const templatesDir = resolveTemplatesDir();
   const templatePath = path.join(templatesDir, "WIKI_WRITER.md");
   const workspacePath = path.join(workspaceDir(), "WIKI_WRITER.md");

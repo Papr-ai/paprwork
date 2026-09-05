@@ -105,4 +105,23 @@ describe("mergeHistoryWithLocal ordering", () => {
       "m03",
     ]);
   });
+
+  it("does not match duplicate content from paginated turns outside the window", () => {
+    const shared = "I'll help with that.";
+    const local = [
+      ...conversation(4),
+      { id: "old-dup", role: "assistant", content: shared } as ChatMessage,
+      ...conversation(45).slice(4),
+    ];
+    const last = local[local.length - 1];
+    const serverWindow = local.slice(-30).map((m) =>
+      m.id === last.id
+        ? ({ ...m, content: shared } as ChatMessage)
+        : msg(m.id, m.role as never),
+    );
+
+    expect(ids(mergeHistoryWithLocal(local, serverWindow))).toEqual(
+      ids(local),
+    );
+  });
 });

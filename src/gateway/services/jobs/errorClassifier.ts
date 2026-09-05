@@ -30,6 +30,18 @@ export function classifyError(error: unknown): ErrorType {
     return "transient";
   if (msg.includes("network error") || msg.includes("fetch failed"))
     return "transient";
+  // undici/Node fetch surfaces a dropped streaming socket as the bare word
+  // "terminated" (or "other side closed" / "socket hang up"). Long agent runs
+  // hit this when the provider or an intermediary drops the SSE connection
+  // mid-stream — nothing about the job is wrong; retry it.
+  if (
+    msg.includes("terminated") ||
+    msg.includes("other side closed") ||
+    msg.includes("socket hang up") ||
+    msg.includes("premature close") ||
+    msg.includes("aborted")
+  )
+    return "transient";
   if (code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ECONNREFUSED")
     return "transient";
   
@@ -83,6 +95,13 @@ export function getErrorClassificationReason(error: unknown): string {
     return "Provider overloaded (will retry)";
   if (msg.includes("timeout") || msg.includes("timed out"))
     return "Request timed out (will retry)";
+  if (
+    msg.includes("terminated") ||
+    msg.includes("other side closed") ||
+    msg.includes("socket hang up") ||
+    msg.includes("premature close")
+  )
+    return "Model stream dropped mid-response (will retry)";
   if (code === "ETIMEDOUT" || code === "ECONNRESET" || code === "ECONNREFUSED")
     return "Network error (will retry)";
   if (/5\d{2}/.test(msg)) return "Server error (will retry)";

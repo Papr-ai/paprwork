@@ -576,6 +576,7 @@ export function MiniAppView({
           linkedJobCount={linkedJobCount}
           onTrackPullComplete={() => void refreshAppMetadata()}
           onRefreshPreview={handleRefreshPreview}
+          previewTabVisible={previewTabVisible}
         />
       ) : null}
       {!embedded && workspaceMode === "files" ? (

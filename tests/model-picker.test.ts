@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   CHAT_PICKER_EXCLUDED_MODEL_IDS,
   PICKER_DEFAULT_MODEL_IDS,
+  PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS,
+  PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS,
   getAllPickerToggleModelIds,
   getPickerModels,
   isChatPickerModelId,
@@ -58,7 +60,17 @@ describe("modelPicker", () => {
         "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
       ]),
-    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+    ).toEqual([
+      "claude-sonnet-5",
+      "claude-opus-4-6",
+      "claude-opus-5",
+      "gpt-5-6-sol",
+      "glm-5.2-max",
+      "qwen/qwen3-32b",
+      "gemini-3.5-flash-lite",
+      "gemini-3.8-flash",
+      "gemini-3.1-pro-preview",
+    ]);
   });
 
   test("swaps Sonnet 4.6 for Sonnet 5 in customized picker lists", () => {
@@ -93,6 +105,33 @@ describe("modelPicker", () => {
     expect(resolveEnabledPickerModelIds(["claude-fable-5"])).toEqual([
       "claude-fable-5-1",
     ]);
+  });
+
+  test("migrates retired Gemini picker ids to latest Flash defaults", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+      ]),
+    ).toEqual(["gemini-3.5-flash-lite", "gemini-3.8-flash"]);
+  });
+
+  test("migrates Gemini 3.6 and 3.7 picker ids to 3.8 Flash", () => {
+    expect(
+      resolveEnabledPickerModelIds(["gemini-3.6-flash", "gemini-3.7-flash"]),
+    ).toEqual(["gemini-3.8-flash"]);
+  });
+
+  test("upgrades exact pre-Gemini-3.8 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("upgrades exact pre-Gemini-3.6 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
   });
 
   test("upgrades exact pre-Fable default picker list", () => {

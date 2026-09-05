@@ -87,7 +87,8 @@ export function computeSyncableTableFingerprintsForPath(
 ): Record<string, string> | null {
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    // Short busy timeout — a contended file must not block the event loop for 5s.
+    db = new Database(dbPath, { readonly: true, timeout: 100 });
     return computeSyncableTableFingerprints(db);
   } catch {
     return null;

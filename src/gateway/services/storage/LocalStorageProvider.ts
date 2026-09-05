@@ -681,11 +681,13 @@ export class LocalStorageProvider implements IStorageProvider {
     console.log(
       `[LocalStorage] Loaded ${orderedRows.length} messages for chat ${chatId}${limit ? ` (limit: ${limit}, skip: ${skip || 0})` : ''}`,
     );
-    orderedRows.forEach((row, i) => {
-      console.log(
-        `  Message ${i}: role=${row.role}, hasThinking=${!!row.thinking}, hasToolCalls=${!!row.tool_calls}`,
-      );
-    });
+    if (process.env.PAPR_DEBUG_AGENT_CONTEXT === "1") {
+      orderedRows.forEach((row, i) => {
+        console.log(
+          `  Message ${i}: role=${row.role}, hasThinking=${!!row.thinking}, hasToolCalls=${!!row.tool_calls}`,
+        );
+      });
+    }
 
     return orderedRows.map((row) => {
       const toolCalls = this.parsePayloadColumn<StoredMessage["toolCalls"]>(
@@ -860,12 +862,16 @@ export class LocalStorageProvider implements IStorageProvider {
         .all(chatId, recentMessageLimit) as any[];
       recentMessages.reverse();
     }
-    // Log what we actually got
-    console.log(`[LocalStorage] 🔍 Query returned ${recentMessages.length} messages (chronological):`);
-    recentMessages.forEach((msg, i) => {
-      const preview = typeof msg.content === 'string' ? msg.content.substring(0, 50) : '';
-      console.log(`  ${i}. [${msg.timestamp}] ${msg.role}: "${preview}..."`);
-    });
+    if (process.env.PAPR_DEBUG_AGENT_CONTEXT === "1") {
+      console.log(
+        `[LocalStorage] 🔍 Query returned ${recentMessages.length} messages (chronological):`,
+      );
+      recentMessages.forEach((msg, i) => {
+        const preview =
+          typeof msg.content === "string" ? msg.content.substring(0, 50) : "";
+        console.log(`  ${i}. [${msg.timestamp}] ${msg.role}: "${preview}..."`);
+      });
+    }
 
     const archivedCount = chat.message_count - recentMessages.length;
     const enhanced = deserializeEnhancedFields(chat.summary_enhanced);

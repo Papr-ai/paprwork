@@ -161,9 +161,16 @@ export function useChat() {
             return { chatStates: newChatStates };
           }
 
+          const streamingMessageId = existingState.messages.find(
+            (m) => m.isStreaming,
+          )?.id;
           const messages =
             existingState.messages.length > 0
-              ? mergeHistoryWithLocal(existingState.messages, serverMessages)
+              ? mergeHistoryWithLocal(
+                  existingState.messages,
+                  serverMessages,
+                  streamingMessageId,
+                )
               : serverMessages;
 
           const newChatStates = new Map(state.chatStates);

@@ -16,6 +16,9 @@ export async function runDeferredJobsWorkspaceBootstrap(): Promise<void> {
   await appService.installPendingDefaultJobs();
   await appService.repairHomeAndWorkspaceOnStartup();
 
+  const { projectGoalsAndTasks } = await import("../goalsTasksProjection.js");
+  await projectGoalsAndTasks("boot");
+
   const { getWorkspaceService } = await import("../WorkspaceService.js");
   await getWorkspaceService().ensureSleepJob();
   await getWorkspaceService().ensureWikiWriterJob();

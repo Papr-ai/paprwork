@@ -419,6 +419,90 @@ export const STRUCTURED_SECTION_ORDER = [
 
 export type StructuredSectionTitle = (typeof STRUCTURED_SECTION_ORDER)[number];
 
+/**
+ * Legacy / free-form `##` headings that earlier Wiki Writer versions produced.
+ * Pages written with these were silently dropped by the section renderer
+ * because only STRUCTURED_SECTION_ORDER titles are drawn. Map them onto the
+ * canonical section so existing pages show their content; Wiki Writer v9+
+ * writes canonical headings and migrates legacy ones on touch.
+ */
+export const LEGACY_SECTION_ALIASES: Record<string, StructuredSectionTitle> = {
+  overview: "Context & Background",
+  background: "Context & Background",
+  summary: "Context & Background",
+  about: "Context & Background",
+  architecture: "Context & Background",
+  "key facts": "Key Details",
+  facts: "Key Details",
+  "related entities": "Key Details",
+  relationships: "Key Details",
+  details: "Key Interactions",
+  timeline: "Key Interactions",
+  history: "Key Interactions",
+  activity: "Key Interactions",
+  "meeting footprint": "Key Interactions",
+  "owned workstreams": "Key Interactions",
+  references: "Key Interactions",
+  sources: "Key Interactions",
+  decisions: "Decisions & Insights",
+  insights: "Decisions & Insights",
+  learnings: "Decisions & Insights",
+  // Commitments/next-steps are checkbox lists too, but Open Items is
+  // index-addressed for check-off writes; folding into it would shift indexes.
+  commitments: "Key Interactions",
+  "open questions": "Decisions & Insights",
+  "next steps": "Key Interactions",
+  changes: "Changelog",
+  updates: "Changelog",
+};
+
+const STRUCTURED_SET = new Set<string>(STRUCTURED_SECTION_ORDER);
+
+/** Resolve any heading to a renderable section title, or null if unmapped. */
+export function canonicalSectionTitle(title: string): StructuredSectionTitle | null {
+  const trimmed = title.trim();
+  if (STRUCTURED_SET.has(trimmed)) return trimmed as StructuredSectionTitle;
+  const key = trimmed.toLowerCase().replace(/\s+/g, " ");
+  if (LEGACY_SECTION_ALIASES[key]) return LEGACY_SECTION_ALIASES[key];
+  // Ad-hoc dated headings ("Update: July 14, 2026 — …", "2026-08-18 — …") are timeline entries.
+  if (/^(update|changelog|log)\b/i.test(key) || /^\d{4}-\d{2}-\d{2}/.test(key)) {
+    return "Key Interactions";
+  }
+  return null;
+}
+
+/**
+ * Fold legacy / unknown headings into canonical sections so nothing the
+ * writer produced is invisible. Canonical content always comes first; folded
+ * content is appended under a `### <original heading>` subheading so the
+ * reader can still see where it came from. Unmapped headings are appended to
+ * Context & Background rather than dropped.
+ */
+export function normalizeEntitySections(
+  sections: Record<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const folded: Record<string, string[]> = {};
+  for (const [title, body] of Object.entries(sections)) {
+    if (!body || !body.trim()) continue;
+    if (STRUCTURED_SET.has(title.trim())) {
+      out[title.trim()] = body;
+      continue;
+    }
+    let target = canonicalSectionTitle(title) ?? "Context & Background";
+    // Never append foreign content into Open Items: its line indexes back the
+    // check-off write path, so folded lines would corrupt user edits.
+    if (target === "Open Items") target = "Key Interactions";
+    (folded[target] ??= []).push(`### ${title.trim()}\n${body.trim()}`);
+  }
+  for (const [target, chunks] of Object.entries(folded)) {
+    out[target] = out[target]
+      ? `${out[target].trim()}\n\n${chunks.join("\n\n")}`
+      : chunks.join("\n\n");
+  }
+  return out;
+}
+
 export function isPlaceholderSection(title: string, content: string): boolean {
   const plain = content.trim().toLowerCase();
   if (!plain) return true;

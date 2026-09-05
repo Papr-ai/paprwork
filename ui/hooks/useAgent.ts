@@ -10,7 +10,7 @@ import {
 } from "../../src/core/utils/interruptedToolResult";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
 import type { AgentConfig, StreamChunk } from "../types/core";
-import type { MessageAttachment } from "../types/chat";
+import type { MessageAttachment, ChatMessage } from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
@@ -37,8 +37,12 @@ import {
   finalizeStreamingMessages,
   HIDDEN_CONTINUE_USER_MESSAGE,
   interruptedTurnNeedsContinue,
+  isHiddenContinueUserMessage,
   isResumingStream,
   lastUserTurnNeedsContinue,
+  recordAutoContinueAttempt,
+  resetAutoContinueAttempts,
+  shouldAutoContinueInterruptedTurn,
   shouldIgnoreDuplicateDoneChunk,
   markResuming,
   mergeHistoryWithLocal,
@@ -1165,6 +1169,7 @@ export function useAgent() {
               }
             }
             untrackActiveStream(chatId);
+            resetAutoContinueAttempts(chatId);
           }
           break;
 
@@ -2010,6 +2015,10 @@ export function useAgent() {
       console.log("=".repeat(80));
 
       try {
+        if (!isHiddenContinueUserMessage(message)) {
+          resetAutoContinueAttempts(chatId);
+        }
+
         // V1 APPROACH: Create permanent chat BEFORE streaming if temp
         if (isFirstMessage) {
           console.log(
@@ -2216,12 +2225,50 @@ export function useAgent() {
     [setError],
   );
 
+  const autoContinueInterruptedTurn = useCallback(
+    async (chatId: string, config: AgentConfig, messages: ChatMessage[]) => {
+      if (
+        !shouldAutoContinueInterruptedTurn({
+          chatId,
+          messages,
+          isSending:
+            useChatStore.getState().chatStates.get(chatId)?.isSending ?? false,
+          connectionPaused:
+            useChatStore.getState().chatStates.get(chatId)?.connectionPaused ??
+            false,
+          needsStreamRecovery:
+            useChatStore.getState().chatStates.get(chatId)
+              ?.needsStreamRecovery ?? false,
+          gatewayReady: gateway.isConnected(),
+        })
+      ) {
+        return;
+      }
+
+      const attempt = recordAutoContinueAttempt(chatId, messages);
+      console.log(
+        `[useAgent] Auto-continuing interrupted turn for ${chatId} (attempt ${attempt}/3)`,
+      );
+
+      try {
+        await continueInterruptedTurn(chatId, config);
+      } catch (error) {
+        console.warn(
+          `[useAgent] Auto-continue attempt ${attempt} failed for ${chatId}:`,
+          error,
+        );
+      }
+    },
+    [continueInterruptedTurn],
+  );
+
   return {
     sendMessage,
     getHistory,
     clearHistory,
     interruptActiveStream,
     retryStreamRecovery,
+    autoContinueInterruptedTurn,
   };
 }
 
@@ -2237,4 +2284,9 @@ export type UseAgentReturn = {
   clearHistory: (sessionId: string) => Promise<void>;
   interruptActiveStream: (chatId: string) => Promise<void>;
   retryStreamRecovery: (chatId: string, config?: AgentConfig) => Promise<void>;
+  autoContinueInterruptedTurn: (
+    chatId: string,
+    config: AgentConfig,
+    messages: ChatMessage[],
+  ) => Promise<void>;
 };

@@ -12,6 +12,7 @@ import type { ChatMessage } from "../../stores/chatStore";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { isHiddenContinueUserMessage } from "../../lib/agentStreamRecovery";
 import { groupDelegationFollowUpMessages } from "../../utils/delegationMessageGrouping";
+import { AgentLoadingDots } from "./AgentLoadingDots";
 import "./MessageList.css";
 
 interface MessageListProps {
@@ -387,13 +388,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             </div>
           </div>
           <div className="message-content">
-            <div className="agent-loading-indicator">
-              <div className="loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-            </div>
+            <AgentLoadingDots />
           </div>
         </div>
       )}

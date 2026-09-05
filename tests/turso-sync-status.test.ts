@@ -109,7 +109,7 @@ describe("deriveAppCloudSyncStatus database detail", () => {
       },
     };
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
-    expect(status.overall).toBe("needs_sync");
+    expect(status.overall).toBe("synced");
     expect(status.databases[0]?.detail).toBe(
       "Row changes syncing to Turso in the background",
     );

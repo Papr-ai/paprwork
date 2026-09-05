@@ -119,6 +119,18 @@ export class WorkspaceService {
       "SLEEP.md",
     ];
 
+    // Nested templates (e.g. goals/archive.md) — seeded once, never overwritten.
+    const nestedTemplates = ["goals/archive.md"];
+    for (const rel of nestedTemplates) {
+      const destPath = path.join(this.workspaceDir, rel);
+      if (await this.fileExists(destPath)) continue;
+      const srcPath = path.join(templatesDir, rel);
+      if (!(await this.fileExists(srcPath))) continue;
+      await fs.mkdir(path.dirname(destPath), { recursive: true });
+      await fs.copyFile(srcPath, destPath);
+      console.log(`[WorkspaceService] Created template: ${rel}`);
+    }
+
     for (const filename of templateFiles) {
       const destPath = path.join(this.workspaceDir, filename);
       const exists = await this.fileExists(destPath);

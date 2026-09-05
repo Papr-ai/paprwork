@@ -35,3 +35,25 @@ describe("errorClassifier spawn resource errors", () => {
     ).toContain("will retry");
   });
 });
+
+describe("classifyError — dropped model stream", () => {
+  it("treats undici 'terminated' and socket-drop messages as transient so agent jobs retry", () => {
+    for (const msg of [
+      "Agent job model error (anthropic/claude-sonnet-4-6): terminated",
+      "TypeError: terminated",
+      "other side closed",
+      "socket hang up",
+      "Premature close",
+    ]) {
+      expect(classifyError(new Error(msg)), msg).toBe("transient");
+    }
+    expect(getErrorClassificationReason(new Error("Agent job model error (anthropic/x): terminated"))).toMatch(
+      /Model stream dropped mid-response/,
+    );
+  });
+
+  it("still treats auth failures as permanent", () => {
+    expect(classifyError(new Error("401 unauthorized"))).toBe("permanent");
+    expect(classifyError(new Error("invalid api key"))).toBe("permanent");
+  });
+});

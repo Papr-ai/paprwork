@@ -30,6 +30,10 @@ import {
   shouldUseTursoReplicaForSource,
   syncStatusForLinkedDb,
 } from "./tursoReplica/tursoReplicaRouting.js";
+import { detectReplicaSidecarWedge } from "./tursoReplica/tursoReplicaSidecarWedge.js";
+import { MIGRATION_CONFLICT_CODE } from "./tursoReplica/tursoReplicaMigrationConflict.js";
+import { isTursoReplicaOnline } from "../utils/tursoReplicaEnabled.js";
+import type { DatabaseRecord } from "./DatabaseRegistryService.js";
 
 export type TursoSourceSyncState =
   | "synced"
@@ -95,7 +99,9 @@ function countLocalSyncableTables(dbPath: string): number {
     if (stats.size === 0) {
       return 0;
     }
-    const db = new Database(dbPath, { readonly: true });
+    // Short busy timeout: better-sqlite3 sleeps synchronously on the main thread
+    // (default 5000ms) when another engine holds the file.
+    const db = new Database(dbPath, { readonly: true, timeout: 100 });
     try {
       return filterSyncableTables(listUserTables(db)).length;
     } finally {
@@ -129,6 +135,54 @@ async function countLocalSyncableTablesForSource(
     }
   }
   return countLocalSyncableTables(source.dbPath);
+}
+
+/** Cheap local table estimate — avoids opening the replica worker for status polls. */
+export function estimateReplicaLocalTableCount(dbPath: string): number {
+  if (!fs.existsSync(dbPath)) {
+    return 0;
+  }
+  try {
+    return fs.statSync(dbPath).size > 0 ? 1 : 0;
+  } catch {
+    return 0;
+  }
+}
+
+/** Registry-backed replica status for cached /api/sync/items (no worker stats probe). */
+export function buildReplicaTursoSyncStatusFromRegistry(
+  record: DatabaseRecord | undefined,
+  localPath: string,
+): TursoReplicaSyncStatus {
+  const lastPushError = record?.lastReplicaPushError ?? null;
+  const migrationConflict =
+    lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
+  const pushAtMs = record?.lastReplicaPushAt
+    ? Date.parse(record.lastReplicaPushAt)
+    : 0;
+  const mutationAtMs = record?.lastReplicaLocalMutationAt
+    ? Date.parse(record.lastReplicaLocalMutationAt)
+    : 0;
+  const pendingPush =
+    Boolean(lastPushError) ||
+    (mutationAtMs > 0 && (pushAtMs === 0 || pushAtMs < mutationAtMs));
+  return {
+    online: isTursoReplicaOnline(),
+    syncMode: "replica",
+    pendingPush,
+    pendingOps: 0,
+    lastPushError,
+    migrationConflict,
+    cutoverBlocked: record?.cutoverBlocked ?? false,
+    cutoverBlockReason: record?.cutoverBlockReason ?? null,
+    sidecarWedge: detectReplicaSidecarWedge(localPath),
+    stats: null,
+  };
+}
+
+export interface BuildTursoSyncItemsReportOptions {
+  /** When false, skip live replica worker probes (fast path for polling). */
+  liveReplicaProbe?: boolean;
 }
 
 /** Exported for unit tests — fingerprint-aware Turso source status. */
@@ -403,7 +457,9 @@ async function snapshotDbRemoteCheck(
 export async function buildTursoSyncItemsReport(
   appsRootDir: string,
   filterAppId?: string,
+  options?: BuildTursoSyncItemsReportOptions,
 ): Promise<TursoSyncItemsReport> {
+  const liveReplicaProbe = options?.liveReplicaProbe === true;
   const emptyReport = (error: string | null): TursoSyncItemsReport => ({
     enabled: false,
     databaseMode: "per-job",
@@ -438,12 +494,15 @@ export async function buildTursoSyncItemsReport(
   const pushState = loadTursoSyncState();
   const remoteByDbPath = new Map<string, DbRemoteCheckSnapshot>();
   const artifactsByDbPath = new Map<string, string[]>();
+  const registry = getDatabaseRegistryService();
 
   for (const source of sources) {
     const syncKey = linkedSourceSyncKey(source);
     const appSource = linkedSourceAsAppDataSource(source);
     const replicaManaged = shouldUseTursoReplicaForSource(appSource);
-    const localTableCount = await countLocalSyncableTablesForSource(source);
+    const localTableCount = replicaManaged && !liveReplicaProbe
+      ? estimateReplicaLocalTableCount(source.dbPath)
+      : await countLocalSyncableTablesForSource(source);
     const alternateKeys = source.jobId && source.jobId !== syncKey ? [source.jobId] : [];
     const dirty = replicaManaged
       ? false
@@ -453,12 +512,20 @@ export async function buildTursoSyncItemsReport(
     let remoteSnapshot = remoteByDbPath.get(dbPathKey);
     if (!remoteSnapshot) {
       try {
-        remoteSnapshot = await snapshotDbRemoteCheck(
-          source.dbPath,
-          tursoDatabase,
-          localTableCount,
-          replicaManaged,
-        );
+        if (replicaManaged && !liveReplicaProbe) {
+          remoteSnapshot = {
+            remoteTableCount: localTableCount > 0 ? localTableCount : 0,
+            schemaDrift: false,
+            remoteCheckFailed: false,
+          };
+        } else {
+          remoteSnapshot = await snapshotDbRemoteCheck(
+            source.dbPath,
+            tursoDatabase,
+            localTableCount,
+            replicaManaged,
+          );
+        }
       } catch (err) {
         remoteSnapshot = {
           remoteTableCount: 0,
@@ -477,10 +544,21 @@ export async function buildTursoSyncItemsReport(
     const linkingAppIds = listAppsLinkingDbPath(allSources, source.dbPath);
     let replicaStatus: TursoReplicaSyncStatus | undefined;
     if (replicaManaged) {
-      try {
-        replicaStatus = await syncStatusForLinkedDb(appSource);
-      } catch {
-        /* best-effort — fall back to legacy CDC status */
+      if (liveReplicaProbe) {
+        try {
+          replicaStatus = await syncStatusForLinkedDb(appSource);
+        } catch {
+          /* best-effort — fall back to registry snapshot */
+        }
+      }
+      if (!replicaStatus) {
+        const record = source.dbId
+          ? registry.getById(source.dbId)
+          : registry.getByPath(source.dbPath);
+        replicaStatus = buildReplicaTursoSyncStatusFromRegistry(
+          record ?? undefined,
+          source.dbPath,
+        );
       }
     }
     items.push(

@@ -22,7 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 export const SLEEP_JOB_NAMES = ["Papr Sleep Cycle", "papr-sleep"] as const;
-export const SLEEP_PROMPT_VERSION = 17;
+export const SLEEP_PROMPT_VERSION = 24;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
@@ -70,7 +70,37 @@ async function fileExists(filePath: string): Promise<boolean> {
   }
 }
 
+/**
+ * Copy the quote-verification helper next to SLEEP.md on every run so the
+ * Sleep and Wiki Writer prompts can call `$PAPR_HOME/workspace/verify_quotes.py`.
+ * Always overwritten (it is platform code, not user-editable like SLEEP.md).
+ */
+export async function installVerifyQuotesHelper(): Promise<void> {
+  const src = path.join(resolveTemplatesDir(), "verify_quotes.py");
+  const dest = path.join(workspaceDir(), "verify_quotes.py");
+  try {
+    if (!(await fileExists(src))) return;
+    const content = await fs.readFile(src, "utf8");
+    let current = "";
+    try {
+      current = await fs.readFile(dest, "utf8");
+    } catch {
+      /* not installed yet */
+    }
+    if (current !== content) {
+      await fs.mkdir(path.dirname(dest), { recursive: true });
+      await fs.writeFile(dest, content, "utf8");
+    }
+  } catch (err) {
+    console.warn(
+      "[SleepCycleService] Could not install verify_quotes.py:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 async function readSleepPrompt(): Promise<string> {
+  await installVerifyQuotesHelper();
   const templatesDir = resolveTemplatesDir();
   const templatePath = path.join(templatesDir, "SLEEP.md");
   const workspacePath = path.join(workspaceDir(), "SLEEP.md");

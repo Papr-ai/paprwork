@@ -17,6 +17,7 @@ import {
   type NodePosition,
   type WorkflowEdge,
 } from "./workflowUtils";
+import { jobTriggerKind } from "../../utils/jobTriggerLabel";
 import "./AppWorkflow.css";
 
 interface AppWorkflowProps {
@@ -78,15 +79,31 @@ function JobNodeCard({
   onRun: () => void;
   onStop: () => void;
 }) {
-  const isActive =
-    job.status === "running" || job.status === "waiting_permission";
+  const isRunning = job.status === "running";
+  const isWaiting = job.status === "waiting_permission";
+  const isActive = isRunning || isWaiting;
   const typeColor = jobTypeColor(job.type);
   const typeLabel = TYPE_LABEL[job.type] ?? job.type;
   const statusClass = STATUS_CLASS[job.status] ?? "wf-status--pending";
+  const triggerKind = position.triggerKind ?? jobTriggerKind(job);
+  const triggerClass =
+    triggerKind === "manual"
+      ? "wf-node-trigger--manual"
+      : triggerKind === "dependency"
+        ? "wf-node-trigger--dep"
+        : "wf-node-trigger--scheduled";
 
   return (
     <div
-      className={`wf-node wf-node--job ${isSelected ? "wf-node--selected" : ""}`}
+      className={[
+        "wf-node",
+        "wf-node--job",
+        isSelected ? "wf-node--selected" : "",
+        isRunning ? "wf-node--running" : "",
+        isWaiting ? "wf-node--waiting" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
       style={{
         left: position.x,
         top: position.y,
@@ -106,10 +123,24 @@ function JobNodeCard({
             <JobTypeIcon type={job.type} size={14} />
           </span>
           <span className="wf-node-title">{truncate(job.name, 24)}</span>
+          {isRunning && (
+            <span className="wf-node-status-badge wf-node-status-badge--running">
+              Running
+            </span>
+          )}
+          {!isRunning && isWaiting && (
+            <span className="wf-node-status-badge wf-node-status-badge--waiting">
+              Waiting
+            </span>
+          )}
         </div>
         <div className="wf-node-meta">
           <span className="wf-node-type">{typeLabel}</span>
-          {trigger && <span className="wf-node-trigger">{truncate(trigger, 18)}</span>}
+          {trigger && (
+            <span className={`wf-node-trigger ${triggerClass}`}>
+              {truncate(trigger, 18)}
+            </span>
+          )}
         </div>
       </div>
       <button
@@ -239,10 +270,12 @@ export function AppWorkflow({
     [workflowJobs, graph, linkedJobIds, appId, isStandalone],
   );
 
-  const positions = useMemo(
+  const layout = useMemo(
     () => computeWorkflowLayout(workflowJobs, edges, showAppNode ? appId : undefined),
     [workflowJobs, edges, appId, showAppNode],
   );
+
+  const positions = layout.positions;
 
   const posMap = useMemo(() => {
     const map = new Map<string, NodePosition>();
