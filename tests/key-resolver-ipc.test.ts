@@ -151,6 +151,7 @@ describe("keyResolver IPC flow", () => {
     expect(asOAuth).toEqual({ type: "oauth", token: "sk-ant-oat01-token" });
 
     withholdOAuth = true;
+    clearKeyCache();
     const asApiKey = await getProviderAuth("anthropic", fakeIpc);
 
     expect(asApiKey).toEqual({
@@ -158,6 +159,31 @@ describe("keyResolver IPC flow", () => {
       key: "sk-ant-api03-real-platform-key",
     });
     expect(fakeIpc.sentMessages).toHaveLength(2);
+  });
+
+  test("getProviderAuth coalesces OAuth IPC refresh within TTL", async () => {
+    process.env.NODE_ENV = "development";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-api03-real-platform-key";
+
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+    const fakeIpc = new FakeIpcProcess();
+    fakeIpc.send = (message: unknown): void => {
+      const typedMessage = message as RequestKeysMessage;
+      fakeIpc.sentMessages.push(typedMessage);
+      fakeIpc.emit("message", {
+        type: "KEYS_RESPONSE",
+        requestId: typedMessage.requestId,
+        keys: {},
+        oauthTokens: {
+          anthropic: { accessToken: "sk-ant-oat01-token", expiresAt },
+        },
+      } satisfies KeysResponseMessage);
+    };
+
+    await getProviderAuth("anthropic", fakeIpc);
+    await getProviderAuth("anthropic", fakeIpc);
+
+    expect(fakeIpc.sentMessages).toHaveLength(1);
   });
 
   test("getPaprApiKey rejects IPC key scoped to a different namespace", async () => {

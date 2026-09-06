@@ -88,6 +88,7 @@ import {
   DEFAULT_HOME_JOB_ASSETS_DIR,
   findHomeDailyBriefJobIdInRegistry,
   readHomeDailyBriefJobIdFromAppDir,
+  resolveHomeBriefsRegistryDbPath,
   resolveOrAllocateHomeDailyBriefJobId,
   type BundledDefaultJobDef,
 } from "./defaultHomeBundle.js";
@@ -629,6 +630,9 @@ export class AppService {
       const { repairDefaultHomeAppLinkedSources } = await import(
         "./defaultHomeAppRepair.js"
       );
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
       const homeRepair = await repairDefaultHomeAppLinkedSources({
         appsDir: this.appsDir,
         workspaceRoot: getPaprRoot(),
@@ -637,17 +641,44 @@ export class AppService {
           path.join(jobsService.getJobsRootPath(), jobId, "data", "data.db"),
         findLinkedDailyBriefJobId: () =>
           findHomeDailyBriefJobIdInRegistry(allJobs, { preferJobId }),
+        resolveBriefReadTarget: async (jobId) => {
+          const registryPath = resolveHomeBriefsRegistryDbPath(getPaprDataDir());
+          const registry = await initializeDatabaseRegistry();
+
+          if (existsSync(registryPath)) {
+            const record = registry.getByPath(registryPath);
+            return { dbPath: registryPath, dbId: record?.dbId };
+          }
+
+          const job = await jobsService.getJob(jobId);
+          const writeDbId = job?.writeDbIds?.[0]?.trim();
+          if (writeDbId) {
+            const record = registry.getById(writeDbId);
+            if (record?.localPath && existsSync(record.localPath)) {
+              return { dbPath: record.localPath, dbId: writeDbId };
+            }
+          }
+
+          const jobDbPath = path.join(
+            jobsService.getJobsRootPath(),
+            jobId,
+            "data",
+            "data.db",
+          );
+          return { dbPath: existsSync(jobDbPath) ? jobDbPath : "" };
+        },
       });
 
       const totalRepairs =
         homeRepair.prunedSources +
         homeRepair.schemaRepaired +
         homeRepair.dbPathsUpdated +
-        homeRepair.jobIdPersisted;
+        homeRepair.jobIdPersisted +
+        homeRepair.registryUpgraded;
 
       if (totalRepairs > 0) {
         console.log(
-          `[AppService] Startup home repair: dbPaths=${homeRepair.dbPathsUpdated} jobId=${homeRepair.jobIdPersisted} pruned=${homeRepair.prunedSources} schema=${homeRepair.schemaRepaired}`,
+          `[AppService] Startup home repair: dbPaths=${homeRepair.dbPathsUpdated} registry=${homeRepair.registryUpgraded} jobId=${homeRepair.jobIdPersisted} pruned=${homeRepair.prunedSources} schema=${homeRepair.schemaRepaired}`,
         );
       }
     } catch (err) {
@@ -880,27 +911,15 @@ export class AppService {
       );
       const dbPath = path.join(dbDir, "data.db");
 
-      // Ship migrations before creating the DB so the first apply has them.
-      const migrationsDir = path.join(dbDir, "migrations");
-      await fs.mkdir(migrationsDir, { recursive: true });
-      const bundledMigrations = path.join(
-        sourceDir,
-        DEFAULT_HOME_DB_MIGRATIONS_DIR,
+      const { syncBundledHomeMigrationsToRegistry } = await import(
+        "./defaultHomeAppRepair.js"
       );
-      try {
-        for (const file of await fs.readdir(bundledMigrations)) {
-          const target = path.join(migrationsDir, file);
-          // Never clobber a migration the user's workspace already applied.
-          if (!existsSync(target)) {
-            await fs.copyFile(path.join(bundledMigrations, file), target);
-          }
-        }
-      } catch (migErr) {
-        const code = (migErr as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT") {
-          throw migErr;
-        }
-      }
+      await syncBundledHomeMigrationsToRegistry(dbPath, {
+        bundledMigrationsDir: path.join(
+          sourceDir,
+          DEFAULT_HOME_DB_MIGRATIONS_DIR,
+        ),
+      });
 
       const { ensureRegistryDatabase, applyRegistryDatabaseMigrations } =
         await import("./jobs/databaseMigrations.js");

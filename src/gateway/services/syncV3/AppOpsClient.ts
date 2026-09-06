@@ -95,22 +95,44 @@ async function writerFetch(
   }
 }
 
-export async function fetchAppRepoHead(appId: string): Promise<AppRepoHeadResponse> {
-  const resp = await writerFetch(
-    `/apps/${encodeURIComponent(appId)}/head`,
-    { method: "GET" },
-  );
-  if (!resp.ok) {
-    const text = await resp.text();
-    throw new AppOpsClientError(appId, resp.status, text);
+const headInflight = new Map<string, Promise<AppRepoHeadResponse>>();
+
+export async function fetchAppRepoHead(
+  appId: string,
+  options?: { seedOidCache?: boolean },
+): Promise<AppRepoHeadResponse> {
+  const trimmed = appId.trim();
+  const inflight = headInflight.get(trimmed);
+  if (inflight) {
+    return inflight;
   }
-  const payload: unknown = await resp.json();
-  const parsed = AppRepoHeadResponseSchema.safeParse(payload);
-  if (!parsed.success) {
-    throw new AppOpsClientError(appId, 502, "invalid head response shape");
+
+  const request = (async (): Promise<AppRepoHeadResponse> => {
+    const resp = await writerFetch(
+      `/apps/${encodeURIComponent(trimmed)}/head`,
+      { method: "GET" },
+    );
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new AppOpsClientError(trimmed, resp.status, text);
+    }
+    const payload: unknown = await resp.json();
+    const parsed = AppRepoHeadResponseSchema.safeParse(payload);
+    if (!parsed.success) {
+      throw new AppOpsClientError(trimmed, 502, "invalid head response shape");
+    }
+    if (options?.seedOidCache !== false) {
+      await seedOidCacheFromHead(trimmed, parsed.data.files);
+    }
+    return parsed.data;
+  })();
+
+  headInflight.set(trimmed, request);
+  try {
+    return await request;
+  } finally {
+    headInflight.delete(trimmed);
   }
-  await seedOidCacheFromHead(appId, parsed.data.files);
-  return parsed.data;
 }
 
 export async function postAppOps(
@@ -149,5 +171,7 @@ export async function postAppOps(
 
   incrementSyncV3Metric("v3_op_count");
   await applyAckedBlobOids(appId, parsed.data.files);
+  const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
+  await writeAppRepoCommitCursor(appId, parsed.data.commitSha);
   return parsed.data;
 }

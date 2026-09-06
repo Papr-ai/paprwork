@@ -48,20 +48,29 @@ export class ReplicaManagedDbAccessError extends Error {
   constructor(dbPath: string, operation: string) {
     super(
       `Plan A replica DB at ${dbPath} must use @tursodatabase/sync — ` +
-        `${operation} via better-sqlite3 is blocked. ` +
+        `${operation} via better-sqlite3 is blocked (including readonly opens). ` +
         "Use papr_db_apply_migration / papr_db_exec / /api/db/* instead.",
     );
     this.name = "ReplicaManagedDbAccessError";
   }
 }
 
-export function assertNotReplicaManagedWritablePath(
+/** Block any better-sqlite3 access on Plan A replica files (read or write). */
+export function assertNotReplicaManagedSqliteAccess(
   dbPath: string,
   operation: string,
 ): void {
   if (isReplicaManagedDbPath(dbPath)) {
     throw new ReplicaManagedDbAccessError(dbPath, operation);
   }
+}
+
+/** @deprecated Use assertNotReplicaManagedSqliteAccess — writes and reads both conflict with papr_db. */
+export function assertNotReplicaManagedWritablePath(
+  dbPath: string,
+  operation: string,
+): void {
+  assertNotReplicaManagedSqliteAccess(dbPath, operation);
 }
 
 /** Checkpoint WAL into main file before removing sidecars (never unlink a hot -wal). */

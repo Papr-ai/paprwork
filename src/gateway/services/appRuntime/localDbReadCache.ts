@@ -4,7 +4,7 @@
 
 import * as crypto from "crypto";
 
-const DEFAULT_TTL_MS = Number(process.env.LOCAL_DB_READ_CACHE_TTL_MS ?? 3_000);
+const DEFAULT_TTL_MS = Number(process.env.LOCAL_DB_READ_CACHE_TTL_MS ?? 8_000);
 const MAX_ENTRIES = 500;
 
 interface CacheEntry {

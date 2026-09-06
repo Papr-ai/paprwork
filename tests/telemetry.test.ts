@@ -296,3 +296,56 @@ describe("TelemetryClient", () => {
     expect(merged.namespace_id).toBe("spoofed");
   });
 });
+
+describe("rendererTelemetryForward", () => {
+  const prev = { ...process.env };
+
+  beforeEach(() => {
+    process.env.PAPRWORK_TELEMETRY_ENABLED = "true";
+    process.env.PAPRWORK_TELEMETRY_ANONYMOUS_ID = "anon-test-123";
+    process.env.PAPR_PLATFORM_URL = "https://memory.papr.ai";
+  });
+
+  afterEach(() => {
+    process.env = { ...prev };
+    vi.unstubAllGlobals();
+  });
+
+  it("prepareRendererTelemetry rejects anonymous_id mismatch", async () => {
+    const { prepareRendererTelemetry } = await import(
+      "../src/gateway/services/rendererTelemetryForward.js"
+    );
+    const result = prepareRendererTelemetry({
+      anonymous_id: "wrong-id",
+      events: [{ event_name: "paprwork_test", properties: {} }],
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(403);
+      expect(result.error).toBe("anonymous_id mismatch");
+    }
+  });
+
+  it("prepareRendererTelemetry builds payload without network I/O", async () => {
+    const { prepareRendererTelemetry } = await import(
+      "../src/gateway/services/rendererTelemetryForward.js"
+    );
+    const result = prepareRendererTelemetry({
+      anonymous_id: "anon-test-123",
+      events: [
+        {
+          event_name: "paprwork_app_started",
+          properties: { feature: "chat" },
+          timestamp: 1_700_000_000_000,
+        },
+      ],
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.payload.events).toHaveLength(1);
+      expect(result.payload.events[0].event_name).toBe("paprwork_app_started");
+      expect(result.payload.anonymous_id).toBe("anon-test-123");
+      expect(result.payload.url).toContain("/v1/telemetry/events");
+    }
+  });
+});

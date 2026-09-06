@@ -59,14 +59,22 @@ vi.mock("../src/gateway/services/tursoSyncBridgeCore.js", async (importOriginal)
   };
 });
 
+const listDbDirtySyncKeysMock = vi.fn<(...args: unknown[]) => string[]>(
+  () => [],
+);
+
 vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
   loadTursoSyncState: vi.fn(() => ({ jobs: {} })),
   isJobDbDirty: vi.fn(() => false),
   resolveTursoPushStateEntry: vi.fn(() => ({})),
+  listDbDirtySyncKeysForApp: (...args: unknown[]) =>
+    listDbDirtySyncKeysMock(...args),
 }));
 
+// Code-pending git state must be irrelevant to row pulls; mock stays only so
+// other modules importing it still resolve.
 vi.mock("../src/gateway/services/cloudSync/pendingLocalUploads.js", () => ({
-  readAppHasPendingLocalUpload: vi.fn(() => false),
+  readAppHasPendingLocalUpload: vi.fn(() => true),
 }));
 
 vi.mock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
@@ -92,6 +100,8 @@ describe("tursoSyncSession", () => {
     vi.mocked(isJobDbDirty).mockReturnValue(false);
     vi.mocked(remoteAheadOfLocal).mockResolvedValue(false);
     vi.mocked(readAppHasPendingLocalUpload).mockReturnValue(false);
+    listDbDirtySyncKeysMock.mockReset();
+    listDbDirtySyncKeysMock.mockReturnValue([]);
     vi.mocked(shouldUseTursoReplicaForSource).mockReturnValue(false);
     vi.mocked(syncStatusForLinkedDb).mockResolvedValue({ pendingPush: false });
   });
@@ -126,6 +136,31 @@ describe("tursoSyncSession", () => {
     expect(result.action).toBe("pulled");
     expect(bridge.pullJob).toHaveBeenCalledWith("job-abc");
     expect(bridge.pushJob).not.toHaveBeenCalled();
+  });
+
+  it("pulls when app CODE has pending git upload (code state must not gate row pulls)", async () => {
+    // Regression: the old gate used the app folder git hash, which silently
+    // disabled cloud→local row pulls for every app with any local source edit.
+    vi.mocked(readAppHasPendingLocalUpload).mockReturnValue(true);
+    vi.mocked(remoteAheadOfLocal).mockResolvedValue(true);
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc");
+
+    expect(result.action).toBe("pulled");
+    expect(bridge.pullJob).toHaveBeenCalledWith("job-abc");
+  });
+
+  it("skips pull when this DB has unpushed local rows — before any remote check", async () => {
+    listDbDirtySyncKeysMock.mockReturnValue(["job-abc"]);
+    vi.mocked(remoteAheadOfLocal).mockResolvedValue(true);
+    const bridge = makeBridge();
+    const result = await syncLinkedSourceFromCloud(bridge, "job-abc");
+
+    expect(result.action).toBe("skipped");
+    expect(result.reason).toBe("pending_local_db_push");
+    expect(bridge.pullJob).not.toHaveBeenCalled();
+    // Gate short-circuits before the remote-ahead network round-trip.
+    expect(remoteAheadOfLocal).not.toHaveBeenCalled();
   });
 
   it("preferRemote pulls even when app has pending local git upload", async () => {

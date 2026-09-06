@@ -12,6 +12,7 @@ import {
   type TabMetadata,
   type AppState,
 } from "../services/storage/AppStateStorage.js";
+import { scheduleDeferredTabSave } from "../services/storage/deferredTabSave.js";
 import {
   getAppRuntimeLogService,
   type AppRuntimeLogEntry,
@@ -384,8 +385,18 @@ export async function setupAppHandlers(
 
       // ========== APP STATE PERSISTENCE ==========
       case "app:save_tabs": {
-        const tabs = message.payload as TabMetadata[];
-        getAppStateStorage().saveTabs(tabs);
+        const payload = message.payload as
+          | TabMetadata[]
+          | { tabs: TabMetadata[]; sync?: boolean };
+        const tabs = Array.isArray(payload) ? payload : payload.tabs;
+        const sync = !Array.isArray(payload) && payload.sync === true;
+
+        if (sync) {
+          getAppStateStorage().saveTabs(tabs);
+        } else {
+          scheduleDeferredTabSave(tabs);
+        }
+
         ws.send(
           JSON.stringify({
             id: message.id,

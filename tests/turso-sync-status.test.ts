@@ -111,7 +111,7 @@ describe("deriveAppCloudSyncStatus database detail", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("synced");
     expect(status.databases[0]?.detail).toBe(
-      "Row changes syncing to Turso in the background",
+      "Data changes publishing in the background",
     );
     expect(status.databases[0]?.rowsSyncing).toBe(true);
   });
@@ -159,7 +159,10 @@ describe("deriveAppCloudSyncStatus database detail", () => {
     };
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
-    expect(status.databases[0]?.detail).toContain("Local changes not pushed");
+    // Auto mode: rows push on their own — never tell the user to click.
+    expect(status.databases[0]?.detail).toBe(
+      "3 local changes publishing in the background",
+    );
     expect(status.databases[0]?.rowsSyncing).toBeUndefined();
   });
 });

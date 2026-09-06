@@ -170,7 +170,7 @@ export interface AppCloudSyncStatus {
   chipLabel: string;
   globallySyncing: boolean;
   /** Auto-republish after git push (publish catalog / vault allowlist). */
-  cloudPublishing: boolean;
+  cloudUploading: boolean;
   /** Cross-layer publish readiness (git + Turso + verify + convergence). */
   publishStatus: AppCloudPublishStatus;
   publishLabel: string;
@@ -242,9 +242,9 @@ function registryLabelForAppSync(
     return "Registry not on web yet";
   }
   if (codePhase === "uploading") {
-    return "Registry uploading with app code";
+    return "Registry publishing with app code";
   }
-  return "Registry uploads with app code";
+  return "Registry publishes with app code";
 }
 
 function resolveItemPhase(
@@ -270,22 +270,22 @@ function codeDetail(
 ): string {
   if (status === "failed") {
     return lastError
-      ? `Upload failed — ${lastError.slice(0, 120)}`
-      : "Upload failed — retry in Settings → Cloud Sync";
+      ? `Publish failed — ${lastError.slice(0, 120)}`
+      : "Publish failed — retry in Settings → Cloud Sync";
   }
   if (status === "updates_available") {
-    return "Cloud has newer app or job code — merge before uploading";
+    return "Cloud has newer app or job code — merge before publishing";
   }
   if (manualUploadHold && phase === "changed") {
-    return "Local changes waiting — manual upload mode (click Upload now)";
+    return "Local changes waiting — manual publish mode (click Publish changes)";
   }
   switch (phase) {
     case "synced":
       return "App code is on the web";
     case "uploading":
-      return "Uploading app code…";
+      return "Publishing app code…";
     case "not_uploaded":
-      return "App code not uploaded yet";
+      return "App code not published yet";
     case "changed":
       return "App code changed locally";
   }
@@ -300,21 +300,21 @@ function jobDetail(
   if (status === "failed") {
     return lastError
       ? `Failed — ${lastError.slice(0, 80)}`
-      : "Upload failed";
+      : "Publish failed";
   }
   if (status === "updates_available") {
     return "Cloud job status updating";
   }
   if (manualUploadHold && phase === "changed") {
-    return "Waiting — manual upload mode";
+    return "Waiting — manual publish mode";
   }
   switch (phase) {
     case "synced":
       return "On the web";
     case "uploading":
-      return "Uploading…";
+      return "Publishing…";
     case "not_uploaded":
-      return "Not uploaded yet";
+      return "Not published yet";
     case "changed":
       return "Changed locally";
   }
@@ -337,51 +337,53 @@ function databaseDetail(item: {
   cutoverBlocked?: boolean;
   cutoverBlockReason?: string | null;
 }): string {
+  // Primary copy is for non-technical users: no Turso / replica / migration /
+  // ledger / cutover / CDC. Raw reasons stay on lastReplicaPushError and
+  // cutoverBlockReason for a Details line.
+  const pendingCount = item.pendingOps ?? 0;
+  const changes = pendingCount === 1 ? "change" : "changes";
   if (item.syncMode === "replica") {
     if (item.migrationConflict) {
-      return (
-        item.lastReplicaPushError?.slice(0, 120) ??
-        "Migration conflict — reconcile migrations, then Upload now"
-      );
+      return "Your local database and the web version have different structures — ask the agent to reconcile them, then publish again";
     }
     if (item.cutoverBlocked) {
-      return (
-        item.cutoverBlockReason?.slice(0, 120) ??
-        "Replica cutover blocked — check Settings → Cloud Sync"
-      );
+      return "This database can't publish until its structure is fixed — ask the agent to repair it";
     }
     if (item.status === "pending" && item.pendingPush) {
       if (item.online === false) {
-        return `Offline — ${item.pendingOps ?? 0} local change(s) will push when back online`;
+        return `Offline — ${pendingCount} local ${changes} will publish when you're back online`;
       }
-      return `Local changes not pushed to Turso yet (${item.pendingOps ?? 0} pending) — click Upload now`;
+      // Only tell users to click when clicking is actually what's needed.
+      return item.manualUploadHold
+        ? `${pendingCount} local ${changes} not on the web yet — click Publish changes`
+        : `${pendingCount} local ${changes} publishing in the background`;
     }
     if (item.status === "synced") {
-      return `${item.remoteTableCount} table(s) on Turso (replica)`;
+      return `${item.remoteTableCount} table(s) on the web`;
     }
   }
   switch (item.status) {
     case "synced":
-      return `${item.remoteTableCount} table(s) on Turso`;
+      return `${item.remoteTableCount} table(s) on the web`;
     case "pending":
       if (item.manualUploadHold) {
-        return "Local changes waiting — manual upload mode (click Upload now)";
+        return "Local data changes not on the web yet — click Publish changes";
       }
       if (item.schemaDrift) {
-        return "Local schema changed — click Upload now to update Turso";
+        return "The database structure changed locally — click Publish changes to update the web";
       }
       if (item.remoteTableCount > 0) {
-        return "Row changes syncing to Turso in the background";
+        return "Data changes publishing in the background";
       }
-      return `${item.localTableCount} local table(s) not on Turso yet — click Upload now`;
+      return `${item.localTableCount} local table(s) not on the web yet — click Publish changes`;
     case "empty":
       return "No data tables yet";
     case "unavailable":
       return "Database file missing or unreadable";
     case "quarantined":
       return item.quarantineReason
-        ? `Sync paused: ${item.quarantineReason.slice(0, 100)}`
-        : "Sync paused — repair in Settings → Cloud Sync";
+        ? `Publishing paused: ${item.quarantineReason.slice(0, 100)}`
+        : "Publishing paused — ask the agent to repair this database";
     default:
       return item.status;
   }
@@ -414,11 +416,11 @@ function publishDetailLabel(
     case "republishing":
       return detail ?? "Updating publish catalog…";
     case "not_web_ready":
-      return detail ?? "Code or databases still syncing — web app may show stale data";
+      return detail ?? "Still publishing — the web app may show older data until it finishes";
     case "drift":
-      return detail ?? "Local and Turso row counts differ — click Upload now";
+      return detail ?? "The web has older data than your local copy — click Publish changes";
     case "error":
-      return detail ?? "Publish readiness check failed";
+      return detail ?? "Couldn't check whether the web app is up to date";
     default:
       return detail ?? "Publish status unknown";
   }
@@ -427,9 +429,9 @@ function publishDetailLabel(
 function publishChipLabel(status: AppCloudPublishStatus): string | null {
   switch (status) {
     case "not_web_ready":
-      return "Not ready for web";
+      return "Still publishing";
     case "drift":
-      return "Data drift";
+      return "Web data out of date";
     case "error":
       return "Publish check failed";
     default:
@@ -482,7 +484,7 @@ function buildSummaryLine(opts: {
     return "Syncing cloud job status…";
   }
   if (gitRemoteRequiresReview) {
-    return "Merge cloud changes before upload";
+    return "Merge cloud changes before publishing";
   }
 
   if (isQueuedForUpload) {
@@ -494,16 +496,16 @@ function buildSummaryLine(opts: {
       uploadQueueDepth != null &&
       uploadQueueDepth > 1
     ) {
-      return `In upload queue (${uploadQueuePosition} of ${uploadQueueDepth})…`;
+      return `In publish queue (${uploadQueuePosition} of ${uploadQueueDepth})…`;
     }
-    return "Waiting in upload queue…";
+    return "Waiting in publish queue…";
   }
 
   if (isActivelyUploading) {
     if (totalJobCount > 0) {
-      return `Uploading app and jobs (${syncedJobCount}/${totalJobCount} already on web)…`;
+      return `Publishing app and jobs (${syncedJobCount}/${totalJobCount} already on web)…`;
     }
-    return "Uploading app to the web…";
+    return "Publishing app to the web…";
   }
 
   const parts: string[] = [];
@@ -511,7 +513,7 @@ function buildSummaryLine(opts: {
     parts.push(`${syncedJobCount} of ${totalJobCount} jobs on the web`);
   }
   if (codePhase === "not_uploaded") {
-    parts.push("app code not uploaded yet");
+    parts.push("app code not published yet");
   } else if (codePhase === "changed") {
     parts.push("local app changes not on web yet");
   }
@@ -519,13 +521,13 @@ function buildSummaryLine(opts: {
     parts.push(
       codePhase === "not_uploaded"
         ? "database registry not on web yet"
-        : "database registry will upload with app code",
+        : "database registry will publish with app code",
     );
   }
   if (dbBlockingPending > 0) {
-    parts.push(`${dbBlockingPending} database(s) waiting for Turso upload`);
+    parts.push(`${dbBlockingPending} database(s) not on the web yet`);
   } else if (dbRowsSyncing > 0) {
-    parts.push(`${dbRowsSyncing} database(s) syncing row changes in the background`);
+    parts.push(`${dbRowsSyncing} database(s) publishing data in the background`);
   }
   if (publishStatus === "not_web_ready" || publishStatus === "drift") {
     parts.push(publishDetailLabel(publishStatus, publishDetail ?? null));
@@ -533,25 +535,25 @@ function buildSummaryLine(opts: {
   if (parts.length === 0) {
     if (overall === "synced") {
       const relative = formatLastUploadedAt(lastUploadedAt);
-      // Uploaded but never published: say so, so "synced" is not misread as
+      // Published but never published: say so, so "synced" is not misread as
       // "shared with people".
       if (publishNotConfigured) {
         return relative
-          ? `Uploaded ${relative} · not shared yet`
-          : "Uploaded to your private cloud repo · not shared yet";
+          ? `Published ${relative} · not shared yet`
+          : "Published to your private cloud repo · not shared yet";
       }
       return relative
-        ? `Last uploaded ${relative}`
+        ? `Last published ${relative}`
         : "Everything for this app matches the web";
     }
     if (overall === "uploading") {
-      return "Uploading app to the web…";
+      return "Publishing app to the web…";
     }
     if (overall === "needs_sync") {
       if (publishStatus === "error") {
         return publishDetailLabel("error", publishDetail ?? null);
       }
-      return "Some changes still need to sync to the web";
+      return "Some changes aren't on the web yet — click Publish changes";
     }
     return "Checking web sync status…";
   }
@@ -592,7 +594,7 @@ export function deriveAppCloudSyncStatus(
       registryLabel: "Database registry not checked",
       chipLabel: "Cloud off",
       globallySyncing: false,
-      cloudPublishing: false,
+      cloudUploading: false,
       publishStatus: "synced",
       publishLabel: "Cloud sync is off",
       publishDetail: null,
@@ -818,7 +820,7 @@ export function deriveAppCloudSyncStatus(
         ? "Registry on the web"
         : codePhase === "not_uploaded"
           ? "Registry not on web yet"
-          : "Registry uploads with app code";
+          : "Registry publishes with app code";
 
   const codePhaseDisplay =
     clientPushActive && codePhase !== "synced"
@@ -832,7 +834,7 @@ export function deriveAppCloudSyncStatus(
       githubItem?.lastError,
     );
   } else if (codePhaseDisplay === "uploading" && codePhase !== "uploading") {
-    codeLabel = "Uploading app code to cloud repo…";
+    codeLabel = "Publishing app code to cloud repo…";
   }
 
   const publishLive = items.appContext?.publishLive === true;
@@ -844,14 +846,14 @@ export function deriveAppCloudSyncStatus(
     items.publish?.status ?? "synced";
   const publishDetail = items.publish?.detail ?? null;
   const publishLabel = publishDetailLabel(publishStatus, publishDetail);
-  const cloudPublishing = publishStatus === "republishing";
+  const cloudUploading = publishStatus === "republishing";
   // Never published: there is no web layer to keep in sync, so publish state
-  // must not hold the app at "needs sync". Upload now puts code in the cloud
+  // must not hold the app at "needs sync". Publish changes puts code in the cloud
   // repo; publishing is a separate, explicit action.
   const publishNotConfigured = !publishLive && publishedAt == null;
   const publishLayerSynced =
     publishNotConfigured ||
-    (publishLive && publishStatus === "synced" && !cloudPublishing);
+    (publishLive && publishStatus === "synced" && !cloudUploading);
   const publishBlocksWeb =
     !publishNotConfigured &&
     (publishStatus === "drift" ||
@@ -964,16 +966,16 @@ export function deriveAppCloudSyncStatus(
 
   let chipLabel = "Sync status";
   if (coordinatorFailed && !uploadRetryPending) {
-    chipLabel = "Upload failed";
+    chipLabel = "Publish failed";
   } else if (codeStatus === "failed") {
-    chipLabel = "Upload failed";
+    chipLabel = "Publish failed";
   } else if (writerConflict) {
-    chipLabel = "Conflict on the web";
+    chipLabel = "Needs review";
   } else if (gitRemoteRequiresReview) {
-    chipLabel = "Merge required";
+    chipLabel = "Needs review";
   } else if (gitRemoteMetadataSync) {
     chipLabel = "Syncing job status…";
-  } else if (cloudPublishing || publishStatus === "republishing") {
+  } else if (cloudUploading || publishStatus === "republishing") {
     chipLabel = "Updating cloud…";
   } else if (coordinatorUploading && uploadLabel) {
     chipLabel = uploadLabel;
@@ -985,15 +987,17 @@ export function deriveAppCloudSyncStatus(
   } else if (overall === "uploading") {
     chipLabel =
       totalJobCount > 0
-        ? `Uploading ${syncedJobCount}/${totalJobCount}…`
-        : "Uploading…";
+        ? `Publishing ${syncedJobCount}/${totalJobCount}…`
+        : "Publishing…";
   } else if (overall === "needs_sync") {
     const publishChip = publishChipLabel(publishStatus);
+    // "Not published" names the direction and the verb; "Needs sync" told users
+    // neither. Job count reads as "N of M jobs already on the web".
     chipLabel =
       publishChip ??
       (totalJobCount > 0
-        ? `Needs sync (${syncedJobCount}/${totalJobCount})`
-        : "Needs sync");
+        ? `Not published (${syncedJobCount}/${totalJobCount} jobs)`
+        : "Not published");
   } else if (overall === "unknown") {
     chipLabel = "Sync status unknown";
   }
@@ -1041,7 +1045,7 @@ export function deriveAppCloudSyncStatus(
     registryLabel: displayRegistryLabel,
     chipLabel,
     globallySyncing,
-    cloudPublishing,
+    cloudUploading,
     publishStatus,
     publishLabel,
     publishDetail,
@@ -1062,6 +1066,41 @@ export function deriveAppCloudSyncStatus(
     publishLive,
     oversizedAppFilesMessage,
     oversizedAppFilesCount,
+  };
+}
+
+export interface RemoteCodeCheckSnapshot {
+  upToDate: boolean;
+  remoteCommitSha?: string | null;
+  checkFailed?: boolean;
+}
+
+/** Merge writer HEAD check (MongoDB metadata) into publish-bar sync status — notify-only, no pull. */
+export function mergeRemoteCodeCheckIntoStatus(
+  status: AppCloudSyncStatus,
+  remote: RemoteCodeCheckSnapshot | null,
+): AppCloudSyncStatus {
+  if (
+    !remote ||
+    remote.upToDate ||
+    remote.checkFailed ||
+    status.overall === "disabled" ||
+    status.gitRemoteRequiresReview ||
+    status.writerConflict
+  ) {
+    return status;
+  }
+
+  return {
+    ...status,
+    gitUpdatesAvailable: true,
+    codeStatus:
+      status.codeStatus === "synced" || status.codeStatus === "unknown"
+        ? "updates_available"
+        : status.codeStatus,
+    chipLabel: "Updates available",
+    summaryLine: "The web has newer changes — click Get updates",
+    overall: status.overall === "synced" ? "needs_sync" : status.overall,
   };
 }
 
@@ -1087,8 +1126,14 @@ export function formatWebSyncStatusTooltip(
   if (options.loading || !status) {
     return "Checking what's on the web…";
   }
+  if (status.gitUpdatesAvailable && !status.gitRemoteRequiresReview) {
+    return (
+      status.summaryLine ||
+      "Cloud has newer app code — open web sync and click Get updates"
+    );
+  }
   if (status.gitRemoteRequiresReview) {
-    return "Action needed — merge cloud changes before upload";
+    return "Action needed — merge cloud changes before publishing";
   }
   if (status.gitRemoteMetadataSync) {
     return "Integrating cloud job status — no action needed";
@@ -1115,6 +1160,13 @@ export function webSyncVisualState(
   if (options.loading || !status) return "loading";
   if (status.overall === "disabled") return "disabled";
   if (status.codeStatus === "failed" && !status.writerConflict) return "error";
+  if (
+    status.gitUpdatesAvailable &&
+    !status.gitRemoteRequiresReview &&
+    !status.writerConflict
+  ) {
+    return "action_required";
+  }
   if (status.writerConflict || status.gitRemoteRequiresReview) return "action_required";
   if (options.pushing || status.overall === "uploading") return "syncing";
   if (status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0) {

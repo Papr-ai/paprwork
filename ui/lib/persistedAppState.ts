@@ -37,7 +37,7 @@ export async function flushWorkspaceStateToGateway(): Promise<void> {
 
   const tabsToSave = tabs.map((tab, index) => serializeTabForGatewayPersistence(tab, index));
 
-  await gateway.send("app:save_tabs", tabsToSave);
+  await gateway.send("app:save_tabs", { tabs: tabsToSave, sync: true });
 
   const onboardingStep1 = localStorage.getItem("papr-onboarding-step1") === "true";
   const onboardingStep2 = localStorage.getItem("papr-onboarding-step2") === "true";

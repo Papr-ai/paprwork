@@ -28,9 +28,17 @@ function markAppCodeBaselineSynced(appId: string, code: PullAppCodeFromRepoResul
 
 export async function pullAppFromCloud(
   appId: string,
-  options: { token: string | null; waitForTurso?: boolean },
+  options: {
+    token: string | null;
+    waitForTurso?: boolean;
+    /** When false, always fetch remote HEAD (manual Get updates). */
+    allowRecentSkip?: boolean;
+  },
 ): Promise<PullAppFromCloudResult> {
-  const code = await pullAppCodeFromRepo(appId, { token: options.token });
+  const code = await pullAppCodeFromRepo(appId, {
+    token: options.token,
+    allowRecentSkip: options.allowRecentSkip,
+  });
 
   const bridge = getTursoSyncBridge();
   if (!bridge?.enabled) {

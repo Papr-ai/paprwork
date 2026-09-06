@@ -176,23 +176,36 @@ function normalizeParent(raw: string | undefined): string | undefined {
   return m ? m[1] : undefined;
 }
 
+/** "G1 — Title (Parent: G3)" → id, cleaned title, optional parent from the heading suffix. */
+function parseGoalHeading(raw: string): { id: string; title: string; parent?: string } | null {
+  const headMatch = raw.match(/^(G\d+)\s*[—–-]\s*(.+)$/);
+  if (!headMatch) return null;
+  let title = headMatch[2].trim();
+  const parentInTitle = title.match(/\((?:Parent:\s*)(G\d+)\)\s*$/i);
+  const parent = parentInTitle ? parentInTitle[1] : undefined;
+  if (parentInTitle) title = title.replace(/\s*\((?:Parent:\s*)G\d+\)\s*$/i, "").trim();
+  return { id: headMatch[1], title, parent };
+}
+
 /** Parse goal blocks out of the `## Goals` body. Fenced code (the template example) is ignored. */
 export function parseGoals(sectionBody: string): WorkspaceGoal[] {
   const withoutFences = sectionBody.replace(/```[\s\S]*?```/g, "");
-  const blocks = withoutFences.split(/^(?=### )/m).filter((b) => b.startsWith("### "));
+  // L1 blocks use `###`; Sleep sometimes nests L2/L3 under an L1 with `####` — each heading is its own goal.
+  const blocks = withoutFences.split(/^(?=#{3,4} )/m).filter((b) => /^#{3,4} /.test(b));
   const goals: WorkspaceGoal[] = [];
   for (const block of blocks) {
     const lines = block.split("\n");
-    const heading = lines[0].replace(/^###\s*/, "").trim();
-    const headMatch = heading.match(/^(G\d+)\s*[—–-]\s*(.+)$/);
-    if (!headMatch) continue;
+    const heading = lines[0].replace(/^#{3,4}\s*/, "").trim();
+    const parsedHeading = parseGoalHeading(heading);
+    if (!parsedHeading) continue;
     const goal: WorkspaceGoal = {
-      id: headMatch[1],
-      title: headMatch[2].trim(),
+      id: parsedHeading.id,
+      title: parsedHeading.title,
       status: "unknown",
       level: "L1",
       confidence: "unknown",
       priority: 99,
+      parent: parsedHeading.parent,
     };
     let explicitLevel: GoalLevel | null = null;
     for (const line of lines.slice(1)) {

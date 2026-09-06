@@ -107,6 +107,7 @@ export class AppStateStorage {
   saveTabs(tabs: TabMetadata[]): void {
     if (this.closed) return;
 
+    const started = performance.now();
     const transaction = this.db.transaction((tabsToSave: TabMetadata[]) => {
       this.db.prepare('DELETE FROM tabs').run();
 
@@ -135,6 +136,12 @@ export class AppStateStorage {
     });
 
     transaction(tabs);
+    const elapsedMs = Math.round(performance.now() - started);
+    if (elapsedMs >= 50) {
+      console.log(
+        `[AppStateStorage] saveTabs ${tabs.length} tab(s) in ${elapsedMs}ms`,
+      );
+    }
   }
 
   /**

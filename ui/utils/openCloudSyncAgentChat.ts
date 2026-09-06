@@ -82,11 +82,11 @@ export function buildSchemaDriftAgentPrompt(input: {
   }
   parts.push(
     "Workflow: get_cloud_sync_status → inspect each linked DB (syncMode legacy vs replica, schemaDrift, migrationConflict, row counts local vs Turso).",
-    "Legacy DB + Plan A rollout: cutover runs automatically on Upload now **or** push_cloud_sync({ appId }) with default targets (github + turso) — same ordered flush (migrations → cutover → replica push → git → publish). Same Turso instance — never delete_database/recreate. Local-only legacy CDC tables (e.g. turso_cdc, turso_sync_last_change_id) are ignored for drift and stripped at cutover.",
+    "Legacy DB + Plan A rollout: cutover runs automatically on Publish changes **or** push_cloud_sync({ appId }) with default targets (github + turso) — same ordered flush (migrations → cutover → replica push → git → publish). Same Turso instance — never delete_database/recreate. Local-only legacy CDC tables (e.g. turso_cdc, turso_sync_last_change_id) are ignored for drift and stripped at cutover.",
     "After cutover (or if already replica): compare migrations/*.sql vs schema_migrations → papr_db_apply_migration for missing migrations (never papr_db_exec DDL or bash/sqlite3 on registry DB files).",
     "Migration conflict: repair_cloud_sync merge_lww first. accept_cloud only when Turso is authoritative (never when local has more rows).",
     "Local has rows but Turso empty/stale (e.g. after mistaken delete/recreate): restore data.db from newest .sync-backup or .pre-replica.bak, then repair_cloud_sync bootstrap_remote (NOT force_local, NOT sqlite3 INSERT).",
-    "Legacy-only sync (no replica rollout): push_cloud_sync({ appId }) or Upload now applies local migrations then pushes Turso.",
+    "Legacy-only sync (no replica rollout): push_cloud_sync({ appId }) or Publish changes applies local migrations then pushes Turso.",
     "Do NOT use push_cloud_sync targets: ['github'] or targets: ['turso'] alone when cutover or full web upload is needed — use push_cloud_sync({ appId }) (both layers).",
     "Verify web-ready with get_cloud_sync_status.",
   );
@@ -107,8 +107,8 @@ export function buildUploadFailureAgentPrompt(input: {
   codeLastError?: string | null;
 }): string {
   const parts = [
-    "Help me fix a failed Web sync / Upload now for my Papr mini-app.",
-    "Upload now did not complete — local changes are still not on the web.",
+    "Help me fix a failed Web sync / Publish changes for my Papr mini-app.",
+    "Publish changes did not complete — local changes are still not on the web.",
   ];
   if (input.appId) {
     parts.push(`App id: ${input.appId}.`);
@@ -142,11 +142,11 @@ export function buildUploadFailureAgentPrompt(input: {
   }
   parts.push(
     "Workflow: get_cloud_sync_status → inspect linked database sync (Plan A replica vs legacy) → diagnose the error.",
-    "Legacy DBs migrate to Plan A replica automatically on Upload now or push_cloud_sync({ appId }) — same pipeline (never delete/recreate Turso).",
+    "Legacy DBs migrate to Plan A replica automatically on Publish changes or push_cloud_sync({ appId }) — same pipeline (never delete/recreate Turso).",
     "For Turso replica WAL/checkpoint or stuck pending CDC: try repair_cloud_sync with strategy accept_cloud after explaining data loss (resets local replica from cloud).",
     "For migration conflicts: reconcile schema_migrations on primary vs local before push.",
     "For writer/git conflicts: inspect_cloud_repo and merge remote changes first.",
-    "After fixing, verify web-ready and retry push_cloud_sync({ appId }) or Upload now. Explain what failed and what you changed.",
+    "After fixing, verify web-ready and retry push_cloud_sync({ appId }) or Publish changes. Explain what failed and what you changed.",
   );
   return parts.join(" ");
 }
@@ -173,7 +173,7 @@ export function buildOversizedFilesAgentPrompt(input: {
     "Workflow: get_cloud_sync_status → read oversizedAppFiles paths and reasons.",
     "For binary assets (images, PDFs, large JSON): upload via App Files and update the app to use the App Files reference instead of a local path.",
     "For data.db in the app folder: if it belongs to a job, ensure the database lives under Jobs/ and is linked in Data Sources — not copied into apps/<appId>/.",
-    "Remove or relocate skipped paths from the app folder, then verify oversizedAppFiles is clear with get_cloud_sync_status and retry Upload now if needed.",
+    "Remove or relocate skipped paths from the app folder, then verify oversizedAppFiles is clear with get_cloud_sync_status and retry Publish changes if needed.",
   );
   return parts.join(" ");
 }
@@ -193,8 +193,8 @@ export function buildWriterConflictAgentPrompt(input: {
     parts.push(`Last error: ${input.error.trim()}.`);
   }
   parts.push(
-    "Workflow: get_cloud_sync_status → inspect_cloud_repo (see what changed on the web) → merge remote changes OR edit my local files to incorporate remote updates → push_cloud_sync / Upload now.",
-    "Do not blindly overwrite — explain what changed and what I should keep before uploading again.",
+    "Workflow: get_cloud_sync_status → inspect_cloud_repo (see what changed on the web) → merge remote changes OR edit my local files to incorporate remote updates → push_cloud_sync / Publish changes.",
+    "Do not blindly overwrite — explain what changed and what I should keep before publishing again.",
   );
   return parts.join(" ");
 }

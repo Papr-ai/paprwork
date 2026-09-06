@@ -290,6 +290,10 @@ export function ContentArea() {
     [tabs],
   );
 
+  // Always keep the LRU warm set (cap = max(7, visible + 1)) — including in
+  // split view. Passing { visibleOnly: true } here evicted every hidden app
+  // iframe whenever a parent chat with child tabs became active, so returning
+  // to a standalone app tab paid a full cold reload (queries, Turso pulls).
   const mountedAppTabIds = useMemo(
     () =>
       selectMountedAppTabIds(
@@ -299,6 +303,15 @@ export function ContentArea() {
       ),
     [appTabs, visiblePaneTabIds, lastActiveTick],
   );
+
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === "undefined" || !document.hidden,
+  );
+  useEffect(() => {
+    const sync = () => setDocumentVisible(!document.hidden);
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
 
   const resolveAppTabPlacement = useCallback(
     (tabId: string): AppTabKeepAlivePlacement => {
@@ -336,6 +349,7 @@ export function ContentArea() {
             key={tab.id}
             tab={tab}
             placement={resolveAppTabPlacement(tab.id)}
+            documentVisible={documentVisible}
           />
         ))}
     </div>

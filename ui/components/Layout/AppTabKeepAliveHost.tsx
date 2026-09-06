@@ -26,6 +26,8 @@ function renderAppTabContent(tab: Tab, previewTabVisible: boolean): ReactNode {
 interface AppTabKeepAliveHostProps {
   tab: Tab;
   placement: AppTabKeepAlivePlacement;
+  /** False when the Paprwork window is backgrounded (alt-tab, minimize). */
+  documentVisible?: boolean;
 }
 
 /**
@@ -35,8 +37,9 @@ interface AppTabKeepAliveHostProps {
 export function AppTabKeepAliveHost({
   tab,
   placement,
+  documentVisible = true,
 }: AppTabKeepAliveHostProps) {
-  const previewTabVisible = placement !== "hidden";
+  const previewTabVisible = placement !== "hidden" && documentVisible;
 
   return (
     <div

@@ -17,10 +17,14 @@ import { appNeedsOrderedFlushAsync } from "../cloudSync/pendingLocalUploads.js";
 import { getCloudSyncService } from "../cloudSync/cloudSyncSingleton.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
 import { fetchAppRepoHead } from "./AppOpsClient.js";
+import { writeAppRepoCommitCursor, readAppRepoCommitCursors } from "./appRepoCommittedFanout.js";
+import {
+  isAppCodeRecentlyVerified,
+  isLocalAppCodeAtRemoteHead,
+} from "./appRepoHeadSyncCheck.js";
 import { ensureAppRepoRecord, fetchAppRepoReadCredentials, getAppRepoRecord } from "./AppRepoClient.js";
 import {
   applyAckedBlobOids,
-  getCachedBlobOid,
   readOidCache,
 } from "./OidCache.js";
 
@@ -64,8 +68,10 @@ function hashContent(content: string): string {
 /** Merge remote repo tree into local app dir using OID cache for conflict detection. */
 export async function pullAppCodeFromRepo(
   appId: string,
-  options: { token: string | null },
+  options: { token: string | null; allowRecentSkip?: boolean },
 ): Promise<PullAppCodeFromRepoResult> {
+  const { PhaseTimer } = await import("../../utils/phaseTiming.js");
+  const timer = new PhaseTimer();
   const trimmed = appId.trim();
   const empty: PullAppCodeFromRepoResult = {
     appId: trimmed,
@@ -81,36 +87,72 @@ export async function pullAppCodeFromRepo(
 
   const sync = getCloudSyncService();
   if (sync && (await appNeedsOrderedFlushAsync(sync, trimmed))) {
+    timer.mark("pendingUploadCheck");
+    timer.logIfSlow(`PullAppCode skip-pending app=${trimmed}`, 50);
     return {
       ...empty,
       skipped: true,
       reason: "local changes pending upload — upload or discard before pulling code",
     };
   }
+  timer.mark("pendingUploadCheck");
 
   let record = await getAppRepoRecord(trimmed);
   if (!record) {
     try {
       record = await ensureAppRepoRecord(trimmed);
     } catch {
+      timer.logIfSlow(`PullAppCode no-repo app=${trimmed}`, 200);
       return { ...empty, skipped: true, reason: "no per-app repo registered" };
     }
   }
+  timer.mark("repoRecord");
+
+  if (options.allowRecentSkip !== false) {
+    const cursors = await readAppRepoCommitCursors();
+    const recent = isAppCodeRecentlyVerified(trimmed, cursors);
+    if (recent.verified) {
+      timer.mark("recentVerifySkip");
+      timer.logIfSlow(`PullAppCode skip-recent app=${trimmed}`, 50);
+      return {
+        ...empty,
+        commitSha: recent.commitSha,
+        skipped: true,
+        reason: "verified recently",
+      };
+    }
+  }
+  timer.mark("recentVerifyCheck");
 
   let head;
   try {
-    head = await fetchAppRepoHead(trimmed);
+    head = await fetchAppRepoHead(trimmed, { seedOidCache: false });
   } catch (err) {
+    timer.logIfSlow(`PullAppCode head-fail app=${trimmed}`, 200);
     return {
       ...empty,
       skipped: true,
       reason: (err as Error).message.slice(0, 120),
     };
   }
+  timer.mark("fetchHead");
+
+  if (await isLocalAppCodeAtRemoteHead(trimmed, head)) {
+    await writeAppRepoCommitCursor(trimmed, head.commitSha);
+    timer.mark("headUpToDate");
+    timer.logIfSlow(`PullAppCode skip-head app=${trimmed}`, 50);
+    return {
+      ...empty,
+      commitSha: head.commitSha,
+      skipped: true,
+      reason: "already at remote head",
+    };
+  }
 
   const remoteOidByPath = new Map(head.files.map((file) => [file.path, file.blobOid]));
 
   const readCreds = await fetchAppRepoReadCredentials(trimmed);
+  timer.mark("readCreds");
   const cloneToken = readCreds?.token ?? options.token;
   const cloneUrl = readCreds?.cloneUrl ?? record.cloneUrl;
   const cloneRepoPath = readCreds?.repoPath ?? "";
@@ -133,6 +175,8 @@ export async function pullAppCodeFromRepo(
     sourceDir = cloned.sourceDir;
     cleanup = cloned.cleanup;
   } catch (err) {
+    timer.mark("gitClone-failed");
+    timer.logIfSlow(`PullAppCode clone-fail app=${trimmed}`, 200);
     if (isGitRepositoryNotFoundError(err)) {
       const reason = readCreds
         ? "per-app GitHub repo not provisioned yet — upload local changes or wait for cloud sync"
@@ -150,12 +194,16 @@ export async function pullAppCodeFromRepo(
     };
   }
 
+  timer.mark("gitClone");
+
   try {
     const upstreamFiles = await collectTextFiles(sourceDir);
+    timer.mark("collectRemote");
     const appDir = path.join(getPaprAppsRoot(), trimmed);
     const localFiles = (await fs.stat(appDir).catch(() => null))
       ? await collectTextFiles(appDir)
       : new Map<string, string>();
+    timer.mark("collectLocal");
 
     const oidCache = await readOidCache();
     const cachedPaths = oidCache.apps[trimmed] ?? {};
@@ -212,6 +260,13 @@ export async function pullAppCodeFromRepo(
       console.log(
         `[PullAppCode] ${trimmed}: updated ${updatedFiles.length} file(s) from per-app repo @ ${head.commitSha.slice(0, 7)}`,
       );
+    }
+
+    timer.mark(`merge(updated=${updatedFiles.length})`);
+    timer.logIfSlow(`PullAppCode app=${trimmed}`, 500);
+
+    if (conflictFiles.length === 0) {
+      await writeAppRepoCommitCursor(trimmed, head.commitSha);
     }
 
     return {
@@ -273,14 +328,8 @@ export async function pullDesktopAppOnRemoteCommit(input: {
 /** True when local file OID differs from last acked remote OID (cloud may be ahead). */
 export async function appRepoMayHaveRemoteUpdates(appId: string): Promise<boolean> {
   try {
-    const head = await fetchAppRepoHead(appId);
-    for (const file of head.files) {
-      const cached = await getCachedBlobOid(appId, file.path);
-      if (cached !== file.blobOid) {
-        return true;
-      }
-    }
-    return false;
+    const head = await fetchAppRepoHead(appId, { seedOidCache: false });
+    return !(await isLocalAppCodeAtRemoteHead(appId, head));
   } catch {
     return false;
   }

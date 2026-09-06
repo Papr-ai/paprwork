@@ -17,12 +17,23 @@ const Reviews = {
   },
   /* Pull the canonical rows into the cache once per load so a fresh device /
      web install shows the same reviewed state. Silent on failure (offline). */
+  hydrateFromRows(rows) {
+    try {
+      const state = this.cache();
+      for (const row of rows) {
+        state[row.item_key] = {
+          status: row.status,
+          note: row.note || undefined,
+          at: row.updated_at,
+        };
+      }
+      this.setCache(state);
+    } catch { /* cache still works offline */ }
+  },
   async hydrate() {
     try {
       const rows = await Data.query('SELECT item_key, status, note, updated_at FROM brief_reviews');
-      const state = this.cache();
-      for (const row of rows) state[row.item_key] = { status: row.status, note: row.note || undefined, at: row.updated_at };
-      this.setCache(state);
+      this.hydrateFromRows(rows);
     } catch { /* table may not exist yet on a pre-migration install; cache still works */ }
   },
   async upsert(id, item, briefDate, status, note) {

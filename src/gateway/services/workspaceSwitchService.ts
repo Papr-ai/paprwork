@@ -25,6 +25,7 @@ import {
 } from "./AgentService.js";
 import { resetStorageManagerSingleton } from "./StorageManager.js";
 import { resetAppStateStorageSingleton } from "./storage/AppStateStorage.js";
+import { discardDeferredTabSave } from "./storage/deferredTabSave.js";
 import { refreshToolResultTruncationSettings } from "./agent/toolResultTruncationSettings.js";
 import { getAgentStreamRegistry } from "./AgentStreamRegistry.js";
 import { getAgentService } from "./AgentService.js";
@@ -229,6 +230,7 @@ async function resetPathBoundSingletons(): Promise<void> {
 
   resetAgentServiceSingletonForTests();
   await resetStorageManagerSingleton();
+  discardDeferredTabSave("path-bound singleton reset");
   resetAppStateStorageSingleton();
   await yieldEventLoop();
 }
@@ -609,6 +611,7 @@ export async function switchActiveWorkspace(
     await cancelActiveAgentStreamsQuick();
     await stopActiveJobsBeforeWorkspaceSwitch();
     bumpWorkspaceWriteGeneration("workspace switch started");
+    discardDeferredTabSave("workspace switch started");
     await pauseWorkspaceSwitchWriters();
     const pointer = await activateWorkspacePointer(input);
 
@@ -625,7 +628,8 @@ export async function switchActiveWorkspace(
       }
     }
 
-    // Point tab SQLite at the new workspace before renderer reload can load tabs.
+    // Drop tab churn from the leaving org; renderer already flushed via sync save.
+    discardDeferredTabSave("workspace switch pointer activated");
     resetAppStateStorageSingleton();
     if (input.paprApiKey) {
       process.env.PAPR_API_KEY = input.paprApiKey;

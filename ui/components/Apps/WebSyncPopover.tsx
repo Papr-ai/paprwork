@@ -19,15 +19,61 @@ import {
 } from "../../utils/openCloudSyncAgentChat";
 import { AUTO_UPLOAD_TOGGLE_LABEL } from "../../utils/appUploadMode";
 
-/** Primary push action label — Publish for first-time web deploy, Upload now when already live. */
+/** Primary push action label — Publish for first-time web deploy, Publish changes when already live. */
 export function webSyncPushButtonLabel(options: {
   appLive: boolean;
   pushing: boolean;
 }): string {
   if (options.pushing) {
-    return options.appLive ? "Uploading…" : "Publishing…";
+    return "Publishing…";
   }
-  return options.appLive ? "Upload now" : "Publish";
+  return options.appLive ? "Publish changes" : "Publish";
+}
+
+/**
+ * "Ask agent" is offered whenever the app is not simply synced — anything
+ * that did not resolve on its own (stuck, pending after a publish attempt,
+ * updates the user can't merge, unknown) is something the agent can
+ * diagnose. Never shown for synced / disabled / actively publishing.
+ */
+export function webSyncShouldOfferAgent(
+  status: AppCloudSyncStatus | null,
+  options: { error?: string | null; pushing?: boolean; pulling?: boolean },
+): boolean {
+  if (options.error) return true;
+  if (!status) return false;
+  if (options.pushing || options.pulling) return false;
+  if (status.overall === "synced" || status.overall === "disabled") return false;
+  if (status.overall === "uploading") return false;
+  return true;
+}
+
+export function buildGenericSyncAgentPrompt(input: {
+  appId?: string;
+  status: AppCloudSyncStatus;
+}): string {
+  const s = input.status;
+  const parts = [
+    "Help me get my Papr mini-app fully published to the web.",
+    `Current status: ${s.chipLabel} — ${s.summaryLine}`,
+  ];
+  if (input.appId) parts.push(`App id: ${input.appId}.`);
+  if (s.codeLabel) parts.push(`App code: ${s.codeLabel}`);
+  for (const job of s.dependentJobs) {
+    if (job.phase !== "synced") parts.push(`Job "${job.label}": ${job.detail}`);
+  }
+  for (const db of s.databases) {
+    if (db.phase !== "synced" || db.rowsSyncing) {
+      parts.push(`Database "${db.alias}": ${db.detail}`);
+      if (db.lastReplicaPushError) parts.push(`  raw error: ${db.lastReplicaPushError}`);
+      if (db.cutoverBlockReason) parts.push(`  raw reason: ${db.cutoverBlockReason}`);
+    }
+  }
+  if (s.codeLastError) parts.push(`Last code error: ${s.codeLastError}`);
+  parts.push(
+    "Use get_cloud_sync_status({ appId }) and papr_db_sync_status to diagnose, fix what you can, then tell me what changed.",
+  );
+  return parts.join("\n");
 }
 
 export interface WebSyncPopoverProps {
@@ -46,7 +92,7 @@ export interface WebSyncPopoverProps {
   onApplyRemoteUpdates: () => void;
   /** False when the app has never been published — primary action is Publish (share + upload). */
   appLive?: boolean;
-  /** Per-app: upload to web automatically vs Upload now only */
+  /** Per-app: upload to web automatically vs Publish changes only */
   autoUploadEnabled?: boolean;
   autoUploadUsesGlobalDefault?: boolean;
   autoUploadSaving?: boolean;
@@ -122,13 +168,15 @@ function databaseBlockerHint(
   if (blocked.length === 0) {
     return null;
   }
+  // Plain-language first; technical reason stays on the database row's
+  // detail / raw error fields for anyone who wants it.
   if (blocked.some((db) => db.cutoverBlocked)) {
-    return "Replica cutover is blocked — Ask agent can diagnose migration or schema issues, then retry Upload now.";
+    return "One of this app's databases can't publish until its structure is fixed. Ask the agent to repair it, then publish again.";
   }
   if (blocked.some((db) => db.migrationConflict)) {
-    return "Migration ledger conflict — Ask agent can reconcile local vs Turso primary, then retry Upload now.";
+    return "Your local database and the web version have different structures. Ask the agent to reconcile them, then publish again.";
   }
-  return "Schema drift is blocking web-ready — Ask agent can align migrations, then retry Upload now.";
+  return "The database structure changed locally and isn't on the web yet. Click Publish changes — if that fails, ask the agent to align it.";
 }
 
 function resolveUploadFailureMessage(
@@ -146,7 +194,7 @@ function resolveUploadFailureMessage(
     return (
       status.uploadDetail?.trim() ||
       status.uploadLabel?.trim() ||
-      "Upload failed"
+      "Publish failed"
     );
   }
   const replicaDbError = status.databases.find(
@@ -228,7 +276,7 @@ export function WebSyncPopover({
     : "mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked";
 
   // No status yet (first open, or a check that has not resolved): show the
-  // shell with Upload now rather than rendering nothing on click.
+  // shell with Publish changes rather than rendering nothing on click.
   if (!status) {
     return (
       <div
@@ -409,7 +457,7 @@ export function WebSyncPopover({
           role="status"
         >
           <p className="mini-app-publish-bar__sync-remote-banner-title">
-            Merge cloud changes before upload
+            Merge cloud changes before publishing
           </p>
           {commitSummary ? (
             <p className="mini-app-publish-bar__sync-remote-banner-body">{commitSummary}</p>
@@ -424,7 +472,7 @@ export function WebSyncPopover({
             Upload conflict — cloud repo changed
           </p>
           <p className="mini-app-publish-bar__sync-remote-banner-body">
-            Get updates or ask the agent to reconcile remote changes, then upload again.
+            Get updates or ask the agent to reconcile remote changes, then publish again.
           </p>
         </div>
       ) : metadataSync ? (
@@ -456,13 +504,13 @@ export function WebSyncPopover({
           <p className="mini-app-publish-bar__sync-popover-hint">
             {appLive ? (
               <>
-                Upload is manual for this app — click <strong>Upload now</strong> when you
+                Publishing is manual for this app — click <strong>Publish changes</strong> when you
                 want local changes on the web. After sharing changes, wait until this panel
                 shows synced before copying the external link.
               </>
             ) : (
               <>
-                This app is not on the web yet — click <strong>Publish</strong> to upload
+                This app is not on the web yet — click <strong>Publish</strong> to publish
                 code and databases and create your link (uses your current Share settings).
               </>
             )}
@@ -473,7 +521,7 @@ export function WebSyncPopover({
         status.overall !== "synced" &&
         status.overall !== "disabled" ? (
           <p className="mini-app-publish-bar__sync-popover-hint">
-            Not on the web yet — click <strong>Publish</strong> once; later changes upload
+            Not on the web yet — click <strong>Publish</strong> once; later changes publish
             automatically.
           </p>
         ) : null}
@@ -509,7 +557,7 @@ export function WebSyncPopover({
         ) : allSynced ? (
           <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--ok">
             {status.lastUploadedAt
-              ? `Last uploaded ${formatLastUploadedAt(status.lastUploadedAt) ?? "recently"}.`
+              ? `Last published ${formatLastUploadedAt(status.lastUploadedAt) ?? "recently"}.`
               : "Everything matches the web."}
           </p>
         ) : null}
@@ -601,7 +649,7 @@ export function WebSyncPopover({
               </p>
             ) : error ? (
               <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
-                Upload did not clear the database blocker — try Ask agent to diagnose.
+                Publishing did not clear the database blocker — try Ask agent to diagnose.
               </p>
             ) : null}
           </>
@@ -686,7 +734,7 @@ export function WebSyncPopover({
               {pulling ? "Getting updates…" : "Get updates"}
             </button>
             <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
-              Upload failed — Ask agent can diagnose and repair, then retry Upload now.
+              Publish didn't finish — try Publish changes again. If it keeps failing, ask the agent to look into it.
             </p>
           </>
         ) : showOversizedFilesHelp ? (
@@ -766,6 +814,20 @@ export function WebSyncPopover({
             >
               {pulling ? "Getting updates…" : "Get updates"}
             </button>
+            {webSyncShouldOfferAgent(status, { error, pushing, pulling }) ? (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy}
+                onClick={() => {
+                  openCloudSyncAgentChat(
+                    buildGenericSyncAgentPrompt({ appId, status }),
+                  );
+                }}
+              >
+                Ask agent
+              </button>
+            ) : null}
           </>
         )}
       </div>

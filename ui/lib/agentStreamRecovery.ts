@@ -126,7 +126,21 @@ export function interruptedTurnNeedsContinue(
     !serverHasReplacement &&
     mergedMessages.some((m) => m.id === streamingMessageId);
 
-  return hadInterruptedPartial || lastUserTurnNeedsContinue(mergedMessages);
+  if (hadInterruptedPartial || lastUserTurnNeedsContinue(mergedMessages)) {
+    return true;
+  }
+
+  const lastAssistant = [...mergedMessages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  if (
+    lastAssistant?.interrupted &&
+    !assistantMessageWasStopped(lastAssistant)
+  ) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -435,6 +449,29 @@ export function trackActiveStream(chatId: string, requestId: string): void {
   activeStreamRequests.set(chatId, requestId);
 }
 
+/** Resolve chatId when a chunk only carries the gateway stream requestId. */
+export function resolveChatIdForStreamRequest(
+  requestId: string,
+): string | undefined {
+  for (const [chatId, activeRequestId] of activeStreamRequests.entries()) {
+    if (activeRequestId === requestId) {
+      return chatId;
+    }
+  }
+  return undefined;
+}
+
+/** True only when a done chunk can finalize UI state (must include chatId). */
+export function isStreamDoneChunkWithChatId(
+  chunk: Record<string, unknown>,
+): boolean {
+  return (
+    chunk.type === "done" &&
+    typeof chunk.chatId === "string" &&
+    chunk.chatId.length > 0
+  );
+}
+
 export function untrackActiveStream(chatId: string): void {
   activeStreamRequests.delete(chatId);
   appliedChunkCounts.delete(chatId);
@@ -702,12 +739,7 @@ export function shouldAutoContinueInterruptedTurn(args: {
   needsStreamRecovery: boolean;
   gatewayReady: boolean;
 }): boolean {
-  if (
-    args.isSending ||
-    args.connectionPaused ||
-    args.needsStreamRecovery ||
-    !args.gatewayReady
-  ) {
+  if (args.isSending || !args.gatewayReady || isResumingStream(args.chatId)) {
     return false;
   }
 
@@ -716,6 +748,11 @@ export function shouldAutoContinueInterruptedTurn(args: {
     .find((message) => message.role === "assistant");
   if (!lastAssistant?.interrupted) return false;
   if (assistantMessageWasStopped(lastAssistant)) return false;
+
+  // Live-stream re-subscribe is still in flight — wait before hidden continue.
+  if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {
+    return false;
+  }
 
   return getAutoContinueAttempts(args.chatId, args.messages) < MAX_AUTO_CONTINUE_ATTEMPTS;
 }

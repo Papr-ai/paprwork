@@ -37,7 +37,13 @@ import { CloudUpstreamBar } from "./CloudUpstreamBar";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
 import { AppWorkspaceMenu } from "./AppWorkspaceMenu";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
-import { WebSyncPopover, WebSyncStatusDot, webSyncPushButtonLabel } from "./WebSyncPopover";
+import {
+  WebSyncPopover,
+  WebSyncStatusDot,
+  buildGenericSyncAgentPrompt,
+  webSyncPushButtonLabel,
+} from "./WebSyncPopover";
+import { openCloudSyncAgentChat } from "../../utils/openCloudSyncAgentChat";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import {
   CloudCompatibilityBadge,
@@ -292,6 +298,9 @@ export function MiniAppPublishBar({
   const [webSyncActionNotice, setWebSyncActionNotice] = useState<string | null>(
     null,
   );
+  const [webSyncActionKind, setWebSyncActionKind] = useState<
+    "review" | "updates" | "failed" | "upload"
+  >("review");
   const prevMergeRequiredRef = useRef(false);
 
   const {
@@ -312,31 +321,99 @@ export function MiniAppPublishBar({
     previewTabVisible,
   });
 
+  const autoUploadEnabled = resolveEffectiveAutoUpload(
+    cloud.uploadMode,
+    globalAutoUploadEnabled,
+  );
+  const autoUploadUsesGlobalDefault = usesGlobalUploadDefault(cloud.uploadMode);
+
+  // One callout, four triggers — each fires on a false→true edge, never
+  // re-nags while the condition persists, and clears itself when resolved.
+  //   review   — cloud changes need a merge (blocking; auto-opens popover)
+  //   updates  — the web has newer changes the user cannot know about
+  //   failed   — a silent upload failure is the worst outcome
+  //   upload   — MANUAL mode + live app + local changes: users assume changes
+  //              reach the web on their own. Once per app per session.
+  const prevUpdatesRef = useRef(false);
+  const prevFailedRef = useRef(false);
+  const uploadReminderShownRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     const mergeRequired = webSyncStatus?.gitRemoteRequiresReview === true;
     if (mergeRequired && !prevMergeRequiredRef.current) {
       const headline = webSyncStatus?.gitRemoteReviewHeadline?.trim();
       setWebSyncActionNotice(
         headline
-          ? `${headline} — open Web sync to merge before upload.`
-          : "Cloud changes need your approval — open Web sync to merge before upload.",
+          ? `${headline} — review before publishing.`
+          : "The web has changes that need your review before you can upload.",
       );
+      setWebSyncActionKind("review");
       setWebSyncPopoverOpen(true);
     }
-    if (!mergeRequired) {
+    if (!mergeRequired && webSyncActionKind === "review") {
       setWebSyncActionNotice(null);
     }
     prevMergeRequiredRef.current = mergeRequired;
   }, [
     webSyncStatus?.gitRemoteRequiresReview,
     webSyncStatus?.gitRemoteReviewHeadline,
-  ]);
+  ]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const autoUploadEnabled = resolveEffectiveAutoUpload(
-    cloud.uploadMode,
-    globalAutoUploadEnabled,
-  );
-  const autoUploadUsesGlobalDefault = usesGlobalUploadDefault(cloud.uploadMode);
+  useEffect(() => {
+    const updates =
+      webSyncStatus?.gitUpdatesAvailable === true &&
+      webSyncStatus?.gitRemoteRequiresReview !== true;
+    if (updates && !prevUpdatesRef.current && !webSyncActionNotice) {
+      setWebSyncActionNotice("The web has newer changes for this app.");
+      setWebSyncActionKind("updates");
+    }
+    if (!updates && webSyncActionKind === "updates") {
+      setWebSyncActionNotice(null);
+    }
+    prevUpdatesRef.current = updates;
+  }, [webSyncStatus?.gitUpdatesAvailable, webSyncStatus?.gitRemoteRequiresReview]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const failed =
+      webSyncStatus?.codeStatus === "failed" ||
+      (webSyncStatus?.uploadStatus === "failed" &&
+        webSyncStatus?.uploadRetryPending !== true);
+    if (failed && !prevFailedRef.current && !webSyncPushing) {
+      setWebSyncActionNotice(
+        "Publish didn't finish — your latest changes aren't on the web yet.",
+      );
+      setWebSyncActionKind("failed");
+    }
+    if (!failed && webSyncActionKind === "failed") {
+      setWebSyncActionNotice(null);
+    }
+    prevFailedRef.current = Boolean(failed);
+  }, [webSyncStatus?.codeStatus, webSyncStatus?.uploadStatus, webSyncStatus?.uploadRetryPending, webSyncPushing]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (
+      autoUploadEnabled ||
+      webSyncStatus?.overall !== "needs_sync" ||
+      webSyncStatus?.publishLive !== true ||
+      webSyncStatus?.gitRemoteRequiresReview ||
+      webSyncStatus?.gitUpdatesAvailable ||
+      webSyncActionNotice ||
+      uploadReminderShownRef.current.has(appId)
+    ) {
+      return;
+    }
+    uploadReminderShownRef.current.add(appId);
+    setWebSyncActionNotice(
+      "Your changes stay on this Mac until you publish them — people using this app on the web still see the old version.",
+    );
+    setWebSyncActionKind("upload");
+  }, [autoUploadEnabled, webSyncStatus?.overall, webSyncStatus?.publishLive, webSyncStatus?.gitRemoteRequiresReview, webSyncStatus?.gitUpdatesAvailable, appId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (webSyncActionKind === "upload" && webSyncStatus?.overall === "synced") {
+      setWebSyncActionNotice(null);
+    }
+  }, [webSyncStatus?.overall]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     setCompatReport(cloud.compatibility);
@@ -350,6 +427,10 @@ export function MiniAppPublishBar({
     applyingSharingRef.current = false;
     setNeedsDesktopAck(false);
     setWebSyncPopoverOpen(false);
+    setWebSyncActionNotice(null);
+    prevMergeRequiredRef.current = false;
+    prevUpdatesRef.current = false;
+    prevFailedRef.current = false;
     const model = sharingToAudienceModel(
       cloud.loginAccess,
       cloud.externalLink,
@@ -525,7 +606,7 @@ export function MiniAppPublishBar({
       await cloud.updateSharing(model);
       const needsCodeUpload = audienceModelNeedsInitialCodeUpload(model, cloud.live);
       if (needsCodeUpload) {
-        setShareSyncNotice("Uploading app code and databases to the web…");
+        setShareSyncNotice("Publishing app code and databases to the web…");
         await webSyncPushNow();
       }
       return { published: needsCodeUpload };
@@ -720,7 +801,7 @@ export function MiniAppPublishBar({
     if (webSyncPushing) {
       return {
         tone: "info" as const,
-        message: "Uploading app code and databases to the web…",
+        message: "Publishing app code and databases to the web…",
       };
     }
     if (
@@ -768,7 +849,7 @@ export function MiniAppPublishBar({
       if (!published) {
         await cloud.publish();
         setNeedsDesktopAck(false);
-        setShareSyncNotice("Uploading app code and databases to the web…");
+        setShareSyncNotice("Publishing app code and databases to the web…");
         await webSyncPushNow();
       }
     } catch (err) {
@@ -787,7 +868,7 @@ export function MiniAppPublishBar({
       .publish({ acknowledgeDesktopOnly: true })
       .then(async () => {
         setNeedsDesktopAck(false);
-        setShareSyncNotice("Uploading app code and databases to the web…");
+        setShareSyncNotice("Publishing app code and databases to the web…");
         await webSyncPushNow();
       })
       .catch((err: unknown) => {
@@ -985,12 +1066,10 @@ export function MiniAppPublishBar({
         </div>
       </div>
 
-      {webSyncStatus?.gitRemoteRequiresReview &&
-      workspaceMode === "preview" &&
-      webSyncActionNotice ? (
+      {workspaceMode === "preview" && webSyncActionNotice ? (
         <div
           className="mini-app-publish-bar__action-callout"
-          role="alert"
+          role={webSyncActionKind === "failed" || webSyncActionKind === "review" ? "alert" : "status"}
           aria-live="polite"
         >
           <span className="mini-app-publish-bar__action-callout-text">
@@ -999,10 +1078,36 @@ export function MiniAppPublishBar({
           <button
             type="button"
             className="mini-app-publish-bar__action-callout-btn"
-            onClick={handleWebSyncDotClick}
+            disabled={webSyncPushing || webSyncPulling}
+            onClick={() => {
+              if (webSyncActionKind === "updates") {
+                void webSyncPullUpdates();
+              } else if (webSyncActionKind === "upload" || webSyncActionKind === "failed") {
+                void webSyncPushNow();
+              } else {
+                handleWebSyncDotClick();
+              }
+            }}
           >
-            Review
+            {webSyncActionKind === "updates"
+              ? webSyncPulling ? "Getting updates…" : "Get updates"
+              : webSyncActionKind === "upload" || webSyncActionKind === "failed"
+                ? webSyncPushing ? "Publishing…" : webSyncActionKind === "failed" ? "Try again" : "Publish changes"
+                : "Review"}
           </button>
+          {webSyncActionKind !== "updates" && webSyncStatus ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__action-callout-btn mini-app-publish-bar__action-callout-btn--secondary"
+              onClick={() =>
+                openCloudSyncAgentChat(
+                  buildGenericSyncAgentPrompt({ appId, status: webSyncStatus }),
+                )
+              }
+            >
+              Ask agent
+            </button>
+          ) : null}
           <button
             type="button"
             className="mini-app-publish-bar__action-callout-dismiss"

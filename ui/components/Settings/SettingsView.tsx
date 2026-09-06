@@ -424,7 +424,7 @@ function ProfileTab() {
       setImageUrl(dataUrl);
       await saveProfileFields({ name, email, imageUrl: dataUrl });
     } catch (err) {
-      console.error("[ProfileTab] Photo upload error:", err);
+      console.error("[ProfileTab] Photo publish error:", err);
       alert("Could not save profile photo. Please try again.");
     } finally {
       setSaving(false);
@@ -1011,6 +1011,54 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.0" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.0</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Smarter Cloud &amp; Web Sync Status</strong>
+                <p>
+                  Publish bar and Web Sync popover now show honest remote-code
+                  vs database sync state, merge Git and Turso signals, and
+                  surface actionable next steps when drift is detected.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Default Home App Repair</strong>
+                <p>
+                  Automatically repairs missing or stale bundled Home dashboard
+                  installs on startup, keeping goals, reviews, and brief data
+                  in sync with the latest default app bundle.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Replica &amp; Schema Drift Healing</strong>
+                <p>
+                  Schema ledger tracking, drift heal for replica migrations,
+                  startup grace for pull scheduler, and safer sync session
+                  lifecycle for linked databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Tab &amp; App State Performance</strong>
+                <p>
+                  Deferred tab saves, tab structure fingerprinting, preview
+                  fetch gate for mini-apps, and Zustand stores for jobs and
+                  custom keys reduce UI jank and gateway load.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.0"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.5.9" && (
           <div className="about-card">
             <h3>What's New in v2.5.9</h3>
@@ -1386,7 +1434,7 @@ function AboutTab() {
               <li className="whats-new-list__item">
                 <strong>Sync Metadata on Upload</strong>
                 <p>
-                  Upload now flushes registry metadata alongside app code so
+                  Publish changes flushes registry metadata alongside app code so
                   cloud databases stay aligned after publish.
                 </p>
               </li>
@@ -2170,7 +2218,7 @@ function AboutTab() {
                 <strong>Manual Upload Mode</strong>
                 <p>
                   Per-app auto vs manual upload — test locally and push to cloud
-                  only when ready with Upload now.
+                  only when ready with Publish changes.
                 </p>
               </li>
               <li className="whats-new-list__item">

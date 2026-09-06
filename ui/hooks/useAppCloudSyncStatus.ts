@@ -3,10 +3,13 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useChatStore } from "../stores/chatStore";
 import type { SyncItemsResponse } from "../components/Settings/CloudSyncDetails";
 import {
   deriveAppCloudSyncStatus,
+  mergeRemoteCodeCheckIntoStatus,
   type AppCloudSyncStatus,
+  type RemoteCodeCheckSnapshot,
 } from "../utils/appCloudSyncStatus";
 import {
   readCachedAppCloudSyncStatus,
@@ -183,6 +186,14 @@ export function useAppCloudSyncStatus(
 } {
   const active = options?.enabled !== false;
   const previewTabVisible = options?.previewTabVisible !== false;
+  const anyChatBusy = useChatStore((state) => {
+    for (const chatState of state.chatStates.values()) {
+      if (chatState.isSending || chatState.isStreaming) {
+        return true;
+      }
+    }
+    return false;
+  });
   const initialItems = readInitialSyncItems(appId);
   const initialStatus = initialItems
     ? deriveAppCloudSyncStatus(
@@ -214,10 +225,12 @@ export function useAppCloudSyncStatus(
   const [pulling, setPulling] = useState(false);
   const [applyingUpdates, setApplyingUpdates] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [remoteCodeCheck, setRemoteCodeCheck] =
+    useState<RemoteCodeCheckSnapshot | null>(null);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
 
-  const status = useMemo(() => {
+  const status = useMemo((): AppCloudSyncStatus | null => {
     if (syncItems) {
       if (
         syncItems.appContext?.appId &&
@@ -225,13 +238,40 @@ export function useAppCloudSyncStatus(
       ) {
         return null;
       }
-      return deriveAppCloudSyncStatus(appId, syncItems, gitGlobalStatus, {
+      const base = deriveAppCloudSyncStatus(appId, syncItems, gitGlobalStatus, {
         isUploading: pushing,
         refreshing,
       });
+      return mergeRemoteCodeCheckIntoStatus(base, remoteCodeCheck);
     }
     return null;
-  }, [appId, syncItems, gitGlobalStatus, pushing, refreshing]);
+  }, [appId, syncItems, gitGlobalStatus, pushing, refreshing, remoteCodeCheck]);
+
+  const fetchRemoteCodeStatus = useCallback(async () => {
+    if (!active || !previewTabVisible || gitSyncEnabled === false) {
+      return;
+    }
+    try {
+      const res = await fetch(
+        `${GATEWAY}/api/apps/${encodeURIComponent(appId)}/remote-code-status`,
+      );
+      if (!res.ok) {
+        return;
+      }
+      const body = (await res.json()) as {
+        upToDate: boolean;
+        remoteCommitSha?: string | null;
+        checkFailed?: boolean;
+      };
+      setRemoteCodeCheck({
+        upToDate: body.upToDate,
+        remoteCommitSha: body.remoteCommitSha ?? null,
+        checkFailed: body.checkFailed,
+      });
+    } catch {
+      // Non-blocking metadata check
+    }
+  }, [active, appId, previewTabVisible, gitSyncEnabled]);
 
   const refresh = useCallback(
     async (force = false) => {
@@ -352,12 +392,13 @@ export function useAppCloudSyncStatus(
         );
       }
       await refresh(true);
+      await fetchRemoteCodeStatus();
     } catch (err) {
       setError((err as Error).message.slice(0, 120));
     } finally {
       setPulling(false);
     }
-  }, [refresh, appId, status?.gitRemoteRequiresReview]);
+  }, [refresh, appId, status?.gitRemoteRequiresReview, fetchRemoteCodeStatus]);
 
   const applyRemoteUpdates = useCallback(async () => {
     setApplyingUpdates(true);
@@ -381,7 +422,7 @@ export function useAppCloudSyncStatus(
   }, [refresh]);
 
   useEffect(() => {
-    if (!active) {
+    if (!active || !previewTabVisible) {
       setLoading(false);
       return;
     }
@@ -397,10 +438,10 @@ export function useAppCloudSyncStatus(
     setLoading(cached === null);
 
     void refresh(false);
-  }, [active, appId, refresh]);
+  }, [active, appId, previewTabVisible, refresh]);
 
   useEffect(() => {
-    if (!active || !previewTabVisible) return;
+    if (!active || !previewTabVisible || anyChatBusy) return;
     const intervalMs =
       pushing ||
       pulling ||
@@ -418,6 +459,7 @@ export function useAppCloudSyncStatus(
   }, [
     active,
     previewTabVisible,
+    anyChatBusy,
     refresh,
     pushing,
     pulling,
@@ -427,6 +469,17 @@ export function useAppCloudSyncStatus(
     status?.publishStatus,
     status?.globallySyncing,
   ]);
+
+  useEffect(() => {
+    if (!active || !previewTabVisible || anyChatBusy) {
+      return;
+    }
+    void fetchRemoteCodeStatus();
+    const timer = setInterval(() => {
+      void fetchRemoteCodeStatus();
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [active, previewTabVisible, anyChatBusy, fetchRemoteCodeStatus]);
 
   return {
     status,

@@ -44,6 +44,7 @@ import {
   resetAutoContinueAttempts,
   shouldAutoContinueInterruptedTurn,
   shouldIgnoreDuplicateDoneChunk,
+  resolveChatIdForStreamRequest,
   markResuming,
   mergeHistoryWithLocal,
   rehydrateStreamingRefsForChat,
@@ -131,12 +132,17 @@ export function useAgent() {
 
       // Extract chatId from chunk (all chunks should have this)
       const streamChunk = chunk as unknown as Record<string, unknown>;
-      const chatId =
-        typeof streamChunk.chatId === "string" ? streamChunk.chatId : undefined;
       const requestId =
         typeof streamChunk.requestId === "string"
           ? streamChunk.requestId
           : undefined;
+      let chatId =
+        typeof streamChunk.chatId === "string" && streamChunk.chatId.length > 0
+          ? streamChunk.chatId
+          : undefined;
+      if (!chatId && requestId) {
+        chatId = resolveChatIdForStreamRequest(requestId);
+      }
 
       if (!chatId) {
         console.error("[useAgent] Chunk missing chatId:", chunk);
@@ -2247,11 +2253,11 @@ export function useAgent() {
 
       const attempt = recordAutoContinueAttempt(chatId, messages);
       console.log(
-        `[useAgent] Auto-continuing interrupted turn for ${chatId} (attempt ${attempt}/3)`,
+        `[useAgent] Auto-continuing interrupted turn for ${chatId} (attempt ${attempt}/3) — trying stream recovery first`,
       );
 
       try {
-        await continueInterruptedTurn(chatId, config);
+        await retryStreamRecovery(chatId, config);
       } catch (error) {
         console.warn(
           `[useAgent] Auto-continue attempt ${attempt} failed for ${chatId}:`,
@@ -2259,7 +2265,7 @@ export function useAgent() {
         );
       }
     },
-    [continueInterruptedTurn],
+    [retryStreamRecovery],
   );
 
   return {

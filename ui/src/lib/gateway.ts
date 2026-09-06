@@ -371,7 +371,9 @@ class GatewayClient {
           if (
             typeof payloadData === "object" &&
             payloadData !== null &&
-            (payloadData as { type?: string }).type === "done"
+            (payloadData as { type?: string }).type === "done" &&
+            typeof (payloadData as { chatId?: unknown }).chatId === "string" &&
+            ((payloadData as { chatId: string }).chatId.length > 0)
           ) {
             receivedDoneChunk = true;
           }
@@ -516,7 +518,9 @@ class GatewayClient {
           if (
             typeof payloadData === "object" &&
             payloadData !== null &&
-            (payloadData as { type?: string }).type === "done"
+            (payloadData as { type?: string }).type === "done" &&
+            typeof (payloadData as { chatId?: unknown }).chatId === "string" &&
+            ((payloadData as { chatId: string }).chatId.length > 0)
           ) {
             receivedDoneChunk = true;
           }

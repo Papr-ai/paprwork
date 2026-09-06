@@ -13,7 +13,7 @@ import {
 import { MiniAppFilesView } from "./MiniAppFilesView";
 import { MiniAppJobsView } from "./MiniAppJobsView";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
-import { useJobs } from "../../hooks/useJobs";
+import { useAppLinkedJobCount } from "../../stores/jobsStore";
 import {
   clearCloudPreviewCookies,
   buildUpstreamPublishedWebUrl,
@@ -44,8 +44,9 @@ export function MiniAppView({
   const [viewMode, setViewMode] = useState<AppPreviewMode>("local");
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
   const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
-  const { graph } = useJobs();
-  const linkedJobCount = graph?.appLinks[appId]?.jobIds.length ?? 0;
+  const linkedJobCount = useAppLinkedJobCount(appId);
+  /** Hidden LRU previews stay mounted but must not load iframes until selected. */
+  const [iframeActivated, setIframeActivated] = useState(previewTabVisible);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
   const [publishedIframeBaseUrl, setPublishedIframeBaseUrl] = useState<string | null>(
     null,
@@ -100,18 +101,6 @@ export function MiniAppView({
     viewMode === "published" &&
     ((isTrackCollaborator && !!upstreamLiveUrl) ||
       (cloud.live && !!cloud.publishedWebUrl));
-
-  // Debounced cloud→local Turso pull when opening local preview (scoped to this app).
-  useEffect(() => {
-    if (isPublishedPreview || viewMode !== "local" || !appId) {
-      return;
-    }
-    void fetch(`${gatewayBaseUrl}/api/apps/${appId}/sync-from-cloud`, {
-      method: "POST",
-    }).catch(() => {
-      // Non-blocking — stale data until next sync trigger
-    });
-  }, [appId, gatewayBaseUrl, isPublishedPreview, viewMode]);
 
   useEffect(() => {
     if (!isPublishedPreview || !publishedLiveUrl) {
@@ -177,6 +166,12 @@ export function MiniAppView({
 
   usePreviewTabLifecycle(iframeRef, previewTabVisible);
 
+  useEffect(() => {
+    if (previewTabVisible) {
+      setIframeActivated(true);
+    }
+  }, [previewTabVisible]);
+
   const scheduleIframeRetry = useCallback((reason: string) => {
     setIframeLoadError(reason);
     if (iframeRetryTimerRef.current) {
@@ -205,10 +200,12 @@ export function MiniAppView({
   }, [gatewaySupervisorReady, isPublishedPreview]);
 
   const shouldLoadLocalIframe =
-    !isPublishedPreview &&
-    (gatewaySupervisorReady || gatewaySupervisorStatus === "unknown");
+    !isPublishedPreview && iframeActivated;
 
   useEffect(() => {
+    if (!iframeActivated) {
+      return;
+    }
     setAppMissingInWorkspace(false);
     setIframeLoadError(null);
     setRuntimeError(null);
@@ -239,7 +236,7 @@ export function MiniAppView({
         );
       }
     })();
-  }, [appId]);
+  }, [appId, iframeActivated]);
 
   const refreshAppMetadata = async () => {
     try {

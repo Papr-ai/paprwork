@@ -94,7 +94,7 @@ import { setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
 import { initializeDbPool } from "./services/DbQueryPool.js";
 import { initializeDbRouter } from "./services/appRuntime/DbRouter.js";
-import { forwardRendererTelemetry } from "./services/rendererTelemetryForward.js";
+import { prepareRendererTelemetry, sendPreparedRendererTelemetry } from "./services/rendererTelemetryForward.js";
 import { getPaprApiKey } from "./utils/keyResolver.js";
 import { getMemoryServerBaseUrl } from "./utils/cloudApiClient.js";
 import {
@@ -729,7 +729,26 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.get("/api/apps/:appId/remote-code-status", async (req, res) => {
+      try {
+        const appId = req.params.appId;
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { checkAppRemoteCodeStatus } = await import(
+          "./services/syncV3/checkAppRemoteCodeStatus.js"
+        );
+        const status = await checkAppRemoteCodeStatus(appId);
+        res.json(status);
+      } catch (err) {
+        console.error("[Gateway] /api/apps/remote-code-status error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/apps/:appId/sync-from-cloud", async (req, res) => {
+      const { PhaseTimer } = await import("./utils/phaseTiming.js");
       try {
         const appId = req.params.appId;
         if (!appId) {
@@ -737,20 +756,35 @@ async function startGateway(): Promise<void> {
           return;
         }
         const body = (req.body ?? {}) as { wait?: boolean };
+        const waitForCompletion = body.wait === true;
         const sync = getCloudSyncService();
         const token = sync ? await sync.ensureFreshToken() : null;
+
+        // No background pull — use GET remote-code-status to detect updates, then POST with wait:true.
+        if (!waitForCompletion) {
+          res.status(400).json({
+            error:
+              "Background pull disabled. Poll GET /api/apps/:appId/remote-code-status and POST with { wait: true } to pull.",
+          });
+          return;
+        }
+
+        const timer = new PhaseTimer();
         const { pullAppFromCloud } = await import(
           "./services/syncV3/pullAppFromCloud.js"
         );
         const result = await pullAppFromCloud(appId, {
           token,
-          waitForTurso: body.wait === true,
+          waitForTurso: true,
+          allowRecentSkip: false,
         });
+        timer.mark("pullAppFromCloud");
         if (result.code.skipped && result.code.reason) {
           console.log(
             `[Gateway] /api/apps/sync-from-cloud skipped for ${appId}: ${result.code.reason.slice(0, 120)}`,
           );
         }
+        timer.logIfSlow(`Gateway sync-from-cloud app=${appId}`, 200);
         res.json({ success: true, ...result });
       } catch (err) {
         console.error("[Gateway] /api/apps/sync-from-cloud error:", err);
@@ -2653,21 +2687,15 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // Renderer telemetry: same-origin POST → gateway forwards to Papr proxy (no CORS).
-    app.post("/api/telemetry/events", async (req, res) => {
-      try {
-        const result = await forwardRendererTelemetry(req.body);
-        if (result.status === 204) {
-          res.sendStatus(204);
-          return;
-        }
-        res.status(result.status).json({
-          error: result.error ?? "telemetry error",
-        });
-      } catch (err) {
-        console.error("[Gateway] /api/telemetry/events:", err);
-        res.status(500).json({ error: "internal error" });
+    // Renderer telemetry: validate sync, respond immediately, forward async (never block hot path).
+    app.post("/api/telemetry/events", (req, res) => {
+      const prepared = prepareRendererTelemetry(req.body);
+      if (!prepared.ok) {
+        res.status(prepared.status).json({ error: prepared.error });
+        return;
       }
+      res.sendStatus(204);
+      void sendPreparedRendererTelemetry(prepared.payload);
     });
 
     app.post("/api/bash/run", async (_req, res) => {
@@ -3056,6 +3084,11 @@ async function startGateway(): Promise<void> {
           );
           content = injectMiniAppNativeDialogShim(content);
 
+          const { injectMiniAppPreviewFetchGate } = await import(
+            "./utils/injectMiniAppPreviewFetchGate.js"
+          );
+          content = injectMiniAppPreviewFetchGate(content);
+
           // Boot watchdog: turns a silent blank iframe into a labeled
           // diagnostic banner (entry module never ran / threw / rendered nothing).
           const { injectMiniAppBootWatchdog } = await import(
@@ -3083,20 +3116,29 @@ async function startGateway(): Promise<void> {
     console.log("[Gateway] All routes registered — gateway fully ready");
 
     if (!isCloudAgentGatewayMode()) {
-      void import("./services/jobs/deferredStartupBootstrap.js")
-        .then(({ runDeferredJobsWorkspaceBootstrap }) =>
-          runDeferredJobsWorkspaceBootstrap(),
-        )
-        .then(() => {
-          getJobsScheduler().start();
-          return import("./services/platforms/SessionKeeperService.js");
-        })
+      void import("./services/tursoPullScheduler.js").then(
+        ({ markTursoPullSchedulerGatewayBoot }) => {
+          markTursoPullSchedulerGatewayBoot();
+        },
+      );
+      getJobsScheduler().start();
+      void import("./services/platforms/SessionKeeperService.js")
         .then(({ getSessionKeeperService }) => {
           getSessionKeeperService().start();
         })
         .catch((err) => {
           console.warn(
-            "[Gateway] Deferred jobs bootstrap failed (scheduler not started):",
+            "[Gateway] Session keeper start failed:",
+            err instanceof Error ? err.message : err,
+          );
+        });
+      void import("./services/jobs/deferredStartupBootstrap.js")
+        .then(({ runDeferredJobsWorkspaceBootstrap }) =>
+          runDeferredJobsWorkspaceBootstrap(),
+        )
+        .catch((err) => {
+          console.warn(
+            "[Gateway] Deferred jobs bootstrap failed:",
             err instanceof Error ? err.message : err,
           );
         });

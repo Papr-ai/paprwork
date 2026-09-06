@@ -21,27 +21,42 @@ function appVersion(): string {
   return process.env.PAPRWORK_APP_VERSION?.trim() || "unknown";
 }
 
-/**
- * Validates renderer POST body and forwards to Papr telemetry proxy (same wire
- * format as TelemetryClient). Avoids browser CORS by keeping requests same-origin
- * to the gateway.
- */
-export async function forwardRendererTelemetry(
+export type RendererTelemetryReject = {
+  ok: false;
+  status: number;
+  error: string;
+};
+
+export type RendererTelemetryPayload = {
+  events: Array<{
+    event_name: string;
+    properties: Record<string, number | string | boolean>;
+    user_id: string;
+    timestamp: number;
+  }>;
+  anonymous_id: string;
+  url: string;
+};
+
+export type RendererTelemetryPrepareResult =
+  | RendererTelemetryReject
+  | { ok: true; payload: RendererTelemetryPayload };
+
+/** Sync validation + payload build — safe to run before responding to the client. */
+export function prepareRendererTelemetry(
   rawBody: unknown,
-): Promise<{ status: number; error?: string }> {
-  if (
-    !isTelemetrySendingEnabled(() => gatewayTelemetryPreference())
-  ) {
-    return { status: 403, error: "telemetry disabled" };
+): RendererTelemetryPrepareResult {
+  if (!isTelemetrySendingEnabled(() => gatewayTelemetryPreference())) {
+    return { ok: false, status: 403, error: "telemetry disabled" };
   }
 
   const anonId = expectedAnonymousId();
   if (!anonId) {
-    return { status: 503, error: "telemetry not configured" };
+    return { ok: false, status: 503, error: "telemetry not configured" };
   }
 
   if (typeof rawBody !== "object" || rawBody === null) {
-    return { status: 400, error: "invalid body" };
+    return { ok: false, status: 400, error: "invalid body" };
   }
 
   const body = rawBody as {
@@ -52,39 +67,33 @@ export async function forwardRendererTelemetry(
   };
 
   if (body.anonymous_id !== anonId) {
-    return { status: 403, error: "anonymous_id mismatch" };
+    return { ok: false, status: 403, error: "anonymous_id mismatch" };
   }
 
   const rendererAccountId =
     (typeof body.papr_account_id === "string" ? body.papr_account_id.trim() : "") ||
     (typeof body.papr_user_id === "string" ? body.papr_user_id.trim() : "");
   const effectivePaprUserId = rendererAccountId || getPaprUserId() || "";
-  // Read once per batch: all events in one POST share the active workspace.
   const workspacePointer = readActiveWorkspacePointer();
 
   if (!Array.isArray(body.events) || body.events.length === 0) {
-    return { status: 400, error: "events required" };
+    return { ok: false, status: 400, error: "events required" };
   }
 
   if (body.events.length > MAX_EVENTS) {
-    return { status: 400, error: "too many events" };
+    return { ok: false, status: 400, error: "too many events" };
   }
 
   const base = resolveTelemetryBaseUrl();
   if (!base) {
-    return { status: 503, error: "telemetry url not configured" };
+    return { ok: false, status: 503, error: "telemetry url not configured" };
   }
 
-  const outboundEvents: Array<{
-    event_name: string;
-    properties: Record<string, number | string | boolean>;
-    user_id: string;
-    timestamp: number;
-  }> = [];
+  const outboundEvents: RendererTelemetryPayload["events"] = [];
 
   for (const raw of body.events) {
     if (typeof raw !== "object" || raw === null) {
-      return { status: 400, error: "invalid event" };
+      return { ok: false, status: 400, error: "invalid event" };
     }
     const ev = raw as {
       event_name?: unknown;
@@ -93,17 +102,19 @@ export async function forwardRendererTelemetry(
       timestamp?: unknown;
     };
     if (typeof ev.event_name !== "string" || !ev.event_name.trim()) {
-      return { status: 400, error: "invalid event_name" };
+      return { ok: false, status: 400, error: "invalid event_name" };
     }
     const evUserId = typeof ev.user_id === "string" ? ev.user_id : "";
     const allowedUserIds = [anonId];
     if (effectivePaprUserId) allowedUserIds.push(effectivePaprUserId);
     if (evUserId && !allowedUserIds.includes(evUserId)) {
-      return { status: 403, error: "user_id mismatch" };
+      return { ok: false, status: 403, error: "user_id mismatch" };
     }
 
     const propsIn =
-      ev.properties !== undefined && typeof ev.properties === "object" && ev.properties !== null
+      ev.properties !== undefined &&
+      typeof ev.properties === "object" &&
+      ev.properties !== null
         ? (ev.properties as Record<string, unknown>)
         : {};
 
@@ -136,29 +147,38 @@ export async function forwardRendererTelemetry(
     });
   }
 
-  const payload = {
-    events: outboundEvents,
-    anonymous_id: anonId,
+  return {
+    ok: true,
+    payload: {
+      events: outboundEvents,
+      anonymous_id: anonId,
+      url: `${base}${TELEMETRY_PATH}`,
+    },
   };
+}
 
+/** Network forward only — run off the HTTP hot path. */
+export async function sendPreparedRendererTelemetry(
+  payload: RendererTelemetryPayload,
+): Promise<{ status: number; error?: string }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
 
   try {
-    const response = await fetch(`${base}${TELEMETRY_PATH}`, {
+    const response = await fetch(payload.url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        events: payload.events,
+        anonymous_id: payload.anonymous_id,
+      }),
       signal: controller.signal,
     });
 
     if (!response.ok) {
       const detail = `upstream ${response.status}`;
       console.warn(`[Telemetry] Renderer forward failed: ${detail}`);
-      return {
-        status: 502,
-        error: detail,
-      };
+      return { status: 502, error: detail };
     }
     return { status: 204 };
   } catch (err) {
@@ -173,4 +193,19 @@ export async function forwardRendererTelemetry(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/**
+ * Validates renderer POST body and forwards to Papr telemetry proxy (same wire
+ * format as TelemetryClient). Avoids browser CORS by keeping requests same-origin
+ * to the gateway.
+ */
+export async function forwardRendererTelemetry(
+  rawBody: unknown,
+): Promise<{ status: number; error?: string }> {
+  const prepared = prepareRendererTelemetry(rawBody);
+  if (!prepared.ok) {
+    return { status: prepared.status, error: prepared.error };
+  }
+  return sendPreparedRendererTelemetry(prepared.payload);
 }

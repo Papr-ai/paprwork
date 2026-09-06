@@ -85,16 +85,26 @@ function handleGatewayBroadcast(
   }
 }
 
+function onDocumentVisible(): void {
+  if (typeof document !== "undefined" && !document.hidden && pollSubscribers > 0) {
+    void useJobRunDashboardStore.getState().loadDashboard({ silent: true });
+  }
+}
+
 export function subscribeJobRunDashboardPolling(): () => void {
   pollSubscribers += 1;
   if (pollSubscribers === 1) {
     pollTimer = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) {
+        return;
+      }
       void useJobRunDashboardStore.getState().loadDashboard({ silent: true });
     }, 10_000);
     window.addEventListener(
       "gateway-broadcast",
       handleGatewayBroadcast as EventListener,
     );
+    document.addEventListener("visibilitychange", onDocumentVisible);
   }
 
   return () => {
@@ -108,6 +118,7 @@ export function subscribeJobRunDashboardPolling(): () => void {
         "gateway-broadcast",
         handleGatewayBroadcast as EventListener,
       );
+      document.removeEventListener("visibilitychange", onDocumentVisible);
     }
   };
 }

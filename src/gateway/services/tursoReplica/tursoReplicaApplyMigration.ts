@@ -9,6 +9,7 @@ import {
   splitSqlStatements,
 } from "../jobs/migrationSqlHelpers.js";
 import { migrationSatisfiedOnReplica } from "./tursoReplicaMigrationVerify.js";
+import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import {
   execLinkedDbViaTursoReplica,
@@ -103,11 +104,9 @@ export async function applyRegistryMigrationViaLocalReplica(
     }
   }
 
-  const schemaOk = await migrationSchemaSatisfiedOnLocalReplica(
-    source,
-    migrationRoot,
-    migrationId,
-  );
+  const schemaOk =
+    isMigrationLedgerMarker(migrationId) ||
+    (await migrationSchemaSatisfiedOnLocalReplica(source, migrationRoot, migrationId));
   if (!schemaOk) {
     throw new Error(
       `Migration ${migrationId} may have applied on the replica backend but ledger was not updated — ` +

@@ -12,8 +12,9 @@ import type { DbQueryPool } from "../src/gateway/services/DbQueryPool.js";
 
 const mockQueryLinkedDbViaTursoReplica = vi.fn();
 const mockShouldUseTursoReplicaForSource = vi.fn();
+const mockReplicaClose = vi.fn(async () => undefined);
 const mockGetTursoReplicaService = vi.fn(() => ({
-  close: vi.fn(async () => undefined),
+  close: mockReplicaClose,
 }));
 
 vi.mock("../src/gateway/services/tursoReplica/TursoReplicaService.js", () => ({
@@ -64,6 +65,7 @@ describe("DbRouter", () => {
     resetDbRouterTursoCache();
     mockShouldUseTursoReplicaForSource.mockReturnValue(false);
     mockQueryLinkedDbViaTursoReplica.mockReset();
+    mockReplicaClose.mockClear();
     pool = {
       query: vi.fn().mockResolvedValue({
         rows: [{ id: 1 }],
@@ -152,12 +154,8 @@ describe("DbRouter", () => {
       router.query("app-1", replicaSource, "SELECT 1", []),
     ).rejects.toThrow(/timed out/);
 
+    expect(mockQueryLinkedDbViaTursoReplica).toHaveBeenCalledTimes(2);
     expect(pool.query).not.toHaveBeenCalled();
-    expect(mockQueryLinkedDbViaTursoReplica).toHaveBeenCalledWith(
-      replicaSource,
-      "SELECT 1",
-      [],
-      { pullBeforeRead: false },
-    );
+    expect(mockReplicaClose).not.toHaveBeenCalled();
   });
 });

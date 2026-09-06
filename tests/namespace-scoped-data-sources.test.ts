@@ -44,6 +44,35 @@ describe("namespace-scoped job-linked data sources", () => {
     expect(existsSync(resolved.dbPath)).toBe(true);
   });
 
+  it("keeps registry dbPath when source has dbId even if a legacy jobId db exists", () => {
+    const tempRoot = path.join(os.tmpdir(), `papr-ns-scope-reg-${Date.now()}`);
+    const activeHome = path.join(tempRoot, "orgs", "my-org", "namespaces", "my-ns");
+    const jobId = "6953796f-b12d-4397-bc80-78bc43911fce";
+    const jobsRoot = path.join(activeHome, "Jobs");
+    const legacyJobDb = canonicalJobDatabasePath(jobsRoot, jobId);
+    const registryDb = path.join(activeHome, "data", "databases", "home-daily-briefs", "data.db");
+
+    mkdirSync(path.dirname(legacyJobDb), { recursive: true });
+    writeFileSync(legacyJobDb, "");
+
+    const resolved = resolveJobLinkedSourceForWorkspace(
+      {
+        id: "briefs",
+        type: "sqlite",
+        jobId,
+        dbId: "db-45e3f3ea",
+        alias: "Daily Brief Generator",
+        dbPath: registryDb,
+        tables: ["briefs"],
+        linkedAt: new Date().toISOString(),
+      },
+      jobsRoot,
+    );
+
+    // Registry-backed sources must never be redirected to Jobs/<id>/data/data.db.
+    expect(resolved.dbPath).toBe(registryDb);
+  });
+
   it("keeps stored dbPath when job database is missing in active workspace", () => {
     const tempRoot = path.join(os.tmpdir(), `papr-ns-missing-${Date.now()}`);
     const activeHome = path.join(tempRoot, "orgs", "my-org", "namespaces", "my-ns");

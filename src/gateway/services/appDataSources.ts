@@ -135,6 +135,14 @@ export function resolveJobLinkedSourceForWorkspace(
     return source;
   }
 
+  // Registry-backed sources (dbId) own their path under data/databases/.
+  // A leftover legacy jobId must not redirect reads to Jobs/<id>/data/data.db —
+  // that file lags the registry schema (e.g. missing brief_reviews) and every
+  // app open would fail + trigger a pointless schema-drift heal.
+  if (source.dbId?.trim()) {
+    return source;
+  }
+
   const canonical = canonicalJobDatabasePath(jobsRoot, jobId);
   if (!existsSync(canonical)) {
     return source;

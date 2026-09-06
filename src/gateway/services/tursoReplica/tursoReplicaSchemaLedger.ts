@@ -4,6 +4,8 @@
  */
 
 import type { AppDataSource } from "../appDataSources.js";
+import { listMigrationSqlFiles } from "../jobs/jobMigrationManifest.js";
+import { shouldSkipMigrationForRemoteLedger } from "../jobs/migrationLedgerPolicy.js";
 import { normalizeMigrationId } from "../jobs/migrationIdNormalize.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import {
@@ -97,4 +99,64 @@ export async function dedupeReplicaMigrationLedger(
   }
 
   return { removed: toRemove };
+}
+
+async function listReplicaAppliedMigrationIds(
+  source: AppDataSource,
+): Promise<Set<string>> {
+  await ensureReplicaSchemaMigrationsLedger(source);
+  const result = await queryLinkedDbViaTursoReplica(
+    source,
+    "SELECT id FROM schema_migrations ORDER BY id ASC",
+    [],
+    { pullBeforeRead: false },
+  );
+  return new Set(
+    result.rows
+      .map((row) => String(row.id ?? "").trim())
+      .filter((id) => id.length > 0),
+  );
+}
+
+/**
+ * Backfill schema_migrations on the replica handle when tables already exist
+ * but the ledger row is missing. Never opens the on-disk file with better-sqlite3.
+ */
+export async function reconcileReplicaMigrationLedgerFromSchema(
+  source: AppDataSource,
+  migrationRoot: string,
+): Promise<string[]> {
+  const migrationIds = await listMigrationSqlFiles(migrationRoot);
+  if (migrationIds.length === 0) {
+    return [];
+  }
+
+  const { migrationSatisfiedOnReplica } = await import(
+    "./tursoReplicaMigrationVerify.js"
+  );
+  const applied = await listReplicaAppliedMigrationIds(source);
+  const backfilled: string[] = [];
+
+  for (const migrationId of migrationIds) {
+    if (shouldSkipMigrationForRemoteLedger(migrationId)) {
+      continue;
+    }
+    const bareId = normalizeMigrationId(migrationId);
+    if (applied.has(migrationId) || applied.has(bareId)) {
+      continue;
+    }
+    if (
+      !(await migrationSatisfiedOnReplica(source, migrationRoot, migrationId))
+    ) {
+      continue;
+    }
+    await writeLinkedDbViaTursoReplica(
+      source,
+      "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+      [migrationId, new Date().toISOString()],
+    );
+    backfilled.push(migrationId);
+  }
+
+  return backfilled;
 }

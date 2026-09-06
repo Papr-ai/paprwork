@@ -163,6 +163,9 @@ export class JobsService {
   /** Workspace bound at initialize — disk writes never follow getPaprRoot() mid-flight. */
   private boundPaprDir: string | null = null;
   private boundWriteGeneration: number | null = null;
+  /** Throttle fs.stat/readdir stale-job scans (was blocking gateway ~15s with 200+ jobs). */
+  private lastStalePruneAtMs = 0;
+  private static readonly STALE_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
 
   constructor() {
     const homeDir = os.homedir();
@@ -832,7 +835,18 @@ export class JobsService {
     if (jobBelongsToApp(job.appIds, appId)) return;
 
     const appIds = mergeJobAppIds(job.appIds, [appId]);
-    await this.updateJob(jobId, { appIds });
+    await this.validateAppIdsExist(
+      appIds.filter((id) => id !== STANDALONE_APP_ID),
+    );
+
+    const updated: import("./jobs/types.js").JobRecord = {
+      ...job,
+      appIds,
+      updatedAt: new Date().toISOString(),
+    };
+    this.jobs.set(jobId, updated);
+    await this.persistJobRecord(updated);
+    await this.saveJobs();
   }
 
   private async validateAppIdsExist(appIds: string[]): Promise<void> {
@@ -882,24 +896,47 @@ export class JobsService {
    * Remove index entries whose job directories no longer exist on disk.
    * Handles cases where a job folder was deleted externally (e.g. bash rm -rf).
    */
-  private async pruneStaleJobEntries(): Promise<void> {
-    const staleIds: string[] = [];
-    for (const jobId of this.jobs.keys()) {
-      const jobDir = path.join(this.jobsRootDir, jobId);
-      try {
-        const stat = await fs.stat(jobDir);
-        if (!stat.isDirectory()) {
-          staleIds.push(jobId);
-          continue;
-        }
-        const files = await fs.readdir(jobDir);
-        if (files.length === 0) {
-          staleIds.push(jobId);
-        }
-      } catch {
-        staleIds.push(jobId);
-      }
+  async maybePruneStaleJobEntries(): Promise<void> {
+    const now = Date.now();
+    if (now - this.lastStalePruneAtMs < JobsService.STALE_PRUNE_INTERVAL_MS) {
+      return;
     }
+    this.lastStalePruneAtMs = now;
+    const started = performance.now();
+    await this.pruneStaleJobEntries();
+    const elapsedMs = Math.round(performance.now() - started);
+    if (elapsedMs >= 500) {
+      console.log(
+        `[JobsService] Stale job prune scanned ${this.jobs.size} job(s) in ${elapsedMs}ms`,
+      );
+    }
+  }
+
+  private async pruneStaleJobEntries(): Promise<void> {
+    const jobIds = [...this.jobs.keys()];
+    if (jobIds.length === 0) {
+      return;
+    }
+
+    const staleResults = await Promise.all(
+      jobIds.map(async (jobId): Promise<string | null> => {
+        const jobDir = path.join(this.jobsRootDir, jobId);
+        try {
+          const stat = await fs.stat(jobDir);
+          if (!stat.isDirectory()) {
+            return jobId;
+          }
+          const files = await fs.readdir(jobDir);
+          if (files.length === 0) {
+            return jobId;
+          }
+        } catch {
+          return jobId;
+        }
+        return null;
+      }),
+    );
+    const staleIds = staleResults.filter((id): id is string => id !== null);
 
     if (staleIds.length === 0) return;
 
@@ -1463,7 +1500,6 @@ export class JobsService {
     folder?: string;
     appId?: string;
   }): Promise<JobRecord[]> {
-    await this.pruneStaleJobEntries();
     let jobs = Array.from(this.jobs.values()).sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),

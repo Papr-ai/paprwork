@@ -33,6 +33,7 @@ const SKIP_DISCOVERY = new Set(["sdk-manifest.ts"]);
 /** Platform-injected or internal — served for bundling, not app imports. */
 const PLATFORM_OR_INTERNAL = new Set([
   "papr-native-dialog-shim.ts",
+  "papr-preview-fetch-gate.ts",
   "papr-auth-guard.ts",
   "papr-auth-ui.ts",
   "papr-version-check.ts",
@@ -77,6 +78,10 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     },
     "papr-native-dialog-shim.ts": {
       summary: "Auto-injected legacy prompt/confirm/alert polyfill",
+      exports: "(platform — do not import)",
+    },
+    "papr-preview-fetch-gate.ts": {
+      summary: "Auto-injected fetch gate — pauses /api/* while preview hidden",
       exports: "(platform — do not import)",
     },
     "papr-auth-guard.ts": {

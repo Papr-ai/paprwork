@@ -38,11 +38,11 @@ const Goals = {
     const kids = (g.children || []);
     const l3 = kids.filter(k => k.level === 'L3'), l2 = kids.filter(k => k.level !== 'L3');
     return `<div class="goal ${g.level} ${g.status}">
-      <div class="goal-head"><span class="goal-id">${this.esc(g.id)}</span><span class="goal-title">${this.esc(g.title)}</span>${this.badges(g)}</div>
+      <div class="goal-head"><span class="goal-title">${this.esc(g.title)}</span>${this.badges(g)}</div>
       ${g.nextMilestone ? `<div class="goal-next">Next: ${this.esc(g.nextMilestone)}</div>` : ''}
       ${this.entityChips(g)}
       ${this.actions(g)}
-      ${l2.length ? `<div class="goal-children">${l2.map(k => this.node(k)).join('')}</div>` : ''}
+      ${l2.length ? `<details class="goal-l2s"><summary>${l2.length} sub-goal${l2.length > 1 ? 's' : ''}</summary><div class="goal-children">${l2.map(k => this.node(k)).join('')}</div></details>` : ''}
       ${l3.length ? `<details class="goal-l3s"><summary>${l3.length} tactical</summary>${l3.map(k => this.node(k)).join('')}</details>` : ''}
     </div>`;
   },
@@ -62,7 +62,7 @@ const Goals = {
     const roots = (d.tree && d.tree.length) ? d.tree : d.goals.map(g => ({ ...g, children: [] }));
     const past = (d.archive || []);
     const byPeriod = past.reduce((m, g) => ((m[g.period || '—'] ||= []).push(g), m), {});
-    const pastHtml = past.length ? `<details class="goals-past"><summary>Past goals (${past.length})</summary>${Object.entries(byPeriod).map(([p, gs]) => `<div class="goals-past-period"><h3>${this.esc(p)}</h3>${gs.map(g => `<div class="goal past ${g.level} ${g.status}"><div class="goal-head"><span class="goal-id">${this.esc(g.id)}</span><span class="goal-title">${this.esc(g.title)}</span></div>${this.actions(g)}</div>`).join('')}</div>`).join('')}</details>` : '';
+    const pastHtml = past.length ? `<details class="goals-past"><summary>Past goals (${past.length})</summary>${Object.entries(byPeriod).map(([p, gs]) => `<div class="goals-past-period"><h3>${this.esc(p)}</h3>${gs.map(g => `<div class="goal past ${g.level} ${g.status}"><div class="goal-head"><span class="goal-title">${this.esc(g.title)}</span></div>${this.actions(g)}</div>`).join('')}</div>`).join('')}</details>` : '';
     return `<section class="goals">
       <div class="goals-head"><h2 class="section-title">Goals ${drafts}</h2><div class="goals-actions">${d.proposedCount > 1 ? '<button class="goals-btn tiny" data-goals="confirm-all">Confirm all</button>' : ''}<button class="goals-btn ghost" data-goals="edit">Update goals</button></div></div>
       <div class="goals-tree">${roots.map(g => this.node(g)).join('')}</div>
@@ -70,6 +70,13 @@ const Goals = {
     </section>`;
   },
   goalLine(g) { return `${g.id} [${g.level}${g.parent ? ' → ' + g.parent : ''}] — ${g.title} [${g.status}, ${g.confidence} confidence, priority ${g.priority}]${g.nextMilestone ? ` · next: ${g.nextMilestone}` : ''}${g.entities?.length ? ` · entities: ${g.entities.join(', ')}` : ''}`; },
+  goalSummary(g, gid) {
+    if (!g) return `Goal ${gid}`;
+    const bits = [`"${g.title}"`, g.level];
+    if (g.parent) bits.push(`parent ${g.parent}`);
+    if (g.nextMilestone) bits.push(`next: ${g.nextMilestone}`);
+    return `${bits.join(' · ')} (${gid})`;
+  },
   prompt(mode, gid) {
     const goals = this.data?.goals || [];
     const one = goals.find(g => g.id === gid);
@@ -81,15 +88,15 @@ const Goals = {
       case 'set':
         return `I want to set my goals so my daily brief is built around them.\n\nInterview me briefly, top-down: what 2–5 long-term outcomes (L1) am I working toward, then for each the mid-term goals (L2) and this month's tactical steps (L3) with dates, and which matters most. Push back if I give tasks as L1s. Set Confidence: high for anything I state directly. ${fmt}`;
       case 'confirm':
-        return `Confirm goal ${gid} in IDENTITY.md: change its Status from proposed to on-track and set Confidence: high (keep title, level, parent, milestone, evidence as-is).\n\n${one ? this.goalLine(one) : ''}\n\nThen show me the updated tree.`;
+        return `Please confirm this draft goal from my Home dashboard — update IDENTITY.md so Status is on-track and Confidence is high:\n\n${this.goalSummary(one, gid)}`;
       case 'confirm-all':
-        return `Confirm all my drafted goals in IDENTITY.md: change every Status: proposed to on-track and set Confidence: high, keeping titles, levels, parents, milestones and evidence as-is.\n\n${list}\n\nThen show me the updated tree.`;
+        return `Please confirm all my draft goals from the Home dashboard — in IDENTITY.md, set every Status: proposed to on-track and Confidence: high.\n\nCurrent goals:\n${list}`;
       case 'reject':
-        return `Goal ${gid} is NOT one of my goals — remove it from IDENTITY.md "## Goals" (re-parent or remove its children too, and ask me which).\n\n${one ? this.goalLine(one) : ''}\n\nAsk me one question: why not (wrong outcome, someone else's, already done, wrong level, or just not a priority)? Record that reason in MEMORY.md "## Preferences" so Sleep does not re-propose it, then show me the remaining tree.`;
+        return `This draft goal isn't mine — please remove it from IDENTITY.md ## Goals:\n\n${this.goalSummary(one, gid)}\n\nAsk me briefly why it doesn't fit before you remove it. If it has sub-goals, ask what to do with those too.`;
       case 'close':
-        return `Close goal ${gid} in IDENTITY.md:\n\n${one ? this.goalLine(one) : ''}\n\nAsk me two things: was it achieved (done) or are we dropping it, and what happened in one line. Then set Status accordingly, add "Closed: <today>" and "Outcome: <my answer>", close its L2/L3 children the same way (ask if unsure), and show me the tree. Sleep will move it to workspace/goals/archive.md in a week — do not delete it.`;
+        return `I want to close this goal:\n\n${this.goalSummary(one, gid)}\n\nAsk whether we achieved it or are dropping it, and what happened in one line.`;
       case 'edit-one':
-        return `Let's edit goal ${gid} in IDENTITY.md:\n\n${one ? this.goalLine(one) : ''}\n\nAsk me what to change (wording, level, parent, milestone, date, priority, period), then rewrite that block, set Status: on-track and Confidence: high (it is confirmed once I edit it), and show me the tree.`;
+        return `I want to edit this goal in IDENTITY.md:\n\n${this.goalSummary(one, gid)}`;
       default:
         return `Let's update my goals in IDENTITY.md (## Goals). Current tree:\n\n${list}\n\nAsk me what changed — anything done, at risk, new, reprioritised, or mis-levelled — then rewrite the block. ${fmt}`;
     }

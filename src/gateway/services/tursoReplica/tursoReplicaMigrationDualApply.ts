@@ -21,6 +21,7 @@ import {
   migrationSatisfiedOnReplica,
 } from "./tursoReplicaMigrationVerify.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
+import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
 import {
   computeMigrationSqlChecksum,
   createMigrationApplyPair,
@@ -178,11 +179,9 @@ export async function applyRegistryMigrationOnReplicaOnly(
   const statements = splitSqlStatements(sql);
   const pendingPush = await applyStatementsOnReplica(source, statements);
 
-  const schemaOk = await migrationSchemaSatisfiedOnReplica(
-    source,
-    migrationRoot,
-    migrationId,
-  );
+  const schemaOk =
+    isMigrationLedgerMarker(migrationId) ||
+    (await migrationSchemaSatisfiedOnReplica(source, migrationRoot, migrationId));
   if (!schemaOk) {
     throw new Error(
       `Migration ${migrationId} may have applied on the replica backend but ledger was not updated — ` +

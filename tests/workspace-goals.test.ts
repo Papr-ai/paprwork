@@ -140,4 +140,54 @@ describe("workspaceGoals parser (L1/L2/L3 + confidence + priority)", () => {
   it("returns null when IDENTITY.md has no Goals heading", () => {
     expect(extractGoalsSection("# Identity\n\n## About\n- x\n")).toBeNull();
   });
+
+  it("parses #### L2/L3 blocks nested under an L1 without overwriting the parent", () => {
+    const section = `### G1 — Ship platform
+- Level: L1
+- Status: proposed
+- Priority: 1
+- Next milestone: Ship tab-load fixes
+
+#### G2 — Fix latency (Parent: G1)
+- Level: L2
+- Status: proposed
+- Priority: 1
+- Next milestone: Instrument the worker
+
+#### G4 — Stabilize batch jobs (Parent: G1)
+- Level: L2
+- Status: proposed
+- Priority: 3
+- Parent: G1
+- Entities: projects/home
+- Next milestone: Add retry/backoff
+
+### G5 — Decision Provenance
+- Level: L1
+- Status: proposed
+- Priority: 2
+`;
+    const goals = parseGoals(section);
+    const byId = Object.fromEntries(goals.map((g) => [g.id, g]));
+    expect(byId.G1).toMatchObject({
+      level: "L1",
+      priority: 1,
+      nextMilestone: "Ship tab-load fixes",
+    });
+    expect(byId.G1.parentMissing).toBeUndefined();
+    expect(byId.G1.entities).toBeUndefined();
+    expect(byId.G2).toMatchObject({ level: "L2", parent: "G1", priority: 1, title: "Fix latency" });
+    expect(byId.G2.parentMissing).toBeUndefined();
+    expect(byId.G4).toMatchObject({
+      level: "L2",
+      parent: "G1",
+      priority: 3,
+      entities: ["projects/home"],
+    });
+    expect(byId.G5).toMatchObject({ level: "L1", priority: 2 });
+
+    const tree = buildGoalTree(goals);
+    expect(tree.map((n) => n.id)).toEqual(["G1", "G5"]);
+    expect(tree[0].children.map((n) => n.id)).toEqual(["G2", "G4"]);
+  });
 });

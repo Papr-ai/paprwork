@@ -31,6 +31,7 @@ import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import { mergeCloudActingUserBody } from "../../utils/cloudActingUser.js";
 import type { TursoCredentials } from "../tursoSyncBridgeCore.js";
 import { shipSchemaMigrationForDbPath } from "./shipSchemaMigrationLog.js";
+import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 
 async function fetchTursoCredentialsForBackfill(
   replicaId: string,
@@ -142,6 +143,9 @@ const JOE_COFFEE_APP_ID = "744f60d6-d57b-4be7-95fd-feb7115831b4";
 const JOE_COFFEE_REPLICA_ID = "d-0ff146f4";
 
 function countLocalSyncableTables(dbPath: string): number {
+  if (isReplicaManagedDbPath(dbPath)) {
+    return 0;
+  }
   let db: Database.Database | undefined;
   try {
     db = new Database(dbPath, { readonly: true, fileMustExist: true });

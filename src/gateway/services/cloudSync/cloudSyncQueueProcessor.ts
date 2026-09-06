@@ -81,24 +81,30 @@ export async function enqueueAutoUploadApps(
     return;
   }
 
+  const stateManager = host.getStateManager();
+  const relativePaths: string[] = [];
   for (const entry of fs.readdirSync(appsPath, { withFileTypes: true })) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) {
       continue;
     }
-    const appId = entry.name;
-    const relativePath = path.join("apps", appId);
-    const stateManager = host.getStateManager();
-    if (stateManager.isDeadLetter(relativePath)) {
-      continue;
-    }
+    relativePaths.push(path.join("apps", entry.name));
+  }
 
+  if (relativePaths.length > 0) {
     await reconcilePathsIfGitClean(
       host.paprDir,
-      [relativePath],
+      relativePaths,
       (args, opts) => host.runGit(args, opts),
       stateManager,
       (paths) => host.removePathsFromQueue(paths),
     );
+  }
+
+  for (const relativePath of relativePaths) {
+    const appId = path.basename(relativePath);
+    if (stateManager.isDeadLetter(relativePath)) {
+      continue;
+    }
 
     if (!stateManager.hasItemChanged(relativePath)) {
       continue;
@@ -126,6 +132,7 @@ export async function enqueueSubDirs(host: CloudSyncQueueHost): Promise<void> {
   let deadLetterSkipped = 0;
   let reconciled = 0;
   const stateManager = host.getStateManager();
+  const candidatePaths: string[] = [];
 
   for (const parent of QUEUED_DIRS) {
     const parentPath = path.join(host.paprDir, parent);
@@ -137,33 +144,38 @@ export async function enqueueSubDirs(host: CloudSyncQueueHost): Promise<void> {
       if (!entry.isDirectory() || entry.name.startsWith(".")) {
         continue;
       }
-      const relativePath = path.join(parent, entry.name);
-      if (stateManager.isDeadLetter(relativePath)) {
-        deadLetterSkipped++;
-        continue;
-      }
-
-      reconciled += (
-        await reconcilePathsIfGitClean(
-          host.paprDir,
-          [relativePath],
-          (args, opts) => host.runGit(args, opts),
-          stateManager,
-          (paths) => host.removePathsFromQueue(paths),
-        )
-      ).length;
-
-      if (!stateManager.hasItemChanged(relativePath)) {
-        skipped++;
-        continue;
-      }
-      if (!shouldAutoUploadRelativePath(relativePath, host.paprDir)) {
-        skipped++;
-        continue;
-      }
-
-      host.pushQueue({ relativePath, failures: 0 });
+      candidatePaths.push(path.join(parent, entry.name));
     }
+  }
+
+  if (candidatePaths.length > 0) {
+    reconciled = (
+      await reconcilePathsIfGitClean(
+        host.paprDir,
+        candidatePaths,
+        (args, opts) => host.runGit(args, opts),
+        stateManager,
+        (paths) => host.removePathsFromQueue(paths),
+      )
+    ).length;
+  }
+
+  for (const relativePath of candidatePaths) {
+    if (stateManager.isDeadLetter(relativePath)) {
+      deadLetterSkipped++;
+      continue;
+    }
+
+    if (!stateManager.hasItemChanged(relativePath)) {
+      skipped++;
+      continue;
+    }
+    if (!shouldAutoUploadRelativePath(relativePath, host.paprDir)) {
+      skipped++;
+      continue;
+    }
+
+    host.pushQueue({ relativePath, failures: 0 });
   }
 
   host.setQueueTotal(host.queueLength);

@@ -305,3 +305,38 @@ export function resolveDailyBriefDbPath(
 ): string {
   return canonicalJobDatabasePath(jobsRoot, jobId);
 }
+
+/** Canonical registry path for Home briefs (`data/databases/home-daily-briefs/data.db`). */
+export function resolveHomeBriefsRegistryDbPath(dataDir: string): string {
+  return path.join(dataDir, "databases", DEFAULT_HOME_BRIEFS_DB_SLUG, "data.db");
+}
+
+export function isHomeDailyBriefRegistryDbPath(dbPath: string): boolean {
+  return dbPath
+    .replace(/\\/g, "/")
+    .includes(`/data/databases/${DEFAULT_HOME_BRIEFS_DB_SLUG}/`);
+}
+
+export function isHomeDailyBriefJobScratchDbPath(dbPath: string): boolean {
+  const normalized = dbPath.replace(/\\/g, "/");
+  return /\/Jobs\/[^/]+\/data\/data\.db$/i.test(normalized);
+}
+
+/** True when the linked source should be repointed at the registry DB. */
+export function shouldUpgradeDailyBriefToRegistryDb(params: {
+  storedDbPath: string | undefined;
+  registryDbPath: string;
+}): boolean {
+  if (!existsSync(params.registryDbPath)) {
+    return false;
+  }
+  const stored = params.storedDbPath?.trim() ?? "";
+  if (stored.length === 0) {
+    return true;
+  }
+  return (
+    path.normalize(stored) !== path.normalize(params.registryDbPath) &&
+    (isHomeDailyBriefJobScratchDbPath(stored) ||
+      !isHomeDailyBriefRegistryDbPath(stored))
+  );
+}

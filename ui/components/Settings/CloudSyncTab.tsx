@@ -272,7 +272,7 @@ export function CloudSyncTab() {
                 <h4>Auto-upload to cloud</h4>
                 <p>
                   When on, local app/job/git and Turso changes upload automatically.
-                  When off, use <strong>Upload now</strong> on each app or agent{" "}
+                  When off, use <strong>Publish changes</strong> on each app or agent{" "}
                   <code>push_cloud_sync</code>.
                 </p>
               </div>

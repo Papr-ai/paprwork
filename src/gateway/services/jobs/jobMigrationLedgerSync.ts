@@ -527,6 +527,13 @@ export async function hydrateLocalSchemaMigrationsFromRemote(
   remote: Client,
   localDbPath: string,
 ): Promise<string[]> {
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(localDbPath)) {
+    return [];
+  }
+
   await ensureRemoteSchemaMigrationsTable(remote);
   const result = await remote.execute(
     `SELECT id, applied_at FROM ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)} ORDER BY id`,
@@ -593,6 +600,13 @@ export async function reconcileLocalMigrationLedgerFromSchema(
   localDbPath: string,
   migrationRoot: string,
 ): Promise<string[]> {
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(localDbPath)) {
+    return [];
+  }
+
   const migrationIds = await listMigrationSqlFiles(migrationRoot);
   if (migrationIds.length === 0) {
     return [];

@@ -4,6 +4,7 @@
 
 import { createHash } from "crypto";
 import Database from "better-sqlite3";
+import { isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
 import {
   filterSyncableTables,
   listUserTables,
@@ -85,6 +86,9 @@ export function computeSyncableTableFingerprints(
 export function computeSyncableTableFingerprintsForPath(
   dbPath: string,
 ): Record<string, string> | null {
+  if (isReplicaManagedDbPath(dbPath)) {
+    return null;
+  }
   let db: Database.Database | null = null;
   try {
     // Short busy timeout — a contended file must not block the event loop for 5s.

@@ -16,6 +16,7 @@ import {
   releaseSchedulerRunLease,
   tryAcquireSchedulerRunLease,
 } from "./jobs/jobSchedulerRunLease.js";
+import { PhaseTimer } from "../utils/phaseTiming.js";
 
 let jobsSchedulerInstance: JobsScheduler | null = null;
 
@@ -146,19 +147,29 @@ export class JobsScheduler {
   }
 
   private async tick(): Promise<void> {
+    const timer = new PhaseTimer();
     const { waitForWorkspaceReady } = await import("./workspaceReadiness.js");
     await waitForWorkspaceReady();
+    timer.mark("workspaceReady");
 
-    const tickStart = Date.now();
     const jobsService = getJobsService();
     await jobsService.initialize();
-    
+    timer.mark("jobsInitialize");
+
     console.log(`[JobsScheduler] Tick started at ${new Date().toISOString()}`);
     await jobsService.reconcileStaleRunningJobs();
-    
+    timer.mark("reconcileStale");
+    void jobsService.maybePruneStaleJobEntries().catch((err) => {
+      console.warn(
+        "[JobsScheduler] Stale job prune failed:",
+        (err as Error).message.slice(0, 120),
+      );
+    });
+
     let jobs = await jobsService.listJobs();
+    timer.mark("listJobs");
     console.log(`[JobsScheduler] Checking ${jobs.length} total jobs`);
-    
+
     const now = new Date();
     const launches: Array<Promise<void>> = [];
     const launchedCount = { value: 0 };
@@ -168,7 +179,9 @@ export class JobsScheduler {
     let skippedCloudPreferred = 0;
     let skippedRunLease = 0;
     const cloudSchedulerAuthoritative = await isCloudSchedulerAuthoritative();
+    timer.mark("cloudSchedulerAuth");
 
+    const scanStarted = performance.now();
     for (const job of jobs) {
       if (!job.schedule?.enabled) {
         continue;
@@ -302,20 +315,25 @@ export class JobsScheduler {
       })();
       launches.push(launch);
     }
+    timer.mark(`scanDue(${Math.round(performance.now() - scanStarted)}ms)`);
+
     await Promise.all(launches);
+    timer.mark(`launches(${launchedCount.value})`);
 
     jobs = await jobsService.listJobs();
+    timer.mark("listJobsAfter");
     this.queueWake(jobs, cloudSchedulerAuthoritative);
+    timer.mark("queueWake");
 
-    const elapsed = Date.now() - tickStart;
+    const elapsed = timer.totalMs();
     console.log(
       `[JobsScheduler] Tick completed in ${elapsed}ms - ` +
-      `enabled: ${enabledCount}, due: ${dueCount}, launched: ${launchedCount.value}, ` +
-      `skipped: ${skippedRunning}, cloud_deferred: ${skippedCloudPreferred}, lease_contention: ${skippedRunLease}`
+        `enabled: ${enabledCount}, due: ${dueCount}, launched: ${launchedCount.value}, ` +
+        `skipped: ${skippedRunning}, cloud_deferred: ${skippedCloudPreferred}, lease_contention: ${skippedRunLease}`,
     );
-
-    // Note: Removed paprwork_scheduler_tick telemetry - too noisy for Amplitude
-    // Scheduler health should be monitored via logs, not user analytics
+    if (elapsed >= 100) {
+      timer.log("JobsScheduler phases");
+    }
   }
 }
 

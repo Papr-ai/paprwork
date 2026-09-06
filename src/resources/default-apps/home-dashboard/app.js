@@ -149,14 +149,24 @@ const App = {
     `;
   },
   async init() {
-    this.dates = await Data.dates();
+    let testBrief;
+    try {
+      const initData = await Data.loadInitData();
+      this.dates = initData.dates;
+      testBrief = initData.brief;
+      Reviews.hydrateFromRows(initData.reviewRows);
+    } catch (e) {
+      this.dates = await Data.dates().catch(() => []);
+      testBrief = await Data.load();
+      Reviews.hydrate();
+    }
     if (!this.dates.length) this.dates = [Data.todayKey()];
 
-    const [testBrief] = await Promise.all([Data.load(), Goals.load(), Reviews.hydrate()]);
+    await Goals.load();
     this.loadError = testBrief._loadError === true;
     this.isSampleData = !this.loadError && (this.dates.length === 0 || testBrief._isSample === true);
     
-    await this.render(); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
+    await this.render(testBrief); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
     document.getElementById('sections').addEventListener('click', async (e) => {
       const reviewBtn = e.target.closest('[data-review]');
       if (reviewBtn) { e.stopPropagation(); await this.review(reviewBtn); return; }
@@ -187,9 +197,10 @@ const App = {
       } catch (e) { /* paprAPI may not be available */ }
     });
   },
-  async render() {
+  async render(cachedBrief) {
     const date = this.dates[this.idx];
-    let brief = await Data.load(date);
+    let brief = (cachedBrief && this.idx === 0) ? cachedBrief : await Data.load(date);
+    cachedBrief = null;
     this.loadError = brief._loadError === true;
     if (!this.loadError && brief._isSample && this.dates.length > 0) {
       brief = await Data.load();

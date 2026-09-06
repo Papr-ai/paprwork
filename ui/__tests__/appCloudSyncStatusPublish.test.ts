@@ -1,7 +1,7 @@
 /**
  * Web sync status for apps that have been uploaded but never published.
  *
- * Regression cover: clicking "Upload now" on an unpublished (Draft · Private)
+ * Regression cover: clicking "Publish changes" on an unpublished (Draft · Private)
  * app left the indicator amber with "Some changes still need to sync to the
  * web", even though the upload had fully succeeded. publishLayerSynced
  * required publishLive, so a never-published app could never reach "synced".

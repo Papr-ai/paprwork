@@ -26,7 +26,7 @@ import {
   resolveTursoPushStateEntry,
   recordTursoIndexVersion,
 } from "./tursoSyncState.js";
-import { readAppHasPendingLocalUpload } from "./cloudSync/pendingLocalUploads.js";
+import { listDbDirtySyncKeysForApp } from "./tursoSyncState.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import {
   loadSyncIndexSnapshot,
@@ -229,10 +229,13 @@ export async function syncLinkedSourceFromCloud(
   const resolvedKey = linkedSourceSyncKey(linked);
   const appSource = linkedSourceAsAppDataSource(linked);
   const isReplica = shouldUseTursoReplicaForSource(appSource);
-  const pendingLocalGitUpload =
-    !options?.preferRemote &&
-    linked.appId !== undefined &&
-    readAppHasPendingLocalUpload(linked.appId, getPaprRoot());
+  // Only unpushed LOCAL ROWS on this DB can be clobbered by a cloud→local pull,
+  // so that is the only pull gate. App *code* pending git upload is unrelated
+  // to row state and must never block data sync — coupling them silently
+  // disabled pulls for every app with any local source edit.
+  const dirtyDbSyncKeys = new Set(
+    listDbDirtySyncKeysForApp(new Set([resolvedKey]), getPaprRoot()),
+  );
 
   // Cloud db-changed on replica DBs: pull remote first. Legacy fingerprint dirty
   // (!prev after cutover) must not trigger push-before-pull and duplicate rows.
@@ -317,6 +320,24 @@ export async function syncLinkedSourceFromCloud(
     }
   }
 
+  // Only unpushed LOCAL ROWS on this specific DB can be clobbered by a cloud→local
+  // pull — so that is the only thing that gates it. App *code* pending upload
+  // (git hash) is unrelated to row state and must not block data sync; coupling
+  // them silently disabled pulls for every app with any local source edit.
+  // Checked before the remote-ahead network call so the skip path costs nothing.
+  if (dirtyDbSyncKeys.has(resolvedKey)) {
+    console.log(
+      `[TursoSync] Skipping cloud→local pull for ${resolvedKey} — ` +
+        `local rows not yet pushed (push first to avoid overwriting them)`,
+    );
+    return {
+      syncKey: resolvedKey,
+      action: "skipped",
+      trigger,
+      reason: "pending_local_db_push",
+    };
+  }
+
   const shouldPull =
     options?.assumeRemoteChanged === true ||
     (await isLinkedSourceRemoteAhead(bridge, linked));
@@ -327,19 +348,6 @@ export async function syncLinkedSourceFromCloud(
       action: "skipped",
       trigger,
       reason: "remote_unchanged",
-    };
-  }
-
-  if (pendingLocalGitUpload) {
-    console.log(
-      `[TursoSync] Skipping cloud→local pull for ${resolvedKey} — ` +
-        `app has pending local git upload (Upload now first)`,
-    );
-    return {
-      syncKey: resolvedKey,
-      action: "skipped",
-      trigger,
-      reason: "pending_local_git_upload",
     };
   }
 
@@ -377,16 +385,17 @@ export async function reconcileLinkedSourcesFromCloud(
 
   const sources = await bridge.listLinkedSources();
   const syncKeys = resolveSyncKeysForCloudPull(sources, scope);
-  const results: TursoCloudSyncSessionResult[] = [];
-
-  for (const syncKey of syncKeys) {
-    const result = await syncLinkedSourceFromCloud(bridge, syncKey, {
-      assumeRemoteChanged: options?.assumeRemoteChanged,
-      trigger: options?.trigger,
-      preferRemote: options?.preferRemote,
-    });
+  const results = await Promise.all(
+    syncKeys.map((syncKey) =>
+      syncLinkedSourceFromCloud(bridge, syncKey, {
+        assumeRemoteChanged: options?.assumeRemoteChanged,
+        trigger: options?.trigger,
+        preferRemote: options?.preferRemote,
+      }),
+    ),
+  );
+  for (const result of results) {
     recordSessionResult(result);
-    results.push(result);
   }
 
   const pulled = results.filter((r) => r.action === "pulled").length;

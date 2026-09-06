@@ -236,4 +236,30 @@ describe("JobsService lifecycle helpers", () => {
     const after = await fs.readFile(indexPath, "utf8");
     expect(after).toBe(before);
   });
+
+  test("listJobs does not scan job folders on disk (hot path stays in-memory)", async () => {
+    const service = await setupService();
+    for (let i = 0; i < 5; i += 1) {
+      await service.createJob({
+        name: `Job ${i}`,
+        appIds: [STANDALONE_APP_ID],
+        type: "shell",
+        command: "echo hi",
+      });
+    }
+
+    const statSpy = vi.spyOn(fs, "stat");
+    const readdirSpy = vi.spyOn(fs, "readdir");
+    statSpy.mockClear();
+    readdirSpy.mockClear();
+
+    await service.listJobs();
+    await service.listJobs();
+
+    expect(statSpy).not.toHaveBeenCalled();
+    expect(readdirSpy).not.toHaveBeenCalled();
+
+    statSpy.mockRestore();
+    readdirSpy.mockRestore();
+  });
 });

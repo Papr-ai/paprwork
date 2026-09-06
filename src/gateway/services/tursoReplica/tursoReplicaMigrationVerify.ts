@@ -6,6 +6,7 @@
 
 import type { Client } from "@libsql/client";
 import type { AppDataSource } from "../appDataSources.js";
+import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
 import {
   verifyMigrationOnRemote,
   type MigrationVerification,
@@ -65,6 +66,10 @@ export async function migrationSatisfiedOnReplica(
   migrationRoot: string,
   migrationId: string,
 ): Promise<boolean> {
+  const bareId = migrationId.replace(/\.sql$/, "");
+  if (isMigrationLedgerMarker(bareId) || isMigrationLedgerMarker(migrationId)) {
+    return true;
+  }
   const result = await verifyMigrationOnReplica(source, migrationRoot, migrationId);
   return result.satisfied;
 }

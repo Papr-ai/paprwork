@@ -39,6 +39,12 @@ interface IpcProcessLike {
 
 const IPC_KEY_RESOLVE_TIMEOUT_MS = 15_000;
 const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
+/** Re-read OAuth vs API-key decision from main without keychain on every agent turn. */
+const OAUTH_IPC_REFRESH_TTL_MS = 8_000;
+let oauthIpcLastRefreshAtMs = 0;
+
+/** Coalesce concurrent IPC key requests (tab switch can fan out several getProviderAuth calls). */
+const inFlightKeyRequests = new Map<string, Promise<Record<string, string>>>();
 
 /**
  * Real Platform keys that the OAuth path overwrote in process.env.
@@ -114,7 +120,13 @@ async function requestKeysViaIPC(
   keyNames: string[],
   ipcProcess: IpcProcessLike,
 ): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
+  const dedupeKey = [...keyNames].sort().join(",");
+  const inFlight = inFlightKeyRequests.get(dedupeKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const promise = new Promise<Record<string, string>>((resolve, reject) => {
     if (!ipcProcess.send) {
       reject(new Error("IPC not available - not running as child process"));
       return;
@@ -168,7 +180,12 @@ async function requestKeysViaIPC(
       keys: keyNames,
     };
     ipcProcess.send(payload);
+  }).finally(() => {
+    inFlightKeyRequests.delete(dedupeKey);
   });
+
+  inFlightKeyRequests.set(dedupeKey, promise);
+  return promise;
 }
 
 /**
@@ -362,6 +379,12 @@ export async function getPaprApiKey(
  */
 export function clearKeyCache(keyName?: string): void {
   authEpoch += 1;
+  oauthIpcLastRefreshAtMs = 0;
+  void import("./cloudSchedulerAuthority.js")
+    .then(({ clearCloudSchedulerAuthorityCache }) => {
+      clearCloudSchedulerAuthorityCache();
+    })
+    .catch(() => undefined);
   if (keyName) {
     delete keyCache[keyName];
     if (keyName === "PAPR_API_KEY") {
@@ -441,12 +464,15 @@ export async function getProviderAuth(
   // In dev mode getApiKeys() reads process.env only, but the gateway still runs
   // as an Electron child with IPC — so OAuth tokens from Settings must be loaded here.
   //
-  // Ask on every resolution, not just when the cache is empty: main decides which
-  // credentials the gateway may see (it withholds OAuth when the user picked API
-  // key), and a cached token must never keep us from re-reading that decision.
-  if (ipcProcess.send) {
+  // Main decides which credentials the gateway may see (withholds OAuth when the
+  // user picked API key). Refresh on a short TTL so tab switches do not spam
+  // keychain; setupKeyCacheInvalidationListener clears the TTL when settings change.
+  const oauthIpcStale =
+    Date.now() - oauthIpcLastRefreshAtMs >= OAUTH_IPC_REFRESH_TTL_MS;
+  if (ipcProcess.send && oauthIpcStale) {
     try {
       await requestKeysViaIPC([keyName], ipcProcess);
+      oauthIpcLastRefreshAtMs = Date.now();
     } catch (error) {
       console.warn(
         `[KeyResolver] OAuth IPC lookup failed for ${provider}:`,

@@ -7,6 +7,7 @@ import {
   DEFAULT_HOME_APP_ID,
   DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
   repairDefaultHomeAppLinkedSources,
+  syncBundledHomeMigrationsToRegistry,
 } from "../src/gateway/services/defaultHomeAppRepair.js";
 import { detectSchemaMigrationsLayout } from "../src/gateway/services/jobs/schemaMigrationsLedger.js";
 
@@ -164,5 +165,119 @@ describe("defaultHomeAppRepair", () => {
       "utf8",
     );
     expect(jobIdFile.trim()).toBe(DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+  });
+
+  it("upgrades Daily Brief data-sources from job scratch DB to the registry DB", async () => {
+    const jobDb = path.join(
+      jobsRoot,
+      DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+      "data",
+      "data.db",
+    );
+    const registryDb = path.join(
+      tmpDir,
+      "data",
+      "databases",
+      "home-daily-briefs",
+      "data.db",
+    );
+    await fs.mkdir(path.dirname(jobDb), { recursive: true });
+    await fs.mkdir(path.dirname(registryDb), { recursive: true });
+    await fs.writeFile(jobDb, "sqlite stub", "utf8");
+    await fs.writeFile(registryDb, "sqlite stub", "utf8");
+
+    await fs.writeFile(
+      path.join(appsDir, DEFAULT_HOME_APP_ID, "data-sources.json"),
+      JSON.stringify(
+        {
+          sources: [
+            {
+              id: "briefs",
+              type: "sqlite",
+              jobId: DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+              alias: "Daily Brief Generator",
+              dbPath: jobDb,
+              tables: ["briefs"],
+              linkedAt: "2026-04-07T00:00:00.000Z",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const repair = await repairDefaultHomeAppLinkedSources({
+      appsDir,
+      workspaceRoot: tmpDir,
+      jobExists: (jobId) => jobId === DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+      resolveJobDbPath: (jobId) =>
+        path.join(jobsRoot, jobId, "data", "data.db"),
+      resolveBriefReadTarget: async () => ({
+        dbPath: registryDb,
+        dbId: "db-test-registry",
+      }),
+    });
+
+    expect(repair.registryUpgraded).toBe(1);
+    expect(repair.dbPathsUpdated).toBeGreaterThanOrEqual(1);
+
+    const saved = JSON.parse(
+      await fs.readFile(
+        path.join(appsDir, DEFAULT_HOME_APP_ID, "data-sources.json"),
+        "utf-8",
+      ),
+    ) as { sources: Array<{ dbPath?: string; dbId?: string; jobId?: string }> };
+    expect(saved.sources[0]?.dbPath).toBe(registryDb);
+    expect(saved.sources[0]?.dbId).toBe("db-test-registry");
+    expect(saved.sources[0]?.jobId).toBe(DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+  });
+
+  it("copies missing bundled Home migrations into the registry migrations folder", async () => {
+    const registryDb = path.join(
+      tmpDir,
+      "data",
+      "databases",
+      "home-daily-briefs",
+      "data.db",
+    );
+    await fs.mkdir(path.dirname(registryDb), { recursive: true });
+    await fs.writeFile(registryDb, "sqlite stub", "utf8");
+
+    const bundledMigrations = path.join(
+      appsDir,
+      DEFAULT_HOME_APP_ID,
+      "db-migrations",
+    );
+    await fs.mkdir(bundledMigrations, { recursive: true });
+    await fs.writeFile(
+      path.join(bundledMigrations, "0003_goals_tasks.sql"),
+      "CREATE TABLE IF NOT EXISTS goals (id TEXT PRIMARY KEY);",
+      "utf8",
+    );
+
+    const copied = await syncBundledHomeMigrationsToRegistry(registryDb, {
+      appsDir,
+    });
+
+    expect(copied).toEqual(["0003_goals_tasks.sql"]);
+    const onDisk = await fs.readFile(
+      path.join(
+        tmpDir,
+        "data",
+        "databases",
+        "home-daily-briefs",
+        "migrations",
+        "0003_goals_tasks.sql",
+      ),
+      "utf8",
+    );
+    expect(onDisk).toContain("CREATE TABLE IF NOT EXISTS goals");
+
+    const copiedAgain = await syncBundledHomeMigrationsToRegistry(registryDb, {
+      appsDir,
+    });
+    expect(copiedAgain).toEqual([]);
   });
 });

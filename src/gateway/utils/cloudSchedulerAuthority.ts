@@ -15,15 +15,35 @@ export {
   shouldDesktopSchedulerRunJob,
 } from "../services/jobs/executionCapability.js";
 
+/** Avoid keychain IPC + settings read on every 60s scheduler tick. */
+const CLOUD_SCHEDULER_AUTH_CACHE_MS = 120_000;
+let cloudSchedulerAuthCache:
+  | { value: boolean; expiresAt: number }
+  | null = null;
+
+export function clearCloudSchedulerAuthorityCache(): void {
+  cloudSchedulerAuthCache = null;
+}
+
 /** True when cloud sync + Papr auth + dispatch push are active. */
 export async function isCloudSchedulerAuthoritative(): Promise<boolean> {
-  if (!isSyncV3FlagEnabled("SYNC_V3_DISPATCH_PUSH")) {
-    return false;
+  const now = Date.now();
+  if (cloudSchedulerAuthCache && now < cloudSchedulerAuthCache.expiresAt) {
+    return cloudSchedulerAuthCache.value;
   }
-  const settings = await loadSettings();
-  if (settings.preferences.cloudSyncEnabled === false) {
-    return false;
+
+  let value = false;
+  if (isSyncV3FlagEnabled("SYNC_V3_DISPATCH_PUSH")) {
+    const settings = await loadSettings();
+    if (settings.preferences.cloudSyncEnabled !== false) {
+      const apiKey = await getPaprApiKey();
+      value = Boolean(apiKey);
+    }
   }
-  const apiKey = await getPaprApiKey();
-  return Boolean(apiKey);
+
+  cloudSchedulerAuthCache = {
+    value,
+    expiresAt: now + CLOUD_SCHEDULER_AUTH_CACHE_MS,
+  };
+  return value;
 }

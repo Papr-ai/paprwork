@@ -3,7 +3,7 @@
  * Much faster than localStorage for large datasets
  */
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useRef } from 'react';
 import { useTabStore } from '../stores/tabStore';
 import { gateway } from '../src/lib/gateway';
 import {
@@ -22,6 +22,8 @@ import {
   writeWorkspaceUiCache,
 } from '../lib/workspaceUiCache';
 import { useArtifactsStore } from '../stores/artifactsStore';
+import { scheduleTabStructureSave } from '../lib/tabPersistenceScheduler';
+import { buildTabStructureFingerprint } from '../lib/tabStructureFingerprint';
 
 export function useAppStatePersistence() {
   const tabs = useTabStore((state) => state.tabs);
@@ -30,6 +32,7 @@ export function useAppStatePersistence() {
   const splitRatios = useTabStore((state) => state.splitRatios);
   const history = useTabStore((state) => state.history);
   const historyIndex = useTabStore((state) => state.historyIndex);
+  const lastTabStructureFingerprintRef = useRef<string | null>(null);
 
   // Load tabs from SQLite on mount
   useEffect(() => {
@@ -111,45 +114,48 @@ export function useAppStatePersistence() {
       });
   }, []); // Only run once on mount
 
-  // Save tabs to SQLite (debounced)
+  // Save tabs to SQLite (debounced + coalesced on rapid switches)
   useEffect(() => {
     if (tabs.length === 0 || isWorkspaceSwitchReloading()) return;
 
-    const saveTimeout = setTimeout(() => {
-      console.log('[Persistence] Saving tabs to SQLite...');
-      const saveStartTime = performance.now();
-      
+    const fingerprint = buildTabStructureFingerprint(tabs);
+    if (fingerprint === lastTabStructureFingerprintRef.current) {
+      return;
+    }
+    lastTabStructureFingerprintRef.current = fingerprint;
+
+    scheduleTabStructureSave(async () => {
       const tabsToSave = tabs.map((tab, index) =>
         serializeTabForGatewayPersistence(tab, index),
       );
 
-      gateway.send('app:save_tabs', tabsToSave).then(() => {
-        console.log(`[Persistence] Saved ${tabs.length} tabs in ${(performance.now() - saveStartTime).toFixed(2)}ms`);
-        const key = getActiveWorkspaceUiCacheKey();
-        if (key) {
-          const {
-            activeTabId: savedActiveTabId,
-            splitRatio,
-            splitRatios,
-            history,
-            historyIndex,
-          } = useTabStore.getState();
-          writeWorkspaceUiCache(key, {
-            tabs: normalizeTabHierarchy(tabs),
-            activeTabId: savedActiveTabId,
-            splitRatio,
-            splitRatios,
-            history,
-            historyIndex,
-            artifacts: useArtifactsStore.getState().artifacts,
-          });
-        }
-      }).catch((error: Error) => {
-        console.error('[Persistence] Failed to save tabs:', error);
+      // Do not block tab switches on gateway queue depth — ACK is immediate server-side.
+      void gateway.send("app:save_tabs", tabsToSave).catch((error: Error) => {
+        console.error("[Persistence] Tab save failed:", error);
       });
-    }, 2000); // Increased debounce to 2 seconds to reduce save frequency
 
-    return () => clearTimeout(saveTimeout);
+      const key = getActiveWorkspaceUiCacheKey();
+      if (key) {
+        const {
+          activeTabId: savedActiveTabId,
+          splitRatio,
+          splitRatios,
+          history,
+          historyIndex,
+        } = useTabStore.getState();
+        writeWorkspaceUiCache(key, {
+          tabs: normalizeTabHierarchy(tabs),
+          activeTabId: savedActiveTabId,
+          splitRatio,
+          splitRatios,
+          history,
+          historyIndex,
+          artifacts: useArtifactsStore.getState().artifacts,
+        });
+      }
+    }, "tabs-changed");
+
+    return undefined;
   }, [tabs]);
 
   // Save app state (debounced) - includes split ratios, navigation history, and onboarding
@@ -176,7 +182,7 @@ export function useAppStatePersistence() {
       }).catch((error: Error) => {
         console.error('[Persistence] Failed to save app state:', error);
       });
-    }, 1000); // Increased debounce to 1 second to reduce save frequency
+    }, 2000);
 
     return () => clearTimeout(saveTimeout);
   }, [activeTabId, splitRatio, splitRatios, history, historyIndex]);

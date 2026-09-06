@@ -22,6 +22,10 @@ const DEFAULT_APP_OPEN_DEBOUNCE_MS = 3_000;
  * sync-index heartbeat + db-changed SSE already keep the replica current between opens.
  */
 const DEFAULT_APP_OPEN_COOLDOWN_MS = 60_000;
+/** After gateway boot, defer app-open pulls so the first restored app stays responsive. */
+const DEFAULT_STARTUP_GRACE_MS = 8_000;
+
+let gatewayStartedAtMs = Date.now();
 
 const appOpenTimers = new Map<string, NodeJS.Timeout>();
 const appOpenInFlight = new Set<string>();
@@ -50,6 +54,22 @@ function debounceMs(): number {
     : DEFAULT_APP_OPEN_DEBOUNCE_MS;
 }
 
+function startupGraceMs(): number {
+  const raw = process.env.TURSO_PULL_STARTUP_GRACE_MS;
+  if (!raw) {
+    return DEFAULT_STARTUP_GRACE_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_STARTUP_GRACE_MS;
+}
+
+/** Mark gateway boot time — app-open pulls are suppressed briefly after this. */
+export function markTursoPullSchedulerGatewayBoot(): void {
+  gatewayStartedAtMs = Date.now();
+}
+
 export function scheduleTursoPullForAppOpen(appId: string): void {
   const bridge = getTursoSyncBridge();
   if (!bridge?.enabled) {
@@ -58,6 +78,11 @@ export function scheduleTursoPullForAppOpen(appId: string): void {
 
   const trimmed = appId.trim();
   if (!trimmed) {
+    return;
+  }
+
+  const grace = startupGraceMs();
+  if (grace > 0 && Date.now() - gatewayStartedAtMs < grace) {
     return;
   }
 
@@ -181,4 +206,5 @@ export function resetTursoPullSchedulerForTests(): void {
   appOpenInFlight.clear();
   appOpenLastReconciledAt.clear();
   dbIdPullInFlight.clear();
+  gatewayStartedAtMs = Date.now();
 }

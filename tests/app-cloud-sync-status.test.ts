@@ -81,11 +81,11 @@ describe("deriveAppCloudSyncStatus", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("synced");
     expect(status.chipLabel).toBe("Synced");
-    expect(status.summaryLine).toContain("Last uploaded");
+    expect(status.summaryLine).toContain("Last published");
     expect(status.lastUploadedAt).toBe("2026-01-01T00:00:00.000Z");
   });
 
-  it("needs sync when code is synced but app is not published live", () => {
+  it("shows synced when code is synced but app was never published live", () => {
     const status = deriveAppCloudSyncStatus(
       "app-1",
       baseItems({
@@ -94,7 +94,8 @@ describe("deriveAppCloudSyncStatus", () => {
       }),
       "idle",
     );
-    expect(status.overall).toBe("needs_sync");
+    expect(status.overall).toBe("synced");
+    expect(status.publishLive).toBeFalsy();
   });
 
   it("reports synced when app is live on web but git sync-state lags", () => {
@@ -145,14 +146,35 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(webSyncVisualState(status)).toBe("synced");
   });
 
-  it("does not claim everything matches when needs_sync with no detail parts", () => {
+  it("does not claim everything matches when local code changed on a live app", () => {
     const items = baseItems({ appId: "app-1", codeStatus: "synced" });
-    items.upload = { status: "waiting", label: "Queued for upload…" };
+    items.appContext = {
+      appId: "app-1",
+      dependentJobIds: [],
+      publishLive: true,
+      publishedAt: "2026-01-01T00:00:00.000Z",
+    };
+    items.publish = { status: "synced", detail: "Live on the web" };
+    items.appSync = {
+      protocol: "v3",
+      appId: "app-1",
+      relativePath: "apps/app-1",
+      status: "pending",
+      phase: "changed",
+      label: "Local changes not on web",
+      detail: "2 writer change(s) waiting to publish",
+      lastUploadedAt: "2026-01-01T00:00:00.000Z",
+      pendingWriterOps: 2,
+      inflightWriterOps: 0,
+      deadLetterWriterOps: 0,
+      hasLocalChanges: true,
+      queuedForUpload: false,
+    };
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
     expect(status.summaryLine).not.toContain("Everything for this app matches");
-    expect(status.summaryLine).toContain("Some changes still need to sync");
+    expect(status.summaryLine).toContain("local app changes not on web yet");
     expect(webSyncVisualState(status)).toBe("warn");
   });
 
@@ -164,10 +186,30 @@ describe("deriveAppCloudSyncStatus", () => {
     );
     expect(status.overall).toBe("needs_sync");
     expect(status.codePhase).toBe("not_uploaded");
-    expect(status.chipLabel).toBe("Needs sync");
+    expect(status.chipLabel).toBe("Not published");
   });
 
-  it("reports needs_sync when a linked database is pending", () => {
+  it("reports needs_sync when a linked database is pending with no remote copy", () => {
+    const status = deriveAppCloudSyncStatus(
+      "app-1",
+      baseItems({
+        appId: "app-1",
+        databases: [
+          {
+            alias: "metrics",
+            jobId: "job-2",
+            status: "pending",
+            remoteTableCount: 0,
+            localTableCount: 2,
+          },
+        ],
+      }),
+      "idle",
+    );
+    expect(status.overall).toBe("needs_sync");
+  });
+
+  it("stays synced when a linked database has background row sync only", () => {
     const status = deriveAppCloudSyncStatus(
       "app-1",
       baseItems({
@@ -176,26 +218,33 @@ describe("deriveAppCloudSyncStatus", () => {
       }),
       "idle",
     );
-    expect(status.overall).toBe("needs_sync");
+    expect(status.overall).toBe("synced");
   });
 
-  it("reports needs_sync when coordinator upload is waiting but turso looks synced", () => {
+  it("stays synced when coordinator upload is waiting on an already-live app", () => {
     const items = baseItems({
       appId: "app-1",
       databases: [{ alias: "main", jobId: "job-1", status: "synced" }],
     });
+    items.appContext = {
+      appId: "app-1",
+      dependentJobIds: [],
+      publishLive: true,
+      publishedAt: "2026-01-01T00:00:00.000Z",
+    };
+    items.publish = { status: "synced", detail: "Live on the web" };
     items.upload = {
       status: "waiting",
-      label: "Changes waiting to upload",
+      label: "Changes waiting to publish",
       detail: "Database changes are waiting to sync to the web.",
     };
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
-    expect(status.overall).toBe("needs_sync");
-    expect(status.uploadStatus).toBe("waiting");
+    expect(status.overall).toBe("synced");
+    expect(status.uploadStatus).toBeUndefined();
   });
 
-  it("shows queue position in summary when upload is queued", () => {
+  it("shows queue position in summary when upload is queued before first publish", () => {
     const items = baseItems({ appId: "app-1", codeStatus: "pending" });
     items.upload = {
       status: "waiting",
@@ -204,7 +253,7 @@ describe("deriveAppCloudSyncStatus", () => {
       queueDepth: 8,
       label: "2 apps ahead · 8 in queue",
       detail:
-        "2 other apps uploading first (8 apps in queue). Use Upload now or Move to front to skip the line.",
+        "2 other apps uploading first (8 apps in queue). Use Publish changes or Move to front to skip the line.",
     };
     items.appSync = {
       protocol: "v3",
@@ -214,7 +263,7 @@ describe("deriveAppCloudSyncStatus", () => {
       phase: "changed",
       label: "2 apps ahead · 8 in queue",
       detail:
-        "2 other apps uploading first (8 apps in queue). Use Upload now or Move to front to skip the line.",
+        "2 other apps uploading first (8 apps in queue). Use Publish changes or Move to front to skip the line.",
       lastUploadedAt: null,
       pendingWriterOps: 0,
       inflightWriterOps: 0,
@@ -225,8 +274,6 @@ describe("deriveAppCloudSyncStatus", () => {
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
-    expect(status.uploadQueued).toBe(true);
-    expect(status.uploadQueuePosition).toBe(3);
     expect(status.summaryLine).toContain("2 apps ahead");
     expect(status.codePhase).not.toBe("uploading");
   });
@@ -240,7 +287,7 @@ describe("deriveAppCloudSyncStatus", () => {
       queueDepth: 14,
       label: "1 app ahead · 14 in queue",
       detail:
-        "1 other app uploading first (14 apps in queue). Use Upload now or Move to front to skip the line.",
+        "1 other app uploading first (14 apps in queue). Use Publish changes or Move to front to skip the line.",
     };
     items.appSync = {
       protocol: "v3",
@@ -249,7 +296,7 @@ describe("deriveAppCloudSyncStatus", () => {
       status: "synced",
       phase: "synced",
       label: "App code on the web",
-      detail: "Last uploaded Jan 1, 2026",
+      detail: "Last published Jan 1, 2026",
       lastUploadedAt: "2026-01-01T00:00:00.000Z",
       pendingWriterOps: 0,
       inflightWriterOps: 0,
@@ -277,7 +324,7 @@ describe("deriveAppCloudSyncStatus", () => {
 
     const status = deriveAppCloudSyncStatus("app-1", items, "queuing");
     expect(status.overall).toBe("needs_sync");
-    expect(status.chipLabel).toBe("Needs sync");
+    expect(status.chipLabel).toBe("Not published");
   });
 
   it("reports synced jobs even when stale queue entries remain", () => {
@@ -331,7 +378,7 @@ describe("deriveAppCloudSyncStatus", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
     expect(status.codePhase).toBe("changed");
-    expect(status.chipLabel).toBe("Needs sync");
+    expect(status.chipLabel).toBe("Not published");
   });
 
   it("reports needs_sync when a dependent job changed locally", () => {
@@ -351,7 +398,7 @@ describe("deriveAppCloudSyncStatus", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
     expect(status.dependentJobs).toHaveLength(1);
-    expect(status.chipLabel).toBe("Needs sync (0/1)");
+    expect(status.chipLabel).toBe("Not published (0/1 jobs)");
   });
 
   it("reports needs_sync (not uploading) when dependent jobs were never uploaded", () => {
@@ -371,7 +418,7 @@ describe("deriveAppCloudSyncStatus", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
     expect(status.dependentJobs[0]?.phase).toBe("not_uploaded");
-    expect(status.chipLabel).toBe("Needs sync (0/1)");
+    expect(status.chipLabel).toBe("Not published (0/1 jobs)");
   });
 
   it("reports uploading while client push is in flight", () => {
@@ -393,7 +440,7 @@ describe("deriveAppCloudSyncStatus", () => {
       isUploading: true,
     });
     expect(status.overall).toBe("uploading");
-    expect(status.chipLabel).toBe("Uploading 0/1…");
+    expect(status.chipLabel).toBe("Publishing 0/1…");
   });
 
   it("flags registry when app code (linked-databases.json) is not synced", () => {
@@ -415,7 +462,7 @@ describe("deriveAppCloudSyncStatus", () => {
     expect(status.codePhase).toBe("changed");
     expect(status.codeLabel).toBe("App code changed locally");
     expect(status.summaryLine).toContain("local app changes not on web yet");
-    expect(status.summaryLine).not.toContain("not uploaded yet");
+    expect(status.summaryLine).not.toContain("not published yet");
   });
 
   it("does not treat row-only turso pending as blocking sync chip", () => {
@@ -469,7 +516,7 @@ describe("deriveAppCloudSyncStatus", () => {
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("synced");
     expect(status.databases[0]?.rowsSyncing).toBe(true);
-    expect(status.summaryLine).toContain("syncing row changes");
+    expect(status.summaryLine).toContain("publishing data in the background");
   });
 
   it("shows yellow when publish layer blocks web readiness", () => {
@@ -490,7 +537,7 @@ describe("deriveAppCloudSyncStatus", () => {
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
-    expect(status.chipLabel).toBe("Not ready for web");
+    expect(status.chipLabel).toBe("Still publishing");
     expect(status.publishStatus).toBe("not_web_ready");
     expect(status.publishLabel).toContain("main: pending");
   });
@@ -508,7 +555,7 @@ describe("deriveAppCloudSyncStatus", () => {
       baseItems({ appId: "app-1", codeStatus: "pending" }),
       "idle",
     );
-    expect(formatWebSyncStatusTooltip(pending)).toContain("not uploaded yet");
+    expect(formatWebSyncStatusTooltip(pending)).toContain("not published yet");
 
     expect(formatWebSyncStatusTooltip(null, { loading: true })).toBe(
       "Checking what's on the web…",
@@ -592,8 +639,8 @@ describe("deriveAppCloudSyncStatus", () => {
     items.github!.apps[0]!.lastSyncAt = "2026-01-01T00:00:00.000Z";
     items.upload = {
       status: "waiting",
-      label: "Changes waiting to upload",
-      detail: "App file changes are waiting to upload.",
+      label: "Changes waiting to publish",
+      detail: "App file changes are waiting to publish.",
     };
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
@@ -611,7 +658,7 @@ describe("deriveAppCloudSyncStatus", () => {
       status: "pending",
       phase: "changed",
       label: "Local changes not on web",
-      detail: "2 writer change(s) waiting to upload",
+      detail: "2 writer change(s) waiting to publish",
       lastUploadedAt: "2026-01-01T00:00:00.000Z",
       pendingWriterOps: 2,
       inflightWriterOps: 0,
@@ -622,11 +669,11 @@ describe("deriveAppCloudSyncStatus", () => {
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
     expect(status.overall).toBe("needs_sync");
-    expect(status.codeLabel).toBe("2 writer change(s) waiting to upload");
+    expect(status.codeLabel).toBe("2 writer change(s) waiting to publish");
     expect(status.summaryLine).toContain("local app changes not on web yet");
   });
 
-  it("reports uploading only when coordinator is actively uploading", () => {
+  it("reports needs_sync when coordinator is uploading before first publish", () => {
     const items = baseItems({ appId: "app-1", codeStatus: "outdated" });
     items.github!.apps[0]!.lastSyncAt = "2026-01-01T00:00:00.000Z";
     items.upload = {
@@ -636,8 +683,8 @@ describe("deriveAppCloudSyncStatus", () => {
     };
 
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
-    expect(status.overall).toBe("uploading");
-    expect(status.summaryLine).toContain("Uploading app to the web");
+    expect(status.overall).toBe("needs_sync");
+    expect(status.summaryLine).toContain("local app changes not on web yet");
   });
 });
 

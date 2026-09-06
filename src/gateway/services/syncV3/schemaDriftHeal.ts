@@ -270,14 +270,51 @@ async function listUnsatisfiedMigrationIds(
     return [];
   }
 
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
   let localApplied: string[] = [];
-  const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
-  try {
-    localApplied = normalizeMigrationIdList(
-      listAppliedMigrationIdsReadOnly(localDb),
+  if (isReplicaManagedDbPath(dbPath)) {
+    const { getDatabaseRegistryService } = await import(
+      "../DatabaseRegistryService.js"
     );
-  } finally {
-    localDb.close();
+    const record = getDatabaseRegistryService().getByPath(dbPath);
+    if (record) {
+      const { queryLinkedDbViaTursoReplica } = await import(
+        "../tursoReplica/tursoReplicaRouting.js"
+      );
+      const source = {
+        id: record.dbId,
+        type: "sqlite" as const,
+        dbId: record.dbId,
+        alias: record.label ?? record.dbId,
+        dbPath: record.localPath,
+        tables: [],
+        linkedAt: record.createdAt,
+      };
+      try {
+        const result = await queryLinkedDbViaTursoReplica(
+          source,
+          "SELECT id FROM schema_migrations ORDER BY id ASC",
+          [],
+          { pullBeforeRead: false },
+        );
+        localApplied = normalizeMigrationIdList(
+          result.rows.map((row) => String(row.id ?? row[0] ?? "")),
+        );
+      } catch {
+        localApplied = [];
+      }
+    }
+  } else {
+    const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+    try {
+      localApplied = normalizeMigrationIdList(
+        listAppliedMigrationIdsReadOnly(localDb),
+      );
+    } finally {
+      localDb.close();
+    }
   }
 
   const unsatisfied: string[] = [];
@@ -327,6 +364,12 @@ async function buildDriftHealOpsIfNeeded(
   linked: TursoLinkedSource,
 ): Promise<JobMigrationSchemaOp[]> {
   const dbPath = linked.dbPath;
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(dbPath)) {
+    return [];
+  }
   const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
   try {
     const tableNames = filterSyncableTables(listUserTables(localDb));
@@ -377,6 +420,12 @@ async function listDriftedTableNames(
   linked: TursoLinkedSource,
 ): Promise<string[]> {
   const dbPath = linked.dbPath;
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(dbPath)) {
+    return [];
+  }
   const remoteHandle = await openRemoteClient(linked);
   if (!remoteHandle) {
     return [];

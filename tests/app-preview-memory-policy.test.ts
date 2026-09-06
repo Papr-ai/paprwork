@@ -1,10 +1,15 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi, beforeEach, afterEach } from "vitest";
 
 import type { Tab } from "../ui/types/tabs";
 import {
   effectiveMaxMountedAppPreviews,
   selectMountedAppTabIds,
 } from "../ui/utils/appPreviewMemoryPolicy";
+import {
+  getTabSaveDebounceMs,
+  resetTabPersistenceSchedulerForTests,
+  scheduleTabStructureSave,
+} from "../ui/lib/tabPersistenceScheduler";
 
 function appTab(id: string): Tab {
   return {
@@ -49,6 +54,20 @@ describe("selectMountedAppTabIds", () => {
     expect(mounted.has("d")).toBe(true);
   });
 
+  test("visibleOnly mounts split panes without LRU hidden warm slots", () => {
+    const tabs = [appTab("a"), appTab("b"), appTab("c"), appTab("d")];
+    const visible = new Set(["a", "b"]);
+    const lastActive = new Map<string, number>([
+      ["c", 900],
+      ["d", 800],
+    ]);
+
+    const mounted = selectMountedAppTabIds(tabs, visible, lastActive, {
+      visibleOnly: true,
+    });
+    expect([...mounted].sort()).toEqual(["a", "b"]);
+  });
+
   test("keeps most recently used hidden tabs within the cap", () => {
     const tabs = [appTab("a"), appTab("b"), appTab("c")];
     const visible = new Set<string>();
@@ -60,5 +79,28 @@ describe("selectMountedAppTabIds", () => {
 
     const mounted = selectMountedAppTabIds(tabs, visible, lastActive, 2);
     expect([...mounted].sort()).toEqual(["b", "c"]);
+  });
+});
+
+describe("tabPersistenceScheduler", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    resetTabPersistenceSchedulerForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    resetTabPersistenceSchedulerForTests();
+  });
+
+  test("coalesces rapid tab save requests into one flush", async () => {
+    const saveFn = vi.fn().mockResolvedValue(undefined);
+
+    scheduleTabStructureSave(saveFn, "t1");
+    scheduleTabStructureSave(saveFn, "t2");
+    scheduleTabStructureSave(saveFn, "t3");
+
+    await vi.advanceTimersByTimeAsync(getTabSaveDebounceMs());
+    expect(saveFn).toHaveBeenCalledTimes(1);
   });
 });

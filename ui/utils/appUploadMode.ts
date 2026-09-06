@@ -33,10 +33,10 @@ export function autoUploadToggleHint(enabled: boolean): string {
   if (enabled) {
     return "Your app and data sync to the web in the background.";
   }
-  return "Changes stay on this computer until you click Upload now — good for testing first.";
+  return "Changes stay on this computer until you click Publish changes — good for testing first.";
 }
 
 export const AUTO_UPLOAD_SECTION_TITLE = "When changes go to the web";
-export const AUTO_UPLOAD_TOGGLE_LABEL = "Upload automatically";
+export const AUTO_UPLOAD_TOGGLE_LABEL = "Publish automatically";
 export const AUTO_UPLOAD_GLOBAL_HINT =
   "Using your workspace default. Change for all apps in Settings → Cloud Sync.";

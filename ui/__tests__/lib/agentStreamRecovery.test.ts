@@ -9,6 +9,10 @@ import {
   resetAutoContinueAttempts,
   shouldAutoContinueInterruptedTurn,
   shouldIgnoreDuplicateDoneChunk,
+  isStreamDoneChunkWithChatId,
+  resolveChatIdForStreamRequest,
+  trackActiveStream,
+  untrackActiveStream,
   serverHasCompletedAssistantForStreamingTurn,
 } from "../../lib/agentStreamRecovery";
 
@@ -234,6 +238,32 @@ describe("shouldIgnoreDuplicateDoneChunk", () => {
   });
 });
 
+describe("isStreamDoneChunkWithChatId", () => {
+  it("returns true when done chunk includes chatId", () => {
+    expect(
+      isStreamDoneChunkWithChatId({
+        type: "done",
+        chatId: "chat-1",
+        payload: {},
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false when done chunk is missing chatId", () => {
+    expect(isStreamDoneChunkWithChatId({ type: "done", payload: {} })).toBe(
+      false,
+    );
+  });
+});
+
+describe("resolveChatIdForStreamRequest", () => {
+  it("maps requestId back to the active chat", () => {
+    trackActiveStream("chat-abc", "req-123");
+    expect(resolveChatIdForStreamRequest("req-123")).toBe("chat-abc");
+    untrackActiveStream("chat-abc");
+  });
+});
+
 describe("lastUserTurnNeedsContinue", () => {
   it("returns true when last user turn has no assistant response", () => {
     const messages: ChatMessage[] = [
@@ -284,6 +314,44 @@ describe("interruptedTurnNeedsContinue", () => {
 
     expect(
       interruptedTurnNeedsContinue(messages, "stream", true),
+    ).toBe(false);
+  });
+
+  it("returns true when history reload flagged the last assistant interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build the dashboard" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial work saved to DB",
+        interrupted: true,
+      },
+    ];
+
+    expect(
+      interruptedTurnNeedsContinue(messages, undefined, false),
+    ).toBe(true);
+  });
+
+  it("returns false when the user stopped the interrupted turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build the dashboard" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial",
+        interrupted: true,
+        sequence: [
+          {
+            type: "tool",
+            data: { toolName: "bash", status: "stopped", error: "Stopped by user" },
+          },
+        ],
+      },
+    ];
+
+    expect(
+      interruptedTurnNeedsContinue(messages, undefined, false),
     ).toBe(false);
   });
 });
@@ -426,5 +494,23 @@ describe("autoContinueInterruptedTurn helpers", () => {
         gatewayReady: true,
       }),
     ).toBe(false);
+  });
+
+  it("allows auto-continue while needsStreamRecovery is set for interrupted turns", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      interruptedAssistant,
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: true,
+        gatewayReady: true,
+      }),
+    ).toBe(true);
   });
 });

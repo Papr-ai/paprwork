@@ -18,9 +18,11 @@ import {
   listLocalOnlyMigrationIds,
   readRemoteTursoMigrationIds,
 } from "../tursoReplicaMigrationConflict.js";
+import { isReplicaManagedDbPath } from "../tursoReplicaFileGuard.js";
 import { applyReplicaRegistryDatabaseMigrations } from "../tursoReplicaRegistryMigrations.js";
 import type { CutoverClassification, CutoverSnapshot } from "./tursoReplicaCutoverTypes.js";
 import { preReplicaBackupPath } from "./tursoReplicaCutoverBackup.js";
+import type { AppDataSource } from "../../appDataSources.js";
 
 function readMigrationIdsFromSqlite(dbPath: string): string[] {
   if (!fs.existsSync(dbPath)) {
@@ -148,6 +150,18 @@ export async function pushLocalSchemaToTursoBeforeCutover(
   }
 }
 
+function recordAsMigrationSource(record: DatabaseRecord): AppDataSource {
+  return {
+    id: record.dbId,
+    type: "sqlite",
+    dbId: record.dbId,
+    alias: record.label ?? record.dbId,
+    dbPath: record.localPath,
+    tables: [],
+    linkedAt: record.createdAt,
+  };
+}
+
 /** After cutover attach: align ledger with schema and apply any still-pending git migrations. */
 export async function repairReplicaMigrationAuthorityAfterCutover(
   record: DatabaseRecord,
@@ -157,10 +171,28 @@ export async function repairReplicaMigrationAuthorityAfterCutover(
     return { ledgerInferred: [], migrationsApplied: [] };
   }
 
-  const ledgerInferred = await reconcileLocalMigrationLedgerFromSchema(
-    record.localPath,
-    migrationRoot,
+  const { getTursoReplicaSyncWorkerClient } = await import(
+    "../TursoReplicaSyncWorkerClient.js"
   );
+  await getTursoReplicaSyncWorkerClient()
+    .close(record.localPath)
+    .catch(() => undefined);
+
+  let ledgerInferred: string[];
+  if (isReplicaManagedDbPath(record.localPath)) {
+    const { reconcileReplicaMigrationLedgerFromSchema } = await import(
+      "../tursoReplicaSchemaLedger.js"
+    );
+    ledgerInferred = await reconcileReplicaMigrationLedgerFromSchema(
+      recordAsMigrationSource(record),
+      migrationRoot,
+    );
+  } else {
+    ledgerInferred = await reconcileLocalMigrationLedgerFromSchema(
+      record.localPath,
+      migrationRoot,
+    );
+  }
 
   const migrationsApplied = await applyReplicaRegistryDatabaseMigrations(
     migrationRoot,

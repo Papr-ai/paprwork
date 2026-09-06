@@ -40,10 +40,10 @@ function minimalSyncStatus(
     hasLinkedDatabases: false,
     hasRegistryDatabases: false,
     registryPhase: "synced",
-    registryLabel: "Registry uploads with app code",
+    registryLabel: "Registry publishes with app code",
     chipLabel: "Pending",
     globallySyncing: false,
-    cloudPublishing: false,
+    cloudUploading: false,
     publishStatus: "synced",
     publishLabel: "Live",
     publishDetail: null,
@@ -76,7 +76,7 @@ describe("WebSyncPopover", () => {
     ).not.toThrow();
   });
 
-  it("still offers Upload now while status is unresolved (live app)", () => {
+  it("still offers Publish changes while status is unresolved (live app)", () => {
     render(
       <WebSyncPopover {...baseProps} status={null} loading={false} appLive />,
     );
@@ -95,8 +95,8 @@ describe("WebSyncPopover", () => {
   it("labels push action from publish state", () => {
     expect(webSyncPushButtonLabel({ appLive: false, pushing: false })).toBe("Publish");
     expect(webSyncPushButtonLabel({ appLive: false, pushing: true })).toBe("Publishing…");
-    expect(webSyncPushButtonLabel({ appLive: true, pushing: false })).toBe("Upload now");
-    expect(webSyncPushButtonLabel({ appLive: true, pushing: true })).toBe("Uploading…");
+    expect(webSyncPushButtonLabel({ appLive: true, pushing: false })).toBe("Publish changes");
+    expect(webSyncPushButtonLabel({ appLive: true, pushing: true })).toBe("Publishing…");
   });
 
   it("surfaces an error alongside the unresolved state", () => {
@@ -112,7 +112,7 @@ describe("WebSyncPopover", () => {
     expect(screen.getByText("App sync failed")).toBeTruthy();
   });
 
-  it("shows Ask agent when Upload now fails with an error", () => {
+  it("shows Ask agent when Publish changes fails with an error", () => {
     let openedMessage: string | undefined;
     const listener = (event: Event) => {
       openedMessage = (event as CustomEvent<{ message: string }>).detail.message;

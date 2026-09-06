@@ -30,6 +30,10 @@ import {
   isReplicaCheckpointWalError,
   isReplicaSqlSchemaError,
 } from "../tursoReplica/tursoReplicaCheckpointRecovery.js";
+import {
+  healReplicaSchemaDrift,
+  isReplicaMissingTableError,
+} from "../tursoReplica/tursoReplicaSchemaDriftHeal.js";
 import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
 import { isReplicaReadPathDegraded } from "../tursoReplica/tursoReplicaBackgroundRecovery.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
@@ -51,19 +55,21 @@ const tursoUnavailableUntil = new Map<string, number>();
 const TURSO_UNAVAILABLE_COOLDOWN_MS = 30_000;
 /** Mini-app UI reads must not block on cloud pull or a stuck sync queue. */
 const REPLICA_MINI_APP_READ_TIMEOUT_MS = 2_500;
+const REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS = 8_000;
+
+export function isReplicaMiniAppReadTimeoutError(message: string): boolean {
+  return /timed out after \d+ms/i.test(message);
+}
 
 function withMiniAppReplicaReadTimeout<T>(
   promise: Promise<T>,
   label: string,
+  timeoutMs: number = REPLICA_MINI_APP_READ_TIMEOUT_MS,
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(
-        new Error(
-          `${label} timed out after ${REPLICA_MINI_APP_READ_TIMEOUT_MS}ms`,
-        ),
-      );
-    }, REPLICA_MINI_APP_READ_TIMEOUT_MS);
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -208,33 +214,47 @@ export class DbRouter {
     sql: string,
     params?: unknown[],
   ): Promise<RoutedQueryResult> {
+    const started = performance.now();
+    let result: RoutedQueryResult;
     if (shouldUseTursoReplicaForSource(source)) {
-      return this.queryReplicaSource(appId, source, sql, params);
+      result = await this.queryReplicaSource(appId, source, sql, params);
+    } else if (isLocalDbReadable(source.dbPath)) {
+      const local = await this.pool.query(appId, source.dbPath, sql, params);
+      result = { ...local, backend: "local" };
+    } else {
+      const client = await getTursoClientForSource(source);
+      if (!client) {
+        const pathHint = source.dbPath?.trim()
+          ? source.dbPath
+          : source.dbId
+            ? `(unresolved dbId ${source.dbId})`
+            : "(no dbPath configured)";
+        throw new Error(
+          `Local database not found at ${pathHint} and Turso fallback is unavailable. ` +
+            "Sign in to Papr or run the linked job on this machine first.",
+        );
+      }
+
+      const remote = await this.queryViaTursoPrimary(
+        appId,
+        source,
+        sql,
+        params,
+        client,
+      );
+      if (!remote) {
+        throw new Error("Turso fallback query returned no result");
+      }
+      result = remote;
     }
 
-    if (isLocalDbReadable(source.dbPath)) {
-      const result = await this.pool.query(appId, source.dbPath, sql, params);
-      return { ...result, backend: "local" };
-    }
-
-    const client = await getTursoClientForSource(source);
-    if (!client) {
-      const pathHint = source.dbPath?.trim()
-        ? source.dbPath
-        : source.dbId
-          ? `(unresolved dbId ${source.dbId})`
-          : "(no dbPath configured)";
-      throw new Error(
-        `Local database not found at ${pathHint} and Turso fallback is unavailable. ` +
-          "Sign in to Papr or run the linked job on this machine first.",
+    const elapsedMs = Math.round(performance.now() - started);
+    if (elapsedMs >= 250) {
+      console.log(
+        `[DbRouter] Slow query ${elapsedMs}ms app=${appId} source=${source.alias ?? source.dbId} backend=${result.backend} rows=${result.count}`,
       );
     }
-
-    const remote = await this.queryViaTursoPrimary(appId, source, sql, params, client);
-    if (!remote) {
-      throw new Error("Turso fallback query returned no result");
-    }
-    return remote;
+    return result;
   }
 
   private async queryReplicaSource(
@@ -267,8 +287,57 @@ export class DbRouter {
     } catch (error) {
       const message = (error as Error).message;
 
+      if (isReplicaMissingTableError(message)) {
+        console.warn(
+          `[DbRouter] Missing table on replica for ${source.alias ?? source.dbId} — healing schema drift`,
+        );
+        try {
+          await healReplicaSchemaDrift(source);
+          const retry = await withMiniAppReplicaReadTimeout(
+            queryLinkedDbViaTursoReplica(source, sql, params, {
+              pullBeforeRead: false,
+            }),
+            `replica read after schema heal (${source.alias ?? source.dbId ?? "db"})`,
+          );
+          console.log(
+            `[DbRouter] Turso replica query (healed) app=${appId} source=${source.alias} rows=${retry.count}`,
+          );
+          return { ...retry, backend: "turso-replica" };
+        } catch (healError) {
+          console.warn(
+            `[DbRouter] Schema heal + retry failed for ${source.alias ?? source.dbId}:`,
+            (healError as Error).message.slice(0, 200),
+          );
+        }
+      }
+
       if (isReplicaSqlSchemaError(message)) {
         throw error;
+      }
+
+      if (isReplicaMiniAppReadTimeoutError(message)) {
+        console.warn(
+          `[DbRouter] Replica read slow for ${source.alias ?? source.dbId} — retrying locally (no cloud fallback)`,
+        );
+        try {
+          const retry = await withMiniAppReplicaReadTimeout(
+            queryLinkedDbViaTursoReplica(source, sql, params, {
+              pullBeforeRead: false,
+            }),
+            `replica read retry (${source.alias ?? source.dbId ?? "db"})`,
+            REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS,
+          );
+          console.log(
+            `[DbRouter] Turso replica query (retry) app=${appId} source=${source.alias} rows=${retry.count}`,
+          );
+          return { ...retry, backend: "turso-replica" };
+        } catch (retryError) {
+          throw new Error(
+            `Replica read timed out for ${source.alias ?? source.dbId}. ` +
+              "Gateway was busy — retry in a moment. " +
+              `Original: ${(retryError as Error).message.slice(0, 120)}`,
+          );
+        }
       }
 
       const tursoDatabase = resolveTursoDatabaseName(source);

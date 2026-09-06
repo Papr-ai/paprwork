@@ -322,17 +322,40 @@ async function ensureHomeGoalsTasksSchema(): Promise<void> {
   } catch {
     return;
   }
-  const { applyRegistryDatabaseMigrations } = await import("./jobs/databaseMigrations.js");
-  const applied = await applyRegistryDatabaseMigrations(dbPath);
+  const { ensureHomeDailyBriefRegistrySchema } = await import(
+    "./defaultHomeAppRepair.js"
+  );
+  const applied = await ensureHomeDailyBriefRegistrySchema(dbPath);
   if (applied.length > 0) {
     console.log(
       `[GoalsTasksProjection] Applied Home briefs migrations: ${applied.join(", ")}`,
     );
   }
-  const { getTursoReplicaSyncWorkerClient } = await import(
-    "./tursoReplica/TursoReplicaSyncWorkerClient.js"
+}
+
+/** True when the Home briefs DB exists and has a goals table (projection can run). */
+export async function isHomeGoalsProjectionReady(): Promise<boolean> {
+  const dbPath = path.join(
+    getPaprDataDir(),
+    "databases",
+    DEFAULT_HOME_BRIEFS_DB_SLUG,
+    "data.db",
   );
-  await getTursoReplicaSyncWorkerClient().close(dbPath).catch(() => undefined);
+  try {
+    await fs.access(dbPath);
+  } catch {
+    return false;
+  }
+  try {
+    await ensureHomeGoalsTasksSchema();
+    const rows = await homeDb(
+      "query",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'goals' LIMIT 1",
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /**

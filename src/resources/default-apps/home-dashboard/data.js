@@ -37,6 +37,57 @@ const Data = {
     if (!r.ok) throw new Error(data?.error || 'Database query failed');
     return data?.rows || [];
   },
+  async queryBatch(statements) {
+    const r = await fetch('/api/db/query-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: this.APP_ID, statements }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || 'Database batch query failed');
+    return data?.results || [];
+  },
+  briefFromRows(rows, date) {
+    if (date) {
+      if (!this.isBriefDateKey(date)) return Data.sample();
+      const row = rows.find((entry) => entry.date === date);
+      const brief = this.parseBriefJson(row?.brief_json);
+      return brief ?? Data.sample();
+    }
+    for (const row of rows) {
+      if (!this.isBriefDateKey(row.date)) continue;
+      const brief = this.parseBriefJson(row.brief_json);
+      if (brief) return brief;
+    }
+    return Data.sample();
+  },
+  datesFromRows(rows) {
+    return rows
+      .filter((row) => this.isBriefDateKey(row.date) && this.parseBriefJson(row.brief_json))
+      .map((row) => row.date);
+  },
+  async loadInitData() {
+    const results = await this.queryBatch([
+      {
+        sql: 'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30',
+      },
+      {
+        sql: 'SELECT item_key, status, note, updated_at FROM brief_reviews',
+      },
+    ]);
+    const briefResult = results[0];
+    const reviewResult = results[1];
+    if (!briefResult?.ok) {
+      throw new Error(briefResult?.error || 'Failed to load briefs');
+    }
+    const briefRows = briefResult.rows || [];
+    const reviewRows = reviewResult?.ok ? (reviewResult.rows || []) : [];
+    return {
+      dates: this.datesFromRows(briefRows),
+      brief: this.briefFromRows(briefRows),
+      reviewRows,
+    };
+  },
   isBriefDateKey(date) {
     return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
   },

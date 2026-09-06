@@ -17,6 +17,7 @@ import type {
   DbWorkerRequest,
   DbWorkerResponse,
 } from "../workers/db-query-worker.js";
+import { assertNotReplicaManagedSqliteAccess } from "./tursoReplica/tursoReplicaFileGuard.js";
 
 // ── Result types exposed to callers ───────────────────────────────────────
 
@@ -310,6 +311,10 @@ export class DbQueryPool {
   private async dispatch(
     partial: Omit<DbWorkerRequest, "id">,
   ): Promise<DbWorkerResponse> {
+    assertNotReplicaManagedSqliteAccess(
+      partial.dbPath,
+      `DbQueryPool.${partial.type}`,
+    );
     const req: DbWorkerRequest = { ...partial, id: this.nextId++ } as DbWorkerRequest;
     const res = await this.pick().execute(req);
     if (!res.success) throw new Error(res.error ?? "Worker query failed");

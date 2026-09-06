@@ -237,6 +237,17 @@
   filter: brightness(1.05);
 }
 
+.mini-app-publish-bar__action-callout-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.mini-app-publish-bar__action-callout-btn--secondary {
+  background: transparent;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+}
+
 .mini-app-publish-bar__action-callout-dismiss {
   flex-shrink: 0;
   width: 22px;
