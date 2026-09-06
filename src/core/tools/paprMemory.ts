@@ -20,6 +20,10 @@ import {
   recordSearchOutcome,
   type RetrievedCandidate,
 } from "../utils/searchOutcomeFeedback.js";
+import {
+  analyzeResultSetShape,
+  describeResultSetShape,
+} from "../utils/resultSetShape.js";
 import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
 import { assertValidWikiGraphQLSelection } from "../../gateway/services/wikiGraphqlUtils.js";
 import {
@@ -325,6 +329,13 @@ export interface SearchAgentMemoryToolResult {
   data: SearchResponse | string;
   /** Agent-visible reminder — include literal searchId for submit_memory_feedback */
   _memoryFeedbackReminder: string;
+  /**
+   * Present ONLY when the result set is degenerate (mostly near-duplicates, or
+   * a repeated memory id). Omitted on healthy searches so the field itself is
+   * the signal — an agent that sees it should narrow filters or fall back to
+   * grep rather than reading ranks that carry no new information.
+   */
+  _retrievalQuality?: string;
 }
 
 function buildMemoryFeedbackReminder(
@@ -966,12 +977,22 @@ export const searchAgentMemoryTool = createTool({
       const isGenuinelyEmpty =
         formatted.memoryCount === 0 && formatted.nodeCount === 0;
 
-      // Record every search so the turn-end flush can derive which memories
-      // the answer actually used. `null` means the payload could not be
-      // parsed — recorded as candidatesKnown:false so it is never graded as
-      // "nothing was cited".
+      // Extracted once: the same candidate list feeds turn-end citation
+      // derivation AND the degeneracy check surfaced to the agent below.
+      // `null` means the payload could not be parsed — recorded as
+      // candidatesKnown:false so it is never graded as "nothing was cited".
+      const candidates = extractRetrievedCandidates(response);
+
+      // Warn on duplicate floods / id fan-out regardless of whether a searchId
+      // came back — the agent needs this even when feedback cannot be filed.
+      if (candidates && candidates.length > 0) {
+        const warning = describeResultSetShape(
+          analyzeResultSetShape(candidates),
+        );
+        if (warning) formatted._retrievalQuality = warning;
+      }
+
       if (formatted.searchId !== null) {
-        const candidates = extractRetrievedCandidates(response);
         recordSearchOutcome({
           searchId: formatted.searchId,
           memoryCount: formatted.memoryCount,

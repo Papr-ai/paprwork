@@ -7,6 +7,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
+import { normalizeForDedupe } from '../../../core/utils/resultSetShape.js';
 import { getPaprRoot } from '../../../core/utils/paprRoot.js';
 import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
@@ -14,6 +16,11 @@ import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
 import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
 import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
+
+/** Short content digest for duplicate detection. Not security-sensitive. */
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
 
 interface JobJsonMetadata {
   id?: string;
@@ -538,7 +545,15 @@ export class CodeIndexerService {
       project_type: projectMetadata.type,
       source: 'code_indexer',
       indexed_at: new Date().toISOString(),
-      entity_type: 'code_file'
+      entity_type: 'code_file',
+      // Exact hash identifies re-indexes of unchanged files. `boilerplate_hash`
+      // ignores UUIDs/hex/integers so generated scaffolding shares one value:
+      // 98 of 110 `db.ts` files in this workspace are identical apart from
+      // their APP_ID constant, which is why exact hashing alone cannot see the
+      // duplication. Recorded (not filtered) so search can collapse groups
+      // without the indexer having to decide which project "owns" a copy.
+      content_hash: sha256(content),
+      boilerplate_hash: sha256(normalizeForDedupe(content)),
     };
     
     if (fileMetadata.data_source_path) {
