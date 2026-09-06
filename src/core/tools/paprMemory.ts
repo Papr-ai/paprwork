@@ -15,6 +15,11 @@ import {
   resolveConversationId,
 } from "./chatScope.js";
 import { getCurrentChatId } from "./context.js";
+import {
+  markSearchOutcomeSubmitted,
+  recordSearchOutcome,
+  type RetrievedCandidate,
+} from "../utils/searchOutcomeFeedback.js";
 import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
 import { assertValidWikiGraphQLSelection } from "../../gateway/services/wikiGraphqlUtils.js";
 import {
@@ -337,10 +342,21 @@ function buildMemoryFeedbackReminder(
     );
   }
 
+  // Citations are derived from your answer at turn end, so the agent no longer
+  // needs to report "these were useful" — that is measured. What CANNOT be
+  // derived is a judgement about results you did not use: whether they were
+  // off-topic, stale, or wrong. Mixed results are the highest-information case
+  // for a contrastive objective, so they are explicitly requested here rather
+  // than skipped (the old "skip when mixed" rule is what produced 26 thumbs_up
+  // and zero negatives in the entire feedback log).
   return (
-    `After evaluating these results, if retrieval was clearly helpful or clearly irrelevant, call:\n` +
-    `submit_memory_feedback({ searchId: "${searchId}", feedbackType: "thumbs_up" | "thumbs_down" | "memory_relevance", citedMemoryIds: ["<memory-id-from-results>"] })\n` +
-    `Skip feedback when results were mediocre or mixed. Wrong memory content → delete_memory or add_agent_memory.`
+    `searchId="${searchId}" — cited memories are derived automatically from your answer; you do NOT need to report which ones helped.\n` +
+    `Do submit feedback when you can judge something the derivation cannot:\n` +
+    `• MIXED results (some on-target, some off) — the most valuable case, do not skip it\n` +
+    `• Results that looked relevant but were stale, wrong, or duplicated\n` +
+    `• Nothing usable despite a non-empty result set\n` +
+    `submit_memory_feedback({ searchId: "${searchId}", feedbackType: "memory_relevance" | "thumbs_down" | "correction", feedbackScore: 1-5, feedbackText: "<what was off>" })\n` +
+    `Wrong memory content → delete_memory or add_agent_memory.`
   );
 }
 
@@ -365,6 +381,102 @@ function parseToonEnvelope(toon: string): {
     memoryCount: countOf("memories"),
     nodeCount: countOf("nodes"),
   };
+}
+
+/**
+ * Split one TOON row on commas, respecting double-quoted fields.
+ * Memory content routinely contains commas, so a naive split shifts every
+ * column after the first one and silently mismatches ids to content.
+ */
+function splitToonRow(row: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < row.length; i += 1) {
+    const ch = row[i];
+    if (ch === '"') {
+      if (inQuotes && row[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current);
+  return cells.map((c) => c.trim());
+}
+
+/**
+ * Recover `{ id, content, rank }` per retrieved memory, for citation
+ * derivation at turn end.
+ *
+ * Returns `null` when the payload cannot be parsed — the caller MUST treat
+ * that as "unknown", never as "nothing was retrieved". Grading an unparsed
+ * response as zero-citations would emit a false negative label for every
+ * successful search.
+ */
+export function extractRetrievedCandidates(
+  response: SearchResponse | string,
+): RetrievedCandidate[] | null {
+  // Structured path.
+  if (typeof response !== "string") {
+    const memories = response.data?.memories;
+    if (Array.isArray(memories)) {
+      return memories.map((m, index) => ({
+        id: String((m as { id?: unknown })?.id ?? ""),
+        content: String((m as { content?: unknown })?.content ?? ""),
+        rank: index,
+      }));
+    }
+  }
+
+  const toon =
+    typeof response === "string"
+      ? response
+      : typeof response.data === "string"
+        ? (response.data as unknown as string)
+        : null;
+  if (toon === null) return null;
+
+  // Tabular TOON: `memories[#N]{id,content,...}:` then indented rows.
+  const header = toon.match(/memories\[#(\d+)\]\{([^}]*)\}\s*:/);
+  if (!header) return null;
+
+  const fields = header[2]!.split(",").map((f) => f.trim());
+  const idIndex = fields.indexOf("id");
+  const contentIndex = fields.indexOf("content");
+  if (idIndex === -1 || contentIndex === -1) return null;
+
+  const afterHeader = toon.slice(header.index! + header[0].length);
+  const candidates: RetrievedCandidate[] = [];
+  const expected = Number.parseInt(header[1]!, 10);
+
+  for (const line of afterHeader.split("\n")) {
+    if (candidates.length >= expected) break;
+    // Rows are indented under the header; a non-indented line ends the table.
+    if (!/^\s+\S/.test(line)) {
+      if (line.trim() === "") continue;
+      break;
+    }
+    const cells = splitToonRow(line.trim());
+    if (cells.length < fields.length) continue;
+    const id = cells[idIndex] ?? "";
+    if (!id) continue;
+    candidates.push({
+      id,
+      content: cells[contentIndex] ?? "",
+      rank: candidates.length,
+    });
+  }
+
+  return candidates.length > 0 ? candidates : null;
 }
 
 export function formatSearchMemoryResponse(
@@ -759,8 +871,28 @@ export const searchAgentMemoryTool = createTool({
       // the ranker down on every successful query.
       const isGenuinelyEmpty =
         formatted.memoryCount === 0 && formatted.nodeCount === 0;
-      if (formatted.searchId !== null && isGenuinelyEmpty) {
-        void submitEmptySearchFeedback(client, formatted.searchId);
+
+      // Record every search so the turn-end flush can derive which memories
+      // the answer actually used. `null` means the payload could not be
+      // parsed — recorded as candidatesKnown:false so it is never graded as
+      // "nothing was cited".
+      if (formatted.searchId !== null) {
+        const candidates = extractRetrievedCandidates(response);
+        recordSearchOutcome({
+          searchId: formatted.searchId,
+          memoryCount: formatted.memoryCount,
+          nodeCount: formatted.nodeCount,
+          candidatesKnown: candidates !== null,
+          candidates: candidates ?? [],
+        });
+
+        if (isGenuinelyEmpty) {
+          // Empty searches are graded inline (nothing to cite, so waiting for
+          // turn end buys nothing). Claim the id so the flush cannot submit a
+          // second row for the same retrieval.
+          void submitEmptySearchFeedback(client, formatted.searchId);
+          markSearchOutcomeSubmitted(formatted.searchId);
+        }
       }
       return formatted;
     } catch (error) {
@@ -1516,7 +1648,8 @@ export const submitMemoryFeedbackTool = createTool({
   id: "submit_memory_feedback",
   description:
     "Submit retrieval-quality feedback to Papr Memory after evaluating search_agent_memory results. " +
-    "Use the searchId from that search response. Only submit when results were clearly helpful or clearly irrelevant — not on every search. " +
+    "Use the searchId from that search response. Cited memories are derived automatically from your answer at turn end, so do NOT submit just to report that results helped. " +
+    "DO submit when results were MIXED (some on-target, some off) — that is the highest-value signal and must not be skipped — or when results looked relevant but were stale, wrong, or unusable. " +
     "For wrong memory content, prefer delete_memory or add_agent_memory instead of correction feedback alone.",
   inputSchema: submitMemoryFeedbackSchema,
   execute: async (args) => {

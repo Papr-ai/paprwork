@@ -18,6 +18,10 @@ import {
   initializeMemorySearchGate,
   wrapToolsWithMemorySearchFirstGate,
 } from "../../core/utils/memorySearchFirstGate.js";
+import {
+  flushSearchOutcomeFeedback,
+  resetSearchOutcomes,
+} from "../../core/utils/searchOutcomeFeedback.js";
 import { allTools, getApiKeysForSanitization, legacyToolAliases } from "../../core/tools/index.js";
 import {
   ACTIVE_PLANS_MESSAGE_PREFIX,
@@ -1150,6 +1154,10 @@ export class AgentService {
         hasPaprApiKey,
         allowedToolIds: options?.allowedToolIds,
       });
+      // Searches recorded this turn are graded against the final answer at
+      // turn end. Reset here so a previous turn's searches can never be
+      // attributed to this turn's answer.
+      resetSearchOutcomes();
       const tools = wrapToolsWithMemorySearchFirstGate(
         this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
       );
@@ -2472,6 +2480,44 @@ export class AgentService {
         // the parent would pass it to UI and create an empty message. Just return.
         this.sessionManager.setStreaming(chatId, false);
         return;
+      }
+
+      // Grade this turn's memory searches against the answer the agent
+      // actually produced. Deliberately placed AFTER both empty-completion
+      // early-returns: grading against an empty answer would mark every
+      // retrieved memory as unused and mint false negatives at scale.
+      //
+      // Fire-and-forget — retrieval telemetry must never delay or fail a turn.
+      if (hasPaprApiKey && assistantText.trim().length > 0) {
+        void (async () => {
+          try {
+            const [{ getPaprClient }, { paprUserScope }] = await Promise.all([
+              import("../../core/tools/paprClient.js"),
+              import("../utils/paprUserId.js"),
+            ]);
+            const client = await getPaprClient();
+            const result = await flushSearchOutcomeFeedback(
+              client as unknown as Parameters<
+                typeof flushSearchOutcomeFeedback
+              >[0],
+              assistantText,
+              paprUserScope(),
+            );
+            if (result.submitted > 0) {
+              console.log(
+                `[AgentService] search-outcome feedback: submitted=${result.submitted} ` +
+                  `skipped=${result.skipped} verdicts=${result.grades
+                    .map((g) => g.verdict)
+                    .join(",")}`,
+              );
+            }
+          } catch (error) {
+            console.warn(
+              "[AgentService] search-outcome feedback flush failed:",
+              error instanceof Error ? error.message : error,
+            );
+          }
+        })();
       }
 
       // 4. Save assistant message with thinking and tool calls
