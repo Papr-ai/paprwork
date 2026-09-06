@@ -102,6 +102,30 @@ describe("deriveCitations", () => {
     expect(result.citedIds).toEqual([]);
   });
 
+  it("still judges a degenerate result set where one document fills every slot", () => {
+    // Observed live: max_memories=25 returned ONE document fanned out across
+    // metadata rows. Counting rows as documents made every term 100%-frequent,
+    // so all terms were filtered, nothing was judgeable, and a total miss
+    // graded HIGHER (citations_unknown=3) than an ordinary unused result
+    // (retrieved_unused=2). Frequency is now computed over distinct ids.
+    const body = "sidecar wedge watermark realign reconnect replica frames";
+    const candidates = Array.from({ length: 25 }, (_, rank) =>
+      candidate("same-doc", body, rank),
+    );
+
+    const result = deriveCitations("Unrelated answer about payoff matrices.", candidates);
+
+    expect(result.judgeableCount).toBe(25);
+    expect(result.citedIds).toEqual([]);
+
+    const grade = gradeSearchOutcome(
+      search({ memoryCount: 25, candidates }),
+      result,
+    );
+    expect(grade.verdict).toBe("retrieved_unused");
+    expect(grade.score).toBe(2);
+  });
+
   it("returns empty for an empty answer", () => {
     const result = deriveCitations("", [candidate("a", "some content here", 0)]);
     expect(result.citedIds).toEqual([]);
@@ -274,6 +298,70 @@ describe("extractRetrievedCandidates", () => {
       rank: 0,
     });
     expect(result![1]!.content).toBe("Second memory");
+  });
+
+  it("parses list-style TOON — the shape memory search actually returns", () => {
+    // Fixture copied from a real search_agent_memory response. The original
+    // parser only handled the tabular `memories[#N]{id,content}:` form, so on
+    // live payloads it returned null and citation derivation never ran.
+    const toon = [
+      "code: 200",
+      "status: success",
+      "data:",
+      "  memories[#2]:",
+      "    - id: 0dfe9a25-2720-4b1e-91d7-1772cc44aa29",
+      '      content: "// Context Intelligence demo\\nvar CTX = { coda: \\"support_fleet\\" };"',
+      "      type: TextMemoryItem",
+      "      customMetadata:",
+      "        file_name: connector-room.js",
+      "        source: code_indexer",
+      "      similarity_score: 0.5973358",
+      "    - id: 1bbb1111-2222-3333-4444-555555555555",
+      '      content: "Second memory about payoff matrices."',
+      "      type: TextMemoryItem",
+      "  nodes[#1]:",
+      "    - label: Insight",
+      "      properties:",
+      "        content: should not be read as a memory",
+      "search_id: fe0534a2-c610-425a-945a-ceaad0390d84",
+    ].join("\n");
+
+    const result = extractRetrievedCandidates(toon);
+
+    expect(result).toHaveLength(2);
+    expect(result![0]!.id).toBe("0dfe9a25-2720-4b1e-91d7-1772cc44aa29");
+    // Escapes resolved: \n became a newline, \" became a quote.
+    expect(result![0]!.content).toContain("Context Intelligence demo");
+    expect(result![0]!.content).toContain('{ coda: "support_fleet" }');
+    expect(result![0]!.content).toContain("\n");
+    expect(result![1]!.content).toBe("Second memory about payoff matrices.");
+    expect(result![1]!.rank).toBe(1);
+    // The nodes[] section must not leak in as a 3rd memory.
+    expect(result!.some((c) => c.content.includes("should not be read"))).toBe(
+      false,
+    );
+  });
+
+  it("keeps duplicate ids as separate ranked candidates", () => {
+    // The degenerate case observed live: max_memories=25 returned ONE distinct
+    // document fanned out across metadata rows. The parser must report what was
+    // actually returned rather than silently de-duplicating, otherwise the
+    // ranking defect becomes invisible to the feedback signal.
+    const toon = [
+      "data:",
+      "  memories[#2]:",
+      "    - id: same-id",
+      '      content: "identical body"',
+      "    - id: same-id",
+      '      content: "identical body"',
+      "search_id: s",
+    ].join("\n");
+
+    const result = extractRetrievedCandidates(toon);
+
+    expect(result).toHaveLength(2);
+    expect(result![0]!.rank).toBe(0);
+    expect(result![1]!.rank).toBe(1);
   });
 
   it("returns null (unknown) when the shape has no field header", () => {
