@@ -188,17 +188,35 @@ export function deriveCitations(
   const answerLower = answerText.toLowerCase();
   const answerTerms = new Set(tokenize(answerText));
 
-  // Document frequency across the candidate set.
   const perCandidateTerms = candidates.map((c) => new Set(tokenize(c.content)));
+
+  // Document frequency is computed over DISTINCT documents, not raw rows.
+  //
+  // Measured on a real response: max_memories=25 returned ONE document fanned
+  // out across 25 metadata rows. Counting rows made every term appear in 100%
+  // of "documents", so the >50% filter removed all of them, every candidate
+  // became un-judgeable, and a total retrieval miss graded as
+  // `citations_unknown` (3) instead of `retrieved_unused` (2) — the degenerate
+  // case scoring HIGHER than a normal unused result. Deduplicating by id keeps
+  // the ranking defect visible while still judging the underlying document.
+  const seenIds = new Set<string>();
+  const distinctTermSets: Set<string>[] = [];
+  candidates.forEach((candidate, index) => {
+    if (seenIds.has(candidate.id)) return;
+    seenIds.add(candidate.id);
+    distinctTermSets.push(perCandidateTerms[index] ?? new Set<string>());
+  });
+
   const docFrequency = new Map<string, number>();
-  for (const terms of perCandidateTerms) {
+  for (const terms of distinctTermSets) {
     for (const term of terms) {
       docFrequency.set(term, (docFrequency.get(term) ?? 0) + 1);
     }
   }
+  const distinctCount = distinctTermSets.length;
   const maxDocFrequency = Math.max(
     1,
-    Math.floor(candidates.length * MAX_DOC_FREQUENCY_RATIO),
+    Math.floor(distinctCount * MAX_DOC_FREQUENCY_RATIO),
   );
 
   const citations: DerivedCitation[] = [];
@@ -222,7 +240,7 @@ export function deriveCitations(
     // 2. Distinctive-term containment.
     const distinctive = [...(perCandidateTerms[index] ?? new Set<string>())].filter(
       (term) =>
-        candidates.length === 1 || (docFrequency.get(term) ?? 0) <= maxDocFrequency,
+        distinctCount === 1 || (docFrequency.get(term) ?? 0) <= maxDocFrequency,
     );
     if (distinctive.length < MIN_DISTINCTIVE_TERMS) {
       // Not judgeable — too little unique signal. Deliberately NOT counted as

@@ -446,6 +446,17 @@ export function extractRetrievedCandidates(
   if (toon === null) return null;
 
   // Tabular TOON: `memories[#N]{id,content,...}:` then indented rows.
+  const tabular = parseTabularMemories(toon);
+  if (tabular !== null) return tabular;
+
+  // List TOON: `memories[#N]:` then `- id: …` / `content: …` blocks.
+  // This is what the server actually returns for memory search; the tabular
+  // form above is used by other endpoints. Supporting only the tabular shape
+  // silently disabled citation derivation on every real search.
+  return parseListMemories(toon);
+}
+
+function parseTabularMemories(toon: string): RetrievedCandidate[] | null {
   const header = toon.match(/memories\[#(\d+)\]\{([^}]*)\}\s*:/);
   if (!header) return null;
 
@@ -477,6 +488,89 @@ export function extractRetrievedCandidates(
   }
 
   return candidates.length > 0 ? candidates : null;
+}
+
+/** Unquote a TOON scalar, resolving the escapes the server emits. */
+function parseToonScalar(raw: string): string {
+  const text = raw.trim();
+  if (!text.startsWith('"')) return text;
+
+  let out = "";
+  for (let i = 1; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (ch === "\\") {
+      const next = text[i + 1];
+      if (next === '"' || next === "\\") {
+        out += next;
+        i += 1;
+      } else if (next === "n") {
+        out += "\n";
+        i += 1;
+      } else if (next === "t") {
+        out += "\t";
+        i += 1;
+      } else {
+        out += ch;
+      }
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+  }
+  return out;
+}
+
+function parseListMemories(toon: string): RetrievedCandidate[] | null {
+  // `memories[#N]:` with NO `{...}` field header — negative lookahead keeps
+  // this from stealing the tabular shape.
+  const header = toon.match(/^([ \t]*)memories\[#(\d+)\][ \t]*:(?!\{)/m);
+  if (!header) return null;
+
+  const headerIndent = header[1]!.length;
+  const expected = Number.parseInt(header[2]!, 10);
+  const afterHeader = toon.slice(header.index! + header[0].length);
+
+  const candidates: RetrievedCandidate[] = [];
+  let currentId: string | null = null;
+  let currentContent = "";
+
+  const flush = (): void => {
+    if (currentId) {
+      candidates.push({
+        id: currentId,
+        content: currentContent,
+        rank: candidates.length,
+      });
+    }
+    currentId = null;
+    currentContent = "";
+  };
+
+  for (const line of afterHeader.split("\n")) {
+    if (line.trim() === "") continue;
+    // A line at or left of the header's indent ends the block (`nodes[#20]:`,
+    // `search_id: …`). Without this the node section would leak in as memories.
+    const indent = line.length - line.trimStart().length;
+    if (indent <= headerIndent) break;
+
+    const itemStart = line.match(/^[ \t]*-[ \t]+id[ \t]*:[ \t]*(.*)$/);
+    if (itemStart) {
+      flush();
+      if (candidates.length >= expected) break;
+      currentId = parseToonScalar(itemStart[1]!);
+      continue;
+    }
+
+    // Only the FIRST content key of an item counts. Nested blocks
+    // (customMetadata, acl) can repeat key names at deeper indent.
+    if (currentId && !currentContent) {
+      const contentField = line.match(/^[ \t]*content[ \t]*:[ \t]*(.*)$/);
+      if (contentField) currentContent = parseToonScalar(contentField[1]!);
+    }
+  }
+  flush();
+
+  return candidates.length > 0 ? candidates.slice(0, expected) : null;
 }
 
 export function formatSearchMemoryResponse(
