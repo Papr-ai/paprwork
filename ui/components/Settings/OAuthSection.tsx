@@ -9,6 +9,7 @@ import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProvi
 import { trackOAuthProviderStep } from "../../lib/oauthProviderTelemetry";
 import { getOnboardingState } from "../../utils/onboardingState";
 import { cleanClaudeOAuthToken } from "../../utils/claudeOAuthToken";
+import { useProviderAuthStore } from "../../stores/providerAuthStore";
 import { ClaudeTokenPastePanel } from "./ClaudeTokenPastePanel";
 import { ClaudeManualSetupPanel } from "./ClaudeManualSetupPanel";
 import { useChat } from "../../hooks/useChat";
@@ -52,6 +53,15 @@ export function OAuthSection({
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider, {
     source: oauthSource,
   });
+  // A turn that failed on a 401 is the only proof we get that a token the
+  // provider still lists as valid has stopped working. Without it the card can
+  // only report what we stored, which is why it kept counting down while every
+  // request was being refused.
+  const authRejected = useProviderAuthStore(
+    state => state.rejections[provider] !== undefined,
+  );
+  const clearAuthRejection = useProviderAuthStore(state => state.clearRejection);
+  const needsReconnect = authRejected && status.connected;
   // Persisted in the main process: it decides which credential the gateway ever
   // sees, so this is the mode the agent actually runs on, not just which form shows.
   const [useApiKey, setUseApiKey] = useState(false);
@@ -271,6 +281,18 @@ export function OAuthSection({
     }
   };
 
+  // Both remediations retire the recorded rejection: whatever happens next, the
+  // 401 we saw no longer describes the credential now stored.
+  const handleReconnect = async () => {
+    clearAuthRejection(provider);
+    await startOAuthLogin();
+  };
+
+  const handleDisconnect = async () => {
+    clearAuthRejection(provider);
+    await disconnect();
+  };
+
   const formatExpiry = (expiresAt?: string) => {
     if (!expiresAt) return "";
     const date = new Date(expiresAt);
@@ -299,11 +321,16 @@ export function OAuthSection({
             </span>
           )
         ) : (
-          status.connected && (
+          status.connected &&
+          (needsReconnect ? (
+            <span className="oauth-badge oauth-badge--attention">
+              Reconnect needed
+            </span>
+          ) : (
             <span className="oauth-badge oauth-badge--connected">
               ✓ Connected
             </span>
-          )
+          ))
         )}
       </div>
 
@@ -319,7 +346,9 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
-              {status.expiresAt && (
+              {/* Hidden once rejected: the stored expiry is what we know, and
+                  the 401 proves it is no longer what the provider honours. */}
+              {status.expiresAt && !needsReconnect && (
                 <div className="oauth-detail">
                   <span className="oauth-detail-label">Token:</span>
                   <span className="oauth-detail-value">
@@ -327,10 +356,25 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
+              {needsReconnect && (
+                <p className="oauth-reconnect-note" aria-live="polite">
+                  {subscriptionName} rejected this token. Reconnect to continue.
+                </p>
+              )}
+              {needsReconnect && (
+                <button
+                  className="settings-btn settings-btn--primary"
+                  onClick={handleReconnect}
+                  disabled={loading}
+                  style={{ width: "100%", marginBottom: "8px" }}
+                >
+                  {loading ? "Reconnecting..." : "Reconnect"}
+                </button>
+              )}
               <div style={{ display: "flex", gap: "8px" }}>
                 <button
                   className="settings-btn settings-btn--secondary"
-                  onClick={disconnect}
+                  onClick={handleDisconnect}
                   disabled={loading}
                   style={{ flex: 1 }}
                 >

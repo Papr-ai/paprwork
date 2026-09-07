@@ -17,6 +17,11 @@ import type {
 } from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
+import { useProviderAuthStore } from "../stores/providerAuthStore";
+import {
+  isProviderAuthRejection,
+  providerForModelId,
+} from "../utils/providerAuthRejection";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
@@ -845,6 +850,15 @@ export function useAgent() {
 
         case "done":
           {
+            // A completed turn proves the credentials work again, so retire any
+            // rejection we recorded for this provider.
+            const succeededProvider = providerForModelId(
+              useChatStore.getState().getLastSelectedModel(chatId),
+            );
+            if (succeededProvider) {
+              useProviderAuthStore.getState().clearRejection(succeededProvider);
+            }
+
             // Clear any pending batch update for this chat
             const existingTimeout = updateBatchRef.current.get(chatId);
             if (existingTimeout) {
@@ -1395,13 +1409,20 @@ export function useAgent() {
                   "The cloud agent session expired before your message was processed. Send your message again — Paprwork will start a fresh cloud agent automatically.";
               }
               // Pattern: Invalid API key (specific patterns, not just "API key" anywhere)
-              else if (
-                rawError.includes("Invalid API key") ||
-                rawError.includes("invalid x-api-key") ||
-                rawError.includes("authentication_error") ||
-                rawError.includes("(401)")
-              ) {
+              else if (isProviderAuthRejection(rawError)) {
                 errorMsg = `Invalid API key. Please check your API key in Settings.`;
+
+                // Remember which account was rejected so the AI Models card can
+                // say "reconnect" rather than counting down a stored expiry the
+                // provider has stopped honouring.
+                const rejectedProvider = providerForModelId(
+                  useChatStore.getState().getLastSelectedModel(chatId),
+                );
+                if (rejectedProvider) {
+                  useProviderAuthStore
+                    .getState()
+                    .recordRejection(rejectedProvider, errorMsg);
+                }
               }
               // Pattern: AI SDK tool validation errors (Zod validation failures)
               else if (

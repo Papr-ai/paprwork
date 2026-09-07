@@ -12,6 +12,10 @@ import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js"
 import { invalidateKeyCache } from "./customKeys.js";
 import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
 import {
+  claudeCredentialsToTokenLifetime,
+  isUsableRefreshToken,
+} from "../../core/services/claudeCliCredentials.js";
+import {
   getOAuthCompletedEventName,
   getOAuthFailedEventName,
   getOAuthStepEventName,
@@ -28,6 +32,15 @@ type OAuthTelemetryTracker = (
 type OAuthStartTelemetryOptions = {
   source?: string;
 };
+
+/**
+ * A pasted `claude setup-token` carries no expiry of its own, and Anthropic
+ * issues those for about a year. Consulted only when the source told us
+ * nothing: credentials read from Claude Code's own storage bring a real
+ * expiresAt, and assuming a year for those is what let an access token that
+ * had already died keep reporting itself as connected.
+ */
+const SETUP_TOKEN_ASSUMED_TTL_SECONDS = 365 * 24 * 60 * 60;
 
 function resolveOAuthTelemetrySource(source?: string): string {
   if (source === "onboarding" || source === "settings") {
@@ -237,6 +250,46 @@ async function removeOAuthManagedApiKey(
 }
 
 /**
+ * Replace our stored Claude token with a fresh read of Claude Code's own
+ * credentials. Claude Code keeps its access token renewed, so adopting its
+ * record recovers both a redeemable refresh token and a truthful expiry.
+ *
+ * Returns whether anything was adopted.
+ */
+async function adoptClaudeCredentialsFromCLIStorage(
+  tokenId: string,
+): Promise<boolean> {
+  if (!oauthTokenStorage || !claudeSetupTokenService) return false;
+
+  const credentials =
+    await claudeSetupTokenService.readCredentialsFromCLIStorage();
+  if (!credentials) {
+    console.warn(
+      "[OAuth IPC] Claude token cannot be refreshed and Claude Code has no credentials to adopt — reconnect required",
+    );
+    return false;
+  }
+
+  if (!isUsableRefreshToken(credentials.refreshToken, credentials.accessToken)) {
+    // A setup-token has no refresh token to adopt, so there is nothing to
+    // improve. Leave the stored record alone.
+    return false;
+  }
+
+  const lifetime = claudeCredentialsToTokenLifetime(credentials, {
+    fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+  });
+
+  await oauthTokenStorage.updateToken(tokenId, lifetime);
+  await syncOAuthTokenToApiKeys("anthropic", lifetime.accessToken);
+
+  console.log(
+    "[OAuth IPC] Adopted Claude Code credentials (real refresh token + expiry)",
+  );
+  return true;
+}
+
+/**
  * Refresh OAuth token if it's about to expire
  */
 async function refreshTokenIfNeeded(
@@ -254,9 +307,31 @@ async function refreshTokenIfNeeded(
       return false;
     }
 
+    const canRedeemRefreshToken = isUsableRefreshToken(
+      token.refreshToken,
+      token.accessToken,
+    );
+
+    // Tokens stored by older builds echoed the access token into the refresh
+    // slot alongside an invented year-long expiry, so they can neither be
+    // refreshed nor ever look expired. Re-reading Claude Code's own storage
+    // replaces that copy with the real refresh token and expiry.
+    if (provider === "anthropic" && !canRedeemRefreshToken) {
+      return await adoptClaudeCredentialsFromCLIStorage(token.id);
+    }
+
     // Check if token needs refresh (within buffer time)
     if (!oauthTokenStorage.isTokenExpired(token, REFRESH_BUFFER / 60)) {
       // Token is still valid, no refresh needed
+      return false;
+    }
+
+    if (!canRedeemRefreshToken) {
+      // A refresh grant only accepts a refresh token; sending the access token
+      // would 400. Nothing to do but let the UI ask for a reconnect.
+      console.warn(
+        `[OAuth IPC] ${provider} token expired but no usable refresh token is stored — reconnect required`,
+      );
       return false;
     }
 
@@ -522,15 +597,16 @@ export async function initializeOAuthIPC(
       trackOAuthStep("anthropic", "flow_started", { source: telemetrySource });
 
       // Step 0: Check for existing token in Keychain / credential files
-      const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
-      if (existingToken) {
-        console.log("[OAuth IPC] Found existing Claude token in CLI storage");
+      const existingCredentials =
+        await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+      if (existingCredentials) {
+        console.log("[OAuth IPC] Found existing Claude credentials in CLI storage");
         trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
         const tokenInput = {
           provider: "anthropic" as const,
-          accessToken: existingToken,
-          refreshToken: existingToken,
-          expiresIn: 365 * 24 * 60 * 60,
+          ...claudeCredentialsToTokenLifetime(existingCredentials, {
+            fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+          }),
         };
         await persistOAuthConnection("anthropic", tokenInput, {
           flow_source: "keychain",
@@ -665,8 +741,9 @@ export async function initializeOAuthIPC(
     async (_event, options?: OAuthStartTelemetryOptions) => {
       const telemetrySource = resolveOAuthTelemetrySource(options?.source);
       try {
-        const token = await claudeSetupTokenService!.readTokenFromCLIStorage();
-        if (!token) {
+        const credentials =
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+        if (!credentials) {
           return { success: false, reason: "not_found" as const };
         }
 
@@ -676,9 +753,9 @@ export async function initializeOAuthIPC(
 
         const tokenInput = {
           provider: "anthropic" as const,
-          accessToken: token,
-          refreshToken: token,
-          expiresIn: 365 * 24 * 60 * 60,
+          ...claudeCredentialsToTokenLifetime(credentials, {
+            fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+          }),
         };
 
         await persistOAuthConnection("anthropic", tokenInput, {
@@ -730,11 +807,16 @@ export async function initializeOAuthIPC(
         };
       }
 
+      // A pasted setup-token arrives on its own: no refresh token, no expiry.
+      // claudeCredentialsToTokenLifetime echoes the access token into the
+      // refresh slot to satisfy storeToken, and isUsableRefreshToken keeps the
+      // refresh path from trying to redeem it.
       const tokenInput = {
         provider: "anthropic" as const,
-        accessToken: cleanedToken,
-        refreshToken: cleanedToken,
-        expiresIn: 365 * 24 * 60 * 60,
+        ...claudeCredentialsToTokenLifetime(
+          { accessToken: cleanedToken },
+          { fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS },
+        ),
       };
 
       await persistOAuthConnection("anthropic", tokenInput, {
