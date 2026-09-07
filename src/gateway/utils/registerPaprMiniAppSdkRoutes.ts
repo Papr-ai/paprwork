@@ -3,6 +3,7 @@
  */
 
 import type { Express, Request, Response } from "express";
+import { existsSync, readFileSync } from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
 import {
@@ -41,6 +42,20 @@ function resolveSdkDir(): string {
 
 const SDK_DIR = resolveSdkDir();
 
+function prebuiltBundlePath(sdkFileName: string): string {
+  const base = sdkFileName.replace(/\.ts$/, ".js");
+  return path.join(SDK_DIR, "bundled", base);
+}
+
+function sendSdkJavaScript(res: Response, code: string, cacheImmutable: boolean): void {
+  res.setHeader("Content-Type", "application/javascript; charset=utf-8");
+  res.setHeader(
+    "Cache-Control",
+    cacheImmutable ? "public, max-age=31536000, immutable" : "public, max-age=60",
+  );
+  res.send(code);
+}
+
 async function serveSdkFile(
   sdkFileName: string,
   _req: Request,
@@ -48,6 +63,12 @@ async function serveSdkFile(
   format: MiniAppSdkFormat = "iife",
 ): Promise<void> {
   try {
+    const prebuiltPath = prebuiltBundlePath(sdkFileName);
+    if (existsSync(prebuiltPath)) {
+      sendSdkJavaScript(res, readFileSync(prebuiltPath, "utf8"), true);
+      return;
+    }
+
     const filePath = path.join(SDK_DIR, sdkFileName);
     const esbuild = await import("esbuild");
     const result = await esbuild.build({
@@ -64,14 +85,7 @@ async function serveSdkFile(
       res.status(500).send("SDK bundle failed");
       return;
     }
-    res.setHeader(
-      "Content-Type",
-      format === "esm"
-        ? "application/javascript; charset=utf-8"
-        : "application/javascript; charset=utf-8",
-    );
-    res.setHeader("Cache-Control", "public, max-age=60");
-    res.send(code);
+    sendSdkJavaScript(res, code, false);
   } catch (err) {
     res.status(500).send((err as Error).message);
   }

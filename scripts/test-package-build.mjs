@@ -102,6 +102,8 @@ function checkBuilderConfig() {
   const requiredAsarUnpack = [
     'dist/resources/default-apps/**',
     'dist/resources/default-jobs/**',
+    'dist/resources/mini-app-sdk/**',
+    'src/resources/mini-app-sdk/**',
   ];
   
   let allIncluded = true;
@@ -302,6 +304,9 @@ function checkAsarContents(appPath) {
       'dist/resources/default-apps/home-dashboard/app-id.txt',
       'dist/resources/default-jobs',
       'dist/resources/mini-app-sdk/papr-sdk.ts',
+      'dist/resources/mini-app-sdk/bundled/papr-preview-fetch-gate.js',
+      'dist/resources/mini-app-sdk/bundled/papr-native-dialog-shim.js',
+      'dist/resources/mini-app-sdk/bundled/papr-job-events.js',
     ];
     
     let allIncluded = true;

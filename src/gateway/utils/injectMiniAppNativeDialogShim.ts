@@ -3,7 +3,7 @@
  */
 
 const SHIM_SCRIPT =
-  '<script src="/__papr__/papr-native-dialog-shim.js"></script>';
+  '<script async defer src="/__papr__/papr-native-dialog-shim.js"></script>';
 
 export function injectMiniAppNativeDialogShim(html: string): string {
   if (html.includes("papr-native-dialog-shim.js")) {

@@ -3,7 +3,7 @@
  */
 
 const GATE_SCRIPT =
-  '<script src="/__papr__/papr-preview-fetch-gate.js"></script>';
+  '<script async defer src="/__papr__/papr-preview-fetch-gate.js"></script>';
 
 export function injectMiniAppPreviewFetchGate(html: string): string {
   if (html.includes("papr-preview-fetch-gate.js")) {

@@ -5,7 +5,9 @@ describe("injectMiniAppNativeDialogShim", () => {
   test("injects shim script at start of head", () => {
     const html = "<html><head><title>App</title></head><body></body></html>";
     const out = injectMiniAppNativeDialogShim(html);
-    expect(out).toContain('<script src="/__papr__/papr-native-dialog-shim.js"></script>');
+    expect(out).toContain(
+      '<script async defer src="/__papr__/papr-native-dialog-shim.js"></script>',
+    );
     expect(out.indexOf("papr-native-dialog-shim.js")).toBeLessThan(out.indexOf("<title>"));
   });
 

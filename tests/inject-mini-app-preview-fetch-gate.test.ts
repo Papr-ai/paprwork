@@ -5,7 +5,7 @@ describe("injectMiniAppPreviewFetchGate", () => {
   test("injects script tag at start of head", () => {
     const html = "<html><head></head><body></body></html>";
     const out = injectMiniAppPreviewFetchGate(html);
-    expect(out).toContain('src="/__papr__/papr-preview-fetch-gate.js"');
+    expect(out).toContain('async defer src="/__papr__/papr-preview-fetch-gate.js"');
     expect(out.indexOf("papr-preview-fetch-gate.js")).toBeLessThan(
       out.indexOf("</head>"),
     );

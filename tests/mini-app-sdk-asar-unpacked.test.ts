@@ -33,6 +33,7 @@ describe("mini-app SDK packaging", () => {
     // Without this, esbuild cannot resolve the SDK entry points and every
     // mini-app that imports from /__papr__/ renders blank.
     expect(unpack).toContain("dist/resources/mini-app-sdk/**");
+    expect(unpack).toContain("src/resources/mini-app-sdk/**");
 
     // esbuild itself must stay unpacked for the same reason.
     expect(unpack).toContain("node_modules/esbuild/**");
@@ -51,10 +52,14 @@ describe("mini-app SDK packaging", () => {
     // esbuild a path inside the archive.
     expect(source).toContain("app.asar.unpacked");
 
-    // fs-based probing cannot pick the right path here: Electron's patched
-    // fs reports the in-asar path as readable, which is the broken one.
-    const chooses = /existsSync[\s\S]{0,200}mini-app-sdk/.test(source);
-    expect(chooses).toBe(false);
+    // Packaged builds must serve prebuilt bundles — no runtime esbuild dependency.
+    expect(source).toContain("bundled");
+
+    // resolveSdkDir must not probe with fs.existsSync — Electron's patched fs
+    // reports the in-asar path as readable, which is the broken one for esbuild.
+    const resolveSdkDirFn =
+      source.match(/function resolveSdkDir\(\)[\s\S]*?^}/m)?.[0] ?? "";
+    expect(resolveSdkDirFn).not.toMatch(/existsSync/);
   });
 
   it("keeps every SDK entry point inside the unpacked directory", () => {
@@ -78,6 +83,22 @@ describe("mini-app SDK packaging", () => {
       expect(
         fs.existsSync(path.join(distSdk, file)),
         `missing dist/resources/mini-app-sdk/${file} — run npm run build:gateway`,
+      ).toBe(true);
+    }
+  });
+
+  it("prebuilds browser bundles for every SDK route after build:gateway", () => {
+    const bundledDir = path.join(repoRoot, "dist/resources/mini-app-sdk/bundled");
+    const critical = [
+      "papr-preview-fetch-gate.js",
+      "papr-native-dialog-shim.js",
+      "papr-job-events.js",
+      "papr-sdk.js",
+    ];
+    for (const file of critical) {
+      expect(
+        fs.existsSync(path.join(bundledDir, file)),
+        `missing prebuilt SDK bundle bundled/${file} — run npm run build:gateway`,
       ).toBe(true);
     }
   });

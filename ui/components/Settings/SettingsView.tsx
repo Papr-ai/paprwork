@@ -1011,6 +1011,38 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.2" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.2</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Mini-App SDK Packaging Fix</strong>
+                <p>
+                  Pre-built SDK bundles ship in every release so mini-apps load
+                  instantly — no more 11-second stalls or HTTP 500 on
+                  /__papr__/ routes when .ts sources are missing from updates.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Non-Blocking Preview Scripts</strong>
+                <p>
+                  Preview fetch gate and native dialog shim load async so a
+                  missing SDK module cannot block the entire mini-app from
+                  rendering.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.2"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.1" && (
           <div className="about-card">
             <h3>What's New in v2.6.1</h3>
