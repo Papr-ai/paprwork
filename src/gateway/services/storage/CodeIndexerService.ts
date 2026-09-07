@@ -14,6 +14,8 @@ import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
+import type { CodeIndexTracker } from './CodeIndexTracker.js';
+import { isMemoryNotFound } from './CodeSummaryMemoryStore.js';
 import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
 import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
 
@@ -100,7 +102,13 @@ export class CodeIndexerService {
   constructor(
     private client: Papr,
     schemaId: string,
-    paprDir?: string
+    paprDir?: string,
+    /**
+     * Optional so existing call sites keep working. When supplied, raw code
+     * files are UPDATED in place on re-index instead of re-added — without it
+     * every re-index inserts another Memory document sharing one memoryId.
+     */
+    private tracker?: CodeIndexTracker,
   ) {
     this.paprDir = paprDir || getPaprRoot();
     this.schemaId = schemaId;
@@ -560,19 +568,13 @@ export class CodeIndexerService {
       paprMetadata.data_source_path = fileMetadata.data_source_path;
     }
     
-    const fileMemoryScope = await paprMemoryScopeSpread({
-      addPolicy: buildCodeIndexAddPolicy(this.schemaId),
-    });
+    const fileMetadataForPapr = {
+      role: 'assistant' as const,
+      category: 'learning' as const,
+      customMetadata: paprMetadata,
+    };
 
-    await this.client.memory.add({
-      content: truncatedContent,
-      ...fileMemoryScope,
-      metadata: {
-        role: 'assistant',
-        category: 'learning',
-        customMetadata: paprMetadata
-      },
-    }).catch((error: unknown) => {
+    const rethrow = (error: unknown): never => {
       const err = error as {
         statusCode?: number;
         code?: number;
@@ -582,6 +584,73 @@ export class CodeIndexerService {
       throw new Error(
         `${err.statusCode ?? err.code ?? 'Unknown'} ${JSON.stringify(err.body ?? err.message ?? error)}`,
       );
+    };
+
+    // UPDATE IN PLACE on re-index.
+    //
+    // This path was an unconditional `memory.add()`, so every re-index of a
+    // file inserted ANOTHER Memory document. Because the server derives
+    // memoryId from content, those documents all share one memoryId, and the
+    // search pipeline dedups ids rather than documents — so a single logical
+    // memory expands to fill every result slot. Measured live: one memoryId
+    // returned 25/25 times across 16 distinct file_paths, with 25 distinct
+    // created_at values proving 25 separate inserts.
+    const knownMemoryId = this.tracker?.getIndexedFileMemoryId(fileMetadata.file_path);
+    if (knownMemoryId) {
+      try {
+        await this.client.memory.update(knownMemoryId, {
+          content: truncatedContent,
+          metadata: fileMetadataForPapr,
+        });
+        return;
+      } catch (error) {
+        // Only a genuine 404 may fall through to `add`. Retrying any other
+        // failure as an insert is precisely what produced the duplicates.
+        if (!isMemoryNotFound(error)) {
+          rethrow(error);
+        }
+        console.warn(
+          `[CodeIndexer] memory ${knownMemoryId} for ${fileMetadata.file_name} ` +
+            `not found (404) — recreating.`,
+        );
+      }
+    }
+
+    const fileMemoryScope = await paprMemoryScopeSpread({
+      addPolicy: buildCodeIndexAddPolicy(this.schemaId),
     });
+
+    const response = await this.client.memory.add({
+      content: truncatedContent,
+      ...fileMemoryScope,
+      metadata: fileMetadataForPapr,
+    }).catch(rethrow);
+
+    // Persist the id so the NEXT run updates instead of inserting. Without
+    // this the column stays NULL and the duplication repeats indefinitely.
+    const newMemoryId = extractAddedMemoryId(response);
+    if (newMemoryId && this.tracker) {
+      this.tracker.setIndexedFileMemoryId(fileMetadata.file_path, newMemoryId);
+    }
   }
+}
+
+/** Read the memory id out of an `add` response across known payload shapes. */
+function extractAddedMemoryId(response: unknown): string | undefined {
+  if (!response || typeof response !== 'object') return undefined;
+  const record = response as Record<string, unknown>;
+  if (typeof record.id === 'string') return record.id;
+
+  const data = record.data;
+  if (Array.isArray(data)) {
+    const first = data[0] as Record<string, unknown> | undefined;
+    const id = first?.memoryId ?? first?.memory_id ?? first?.id;
+    return typeof id === 'string' ? id : undefined;
+  }
+  if (data && typeof data === 'object') {
+    const inner = data as Record<string, unknown>;
+    const id = inner.id ?? inner.memory_id ?? inner.memoryId;
+    return typeof id === 'string' ? id : undefined;
+  }
+  return undefined;
 }
