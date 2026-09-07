@@ -367,7 +367,35 @@ async function refreshTokenIfNeeded(
     return true;
   } catch (error) {
     console.error(`[OAuth IPC] Failed to refresh ${provider} token:`, error);
-    // TODO: Notify user about refresh failure
+
+    // Claude Code keeps its own access token renewed and is the authority for
+    // these credentials, so a failed refresh of our copy is recoverable: adopt
+    // its current record instead. Previously this path just returned, leaving
+    // the stored token expired with nothing that would ever renew it.
+    if (provider === "anthropic" && oauthTokenStorage) {
+      const token = oauthTokenStorage.getTokenByProvider(provider);
+      if (token) {
+        try {
+          if (await adoptClaudeCredentialsFromCLIStorage(token.id)) {
+            console.log(
+              "[OAuth IPC] Recovered from failed refresh by adopting Claude Code credentials",
+            );
+            return true;
+          }
+        } catch (adoptError) {
+          console.error(
+            "[OAuth IPC] Adopting Claude Code credentials also failed:",
+            adoptError,
+          );
+        }
+      }
+    }
+
+    sendOAuthStatus(
+      provider,
+      "error",
+      error instanceof Error ? error.message : "Token refresh failed",
+    );
     return false;
   }
 }

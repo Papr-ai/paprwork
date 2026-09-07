@@ -473,7 +473,9 @@ export async function getProviderAuth(
   provider: "openai" | "anthropic",
   ipcProcess: IpcProcessLike = process,
 ): Promise<
-  { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
+  | { type: "oauth"; token: string }
+  | { type: "apiKey"; key: string; oauthExpired?: boolean }
+  | null
 > {
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
@@ -514,13 +516,35 @@ export async function getProviderAuth(
     }
   }
 
-  // Fall back to API key
+  // Fall back to API key.
+  //
+  // When an OAuth token exists but has expired, this is a downgrade rather
+  // than a plain fallback: it moves the request off the user's subscription
+  // and onto their platform API organisation, which bills separately and
+  // carries its own spend caps. Say so out loud. Doing it silently is how a
+  // subscription sitting at 11% usage produced "you have reached your usage
+  // limits" — the cap being reported belonged to an account the user had not
+  // chosen to spend from.
+  const oauthExpired = oauthTokenCache[provider] !== undefined;
+
   if (keys[keyName]) {
+    if (oauthExpired) {
+      console.warn(
+        `[KeyResolver] ${provider} OAuth token is expired — falling back to the ` +
+          `platform API key. Requests will bill the platform API account, not ` +
+          `the subscription. Reconnect ${provider} in Settings to go back to ` +
+          `the subscription.`
+      );
+    }
     console.log(
       `[KeyResolver] Using API key for ${provider} ` +
       `(length: ${keys[keyName].length}, prefix: ${keys[keyName].substring(0, 20)}...)`
     );
-    return { type: "apiKey", key: keys[keyName] };
+    return {
+      type: "apiKey",
+      key: keys[keyName],
+      ...(oauthExpired ? { oauthExpired: true } : {}),
+    };
   }
 
   console.log(`[KeyResolver] No authentication found for ${provider}`);
@@ -536,7 +560,9 @@ export async function getProviderAuthForModel(
   options: { modelId: string; modelProvider: string },
   ipcProcess: IpcProcessLike = process,
 ): Promise<
-  { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
+  | { type: "oauth"; token: string }
+  | { type: "apiKey"; key: string; oauthExpired?: boolean }
+  | null
 > {
   const { modelId, modelProvider } = options;
 
