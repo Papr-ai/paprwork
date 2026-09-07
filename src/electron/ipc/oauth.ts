@@ -12,10 +12,15 @@ import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js"
 import { invalidateKeyCache } from "./customKeys.js";
 import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
 import {
+  claudeAccessTokenIsLive,
   claudeCredentialsAreUsable,
   claudeCredentialsToTokenLifetime,
   isUsableRefreshToken,
 } from "../../core/services/claudeCliCredentials.js";
+import {
+  isInvalidGrantError,
+  RefreshRejectionLedger,
+} from "../../core/services/oauthRefreshRejection.js";
 import {
   getOAuthCompletedEventName,
   getOAuthFailedEventName,
@@ -57,6 +62,7 @@ let claudeSetupTokenService: ClaudeSetupTokenService | null = null;
 let claudeOAuthService: ClaudeOAuthService | null = null;
 let trackOAuthEvent: OAuthTelemetryTracker | undefined;
 const oauthFlowStartedAt = new Map<OAuthProviderId, number>();
+const refreshRejections = new RefreshRejectionLedger();
 
 function trackOAuthStep(
   provider: OAuthProviderId,
@@ -257,8 +263,25 @@ async function removeOAuthManagedApiKey(
  *
  * Returns whether anything was adopted.
  */
+/**
+ * Whether the stored token can actually mint a new access token.
+ *
+ * Well-formedness is necessary but not sufficient: a grant the provider has
+ * already answered `invalid_grant` to renews nothing, however valid it looks.
+ * Reporting it as renewable is what let the card stay reassuring while every
+ * refresh was being refused.
+ */
+function tokenCanRenew(
+  provider: "openai" | "anthropic",
+  token: { refreshToken: string; accessToken: string },
+): boolean {
+  if (!isUsableRefreshToken(token.refreshToken, token.accessToken)) return false;
+  return !refreshRejections.isRejected(provider, token.refreshToken);
+}
+
 async function adoptClaudeCredentialsFromCLIStorage(
   tokenId: string,
+  options?: { mustOutliveMs?: number },
 ): Promise<boolean> {
   if (!oauthTokenStorage || !claudeSetupTokenService) return false;
 
@@ -277,6 +300,36 @@ async function adoptClaudeCredentialsFromCLIStorage(
     return false;
   }
 
+  const describeExpiry = (ms: number | undefined): string =>
+    ms === undefined ? "unknown" : new Date(ms).toISOString();
+
+  // Adoption overwrites a credential the user may have just entered by hand, so
+  // it has to be an upgrade. Claude Code's stored copy is only authoritative
+  // while it is current; once its access token has lapsed, adopting it swaps a
+  // working token for a dead one and — because the replacement is expired on
+  // arrival — arms the very next refresh tick to do it again.
+  if (!claudeAccessTokenIsLive(credentials)) {
+    console.warn(
+      `[OAuth IPC] Not adopting Claude Code credentials: access token expired ` +
+        `${describeExpiry(credentials.expiresAt)}. Keeping the stored token; ` +
+        `sign in to Claude Code again to refresh this source.`,
+    );
+    return false;
+  }
+
+  if (
+    options?.mustOutliveMs !== undefined &&
+    credentials.expiresAt !== undefined &&
+    credentials.expiresAt <= options.mustOutliveMs
+  ) {
+    console.warn(
+      `[OAuth IPC] Not adopting Claude Code credentials: they expire ` +
+        `${describeExpiry(credentials.expiresAt)}, no later than the stored ` +
+        `token (${describeExpiry(options.mustOutliveMs)}).`,
+    );
+    return false;
+  }
+
   const lifetime = claudeCredentialsToTokenLifetime(credentials, {
     fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
   });
@@ -285,7 +338,8 @@ async function adoptClaudeCredentialsFromCLIStorage(
   await syncOAuthTokenToApiKeys("anthropic", lifetime.accessToken);
 
   console.log(
-    "[OAuth IPC] Adopted Claude Code credentials (real refresh token + expiry)",
+    `[OAuth IPC] Adopted Claude Code credentials (expires ` +
+      `${describeExpiry(credentials.expiresAt)}, refreshable)`,
   );
   return true;
 }
@@ -336,6 +390,15 @@ async function refreshTokenIfNeeded(
       return false;
     }
 
+    // A grant the server already answered `invalid_grant` to will be refused
+    // identically every time, so re-posting it each tick only produces noise.
+    if (refreshRejections.isRejected(provider, token.refreshToken)) {
+      console.warn(
+        `[OAuth IPC] ${provider} refresh token was already rejected by the provider — reconnect required`,
+      );
+      return false;
+    }
+
     console.log(`[OAuth IPC] Refreshing ${provider} token (expires soon)`);
 
     // Get the appropriate OAuth service for refresh
@@ -369,15 +432,35 @@ async function refreshTokenIfNeeded(
   } catch (error) {
     console.error(`[OAuth IPC] Failed to refresh ${provider} token:`, error);
 
+    // Only an explicit `invalid_grant` condemns the token; a Cloudflare
+    // challenge or a network fault says nothing about it and stays retryable.
+    if (isInvalidGrantError(error)) {
+      const rejectedToken =
+        oauthTokenStorage?.getTokenByProvider(provider)?.refreshToken;
+      if (rejectedToken) refreshRejections.record(provider, rejectedToken);
+    }
+
     // Claude Code keeps its own access token renewed and is the authority for
     // these credentials, so a failed refresh of our copy is recoverable: adopt
     // its current record instead. Previously this path just returned, leaving
     // the stored token expired with nothing that would ever renew it.
+    //
+    // The stored expiry is passed as the bar to beat. We only reach here after
+    // a refresh was rejected, so Claude Code's copy is a candidate, not an
+    // authority — adopting one that dies sooner than what we already hold is a
+    // downgrade, and adopting an already-dead one is what overwrote tokens the
+    // user had just entered by hand.
     if (provider === "anthropic" && oauthTokenStorage) {
       const token = oauthTokenStorage.getTokenByProvider(provider);
       if (token) {
+        const storedExpiresAtMs = Date.parse(token.expiresAt);
+        const baseline: { mustOutliveMs?: number } = Number.isNaN(
+          storedExpiresAtMs,
+        )
+          ? {}
+          : { mustOutliveMs: storedExpiresAtMs };
         try {
-          if (await adoptClaudeCredentialsFromCLIStorage(token.id)) {
+          if (await adoptClaudeCredentialsFromCLIStorage(token.id, baseline)) {
             console.log(
               "[OAuth IPC] Recovered from failed refresh by adopting Claude Code credentials",
             );
@@ -582,7 +665,7 @@ export async function initializeOAuthIPC(
         // that has expired with no way back needs the user. Without this the
         // UI cannot tell those apart, so it has to either cry wolf or, as it
         // did, stay green while every request was being refused.
-        canRenew: isUsableRefreshToken(token.refreshToken, token.accessToken),
+        canRenew: tokenCanRenew("openai", token),
       };
     } catch (error) {
       console.error("[OAuth IPC] Failed to get OpenAI status:", error);
@@ -596,6 +679,7 @@ export async function initializeOAuthIPC(
       // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("openai");
       activeFlows.delete("openai");
+      refreshRejections.clear("openai");
 
       // Remove OAuth-managed API key from CustomKeysStorage
       await removeOAuthManagedApiKey("openai");
@@ -744,7 +828,7 @@ export async function initializeOAuthIPC(
         // that has expired with no way back needs the user. Without this the
         // UI cannot tell those apart, so it has to either cry wolf or, as it
         // did, stay green while every request was being refused.
-        canRenew: isUsableRefreshToken(token.refreshToken, token.accessToken),
+        canRenew: tokenCanRenew("anthropic", token),
       };
     } catch (error) {
       console.error("[OAuth IPC] Failed to get Claude status:", error);
@@ -771,6 +855,7 @@ export async function initializeOAuthIPC(
       // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("anthropic");
       activeFlows.delete("anthropic");
+      refreshRejections.clear("anthropic");
 
       // Remove OAuth-managed API key from CustomKeysStorage
       await removeOAuthManagedApiKey("anthropic");

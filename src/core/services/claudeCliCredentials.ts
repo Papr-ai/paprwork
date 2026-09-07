@@ -148,6 +148,39 @@ export function claudeCredentialsAreUsable(
   return credentials.expiresAt > now;
 }
 
+/** Clock skew allowance so a token about to lapse is not treated as live. */
+export const CREDENTIAL_EXPIRY_SKEW_MS = 60_000;
+
+/**
+ * Whether the access token itself is still usable right now, ignoring any
+ * refresh token.
+ *
+ * This is deliberately stricter than `claudeCredentialsAreUsable`, and the two
+ * answer different questions. That one asks "could these ever authenticate?",
+ * where a refresh token counts because it can mint a new access token — the
+ * right test for deciding whether Connect should short-circuit.
+ *
+ * Adoption asks something else: "will replacing what I already hold with this
+ * leave me better off?" There a refresh token earns nothing, because the only
+ * moment adoption runs as recovery is immediately after a refresh token was
+ * rejected. Counting a second unproven refresh token as evidence of health is
+ * how a credential that expired months ago came to overwrite a working one.
+ */
+export function claudeAccessTokenIsLive(
+  credentials: ClaudeCliCredentials,
+  options?: { now?: number; skewMs?: number },
+): boolean {
+  const now = options?.now ?? Date.now();
+  const skewMs = options?.skewMs ?? CREDENTIAL_EXPIRY_SKEW_MS;
+
+  // No expiry means the source never told us one — a pasted setup-token is the
+  // usual case. Callers already apply a fallback TTL to those, so treat them as
+  // live rather than discarding a credential that is most likely fine.
+  if (credentials.expiresAt === undefined) return true;
+
+  return credentials.expiresAt > now + skewMs;
+}
+
 /**
  * Map credentials onto the fields `OAuthTokenStorage.storeToken` requires.
  *
