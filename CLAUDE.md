@@ -4995,4 +4995,29 @@ That assumption holds only while the server list is the *whole* history. It isn'
 
 ---
 
+### Issue 78: Claude OAuth 401s — A Fabricated Token Lifetime ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** Switching Claude from an API key to OAuth produced `OAuth access token is invalid.` on the next turn, while Settings reported **Connected · Expires in 360d**.
+**Root Cause:** Adopting Claude Code's credentials read only `accessToken` and then *invented* the other two fields — `refreshToken` was set to a copy of the access token, and `expiresIn` to a flat 365 days. Claude Code's access token lasts about **8 hours**, so requests began failing the same day. Neither recovery path could fire:
+1. `isTokenExpired()` never returned true, because the invented year had not elapsed.
+2. Had it fired, the refresh grant would have posted an *access* token as a refresh token, which can only fail.
+
+Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`). We were reading one of them.
+**Solution:** Parse the credentials as stored, in one place. `src/core/services/claudeCliCredentials.ts` is a pure module answering two questions: is this refresh token actually redeemable (`isUsableRefreshToken` rejects the echoed-token shape, and the whitespace-only case a failing test caught), and when does this really expire. Used at the three sites that previously fabricated a lifetime. A pasted setup token — which genuinely has no refresh token — is still accepted.
+**Self-healing:** installs already holding a fabricated record repair themselves. `refreshTokenIfNeeded` re-reads Claude Code's storage and adopts its current refresh token and expiry rather than waiting for an expiry that never arrives. No disconnect/reconnect needed.
+**The badge could not be honest without the data fix:** it showed a countdown while every request 401'd. The renderer already sees that error when a turn fails, so no new network call or IPC was needed — `useAgent` records it against the provider (`providerAuthStore`) and the AI Models card swaps the countdown for **Reconnect needed** plus a Reconnect button. Cleared on the next successful turn, or on reconnect/disconnect. Deliberately **not persisted**: it records a rejection we *observed*, so after a restart we hold no evidence and should not claim any.
+**Files Created:**
+- `src/core/services/claudeCliCredentials.ts` — credential parsing + lifetime derivation
+- `ui/utils/providerAuthRejection.ts` — `isProviderAuthRejection`, shared with `useAgent`'s existing 401 branch so the two cannot drift on what counts as an auth failure
+- `ui/stores/providerAuthStore.ts` — transient rejection record
+- `tests/claude-cli-credentials.test.ts` (13), `tests/provider-auth-rejection.test.ts` (10)
+**Files Changed:**
+- `src/core/services/ClaudeSetupTokenService.ts` — `readCredentialsFromCLIStorage`
+- `src/electron/ipc/oauth.ts` — the three fabrication sites, plus repair-on-refresh
+- `ui/hooks/useAgent.ts`, `ui/components/Settings/OAuthSection.tsx`, `ui/components/Settings/SettingsView.css`
+**Prevention:** Never invent a value you could read. A fabricated expiry does not just fail — it disables the recovery that would have caught the failure, and it makes the UI confidently wrong. If a field is unknown, model it as absent rather than as a plausible-looking default.
+**Related:** Enhancement 63 (Claude CLI curl installer), Issue 65 (pi-ai OAuth path)
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
