@@ -120,6 +120,35 @@ export function isUsableRefreshToken(
 }
 
 /**
+ * Whether adopting these credentials would produce a connection that can
+ * actually authenticate — now or after a refresh.
+ *
+ * Connect short-circuits when it finds credentials in Claude Code's storage.
+ * Finding them is not the same as them working: an expired access token with
+ * no way to renew authenticates nothing, and adopting it puts the card back
+ * into the state the user pressed Connect to escape. Checking usability here
+ * is what lets Connect fall through to a real sign-in instead.
+ */
+export function claudeCredentialsAreUsable(
+  credentials: ClaudeCliCredentials,
+  now: number = Date.now(),
+): boolean {
+  // A usable refresh token can mint a new access token, so an expired access
+  // token is recoverable and worth adopting.
+  if (isUsableRefreshToken(credentials.refreshToken, credentials.accessToken)) {
+    return true;
+  }
+
+  // No refresh path, so the access token itself has to still be alive. An
+  // absent expiry means the source never told us one — a pasted setup token
+  // being the usual case — and those are assumed live, matching the fallback
+  // TTL callers already apply.
+  if (credentials.expiresAt === undefined) return true;
+
+  return credentials.expiresAt > now;
+}
+
+/**
  * Map credentials onto the fields `OAuthTokenStorage.storeToken` requires.
  *
  * `fallbackTtlSeconds` is only consulted when the source gave us no expiry, so

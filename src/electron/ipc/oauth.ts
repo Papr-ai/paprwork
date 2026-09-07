@@ -12,6 +12,7 @@ import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js"
 import { invalidateKeyCache } from "./customKeys.js";
 import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
 import {
+  claudeCredentialsAreUsable,
   claudeCredentialsToTokenLifetime,
   isUsableRefreshToken,
 } from "../../core/services/claudeCliCredentials.js";
@@ -576,6 +577,12 @@ export async function initializeOAuthIPC(
         accountId: token.accountId,
         expiresAt: token.expiresAt,
         isExpired,
+        // An expired token that can still be refreshed renews itself on the
+        // next request, so the card must not raise an alarm about it. Only one
+        // that has expired with no way back needs the user. Without this the
+        // UI cannot tell those apart, so it has to either cry wolf or, as it
+        // did, stay green while every request was being refused.
+        canRenew: isUsableRefreshToken(token.refreshToken, token.accessToken),
       };
     } catch (error) {
       console.error("[OAuth IPC] Failed to get OpenAI status:", error);
@@ -627,7 +634,22 @@ export async function initializeOAuthIPC(
       // Step 0: Check for existing token in Keychain / credential files
       const existingCredentials =
         await claudeSetupTokenService!.readCredentialsFromCLIStorage();
-      if (existingCredentials) {
+      // Adopt them only if they can actually authenticate. Credentials that
+      // have expired with no way to renew are worse than none: adopting them
+      // reports success and lands the user back on the expired card they
+      // pressed Connect to escape, with the terminal sign-in below never
+      // reached. Falling through gets them a real token.
+      if (
+        existingCredentials &&
+        !claudeCredentialsAreUsable(existingCredentials)
+      ) {
+        console.log(
+          "[OAuth IPC] Ignoring Claude CLI credentials: expired with no usable " +
+            "refresh token — continuing to sign-in instead of adopting them",
+        );
+      }
+
+      if (existingCredentials && claudeCredentialsAreUsable(existingCredentials)) {
         console.log("[OAuth IPC] Found existing Claude credentials in CLI storage");
         trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
         const tokenInput = {
@@ -717,6 +739,12 @@ export async function initializeOAuthIPC(
         accountId: token.accountId,
         expiresAt: token.expiresAt,
         isExpired,
+        // An expired token that can still be refreshed renews itself on the
+        // next request, so the card must not raise an alarm about it. Only one
+        // that has expired with no way back needs the user. Without this the
+        // UI cannot tell those apart, so it has to either cry wolf or, as it
+        // did, stay green while every request was being refused.
+        canRenew: isUsableRefreshToken(token.refreshToken, token.accessToken),
       };
     } catch (error) {
       console.error("[OAuth IPC] Failed to get Claude status:", error);
@@ -772,6 +800,15 @@ export async function initializeOAuthIPC(
         const credentials =
           await claudeSetupTokenService!.readCredentialsFromCLIStorage();
         if (!credentials) {
+          return { success: false, reason: "not_found" as const };
+        }
+
+        // This polls while the user completes sign-in in the terminal, so the
+        // stale credential that sign-in is meant to replace is still on disk
+        // for most of that window. Treat an unusable one as absent, otherwise
+        // the first poll adopts it and reports success before the user has
+        // finished — which is the same false success Connect used to give.
+        if (!claudeCredentialsAreUsable(credentials)) {
           return { success: false, reason: "not_found" as const };
         }
 
