@@ -119,35 +119,6 @@ export function isUsableRefreshToken(
   return true;
 }
 
-/**
- * Whether adopting these credentials would produce a connection that can
- * actually authenticate — now or after a refresh.
- *
- * Connect short-circuits when it finds credentials in Claude Code's storage.
- * Finding them is not the same as them working: an expired access token with
- * no way to renew authenticates nothing, and adopting it puts the card back
- * into the state the user pressed Connect to escape. Checking usability here
- * is what lets Connect fall through to a real sign-in instead.
- */
-export function claudeCredentialsAreUsable(
-  credentials: ClaudeCliCredentials,
-  now: number = Date.now(),
-): boolean {
-  // A usable refresh token can mint a new access token, so an expired access
-  // token is recoverable and worth adopting.
-  if (isUsableRefreshToken(credentials.refreshToken, credentials.accessToken)) {
-    return true;
-  }
-
-  // No refresh path, so the access token itself has to still be alive. An
-  // absent expiry means the source never told us one — a pasted setup token
-  // being the usual case — and those are assumed live, matching the fallback
-  // TTL callers already apply.
-  if (credentials.expiresAt === undefined) return true;
-
-  return credentials.expiresAt > now;
-}
-
 /** Clock skew allowance so a token about to lapse is not treated as live. */
 export const CREDENTIAL_EXPIRY_SKEW_MS = 60_000;
 
@@ -155,16 +126,17 @@ export const CREDENTIAL_EXPIRY_SKEW_MS = 60_000;
  * Whether the access token itself is still usable right now, ignoring any
  * refresh token.
  *
- * This is deliberately stricter than `claudeCredentialsAreUsable`, and the two
- * answer different questions. That one asks "could these ever authenticate?",
- * where a refresh token counts because it can mint a new access token — the
- * right test for deciding whether Connect should short-circuit.
+ * There used to be a laxer companion to this — `claudeCredentialsAreUsable` —
+ * which counted the mere presence of a refresh token as proof the credentials
+ * would work, on the theory that an expired access token is recoverable. That
+ * theory is an assumption, and it was wrong often enough to cause the same bug
+ * at all three call sites: it let a credential five months dead overwrite a
+ * working token, report a successful sign-in without opening the terminal, and
+ * satisfy the poll that waits for the user to finish signing in.
  *
- * Adoption asks something else: "will replacing what I already hold with this
- * leave me better off?" There a refresh token earns nothing, because the only
- * moment adoption runs as recovery is immediately after a refresh token was
- * rejected. Counting a second unproven refresh token as evidence of health is
- * how a credential that expired months ago came to overwrite a working one.
+ * The concept survives where it was genuinely wanted, but verified rather than
+ * assumed: callers that can accept a renewable credential now attempt the
+ * refresh and check whether it succeeded. Nobody has to guess.
  */
 export function claudeAccessTokenIsLive(
   credentials: ClaudeCliCredentials,

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CREDENTIAL_EXPIRY_SKEW_MS,
   claudeAccessTokenIsLive,
-  claudeCredentialsAreUsable,
+  isUsableRefreshToken,
   type ClaudeCliCredentials,
 } from "../src/core/services/claudeCliCredentials.js";
 import {
@@ -32,13 +32,17 @@ describe("claudeAccessTokenIsLive", () => {
     ).toBe(false);
   });
 
-  it("is stricter than claudeCredentialsAreUsable, which the bug needed", () => {
-    // Pins the distinction the fix turns on. `claudeCredentialsAreUsable`
-    // answers "could these ever authenticate?", so a refresh token makes even
-    // the April credential "usable" — which is why simply reusing that
-    // predicate at the adoption site would not have fixed anything.
+  it("does not treat a well-formed refresh token as evidence of health", () => {
+    // The credential that caused every variant of this bug looks healthy by
+    // structure: its refresh token is real and distinct from the access token.
+    // A predicate that stopped there returned true for it, which is how it came
+    // to overwrite a working token, satisfy Connect without opening a terminal,
+    // and satisfy the poll that waits for the user to finish signing in.
     expect(
-      claudeCredentialsAreUsable(APRIL_KEYCHAIN_CREDENTIAL, SEPTEMBER_NOW),
+      isUsableRefreshToken(
+        APRIL_KEYCHAIN_CREDENTIAL.refreshToken,
+        APRIL_KEYCHAIN_CREDENTIAL.accessToken,
+      ),
     ).toBe(true);
     expect(
       claudeAccessTokenIsLive(APRIL_KEYCHAIN_CREDENTIAL, {

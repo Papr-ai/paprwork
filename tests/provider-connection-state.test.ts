@@ -5,7 +5,7 @@ import {
   type ProviderConnectionInputs,
 } from "../ui/utils/providerConnectionState";
 import {
-  claudeCredentialsAreUsable,
+  claudeAccessTokenIsLive,
   parseClaudeCliCredentials,
 } from "../src/core/services/claudeCliCredentials";
 
@@ -125,15 +125,15 @@ describe("deriveProviderConnectionState", () => {
   });
 });
 
-describe("claudeCredentialsAreUsable", () => {
+describe("claudeAccessTokenIsLive", () => {
   const now = Date.UTC(2026, 8, 7);
   const hour = 3_600_000;
 
   it("accepts a live access token", () => {
     expect(
-      claudeCredentialsAreUsable(
+      claudeAccessTokenIsLive(
         { accessToken: "sk-ant-oat-live", expiresAt: now + hour },
-        now,
+        { now },
       ),
     ).toBe(true);
   });
@@ -142,46 +142,51 @@ describe("claudeCredentialsAreUsable", () => {
   // put the user back on the expired card they pressed Connect to escape.
   it("rejects an expired token with no refresh token", () => {
     expect(
-      claudeCredentialsAreUsable(
+      claudeAccessTokenIsLive(
         { accessToken: "sk-ant-oat-dead", expiresAt: now - hour },
-        now,
+        { now },
       ),
     ).toBe(false);
   });
 
   it("rejects an expired token whose refresh token echoes the access token", () => {
     expect(
-      claudeCredentialsAreUsable(
+      claudeAccessTokenIsLive(
         {
           accessToken: "sk-ant-oat-dead",
           refreshToken: "sk-ant-oat-dead",
           expiresAt: now - hour,
         },
-        now,
+        { now },
       ),
     ).toBe(false);
   });
 
-  it("accepts an expired token that can be refreshed", () => {
+  it("rejects an expired token even when it carries a real refresh token", () => {
+    // This case previously returned true, on the theory that a refresh token
+    // makes an expired credential recoverable. That is an assumption, and
+    // acting on it is what let a five-month-dead credential be adopted as if
+    // it worked. Callers that can accept a renewable credential now run the
+    // refresh and check the result instead of predicting it.
     expect(
-      claudeCredentialsAreUsable(
+      claudeAccessTokenIsLive(
         {
           accessToken: "sk-ant-oat-dead",
           refreshToken: "sk-ant-ort-real",
           expiresAt: now - hour,
         },
-        now,
+        { now },
       ),
-    ).toBe(true);
+    ).toBe(false);
   });
 
   it("accepts credentials with no stated expiry", () => {
     expect(
-      claudeCredentialsAreUsable({ accessToken: "sk-ant-oat-pasted" }, now),
+      claudeAccessTokenIsLive({ accessToken: "sk-ant-oat-pasted" }, { now }),
     ).toBe(true);
   });
 
-  it("rejects a real Claude Code blob once expired and unrenewable", () => {
+  it("rejects a real Claude Code blob once expired", () => {
     const parsed = parseClaudeCliCredentials(
       JSON.stringify({
         claudeAiOauth: {
@@ -193,6 +198,6 @@ describe("claudeCredentialsAreUsable", () => {
     );
 
     expect(parsed).not.toBeNull();
-    expect(claudeCredentialsAreUsable(parsed!, now)).toBe(false);
+    expect(claudeAccessTokenIsLive(parsed!, { now })).toBe(false);
   });
 });

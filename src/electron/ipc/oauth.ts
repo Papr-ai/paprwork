@@ -13,9 +13,9 @@ import { invalidateKeyCache } from "./customKeys.js";
 import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
 import {
   claudeAccessTokenIsLive,
-  claudeCredentialsAreUsable,
   claudeCredentialsToTokenLifetime,
   isUsableRefreshToken,
+  type ClaudeCliCredentials,
 } from "../../core/services/claudeCliCredentials.js";
 import {
   isInvalidGrantError,
@@ -277,6 +277,57 @@ function tokenCanRenew(
 ): boolean {
   if (!isUsableRefreshToken(token.refreshToken, token.accessToken)) return false;
   return !refreshRejections.isRejected(provider, token.refreshToken);
+}
+
+/**
+ * Decide whether Claude Code's stored credentials can be adopted instead of
+ * sending the user to a terminal, renewing them first when only the access
+ * token has lapsed. Returns null when a real sign-in is required.
+ *
+ * Pressing Sign in states an intent the short-circuit has to honour. Adopting
+ * a credential that cannot authenticate reports success, skips the terminal,
+ * and returns the user to the card they pressed the button to escape — which
+ * reads, correctly, as the button doing nothing.
+ */
+async function resolveAdoptableClaudeCredentials(
+  credentials: ClaudeCliCredentials,
+): Promise<ClaudeCliCredentials | null> {
+  // Live access token: adopt as-is, no network round trip.
+  if (claudeAccessTokenIsLive(credentials)) return credentials;
+
+  const refreshToken = credentials.refreshToken;
+  if (
+    !refreshToken ||
+    !isUsableRefreshToken(refreshToken, credentials.accessToken) ||
+    !claudeOAuthService
+  ) {
+    return null;
+  }
+
+  // A grant the provider has already refused will be refused again.
+  if (refreshRejections.isRejected("anthropic", refreshToken)) return null;
+
+  // Only the access token has lapsed, which is the ordinary state of a Claude
+  // Code login left idle for a few hours. Renewing keeps that case off the
+  // terminal path — but the credential is adopted on the refresh *succeeding*,
+  // never on a refresh token merely being present.
+  try {
+    const renewed = await claudeOAuthService.refreshToken(refreshToken);
+    return {
+      accessToken: renewed.accessToken,
+      refreshToken: renewed.refreshToken,
+      expiresAt: Date.now() + renewed.expiresIn * 1000,
+    };
+  } catch (error) {
+    if (isInvalidGrantError(error)) {
+      refreshRejections.record("anthropic", refreshToken);
+    }
+    console.warn(
+      "[OAuth IPC] Claude Code credentials could not be renewed — continuing to sign-in:",
+      (error as Error).message,
+    );
+    return null;
+  }
 }
 
 async function adoptClaudeCredentialsFromCLIStorage(
@@ -715,30 +766,33 @@ export async function initializeOAuthIPC(
       oauthFlowStartedAt.set("anthropic", Date.now());
       trackOAuthStep("anthropic", "flow_started", { source: telemetrySource });
 
-      // Step 0: Check for existing token in Keychain / credential files
+      // Step 0: Check for existing token in Keychain / credential files.
+      // Finding credentials is not the same as their working, so they are only
+      // adopted once they demonstrably authenticate — live, or successfully
+      // renewed. Anything else falls through to the real sign-in below.
       const existingCredentials =
         await claudeSetupTokenService!.readCredentialsFromCLIStorage();
-      // Adopt them only if they can actually authenticate. Credentials that
-      // have expired with no way to renew are worse than none: adopting them
-      // reports success and lands the user back on the expired card they
-      // pressed Connect to escape, with the terminal sign-in below never
-      // reached. Falling through gets them a real token.
-      if (
-        existingCredentials &&
-        !claudeCredentialsAreUsable(existingCredentials)
-      ) {
+      const adoptableCredentials = existingCredentials
+        ? await resolveAdoptableClaudeCredentials(existingCredentials)
+        : null;
+
+      if (existingCredentials && !adoptableCredentials) {
         console.log(
-          "[OAuth IPC] Ignoring Claude CLI credentials: expired with no usable " +
-            "refresh token — continuing to sign-in instead of adopting them",
+          "[OAuth IPC] Claude CLI credentials cannot authenticate (expired " +
+            `${
+              existingCredentials.expiresAt === undefined
+                ? "unknown"
+                : new Date(existingCredentials.expiresAt).toISOString()
+            }, not renewable) — continuing to sign-in instead of adopting them`,
         );
       }
 
-      if (existingCredentials && claudeCredentialsAreUsable(existingCredentials)) {
+      if (adoptableCredentials) {
         console.log("[OAuth IPC] Found existing Claude credentials in CLI storage");
         trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
         const tokenInput = {
           provider: "anthropic" as const,
-          ...claudeCredentialsToTokenLifetime(existingCredentials, {
+          ...claudeCredentialsToTokenLifetime(adoptableCredentials, {
             fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
           }),
         };
@@ -890,10 +944,12 @@ export async function initializeOAuthIPC(
 
         // This polls while the user completes sign-in in the terminal, so the
         // stale credential that sign-in is meant to replace is still on disk
-        // for most of that window. Treat an unusable one as absent, otherwise
-        // the first poll adopts it and reports success before the user has
-        // finished — which is the same false success Connect used to give.
-        if (!claudeCredentialsAreUsable(credentials)) {
+        // for most of that window. What we are waiting for is a freshly minted
+        // token, and those are live by definition — so liveness is the test.
+        // Accepting a merely renewable credential here would let the very first
+        // poll adopt the stale one and report success before the user has
+        // typed anything, which is the same false success Connect used to give.
+        if (!claudeAccessTokenIsLive(credentials)) {
           return { success: false, reason: "not_found" as const };
         }
 
