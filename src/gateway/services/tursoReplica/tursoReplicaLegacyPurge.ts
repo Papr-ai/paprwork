@@ -96,6 +96,8 @@ export async function purgeLegacySyncPathForReplicaRecord(
 export async function purgeLegacySyncPathForAllReplicas(options?: {
   dbId?: string;
 }): Promise<ReplicaLegacyPurgeResult[]> {
+  const { initializeDatabaseRegistry } = await import("../DatabaseRegistryService.js");
+  await initializeDatabaseRegistry();
   const registry = getDatabaseRegistryService();
   let records = registry.listActive().filter((record) => record.syncMode === "replica");
   if (options?.dbId) {

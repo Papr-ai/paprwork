@@ -13,9 +13,11 @@ import {
   type AppDataSource,
 } from "./appDataSources.js";
 import {
+  cleanupLegacyHomeJobArtifacts,
   dailyBriefDataSourceNeedsUpdate,
   mergeDailyBriefDataSource,
   DEFAULT_HOME_APP_ID,
+  DEFAULT_HOME_BRIEFS_DB_ISOLATION,
   DEFAULT_HOME_DB_MIGRATIONS_DIR,
   isHomeDailyBriefRegistryDbPath,
   readHomeDailyBriefJobIdFromAppDir,
@@ -42,6 +44,8 @@ export interface DefaultHomeAppRepairResult {
   dbPathsUpdated: number;
   jobIdPersisted: number;
   registryUpgraded: number;
+  isolationUpgraded: number;
+  legacyArtifactsRemoved: number;
 }
 
 /**
@@ -193,6 +197,31 @@ export async function ensureHomeDailyBriefRegistrySchema(
   return applied;
 }
 
+/** Upgrade Home briefs registry DB from shared → per-user so briefs do not bleed across teammates. */
+export async function ensureHomeBriefsDbPerUserIsolation(
+  dbId: string | undefined,
+): Promise<boolean> {
+  const trimmed = dbId?.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const { getDatabaseRegistryService } = await import(
+    "./DatabaseRegistryService.js"
+  );
+  const registry = getDatabaseRegistryService();
+  const record = registry.getById(trimmed);
+  if (!record || record.isolation === DEFAULT_HOME_BRIEFS_DB_ISOLATION) {
+    return false;
+  }
+
+  await registry.setIsolation(trimmed, DEFAULT_HOME_BRIEFS_DB_ISOLATION);
+  console.log(
+    `[DefaultHomeAppRepair] Upgraded Home briefs DB ${trimmed} to ${DEFAULT_HOME_BRIEFS_DB_ISOLATION} isolation`,
+  );
+  return true;
+}
+
 function mergeBriefSource(
   existing: AppDataSource | undefined,
   jobId: string,
@@ -228,6 +257,8 @@ export async function repairDefaultHomeAppLinkedSources(params: {
   resolveBriefReadTarget?: (
     jobId: string,
   ) => Promise<DailyBriefReadTarget | undefined>;
+  /** Remove legacy agent scripts / stale brief JSON from the Daily Brief job dir. */
+  cleanupLegacyJobArtifacts?: (jobId: string) => Promise<number>;
 }): Promise<DefaultHomeAppRepairResult> {
   const result: DefaultHomeAppRepairResult = {
     prunedSources: 0,
@@ -235,6 +266,8 @@ export async function repairDefaultHomeAppLinkedSources(params: {
     dbPathsUpdated: 0,
     jobIdPersisted: 0,
     registryUpgraded: 0,
+    isolationUpgraded: 0,
+    legacyArtifactsRemoved: 0,
   };
 
   const appDir = path.join(params.appsDir, DEFAULT_HOME_APP_ID);
@@ -264,6 +297,17 @@ export async function repairDefaultHomeAppLinkedSources(params: {
   if (dailyBriefJobId && jobIdFromFile !== dailyBriefJobId) {
     await writeHomeDailyBriefJobIdToAppDir(appDir, dailyBriefJobId);
     result.jobIdPersisted += 1;
+  }
+
+  if (dailyBriefJobId && params.cleanupLegacyJobArtifacts) {
+    const removed = await params.cleanupLegacyJobArtifacts(dailyBriefJobId);
+    result.legacyArtifactsRemoved += removed;
+  } else if (dailyBriefJobId) {
+    const jobDir = path.dirname(
+      path.dirname(params.resolveJobDbPath(dailyBriefJobId)),
+    );
+    const removed = await cleanupLegacyHomeJobArtifacts(jobDir);
+    result.legacyArtifactsRemoved += removed.length;
   }
 
   let readTarget: DailyBriefReadTarget | undefined;
@@ -382,6 +426,18 @@ export async function repairDefaultHomeAppLinkedSources(params: {
 
   const registryDbPath = readTarget?.dbPath?.trim();
   if (registryDbPath && isHomeDailyBriefRegistryDbPath(registryDbPath)) {
+    if (
+      await ensureHomeBriefsDbPerUserIsolation(readTarget?.dbId).catch((err) => {
+        console.warn(
+          "[DefaultHomeAppRepair] Home briefs isolation upgrade failed:",
+          err,
+        );
+        return false;
+      })
+    ) {
+      result.isolationUpgraded += 1;
+    }
+
     const applied = await ensureHomeDailyBriefRegistrySchema(
       registryDbPath,
       { appsDir: params.appsDir },

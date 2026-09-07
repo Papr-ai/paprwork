@@ -1505,6 +1505,22 @@ export function useAgent() {
         }
 
         finalizeStreamingMessage(streamingMessageId, chatId);
+
+        const { chatStates: afterFinalizeStates } = useChatStore.getState();
+        const afterFinalizeChat = afterFinalizeStates.get(chatId);
+        if (afterFinalizeChat) {
+          const stoppedMessages = afterFinalizeChat.messages.map((msg) =>
+            msg.id === streamingMessageId
+              ? { ...msg, interrupted: true }
+              : msg,
+          );
+          const stoppedChatStates = new Map(afterFinalizeStates);
+          stoppedChatStates.set(chatId, {
+            ...afterFinalizeChat,
+            messages: stoppedMessages,
+          });
+          useChatStore.setState({ chatStates: stoppedChatStates });
+        }
       }
 
       streamingMessageIdRef.current.delete(chatId);

@@ -7,7 +7,8 @@ import {
   readAppRepoCommitCursors,
   type AppRepoCommitCursorStore,
 } from "./appRepoCommittedFanout.js";
-import { readOidCache } from "./OidCache.js";
+import { fetchAppRepoHead } from "./AppOpsClient.js";
+import { overwriteOidCacheFromHead, readOidCache } from "./OidCache.js";
 
 /** Skip remote HEAD fetch for preview opens when we verified recently (manual sync bypasses). */
 export const RECENT_HEAD_VERIFY_MS = Number(
@@ -36,13 +37,17 @@ export async function isLocalAppCodeAtRemoteHead(
   head: AppRepoHeadResponse,
 ): Promise<boolean> {
   const trimmed = appId.trim();
-  if (!trimmed || head.files.length === 0) {
+  if (!trimmed) {
     return false;
   }
 
   const cursors = await readAppRepoCommitCursors();
   if (cursors[trimmed]?.lastCommitSha === head.commitSha) {
     return true;
+  }
+
+  if (head.files.length === 0) {
+    return false;
   }
 
   const cache = await readOidCache();
@@ -58,4 +63,19 @@ export async function isLocalAppCodeAtRemoteHead(
   }
 
   return true;
+}
+
+/** After a no-op push or publish, align OID cache + commit cursor with writer HEAD. */
+export async function realignLocalAppCodeBaseline(
+  appId: string,
+): Promise<{ commitSha: string; pathsReseeded: number } | null> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return null;
+  }
+  const head = await fetchAppRepoHead(trimmed, { seedOidCache: false });
+  const pathsReseeded = await overwriteOidCacheFromHead(trimmed, head.files);
+  const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
+  await writeAppRepoCommitCursor(trimmed, head.commitSha);
+  return { commitSha: head.commitSha, pathsReseeded };
 }

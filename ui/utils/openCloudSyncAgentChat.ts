@@ -183,8 +183,8 @@ export function buildWriterConflictAgentPrompt(input: {
   error?: string | null;
 }): string {
   const parts = [
-    "Help me resolve a cloud repo upload conflict (writer 409) for my Papr mini-app.",
-    "The cloud copy changed since my last upload, so my push was rejected.",
+    "Help me resolve a cloud repo publish conflict (writer 409) for my Papr mini-app.",
+    "The cloud copy changed since my last publish, so my push was rejected.",
   ];
   if (input.appId) {
     parts.push(`App id: ${input.appId}.`);
@@ -193,8 +193,9 @@ export function buildWriterConflictAgentPrompt(input: {
     parts.push(`Last error: ${input.error.trim()}.`);
   }
   parts.push(
-    "Workflow: get_cloud_sync_status → inspect_cloud_repo (see what changed on the web) → merge remote changes OR edit my local files to incorporate remote updates → push_cloud_sync / Publish changes.",
-    "Do not blindly overwrite — explain what changed and what I should keep before publishing again.",
+    "Workflow: get_cloud_sync_status → inspect_cloud_repo (if another device may have edited cloud) → reset_writer_baseline_and_publish({ appId }) when gitUpdatesAvailable is false but writer 409 persists → verify with get_cloud_sync_status.",
+    "reset_writer_baseline_and_publish re-seeds local publish baseline from cloud HEAD and publishes local code — it does NOT delete local app source files.",
+    "Do not blindly overwrite — explain what changed and what you are keeping before resetting baseline when cloud may have real edits.",
   );
   return parts.join(" ");
 }

@@ -98,8 +98,8 @@ describe("repairCloudSync strategies", () => {
     expect(result.syncStatus?.dbId).toBe("db-1");
   });
 
-  it("bootstrap_remote pushes full snapshot then reseeds replica", async () => {
-    const pushLocalLegacyFileToTursoPrimary = vi.fn(async () => undefined);
+  it("bootstrap_remote sync-pushes then reseeds replica", async () => {
+    const pushReplicaBootstrapViaTursoSync = vi.fn(async () => ({ ok: true as const }));
     const reseedTursoReplicaFromRemote = vi.fn(async () => undefined);
     const close = vi.fn(async () => undefined);
 
@@ -122,7 +122,7 @@ describe("repairCloudSync strategies", () => {
     }));
 
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaProvision.js", () => ({
-      pushLocalLegacyFileToTursoPrimary,
+      pushReplicaBootstrapViaTursoSync,
       reseedTursoReplicaFromRemote,
     }));
 
@@ -152,9 +152,62 @@ describe("repairCloudSync strategies", () => {
       strategy: "bootstrap_remote",
     });
 
-    expect(pushLocalLegacyFileToTursoPrimary).toHaveBeenCalledOnce();
+    expect(pushReplicaBootstrapViaTursoSync).toHaveBeenCalledOnce();
     expect(reseedTursoReplicaFromRemote).toHaveBeenCalledOnce();
     expect(result.push?.ok).toBe(true);
+    expect(result.pull?.pulled).toBe(true);
+  });
+
+  it("accept_cloud stops sync worker then reprovisions replica", async () => {
+    const reseedTursoReplicaFromRemote = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+
+    vi.doMock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+      initializeDatabaseRegistry: vi.fn(async () => undefined),
+      getDatabaseRegistryService: () => ({
+        getById: () => ({
+          dbId: "db-wedge",
+          localPath: "/tmp/wedge/data.db",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          syncMode: "replica",
+        }),
+        updateReplicaPushState: vi.fn(async () => undefined),
+      }),
+      tursoNameForRecord: () => "d-wedge000",
+    }));
+
+    vi.doMock("../src/gateway/services/tursoReplica/TursoReplicaService.js", () => ({
+      getTursoReplicaService: () => ({ close }),
+    }));
+
+    vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaProvision.js", () => ({
+      reseedTursoReplicaFromRemote,
+    }));
+
+    vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
+      syncStatusForLinkedDb: vi.fn(async () => ({
+        online: true,
+        syncMode: "replica",
+        pendingPush: false,
+        pendingOps: 0,
+        cutoverBlocked: false,
+        cutoverBlockReason: null,
+        migrationConflict: false,
+        lastPushError: null,
+      })),
+    }));
+
+    const { repairCloudSync } = await import(
+      "../src/gateway/services/tursoReplica/PaprDbService.js"
+    );
+
+    const result = await repairCloudSync({
+      dbId: "db-wedge",
+      strategy: "accept_cloud",
+    });
+
+    expect(reseedTursoReplicaFromRemote).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
     expect(result.pull?.pulled).toBe(true);
   });
 });

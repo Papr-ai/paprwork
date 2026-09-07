@@ -3,8 +3,9 @@
  *
  * Delivery paths (first match wins, all may run in dev):
  * 1. In-process subscribers (desktop gateway revision notify)
- * 2. Optional webhook: PAPR_APP_REPO_COMMITTED_WEBHOOK_URL
- * 3. Optional GCP Pub/Sub topic: PAPR_APP_REPO_COMMITTED_TOPIC (HTTP publish at deploy)
+ * 2. Optional webhook: PAPR_APP_REPO_COMMITTED_WEBHOOK_URL (cloud-app-host static assets)
+ * 3. Optional webhook: PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL (cloud-agent-gateway job clone cache)
+ * 4. Optional GCP Pub/Sub topic: PAPR_APP_REPO_COMMITTED_TOPIC (HTTP publish at deploy)
  */
 
 import { promises as fs } from "node:fs";
@@ -98,6 +99,49 @@ async function postWebhook(event: AppRepoCommittedEvent): Promise<void> {
   }
 }
 
+function resolveAppRepoCommittedGatewayWebhookHeaders(): Record<string, string> | null {
+  const url = process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL?.trim();
+  if (!url) {
+    return null;
+  }
+  const gatewayKey = process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY?.trim();
+  if (!gatewayKey) {
+    console.warn(
+      "[AppRepoFanout] PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL set but PAPR_CLOUD_AGENT_GATEWAY_KEY missing — skipping gateway webhook",
+    );
+    return null;
+  }
+  return {
+    "Content-Type": "application/json",
+    "X-Cloud-Agent-Gateway-Key": gatewayKey,
+  };
+}
+
+async function postGatewayWebhook(event: AppRepoCommittedEvent): Promise<void> {
+  const url = process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL?.trim();
+  const headers = resolveAppRepoCommittedGatewayWebhookHeaders();
+  if (!url || !headers) {
+    return;
+  }
+  try {
+    const resp = await fetch(url, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(event),
+    });
+    if (!resp.ok) {
+      console.warn(
+        `[AppRepoFanout] Gateway webhook ${url} returned ${resp.status} for appId=${event.appId}`,
+      );
+    }
+  } catch (err) {
+    console.warn(
+      `[AppRepoFanout] Gateway webhook failed for appId=${event.appId}:`,
+      (err as Error).message.slice(0, 120),
+    );
+  }
+}
+
 /** Fan out to subscribers + optional webhook. Dedupes by appId+commitSha. */
 export async function fanoutAppRepoCommitted(
   event: AppRepoCommittedEvent,
@@ -118,6 +162,7 @@ export async function fanoutAppRepoCommitted(
   }
 
   await postWebhook(event);
+  await postGatewayWebhook(event);
 }
 
 export interface AppRepoCommitCursorStore {

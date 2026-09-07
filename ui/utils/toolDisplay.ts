@@ -355,6 +355,10 @@ export const TOOL_DESCRIPTIONS: Record<
     running: "Pushing cloud sync",
     complete: "Cloud sync pushed",
   },
+  reset_writer_baseline_and_publish: {
+    running: "Resetting publish baseline",
+    complete: "Publish baseline reset",
+  },
   query_cloud_turso: {
     running: "Querying cloud database",
     complete: "Cloud database queried",
@@ -438,6 +442,14 @@ export const TOOL_DESCRIPTIONS: Record<
   // Skills
   create_skill: { running: "Creating skill", complete: "Skill created" },
   read_skill: { running: "Reading skill", complete: "Skill loaded" },
+  list_media_models: {
+    running: "Listing media models",
+    complete: "Media models listed",
+  },
+  generate_media: {
+    running: "Generating media",
+    complete: "Media generated",
+  },
   // Browser
   browser_navigate: {
     running: "Navigating browser",
@@ -573,6 +585,14 @@ export function getToolDisplayLabel(toolCall: ToolCallLike): string {
         ? (isRunning ? `Reading ${filename}` : `Read ${filename}`)
         : (isRunning ? `Writing ${filename}` : `Wrote ${filename}`);
     }
+  }
+
+  if (toolName === "generate_media") {
+    const modelId =
+      typeof toolCall.args?.modelId === "string" ? toolCall.args.modelId : "";
+    const kindHint = modelId.includes("veo") ? "video" : "image";
+    const noun = kindHint === "video" ? "video" : "image";
+    return isRunning ? `Generating ${noun}` : `Generated ${noun}`;
   }
 
   if (toolName === "list_directory" && typeof toolCall.args?.path === "string") {

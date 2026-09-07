@@ -31,6 +31,7 @@ import {
   syncStatusForLinkedDb,
 } from "./tursoReplica/tursoReplicaRouting.js";
 import { detectReplicaSidecarWedge } from "./tursoReplica/tursoReplicaSidecarWedge.js";
+import { computeReplicaPendingPush } from "./tursoReplica/replicaPendingPush.js";
 import { MIGRATION_CONFLICT_CODE } from "./tursoReplica/tursoReplicaMigrationConflict.js";
 import { isTursoReplicaOnline } from "../utils/tursoReplicaEnabled.js";
 import type { DatabaseRecord } from "./DatabaseRegistryService.js";
@@ -61,7 +62,7 @@ export interface TursoSourceSyncItem {
   remoteCheckFailed?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
-  /** Dirty but auto-upload off — use Upload now. */
+  /** Dirty but auto-upload off — use Publish changes. */
   manualUploadHold?: boolean;
   /** Plan A replica path — when set, row sync uses Turso Sync push/pull. */
   syncMode?: "legacy" | "replica";
@@ -157,15 +158,13 @@ export function buildReplicaTursoSyncStatusFromRegistry(
   const lastPushError = record?.lastReplicaPushError ?? null;
   const migrationConflict =
     lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
-  const pushAtMs = record?.lastReplicaPushAt
-    ? Date.parse(record.lastReplicaPushAt)
-    : 0;
-  const mutationAtMs = record?.lastReplicaLocalMutationAt
-    ? Date.parse(record.lastReplicaLocalMutationAt)
-    : 0;
-  const pendingPush =
-    Boolean(lastPushError) ||
-    (mutationAtMs > 0 && (pushAtMs === 0 || pushAtMs < mutationAtMs));
+  const pendingPush = computeReplicaPendingPush({
+    pendingOps: 0,
+    lastPushError,
+    migrationConflict,
+    lastReplicaPushAt: record?.lastReplicaPushAt,
+    lastReplicaLocalMutationAt: record?.lastReplicaLocalMutationAt,
+  });
   return {
     online: isTursoReplicaOnline(),
     syncMode: "replica",

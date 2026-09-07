@@ -21,6 +21,7 @@ import {
 import { pullLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import { syncStatusForLinkedDb } from "./tursoReplicaRouting.js";
+import { isReplicaCheckpointWalError } from "./tursoReplicaCheckpointRecovery.js";
 
 export type ReconcileSyncAction =
   | "repair_sidecar_wedge"
@@ -73,9 +74,27 @@ export async function reconcileReplicaSync(options: {
         repairReplicaSidecarsOnCheckpointError(options.source.dbPath);
       let pulled = false;
       if (isTursoReplicaOnline()) {
-        pulled = await pullLinkedDbViaTursoReplica(options.source, {
-          forceReconnect: true,
-        });
+        try {
+          pulled = await pullLinkedDbViaTursoReplica(options.source, {
+            forceReconnect: true,
+          });
+        } catch (error) {
+          const message = (error as Error).message;
+          if (isReplicaCheckpointWalError(message)) {
+            const record = registry.getById(options.dbId);
+            if (record?.syncMode === "replica") {
+              const { reseedTursoReplicaFromRemote } = await import(
+                "./tursoReplicaProvision.js"
+              );
+              await reseedTursoReplicaFromRemote(record);
+              pulled = true;
+            } else {
+              throw error;
+            }
+          } else {
+            throw error;
+          }
+        }
       }
       await registry.updateReplicaPushState(options.dbId, {
         lastReplicaPushError: null,

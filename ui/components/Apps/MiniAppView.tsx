@@ -21,6 +21,7 @@ import {
 } from "../../utils/cloudDesktopPreview";
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
+import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
 import { confirmRefreshIfNewRevision } from "../../utils/publishedAppRevisionCheck";
 import "./MiniAppPublishBar.css";
 
@@ -169,6 +170,7 @@ export function MiniAppView({
   useEffect(() => {
     if (previewTabVisible) {
       setIframeActivated(true);
+      setRuntimeError(null);
     }
   }, [previewTabVisible]);
 
@@ -241,13 +243,66 @@ export function MiniAppView({
   const refreshAppMetadata = async () => {
     try {
       const resp = await gateway.send("app:get", { appId });
-      const data = resp.data as { cloudLineage?: ArtifactCloudLineage };
+      const data = resp.data as {
+        title?: string;
+        cloudLineage?: ArtifactCloudLineage;
+      };
+      const title = data?.title?.trim();
+      if (title) {
+        setAppTitle(title);
+      }
       setCloudLineage(data?.cloudLineage ?? null);
     } catch {
       /* optional */
     }
     triggerReload();
   };
+
+  useEffect(() => {
+    if (!iframeActivated || isCatalogPreviewEntityId(appId)) {
+      return;
+    }
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | {
+            type?: string;
+            data?: { appId?: string; filename?: string };
+          }
+        | undefined;
+      if (!detail) {
+        return;
+      }
+
+      const isListUpdated = detail.type === "app:list-updated";
+      const isMetadataFileChange =
+        detail.type === "app:file-changed" &&
+        detail.data?.appId === appId &&
+        detail.data.filename?.replace(/\\/g, "/") === "metadata.json";
+      if (!isListUpdated && !isMetadataFileChange) {
+        return;
+      }
+
+      void (async () => {
+        try {
+          const resp = await gateway.send("app:get", { appId });
+          if (!resp.success) {
+            return;
+          }
+          const data = resp.data as { title?: string };
+          const title = data?.title?.trim();
+          if (title) {
+            setAppTitle(title);
+          }
+        } catch {
+          /* optional */
+        }
+      })();
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [appId, iframeActivated]);
 
   useEffect(() => {
     if (
@@ -456,7 +511,7 @@ export function MiniAppView({
       if (!entry?.message) return;
       if (entry.level === "error") {
         const message = entry.message.trim();
-        if (message.length > 0) {
+        if (message.length > 0 && !isBenignPreviewFetchAbortMessage(message)) {
           setRuntimeError(message);
         }
       }
@@ -631,10 +686,13 @@ export function MiniAppView({
             <div className="mini-app-view__overlay mini-app-view__overlay--hint">
               <p className="mini-app-view__runtime-error-title">App failed to load</p>
               <pre className="mini-app-view__runtime-error">{runtimeError}</pre>
-              <p className="mini-app-view__runtime-error-hint">
-                This often means a linked database path is missing after workspace migration.
-                Check the Apps page warning icon or ask the agent to fix data-sources.json.
-              </p>
+              {!isBenignPreviewFetchAbortMessage(runtimeError) ? (
+                <p className="mini-app-view__runtime-error-hint">
+                  This often means a linked database path is missing after workspace
+                  migration. Check the Apps page warning icon or ask the agent to fix
+                  data-sources.json.
+                </p>
+              ) : null}
             </div>
           ) : null}
           {iframeLoadError && !gatewaySupervisorStarting && !runtimeError ? (

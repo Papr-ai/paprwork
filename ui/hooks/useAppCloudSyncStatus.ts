@@ -8,6 +8,7 @@ import type { SyncItemsResponse } from "../components/Settings/CloudSyncDetails"
 import {
   deriveAppCloudSyncStatus,
   mergeRemoteCodeCheckIntoStatus,
+  suppressStaleGitUpdatesAvailable,
   type AppCloudSyncStatus,
   type RemoteCodeCheckSnapshot,
 } from "../utils/appCloudSyncStatus";
@@ -45,7 +46,7 @@ async function requestAppUpload(appId: string): Promise<void> {
   });
   if (res.status !== 202 && !res.ok) {
     const body = (await res.json()) as { error?: string };
-    throw new Error(body.error ?? `Upload failed (${res.status})`);
+    throw new Error(body.error ?? `Publish failed (${res.status})`);
   }
 }
 
@@ -227,6 +228,7 @@ export function useAppCloudSyncStatus(
   const [error, setError] = useState<string | null>(null);
   const [remoteCodeCheck, setRemoteCodeCheck] =
     useState<RemoteCodeCheckSnapshot | null>(null);
+  const [liveSyncPending, setLiveSyncPending] = useState(true);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
 
@@ -242,13 +244,23 @@ export function useAppCloudSyncStatus(
         isUploading: pushing,
         refreshing,
       });
-      return mergeRemoteCodeCheckIntoStatus(base, remoteCodeCheck);
+      const merged = mergeRemoteCodeCheckIntoStatus(base, remoteCodeCheck);
+      return suppressStaleGitUpdatesAvailable(merged, liveSyncPending);
     }
     return null;
-  }, [appId, syncItems, gitGlobalStatus, pushing, refreshing, remoteCodeCheck]);
+  }, [
+    appId,
+    syncItems,
+    gitGlobalStatus,
+    pushing,
+    refreshing,
+    remoteCodeCheck,
+    liveSyncPending,
+  ]);
 
   const fetchRemoteCodeStatus = useCallback(async () => {
     if (!active || !previewTabVisible || gitSyncEnabled === false) {
+      setLiveSyncPending(false);
       return;
     }
     try {
@@ -325,9 +337,14 @@ export function useAppCloudSyncStatus(
         refreshInFlightRef.current = false;
         setLoading(false);
         setRefreshing(false);
+        try {
+          await fetchRemoteCodeStatus();
+        } finally {
+          setLiveSyncPending(false);
+        }
       }
     },
-    [active, appId],
+    [active, appId, fetchRemoteCodeStatus],
   );
 
   const pushNow = useCallback(async () => {
@@ -340,12 +357,13 @@ export function useAppCloudSyncStatus(
     try {
       await requestAppUpload(appId);
       await waitForUploadCompletion(appId, refresh);
+      await fetchRemoteCodeStatus();
     } catch (err) {
       setError((err as Error).message.slice(0, 120));
     } finally {
       setPushing(false);
     }
-  }, [refresh, appId, status?.gitRemoteRequiresReview]);
+  }, [refresh, appId, status?.gitRemoteRequiresReview, fetchRemoteCodeStatus]);
 
   const bumpQueue = useCallback(async () => {
     if (status?.gitRemoteRequiresReview) {
@@ -431,6 +449,8 @@ export function useAppCloudSyncStatus(
     setPulling(false);
     setApplyingUpdates(false);
     setError(null);
+    setLiveSyncPending(true);
+    setRemoteCodeCheck(null);
 
     const cached = readCachedSyncItemsForApp(appId);
     setSyncItems(cached);
@@ -470,11 +490,18 @@ export function useAppCloudSyncStatus(
     status?.globallySyncing,
   ]);
 
+  const prevPushingRef = useRef(false);
+  useEffect(() => {
+    if (prevPushingRef.current && !pushing) {
+      void fetchRemoteCodeStatus();
+    }
+    prevPushingRef.current = pushing;
+  }, [pushing, fetchRemoteCodeStatus]);
+
   useEffect(() => {
     if (!active || !previewTabVisible || anyChatBusy) {
       return;
     }
-    void fetchRemoteCodeStatus();
     const timer = setInterval(() => {
       void fetchRemoteCodeStatus();
     }, 60_000);

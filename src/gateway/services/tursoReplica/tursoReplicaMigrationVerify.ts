@@ -11,6 +11,7 @@ import {
   verifyMigrationOnRemote,
   type MigrationVerification,
 } from "../jobs/jobMigrationLedgerSync.js";
+import { filterUserSchemaComparisonTables } from "../legacyCdcArtifacts.js";
 import { queryLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
 
 function createReplicaSchemaClient(source: AppDataSource): Client {
@@ -86,9 +87,11 @@ export async function listReplicaUserTables(
     [],
     { pullBeforeRead: false },
   );
-  return result.rows
-    .map((row) => String((row as Record<string, unknown>).name ?? "").trim())
-    .filter((name) => name.length > 0);
+  return filterUserSchemaComparisonTables(
+    result.rows
+      .map((row) => String((row as Record<string, unknown>).name ?? "").trim())
+      .filter((name) => name.length > 0),
+  );
 }
 
 export async function listCloudUserTables(
@@ -98,9 +101,11 @@ export async function listCloudUserTables(
   const client = await openTursoPrimaryClient(tursoDatabase);
   try {
     const result = await client.execute(USER_TABLES_SQL);
-    return result.rows
-      .map((row) => String(row.name ?? "").trim())
-      .filter((name) => name.length > 0);
+    return filterUserSchemaComparisonTables(
+      result.rows
+        .map((row) => String(row.name ?? "").trim())
+        .filter((name) => name.length > 0),
+    );
   } finally {
     client.close();
   }
@@ -114,10 +119,12 @@ export function diffTableSets(
   cloudOnlyTables: string[];
   schemaPaired: boolean;
 } {
-  const cloudSet = new Set(cloudTables);
-  const replicaSet = new Set(replicaTables);
-  const replicaOnlyTables = replicaTables.filter((t) => !cloudSet.has(t));
-  const cloudOnlyTables = cloudTables.filter((t) => !replicaSet.has(t));
+  const replicaFiltered = filterUserSchemaComparisonTables(replicaTables);
+  const cloudFiltered = filterUserSchemaComparisonTables(cloudTables);
+  const cloudSet = new Set(cloudFiltered);
+  const replicaSet = new Set(replicaFiltered);
+  const replicaOnlyTables = replicaFiltered.filter((t) => !cloudSet.has(t));
+  const cloudOnlyTables = cloudFiltered.filter((t) => !replicaSet.has(t));
   return {
     replicaOnlyTables,
     cloudOnlyTables,

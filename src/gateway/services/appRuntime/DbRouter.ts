@@ -32,12 +32,16 @@ import {
 } from "../tursoReplica/tursoReplicaCheckpointRecovery.js";
 import {
   healReplicaSchemaDrift,
-  isReplicaMissingTableError,
+  isReplicaMissingColumnError,
+  isReplicaSchemaDriftError,
 } from "../tursoReplica/tursoReplicaSchemaDriftHeal.js";
 import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
-import { isReplicaReadPathDegraded } from "../tursoReplica/tursoReplicaBackgroundRecovery.js";
+import {
+  clearReplicaReadPathDegraded,
+  isReplicaReadPathDegraded,
+} from "../tursoReplica/tursoReplicaBackgroundRecovery.js";
+import { isReplicaPathPublishQuiesced } from "../tursoReplica/tursoReplicaPublishQuiesce.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
-import { displayTableName, rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
 
 export type DbBackend = "local" | "turso" | "turso-replica";
 
@@ -56,6 +60,8 @@ const TURSO_UNAVAILABLE_COOLDOWN_MS = 30_000;
 /** Mini-app UI reads must not block on cloud pull or a stuck sync queue. */
 const REPLICA_MINI_APP_READ_TIMEOUT_MS = 2_500;
 const REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS = 8_000;
+/** When degraded, still prefer local replica before cloud (worker wedge ≠ cloud is faster). */
+const REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS = 5_000;
 
 export function isReplicaMiniAppReadTimeoutError(message: string): boolean {
   return /timed out after \d+ms/i.test(message);
@@ -155,26 +161,6 @@ async function getTursoClientForSource(
   return promise;
 }
 
-async function listTursoLocalTables(source: AppDataSource): Promise<string[]> {
-  const client = await getTursoClientForSource(source);
-  if (!client) {
-    return [];
-  }
-
-  const result = await client.execute({
-    sql: `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
-    args: [],
-  });
-
-  return filterSyncableTables(
-    result.rows
-      .map((row) =>
-        displayTableName(String(row.name ?? ""), source.jobId ?? ""),
-      )
-      .filter((name): name is string => name !== null),
-  );
-}
-
 export class DbRouter {
   constructor(private readonly pool: DbQueryPool) {}
 
@@ -263,14 +249,58 @@ export class DbRouter {
     sql: string,
     params?: unknown[],
   ): Promise<RoutedQueryResult> {
-    if (isReplicaReadPathDegraded(source.dbPath) && isTursoReplicaOnline()) {
+    const dbPath = source.dbPath;
+    const skipLocalReplica =
+      (dbPath && isReplicaPathPublishQuiesced(dbPath)) ||
+      (dbPath && isReplicaReadPathDegraded(dbPath));
+
+    if (skipLocalReplica && isTursoReplicaOnline()) {
       const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
       if (remote) {
-        console.warn(
-          `[DbRouter] Degraded replica path — served ${source.alias ?? source.dbId} from Turso primary`,
-        );
+        if (isReplicaPathPublishQuiesced(dbPath ?? "")) {
+          console.log(
+            `[DbRouter] Publish quiesce — served ${source.alias ?? source.dbId} from Turso primary`,
+          );
+        } else {
+          console.warn(
+            `[DbRouter] Degraded replica — served ${source.alias ?? source.dbId} from Turso primary`,
+          );
+        }
         return remote;
       }
+    }
+
+    if (
+      dbPath &&
+      isReplicaReadPathDegraded(dbPath) &&
+      !isReplicaPathPublishQuiesced(dbPath) &&
+      isTursoReplicaOnline()
+    ) {
+      try {
+        const local = await withMiniAppReplicaReadTimeout(
+          queryLinkedDbViaTursoReplica(source, sql, params, {
+            pullBeforeRead: false,
+          }),
+          `degraded replica read (${source.alias ?? source.dbId ?? "db"})`,
+          REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS,
+        );
+        clearReplicaReadPathDegraded(source.dbPath);
+        console.log(
+          `[DbRouter] Degraded path recovered locally app=${appId} source=${source.alias} rows=${local.count}`,
+        );
+        return { ...local, backend: "turso-replica" };
+      } catch (localError) {
+        console.warn(
+          `[DbRouter] Degraded local replica failed for ${source.alias ?? source.dbId}: ` +
+            `${(localError as Error).message.slice(0, 120)}`,
+        );
+      }
+    }
+
+    if (dbPath && isReplicaPathPublishQuiesced(dbPath)) {
+      throw new Error(
+        `Database sync in progress for ${source.alias ?? source.dbId}. Retry in a moment.`,
+      );
     }
 
     try {
@@ -280,6 +310,7 @@ export class DbRouter {
         }),
         `replica read (${source.alias ?? source.dbId ?? "db"})`,
       );
+      clearReplicaReadPathDegraded(source.dbPath);
       console.log(
         `[DbRouter] Turso replica query app=${appId} source=${source.alias} rows=${result.count}`,
       );
@@ -287,9 +318,9 @@ export class DbRouter {
     } catch (error) {
       const message = (error as Error).message;
 
-      if (isReplicaMissingTableError(message)) {
+      if (isReplicaSchemaDriftError(message)) {
         console.warn(
-          `[DbRouter] Missing table on replica for ${source.alias ?? source.dbId} — healing schema drift`,
+          `[DbRouter] Schema drift on replica for ${source.alias ?? source.dbId} — healing`,
         );
         try {
           await healReplicaSchemaDrift(source);
@@ -298,7 +329,9 @@ export class DbRouter {
               pullBeforeRead: false,
             }),
             `replica read after schema heal (${source.alias ?? source.dbId ?? "db"})`,
+            REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS,
           );
+          clearReplicaReadPathDegraded(source.dbPath);
           console.log(
             `[DbRouter] Turso replica query (healed) app=${appId} source=${source.alias} rows=${retry.count}`,
           );
@@ -308,11 +341,33 @@ export class DbRouter {
             `[DbRouter] Schema heal + retry failed for ${source.alias ?? source.dbId}:`,
             (healError as Error).message.slice(0, 200),
           );
+          // Local replica can lag cloud after wedge reset — cloud still has full schema.
+          await getTursoReplicaService().close(source.dbPath);
+          if (isTursoReplicaOnline()) {
+            const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
+            if (remote) {
+              console.warn(
+                `[DbRouter] Served ${source.alias ?? source.dbId} from Turso primary ` +
+                  "while local replica migrations catch up",
+              );
+              return remote;
+            }
+          }
         }
       }
 
-      if (isReplicaSqlSchemaError(message)) {
+      if (isReplicaSqlSchemaError(message) && !isReplicaSchemaDriftError(message)) {
         throw error;
+      }
+
+      if (isReplicaMissingColumnError(message) && isTursoReplicaOnline()) {
+        console.warn(
+          `[DbRouter] Missing column on replica for ${source.alias ?? source.dbId} — Turso primary fallback`,
+        );
+        const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
+        if (remote) {
+          return remote;
+        }
       }
 
       if (isReplicaMiniAppReadTimeoutError(message)) {
@@ -327,6 +382,7 @@ export class DbRouter {
             `replica read retry (${source.alias ?? source.dbId ?? "db"})`,
             REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS,
           );
+          clearReplicaReadPathDegraded(source.dbPath);
           console.log(
             `[DbRouter] Turso replica query (retry) app=${appId} source=${source.alias} rows=${retry.count}`,
           );
@@ -343,6 +399,15 @@ export class DbRouter {
       const tursoDatabase = resolveTursoDatabaseName(source);
 
       if (tursoDatabase && isReplicaCheckpointWalError(message)) {
+        if (source.dbPath && isReplicaPathPublishQuiesced(source.dbPath)) {
+          const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
+          if (remote) {
+            console.warn(
+              `[DbRouter] Publish quiesce — WAL wedge on ${source.alias ?? source.dbId}, served from Turso primary`,
+            );
+            return remote;
+          }
+        }
         console.warn(
           `[DbRouter] Replica checkpoint error for ${source.alias ?? source.dbId} — ` +
             "attempting Tier-1 recovery (pull + drain CDC)",
@@ -406,13 +471,8 @@ export class DbRouter {
       return null;
     }
 
-    const remoteTables = await listTursoLocalTables(source);
-    const syncable = filterSyncableTables(
-      remoteTables.length > 0 ? remoteTables : source.tables,
-    );
-    const remoteSql = rewriteSqlForTurso(sql, source, syncable);
     const result = await client.execute({
-      sql: remoteSql,
+      sql,
       args: (params ?? []) as (string | number | bigint | boolean | null)[],
     });
 
@@ -440,6 +500,18 @@ export class DbRouter {
   ): Promise<RoutedSchemaResult> {
     if (shouldUseTursoReplicaForSource(source)) {
       if (isReplicaReadPathDegraded(source.dbPath) && isTursoReplicaOnline()) {
+        try {
+          const local = await withMiniAppReplicaReadTimeout(
+            schemaLinkedDbViaTursoReplica(source),
+            `degraded replica schema (${source.alias ?? source.dbId ?? "db"})`,
+            REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS,
+          );
+          clearReplicaReadPathDegraded(source.dbPath);
+          return { ...local, backend: "turso-replica" };
+        } catch {
+          /* fall through to Turso primary schema */
+        }
+
         const client = await getTursoClientForSource(source);
         if (client) {
           const tablesResult = await client.execute({

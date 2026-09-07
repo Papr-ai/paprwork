@@ -28,6 +28,7 @@ import {
   recordTursoPushQuarantine,
 } from "./tursoSyncState.js";
 import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
+import { isReplicaLinkedDbDirtyForWatcher } from "./tursoReplica/tursoReplicaRouting.js";
 
 let watcher: TreeWatcher | null = null;
 
@@ -175,12 +176,26 @@ function scheduleReplicaPushFromWatcher(
 }
 
 function evaluateDbChangeReplica(watched: WatchedDbDir): void {
+  const syncState = loadTursoSyncState();
+  if (isJobDbQuarantined(watched.syncKey, syncState)) {
+    return;
+  }
+
   const coordinator = getSyncCoordinator();
   if (coordinator) {
     const status = coordinator.getStatus();
     if (status.activeFlush || status.inFlightAppIds.length > 0) {
       return;
     }
+  }
+
+  if (
+    !isReplicaLinkedDbDirtyForWatcher({
+      dbPath: watched.dbPath,
+      ...(watched.dbId ? { dbId: watched.dbId } : {}),
+    })
+  ) {
+    return;
   }
   scheduleReplicaPushFromWatcher(watched);
   publishDbChanged({

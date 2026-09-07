@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import {
   mergeRemoteCodeCheckIntoStatus,
+  suppressStaleGitUpdatesAvailable,
   type AppCloudSyncStatus,
 } from "../ui/utils/appCloudSyncStatus";
 
@@ -31,6 +32,7 @@ function baseStatus(overrides: Partial<AppCloudSyncStatus> = {}): AppCloudSyncSt
     oversizedAppFilesMessage: null,
     oversizedAppFilesCount: 0,
     hasSchemaDrift: false,
+    hasLocalChanges: false,
     ...overrides,
   };
 }
@@ -43,7 +45,7 @@ describe("mergeRemoteCodeCheckIntoStatus", () => {
     });
     expect(merged.gitUpdatesAvailable).toBe(true);
     expect(merged.codeStatus).toBe("updates_available");
-    expect(merged.overall).toBe("needs_sync");
+    expect(merged.overall).toBe("synced");
     expect(merged.chipLabel).toBe("Updates available");
   });
 
@@ -66,5 +68,57 @@ describe("mergeRemoteCodeCheckIntoStatus", () => {
     });
     expect(merged.gitUpdatesAvailable).toBe(false);
     expect(merged.chipLabel).toBe("Synced");
+  });
+
+  test("does not claim cloud is newer when local changes are waiting", () => {
+    const localPending = baseStatus({
+      overall: "needs_sync",
+      codeStatus: "pending",
+      codePhase: "changed",
+      hasLocalChanges: true,
+      chipLabel: "Not published",
+      summaryLine: "Local changes waiting — manual publish mode (click Publish changes)",
+    });
+    const merged = mergeRemoteCodeCheckIntoStatus(localPending, {
+      upToDate: false,
+      remoteCommitSha: "abc123",
+    });
+    expect(merged.gitUpdatesAvailable).toBe(false);
+    expect(merged.codeStatus).toBe("pending");
+    expect(merged.summaryLine).toContain("Local changes waiting");
+  });
+
+  test("clears stale namespace-git flag when live remote check is up to date", () => {
+    const merged = mergeRemoteCodeCheckIntoStatus(
+      baseStatus({
+        gitUpdatesAvailable: true,
+        codeStatus: "updates_available",
+        overall: "needs_sync",
+        chipLabel: "Updates available",
+      }),
+      {
+        upToDate: true,
+        remoteCommitSha: "abc123",
+      },
+    );
+    expect(merged.gitUpdatesAvailable).toBe(false);
+    expect(merged.codeStatus).toBe("synced");
+    expect(merged.overall).toBe("synced");
+  });
+});
+
+describe("suppressStaleGitUpdatesAvailable", () => {
+  test("hides cached flag while live check pending", () => {
+    const pending = suppressStaleGitUpdatesAvailable(
+      baseStatus({ gitUpdatesAvailable: true }),
+      true,
+    );
+    expect(pending.gitUpdatesAvailable).toBe(false);
+
+    const settled = suppressStaleGitUpdatesAvailable(
+      baseStatus({ gitUpdatesAvailable: true }),
+      false,
+    );
+    expect(settled.gitUpdatesAvailable).toBe(true);
   });
 });

@@ -85,23 +85,23 @@ function buildLabels(input: {
       detail:
         flushErrorMessage?.slice(0, 160) ??
         lastError?.slice(0, 160) ??
-        "Cloud repo changed — get updates or ask the agent, edit locally, then upload again",
+        "Cloud repo changed — get updates or ask the agent, edit locally, then publish again",
     };
   }
 
   if (status === "failed") {
     return {
-      label: "Upload failed",
+      label: "Publish failed",
       detail:
         lastError?.slice(0, 160) ??
         flushErrorMessage?.slice(0, 160) ??
-        "Upload failed — retry with Upload now",
+        "Publish failed — retry with Publish changes",
     };
   }
 
   if (phase === "uploading") {
     return {
-      label: "Uploading app code…",
+      label: "Publishing app code…",
       detail:
         pendingWriterOps > 0
           ? `Sending ${pendingWriterOps} change(s) to cloud repo…`
@@ -115,18 +115,18 @@ function buildLabels(input: {
     const label =
       position != null && depth != null && depth > 0
         ? formatFlushQueueLabel(position, depth)
-        : "In upload queue";
+        : "In publish queue";
     const detail =
       position != null && depth != null && depth > 0
         ? formatFlushQueueDetail(position, depth)
-        : "Waiting for other apps to finish uploading…";
+        : "Waiting for other apps to finish publishing…";
     return { label, detail };
   }
 
   if (manualUploadHold && phase === "changed") {
     return {
       label: "Local changes waiting",
-      detail: "Manual upload mode — click Upload now",
+      detail: "Manual publish mode — click Publish changes",
     };
   }
 

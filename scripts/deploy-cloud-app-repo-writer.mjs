@@ -81,6 +81,10 @@ const appHostUrl = (
   getArg("app-host-url", process.env.PAPR_CLOUD_APPS_HOST) ??
   "https://papr-cloud-app-host-223473570766.us-west1.run.app"
 ).replace(/\/$/, "");
+const gatewayUrl = (
+  getArg("gateway-url", process.env.CLOUD_AGENT_GATEWAY_URL) ??
+  "https://papr-cloud-agent-gateway-223473570766.us-west1.run.app"
+).replace(/\/$/, "");
 const skipWebhook = args.includes("--skip-webhook");
 const committedWebhookUrl = skipWebhook
   ? ""
@@ -90,7 +94,16 @@ const committedWebhookUrl = skipWebhook
         process.env.PAPR_APP_REPO_COMMITTED_WEBHOOK_URL,
       ) ?? `${appHostUrl}/internal/app-repo-committed`
     ).replace(/\/$/, "");
+const committedGatewayWebhookUrl = skipWebhook
+  ? ""
+  : (
+      getArg(
+        "committed-gateway-webhook-url",
+        process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL,
+      ) ?? `${gatewayUrl}/internal/app-repo-committed`
+    ).replace(/\/$/, "");
 const appHostSecretName = "papr-cloud-app-host-key";
+const gatewaySecretName = "papr-cloud-agent-gateway-key";
 
 function fail(msg) {
   console.error(`\n❌ ${msg}`);
@@ -282,15 +295,32 @@ if (!skipWebhook && appHostSecretCheck.status !== 0) {
   );
 }
 
+const gatewaySecretCheck = spawnSync(
+  "gcloud",
+  ["secrets", "describe", gatewaySecretName, `--project=${project}`],
+  { encoding: "utf8" },
+);
+if (!skipWebhook && gatewaySecretCheck.status !== 0) {
+  console.warn(
+    `[deploy] Secret ${gatewaySecretName} missing — gateway repo-cache webhook disabled until gateway is deployed`,
+  );
+}
+
 const allSecretNames = [
   ...GITHUB_SECRET_SPECS.map((s) => s.secretName),
   ...(appHostSecretCheck.status === 0 ? [appHostSecretName] : []),
+  ...(gatewaySecretCheck.status === 0 ? [gatewaySecretName] : []),
 ];
 grantComputeSecretAccess(allSecretNames);
 
 const envVars = [`PAPR_MEMORY_SERVER_URL=${memoryUrl}`];
 if (committedWebhookUrl) {
   envVars.push(`PAPR_APP_REPO_COMMITTED_WEBHOOK_URL=${committedWebhookUrl}`);
+}
+if (committedGatewayWebhookUrl && gatewaySecretCheck.status === 0) {
+  envVars.push(
+    `PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL=${committedGatewayWebhookUrl}`,
+  );
 }
 
 const secretBindings = [
@@ -299,6 +329,9 @@ const secretBindings = [
   ),
   ...(appHostSecretCheck.status === 0
     ? [`PAPR_CLOUD_APP_HOST_KEY=${appHostSecretName}:latest`]
+    : []),
+  ...(gatewaySecretCheck.status === 0
+    ? [`PAPR_CLOUD_AGENT_GATEWAY_KEY=${gatewaySecretName}:latest`]
     : []),
 ].join(",");
 

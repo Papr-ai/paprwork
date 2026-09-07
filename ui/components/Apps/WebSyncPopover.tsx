@@ -17,8 +17,6 @@ import {
   buildWriterConflictAgentPrompt,
   openCloudSyncAgentChat,
 } from "../../utils/openCloudSyncAgentChat";
-import { AUTO_UPLOAD_TOGGLE_LABEL } from "../../utils/appUploadMode";
-
 /** Primary push action label — Publish for first-time web deploy, Publish changes when already live. */
 export function webSyncPushButtonLabel(options: {
   appLive: boolean;
@@ -92,11 +90,8 @@ export interface WebSyncPopoverProps {
   onApplyRemoteUpdates: () => void;
   /** False when the app has never been published — primary action is Publish (share + upload). */
   appLive?: boolean;
-  /** Per-app: upload to web automatically vs Publish changes only */
+  /** Per-app: upload to web automatically vs Publish changes only (hint copy only) */
   autoUploadEnabled?: boolean;
-  autoUploadUsesGlobalDefault?: boolean;
-  autoUploadSaving?: boolean;
-  onAutoUploadChange?: (enabled: boolean) => void;
   popoverRef?: React.RefObject<HTMLDivElement | null>;
   className?: string;
   style?: React.CSSProperties;
@@ -222,14 +217,11 @@ export function WebSyncPopover({
   onApplyRemoteUpdates,
   appLive = true,
   autoUploadEnabled,
-  autoUploadUsesGlobalDefault = false,
-  autoUploadSaving = false,
-  onAutoUploadChange,
   popoverRef,
   className,
   style,
 }: WebSyncPopoverProps) {
-  const busy = pushing || pulling || applyingUpdates || loading || refreshing || autoUploadSaving;
+  const busy = pushing || pulling || applyingUpdates || loading || refreshing;
   const pushLabel = webSyncPushButtonLabel({ appLive, pushing });
   const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
   const writerConflict = status?.writerConflict === true;
@@ -264,12 +256,6 @@ export function WebSyncPopover({
     !showWriterConflict &&
     !showDatabaseBlockerHelp &&
     !showUploadFailureHelp &&
-    !metadataSync;
-  const showAutoUploadToggle =
-    onAutoUploadChange != null &&
-    status?.overall !== "disabled" &&
-    !showMergeReview &&
-    !showWriterConflict &&
     !metadataSync;
   const popoverClassName = className
     ? `mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked ${className}`
@@ -524,24 +510,6 @@ export function WebSyncPopover({
             Not on the web yet — click <strong>Publish</strong> once; later changes publish
             automatically.
           </p>
-        ) : null}
-        {showAutoUploadToggle ? (
-          <label className="mini-app-publish-bar__sync-upload-toggle mini-app-publish-bar__sync-upload-toggle--compact">
-            <input
-              type="checkbox"
-              checked={autoUploadEnabled ?? true}
-              disabled={busy}
-              onChange={(event) => {
-                onAutoUploadChange?.(event.target.checked);
-              }}
-            />
-            <span>{AUTO_UPLOAD_TOGGLE_LABEL}</span>
-            {autoUploadUsesGlobalDefault ? (
-              <span className="mini-app-publish-bar__sync-upload-toggle-note">
-                (workspace default)
-              </span>
-            ) : null}
-          </label>
         ) : null}
         {statusRows.length > 0 ? (
           <ul className="mini-app-publish-bar__sync-popover-list">

@@ -28,7 +28,7 @@ export interface CloudPublishAppPrefs {
   autoPublish: boolean;
   /** When false, skip cloud upload for this app. inherit = follow global cloud sync. */
   cloudEnabled?: CloudEnabledPref;
-  /** auto = push on change; manual = Upload now only; inherit = global cloudAutoUploadEnabled. */
+  /** auto = push on change; manual = Publish changes only; inherit = global cloudAutoUploadEnabled. */
   uploadMode?: CloudUploadModePref;
   accessMode: CloudAccessMode;
   /** Who can open the app after signing in with Papr. */

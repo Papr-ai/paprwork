@@ -81,7 +81,7 @@ describe("WebSyncPopover", () => {
       <WebSyncPopover {...baseProps} status={null} loading={false} appLive />,
     );
 
-    expect(screen.getByRole("button", { name: /upload now/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /publish changes/i })).toBeTruthy();
   });
 
   it("offers Publish while status is unresolved (draft app)", () => {

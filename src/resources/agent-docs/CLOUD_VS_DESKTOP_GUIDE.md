@@ -9,7 +9,7 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 
 **Canonical terms (use consistently):**
 - **Cloud Sync** — Settings toggle; enables git push, Turso replica sync, vault push, and auto-publish
-- **Upload now** — UI button; same engine as `push_cloud_sync({ appId })` (git **+** Turso ordered flush)
+- **Publish / Publish changes** — UI button in the app tab; same engine as `push_cloud_sync({ appId })` (git **+** Turso ordered flush)
 - **Cloud vault** — Integration Keys + platform cookies on the memory server; cloud jobs read vault, **not** desktop keychain
 - **Plan A replica** — Registry DB sync mode (`syncMode: "replica"`); Turso primary is authority; desktop tails frames via `papr_db_pull`
 - **Sync V3** — Per-app GitHub writer repo for app source (not namespace monorepo `apps/` paths)
@@ -108,7 +108,7 @@ Flow (registry DBs with `syncMode: "replica"`):
 
 1. Cloud gateway: writes go to Turso **primary** (direct adapter or replica service online path)
 2. Agent/job writes during cloud run land on primary
-3. Desktop on wake: heartbeat / manual sync runs **`papr_db_pull`** (or app Upload now / `push_cloud_sync` pull-before-push bookends) → local embedded replica tails new frames
+3. Desktop on wake: heartbeat / manual sync runs **`papr_db_pull`** (or app Publish changes / `push_cloud_sync` pull-before-push bookends) → local embedded replica tails new frames
 4. Agent tools: `papr_db_sync_status` shows `online`, `pendingPush`, `migrationConflict` — use `papr_db_push` / `repair_cloud_sync` when blocked
 
 **Legacy path (`syncMode: "legacy"`):** still uses CDC + optional `sync-index` polling until cutover. Prefer replica tools when status shows `syncMode: "replica"`.

@@ -141,7 +141,7 @@ CREATE TABLE invoices (
   status TEXT NOT NULL DEFAULT 'open'
 );`.trim(),
 })
-// Apply: run_job({ writeDbIds: [dbId] }) or app Upload now / sync
+// Apply: run_job({ writeDbIds: [dbId] }) or app Publish changes / sync
 ```
 
 **Required:** Every synced table needs a **PRIMARY KEY** (`INTEGER PRIMARY KEY`, `TEXT PRIMARY KEY`, or composite PK). Without it, delta sync and row versioning are disabled.
@@ -154,9 +154,9 @@ CREATE TABLE invoices (
 | Row DML | `papr_db_exec({ dbId, sql })` or mini-app `/api/db/write` — **no DDL** under Plan A |
 | Sync status / recovery | `papr_db_sync_status`, `repair_cloud_sync` |
 | Push / pull (recovery only) | `papr_db_push` / `papr_db_pull` — hidden from main agent when Plan A is on |
-| Code + publish | `push_cloud_sync({ appId })` or Upload now — git + replica push |
+| Code + publish | `push_cloud_sync({ appId })` or Publish / Publish changes in the app tab — git + replica push |
 
-DML auto-pushes when online. After offline row work, use **Upload now** or `repair_cloud_sync({ strategy: 'pull' })` before editing again. Job scratch DBs (`$JOB_DB`) stay legacy until cutover.
+DML auto-pushes when online. After offline row work, use **Publish changes** or `repair_cloud_sync({ strategy: 'pull' })` before editing again. Job scratch DBs (`$JOB_DB`) stay legacy until cutover.
 
 **Platform-managed (auto-added, do not create):** `_papr_created_at`, `_papr_updated_at`, `_papr_row_version` — used for conflict resolution across devices.
 
@@ -533,7 +533,7 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 | `papr_db_sync_status` / `papr_db_push` / `papr_db_pull` / `repair_cloud_sync` | Plan A registry DB row sync — use when `turso.sources[].syncMode === "replica"` |
 | `query_cloud_turso({ sql, jobId \| tursoDatabase \| appId+alias })` | Read-only SQL on Turso replica — verify cloud rows match local |
 | `inspect_cloud_repo({ action: "read"\|"list", relativePath?, prefix? })` | Read/list files on GitHub (e.g. `apps/{id}/dist/app.js`, `Jobs/{id}/job.json`) |
-| `push_cloud_sync({ appId? })` | Force git + Turso push (Upload now equivalent); replica DBs pushed via replica path |
+| `push_cloud_sync({ appId? })` | Force git + Turso push (Publish / Publish changes equivalent); replica DBs pushed via replica path |
 
 **Diagnose → fix → verify:**
 
@@ -557,7 +557,7 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 1. Call `get_cloud_sync_status({ appId, jobId, includeJobLogs: true })`
 2. Check `desktopHeartbeat.desktopAwake` — if `false` and job is in `pendingCloudRuns`, user must open Paprwork
 3. Check `jobs.githubRecords` — confirms job definition reached GitHub
-4. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Upload now or `papr_db_push`. `migrationConflict` → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`). Legacy CDC shows row-level background sync separately.
+4. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Publish changes or `papr_db_push`. `migrationConflict` → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`). Legacy CDC shows row-level background sync separately.
 
 **Migration ledger duplicates:** Legacy rows may show both `0001_init` and `0001_init.sql`. Harmless for schema (same migration) but can false-flag `ledgerPaired: false`. Fix: `papr_db_reconcile_sync({ dbId, action: "dedupe_migration_ledger" })` then re-check parity.
 

@@ -1,12 +1,19 @@
 /**
  * Pull app source from the Sync V3 per-app GitHub repo into $PAPR_HOME/apps/{appId}/.
+ * Schema-owner migrations (databases/{slug}/migrations/) hydrate into
+ * $PAPR_HOME/data/databases/{slug}/migrations/ — the registry apply path.
  * Used by Get updates (per-app) — replaces legacy namespace git for app code.
  */
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
+import { getPaprAppsRoot, getPaprRoot } from "../../../core/utils/paprRoot.js";
+import {
+  readActiveAppWorkspaceScope,
+  repairPulledMetadataWorkspaceScope,
+} from "../../../core/utils/appWorkspaceScope.js";
+import { writeCloudAppMetadataFile } from "../cloudAppMetadataFile.js";
 import { fileContentHash } from "../../utils/fileContentHash.js";
 import { getAppService } from "../AppService.js";
 import {
@@ -27,11 +34,17 @@ import {
   applyAckedBlobOids,
   readOidCache,
 } from "./OidCache.js";
+import {
+  applyRegistryMigrationsAfterPull,
+  persistPulledSchemaMigration,
+} from "./syncPulledSchemaOwnerMigrations.js";
 
 export interface PullAppCodeFromRepoResult {
   appId: string;
   commitSha: string | null;
   updatedFiles: string[];
+  /** Registry-relative paths under data/databases/{slug}/migrations/ */
+  registryMigrationsCopied: string[];
   conflictFiles: string[];
   skippedFiles: string[];
   skipped?: boolean;
@@ -77,6 +90,7 @@ export async function pullAppCodeFromRepo(
     appId: trimmed,
     commitSha: null,
     updatedFiles: [],
+    registryMigrationsCopied: [],
     conflictFiles: [],
     skippedFiles: [],
   };
@@ -210,17 +224,48 @@ export async function pullAppCodeFromRepo(
 
     const appService = getAppService();
     const updatedFiles: string[] = [];
+    const registryMigrationsCopied: string[] = [];
     const conflictFiles: string[] = [];
     const skippedFiles: string[] = [];
+    let metadataScopeRepair: ReturnType<
+      typeof repairPulledMetadataWorkspaceScope
+    > | null = null;
 
     for (const [filePath, upstreamContent] of upstreamFiles) {
       const remoteOid = remoteOidByPath.get(filePath);
+      const lastSyncedOid = cachedPaths[filePath] ?? null;
+
+      const migrationOutcome = await persistPulledSchemaMigration({
+        appId: trimmed,
+        repoPath: filePath,
+        content: upstreamContent,
+        remoteOid,
+        lastSyncedOid,
+      });
+
+      if (migrationOutcome.kind === "written") {
+        registryMigrationsCopied.push(migrationOutcome.registryRelativePath);
+        updatedFiles.push(filePath);
+        continue;
+      }
+      if (migrationOutcome.kind === "conflict") {
+        conflictFiles.push(filePath);
+        continue;
+      }
+      if (migrationOutcome.kind === "unchanged") {
+        skippedFiles.push(filePath);
+        continue;
+      }
+      if (migrationOutcome.kind === "skipped") {
+        skippedFiles.push(filePath);
+        continue;
+      }
+
       const upstreamHash = hashContent(upstreamContent);
       const localContent = localFiles.get(filePath);
       const localOid = localContent
         ? await computeBlobOidForContent(localContent)
         : null;
-      const lastSyncedOid = cachedPaths[filePath] ?? null;
 
       if (remoteOid && localOid === remoteOid) {
         skippedFiles.push(filePath);
@@ -241,11 +286,53 @@ export async function pullAppCodeFromRepo(
         continue;
       }
 
-      const written = await appService.writeAppFile(trimmed, filePath, upstreamContent);
+      let contentToWrite = upstreamContent;
+      if (filePath === "metadata.json") {
+        const localApp = await appService.getApp(trimmed);
+        const repair = repairPulledMetadataWorkspaceScope(
+          upstreamContent,
+          {
+            organizationId: localApp?.organizationId,
+            namespaceId: localApp?.namespaceId,
+          },
+          readActiveAppWorkspaceScope(),
+        );
+        contentToWrite = repair.content;
+        if (repair.repaired) {
+          metadataScopeRepair = repair;
+        }
+      }
+
+      const written = await appService.writeAppFile(trimmed, filePath, contentToWrite);
       if (written) {
         updatedFiles.push(filePath);
       } else {
         skippedFiles.push(filePath);
+      }
+    }
+
+    if (metadataScopeRepair?.appliedScope) {
+      const scope = metadataScopeRepair.appliedScope;
+      const localApp = await appService.getApp(trimmed);
+      if (
+        localApp &&
+        (localApp.organizationId !== scope.organizationId ||
+          localApp.namespaceId !== scope.namespaceId)
+      ) {
+        await appService.updateApp(trimmed, {
+          organizationId: scope.organizationId,
+          namespaceId: scope.namespaceId,
+        });
+        console.log(
+          `[PullAppCode] ${trimmed}: repaired apps.json workspace scope → ${scope.organizationId}/${scope.namespaceId}`,
+        );
+      } else {
+        await writeCloudAppMetadataFile(getPaprRoot(), trimmed).catch((err: unknown) => {
+          console.warn(
+            `[PullAppCode] Failed to rewrite metadata.json for ${trimmed}:`,
+            err instanceof Error ? err.message : err,
+          );
+        });
       }
     }
 
@@ -257,8 +344,12 @@ export async function pullAppCodeFromRepo(
     }
 
     if (updatedFiles.length > 0) {
+      const migrationNote =
+        registryMigrationsCopied.length > 0
+          ? ` (${registryMigrationsCopied.length} registry migration(s))`
+          : "";
       console.log(
-        `[PullAppCode] ${trimmed}: updated ${updatedFiles.length} file(s) from per-app repo @ ${head.commitSha.slice(0, 7)}`,
+        `[PullAppCode] ${trimmed}: updated ${updatedFiles.length} file(s)${migrationNote} from per-app repo @ ${head.commitSha.slice(0, 7)}`,
       );
     }
 
@@ -273,6 +364,7 @@ export async function pullAppCodeFromRepo(
       appId: trimmed,
       commitSha: head.commitSha,
       updatedFiles,
+      registryMigrationsCopied,
       conflictFiles,
       skippedFiles,
     };
@@ -311,6 +403,22 @@ export async function pullDesktopAppOnRemoteCommit(input: {
       `[AppRepoRevisionSubscriber] Desktop pull skipped for ${input.appId}: ${result.reason.slice(0, 80)}`,
     );
     return;
+  }
+
+  if (result.conflictFiles.length === 0) {
+    try {
+      const applied = await applyRegistryMigrationsAfterPull(input.appId);
+      if (applied.length > 0) {
+        console.log(
+          `[AppRepoRevisionSubscriber] Applied registry migrations for ${input.appId}: ${applied.join(", ")}`,
+        );
+      }
+    } catch (error) {
+      console.warn(
+        `[AppRepoRevisionSubscriber] Registry migration apply failed for ${input.appId}:`,
+        (error as Error).message,
+      );
+    }
   }
 
   if (result.updatedFiles.length > 0) {

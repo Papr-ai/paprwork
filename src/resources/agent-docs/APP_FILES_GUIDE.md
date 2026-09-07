@@ -11,9 +11,45 @@ Use **App Files** when a mini-app needs to store or serve files **over 10MB** (v
 | Need | Use |
 |------|-----|
 | Video/audio/PDF served to visitors on apps.papr.ai | **App Files** — store file **id** in SQLite |
-| Small icon, SVG, PDF under 10MB | `apps/{id}/assets/` — git sync works |
+| **AI-generated image/video for a mini-app** | **`generate_media({ appId, ... })`** → store **appFileId** in SQLite |
+| Small icon, SVG you authored by hand under 10MB | `apps/{id}/assets/` — git sync works |
 | Searchable brand book in **chat only** (not web asset) | `upload_document_to_memory` / Papr Memory |
 | Job output file (recording, export) | `papr_files.add()` from Python job |
+
+---
+
+## Agent-generated images (`generate_media`)
+
+Use the **`generate_media`** tool (not Python jobs, not `read_file` on JPEGs, not base64 in HTML).
+
+```javascript
+// 1. Generate + register in App Files (appId is REQUIRED for mini-apps)
+generate_media({
+  appId: "a3b51c4f-186a-4106-8ab3-08b9cf5ed12a",
+  modelId: "gemini-3.1-flash-image",
+  fileName: "slide-hero-bg",
+  prompt: "Minimal gradient hero background, on-brand blues",
+})
+// → { appFileId: "0e12fb4c-...", fileName: "slide-hero-bg.png", nextStep: "..." }
+
+// 2. Persist id in app SQLite (example)
+// UPDATE slides SET background_file_id = ? WHERE id = ?
+
+// 3. Mini-app serves it (browser)
+import { papr } from '/__papr__/papr-files.js';
+const { url } = await papr.files.url(storedFileId);
+img.src = url;
+```
+
+**Rules:**
+- Read **`appFileId`** and **`nextStep`** from the tool result — they appear first
+- **Never** store `localPath` in the database for published apps
+- **Never** `read_file` the generated JPEG/PNG into agent context
+- **Never** embed base64 data URIs in slide HTML
+- **Wrong route:** `/api/apps/{appId}/app-files/{id}` — does not exist
+- **Correct routes:** `POST /api/files/url` `{ appId, id }` or `papr.files.url(id)` in the mini-app
+
+Chat-only generation (no mini-app): omit `appId` — file lands in `$PAPR_HOME/data/generated-media/` for chat preview only.
 
 ---
 

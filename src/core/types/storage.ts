@@ -79,7 +79,7 @@ export interface AppSettings {
     cloudAutoPublishEnabled: boolean;
     /**
      * When cloud sync is on, automatically push git/Turso changes to the cloud.
-     * Enabled by default. When false, only Upload now / agent push_cloud_sync upload.
+     * Enabled by default. When false, only Publish changes / agent push_cloud_sync publish.
      */
     cloudAutoUploadEnabled: boolean;
     /**

@@ -427,6 +427,16 @@ export class SyncCoordinator {
     }
   }
 
+  /** Clear recorded flush/conflict errors so a repaired baseline can publish cleanly. */
+  clearFlushErrorState(appId: string): void {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return;
+    }
+    this.clearAutoFlushFailure(trimmed);
+    this.sync.clearManualFlushError(trimmed);
+  }
+
   /** Drop pending auto-flush state when an app is deleted locally. */
   forgetDeletedApp(appId: string): void {
     const trimmed = appId.trim();

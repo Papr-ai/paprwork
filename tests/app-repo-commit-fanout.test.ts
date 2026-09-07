@@ -96,6 +96,58 @@ describe("appRepoCommittedFanout", () => {
     }
   });
 
+  test("posts gateway webhook with X-Cloud-Agent-Gateway-Key when configured", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const prevWebhook = process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL;
+    const prevKey = process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY;
+    process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL =
+      "https://gateway.example/internal/app-repo-committed";
+    process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY = "test-gateway-key";
+
+    try {
+      const { fanoutAppRepoCommitted } = await import(
+        "../src/gateway/services/syncV3/appRepoCommittedFanout.js"
+      );
+
+      const event = {
+        appId: "app-gateway",
+        commitSha: "cafebabe",
+        githubOrg: "papr-shard-0001",
+        repoName: "app-app-gateway",
+        namespaceId: "ns-1",
+        committedAt: new Date().toISOString(),
+      };
+
+      await fanoutAppRepoCommitted(event);
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://gateway.example/internal/app-repo-committed",
+        expect.objectContaining({
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Cloud-Agent-Gateway-Key": "test-gateway-key",
+          },
+          body: JSON.stringify(event),
+        }),
+      );
+    } finally {
+      if (prevWebhook === undefined) {
+        delete process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL;
+      } else {
+        process.env.PAPR_APP_REPO_COMMITTED_GATEWAY_WEBHOOK_URL = prevWebhook;
+      }
+      if (prevKey === undefined) {
+        delete process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY;
+      } else {
+        process.env.PAPR_CLOUD_AGENT_GATEWAY_KEY = prevKey;
+      }
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("parses direct and Pub/Sub push payloads", async () => {
     const {
       isAppRepoCommittedEvent,

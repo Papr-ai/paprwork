@@ -47,7 +47,7 @@ describe("papr-preview-fetch-gate", () => {
     expect(nativeFetch).toHaveBeenCalledTimes(2);
   });
 
-  it("rejects large stale queues on visible instead of flushing", async () => {
+  it("flushes large stale queues on visible instead of rejecting", async () => {
     const nativeFetch = vi.fn().mockResolvedValue(new Response("ok"));
     vi.stubGlobal("fetch", nativeFetch);
 
@@ -64,7 +64,7 @@ describe("papr-preview-fetch-gate", () => {
       new MessageEvent("message", { data: { type: "papr:preview-visible" } }),
     );
 
-    await expect(Promise.all(pending)).rejects.toMatchObject({ name: "AbortError" });
-    expect(nativeFetch).not.toHaveBeenCalled();
+    await Promise.all(pending);
+    expect(nativeFetch).toHaveBeenCalledTimes(6);
   });
 });

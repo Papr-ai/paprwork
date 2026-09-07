@@ -5,9 +5,11 @@ import {
   interruptedTurnNeedsContinue,
   lastUserTurnNeedsContinue,
   mergeHistoryWithLocal,
+  priorUserTurnSettledForQueue,
   recordAutoContinueAttempt,
   resetAutoContinueAttempts,
   shouldAutoContinueInterruptedTurn,
+  shouldDrainMessageQueue,
   shouldIgnoreDuplicateDoneChunk,
   isStreamDoneChunkWithChatId,
   resolveChatIdForStreamRequest,
@@ -286,6 +288,80 @@ describe("lastUserTurnNeedsContinue", () => {
       { id: "a1", role: "assistant", content: "" },
     ];
     expect(lastUserTurnNeedsContinue(messages)).toBe(true);
+  });
+});
+
+describe("priorUserTurnSettledForQueue", () => {
+  it("returns false when the last user turn has no assistant yet", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(false);
+  });
+
+  it("returns true when the last user turn has a completed assistant", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+      { id: "a1", role: "assistant", content: "Answer" },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(true);
+  });
+
+  it("returns true when the prior assistant was explicitly interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial",
+        interrupted: true,
+      },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(true);
+  });
+
+  it("returns false when another user message already sits after the last user turn", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "First question" },
+      { id: "u2", role: "user", content: "Second question" },
+    ];
+    expect(priorUserTurnSettledForQueue(messages)).toBe(false);
+  });
+});
+
+describe("shouldDrainMessageQueue", () => {
+  it("returns false while the agent is still sending", () => {
+    expect(
+      shouldDrainMessageQueue({
+        chatId: "chat-1",
+        messages: [
+          { id: "u1", role: "user", content: "Hi" },
+          { id: "a1", role: "assistant", content: "Hello" },
+        ],
+        isSending: true,
+        isWaitingForAgentSlot: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        queueTransitionInFlight: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns true when the prior turn settled and nothing is in flight", () => {
+    expect(
+      shouldDrainMessageQueue({
+        chatId: "chat-1",
+        messages: [
+          { id: "u1", role: "user", content: "Hi" },
+          { id: "a1", role: "assistant", content: "Hello" },
+        ],
+        isSending: false,
+        isWaitingForAgentSlot: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        queueTransitionInFlight: false,
+      }),
+    ).toBe(true);
   });
 });
 

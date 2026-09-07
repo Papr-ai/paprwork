@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildRepetitionRecoveryPlanNudge,
+  buildRepetitionRecoveryTextOnlyNudge,
+} from "../src/gateway/services/agent/wrapUpContinuation.js";
+import {
   buildPlanContinuationNudge,
   decideTurnEnd,
   MAX_PLAN_CONTINUATIONS_PER_TURN,
@@ -195,5 +199,25 @@ describe("buildPlanContinuationNudge", () => {
   it("keeps the sentence readable for a single step", () => {
     const nudge = buildPlanContinuationNudge({ pendingSteps: 1 });
     expect(nudge).toContain("1 unfinished step,");
+  });
+});
+
+describe("buildRepetitionRecoveryNudge", () => {
+  it("text-only nudge asks for user-facing explanation without tools", () => {
+    const nudge = buildRepetitionRecoveryTextOnlyNudge("write_file", 8);
+    expect(nudge).toContain("write_file");
+    expect(nudge).toContain("8 times");
+    expect(nudge).toContain("Do not call tools");
+  });
+
+  it("plan nudge prepends repetition warning before plan continuation", () => {
+    const plan = buildPlanContinuationNudge({
+      pendingSteps: 2,
+      nextStepDescription: "Wire app shell",
+    });
+    const combined = buildRepetitionRecoveryPlanNudge("write_file", 8, plan);
+    expect(combined).toContain("write_file");
+    expect(combined).toContain("update_plan");
+    expect(combined).toContain("Wire app shell");
   });
 });

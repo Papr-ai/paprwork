@@ -17,7 +17,11 @@ import {
   getCloudAgentGatewayService,
   newCloudAgentRunId,
 } from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
+import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
+import {
+  parseAppRepoCommittedPayload,
+} from "./services/syncV3/appRepoCommittedInbound.js";
 
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
 
@@ -222,6 +226,16 @@ async function main(): Promise<void> {
     const service = getCloudAgentGatewayService();
     await service.endAgentSession(sessionId);
     res.json({ ok: true, sessionId });
+  });
+
+  app.post("/internal/app-repo-committed", requireGatewayAuth, async (req, res) => {
+    const event = parseAppRepoCommittedPayload(req.body);
+    if (!event) {
+      res.status(400).json({ error: "Invalid app-repo-committed payload" });
+      return;
+    }
+    const result = await handleCloudAgentAppRepoCommitted(event);
+    res.json({ ok: true, ...result });
   });
 
   app.listen(PORT, "0.0.0.0", () => {

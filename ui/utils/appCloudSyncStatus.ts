@@ -201,6 +201,8 @@ export interface AppCloudSyncStatus {
   /** Files in the app folder over 10MB — git sync skips them; use App Files. */
   oversizedAppFilesMessage?: string | null;
   oversizedAppFilesCount?: number;
+  /** Local app source differs from last cloud upload (Sync V3 fingerprint / git). */
+  hasLocalChanges?: boolean;
 }
 
 const GIT_ACTIVE_STATUSES = new Set([
@@ -605,6 +607,7 @@ export function deriveAppCloudSyncStatus(
       gitRemoteReviewHeadline: null,
       oversizedAppFilesMessage: null,
       oversizedAppFilesCount: 0,
+      hasLocalChanges: false,
     };
   }
 
@@ -1002,6 +1005,10 @@ export function deriveAppCloudSyncStatus(
     chipLabel = "Sync status unknown";
   }
 
+  const hasLocalChanges =
+    appSync?.hasLocalChanges === true ||
+    (appSync == null && displayCodePhase === "changed");
+
   const summaryLine =
     overall === "unknown"
       ? "Could not determine web sync status — open for details"
@@ -1066,6 +1073,7 @@ export function deriveAppCloudSyncStatus(
     publishLive,
     oversizedAppFilesMessage,
     oversizedAppFilesCount,
+    hasLocalChanges,
   };
 }
 
@@ -1075,19 +1083,66 @@ export interface RemoteCodeCheckSnapshot {
   checkFailed?: boolean;
 }
 
+/** Hide cached namespace-git "updates available" until live sync checks finish. */
+export function suppressStaleGitUpdatesAvailable(
+  status: AppCloudSyncStatus,
+  liveCheckPending: boolean,
+): AppCloudSyncStatus {
+  if (!liveCheckPending || !status.gitUpdatesAvailable) {
+    return status;
+  }
+  return {
+    ...status,
+    gitUpdatesAvailable: false,
+  };
+}
+
 /** Merge writer HEAD check (MongoDB metadata) into publish-bar sync status — notify-only, no pull. */
 export function mergeRemoteCodeCheckIntoStatus(
   status: AppCloudSyncStatus,
   remote: RemoteCodeCheckSnapshot | null,
 ): AppCloudSyncStatus {
+  if (remote?.upToDate) {
+    if (
+      !status.gitUpdatesAvailable &&
+      status.codeStatus !== "updates_available"
+    ) {
+      return status;
+    }
+    const cleared: AppCloudSyncStatus = {
+      ...status,
+      gitUpdatesAvailable: false,
+    };
+    if (
+      status.codeStatus === "updates_available" &&
+      !status.gitRemoteRequiresReview &&
+      !status.writerConflict &&
+      !status.hasLocalChanges
+    ) {
+      return {
+        ...cleared,
+        codeStatus: "synced",
+        chipLabel: "Synced",
+        summaryLine: "Everything matches the web.",
+        overall: status.overall === "needs_sync" ? "synced" : status.overall,
+      };
+    }
+    return cleared;
+  }
+
   if (
     !remote ||
-    remote.upToDate ||
     remote.checkFailed ||
     status.overall === "disabled" ||
     status.gitRemoteRequiresReview ||
     status.writerConflict
   ) {
+    return status;
+  }
+
+  // HEAD vs local OID check is directionless — when local edits are waiting,
+  // cloud is not necessarily ahead; upload messaging owns that state.
+  if (status.hasLocalChanges) {
     return status;
   }
 
@@ -1100,7 +1155,7 @@ export function mergeRemoteCodeCheckIntoStatus(
         : status.codeStatus,
     chipLabel: "Updates available",
     summaryLine: "The web has newer changes — click Get updates",
-    overall: status.overall === "synced" ? "needs_sync" : status.overall,
+    overall: status.overall === "needs_sync" ? "needs_sync" : status.overall,
   };
 }
 

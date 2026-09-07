@@ -106,7 +106,7 @@ export async function pushAppNow(
 export function pushAppNowInBackground(sync: CloudSyncHostService, appId: string): void {
   void pushAppNow(sync, appId).catch((err: Error) => {
     console.warn(
-      `[CloudSync] Background Upload now failed for ${appId}:`,
+      `[CloudSync] Background publish failed for ${appId}:`,
       err.message.slice(0, 160),
     );
   });

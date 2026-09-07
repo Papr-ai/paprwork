@@ -507,7 +507,12 @@ export interface ElectronAPI {
     readPreview: (input: {
       filePath: string;
       mimeType?: string;
-    }) => Promise<{ success: boolean; dataUrl?: string; error?: string }>;
+    }) => Promise<{
+      success: boolean;
+      dataUrl?: string;
+      fileUrl?: string;
+      error?: string;
+    }>;
   };
 
   agentPreview: {

@@ -20,6 +20,7 @@ import {
 import {
   isReplicaReadPathDegraded,
   noteReplicaReadPathFailure,
+  clearReplicaReadPathDegraded,
   resetReplicaBackgroundRecoveryForTests,
   scheduleReplicaBackgroundWedgeRecovery,
 } from "../src/gateway/services/tursoReplica/tursoReplicaBackgroundRecovery.js";
@@ -44,7 +45,7 @@ describe("buildReplicaTursoSyncStatusFromRegistry", () => {
     expect(status.stats).toBeNull();
   });
 
-  it("marks pending when last push error is set", () => {
+  it("marks pending when last push error is set without a covering push", () => {
     const record: DatabaseRecord = {
       dbId: "abc",
       localPath: "/tmp/data.db",
@@ -57,6 +58,23 @@ describe("buildReplicaTursoSyncStatusFromRegistry", () => {
     };
     const status = buildReplicaTursoSyncStatusFromRegistry(record, record.localPath);
     expect(status.pendingPush).toBe(true);
+  });
+
+  it("does not mark pending when push succeeded after last mutation despite stale error", () => {
+    const record: DatabaseRecord = {
+      dbId: "abc",
+      localPath: "/tmp/data.db",
+      tursoShortName: "d-abc12345",
+      isolation: "shared",
+      status: "active",
+      lastReplicaPushError: "short read on WAL frame",
+      lastReplicaPushAt: "2026-09-06T12:00:00.000Z",
+      lastReplicaLocalMutationAt: "2026-09-06T11:00:00.000Z",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-09-06T12:00:00.000Z",
+    };
+    const status = buildReplicaTursoSyncStatusFromRegistry(record, record.localPath);
+    expect(status.pendingPush).toBe(false);
   });
 });
 
@@ -130,6 +148,13 @@ describe("tursoReplicaBackgroundRecovery", () => {
     noteReplicaReadPathFailure("/tmp/wedge.db");
     noteReplicaReadPathFailure("/tmp/wedge.db");
     expect(isReplicaReadPathDegraded("/tmp/wedge.db")).toBe(true);
+  });
+
+  it("clears degraded state after successful local read", () => {
+    noteReplicaReadPathFailure("/tmp/wedge.db");
+    noteReplicaReadPathFailure("/tmp/wedge.db");
+    clearReplicaReadPathDegraded("/tmp/wedge.db");
+    expect(isReplicaReadPathDegraded("/tmp/wedge.db")).toBe(false);
   });
 });
 

@@ -44,7 +44,7 @@ import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
-import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn } from "../../lib/agentStreamRecovery";
+import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn, shouldDrainMessageQueue } from "../../lib/agentStreamRecovery";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 
@@ -188,6 +188,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
   const isProcessingQueue = useRef(false);
+  const queueTransitionInFlightRef = useRef(false);
 
   // ✅ Filter queue to only show messages for THIS chat
   const currentChatQueue = useMemo(
@@ -734,19 +735,37 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const queued = messageQueue.find(q => q.id === messageId && q.chatId === chatId);
     if (!queued) return;
 
-    // Remove from queue — sendMessage handles interrupting any active stream
+    // Remove from queue — interrupt then send so the queued message replaces work in flight.
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
 
+    queueTransitionInFlightRef.current = true;
     isProcessingQueue.current = true;
     try {
+      await handleStopAgent();
       await handleSendMessage(
         queued.text,
         queued.contextArtifacts,
       );
     } finally {
       isProcessingQueue.current = false;
+      queueTransitionInFlightRef.current = false;
     }
-  }, [messageQueue, handleSendMessage, chatId]);
+  }, [messageQueue, handleSendMessage, handleStopAgent, chatId]);
+
+  const handleInterruptAndSend = useCallback(
+    async (message: string, contextArtifacts?: Artifact[]) => {
+      queueTransitionInFlightRef.current = true;
+      isProcessingQueue.current = true;
+      try {
+        await handleStopAgent();
+        await handleSendMessage(message, contextArtifacts);
+      } finally {
+        isProcessingQueue.current = false;
+        queueTransitionInFlightRef.current = false;
+      }
+    },
+    [handleSendMessage, handleStopAgent],
+  );
 
   const handleRemoveQueued = useCallback((messageId: string) => {
     setMessageQueue(prev => prev.filter(q => q.id !== messageId));
@@ -775,12 +794,34 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     }
   }, [currentChatQueue, handleSendMessage]);
 
-  // Auto-send next queued message when agent finishes responding
+  // Auto-send next queued message when the prior user turn is fully settled.
   useEffect(() => {
-    if (!isSending && currentChatQueue.length > 0 && !isProcessingQueue.current) {
-      processNextQueued();
+    if (
+      !shouldDrainMessageQueue({
+        chatId,
+        messages,
+        isSending: isSending || isWaitingForAgentSlot,
+        isWaitingForAgentSlot,
+        connectionPaused,
+        needsStreamRecovery,
+        queueTransitionInFlight: queueTransitionInFlightRef.current,
+      }) ||
+      currentChatQueue.length === 0 ||
+      isProcessingQueue.current
+    ) {
+      return;
     }
-  }, [isSending, currentChatQueue.length, processNextQueued]);
+    void processNextQueued();
+  }, [
+    chatId,
+    messages,
+    isSending,
+    isWaitingForAgentSlot,
+    connectionPaused,
+    needsStreamRecovery,
+    currentChatQueue.length,
+    processNextQueued,
+  ]);
 
   // Listen for onboarding messages dispatched from OnboardingCard via sidebar
   useEffect(() => {
@@ -971,6 +1012,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         chatId={chatId}
         onFileAttachmentsAdded={() => setIsFileDragOver(false)}
         onSend={handleSendMessage}
+        onInterruptAndSend={handleInterruptAndSend}
         onQueue={handleQueueMessage}
         queuedCount={currentChatQueue.length}
         onStop={handleStopAgent}

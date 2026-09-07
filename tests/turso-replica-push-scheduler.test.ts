@@ -64,7 +64,7 @@ describe("tursoReplicaPushScheduler routing", () => {
     expect(replicaSchedule).toHaveBeenCalledWith("db-test", "normal", "watcher");
   });
 
-  it("evaluateDbChange schedules replica push for Plan A registry DBs", async () => {
+  it("evaluateDbChange schedules replica push for Plan A registry DBs when dirty", async () => {
     process.env.PAPR_TURSO_REPLICA_SYNC = "force";
     process.env.CLOUD_SYNC_ENABLED = "true";
 
@@ -81,10 +81,35 @@ describe("tursoReplicaPushScheduler routing", () => {
     );
     vi.spyOn(routing, "shouldSuppressLegacyTursoPush").mockReturnValue(true);
 
+    const registryMod = await import(
+      "../src/gateway/services/DatabaseRegistryService.js"
+    );
+    vi.spyOn(registryMod, "getDatabaseRegistryService").mockReturnValue({
+      getById: (dbId: string) =>
+        dbId === "db-test"
+          ? {
+              dbId: "db-test",
+              localPath: "/tmp/data/databases/todos/data.db",
+              tursoShortName: "d-test0001",
+              isolation: "shared",
+              status: "active",
+              syncMode: "replica",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              lastReplicaPushAt: "2026-01-01T00:00:00.000Z",
+              lastReplicaLocalMutationAt: "2026-01-02T00:00:00.000Z",
+            }
+          : undefined,
+      getByPath: () => undefined,
+    } as ReturnType<typeof registryMod.getDatabaseRegistryService>);
+
     const coordinatorMod = await import(
       "../src/gateway/services/cloudSync/SyncCoordinator.js"
     );
     vi.spyOn(coordinatorMod, "getSyncCoordinator").mockReturnValue(null);
+
+    const publishMod = await import("../src/gateway/utils/publishJobRunEvents.js");
+    const publishDbChanged = vi.spyOn(publishMod, "publishDbChanged");
 
     const { getPaprRoot } = await import("../src/core/utils/paprRoot.js");
     const dbPath = `${getPaprRoot()}/data/databases/todos/data.db`;
@@ -101,6 +126,139 @@ describe("tursoReplicaPushScheduler routing", () => {
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(replicaSchedule).toHaveBeenCalledWith("db-test", "normal", "watcher");
+    expect(publishDbChanged).toHaveBeenCalledWith({ dbId: "db-test" });
+  });
+
+  it("evaluateDbChange skips replica push and SSE when registry is clean", async () => {
+    process.env.PAPR_TURSO_REPLICA_SYNC = "force";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+
+    const replicaSchedule = vi.fn();
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/tursoReplicaPushScheduler.js",
+      () => ({
+        scheduleTursoReplicaPushForSyncKey: replicaSchedule,
+      }),
+    );
+
+    const routing = await import(
+      "../src/gateway/services/tursoReplica/tursoReplicaRouting.js"
+    );
+    vi.spyOn(routing, "shouldSuppressLegacyTursoPush").mockReturnValue(true);
+
+    const registryMod = await import(
+      "../src/gateway/services/DatabaseRegistryService.js"
+    );
+    vi.spyOn(registryMod, "getDatabaseRegistryService").mockReturnValue({
+      getById: (dbId: string) =>
+        dbId === "db-test"
+          ? {
+              dbId: "db-test",
+              localPath: "/tmp/data/databases/todos/data.db",
+              tursoShortName: "d-test0001",
+              isolation: "shared",
+              status: "active",
+              syncMode: "replica",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              lastReplicaPushAt: "2026-01-02T00:00:00.000Z",
+              lastReplicaLocalMutationAt: "2026-01-01T00:00:00.000Z",
+            }
+          : undefined,
+      getByPath: () => undefined,
+    } as ReturnType<typeof registryMod.getDatabaseRegistryService>);
+
+    const coordinatorMod = await import(
+      "../src/gateway/services/cloudSync/SyncCoordinator.js"
+    );
+    vi.spyOn(coordinatorMod, "getSyncCoordinator").mockReturnValue(null);
+
+    const publishMod = await import("../src/gateway/utils/publishJobRunEvents.js");
+    const publishDbChanged = vi.spyOn(publishMod, "publishDbChanged");
+
+    const { getPaprRoot } = await import("../src/core/utils/paprRoot.js");
+    const dbPath = `${getPaprRoot()}/data/databases/todos/data.db`;
+
+    const { evaluateDbChangeForTests } = await import(
+      "../src/gateway/services/TursoLinkedDbWatcher.js"
+    );
+
+    evaluateDbChangeForTests({
+      syncKey: "db-test",
+      dbId: "db-test",
+      dbPath,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(replicaSchedule).not.toHaveBeenCalled();
+    expect(publishDbChanged).not.toHaveBeenCalled();
+  });
+
+  it("evaluateDbChange still emits SSE in manual upload mode when registry is dirty", async () => {
+    process.env.PAPR_TURSO_REPLICA_SYNC = "force";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+
+    const replicaSchedule = vi.fn();
+    vi.doMock(
+      "../src/gateway/services/tursoReplica/tursoReplicaPushScheduler.js",
+      () => ({
+        scheduleTursoReplicaPushForSyncKey: replicaSchedule,
+      }),
+    );
+
+    const routing = await import(
+      "../src/gateway/services/tursoReplica/tursoReplicaRouting.js"
+    );
+    vi.spyOn(routing, "shouldSuppressLegacyTursoPush").mockReturnValue(true);
+
+    const registryMod = await import(
+      "../src/gateway/services/DatabaseRegistryService.js"
+    );
+    vi.spyOn(registryMod, "getDatabaseRegistryService").mockReturnValue({
+      getById: (dbId: string) =>
+        dbId === "db-test"
+          ? {
+              dbId: "db-test",
+              localPath: "/tmp/data/databases/todos/data.db",
+              tursoShortName: "d-test0001",
+              isolation: "shared",
+              status: "active",
+              syncMode: "replica",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+              lastReplicaPushAt: "2026-01-01T00:00:00.000Z",
+              lastReplicaLocalMutationAt: "2026-01-02T00:00:00.000Z",
+            }
+          : undefined,
+      getByPath: () => undefined,
+    } as ReturnType<typeof registryMod.getDatabaseRegistryService>);
+
+    const uploadMode = await import("../src/gateway/services/cloudUploadMode.js");
+    vi.spyOn(uploadMode, "shouldAutoUploadReplicaSyncKey").mockReturnValue(false);
+
+    const coordinatorMod = await import(
+      "../src/gateway/services/cloudSync/SyncCoordinator.js"
+    );
+    vi.spyOn(coordinatorMod, "getSyncCoordinator").mockReturnValue(null);
+
+    const publishMod = await import("../src/gateway/utils/publishJobRunEvents.js");
+    const publishDbChanged = vi.spyOn(publishMod, "publishDbChanged");
+
+    const { getPaprRoot } = await import("../src/core/utils/paprRoot.js");
+    const dbPath = `${getPaprRoot()}/data/databases/todos/data.db`;
+
+    const { evaluateDbChangeForTests } = await import(
+      "../src/gateway/services/TursoLinkedDbWatcher.js"
+    );
+
+    evaluateDbChangeForTests({
+      syncKey: "db-test",
+      dbId: "db-test",
+      dbPath,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(publishDbChanged).toHaveBeenCalledWith({ dbId: "db-test" });
   });
 
   it("scheduleTursoReplicaPushForSyncKey skips watcher push in manual upload mode", async () => {

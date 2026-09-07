@@ -16,6 +16,19 @@ export function isReplicaMissingTableError(message: string): boolean {
   );
 }
 
+/** Ledger says migration applied but column rename/add never landed on the replica handle. */
+export function isReplicaMissingColumnError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("no such column:") ||
+    lower.includes("has no column named")
+  );
+}
+
+export function isReplicaSchemaDriftError(message: string): boolean {
+  return isReplicaMissingTableError(message) || isReplicaMissingColumnError(message);
+}
+
 /** One-shot heal: apply missing registry migrations on the replica handle, then close it. */
 export async function healReplicaSchemaDrift(source: AppDataSource): Promise<boolean> {
   const dbPath = source.dbPath?.trim();

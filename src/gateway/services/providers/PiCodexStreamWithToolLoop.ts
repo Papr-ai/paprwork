@@ -17,6 +17,8 @@ import type { AssistantMessageEvent } from "@mariozechner/pi-ai";
 import {
   applyForcedTextOnlyWrapUpStep,
   applyPlanContinuationStep,
+  buildRepetitionRecoveryPlanNudge,
+  buildRepetitionRecoveryTextOnlyNudge,
   WRAP_UP_AFTER_TOOLS_NO_TEXT,
 } from "../agent/wrapUpContinuation.js";
 import {
@@ -44,6 +46,7 @@ import {
   logWrapUpTrigger,
   type PiTurnEndReason,
 } from "../agent/turnEndDiagnostics.js";
+import { toolRepetitionDedupKey } from "../agent/toolRepetitionKey.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
   EMPTY_PI_AI_BILLING_USAGE,
@@ -411,6 +414,9 @@ export async function* createPiCodexStreamWithToolLoop(
 
   /** One forced text-only step (memory budget or hard tool/step limits). */
   let textOnlyWrapUpStepUsed = false;
+
+  /** One recovery step after identical tool+args loop detection. */
+  let repetitionRecoveryUsed = false;
 
   // Detect repetitive tool calls (possible infinite loop)
   const recentToolCalls: Array<{ name: string; args: string }> = [];
@@ -838,10 +844,10 @@ export async function* createPiCodexStreamWithToolLoop(
         recentToolCalls.splice(0, recentToolCalls.length - MAX_RECENT_TOOL_CALLS);
       }
       
-      // Check for repetitive tool calls (same tool with similar args)
+      // Check for repetitive tool calls (identical tool + full args)
       const toolCallCounts = new Map<string, number>();
       for (const tc of recentToolCalls) {
-        const key = `${tc.name}:${tc.args.substring(0, 100)}`; // First 100 chars of args
+        const key = toolRepetitionDedupKey(tc.name, tc.args);
         toolCallCounts.set(key, (toolCallCounts.get(key) || 0) + 1);
       }
       
@@ -863,18 +869,94 @@ export async function* createPiCodexStreamWithToolLoop(
           ([, count]) => count === maxRepetitions,
         );
         const toolName = repetitiveCall?.[0].split(":")[0] ?? "tool";
+
+        if (!repetitionRecoveryUsed) {
+          repetitionRecoveryUsed = true;
+          recentToolCalls.length = 0;
+
+          console.warn(
+            `[PiCodexToolLoop] 🔄 Repetition recovery: identical ${toolName} call ${maxRepetitions}× in last ${MAX_RECENT_TOOL_CALLS} — nudging model instead of ending turn.`,
+          );
+
+          const skippedResults = toolCallsThisTurn.map((tc) => ({
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            result:
+              `Skipped — identical ${toolName} call repeated ${maxRepetitions} times. ` +
+              `Do not retry this exact call; use a different approach.`,
+          }));
+          appendToolTurnToContext(
+            context,
+            doneMessage,
+            skippedResults,
+            cumulativeTokens,
+          );
+          stripAllAssistantReasoning(context.messages as unknown[]);
+
+          let usedPlanContinuation = false;
+          if (resolveModelStop) {
+            try {
+              const continuation = await resolveModelStop({
+                trailingText: stepText,
+                step,
+                totalToolCalls,
+                continuationsUsed: planContinuationsUsed,
+              });
+              if (continuation) {
+                planContinuationsUsed += 1;
+                usedPlanContinuation = true;
+                applyPlanContinuationStep(
+                  context,
+                  buildRepetitionRecoveryPlanNudge(
+                    toolName,
+                    maxRepetitions,
+                    continuation.nudge,
+                  ),
+                );
+                console.warn(
+                  `[TurnEnd:repetition-recovery] ${JSON.stringify({
+                    ts: new Date().toISOString(),
+                    chatId: toolContext?.chatId ?? null,
+                    sessionId: streamOptions.sessionId,
+                    toolName,
+                    repetitions: maxRepetitions,
+                    pendingSteps: continuation.pendingSteps,
+                    continuation: planContinuationsUsed,
+                  })}`,
+                );
+              }
+            } catch (err) {
+              console.warn(
+                `[PiCodexToolLoop] Repetition recovery plan check failed:`,
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+
+          if (!usedPlanContinuation) {
+            applyForcedTextOnlyWrapUpStep(
+              context,
+              buildRepetitionRecoveryTextOnlyNudge(toolName, maxRepetitions),
+            );
+            textOnlyWrapUpStepUsed = true;
+          }
+
+          step++;
+          stepText = "";
+          continue stepLoop;
+        }
+
         console.error(
-          `[PiCodexToolLoop] 🛑 HARD STOP: Identical ${toolName} call repeated ${maxRepetitions} times in last ${MAX_RECENT_TOOL_CALLS} calls. Breaking tool loop.`,
+          `[PiCodexToolLoop] 🛑 HARD STOP: Identical ${toolName} call repeated ${maxRepetitions} times after recovery — forcing text-only wrap-up.`,
         );
-        context.messages.push({
-          role: "user",
-          content:
-            `[SYSTEM: You repeated the same ${toolName} call ${maxRepetitions} times without success. ` +
-            `STOP retrying this exact call. Explain the validation error to the user and ask how to proceed, ` +
-            `or use a different approach (edit_file on an existing app, smaller files payload, fix schema fields).]`,
-        } as never);
+        applyForcedTextOnlyWrapUpStep(
+          context,
+          buildRepetitionRecoveryTextOnlyNudge(toolName, maxRepetitions),
+        );
+        textOnlyWrapUpStepUsed = true;
         emitTurnEnd("repetition_abort");
-        break stepLoop;
+        step++;
+        continue stepLoop;
       }
       
       console.log(

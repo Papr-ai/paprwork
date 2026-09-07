@@ -31,6 +31,14 @@ describe("toolResultTruncation", () => {
     expect(categorizeTool("edit_app_file_lines")).toBe("file_edit");
     expect(categorizeTool("get_file_code_summary")).toBe("code_cache");
     expect(categorizeTool("create_plan")).toBe("small_crud");
+    expect(categorizeTool("generate_media")).toBe("small_crud");
+    expect(categorizeTool("list_media_models")).toBe("small_crud");
+  });
+
+  test("generate_media results use moderate history limit not bash 400", () => {
+    expect(getDefaultHistoryCharLimit("small_crud", "generate_media")).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars,
+    );
   });
 
   test("file reads under absolute cap stay full in history", () => {

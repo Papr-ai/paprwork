@@ -450,7 +450,7 @@ export type PushCloudSyncTarget = "github" | "turso";
 
 export const PUSH_CLOUD_SYNC_REQUIRES_SCOPE_ERROR =
   "push_cloud_sync requires scope: pass appId (recommended), jobId, alias, tursoDatabase, or tables. " +
-  "Full-workspace push is not allowed — use Upload now per app in the UI, or papr_db_push({ dbId }) for one database.";
+  "Full-workspace push is not allowed — use Publish / Publish changes in the app tab per app, or papr_db_push({ dbId }) for one database.";
 
 export function hasPushCloudSyncScope(
   options: PushCloudSyncOptions | undefined,
@@ -694,6 +694,38 @@ export async function pushCloudSync(
     pushedAt: new Date().toISOString(),
     durationMs: Math.round(performance.now() - startMs),
   };
+}
+
+export interface ResetWriterBaselineAndPublishResult {
+  baseline: import("./syncV3/resetWriterBaseline.js").ResetWriterBaselineResult;
+  publish?: PushCloudSyncResult;
+  publishError?: string;
+}
+
+/**
+ * Re-seed local writer OID baseline from cloud HEAD, clear failed writer ops,
+ * then run the same ordered flush as Publish changes.
+ */
+export async function resetWriterBaselineAndPublish(
+  appId: string,
+): Promise<ResetWriterBaselineAndPublishResult> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    throw new Error("appId is required");
+  }
+
+  const { resetWriterBaseline } = await import("./syncV3/resetWriterBaseline.js");
+  const baseline = await resetWriterBaseline(trimmed);
+
+  try {
+    const publish = await pushCloudSync({ appId: trimmed });
+    return { baseline, publish };
+  } catch (err) {
+    return {
+      baseline,
+      publishError: (err as Error).message,
+    };
+  }
 }
 
 export async function queryCloudTurso(input: {

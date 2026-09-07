@@ -13,14 +13,14 @@ describe("flushQueueCopy", () => {
 
   it("formats queue label with apps ahead", () => {
     expect(formatFlushQueueLabel(5, 12)).toBe("4 apps ahead · 12 in queue");
-    expect(formatFlushQueueLabel(1, 12)).toBe("Next in upload queue");
+    expect(formatFlushQueueLabel(1, 12)).toBe("Next in publish queue");
   });
 
   it("formats queue detail with bump hint", () => {
-    expect(formatFlushQueueDetail(5, 12)).toContain("4 other apps uploading first");
-    expect(formatFlushQueueDetail(5, 12)).toContain("Upload now");
+    expect(formatFlushQueueDetail(5, 12)).toContain("4 other apps publishing first");
+    expect(formatFlushQueueDetail(5, 12)).toContain("Publish changes");
     expect(formatFlushQueueDetail(1, 3)).toBe(
-      "Next in line — upload starting soon.",
+      "Next in line — publish starting soon.",
     );
   });
 });

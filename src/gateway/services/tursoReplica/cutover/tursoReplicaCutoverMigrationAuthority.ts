@@ -210,6 +210,52 @@ export async function repairReplicaMigrationAuthorityAfterCutover(
   return { ledgerInferred, migrationsApplied };
 }
 
+/** After Publish / flush — apply pending migrations on linked replica DBs for one app. */
+export async function repairReplicaMigrationAuthorityForApp(
+  appId: string,
+  appsRootDir: string,
+): Promise<number> {
+  const { discoverTursoLinkedSources, linkedSourceAsAppDataSource } = await import(
+    "../../tursoLinkedSources.js"
+  );
+  const { initializeDatabaseRegistry, getDatabaseRegistryService } = await import(
+    "../../DatabaseRegistryService.js"
+  );
+
+  await initializeDatabaseRegistry();
+  const registry = getDatabaseRegistryService();
+  const sources = (await discoverTursoLinkedSources(appsRootDir)).filter(
+    (source) => source.appId === appId,
+  );
+
+  let repaired = 0;
+  for (const linked of sources) {
+    const record = registry.getRecordForSource(linkedSourceAsAppDataSource(linked));
+    if (!record || record.syncMode !== "replica") {
+      continue;
+    }
+    try {
+      const result = await repairReplicaMigrationAuthorityAfterCutover(record);
+      if (result.ledgerInferred.length > 0 || result.migrationsApplied.length > 0) {
+        repaired += 1;
+      }
+    } catch (error) {
+      console.warn(
+        `[TursoReplicaCutover] Post-publish migration repair failed for ${record.dbId}: ` +
+          `${(error as Error).message.slice(0, 160)}`,
+      );
+    }
+  }
+
+  if (repaired > 0) {
+    console.log(
+      `[TursoReplicaCutover] Post-publish migration repair completed for ${repaired} database(s) on app ${appId}`,
+    );
+  }
+
+  return repaired;
+}
+
 /** Gateway startup — heal ledger/schema drift on databases already on syncMode=replica. */
 export async function repairAllReplicaMigrationAuthorityOnStartup(): Promise<number> {
   const { getDatabaseRegistryService, initializeDatabaseRegistry } = await import(

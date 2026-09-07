@@ -28,7 +28,7 @@ export interface GitHubSyncItem {
   lastSyncAt: string | null;
   lastError?: string | null;
   failedAt?: string | null;
-  /** Local changes exist but auto-upload is off — use Upload now. */
+  /** Local changes exist but auto-upload is off — use Publish changes. */
   manualUploadHold?: boolean;
 }
 

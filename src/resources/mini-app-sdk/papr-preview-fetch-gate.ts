@@ -53,7 +53,6 @@ export function installPreviewFetchGate(): void {
   // papr:preview-hidden only after backgrounding; until then fetches must run
   // during iframe bootstrap or the app stays on "Loading…" forever.
   let phase: PreviewPhase = "visible";
-  const MAX_FLUSH_ON_VISIBLE = 5;
   const queue: Array<{
     run: () => void;
     reject: (reason: unknown) => void;
@@ -82,14 +81,9 @@ export function installPreviewFetchGate(): void {
     }
     if (type === "papr:preview-visible") {
       phase = "visible";
-      // A tab switch back often has 1–3 bootstrap queries (paint/load).
-      // Flush those so the app is not stuck on a never-resolving promise.
-      // Larger queues are stale background polls — reject so callers can bail.
-      if (queue.length <= MAX_FLUSH_ON_VISIBLE) {
-        flushQueuedFetches();
-      } else {
-        rejectQueuedFetches("Preview became visible — stale background fetches aborted");
-      }
+      // Resume every fetch queued while hidden. Pausing while backgrounded already
+      // prevented gateway load; callers expect these promises to settle on return.
+      flushQueuedFetches();
       return;
     }
     if (type === "papr:preview-evicting") {

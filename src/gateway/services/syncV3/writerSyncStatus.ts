@@ -26,7 +26,7 @@ export async function isAppWriterSyncReady(
     const latest = conflicts[conflicts.length - 1];
     return {
       ready: false,
-      detail: `Writer conflict at ${latest.path} — resolve and re-upload`,
+      detail: `Writer conflict at ${latest.path} — resolve in the app tab (Publish / Publish changes) or merge remote changes, then publish again`,
     };
   }
 

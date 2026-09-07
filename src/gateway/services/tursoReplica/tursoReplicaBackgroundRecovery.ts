@@ -26,6 +26,13 @@ export function isReplicaReadPathDegraded(localPath: string): boolean {
   return until !== undefined && Date.now() < until;
 }
 
+/** Clears degraded state after a successful local replica read (interactive path recovered). */
+export function clearReplicaReadPathDegraded(localPath: string): void {
+  const key = normalizeKey(localPath);
+  degradedUntilMs.delete(key);
+  failureWindows.delete(key);
+}
+
 export function noteReplicaReadPathFailure(localPath: string): void {
   const key = normalizeKey(localPath);
   const now = Date.now();

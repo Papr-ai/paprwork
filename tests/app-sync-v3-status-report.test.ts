@@ -40,7 +40,7 @@ describe("buildAppSyncV3Report", () => {
 
     expect(report.status).toBe("uploading");
     expect(report.phase).toBe("uploading");
-    expect(report.label).toBe("Uploading app code…");
+    expect(report.label).toBe("Publishing app code…");
   });
 
   it("reports pending when writer outbox has entries", async () => {

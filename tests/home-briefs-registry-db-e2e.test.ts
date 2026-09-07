@@ -17,7 +17,11 @@ import { existsSync, promises as fs } from "fs";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
-import { DEFAULT_HOME_BRIEFS_DB_SLUG } from "../src/gateway/services/defaultHomeBundle.js";
+import {
+  DEFAULT_HOME_BRIEFS_DB_ISOLATION,
+  DEFAULT_HOME_BRIEFS_DB_SLUG,
+} from "../src/gateway/services/defaultHomeBundle.js";
+import { ensureHomeBriefsDbPerUserIsolation } from "../src/gateway/services/defaultHomeAppRepair.js";
 
 const BUNDLE_DIR = path.join(
   process.cwd(),
@@ -105,6 +109,7 @@ describe("Home briefs registry DB (e2e, scratch workspace)", () => {
       localPath: registryDbPath,
       label: "Home Daily Briefs",
       schemaOwnerAppId: APP_ID,
+      isolation: DEFAULT_HOME_BRIEFS_DB_ISOLATION,
       // deliberately no ownerJobId — that would force a j-* Turso name
     });
 
@@ -129,6 +134,20 @@ describe("Home briefs registry DB (e2e, scratch workspace)", () => {
     // d-* (registry) not j-* (job-owned).
     expect(record?.tursoShortName).toMatch(/^d-[a-f0-9]{8}$/);
     expect(record?.ownerJobId).toBeUndefined();
+    expect(record?.isolation).toBe(DEFAULT_HOME_BRIEFS_DB_ISOLATION);
+  });
+
+  it("upgrades shared Home briefs registry DB to per-user isolation on repair", async () => {
+    const dbId = await provisionRegistryDb();
+    const { initializeDatabaseRegistry } = await import(
+      "../src/gateway/services/DatabaseRegistryService.js"
+    );
+    const registry = await initializeDatabaseRegistry();
+    await registry.setIsolation(dbId, "shared");
+
+    expect(await ensureHomeBriefsDbPerUserIsolation(dbId)).toBe(true);
+    expect(registry.getById(dbId)?.isolation).toBe(DEFAULT_HOME_BRIEFS_DB_ISOLATION);
+    expect(await ensureHomeBriefsDbPerUserIsolation(dbId)).toBe(false);
   });
 
   it("applies the bundled migration and records a matching ledger id", async () => {

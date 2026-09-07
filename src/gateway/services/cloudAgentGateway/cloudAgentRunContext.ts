@@ -6,6 +6,7 @@ import fs from "fs/promises";
 import os from "os";
 import path from "path";
 import type { Provider } from "../../../core/types/agents.js";
+import { isWarmWorkspaceFresh } from "./appRepoCloneCache.js";
 import {
   cloneUserRepoToPaprHome,
   materializeAppWorkspaceToPaprHome,
@@ -309,7 +310,38 @@ export async function beginCloudAgentRun(
   const tursoTargets = resolveTursoBookendTargets(request, paprHome);
 
   const prepOnly = options.prepOnly === true;
-  const skipClone = options.skipClone === true;
+  let skipClone = options.skipClone === true;
+
+  if (skipClone) {
+    try {
+      await fs.access(paprHome);
+    } catch {
+      throw new Error(
+        `Warm workspace missing on disk for session ${request.workspaceSessionId ?? request.runId}`,
+      );
+    }
+
+    if (
+      request.workspaceScope === "app" &&
+      request.appRepoOwner &&
+      request.appRepoName
+    ) {
+      const warmFresh = await isWarmWorkspaceFresh({
+        paprHome,
+        owner: request.appRepoOwner,
+        repo: request.appRepoName,
+        branch: request.repoBranch,
+        token: request.repoToken,
+      });
+      if (!warmFresh) {
+        console.log(
+          `[CloudAgentRun] Warm workspace stale for ${request.appRepoOwner}/${request.appRepoName} ` +
+            `session=${request.workspaceSessionId ?? request.runId} — rematerializing`,
+        );
+        skipClone = false;
+      }
+    }
+  }
 
   const mongoHydratePromise = skipClone
     ? null
@@ -344,14 +376,6 @@ export async function beginCloudAgentRun(
         token: request.repoToken,
         branch: request.repoBranch,
       });
-    }
-  } else {
-    try {
-      await fs.access(paprHome);
-    } catch {
-      throw new Error(
-        `Warm workspace missing on disk for session ${request.workspaceSessionId ?? request.runId}`,
-      );
     }
   }
 

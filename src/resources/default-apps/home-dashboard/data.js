@@ -48,18 +48,11 @@ const Data = {
     return data?.results || [];
   },
   briefFromRows(rows, date) {
-    if (date) {
-      if (!this.isBriefDateKey(date)) return Data.sample();
-      const row = rows.find((entry) => entry.date === date);
-      const brief = this.parseBriefJson(row?.brief_json);
-      return brief ?? Data.sample();
-    }
-    for (const row of rows) {
-      if (!this.isBriefDateKey(row.date)) continue;
-      const brief = this.parseBriefJson(row.brief_json);
-      if (brief) return brief;
-    }
-    return Data.sample();
+    const targetDate = date ?? this.todayKey();
+    if (!this.isBriefDateKey(targetDate)) return Data.sample();
+    const row = rows.find((entry) => entry.date === targetDate);
+    const brief = this.parseBriefJson(row?.brief_json);
+    return brief ?? Data.sample();
   },
   datesFromRows(rows) {
     return rows
@@ -137,15 +130,12 @@ const Data = {
         return brief ?? Data.sample();
       }
 
+      const today = this.todayKey();
       const rows = await this.query(
-        'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 15',
+        `SELECT brief_json FROM briefs WHERE date='${today}' AND brief_json IS NOT NULL LIMIT 1`,
       );
-      for (const row of rows) {
-        if (!this.isBriefDateKey(row.date)) continue;
-        const brief = this.parseBriefJson(row.brief_json);
-        if (brief) return brief;
-      }
-      return Data.sample();
+      const brief = this.parseBriefJson(rows[0]?.brief_json);
+      return brief ?? Data.sample();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.error('[Home] Failed to load brief:', message);

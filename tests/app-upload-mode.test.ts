@@ -45,7 +45,7 @@ describe("appUploadMode", () => {
   describe("autoUploadToggleHint", () => {
     it("uses plain language without jargon", () => {
       expect(autoUploadToggleHint(true)).toContain("background");
-      expect(autoUploadToggleHint(false)).toContain("Upload now");
+      expect(autoUploadToggleHint(false)).toContain("Publish changes");
       expect(autoUploadToggleHint(false)).not.toMatch(/manual|turso|uploadMode/i);
     });
   });

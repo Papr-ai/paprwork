@@ -24,6 +24,7 @@ interface ReadChatAttachmentPreviewInput {
 interface ReadChatAttachmentPreviewResult {
   success: boolean;
   dataUrl?: string;
+  fileUrl?: string;
   error?: string;
 }
 
@@ -39,6 +40,15 @@ const IMAGE_EXTENSIONS = new Set([
   ".svg",
 ]);
 
+const VIDEO_EXTENSIONS = new Set([
+  ".mp4",
+  ".webm",
+  ".ogg",
+  ".mov",
+]);
+
+const VIDEO_PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
+
 function mimeTypeFromExtension(ext: string): string {
   const map: Record<string, string> = {
     ".png": "image/png",
@@ -52,11 +62,32 @@ function mimeTypeFromExtension(ext: string): string {
   return map[ext] ?? "application/octet-stream";
 }
 
+function pathToFileUrl(filePath: string): string {
+  const normalized = filePath.replace(/\\/g, "/");
+  if (/^[a-zA-Z]:\//.test(normalized)) {
+    return `file:///${encodeURI(normalized).replace(/#/g, "%23")}`;
+  }
+  return `file://${encodeURI(normalized).replace(/#/g, "%23")}`;
+}
+
 function resolvePreviewMimeType(filePath: string, mimeType?: string): string | null {
-  if (mimeType?.startsWith("image/")) return mimeType;
+  if (mimeType?.startsWith("image/") || mimeType?.startsWith("video/")) {
+    return mimeType;
+  }
   const ext = path.extname(filePath).toLowerCase();
-  if (!IMAGE_EXTENSIONS.has(ext)) return null;
-  return mimeTypeFromExtension(ext);
+  if (IMAGE_EXTENSIONS.has(ext)) {
+    return mimeTypeFromExtension(ext);
+  }
+  if (VIDEO_EXTENSIONS.has(ext)) {
+    const videoMap: Record<string, string> = {
+      ".mp4": "video/mp4",
+      ".webm": "video/webm",
+      ".ogg": "video/ogg",
+      ".mov": "video/quicktime",
+    };
+    return videoMap[ext] ?? "video/mp4";
+  }
+  return null;
 }
 
 function sanitizeFileName(fileName: string): string {
@@ -135,13 +166,24 @@ export function initializeChatAttachmentsIPC(): void {
         const resolvedPath = path.resolve(input.filePath);
         const previewMime = resolvePreviewMimeType(resolvedPath, input.mimeType);
         if (!previewMime) {
-          return { success: false, error: "Preview only supported for images" };
+          return {
+            success: false,
+            error: "Preview only supported for images and videos",
+          };
         }
 
         const stat = await fs.stat(resolvedPath);
         if (!stat.isFile()) {
           return { success: false, error: "Path is not a file" };
         }
+
+        if (previewMime.startsWith("video/")) {
+          if (stat.size > VIDEO_PREVIEW_MAX_BYTES) {
+            return { success: false, error: "Video too large to preview" };
+          }
+          return { success: true, fileUrl: pathToFileUrl(resolvedPath) };
+        }
+
         if (stat.size > PREVIEW_MAX_BYTES) {
           return { success: false, error: "Image too large to preview" };
         }

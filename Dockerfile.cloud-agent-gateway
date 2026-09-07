@@ -18,7 +18,7 @@ RUN node -e "\
   drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=optional --no-audit --no-fund
-COPY tsconfig.gateway.json tsconfig.json ./
+COPY tsconfig.gateway.json tsconfig.mini-app-sdk-node.json tsconfig.json ./
 COPY src ./src
 RUN npm run build:gateway
 

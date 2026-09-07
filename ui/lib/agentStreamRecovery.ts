@@ -115,6 +115,60 @@ export function lastUserTurnNeedsContinue(messages: ChatMessage[]): boolean {
   return false;
 }
 
+function assistantTurnSettledForQueue(message: ChatMessage): boolean {
+  if (message.isStreaming) return false;
+  if (assistantMessageHasContent(message)) return true;
+  if (message.interrupted === true) return true;
+  return assistantMessageWasStopped(message);
+}
+
+/**
+ * True when the latest visible user message already has a settled assistant
+ * turn (completed, interrupted, or explicitly stopped). Queued messages must
+ * not send until this is true — otherwise a follow-up can run while the prior
+ * answer is still in flight and replies appear out of order.
+ */
+export function priorUserTurnSettledForQueue(
+  messages: ChatMessage[],
+): boolean {
+  const lastUser = findLastVisibleUserMessage(messages);
+  if (!lastUser) return true;
+
+  const lastUserIndex = messages.findIndex((m) => m.id === lastUser.id);
+  const after = messages.slice(lastUserIndex + 1);
+
+  for (const message of after) {
+    if (
+      message.role === "user" &&
+      !isHiddenContinueUserMessage(message.content)
+    ) {
+      return false;
+    }
+  }
+
+  const assistantAfter = after.find((m) => m.role === "assistant");
+  if (!assistantAfter) return false;
+  return assistantTurnSettledForQueue(assistantAfter);
+}
+
+/** Whether it is safe to auto-send the next queued user message. */
+export function shouldDrainMessageQueue(args: {
+  chatId: string;
+  messages: ChatMessage[];
+  isSending: boolean;
+  isWaitingForAgentSlot: boolean;
+  connectionPaused: boolean;
+  needsStreamRecovery: boolean;
+  queueTransitionInFlight: boolean;
+}): boolean {
+  if (args.queueTransitionInFlight || args.isSending) return false;
+  if (args.isWaitingForAgentSlot) return false;
+  if (args.connectionPaused || args.needsStreamRecovery) return false;
+  if (chatHasLiveStreamBlockingHistory(args.chatId)) return false;
+  if (activeStreamRequests.has(args.chatId)) return false;
+  return priorUserTurnSettledForQueue(args.messages);
+}
+
 /** True when a stream was interrupted mid-turn and should be continued on Resume */
 export function interruptedTurnNeedsContinue(
   mergedMessages: ChatMessage[],

@@ -411,6 +411,33 @@ export async function requeueDeadLetterOutboxEntries(
   return requeued;
 }
 
+/** Remove dead-letter and failed writer ops for one app (baseline repair). */
+export async function clearWriterOutboxFailureEntries(appId: string): Promise<number> {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const entries = await listOutboxEntries();
+  const kept = entries.filter((entry) => {
+    if (entry.appId !== trimmed) {
+      return true;
+    }
+    if (entry.status === "dead_letter" || entry.status === "failed") {
+      return false;
+    }
+    // Pending rows with lastError are stale failed retries — drop on baseline reset.
+    if (entry.status === "pending" && entry.lastError) {
+      return false;
+    }
+    return true;
+  });
+  const removed = entries.length - kept.length;
+  if (removed > 0) {
+    await writeAllEntries(kept);
+  }
+  return removed;
+}
+
 /** Test-only — reset outbox file. */
 export async function clearSyncOutboxForTests(): Promise<void> {
   await fs.rm(outboxPath(), { force: true });

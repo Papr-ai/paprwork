@@ -114,13 +114,26 @@ export async function pushAppWriterOpsForPaprDir(
   const collected = await collectAppOpFiles(paprDir, appId);
   if (collected.files.length === 0) {
     await markSyncedPaths(paprDir, appId, onSynced);
-    return {
-      appId,
-      filesSent: 0,
-      skippedUnchanged: collected.skippedUnchanged,
-      outboxReplayed,
-      deferred: collected.deferred,
-    };
+    try {
+      const { realignLocalAppCodeBaseline } = await import("./appRepoHeadSyncCheck.js");
+      const realigned = await realignLocalAppCodeBaseline(appId);
+      return {
+        appId,
+        commitSha: realigned?.commitSha,
+        filesSent: 0,
+        skippedUnchanged: collected.skippedUnchanged,
+        outboxReplayed,
+        deferred: collected.deferred,
+      };
+    } catch {
+      return {
+        appId,
+        filesSent: 0,
+        skippedUnchanged: collected.skippedUnchanged,
+        outboxReplayed,
+        deferred: collected.deferred,
+      };
+    }
   }
 
   const commitMessage =

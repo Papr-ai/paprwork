@@ -180,15 +180,6 @@ export async function repairCloudSync(options: {
         const { reseedTursoReplicaFromRemote } = await import(
           "./tursoReplicaProvision.js"
         );
-        // Close BEFORE reseeding, and again after.
-        //
-        // Reseeding rewrites data.db and its sidecars on disk, but a cached
-        // sync handle keeps its own WAL offset in memory. Without closing, the
-        // files come back healthy — papr_db_sync_status reports sidecarWedge
-        // false — while every write still fails "short read on WAL frame",
-        // because the live handle points into the WAL that was just replaced.
-        // That is why this repair only appeared to work after an app restart.
-        await replica.close(source.dbPath);
         await reseedTursoReplicaFromRemote(record);
         await replica.close(source.dbPath);
       } else {
@@ -340,13 +331,73 @@ export async function repairCloudSync(options: {
       ).getTursoReplicaService();
       await replicaService.close(record.localPath);
 
-      const { pushLocalLegacyFileToTursoPrimary, reseedTursoReplicaFromRemote } =
-        await import("./tursoReplicaProvision.js");
-      await pushLocalLegacyFileToTursoPrimary(record);
+      const { reseedTursoReplicaFromRemote } = await import(
+        "./tursoReplicaProvision.js"
+      );
+
+      let pushResult:
+        | { ok: true }
+        | {
+            ok: false;
+            error?: string;
+            conflictCode?: string;
+            localOnlyMigrationIds?: string[];
+            cloudAheadMigrationIds?: string[];
+          };
 
       if (record.syncMode === "replica") {
+        const { pushReplicaBootstrapViaTursoSync } = await import(
+          "./tursoReplicaProvision.js"
+        );
+        const syncPush = await pushReplicaBootstrapViaTursoSync(record, source);
+        pushResult = syncPush.ok
+          ? { ok: true as const }
+          : {
+              ok: false as const,
+              error: syncPush.error,
+              conflictCode: syncPush.conflictCode,
+              localOnlyMigrationIds: syncPush.localOnlyMigrationIds,
+              cloudAheadMigrationIds: syncPush.cloudAheadMigrationIds,
+            };
+        if (!syncPush.ok) {
+          await registry.updateReplicaPushState(options.dbId, {
+            lastReplicaPushError: syncPush.error ?? "Bootstrap push failed",
+            cutoverBlocked: true,
+            cutoverBlockReason: syncPush.error ?? null,
+          });
+          const syncStatus = await paprDbSyncStatus({ dbId: options.dbId });
+          return {
+            strategy: options.strategy,
+            dbId: options.dbId,
+            backupPath,
+            push: pushResult,
+            syncStatus,
+          };
+        }
         await reseedTursoReplicaFromRemote(record);
       } else {
+        const { pushLocalLegacyFileToTursoPrimary } = await import(
+          "./tursoReplicaProvision.js"
+        );
+        try {
+          await pushLocalLegacyFileToTursoPrimary(record);
+          pushResult = { ok: true as const };
+        } catch (error) {
+          const message = (error as Error).message;
+          await registry.updateReplicaPushState(options.dbId, {
+            lastReplicaPushError: message,
+            cutoverBlocked: true,
+            cutoverBlockReason: message,
+          });
+          const syncStatus = await paprDbSyncStatus({ dbId: options.dbId });
+          return {
+            strategy: options.strategy,
+            dbId: options.dbId,
+            backupPath,
+            push: { ok: false as const, error: message },
+            syncStatus,
+          };
+        }
         await pullLinkedDbViaTursoReplica(source);
       }
 
@@ -362,7 +413,7 @@ export async function repairCloudSync(options: {
         strategy: options.strategy,
         dbId: options.dbId,
         backupPath,
-        push: { ok: true as const },
+        push: pushResult,
         pull: { pulled: true },
         syncStatus,
       };

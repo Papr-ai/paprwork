@@ -34,6 +34,11 @@ import "./InputBar.css";
 interface InputBarProps {
   chatId: string; // Chat ID for persisting draft messages
   onSend: (message: string, context?: Artifact[]) => void;
+  /** Stop the in-flight turn, then send immediately (double-enter shortcut). */
+  onInterruptAndSend?: (
+    message: string,
+    context?: Artifact[],
+  ) => void | Promise<void>;
   onQueue?: (message: string, context?: Artifact[]) => void;
   /** Number of messages currently queued for this chat. */
   queuedCount?: number;
@@ -66,6 +71,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     {
       chatId,
       onSend,
+      onInterruptAndSend,
       onQueue,
       queuedCount = 0,
       onStop,
@@ -282,24 +288,21 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       
       // If agent is working
       if (isSending) {
-        // If user pressed send again within 1 second (double-enter or double-click), 
-        // stop agent and send immediately
+        // Double-enter / double-click within 1s: stop the current turn and send now.
         if (timeSinceLastAttempt < 1000) {
-          if (onStop) {
-            onStop();
-          }
-          onSend(
+          const sendNow = onInterruptAndSend ?? onSend;
+          void sendNow(
             messageToSend,
             selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
           );
           setMessage("");
           clearDraftMessage(chatId);
           setSelectedArtifacts([]);
-          
+
           if (textareaRef.current) {
             textareaRef.current.style.height = "auto";
           }
-          lastSendAttemptRef.current = 0; // Reset
+          lastSendAttemptRef.current = 0;
         } else {
           // First attempt while agent is working - queue the message
           if (onQueue) {

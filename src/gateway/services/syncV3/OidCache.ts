@@ -144,6 +144,21 @@ export async function seedOidCacheFromHead(
   await writeOidCache(cache);
 }
 
+/** Replace an app's OID cache from writer HEAD — used to repair stale publish baselines. */
+export async function overwriteOidCacheFromHead(
+  appId: string,
+  files: ReadonlyArray<{ path: string; blobOid: string }>,
+): Promise<number> {
+  const trimmed = appId.trim();
+  const cache = await readOidCache();
+  cache.apps[trimmed] = {};
+  for (const file of files) {
+    cache.apps[trimmed][file.path] = file.blobOid;
+  }
+  await writeOidCache(cache);
+  return files.length;
+}
+
 /** Test-only — reset cache file. */
 export async function clearOidCacheForTests(): Promise<void> {
   await fs.rm(cachePath(), { force: true });

@@ -19,8 +19,10 @@ import {
   shouldShowWebviewSessionPreview,
   WebviewSessionPreview,
 } from "./AppToolPreview";
+import { GeneratedMediaGallery } from "./GeneratedMediaGallery";
 import "./FileWritePreview.css";
 import "./AppToolPreview.css";
+import "./GeneratedMediaGallery.css";
 import { WorkingCard } from "./WorkingCard";
 import {
   ToolCallResultFeedback,
@@ -42,6 +44,10 @@ import { MessageAttachments } from "./MessageAttachments";
 import "./MessageAttachments.css";
 import { resolveToolCallStatus } from "../../../src/core/utils/interruptedToolResult";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
+import {
+  parseGeneratedMediaGalleryItem,
+  type GeneratedMediaGalleryItem,
+} from "../../utils/generatedMediaPreview";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
 import { useSubagentJobStore, type SubagentJobInfo } from "../../stores/subagentJobStore";
 
@@ -183,6 +189,7 @@ function renderSequence(
       string,
       Parameters<typeof KeyRequestCard>[0]["data"]
     >();
+    const generatedMediaItems: GeneratedMediaGalleryItem[] = [];
     // Track which jobs/delegations we've already added to exploringItems (to prevent duplicates)
     const addedJobIds = new Set<string>();
     const addedDelegationIds = new Set<string>();
@@ -367,6 +374,17 @@ function renderSequence(
           toolCall.result,
           toolCall.status,
         );
+        const mediaItem = parseGeneratedMediaGalleryItem({
+          toolName: toolCall.toolName,
+          result: toolCall.result,
+          status: toolCall.status,
+          args: toolCall.args,
+          fallbackId: `tool-${index}`,
+        });
+        if (mediaItem) {
+          generatedMediaItems.push(mediaItem);
+        }
+
         exploringItems.push(
           <div key={`tool-${index}`} className="exploring-tool-row">
             <div className="exploring-tool-item">
@@ -604,6 +622,16 @@ function renderSequence(
         >
           {workingChildren}
         </WorkingCard>,
+      );
+    }
+
+    if (generatedMediaItems.length > 0) {
+      elements.push(
+        <GeneratedMediaGallery
+          key="generated-media-gallery"
+          items={generatedMediaItems}
+          isStreaming={message.isStreaming}
+        />,
       );
     }
 
@@ -874,6 +902,27 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                   isStreaming={message.isStreaming}
                   narration={content} // Show agent's explanation after tool calls
                 />
+                {(() => {
+                  const mediaItems: GeneratedMediaGalleryItem[] = [];
+                  message.toolCalls.forEach((tc, index) => {
+                    const item = parseGeneratedMediaGalleryItem({
+                      toolName: tc.toolName,
+                      result: tc.result,
+                      status: tc.status,
+                      args: tc.args,
+                      fallbackId: tc.id ?? `fallback-${index}`,
+                    });
+                    if (item) mediaItems.push(item);
+                  });
+                  if (mediaItems.length === 0) return null;
+                  return (
+                    <GeneratedMediaGallery
+                      key="generated-media-gallery-fallback"
+                      items={mediaItems}
+                      isStreaming={message.isStreaming}
+                    />
+                  );
+                })()}
                 {/* Job cards for run_job (fallback when no sequence) — one per
                     jobId, latest state wins. A message can call run_job twice
                     on the same job (a retry, or a finished run followed by an

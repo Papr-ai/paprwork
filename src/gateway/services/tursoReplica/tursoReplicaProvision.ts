@@ -193,6 +193,40 @@ export async function attachTursoReplicaInPlaceForCutover(
 }
 
 /**
+ * Plan A bootstrap — push local replica state to Turso via @tursodatabase/sync,
+ * not better-sqlite3 + HTTP snapshot. Caller typically reseeds afterward.
+ */
+export async function pushReplicaBootstrapViaTursoSync(
+  record: DatabaseRecord,
+  source: AppDataSource,
+): Promise<import("./tursoReplicaTypes.js").TursoReplicaPushResponse> {
+  const { getTursoReplicaService } = await import("./TursoReplicaService.js");
+  await getTursoReplicaService().close(record.localPath);
+
+  const stripped = stripLegacySyncPathArtifacts(record.localPath);
+  if (stripped.length > 0) {
+    console.log(
+      `[TursoReplicaProvision] Stripped legacy sync artifacts before replica bootstrap for ${record.dbId}: ` +
+        stripped.join(", "),
+    );
+  }
+
+  const clearedLegacy = clearLegacyTursoSyncStateForDbPath(record.localPath);
+  if (clearedLegacy > 0) {
+    console.log(
+      `[TursoReplicaProvision] Cleared ${clearedLegacy} legacy Turso sync state ` +
+        `entries before replica bootstrap for ${record.dbId}`,
+    );
+  }
+
+  const { pushLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
+  return pushLinkedDbViaTursoReplica(source, {
+    pullBeforePush: false,
+    skipMigrationConflictCheck: true,
+  });
+}
+
+/**
  * Final legacy → Turso primary push before cutover (bucket B / dirty C).
  * Bootstraps a full local table snapshot to Turso (CDC/workspace log is not enough).
  */
@@ -253,7 +287,10 @@ export async function pushLocalLegacyFileToTursoPrimary(
   }
 }
 
-/** Drop local replica files and re-pull from Turso primary (repair hybrid/contaminated files). */
+/**
+ * Drop local replica files and re-pull from Turso primary.
+ * Stops the sync worker so stale in-memory WAL offsets cannot survive a disk rewrite.
+ */
 export async function reseedTursoReplicaFromRemote(
   record: DatabaseRecord,
 ): Promise<void> {
@@ -262,8 +299,17 @@ export async function reseedTursoReplicaFromRemote(
   }
 
   const { getTursoReplicaService } = await import("./TursoReplicaService.js");
+  const { shutdownTursoReplicaSyncWorker } = await import(
+    "./TursoReplicaSyncWorkerClient.js"
+  );
+  const { clearReplicaReadPathDegraded } = await import(
+    "./tursoReplicaBackgroundRecovery.js"
+  );
+
   const replica = getTursoReplicaService();
   await replica.close(record.localPath);
+  await shutdownTursoReplicaSyncWorker();
+  clearReplicaReadPathDegraded(record.localPath);
   removeTursoReplicaLocalFiles(record.localPath);
   await provisionTursoReplicaForRecord(record);
 }

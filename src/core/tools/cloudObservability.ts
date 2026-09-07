@@ -13,6 +13,7 @@ import {
   pushCloudSync,
   queryCloudTurso,
   readCloudRepoFile,
+  resetWriterBaselineAndPublish,
 } from "../../gateway/services/CloudObservabilityService.js";
 
 function unwrapContext<T>(input: T | { context?: T }): T {
@@ -68,7 +69,7 @@ Returns:
 
 Use before debugging cloud mini-apps, Turso drift, migration conflicts, or jobs stuck pending on apps.papr.ai.
 NEVER use bash git ls-files/status on apps/{id}/ in the namespace repo — use appWriterRepo from this tool instead.
-Read-only. To fix: push_cloud_sync (git + ordered flush), papr_db_push/pull (replica row sync), repair_cloud_sync (migration conflicts), run_job, publish_cloud_app.
+Read-only. To fix: push_cloud_sync (git + ordered flush), reset_writer_baseline_and_publish (writer 409 baseline repair + publish), papr_db_push/pull (replica row sync), repair_cloud_sync (migration conflicts), run_job, publish_cloud_app.
 Requires Papr login (PAPR_API_KEY).`,
   inputSchema: getCloudSyncStatusSchema,
   execute: async (input) => {
@@ -258,7 +259,7 @@ const pushCloudSyncSchema = z.object({
     .array(z.enum(["github", "turso"]))
     .optional()
     .describe(
-      "What to push. Default: both (recommended for appId — database then code, same as Upload now). " +
+      "What to push. Default: both (recommended for appId — database then code, same as Publish / Publish changes in the app tab). " +
         "['turso'] = database only. ['github'] = code folders only — does NOT sync linked DBs or refresh live web app.",
     ),
 }).refine(hasPushCloudSyncScope, {
@@ -267,7 +268,7 @@ const pushCloudSyncSchema = z.object({
 
 export const pushCloudSyncTool = createTool({
   id: "push_cloud_sync",
-  description: `Force Cloud Sync push (same engine as Upload now) with **required scope** — full-workspace push is rejected.
+  description: `Force Cloud Sync push (same engine as Publish / Publish changes in the app tab) with **required scope** — full-workspace push is rejected.
 
 Targets (default: both github + turso — use this for appId when the live web app should update):
 - github — apps/{id}, Jobs/{id}, data/ to GitHub (code only — skips database + live link refresh)
@@ -276,7 +277,7 @@ Targets (default: both github + turso — use this for appId when the live web a
 For registry DBs on Plan A replica path (syncMode=replica), turso target uses papr_db_push semantics (pull-before-push, migration conflict detection). Prefer papr_db_push for row-only fixes on a single dbId.
 
 Scope examples (always pass at least one scope field):
-- push_cloud_sync({ appId }) — **recommended** — database, then app code + jobs (ordered, like Upload now)
+- push_cloud_sync({ appId }) — **recommended** — database, then app code + jobs (ordered, like Publish / Publish changes in the app tab)
 - push_cloud_sync({ appId, targets: ['turso'] }) — Turso DBs for one app only (DB fix, no code publish)
 - push_cloud_sync({ appId, alias: 'gtm-audit', targets: ['turso'] }) — one linked database
 - push_cloud_sync({ appId, alias: 'gtm-audit', tables: ['audits'], targets: ['turso'] }) — one table
@@ -286,7 +287,7 @@ Scope examples (always pass at least one scope field):
 
 Do NOT call push_cloud_sync with no appId/jobId/alias/tursoDatabase/tables. For one DB row sync only, use papr_db_push({ dbId }).
 
-Do NOT use targets: ['github'] alone when the user expects the web app or database to update — use default both or Upload now.
+Do NOT use targets: ['github'] alone when the user expects the web app or database to update — use default both or Publish / Publish changes in the app tab.
 
 Returns scope label, github pushedPaths, turso databases touched, durationMs.
 When oversizedAppFiles is present, those paths were skipped — register them with App Files before publishing.
@@ -316,9 +317,52 @@ After push, call get_cloud_sync_status to verify.`,
   },
 });
 
+const resetWriterBaselineAndPublishSchema = z.object({
+  appId: z
+    .string()
+    .uuid()
+    .describe("Mini-app ID stuck on writer 409 / publish baseline drift"),
+});
+
+export const resetWriterBaselineAndPublishTool = createTool({
+  id: "reset_writer_baseline_and_publish",
+  description: `Repair a stuck Sync V3 writer publish baseline, then publish (agent-only escape hatch).
+
+Use when:
+- push_cloud_sync or Publish changes fails with "Writer conflict" / HTTP 409
+- get_cloud_sync_status shows writerConflict or deadLetterWriterOps
+- Get updates has nothing to pull (gitUpdatesAvailable false) but publish still fails
+
+What it does (does NOT delete or overwrite local app source files):
+1. Fetches per-app writer repo HEAD and overwrites local OID cache (publish baseline)
+2. Clears dead-letter / failed writer outbox entries and conflict telemetry for this app
+3. Runs push_cloud_sync({ appId }) — same ordered flush as Publish changes
+
+Before using when another device or the web may have edited the app: inspect_cloud_repo and explain what changed. This path publishes **local** code on top of the re-seeded baseline.
+
+After running, call get_cloud_sync_status to verify.`,
+  inputSchema: resetWriterBaselineAndPublishSchema,
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const startTime = performance.now();
+    try {
+      const data = await resetWriterBaselineAndPublish(args.appId);
+      return {
+        success: true,
+        data,
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      toolError(error, startTime);
+    }
+  },
+});
+
 export const cloudObservabilityTools = [
   getCloudSyncStatusTool,
   pushCloudSyncTool,
+  resetWriterBaselineAndPublishTool,
   queryCloudTursoTool,
   inspectCloudRepoTool,
 ];

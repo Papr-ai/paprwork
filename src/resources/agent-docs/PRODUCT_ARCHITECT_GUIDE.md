@@ -162,7 +162,7 @@ Copy this checklist into every brief when the app uses backend handlers and/or l
 | **DB reads** | `POST /api/db/query` with `{ sourceId, sql, params }` — field is **`sql`**, not `query` |
 | **DB writes** | `POST /api/db/write` — not `/api/db/query` for mutations |
 | **Plan A schema** (cloud sync on) | `migrations/{id}.sql` in brief → builder runs `write_file` + `papr_db_apply_migration({ dbId, migrationId })` on Turso primary — **never** `papr_db_exec` DDL or bash/sqlite3 on registry DB files |
-| **Plan A rows** | `papr_db_exec` DML, `/api/db/write`, or job SQL via `$PAPR_DB_*`; Upload now / `push_cloud_sync({ appId })` = git + Turso ordered flush |
+| **Plan A rows** | `papr_db_exec` DML, `/api/db/write`, or job SQL via `$PAPR_DB_*`; Publish changes / `push_cloud_sync({ appId })` = git + Turso ordered flush |
 | **Scaffold** | Extend `backend/ping.py` pattern — do not replace with stdin handlers |
 
 List any app-specific handler names from §2 here (e.g. `meeting-start`, `agenda-manage`) so the builder wires the correct actions.
@@ -198,7 +198,7 @@ Job write  →  onDbChanged → reload affected queries only
 - 5+ raw `/api/db/query` calls without backend handlers
 - `setInterval` + `/api/db/query` (polling)
 
-**Sync note (Plan A — cloud sync on):** Three lanes — do not conflate: **(1) Git (Sync V3)** per-app GitHub repo for app source + `jobs/{id}/`; **(2) Turso (Plan A)** registry DB schema + rows via `attach_database` / `data-sources.json`; **(3) Vault** Integration Keys + platform cookies (cloud jobs read vault, not desktop keychain). Registry DB **schema** = migration files + `papr_db_apply_migration` (Turso primary when online). **Rows** = local replica → `push()` to Turso (auto when online). **Upload now** / `push_cloud_sync({ appId })` = git + Turso ordered flush (same engine). Git Upload ships migration **files** for collaboration — it does not execute schema. Debug start: `get_cloud_sync_status({ appId?, jobId? })`. High Turso read spikes usually come from **bad app query patterns**, **agent debug tools** (`query_cloud_turso`), or **legacy bootstrap** — not routine replica push/pull.
+**Sync note (Plan A — cloud sync on):** Three lanes — do not conflate: **(1) Git (Sync V3)** per-app GitHub repo for app source + `jobs/{id}/`; **(2) Turso (Plan A)** registry DB schema + rows via `attach_database` / `data-sources.json`; **(3) Vault** Integration Keys + platform cookies (cloud jobs read vault, not desktop keychain). Registry DB **schema** = migration files + `papr_db_apply_migration` (Turso primary when online). **Rows** = local replica → `push()` to Turso (auto when online). **Publish / Publish changes in the app tab** / `push_cloud_sync({ appId })` = git + Turso ordered flush (same engine). Git publish ships migration **files** for collaboration — it does not execute schema. Debug start: `get_cloud_sync_status({ appId?, jobId? })`. High Turso read spikes usually come from **bad app query patterns**, **agent debug tools** (`query_cloud_turso`), or **legacy bootstrap** — not routine replica push/pull.
 
 ### 9. Platform Connections (when jobs scrape social / login sites)
 

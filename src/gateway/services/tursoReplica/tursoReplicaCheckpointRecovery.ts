@@ -7,7 +7,8 @@ export function isReplicaCheckpointWalError(message: string): boolean {
   return (
     lower.includes("checkpoint") ||
     lower.includes("unable to checkpoint synced portion of wal") ||
-    lower.includes("sync engine operation failed")
+    lower.includes("sync engine operation failed") ||
+    lower.includes("short read on wal frame")
   );
 }
 

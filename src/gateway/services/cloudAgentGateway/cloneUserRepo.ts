@@ -5,9 +5,15 @@ import os from "os";
 import path from "path";
 import { promisify } from "util";
 
-const execFileAsync = promisify(execFile);
+import {
+  appRepoCacheKey,
+  isAppRepoDiskCacheFresh,
+  REPO_CACHE_DIR,
+  writeCacheHeadSha,
+  writeMaterializedHeadSha,
+} from "./appRepoCloneCache.js";
 
-const REPO_CACHE_DIR = path.join(os.tmpdir(), "papr-cloud-repo-cache");
+const execFileAsync = promisify(execFile);
 
 function repoCacheKey(cloneUrl: string, branch: string): string {
   return crypto
@@ -15,6 +21,11 @@ function repoCacheKey(cloneUrl: string, branch: string): string {
     .update(`${branch}\0${cloneUrl}`)
     .digest("hex")
     .slice(0, 24);
+}
+
+function injectTokenIntoCloneUrl(cloneUrl: string, token: string): string {
+  const normalized = cloneUrl.replace(/^https:\/\//, "");
+  return `https://x-access-token:${encodeURIComponent(token)}@${normalized}`;
 }
 
 export async function cloneUserRepoToPaprHome(input: {
@@ -52,19 +63,6 @@ export async function cloneUserRepoToPaprHome(input: {
   console.log(`[CloudAgentClone] Populated disk cache (${cacheKey})`);
 }
 
-function injectTokenIntoCloneUrl(cloneUrl: string, token: string): string {
-  const normalized = cloneUrl.replace(/^https:\/\//, "");
-  return `https://x-access-token:${encodeURIComponent(token)}@${normalized}`;
-}
-
-function appRepoCacheKey(owner: string, repo: string, branch: string): string {
-  return crypto
-    .createHash("sha256")
-    .update(`${branch}\0${owner}/${repo}`)
-    .digest("hex")
-    .slice(0, 24);
-}
-
 /**
  * Materialize a Sync V3 per-app repo into a minimal Papr workspace:
  *   apps/{appId}/  ← app repo root
@@ -83,19 +81,33 @@ export async function materializeAppWorkspaceToPaprHome(input: {
 }): Promise<void> {
   const branch = input.branch ?? "main";
   const cacheKey = appRepoCacheKey(input.owner, input.repo, branch);
-  const cachePath = path.join(REPO_CACHE_DIR, `app-${cacheKey}`);
+  const { fresh, cachePath, remoteHead } = await isAppRepoDiskCacheFresh({
+    owner: input.owner,
+    repo: input.repo,
+    branch,
+    token: input.token,
+  });
+
   const appDest = path.join(input.targetPaprHome, "apps", input.appId);
 
   await fs.rm(input.targetPaprHome, { recursive: true, force: true });
   await fs.mkdir(appDest, { recursive: true });
 
   let repoRoot = cachePath;
-  try {
-    await fs.access(cachePath);
+  if (fresh) {
     console.log(
-      `[CloudAgentClone] Using cached app repo ${input.owner}/${input.repo} (${cacheKey})`,
+      `[CloudAgentClone] Using cached app repo ${input.owner}/${input.repo}@${branch} ` +
+        `head=${remoteHead?.slice(0, 8) ?? "unknown"} (${cacheKey})`,
     );
-  } catch {
+  } else {
+    if (remoteHead) {
+      console.log(
+        `[CloudAgentClone] Repo cache stale or missing for ${input.owner}/${input.repo}@${branch} ` +
+          `(remote head=${remoteHead.slice(0, 8)}) — recloning`,
+      );
+    }
+    await fs.rm(cachePath, { recursive: true, force: true }).catch(() => undefined);
+
     repoRoot = path.join(
       os.tmpdir(),
       `papr-app-clone-${cacheKey}-${Date.now()}`,
@@ -108,17 +120,19 @@ export async function materializeAppWorkspaceToPaprHome(input: {
       { timeout: 180_000 },
     );
     await fs.mkdir(REPO_CACHE_DIR, { recursive: true });
-    await fs.rm(cachePath, { recursive: true, force: true }).catch(() => undefined);
     await fs.cp(repoRoot, cachePath, { recursive: true });
+    if (remoteHead) {
+      await writeCacheHeadSha(cachePath, remoteHead);
+    }
     console.log(
-      `[CloudAgentClone] Cached app repo ${input.owner}/${input.repo} (${cacheKey})`,
+      `[CloudAgentClone] Cached app repo ${input.owner}/${input.repo}@${branch} (${cacheKey})`,
     );
     repoRoot = cachePath;
   }
 
   const repoEntries = await fs.readdir(repoRoot, { withFileTypes: true });
   for (const entry of repoEntries) {
-    if (entry.name === ".git") {
+    if (entry.name === ".git" || entry.name === ".papr-cache-head") {
       continue;
     }
     await fs.cp(
@@ -150,8 +164,13 @@ export async function materializeAppWorkspaceToPaprHome(input: {
     }
   }
 
+  if (remoteHead) {
+    await writeMaterializedHeadSha(input.targetPaprHome, remoteHead);
+  }
+
   console.log(
     `[CloudAgentClone] Materialized app workspace appId=${input.appId} ` +
-      `repo=${input.owner}/${input.repo} → ${input.targetPaprHome}`,
+      `repo=${input.owner}/${input.repo} head=${remoteHead?.slice(0, 8) ?? "unknown"} ` +
+      `→ ${input.targetPaprHome}`,
   );
 }

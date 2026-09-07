@@ -12,6 +12,33 @@ import {
 } from "../lib/workspaceUiCache";
 import { normalizeTabHierarchy } from "../lib/persistedAppState";
 import { useTabStore } from "../stores/tabStore";
+import type { Tab } from "../types/tabs";
+
+function syncAppTabTitlesFromArtifacts(apps: Artifact[]): void {
+  const titleByAppId = new Map(
+    apps
+      .filter((item) => item.type === "app" && item.id && item.title?.trim())
+      .map((item) => [item.id, item.title.trim()]),
+  );
+  if (titleByAppId.size === 0) {
+    return;
+  }
+
+  const { tabs, updateTabTitle } = useTabStore.getState();
+  const visitTab = (tab: Tab) => {
+    if (tab.type !== "app") {
+      return;
+    }
+    const nextTitle = titleByAppId.get(tab.entityId);
+    if (nextTitle && tab.title !== nextTitle) {
+      updateTabTitle(tab.id, nextTitle);
+    }
+  };
+
+  for (const tab of tabs) {
+    visitTab(tab);
+  }
+}
 
 export function useArtifacts(scope: "all" | "apps" = "all") {
   const {
@@ -361,7 +388,12 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         | { type?: string }
         | undefined;
       if (detail?.type === "app:list-updated") {
-        void loadArtifacts({ forceRefresh: true });
+        void loadArtifacts({ forceRefresh: true }).then(() => {
+          const apps = useArtifactsStore
+            .getState()
+            .artifacts.filter((item) => item.type === "app");
+          syncAppTabTitlesFromArtifacts(apps);
+        });
       }
     };
     window.addEventListener("gateway-broadcast", handler);

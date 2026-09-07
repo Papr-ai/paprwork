@@ -216,7 +216,7 @@ If the app calls ANY external API with secrets, those calls MUST go through back
 ## Implementation Contracts (REQUIRED — copy checklist for builder)
 ${PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION}
 ## Cloud Read Budget — estimated rows read per page; aggregate tables (app_stats) for KPIs, not runtime COUNT(*) from frontend
-## Plan A Cloud DB (when linked DBs + cloud sync) — three lanes: Git (Sync V3 per-app repo), Turso (attach_database / data-sources.json), Vault (Integration Keys + platform cookies — cloud jobs read vault, not keychain). Schema: migrations/{id}.sql → papr_db_apply_migration; rows via DML; Upload now / push_cloud_sync({ appId }) = git + Turso ordered flush
+## Plan A Cloud DB (when linked DBs + cloud sync) — three lanes: Git (Sync V3 per-app repo), Turso (attach_database / data-sources.json), Vault (Integration Keys + platform cookies — cloud jobs read vault, not keychain). Schema: migrations/{id}.sql → papr_db_apply_migration; rows via DML; Publish changes / push_cloud_sync({ appId }) = git + Turso ordered flush
 ## Platform Connections (when social/login scraping) — LinkedIn jobs ONLY: linkedin-api + papr_platform_browser (CDP :9222, desktop). X/Reddit/Instagram: \${PLATFORM_*} keys + headless Playwright — NO reddit-api/x-api CDP. Cloud non-LinkedIn: vault-synced keys + headless; no Papr Chrome
 ## Design System — one task per page, 2-3 sections per page, ONE primary action per page, Liquid Glass + brand
 ## Phased Plan — Phase 1 MVP, later phases

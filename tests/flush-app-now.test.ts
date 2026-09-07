@@ -67,6 +67,16 @@ const mockPushLinkedSource = vi.fn();
 const mockShouldSkipTursoPush = vi.fn();
 const mockShouldUseTursoReplicaForSource = vi.fn(() => true);
 const mockRunReplicaCutoverForAppUpload = vi.fn();
+const mockQuiesceReplicaPathForPublish = vi.fn();
+const mockReleaseReplicaPublishQuiesce = vi.fn();
+
+vi.mock("../src/gateway/services/tursoReplica/tursoReplicaPublishQuiesce.js", () => ({
+  quiesceReplicaPathForPublish: (...args: unknown[]) =>
+    mockQuiesceReplicaPathForPublish(...args),
+  releaseReplicaPublishQuiesce: (...args: unknown[]) =>
+    mockReleaseReplicaPublishQuiesce(...args),
+  isReplicaPathPublishQuiesced: () => false,
+}));
 
 vi.mock(
   "../src/gateway/services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js",
@@ -305,12 +315,18 @@ describe("flushAppNow", () => {
 
     const result = await flushAppNow(sync, "app-1");
 
-    expect(callOrder).toEqual(["migrations", "cutover", "writer", "catalog"]);
+    expect(callOrder).toEqual([
+      "migrations",
+      "cutover",
+      "turso-push",
+      "writer",
+      "catalog",
+    ]);
     expect(mockRunReplicaCutoverForAppUpload).toHaveBeenCalledWith("app-1");
     expect(mockCatchUpLinkedSource).not.toHaveBeenCalled();
     expect(mockApplyLocalMigrations).toHaveBeenCalledWith("app-1", "/tmp/papr/apps");
-    expect(mockPushLinkedSource).not.toHaveBeenCalled();
-    expect(result.tursoPushed).toBe(false);
+    expect(mockPushLinkedSource).toHaveBeenCalled();
+    expect(result.tursoPushed).toBe(true);
     expect(result.published).toBe(true);
   });
 
@@ -363,12 +379,18 @@ describe("flushAppNow", () => {
 
     const result = await flushAppNow(sync, "app-1");
 
-    expect(callOrder).toEqual(["migrations", "cutover", "writer", "catalog"]);
+    expect(callOrder).toEqual([
+      "migrations",
+      "cutover",
+      "turso-push",
+      "writer",
+      "catalog",
+    ]);
     expect(mockRunReplicaCutoverForAppUpload).toHaveBeenCalledWith("app-1");
     expect(mockCatchUpLinkedSource).not.toHaveBeenCalled();
     expect(mockApplyLocalMigrations).toHaveBeenCalledWith("app-1", "/tmp/papr/apps");
-    expect(mockPushLinkedSource).not.toHaveBeenCalled();
-    expect(result.tursoPushed).toBe(false);
+    expect(mockPushLinkedSource).toHaveBeenCalled();
+    expect(result.tursoPushed).toBe(true);
     expect(result.published).toBe(true);
   });
 
@@ -400,14 +422,14 @@ describe("flushAppNow", () => {
     expect(mockPushLinkedSource).not.toHaveBeenCalled();
   });
 
-  it("Plan A flush skips post-cutover replica push entirely", async () => {
+  it("Plan A flush pushes pending replica DBs after cutover", async () => {
     mockShouldRunReplicaCutover.mockReturnValue(true);
     mockIsLegacyWorkspaceRowSyncEnabled.mockReturnValue(false);
     mockShouldSkipTursoPush.mockResolvedValue(false);
 
     const result = await flushAppNow(sync, "app-1");
 
-    expect(mockPushLinkedSource).not.toHaveBeenCalled();
-    expect(result.tursoPushed).toBe(false);
+    expect(mockPushLinkedSource).toHaveBeenCalled();
+    expect(result.tursoPushed).toBe(true);
   });
 });

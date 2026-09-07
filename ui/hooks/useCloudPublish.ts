@@ -456,7 +456,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       setToast(
         enabled
           ? "This app will upload changes automatically"
-          : "You'll upload this app manually with Upload now",
+          : "You'll publish this app manually with Publish changes",
       );
     } catch (err) {
       setError((err as Error).message.slice(0, 160));

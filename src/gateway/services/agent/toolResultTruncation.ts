@@ -119,6 +119,8 @@ const SMALL_CRUD_TOOLS = new Set([
   "list_skills",
   "read_skill",
   "list_sub_agents",
+  "generate_media",
+  "list_media_models",
 ]);
 
 /** Recovery + delegation status tools — never truncate (full payload must survive). */

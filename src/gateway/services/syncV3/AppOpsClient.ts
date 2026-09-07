@@ -84,7 +84,7 @@ async function writerFetch(
     const cause = err instanceof Error ? err.message : String(err);
     const hint = isLocalAppRepoWriter()
       ? " Local writer is not running — start it with `npm run start:app-repo-writer`, or unset PAPR_APP_REPO_WRITER_URL to use the Papr Cloud writer."
-      : " Check your network connection and try Upload now again.";
+      : " Check your network connection and try Publish changes again.";
     throw new AppOpsClientError(
       "writer",
       503,
@@ -173,5 +173,11 @@ export async function postAppOps(
   await applyAckedBlobOids(appId, parsed.data.files);
   const { writeAppRepoCommitCursor } = await import("./appRepoCommittedFanout.js");
   await writeAppRepoCommitCursor(appId, parsed.data.commitSha);
+  try {
+    const { realignLocalAppCodeBaseline } = await import("./appRepoHeadSyncCheck.js");
+    await realignLocalAppCodeBaseline(appId);
+  } catch {
+    // Non-fatal — ack OIDs + cursor are enough when HEAD is not yet visible.
+  }
   return parsed.data;
 }

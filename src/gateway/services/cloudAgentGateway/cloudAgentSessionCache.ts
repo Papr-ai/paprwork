@@ -3,6 +3,7 @@
  */
 
 import fs from "fs/promises";
+import { isWarmWorkspaceFresh } from "./appRepoCloneCache.js";
 import {
   beginCloudAgentRun,
   resolveCloudRunRoot,
@@ -146,6 +147,21 @@ export class CloudAgentSessionCache {
     await fs.rm(entry.runRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 
+  /** Drop warm workspaces for an app after publish (stale job.json / repo files). */
+  async invalidateSessionsForApp(appId: string): Promise<number> {
+    const trimmed = appId.trim();
+    if (!trimmed) {
+      return 0;
+    }
+    const sessionIds = [...this.entries.entries()]
+      .filter(([, entry]) => entry.request.appId === trimmed)
+      .map(([sessionId]) => sessionId);
+    for (const sessionId of sessionIds) {
+      await this.endSession(sessionId);
+    }
+    return sessionIds.length;
+  }
+
   private async warmSessionOnDisk(
     request: CloudAgentRunRequest,
     sessionId: string,
@@ -155,7 +171,21 @@ export class CloudAgentSessionCache {
     let skipClone = false;
     try {
       await fs.access(paprHome);
-      skipClone = true;
+      if (
+        request.workspaceScope === "app" &&
+        request.appRepoOwner &&
+        request.appRepoName
+      ) {
+        skipClone = await isWarmWorkspaceFresh({
+          paprHome,
+          owner: request.appRepoOwner,
+          repo: request.appRepoName,
+          branch: request.repoBranch,
+          token: request.repoToken,
+        });
+      } else {
+        skipClone = true;
+      }
     } catch {
       skipClone = false;
     }

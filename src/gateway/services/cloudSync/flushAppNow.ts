@@ -123,19 +123,35 @@ async function pushLinkedSourcesForFlush(
     detail: `Pushing ${sourcesNeedingTursoPush.length} linked database(s) via replica.`,
   });
 
+  const { quiesceReplicaPathForPublish, releaseReplicaPublishQuiesce } =
+    await import("../tursoReplica/tursoReplicaPublishQuiesce.js");
+  for (const source of sourcesNeedingTursoPush) {
+    if (shouldUseTursoReplicaForSource(linkedSourceAsAppDataSource(source))) {
+      quiesceReplicaPathForPublish(source.dbPath);
+    }
+  }
+
   let tursoPushed = false;
-  await withTursoPushInFlight(syncKeys, async () => {
+  try {
+    await withTursoPushInFlight(syncKeys, async () => {
+      for (const source of sourcesNeedingTursoPush) {
+        const pushResult = await pushLinkedSourceWithReplicaRouting(source);
+        if (pushResult.ok) {
+          tursoPushed = true;
+        } else {
+          throw new Error(
+            `Turso push failed for ${source.alias}: ${pushResult.error ?? "unknown"}`,
+          );
+        }
+      }
+    });
+  } finally {
     for (const source of sourcesNeedingTursoPush) {
-      const pushResult = await pushLinkedSourceWithReplicaRouting(source);
-      if (pushResult.ok) {
-        tursoPushed = true;
-      } else {
-        throw new Error(
-          `Turso push failed for ${source.alias}: ${pushResult.error ?? "unknown"}`,
-        );
+      if (shouldUseTursoReplicaForSource(linkedSourceAsAppDataSource(source))) {
+        releaseReplicaPublishQuiesce(source.dbPath);
       }
     }
-  });
+  }
   return tursoPushed;
 }
 
@@ -179,10 +195,15 @@ export async function flushAppNow(
     await runPlanACutoverForUpload(appId);
     await yieldEventLoop();
 
-    // Cutover attaches replica sync; only push sources still on legacy workspace log.
-    tursoPushed = await pushLinkedSourcesForFlush(pushSources, syncKeys, {
+    // Uncutover DBs may still use legacy workspace log; replica DBs need an
+    // explicit push on manual Publish (auto-sync is off in manual upload mode).
+    const legacyPushed = await pushLinkedSourcesForFlush(pushSources, syncKeys, {
       legacyOnly: true,
     });
+    const replicaPushed = await pushLinkedSourcesForFlush(pushSources, syncKeys, {
+      replicaOnly: true,
+    });
+    tursoPushed = legacyPushed || replicaPushed;
     await yieldEventLoop();
   } else if (legacyRowSync) {
     await catchUpAppLinkedSources(appSources);

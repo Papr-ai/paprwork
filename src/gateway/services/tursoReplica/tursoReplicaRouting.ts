@@ -8,6 +8,8 @@ import {
   resolveTursoDatabaseNameForSource,
   type DatabaseRecord,
 } from "../DatabaseRegistryService.js";
+import { getPaprUserId } from "../../utils/paprUserId.js";
+import { resolveTursoActingUserIdForSource } from "../appRuntime/tursoRuntimeIdentity.js";
 import { getTursoReplicaService } from "./TursoReplicaService.js";
 import type { TursoReplicaPushResponse, TursoReplicaWriteResult, TursoReplicaWriteOptions } from "./tursoReplicaTypes.js";
 import {
@@ -34,6 +36,7 @@ import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
 import type { TursoPushScopedOptions } from "../TursoSyncBridge.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
 import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
+import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 
 /** One local registry save after a replica write (no cloud upload — timestamps are local-only). */
 async function noteReplicaWriteOutcome(
@@ -66,6 +69,34 @@ async function noteReplicaPushSuccess(source: AppDataSource): Promise<void> {
   await registry.updateReplicaPushState(source.dbId, {
     lastReplicaPushError: null,
     lastReplicaPushAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Registry-backed dirty check for TursoLinkedDbWatcher (replica path).
+ *
+ * Replica files are worker-owned — the main thread must not open them to read
+ * `_papr_sync_log`. Instead we mirror legacy semantics: only act when
+ * `lastReplicaLocalMutationAt` is ahead of `lastReplicaPushAt` (or push is
+ * blocked). WAL/SHM touches without a registered mutation are ignored.
+ */
+export function isReplicaLinkedDbDirtyForWatcher(input: {
+  dbPath: string;
+  dbId?: string;
+}): boolean {
+  const registry = getDatabaseRegistryService();
+  const record: DatabaseRecord | undefined = input.dbId
+    ? registry.getById(input.dbId)
+    : registry.getByPath(input.dbPath);
+  const lastPushError = record?.lastReplicaPushError ?? null;
+  const migrationConflict =
+    lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
+  return computeReplicaPendingPush({
+    pendingOps: 0,
+    lastPushError,
+    migrationConflict,
+    lastReplicaPushAt: record?.lastReplicaPushAt ?? null,
+    lastReplicaLocalMutationAt: record?.lastReplicaLocalMutationAt ?? null,
   });
 }
 
@@ -117,6 +148,25 @@ export function shouldUseTursoReplicaForSource(source: AppDataSource): boolean {
   });
 }
 
+function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
+  const record = resolveRegistryRecordForSource(source);
+  const callerUserId = getPaprUserId();
+  const userId =
+    record?.isolation === "per-user"
+      ? resolveTursoActingUserIdForSource(source, {
+          publisherUserId: callerUserId ?? "",
+          callerUserId,
+        })
+      : undefined;
+  const tursoDatabase = resolveTursoDatabaseNameForSource(source, userId);
+  if (!tursoDatabase) {
+    throw new Error(
+      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
+    );
+  }
+  return tursoDatabase;
+}
+
 /** Skip legacy CDC / workspace-log Turso push when Plan A owns this linked source. */
 export function shouldSuppressLegacyTursoPush(options: {
   syncKey: string;
@@ -153,12 +203,7 @@ export async function writeLinkedDbViaTursoReplica(
   params?: unknown[],
   writeOptions?: TursoReplicaWriteOptions,
 ): Promise<TursoReplicaWriteResult> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   const result = await replica.runWrite({
@@ -179,12 +224,7 @@ export async function writeLinkedDbBatchViaTursoReplica(
   source: AppDataSource,
   statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
 ): Promise<TursoReplicaWriteResult> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   const result = await replica.runStatements({
@@ -204,12 +244,7 @@ export async function execLinkedDbViaTursoReplica(
   sql: string,
   writeOptions?: TursoReplicaWriteOptions,
 ): Promise<{ pendingPush: boolean }> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   const result = await replica.runExec(
@@ -260,12 +295,7 @@ export async function pullLinkedDbViaTursoReplica(
   source: AppDataSource,
   options?: { forceReconnect?: boolean },
 ): Promise<boolean> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   if (options?.forceReconnect) {
@@ -285,12 +315,7 @@ export async function pushLinkedDbViaTursoReplica(
   source: AppDataSource,
   options?: { pullBeforePush?: boolean; skipMigrationConflictCheck?: boolean },
 ): Promise<TursoReplicaPushResponse> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   const pullFirst =
@@ -370,12 +395,7 @@ export async function queryLinkedDbViaTursoReplica(
   params?: unknown[],
   options?: { pullBeforeRead?: boolean },
 ): Promise<import("../DbQueryPool.js").QueryResult> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   return replica.runQuery({
@@ -390,12 +410,7 @@ export async function queryLinkedDbViaTursoReplica(
 export async function schemaLinkedDbViaTursoReplica(
   source: AppDataSource,
 ): Promise<import("../DbQueryPool.js").SchemaResult> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const replica = getTursoReplicaService();
   return replica.runSchema(source.dbPath, tursoDatabase);
@@ -404,12 +419,7 @@ export async function schemaLinkedDbViaTursoReplica(
 export async function syncStatusForLinkedDb(
   source: AppDataSource,
 ): Promise<import("./tursoReplicaTypes.js").TursoReplicaSyncStatus> {
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source);
-  if (!tursoDatabase) {
-    throw new Error(
-      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
-    );
-  }
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
 
   const record = resolveRegistryRecordForSource(source);
   const replica = getTursoReplicaService();

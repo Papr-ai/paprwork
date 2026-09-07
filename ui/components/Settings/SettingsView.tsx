@@ -1011,6 +1011,54 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.1" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.1</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>AI Media Generation</strong>
+                <p>
+                  New generate_media tool for images and video (OpenAI Codex,
+                  Veo). Generated media appears inline in chat with a gallery
+                  preview and persistent storage.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Bootstrap &amp; Publish Quiesce</strong>
+                <p>
+                  Safer replica bootstrap replay, publish quiesce before cutover,
+                  pending-push tracking, and improved background recovery for
+                  linked databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Sync Writer Improvements</strong>
+                <p>
+                  Reset writer baseline after pulls, schema-owner migration sync,
+                  app repo clone cache, and clearer publish/sync status when
+                  remote code or databases drift.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent &amp; Chat Polish</strong>
+                <p>
+                  Tool repetition detection to reduce duplicate calls, preview
+                  fetch abort for mini-apps, and improved wrap-up continuation
+                  during long tool-heavy turns.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.1"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.0" && (
           <div className="about-card">
             <h3>What's New in v2.6.0</h3>

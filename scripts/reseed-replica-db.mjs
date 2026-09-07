@@ -67,7 +67,7 @@ async function main() {
     "services/tursoReplica/tursoReplicaProvision.js",
   );
 
-  console.log("[reseed] Closing connections and wiping local replica files...");
+  console.log("[reseed] Closing connections, stopping sync worker, wiping local replica files...");
   await reseedTursoReplicaFromRemote(record);
 
   const { queryLinkedDbViaTursoReplica } = await importDist(

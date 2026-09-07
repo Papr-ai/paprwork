@@ -4,8 +4,11 @@
  */
 
 import { fetchAppRepoHead } from "./AppOpsClient.js";
-import { writeAppRepoCommitCursor } from "./appRepoCommittedFanout.js";
-import { isLocalAppCodeAtRemoteHead } from "./appRepoHeadSyncCheck.js";
+import { writeAppRepoCommitCursor, readAppRepoCommitCursors } from "./appRepoCommittedFanout.js";
+import {
+  isAppCodeRecentlyVerified,
+  isLocalAppCodeAtRemoteHead,
+} from "./appRepoHeadSyncCheck.js";
 import { ensureAppRepoRecord, getAppRepoRecord } from "./AppRepoClient.js";
 
 export interface AppRemoteCodeStatus {
@@ -30,6 +33,17 @@ export async function checkAppRemoteCodeStatus(
 
   if (!trimmed) {
     return empty;
+  }
+
+  const cursors = await readAppRepoCommitCursors();
+  const recent = isAppCodeRecentlyVerified(trimmed, cursors);
+  if (recent.verified) {
+    return {
+      appId: trimmed,
+      upToDate: true,
+      remoteCommitSha: recent.commitSha,
+      reason: "recently verified at remote head",
+    };
   }
 
   let record = await getAppRepoRecord(trimmed);

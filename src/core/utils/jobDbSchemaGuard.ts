@@ -156,7 +156,7 @@ function buildBlockMessage(
       ? `2. run_job({ jobId: "${jobId}" }) — applies Jobs/${jobId}/migrations/ locally`
       : `2. Apply migration via papr_db_apply_migration (registry) or run_job (job scratch)`;
   const syncStep =
-    `3. papr_db_push({ dbId }) or Upload now / push_cloud_sync({ appId }) — Plan A replica sync\n` +
+    `3. papr_db_push({ dbId }) or Publish changes / push_cloud_sync({ appId }) — Plan A replica sync\n` +
     `   Do not use raw sqlite3 DDL on synced databases.`;
 
   const message =

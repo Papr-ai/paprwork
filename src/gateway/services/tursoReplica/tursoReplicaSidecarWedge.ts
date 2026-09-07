@@ -21,6 +21,7 @@
 
 import * as fs from "fs";
 import { removeTursoReplicaSidecarsOnly } from "./tursoReplicaFileGuard.js";
+import { writeBootstrapPendingMarker } from "./tursoReplicaBootstrapMarker.js";
 import { readReplicaWalShape } from "./tursoReplicaWalFrames.js";
 
 interface ReplicaSidecarInfo {
@@ -176,6 +177,9 @@ export function repairReplicaSidecarWedge(dbPath: string): boolean {
   if (!detectReplicaSidecarWedge(dbPath)) {
     return false;
   }
+  // Marker first, delete second: a crash between the two costs one redundant pull, whereas
+  // the reverse order is exactly the silent-empty-replica bug this guards against.
+  writeBootstrapPendingMarker(dbPath, "sidecar_wedge_repair");
   removeTursoReplicaSidecarsOnly(dbPath);
   return true;
 }
@@ -187,6 +191,7 @@ export function repairReplicaSidecarWedge(dbPath: string): boolean {
  * open handle, then repair — unlinking a `-wal` that the engine still has open corrupts it.
  */
 export function resetReplicaSidecars(dbPath: string): void {
+  writeBootstrapPendingMarker(dbPath, "pre_sync_sidecar_reset");
   removeTursoReplicaSidecarsOnly(dbPath);
 }
 
@@ -198,6 +203,7 @@ export function repairReplicaSidecarsOnCheckpointError(dbPath: string): boolean 
   if (!fs.existsSync(dbPath)) {
     return false;
   }
+  writeBootstrapPendingMarker(dbPath, "checkpoint_error_repair");
   removeTursoReplicaSidecarsOnly(dbPath);
   return true;
 }

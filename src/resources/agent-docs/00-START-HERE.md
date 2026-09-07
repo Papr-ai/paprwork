@@ -84,11 +84,11 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 
 | Lane | What moves | How to fix / push |
 |------|------------|-------------------|
-| **Git (Sync V3)** | App source + `jobs/{id}/` in **per-app** GitHub repo | `push_cloud_sync({ appId })` or Upload now; verify with `inspect_cloud_repo({ appId })` — **not** namespace `git ls-files apps/` |
-| **Turso (Plan A)** | Registry DB schema + rows (`attach_database` / `data-sources.json`) | Schema: `write_file migrations/*.sql` → `papr_db_apply_migration`. Rows: `/api/db/write`, `papr_db_exec`, or Upload now |
+| **Git (Sync V3)** | App source + `jobs/{id}/` in **per-app** GitHub repo | `push_cloud_sync({ appId })` or Publish / Publish changes in the app tab; verify with `inspect_cloud_repo({ appId })` — **not** namespace `git ls-files apps/` |
+| **Turso (Plan A)** | Registry DB schema + rows (`attach_database` / `data-sources.json`) | Schema: `write_file migrations/*.sql` → `papr_db_apply_migration`. Rows: `/api/db/write`, `papr_db_exec`, or Publish changes |
 | **Vault** | Integration Keys + platform cookies for cloud jobs | Pushes when desktop is **awake** with Cloud Sync on — cloud cannot read local keychain |
 
-**Debugging workflow:** `get_cloud_sync_status` → `push_cloud_sync({ appId })` (git **+** Turso ordered flush, same as Upload now) → `papr_db_*` / `repair_cloud_sync` for DB drift → verify again.
+**Debugging workflow:** `get_cloud_sync_status` → `push_cloud_sync({ appId })` (git **+** Turso ordered flush, same as Publish / Publish changes in the app tab) → `papr_db_*` / `repair_cloud_sync` for DB drift → verify again.
 
 **Vault rule:** Cloud agent jobs use keys from the **cloud vault**, not the desktop keychain. New Platform Connection cookies or Integration Keys only reach cloud after desktop syncs while awake.
 

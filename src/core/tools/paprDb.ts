@@ -34,8 +34,11 @@ export const paprDbSyncStatusTool = createTool({
     "sidecarWedge means the recorded WAL watermark names a frame the WAL does not hold. " +
     "Connecting now resets those sidecars automatically, so this is normally false; if it stays " +
     "true the replica could not be opened at all and needs repair_cloud_sync. " +
-    "Only repair_cloud_sync accept_cloud resets them - 'pull' and 'merge_lww' do NOT, and may report success while doing nothing. " +
-    "accept_cloud reseeds local from the Turso primary, so confirm cloud is not missing local-only rows before using it. " +
+    "Repair escalation (try in order — do not skip to accept_cloud unless needed): " +
+    "(1) repair_cloud_sync pull — refresh from cloud; " +
+    "(2) papr_db_reconcile_sync repair_sidecar_wedge — reset sidecars + pull (auto full reseed if WAL I/O persists); " +
+    "(3) accept_cloud — LAST RESORT: wipe local replica and re-pull from Turso primary. " +
+    "Only use accept_cloud after confirming Turso has the rows you need (local-only unpushed data is lost). " +
     "Never sqlite3 the data.db path — that reads the on-disk file, not the replica handle. " +
     "Requires PAPR_TURSO_REPLICA_SYNC and Papr cloud sync enabled.",
   inputSchema: dbRefSchema,
@@ -132,7 +135,7 @@ export const paprDbApplyMigrationTool = createTool({
     "Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. " +
     "Never pushes DDL via replica push — avoids schema drift on Turso. " +
     "Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. " +
-    "Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Upload now. " +
+    "Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Publish changes. " +
     "For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
   inputSchema: paprDbApplyMigrationSchema,
   execute: async (input) => {
@@ -208,8 +211,8 @@ export const paprDbMigrationParityTool = createTool({
 export const paprDbReconcileSyncTool = createTool({
   id: "papr_db_reconcile_sync",
   description:
-    "Repair Plan A replica sync without pushing DDL. Actions: " +
-    "repair_sidecar_wedge (reset corrupt sidecars + pull), " +
+    "Repair Plan A replica sync without pushing DDL. Try these before accept_cloud. Actions: " +
+    "repair_sidecar_wedge (reset corrupt sidecars + pull; escalates to full reseed if WAL I/O persists), " +
     "pull_and_align (pull after cloud migration), " +
     "clear_push_error (clear lastReplicaPushError), " +
     "complete_pairing (mark replica+cloud paired after manual steps), " +
@@ -246,12 +249,13 @@ export const repairCloudSyncTool = createTool({
     "Use when row push fails or local/cloud data diverged. " +
     "For schema/migration issues prefer papr_db_migration_parity + papr_db_reconcile_sync " +
     "and explicit papr_db_apply_migration_replica/cloud — NOT merge_lww. " +
-    "Strategies: pull (refresh from cloud), push (pull-first then push rows), " +
-    "accept_cloud (reseed local from Turso primary — NEVER when local has more rows than Turso), " +
-    "merge_lww (DEPRECATED — only rebases ledger via DELETE; use papr_db_reconcile_sync instead), " +
-    "force_local (replica WAL push — does NOT upload rows inserted via bash/sqlite3), " +
-    "bootstrap_remote (full table snapshot from local file to Turso primary, then reseed replica), " +
-    "export_conflicts (inspect migration ledger conflicts without changing data).",
+    "Try strategies in order: pull (refresh from cloud) → papr_db_reconcile_sync repair_sidecar_wedge (sidecar/WAL) → " +
+    "accept_cloud (LAST RESORT — wipe local replica, re-pull from Turso; only when Turso has the data you need). " +
+    "Other strategies: push (pull-first then push rows), " +
+    "force_local (replica sync push — does NOT upload rows inserted via bash/sqlite3), " +
+    "bootstrap_remote (Plan A: sync push to Turso then reseed replica; legacy syncMode: HTTP table snapshot), " +
+    "export_conflicts (inspect migration ledger conflicts without changing data). " +
+    "merge_lww is DEPRECATED — use papr_db_reconcile_sync instead.",
   inputSchema: z.object({
     dbId: z.string().min(1).describe("Registry dbId"),
     strategy: z

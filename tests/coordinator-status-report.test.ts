@@ -184,7 +184,7 @@ describe("buildCoordinatorStatusReport", () => {
 
     const report = buildCoordinatorStatusReport(coordinator, "app-1");
     expect(report?.status).toBe("failed");
-    expect(report?.label).toContain("Upload failed");
+    expect(report?.label).toContain("Publish failed");
   });
 
   it("returns queue position when app is queued behind an active flush", () => {

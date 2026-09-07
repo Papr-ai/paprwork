@@ -56,6 +56,7 @@ import {
   mergeAppWorkspaceFields,
   readActiveAppWorkspaceScope,
   readAppWorkspaceFieldsFromDisk,
+  shouldPruneStrayWorkspaceAppCopy,
   shouldShowAppInMyApps,
   withWorkspaceScope,
 } from "../../core/utils/appWorkspaceScope.js";
@@ -82,8 +83,10 @@ import {
   mergeDailyBriefDataSource,
   dailyBriefDataSourceNeedsUpdate,
   DEFAULT_HOME_APP_ID,
+  DEFAULT_HOME_BRIEFS_DB_ISOLATION,
   DEFAULT_HOME_BRIEFS_DB_LABEL,
   DEFAULT_HOME_BRIEFS_DB_SLUG,
+  cleanupLegacyHomeJobArtifacts,
   DEFAULT_HOME_DB_MIGRATIONS_DIR,
   DEFAULT_HOME_JOB_ASSETS_DIR,
   findHomeDailyBriefJobIdInRegistry,
@@ -864,6 +867,13 @@ export class AppService {
           `[AppService] Installed ${assets.length} Home job asset(s) for ${jobId}`,
         );
       }
+
+      const removed = await cleanupLegacyHomeJobArtifacts(jobDir);
+      if (removed.length > 0) {
+        console.log(
+          `[AppService] Removed ${removed.length} legacy Home job artifact(s) for ${jobId}: ${removed.join(", ")}`,
+        );
+      }
     } catch (assetErr) {
       const code = (assetErr as NodeJS.ErrnoException).code;
       if (code !== "ENOENT") {
@@ -934,13 +944,21 @@ export class AppService {
         "./DatabaseRegistryService.js"
       );
       const registry = await initializeDatabaseRegistry();
-      const record = await registry.register({
+      let record = await registry.register({
         localPath: dbPath,
         label: DEFAULT_HOME_BRIEFS_DB_LABEL,
         schemaOwnerAppId: appId,
+        isolation: DEFAULT_HOME_BRIEFS_DB_ISOLATION,
         // No ownerJobId: that would name the Turso instance j-{jobId} and tie
         // a shared registry DB to one job. This DB outlives the job.
       });
+
+      if (record.isolation !== DEFAULT_HOME_BRIEFS_DB_ISOLATION) {
+        record = await registry.setIsolation(
+          record.dbId,
+          DEFAULT_HOME_BRIEFS_DB_ISOLATION,
+        );
+      }
 
       await applyRegistryDatabaseMigrations(dbPath);
       await this.backfillHomeBriefsFromLegacyDb(
@@ -1288,6 +1306,58 @@ export class AppService {
     } catch {
       return {};
     }
+  }
+
+  /**
+   * Mirror title/description/icon/tags from metadata.json into the in-memory
+   * registry (apps.json). Registry → metadata is handled by updateApp /
+   * writeCloudAppMetadataFile; this covers the reverse path when agents or
+   * cloud pull edit metadata.json directly.
+   */
+  private syncRegistryFromMetadataContent(
+    appId: string,
+    rawContent: string,
+  ): boolean {
+    const metadata = parseCloudAppMetadataFile(rawContent);
+    if (!metadata || metadata.appId !== appId) {
+      return false;
+    }
+
+    const app = this.apps.get(appId);
+    if (!app) {
+      return false;
+    }
+
+    let changed = false;
+    const title = metadata.title.trim();
+    if (title && app.title !== title) {
+      app.title = title;
+      changed = true;
+    }
+    if (metadata.description && app.description !== metadata.description) {
+      app.description = metadata.description;
+      changed = true;
+    }
+    if (metadata.icon && app.icon !== metadata.icon) {
+      app.icon = metadata.icon;
+      changed = true;
+    }
+    const nextTags = metadata.tags?.length ? metadata.tags : undefined;
+    const tagsEqual =
+      JSON.stringify(app.tags ?? []) === JSON.stringify(nextTags ?? []);
+    if (!tagsEqual) {
+      app.tags = nextTags;
+      changed = true;
+    }
+
+    if (changed) {
+      app.updatedAt = metadata.updatedAt ?? new Date().toISOString();
+      console.log(
+        `[AppService] Synced registry from metadata.json: ${appId} - ${app.title}`,
+      );
+    }
+
+    return changed;
   }
 
   /** Fix apps index entries that still carry the legacy recovered placeholder. */
@@ -1801,14 +1871,29 @@ export class AppService {
       }
 
       const appDir = path.join(this.appsDir, appId);
-      const workspaceFields = mergeAppWorkspaceFields(
-        app,
-        await readAppWorkspaceFieldsFromDisk(appDir),
-      );
-      if (isAppWorkspaceUnassigned(workspaceFields)) {
+      const diskFields = await readAppWorkspaceFieldsFromDisk(appDir);
+
+      if (isAppAssignedToWorkspace(app, scope)) {
+        const merged = mergeAppWorkspaceFields(app, diskFields);
+        if (!isAppAssignedToWorkspace(merged, scope)) {
+          console.warn(
+            `[AppService] Repairing stale workspace metadata for ${appId} (cloud pull wrote foreign org/namespace)`,
+          );
+          await writeCloudAppMetadataFile(this.paprRootDir, appId).catch(
+            (err: unknown) => {
+              console.warn(
+                `[AppService] Failed to repair metadata.json for ${appId}:`,
+                err instanceof Error ? err.message : err,
+              );
+            },
+          );
+        }
         continue;
       }
-      if (isAppAssignedToWorkspace(workspaceFields, scope)) {
+
+      if (
+        !shouldPruneStrayWorkspaceAppCopy(app, diskFields, scope)
+      ) {
         continue;
       }
 
@@ -2277,6 +2362,15 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Updated app: ${id}`);
+
+    if (
+      "title" in nextUpdates ||
+      "description" in nextUpdates ||
+      "icon" in nextUpdates ||
+      "tags" in nextUpdates
+    ) {
+      this.broadcastAppListUpdated();
+    }
 
     void writeCloudAppMetadataFile(this.paprRootDir, id).catch((err) => {
       console.warn(
@@ -2914,6 +3008,15 @@ export class AppService {
         }
       }
 
+      const normalizedFilename = filename.replace(/\\/g, "/");
+      let registrySyncedFromMetadata = false;
+      if (normalizedFilename === "metadata.json") {
+        registrySyncedFromMetadata = this.syncRegistryFromMetadataContent(
+          appId,
+          content,
+        );
+      }
+
       // Sync icon to registry when icon-bearing files are written
       const basename = path.basename(filename);
       if (basename === "index.html") {
@@ -2937,9 +3040,14 @@ export class AppService {
         }
       }
 
-      // Update app's updatedAt
-      app.updatedAt = new Date().toISOString();
+      if (!registrySyncedFromMetadata) {
+        app.updatedAt = new Date().toISOString();
+      }
       await this.saveApps();
+
+      if (registrySyncedFromMetadata) {
+        this.broadcastAppListUpdated();
+      }
 
       // Rebuild + iframe reload are handled by the filesystem watcher (debounced)
       // so multi-file agent edits coalesce into a single build/reload cycle.
@@ -3145,6 +3253,18 @@ export class AppService {
   }
 
   private async processFileChange(appId: string, filename: string): Promise<void> {
+    const normalizedFilename = filename.replace(/\\/g, "/");
+    if (normalizedFilename === "metadata.json") {
+      const metadataContent = await this.readAppFile(appId, "metadata.json");
+      if (
+        metadataContent &&
+        this.syncRegistryFromMetadataContent(appId, metadataContent)
+      ) {
+        await this.saveApps();
+        this.broadcastAppListUpdated();
+      }
+    }
+
     try {
       await this.buildApp(appId);
       await this.runValidation(appId);

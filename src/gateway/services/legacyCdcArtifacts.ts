@@ -58,6 +58,11 @@ export function isLegacySyncPathTable(tableName: string): boolean {
   return false;
 }
 
+/** User app tables only — excludes legacy CDC and sync-path infra for schema pairing. */
+export function filterUserSchemaComparisonTables(tables: readonly string[]): string[] {
+  return tables.filter((name) => !isLegacySyncPathTable(name));
+}
+
 function listSqliteUserTables(db: Database.Database): string[] {
   const rows = db
     .prepare(

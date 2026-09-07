@@ -94,11 +94,11 @@ export function buildCoordinatorStatusReport(
         label:
           queue && queue.depth > 0
             ? formatFlushQueueLabel(queue.position, queue.depth)
-            : "Queued for upload…",
+            : "Queued for publish…",
         detail:
           queue && queue.depth > 0
             ? formatFlushQueueDetail(queue.position, queue.depth)
-            : "Waiting in upload queue…",
+            : "Waiting in publish queue…",
         appId,
       };
     }
@@ -111,13 +111,13 @@ export function buildCoordinatorStatusReport(
       label: isConflict
         ? "File changed on the web"
         : flushError.retryPending
-          ? "Upload failed — retrying"
-          : "Upload failed",
+          ? "Publish failed — retrying"
+          : "Publish failed",
       detail: isConflict
-        ? `These paths changed on the server: ${(flushError.conflictPaths ?? []).join(", ").slice(0, 160) || flushError.message.slice(0, 160)}. Use Upload now after reviewing.`
+        ? `These paths changed on the server: ${(flushError.conflictPaths ?? []).join(", ").slice(0, 160) || flushError.message.slice(0, 160)}. Click Publish changes in the app tab after reviewing.`
         : flushError.retryPending
           ? `${flushError.message.slice(0, 120)} Retrying automatically.`
-          : `${flushError.message.slice(0, 160)} Use Upload now to retry.`,
+          : `${flushError.message.slice(0, 160)} Click Publish changes to retry.`,
       appId,
       retryPending: flushError.retryPending,
     };
@@ -137,12 +137,12 @@ export function buildCoordinatorStatusReport(
     } else if (dbDirty) {
       detail = "Database changes are waiting to sync to the web.";
     } else {
-      detail = "App file changes are waiting to upload.";
+      detail = "App file changes are waiting to publish.";
     }
     return {
       status: "waiting",
       waitingReason: "dirty",
-      label: "Changes waiting to upload",
+      label: "Changes waiting to publish",
       detail,
       ...(appId ? { appId } : {}),
     };

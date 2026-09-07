@@ -4,6 +4,7 @@ import os from "os";
 import { promises as fs } from "fs";
 import { randomUUID } from "crypto";
 import { AppService } from "../src/gateway/services/AppService.js";
+import { serializeCloudAppMetadataFile } from "../src/core/utils/cloudAppMetadata.js";
 
 describe("AppService", () => {
   let originalHome: string | undefined;
@@ -147,6 +148,36 @@ describe("AppService", () => {
     expect(updated?.description).toBe("Updated");
     expect(wrote).toBe(true);
     expect(loadedFile).toBe("v2");
+  });
+
+  test("writeAppFile on metadata.json syncs registry title and description", async () => {
+    const created = await appService.createApp("GTM Foundations Audit", "Old desc", [
+      { filename: "index.html", content: "<h1>Audit</h1>" },
+    ]);
+
+    const metadata = serializeCloudAppMetadataFile({
+      appId: created.id,
+      title: "Website Audit",
+      description: "Audits website performance and SEO",
+      updatedAt: new Date().toISOString(),
+    });
+    const wrote = await appService.writeAppFile(
+      created.id,
+      "metadata.json",
+      metadata,
+    );
+
+    const app = await appService.getApp(created.id);
+    const appsJson = JSON.parse(
+      await fs.readFile(path.join(testHomeDir, "Papr", "data", "apps.json"), "utf8"),
+    ) as Array<{ id: string; title: string; description: string }>;
+
+    expect(wrote).toBe(true);
+    expect(app?.title).toBe("Website Audit");
+    expect(app?.description).toBe("Audits website performance and SEO");
+    expect(appsJson.find((entry) => entry.id === created.id)?.title).toBe(
+      "Website Audit",
+    );
   });
 
   test("prunes index when app folder is removed outside deleteApp (e.g. bash rm)", async () => {

@@ -143,3 +143,129 @@ export function withWorkspaceScope<T extends AppWorkspaceFields>(
     namespaceId: scope.namespaceId,
   };
 }
+
+/**
+ * Whether pruneStrayWorkspaceAppCopies may delete an app folder.
+ * apps.json is authoritative — never prune apps registered in the active workspace,
+ * even when cloud-pulled metadata.json claims a different org/namespace.
+ */
+export function shouldPruneStrayWorkspaceAppCopy(
+  indexFields: AppWorkspaceFields,
+  diskFields: AppWorkspaceFields,
+  activeScope: AppWorkspaceScope,
+): boolean {
+  if (isAppAssignedToWorkspace(indexFields, activeScope)) {
+    return false;
+  }
+
+  const merged = mergeAppWorkspaceFields(indexFields, diskFields);
+  if (isAppWorkspaceUnassigned(merged)) {
+    return false;
+  }
+  return !isAppAssignedToWorkspace(merged, activeScope);
+}
+
+/**
+ * Resolve which org/namespace Get updates should write into metadata.json.
+ * Home path (active workspace) wins over stale cloud repo assignment.
+ */
+export function resolveWorkspaceScopeForPulledMetadata(
+  localIndexFields: AppWorkspaceFields,
+  activeScope: AppWorkspaceScope | null,
+): AppWorkspaceScope | null {
+  if (!activeScope) {
+    return null;
+  }
+  if (isAppAssignedToWorkspace(localIndexFields, activeScope)) {
+    return {
+      organizationId: localIndexFields.organizationId!.trim(),
+      namespaceId: localIndexFields.namespaceId!.trim(),
+    };
+  }
+  if (!isAppWorkspaceUnassigned(localIndexFields)) {
+    // Index explicitly belongs to another workspace — do not re-home via pull.
+    return null;
+  }
+  // App folder lives in this home path; stamp the active workspace.
+  return activeScope;
+}
+
+export interface PulledMetadataScopeRepair {
+  content: string;
+  appliedScope: AppWorkspaceScope | null;
+  repaired: boolean;
+}
+
+/**
+ * Get updates must not overwrite local workspace assignment with stale cloud metadata
+ * (e.g. bundle import source namespace baked into the per-app repo).
+ */
+export function repairPulledMetadataWorkspaceScope(
+  pulledContent: string,
+  localIndexFields: AppWorkspaceFields,
+  activeScope: AppWorkspaceScope | null,
+): PulledMetadataScopeRepair {
+  if (!activeScope) {
+    return { content: pulledContent, appliedScope: null, repaired: false };
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(pulledContent) as Record<string, unknown>;
+  } catch {
+    return { content: pulledContent, appliedScope: null, repaired: false };
+  }
+
+  const targetScope = resolveWorkspaceScopeForPulledMetadata(
+    localIndexFields,
+    activeScope,
+  );
+
+  const pulledOrg =
+    typeof parsed.organizationId === "string" ? parsed.organizationId.trim() : "";
+  const pulledNs =
+    typeof parsed.namespaceId === "string" ? parsed.namespaceId.trim() : "";
+
+  if (!targetScope) {
+    const pulledAssignedElsewhere =
+      pulledOrg.length > 0 &&
+      pulledNs.length > 0 &&
+      !isAppAssignedToWorkspace(
+        { organizationId: pulledOrg, namespaceId: pulledNs },
+        activeScope,
+      );
+    if (!pulledAssignedElsewhere) {
+      return { content: pulledContent, appliedScope: null, repaired: false };
+    }
+    delete parsed.organizationId;
+    delete parsed.namespaceId;
+    return {
+      content: `${JSON.stringify(parsed, null, 2)}\n`,
+      appliedScope: null,
+      repaired: true,
+    };
+  }
+
+  const repaired =
+    pulledOrg !== targetScope.organizationId || pulledNs !== targetScope.namespaceId;
+  parsed.organizationId = targetScope.organizationId;
+  parsed.namespaceId = targetScope.namespaceId;
+  return {
+    content: `${JSON.stringify(parsed, null, 2)}\n`,
+    appliedScope: targetScope,
+    repaired,
+  };
+}
+
+/** @deprecated Use repairPulledMetadataWorkspaceScope — kept for callers that only need content. */
+export function preserveLocalWorkspaceScopeInPulledMetadata(
+  pulledContent: string,
+  localIndexFields: AppWorkspaceFields,
+  activeScope: AppWorkspaceScope | null,
+): string {
+  return repairPulledMetadataWorkspaceScope(
+    pulledContent,
+    localIndexFields,
+    activeScope,
+  ).content;
+}

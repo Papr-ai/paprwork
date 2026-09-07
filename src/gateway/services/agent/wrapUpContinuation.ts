@@ -28,6 +28,36 @@ export const WRAP_UP_WITH_PLAN_INCOMPLETE =
   "outstanding, and what you need in order to finish. Do not claim the task is complete, " +
   "and do not call tools.]";
 
+/** Lead-in when the model retried the same tool+args too many times. */
+export function buildRepetitionRecoveryLead(
+  toolName: string,
+  repetitions: number,
+): string {
+  return (
+    `[SYSTEM: Your identical ${toolName} call was repeated ${repetitions} times without progress. ` +
+    `Do NOT retry that exact call — use edit_file, split into smaller files, or fix validation/schema issues.`
+  );
+}
+
+export function buildRepetitionRecoveryTextOnlyNudge(
+  toolName: string,
+  repetitions: number,
+): string {
+  return (
+    `${buildRepetitionRecoveryLead(toolName, repetitions)} ` +
+    `Write a brief user-facing explanation of what blocked you and what you will try next ` +
+    `(or ask one direct question). Do not call tools.]`
+  );
+}
+
+export function buildRepetitionRecoveryPlanNudge(
+  toolName: string,
+  repetitions: number,
+  planNudge: string,
+): string {
+  return `${buildRepetitionRecoveryLead(toolName, repetitions)}]\n\n${planNudge}`;
+}
+
 /** Queue one continuation step with tools left intact so the loop keeps working. */
 export function applyPlanContinuationStep(
   context: { messages: unknown[] },

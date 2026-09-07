@@ -13,7 +13,6 @@ import {
 } from "../../utils/appCloudSyncStatus";
 import {
   resolveEffectiveAutoUpload,
-  usesGlobalUploadDefault,
 } from "../../utils/appUploadMode";
 import { audienceModelNeedsInitialCodeUpload } from "../../utils/cloudPublishRouting";
 import {
@@ -325,7 +324,6 @@ export function MiniAppPublishBar({
     cloud.uploadMode,
     globalAutoUploadEnabled,
   );
-  const autoUploadUsesGlobalDefault = usesGlobalUploadDefault(cloud.uploadMode);
 
   // One callout, four triggers — each fires on a false→true edge, never
   // re-nags while the condition persists, and clears itself when resolved.
@@ -1007,9 +1005,6 @@ export function MiniAppPublishBar({
                     syncActionNeeded={webSyncActionNeeded}
                     appLive={cloud.live}
                     autoUploadEnabled={autoUploadEnabled}
-                    autoUploadUsesGlobalDefault={autoUploadUsesGlobalDefault}
-                    autoUploadSaving={cloud.autoUploadSaving}
-                    onAutoUploadChange={(enabled) => void cloud.setAutoUploadEnabled(enabled)}
                     onPushNow={() => void handleWebSyncPushOrPublish()}
                     onBumpQueue={() => void webSyncBumpQueue()}
                     onPullUpdates={() => void webSyncPullUpdates()}

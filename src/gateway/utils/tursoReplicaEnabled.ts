@@ -119,7 +119,7 @@ export function logTursoReplicaStartupGuard(): void {
       "uncutover apps keep legacy workspace-log sync until Upload.",
   );
   console.warn(
-    "[TursoReplica] Legacy → replica cutover runs on Upload now (per app). " +
+    "[TursoReplica] Legacy → replica cutover runs on Publish / Publish changes (per app). " +
       "Untouched apps stay on legacy sync until the user uploads.",
   );
   if (process.env.PAPR_TURSO_REPLICA_CUTOVER_ON_STARTUP === "1") {

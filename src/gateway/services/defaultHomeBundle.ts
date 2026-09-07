@@ -47,6 +47,17 @@ export const DEFAULT_HOME_BRIEFS_DB_LABEL = "Home Daily Briefs";
  */
 export const DEFAULT_HOME_BRIEFS_DB_SLUG = "home-daily-briefs";
 
+/** Each signed-in user gets their own Turso replica — briefs must not bleed across teammates. */
+export const DEFAULT_HOME_BRIEFS_DB_ISOLATION = "per-user" as const;
+
+/** Legacy agent-written scripts with hardcoded calendar paths — removed on install/repair. */
+export const LEGACY_HOME_JOB_SCRIPT_NAMES = [
+  "generate_brief.py",
+  "generate_brief_simple.py",
+] as const;
+
+const LEGACY_HOME_JOB_BRIEF_JSON = /^brief_(?:today|\d{4}-\d{2}-\d{2})\.json$/;
+
 /** Bundled job assets copied into the job dir on install (source of truth for writes). */
 export const DEFAULT_HOME_JOB_ASSETS_DIR = "job-assets";
 
@@ -323,6 +334,52 @@ export function isHomeDailyBriefJobScratchDbPath(dbPath: string): boolean {
 }
 
 /** True when the linked source should be repointed at the registry DB. */
+/** Remove pre-bundled agent scripts and stale brief JSON from the job dir. */
+export async function cleanupLegacyHomeJobArtifacts(
+  jobDir: string,
+): Promise<string[]> {
+  const removed: string[] = [];
+  for (const name of LEGACY_HOME_JOB_SCRIPT_NAMES) {
+    const filePath = path.join(jobDir, name);
+    try {
+      await fs.unlink(filePath);
+      removed.push(name);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `[DefaultHomeBundle] Could not remove legacy Home job artifact ${name}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+  }
+
+  let entries: string[];
+  try {
+    entries = await fs.readdir(jobDir);
+  } catch {
+    return removed;
+  }
+
+  for (const name of entries) {
+    if (!LEGACY_HOME_JOB_BRIEF_JSON.test(name)) {
+      continue;
+    }
+    try {
+      await fs.unlink(path.join(jobDir, name));
+      removed.push(name);
+    } catch (err) {
+      console.warn(
+        `[DefaultHomeBundle] Could not remove legacy Home job artifact ${name}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  return removed;
+}
+
 export function shouldUpgradeDailyBriefToRegistryDb(params: {
   storedDbPath: string | undefined;
   registryDbPath: string;

@@ -13,7 +13,7 @@ describe("buildSchemaDriftAgentPrompt", () => {
         {
           alias: "gtm",
           syncMode: "legacy",
-          detail: "Local schema changed — click Upload now to update Turso.",
+          detail: "Local schema changed — click Publish changes to update Turso.",
         },
       ],
       publishDetail: "gtm: local schema changed",
@@ -21,7 +21,7 @@ describe("buildSchemaDriftAgentPrompt", () => {
 
     expect(prompt).toContain("91d94d77-dace-4746-8be4-2f7e385c6944");
     expect(prompt).toContain("gtm — legacy");
-    expect(prompt).toContain("Upload now");
+    expect(prompt).toContain("Publish changes");
     expect(prompt).toContain("push_cloud_sync({ appId })");
     expect(prompt).toContain("papr_db_apply_migration");
     expect(prompt).toContain("bootstrap_remote");
@@ -67,14 +67,14 @@ describe("buildOversizedFilesAgentPrompt", () => {
 });
 
 describe("buildUploadFailureAgentPrompt", () => {
-  it("includes Upload-now cutover guardrails for legacy DBs", () => {
+  it("includes Publish-changes cutover guardrails for legacy DBs", () => {
     const prompt = buildUploadFailureAgentPrompt({
       appId: "app-1",
       error: "Cutover blocked: schema drift",
       databases: [{ alias: "gtm", syncMode: "legacy" }],
     });
 
-    expect(prompt).toContain("Upload now");
+    expect(prompt).toContain("Publish changes");
     expect(prompt).toContain("push_cloud_sync({ appId })");
     expect(prompt).toContain("never delete/recreate");
     expect(prompt).toContain("repair_cloud_sync");

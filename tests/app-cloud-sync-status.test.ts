@@ -253,7 +253,7 @@ describe("deriveAppCloudSyncStatus", () => {
       queueDepth: 8,
       label: "2 apps ahead · 8 in queue",
       detail:
-        "2 other apps uploading first (8 apps in queue). Use Publish changes or Move to front to skip the line.",
+        "2 other apps publishing first (8 apps in queue). Use Publish changes or Move to front to skip the line.",
     };
     items.appSync = {
       protocol: "v3",
@@ -263,7 +263,7 @@ describe("deriveAppCloudSyncStatus", () => {
       phase: "changed",
       label: "2 apps ahead · 8 in queue",
       detail:
-        "2 other apps uploading first (8 apps in queue). Use Publish changes or Move to front to skip the line.",
+        "2 other apps publishing first (8 apps in queue). Use Publish changes or Move to front to skip the line.",
       lastUploadedAt: null,
       pendingWriterOps: 0,
       inflightWriterOps: 0,
@@ -287,7 +287,7 @@ describe("deriveAppCloudSyncStatus", () => {
       queueDepth: 14,
       label: "1 app ahead · 14 in queue",
       detail:
-        "1 other app uploading first (14 apps in queue). Use Publish changes or Move to front to skip the line.",
+        "1 other app publishing first (14 apps in queue). Use Publish changes or Move to front to skip the line.",
     };
     items.appSync = {
       protocol: "v3",

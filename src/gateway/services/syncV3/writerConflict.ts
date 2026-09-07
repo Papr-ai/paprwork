@@ -65,3 +65,17 @@ export function listRecentWriterConflicts(appId?: string): WriterConflictEvent[]
 export function clearWriterConflictsForTests(): void {
   recentConflicts.length = 0;
 }
+
+export function clearWriterConflictsForApp(appId: string): number {
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return 0;
+  }
+  const before = recentConflicts.length;
+  for (let i = recentConflicts.length - 1; i >= 0; i -= 1) {
+    if (recentConflicts[i]?.appId === trimmed) {
+      recentConflicts.splice(i, 1);
+    }
+  }
+  return before - recentConflicts.length;
+}

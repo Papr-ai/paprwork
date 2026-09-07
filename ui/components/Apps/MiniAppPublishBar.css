@@ -622,51 +622,6 @@
   letter-spacing: 0.04em;
 }
 
-.mini-app-publish-bar__sync-upload-mode {
-  margin: 0 0 12px;
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--bg-secondary, rgba(120, 120, 128, 0.08));
-  border: 1px solid var(--border-color);
-}
-
-.mini-app-publish-bar__sync-upload-toggle {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--text-primary);
-  cursor: pointer;
-}
-
-.mini-app-publish-bar__sync-upload-toggle--compact {
-  margin: 0 0 8px;
-  font-size: 10px;
-  font-weight: 500;
-}
-
-.mini-app-publish-bar__sync-upload-toggle-note {
-  font-size: 9px;
-  font-weight: 400;
-  color: var(--text-tertiary);
-}
-
-.mini-app-publish-bar__sync-upload-toggle input[type="checkbox"] {
-  width: 14px;
-  height: 14px;
-  cursor: pointer;
-}
-
-.mini-app-publish-bar__sync-upload-mode .mini-app-publish-bar__sync-popover-hint {
-  margin-bottom: 4px;
-}
-
-.mini-app-publish-bar__sync-upload-mode .mini-app-publish-bar__sync-popover-hint:last-child {
-  margin-bottom: 0;
-}
-
 .mini-app-publish-bar__sync-popover-error {
   margin: 0 0 8px;
   font-size: 10px;

@@ -11,11 +11,11 @@ export function formatFlushQueueLabel(
   depth: number,
 ): string {
   if (depth <= 1) {
-    return "Queued for upload…";
+    return "Queued for publish…";
   }
   const ahead = flushQueueAppsAhead(position);
   if (ahead === 0) {
-    return "Next in upload queue";
+    return "Next in publish queue";
   }
   const queueSuffix = depth > 1 ? ` · ${depth} in queue` : "";
   return `${ahead} app${ahead === 1 ? "" : "s"} ahead${queueSuffix}`;
@@ -27,8 +27,8 @@ export function formatFlushQueueDetail(
 ): string {
   const ahead = flushQueueAppsAhead(position);
   if (ahead === 0) {
-    return "Next in line — upload starting soon.";
+    return "Next in line — publish starting soon.";
   }
   const queueNote = depth > 1 ? ` (${depth} apps in queue).` : ".";
-  return `${ahead} other app${ahead === 1 ? "" : "s"} uploading first${queueNote} Use Upload now or Move to front to skip the line.`;
+  return `${ahead} other app${ahead === 1 ? "" : "s"} publishing first${queueNote} Use Publish changes or Move to front to skip the line.`;
 }

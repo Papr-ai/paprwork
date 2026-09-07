@@ -30,6 +30,15 @@ import {
   shutdownTursoReplicaSyncWorker,
 } from "./TursoReplicaSyncWorkerClient.js";
 import {
+  clearBootstrapPendingMarker,
+  countUserRows,
+  hasBootstrapPendingMarker,
+  noteBootstrapAttemptFailed,
+  readBootstrapPendingMarker,
+  type BootstrapPendingMarker,
+} from "./tursoReplicaBootstrapMarker.js";
+import { replayBootstrapSnapshot } from "./tursoReplicaBootstrapReplay.js";
+import {
   markTursoReplicaReachable,
   noteTursoReplicaTransportError,
 } from "../../utils/tursoReplicaConnectivity.js";
@@ -53,6 +62,7 @@ import {
   scheduleReplicaBackgroundWedgeRecovery,
 } from "./tursoReplicaBackgroundRecovery.js";
 import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
+import { computeReplicaPendingPush } from "./replicaPendingPush.js";
 
 const REPLICA_STATUS_TIMEOUT_MS = 12_000;
 const REPLICA_SYNC_TIMEOUT_MS = 15_000;
@@ -225,8 +235,55 @@ export class TursoReplicaService {
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
     return this.withBackgroundPath(localPath, async () => {
       const spec = await this.openSpec(localPath, tursoDatabase);
-      return this.syncWithRecovery(spec, "pull");
+      const marker = readBootstrapPendingMarker(localPath);
+      try {
+        const pulled = await this.syncWithRecovery(spec, "pull");
+        if (marker) {
+          this.settleBootstrapMarker(localPath, marker);
+        }
+        return pulled;
+      } catch (error) {
+        if (marker) {
+          // Leave the marker in place — an unverified pull must not look like a bootstrap.
+          noteBootstrapAttemptFailed(localPath, (error as Error).message);
+        }
+        throw error;
+      }
     });
+  }
+
+  /**
+   * Finish a post-repair bootstrap: replay preserved rows, then clear the marker.
+   *
+   * "pull() resolved" only means the worker did not throw — it is not evidence that rows
+   * arrived, which is precisely how an empty replica previously passed as healthy. We clear
+   * the marker only once the file actually holds user rows, or once we can prove there were
+   * never any to lose (rowsAtRepair === 0 and the cloud is genuinely empty).
+   */
+  private settleBootstrapMarker(
+    localPath: string,
+    marker: BootstrapPendingMarker,
+  ): void {
+    if (marker.snapshotPath && fs.existsSync(marker.snapshotPath)) {
+      const replay = replayBootstrapSnapshot(localPath, marker.snapshotPath);
+      if (replay.rowsReplayed > 0 || replay.tablesReplayed > 0) {
+        console.log(
+          `[TursoReplicaService] Replayed ${replay.rowsReplayed} preserved rows across ` +
+            `${replay.tablesReplayed} tables after bootstrap: ${localPath}`,
+        );
+      }
+    }
+    const rowsNow = countUserRows(localPath);
+    // rowsNow === -1 means unreadable, which is not proof of a successful bootstrap.
+    const bootstrapped = rowsNow > 0 || (rowsNow === 0 && marker.rowsAtRepair === 0);
+    if (!bootstrapped) {
+      noteBootstrapAttemptFailed(
+        localPath,
+        `post-pull row check inconclusive (rowsNow=${rowsNow}, rowsAtRepair=${marker.rowsAtRepair})`,
+      );
+      return;
+    }
+    clearBootstrapPendingMarker(localPath);
   }
 
   /**
@@ -458,23 +515,13 @@ export class TursoReplicaService {
     const migrationConflict =
       lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
 
-    const pushAtMs = options.lastReplicaPushAt ? Date.parse(options.lastReplicaPushAt) : 0;
-    const mutationAtMs = options.lastReplicaLocalMutationAt
-      ? Date.parse(options.lastReplicaLocalMutationAt)
-      : 0;
-    const pushCoversLocalMutations =
-      pushAtMs > 0 && (mutationAtMs === 0 || pushAtMs >= mutationAtMs);
-
-    let pendingPush = pendingOps > 0 || Boolean(lastPushError);
-    if (
-      pendingPush &&
-      pendingOps > 0 &&
-      !lastPushError &&
-      !migrationConflict &&
-      pushCoversLocalMutations
-    ) {
-      pendingPush = false;
-    }
+    const pendingPush = computeReplicaPendingPush({
+      pendingOps,
+      lastPushError,
+      migrationConflict,
+      lastReplicaPushAt: options.lastReplicaPushAt,
+      lastReplicaLocalMutationAt: options.lastReplicaLocalMutationAt,
+    });
 
     return {
       online,
@@ -538,17 +585,22 @@ export class TursoReplicaService {
       );
     }
 
+    // `existsSync` alone is the wrong question after a sidecar repair: repair keeps data.db,
+    // so a repaired-but-never-reseeded replica looks established and is never bootstrapped.
+    // The marker is the durable record that the follow-up pull never happened.
     const localReplicaExists = fs.existsSync(localPath);
+    const bootstrapPending = hasBootstrapPendingMarker(localPath);
     try {
       const creds = await bridge.resolveCredentialsForReplicaOpen(tursoDatabase, {
-        localReplicaExists,
+        localReplicaExists: localReplicaExists && !bootstrapPending,
       });
       this.touchedPaths.add(key);
       return {
         localPath,
         tursoUrl: creds.tursoUrl,
         authToken: creds.authToken,
-        bootstrapIfEmpty: overrides?.bootstrapIfEmpty ?? !localReplicaExists,
+        bootstrapIfEmpty:
+          overrides?.bootstrapIfEmpty ?? (!localReplicaExists || bootstrapPending),
       };
     } catch (error) {
       noteTursoReplicaTransportError(error);

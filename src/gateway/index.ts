@@ -2905,6 +2905,49 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    app.get("/api/generated-media/:filename", async (req, res) => {
+      try {
+        const { filename } = req.params;
+        if (!filename || filename.includes("..") || filename.includes("/")) {
+          res.status(400).send("Invalid filename");
+          return;
+        }
+
+        const mediaRoot = path.join(getPaprRoot(), "data", "generated-media");
+        const filePath = path.join(mediaRoot, filename);
+        const resolved = path.resolve(filePath);
+        if (!resolved.startsWith(path.resolve(mediaRoot) + path.sep)) {
+          res.status(400).send("Invalid filename");
+          return;
+        }
+
+        const fs = await import("fs/promises");
+        try {
+          await fs.access(resolved);
+        } catch {
+          res.status(404).send("File not found");
+          return;
+        }
+
+        const ext = path.extname(filename).toLowerCase();
+        const mimeTypes: Record<string, string> = {
+          ".mp4": "video/mp4",
+          ".webm": "video/webm",
+          ".png": "image/png",
+          ".jpg": "image/jpeg",
+          ".jpeg": "image/jpeg",
+          ".gif": "image/gif",
+          ".webp": "image/webp",
+        };
+        res.setHeader("Content-Type", mimeTypes[ext] ?? "application/octet-stream");
+        res.sendFile(resolved);
+      } catch (error) {
+        console.error("[Gateway] Failed to serve generated media:", error);
+        res.status(500).send("Failed to read generated media");
+      }
+    });
+    // ─────────────────────────────────────────────────────────────────────────
+
     registerCloudDesktopPreviewRoutes(app);
 
     // Serve mini-app files for iframe rendering in UI.

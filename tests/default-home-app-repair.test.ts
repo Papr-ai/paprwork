@@ -6,6 +6,10 @@ import Database from "better-sqlite3";
 import {
   DEFAULT_HOME_APP_ID,
   DEFAULT_HOME_DAILY_BRIEF_JOB_ID,
+  LEGACY_HOME_JOB_SCRIPT_NAMES,
+  cleanupLegacyHomeJobArtifacts,
+} from "../src/gateway/services/defaultHomeBundle.js";
+import {
   repairDefaultHomeAppLinkedSources,
   syncBundledHomeMigrationsToRegistry,
 } from "../src/gateway/services/defaultHomeAppRepair.js";
@@ -279,5 +283,24 @@ describe("defaultHomeAppRepair", () => {
       appsDir,
     });
     expect(copiedAgain).toEqual([]);
+  });
+
+  it("removes legacy Home job scripts and stale brief JSON", async () => {
+    const jobDir = path.join(jobsRoot, DEFAULT_HOME_DAILY_BRIEF_JOB_ID);
+    await fs.writeFile(
+      path.join(jobDir, LEGACY_HOME_JOB_SCRIPT_NAMES[0]),
+      "# legacy",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(jobDir, "brief_2026-05-19.json"),
+      "{}",
+      "utf8",
+    );
+
+    const removed = await cleanupLegacyHomeJobArtifacts(jobDir);
+    expect(removed).toContain(LEGACY_HOME_JOB_SCRIPT_NAMES[0]);
+    expect(removed).toContain("brief_2026-05-19.json");
+    await expect(fs.access(path.join(jobDir, "brief_2026-05-19.json"))).rejects.toThrow();
   });
 });

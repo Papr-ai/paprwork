@@ -94,6 +94,7 @@ export class SystemPromptBuilder {
       this.buildNativeWebSearchSection(), // Native web search tools (provider-specific)
       this.buildBashToolSection(),
       this.buildDocumentToolsSection(),
+      this.buildMediaGenerationSection(),
       this.buildMemoryToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildFocusContextSection(),
@@ -793,9 +794,10 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("get_cloud_sync_status") ||
           has("query_cloud_turso") ||
           has("inspect_cloud_repo") ||
-          has("push_cloud_sync"),
+          has("push_cloud_sync") ||
+          has("reset_writer_baseline_and_publish"),
         details:
-          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Upload now); NOT Memory API",
+          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Publish / Publish changes in the app tab) — reset_writer_baseline_and_publish (writer 409 baseline repair); NOT Memory API",
       },
       {
         area: "Platform feedback",
@@ -977,6 +979,7 @@ read_skill({ skillId: "preloaded-app-and-jobs-guide" })
 | Routing / which doc to open | read_file({ path: "src/resources/agent-docs/00-START-HERE.md" }) |
 | Apps, jobs, SQLite, /api/db/* | read_file({ path: "src/resources/agent-docs/APP_AND_JOBS_GUIDE.md" }) |
 | Large binaries (video, PDF >10MB) — App Files | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) |
+| Image/video generation + App Files wiring | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) § Agent-generated images |
 | Architecture before build | read_file({ path: "src/resources/agent-docs/PRODUCT_ARCHITECT_GUIDE.md" }) |
 | Worked architecture example | read_file({ path: "src/resources/agent-docs/EXAMPLE_APP_ARCHITECTURE_PLAN.md" }) |
 | API keys & external APIs | read_file({ path: "src/resources/agent-docs/API_KEY_TESTING_PROTOCOL.md" }) |
@@ -1325,6 +1328,51 @@ User asks to "import ~/Documents/notes.md":
 ## Editing
 
 Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor auto-updates.`;
+  }
+
+  /**
+   * Image/video generation — App Files wiring (not code tree, not base64)
+   */
+  private buildMediaGenerationSection(): string {
+    return `# Media Generation (generate_media)
+
+**Tools:** \`list_media_models\` → \`generate_media\`
+
+## Chat-only vs mini-app
+
+| Goal | Call | Store |
+|------|------|-------|
+| Preview in chat only | \`generate_media({ prompt, modelId })\` | Nothing — localPath is for debugging only |
+| **Image/video in a mini-app** | \`generate_media({ appId, prompt, modelId, fileName })\` | **\`appFileId\`** in SQLite |
+
+## Wiring into apps (REQUIRED pattern)
+
+1. \`generate_media({ appId: "<uuid>", modelId: "...", fileName: "hero-bg", prompt: "..." })\`
+2. Tool returns **\`appFileId\`** and **\`nextStep\`** — read those fields first (do not call \`get_full_tool_result\` unless truncated)
+3. \`UPDATE slides SET bg_file_id = ?\` (or insert row) with the **appFileId** — never \`localPath\`, never base64
+4. Mini-app runtime:
+
+\`\`\`javascript
+import { papr } from '/__papr__/papr-files.js';
+const { url } = await papr.files.url(row.bg_file_id);
+img.src = url;
+\`\`\`
+
+## NEVER do this
+
+- ❌ \`read_file\` / \`read_app_file\` on \`.jpg\` / \`.png\` to "get bytes" (floods context)
+- ❌ Base64 data URIs embedded in HTML/MD slides
+- ❌ \`write_file\` generated images into \`apps/{id}/assets/\` (use App Files via \`appId\`)
+- ❌ Invented URLs like \`/api/apps/{appId}/app-files/{id}\` (wrong)
+- ❌ Python job + backend pipeline when \`generate_media\` + \`appId\` suffices
+
+## Correct API routes (reference)
+
+- Mini-app browser: \`papr.files.url(id)\` via \`/api/files/url\`
+- Agent debug/preview: \`GET /api/files/content?appId=...&id=...\`
+- **Not:** \`/api/apps/...\`, \`/api/generated-media/...\` from inside published mini-apps
+
+Full guide: \`src/resources/agent-docs/APP_FILES_GUIDE.md\` § Agent-generated images.`;
   }
 
   /**
@@ -2068,8 +2116,8 @@ delegate_task({
 **Plan A cloud DB (Product Architect must specify when linked DBs + cloud sync):**
 - List each migration file (\`0001_init.sql\`, \`0002_add_notes.sql\`, …) in §2 Shared SQLite
 - Schema path: \`write_file\` migration → \`papr_db_apply_migration({ dbId, migrationId })\` — replica apply → Turso primary (HTTP) → pull align (never DDL via replica push)
-- Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Upload now / \`push_cloud_sync({ appId })\` for git + replica push
-- Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`, \`dedupe_migration_ledger\` for legacy \`0001_foo\` + \`0001_foo.sql\` duplicates) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery: \`repair_cloud_sync({ strategy: 'pull' | 'accept_cloud' | 'export_conflicts' })\` — **not** \`merge_lww\` (deprecated; only rebases ledger)
+- Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Publish / Publish changes / \`push_cloud_sync({ appId })\` for git + replica push
+- Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`, \`dedupe_migration_ledger\` for legacy \`0001_foo\` + \`0001_foo.sql\` duplicates) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery (in order): \`repair_cloud_sync({ strategy: 'pull' })\` → \`papr_db_reconcile_sync({ action: 'repair_sidecar_wedge' })\` (auto full reseed if WAL I/O persists) → \`repair_cloud_sync({ strategy: 'accept_cloud' })\` only when Turso has the rows you need (wipes unpushed local data). **not** \`merge_lww\` (deprecated; only rebases ledger)
 - Offline: \`papr_db_apply_migration\` applies on replica only; run cloud apply when back online
 
 **After approval:** Build yourself — never skip Product Architect for \`create_app\`.
@@ -2314,7 +2362,7 @@ CREATE TABLE contacts (
 })
 // Apply on Turso primary + pull local replica (Plan A):
 // Registry DB: papr_db_apply_migration({ dbId, migrationId: "0001_init" })
-// Job scratch: run_job({ jobId }) applies Jobs/{jobId}/migrations/ — then Upload now if needed
+// Job scratch: run_job({ jobId }) applies Jobs/{jobId}/migrations/ — then Publish changes if needed
 \`\`\`
 
 **Rules:**
@@ -2358,7 +2406,7 @@ Content-only apps (no \`/api/db/*\`) **do not** need \`data-sources.json\`. Vali
 
 - **Cloud eligibility:** \`attach_database\` writes \`data-sources.json\` → Git sync + Turso push follow automatically.
 - **Shared registry DBs:** One \`dbId\` can be linked from **multiple mini-apps** (\`data-sources.json\` in each app). They share the **same on-disk SQLite file** and **one Turso replica** (\`d-{dbId8}\`). Schema drift on the shared DB affects **every** linking app — green sync on one app does **not** mean another app's view is fine if that app was not in the discovery report.
-- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Upload now / \`push_cloud_sync({ appId })\`** ships git/code + triggers replica push for Plan A registry DBs (\`syncMode: "replica"\`). **Schema:** \`write_file migrations/*.sql\` → \`papr_db_apply_migration\` (or replica/cloud split tools for recovery). **Rows:** \`papr_db_exec\` DML or Upload now. Schema drift: \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` — not \`merge_lww\`.
+- **Agent rule — shared DB dependencies:** When debugging cloud DB issues, list **all apps** linking the same \`dbId\` (grep \`data-sources.json\` for the \`dbId\`). Run \`get_cloud_sync_status\` for **each** linking app, or check Turso status for the shared alias. **Publish / Publish changes / \`push_cloud_sync({ appId })\`** ships git/code + triggers replica push for Plan A registry DBs (\`syncMode: "replica"\`). **Schema:** \`write_file migrations/*.sql\` → \`papr_db_apply_migration\` (or replica/cloud split tools for recovery). **Rows:** \`papr_db_exec\` DML or Publish changes. Schema drift: \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` — not \`merge_lww\`.
 - **Cloud agent bookends:** Memory \`cloud_agent_run_prepare\` returns \`tursoSources[]\` for each write target; gateway pulls/pushes by \`syncKey\` (dbId).
 
 ## Multi-user, owner access, and data isolation (do not conflate)
@@ -2752,9 +2800,10 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 **Never** write job files to \`$PAPR_HOME/jobs/\` (lowercase) or assume cloud git uses the same spelling as local disk.
 
 **Large files in apps (REQUIRED — App Files vs Memory):**
-- **Served in the mini-app** (video, audio, downloadable PDF, dataset): use **App Files** — never copy into \`apps/{id}/\` expecting git sync. Limit is **10MB** per file for git.
+- **Served in the mini-app** (video, audio, downloadable PDF, dataset, **AI-generated images**): use **App Files** — never copy into \`apps/{id}/\` expecting git sync. Limit is **10MB** per file for git.
+- **AI-generated images for apps:** \`generate_media({ appId, modelId, prompt, fileName })\` → store returned **\`appFileId\`** in SQLite. Mini-app: \`papr.files.url(id)\`. **Never** \`read_file\` JPEGs, embed base64, or invent \`/api/apps/{id}/app-files/...\` routes.
 - **Searchable in chat only** (brand book you query via memory): \`upload_document_to_memory\` / \`add_document\` — not for visitor-facing assets.
-- Small static assets **(<10MB)** in \`apps/{id}/assets/\` sync normally.
+- Small static assets **(<10MB)** in \`apps/{id}/assets/\` sync normally (icons, SVGs you author by hand — not \`generate_media\` output).
 
 **Large brand/docs PDFs for web delivery:** Do NOT copy 10MB+ PDFs into \`apps/\` or \`data/\`. Register with App Files (\`papr.files.upload\` / \`papr_files.add\`) and store the **file id** in SQLite. For memory-only indexing (no web asset), use \`upload_document_to_memory\`.
 
@@ -2788,7 +2837,7 @@ When only one DB is linked, \`sourceId\` may be omitted. With multiple linked DB
 - Import \`subscribeJobEvents\` from \`/__papr__/papr-job-events.ts\` only — **never** copy or shim locally; esbuild leaves it external, gateway/cloud serves it at runtime
 - SSE endpoint: \`/api/jobs/events\` — works on desktop gateway **and** cloud \`apps.papr.ai\`
 - **Initial load:** call \`loadData()\` once on page load, then \`onDbChanged\` for live refresh after job writes
-- **Turso (cloud data):** Registry DBs linked via \`attach_database\` / \`data-sources.json\` sync to Turso (Plan A replica). DML auto-pushes when online; Upload now / \`push_cloud_sync({ appId })\` for manual flush. Published apps on \`apps.papr.ai\` read Turso directly — no extra agent step for web readers
+- **Turso (cloud data):** Registry DBs linked via \`attach_database\` / \`data-sources.json\` sync to Turso (Plan A replica). DML auto-pushes when online; Publish / Publish changes / \`push_cloud_sync({ appId })\` for manual flush. Published apps on \`apps.papr.ai\` read Turso directly — no extra agent step for web readers
 
 **Decision tree — pick the right callback (never poll):**
 | Job output model | Subscribe callback | App refresh |
@@ -2863,6 +2912,7 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 - **Contributor** (installed a fork with \`install_cloud_app\`): \`submit_cloud_app_change\` — pushes app source + linked Jobs/migrations to the owner's papr-work repo and opens a GitHub PR. Returns \`prUrl\` when successful.
 - **Owner** (published the upstream app): \`list_cloud_app_changes\` — incoming PRs; \`resolve_cloud_app_change({ requestId, action: "approve"|"reject" })\` — approve merges the PR on GitHub, then sync pulls changes locally. Reject closes the PR.
 - Owner reviewing conflicts: use \`inspect_cloud_repo\` + \`get_cloud_sync_status\` — same as normal git sync review; there is no local folder merge on the owner's machine.
+- **Writer 409 / app-repo conflict:** When \`get_cloud_sync_status\` shows \`writerConflict\` or push fails with "Writer conflict", and Get updates has nothing to pull, use \`reset_writer_baseline_and_publish({ appId })\` — re-seeds local publish baseline from cloud HEAD then publishes (does not delete local source files). If another device may have edited cloud, run \`inspect_cloud_repo\` first and explain before resetting. Otherwise retry \`push_cloud_sync({ appId })\` once; do not loop blindly.
 - Contributors keep syncing their fork normally while a PR is open.
 
 **Cloud observability (debug sync, Turso, GitHub, stuck jobs — NOT Memory API):**
@@ -2871,7 +2921,7 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 - \`inspect_cloud_repo({ appId, action: "read"|"list", ... })\` — **check app repo** — read/list the per-app writer repo (\`dist/\`, \`backend/\`, \`jobs/\` at repo root). Requires \`appId\` for list. Path \`dist/app.js\` not \`apps/{id}/dist/app.js\`.
 - \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica
 - \`papr_db_sync_status\` / \`papr_db_migration_parity\` / \`papr_db_reconcile_sync\` / \`repair_cloud_sync\` — **Plan A registry DB sync**. \`papr_db_push\` / \`papr_db_pull\` are recovery-only (hidden from main agent when cloud + replica rollout are on).
-- \`push_cloud_sync({ appId, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — **requires scope** (appId recommended). Git/code + Turso push (replica-aware). **Rejected if called with no appId/jobId/alias/tursoDatabase/tables.** For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Upload now. Use \`targets: ['turso']\` for DB-only; \`papr_db_push({ dbId })\` for a single registry DB. Use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
+- \`push_cloud_sync({ appId, alias?, jobId?, tursoDatabase?, tables?, targets?: ['github'|'turso'] })\` — **requires scope** (appId recommended). Git/code + Turso push (replica-aware). **Rejected if called with no appId/jobId/alias/tursoDatabase/tables.** For one app going live on the web, use \`push_cloud_sync({ appId })\` (both layers) or Publish / Publish changes in the app tab. Use \`targets: ['turso']\` for DB-only; \`papr_db_push({ dbId })\` for a single registry DB. Use \`targets: ['github']\` only for job **code** folders (does **not** update linked databases or refresh the live app link).
 
 **Cloud job debugging — two paths (do not conflate):**
 
@@ -2880,9 +2930,9 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 | **Published app** \`POST /api/jobs/run\` (Run now button, share link) | **Cloud App Host sandbox** on \`apps.papr.ai\` — desktop can be asleep | Check job code synced to app repo (\`inspect_cloud_repo\`), vault keys on cloud (not desktop keychain), \`local-only\` / LinkedIn CDP blockers. Re-run from app UI — **do not** tell user to wake desktop for this path. |
 | **Scheduled job** or **memory scheduler** when desktop heartbeat stale | Cloud memory scheduler **or** local \`JobsScheduler\` when awake | \`get_cloud_sync_status({ appId, jobId })\` → \`desktopHeartbeat.desktopAwake\`, \`pendingCloudRuns\` (jobs waiting for desktop gateway). Wake Paprwork if cloud deferred to desktop. |
 
-**Both paths:** If \`turso.sources[].migrationConflict\`, use \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` (not \`merge_lww\`) then Upload now. If sync pending, \`push_cloud_sync({ appId })\`. Agent desktop re-test: \`run_job({ jobId, runtime: "cloud" })\`.
+**Both paths:** If \`turso.sources[].migrationConflict\`, use \`papr_db_migration_parity\` + \`papr_db_reconcile_sync\` (not \`merge_lww\`) then Publish changes. If sync pending, \`push_cloud_sync({ appId })\`. Agent desktop re-test: \`run_job({ jobId, runtime: "cloud" })\`.
 
-Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`repair_cloud_sync\`, \`papr_db_apply_migration\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
+Workflow: diagnose with \`get_cloud_sync_status\` → fix with \`push_cloud_sync\`, \`reset_writer_baseline_and_publish\` (writer 409 baseline drift), \`repair_cloud_sync\`, \`papr_db_apply_migration\`, \`run_job\` (optional \`runtime: "cloud"\`), \`update_job\`, \`publish_cloud_app\` → verify with \`get_cloud_sync_status\` again.
 
 **Sharing decision tree (prefer cloud when available):**
 1. **Default / recommended:** Cloud Sync on + Papr login → \`publish_cloud_app\` with **loginAccess=public, codeAccess=install** for Community discovery + fork/install (live app + private source on papr-work)
