@@ -127,6 +127,18 @@ const queuedJobIds = new Set<string>();
 /** Jobs currently executing pushJob — still pending from max-wait's perspective. */
 const pushInFlightSyncKeys = new Set<string>();
 const pushFailureBackoffUntilMs = new Map<string, number>();
+/**
+ * Consecutive follow-up pushes that shipped nothing while the dirty check kept
+ * saying there was work. The two answers come from different evidence — the
+ * push asks the sync log whether anything is unshipped, the dirty check also
+ * asks whether the remote is missing local tables — so they can disagree
+ * permanently. Re-running immediately cannot break that tie: nothing about the
+ * state changed between the two calls, so the next round returns the same pair
+ * of answers. Counting them is what turns an unbounded spin into a backoff.
+ */
+const noProgressFollowUps = new Map<string, number>();
+/** Allows for a genuine write landing mid-push before treating it as a stall. */
+const MAX_NO_PROGRESS_FOLLOW_UPS = 2;
 const lastMaxWaitLogAtMs = new Map<string, number>();
 let queueProcessing = false;
 let rateLimitUntilMs = 0;
@@ -211,6 +223,7 @@ function clearDirtyTracking(syncKey: string): void {
   firstDirtyAtMs.delete(syncKey);
   lastMaxWaitLogAtMs.delete(syncKey);
   pushFailureBackoffUntilMs.delete(syncKey);
+  noProgressFollowUps.delete(syncKey);
 }
 
 function pushFailureBackoffMs(): number {
@@ -314,17 +327,51 @@ async function finishTursoPushTracking(
   linked: TursoLinkedSource,
   schedulerKey: string,
   resolvedSyncKey: string,
+  shippedWork: boolean,
 ): Promise<void> {
   const stillDirty = await bridge.linkedSourceNeedsPush(linked);
-  if (stillDirty) {
+  if (!stillDirty) {
+    clearDirtyTracking(schedulerKey);
+    return;
+  }
+
+  // Still dirty after a push that actually shipped rows means the backlog is
+  // draining, so keep going at full speed.
+  if (shippedWork) {
     noteDirty(schedulerKey);
+    noProgressFollowUps.delete(schedulerKey);
     enqueueTursoPush(schedulerKey, true);
     console.log(
       `[TursoPushScheduler] Backlog remains for ${resolvedSyncKey} — queued follow-up push`,
     );
     return;
   }
-  clearDirtyTracking(schedulerKey);
+
+  // Shipped nothing and still dirty. Re-queuing at the front with no delay is
+  // what turned this into a hot loop: the push reports the log has nothing
+  // unshipped, the dirty check reports the remote is missing tables, and
+  // neither answer moves. Allow a couple of rounds for a write that genuinely
+  // landed mid-push, then back off so the tie costs a retry a minute rather
+  // than a core.
+  const attempts = (noProgressFollowUps.get(schedulerKey) ?? 0) + 1;
+  noProgressFollowUps.set(schedulerKey, attempts);
+
+  if (attempts > MAX_NO_PROGRESS_FOLLOW_UPS) {
+    notePushFailureBackoff(schedulerKey);
+    console.warn(
+      `[TursoPushScheduler] ${resolvedSyncKey} still reports pending work after ` +
+        `${attempts} pushes that shipped nothing — backing off for ` +
+        `${pushFailureBackoffMs()}ms. The sync log and the dirty check disagree; ` +
+        `the remote is likely missing tables the log considers already shipped.`,
+    );
+    return;
+  }
+
+  noteDirty(schedulerKey);
+  enqueueTursoPush(schedulerKey, true);
+  console.log(
+    `[TursoPushScheduler] Backlog remains for ${resolvedSyncKey} — queued follow-up push`,
+  );
 }
 
 async function executePushForJob(
@@ -385,6 +432,7 @@ async function executePushForJob(
         linked,
         syncKey,
         resolvedSyncKey,
+        true,
       );
       const skipped =
         pushResult.skippedTables && pushResult.skippedTables.length > 0
@@ -406,6 +454,7 @@ async function executePushForJob(
         linked,
         syncKey,
         resolvedSyncKey,
+        false,
       );
       return;
     }
@@ -688,6 +737,12 @@ async function enqueueDirtyLinkedJobs(
     }
     const syncKey = linkedSourceSyncKey(source);
     if (!(await bridge.linkedSourceNeedsPush(source))) {
+      continue;
+    }
+    // A source that keeps reporting dirty is exactly the one a backoff exists
+    // to hold off, so honour it here directly rather than relying on max-wait
+    // having elapsed for flushIfMaxWaitElapsed to reach its own check.
+    if (trigger !== "manual" && isInPushFailureBackoff(syncKey)) {
       continue;
     }
     logTursoSchedule(syncKey, trigger, "dirty linked source");
