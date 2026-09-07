@@ -879,14 +879,9 @@ const LOCAL_DB_BUSY_TIMEOUT_MS = 5_000;
 /** Paths where changelog infrastructure was installed this session (avoids DDL on every watcher event). */
 const changeLogReadyPaths = new Set<string>();
 
-export function isSqliteBusyError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code: string }).code === "SQLITE_BUSY"
-  );
-}
+// Re-exported so existing importers keep working; defined in the classifier
+// module, which is native-import-free and reachable from the sync worker.
+export { isSqliteBusyError } from "./tursoReplica/tursoReplicaErrors.js";
 
 /** @internal test hook */
 export function resetChangeLogReadyCacheForTests(): void {

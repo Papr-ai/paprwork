@@ -5020,6 +5020,37 @@ Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`)
 
 ---
 
+### Issue 80: "Today's Brief" Showed "database is locked" — The Missing `busy_timeout` ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** Clicking Home hung on "Loading today's brief" and surfaced `database is locked`. Startup logs also repeated `[TursoReplicaCutover] Startup migration repair failed … database is locked` and `Migration 0002_feed_schema is in schema_migrations but missing on the replica handle — re-applying` on **every** launch.
+**Root Cause:** A lock was treated as a permanent error at every layer it reached.
+1. **Nothing waited.** `connectTursoReplica` passes no busy timeout, and its retry ladder fires only for `isTursoHostNotReadyError`. Every `better-sqlite3` path in the repo waits out a contended file (3s on the mini-app read worker, 5s on the CDC writer); the replica engine had no equivalent, so a read landing during a push or migration failed on its first attempt.
+2. **The one retry that existed didn't recognise it.** `runQuery` recovers only when `isReplicaReadTransportError` matches — checkpoint errors, `timed out after`, `REPLICA_GEN_DRIFT`. `"database is locked"` matches none, so it rethrew immediately, through `DbRouter` → `/api/db/query-batch` → `res.status(500).json({ error: message })` → `data.js`, which renders the raw string. That is the verbatim path from engine to your screen.
+3. **The startup repair gave up for the session.** A busy error was caught, `console.warn`ed, and abandoned with no retry and no state marked — so the ledger/schema drift the function exists to heal stayed in place and the same warning reappeared next launch, forever.
+4. **The busy detector was too narrow to fire.** `isSqliteBusyError` checked only `code === "SQLITE_BUSY"`. Two engines touch these files and only one sets a code: better-sqlite3 raises the code, `@tursodatabase/sync` surfaces a bare `"database is locked"`. So every "DB busy, defer and retry" branch (`TursoLinkedDbWatcher`, `workspaceLogSync`) silently never ran for replica-backed databases. A **second, correct** copy of the predicate already lived in `registryDbSchemaReader.ts` and matched the message.
+**The trap:** the obvious fix — adding `"database is locked"` to `isReplicaReadTransportError` — is wrong and destructive. That classifier's recovery calls `recoverReadWedge`, which closes the handle and **resets the sync sidecars**. Doing sidecar surgery because another operation briefly held the lock is the wrong remedy: a lock means the previous holder is mid-flight, so the fix is to wait. Contention and damage need separate classifiers, and a test pins them disjoint.
+**Solution:**
+1. `isReplicaBusyError` — a distinct classifier for contention (`database is locked`, `database table is locked`, `sqlite_busy`), deliberately *not* wired into wedge recovery.
+2. `retryWhileReplicaBusy` (`replicaBusyRetry.ts`) — the missing `busy_timeout`: 5 attempts over ~2.4s, in the same range as the better-sqlite3 read path's 3s, well under `REPLICA_OPERATION_TIMEOUT_MS`. Retries **only** on a lock; anything else propagates on the first attempt. Waiting inside the caller's scheduler slot is intentional — that is what `busy_timeout` does too (it blocks the connection rather than yielding it). Applied to `runQuery` and `runSchema`.
+3. **Startup repair retries.** Databases that failed *only* because they were locked are collected and re-attempted (2 rounds, 30s apart) instead of abandoned, so the drift actually heals rather than re-logging every launch. A non-lock failure still reports immediately.
+4. **One busy detector.** Moved into `tursoReplicaErrors.ts` (the native-import-free classifier module, reachable from the sync worker), broadened to match code **or** message, re-exported from `tursoSyncBridgeCore` for existing importers, and the duplicate in `registryDbSchemaReader.ts` deleted.
+**Changed an existing assertion — deliberately.** `tests/turso-sync-bridge.test.ts` asserted `isSqliteBusyError(new Error("database is locked")) === false`. It carried no rationale and arrived inside a large squashed commit, so it pinned the implementation rather than a requirement — and it was wrong: the later sibling implementation matched the message, and every consumer uses this predicate to decide "defer and retry". Corrected, with the reasoning recorded in the test.
+**Files Created:** `src/gateway/services/tursoReplica/replicaBusyRetry.ts`, `tests/replica-busy-retry.test.ts` (15 tests)
+**Files Changed:** `tursoReplicaErrors.ts`, `TursoReplicaService.ts`, `cutover/tursoReplicaCutoverMigrationAuthority.ts`, `tursoSyncBridgeCore.ts`, `jobs/registryDbSchemaReader.ts`, `tests/turso-sync-bridge.test.ts`
+**Prevention:** Two engines on one file need one busy predicate, and it cannot key on a field only one of them sets. When a retry classifier's recovery has side effects, do not widen it — a transient condition and a damaged one need different remedies even though both surface as an error string. And an error that is retryable must be *recognised* as retryable at the layer that owns the retry; a wait budget nothing consults is not a wait.
+
+---
+
+### Issue 81: Duplicate React Keys in Related Memories ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** `Encountered two children with the same key` from `RelatedMemoriesPanel`, `WikiEntityPage`, `WikiLibrary`, and `MemoryView`.
+**Root Cause:** Papr search returns a memory **once per matching chunk**, so `_fetchRelatedMemories` emitted the same `id` several times. The UI keys the list by `id` *and* resolves "which one is open" with a find-by-id, so a repeat broke reconciliation and made the lookup ambiguous. A data defect, not a rendering one — fixing it at the `key` would have hidden it.
+**Solution:** `toRelatedMemories()` keeps the first hit per id (search returns strongest-first, so the best match wins), drops hits with no id or no content, and coerces the untyped payload's fields. Deduped at the source so every consumer benefits.
+**Files Changed:** `src/gateway/services/KnowledgeGraphWikiService.ts`; `tests/wiki-related-memories.test.ts` (8 tests)
+**Prevention:** A React key warning names the symptom, not the bug. If a list is keyed by an id that also serves as a lookup key, uniqueness is a data invariant — enforce it where the data is produced.
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
 
 ### Issue 79: A Render Error Wiped the Composer and Looked Like an App Reload ✅ FIXED
