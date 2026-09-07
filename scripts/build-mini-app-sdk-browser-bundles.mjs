@@ -14,8 +14,25 @@ import { fileURLToPath, pathToFileURL } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 const SDK_DIR = path.join(ROOT, "dist/resources/mini-app-sdk");
+const SRC_SDK_DIR = path.join(ROOT, "src/resources/mini-app-sdk");
 const OUT_DIR = path.join(SDK_DIR, "bundled");
 const MANIFEST_PATH = path.join(SDK_DIR, "sdk-manifest.js");
+
+function resolveEntryPath(manifestFile) {
+  for (const dir of [SDK_DIR, SRC_SDK_DIR]) {
+    const direct = path.join(dir, manifestFile);
+    if (existsSync(direct)) {
+      return direct;
+    }
+    if (manifestFile.endsWith(".ts")) {
+      const jsPath = path.join(dir, manifestFile.replace(/\.ts$/, ".js"));
+      if (existsSync(jsPath)) {
+        return jsPath;
+      }
+    }
+  }
+  return null;
+}
 
 async function main() {
   if (!existsSync(MANIFEST_PATH)) {
@@ -34,15 +51,18 @@ async function main() {
 
   let failed = false;
   for (const mod of MINI_APP_SDK_MODULES) {
-    const entry = path.join(SDK_DIR, mod.file);
-    const outName = mod.file.replace(/\.ts$/, ".js");
-    const outFile = path.join(OUT_DIR, outName);
+    const entry = resolveEntryPath(mod.file);
 
-    if (!existsSync(entry)) {
-      console.error(`[mini-app-sdk] Missing source for ${mod.route}: ${entry}`);
+    if (!entry) {
+      console.error(
+        `[mini-app-sdk] Missing source for ${mod.route}: ${mod.file} (checked dist + src)`,
+      );
       failed = true;
       continue;
     }
+
+    const outName = mod.file.replace(/\.ts$/, ".js");
+    const outFile = path.join(OUT_DIR, outName);
 
     const result = await esbuild.build({
       entryPoints: [entry],
