@@ -28,6 +28,7 @@ import { OnboardingView } from "../Onboarding/OnboardingView";
 import { MemoryView } from "../Memory/MemoryView";
 import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
 import { gateway } from "../../src/lib/gateway";
+import { PaneErrorBoundary } from "./PaneErrorBoundary";
 import "./ContentArea.css";
 
 const MemoChatContainer = React.memo(ChatContainer);
@@ -355,8 +356,19 @@ export function ContentArea() {
     </div>
   );
 
-  // Render view based on tab type
+  // Every pane is wrapped, so a render-time throw in one tab shows a recoverable
+  // card in that tab instead of unmounting the whole React tree — which is what
+  // made a single bad render look like the app reloading.
   const renderView = (tabId: string | null, skipAgents = false) => {
+    const view = renderViewForTab(tabId, skipAgents);
+    if (view === null) return null;
+    return (
+      <PaneErrorBoundary paneKey={tabId ?? "unknown"}>{view}</PaneErrorBoundary>
+    );
+  };
+
+  // Render view based on tab type
+  const renderViewForTab = (tabId: string | null, skipAgents = false) => {
     if (!tabId) return null;
 
     const tab = getTab(tabId);
@@ -429,7 +441,9 @@ export function ContentArea() {
               isAgentsActive ? " content-pane__keep-alive--visible" : ""
             }`}
           >
-            <AgentsView />
+            <PaneErrorBoundary paneKey={`agents-keep-alive-${pane}`}>
+              <AgentsView />
+            </PaneErrorBoundary>
           </div>
         )}
         {isAppTab(tab) && mountedAppTabIds.has(tab.id) ? null : isAppTab(tab) ? (

@@ -5021,3 +5021,24 @@ Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`)
 ---
 
 **This file is living documentation. Update it as we learn and make decisions.**
+
+### Issue 79: A Render Error Wiped the Composer and Looked Like an App Reload ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** A render-time throw in one chat tab blanked the whole window and destroyed a half-typed message. Separately, `ChatContainer` logged `Maximum update depth exceeded` continuously while a mini-app tab was in use.
+**Three defects, only one of which was the crash:**
+1. **Nothing contained a render error.** With no error boundary anywhere in the tree, React unmounted the entire app on any throw — indistinguishable from a reload. React's own console output said as much (`Consider adding an error boundary`) and it had never been acted on.
+2. **The draft existed in exactly one place, and it was volatile.** `draftByChatId` was an in-memory `Map` in `chatStore`. Unsent text is the only chat state with no other copy — messages come back from the server, a half-typed message does not — so a reload, a renderer crash, or `resetForWorkspaceSwitch()` took it with them.
+3. **An infinite render loop.** `useModelPickerSettings` returned `pickerModels: getPickerModels(enabledIds)` — a new array identity every render. `ChatContainer` has an effect depending on it, so that effect re-ran every render, and inside it `setModelSettings(readChatSettings(chatId))` set a **freshly built object** every time. New identity in, state change reported out, render, repeat. The loop needed both halves; either alone is inert, which is why this only surfaced once the model-settings effect was added.
+**Not the cause:** the reported `ReferenceError: EFFORT_VARIANT_MODELS is not defined` was an HMR artifact — a partially-applied module graph mid-update, at `?t=1788797208544`. The imports are correct and the production build is clean. Chasing it would have fixed nothing; the app should not die on *any* render throw, whatever its origin.
+**Solution:**
+1. **`PaneErrorBoundary` around every pane** (`ContentArea`), keyed on `paneKey` so switching tabs clears a previous error rather than pinning it. Shows a retry card and states the draft is safe.
+2. **`chatDraftStore`** — durable per-chat drafts in `localStorage`, written on the debounce that already fed the map, with LRU eviction (50 chats), a 100K per-draft cap, and quota/corruption handled by degrading to memory-only. `getDraftMessage` falls back to it, so `InputBar`'s lazy `useState` seed repaints a surviving draft instead of an empty box. A `pagehide` listener plus an unmount flush closes the 300ms debounce window. Renamed on temp→permanent id (reachable: typing a second message while the first streams) and forgotten on delete.
+3. **Break the loop at both ends** — `useMemo` on `pickerModels`, and a `sameSettings` bail-out in the `setModelSettings` updater. Fixing only one end would leave the other as a live trap for the next effect added.
+**Files Created:**
+- `ui/utils/chatDraftStore.ts`, `ui/components/Layout/PaneErrorBoundary.tsx` / `.css`
+- `tests/chat-draft-store.test.ts` (21), `tests/render-loop-invariants.test.ts` (10), `ui/__tests__/hooks/useModelPickerSettings.test.tsx` (3)
+**Files Changed:**
+- `ui/stores/chatStore.ts` — durable drafts; side effects moved out of the `set` updater to keep it pure
+- `ui/components/Chat/InputBar.tsx`, `ui/hooks/useChat.ts`, `ui/hooks/useModelPickerSettings.ts`, `ui/components/Chat/ChatContainer.tsx`, `ui/components/Layout/ContentArea.tsx`, `ui/utils/chatModelSettings.ts`
+**Prevention:** A React tree with no error boundary treats every render throw as fatal to the whole app. State the user typed and has not sent needs a durable copy — it is the only state you cannot re-fetch. And an effect that both depends on a value and re-derives it must compare by content: a fresh object read is never reference-equal, so `setState` from one always reports a change.
+**Related:** Issue 75 (chat pane stranded after a store wipe), Issue 74 (per-chat model scoping), Enhancement 77 (per-chat model controls — the effect that completed the loop)

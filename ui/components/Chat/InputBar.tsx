@@ -99,16 +99,18 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     ref,
   ) => {
     // Draft lives outside chatStates so debounced saves do not re-render MessageList.
-    const draftMessage = useChatStore(
-      (state) => state.draftByChatId.get(chatId) ?? "",
-    );
     const setDraftMessage = useChatStore((state) => state.setDraftMessage);
     const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
 
     // Ollama status for showing install indicator
     const { hasModel, hostTotalRamGb } = useOllama();
 
-    const [message, setMessage] = useState(draftMessage);
+    // Seeded through the store's getter, which falls back to the durable copy:
+    // after a reload or a crash the in-memory map is empty, and reading it
+    // directly would paint an empty composer over a draft that still exists.
+    const [message, setMessage] = useState(() =>
+      useChatStore.getState().getDraftMessage(chatId),
+    );
     const [isFocused, setIsFocused] = useState(false);
     const [showContextDropdown, setShowContextDropdown] = useState(false);
     const [showModelSettings, setShowModelSettings] = useState(false);
@@ -165,6 +167,23 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     useEffect(() => {
       debouncedSaveDraft(chatId, message);
     }, [message, chatId, debouncedSaveDraft]);
+
+    // The debounce leaves a 300ms window in which the newest keystrokes exist
+    // only in component state. Flush on the way out so that window does not
+    // include the moment the pane unmounts or the page goes away.
+    const pendingDraftRef = useRef({ chatId, message });
+    pendingDraftRef.current = { chatId, message };
+    useEffect(() => {
+      const flush = () => {
+        const pending = pendingDraftRef.current;
+        setDraftMessage(pending.chatId, pending.message);
+      };
+      window.addEventListener("pagehide", flush);
+      return () => {
+        window.removeEventListener("pagehide", flush);
+        flush();
+      };
+    }, [setDraftMessage]);
 
     const appendFileArtifacts = useCallback(
       async (files: File[]) => {

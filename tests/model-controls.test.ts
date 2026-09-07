@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, beforeEach } from "vitest";
+import { readFileSync } from "fs";
 import { ModelFallback } from "../src/core/agents/ModelFallback";
 import {
   CONTEXT_OPTIONS,
@@ -449,5 +450,32 @@ describe("picker collapse", () => {
     for (const id of PICKER_DEFAULT_MODEL_IDS) {
       expect(isChatPickerModelId(id), `${id} is hidden but default`).toBe(true);
     }
+  });
+});
+
+describe("renderer -> gateway import boundary", () => {
+  it("keeps anthropicAdaptiveThinking importable from the renderer", () => {
+    // `modelControls` reaches across into the gateway for this one predicate,
+    // so the effort control is gated by the same rule the request is built
+    // from rather than a second hand-kept list. That only works because the
+    // file is a leaf: gateway modules import each other with `.js` specifiers,
+    // which Vite will not resolve back to `.ts`, so the first import added
+    // here would break the renderer build — and only the release build, since
+    // the dev server is more forgiving. Hence this guard.
+    const source = readFileSync(
+      new URL(
+        "../src/gateway/utils/anthropicAdaptiveThinking.ts",
+        import.meta.url,
+      ),
+      "utf8",
+    );
+    const runtimeImports = source
+      .split("\n")
+      .filter((line) => /^\s*import\s/.test(line))
+      .filter((line) => !/^\s*import\s+type\s/.test(line));
+    expect(
+      runtimeImports,
+      "anthropicAdaptiveThinking must stay import-free to remain renderer-safe",
+    ).toEqual([]);
   });
 });

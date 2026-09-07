@@ -24,6 +24,26 @@ export interface ChatModelSettings {
   fast?: boolean;
 }
 
+/**
+ * Do two settings objects mean the same thing?
+ *
+ * Every read here builds a fresh object, so React state holding one of these
+ * cannot be compared by reference: setting it from a re-read would always look
+ * like a change, and an effect that both depends on state and re-reads it would
+ * spin. Callers use this to bail out instead.
+ */
+export function sameSettings(
+  a: ChatModelSettings,
+  b: ChatModelSettings,
+): boolean {
+  return (
+    a.thinking === b.thinking &&
+    a.effort === b.effort &&
+    a.contextLimit === b.contextLimit &&
+    a.fast === b.fast
+  );
+}
+
 /** chatId -> settings. Insertion-ordered; oldest entries are evicted first. */
 const PER_CHAT_KEY = "paprwork_chat_model_settings";
 

@@ -46,6 +46,7 @@ import {
   adoptEffortFromVariant,
   readChatSettings,
   readNewChatDefaultSettings,
+  sameSettings,
   writeChatSettings,
   writeNewChatDefaultSettings,
   type ChatModelSettings,
@@ -386,11 +387,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     adoptEffortFromVariant(chatId, resolvedId);
 
     const stored = readChatSettings(chatId);
-    setModelSettings(
+    const next =
       Object.keys(stored).length > 0 || chatHasHistory
         ? stored
-        : readNewChatDefaultSettings(),
-    );
+        : readNewChatDefaultSettings();
+    // Bail out when nothing actually changed. Each read builds a fresh object,
+    // so setting it unconditionally reports a state change on every run of this
+    // effect — and this effect re-runs whenever any dep gets a new identity,
+    // which is enough to loop.
+    setModelSettings((prev) => (sameSettings(prev, next) ? prev : next));
 
     setSelectedModel((prev) => {
 
