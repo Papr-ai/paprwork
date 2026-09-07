@@ -4964,4 +4964,35 @@ That assumption holds only while the server list is the *whole* history. It isn'
 
 ---
 
+### Enhancement 77: Per-Chat Model Controls — Thinking, Fast, Context, Effort ✅ IMPLEMENTED
+**Added:** 2026-09-07
+**Problem:** The four things that decide what a turn costs were all unreachable from the composer, so a chat ran at whatever the model advertised. On a 1M-window model the history budget computes to ~636K tokens, and everything inside that budget is re-sent on **every step** of a turn that can run to 100 steps. Console usage for Sep 2–6 sits almost entirely in the `200k – 1M` bucket.
+**Not the cause:** the window is not a price *tier* — Anthropic dropped the >200K surcharge in March 2026. But input is billed per token, so the window is a spend dial either way.
+**Root Causes:** Three separate gaps, only one of which was a missing UI:
+1. **Effort was expressed as a separate model per level.** `gpt-5-6-sol-low` / `gpt-5-6-sol` / `gpt-5-6-sol-high` are one API model with three `reasoning.effort` values, and the picker listed all three as if they were different models — advertising packaging as capability while leaving the parameter itself unreachable.
+2. **No context cap existed** anywhere in `AgentConfig`, so `computeHistoryTokenBudget` had nothing to narrow against.
+3. **Thinking had no off switch**, even on the providers whose request carries one.
+**Solution:** One popover on the composer pill, governed by a single rule — **a row appears only when the request can actually carry it**. Capability is derived from the model (`ui/constants/modelControls.ts`) rather than hand-listed, because a switch wired to nothing is worse than no switch. Context options are **200K / 400K / 1M defaulting to 200K**; defaulting low is the part that saves money. Effort variants collapse into base + effort (picker: ~11 rows → ~7) with migration on both the visible list and each chat's stored settings.
+**Two traps worth naming:**
+- **`thinkingBudget: 0` cannot mean "thinking off."** Opus 5 and Fable 5.1 ship `defaultThinkingBudget: 0` and still think adaptively, so overloading it would have silently disabled reasoning on exactly the models people reach for it on. The off state is its own field: `AgentConfig.thinking?: false`, only ever `false`, absent meaning "provider default".
+- **Anthropic `effort` is an adaptive-thinking field.** Sonnet 4.6 / Haiku 4.5 / Opus 4.6 take `{type:"enabled", budgetTokens}` and have no effort field. UI gate and gateway gate call the *same* predicate (`anthropicModelUsesAdaptiveThinking`) instead of mirroring a list. `max` is offered only on Fable and Opus 5, matching the gateway's own `xhigh -> max` promotion.
+**Context is a cap, never a widener:** `resolveEffectiveContextWindow` = `min(modelWindow, max(userCap, 128K))`. The 128K floor exists because a turn carries ~86K of tool schemas before any conversation; a lower cap leaves no room for the history it is meant to be budgeting.
+**Files Created:**
+- `ui/constants/modelControls.ts`, `ui/utils/chatModelSettings.ts`, `ui/utils/buildAgentConfig.ts`
+- `ui/components/Chat/ModelSettingsPopover.tsx` / `.css`, `ui/components/Chat/ModelSettingsButton.tsx`
+- `tests/model-controls.test.ts` — 40 tests
+- `docs/PER_CHAT_MODEL_CONTROLS.md`
+**Files Changed:**
+- `src/core/types/agents.ts` — `contextLimit`, `thinking?: false`, `speed`
+- `src/gateway/services/agent/contextBudget.ts` — `resolveEffectiveContextWindow`
+- `src/gateway/services/AgentService.ts` — honour all four on the AI SDK route
+- `src/gateway/services/providers/piAiAnthropicAdaptiveThinking.ts` — off switch on the OAuth route
+- `ui/constants/modelPicker.ts`, `ui/components/Chat/{ChatContainer,InputBar,ModelPickerDropdown}.tsx`, `ui/hooks/useChat.ts`, `ui/stores/chatStore.ts`
+**Drift guards:** `MODEL_CONTEXT_WINDOWS` restates the gateway's `ModelFallback` (the renderer cannot import it — its relative imports carry `.js` specifiers Vite will not resolve back to `.ts`), and a test asserts every entry equals `ModelFallback.getModelInfo(id).contextWindow`.
+**Prevention:** Do not express a parameter as a separate model id. Do not overload a numeric default (`0`) to mean "off" when the provider already uses that value as a real default. And before wiring a control, confirm the SDK accepts the field — a toggle whose value is silently dropped is worse than no toggle.
+**Related:** Issue 74 (per-chat model scoping — same persistence pattern, and the reason a per-chat read never falls back to a global), Enhancement 51 (tool result truncation — the other half of what a step re-sends)
+**See:** `docs/PER_CHAT_MODEL_CONTROLS.md`
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**

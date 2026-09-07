@@ -25,6 +25,7 @@ import {
   writeChatModel,
   writeNewChatDefaultModel,
 } from "../utils/chatModelMemory";
+import { renameChatSettings } from "../utils/chatModelSettings";
 
 // Re-export types for backward compatibility
 export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem, MessageAttachment };
@@ -358,9 +359,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((state) => {
       if (oldChatId === newChatId) return state;
 
-      // Carry the persisted model across the rename, or the chat loses it the
-      // moment its first message gives it a permanent id.
+      // Carry the persisted model and its dials across the rename, or the chat
+      // loses them the moment its first message gives it a permanent id.
       renameChatModel(oldChatId, newChatId);
+      renameChatSettings(oldChatId, newChatId);
 
       const oldState = state.chatStates.get(oldChatId);
       const newChatStates = new Map(state.chatStates);

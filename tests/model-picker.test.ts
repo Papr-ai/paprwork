@@ -65,7 +65,8 @@ describe("modelPicker", () => {
       "claude-opus-4-6",
       "claude-opus-5",
       "gpt-5-6-sol",
-      "glm-5.2-max",
+      // Collapsed: max reasoning is now an Effort choice on glm-5.2, not a row.
+      "glm-5.2",
       "qwen/qwen3-32b",
       "gemini-3.5-flash-lite",
       "gemini-3.8-flash",
@@ -177,7 +178,8 @@ describe("modelPicker", () => {
     expect(isPickerDefaultModelId("claude-opus-5")).toBe(true);
     expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(true);
     expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(true);
-    expect(isPickerDefaultModelId("glm-5.2-max")).toBe(true);
+    expect(isPickerDefaultModelId("glm-5.2")).toBe(true);
+    expect(isPickerDefaultModelId("glm-5.2-max")).toBe(false);
     expect(isPickerDefaultModelId("claude-haiku-4-5")).toBe(false);
   });
 

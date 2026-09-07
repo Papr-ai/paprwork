@@ -63,6 +63,25 @@ export interface AgentConfig {
   maxTokens?: number; // Output token limit
   thinkingBudget?: number;
   reasoning?: ModelReasoning;
+  /**
+   * User-chosen cap on the context window, in tokens.
+   *
+   * Separate from `thinkingBudget: 0`, which cannot mean "no thinking" —
+   * Opus 5 and Fable 5.1 ship a default budget of 0 and still think adaptively.
+   * Absent means "use the model's advertised window".
+   */
+  contextLimit?: number;
+  /**
+   * Explicitly disable reasoning. Only ever `false`; absent means the provider
+   * default applies. Honoured where the request has a real off switch
+   * (Anthropic `thinking: disabled`, Google zero budget, Ollama `think`).
+   */
+  thinking?: false;
+  /**
+   * Anthropic fast mode. Billed at roughly 2× standard rates and available on
+   * the first-party API only, so it is never set on the pi-ai (OAuth) path.
+   */
+  speed?: "fast" | "standard";
 }
 
 /**

@@ -30,6 +30,33 @@ export function resolveModelContextWindow(
   return PROVIDER_DEFAULT_CONTEXT[provider] ?? 128_000;
 }
 
+/**
+ * Smallest window we will budget against, whatever the user asks for.
+ *
+ * A turn carries ~86K of tool schemas before any conversation, so a cap below
+ * this would leave no room for the history it is supposed to be budgeting and
+ * every turn would trim to the 8K floor.
+ */
+export const MIN_CONTEXT_LIMIT = 128_000;
+
+/**
+ * Effective window: the model's own, narrowed by the user's choice.
+ *
+ * A cap can only ever shrink the window — asking for 1M on a 200K model does
+ * not widen it — and cannot go below {@link MIN_CONTEXT_LIMIT}.
+ */
+export function resolveEffectiveContextWindow(
+  provider: Provider,
+  modelId: string,
+  contextLimit?: number,
+): number {
+  const modelWindow = resolveModelContextWindow(provider, modelId);
+  if (!contextLimit || !Number.isFinite(contextLimit) || contextLimit <= 0) {
+    return modelWindow;
+  }
+  return Math.min(modelWindow, Math.max(contextLimit, MIN_CONTEXT_LIMIT));
+}
+
 /** Fraction of context window available for message history (rest: tools + output). */
 const HISTORY_BUDGET_RATIO = 0.85;
 
@@ -80,10 +107,13 @@ export function computeHistoryTokenBudget(params: {
   modelId: string;
   toolTokenEstimate: number;
   maxOutputTokens?: number;
+  /** User-chosen cap; narrows the model's window, never widens it. */
+  contextLimit?: number;
 }): number {
-  const contextWindow = resolveModelContextWindow(
+  const contextWindow = resolveEffectiveContextWindow(
     params.provider,
     params.modelId,
+    params.contextLimit,
   );
   const outputReserve = params.maxOutputTokens ?? DEFAULT_OUTPUT_RESERVE;
   const budget = Math.floor(

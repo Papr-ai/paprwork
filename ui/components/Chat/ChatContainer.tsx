@@ -42,6 +42,18 @@ import {
 } from "../../utils/resolveChatModel";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
+import {
+  adoptEffortFromVariant,
+  readChatSettings,
+  readNewChatDefaultSettings,
+  writeChatSettings,
+  writeNewChatDefaultSettings,
+  type ChatModelSettings,
+} from "../../utils/chatModelSettings";
+import {
+  buildAgentConfig,
+  resolveModelSettings,
+} from "../../utils/buildAgentConfig";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn, shouldDrainMessageQueue } from "../../lib/agentStreamRecovery";
@@ -176,6 +188,51 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
+
+  // Thinking / effort / context / fast for this chat. Stored sparsely, so a
+  // field the user never touched stays "unset" and follows the model.
+  const [modelSettings, setModelSettings] = useState<ChatModelSettings>({});
+
+  /** Effective dials for this chat, after dropping what the model can't honour. */
+  const resolvedModelSettings = useMemo(
+    () => resolveModelSettings(selectedModel, modelSettings),
+    [selectedModel, modelSettings],
+  );
+
+  /**
+   * Which credential this turn will actually run on. Only Anthropic needs it —
+   * Fast mode is an API-key-only parameter, and OAuth turns go through pi-ai,
+   * which has no `speed` field to carry it. The gateway prefers OAuth when both
+   * exist, so this mirrors that order rather than guessing.
+   */
+  const authType = useMemo<"oauth" | "apiKey" | undefined>(() => {
+    if (selectedModel.provider !== "anthropic") return undefined;
+    if (authStatus.anthropic.oauth) return "oauth";
+    if (authStatus.anthropic.apiKey) return "apiKey";
+    return undefined;
+  }, [selectedModel.provider, authStatus]);
+
+  const handleChangeModelSettings = useCallback(
+    (patch: ChatModelSettings) => {
+      const next = writeChatSettings(chatId, patch);
+      setModelSettings(next);
+      // Seed the next new chat, the same way the model picker does.
+      writeNewChatDefaultSettings(next);
+    },
+    [chatId],
+  );
+
+  /** One config shape for send, auto-continue and stream recovery alike. */
+  const makeAgentConfig = useCallback(
+    (systemPrompt: string) =>
+      buildAgentConfig({
+        model: selectedModel,
+        settings: modelSettings,
+        systemPrompt,
+        authType,
+      }),
+    [selectedModel, modelSettings, authType],
+  );
   const {
     message: gatewaySupervisorMessage,
     isReady: gatewaySupervisorReady,
@@ -265,14 +322,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
       : "";
 
-    const config = {
-      provider: selectedModel.provider,
-      model: selectedModel.id,
-      systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
-      reasoning: selectedModel.reasoning,
-      thinkingBudget: selectedModel.defaultThinkingBudget,
-      maxTokens: selectedModel.maxTokens,
-    };
+    const config = makeAgentConfig(DEFAULT_SYSTEM_PROMPT + mergedContext);
 
     autoContinueInFlightRef.current = true;
     void autoContinueInterruptedTurn(chatId, config, messages).finally(() => {
@@ -287,7 +337,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isWaitingForAgentSlot,
     messages,
     needsStreamRecovery,
-    selectedModel,
+    makeAgentConfig,
   ]);
 
   const gatewayBanner =
@@ -323,7 +373,27 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   // default (new chats only) > default order (sonnet-5 → gpt-5-6-sol →
   // gemini-3-flash) > first available
   useEffect(() => {
+    const store = useChatStore.getState();
+    const resolvedId = resolveChatModelId({
+      perChatModelId: store.getLastSelectedModel(chatId),
+      historyModelId,
+      newChatDefaultModelId: store.getDefaultModelForNewChat(),
+      hasHistory: chatHasHistory,
+    });
+
+    // A chat pinned to a retired effort variant keeps the effort that variant
+    // meant, rather than silently dropping to the base model's default.
+    adoptEffortFromVariant(chatId, resolvedId);
+
+    const stored = readChatSettings(chatId);
+    setModelSettings(
+      Object.keys(stored).length > 0 || chatHasHistory
+        ? stored
+        : readNewChatDefaultSettings(),
+    );
+
     setSelectedModel((prev) => {
+
       const store = useChatStore.getState();
       // Explicit per-chat pick always wins — do not downgrade to Sonnet just
       // because isModelAvailable flickered false (e.g. PAPR_API_KEY not in the
@@ -705,14 +775,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
       // Create config WITHOUT apiKey - Gateway will fetch it via IPC
       // This keeps keys secure and never sends them over WebSocket
-      const config = {
-        provider: selectedModel.provider,
-        model: selectedModel.id,
-        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext + artifactsContext,
-        reasoning: selectedModel.reasoning,
-        thinkingBudget: selectedModel.defaultThinkingBudget,
-        maxTokens: selectedModel.maxTokens, // Output token limit
-      };
+      const config = makeAgentConfig(
+        DEFAULT_SYSTEM_PROMPT + mergedContext + artifactsContext,
+      );
 
       useChatStore.getState().setLastSelectedModel(chatId, selectedModel.id);
 
@@ -731,7 +796,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           : undefined,
       );
     },
-    [selectedModel, sendMessage, chatId, ensureModel, isModelAvailable, authStatus.paprProxy, setError],
+
+    [selectedModel, makeAgentConfig, sendMessage, chatId, ensureModel, isModelAvailable, authStatus.paprProxy, setError],
   );
 
   const stopAgentAndClearQueue = useCallback(async () => {
@@ -911,20 +977,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         ? `\n\n## Active Context\nThe user has merged this chat with a ${mergedArtifact.type} titled "${mergedArtifact.title}" (${idKey}: "${mergedArtifact.id}"). They are viewing and working on this ${mergedArtifact.type} alongside this conversation. Reference it directly when relevant.`
         : "";
 
-      const config = {
-        provider: selectedModel.provider,
-        model: selectedModel.id,
-        systemPrompt: DEFAULT_SYSTEM_PROMPT + mergedContext,
-        reasoning: selectedModel.reasoning,
-        thinkingBudget: selectedModel.defaultThinkingBudget,
-        maxTokens: selectedModel.maxTokens,
-      };
+      const config = makeAgentConfig(DEFAULT_SYSTEM_PROMPT + mergedContext);
 
       await retryStreamRecovery(chatId, config);
     } finally {
       setIsResumingStream(false);
     }
-  }, [chatId, isResumingStream, retryStreamRecovery, selectedModel]);
+  }, [chatId, isResumingStream, retryStreamRecovery, makeAgentConfig]);
 
   const handleChatDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
@@ -1065,6 +1124,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onOpenSettings={handleOpenSettings}
         onOpenSettingsModels={handleOpenSettingsModels}
         pickerModels={pickerModels}
+        modelSettings={resolvedModelSettings}
+        onChangeModelSettings={handleChangeModelSettings}
+        authType={authType}
       />
 
       {contextInfo !== null ? (
