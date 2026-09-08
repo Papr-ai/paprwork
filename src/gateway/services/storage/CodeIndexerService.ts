@@ -13,6 +13,10 @@ import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
 import { reserveMemoryWrite } from '../memoryWriteGuard.js';
+import {
+  isRawCodeMemoryIndexEnabled,
+  announceRawCodeIndexPolicyOnce,
+} from './codeIndexPolicy.js';
 import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
 import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
 
@@ -474,6 +478,17 @@ export class CodeIndexerService {
    * Index a project to PAPR
    */
   private async indexProject(metadata: ProjectMetadata): Promise<void> {
+    // Same policy as indexCodeFile. This write had no gate of any kind and
+    // stable content ("Project: X / Type: Y / ID: Z"), so it re-added an
+    // identical row on every index pass.
+    //
+    // The richer replacement already exists: CodeSummaryIndexPipeline's
+    // project overview, which upserts and reflects what the project DOES.
+    announceRawCodeIndexPolicyOnce();
+    if (!isRawCodeMemoryIndexEnabled()) {
+      return;
+    }
+
     // Create a memory entry for the project
     // Convert project metadata for PAPR (only primitives allowed in customMetadata)
     const paprMetadata: Record<string, string | number | boolean> = {
@@ -534,6 +549,20 @@ export class CodeIndexerService {
     fileMetadata: CodeFileMetadata,
     projectMetadata: ProjectMetadata
   ): Promise<void> {
+    // Raw file bodies are OFF by default. See codeIndexPolicy.ts.
+    //
+    // This is the write that produced 29,315 duplicate code_indexer rows and
+    // that the agent reads in 1.3% of searches. LLM summaries of the same
+    // files still sync via CodeSummaryIndexPipeline, which is a real upsert
+    // (deletes previousMemoryId before adding), so disabling this does not
+    // blind code search — it removes the raw, duplicated half.
+    //
+    // Returning before readFileSync keeps a disabled indexer free.
+    announceRawCodeIndexPolicyOnce();
+    if (!isRawCodeMemoryIndexEnabled()) {
+      return;
+    }
+
     const content = fs.readFileSync(fileMetadata.file_path, 'utf-8');
     
     // Truncate very long files for indexing
