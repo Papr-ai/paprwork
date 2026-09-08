@@ -2,19 +2,36 @@
  * Shared checkpoint / WAL wedge detection for Turso Sync replica paths.
  */
 
-export function isReplicaCheckpointWalError(message: string): boolean {
+/** Turso cloud unreachable — recover in background, never reset sidecars. */
+export function isReplicaNetworkFetchError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
-    lower.includes("checkpoint") ||
+    lower.includes("fetch error") ||
+    lower.includes("fetch failed") ||
+    lower.includes("connect timeout") ||
+    lower.includes("und_err_connect_timeout") ||
+    lower.includes("econnrefused") ||
+    lower.includes("enotfound") ||
+    lower.includes("network request failed")
+  );
+}
+
+export function isReplicaCheckpointWalError(message: string): boolean {
+  if (isReplicaNetworkFetchError(message)) {
+    return false;
+  }
+  const lower = message.toLowerCase();
+  return (
     lower.includes("unable to checkpoint synced portion of wal") ||
-    lower.includes("sync engine operation failed") ||
-    lower.includes("short read on wal frame")
+    lower.includes("short read on wal frame") ||
+    (lower.includes("checkpoint") && lower.includes("wal"))
   );
 }
 
 export function isReplicaReadTransportError(message: string): boolean {
   return (
     isReplicaCheckpointWalError(message) ||
+    isReplicaNetworkFetchError(message) ||
     message.includes("timed out after") ||
     message.includes("REPLICA_GEN_DRIFT")
   );

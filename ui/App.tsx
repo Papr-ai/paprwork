@@ -36,8 +36,11 @@ import {
 } from "./lib/telemetry";
 import { gateway } from "./src/lib/gateway";
 import { ensureGatewayRecoveryRegistered } from "./lib/agentStreamRecovery";
-import { AppAgentChatOverlay } from "./components/Apps/AppAgentChatOverlay";
-import type { AppAgentChatConfig } from "../src/core/types/appAgentChat";
+import {
+  appAgentMainChatTabTitle,
+  buildAppAgentMainChatMessage,
+  findAppTabId,
+} from "./utils/openAppAgentMainChat";
 import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
@@ -54,20 +57,12 @@ import { useProfileStore } from "./stores/profileStore";
 
 type ChatOpenPayload = {
   message?: string;
+  welcomeMessage?: string;
   model?: string | null;
   provider?: string | null;
   mode?: "main" | "app-agent";
   appId?: string;
   subAgentId?: string;
-};
-
-type AppAgentChatSession = {
-  appId: string;
-  appTitle: string;
-  config: AppAgentChatConfig;
-  subAgentName: string;
-  subAgentIcon?: string;
-  initialMessage?: string;
 };
 
 // Check if Papr authentication is required (commercial build vs open source)
@@ -84,9 +79,6 @@ export function App() {
   // Check this FIRST before loading anything else
   const [isAuthenticated, setIsAuthenticated] = useState(!REQUIRE_PAPR_AUTH);
   const [authChecked, setAuthChecked] = useState(false);
-  const [appAgentChatSession, setAppAgentChatSession] =
-    useState<AppAgentChatSession | null>(null);
-  
   // Check authentication immediately (before loading preferences/SQLite)
   useEffect(() => {
     if (!REQUIRE_PAPR_AUTH) {
@@ -181,7 +173,7 @@ export function App() {
   }, []);
 
   const { createChat } = useChat();
-  const { createTab, switchToTab } = useTabs();
+  const { createTab, switchToTab, createArtifactFromChat } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -429,7 +421,6 @@ export function App() {
       setTelemetryPaprUserId(null);
       if (REQUIRE_PAPR_AUTH) {
         console.log("[App] Papr logout — returning to auth wall (commercial build)");
-        setAppAgentChatSession(null);
         setIsAuthenticated(false);
       }
     };
@@ -490,31 +481,58 @@ export function App() {
             const appResp = await gateway.send("app:get", { appId: detail.appId });
             const appData = appResp.data as {
               title?: string;
-              agentChat?: AppAgentChatConfig;
+              agentChat?: { welcomeMessage?: string };
             };
-            const config =
-              appData.agentChat ??
-              ({
-                enabled: true,
-                subAgentId: detail.subAgentId,
-              } satisfies AppAgentChatConfig);
 
             const agentResp = await gateway.send("subagent:get", {
               agentId: detail.subAgentId,
             });
             const agent = agentResp.data as {
               name?: string;
-              icon?: string;
             };
 
-            setAppAgentChatSession({
-              appId: detail.appId,
-              appTitle: appData.title?.trim() || "Mini-app",
-              config,
-              subAgentName: agent.name ?? detail.subAgentId,
-              subAgentIcon: agent.icon,
-              initialMessage: detail.message?.trim(),
-            });
+            const appTitle = appData.title?.trim() || "Mini-app";
+            const subAgentName = agent.name ?? detail.subAgentId;
+
+            const chatId = await createChat();
+            if (!chatId) return;
+
+            const chatTabId = createTab(
+              "chat",
+              chatId,
+              appAgentMainChatTabTitle(appTitle, subAgentName),
+            );
+
+            const appTabId = findAppTabId(
+              useTabStore.getState().tabs,
+              detail.appId,
+            );
+            if (appTabId) {
+              createArtifactFromChat(chatTabId, appTabId, { autoSwitch: false });
+            }
+
+            switchToTab(chatTabId);
+
+            const userMessage = detail.message?.trim();
+            if (userMessage) {
+              const penMessage = buildAppAgentMainChatMessage({
+                appId: detail.appId,
+                appTitle,
+                subAgentId: detail.subAgentId,
+                subAgentName,
+                userMessage,
+                welcomeMessage:
+                  detail.welcomeMessage?.trim() ||
+                  appData.agentChat?.welcomeMessage,
+              });
+              window.setTimeout(() => {
+                window.dispatchEvent(
+                  new CustomEvent("papr-onboarding-send", {
+                    detail: { message: penMessage },
+                  }),
+                );
+              }, 300);
+            }
           } catch (err) {
             console.error("[App] Failed to open app agent chat:", err);
           }
@@ -538,7 +556,7 @@ export function App() {
 
     window.addEventListener("papr-chat-open", handleChatOpen);
     return () => window.removeEventListener("papr-chat-open", handleChatOpen);
-  }, [createChat, createTab, switchToTab]);
+  }, [createChat, createTab, switchToTab, createArtifactFromChat]);
 
   useEffect(() => {
     const handlePlatformBrowserOpen = (event: Event) => {
@@ -603,17 +621,6 @@ export function App() {
       <PaprQuotaBanner />
       <ConnectionIndicator />
       <UpdateBanner />
-      {appAgentChatSession && (
-        <AppAgentChatOverlay
-          appId={appAgentChatSession.appId}
-          appTitle={appAgentChatSession.appTitle}
-          config={appAgentChatSession.config}
-          subAgentName={appAgentChatSession.subAgentName}
-          subAgentIcon={appAgentChatSession.subAgentIcon}
-          initialMessage={appAgentChatSession.initialMessage}
-          onClose={() => setAppAgentChatSession(null)}
-        />
-      )}
     </>
   );
 }

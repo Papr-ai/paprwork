@@ -11,6 +11,7 @@ import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { useCloudCatalogInstallFlow } from "../../hooks/useCloudCatalogInstallFlow";
 import { ImportSetupWizard } from "./ImportSetupWizard";
 import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
+import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import { MiniAppPreviewUrlBar } from "./MiniAppPreviewUrlBar";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import "./MiniAppPublishBar.css";
@@ -92,6 +93,10 @@ export function CloudCatalogPreviewView({
     installingId,
     installToast,
     cloudInstallWizard,
+    optionalDepsNotice,
+    setOptionalDepsNotice,
+    continueFromOptionalDeps,
+    openCommunityAppsFromOptionalDeps,
     installCloudApp,
     startCloudInstall,
     resolveLocalAppId,
@@ -388,6 +393,16 @@ export function CloudCatalogPreviewView({
           onComplete={finishInstallWizard}
           onCancel={finishInstallWizard}
           onRequestHelp={(req) => void openInstallHelp(req)}
+        />
+      ) : null}
+
+      {optionalDepsNotice ? (
+        <CloudInstallOptionalDepsNotice
+          appTitle={optionalDepsNotice.appTitle}
+          dependencies={optionalDepsNotice.dependencies}
+          onClose={() => setOptionalDepsNotice(null)}
+          onOpenCommunityApps={openCommunityAppsFromOptionalDeps}
+          onContinue={continueFromOptionalDeps}
         />
       ) : null}
     </div>

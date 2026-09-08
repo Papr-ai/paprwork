@@ -47,12 +47,34 @@ const Data = {
     if (!r.ok) throw new Error(data?.error || 'Database batch query failed');
     return data?.results || [];
   },
+  withBriefMeta(brief, briefDate) {
+    if (!brief) return null;
+    const today = this.todayKey();
+    return {
+      ...brief,
+      _briefDate: briefDate,
+      _isStale: briefDate !== today,
+    };
+  },
+  mostRecentBriefFromRows(rows) {
+    for (const entry of rows) {
+      if (!this.isBriefDateKey(entry.date)) continue;
+      const brief = this.parseBriefJson(entry.brief_json);
+      if (brief) return this.withBriefMeta(brief, entry.date);
+    }
+    return null;
+  },
   briefFromRows(rows, date) {
     const targetDate = date ?? this.todayKey();
     if (!this.isBriefDateKey(targetDate)) return Data.sample();
     const row = rows.find((entry) => entry.date === targetDate);
     const brief = this.parseBriefJson(row?.brief_json);
-    return brief ?? Data.sample();
+    if (brief) return this.withBriefMeta(brief, targetDate);
+    if (!date || targetDate === this.todayKey()) {
+      const recent = this.mostRecentBriefFromRows(rows);
+      if (recent) return recent;
+    }
+    return Data.sample();
   },
   datesFromRows(rows) {
     return rows
@@ -119,23 +141,32 @@ const Data = {
       }],
     };
   },
+  async loadMostRecentBrief() {
+    const rows = await this.query(
+      'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1',
+    );
+    return this.mostRecentBriefFromRows(rows) ?? Data.sample();
+  },
   async load(date) {
     try {
       if (date) {
         if (!this.isBriefDateKey(date)) return Data.sample();
         const rows = await this.query(
-          `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`,
+          `SELECT date, brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`,
         );
         const brief = this.parseBriefJson(rows[0]?.brief_json);
-        return brief ?? Data.sample();
+        if (brief) return this.withBriefMeta(brief, date);
+        if (date === this.todayKey()) return await this.loadMostRecentBrief();
+        return Data.sample();
       }
 
       const today = this.todayKey();
       const rows = await this.query(
-        `SELECT brief_json FROM briefs WHERE date='${today}' AND brief_json IS NOT NULL LIMIT 1`,
+        `SELECT date, brief_json FROM briefs WHERE date='${today}' AND brief_json IS NOT NULL LIMIT 1`,
       );
       const brief = this.parseBriefJson(rows[0]?.brief_json);
-      return brief ?? Data.sample();
+      if (brief) return this.withBriefMeta(brief, today);
+      return await this.loadMostRecentBrief();
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
       console.error('[Home] Failed to load brief:', message);

@@ -1011,6 +1011,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.3" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.3</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Cloud Publish Dependencies</strong>
+                <p>
+                  Publish panel now surfaces linked jobs, databases, and skills
+                  before you ship — with clearer errors when something is missing
+                  or out of sync.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Skills Catalog Refresh</strong>
+                <p>
+                  Expanded skills library with improved browsing, install flow,
+                  and one-click “start skill chat” from the Skills tab.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Mini-App Preview Performance</strong>
+                <p>
+                  Faster local preview loads with dist caching and a non-blocking
+                  gateway gate — builds on the v2.6.2 SDK packaging fix.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Turso Replica Healing</strong>
+                <p>
+                  Automatic schema drift detection and repair for linked app
+                  databases, with safer job scripts around replica paths.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.3"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.2" && (
           <div className="about-card">
             <h3>What's New in v2.6.2</h3>

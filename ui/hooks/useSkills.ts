@@ -10,7 +10,7 @@ export interface SkillRecord {
   assignedAgentIds: string[];
   createdAt: string;
   updatedAt: string;
-  source?: "local" | "preloaded" | "clawhub" | "skills.sh";
+  source?: "local" | "preloaded" | "clawhub" | "skills.sh" | "gtmskills.com" | "gtm-skills.com";
   externalId?: string;
 }
 
@@ -19,7 +19,7 @@ export interface CatalogSkill {
   name: string;
   description: string;
   content: string;
-  source: "clawhub" | "skills.sh";
+  source: "clawhub" | "skills.sh" | "gtmskills.com" | "gtm-skills.com";
   url?: string;
   category?: string;
   tags?: string[];
@@ -89,17 +89,28 @@ export function useSkills() {
   }, []);
 
   const installCatalogSkill = useCallback(
-    async (source: "clawhub" | "skills.sh", catalogId: string) => {
-      const response = await gateway.send("skill:install-catalog", {
-        source,
-        catalogId,
-      });
-      const installed = response.data as SkillRecord;
-      setSkills((prev) => [
-        installed,
-        ...prev.filter((s) => s.id !== installed.id),
-      ]);
-      return installed;
+    async (
+      source: "clawhub" | "skills.sh" | "gtmskills.com" | "gtm-skills.com",
+      catalogId: string,
+    ) => {
+      setError(null);
+      try {
+        const response = await gateway.send("skill:install-catalog", {
+          source,
+          catalogId,
+        });
+        const installed = response.data as SkillRecord;
+        setSkills((prev) => [
+          installed,
+          ...prev.filter((s) => s.id !== installed.id),
+        ]);
+        return installed;
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to install skill",
+        );
+        throw err;
+      }
     },
     [],
   );

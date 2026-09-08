@@ -25,6 +25,10 @@ import {
 } from "./tursoReplicaFileGuard.js";
 import { clearLegacyTursoSyncStateForDbPath } from "../tursoSyncState.js";
 import {
+  countUserRows,
+  hasBootstrapPendingMarker,
+} from "./tursoReplicaBootstrapMarker.js";
+import {
   bumpRemoteSyncVersion,
   ensureLocalDbChangeLogReady,
   filterSyncableTables,
@@ -312,4 +316,16 @@ export async function reseedTursoReplicaFromRemote(
   clearReplicaReadPathDegraded(record.localPath);
   removeTursoReplicaLocalFiles(record.localPath);
   await provisionTursoReplicaForRecord(record);
+
+  if (hasBootstrapPendingMarker(record.localPath)) {
+    throw new Error(
+      `Reseed completed but bootstrap marker remains for ${record.dbId}`,
+    );
+  }
+  const rows = countUserRows(record.localPath);
+  if (rows < 0) {
+    throw new Error(
+      `Reseed completed but local replica is unreadable for ${record.dbId}`,
+    );
+  }
 }

@@ -47,6 +47,12 @@ export interface TursoReplicaSyncStatus {
   cutoverBlockReason: string | null;
   /** True when sync WAL is empty but -info claims progress — pull/push will wedge. */
   sidecarWedge: boolean;
+  /** Resolved Turso database short name used for this replica. */
+  tursoDatabase?: string;
+  /** Post-repair bootstrap marker still on disk — local replica may be empty. */
+  bootstrapPending: boolean;
+  bootstrapAttempts: number;
+  lastBootstrapError: string | null;
   stats: TursoReplicaDatabaseStats | null;
 }
 

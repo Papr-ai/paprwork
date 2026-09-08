@@ -34,6 +34,27 @@ export async function prepareAppForCloudGitSync(
 ): Promise<void> {
   const appDir = path.join(paprDir, "apps", appId);
   try {
+    const {
+      reconcileAppDataSourcesForPublish,
+      detectCrossAppDependencies,
+      writeCloudAppDependenciesFile,
+    } = await import("../cloudAppResourceIntegrity.js");
+
+    const reconcile = await reconcileAppDataSourcesForPublish(paprDir, appId);
+    if (reconcile.changed) {
+      console.log(
+        `[CloudSync] Reconciled data-sources for ${appId}: +${reconcile.addedJobIds.length} jobs, -${reconcile.removedJobIds.length} stale job refs`,
+      );
+    }
+
+    const dependencies = await detectCrossAppDependencies(paprDir, appId);
+    await writeCloudAppDependenciesFile(paprDir, appId, dependencies);
+    if (dependencies.apps.length > 0 || dependencies.databases.length > 0) {
+      console.log(
+        `[CloudSync] Declared ${dependencies.apps.length} cross-app and ${dependencies.databases.length} cross-db dependencies for ${appId}`,
+      );
+    }
+
     const { scrubAppDataSourcesForGitSync } = await import(
       "../portableDataSources.js"
     );

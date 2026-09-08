@@ -8,8 +8,9 @@ import { getTursoReplicaService } from "./TursoReplicaService.js";
 import {
   detectReplicaSidecarWedge,
   repairReplicaSidecarWedge,
-  repairReplicaSidecarsOnCheckpointError,
 } from "./tursoReplicaSidecarWedge.js";
+import { pullReplicaHonest } from "./tursoReplicaRepairHelpers.js";
+import { hasBootstrapPendingMarker } from "./tursoReplicaBootstrapMarker.js";
 import {
   completeMigrationPairing,
   getMigrationApplyPair,
@@ -18,10 +19,8 @@ import {
   alignReplicaAfterCloudMigration,
   buildMigrationParityReport,
 } from "./tursoReplicaMigrationDualApply.js";
-import { pullLinkedDbViaTursoReplica } from "./tursoReplicaRouting.js";
-import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import { syncStatusForLinkedDb } from "./tursoReplicaRouting.js";
-import { isReplicaCheckpointWalError } from "./tursoReplicaCheckpointRecovery.js";
+import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 
 export type ReconcileSyncAction =
   | "repair_sidecar_wedge"
@@ -37,6 +36,8 @@ export interface ReconcileSyncResult {
   sidecarWedgeBefore: boolean;
   sidecarRepaired: boolean;
   pulled: boolean;
+  reseeded?: boolean;
+  bootstrapPending?: boolean;
   pushErrorCleared: boolean;
   pairingCompleted: boolean;
   parity?: Awaited<ReturnType<typeof buildMigrationParityReport>>;
@@ -69,41 +70,31 @@ export async function reconcileReplicaSync(options: {
   switch (options.action) {
     case "repair_sidecar_wedge": {
       await replica.close(options.source.dbPath);
-      const repaired =
-        repairReplicaSidecarWedge(options.source.dbPath) ||
-        repairReplicaSidecarsOnCheckpointError(options.source.dbPath);
+      const repaired = repairReplicaSidecarWedge(options.source.dbPath);
       let pulled = false;
+      let reseeded = false;
       if (isTursoReplicaOnline()) {
-        try {
-          pulled = await pullLinkedDbViaTursoReplica(options.source, {
-            forceReconnect: true,
-          });
-        } catch (error) {
-          const message = (error as Error).message;
-          if (isReplicaCheckpointWalError(message)) {
-            const record = registry.getById(options.dbId);
-            if (record?.syncMode === "replica") {
-              const { reseedTursoReplicaFromRemote } = await import(
-                "./tursoReplicaProvision.js"
-              );
-              await reseedTursoReplicaFromRemote(record);
-              pulled = true;
-            } else {
-              throw error;
-            }
-          } else {
-            throw error;
-          }
-        }
+        const result = await pullReplicaHonest(options.source, {
+          forceReconnect: true,
+          allowReseed: true,
+        });
+        pulled = result.pulled;
+        reseeded = result.reseeded;
       }
-      await registry.updateReplicaPushState(options.dbId, {
-        lastReplicaPushError: null,
-      });
+      const bootstrapPending = hasBootstrapPendingMarker(options.source.dbPath);
+      const recovered = pulled && !bootstrapPending;
+      if (recovered) {
+        await registry.updateReplicaPushState(options.dbId, {
+          lastReplicaPushError: null,
+        });
+      }
       return {
         ...base,
         sidecarRepaired: repaired,
         pulled,
-        pushErrorCleared: true,
+        reseeded,
+        bootstrapPending,
+        pushErrorCleared: recovered,
         syncStatus: await syncStatusForLinkedDb(options.source),
       };
     }

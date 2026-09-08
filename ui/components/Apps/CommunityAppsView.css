@@ -787,3 +787,36 @@
   color: var(--text-tertiary);
   cursor: pointer;
 }
+
+.community-install-modal--wide {
+  width: min(480px, 100%);
+}
+
+.community-install-modal__dep-list {
+  margin: 0 0 16px;
+  padding-left: 1.25rem;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.community-install-modal__dep-list strong {
+  color: var(--text-primary);
+}
+
+.community-install-modal__primary {
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: var(--accent, #007aff);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.community-install-modal__primary:hover:not(:disabled) {
+  filter: brightness(1.05);
+}

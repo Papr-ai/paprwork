@@ -13,6 +13,8 @@ import { assertReadOnlySql, assertWriteSql } from "./sqlValidation.js";
 export interface BackendDbProxySession {
   appId: string;
   sourceId?: string;
+  /** Job-only sessions resolve registry DBs without an app data-sources.json entry. */
+  registryDbId?: string;
   expiresAt: number;
   cloud?: {
     runtimeAuth: AppRuntimeRouteAuth;
@@ -31,6 +33,10 @@ export interface DesktopBackendDbProxyDeps {
     sourceId: string | undefined,
     sql: string,
     operation: "read" | "write",
+  ) => Promise<AppDataSource>;
+  resolveRegistrySource?: (
+    dbId: string,
+    sourceId: string | undefined,
   ) => Promise<AppDataSource>;
   query: (
     appId: string,
@@ -75,6 +81,7 @@ function pruneExpiredSessions(): void {
 export function mintBackendDbProxyEnv(input: {
   appId: string;
   sourceId?: string;
+  registryDbId?: string;
   proxyBaseUrl: string;
   cloud?: BackendDbProxySession["cloud"];
   ttlMs?: number;
@@ -84,6 +91,7 @@ export function mintBackendDbProxyEnv(input: {
   sessions.set(token, {
     appId: input.appId,
     sourceId: input.sourceId?.trim() || undefined,
+    registryDbId: input.registryDbId?.trim() || undefined,
     expiresAt: Date.now() + (input.ttlMs ?? DEFAULT_TTL_MS),
     cloud: input.cloud,
   });
@@ -130,6 +138,20 @@ function requireSession(req: Request, res: Response): BackendDbProxySession | nu
   return session;
 }
 
+async function resolveDesktopProxySource(
+  deps: DesktopBackendDbProxyDeps,
+  session: BackendDbProxySession,
+  sourceId: string | undefined,
+  sql: string,
+  operation: "read" | "write",
+): Promise<AppDataSource> {
+  const resolvedSourceId = sourceId ?? session.sourceId;
+  if (session.registryDbId && deps.resolveRegistrySource) {
+    return deps.resolveRegistrySource(session.registryDbId, resolvedSourceId);
+  }
+  return deps.resolveSource(session.appId, resolvedSourceId, sql, operation);
+}
+
 export function createDesktopBackendDbProxyRouter(
   deps: DesktopBackendDbProxyDeps,
 ): Router {
@@ -151,9 +173,10 @@ export function createDesktopBackendDbProxyRouter(
       }
 
       assertReadOnlySql(sql);
-      const source = await deps.resolveSource(
-        session.appId,
-        sourceId ?? session.sourceId,
+      const source = await resolveDesktopProxySource(
+        deps,
+        session,
+        sourceId,
         sql,
         "read",
       );
@@ -186,9 +209,10 @@ export function createDesktopBackendDbProxyRouter(
       );
       assertReplaySafeRowSql(sql);
 
-      const source = await deps.resolveSource(
-        session.appId,
-        sourceId ?? session.sourceId,
+      const source = await resolveDesktopProxySource(
+        deps,
+        session,
+        sourceId,
         sql,
         "write",
       );

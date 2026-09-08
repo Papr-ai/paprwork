@@ -13,6 +13,7 @@ import {
   isTursoReplicaSyncFeatureEnabled,
   shouldUseTursoReplicaForDb,
 } from "../../utils/tursoReplicaEnabled.js";
+import { clearBootstrapPendingMarker } from "./tursoReplicaBootstrapMarker.js";
 
 const REPLICA_SIDEcar_SUFFIXES = [
   "-changes",
@@ -85,11 +86,13 @@ export function safeCleanupSqliteSidecars(dbPath: string): void {
 
   if (walSize > 0) {
     let db: Database.Database | null = null;
+    let checkpointOk = false;
     try {
       db = new Database(dbPath);
       db.pragma("wal_checkpoint(TRUNCATE)");
+      checkpointOk = true;
     } catch {
-      return;
+      checkpointOk = false;
     } finally {
       try {
         db?.close();
@@ -100,6 +103,10 @@ export function safeCleanupSqliteSidecars(dbPath: string): void {
 
     try {
       if (fs.statSync(walPath).size > 0) {
+        // Never unlink a non-empty WAL — the sync engine may still reference it.
+        if (!checkpointOk) {
+          return;
+        }
         return;
       }
     } catch {
@@ -128,9 +135,10 @@ export function removeTursoReplicaSidecarsOnly(dbPath: string): void {
   }
 }
 
-/** Remove a Turso Sync replica file set (local db + sync sidecars). */
+/** Remove a Turso Sync replica file set (local db + sync sidecars + bootstrap marker). */
 export function removeTursoReplicaLocalFiles(dbPath: string): void {
   safeCleanupSqliteSidecars(dbPath);
+  clearBootstrapPendingMarker(dbPath);
   try {
     fs.unlinkSync(dbPath);
   } catch {

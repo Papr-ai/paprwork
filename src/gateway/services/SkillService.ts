@@ -3,6 +3,24 @@ import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
+import {
+  fetchGtmCatalogSkillsLive,
+  fetchGtmSkillsComOpenClawContent,
+  fetchGtmSkillsComPromptContent,
+  fetchGtmskillsComSkillContent,
+} from "./gtmSkillsCatalog.js";
+import {
+  fetchSkillsShLegacyCatalog,
+  fetchSkillsShSkillContent,
+  fetchSkillsShV1Catalog,
+  SKILLS_SH_LEGACY_SEED_QUERIES,
+} from "./skillsShCatalog.js";
+
+export type CatalogSkillSource =
+  | "clawhub"
+  | "skills.sh"
+  | "gtmskills.com"
+  | "gtm-skills.com";
 
 export interface SkillRecord {
   id: string;
@@ -13,7 +31,7 @@ export interface SkillRecord {
   assignedAgentIds: string[];
   createdAt: string;
   updatedAt: string;
-  source?: "local" | "preloaded" | "clawhub" | "skills.sh";
+  source?: "local" | "preloaded" | CatalogSkillSource;
   externalId?: string;
 }
 
@@ -22,7 +40,7 @@ export interface CatalogSkill {
   name: string;
   description: string;
   content: string;
-  source: "clawhub" | "skills.sh";
+  source: CatalogSkillSource;
   url?: string;
   category?: string;
   tags?: string[];
@@ -38,7 +56,7 @@ interface CreateSkillInput {
 }
 
 interface InstallCatalogSkillInput {
-  source: "clawhub" | "skills.sh";
+  source: CatalogSkillSource;
   catalogId: string;
 }
 
@@ -231,7 +249,7 @@ export class SkillService {
   }
 
   private parseCatalogResponse(
-    source: "clawhub" | "skills.sh",
+    source: CatalogSkillSource,
     payload: unknown,
   ): CatalogSkill[] {
     const list: unknown[] = Array.isArray(payload)
@@ -273,7 +291,7 @@ export class SkillService {
   }
 
   private async fetchCatalog(
-    source: "clawhub" | "skills.sh",
+    source: CatalogSkillSource,
     url: string,
   ): Promise<CatalogSkill[]> {
     try {
@@ -289,24 +307,55 @@ export class SkillService {
   }
 
   async listCatalogSkills(): Promise<CatalogSkill[]> {
-    // Try live APIs first
     const clawhubUrl = process.env.CLAWHUB_SKILLS_CATALOG_URL;
     const skillsShUrl = process.env.SKILLS_SH_CATALOG_URL;
+    const skillsShToken = process.env.VERCEL_OIDC_TOKEN;
 
-    const [clawhub, skillsSh] = await Promise.all([
+    const [
+      clawhub,
+      skillsShConfigured,
+      skillsShLive,
+      skillsShLegacy,
+      gtmLive,
+    ] = await Promise.all([
       clawhubUrl
         ? this.fetchCatalog("clawhub", clawhubUrl)
         : Promise.resolve([]),
       skillsShUrl
         ? this.fetchCatalog("skills.sh", skillsShUrl)
         : Promise.resolve([]),
+      skillsShToken
+        ? fetchSkillsShV1Catalog(skillsShToken)
+        : Promise.resolve([]),
+      !skillsShUrl && !skillsShToken
+        ? fetchSkillsShLegacyCatalog([...SKILLS_SH_LEGACY_SEED_QUERIES])
+        : Promise.resolve([]),
+      fetchGtmCatalogSkillsLive(),
     ]);
 
-    let merged = [...clawhub, ...skillsSh];
+    let merged = [
+      ...clawhub,
+      ...skillsShConfigured,
+      ...skillsShLive,
+      ...skillsShLegacy,
+      ...gtmLive,
+    ];
 
-    // Fall back to cached catalog if live APIs returned nothing
+    const cached = await this.loadCachedCatalog();
     if (merged.length === 0) {
-      merged = await this.loadCachedCatalog();
+      merged = cached;
+    } else {
+      const liveKeys = new Set(
+        merged.map((skill) => `${skill.source}:${skill.id}`),
+      );
+      for (const skill of cached) {
+        const key = `${skill.source}:${skill.id}`;
+        if (liveKeys.has(key)) {
+          continue;
+        }
+        merged.push(skill);
+        liveKeys.add(key);
+      }
     }
 
     const seen = new Set<string>();
@@ -348,7 +397,11 @@ export class SkillService {
           const source =
             row.source === "clawhub"
               ? ("clawhub" as const)
-              : ("skills.sh" as const);
+              : row.source === "gtmskills.com"
+                ? ("gtmskills.com" as const)
+                : row.source === "gtm-skills.com"
+                  ? ("gtm-skills.com" as const)
+                  : ("skills.sh" as const);
           const category =
             typeof row.category === "string" ? row.category : undefined;
           const tags = Array.isArray(row.tags)
@@ -465,9 +518,15 @@ export class SkillService {
     input: InstallCatalogSkillInput,
   ): Promise<SkillRecord> {
     const catalog = await this.listCatalogSkills();
-    const match = catalog.find(
+    let match = catalog.find(
       (skill) => skill.source === input.source && skill.id === input.catalogId,
     );
+    if (!match) {
+      const cached = await this.loadCachedCatalog();
+      match = cached.find(
+        (skill) => skill.source === input.source && skill.id === input.catalogId,
+      );
+    }
     if (!match) {
       throw new Error(
         `Catalog skill not found: ${input.source}/${input.catalogId}`,
@@ -481,10 +540,35 @@ export class SkillService {
       return existing;
     }
 
+    let content = match.content;
+    if (!content.trim()) {
+      if (match.source === "skills.sh") {
+        const token = process.env.VERCEL_OIDC_TOKEN;
+        if (token) {
+          const fetched = await fetchSkillsShSkillContent(token, match.id);
+          if (fetched) {
+            content = fetched;
+          }
+        }
+      } else if (match.source === "gtmskills.com") {
+        const fetched = await fetchGtmskillsComSkillContent(match.id);
+        if (fetched) {
+          content = fetched;
+        }
+      } else if (match.source === "gtm-skills.com") {
+        const fetched = match.id.startsWith("prompt/")
+          ? await fetchGtmSkillsComPromptContent(match.id)
+          : await fetchGtmSkillsComOpenClawContent(match.id);
+        if (fetched) {
+          content = fetched;
+        }
+      }
+    }
+
     return this.createSkill({
       name: match.name,
       description: match.description,
-      content: match.content,
+      content,
       source: match.source,
       externalId: match.id,
     });

@@ -15,7 +15,7 @@ const createSkillSchema = z.object({
 export const readSkillTool = createTool({
   id: "read_skill",
   description:
-    "Read a skill's full content by ID/name, or list ALL installed skills. Call with NO arguments to discover all 26+ available skills (returns just name/description). Example: read_skill() returns directory, read_skill({ skillId: 'preloaded-social-media-auth' }) loads full content.",
+    "Read a skill's full content by ID/name, or list installed/enabled skills only. Call with NO arguments for the installed directory (~28 preloaded). For the 800+ marketplace catalog, grep $PAPR_HOME/skills-catalog.json (see system prompt) — do not read the whole file. Example: read_skill() returns installed list; read_skill({ skillId: 'preloaded-social-media-auth' }) loads full content.",
   inputSchema: readSkillSchema,
   execute: async (input) => {
     const args =

@@ -12,10 +12,12 @@ import { useTabs } from "./useTabs";
 import { trackEvent } from "../lib/telemetry";
 import {
   fetchCloudLineageIndex,
+  extractOptionalInstallDependencies,
   installCloudCatalogApp,
   userProvidedRequirements,
   type CloudInstallMode,
 } from "../utils/cloudCatalogInstall";
+import type { CloudAppDependenciesFile } from "../../src/core/types/cloudAppDependencies";
 import {
   resolveLocalAppIdForCatalogEntry,
   type CloudLineageIndex,
@@ -31,6 +33,11 @@ export function useCloudCatalogInstallFlow() {
     appId: string;
     appTitle: string;
     requirements: RequiredKeySpec[];
+  } | null>(null);
+  const [optionalDepsNotice, setOptionalDepsNotice] = useState<{
+    appId: string;
+    appTitle: string;
+    dependencies: CloudAppDependenciesFile;
   } | null>(null);
 
   const { artifacts, loadArtifacts } = useArtifacts();
@@ -108,10 +115,15 @@ export function useCloudCatalogInstallFlow() {
           app_id: entry.appId,
         } as Record<string, unknown>);
 
+        const optionalDeps = extractOptionalInstallDependencies(body);
+        const hasOptionalDeps = optionalDeps !== null;
+
         const needsFollowUp =
           Boolean(body.agentSetupMessage) ||
           body.bootstrap?.needsSeed === true ||
-          (body.bootstrap?.warnings?.length ?? 0) > 0;
+          (body.bootstrap?.warnings?.length ?? 0) > 0 ||
+          (body.installWarnings?.length ?? 0) > 0 ||
+          hasOptionalDeps;
 
         if (needsFollowUp && body.agentSetupMessage) {
           setInstallToast(
@@ -122,6 +134,15 @@ export function useCloudCatalogInstallFlow() {
             body.app?.id,
             title,
           );
+        } else if (hasOptionalDeps && body.app?.id && optionalDeps) {
+          setInstallToast(
+            `${modeLabel} "${title}" — core features ready. Optional apps listed separately.`,
+          );
+          setOptionalDepsNotice({
+            appId: body.app.id,
+            appTitle: title,
+            dependencies: optionalDeps,
+          });
         } else {
           setInstallToast(`${modeLabel} "${title}" into Paprwork`);
         }
@@ -190,6 +211,19 @@ export function useCloudCatalogInstallFlow() {
     switchToTab(tabId);
   }, [cloudInstallWizard, createTab, switchToTab]);
 
+  const continueFromOptionalDeps = useCallback(() => {
+    if (!optionalDepsNotice) return;
+    const { appId, appTitle } = optionalDepsNotice;
+    setOptionalDepsNotice(null);
+    const tabId = createTab("app", appId, appTitle);
+    switchToTab(tabId);
+  }, [optionalDepsNotice, createTab, switchToTab]);
+
+  const openCommunityAppsFromOptionalDeps = useCallback(() => {
+    setOptionalDepsNotice(null);
+    window.dispatchEvent(new CustomEvent("papr-open-community-apps"));
+  }, []);
+
   const openInstallHelp = useCallback(
     async (request: HelpRequest) => {
       const chatId = await createChat();
@@ -227,6 +261,10 @@ export function useCloudCatalogInstallFlow() {
     installToast,
     cloudInstallWizard,
     setCloudInstallWizard,
+    optionalDepsNotice,
+    setOptionalDepsNotice,
+    continueFromOptionalDeps,
+    openCommunityAppsFromOptionalDeps,
     installCloudApp,
     startCloudInstall,
     resolveLocalAppId,

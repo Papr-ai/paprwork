@@ -13,7 +13,8 @@ coverage
 ui/
 tests/
 test/
-scripts/
+scripts/*
+!scripts/build-mini-app-sdk-browser-bundles.mjs
 docs/
 .github/
 ui/dist

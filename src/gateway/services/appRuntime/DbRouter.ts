@@ -31,10 +31,10 @@ import {
   isReplicaSqlSchemaError,
 } from "../tursoReplica/tursoReplicaCheckpointRecovery.js";
 import {
-  healReplicaSchemaDrift,
   isReplicaMissingColumnError,
   isReplicaSchemaDriftError,
 } from "../tursoReplica/tursoReplicaSchemaDriftHeal.js";
+import { scheduleReplicaSchemaDriftHeal } from "../tursoReplica/tursoReplicaSchemaDriftScheduler.js";
 import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
 import {
   clearReplicaReadPathDegraded,
@@ -320,40 +320,23 @@ export class DbRouter {
 
       if (isReplicaSchemaDriftError(message)) {
         console.warn(
-          `[DbRouter] Schema drift on replica for ${source.alias ?? source.dbId} — healing`,
+          `[DbRouter] Schema drift on replica for ${source.alias ?? source.dbId} — scheduling background heal`,
         );
-        try {
-          await healReplicaSchemaDrift(source);
-          const retry = await withMiniAppReplicaReadTimeout(
-            queryLinkedDbViaTursoReplica(source, sql, params, {
-              pullBeforeRead: false,
-            }),
-            `replica read after schema heal (${source.alias ?? source.dbId ?? "db"})`,
-            REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS,
-          );
-          clearReplicaReadPathDegraded(source.dbPath);
-          console.log(
-            `[DbRouter] Turso replica query (healed) app=${appId} source=${source.alias} rows=${retry.count}`,
-          );
-          return { ...retry, backend: "turso-replica" };
-        } catch (healError) {
-          console.warn(
-            `[DbRouter] Schema heal + retry failed for ${source.alias ?? source.dbId}:`,
-            (healError as Error).message.slice(0, 200),
-          );
-          // Local replica can lag cloud after wedge reset — cloud still has full schema.
-          await getTursoReplicaService().close(source.dbPath);
-          if (isTursoReplicaOnline()) {
-            const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
-            if (remote) {
-              console.warn(
-                `[DbRouter] Served ${source.alias ?? source.dbId} from Turso primary ` +
-                  "while local replica migrations catch up",
-              );
-              return remote;
-            }
+        scheduleReplicaSchemaDriftHeal(source);
+        if (isTursoReplicaOnline()) {
+          const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
+          if (remote) {
+            console.warn(
+              `[DbRouter] Served ${source.alias ?? source.dbId} from Turso primary ` +
+                "while local schema migrates in background",
+            );
+            return remote;
           }
         }
+        throw new Error(
+          `Schema update pending for ${source.alias ?? source.dbId}. ` +
+            "Local replica is catching up — retry in a moment.",
+        );
       }
 
       if (isReplicaSqlSchemaError(message) && !isReplicaSchemaDriftError(message)) {

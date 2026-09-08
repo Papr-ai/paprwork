@@ -143,7 +143,7 @@ export async function repairCloudSync(options: {
 }): Promise<{
   strategy: RepairCloudSyncStrategy;
   dbId: string;
-  pull?: { pulled: boolean };
+  pull?: { pulled: boolean; reseeded?: boolean; bootstrapPending?: boolean };
   push?: {
     ok: boolean;
     error?: string;
@@ -165,12 +165,17 @@ export async function repairCloudSync(options: {
 
   switch (options.strategy) {
     case "pull": {
-      const pull = await paprDbPull({ dbId: options.dbId });
+      const { pullReplicaHonest } = await import("./tursoReplicaRepairHelpers.js");
+      const result = await pullReplicaHonest(source, { allowReseed: true });
       const syncStatus = await paprDbSyncStatus({ dbId: options.dbId });
       return {
         strategy: options.strategy,
         dbId: options.dbId,
-        pull: { pulled: pull.pulled },
+        pull: {
+          pulled: result.pulled,
+          reseeded: result.reseeded,
+          bootstrapPending: result.bootstrapPending,
+        },
         syncStatus,
       };
     }
@@ -184,7 +189,16 @@ export async function repairCloudSync(options: {
         await replica.close(source.dbPath);
       } else {
         await replica.close(source.dbPath);
-        await paprDbPull({ dbId: options.dbId });
+        const { pullReplicaHonest } = await import("./tursoReplicaRepairHelpers.js");
+        await pullReplicaHonest(source, { allowReseed: true });
+      }
+      const bootstrapPending = (
+        await import("./tursoReplicaBootstrapMarker.js")
+      ).hasBootstrapPendingMarker(source.dbPath);
+      if (bootstrapPending) {
+        throw new Error(
+          `accept_cloud finished but bootstrap marker remains for ${options.dbId}`,
+        );
       }
       await registry.updateReplicaPushState(options.dbId, {
         lastReplicaPushError: null,
@@ -196,7 +210,7 @@ export async function repairCloudSync(options: {
       return {
         strategy: options.strategy,
         dbId: options.dbId,
-        pull: { pulled: true },
+        pull: { pulled: true, bootstrapPending: false },
         syncStatus,
       };
     }
@@ -452,11 +466,22 @@ export async function repairCloudSync(options: {
 
 export async function paprDbPull(
   ref: PaprDbSourceRef,
-): Promise<{ pulled: boolean; dbId: string }> {
+): Promise<{
+  pulled: boolean;
+  dbId: string;
+  reseeded?: boolean;
+  bootstrapPending?: boolean;
+}> {
   await initializeDatabaseRegistry();
   const source = resolveSource(ref);
-  const pulled = await pullLinkedDbViaTursoReplica(source);
-  return { pulled, dbId: source.dbId ?? source.id };
+  const { pullReplicaHonest } = await import("./tursoReplicaRepairHelpers.js");
+  const result = await pullReplicaHonest(source, { allowReseed: true });
+  return {
+    pulled: result.pulled,
+    dbId: source.dbId ?? source.id,
+    reseeded: result.reseeded,
+    bootstrapPending: result.bootstrapPending,
+  };
 }
 
 export async function paprDbExec(options: {

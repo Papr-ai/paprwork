@@ -2,6 +2,7 @@
  * Mini-app embedded sub-agent chat (floating bubble).
  *
  * Desktop (Paprwork iframe): uses window.paprAPI.invoke('chat.open', { subAgentId, appId, message })
+ *   → opens a full Pen chat tab (merged with the app when its tab is open), not an overlay modal.
  * Published web: live SSE chat via /api/app-agent/*
  *
  * Usage (auto-injected by enable_app_agent_chat):
@@ -661,7 +662,10 @@ function openDesktopChat(
     mode: "app-agent",
     appId,
     subAgentId: config.subAgentId,
-    message: message ?? config.welcomeMessage ?? "",
+    ...(message?.trim() ? { message: message.trim() } : {}),
+    ...(config.welcomeMessage?.trim()
+      ? { welcomeMessage: config.welcomeMessage.trim() }
+      : {}),
   });
 }
 

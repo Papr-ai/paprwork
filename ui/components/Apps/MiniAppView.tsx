@@ -14,6 +14,7 @@ import { MiniAppFilesView } from "./MiniAppFilesView";
 import { MiniAppJobsView } from "./MiniAppJobsView";
 import type { AppWorkspaceMode, AppWorkspacePanel } from "../../hooks/useAppWorkspace";
 import { useAppLinkedJobCount } from "../../stores/jobsStore";
+import { useTabs } from "../../hooks/useTabs";
 import {
   clearCloudPreviewCookies,
   buildUpstreamPublishedWebUrl,
@@ -23,12 +24,19 @@ import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
 import { confirmRefreshIfNewRevision } from "../../utils/publishedAppRevisionCheck";
+import {
+  canLoadLocalAppPreview,
+  isWaitingForLocalPreviewGateway,
+} from "../../utils/localPreviewGatewayGate";
+import { warmIframeActivationDelayMs } from "../../utils/appPreviewWarmActivation";
 import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
   appId: string;
   /** False when preview tab is backgrounded but still LRU-mounted. */
   previewTabVisible?: boolean;
+  /** True when this preview is in the LRU warm set — load iframe even while hidden. */
+  previewKeepAliveWarm?: boolean;
   /** Hide publish bar — used when embedding the home dashboard in Home → Today. */
   embedded?: boolean;
 }
@@ -36,6 +44,7 @@ interface MiniAppViewProps {
 export function MiniAppView({
   appId,
   previewTabVisible = true,
+  previewKeepAliveWarm = false,
   embedded = false,
 }: MiniAppViewProps) {
   const { reloadKey, triggerReload } = useApp(appId);
@@ -46,8 +55,11 @@ export function MiniAppView({
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
   const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
   const linkedJobCount = useAppLinkedJobCount(appId);
-  /** Hidden LRU previews stay mounted but must not load iframes until selected. */
-  const [iframeActivated, setIframeActivated] = useState(previewTabVisible);
+  /** LRU warm tabs load iframes in the background; visible tab loads immediately. */
+  const [iframeActivated, setIframeActivated] = useState(
+    () => previewTabVisible || !previewKeepAliveWarm,
+  );
+  const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
   const [publishedIframeBaseUrl, setPublishedIframeBaseUrl] = useState<string | null>(
     null,
@@ -59,9 +71,16 @@ export function MiniAppView({
   const [appMissingInWorkspace, setAppMissingInWorkspace] = useState(false);
   const iframeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cloud = useCloudPublish(appId, appTitle);
-  const { isReady: gatewaySupervisorReady, isStarting: gatewaySupervisorStarting, status: gatewaySupervisorStatus } =
+  const { createTab, switchToTab } = useTabs();
+  const { isReady: gatewaySupervisorReady, isStarting: gatewaySupervisorStarting } =
     useGatewaySupervisorStatus();
-  const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
+  const [gatewayConnected, setGatewayConnected] = useState(() =>
+    gateway.isConnected(),
+  );
+
+  useEffect(() => {
+    return gateway.onConnectionChange(setGatewayConnected);
+  }, []);
 
   useEffect(() => {
     setWorkspacePanel("code");
@@ -168,11 +187,24 @@ export function MiniAppView({
   usePreviewTabLifecycle(iframeRef, previewTabVisible);
 
   useEffect(() => {
+    setPreviewShellLoaded(false);
+  }, [appId, reloadKey, iframeLoadKey, viewMode, isPublishedPreview]);
+
+  useEffect(() => {
     if (previewTabVisible) {
       setIframeActivated(true);
       setRuntimeError(null);
+      return;
     }
-  }, [previewTabVisible]);
+    if (!previewKeepAliveWarm) {
+      return;
+    }
+    const delayMs = warmIframeActivationDelayMs(appId);
+    const timer = setTimeout(() => {
+      setIframeActivated(true);
+    }, delayMs);
+    return () => clearTimeout(timer);
+  }, [previewTabVisible, previewKeepAliveWarm, appId]);
 
   const scheduleIframeRetry = useCallback((reason: string) => {
     setIframeLoadError(reason);
@@ -192,17 +224,27 @@ export function MiniAppView({
     };
   }, []);
 
-  useEffect(() => {
-    const wasReady = prevGatewaySupervisorReadyRef.current;
-    prevGatewaySupervisorReadyRef.current = gatewaySupervisorReady;
-    if (gatewaySupervisorReady && !wasReady && !isPublishedPreview) {
-      setIframeLoadError(null);
-      setIframeLoadKey((key) => key + 1);
-    }
-  }, [gatewaySupervisorReady, isPublishedPreview]);
+  const localPreviewGatewayGate = useMemo(
+    () => ({
+      isPublishedPreview,
+      iframeActivated,
+      gatewaySupervisorReady,
+      gatewaySupervisorStarting,
+      gatewayConnected,
+    }),
+    [
+      isPublishedPreview,
+      iframeActivated,
+      gatewaySupervisorReady,
+      gatewaySupervisorStarting,
+      gatewayConnected,
+    ],
+  );
 
-  const shouldLoadLocalIframe =
-    !isPublishedPreview && iframeActivated;
+  const shouldLoadLocalIframe = canLoadLocalAppPreview(localPreviewGatewayGate);
+  const waitingForGateway = isWaitingForLocalPreviewGateway(
+    localPreviewGatewayGate,
+  );
 
   useEffect(() => {
     if (!iframeActivated) {
@@ -465,6 +507,15 @@ export function MiniAppView({
             });
           }
         };
+        window.paprFeatures = {
+          getAvailability: function() {
+            return fetch('/api/apps/' + encodeURIComponent(window.__PAPR_APP_ID__) + '/feature-availability')
+              .then(function(res) {
+                if (!res.ok) throw new Error('Feature availability request failed');
+                return res.json();
+              });
+          }
+        };
       `;
 
       const head = iframeDocument.head;
@@ -629,6 +680,11 @@ export function MiniAppView({
           onTrackPullComplete={() => void refreshAppMetadata()}
           onRefreshPreview={handleRefreshPreview}
           previewTabVisible={previewTabVisible}
+          previewShellLoaded={previewShellLoaded}
+          onOpenDependencyApp={(dependencyAppId, title) => {
+            const tabId = createTab("app", dependencyAppId, title ?? "App");
+            switchToTab(tabId);
+          }}
         />
       ) : null}
       {!embedded && workspaceMode === "files" ? (
@@ -639,7 +695,7 @@ export function MiniAppView({
         )
       ) : (
         <div className="mini-app-view__frame-wrap">
-          {gatewaySupervisorStarting && !isPublishedPreview ? (
+          {waitingForGateway ? (
             <div className="mini-app-view__overlay">
               <p>Gateway is starting — app preview will load when ready…</p>
             </div>
@@ -668,6 +724,7 @@ export function MiniAppView({
                 }
                 setIframeLoadError(null);
                 setRuntimeError(null);
+                setPreviewShellLoaded(true);
               }}
               onError={() => {
                 if (!isPublishedPreview) {
@@ -682,7 +739,7 @@ export function MiniAppView({
               <p>Connecting to apps.papr.ai…</p>
             </div>
           ) : null}
-          {runtimeError && !gatewaySupervisorStarting ? (
+          {runtimeError && !waitingForGateway ? (
             <div className="mini-app-view__overlay mini-app-view__overlay--hint">
               <p className="mini-app-view__runtime-error-title">App failed to load</p>
               <pre className="mini-app-view__runtime-error">{runtimeError}</pre>
@@ -695,7 +752,7 @@ export function MiniAppView({
               ) : null}
             </div>
           ) : null}
-          {iframeLoadError && !gatewaySupervisorStarting && !runtimeError ? (
+          {iframeLoadError && !waitingForGateway && !runtimeError ? (
             <div className="mini-app-view__overlay mini-app-view__overlay--hint">
               <p>{iframeLoadError}</p>
             </div>

@@ -4,6 +4,7 @@
 
 import type { CommunityCatalogEntry } from "../../src/core/types/communityCatalog";
 import type { RequiredKeySpec } from "../../src/core/types/bundles";
+import type { CloudAppDependenciesFile } from "../../src/core/types/cloudAppDependencies";
 import { normalizeRequirements } from "../../src/core/types/bundles";
 import type { RequirementItem } from "../../src/core/types/bundles";
 
@@ -23,6 +24,29 @@ export interface CloudInstallResponse {
     warnings?: string[];
   };
   agentSetupMessage?: string;
+  dependencies?: {
+    apps: Array<{
+      appId: string;
+      title?: string;
+      slug?: string;
+      required: boolean;
+      enables?: string[];
+    }>;
+    databases: Array<{
+      dbId: string;
+      alias?: string;
+      ownerAppId: string;
+      ownerTitle?: string;
+      required: boolean;
+      enables?: string[];
+    }>;
+  };
+  installWarnings?: string[];
+  health?: {
+    ok?: boolean;
+    missingJobIds?: string[];
+    missingRequiredDbIds?: string[];
+  };
   error?: string;
 }
 
@@ -59,6 +83,38 @@ export async function installCloudCatalogApp(
   }
 
   return { ok: true, data: body };
+}
+
+export function extractOptionalInstallDependencies(
+  body: CloudInstallResponse,
+): CloudAppDependenciesFile | null {
+  if (!body.dependencies) {
+    return null;
+  }
+  const apps = body.dependencies.apps.filter((dep) => !dep.required);
+  const databases = body.dependencies.databases.filter((dep) => !dep.required);
+  if (apps.length === 0 && databases.length === 0) {
+    return null;
+  }
+  return {
+    schemaVersion: "1.0.0",
+    updatedAt: new Date().toISOString(),
+    apps,
+    databases,
+  };
+}
+
+export async function fetchAppFeatureAvailability(appId: string): Promise<
+  import("../../src/core/types/cloudAppDependencies").AppFeatureAvailabilityReport
+> {
+  const res = await fetch(
+    `${GATEWAY}/api/apps/${encodeURIComponent(appId)}/feature-availability`,
+  );
+  if (!res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? `Feature availability failed (${res.status})`);
+  }
+  return (await res.json()) as import("../../src/core/types/cloudAppDependencies").AppFeatureAvailabilityReport;
 }
 
 export async function fetchCloudLineageIndex(): Promise<

@@ -176,7 +176,8 @@ main.turn-in { animation: briefIn .24s ease; }
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
 }
 
-.sample-data-banner {
+.sample-data-banner,
+.stale-brief-banner {
   background: var(--banner-bg);
   border: 1px solid var(--banner-border);
   border-radius: 12px;
@@ -184,6 +185,35 @@ main.turn-in { animation: briefIn .24s ease; }
   margin-bottom: 24px;
   backdrop-filter: blur(20px);
   animation: bannerSlideIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.stale-brief-banner {
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.08) 0%, rgba(59, 130, 246, 0.06) 100%);
+  border-color: rgba(245, 158, 11, 0.22);
+}
+
+.stale-brief-content {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.stale-brief-text {
+  flex: 1;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.stale-brief-text strong {
+  display: block;
+  color: var(--text);
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+
+.stale-brief-text span {
+  color: var(--muted);
+  font-size: 12px;
 }
 
 @keyframes bannerSlideIn {

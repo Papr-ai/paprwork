@@ -31,6 +31,7 @@ import {
   syncStatusForLinkedDb,
 } from "./tursoReplica/tursoReplicaRouting.js";
 import { detectReplicaSidecarWedge } from "./tursoReplica/tursoReplicaSidecarWedge.js";
+import { readBootstrapPendingMarker } from "./tursoReplica/tursoReplicaBootstrapMarker.js";
 import { computeReplicaPendingPush } from "./tursoReplica/replicaPendingPush.js";
 import { MIGRATION_CONFLICT_CODE } from "./tursoReplica/tursoReplicaMigrationConflict.js";
 import { isTursoReplicaOnline } from "../utils/tursoReplicaEnabled.js";
@@ -165,6 +166,7 @@ export function buildReplicaTursoSyncStatusFromRegistry(
     lastReplicaPushAt: record?.lastReplicaPushAt,
     lastReplicaLocalMutationAt: record?.lastReplicaLocalMutationAt,
   });
+  const bootstrapMarker = readBootstrapPendingMarker(localPath);
   return {
     online: isTursoReplicaOnline(),
     syncMode: "replica",
@@ -175,6 +177,9 @@ export function buildReplicaTursoSyncStatusFromRegistry(
     cutoverBlocked: record?.cutoverBlocked ?? false,
     cutoverBlockReason: record?.cutoverBlockReason ?? null,
     sidecarWedge: detectReplicaSidecarWedge(localPath),
+    bootstrapPending: bootstrapMarker !== null,
+    bootstrapAttempts: bootstrapMarker?.attempts ?? 0,
+    lastBootstrapError: bootstrapMarker?.lastError ?? null,
     stats: null,
   };
 }

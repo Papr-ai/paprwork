@@ -37,6 +37,14 @@ interface GitSyncStatus {
 const STATUS_CACHE_MS = 1_500;
 let gitStatusInFlight: Promise<GitSyncStatus> | null = null;
 let cachedGitStatus: { value: GitSyncStatus; at: number } | null = null;
+/** Once cloud sync reports ready/disabled for the session, skip long startup polls. */
+let sessionGitSyncReady: GitSyncStatus | null = null;
+
+export function resetGitSyncSessionCacheForTests(): void {
+  sessionGitSyncReady = null;
+  cachedGitStatus = null;
+  gitStatusInFlight = null;
+}
 
 async function requestAppUpload(appId: string): Promise<void> {
   const res = await fetch(`${GATEWAY}/api/sync/push`, {
@@ -149,15 +157,27 @@ async function fetchGitSyncStatus(): Promise<GitSyncStatus> {
 
 /** Gateway returns enabled:false while CloudSyncService is still starting. */
 async function waitForGitSyncReady(): Promise<GitSyncStatus> {
+  if (sessionGitSyncReady !== null) {
+    if (
+      sessionGitSyncReady.enabled ||
+      (sessionGitSyncReady.reason &&
+        sessionGitSyncReady.reason !== "Cloud sync not initialized")
+    ) {
+      return sessionGitSyncReady;
+    }
+  }
+
   const deadline = Date.now() + GATEWAY_READY_MAX_MS;
   let last: GitSyncStatus = { enabled: false };
 
   while (Date.now() < deadline) {
     last = await fetchGitSyncStatus();
     if (last.enabled) {
+      sessionGitSyncReady = last;
       return last;
     }
     if (last.reason && last.reason !== "Cloud sync not initialized") {
+      sessionGitSyncReady = last;
       return last;
     }
     await sleep(GATEWAY_READY_POLL_MS);
@@ -168,7 +188,12 @@ async function waitForGitSyncReady(): Promise<GitSyncStatus> {
 
 export function useAppCloudSyncStatus(
   appId: string,
-  options?: { enabled?: boolean; previewTabVisible?: boolean },
+  options?: {
+    enabled?: boolean;
+    previewTabVisible?: boolean;
+    /** When false, defer sync polling until the app iframe shell has loaded. */
+    previewShellLoaded?: boolean;
+  },
 ): {
   status: AppCloudSyncStatus | null;
   gitSyncEnabled: boolean | null;
@@ -187,6 +212,7 @@ export function useAppCloudSyncStatus(
 } {
   const active = options?.enabled !== false;
   const previewTabVisible = options?.previewTabVisible !== false;
+  const previewShellLoaded = options?.previewShellLoaded ?? true;
   const anyChatBusy = useChatStore((state) => {
     for (const chatState of state.chatStates.values()) {
       if (chatState.isSending || chatState.isStreaming) {
@@ -259,7 +285,12 @@ export function useAppCloudSyncStatus(
   ]);
 
   const fetchRemoteCodeStatus = useCallback(async () => {
-    if (!active || !previewTabVisible || gitSyncEnabled === false) {
+    if (
+      !active ||
+      !previewTabVisible ||
+      !previewShellLoaded ||
+      gitSyncEnabled === false
+    ) {
       setLiveSyncPending(false);
       return;
     }
@@ -283,7 +314,7 @@ export function useAppCloudSyncStatus(
     } catch {
       // Non-blocking metadata check
     }
-  }, [active, appId, previewTabVisible, gitSyncEnabled]);
+  }, [active, appId, previewTabVisible, previewShellLoaded, gitSyncEnabled]);
 
   const refresh = useCallback(
     async (force = false) => {
@@ -444,6 +475,9 @@ export function useAppCloudSyncStatus(
       setLoading(false);
       return;
     }
+    if (!previewShellLoaded) {
+      return;
+    }
 
     setPushing(false);
     setPulling(false);
@@ -458,10 +492,10 @@ export function useAppCloudSyncStatus(
     setLoading(cached === null);
 
     void refresh(false);
-  }, [active, appId, previewTabVisible, refresh]);
+  }, [active, appId, previewTabVisible, previewShellLoaded, refresh]);
 
   useEffect(() => {
-    if (!active || !previewTabVisible || anyChatBusy) return;
+    if (!active || !previewTabVisible || !previewShellLoaded || anyChatBusy) return;
     const intervalMs =
       pushing ||
       pulling ||
@@ -479,6 +513,7 @@ export function useAppCloudSyncStatus(
   }, [
     active,
     previewTabVisible,
+    previewShellLoaded,
     anyChatBusy,
     refresh,
     pushing,
@@ -499,14 +534,14 @@ export function useAppCloudSyncStatus(
   }, [pushing, fetchRemoteCodeStatus]);
 
   useEffect(() => {
-    if (!active || !previewTabVisible || anyChatBusy) {
+    if (!active || !previewTabVisible || !previewShellLoaded || anyChatBusy) {
       return;
     }
     const timer = setInterval(() => {
       void fetchRemoteCodeStatus();
     }, 60_000);
     return () => clearInterval(timer);
-  }, [active, previewTabVisible, anyChatBusy, fetchRemoteCodeStatus]);
+  }, [active, previewTabVisible, previewShellLoaded, anyChatBusy, fetchRemoteCodeStatus]);
 
   return {
     status,

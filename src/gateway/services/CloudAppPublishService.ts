@@ -7,6 +7,10 @@ import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import {
+  formatCloudPublishFailureMessage,
+  reportPaprQuotaError,
+} from "../../core/utils/paprQuota.js";
+import {
   canPerformWorkspaceWrite,
   getWorkspaceWriteGeneration,
   WorkspaceWriteBlockedError,
@@ -491,6 +495,16 @@ export class CloudAppPublishService {
       await applyPerUserIsolationForApp(appId, perUserIsolation, this.paprDir);
     }
 
+    if (perUserIsolation === true) {
+      const { validatePerUserIsolationForPublish } = await import(
+        "./cloudAppPerUserIsolation.js"
+      );
+      const validation = await validatePerUserIsolationForPublish(appId, this.paprDir);
+      if (!validation.ok) {
+        throw new Error(validation.error);
+      }
+    }
+
     const data = await this.postPublishToMemory(appId, memory.slug ?? expectedSlug, {
       intent: "sharing",
       skipPlatformScan: true,
@@ -631,8 +645,12 @@ export class CloudAppPublishService {
 
       if (!response.ok) {
         const lastBody = await response.text();
+        reportPaprQuotaError(
+          new Error(`Cloud publish failed (${response.status}): ${lastBody}`),
+          "cloud-publish",
+        );
         throw new Error(
-          `Cloud publish failed (${response.status}): ${lastBody.slice(0, 200)}`,
+          formatCloudPublishFailureMessage(lastBody, response.status),
         );
       }
 
@@ -818,6 +836,49 @@ export class CloudAppPublishService {
       );
       await applyPerUserIsolationForApp(appId, perUserIsolation, this.paprDir);
     }
+
+    if (perUserIsolation === true) {
+      const { validatePerUserIsolationForPublish } = await import(
+        "./cloudAppPerUserIsolation.js"
+      );
+      const validation = await validatePerUserIsolationForPublish(appId, this.paprDir);
+      if (!validation.ok) {
+        throw new Error(validation.error);
+      }
+    }
+
+    const {
+      reconcileAppDataSourcesForPublish,
+      validatePublishBundleIntegrity,
+      detectCrossAppDependencies,
+      writeCloudAppDependenciesFile,
+    } = await import("./cloudAppResourceIntegrity.js");
+    const reconcileReport = await reconcileAppDataSourcesForPublish(
+      this.paprDir,
+      appId,
+    );
+    if (reconcileReport.changed) {
+      console.log(
+        `[CloudPublish] Reconciled data-sources for ${appId} before publish`,
+      );
+    }
+    const integrity = await validatePublishBundleIntegrity(this.paprDir, appId);
+    if (!integrity.ok) {
+      throw new Error(
+        `Publish blocked — bundle integrity check failed: ${integrity.errors.slice(0, 3).join("; ")}`,
+      );
+    }
+    if (integrity.warnings.length > 0) {
+      console.warn(
+        `[CloudPublish] Bundle warnings for ${appId}:`,
+        integrity.warnings.slice(0, 3).join(" | "),
+      );
+    }
+    await writeCloudAppDependenciesFile(
+      this.paprDir,
+      appId,
+      await detectCrossAppDependencies(this.paprDir, appId),
+    );
 
     if (
       options?.preserveCloudSharing &&

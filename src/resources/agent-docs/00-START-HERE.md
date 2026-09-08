@@ -109,7 +109,17 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 
 ## Skills (loaded on demand)
 
-Use `read_skill` to load full skill content when needed. Key skills include:
+**Installed skills** — `read_skill()` lists what's on this machine; `read_skill({ skillId })` loads full content.
+
+**Marketplace catalog (800+)** — Cached at `$PAPR_HOME/skills-catalog.json` (skills.sh, ClawHub, gtmskills.com, gtm-skills.com). **Never read the whole file.** Search with:
+
+```javascript
+bash({ command: 'grep -i "keyword" "$PAPR_HOME/skills-catalog.json" | head -20' })
+```
+
+Ask the user to install matches from the **Skills** tab, or see `AGENT_SETUP_WORKFLOW.md` for onboarding install patterns.
+
+Key preloaded skills:
 - **Liquid Glass Design System** — Design language for mini-apps
 - **Document System** — Creating and managing Papr documents
 - **PPTX / DOCX / XLSX** — Office document creation
@@ -117,4 +127,4 @@ Use `read_skill` to load full skill content when needed. Key skills include:
 - **Social Media / Platform Connections** — `read_skill({ skillId: "preloaded-social-media-auth" })`
 - **Content Strategy / Copywriting / SEO** — Marketing skills
 
-See `search_agent_memory` with category "agent_skill" for contextual skill discovery.
+See `search_agent_memory` with category "agent_skill" for past skill usage in memory.

@@ -82,6 +82,7 @@ describe("SystemPrompt - Agent Docs & Skills Visibility", () => {
 
     expect(prompt).toContain("# Skills Directory");
     expect(prompt).toContain("read_skill()");
+    expect(prompt).toContain("skills-catalog.json");
     expect(prompt).toContain(
       'read_skill({ skillId: "preloaded-app-and-jobs-guide" })',
     );
@@ -110,6 +111,8 @@ describe("SystemPrompt - Agent Docs & Skills Visibility", () => {
     });
 
     expect(prompt).toContain("# Installed Skills Directory");
+    expect(prompt).toContain("Marketplace Skills Catalog");
+    expect(prompt).toContain("skills-catalog.json");
     expect(prompt).toContain(
       "**Paprwork Design System** (`preloaded-paprwork-design-system`)",
     );

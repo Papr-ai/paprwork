@@ -40,6 +40,7 @@ export function notifyPaprQuotaStatus(status: PaprQuotaStatus): void {
 
 const QUOTA_SIGNAL_PATTERNS = [
   /interaction limit/i,
+  /mini interactions/i,
   /limit reached/i,
   /quota exceeded/i,
   /memory limit/i,
@@ -77,6 +78,19 @@ function looksLikeTechnicalPayload(message: string): boolean {
   );
 }
 
+function extractJsonStringField(raw: string, field: string): string | undefined {
+  const pattern = new RegExp(
+    `"${field}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`,
+  );
+  const match = raw.match(pattern);
+  if (!match?.[1]) return undefined;
+  try {
+    return JSON.parse(`"${match[1]}"`) as string;
+  } catch {
+    return match[1];
+  }
+}
+
 function parseEmbeddedJsonMessage(message: string): string | undefined {
   const trimmed = message.trim();
   const jsonPart = trimmed.replace(/^\d{3}\s*/, "");
@@ -94,6 +108,9 @@ function parseEmbeddedJsonMessage(message: string): string | undefined {
         return detailRecord.error.trim();
       }
     }
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail.trim();
+    }
     if (typeof parsed.message === "string" && parsed.message.trim()) {
       return parsed.message.trim();
     }
@@ -101,6 +118,12 @@ function parseEmbeddedJsonMessage(message: string): string | undefined {
       return parsed.error.trim();
     }
   } catch {
+    const partialDetail = extractJsonStringField(jsonPart, "detail");
+    if (partialDetail?.trim()) return partialDetail.trim();
+    const partialMessage = extractJsonStringField(jsonPart, "message");
+    if (partialMessage?.trim()) return partialMessage.trim();
+    const partialError = extractJsonStringField(jsonPart, "error");
+    if (partialError?.trim()) return partialError.trim();
     return undefined;
   }
   return undefined;
@@ -279,4 +302,27 @@ export function reportPaprQuotaError(
   if (!status) return null;
   notifyPaprQuotaStatus(status);
   return status;
+}
+
+/** User-facing publish failure copy from a cloud API response body. */
+export function formatCloudPublishFailureMessage(
+  body: string,
+  status: number,
+): string {
+  const wrapped = new Error(`${status} ${body}`);
+  const quota = parsePaprQuotaError(wrapped, "cloud-publish");
+  if (quota) {
+    return formatPaprQuotaMessage(quota);
+  }
+
+  const embedded = parseEmbeddedJsonMessage(`${status} ${body}`);
+  if (embedded && !looksLikeTechnicalPayload(embedded)) {
+    return embedded;
+  }
+
+  const trimmed = body.trim();
+  if (trimmed) {
+    return `Cloud publish failed (${status}): ${trimmed.slice(0, 400)}`;
+  }
+  return `Cloud publish failed (${status})`;
 }

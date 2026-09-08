@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   PAPR_USAGE_URL,
   extractErrorMessage,
+  formatCloudPublishFailureMessage,
   formatPaprQuotaMessage,
   isPaprQuotaError,
   notifyPaprQuotaStatus,
@@ -97,6 +98,25 @@ describe("paprQuota", () => {
     const status = parsePaprQuotaError(error);
     expect(status?.detail).not.toMatch(/^\d{3}\s*\{/);
     expect(status?.detail).not.toContain('"code"');
+  });
+
+  it("detects truncated mini interactions JSON without dashboard URL", () => {
+    const error = new Error(
+      'Cloud publish failed (403): {"detail":"You\'ve reached the 1,000 mini interactions limit for your Developer plan. To continue, upgrade to Starter ($100/mo) or Gr',
+    );
+    expect(isPaprQuotaError(error)).toBe(true);
+    const status = parsePaprQuotaError(error, "cloud-publish");
+    expect(status?.kind).toBe("operations");
+    expect(status?.detail).toContain("mini interactions limit");
+  });
+
+  it("formats cloud publish failure from JSON detail field", () => {
+    const message = formatCloudPublishFailureMessage(
+      '{"detail":"You\'ve reached the 1,000 mini interactions limit for your Developer plan."}',
+      403,
+    );
+    expect(message).toContain("Operations limit reached");
+    expect(message).not.toContain('"detail"');
   });
 
   it("notifyPaprQuotaStatus forwards to listener", () => {

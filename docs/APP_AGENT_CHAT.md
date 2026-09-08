@@ -10,7 +10,7 @@ Published and desktop mini-apps often need **in-app AI chat**: users stay in the
 
 | Surface | Today | Target |
 |---------|-------|--------|
-| Desktop Paprwork | `chat.open` → main chat tab | Bound **sub-agent** panel with app context |
+| Desktop Paprwork | `chat.open` → **Pen chat tab** (split with app when open) | Bound **sub-agent** via `delegate_task` |
 | Published web | No `paprAPI`; jobs only | Floating **bubble + live chat** |
 | Builder agent | Manual wiring | `enable_app_agent_chat` tool |
 
@@ -29,8 +29,8 @@ flowchart TB
 
   subgraph desktop [Desktop Paprwork]
     SDK[papr-agent-chat.js] -->|paprAPI| CH[chat.open app-agent]
-    CH --> OV[AppAgentChatOverlay]
-    OV --> D[subagent:delegate appIds]
+    CH --> TAB[Pen chat tab + app split]
+    TAB --> D[delegate_task to sub-agent]
     D --> MC[MiniChatCard]
   end
 
@@ -67,8 +67,10 @@ enable_app_agent_chat({
 
 ### 2. Desktop UX
 
-- SDK bubble → `paprAPI.invoke('chat.open', { mode: 'app-agent', appId, subAgentId })`
-- Paprwork shows `AppAgentChatOverlay` with `MiniChatCard`
+- SDK bubble → `paprAPI.invoke('chat.open', { mode: 'app-agent', appId, subAgentId, message? })`
+- Paprwork opens a **full Pen chat tab** (merged with the app tab when it is already open)
+- Pen orchestrates in-app work via `delegate_task` to the configured sub-agent (MiniChatCard in chat)
+- User messages from the bubble auto-send; bubble-only open (no typed message) leaves the chat ready to compose
 
 ### 3. Web UX (Phase 2)
 

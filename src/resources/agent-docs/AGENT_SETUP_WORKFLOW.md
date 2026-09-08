@@ -59,19 +59,30 @@ register_schema({
 
 Use `read_skill()` (no arguments) to list all installed skills. Scan for skills relevant to the user's domain.
 
-**Step B: Browse the skills catalog**
+**Step B: Search the marketplace catalog**
 
-Read the cached skills catalog to find additional skills for the user:
+800+ skills from skills.sh, ClawHub, gtmskills.com, and gtm-skills.com are cached at `$PAPR_HOME/skills-catalog.json`. **Never read the whole file** (~340KB).
+
+Search by keyword with bash:
 
 ```javascript
-read_file({ path: "$PAPR_HOME/skills-catalog.json" })
+bash({ command: 'grep -iE "marketing|seo|copywriting" "$PAPR_HOME/skills-catalog.json" | head -20' })
 ```
 
-This file contains popular skills from skills.sh and ClawHub, organized by category. Search it for skills matching the user's industry and needs. Do NOT browse the web for skills — everything is in this catalog.
+Narrow by source:
+
+```javascript
+bash({ command: 'grep -i "gtm-skills.com" "$PAPR_HOME/skills-catalog.json" | grep -i "outbound" | head -15' })
+```
+
+Each hit is one JSON object with `id`, `name`, `description`, `category`, `source`. Do NOT browse the web for skills — search this catalog first.
 
 **Step C: Install discovered skills**
 
-For each useful skill found in the catalog, create it locally:
+Best: ask the user to install from the **Skills** tab (fetches full content automatically).
+
+For onboarding setup, create a local copy:
+
 ```javascript
 create_skill({
   name: "Discovered Skill Name",
@@ -199,8 +210,8 @@ Let me get started..."
 
 Then execute:
 ```javascript
-// 1. Read the skills catalog to find relevant skills
-read_file({ path: "$PAPR_HOME/skills-catalog.json" })
+// 1. Search catalog for relevant skills (never read the whole file)
+bash({ command: 'grep -iE "real estate|property|crm" "$PAPR_HOME/skills-catalog.json" | head -20' })
 
 // 2. Create schema
 register_schema({
@@ -246,7 +257,7 @@ create_document({
 ## Best Practices
 
 1. **Be thorough in the interview** — Don't skip questions. Understand their workflow deeply
-2. **Read the skills catalog** — Use `read_file("$PAPR_HOME/skills-catalog.json")` to find relevant skills. Never browse the web for skills
+2. **Search the skills catalog** — Grep `$PAPR_HOME/skills-catalog.json` by keyword (`head -20` to limit results). Never read the whole file or browse the web for skills
 3. **Match skills to their domain** — Install only what's relevant to what they told you
 4. **Community apps first** — Check community bundles at `https://github.com/Papr-ai/paprwork-community-apps` before building apps from scratch. Import pre-built apps when they fit the user's needs, create custom apps only for unmet needs
 5. **Always use create_document** — Never create DOCX files directly

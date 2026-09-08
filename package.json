@@ -1,6 +1,6 @@
 {
   "name": "paprwork",
-  "version": "2.6.2",
+  "version": "2.6.3",
   "description": "AI-powered desktop assistant - Rebuilt with TypeScript and Mastra",
   "main": "./src/electron/main.cjs",
   "type": "module",
@@ -83,6 +83,7 @@
     "test:hybrid-search": "node scripts/test-hybrid-search.mjs",
     "test:web-search": "node scripts/test-web-search.mjs",
     "test:default-app": "node scripts/test-default-app-install.mjs",
+    "update:skills-catalog": "node scripts/update-skills-catalog.mjs",
     "prune:turso": "node scripts/prune-turso-databases.mjs",
     "prune:turso:execute": "node scripts/prune-turso-databases.mjs --all-legacy --execute",
     "analyze:tool-calls": "node scripts/analyze-tool-call-redundancy.mjs",

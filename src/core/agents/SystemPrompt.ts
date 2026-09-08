@@ -1008,32 +1008,43 @@ ${skillsList}
 
 1. **Scan this directory** — All ${this.options.activeSkills.length} enabled skills are listed above
 2. **Load on demand** — \`read_skill({ skillId: "preloaded-social-media-auth" })\` loads full content
-3. **Refresh the list** — \`read_skill()\` (no args) returns updated directory
+3. **Refresh the list** — \`read_skill()\` (no args) returns updated installed directory only
 4. **Don't load all skills** — Only load what's relevant to the current task
 
-**To load a skill:** Use the exact skillId shown in parentheses above.`;
+**To load a skill:** Use the exact skillId shown in parentheses above.
+
+## Marketplace Skills Catalog (search — never load all)
+
+800+ additional skills from skills.sh, ClawHub, gtmskills.com, and gtm-skills.com are cached at \`$PAPR_HOME/skills-catalog.json\`. They are **not** in the installed list above.
+
+**Never \`read_file\` the entire catalog** (~340KB) — it will flood context. Search with bash instead:
+
+\`\`\`javascript
+bash({ command: 'grep -iE "outreach|gtm" "$PAPR_HOME/skills-catalog.json" | head -20' })
+\`\`\`
+
+Each line is one skill object with \`id\`, \`name\`, \`description\`, \`category\`, and \`source\`. Ask the user to install matches from the **Skills** tab, or use \`create_skill()\` during onboarding setup.`;
     } else {
       // Fallback when skills haven't loaded yet
       return `# Skills Directory
 
-**To discover all available skills, call:**
+**Installed skills (preloaded on this machine):**
 \`\`\`javascript
-read_skill()  // No arguments — returns full list of installed skills
+read_skill()  // No arguments — returns installed skills only (~28 preloaded)
 \`\`\`
 
-This will show you all 26+ preloaded skills including:
-- Social Media Authentication
-- API Key Testing Protocol
-- App & Jobs Workflow Guide
-- Content Strategy, Copywriting, SEO Audit
-- And many more...
+**Marketplace catalog (800+ more — search, don't load all):**
+\`\`\`javascript
+bash({ command: 'grep -i "keyword" "$PAPR_HOME/skills-catalog.json" | head -20' })
+\`\`\`
+Sources: skills.sh, ClawHub, gtmskills.com, gtm-skills.com. Never \`read_file\` the whole catalog.
 
-**To load a specific skill:**
+**To load a specific installed skill:**
 \`\`\`javascript
 read_skill({ skillId: "preloaded-social-media-auth" })
 \`\`\`
 
-**Always call \`read_skill()\` first** to see what's available before assuming you don't have access to something.`;
+**Always call \`read_skill()\` first** for installed skills; grep the catalog when you need domain-specific skills beyond what's installed.`;
     }
   }
 

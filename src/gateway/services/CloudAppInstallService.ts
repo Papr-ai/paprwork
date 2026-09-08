@@ -27,6 +27,10 @@ import {
   type MiniApp,
 } from "./AppService.js";
 import { cloneCloudAppSource } from "./cloudSync/cloudGitClone.js";
+import type {
+  CloudAppDependenciesFile,
+  CloudInstallHealthReport,
+} from "../../core/types/cloudAppDependencies.js";
 
 interface MemoryInstallResponse {
   mode: CloudAppInstallMode;
@@ -63,6 +67,11 @@ export interface CloudAppInstallResult {
   /** Pre-filled agent prompt when bootstrap needs follow-up. */
   agentSetupMessage?: string;
   copiedJobIds: string[];
+  promotedJobIds: string[];
+  skippedSparsePaths: string[];
+  dependencies: CloudAppDependenciesFile | null;
+  health: CloudInstallHealthReport;
+  installWarnings: string[];
 }
 
 async function collectAppFiles(
@@ -179,6 +188,8 @@ export class CloudAppInstallService {
     const prepare = await this.prepareInstall(input);
     const cloned = await cloneAppSource(prepare);
 
+    let createdAppId: string | null = null;
+
     try {
       const files = await collectAppFiles(cloned.sourceDir);
 
@@ -202,6 +213,7 @@ export class CloudAppInstallService {
         files,
         icon,
       );
+      createdAppId = app.id;
 
       const remaps = new Map<string, string>([[prepare.source.appId, app.id]]);
       const appDir = path.join(getPaprAppsRoot(), app.id);
@@ -227,6 +239,30 @@ export class CloudAppInstallService {
       }
 
       await finalizePortableCloudAppResources();
+
+      const installWarnings = [...linked.health.warnings];
+      if (linked.skippedSparsePaths.length > 0) {
+        installWarnings.push(
+          `Skipped ${linked.skippedSparsePaths.length} missing repo path(s) during sparse-checkout`,
+        );
+      }
+
+      if (!linked.health.ok) {
+        const missingParts: string[] = [];
+        if (linked.health.missingJobIds.length > 0) {
+          missingParts.push(
+            `jobs: ${linked.health.missingJobIds.slice(0, 5).join(", ")}`,
+          );
+        }
+        if (linked.health.missingRequiredDbIds.length > 0) {
+          missingParts.push(
+            `databases: ${linked.health.missingRequiredDbIds.slice(0, 5).join(", ")}`,
+          );
+        }
+        throw new Error(
+          `Install incomplete — required linked resources missing (${missingParts.join("; ")})`,
+        );
+      }
 
       const {
         bootstrapInstalledAppDatabases,
@@ -317,7 +353,30 @@ export class CloudAppInstallService {
         bootstrap,
         agentSetupMessage,
         copiedJobIds: linked.copiedJobIds,
+        promotedJobIds: linked.promotedJobIds,
+        skippedSparsePaths: linked.skippedSparsePaths,
+        dependencies: linked.dependencies,
+        health: linked.health,
+        installWarnings,
       };
+    } catch (error) {
+      if (createdAppId) {
+        try {
+          const appService = getAppService();
+          await appService.deleteApp(createdAppId, {
+            deleteLinkedJobs: true,
+          });
+          console.warn(
+            `[CloudAppInstall] Rolled back partial install for app ${createdAppId}`,
+          );
+        } catch (rollbackError) {
+          console.error(
+            `[CloudAppInstall] Rollback failed for app ${createdAppId}:`,
+            (rollbackError as Error).message,
+          );
+        }
+      }
+      throw error;
     } finally {
       await cloned.cleanup();
     }

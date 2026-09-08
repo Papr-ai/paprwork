@@ -565,7 +565,6 @@ async function startGateway(): Promise<void> {
       }
     });
 
-    // ── App data health (primary DB row counts, contract status, orphan files) ──
     app.get("/api/apps/:appId/data-health", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -586,6 +585,24 @@ async function startGateway(): Promise<void> {
         }
         console.error("[Gateway] /api/apps/data-health error:", err);
         res.status(500).json({ error: message });
+      }
+    });
+
+    app.get("/api/apps/:appId/feature-availability", async (req, res) => {
+      try {
+        const appId = req.params.appId?.trim();
+        if (!appId) {
+          res.status(400).json({ error: "appId required" });
+          return;
+        }
+        const { assessAppFeatureAvailabilityForApp } = await import(
+          "./services/cloudAppPublishReadiness.js"
+        );
+        const report = await assessAppFeatureAvailabilityForApp(appId);
+        res.json(report);
+      } catch (err) {
+        console.error("[Gateway] /api/apps/feature-availability error:", err);
+        res.status(500).json({ error: (err as Error).message });
       }
     });
 
@@ -1134,6 +1151,41 @@ async function startGateway(): Promise<void> {
       "/internal/backend-db",
       createDesktopBackendDbProxyRouter({
         resolveSource: resolveLinkedSource,
+        resolveRegistrySource: async (dbId, sourceId) => {
+          const { getDatabaseRegistryService } = await import(
+            "./services/DatabaseRegistryService.js"
+          );
+          const { resolveExistingRegistryDbPath, targetFromRegistryRecord } =
+            await import("./services/jobAppDatabase.js");
+          const record = getDatabaseRegistryService().getById(dbId);
+          if (!record || record.status !== "active") {
+            throw Object.assign(new Error(`Database not found: ${dbId}`), {
+              status: 404,
+            });
+          }
+          const target = targetFromRegistryRecord(record);
+          if (
+            sourceId?.trim() &&
+            sourceId.trim() !== target.alias &&
+            sourceId.trim() !== dbId
+          ) {
+            throw Object.assign(
+              new Error(`Unknown sourceId ${sourceId} for registry database ${dbId}`),
+              { status: 400 },
+            );
+          }
+          const dbPath =
+            resolveExistingRegistryDbPath(record.localPath) ?? record.localPath;
+          return {
+            id: target.alias,
+            type: "sqlite" as const,
+            dbId: record.dbId,
+            alias: target.alias,
+            dbPath,
+            tables: [],
+            linkedAt: record.createdAt,
+          };
+        },
         query: async (appId, source, sql, params) => {
           const result = await dbRouter.query(appId, source, sql, params);
           return { rows: result.rows, count: result.count };
@@ -1755,6 +1807,18 @@ async function startGateway(): Promise<void> {
         );
         const compatibility = await scanAppCloudCompatibility(req.params.appId);
         res.json(compatibility);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.get("/api/cloud/publish/:appId/readiness", async (req, res) => {
+      try {
+        const { buildCloudPublishReadinessForApp } = await import(
+          "./services/cloudAppPublishReadiness.js"
+        );
+        const readiness = await buildCloudPublishReadinessForApp(req.params.appId);
+        res.json(readiness);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -2968,14 +3032,6 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        if (requestedPath === "index.html") {
-          void import("./services/tursoPullScheduler.js").then(
-            ({ scheduleTursoPullForAppOpen }) => {
-              scheduleTursoPullForAppOpen(appId);
-            },
-          );
-        }
-
         const ext = path.extname(requestedPath).toLowerCase();
 
         const {
@@ -3001,14 +3057,37 @@ async function startGateway(): Promise<void> {
         // For bundled apps: serve dist/ output when requesting the bundled JS/CSS.
         // The iframe's index.html references dist/app.js and dist/app.css.
         if (requestedPath.startsWith("dist/")) {
-          const distContent = await appService.readAppFile(appId, requestedPath);
-          if (distContent === null) {
+          const distPath = await appService.resolveAppFilePath(appId, requestedPath);
+          if (!distPath) {
             res.status(404).send("Not found — run build first");
             return;
           }
-          res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
+          const fs = await import("fs/promises");
+          let distStat;
+          try {
+            distStat = await fs.stat(distPath);
+          } catch {
+            res.status(404).send("Not found — run build first");
+            return;
+          }
+          const {
+            buildMiniAppDistEtag,
+            ifNoneMatchIncludes,
+            MINI_APP_DIST_CACHE_CONTROL,
+            readIfNoneMatchHeader,
+          } = await import("./utils/miniAppDistCache.js");
+          const etag = buildMiniAppDistEtag(distStat);
+          res.setHeader("Cache-Control", MINI_APP_DIST_CACHE_CONTROL);
+          res.setHeader("ETag", etag);
           res.setHeader("Content-Type", getMiniAppContentType(ext));
-          if (ext === ".js" && typeof distContent === "string") {
+          if (
+            ifNoneMatchIncludes(readIfNoneMatchHeader(req.headers), etag)
+          ) {
+            res.status(304).end();
+            return;
+          }
+          const distContent = await fs.readFile(distPath, "utf8");
+          if (ext === ".js") {
             const { appendModuleRanMarker } = await import(
               "./utils/miniAppBootWatchdog.js"
             );
@@ -3143,6 +3222,14 @@ async function startGateway(): Promise<void> {
         res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
         res.setHeader("Content-Type", getMiniAppContentType(ext));
         res.send(content);
+        // Defer Turso reconcile until after the shell is on the wire — user hot path first.
+        if (requestedPath === "index.html") {
+          void import("./services/tursoPullScheduler.js").then(
+            ({ scheduleTursoPullForAppOpen }) => {
+              scheduleTursoPullForAppOpen(appId);
+            },
+          );
+        }
       } catch (error) {
         console.error("[Gateway] Failed to serve app file:", error);
         res.status(500).send("Failed to read app file");

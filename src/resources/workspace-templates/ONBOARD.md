@@ -93,7 +93,7 @@ Add any user-specific workflow rules:
 
 Based on what you learned, set up relevant features:
 
-1. **Install relevant skills** from the skills catalog (`read_file("$PAPR_HOME/skills-catalog.json")`)
+1. **Install relevant skills** — `read_skill()` for installed; grep `$PAPR_HOME/skills-catalog.json` by keyword for marketplace (`head -20`, never read whole file)
 2. **Create Papr Memory schemas** for their domain if needed
 3. **Create specialist agents** for recurring needs
 4. **Create 1-2 starter jobs** for immediate time-savers

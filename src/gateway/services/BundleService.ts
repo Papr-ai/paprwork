@@ -825,6 +825,27 @@ export class BundleService {
       }
     }
 
+    const paprRoot = path.dirname(this.appService.getAppsRootPath());
+
+    const {
+      reconcileAppDataSourcesForPublish,
+      detectCrossAppDependencies,
+      writeCloudAppDependenciesFile,
+      validatePublishBundleIntegrity,
+    } = await import("./cloudAppResourceIntegrity.js");
+    await reconcileAppDataSourcesForPublish(paprRoot, input.appId);
+    const integrity = await validatePublishBundleIntegrity(paprRoot, input.appId);
+    if (!integrity.ok) {
+      throw new Error(
+        `Export blocked — ${integrity.errors.slice(0, 3).join("; ")}`,
+      );
+    }
+    await writeCloudAppDependenciesFile(
+      paprRoot,
+      input.appId,
+      await detectCrossAppDependencies(paprRoot, input.appId),
+    );
+
     await fs.mkdir(destinationPath, { recursive: true });
     const appRelPath = path.join("apps", app.id);
     const appDest = path.join(destinationPath, appRelPath);

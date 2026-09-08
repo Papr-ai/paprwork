@@ -20,7 +20,13 @@ function renderAppTabContent(tab: Tab, previewTabVisible: boolean): ReactNode {
       <CatalogPreviewTabView tab={tab} previewTabVisible={previewTabVisible} />
     );
   }
-  return <MiniAppView appId={tab.entityId} previewTabVisible={previewTabVisible} />;
+  return (
+    <MiniAppView
+      appId={tab.entityId}
+      previewTabVisible={previewTabVisible}
+      previewKeepAliveWarm
+    />
+  );
 }
 
 interface AppTabKeepAliveHostProps {

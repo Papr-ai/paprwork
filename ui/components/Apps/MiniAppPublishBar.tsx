@@ -51,9 +51,13 @@ import {
 import {
   CloudPublishBlockedError,
   fetchCloudCompatibility,
+  fetchCloudPublishReadiness,
 } from "../../utils/cloudPublishApi";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
+import type { CloudPublishReadinessReport } from "../../src/core/types/cloudAppDependencies";
+import { CloudPublishDependenciesPanel } from "./CloudPublishDependenciesPanel";
 import { PreviewUrlRow } from "./PreviewUrlRow";
+import { PublishBarErrorNotice } from "./PublishBarErrorNotice";
 import "./MiniAppPublishBar.css";
 import "./AppWorkspaceMenu.css";
 import "./AppWorkspacePanelMenu.css";
@@ -78,6 +82,9 @@ interface MiniAppPublishBarProps {
   onRefreshPreview?: () => void;
   /** False when preview tab is backgrounded (LRU keep-alive). Pauses sync polling. */
   previewTabVisible?: boolean;
+  /** True after the local preview iframe shell has loaded — sync checks wait for this. */
+  previewShellLoaded?: boolean;
+  onOpenDependencyApp?: (appId: string, title?: string) => void;
 }
 
 const ACCESS_OPTIONS: {
@@ -271,6 +278,8 @@ export function MiniAppPublishBar({
   onTrackPullComplete,
   onRefreshPreview,
   previewTabVisible = true,
+  previewShellLoaded = true,
+  onOpenDependencyApp,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
@@ -292,7 +301,11 @@ export function MiniAppPublishBar({
   const [compatReport, setCompatReport] = useState<CloudCompatibilityReport | null>(
     cloud.compatibility,
   );
+  const [readiness, setReadiness] = useState<CloudPublishReadinessReport | null>(
+    null,
+  );
   const [compatLoading, setCompatLoading] = useState(false);
+  const [readinessLoading, setReadinessLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
   const [webSyncActionNotice, setWebSyncActionNotice] = useState<string | null>(
     null,
@@ -318,6 +331,7 @@ export function MiniAppPublishBar({
   } = useAppCloudSyncStatus(appId, {
     enabled: workspaceMode === "preview",
     previewTabVisible,
+    previewShellLoaded,
   });
 
   const autoUploadEnabled = resolveEffectiveAutoUpload(
@@ -445,15 +459,21 @@ export function MiniAppPublishBar({
     if (!shareOpen) {
       setNeedsDesktopAck(false);
       setShareSyncNotice(null);
+      setReadiness(null);
       return;
     }
     setCompatLoading(true);
+    setReadinessLoading(true);
     void fetchCloudCompatibility(appId)
       .then(setCompatReport)
       .catch(() => {
         if (cloud.compatibility) setCompatReport(cloud.compatibility);
       })
       .finally(() => setCompatLoading(false));
+    void fetchCloudPublishReadiness(appId)
+      .then(setReadiness)
+      .catch(() => setReadiness(null))
+      .finally(() => setReadinessLoading(false));
   }, [shareOpen, appId, cloud.compatibility]);
 
   useEffect(() => {
@@ -774,6 +794,7 @@ export function MiniAppPublishBar({
   });
   const shareSheetBusy =
     cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
+  const publishBlockedByIntegrity = readiness?.ok === false;
   const shareLinkReady =
     cloud.live &&
     webSyncStatus?.overall === "synced" &&
@@ -790,6 +811,13 @@ export function MiniAppPublishBar({
     perUserIsolation,
   );
   const shareSyncBanner = (() => {
+    if (cloud.errorDetail) {
+      return {
+        tone: "error" as const,
+        message: cloud.error ?? cloud.errorDetail,
+        detail: cloud.errorDetail,
+      };
+    }
     if (shareSyncNotice) {
       return { tone: "info" as const, message: shareSyncNotice };
     }
@@ -832,6 +860,9 @@ export function MiniAppPublishBar({
   };
 
   const handlePublishClick = async () => {
+    if (publishBlockedByIntegrity) {
+      return;
+    }
     setShareSyncNotice("Publishing to the web…");
     try {
       let published = cloud.live;
@@ -1040,8 +1071,12 @@ export function MiniAppPublishBar({
           {cloud.toast ? (
             <span className="mini-app-publish-bar__toast">{cloud.toast}</span>
           ) : null}
-          {cloud.error ? (
-            <span className="mini-app-publish-bar__error">{cloud.error}</span>
+          {cloud.error && cloud.errorDetail ? (
+            <PublishBarErrorNotice
+              summary={cloud.error}
+              detail={cloud.errorDetail}
+              onDismiss={cloud.clearError}
+            />
           ) : null}
 
           <AppWorkspaceMenu
@@ -1124,6 +1159,14 @@ export function MiniAppPublishBar({
                 role="status"
               >
                 <p>{shareSyncBanner.message}</p>
+                {"detail" in shareSyncBanner &&
+                shareSyncBanner.detail &&
+                shareSyncBanner.detail !== shareSyncBanner.message ? (
+                  <details className="share-sheet__error-details">
+                    <summary>View full error</summary>
+                    <p>{shareSyncBanner.detail}</p>
+                  </details>
+                ) : null}
                 {shareSheetBusy ? (
                   <p className="share-sheet__sync-banner-selection">
                     <span className="share-sheet__sync-banner-selection-label">
@@ -1367,16 +1410,29 @@ export function MiniAppPublishBar({
                     ? "Publish your copy on the web to get a shareable link for this fork."
                     : "Publish your app on the web first to get a shareable link."}
                 </p>
+                <CloudPublishDependenciesPanel
+                  readiness={readiness}
+                  loading={readinessLoading}
+                  onOpenDependencyApp={onOpenDependencyApp}
+                />
                 <button
                   type="button"
                   className="share-sheet__primary-btn"
-                  disabled={shareSheetBusy || cloud.loading}
+                  disabled={
+                    shareSheetBusy || cloud.loading || publishBlockedByIntegrity
+                  }
                   onClick={() => void handlePublishClick()}
                 >
                   {isFork ? "Publish your copy" : "Publish on Web"}
                 </button>
               </div>
-            ) : null}
+            ) : (
+              <CloudPublishDependenciesPanel
+                readiness={readiness}
+                loading={readinessLoading}
+                onOpenDependencyApp={onOpenDependencyApp}
+              />
+            )}
 
             {isFork && cloudLineage ? (
               <CloudContributeBackPanel

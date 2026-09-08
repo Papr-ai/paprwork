@@ -49,6 +49,9 @@ import {
   type CloudCatalogPreviewTabMetadata,
 } from "../../types/cloudCatalogPreviewTab";
 import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
+import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
+import { extractOptionalInstallDependencies } from "../../utils/cloudCatalogInstall";
+import type { CloudAppDependenciesFile } from "../../../src/core/types/cloudAppDependencies";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -242,6 +245,11 @@ export function CommunityAppsView({
     appId: string;
     appTitle: string;
     requirements: RequiredKeySpec[];
+  } | null>(null);
+  const [optionalDepsNotice, setOptionalDepsNotice] = useState<{
+    appId: string;
+    appTitle: string;
+    dependencies: CloudAppDependenciesFile;
   } | null>(null);
   const { artifacts, loadArtifacts } = useArtifacts();
   const { createChat } = useChat();
@@ -500,6 +508,8 @@ export function CommunityAppsView({
           needsSeed?: boolean;
           warnings?: string[];
         };
+        dependencies?: CloudAppDependenciesFile;
+        installWarnings?: string[];
         agentSetupMessage?: string;
         error?: string;
       };
@@ -511,10 +521,15 @@ export function CommunityAppsView({
       const modeLabel = mode === "track" ? "Linked" : "Forked";
       trackEvent("paprwork_community_app_installed", { app_name: entry.name, app_id: entry.appId } as Record<string, unknown>);
 
+      const optionalDeps = extractOptionalInstallDependencies(body);
+      const hasOptionalDeps = optionalDeps !== null;
+
       const needsFollowUp =
         Boolean(body.agentSetupMessage) ||
         body.bootstrap?.needsSeed === true ||
-        (body.bootstrap?.warnings?.length ?? 0) > 0;
+        (body.bootstrap?.warnings?.length ?? 0) > 0 ||
+        (body.installWarnings?.length ?? 0) > 0 ||
+        hasOptionalDeps;
 
       if (needsFollowUp && body.agentSetupMessage) {
         setInstallToast(
@@ -525,6 +540,15 @@ export function CommunityAppsView({
           body.app?.id,
           title,
         );
+      } else if (hasOptionalDeps && body.app?.id && optionalDeps) {
+        setInstallToast(
+          `${modeLabel} "${title}" — core features ready. Optional apps listed separately.`,
+        );
+        setOptionalDepsNotice({
+          appId: body.app.id,
+          appTitle: title,
+          dependencies: optionalDeps,
+        });
       } else {
         setInstallToast(`${modeLabel} "${title}" into Paprwork`);
       }
@@ -955,6 +979,24 @@ export function CommunityAppsView({
             switchToTab(tabId);
           }}
           onRequestHelp={(req) => void handleWizardHelp(req)}
+        />
+      ) : null}
+
+      {optionalDepsNotice ? (
+        <CloudInstallOptionalDepsNotice
+          appTitle={optionalDepsNotice.appTitle}
+          dependencies={optionalDepsNotice.dependencies}
+          onClose={() => setOptionalDepsNotice(null)}
+          onOpenCommunityApps={() => {
+            setOptionalDepsNotice(null);
+            window.dispatchEvent(new CustomEvent("papr-open-community-apps"));
+          }}
+          onContinue={() => {
+            const { appId, appTitle } = optionalDepsNotice;
+            setOptionalDepsNotice(null);
+            const tabId = createTab("app", appId, appTitle);
+            switchToTab(tabId);
+          }}
         />
       ) : null}
     </div>

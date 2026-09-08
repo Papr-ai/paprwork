@@ -2,6 +2,7 @@ const App = {
   dates: [], idx: 0, turning: false, labelTimer: null, brief: null,
   storeKey: 'home-review-v1',
   isSampleData: false, // Track if showing sample data
+  isStaleBrief: false, // Today's brief missing — showing most recent real brief
   loadError: false,
   fmtDate(d) { return new Date(d + 'T12:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }); },
   loadState() { return Reviews.cache(); },
@@ -148,6 +149,29 @@ const App = {
       </div>
     `;
   },
+  renderStaleBriefBanner() {
+    if (!this.isStaleBrief || this.idx !== 0) return '';
+    const dateLabel = this.fmtDate(this.dates[this.idx] || Data.todayKey());
+    return `
+      <div class="stale-brief-banner">
+        <div class="stale-brief-content">
+          <div class="stale-brief-text">
+            <strong>Today's brief isn't ready yet</strong>
+            <span>Showing your latest brief from ${dateLabel}.</span>
+          </div>
+          <button id="gen-real-brief-btn" class="gen-real-brief-btn" type="button">
+            Generate today's brief
+          </button>
+        </div>
+      </div>
+    `;
+  },
+  bindBriefActionButtons() {
+    const genBtn = document.getElementById('gen-real-brief-btn');
+    if (genBtn) {
+      genBtn.addEventListener('click', () => this.generateRealBrief());
+    }
+  },
   async init() {
     let testBrief;
     try {
@@ -164,7 +188,8 @@ const App = {
 
     await Goals.load();
     this.loadError = testBrief._loadError === true;
-    this.isSampleData = !this.loadError && (this.dates.length === 0 || testBrief._isSample === true);
+    this.isSampleData = !this.loadError && testBrief._isSample === true;
+    this.isStaleBrief = !this.loadError && !this.isSampleData && testBrief._isStale === true;
     
     await this.render(testBrief); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
     document.getElementById('sections').addEventListener('click', async (e) => {
@@ -179,11 +204,6 @@ const App = {
       }
     });
     
-    // Add click handler for generate button
-    const genBtn = document.getElementById('gen-real-brief-btn');
-    if (genBtn) {
-      genBtn.addEventListener('click', () => this.generateRealBrief());
-    }
   },
   bindLoadErrorButton(message) {
     const fixBtn = document.getElementById('fix-load-error-btn');
@@ -202,25 +222,24 @@ const App = {
     let brief = (cachedBrief && this.idx === 0) ? cachedBrief : await Data.load(date);
     cachedBrief = null;
     this.loadError = brief._loadError === true;
-    if (!this.loadError && brief._isSample && this.dates.length > 0) {
-      brief = await Data.load();
-      this.loadError = brief._loadError === true;
-      if (!this.loadError && !brief._isSample && this.dates[this.idx] !== this.dates[0]) {
-        this.idx = 0;
-      }
-    }
-    this.brief = this.decorate(brief, date);
+    this.isSampleData = !this.loadError && brief._isSample === true;
+    this.isStaleBrief = !this.loadError && !this.isSampleData && brief._isStale === true && this.idx === 0;
+    const briefDate = brief._briefDate || date;
+    this.brief = this.decorate(brief, briefDate);
     
-    // Render banner if sample data or load error
     const banner = this.loadError
       ? this.renderLoadErrorBanner(this.brief._errorMessage)
-      : this.renderSampleDataBanner();
+      : this.isSampleData
+        ? this.renderSampleDataBanner()
+        : this.renderStaleBriefBanner();
     
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
     document.getElementById('goals').innerHTML = this.idx === 0 ? Goals.render() : '';
     document.getElementById('sections').innerHTML = (this.brief.sections || []).map((s) => R.section(s)).join('');
     if (this.loadError) {
       this.bindLoadErrorButton(this.brief._errorMessage);
+    } else if (this.isSampleData || this.isStaleBrief) {
+      this.bindBriefActionButtons();
     }
     this.updateNav(); this.animateBars();
   },

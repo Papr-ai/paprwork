@@ -41,6 +41,7 @@ import {
   isDesktopElectron,
 } from "../utils/cloudDesktopPreview";
 import { copyTextToClipboard } from "../utils/copyToClipboard";
+import { handleCloudPublishError } from "../utils/cloudPublishError";
 
 export interface CloudPublishViewModel {
   loading: boolean;
@@ -48,6 +49,7 @@ export interface CloudPublishViewModel {
   refreshing: boolean;
   busy: boolean;
   error: string | null;
+  errorDetail: string | null;
   toast: string | null;
   enabled: boolean;
   live: boolean;
@@ -95,6 +97,7 @@ function buildViewModel(
   refreshing: boolean,
   busy: boolean,
   error: string | null,
+  errorDetail: string | null,
   toast: string | null,
 ): CloudPublishViewModel {
   const sharing = resolveSharing(state);
@@ -149,6 +152,7 @@ function buildViewModel(
     refreshing,
     busy,
     error,
+    errorDetail,
     toast,
     enabled: state?.enabled === true,
     live: state?.enabled === true && !!state.shareUrl,
@@ -211,6 +215,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
   const [busy, setBusy] = useState(false);
   const [autoUploadSaving, setAutoUploadSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const hasDisplayedStateRef = useRef(cachedOnMount !== null);
   const appIdRef = useRef(appId);
@@ -233,12 +238,28 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     [],
   );
 
+  const applyPublishError = useCallback((err: unknown) => {
+    const handled = handleCloudPublishError(err);
+    setErrorDetail(handled.detailMessage);
+    setError(handled.barMessage);
+  }, []);
+
+  const clearPublishError = useCallback(() => {
+    setError(null);
+    setErrorDetail(null);
+  }, []);
+
+  const setSimpleError = useCallback((message: string) => {
+    setError(message);
+    setErrorDetail(message);
+  }, []);
+
   const refresh = useCallback(async () => {
     const targetAppId = appIdRef.current;
     const generation = ++fetchGenerationRef.current;
 
     try {
-      setError(null);
+      clearPublishError();
       if (hasDisplayedStateRef.current) {
         setRefreshing(true);
       } else {
@@ -263,7 +284,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       ) {
         return;
       }
-      setError((err as Error).message.slice(0, 160));
+      applyPublishError(err);
     } finally {
       if (
         generation === fetchGenerationRef.current &&
@@ -273,13 +294,13 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setRefreshing(false);
       }
     }
-  }, [applyPublishState]);
+  }, [applyPublishError, applyPublishState, clearPublishError]);
 
   useEffect(() => {
     fetchGenerationRef.current += 1;
 
     setBusy(false);
-    setError(null);
+    clearPublishError();
     setToast(null);
 
     const cached = readCachedCloudPublishState(appId);
@@ -307,7 +328,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       options?: { acknowledgeDesktopOnly?: boolean },
     ) => {
       setBusy(true);
-      setError(null);
+      clearPublishError();
       try {
         const { sharing, codeAccess } = audienceModelToPublishPrefs(model);
         const requireSignIn =
@@ -361,18 +382,18 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setToast(`${appTitle ?? "App"} sharing updated`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
-        setError((err as Error).message.slice(0, 160));
+        applyPublishError(err);
       } finally {
         setBusy(false);
       }
     },
-    [appTitle, applyPublishState, state],
+    [appTitle, applyPublishError, applyPublishState, state],
   );
 
   const publish = useCallback(
     async (options?: { acknowledgeDesktopOnly?: boolean }) => {
       setBusy(true);
-      setError(null);
+      clearPublishError();
       try {
         const targetAppId = appIdRef.current;
         const sharing = resolveSharing(state);
@@ -384,18 +405,18 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setToast(`${appTitle ?? "App"} published to ${result.shareUrl ?? "cloud"}`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
-        setError((err as Error).message.slice(0, 160));
+        applyPublishError(err);
         throw err;
       } finally {
         setBusy(false);
       }
     },
-    [appTitle, state, applyPublishState],
+    [appTitle, applyPublishError, applyPublishState, clearPublishError, state],
   );
 
   const unpublish = useCallback(async () => {
     setBusy(true);
-    setError(null);
+    clearPublishError();
     try {
       const targetAppId = appIdRef.current;
       await unpublishCloudApp(targetAppId);
@@ -403,11 +424,11 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       setToast(`${appTitle ?? "App"} unpublished`);
       window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
     } catch (err) {
-      setError((err as Error).message.slice(0, 160));
+      applyPublishError(err);
     } finally {
       setBusy(false);
     }
-  }, [appTitle, applyPublishState]);
+  }, [appTitle, applyPublishError, applyPublishState, clearPublishError]);
 
   const copyLink = useCallback(async (link: string | null) => {
     if (!link) return;
@@ -415,9 +436,9 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     if (copied) {
       setToast("Link copied");
     } else {
-      setError("Could not copy link — select the URL and press ⌘C");
+      setSimpleError("Could not copy link — select the URL and press ⌘C");
     }
-  }, []);
+  }, [setSimpleError]);
 
   const openInBrowser = useCallback(async (link: string | null) => {
     if (!link) return;
@@ -428,13 +449,13 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         window.open(link, "_blank", "noopener,noreferrer");
       }
     } catch {
-      setError("Could not open link");
+      setSimpleError("Could not open link");
     }
-  }, []);
+  }, [setSimpleError]);
 
   const setAutoUploadEnabled = useCallback(async (enabled: boolean) => {
     setAutoUploadSaving(true);
-    setError(null);
+    clearPublishError();
     try {
       const targetAppId = appIdRef.current;
       const uploadMode = uploadModeFromToggle(enabled);
@@ -459,13 +480,21 @@ export function useCloudPublish(appId: string, appTitle?: string) {
           : "You'll publish this app manually with Publish changes",
       );
     } catch (err) {
-      setError((err as Error).message.slice(0, 160));
+      applyPublishError(err);
     } finally {
       setAutoUploadSaving(false);
     }
-  }, []);
+  }, [applyPublishError, clearPublishError]);
 
-  const viewModel = buildViewModel(state, loading, refreshing, busy, error, toast);
+  const viewModel = buildViewModel(
+    state,
+    loading,
+    refreshing,
+    busy,
+    error,
+    errorDetail,
+    toast,
+  );
   viewModel.autoUploadSaving = autoUploadSaving;
 
   return {
@@ -477,6 +506,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     copyLink,
     openInBrowser,
     setAutoUploadEnabled,
+    clearError: clearPublishError,
     shareModel: sharingToAudienceModel(
       viewModel.loginAccess,
       viewModel.externalLink,

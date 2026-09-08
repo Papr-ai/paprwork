@@ -5,6 +5,7 @@
 import type { CloudExternalLink, CloudLoginAccess } from "./cloudShareLink";
 import type { CodeAccess } from "../../src/core/utils/shareAudienceModel";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
+import type { CloudPublishReadinessReport } from "../../src/core/types/cloudAppDependencies";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -75,6 +76,19 @@ export async function fetchCloudCompatibility(
     throw new Error(body.error ?? `Compatibility scan failed (${res.status})`);
   }
   return (await res.json()) as CloudCompatibilityReport;
+}
+
+export async function fetchCloudPublishReadiness(
+  appId: string,
+): Promise<CloudPublishReadinessReport> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/publish/${encodeURIComponent(appId)}/readiness`,
+  );
+  if (!res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? `Publish readiness failed (${res.status})`);
+  }
+  return (await res.json()) as CloudPublishReadinessReport;
 }
 
 export async function publishCloudApp(

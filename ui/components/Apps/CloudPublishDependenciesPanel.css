@@ -1,0 +1,53 @@
+.cloud-deps-panel__list,
+.cloud-deps-panel__deps {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.875rem;
+  line-height: 1.45;
+}
+
+.cloud-deps-panel__deps {
+  list-style: none;
+  padding-left: 0;
+}
+
+.cloud-deps-panel__dep {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0;
+  border-top: 1px solid rgba(128, 128, 128, 0.2);
+}
+
+.cloud-deps-panel__dep:first-child {
+  border-top: none;
+  padding-top: 0.25rem;
+}
+
+.cloud-deps-panel__dep-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.cloud-deps-panel__dep-enables,
+.cloud-deps-panel__dep-status {
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.8125rem;
+}
+
+.cloud-deps-panel__open-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cloud-deps-panel__reconcile {
+  margin-bottom: 0.75rem;
+  font-size: 0.875rem;
+}
+
+.cloud-deps-panel__blockers {
+  margin-bottom: 0.75rem;
+}

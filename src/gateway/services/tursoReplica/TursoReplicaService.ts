@@ -35,6 +35,7 @@ import {
   hasBootstrapPendingMarker,
   noteBootstrapAttemptFailed,
   readBootstrapPendingMarker,
+  bootstrapRetryReadyAtMs,
   type BootstrapPendingMarker,
 } from "./tursoReplicaBootstrapMarker.js";
 import { replayBootstrapSnapshot } from "./tursoReplicaBootstrapReplay.js";
@@ -234,14 +235,26 @@ export class TursoReplicaService {
 
   async pull(localPath: string, tursoDatabase: string): Promise<boolean> {
     return this.withBackgroundPath(localPath, async () => {
+      const markerBefore = readBootstrapPendingMarker(localPath);
+      if (markerBefore && Date.now() < bootstrapRetryReadyAtMs(markerBefore)) {
+        throw new Error(
+          `Replica bootstrap backoff active (${markerBefore.attempts} attempts) — ` +
+            `retry after ${new Date(bootstrapRetryReadyAtMs(markerBefore)).toISOString()}. ` +
+            (markerBefore.lastError ?? ""),
+        );
+      }
+
       const spec = await this.openSpec(localPath, tursoDatabase);
       const marker = readBootstrapPendingMarker(localPath);
       try {
-        const pulled = await this.syncWithRecovery(spec, "pull");
+        const synced = await this.syncWithRecovery(spec, "pull");
         if (marker) {
-          this.settleBootstrapMarker(localPath, marker);
+          const settled = this.settleBootstrapMarker(localPath, marker);
+          if (!settled) {
+            return false;
+          }
         }
-        return pulled;
+        return synced && !hasBootstrapPendingMarker(localPath);
       } catch (error) {
         if (marker) {
           // Leave the marker in place — an unverified pull must not look like a bootstrap.
@@ -263,7 +276,7 @@ export class TursoReplicaService {
   private settleBootstrapMarker(
     localPath: string,
     marker: BootstrapPendingMarker,
-  ): void {
+  ): boolean {
     if (marker.snapshotPath && fs.existsSync(marker.snapshotPath)) {
       const replay = replayBootstrapSnapshot(localPath, marker.snapshotPath);
       if (replay.rowsReplayed > 0 || replay.tablesReplayed > 0) {
@@ -281,9 +294,10 @@ export class TursoReplicaService {
         localPath,
         `post-pull row check inconclusive (rowsNow=${rowsNow}, rowsAtRepair=${marker.rowsAtRepair})`,
       );
-      return;
+      return false;
     }
     clearBootstrapPendingMarker(localPath);
+    return true;
   }
 
   /**
@@ -523,6 +537,8 @@ export class TursoReplicaService {
       lastReplicaLocalMutationAt: options.lastReplicaLocalMutationAt,
     });
 
+    const bootstrapMarker = readBootstrapPendingMarker(options.localPath);
+
     return {
       online,
       syncMode,
@@ -533,6 +549,10 @@ export class TursoReplicaService {
       cutoverBlocked: options.cutoverBlocked ?? false,
       cutoverBlockReason: options.cutoverBlockReason ?? null,
       sidecarWedge: detectReplicaSidecarWedge(options.localPath),
+      tursoDatabase: options.tursoDatabase,
+      bootstrapPending: bootstrapMarker !== null,
+      bootstrapAttempts: bootstrapMarker?.attempts ?? 0,
+      lastBootstrapError: bootstrapMarker?.lastError ?? null,
       stats: pendingOps > 0 || fs.existsSync(options.localPath)
         ? { cdcOperations: pendingOps }
         : null,
@@ -575,13 +595,20 @@ export class TursoReplicaService {
     const key = normalizeDbPath(localPath);
     const report = inspectReplicaSidecarWedge(localPath);
     if (report.wedged) {
-      if (this.touchedPaths.has(key)) {
-        await getTursoReplicaSyncWorkerClient().close(localPath);
-      }
+      await getTursoReplicaSyncWorkerClient().close(localPath);
+      this.touchedPaths.delete(key);
       resetReplicaSidecars(localPath);
       console.warn(
         `[TursoReplicaService] Reset wedged sync sidecars before open: ${localPath} — ` +
           describeReplicaSidecarWedge(report),
+      );
+    }
+
+    const markerForBackoff = readBootstrapPendingMarker(localPath);
+    if (markerForBackoff && Date.now() < bootstrapRetryReadyAtMs(markerForBackoff)) {
+      throw new Error(
+        `Replica bootstrap backoff active (${markerForBackoff.attempts} attempts) — ` +
+          `retry after ${new Date(bootstrapRetryReadyAtMs(markerForBackoff)).toISOString()}`,
       );
     }
 

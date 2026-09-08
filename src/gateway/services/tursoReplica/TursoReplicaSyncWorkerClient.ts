@@ -179,6 +179,7 @@ export class TursoReplicaSyncWorkerClient {
           `[TursoSyncWorker] Engine crashed during ${error.op} on ${error.localPath} — ` +
             `resetting sync sidecars. ${error.stderrTail.slice(-200)}`,
         );
+        void this.close(error.localPath).catch(() => undefined);
         resetReplicaSidecars(error.localPath);
       }
       const retry =

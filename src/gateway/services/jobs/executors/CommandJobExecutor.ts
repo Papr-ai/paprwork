@@ -115,11 +115,17 @@ export class CommandJobExecutor implements IJobExecutor {
     const { detectReplicaRegistrySqliteBlock } = await import(
       "../../../../core/utils/replicaBashSqliteGuard.js"
     );
-    const replicaBlock = detectReplicaRegistrySqliteBlock(finalCommand, {
+    const { detectReplicaJobScriptSqliteBlock } = await import(
+      "../../../../core/utils/replicaJobScriptGuard.js"
+    );
+    const guardCtx = {
       env,
       jobDb: jobDbPath,
       appDb: writeTargets[0]?.dbPath,
-    });
+    };
+    const replicaBlock =
+      detectReplicaRegistrySqliteBlock(finalCommand, guardCtx) ??
+      detectReplicaJobScriptSqliteBlock(finalCommand, params.jobDir, guardCtx);
     if (replicaBlock) {
       throw new Error(replicaBlock.message);
     }

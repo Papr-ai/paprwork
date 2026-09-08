@@ -494,6 +494,29 @@
   color: var(--text-primary);
 }
 
+.share-sheet__sync-banner--error {
+  background: color-mix(in srgb, #e84c60 12%, transparent);
+  border-color: rgba(232, 76, 96, 0.35);
+  color: var(--error);
+}
+
+.share-sheet__error-details {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+.share-sheet__error-details summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.share-sheet__error-details p {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary);
+}
+
 .share-sheet__sync-banner-btn {
   margin-top: 8px;
   padding: 6px 10px;
