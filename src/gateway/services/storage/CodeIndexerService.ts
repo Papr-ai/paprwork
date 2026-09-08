@@ -12,6 +12,7 @@ import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
+import { reserveMemoryWrite } from '../memoryWriteGuard.js';
 import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
 import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
 
@@ -496,19 +497,34 @@ export class CodeIndexerService {
     if (metadata.created_at) paprMetadata.created_at = metadata.created_at.toISOString();
     if (metadata.updated_at) paprMetadata.updated_at = metadata.updated_at.toISOString();
     
+    // Project metadata content is stable ("Project: X / Type: Y / ID: Z"), so
+    // every full index pass produced another identical row. This is the same
+    // defect as indexCodeFile() and had no gate of any kind.
+    const projectContent = `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`;
+    const reservation = reserveMemoryWrite(projectContent, 'code_indexer_project');
+    if (!reservation.proceed) {
+      return;
+    }
+
     const memoryScope = await paprMemoryScopeSpread({
       addPolicy: buildCodeIndexAddPolicy(this.schemaId),
     });
 
-    await this.client.memory.add({
-      content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      ...memoryScope,
-      metadata: {
-        role: 'assistant',
-        category: 'learning',
-        customMetadata: paprMetadata
-      },
-    });
+    try {
+      await this.client.memory.add({
+        content: projectContent,
+        ...memoryScope,
+        metadata: {
+          role: 'assistant',
+          category: 'learning',
+          customMetadata: paprMetadata
+        },
+      });
+      reservation.commit();
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
   }
   
   /**
@@ -545,28 +561,49 @@ export class CodeIndexerService {
       paprMetadata.data_source_path = fileMetadata.data_source_path;
     }
     
+    // Content-hash guard. `needsIndexing()` gates the two QUEUE paths
+    // (SmartCodeIndexManager:169, :393) but not the four direct call sites —
+    // full re-index and single-project index reach indexCodeFile() with no
+    // gate at all, so every full pass re-added every file.
+    //
+    // It also catches something no per-file gate can: measured group
+    // 05a6d704 is render.ts AND drawer.ts with byte-identical content. Two
+    // different paths, one memoryId, six rows. Hashing the body catches it;
+    // hashing per file path cannot.
+    const reservation = reserveMemoryWrite(truncatedContent, 'code_indexer');
+    if (!reservation.proceed) {
+      return;
+    }
+
     const fileMemoryScope = await paprMemoryScopeSpread({
       addPolicy: buildCodeIndexAddPolicy(this.schemaId),
     });
 
-    await this.client.memory.add({
-      content: truncatedContent,
-      ...fileMemoryScope,
-      metadata: {
-        role: 'assistant',
-        category: 'learning',
-        customMetadata: paprMetadata
-      },
-    }).catch((error: unknown) => {
-      const err = error as {
-        statusCode?: number;
-        code?: number;
-        body?: unknown;
-        message?: string;
-      };
-      throw new Error(
-        `${err.statusCode ?? err.code ?? 'Unknown'} ${JSON.stringify(err.body ?? err.message ?? error)}`,
-      );
-    });
+    try {
+      await this.client.memory.add({
+        content: truncatedContent,
+        ...fileMemoryScope,
+        metadata: {
+          role: 'assistant',
+          category: 'learning',
+          customMetadata: paprMetadata
+        },
+      }).catch((error: unknown) => {
+        const err = error as {
+          statusCode?: number;
+          code?: number;
+          body?: unknown;
+          message?: string;
+        };
+        throw new Error(
+          `${err.statusCode ?? err.code ?? 'Unknown'} ${JSON.stringify(err.body ?? err.message ?? error)}`,
+        );
+      });
+      reservation.commit();
+    } catch (error) {
+      // Release so a retry is not blocked by our own reservation.
+      reservation.release();
+      throw error;
+    }
   }
 }
