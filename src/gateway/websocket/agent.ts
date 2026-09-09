@@ -11,6 +11,11 @@ import { getAgentService } from "../services/AgentService.js";
 import type { AgentConfig } from "../../core/types/agents.js";
 import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
 import type { StoredMessageAttachment } from "../services/storage/IStorageProvider.js";
+import {
+  getStreamProfiler,
+  isStreamProfilingEnabled,
+  startStreamProfiler,
+} from "../../core/utils/streamProfiler.js";
 
 interface StreamPayload {
   chatId: string;
@@ -18,6 +23,8 @@ interface StreamPayload {
   config: AgentConfig;
   focusContext?: UiAgentFocusContext;
   attachments?: StoredMessageAttachment[];
+  /** Continue the same assistant row instead of minting a new message id. */
+  reuseAssistantMessageId?: string;
 }
 
 interface StopStreamingPayload {
@@ -56,13 +63,28 @@ export async function setupAgentHandlers(
     switch (message.type) {
       case "agent:stream": {
         const payload = message.payload as StreamPayload;
-        const { chatId, message: userMessage, config, focusContext, attachments } =
-          payload;
+        const {
+          chatId,
+          message: userMessage,
+          config,
+          focusContext,
+          attachments,
+          reuseAssistantMessageId,
+        } = payload;
 
         if (!chatId || !userMessage) {
           sendError(ws, message.id, "Missing chatId or message");
           return;
         }
+
+        const wsStreamProfiler =
+          getStreamProfiler(chatId) ??
+          (isStreamProfilingEnabled()
+            ? startStreamProfiler(chatId, "gateway")
+            : undefined);
+        wsStreamProfiler?.mark("ws.agentStream.received");
+        wsStreamProfiler?.setMeta("provider", config.provider);
+        wsStreamProfiler?.setMeta("model", config.model);
 
         // ✅ OPTIMIZATION: Check if session exists first (reuse cached API key)
         const sessionManager = agentService.getSessionManager();
@@ -240,10 +262,13 @@ export async function setupAgentHandlers(
           uses_papr_proxy: usePaprProxy,
         });
 
+        wsStreamProfiler?.mark("ws.authResolved");
+
         const { getAgentStreamRegistry } = await import(
           "../services/AgentStreamRegistry.js"
         );
 
+        wsStreamProfiler?.mark("ws.startStream");
         getAgentStreamRegistry().startStream({
           chatId,
           requestId: message.id,
@@ -251,6 +276,7 @@ export async function setupAgentHandlers(
           config: configInternal,
           focusContext,
           attachments,
+          reuseAssistantMessageId,
           ws,
         });
         break;

@@ -285,10 +285,25 @@ export function serverHasCompletedAssistantForStreamingTurn(
     .some((m) => m.role === "assistant" && !m.isStreaming);
 }
 
+function assistantTurnSettledOnServer(message: ChatMessage): boolean {
+  return message.interrupted !== true;
+}
+
 function upgradeAssistantFromServer(
   local: ChatMessage,
   serverMsg: ChatMessage,
 ): ChatMessage {
+  // A local "Interrupted" ghost must not beat a completed server row for the
+  // same id — the DB is authoritative once the turn finished.
+  if (local.interrupted && assistantTurnSettledOnServer(serverMsg)) {
+    return {
+      ...serverMsg,
+      isStreaming: false,
+      streamingContent: undefined,
+      streamingReasoning: undefined,
+    };
+  }
+
   const localRichness =
     (local.sequence?.length ?? 0) + (local.toolCalls?.length ?? 0);
   const serverRichness =

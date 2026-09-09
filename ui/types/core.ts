@@ -43,6 +43,7 @@ export interface AgentConfig extends Omit<CoreAgentConfig, "model"> {
 
 // Streaming types
 export type StreamChunkType =
+  | "stream-start"
   | "text-delta"
   | "reasoning-delta"
   | "tool-call"
@@ -51,6 +52,10 @@ export type StreamChunkType =
   | "tool-error"
   | "error"
   | "done";
+
+export interface StreamStartPayload {
+  messageId: string;
+}
 
 export interface StreamChunk<T = unknown> {
   type: StreamChunkType;

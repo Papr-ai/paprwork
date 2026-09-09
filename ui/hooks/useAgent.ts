@@ -10,7 +10,11 @@ import {
 } from "../../src/core/utils/interruptedToolResult";
 import { isExpectedStreamCancellation, isRecoverableProviderStreamDrop } from "../../src/core/constants/streamCancellation.js";
 import type { AgentConfig, StreamChunk } from "../types/core";
-import type { MessageAttachment, ChatMessage } from "../types/chat";
+import type {
+  MessageAttachment,
+  ChatMessage,
+  SequenceItem,
+} from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
@@ -58,6 +62,11 @@ import {
   type StreamingRefs,
 } from "../lib/agentStreamRecovery";
 import type { ToolCall } from "../types/core";
+import {
+  finishUiStreamProfiler,
+  getUiStreamProfiler,
+  startUiStreamProfiler,
+} from "../lib/streamProfiler";
 
 const RATE_LIMIT_EXHAUSTED_ERROR_CODE = "rate_limit_exhausted";
 const RATE_LIMIT_WAIT_TEXT_PATTERN =
@@ -87,6 +96,9 @@ export function useAgent() {
   
   // Streaming state management functions
   const initStreamingState = useChatStore((s) => s.initStreamingState);
+  const reactivateAssistantMessage = useChatStore(
+    (s) => s.reactivateAssistantMessage,
+  );
   const setStreamingText = useChatStore((s) => s.setStreamingText);
   const setStreamingReasoning = useChatStore((s) => s.setStreamingReasoning);
   const replaceStreamingSequence = useChatStore((s) => s.replaceStreamingSequence);
@@ -150,6 +162,8 @@ export function useAgent() {
         return;
       }
 
+      getUiStreamProfiler(chatId)?.mark(`ui.chunk.received.${chunk.type}`);
+
       // Sub-agent trigger responses: only hide delegation chat messages, NOT main chat messages
       // When sub-agent asks main agent a question, main agent may respond in BOTH:
       // 1. Delegation chat (delegation:xxx) - hide these from main UI
@@ -182,6 +196,7 @@ export function useAgent() {
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
       if (
         !streamingMessageIdRef.current.has(chatId) &&
+        chunk.type !== "stream-start" &&
         chunk.type !== "done" &&
         chunk.type !== "error" &&
         chunk.type !== "start-step" &&
@@ -212,6 +227,90 @@ export function useAgent() {
       }
 
       switch (chunk.type) {
+        case "stream-start": {
+          const messageId = (
+            chunk.payload as { messageId?: string }
+          ).messageId?.trim();
+          if (!messageId) break;
+
+          const uiProfiler = getUiStreamProfiler(chatId);
+          const existingId = streamingMessageIdRef.current.get(chatId);
+          const chatState = useChatStore.getState().chatStates.get(chatId);
+          const existingRow = chatState?.messages.find((m) => m.id === messageId);
+
+          uiProfiler?.measureSync("ui.streamStart.handler", () => {
+            if (existingId === messageId) {
+              if (existingRow?.interrupted) {
+                reactivateAssistantMessage(chatId, messageId);
+              }
+              return;
+            }
+
+            if (existingId) {
+              const { chatStates } = useChatStore.getState();
+              const stateForRename = chatStates.get(chatId);
+              if (stateForRename) {
+                const updatedMessages = stateForRename.messages.map((msg) =>
+                  msg.id === existingId ? { ...msg, id: messageId } : msg,
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(chatId, {
+                  ...stateForRename,
+                  messages: updatedMessages,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
+            } else if (existingRow) {
+              reactivateAssistantMessage(chatId, messageId);
+            } else {
+              streamingMessageIdRef.current.set(chatId, messageId);
+              streamingContentRef.current.set(chatId, "");
+              streamingReasoningRef.current.set(chatId, "");
+              toolCallsMapRef.current.set(chatId, new Map());
+              sequenceRef.current.set(chatId, []);
+              currentTextSegmentRef.current.set(chatId, "");
+
+              addMessage(
+                {
+                  id: messageId,
+                  role: "assistant",
+                  content: "",
+                  isStreaming: true,
+                  streamingContent: "",
+                  reasoning: "",
+                  streamingReasoning: "",
+                  toolCalls: [],
+                  sequence: [],
+                },
+                chatId,
+              );
+            }
+          });
+
+          streamingMessageIdRef.current.set(chatId, messageId);
+          const reactivated = useChatStore.getState().chatStates.get(chatId)
+            ?.messages.find((m) => m.id === messageId);
+          streamingContentRef.current.set(
+            chatId,
+            reactivated?.streamingContent ?? reactivated?.content ?? "",
+          );
+          streamingReasoningRef.current.set(
+            chatId,
+            reactivated?.streamingReasoning ?? reactivated?.reasoning ?? "",
+          );
+          if (reactivated?.sequence?.length) {
+            sequenceRef.current.set(chatId, reactivated.sequence as SequenceItem[]);
+          }
+          if (reactivated?.toolCalls?.length) {
+            const map = new Map<string, ToolCall>();
+            for (const tc of reactivated.toolCalls) {
+              map.set(tc.id, tc);
+            }
+            toolCallsMapRef.current.set(chatId, map);
+          }
+          break;
+        }
+
         case "concurrency-queued":
           setWaitingForAgentSlot(chatId, true);
           break;
@@ -732,6 +831,7 @@ export function useAgent() {
               const content = streamingContentRef.current.get(chatId);
               if (streamingMessageId && content !== undefined) {
                 updateStreamingMessage(streamingMessageId, content, chatId);
+                getUiStreamProfiler(chatId)?.mark("ui.textPaint");
               }
               updateBatchRef.current.delete(chatId);
             }, 50); // Update at most every 50ms (20 FPS)
@@ -1580,12 +1680,14 @@ export function useAgent() {
       mode: "auto" | "resolve" = "auto",
     ): Promise<{ needsContinue: boolean }> => {
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
+      const chatMessages =
+        useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
       const streamingMessageId =
         streamingMessageIdRef.current.get(chatId) ??
-        useChatStore
-          .getState()
-          .chatStates.get(chatId)
-          ?.messages.find((m) => m.role === "assistant" && m.isStreaming)?.id;
+        chatMessages.find((m) => m.role === "assistant" && m.isStreaming)?.id ??
+        [...chatMessages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.interrupted)?.id;
       const { setTabStreaming } = useTabStore.getState();
       let shouldCleanup = true;
 
@@ -1768,6 +1870,12 @@ export function useAgent() {
       setTabStreaming(`chat-${chatId}`, true);
       setSending(chatId, true);
 
+      const chatMessages =
+        useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
+      const reuseAssistantMessageId = [...chatMessages]
+        .reverse()
+        .find((m) => m.role === "assistant" && m.interrupted)?.id;
+
       streamingMessageIdRef.current.delete(chatId);
       streamingContentRef.current.delete(chatId);
       streamingReasoningRef.current.delete(chatId);
@@ -1781,6 +1889,9 @@ export function useAgent() {
           chatId,
           message: HIDDEN_CONTINUE_USER_MESSAGE,
           config,
+          ...(reuseAssistantMessageId
+            ? { reuseAssistantMessageId }
+            : {}),
           ...(focusContext ? { focusContext } : {}),
         },
         (chunk) => handleStreamChunk(chunk as StreamChunk),
@@ -2120,6 +2231,9 @@ export function useAgent() {
         setError(null);
         console.log("[useAgent] State reset, about to call gateway.stream");
 
+        startUiStreamProfiler(finalChatId);
+        getUiStreamProfiler(finalChatId)?.mark("ui.beforeGatewayStream");
+
         // Stream message via WebSocket (with permanent chatId)
         const focusContext = resolveAgentFocusContext(finalChatId);
         await gateway.stream(
@@ -2200,6 +2314,7 @@ export function useAgent() {
         // Clear streaming status on error for THIS chat's tab
         setTabStreaming(`chat-${finalChatId}`, false);
       } finally {
+        finishUiStreamProfiler(finalChatId);
         releaseSendLock?.();
         if (sendMessageLockRef.current.get(chatId) === sendLock) {
           sendMessageLockRef.current.delete(chatId);

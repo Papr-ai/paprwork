@@ -58,6 +58,7 @@
     "test:coverage": "vitest run --project unit-backend --project unit-ui --coverage --reporter=verbose",
     "test:watch": "vitest --project unit-backend --project unit-ui --reporter=verbose",
     "test:perf": "node scripts/run-perf-tests.mjs",
+    "profile:stream": "npm run build:gateway && cross-env ELECTRON_RUN_AS_NODE=1 electron scripts/profile-stream-step.mjs",
     "test:llm-streaming": "tsx tests/llm-streaming.test.ts",
     "test:jobs-e2e": "node scripts/test-jobs-e2e.mjs",
     "test:fd-ebadf-repro": "node --import tsx scripts/test-fd-ebadf-repro.mjs",

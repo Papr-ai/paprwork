@@ -6,6 +6,10 @@
  */
 
 import { isExpectedStreamCancellation } from "../../../src/core/constants/streamCancellation.js";
+import {
+  getUiStreamProfiler,
+  isUiStreamProfilingEnabled,
+} from "../../lib/streamProfiler";
 
 export interface GatewayMessage {
   id: string;
@@ -368,6 +372,25 @@ class GatewayClient {
             typeof response.data === "object" && response.data !== null
               ? { ...(response.data as Record<string, unknown>), requestId: id }
               : { payload: response.data, requestId: id };
+          if (isUiStreamProfilingEnabled()) {
+            const chunkType =
+              typeof payloadData === "object" &&
+              payloadData !== null &&
+              typeof (payloadData as { type?: unknown }).type === "string"
+                ? (payloadData as { type: string }).type
+                : "unknown";
+            const chunkChatId =
+              typeof payloadData === "object" &&
+              payloadData !== null &&
+              typeof (payloadData as { chatId?: unknown }).chatId === "string"
+                ? (payloadData as { chatId: string }).chatId
+                : undefined;
+            if (chunkChatId) {
+              getUiStreamProfiler(chunkChatId)?.mark(
+                `ui.ws.agentChunk.${chunkType}`,
+              );
+            }
+          }
           if (
             typeof payloadData === "object" &&
             payloadData !== null &&

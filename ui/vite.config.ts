@@ -33,6 +33,9 @@ export default defineConfig(({ mode }) => {
     'import.meta.env.VITE_REQUIRE_PAPR_AUTH': JSON.stringify(
       env.VITE_REQUIRE_PAPR_AUTH || env.REQUIRE_PAPR_AUTH || 'false'
     ),
+    'import.meta.env.VITE_PAPR_STREAM_PROFILE': JSON.stringify(
+      env.VITE_PAPR_STREAM_PROFILE || env.PAPR_STREAM_PROFILE || 'false'
+    ),
   },
   base: "./",
   resolve: {

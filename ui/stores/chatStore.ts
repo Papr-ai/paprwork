@@ -48,6 +48,8 @@ interface ChatStore {
 
   // Actions
   addMessage: (message: ChatMessage, chatId?: string) => void;
+  /** Resume streaming on an existing assistant row (hidden continue / reconnect). */
+  reactivateAssistantMessage: (chatId: string, messageId: string) => void;
   prependMessages: (messages: ChatMessage[], chatId: string) => void;
   /** Clear cached chats/messages after org/namespace workspace switch. */
   resetForWorkspaceSwitch: () => void;
@@ -189,6 +191,54 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
       return {
         chatStates: newChatStates,
+      };
+    }),
+
+  reactivateAssistantMessage: (chatId, messageId) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+
+      const existing = chatState.messages.find((m) => m.id === messageId);
+      if (!existing) return state;
+
+      const updatedMessages = chatState.messages.map((msg) =>
+        msg.id === messageId
+          ? {
+              ...msg,
+              isStreaming: true,
+              interrupted: undefined,
+              streamingContent: msg.streamingContent ?? msg.content ?? "",
+              streamingReasoning:
+                msg.streamingReasoning ?? msg.reasoning ?? "",
+            }
+          : msg,
+      );
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, {
+        ...chatState,
+        messages: updatedMessages,
+        isStreaming: true,
+      });
+
+      const toolCalls = new Map<string, ToolCall>();
+      for (const tc of existing.toolCalls ?? []) {
+        toolCalls.set(tc.id, tc);
+      }
+
+      const nextStreaming = new Map(state.streamingState);
+      nextStreaming.set(chatId, {
+        messageId,
+        text: existing.content ?? "",
+        reasoning: existing.reasoning ?? "",
+        sequence: existing.sequence ?? [],
+        toolCalls,
+      });
+
+      return {
+        chatStates: newChatStates,
+        streamingState: nextStreaming,
       };
     }),
 

@@ -6,6 +6,7 @@
  * Stream chunk types
  */
 export type StreamChunkType =
+  | "stream-start" // Stable assistant message id before any content chunks
   | "text-delta"
   | "reasoning-delta"
   | "tool-call"
@@ -28,6 +29,14 @@ export interface StreamChunk<T = unknown> {
   type: StreamChunkType;
   payload: T;
   timestamp: string;
+}
+
+/**
+ * Emitted once at the start of a turn so the UI uses the same message id as
+ * the gateway database (checkpoints + final save).
+ */
+export interface StreamStartPayload {
+  messageId: string;
 }
 
 /**

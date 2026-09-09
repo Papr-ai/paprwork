@@ -10,6 +10,10 @@ import type { AgentConfigInternal } from "../../core/types/agents.js";
 import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
 import type { StreamChunk } from "../../core/types/streaming.js";
 import {
+  finishStreamProfiler,
+  getStreamProfiler,
+} from "../../core/utils/streamProfiler.js";
+import {
   isExpectedStreamCancellation,
   STREAM_REPLACED_REASON,
   STREAM_STOPPED_REASON,
@@ -256,6 +260,7 @@ export class AgentStreamRegistry {
     config: AgentConfigInternal;
     focusContext?: UiAgentFocusContext;
     attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
+    reuseAssistantMessageId?: string;
     ws: WebSocket;
   }): void {
     const {
@@ -265,6 +270,7 @@ export class AgentStreamRegistry {
       config,
       focusContext,
       attachments,
+      reuseAssistantMessageId,
       ws,
     } = params;
 
@@ -301,7 +307,14 @@ export class AgentStreamRegistry {
 
     void previousStreamStopped
       .then(() =>
-        this.runStream(entry, userMessage, config, focusContext, attachments),
+        this.runStream(
+          entry,
+          userMessage,
+          config,
+          focusContext,
+          attachments,
+          reuseAssistantMessageId,
+        ),
       )
       .catch((error) => {
         console.error(
@@ -314,6 +327,7 @@ export class AgentStreamRegistry {
           config,
           focusContext,
           attachments,
+          reuseAssistantMessageId,
         );
       });
   }
@@ -324,12 +338,15 @@ export class AgentStreamRegistry {
     config: AgentConfigInternal,
     focusContext?: UiAgentFocusContext,
     attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[],
+    reuseAssistantMessageId?: string,
   ): Promise<void> {
     const { getAgentService } = await import("./AgentService.js");
     const agentService = getAgentService();
     const { chatId, requestId } = entry;
 
     try {
+      getStreamProfiler(chatId)?.mark("registry.runStream.start");
+
       const { runWithToolContext } = await import(
         "../../core/tools/context.js"
       );
@@ -339,7 +356,13 @@ export class AgentStreamRegistry {
           chatId,
           userMessage,
           config,
-          { focusContext, attachments },
+          {
+            focusContext,
+            attachments,
+            ...(reuseAssistantMessageId
+              ? { _reuseAssistantMessageId: reuseAssistantMessageId }
+              : {}),
+          },
         )) {
           if (entry.cancelled) break;
           this.bufferChunk(entry, chunk);
@@ -403,6 +426,9 @@ export class AgentStreamRegistry {
 
       this.broadcastError(entry);
     } finally {
+      getStreamProfiler(chatId)?.mark("registry.runStream.end");
+      finishStreamProfiler(chatId, { requestId });
+
       // Stream reached a terminal state (complete/cancelled/error) — free
       // the replay buffer NOW instead of holding it for the 10-min TTL.
       // Late reconnects get agent:complete (finalMessage) or load history.

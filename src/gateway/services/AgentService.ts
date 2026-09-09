@@ -46,6 +46,7 @@ import { getSkillService, type SkillRecord } from "./SkillService.js";
 import { ChatExporter } from "./storage/ChatExporter.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { generateFallbackTitle } from "./agent/fallbackTitle.js";
+import { getStreamProfiler } from "../../core/utils/streamProfiler.js";
 import {
   compactStaleToolResults,
   estimateMessagesTokens,
@@ -388,6 +389,56 @@ export class AgentService {
     broadcast({ type: "chat:list-updated" });
   }
 
+  private static readonly HIDDEN_CONTINUE_PREFIX = "[__papr_continue__]";
+
+  private async assistantMessageRowExists(
+    chatId: string,
+    messageId: string,
+  ): Promise<boolean> {
+    const messages = await this.storageManager.loadMessages(chatId);
+    return messages.some((row) => row.id === messageId);
+  }
+
+  /** Last incomplete assistant row, else last assistant (hidden continue). */
+  private async findLastResumableAssistantMessageId(
+    chatId: string,
+  ): Promise<string | undefined> {
+    const messages = await this.storageManager.loadMessages(chatId);
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const row = messages[i];
+      if (row.role === "assistant" && row.incomplete) {
+        return row.id;
+      }
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === "assistant") {
+        return messages[i].id;
+      }
+    }
+    return undefined;
+  }
+
+  private async resolveStreamingAssistantMessageId(
+    chatId: string,
+    userMessage: string,
+    options?: { _reuseAssistantMessageId?: string },
+  ): Promise<{ messageId: string; checkpointInserted: boolean }> {
+    const explicitReuse = options?._reuseAssistantMessageId?.trim();
+    if (explicitReuse) {
+      const exists = await this.assistantMessageRowExists(chatId, explicitReuse);
+      return { messageId: explicitReuse, checkpointInserted: exists };
+    }
+
+    if (userMessage.startsWith(AgentService.HIDDEN_CONTINUE_PREFIX)) {
+      const reused = await this.findLastResumableAssistantMessageId(chatId);
+      if (reused) {
+        return { messageId: reused, checkpointInserted: true };
+      }
+    }
+
+    return { messageId: `msg-${uuidv4()}`, checkpointInserted: false };
+  }
+
   // ===== Streaming with Parallel Support =====
 
   /**
@@ -417,6 +468,8 @@ export class AgentService {
       _isWrapUpContinuation?: boolean;
       /** File/context attachments from the chat UI (persisted on user message). */
       attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
+      /** Reuse an existing assistant row (continue / compress / silent retry). */
+      _reuseAssistantMessageId?: string;
     },
   ): AsyncGenerator<StreamChunk & { chatId: string }> {
     if (!this.initialized) {
@@ -546,10 +599,13 @@ export class AgentService {
     let assistantMessageSaved = false;
 
     // ── Incremental checkpoint persistence ─────────────────────────────
-    // Pre-generate a stable message ID so checkpoint INSERTs and the
-    // final save all target the same SQLite row.
-    const assistantMessageId = `msg-${uuidv4()}`;
-    let checkpointInserted = false; // true after the first INSERT
+    // Stable message ID shared with the UI via stream-start. Reused on
+    // hidden continue, context compress retry, and silent retry so one turn
+    // does not fork into duplicate assistant rows.
+    const { messageId: assistantMessageId, checkpointInserted: checkpointRowExists } =
+      await this.resolveStreamingAssistantMessageId(chatId, userMessage, options);
+    getStreamProfiler(chatId)?.mark("gateway.resolveAssistantMessageId");
+    let checkpointInserted = checkpointRowExists;
     let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
     // Running estimate of checkpoint payload size (text + tool results).
     // Beyond the cap we skip periodic checkpoints: each persist re-serializes
@@ -1218,6 +1274,7 @@ export class AgentService {
       console.log(
         `  Total setup: ${(performance.now() - perfStart).toFixed(2)}ms`,
       );
+      getStreamProfiler(chatId)?.mark("gateway.setup.complete");
 
       // Stream from AI SDK directly with abort signal and tools
       t = performance.now();
@@ -1838,48 +1895,36 @@ export class AgentService {
         console.log(
           `  pi-ai ${piProvider} init: ${timings.streamTextInit.toFixed(2)}ms`,
         );
+        getStreamProfiler(chatId)?.mark("gateway.piAiInit");
       } else {
         // Use AI SDK for standard providers (OpenAI Platform, Anthropic, Google)
         
-        // 🔍 LOG EXACT CONTEXT SENT TO AI SDK
-        console.log(`\n${'='.repeat(80)}`);
-        console.log(`📤 [AI SDK] EXACT CONTEXT BEING SENT TO LLM`);
-        console.log(`${'='.repeat(80)}`);
-        console.log(`Model: ${config.model}`);
-        console.log(`Provider: ${config.provider}`);
-        console.log(`Total messages: ${streamTextOptions.messages.length}`);
-        console.log(`\nFULL MESSAGE CONTENT (not truncated):`);
-        console.log(`${'='.repeat(80)}`);
-        streamTextOptions.messages.forEach((msg: any, i: number) => {
-          console.log(`\n[Message ${i}] Role: ${msg.role}`);
-          if (msg.role === 'system') {
-            console.log(`Content:\n${msg.content}`);
-          } else if (msg.role === 'user') {
-            const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
-            console.log(`Content:\n${contentStr}`);
-          } else if (msg.role === 'assistant') {
-            if (Array.isArray(msg.content)) {
-              console.log(`Content (structured):\n${JSON.stringify(msg.content, null, 2)}`);
-            } else {
-              const contentStr = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content, null, 2);
-              console.log(`Content:\n${contentStr}`);
-            }
-          } else if (msg.role === 'tool') {
-            console.log(`Content (tool results):\n${JSON.stringify(msg.content, null, 2)}`);
-          } else {
-            console.log(`Content:\n${JSON.stringify(msg, null, 2)}`);
-          }
-          console.log(`${'─'.repeat(80)}`);
+        const streamProfiler = getStreamProfiler(chatId);
+        await streamProfiler?.measure("gateway.aiSdk.contextLog", async () => {
+          // 🔍 LOG EXACT CONTEXT SENT TO AI SDK (can be slow on large histories)
+          console.log(`\n${"=".repeat(80)}`);
+          console.log(`📤 [AI SDK] EXACT CONTEXT BEING SENT TO LLM`);
+          console.log(`${"=".repeat(80)}`);
+          console.log(`Model: ${config.model}`);
+          console.log(`Provider: ${config.provider}`);
+          console.log(`Total messages: ${streamTextOptions.messages.length}`);
+          console.log(`\nFULL MESSAGE CONTENT (not truncated):`);
+          console.log(`${"=".repeat(80)}`);
+          streamTextOptions.messages.forEach((msg: ModelMessage, i: number) => {
+            console.log(`\n[Message ${i}] Role: ${msg.role}`);
+            console.log(`Content:\n${JSON.stringify(msg.content, null, 2)}`);
+            console.log(`${"─".repeat(80)}`);
+          });
+          console.log(
+            `\nTools available: ${Object.keys(streamTextOptions.tools || {}).length}`,
+          );
+          console.log(`Max output tokens: ${streamTextOptions.maxOutputTokens}`);
+          console.log(
+            `Max steps: ${streamTextOptions.stopWhen ? "custom" : "default"}`,
+          );
+          console.log(`${"=".repeat(80)}\n`);
         });
-        console.log(`\nTools available: ${Object.keys(streamTextOptions.tools || {}).length}`);
-        // Read the field the SDK actually honours. This line used to print
-        // `maxTokens`, the pre-v6 name, so it reported the cap we intended
-        // while the request went out with the provider default of 4096 — the
-        // reason this bug stayed invisible in the logs for so long.
-        console.log(`Max output tokens: ${streamTextOptions.maxOutputTokens}`);
-        console.log(`Max steps: ${streamTextOptions.stopWhen ? 'custom' : 'default'}`);
-        console.log(`${'='.repeat(80)}\n`);
-        
+
         aiSdkStreamResult = await streamText(streamTextOptions);
         if (config.provider === "groq") {
           const { adaptGroqAISDKFullStream } = await import(
@@ -1896,6 +1941,7 @@ export class AgentService {
         }
         timings.streamTextInit = performance.now() - t;
         console.log(`  AI SDK init: ${timings.streamTextInit.toFixed(2)}ms`);
+        getStreamProfiler(chatId)?.mark("gateway.streamTextInit");
       }
 
       const apiKeys = getApiKeysForSanitization();
@@ -1913,7 +1959,18 @@ export class AgentService {
           : {}),
       });
 
+      // Tell the UI the stable row id before any content chunks so reconnect /
+      // history merge cannot fork one turn into two message ids.
+      getStreamProfiler(chatId)?.mark("gateway.streamStart.yield");
+      yield {
+        type: "stream-start",
+        chatId,
+        payload: { messageId: assistantMessageId },
+        timestamp: new Date().toISOString(),
+      } as StreamChunk & { chatId: string };
+
       let firstChunkReceived = false;
+      let firstTextDeltaMarked = false;
       let contextLengthErrorMessage: string | null = null;
       let rateLimitExhausted = false;
       while (true) {
@@ -1927,7 +1984,19 @@ export class AgentService {
           console.log(
             `[AgentService] 🎯 Time from request start to first chunk: ${(performance.now() - perfStart).toFixed(2)}ms`,
           );
+          getStreamProfiler(chatId)?.mark(
+            `gateway.firstChunk.${next.value.type}`,
+          );
           firstChunkReceived = true;
+        }
+
+        if (
+          !firstTextDeltaMarked &&
+          !next.done &&
+          next.value.type === "text-delta"
+        ) {
+          getStreamProfiler(chatId)?.mark("gateway.firstTextDelta");
+          firstTextDeltaMarked = true;
         }
 
         if (next.done) {
@@ -2134,6 +2203,7 @@ export class AgentService {
             ...options,
             _isContextCompressRetry: true,
             _skipSaveUserMessage: true,
+            _reuseAssistantMessageId: assistantMessageId,
           },
         )) {
           yield chunk;
@@ -2452,6 +2522,7 @@ export class AgentService {
             ...options,
             _isSilentRetry: true,
             _skipSaveUserMessage: true,
+            _reuseAssistantMessageId: assistantMessageId,
           },
         )) {
           yield chunk;

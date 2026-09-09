@@ -87,6 +87,37 @@ describe("mergeHistoryWithLocal", () => {
     expect(merged.some((m) => m.id === "a2")).toBe(true);
   });
 
+  it("clears interrupted flag when server row for the same id is settled", () => {
+    const local: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "msg-server",
+        role: "assistant",
+        content: "Done running the job",
+        interrupted: true,
+        toolCalls: [
+          { id: "t1", toolName: "run_job", args: {}, status: "success" },
+          { id: "t2", toolName: "bash", args: {}, status: "success" },
+        ],
+      },
+    ];
+    const server: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Run the job" },
+      {
+        id: "msg-server",
+        role: "assistant",
+        content: "Done running the job",
+        sequence: [{ type: "tool", data: { name: "run_job" } }],
+        toolCalls: [{ id: "t1", toolName: "run_job", args: {}, status: "success" }],
+      },
+    ];
+
+    const merged = mergeHistoryWithLocal(local, server);
+
+    expect(merged[1]?.id).toBe("msg-server");
+    expect(merged[1]?.interrupted).toBeUndefined();
+  });
+
   it("upgrades local assistant shell when server has sequence and toolCalls", () => {
     const local: ChatMessage[] = [
       { id: "u1", role: "user", content: "Run the job" },

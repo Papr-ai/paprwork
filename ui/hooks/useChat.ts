@@ -161,9 +161,11 @@ export function useChat() {
             return { chatStates: newChatStates };
           }
 
-          const streamingMessageId = existingState.messages.find(
-            (m) => m.isStreaming,
-          )?.id;
+          const streamingMessageId =
+            existingState.messages.find((m) => m.isStreaming)?.id ??
+            [...existingState.messages]
+              .reverse()
+              .find((m) => m.role === "assistant" && m.interrupted)?.id;
           const messages =
             existingState.messages.length > 0
               ? mergeHistoryWithLocal(
