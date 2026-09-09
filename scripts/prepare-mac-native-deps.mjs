@@ -94,7 +94,11 @@ function prepareMacNativeDeps(arch) {
 
   if (spec.install.length > 0) {
     log(`installing: ${spec.install.join(", ")}`);
-    execSync(`npm install --no-save ${spec.install.join(" ")}`, {
+    // Apple Silicon CI builds Intel packages too — optional native packages are
+    // prebuilt binaries, so --force + --ignore-scripts bypasses EBADPLATFORM.
+    const crossArchInstall =
+      arch === "x64" && process.arch !== "x64" ? "--force --ignore-scripts" : "";
+    execSync(`npm install --no-save ${crossArchInstall} ${spec.install.join(" ")}`, {
       cwd: ROOT,
       stdio: "inherit",
     });

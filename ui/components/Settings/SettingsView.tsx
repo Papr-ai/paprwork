@@ -1011,15 +1011,22 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.6.6" && (
+        {currentVersion === "2.6.7" && (
           <div className="about-card">
-            <h3>What's New in v2.6.6</h3>
+            <h3>What's New in v2.6.7</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
                 <strong>System Browser Sign-In</strong>
                 <p>
                   Papr login now opens in your default browser so Google, passkeys,
                   and email auth work reliably — no embedded login panel.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds ship correct x64 native libraries so the gateway
+                  starts reliably on launch.
                 </p>
               </li>
               <li className="whats-new-list__item">
@@ -1031,7 +1038,7 @@ function AboutTab() {
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.6"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.7"
               target="_blank"
               rel="noopener noreferrer"
               className="about-card__link"
