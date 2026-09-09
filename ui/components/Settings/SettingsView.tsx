@@ -1011,6 +1011,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.11" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.11</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Stream Continue &amp; Reconnect</strong>
+                <p>
+                  Agent turns keep one assistant message card when continuing
+                  after interruption, compression, or reconnect — no duplicate
+                  cards or lost tool context.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>System Browser Sign-In</strong>
+                <p>
+                  Papr login opens in your default browser so Google, passkeys,
+                  and email auth work reliably.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds ship correct x64 native libraries so the
+                  gateway starts reliably on launch.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Faster Mac Releases</strong>
+                <p>
+                  Apple Silicon and Intel packages build in parallel with
+                  pre-upload native-arch verification.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.11"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.10" && (
           <div className="about-card">
             <h3>What's New in v2.6.10</h3>

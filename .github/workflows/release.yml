@@ -264,11 +264,18 @@ jobs:
         run: |
           set -euo pipefail
           cd artifacts
-          count() { ls -1 $1 2>/dev/null | wc -l | tr -d ' '; }
+          # nullglob-safe — ls on zero matches exits 2 under set -e
+          count() {
+            local n=0
+            shopt -s nullglob
+            for f in $1; do n=$((n + 1)); done
+            shopt -u nullglob
+            echo "$n"
+          }
           MAC_ZIP=$(count 'Papr.Work-*-mac.zip')
-          MAC_PKG=$(count 'Papr.Work-*-mac.pkg')
+          MAC_PKG=$(count '*.pkg')
           WIN_EXE=$(count 'PaprWork-Setup-*.exe')
-          LINUX_IMG=$(count 'PaprWork-*.AppImage')
+          LINUX_IMG=$(count '*.AppImage')
           LINUX_DEB=$(count 'paprwork_*.deb')
           echo "Mac zip: ${MAC_ZIP}, Mac pkg: ${MAC_PKG}, Win exe: ${WIN_EXE}, Linux AppImage: ${LINUX_IMG}, Linux deb: ${LINUX_DEB}"
           test "${MAC_ZIP}" -ge 2 || { echo "::error::Expected 2 Mac zip artifacts (arm64 + x64)"; exit 1; }

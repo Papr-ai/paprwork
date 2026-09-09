@@ -50,7 +50,7 @@ async function main() {
   }
 
   const macZips = [...assetNames].filter((n) => n.endsWith("-mac.zip"));
-  const macPkgs = [...assetNames].filter((n) => n.endsWith("-mac.pkg"));
+  const macPkgs = [...assetNames].filter((n) => n.endsWith(".pkg"));
   const winExes = [...assetNames].filter((n) => n.endsWith(".exe"));
   const linuxImages = [...assetNames].filter((n) => n.endsWith(".AppImage"));
   const linuxDebs = [...assetNames].filter((n) => n.endsWith(".deb"));
