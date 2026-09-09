@@ -85,6 +85,11 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
+      - name: Verify Mac arm64 native arch and SDK bundles
+        run: |
+          node scripts/verify-packaged-native-arch.mjs "release/mac-arm64/Papr Work.app"
+          node scripts/verify-packaged-mini-app-sdk.mjs "release/mac-arm64/Papr Work.app"
+
       - name: Prepare native deps (Intel)
         run: node scripts/prepare-mac-native-deps.mjs x64
 
@@ -96,11 +101,9 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify packaged native architectures and SDK bundles
+      - name: Verify Mac x64 native arch and SDK bundles
         run: |
-          node scripts/verify-packaged-native-arch.mjs "release/mac-arm64/Papr Work.app"
           node scripts/verify-packaged-native-arch.mjs "release/mac-x64/Papr Work.app"
-          node scripts/verify-packaged-mini-app-sdk.mjs "release/mac-arm64/Papr Work.app"
           node scripts/verify-packaged-mini-app-sdk.mjs "release/mac-x64/Papr Work.app"
 
       - name: Cleanup keychain

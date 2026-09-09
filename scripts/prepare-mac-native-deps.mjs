@@ -59,6 +59,25 @@ const MAC_NATIVE_PACKAGES = {
 /** Electron native modules that must be rebuilt per target arch. */
 const ELECTRON_REBUILD_MODULES = ["better-sqlite3", "keytar", "sqlite3"];
 
+/**
+ * @param {string} specifier e.g. "@libsql/darwin-arm64@0.4.7" or "@libsql/darwin-x64"
+ * @returns {string}
+ */
+function scopedPackageName(specifier) {
+  const versionAt = specifier.indexOf("@", 1);
+  return versionAt === -1 ? specifier : specifier.slice(0, versionAt);
+}
+
+/** All macOS optional native packages — stripped before each arch swap. */
+const ALL_MAC_NATIVE_PACKAGES = [
+  ...new Set([
+    ...MAC_NATIVE_PACKAGES.arm64.install.map(scopedPackageName),
+    ...MAC_NATIVE_PACKAGES.arm64.remove,
+    ...MAC_NATIVE_PACKAGES.x64.install.map(scopedPackageName),
+    ...MAC_NATIVE_PACKAGES.x64.remove,
+  ]),
+];
+
 function log(message) {
   console.log(`[prepare-mac-native-deps] ${message}`);
 }
@@ -88,7 +107,7 @@ function prepareMacNativeDeps(arch) {
 
   log(`preparing node_modules for darwin-${arch}`);
 
-  for (const name of spec.remove) {
+  for (const name of ALL_MAC_NATIVE_PACKAGES) {
     removePackage(name);
   }
 

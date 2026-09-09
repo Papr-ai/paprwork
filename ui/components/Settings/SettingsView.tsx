@@ -1011,9 +1011,9 @@ function AboutTab() {
           </div>
         </div>
 
-        {currentVersion === "2.6.7" && (
+        {currentVersion === "2.6.8" && (
           <div className="about-card">
-            <h3>What's New in v2.6.7</h3>
+            <h3>What's New in v2.6.8</h3>
             <ul className="whats-new-list">
               <li className="whats-new-list__item">
                 <strong>System Browser Sign-In</strong>
@@ -1038,7 +1038,7 @@ function AboutTab() {
               </li>
             </ul>
             <a
-              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.7"
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.8"
               target="_blank"
               rel="noopener noreferrer"
               className="about-card__link"
