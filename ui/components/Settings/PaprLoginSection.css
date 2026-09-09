@@ -270,6 +270,13 @@
   cursor: not-allowed;
 }
 
+.papr-section__browser-hint {
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  margin: 12px 0 0 0;
+}
+
 .papr-section__note {
   font-size: 12px;
   color: var(--text-tertiary);

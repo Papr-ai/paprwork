@@ -1,14 +1,16 @@
 #!/usr/bin/env node
 /**
- * Verify prebuilt mini-app SDK bundles are present inside a packaged .app.
+ * Verify prebuilt mini-app SDK bundles are present inside a packaged app.
  *
  * Usage:
  *   node scripts/verify-packaged-mini-app-sdk.mjs release/mac-arm64/Papr\ Work.app
+ *   node scripts/verify-packaged-mini-app-sdk.mjs release/win-unpacked
+ *   node scripts/verify-packaged-mini-app-sdk.mjs release/linux-unpacked
  */
 
 import { existsSync, readdirSync, statSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 const MIN_BYTES = 200;
 
@@ -23,18 +25,36 @@ function ok(message) {
   console.log(`[verify-packaged-mini-app-sdk] ✓ ${message}`);
 }
 
+/**
+ * @param {string} appPath
+ * @returns {string}
+ */
+function resolveAsarUnpackedRoot(appPath) {
+  const candidates = [
+    join(appPath, "Contents/Resources/app.asar.unpacked"),
+    join(appPath, "resources/app.asar.unpacked"),
+    join(appPath, "app.asar.unpacked"),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+  fail(
+    `Could not find app.asar.unpacked under ${appPath} (expected Mac .app or win/linux unpacked dir)`,
+  );
+}
+
 const appPath = process.argv[2];
 if (!appPath) {
   console.error(
-    "Usage: node scripts/verify-packaged-mini-app-sdk.mjs <path/to/Papr Work.app>",
+    "Usage: node scripts/verify-packaged-mini-app-sdk.mjs <packaged-app-path>",
   );
   process.exit(1);
 }
 
-const sdkRoot = join(
-  appPath,
-  "Contents/Resources/app.asar.unpacked/dist/resources/mini-app-sdk",
-);
+const asarUnpacked = resolveAsarUnpackedRoot(appPath);
+const sdkRoot = join(asarUnpacked, "dist/resources/mini-app-sdk");
 const manifestPath = join(sdkRoot, "sdk-manifest.js");
 const bundledDir = join(sdkRoot, "bundled");
 
@@ -59,7 +79,6 @@ for (const mod of MINI_APP_SDK_MODULES) {
       `[verify-packaged-mini-app-sdk] ✗ bundled/${bundleName} too small (${size} bytes)`,
     );
     failed = true;
-    continue;
   }
 }
 
@@ -73,10 +92,7 @@ if (bundledCount !== MINI_APP_SDK_MODULES.length) {
   );
 }
 
-const srcSdkRoot = join(
-  appPath,
-  "Contents/Resources/app.asar.unpacked/src/resources/mini-app-sdk",
-);
+const srcSdkRoot = join(asarUnpacked, "src/resources/mini-app-sdk");
 if (!existsSync(srcSdkRoot)) {
   fail(`Missing unpacked src/resources/mini-app-sdk in packaged app`);
 }
@@ -86,5 +102,5 @@ if (failed) {
 }
 
 ok(
-  `Verified ${MINI_APP_SDK_MODULES.length} mini-app SDK bundles in packaged app`,
+  `Verified ${MINI_APP_SDK_MODULES.length} mini-app SDK bundles in ${appPath}`,
 );

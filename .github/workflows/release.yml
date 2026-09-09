@@ -157,6 +157,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify packaged mini-app SDK bundles (Windows)
+        run: node scripts/verify-packaged-mini-app-sdk.mjs release/win-unpacked
+
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -198,6 +201,9 @@ jobs:
         run: npx electron-builder --linux --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify packaged mini-app SDK bundles (Linux)
+        run: node scripts/verify-packaged-mini-app-sdk.mjs release/linux-unpacked
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4

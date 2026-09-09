@@ -21,7 +21,6 @@ const {
   registerPlatformBrowserIPC,
   handlePlatformBrowserRequest,
   isRequestPlatformBrowserMessage,
-  openAuthBrowser,
 } = require("./ipc/platformBrowser.cjs");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
@@ -2688,9 +2687,6 @@ app.whenReady().then(async () => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);
       }
-    },
-    openAuthInAppBrowser: async (url) => {
-      await openAuthBrowser(url);
     },
   });
 

@@ -49,13 +49,45 @@ async function main() {
     }
   }
 
-  for (const suffix of recommended) {
-    const match = [...assetNames].find((n) => n.endsWith(suffix));
-    if (match) {
-      console.log(`✓ ${match}`);
-    } else {
-      console.warn(`⚠ no asset ending with ${suffix}`);
-    }
+  const macZips = [...assetNames].filter((n) => n.endsWith("-mac.zip"));
+  const macPkgs = [...assetNames].filter((n) => n.endsWith("-mac.pkg"));
+  const winExes = [...assetNames].filter((n) => n.endsWith(".exe"));
+  const linuxImages = [...assetNames].filter((n) => n.endsWith(".AppImage"));
+  const linuxDebs = [...assetNames].filter((n) => n.endsWith(".deb"));
+
+  if (macZips.length >= 2) {
+    for (const name of macZips) console.log(`✓ ${name}`);
+  } else {
+    console.error(`✗ Expected 2 Mac zip artifacts (arm64 + x64), found ${macZips.length}`);
+    failed = true;
+  }
+
+  if (macPkgs.length >= 2) {
+    for (const name of macPkgs) console.log(`✓ ${name}`);
+  } else {
+    console.error(`✗ Expected 2 Mac pkg artifacts (arm64 + x64), found ${macPkgs.length}`);
+    failed = true;
+  }
+
+  if (winExes.length >= 1) {
+    console.log(`✓ ${winExes[0]}`);
+  } else {
+    console.error("✗ Missing Windows installer (.exe)");
+    failed = true;
+  }
+
+  if (linuxImages.length >= 1) {
+    console.log(`✓ ${linuxImages[0]}`);
+  } else {
+    console.error("✗ Missing Linux AppImage");
+    failed = true;
+  }
+
+  if (linuxDebs.length >= 1) {
+    console.log(`✓ ${linuxDebs[0]}`);
+  } else {
+    console.error("✗ Missing Linux deb package");
+    failed = true;
   }
 
   // Also verify CDN download for Mac metadata

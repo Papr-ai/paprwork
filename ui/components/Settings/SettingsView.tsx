@@ -1011,6 +1011,36 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.6" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.6</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>System Browser Sign-In</strong>
+                <p>
+                  Papr login now opens in your default browser so Google, passkeys,
+                  and email auth work reliably — no embedded login panel.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release SDK Verification</strong>
+                <p>
+                  CI verifies mini-app SDK bundles on Mac (arm64 + Intel), Windows,
+                  and Linux before every release upload.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.6"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.5" && (
           <div className="about-card">
             <h3>What's New in v2.6.5</h3>

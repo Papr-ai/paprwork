@@ -21,8 +21,6 @@ import {
   OrgNamespaceSetup,
   type OrgNamespaceSetupRequest,
 } from "../Auth/OrgNamespaceSetup";
-import { PaprAuthBrowser } from "../Auth/PaprAuthBrowser";
-import "../Auth/PaprAuthBrowser.css";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -892,9 +890,10 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           </button>
 
           {isLoading ? (
-            <div className="papr-login-auth-browser">
-              <PaprAuthBrowser visible={isLoading} />
-            </div>
+            <p className="papr-section__browser-hint">
+              Your browser should have opened. Finish sign-in there, then return here — Papr Work
+              will detect when you&apos;re logged in.
+            </p>
           ) : null}
 
           <p className="papr-section__note">
@@ -959,13 +958,14 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       </button>
 
       {isLoading ? (
-        <div className="papr-login-auth-browser">
-          <PaprAuthBrowser visible={isLoading} />
-        </div>
+        <p className="papr-section__browser-hint">
+          Your browser should have opened. Finish sign-in there, then return here — Papr Work will
+          detect when you&apos;re logged in.
+        </p>
       ) : null}
 
       <p className="papr-section__note">
-        Don't have an account?{" "}
+        Don&apos;t have an account?{" "}
         <button
           type="button"
           className="papr-section__inline-link"

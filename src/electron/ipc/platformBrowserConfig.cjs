@@ -51,11 +51,6 @@ const PLATFORM_CONFIG = {
     successUrlPattern: "web\\.telegram\\.org\\/a\\/",
     cookieDomains: ["telegram.org"],
   },
-  "papr-auth": {
-    loginUrl: "",
-    homeUrl: "",
-    cookieDomains: ["auth0.com", "papr.ai"],
-  },
 };
 
 function getPlatformConnectionsPath() {

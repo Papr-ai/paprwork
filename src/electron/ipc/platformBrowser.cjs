@@ -296,25 +296,18 @@ function getOrCreateView(platformId) {
       partition: partitionFor(platformId),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: platformId !== "papr-auth",
+      sandbox: true,
     },
   });
 
-  if (platformId === "papr-auth") {
-    view.webContents.setWindowOpenHandler(({ url }) => {
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    if (shouldNavigatePopupInPlatformTab(url, platformId)) {
       void view.webContents.loadURL(url);
       return { action: "deny" };
-    });
-  } else {
-    view.webContents.setWindowOpenHandler(({ url }) => {
-      if (shouldNavigatePopupInPlatformTab(url, platformId)) {
-        void view.webContents.loadURL(url);
-        return { action: "deny" };
-      }
-      shell.openExternal(url).catch(() => {});
-      return { action: "deny" };
-    });
-  }
+    }
+    shell.openExternal(url).catch(() => {});
+    return { action: "deny" };
+  });
 
   entry = {
     view,
@@ -333,10 +326,6 @@ function getOrCreateView(platformId) {
 function notifyOpenTab(platformId) {
   const win = getMainWindow?.();
   if (!win || win.isDestroyed()) {
-    return;
-  }
-  if (platformId === "papr-auth") {
-    win.webContents.send("papr-auth-browser-open", {});
     return;
   }
   win.webContents.send("platform-browser:open-tab", { platformId });
@@ -863,22 +852,6 @@ function registerPlatformBrowserIPC(ipcMain, getWindow) {
     };
   });
 
-  ipcMain.handle("platform-browser:open-auth", async (_event, payload) => {
-    const url = payload?.url;
-    if (typeof url !== "string" || url.length === 0) {
-      return { success: false, error: "url is required" };
-    }
-    const platformId = "papr-auth";
-    const entry = getOrCreateView(platformId);
-    notifyOpenTab(platformId);
-    await entry.view.webContents.loadURL(url);
-    await waitForLoad(entry.view.webContents);
-    return {
-      success: true,
-      data: { platformId, url: entry.view.webContents.getURL() },
-    };
-  });
-
   ipcMain.handle("platform-browser:get-state", (_event, payload) => {
     const platformId = payload?.platformId;
     if (typeof platformId !== "string") {
@@ -922,6 +895,4 @@ module.exports = {
   isRequestPlatformBrowserMessage,
   getPlatformConfig,
   matchesSuccessUrl,
-  openAuthBrowser: async (url) =>
-    handleEnsure({ platformId: "papr-auth", url }),
 };
