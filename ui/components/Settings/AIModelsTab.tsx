@@ -37,7 +37,6 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
       hint: "platform.openai.com/api-keys",
       hasOAuth: true,
       subscriptionName: "ChatGPT Plus/Pro",
-      models: ["GPT-5.4", "GPT-5.4 Mini", "GPT-5.3 Codex"],
     },
     {
       id: "anthropic",
@@ -46,7 +45,6 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
       hint: "console.anthropic.com",
       hasOAuth: true,
       subscriptionName: "Claude Pro/Max",
-      models: ["Claude Opus 4", "Claude Sonnet 4", "Claude Haiku 4.5"],
     },
     {
       id: "google",
@@ -55,7 +53,6 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
       hint: "makersuite.google.com/app/apikey",
       hasOAuth: false,
       subscriptionName: "",
-      models: ["Gemini 3 Pro", "Gemini 2.5 Flash", "Gemini 3 Flash"],
     },
   ];
 
@@ -133,10 +130,6 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
                     Not configured
                   </span>
                 )}
-              </div>
-
-              <div className="ai-provider-card__models">
-                {provider.models.join(" · ")}
               </div>
 
               {provider.hasOAuth && (

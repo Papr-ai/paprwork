@@ -9,38 +9,51 @@
 .cloud-deps-panel__deps {
   list-style: none;
   padding-left: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .cloud-deps-panel__dep {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  background: color-mix(in srgb, var(--bg-primary, #fff) 60%, transparent);
+}
+
+.cloud-deps-panel__dep-header {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.65rem 0;
-  border-top: 1px solid rgba(128, 128, 128, 0.2);
 }
 
-.cloud-deps-panel__dep:first-child {
-  border-top: none;
-  padding-top: 0.25rem;
-}
-
-.cloud-deps-panel__dep-main {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
+.cloud-deps-panel__dep-title {
   min-width: 0;
+  flex: 1;
+  font-size: 0.875rem;
+  line-height: 1.35;
 }
 
 .cloud-deps-panel__dep-enables,
 .cloud-deps-panel__dep-status {
+  margin: 4px 0 0;
   color: var(--text-secondary, #6b7280);
   font-size: 0.8125rem;
+  line-height: 1.45;
+}
+
+.cloud-deps-panel__dep-status {
+  margin-top: 2px;
 }
 
 .cloud-deps-panel__open-btn {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+.cloud-deps-panel__optional > .share-sheet__secondary-btn {
+  margin-top: 10px;
 }
 
 .cloud-deps-panel__reconcile {

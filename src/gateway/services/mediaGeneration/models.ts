@@ -42,6 +42,30 @@ export const MEDIA_MODELS: readonly MediaModelDefinition[] = [
     supportedAspectRatios: ["1:1", "3:2", "2:3", "16:9", "9:16"],
   },
   {
+    id: "gpt-image-2.5-flare",
+    label: "GPT Image 2.5 Flare",
+    kind: "image",
+    provider: "openai",
+    apiStyle: "openai_images",
+    remoteModel: "gpt-image-2.5-flare",
+    codexImageModel: "gpt-image-2.5-flare",
+    implemented: true,
+    defaultAspectRatio: "1:1",
+    supportedAspectRatios: ["1:1", "3:2", "2:3", "16:9", "9:16"],
+  },
+  {
+    id: "gpt-image-2.5-sunburst",
+    label: "GPT Image 2.5 Sunburst",
+    kind: "image",
+    provider: "openai",
+    apiStyle: "openai_images",
+    remoteModel: "gpt-image-2.5-sunburst",
+    codexImageModel: "gpt-image-2.5-sunburst",
+    implemented: true,
+    defaultAspectRatio: "1:1",
+    supportedAspectRatios: ["1:1", "3:2", "2:3", "16:9", "9:16"],
+  },
+  {
     id: "veo-3.1-generate-preview",
     label: "Veo 3.1",
     kind: "video",
@@ -217,6 +241,12 @@ export function openAiSizeForAspectRatio(
   const ratio = aspectRatio ?? "1:1";
   if (ratio === "16:9" || ratio === "3:2") return "1536x1024";
   if (ratio === "9:16" || ratio === "2:3") return "1024x1536";
-  if (modelId === "gpt-image-2") return "1024x1024";
+  if (modelId.startsWith("gpt-image-")) return "1024x1024";
   return "1024x1024";
+}
+
+export function openAiImageQuality(modelId: string): string {
+  if (modelId === "gpt-image-2.5-sunburst") return "high";
+  if (modelId.startsWith("gpt-image-2.5-")) return "auto";
+  return "medium";
 }

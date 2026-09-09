@@ -574,8 +574,16 @@ function renderSequence(
       }
     }
 
-    // Render working card with delegation cards and tool activity only
-    if (exploringItems.length > 0 || delegationCardElements.length > 0) {
+    // Working card holds tool activity; delegation cards render below (always visible)
+    const webviewSessionPreviewState = collectWebviewSessionPreview(
+      webviewSessionToolCalls,
+      message.isStreaming,
+    );
+    const hasWorkingContent =
+      exploringItems.length > 0 ||
+      shouldShowWebviewSessionPreview(webviewSessionPreviewState);
+
+    if (hasWorkingContent || delegationCardElements.length > 0) {
       const hasCallingTool = sequence.some(
         (item) =>
           item.type === "tool" &&
@@ -592,37 +600,36 @@ function renderSequence(
           (item.data as { error?: string }).error === "Stopped by user",
       );
 
-      const webviewSessionPreviewState = collectWebviewSessionPreview(
-        webviewSessionToolCalls,
-        message.isStreaming,
-      );
-      const workingChildren: React.ReactNode[] = [
-        ...delegationCardElements,
-        ...exploringItems,
-      ];
-      if (shouldShowWebviewSessionPreview(webviewSessionPreviewState)) {
-        workingChildren.push(
-          <WebviewSessionPreview
-            key="webview-session-preview"
-            state={webviewSessionPreviewState!}
-          />,
+      if (hasWorkingContent) {
+        const workingChildren: React.ReactNode[] = [...exploringItems];
+        if (shouldShowWebviewSessionPreview(webviewSessionPreviewState)) {
+          workingChildren.push(
+            <WebviewSessionPreview
+              key="webview-session-preview"
+              state={webviewSessionPreviewState!}
+            />,
+          );
+        }
+
+        elements.push(
+          <WorkingCard
+            key="working"
+            isExploring={isExploring}
+            lastActivity={lastActivity}
+            wasStopped={wasStopped}
+            connectionPaused={connectionPaused}
+            wasInterrupted={!!message.interrupted}
+            isFinishingWork={isFinishingWork}
+            contentRevision={workingChildren.length}
+          >
+            {workingChildren}
+          </WorkingCard>,
         );
       }
 
-      elements.push(
-        <WorkingCard
-          key="working"
-          isExploring={isExploring}
-          lastActivity={lastActivity}
-          wasStopped={wasStopped}
-          connectionPaused={connectionPaused}
-          wasInterrupted={!!message.interrupted}
-          isFinishingWork={isFinishingWork}
-          contentRevision={workingChildren.length}
-        >
-          {workingChildren}
-        </WorkingCard>,
-      );
+      if (delegationCardElements.length > 0) {
+        elements.push(...delegationCardElements);
+      }
     }
 
     if (generatedMediaItems.length > 0) {

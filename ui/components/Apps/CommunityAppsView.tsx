@@ -2,7 +2,7 @@
  * CommunityAppsView - Browse Papr Cloud + open-source community apps
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useChat } from "../../hooks/useChat";
@@ -82,6 +82,8 @@ export interface CommunityAppsViewProps {
   onSearchQueryChange?: (query: string) => void;
   /** Hide inline toolbar — parent renders search in shared topbar */
   hideToolbar?: boolean;
+  /** Right-aligned action in the section toolbar (e.g. open Skills) */
+  toolbarTrailing?: ReactNode;
   /** Increment to refetch catalog from parent refresh button */
   refreshToken?: number;
   /** Shown while the catalog is loading (defaults from scope). */
@@ -224,6 +226,7 @@ export function CommunityAppsView({
   searchQuery: searchQueryProp,
   onSearchQueryChange,
   hideToolbar = false,
+  toolbarTrailing,
   refreshToken = 0,
   loadingLabel,
 }: CommunityAppsViewProps) {
@@ -816,10 +819,10 @@ export function CommunityAppsView({
       {hideToolbar ? (
         !loading && !error ? (
           <div className="apps-view__library-toolbar">
-            <span className="apps-view__section-label">
-              {scope === "namespace" ? "Team apps" : "Community apps"}
-            </span>
-            <div className="apps-view__library-toolbar-actions">
+            <div className="apps-view__library-toolbar-leading">
+              <span className="apps-view__section-label">
+                {scope === "namespace" ? "Team apps" : "Community apps"}
+              </span>
               {catalog ? (() => {
                 const summary = catalogSummaryLine(
                   scope,
@@ -832,6 +835,9 @@ export function CommunityAppsView({
                   <span className="apps-view__library-count">{summary}</span>
                 ) : null;
               })() : null}
+            </div>
+            <div className="apps-view__library-toolbar-actions">
+              {toolbarTrailing}
             </div>
           </div>
         ) : null

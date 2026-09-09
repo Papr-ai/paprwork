@@ -2,6 +2,18 @@
 
 When `PAPR_TURSO_REPLICA_SYNC=replica-records`, legacy registry databases migrate to Turso Sync replica **on Publish / Publish changes in the app tab** for that app only. Same Turso instance (`d-*` / `tursoShortName`) — never delete/recreate.
 
+## CDC terminology (read before diagnosing)
+
+**"CDC" does not always mean legacy.** Check `syncMode` in `get_cloud_sync_status` / `papr_db_sync_status`:
+
+| Signal | Meaning |
+|--------|---------|
+| `syncMode: "legacy"` | Old Papr row sync (workspace log, `_papr_sync_log`, `turso_cdc*` tables) until cutover |
+| `syncMode: "replica"` + `pendingOps` / `cdcOperations` > 0 | **Normal Plan A** — unpushed local DML on Turso Sync. Fix: Publish changes / `papr_db_push`. Applies to **new apps born post-replica** too |
+| `turso_cdc`, `turso_sync_last_change_id` tables on disk | Legacy artifact tables — strip at cutover; not proof the app is still on legacy sync if `syncMode` is already `replica` |
+
+Do **not** tell users a replica DB is "on legacy CDC" because status shows pending ops or mentions CDC.
+
 ## Decision tree
 
 ```

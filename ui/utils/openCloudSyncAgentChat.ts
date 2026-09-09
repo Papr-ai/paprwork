@@ -82,6 +82,7 @@ export function buildSchemaDriftAgentPrompt(input: {
   }
   parts.push(
     "Workflow: get_cloud_sync_status → inspect each linked DB (syncMode legacy vs replica, schemaDrift, migrationConflict, row counts local vs Turso).",
+    "CDC terminology: check syncMode first. pendingOps/cdcOperations on syncMode=replica is normal Plan A pending push (including new post-replica apps) — NOT legacy CDC. Legacy CDC = syncMode=legacy or turso_cdc* / _papr_sync_log tables on disk.",
     "Legacy DB + Plan A rollout: cutover runs automatically on Publish changes **or** push_cloud_sync({ appId }) with default targets (github + turso) — same ordered flush (migrations → cutover → replica push → git → publish). Same Turso instance — never delete_database/recreate. Local-only legacy CDC tables (e.g. turso_cdc, turso_sync_last_change_id) are ignored for drift and stripped at cutover.",
     "After cutover (or if already replica): compare migrations/*.sql vs schema_migrations → papr_db_apply_migration for missing migrations (never papr_db_exec DDL or bash/sqlite3 on registry DB files).",
     "Migration conflict: repair_cloud_sync merge_lww first. accept_cloud only when Turso is authoritative (never when local has more rows).",
@@ -143,7 +144,7 @@ export function buildUploadFailureAgentPrompt(input: {
   parts.push(
     "Workflow: get_cloud_sync_status → inspect linked database sync (Plan A replica vs legacy) → diagnose the error.",
     "Legacy DBs migrate to Plan A replica automatically on Publish changes or push_cloud_sync({ appId }) — same pipeline (never delete/recreate Turso).",
-    "For Turso replica WAL/checkpoint or stuck pending CDC: try repair_cloud_sync with strategy accept_cloud after explaining data loss (resets local replica from cloud).",
+    "For Turso replica WAL/checkpoint or stuck pending push (pendingOps on syncMode=replica): try repair_cloud_sync with strategy accept_cloud after explaining data loss (resets local replica from cloud). Do not confuse replica pendingOps with legacy CDC.",
     "For migration conflicts: reconcile schema_migrations on primary vs local before push.",
     "For writer/git conflicts: inspect_cloud_repo and merge remote changes first.",
     "After fixing, verify web-ready and retry push_cloud_sync({ appId }) or Publish changes. Explain what failed and what you changed.",

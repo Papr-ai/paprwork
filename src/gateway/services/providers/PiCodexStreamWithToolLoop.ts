@@ -470,6 +470,11 @@ export async function* createPiCodexStreamWithToolLoop(
   };
 
   stepLoop: while (step < maxSteps) {
+    if (streamOptions.signal?.aborted) {
+      emitTurnEnd("aborted");
+      break stepLoop;
+    }
+
     // CIRCUIT BREAKER 1: Check validation error count (Issue 65)
     if (validationErrorCount >= MAX_VALIDATION_ERRORS) {
       console.error(
@@ -812,7 +817,8 @@ export async function* createPiCodexStreamWithToolLoop(
 
     if (
       (isToolUseStep || shouldDrainOrphanedTools) &&
-      finalMessage != null
+      finalMessage != null &&
+      !streamOptions.signal?.aborted
     ) {
       if (textOnlyWrapUpStepUsed) {
         // Forced text-only step — pending calls were never emitted to the UI.
@@ -1004,6 +1010,11 @@ export async function* createPiCodexStreamWithToolLoop(
       
       // Execute all tools in parallel — full results preserved for this turn.
       // Stale results from prior turns are compacted before the next model call.
+      if (streamOptions.signal?.aborted) {
+        emitTurnEnd("aborted");
+        break stepLoop;
+      }
+
       for (const tc of toolCallsThisTurn) {
         yield {
           type: "tool-call",

@@ -206,21 +206,42 @@ export function interruptedTurnNeedsContinue(
 export function finalizeStreamingMessages(messages: ChatMessage[]): ChatMessage[] {
   return messages.map((message) => {
     if (!message.isStreaming) return message;
-    const content = message.streamingContent ?? message.content ?? "";
-    const reasoning = message.streamingReasoning ?? message.reasoning;
-    return {
-      ...message,
-      isStreaming: false,
-      interrupted: true,
-      content: content || message.content,
-      ...(reasoning ? { reasoning } : {}),
-      ...(message.sequence
-        ? { sequence: settleUnfinishedToolCalls(message.sequence) }
-        : {}),
-      streamingContent: undefined,
-      streamingReasoning: undefined,
-    };
+    return markMessageAsInterrupted(message);
   });
+}
+
+/** Flag one assistant turn as interrupted and settle in-flight tools. */
+export function markMessageAsInterrupted(message: ChatMessage): ChatMessage {
+  const content = message.streamingContent ?? message.content ?? "";
+  const reasoning = message.streamingReasoning ?? message.reasoning;
+  return {
+    ...message,
+    isStreaming: false,
+    interrupted: true,
+    content: content || message.content,
+    ...(reasoning ? { reasoning } : {}),
+    ...(message.sequence
+      ? { sequence: settleUnfinishedToolCalls(message.sequence) }
+      : {}),
+    streamingContent: undefined,
+    streamingReasoning: undefined,
+  };
+}
+
+export function markAssistantTurnInterrupted(
+  chatId: string,
+  messageId: string,
+): void {
+  const { chatStates } = useChatStore.getState();
+  const chatState = chatStates.get(chatId);
+  if (!chatState) return;
+
+  const messages = chatState.messages.map((message) =>
+    message.id === messageId ? markMessageAsInterrupted(message) : message,
+  );
+  const newChatStates = new Map(chatStates);
+  newChatStates.set(chatId, { ...chatState, messages });
+  useChatStore.setState({ chatStates: newChatStates });
 }
 
 /** A tool that never reported back cannot be left as "calling". */
@@ -800,8 +821,19 @@ export function shouldAutoContinueInterruptedTurn(args: {
   const lastAssistant = [...args.messages]
     .reverse()
     .find((message) => message.role === "assistant");
-  if (!lastAssistant?.interrupted) return false;
-  if (assistantMessageWasStopped(lastAssistant)) return false;
+  if (!lastAssistant?.interrupted) {
+    // Provider dropped before any assistant row existed for this user turn.
+    if (!lastUserTurnNeedsContinue(args.messages)) return false;
+    const lastUser = findLastVisibleUserMessage(args.messages);
+    if (!lastUser) return false;
+    const lastUserIndex = args.messages.findIndex((m) => m.id === lastUser.id);
+    const hasAssistantForTurn = args.messages
+      .slice(lastUserIndex + 1)
+      .some((m) => m.role === "assistant");
+    if (hasAssistantForTurn) return false;
+  } else if (assistantMessageWasStopped(lastAssistant)) {
+    return false;
+  }
 
   // Live-stream re-subscribe is still in flight — wait before hidden continue.
   if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {

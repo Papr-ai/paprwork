@@ -2327,27 +2327,78 @@ const pendingDeepLinks = [];
 /** True after Gateway + main window are ready — auth callbacks need both. */
 let authDeepLinksReady = false;
 
+function handlePaprChatDeepLink(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "chat" || parsed.pathname !== "/open") {
+      return false;
+    }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return false;
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+    mainWindow.webContents.send("chat:open", {
+      message: parsed.searchParams.get("message") || "",
+      model: null,
+      provider: null,
+      mode: "main",
+      appId: null,
+      subAgentId: null,
+    });
+    console.log("[Electron] Opened chat from deep link");
+    return true;
+  } catch (err) {
+    console.error("[Electron] Chat deep link failed:", err);
+    return false;
+  }
+}
+
 async function flushPendingDeepLinks() {
-  if (
-    !authDeepLinksReady ||
-    !handlePaprAuthCallback ||
-    !customKeysStorage ||
-    !settingsStorage
-  ) {
+  if (pendingDeepLinks.length === 0) {
     return;
   }
-  while (pendingDeepLinks.length > 0) {
-    const pendingCount = pendingDeepLinks.length;
-    if (trackPaprLoginDeepLinkFlushStarted) {
-      trackPaprLoginDeepLinkFlushStarted(pendingCount);
+
+  let index = 0;
+  while (index < pendingDeepLinks.length) {
+    const url = pendingDeepLinks[index];
+
+    if (url.startsWith("papr://auth/callback")) {
+      if (
+        !authDeepLinksReady ||
+        !handlePaprAuthCallback ||
+        !customKeysStorage ||
+        !settingsStorage
+      ) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      if (trackPaprLoginDeepLinkFlushStarted) {
+        trackPaprLoginDeepLinkFlushStarted(pendingDeepLinks.length + 1);
+      }
+      console.log("[Electron] Flushing auth deep link");
+      try {
+        await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+      } catch (err) {
+        console.error("[Electron] Auth deep link handler failed:", err);
+      }
+      continue;
     }
-    console.log("[Electron] Flushing pending deep links:", pendingCount);
-    const url = pendingDeepLinks.shift();
-    try {
-      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
-    } catch (err) {
-      console.error("[Electron] Deep link handler failed:", err);
+
+    if (url.startsWith("papr://chat/")) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      console.log("[Electron] Flushing chat deep link");
+      handlePaprChatDeepLink(url);
+      continue;
     }
+
+    console.warn("[Electron] Unknown deep link, dropping:", url.split("?")[0]);
+    pendingDeepLinks.splice(index, 1);
   }
 }
 

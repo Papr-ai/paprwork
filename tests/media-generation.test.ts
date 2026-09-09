@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   listMediaModels,
+  openAiImageQuality,
   openAiSizeForAspectRatio,
   resolveMediaModel,
 } from "../src/gateway/services/mediaGeneration/models.js";
@@ -58,5 +59,28 @@ describe("media generation models", () => {
   it("maps aspect ratios to OpenAI sizes", () => {
     expect(openAiSizeForAspectRatio("16:9", "gpt-image-2")).toBe("1536x1024");
     expect(openAiSizeForAspectRatio("1:1", "gpt-image-2")).toBe("1024x1024");
+    expect(openAiSizeForAspectRatio("1:1", "gpt-image-2.5-flare")).toBe(
+      "1024x1024",
+    );
+  });
+
+  it("resolves GPT Image 2.5 models via Platform API and OAuth", () => {
+    const platform = resolveMediaModel("gpt-image-2.5-flare", {
+      openaiPlatformKey: "sk-proj-real",
+    });
+    expect(platform.model?.remoteModel).toBe("gpt-image-2.5-flare");
+    expect(platform.model?.apiStyle).toBe("openai_images");
+
+    const oauth = resolveMediaModel("gpt-image-2.5-sunburst", {
+      openaiOAuth: { token: "eyJ.test.token", accountId: "user-123" },
+    });
+    expect(oauth.model?.codexImageModel).toBe("gpt-image-2.5-sunburst");
+    expect(oauth.model?.apiStyle).toBe("openai_codex_image");
+  });
+
+  it("selects OpenAI image quality by model tier", () => {
+    expect(openAiImageQuality("gpt-image-2")).toBe("medium");
+    expect(openAiImageQuality("gpt-image-2.5-flare")).toBe("auto");
+    expect(openAiImageQuality("gpt-image-2.5-sunburst")).toBe("high");
   });
 });

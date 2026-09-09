@@ -31,6 +31,7 @@ export const paprDbSyncStatusTool = createTool({
     "Plan A sync status for a registry database. Two tiers only: " +
     "**replica** (embedded @tursodatabase/sync handle on desktop) and **cloud** (Turso primary). " +
     "Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. " +
+    "pendingOps/cdcOperations on syncMode=replica is normal Turso Sync pending push — NOT legacy CDC; check syncMode first. " +
     "sidecarWedge means the recorded WAL watermark names a frame the WAL does not hold. " +
     "Connecting now resets those sidecars automatically, so this is normally false; if it stays " +
     "true the replica could not be opened at all and needs repair_cloud_sync. " +

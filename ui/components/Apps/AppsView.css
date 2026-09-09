@@ -171,6 +171,17 @@
   margin-bottom: 16px;
 }
 
+.apps-view__library-toolbar-leading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.apps-view__library-toolbar-leading .apps-view__section-label {
+  margin-bottom: 0;
+}
+
 .apps-view__library-toolbar-actions {
   display: flex;
   align-items: center;
@@ -181,6 +192,34 @@
   font-size: 12px;
   color: var(--text-tertiary);
   white-space: nowrap;
+}
+
+.apps-view__skills-link {
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background-secondary, #f5f5f7) 88%, transparent);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    border-color 150ms ease,
+    color 150ms ease,
+    background 150ms ease;
+}
+
+.apps-view__skills-link:hover {
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border-color));
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.apps-view__skills-link:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  outline-offset: 2px;
 }
 
 .apps-view__inline-select {

@@ -440,6 +440,14 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     }
   }, [setSimpleError]);
 
+  const notifyLinkCopied = useCallback(() => {
+    setToast("Link copied");
+  }, []);
+
+  const notifyLinkCopyFailed = useCallback(() => {
+    setSimpleError("Could not copy link — select the URL and press ⌘C");
+  }, [setSimpleError]);
+
   const openInBrowser = useCallback(async (link: string | null) => {
     if (!link) return;
     try {
@@ -504,6 +512,8 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     publish,
     unpublish,
     copyLink,
+    notifyLinkCopied,
+    notifyLinkCopyFailed,
     openInBrowser,
     setAutoUploadEnabled,
     clearError: clearPublishError,

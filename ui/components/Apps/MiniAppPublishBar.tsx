@@ -1063,7 +1063,8 @@ export function MiniAppPublishBar({
             }
             onRefresh={() => onRefreshPreview?.()}
             onOpenInBrowser={() => void cloud.openInBrowser(previewDisplayUrl)}
-            onCopyLink={() => void cloud.copyLink(previewDisplayUrl)}
+            onCopySuccess={cloud.notifyLinkCopied}
+            onCopyError={cloud.notifyLinkCopyFailed}
           />
         ) : null}
 

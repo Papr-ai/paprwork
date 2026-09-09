@@ -2378,7 +2378,7 @@ CREATE TABLE contacts (
 
 **Rules:**
 - **PRIMARY KEY required** on every table that syncs to Turso — without it, row sync is unreliable.
-- One migration file = local apply + Turso primary apply (not two manual steps). Use \`papr_db_apply_migration\` for registry DBs — do not replay via legacy CDC.
+- One migration file = local apply + Turso primary apply (not two manual steps). Use \`papr_db_apply_migration\` for registry DBs — do not replay via legacy CDC (\`syncMode: "legacy"\` workspace-log path). Replica \`pendingOps\` / \`cdcOperations\` on \`syncMode: "replica"\` DBs are unrelated — see cloud observability CDC note.
 - Platform adds \`_papr_created_at\`, \`_papr_updated_at\`, \`_papr_row_version\` automatically — do not create or edit these columns.
 - Prefer \`UPDATE … WHERE id = ?\` over \`INSERT OR REPLACE\` for edits (keeps row metadata stable).
 
@@ -2928,6 +2928,7 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 
 **Cloud observability (debug sync, Turso, GitHub, stuck jobs — NOT Memory API):**
 - \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**. \`workspaceApps\` lists apps from local \`apps.json\`. When \`appId\` is set, read \`appWriterRepo\` for per-app GitHub repo + upload status. The \`github\` section omits \`apps/\` rows (misleading) — workspace/Jobs pull signals only.
+- **CDC terminology (do not conflate):** **Always check \`turso.sources[].syncMode\` first.** \`syncMode: "legacy"\` = old Papr row sync (\`_papr_sync_log\`, \`turso_cdc*\` tables, workspace-log push) until cutover. \`syncMode: "replica"\` = Plan A Turso Sync — **including new apps created post-replica.** On replica DBs, \`pendingPush\`, \`pendingOps\`, and \`stats.cdcOperations\` are **normal** counters for unpushed local DML — **not** legacy CDC. Fix replica pending with Publish changes / \`papr_db_push\`, not cutover or legacy sync tools. Only \`turso_cdc\`, \`turso_sync_last_change_id\`, \`_papr_sync_log\`, etc. on disk mean legacy artifacts (strip at cutover).
 - **Namespace git trap (REQUIRED):** Never run \`git ls-files apps/\`, \`git status apps/{id}\`, or \`git ls-tree ... apps/\` to check whether an app uploaded. Sync V3 pushes app code to a **separate per-app repo** (\`papr-work/app-{appId}\`), not the namespace monorepo. Untracked files under \`apps/{id}/\` locally do **not** mean cloud is empty.
 - \`inspect_cloud_repo({ appId, action: "read"|"list", ... })\` — **check app repo** — read/list the per-app writer repo (\`dist/\`, \`backend/\`, \`jobs/\` at repo root). Requires \`appId\` for list. Path \`dist/app.js\` not \`apps/{id}/dist/app.js\`.
 - \`query_cloud_turso({ sql, jobId? | tursoDatabase? | appId+alias })\` — read-only SQL on Turso cloud replica

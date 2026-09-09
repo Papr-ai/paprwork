@@ -19,7 +19,8 @@ export interface MiniAppPreviewUrlBarProps {
   refreshDisabled?: boolean;
   refreshTitle?: string;
   onOpenInBrowser?: () => void;
-  onCopyLink?: () => void;
+  onCopySuccess?: () => void;
+  onCopyError?: () => void;
   primaryAction?: MiniAppPreviewUrlBarPrimaryAction;
   toast?: string | null;
 }
@@ -32,11 +33,12 @@ export function MiniAppPreviewUrlBar({
   refreshDisabled,
   refreshTitle,
   onOpenInBrowser,
-  onCopyLink,
+  onCopySuccess,
+  onCopyError,
   primaryAction,
   toast,
 }: MiniAppPreviewUrlBarProps) {
-  const showUrlRow = Boolean(displayUrl && onOpenInBrowser && onCopyLink);
+  const showUrlRow = Boolean(displayUrl && onOpenInBrowser);
 
   return (
     <div className="mini-app-publish-bar">
@@ -54,7 +56,8 @@ export function MiniAppPreviewUrlBar({
           onRefresh={onRefresh}
           refreshDisabled={refreshDisabled}
           onOpenInBrowser={onOpenInBrowser!}
-          onCopyLink={onCopyLink!}
+          onCopySuccess={onCopySuccess}
+          onCopyError={onCopyError}
         />
       ) : null}
 

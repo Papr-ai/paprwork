@@ -50,6 +50,7 @@ import {
   cacheControlForAppAsset,
   fetchCachedRuntimeRepoFile,
   getCachedTranspiledTypeScript,
+  invalidateAccessCacheForPublishedApp,
   invalidateRepoCacheForPublishedApp,
   invalidateRepoCacheForNamespace,
   validateCachedAccess,
@@ -302,6 +303,10 @@ export class CloudAppHostService {
 
     app.post("/internal/app-revision-updated", (req, res) =>
       void this.handleInternalAppRevisionUpdated(req, res),
+    );
+
+    app.post("/internal/app-access-updated", (req, res) =>
+      void this.handleInternalAppAccessUpdated(req, res),
     );
 
     app.post("/internal/app-repo-committed", (req, res) =>
@@ -1981,6 +1986,23 @@ export class CloudAppHostService {
     } catch {
       return null;
     }
+  }
+
+  private handleInternalAppAccessUpdated(req: Request, res: Response): void {
+    if (!this.verifyCloudAppHostInternalKey(req, res)) {
+      return;
+    }
+
+    const body = req.body as { namespaceId?: string; slug?: string };
+    const namespaceId = body.namespaceId?.trim();
+    const slug = body.slug?.trim();
+    if (!namespaceId || !slug) {
+      res.status(400).json({ error: "namespaceId and slug are required" });
+      return;
+    }
+
+    invalidateAccessCacheForPublishedApp(namespaceId, slug);
+    res.json({ ok: true, cacheInvalidated: true, scope: "access" });
   }
 
   private async handleInternalAppRevisionUpdated(

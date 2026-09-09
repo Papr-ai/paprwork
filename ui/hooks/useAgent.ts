@@ -8,7 +8,7 @@ import {
   isInterruptedToolResult,
   resolveToolCallStatus,
 } from "../../src/core/utils/interruptedToolResult";
-import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { isExpectedStreamCancellation, isRecoverableProviderStreamDrop } from "../../src/core/constants/streamCancellation.js";
 import type { AgentConfig, StreamChunk } from "../types/core";
 import type { MessageAttachment, ChatMessage } from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
@@ -42,6 +42,7 @@ import {
   lastUserTurnNeedsContinue,
   recordAutoContinueAttempt,
   resetAutoContinueAttempts,
+  markAssistantTurnInterrupted,
   shouldAutoContinueInterruptedTurn,
   shouldIgnoreDuplicateDoneChunk,
   resolveChatIdForStreamRequest,
@@ -1227,6 +1228,8 @@ export function useAgent() {
               break;
             }
 
+            const recoverableDrop = isRecoverableProviderStreamDrop(rawError);
+
             // Extract provider-specific error messages
             let errorMsg = rawError;
 
@@ -1248,10 +1251,10 @@ export function useAgent() {
                 errorMsg = `Credit balance too low for ${provider}. Please add credits or switch to a different model.`;
               }
               // Pattern: Connection terminated mid-stream (undici/Node.js "terminated" error)
-              // This happens when any provider's server closes the HTTP connection
-              // unexpectedly (usage limit hit, server-side timeout, socket reset, etc.)
-              else if (rawError === "terminated" || rawError === "socket hang up" || rawError.includes("ECONNRESET")) {
-                errorMsg = `The server closed the connection mid-stream. This usually means a usage or rate limit was hit on your subscription. Please wait a moment and try again, or switch to a different model.`;
+              // Often a server-side idle timeout on long thinking/tool-heavy turns — not always rate limits.
+              else if (recoverableDrop) {
+                errorMsg =
+                  "The connection to the AI provider was interrupted mid-response (often a timeout on long requests). Paprwork will try to resume automatically.";
               }
               // Pattern: Overloaded errors (server capacity issues)
               else if (
@@ -1308,9 +1311,17 @@ export function useAgent() {
               console.error("[useAgent] Tool validation error (full details):", rawError);
             }
 
-            console.error("[useAgent] Received error chunk:", errorMsg);
-            console.error("[useAgent] Full chunk payload:", chunk.payload);
-            setError(errorMsg);
+            if (recoverableDrop) {
+              console.warn(
+                `[useAgent] Recoverable provider stream drop for ${chatId} — marking interrupted for auto-continue:`,
+                rawError,
+              );
+              setError(null);
+            } else {
+              console.error("[useAgent] Received error chunk:", errorMsg);
+              console.error("[useAgent] Full chunk payload:", chunk.payload);
+              setError(errorMsg);
+            }
 
             // Set isSending to false FIRST to prevent empty loading indicator from appearing
             setSending(chatId, false);
@@ -1324,6 +1335,9 @@ export function useAgent() {
               // finalizing — preserves whatever text/tools we already have.
               flushStreamingState(chatId, { isStreaming: false });
               finalizeStreamingMessage(streamingMessageId, chatId);
+              if (recoverableDrop) {
+                markAssistantTurnInterrupted(chatId, streamingMessageId);
+              }
               streamingMessageIdRef.current.delete(chatId);
               streamingContentRef.current.delete(chatId);
               streamingReasoningRef.current.delete(chatId);
@@ -1506,20 +1520,8 @@ export function useAgent() {
 
         finalizeStreamingMessage(streamingMessageId, chatId);
 
-        const { chatStates: afterFinalizeStates } = useChatStore.getState();
-        const afterFinalizeChat = afterFinalizeStates.get(chatId);
-        if (afterFinalizeChat) {
-          const stoppedMessages = afterFinalizeChat.messages.map((msg) =>
-            msg.id === streamingMessageId
-              ? { ...msg, interrupted: true }
-              : msg,
-          );
-          const stoppedChatStates = new Map(afterFinalizeStates);
-          stoppedChatStates.set(chatId, {
-            ...afterFinalizeChat,
-            messages: stoppedMessages,
-          });
-          useChatStore.setState({ chatStates: stoppedChatStates });
+        if (streamingMessageId) {
+          markAssistantTurnInterrupted(chatId, streamingMessageId);
         }
       }
 

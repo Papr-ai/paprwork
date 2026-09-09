@@ -557,7 +557,7 @@ When a published app misbehaves on `apps.papr.ai` — stale data, missing job ru
 1. Call `get_cloud_sync_status({ appId, jobId, includeJobLogs: true })`
 2. Check `desktopHeartbeat.desktopAwake` — if `false` and job is in `pendingCloudRuns`, user must open Paprwork
 3. Check `jobs.githubRecords` — confirms job definition reached GitHub
-4. Check `turso.sources` — `pending` with `syncMode: "replica"` + `pendingPush` means local changes not pushed; run Publish changes or `papr_db_push`. `migrationConflict` → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`). Legacy CDC shows row-level background sync separately.
+4. Check `turso.sources` — read **`syncMode` first**. `syncMode: "replica"` + `pendingPush` / `pendingOps` > 0 = normal Plan A unpushed local DML (including new post-replica apps) — run Publish changes or `papr_db_push`; **not** legacy CDC. `syncMode: "legacy"` = old workspace-log CDC until cutover. `migrationConflict` → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`).
 
 **Migration ledger duplicates:** Legacy rows may show both `0001_init` and `0001_init.sql`. Harmless for schema (same migration) but can false-flag `ledgerPaired: false`. Fix: `papr_db_reconcile_sync({ dbId, action: "dedupe_migration_ledger" })` then re-check parity.
 

@@ -6,6 +6,7 @@ import { sequenceEndsWithToolWithoutTrailingText } from "./streamOrchestrator.js
 export type PiTurnEndReason =
   | "model_stop"
   | "model_length"
+  | "aborted"
   | "memory_graceful_end"
   | "process_memory_error"
   | "validation_loop"

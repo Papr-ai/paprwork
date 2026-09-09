@@ -19,6 +19,7 @@ RUN node -e "\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=optional --no-audit --no-fund
 COPY tsconfig.gateway.json tsconfig.mini-app-sdk-node.json tsconfig.json ./
+COPY scripts/build-mini-app-sdk-browser-bundles.mjs scripts/build-mini-app-sdk-browser-bundles.mjs
 COPY src ./src
 RUN npm run build:gateway
 

@@ -30,6 +30,7 @@ export function useSkills() {
   const [skills, setSkills] = useState<SkillRecord[]>([]);
   const [catalogSkills, setCatalogSkills] = useState<CatalogSkill[]>([]);
   const [loading, setLoading] = useState(false);
+  const [catalogLoading, setCatalogLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const loadSkills = useCallback(async () => {
@@ -55,6 +56,7 @@ export function useSkills() {
   }, []);
 
   const loadCatalogSkills = useCallback(async () => {
+    setCatalogLoading(true);
     setError(null);
     try {
       const response = await gateway.send("skill:catalog");
@@ -63,6 +65,8 @@ export function useSkills() {
       setError(
         err instanceof Error ? err.message : "Failed to load catalog skills",
       );
+    } finally {
+      setCatalogLoading(false);
     }
   }, []);
 
@@ -147,12 +151,14 @@ export function useSkills() {
 
   useEffect(() => {
     void loadSkills();
-  }, [loadSkills]);
+    void loadCatalogSkills();
+  }, [loadSkills, loadCatalogSkills]);
 
   return {
     skills,
     catalogSkills,
     loading,
+    catalogLoading,
     error,
     loadSkills,
     loadCatalogSkills,

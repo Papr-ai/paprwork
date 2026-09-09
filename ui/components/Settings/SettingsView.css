@@ -2425,12 +2425,6 @@ button.about-link {
   margin: 0;
 }
 
-.ai-provider-card__models {
-  font-size: 12px;
-  color: var(--text-tertiary);
-  line-height: 1.4;
-}
-
 /* Provider Badges */
 .ai-provider-badge {
   font-size: 11px;

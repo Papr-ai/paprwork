@@ -29,6 +29,7 @@ import {
   isWaitingForLocalPreviewGateway,
 } from "../../utils/localPreviewGatewayGate";
 import { warmIframeActivationDelayMs } from "../../utils/appPreviewWarmActivation";
+import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
 import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
@@ -121,6 +122,8 @@ export function MiniAppView({
     viewMode === "published" &&
     ((isTrackCollaborator && !!upstreamLiveUrl) ||
       (cloud.live && !!cloud.publishedWebUrl));
+
+  useCloudPreviewChatBridge(isPublishedPreview);
 
   useEffect(() => {
     if (!isPublishedPreview || !publishedLiveUrl) {

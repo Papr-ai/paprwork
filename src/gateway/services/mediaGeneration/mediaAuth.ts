@@ -74,7 +74,7 @@ export async function loadMediaAuthContext(): Promise<MediaAuthContext> {
 
 export function describeOpenAiMediaAuth(ctx: MediaAuthContext): string {
   if (ctx.openaiOAuth) {
-    return "ChatGPT OAuth (Codex image_generation → gpt-image-2)";
+    return "ChatGPT OAuth (Codex image_generation)";
   }
   if (ctx.openaiPlatformKey) {
     return "OpenAI Platform API key";

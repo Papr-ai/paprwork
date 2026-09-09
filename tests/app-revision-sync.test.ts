@@ -5,6 +5,7 @@ import {
 } from "../src/gateway/services/appRuntime/cloudAppHostCache.js";
 import {
   parsePublishedAppRoute,
+  resolvePublishRouteForNotify,
 } from "../src/gateway/services/cloudSync/notifyCloudAppRevision.js";
 
 describe("parsePublishedAppRoute", () => {
@@ -20,6 +21,28 @@ describe("parsePublishedAppRoute", () => {
   it("returns null for invalid URLs", () => {
     expect(parsePublishedAppRoute(null)).toBeNull();
     expect(parsePublishedAppRoute("https://apps.papr.ai/")).toBeNull();
+  });
+});
+
+describe("resolvePublishRouteForNotify", () => {
+  it("prefers share URL over slug fallback", () => {
+    expect(
+      resolvePublishRouteForNotify({
+        shareUrl: "https://apps.papr.ai/ns-a/my-app/",
+        slug: "other-slug",
+        namespaceId: "ns-b",
+      }),
+    ).toEqual({ namespaceId: "ns-a", slug: "my-app" });
+  });
+
+  it("falls back to slug and active namespace", () => {
+    expect(
+      resolvePublishRouteForNotify({
+        shareUrl: null,
+        slug: "lead-prospector",
+        namespaceId: "85ZIB7mD1V",
+      }),
+    ).toEqual({ namespaceId: "85ZIB7mD1V", slug: "lead-prospector" });
   });
 });
 

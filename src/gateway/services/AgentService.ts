@@ -1796,6 +1796,9 @@ export class AgentService {
           piToolContext,
           // Resume the loop when the model stops with plan work outstanding.
           async (stopInfo) => {
+            if (abortController.signal.aborted) {
+              return null;
+            }
             const { decideTurnEnd, buildPlanContinuationNudge } = await import(
               "./agent/turnContinuation.js"
             );

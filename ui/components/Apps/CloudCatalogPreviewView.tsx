@@ -14,6 +14,7 @@ import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import { MiniAppPreviewUrlBar } from "./MiniAppPreviewUrlBar";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
+import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
 import "./MiniAppPublishBar.css";
 import "./CloudCatalogPreviewView.css";
 
@@ -103,6 +104,8 @@ export function CloudCatalogPreviewView({
     finishInstallWizard,
     openInstallHelp,
   } = useCloudCatalogInstallFlow();
+
+  useCloudPreviewChatBridge(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,16 +265,15 @@ export function CloudCatalogPreviewView({
     }
   }, [preview.liveUrl]);
 
-  const copyLink = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(preview.liveUrl);
-      setLinkToast("Link copied");
-      window.setTimeout(() => setLinkToast(null), 2000);
-    } catch {
-      setLinkToast("Could not copy link");
-      window.setTimeout(() => setLinkToast(null), 2500);
-    }
-  }, [preview.liveUrl]);
+  const notifyLinkCopied = useCallback(() => {
+    setLinkToast("Link copied");
+    window.setTimeout(() => setLinkToast(null), 2000);
+  }, []);
+
+  const notifyLinkCopyFailed = useCallback(() => {
+    setLinkToast("Could not copy link");
+    window.setTimeout(() => setLinkToast(null), 2500);
+  }, []);
 
   const refreshPreview = useCallback(() => {
     setLoadError(null);
@@ -314,7 +316,8 @@ export function CloudCatalogPreviewView({
         refreshDisabled={phase === "loading"}
         refreshTitle="Refresh web preview"
         onOpenInBrowser={() => void openInBrowser()}
-        onCopyLink={() => void copyLink()}
+        onCopySuccess={notifyLinkCopied}
+        onCopyError={notifyLinkCopyFailed}
         primaryAction={
           showCustomize
             ? {

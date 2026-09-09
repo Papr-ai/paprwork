@@ -96,34 +96,33 @@ export function CloudPublishDependenciesPanel({
               }
               return (
                 <li key={dep.appId} className="cloud-deps-panel__dep">
-                  <div className="cloud-deps-panel__dep-main">
-                    <strong>{label}</strong>
-                    <span className="cloud-deps-panel__dep-enables">
-                      Enables: {enables}
-                    </span>
-                    <span className="cloud-deps-panel__dep-status">{status}</span>
+                  <div className="cloud-deps-panel__dep-header">
+                    <strong className="cloud-deps-panel__dep-title">{label}</strong>
+                    {dep.localAppExists && onOpenDependencyApp ? (
+                      <button
+                        type="button"
+                        className="share-sheet__secondary-btn cloud-deps-panel__open-btn"
+                        onClick={() => onOpenDependencyApp(dep.appId, dep.title)}
+                      >
+                        Open app
+                      </button>
+                    ) : null}
                   </div>
-                  {dep.localAppExists && onOpenDependencyApp ? (
-                    <button
-                      type="button"
-                      className="share-sheet__secondary-btn cloud-deps-panel__open-btn"
-                      onClick={() => onOpenDependencyApp(dep.appId, dep.title)}
-                    >
-                      Open app
-                    </button>
-                  ) : null}
+                  <p className="cloud-deps-panel__dep-enables">Enables: {enables}</p>
+                  <p className="cloud-deps-panel__dep-status">{status}</p>
                 </li>
               );
             })}
             {readiness.dependencies.databases.map((dbDep) => (
               <li key={dbDep.dbId} className="cloud-deps-panel__dep">
-                <div className="cloud-deps-panel__dep-main">
-                  <strong>{dbDep.alias ?? dbDep.dbId}</strong>
-                  <span className="cloud-deps-panel__dep-enables">
-                    Owned by{" "}
-                    {dbDep.ownerTitle ?? dbDep.ownerSlug ?? dbDep.ownerAppId}
-                  </span>
+                <div className="cloud-deps-panel__dep-header">
+                  <strong className="cloud-deps-panel__dep-title">
+                    {dbDep.alias ?? dbDep.dbId}
+                  </strong>
                 </div>
+                <p className="cloud-deps-panel__dep-enables">
+                  Owned by {dbDep.ownerTitle ?? dbDep.ownerSlug ?? dbDep.ownerAppId}
+                </p>
               </li>
             ))}
           </ul>

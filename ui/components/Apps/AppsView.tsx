@@ -26,6 +26,7 @@ import {
   writeAppsViewTab,
   type AppsViewTab,
 } from "../../utils/appsViewTabPersistence";
+import { openSkillsTab } from "../../utils/openSkillsTab";
 
 type ViewTab = AppsViewTab;
 type SortOption = "recent" | "name";
@@ -55,6 +56,24 @@ export function AppsView() {
   } = useArtifacts("apps");
   const { createTab, switchToTab } = useTabs();
   const papr = usePaprNamespace();
+
+  const openSkillsMarketplace = useCallback(() => {
+    openSkillsTab(createTab, switchToTab, "marketplace");
+  }, [createTab, switchToTab]);
+
+  const openInstalledSkills = useCallback(() => {
+    openSkillsTab(createTab, switchToTab, "installed");
+  }, [createTab, switchToTab]);
+
+  const skillsMarketplaceButton = (
+    <button
+      type="button"
+      className="apps-view__skills-link"
+      onClick={openSkillsMarketplace}
+    >
+      Skills Marketplace
+    </button>
+  );
 
   const showNamespaceTabs = papr.isLoggedIn && Boolean(papr.namespaceId);
 
@@ -525,6 +544,7 @@ export function AppsView() {
             searchQuery={catalogSearchQuery}
             onSearchQueryChange={setCatalogSearchQuery}
             hideToolbar
+            toolbarTrailing={skillsMarketplaceButton}
             refreshToken={catalogRefreshToken}
           />
         </div>
@@ -539,6 +559,7 @@ export function AppsView() {
             searchQuery={catalogSearchQuery}
             onSearchQueryChange={setCatalogSearchQuery}
             hideToolbar
+            toolbarTrailing={skillsMarketplaceButton}
             refreshToken={catalogRefreshToken}
           />
         </div>
@@ -546,10 +567,19 @@ export function AppsView() {
         <div className="apps-view__content">
             {!loading ? (
               <div className="apps-view__library-toolbar">
-                <span className="apps-view__section-label">App library</span>
+                <div className="apps-view__library-toolbar-leading">
+                  <span className="apps-view__section-label">App library</span>
+                  <span className="apps-view__library-count">{apps.length} apps</span>
+                </div>
                 <div className="apps-view__library-toolbar-actions">
                   {renderLibraryFilters()}
-                  <span className="apps-view__library-count">{apps.length} apps</span>
+                  <button
+                    type="button"
+                    className="apps-view__skills-link"
+                    onClick={openInstalledSkills}
+                  >
+                    Installed Skills
+                  </button>
                 </div>
               </div>
             ) : null}

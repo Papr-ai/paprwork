@@ -111,7 +111,9 @@ Flow (registry DBs with `syncMode: "replica"`):
 3. Desktop on wake: heartbeat / manual sync runs **`papr_db_pull`** (or app Publish changes / `push_cloud_sync` pull-before-push bookends) → local embedded replica tails new frames
 4. Agent tools: `papr_db_sync_status` shows `online`, `pendingPush`, `migrationConflict` — use `papr_db_push` / `repair_cloud_sync` when blocked
 
-**Legacy path (`syncMode: "legacy"`):** still uses CDC + optional `sync-index` polling until cutover. Prefer replica tools when status shows `syncMode: "replica"`.
+**Legacy path (`syncMode: "legacy"`):** still uses Papr's old workspace-log CDC + optional `sync-index` polling until cutover. Prefer replica tools when status shows `syncMode: "replica"`.
+
+**Replica `pendingOps` / `cdcOperations` is not legacy CDC:** On `syncMode: "replica"` (including new post-replica apps), those fields are Turso Sync's normal pending-push counter. Run Publish changes or `papr_db_push` — do not assume cutover or legacy sync is needed.
 
 **Published cloud apps:** read Turso primary live — no desktop pull needed for those UIs.
 

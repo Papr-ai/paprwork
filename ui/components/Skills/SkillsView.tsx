@@ -3,6 +3,8 @@ import { useChat } from "../../hooks/useChat";
 import { useSkills } from "../../hooks/useSkills";
 import type { CatalogSkill, SkillRecord } from "../../hooks/useSkills";
 import { useTabs } from "../../hooks/useTabs";
+import { useTabStore } from "../../stores/tabStore";
+import type { SkillsTabView } from "../../utils/openSkillsTab";
 import { startSkillChat } from "../../utils/startSkillChat";
 import "./SkillsView.css";
 
@@ -36,6 +38,9 @@ const TOP_LEVEL_CATEGORIES = [
 ] as const;
 
 type TopLevelCategory = (typeof TOP_LEVEL_CATEGORIES)[number];
+
+/** Collapsed featured grid: 2 rows × 2 columns on desktop */
+const FEATURED_SKILL_COLLAPSED_LIMIT = 4;
 
 const TOP_LEVEL_LABELS: Record<TopLevelCategory, string> = {
   all: "All Skills",
@@ -350,9 +355,9 @@ export function SkillsView() {
     skills,
     catalogSkills,
     loading,
+    catalogLoading,
     error,
     deleteSkill,
-    loadCatalogSkills,
     installCatalogSkill,
   } = useSkills();
   const { createChat } = useChat();
@@ -363,11 +368,39 @@ export function SkillsView() {
     useState<OtherSubcategory>("all-other");
   const [searchQuery, setSearchQuery] = useState("");
   const [showInstalled, setShowInstalled] = useState(false);
+  const [featuredExpanded, setFeaturedExpanded] = useState(false);
   const [installingKey, setInstallingKey] = useState<string | null>(null);
+  const activeTabId = useTabStore((state) => state.activeTabId);
+
+  const applySkillsView = useCallback((view: SkillsTabView | undefined) => {
+    if (view === "installed") {
+      setShowInstalled(true);
+      return;
+    }
+    if (view === "marketplace") {
+      setShowInstalled(false);
+    }
+  }, []);
 
   useEffect(() => {
-    void loadCatalogSkills();
-  }, [loadCatalogSkills]);
+    const tab = activeTabId ? useTabStore.getState().getTab(activeTabId) : undefined;
+    if (tab?.type !== "skills") {
+      return;
+    }
+    const view = tab.metadata?.skillsView;
+    applySkillsView(
+      view === "installed" || view === "marketplace" ? view : undefined,
+    );
+  }, [activeTabId, applySkillsView]);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ view?: SkillsTabView }>).detail;
+      applySkillsView(detail?.view);
+    };
+    window.addEventListener("papr:open-skills", handler);
+    return () => window.removeEventListener("papr:open-skills", handler);
+  }, [applySkillsView]);
 
   const installedCatalogKeys = useMemo(
     () =>
@@ -467,6 +500,23 @@ export function SkillsView() {
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [skills, catalogSkills, currentCategory, otherSubcategory, searchQuery]);
+
+  const visibleFeaturedInstalled = useMemo(() => {
+    if (featuredExpanded) {
+      return featuredInstalled;
+    }
+    return featuredInstalled.slice(0, FEATURED_SKILL_COLLAPSED_LIMIT);
+  }, [featuredInstalled, featuredExpanded]);
+
+  const hiddenFeaturedCount = Math.max(
+    0,
+    featuredInstalled.length - FEATURED_SKILL_COLLAPSED_LIMIT,
+  );
+  const showFeaturedExpand = hiddenFeaturedCount > 0;
+
+  useEffect(() => {
+    setFeaturedExpanded(false);
+  }, [currentCategory, otherSubcategory, searchQuery]);
 
   const marketplaceCatalog = useMemo(() => {
     return catalogSkills
@@ -666,7 +716,7 @@ export function SkillsView() {
                       </span>
                     </div>
                     <div className="skills-featured__grid">
-                      {featuredInstalled.map((skill) => {
+                      {visibleFeaturedInstalled.map((skill) => {
                         const category = resolveInstalledFineCategory(
                           skill,
                           catalogSkills,
@@ -693,6 +743,18 @@ export function SkillsView() {
                         );
                       })}
                     </div>
+                    {showFeaturedExpand ? (
+                      <button
+                        type="button"
+                        className="skills-featured__expand"
+                        onClick={() => setFeaturedExpanded((expanded) => !expanded)}
+                        aria-expanded={featuredExpanded}
+                      >
+                        {featuredExpanded
+                          ? "Show less"
+                          : `Show ${hiddenFeaturedCount} more`}
+                      </button>
+                    ) : null}
                   </section>
                 )}
 
@@ -701,14 +763,24 @@ export function SkillsView() {
                     <div className="skills-section-heading">
                       <h2>Browse marketplace</h2>
                       <p>
-                        {marketplaceCatalog.length} more skill
-                        {marketplaceCatalog.length === 1 ? "" : "s"} to explore
+                        {catalogLoading
+                          ? "Loading marketplace skills…"
+                          : `${marketplaceCatalog.length} more skill${
+                              marketplaceCatalog.length === 1 ? "" : "s"
+                            } to explore`}
                       </p>
                     </div>
                   )}
 
-                  <div className="skills-grid">
-                    {marketplaceCatalog.map((skill) => {
+                  {catalogLoading ? (
+                    <div className="skills-loading skills-loading--inline">
+                      <div className="spinner" />
+                      <p>Loading marketplace skills…</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="skills-grid">
+                        {marketplaceCatalog.map((skill) => {
                       const category = resolveFineCategory(skill);
                       const key = catalogKey(skill.source, skill.id);
                       const isInstalling = installingKey === key;
@@ -731,22 +803,24 @@ export function SkillsView() {
                         />
                       );
                     })}
-                  </div>
-
-                  {marketplaceCatalog.length === 0 &&
-                    featuredInstalled.length === 0 && (
-                      <div className="skills-empty">
-                        <h3>No matching skills</h3>
-                        <p>Try another category or search term.</p>
                       </div>
-                    )}
 
-                  {marketplaceCatalog.length === 0 &&
-                    featuredInstalled.length > 0 && (
-                      <div className="skills-empty skills-empty--inline">
-                        <p>No additional marketplace skills match this filter.</p>
-                      </div>
-                    )}
+                      {marketplaceCatalog.length === 0 &&
+                        featuredInstalled.length === 0 && (
+                          <div className="skills-empty">
+                            <h3>No matching skills</h3>
+                            <p>Try another category or search term.</p>
+                          </div>
+                        )}
+
+                      {marketplaceCatalog.length === 0 &&
+                        featuredInstalled.length > 0 && (
+                          <div className="skills-empty skills-empty--inline">
+                            <p>No additional marketplace skills match this filter.</p>
+                          </div>
+                        )}
+                    </>
+                  )}
                 </section>
               </>
             )}

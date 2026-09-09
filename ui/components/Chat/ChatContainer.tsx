@@ -45,6 +45,7 @@ import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn, shouldDrainMessageQueue } from "../../lib/agentStreamRecovery";
+import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
 
@@ -710,14 +711,23 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     [selectedModel, sendMessage, chatId, ensureModel],
   );
 
+  const stopAgentAndClearQueue = useCallback(async () => {
+    setMessageQueue((prev) => clearQueuedMessagesForChat(prev, chatId));
+    await interruptActiveStream(chatId);
+  }, [chatId, interruptActiveStream]);
+
   const handleStopAgent = useCallback(async () => {
+    // Block auto-drain — Stop means halt, not "stop then send whatever was queued".
+    isProcessingQueue.current = true;
     try {
-      await interruptActiveStream(chatId);
+      await stopAgentAndClearQueue();
       console.log(`[ChatContainer] Stopped agent for chat ${chatId}`);
     } catch (error) {
       console.error("[ChatContainer] Failed to stop agent:", error);
+    } finally {
+      isProcessingQueue.current = false;
     }
-  }, [chatId, interruptActiveStream]);
+  }, [chatId, stopAgentAndClearQueue]);
 
   // Queue management handlers
   const handleQueueMessage = useCallback((message: string, context?: Artifact[]) => {
@@ -757,14 +767,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       queueTransitionInFlightRef.current = true;
       isProcessingQueue.current = true;
       try {
-        await handleStopAgent();
+        // Double-enter replaces in-flight work — discard any queued messages.
+        await stopAgentAndClearQueue();
         await handleSendMessage(message, contextArtifacts);
       } finally {
         isProcessingQueue.current = false;
         queueTransitionInFlightRef.current = false;
       }
     },
-    [handleSendMessage, handleStopAgent],
+    [handleSendMessage, stopAgentAndClearQueue],
   );
 
   const handleRemoveQueued = useCallback((messageId: string) => {

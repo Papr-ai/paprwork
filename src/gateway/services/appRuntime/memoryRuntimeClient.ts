@@ -15,6 +15,10 @@ import type {
 } from "../../../core/types/workspaceLog.js";
 import { getMemoryServerBaseUrl, cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { buildCloudVaultRequestBody } from "../../../core/utils/cloudReposScope.js";
+import {
+  mergeRuntimeVaultKeyNames,
+  runtimeVaultKeyLookupScopes,
+} from "./runtimeVaultKeyScopes.js";
 
 export function getCloudAppHostKey(): string {
   const key = process.env.PAPR_CLOUD_APP_HOST_KEY;
@@ -181,24 +185,58 @@ export async function fetchRuntimeVaultKeyNames(
     return [];
   }
   try {
-    const scope = auth.namespaceId ? "namespace" : "user";
-    const query = scope === "namespace"
-      ? `scope=namespace&namespace_id=${encodeURIComponent(auth.namespaceId)}`
-      : "scope=user";
-    const res = await runtimeFetch(
-      `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?${query}`,
-      {
-        method: "GET",
-        headers: runtimeHeaders(auth),
-      },
+    const lookups = runtimeVaultKeyLookupScopes(auth.namespaceId);
+    const lists = await Promise.all(
+      lookups.map(async ({ scope, query }) => {
+        const res = await runtimeFetch(
+          `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?${query}`,
+          {
+            method: "GET",
+            headers: runtimeHeaders(auth),
+          },
+        );
+        if (!res.ok) {
+          console.warn(
+            `[RuntimeVault] vault/keys ${scope} failed (${res.status}) for ${auth.namespaceId}/${auth.slug}`,
+          );
+          return [] as string[];
+        }
+        const json = (await res.json()) as { keys?: Array<{ name: string }> };
+        return (json.keys ?? []).map((entry) => entry.name);
+      }),
     );
-    if (!res.ok) {
-      return [];
-    }
-    const json = (await res.json()) as { keys?: Array<{ name: string }> };
-    return (json.keys ?? []).map((entry) => entry.name);
-  } catch {
+    return mergeRuntimeVaultKeyNames(...lists);
+  } catch (err) {
+    console.warn(
+      `[RuntimeVault] vault/keys list failed for ${auth.namespaceId}/${auth.slug}:`,
+      (err as Error).message,
+    );
     return [];
+  }
+}
+
+/** Same resolution path as cloud bash/jobs — accurate per-app namespace context. */
+export async function resolveMissingRuntimeVaultKeyNames(
+  auth: AppRuntimeRouteAuth,
+  keyNames: readonly string[],
+): Promise<string[]> {
+  const required = keyNames.map((name) => name.trim()).filter((name) => name.length > 0);
+  if (required.length === 0) {
+    return [];
+  }
+  if (!auth.sessionToken) {
+    return required;
+  }
+  try {
+    const { missing } = await resolveRuntimeVaultEnv(auth, { keyNames: required });
+    return missing;
+  } catch (err) {
+    console.warn(
+      `[RuntimeVault] vault-resolve failed for ${auth.namespaceId}/${auth.slug}, falling back to key list:`,
+      (err as Error).message,
+    );
+    const present = new Set(await fetchRuntimeVaultKeyNames(auth));
+    return required.filter((name) => !present.has(name));
   }
 }
 

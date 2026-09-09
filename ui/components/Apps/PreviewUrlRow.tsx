@@ -2,6 +2,9 @@
  * URL row with refresh / open / copy — shared by publish bar and catalog preview.
  */
 
+import { useCallback, useState } from "react";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
+
 function OpenExternalIcon() {
   return (
     <svg className="share-sheet__icon" viewBox="0 0 16 16" fill="none" aria-hidden>
@@ -56,7 +59,10 @@ export interface PreviewUrlRowProps {
   onRefresh?: () => void;
   refreshDisabled?: boolean;
   onOpenInBrowser: () => void;
-  onCopyLink: () => void;
+  /** Called after copy succeeds (e.g. show toast). Copy uses Electron-safe clipboard APIs. */
+  onCopySuccess?: () => void;
+  /** Called when copy fails. */
+  onCopyError?: () => void;
 }
 
 export function PreviewUrlRow({
@@ -65,8 +71,22 @@ export function PreviewUrlRow({
   onRefresh,
   refreshDisabled = false,
   onOpenInBrowser,
-  onCopyLink,
+  onCopySuccess,
+  onCopyError,
 }: PreviewUrlRowProps) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopyLink = useCallback(async () => {
+    const ok = await copyTextToClipboard(displayUrl);
+    if (ok) {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+      onCopySuccess?.();
+    } else {
+      onCopyError?.();
+    }
+  }, [displayUrl, onCopyError, onCopySuccess]);
+
   return (
     <div className="mini-app-publish-bar__url-row">
       <span className="mini-app-publish-bar__url" title={displayUrl}>
@@ -94,9 +114,9 @@ export function PreviewUrlRow({
       <button
         type="button"
         className="mini-app-publish-bar__icon-button"
-        title="Copy link"
-        aria-label="Copy link"
-        onClick={onCopyLink}
+        title={copied ? "Copied!" : "Copy link"}
+        aria-label={copied ? "Copied" : "Copy link"}
+        onClick={() => void handleCopyLink()}
       >
         <CopyIcon />
       </button>

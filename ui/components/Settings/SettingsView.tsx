@@ -1011,6 +1011,51 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.4" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.4</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>SDK Bundle Verification</strong>
+                <p>
+                  Desktop and cloud builds now verify every prebuilt mini-app SDK
+                  bundle after compile — catches missing /__papr__/ assets before
+                  release.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud Runtime Vault Scopes</strong>
+                <p>
+                  Tighter credential scoping for cloud-hosted apps with safer
+                  memory and database runtime access.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Chat &amp; Stream Reliability</strong>
+                <p>
+                  Improved message queue handling, stream recovery, and stop/cancel
+                  behavior during long agent turns.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Skills &amp; Publish UX</strong>
+                <p>
+                  Skills tab navigation polish, cloud preview chat bridge, and clearer
+                  publish dependency panels.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.4"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.3" && (
           <div className="about-card">
             <h3>What's New in v2.6.3</h3>

@@ -15,6 +15,7 @@ tests/
 test/
 scripts/*
 !scripts/build-mini-app-sdk-browser-bundles.mjs
+!scripts/verify-mini-app-sdk-bundles.mjs
 docs/
 .github/
 ui/dist

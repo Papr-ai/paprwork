@@ -4,6 +4,7 @@
 
 import * as fs from "fs";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import {
@@ -251,6 +252,29 @@ function parsePublishConfig(
   };
 }
 
+function scheduleCloudAppHostAccessInvalidation(
+  config: Pick<CloudPublishConfig, "shareUrl" | "slug">,
+): void {
+  void import("./cloudSync/notifyCloudAppRevision.js")
+    .then(({ notifyCloudAppAccessUpdated, resolvePublishRouteForNotify }) => {
+      const route = resolvePublishRouteForNotify({
+        shareUrl: config.shareUrl,
+        slug: config.slug,
+        namespaceId: readActiveWorkspacePointer()?.namespaceId,
+      });
+      if (!route) {
+        return;
+      }
+      return notifyCloudAppAccessUpdated(route);
+    })
+    .catch((error: unknown) => {
+      console.warn(
+        "[CloudPublish] App access cache notify skipped:",
+        error instanceof Error ? error.message.slice(0, 120) : String(error),
+      );
+    });
+}
+
 export class CloudAppPublishService {
   private readonly boundPaprDir: string;
   private readonly boundWriteGeneration: number;
@@ -437,6 +461,7 @@ export class CloudAppPublishService {
       },
       this.paprDir,
     );
+    scheduleCloudAppHostAccessInvalidation(config);
     return config;
   }
 
@@ -534,6 +559,7 @@ export class CloudAppPublishService {
       },
       this.paprDir,
     );
+    scheduleCloudAppHostAccessInvalidation(config);
     return config;
   }
 
@@ -1066,6 +1092,7 @@ export class CloudAppPublishService {
         );
       });
 
+    scheduleCloudAppHostAccessInvalidation(config);
     return config;
   }
 
@@ -1137,12 +1164,20 @@ export class CloudAppPublishService {
   }
 
   async unpublishApp(appId: string): Promise<void> {
+    const memory = await this.fetchMemoryPublishResponse(appId);
+
     await this.revokeAppFiles(appId);
     const response = await cloudApiFetch(
       `/v1/cloud/apps/publish/${encodeURIComponent(appId)}`,
       { method: "DELETE" },
     );
     if (response.status === 404) {
+      if (memory) {
+        scheduleCloudAppHostAccessInvalidation({
+          shareUrl: memory.shareUrl ?? null,
+          slug: memory.slug ?? null,
+        });
+      }
       return;
     }
     if (!response.ok) {
@@ -1150,6 +1185,13 @@ export class CloudAppPublishService {
       throw new Error(
         `Cloud unpublish failed (${response.status}): ${body.slice(0, 200)}`,
       );
+    }
+
+    if (memory) {
+      scheduleCloudAppHostAccessInvalidation({
+        shareUrl: memory.shareUrl ?? null,
+        slug: memory.slug ?? null,
+      });
     }
   }
 

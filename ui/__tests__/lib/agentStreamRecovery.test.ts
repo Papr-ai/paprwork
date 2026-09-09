@@ -589,4 +589,43 @@ describe("autoContinueInterruptedTurn helpers", () => {
       }),
     ).toBe(true);
   });
+
+  it("allows auto-continue when provider dropped before any assistant row", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("does not auto-continue when assistant exists but was not marked interrupted", () => {
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Build it" },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Partial answer without interrupted flag",
+      },
+    ];
+
+    expect(
+      shouldAutoContinueInterruptedTurn({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe(false);
+  });
 });

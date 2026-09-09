@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import type { ResolvedMediaModel } from "./types.js";
-import { openAiSizeForAspectRatio } from "./models.js";
+import { openAiImageQuality, openAiSizeForAspectRatio } from "./models.js";
 import { generateWithOpenAiCodexOAuth } from "./openaiCodexImage.js";
 import { generateWithVeoModel } from "./veoVideo.js";
 
@@ -147,7 +147,7 @@ export async function generateWithOpenAiImageModel(input: {
       prompt: input.prompt,
       n: 1,
       size: openAiSizeForAspectRatio(input.aspectRatio, input.model.id),
-      quality: "medium",
+      quality: openAiImageQuality(input.model.id),
       response_format: "b64_json",
     }),
   });

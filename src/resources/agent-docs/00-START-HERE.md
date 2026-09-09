@@ -94,6 +94,8 @@ If the task is tiny and explicit, you may merge steps. Always explain tradeoffs 
 
 **Plan A semantics:** Schema = migration file → `papr_db_apply_migration` (replica → Turso primary → pull). Rows = DML auto-pushes when online. Schema drift → `papr_db_migration_parity` + `papr_db_reconcile_sync` (not `merge_lww`). Legacy duplicate ledger ids (`0001_foo` + `0001_foo.sql`) → `papr_db_reconcile_sync({ action: "dedupe_migration_ledger" })`.
 
+**CDC terminology:** Two different meanings — check `syncMode` first. **Legacy CDC** (`syncMode: "legacy"`) = old Papr sync tables (`turso_cdc*`, `_papr_sync_log`) until cutover. **Replica `pendingOps` / `cdcOperations`** (`syncMode: "replica"`) = normal Turso Sync pending-push counter on Plan A DBs (including new post-replica apps) — **not** legacy. Fix with Publish changes / `papr_db_push`, not cutover.
+
 ---
 
 ## Agent-Docs Index
