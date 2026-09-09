@@ -98,17 +98,18 @@ async function resolveConfigForChat(
   }
 
   if (!apiKey) {
-    const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-    if (paprKeys.PAPR_API_KEY) {
+    const { resolvePaprProxyAuth } = await import("../utils/keyResolver.js");
+    const paprProxy = await resolvePaprProxyAuth();
+    if (paprProxy) {
       console.log(
         "[SubAgentResponseTrigger] No direct API key — falling back to Papr AI proxy",
       );
       return {
         provider,
         model,
-        apiKey: paprKeys.PAPR_API_KEY,
-        authType,
-        usePaprProxy: true,
+        apiKey: paprProxy.apiKey,
+        authType: "apiKey",
+        usePaprProxy: paprProxy.usePaprProxy,
         systemPrompt: "",
       };
     }

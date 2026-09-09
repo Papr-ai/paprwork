@@ -1284,8 +1284,16 @@ export class AgentService {
       let cumulativeSteps = 0;
       cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
-      // Build native web search tools configuration
-      const nativeSearchTools = await this.buildNativeSearchTools(config.provider);
+      // Native provider search tools (OpenAI web_search, Gemini google_search) target
+      // direct provider APIs — they break when the model routes through Papr proxy.
+      const nativeSearchTools = config.usePaprProxy
+        ? {}
+        : await this.buildNativeSearchTools(config.provider);
+      if (config.usePaprProxy) {
+        console.log(
+          `[AgentService] Skipping native provider search tools — using Papr AI proxy for ${config.provider}`,
+        );
+      }
 
       const streamTextOptions: any = {
         model,

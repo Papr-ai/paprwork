@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import {
   getLegacyDefaultSource,
   getSingleLinkedSource,
+  isUnlinkedDataSource,
+  omitUnlinkedDataSources,
   parseDataSourcesFile,
   resolveAppDataSource,
   resolveAttachAlias,
@@ -134,5 +136,37 @@ describe("appDataSources", () => {
       { sourceId: "metrics", operation: "write" },
     );
     expect(resolved.alias).toBe("metrics");
+  });
+
+  test("isUnlinkedDataSource detects shipped Home placeholders", () => {
+    expect(
+      isUnlinkedDataSource({
+        id: "",
+        type: "sqlite",
+        jobId: "",
+        alias: "Daily Brief Generator",
+        dbPath: "",
+        tables: ["briefs"],
+        linkedAt: "2026-04-07T00:00:00.000Z",
+      }),
+    ).toBe(true);
+    expect(isUnlinkedDataSource(auditSource)).toBe(false);
+  });
+
+  test("omitUnlinkedDataSources treats template config as empty", () => {
+    const config = omitUnlinkedDataSources({
+      sources: [
+        {
+          id: "",
+          type: "sqlite",
+          jobId: "",
+          alias: "Daily Brief Generator",
+          dbPath: "",
+          tables: ["briefs"],
+          linkedAt: "2026-04-07T00:00:00.000Z",
+        },
+      ],
+    });
+    expect(config.sources).toEqual([]);
   });
 });

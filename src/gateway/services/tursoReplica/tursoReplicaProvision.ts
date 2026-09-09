@@ -27,7 +27,9 @@ import { clearLegacyTursoSyncStateForDbPath } from "../tursoSyncState.js";
 import {
   countUserRows,
   hasBootstrapPendingMarker,
+  isReplicaUserDataTable,
 } from "./tursoReplicaBootstrapMarker.js";
+import type { TursoReplicaPushResponse } from "./tursoReplicaTypes.js";
 import {
   bumpRemoteSyncVersion,
   ensureLocalDbChangeLogReady,
@@ -200,12 +202,87 @@ export async function attachTursoReplicaInPlaceForCutover(
  * Plan A bootstrap — push local replica state to Turso via @tursodatabase/sync,
  * not better-sqlite3 + HTTP snapshot. Caller typically reseeds afterward.
  */
+/** Count user rows on Turso primary (HTTP), mirroring local countUserRows semantics. */
+export async function countRemoteUserRows(
+  record: DatabaseRecord,
+): Promise<number> {
+  if (!isTursoReplicaOnline()) {
+    return -1;
+  }
+  const bridge = getTursoSyncBridge();
+  if (!bridge?.enabled) {
+    return -1;
+  }
+
+  const tursoDatabase = tursoNameForRecord(record);
+  return bridge.runExclusiveForDbPath(record.localPath, async () => {
+    let credentials;
+    try {
+      credentials = await bridge.fetchCredentials(tursoDatabase);
+    } catch {
+      return -1;
+    }
+
+    const remote = createClient({
+      url: credentials.tursoUrl,
+      authToken: credentials.authToken,
+    });
+    try {
+      const tablesResult = await remote.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
+      );
+      const tables = tablesResult.rows
+        .map((row) => String(row.name ?? ""))
+        .filter((name) => isReplicaUserDataTable(name));
+
+      let total = 0;
+      for (const table of tables) {
+        const countResult = await remote.execute(
+          `SELECT COUNT(*) AS n FROM "${table}"`,
+        );
+        const raw = countResult.rows[0]?.n;
+        total += typeof raw === "number" ? raw : Number(raw ?? 0);
+      }
+      return total;
+    } catch {
+      return -1;
+    } finally {
+      remote.close();
+    }
+  });
+}
+
+/**
+ * Guard against false-green bootstrap: sync push can return ok without seeding Turso
+ * when replica sidecars still reference another namespace.
+ */
+export function assertRemoteSeededAfterReplicaPush(options: {
+  localUserRowsBefore: number;
+  remoteUserRowsAfterPush: number;
+}): void {
+  if (
+    options.localUserRowsBefore > 0 &&
+    options.remoteUserRowsAfterPush <= 0
+  ) {
+    throw new Error(
+      "Replica sync push reported success but Turso has no user rows. " +
+        "Local replica was not reseeded — your data is unchanged. " +
+        "Use papr_db_apply_migration_cloud + papr_db_push to seed Turso, " +
+        "or strip replica sidecars and retry.",
+    );
+  }
+}
+
 export async function pushReplicaBootstrapViaTursoSync(
   record: DatabaseRecord,
   source: AppDataSource,
-): Promise<import("./tursoReplicaTypes.js").TursoReplicaPushResponse> {
+): Promise<TursoReplicaPushResponse> {
   const { getTursoReplicaService } = await import("./TursoReplicaService.js");
   await getTursoReplicaService().close(record.localPath);
+
+  if (hasBootstrapPendingMarker(record.localPath)) {
+    removeTursoReplicaSidecarsOnly(record.localPath);
+  }
 
   const stripped = stripLegacySyncPathArtifacts(record.localPath);
   if (stripped.length > 0) {
@@ -228,6 +305,36 @@ export async function pushReplicaBootstrapViaTursoSync(
     pullBeforePush: false,
     skipMigrationConflictCheck: true,
   });
+}
+
+/**
+ * Push local replica rows to Turso, verify remote received user data, then reseed.
+ * Skips reseed when push fails verification so local rows are not wiped.
+ */
+export async function pushReplicaBootstrapAndReseedVerified(
+  record: DatabaseRecord,
+  source: AppDataSource,
+): Promise<TursoReplicaPushResponse> {
+  const localRowsBefore = countUserRows(record.localPath);
+
+  const push = await pushReplicaBootstrapViaTursoSync(record, source);
+  if (!push.ok) {
+    return push;
+  }
+
+  const remoteRowsAfterPush = await countRemoteUserRows(record);
+  try {
+    assertRemoteSeededAfterReplicaPush({
+      localUserRowsBefore: localRowsBefore,
+      remoteUserRowsAfterPush: remoteRowsAfterPush,
+    });
+  } catch (error) {
+    return { ok: false, error: (error as Error).message };
+  }
+
+  const minExpectedUserRows = localRowsBefore > 0 ? 1 : 0;
+  await reseedTursoReplicaFromRemote(record, { minExpectedUserRows });
+  return { ok: true };
 }
 
 /**
@@ -297,6 +404,7 @@ export async function pushLocalLegacyFileToTursoPrimary(
  */
 export async function reseedTursoReplicaFromRemote(
   record: DatabaseRecord,
+  options?: { minExpectedUserRows?: number },
 ): Promise<void> {
   if (record.syncMode !== "replica") {
     throw new Error(`Database ${record.dbId} is not syncMode=replica`);
@@ -326,6 +434,13 @@ export async function reseedTursoReplicaFromRemote(
   if (rows < 0) {
     throw new Error(
       `Reseed completed but local replica is unreadable for ${record.dbId}`,
+    );
+  }
+  const minExpected = options?.minExpectedUserRows ?? 0;
+  if (minExpected > 0 && rows < minExpected) {
+    throw new Error(
+      `Reseed produced ${rows} user rows on ${record.dbId} but expected at least ${minExpected}. ` +
+        "Turso may still be empty — restore from bootstrap-remote backup if needed.",
     );
   }
 }

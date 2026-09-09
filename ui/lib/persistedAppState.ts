@@ -6,7 +6,8 @@ import { useTabStore } from "../stores/tabStore";
 import type { TabType } from "../types/tabs";
 import { isCatalogPreviewEntityId } from "../types/cloudCatalogPreviewTab";
 import { gateway } from "../src/lib/gateway";
-import { ensureDefaultChatTab, ensureDefaultHomeTab } from "./ensureDefaultChatTab";
+import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
+import { ensureWorkspaceLandingTab } from "./ensureWorkspaceLandingTab";
 import { ensureSettingsTab } from "./ensureSettingsTab";
 import { serializeTabForGatewayPersistence } from "./tabPersistenceMetadata";
 
@@ -66,7 +67,7 @@ export interface WorkspaceEntityIdSets {
 
 export interface ApplyPersistedAppStateOptions extends WorkspaceEntityIdSets {
   /** When restored workspace has no valid active tab. Default: open Home. */
-  emptyActiveTabFallback?: "chat" | "home" | "settings" | "none";
+  emptyActiveTabFallback?: "chat" | "home" | "settings" | "landing" | "none";
 }
 
 export interface PersistedAppStateSnapshot {
@@ -301,9 +302,9 @@ export function applyPersistedAppStateToTabStore(
   }
 
   if (!useTabStore.getState().activeTabId) {
-    const fallback = options?.emptyActiveTabFallback ?? "home";
-    if (fallback === "home") {
-      ensureDefaultHomeTab();
+    const fallback = options?.emptyActiveTabFallback ?? "landing";
+    if (fallback === "landing" || fallback === "home") {
+      ensureWorkspaceLandingTab();
     } else if (fallback === "chat") {
       ensureDefaultChatTab();
     } else if (fallback === "settings") {

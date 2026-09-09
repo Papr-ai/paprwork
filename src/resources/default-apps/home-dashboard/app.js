@@ -36,32 +36,35 @@ const App = {
     this.JOB_ID = await Data.resolveJobId();
     return this.JOB_ID;
   },
+  async ensureBriefSetup() {
+    const res = await fetch('/api/home/ensure-brief-setup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: Data.APP_ID }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      throw new Error(data?.error || 'Failed to set up Daily Brief');
+    }
+    this.JOB_ID = data.jobId;
+    Data._jobId = data.jobId;
+    return data.jobId;
+  },
   async generateRealBrief() {
     const btn = document.getElementById('gen-real-brief-btn');
     if (!btn) return;
     
     btn.disabled = true;
-    btn.innerHTML = '<div class="spinner"></div>Generating...';
+    btn.innerHTML = '<div class="spinner"></div>Setting up...';
     
     try {
-      const jobId = await this.resolveJobId();
+      const jobId = await this.ensureBriefSetup();
+      btn.innerHTML = '<div class="spinner"></div>Generating...';
       let response = await fetch('/api/jobs/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId, wait: false })
       });
-      
-      // Job doesn't exist — ask the agent to set it up
-      if (response.status === 404) {
-        btn.innerHTML = 'Opening chat...';
-        try {
-          window.paprAPI.invoke('chat.open', {
-            message: 'My Home dashboard needs a Daily Brief Generator job. Please create an agent job linked to my Home app that generates a daily brief and saves it to the briefs table in $APP_DB (the app-linked database). The brief_json should include: hero (date, title, subtitle, stats), sections (priorities, timeline, alerts, freeform).'
-          });
-        } catch (e) { /* paprAPI may not be available */ }
-        setTimeout(() => { btn.innerHTML = 'Generate My Real Brief'; btn.disabled = false; }, 2000);
-        return;
-      }
       
       const result = await response.json();
       if (!response.ok && response.status !== 409) {
@@ -180,9 +183,15 @@ const App = {
       testBrief = initData.brief;
       Reviews.hydrateFromRows(initData.reviewRows);
     } catch (e) {
-      this.dates = await Data.dates().catch(() => []);
-      testBrief = await Data.load();
-      Reviews.hydrate();
+      if (Data.isTemplateModeError(e)) {
+        testBrief = Data.sample();
+        this.dates = [Data.todayKey()];
+        Reviews.hydrate();
+      } else {
+        this.dates = await Data.dates().catch(() => []);
+        testBrief = await Data.load();
+        Reviews.hydrate();
+      }
     }
     if (!this.dates.length) this.dates = [Data.todayKey()];
 

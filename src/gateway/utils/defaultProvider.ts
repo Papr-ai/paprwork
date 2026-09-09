@@ -86,6 +86,16 @@ export async function getDefaultProviderAndModel(): Promise<{
       return { provider: "google", model: defaultModelByProvider.google };
     }
 
+    // 2b. Papr login enables cloud models via proxy (no BYOK/OAuth required)
+    const { getPaprApiKey } = await import("./keyResolver.js");
+    const paprApiKey = await getPaprApiKey();
+    if (paprApiKey) {
+      console.log(
+        "[DefaultProvider] No BYOK/OAuth — using Papr AI proxy (openai default)",
+      );
+      return { provider: "openai", model: defaultModelByProvider.openai };
+    }
+
     // 3. Fallback to Ollama (always available, no auth needed)
     console.log(
       "[DefaultProvider] No OAuth or API keys found, falling back to Ollama (local inference)",

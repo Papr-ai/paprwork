@@ -86,7 +86,7 @@ export function buildSchemaDriftAgentPrompt(input: {
     "Legacy DB + Plan A rollout: cutover runs automatically on Publish changes **or** push_cloud_sync({ appId }) with default targets (github + turso) — same ordered flush (migrations → cutover → replica push → git → publish). Same Turso instance — never delete_database/recreate. Local-only legacy CDC tables (e.g. turso_cdc, turso_sync_last_change_id) are ignored for drift and stripped at cutover.",
     "After cutover (or if already replica): compare migrations/*.sql vs schema_migrations → papr_db_apply_migration for missing migrations (never papr_db_exec DDL or bash/sqlite3 on registry DB files).",
     "Migration conflict: repair_cloud_sync merge_lww first. accept_cloud only when Turso is authoritative (never when local has more rows).",
-    "Local has rows but Turso empty/stale (e.g. after mistaken delete/recreate): restore data.db from newest .sync-backup or .pre-replica.bak, then repair_cloud_sync bootstrap_remote (NOT force_local, NOT sqlite3 INSERT).",
+    "Local has rows but Turso empty/stale (e.g. after cross-namespace copy, mistaken delete/recreate): restore data.db from newest .sync-backup or .pre-replica.bak if needed, strip replica sidecars (-changes/-info/-shm/-wal), then papr_db_apply_migration_cloud + papr_db_push — NOT bootstrap_remote (reseed wipes local if Turso stays empty), NOT force_local, NOT sqlite3 INSERT.",
     "Legacy-only sync (no replica rollout): push_cloud_sync({ appId }) or Publish changes applies local migrations then pushes Turso.",
     "Do NOT use push_cloud_sync targets: ['github'] or targets: ['turso'] alone when cutover or full web upload is needed — use push_cloud_sync({ appId }) (both layers).",
     "Verify web-ready with get_cloud_sync_status.",

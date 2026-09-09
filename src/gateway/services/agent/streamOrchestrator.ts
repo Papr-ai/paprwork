@@ -239,12 +239,49 @@ function extractErrorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+function formatNoModelOutputMessage(): string {
+  return (
+    "The model returned an empty response. If you don't have your own API keys, " +
+    "sign in with Papr under Settings → AI Models — cloud models route through the Papr proxy. " +
+    "Otherwise try a different model or check the gateway logs for details."
+  );
+}
+
+function isNoModelOutputError(error: unknown): boolean {
+  if (typeof error === "string") {
+    return error.includes("No output generated");
+  }
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    if (record.name === "AI_NoOutputGeneratedError") {
+      return true;
+    }
+    if (
+      typeof record.message === "string" &&
+      record.message.includes("No output generated")
+    ) {
+      return true;
+    }
+  }
+  if (error instanceof Error) {
+    return (
+      error.name === "AI_NoOutputGeneratedError" ||
+      error.message.includes("No output generated")
+    );
+  }
+  return false;
+}
+
 /**
  * Extract a user-friendly error message from API errors.
  * Handles AI SDK RetryError (with nested APICallError), plain Error objects,
  * and common API error response shapes.
  */
 function extractErrorMessage(error: unknown): string {
+  if (isNoModelOutputError(error)) {
+    return formatNoModelOutputMessage();
+  }
+
   if (typeof error === "string") {
     return error;
   }
@@ -341,11 +378,17 @@ function extractErrorMessage(error: unknown): string {
         const extracted = extractFromRetryError(errorObj);
         if (extracted) return extracted;
       }
+      if (isNoModelOutputError(error)) {
+        return formatNoModelOutputMessage();
+      }
       return error.message;
     }
 
     // { message: "..." }
     if (typeof errorObj.message === "string") {
+      if (isNoModelOutputError(errorObj.message)) {
+        return formatNoModelOutputMessage();
+      }
       return errorObj.message;
     }
 

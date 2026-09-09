@@ -292,6 +292,22 @@ export async function bootstrapInstalledAppDatabases(
   const needsSeed =
     ready && linkedDbs.some((db) => db.userTableCount === 0);
 
+  try {
+    const { rebootstrapPendingPortableReplicas } = await import(
+      "./tursoReplica/portableReplicaBootstrap.js"
+    );
+    const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+    if (replicaBootstrap.attempted > 0) {
+      console.log(
+        `[CloudInstall] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+      );
+    }
+  } catch (error) {
+    warnings.push(
+      `Portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
+    );
+  }
+
   return {
     appId,
     linkedDbs,

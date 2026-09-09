@@ -28,6 +28,14 @@ const Data = {
     this._jobId = this.LEGACY_JOB_ID;
     return this._jobId;
   },
+  isTemplateModeError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes('No data sources linked') ||
+      message.includes('no dbPath configured') ||
+      message.includes('Local database not found')
+    );
+  },
   async query(sql) {
     const r = await fetch('/api/db/query', { method:'POST',
       headers:{'Content-Type':'application/json'},
@@ -82,26 +90,37 @@ const Data = {
       .map((row) => row.date);
   },
   async loadInitData() {
-    const results = await this.queryBatch([
-      {
-        sql: 'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30',
-      },
-      {
-        sql: 'SELECT item_key, status, note, updated_at FROM brief_reviews',
-      },
-    ]);
-    const briefResult = results[0];
-    const reviewResult = results[1];
-    if (!briefResult?.ok) {
-      throw new Error(briefResult?.error || 'Failed to load briefs');
+    try {
+      const results = await this.queryBatch([
+        {
+          sql: 'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30',
+        },
+        {
+          sql: 'SELECT item_key, status, note, updated_at FROM brief_reviews',
+        },
+      ]);
+      const briefResult = results[0];
+      const reviewResult = results[1];
+      if (!briefResult?.ok) {
+        throw new Error(briefResult?.error || 'Failed to load briefs');
+      }
+      const briefRows = briefResult.rows || [];
+      const reviewRows = reviewResult?.ok ? (reviewResult.rows || []) : [];
+      return {
+        dates: this.datesFromRows(briefRows),
+        brief: this.briefFromRows(briefRows),
+        reviewRows,
+      };
+    } catch (error) {
+      if (this.isTemplateModeError(error)) {
+        return {
+          dates: [this.todayKey()],
+          brief: this.sample(),
+          reviewRows: [],
+        };
+      }
+      throw error;
     }
-    const briefRows = briefResult.rows || [];
-    const reviewRows = reviewResult?.ok ? (reviewResult.rows || []) : [];
-    return {
-      dates: this.datesFromRows(briefRows),
-      brief: this.briefFromRows(briefRows),
-      reviewRows,
-    };
   },
   isBriefDateKey(date) {
     return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
@@ -168,6 +187,9 @@ const Data = {
       if (brief) return this.withBriefMeta(brief, today);
       return await this.loadMostRecentBrief();
     } catch (e) {
+      if (this.isTemplateModeError(e)) {
+        return Data.sample();
+      }
       const message = e instanceof Error ? e.message : String(e);
       console.error('[Home] Failed to load brief:', message);
       return Data.loadError(message);

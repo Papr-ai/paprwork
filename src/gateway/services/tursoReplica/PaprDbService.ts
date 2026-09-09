@@ -345,10 +345,6 @@ export async function repairCloudSync(options: {
       ).getTursoReplicaService();
       await replicaService.close(record.localPath);
 
-      const { reseedTursoReplicaFromRemote } = await import(
-        "./tursoReplicaProvision.js"
-      );
-
       let pushResult:
         | { ok: true }
         | {
@@ -360,10 +356,10 @@ export async function repairCloudSync(options: {
           };
 
       if (record.syncMode === "replica") {
-        const { pushReplicaBootstrapViaTursoSync } = await import(
+        const { pushReplicaBootstrapAndReseedVerified } = await import(
           "./tursoReplicaProvision.js"
         );
-        const syncPush = await pushReplicaBootstrapViaTursoSync(record, source);
+        const syncPush = await pushReplicaBootstrapAndReseedVerified(record, source);
         pushResult = syncPush.ok
           ? { ok: true as const }
           : {
@@ -388,7 +384,6 @@ export async function repairCloudSync(options: {
             syncStatus,
           };
         }
-        await reseedTursoReplicaFromRemote(record);
       } else {
         const { pushLocalLegacyFileToTursoPrimary } = await import(
           "./tursoReplicaProvision.js"

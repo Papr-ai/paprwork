@@ -275,6 +275,18 @@ export async function installCloudAppLinkedResources(input: {
     targetPaprHome: getPaprRoot(),
   });
 
+  if (sync.registryDbIds.length > 0 || sync.copiedJobIds.length > 0) {
+    const { preparePortableReplicaDatabases } = await import(
+      "./tursoReplica/portableReplicaBootstrap.js"
+    );
+    await preparePortableReplicaDatabases({
+      paprHome: getPaprRoot(),
+      registryDbIds: sync.registryDbIds,
+      copiedJobIds: sync.copiedJobIds,
+      reason: "portable_install",
+    });
+  }
+
   const localAppDir = path.join(getPaprAppsRoot(), input.localAppId);
   let promotedJobIds: string[] = [];
   const needsFallback = checkout.jobIds.some(

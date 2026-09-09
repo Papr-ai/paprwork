@@ -24,7 +24,8 @@ describe("buildSchemaDriftAgentPrompt", () => {
     expect(prompt).toContain("Publish changes");
     expect(prompt).toContain("push_cloud_sync({ appId })");
     expect(prompt).toContain("papr_db_apply_migration");
-    expect(prompt).toContain("bootstrap_remote");
+    expect(prompt).toContain("papr_db_apply_migration_cloud");
+    expect(prompt).toContain("NOT bootstrap_remote");
     expect(prompt).toContain("never delete_database/recreate");
     expect(prompt).not.toContain("schema drift heal");
   });

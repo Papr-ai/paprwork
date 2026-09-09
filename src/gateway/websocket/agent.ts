@@ -131,9 +131,9 @@ export async function setupAgentHandlers(
             }
             // Composer routes through Papr Cursor delegation (PAPR_API_KEY only)
             else if (config.provider === "cursor") {
-              const { getApiKeys } = await import("../utils/keyResolver.js");
-              const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-              if (!paprKeys.PAPR_API_KEY) {
+              const { getPaprApiKey } = await import("../utils/keyResolver.js");
+              const paprApiKey = await getPaprApiKey();
+              if (!paprApiKey) {
                 sendError(
                   ws,
                   message.id,
@@ -141,7 +141,7 @@ export async function setupAgentHandlers(
                 );
                 return;
               }
-              apiKey = paprKeys.PAPR_API_KEY;
+              apiKey = paprApiKey;
               authType = "apiKey";
             }
             // For openai, openai-codex, and anthropic, use getProviderAuth which handles OAuth
@@ -161,15 +161,16 @@ export async function setupAgentHandlers(
 
               if (!auth) {
                 // No direct provider auth — try Papr API key as proxy fallback
-                const { getApiKeys } = await import("../utils/keyResolver.js");
-                const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-                if (paprKeys.PAPR_API_KEY) {
+                const { resolvePaprProxyAuth, PAPR_PROXY_SIGN_IN_MESSAGE } =
+                  await import("../utils/keyResolver.js");
+                const paprProxy = await resolvePaprProxyAuth();
+                if (paprProxy) {
                   console.log(
                     `[Agent WS] No direct ${config.provider} auth — falling back to Papr AI proxy`,
                   );
-                  apiKey = paprKeys.PAPR_API_KEY;
+                  apiKey = paprProxy.apiKey;
                   authType = "apiKey";
-                  usePaprProxy = true;
+                  usePaprProxy = paprProxy.usePaprProxy;
                 } else {
                   const { requiresOpenAIPlatformApiKey } =
                     await import("../utils/modelNormalizer.js");
@@ -181,7 +182,7 @@ export async function setupAgentHandlers(
                     message.id,
                     needsPlatformKey
                       ? `${config.model} requires an OpenAI API key. It is no longer available via ChatGPT OAuth.`
-                      : `No authentication found for provider: ${config.provider}`,
+                      : PAPR_PROXY_SIGN_IN_MESSAGE,
                   );
                   return;
                 }
@@ -203,15 +204,18 @@ export async function setupAgentHandlers(
 
               if (!apiKey) {
                 // No direct key — try Papr API key as proxy fallback
-                const paprKeys = await getApiKeys(["PAPR_API_KEY"]);
-                if (paprKeys.PAPR_API_KEY) {
+                const { resolvePaprProxyAuth, PAPR_PROXY_SIGN_IN_MESSAGE } =
+                  await import("../utils/keyResolver.js");
+                const paprProxy = await resolvePaprProxyAuth();
+                if (paprProxy) {
                   console.log(
                     `[Agent WS] No ${keyName} found — falling back to Papr AI proxy`,
                   );
-                  apiKey = paprKeys.PAPR_API_KEY;
-                  usePaprProxy = true;
+                  apiKey = paprProxy.apiKey;
+                  authType = "apiKey";
+                  usePaprProxy = paprProxy.usePaprProxy;
                 } else {
-                  sendError(ws, message.id, `API key not found: ${keyName}`);
+                  sendError(ws, message.id, PAPR_PROXY_SIGN_IN_MESSAGE);
                   return;
                 }
               }

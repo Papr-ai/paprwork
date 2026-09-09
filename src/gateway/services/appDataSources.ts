@@ -96,6 +96,36 @@ export function resolveAttachAlias(input: {
   return input.dbId;
 }
 
+/** Shipped placeholder before first "Generate brief" — not a usable database link. */
+export function isUnlinkedDataSource(source: AppDataSource): boolean {
+  return (
+    !source.jobId?.trim() &&
+    !source.dbId?.trim() &&
+    !source.dbPath?.trim()
+  );
+}
+
+export function omitUnlinkedDataSources(
+  config: AppDataSourcesFile,
+): AppDataSourcesFile {
+  const sources = config.sources.filter((source) => !isUnlinkedDataSource(source));
+  if (sources.length === config.sources.length) {
+    return config;
+  }
+  const primary =
+    config.primary &&
+    sources.some(
+      (source) => source.alias === config.primary || source.id === config.primary,
+    )
+      ? config.primary
+      : undefined;
+  return {
+    ...config,
+    sources,
+    ...(primary ? { primary } : {}),
+  };
+}
+
 export function serializeDataSourcesFile(config: AppDataSourcesFile): string {
   const sources = config.sources.map(({ role: _role, ...source }) => source);
   return JSON.stringify({ sources }, null, 2);

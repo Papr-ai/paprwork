@@ -168,6 +168,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
+  const setError = useChatStore((state) => state.setError);
   const { ensureModel, progress, installing } = useOllama();
   const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
@@ -344,7 +345,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       if (pickerAvailable) return pickerAvailable;
       const firstAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
       if (firstAvailable) return firstAvailable;
-      if (!isModelAvailable(prev)) return fallbackModel;
+      if (!isModelAvailable(prev)) {
+        const anyAvailable = CHAT_MODELS.find((m) => isModelAvailable(m));
+        return anyAvailable ?? prev;
+      }
       return prev;
     });
     // historyModelId is a dependency because history arrives after mount: a
@@ -667,6 +671,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         }
       }
 
+      if (!isModelAvailable(selectedModel)) {
+        setError(
+          authStatus.paprProxy
+            ? "This model isn't available right now. Try another model from the picker."
+            : "Sign in with Papr to use cloud models without your own API keys (Settings → AI Models), or add a provider API key / connect OAuth.",
+        );
+        return;
+      }
+
       // Ensure Ollama model is ready before sending message
       if (selectedModel.provider === 'ollama') {
         try {
@@ -708,7 +721,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           : undefined,
       );
     },
-    [selectedModel, sendMessage, chatId, ensureModel],
+    [selectedModel, sendMessage, chatId, ensureModel, isModelAvailable, authStatus.paprProxy, setError],
   );
 
   const stopAgentAndClearQueue = useCallback(async () => {

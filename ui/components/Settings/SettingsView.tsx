@@ -1011,6 +1011,52 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.12" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.12</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Portable Replica Databases</strong>
+                <p>
+                  Apps copied or installed across workspaces re-bind Turso
+                  replicas automatically — local data is not wiped by a false
+                  sync when cloud is still empty.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Home Daily Brief Setup</strong>
+                <p>
+                  Fresh installs show sample brief data with one-click setup to
+                  create the Daily Brief job and link databases — no chat
+                  handoff required.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Workspace Landing Tabs</strong>
+                <p>
+                  After switching org or namespace, empty workspaces open
+                  Getting Started or Profile instead of a blank screen.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Clearer Empty Model Errors</strong>
+                <p>
+                  When a model returns no output, chat explains how to sign in
+                  with Papr or try another model instead of a generic error.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.12"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.11" && (
           <div className="about-card">
             <h3>What's New in v2.6.11</h3>

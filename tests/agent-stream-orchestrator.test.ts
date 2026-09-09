@@ -100,6 +100,36 @@ describe("agent stream orchestrator", () => {
     );
   });
 
+  test("formats AI SDK no-output errors with Papr proxy guidance", async () => {
+    const iterator = orchestrateModelStream(
+      chunkStream([
+        {
+          type: "error",
+          error: {
+            name: "AI_NoOutputGeneratedError",
+            message: "No output generated. Check the stream for errors.",
+          },
+        },
+      ]),
+      "chat-no-output",
+      [],
+    );
+    const emitted: Array<{ type: string; payload: unknown }> = [];
+
+    while (true) {
+      const next = await iterator.next();
+      if (next.done) break;
+      emitted.push({ type: next.value.type, payload: next.value.payload });
+    }
+
+    const streamError = emitted.find((entry) => entry.type === "error");
+    expect(streamError).toBeDefined();
+    const payload = streamError?.payload as { error?: string };
+    expect(payload.error).toContain("empty response");
+    expect(payload.error).toContain("sign in with Papr");
+    expect(payload.error).not.toContain("Check the stream for errors");
+  });
+
   test("formats Papr proxy connect timeout errors clearly", async () => {
     const connectTimeoutError = {
       name: "AI_RetryError",

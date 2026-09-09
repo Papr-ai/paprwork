@@ -23,13 +23,20 @@ const MARKER_SUFFIX = "-papr-bootstrap-pending";
 const SNAPSHOT_SUFFIX = "-papr-presnapshot";
 
 /** Tables that carry no user rows and must never gate "is this replica populated". */
-const NON_USER_TABLES = new Set(["schema_migrations", "_papr_sync_log"]);
+export const REPLICA_NON_USER_TABLES = new Set([
+  "schema_migrations",
+  "_papr_sync_log",
+]);
 
 export type BootstrapPendingReason =
   | "sidecar_wedge_repair"
   | "pre_sync_sidecar_reset"
   | "checkpoint_error_repair"
-  | "legacy_cutover";
+  | "legacy_cutover"
+  /** Cross-namespace copy — local replica rows came from another namespace's Turso. */
+  | "cross_namespace_copy"
+  /** Community/team install — bundled replica SQLite from publisher workspace. */
+  | "portable_install";
 
 export interface BootstrapPendingMarker {
   reason: BootstrapPendingReason;
@@ -61,7 +68,13 @@ export function listUserTables(db: Database.Database): string[] {
     .all() as Array<{ name: string }>;
   return rows
     .map((r) => r.name)
-    .filter((name) => !NON_USER_TABLES.has(name) && !name.startsWith("turso_"));
+    .filter((name) => isReplicaUserDataTable(name));
+}
+
+export function isReplicaUserDataTable(tableName: string): boolean {
+  return (
+    !REPLICA_NON_USER_TABLES.has(tableName) && !tableName.startsWith("turso_")
+  );
 }
 
 /**

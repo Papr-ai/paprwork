@@ -25,6 +25,10 @@ import {
   type WorkspaceEntityIdSets,
 } from "./persistedAppState";
 import { ensureSettingsTab } from "./ensureSettingsTab";
+import {
+  ensureWorkspaceLandingTab,
+  needsWorkspaceLandingTab,
+} from "./ensureWorkspaceLandingTab";
 import { resetDefaultChatTabGuardForTests } from "./ensureDefaultChatTab";
 import {
   beginWorkspaceSwitchOverlay,
@@ -378,6 +382,12 @@ function applySwitchLabelsToProfileCache(
   );
 }
 
+function ensureLandingTabAfterWorkspaceRestore(): void {
+  if (needsWorkspaceLandingTab()) {
+    ensureWorkspaceLandingTab();
+  }
+}
+
 async function completeWorkspaceSwitchReload(generation: number): Promise<void> {
   if (generation !== workspaceReloadGeneration) {
     return;
@@ -386,6 +396,7 @@ async function completeWorkspaceSwitchReload(generation: number): Promise<void> 
   if (generation !== workspaceReloadGeneration) {
     return;
   }
+  ensureLandingTabAfterWorkspaceRestore();
   endWorkspaceSwitchOverlay();
   applySwitchLabelsToProfileCache(reloadLabelsByGeneration.get(generation));
   window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
@@ -661,6 +672,7 @@ async function reloadUiForWorkspaceSwitchInner(
       if (generation !== workspaceReloadGeneration) {
         return;
       }
+      ensureLandingTabAfterWorkspaceRestore();
       awaitingSwitchTabRecovery = null;
       endWorkspaceSwitchOverlay();
       window.dispatchEvent(new CustomEvent("papr-workspace-reload"));

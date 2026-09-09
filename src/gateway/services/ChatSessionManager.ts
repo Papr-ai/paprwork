@@ -239,7 +239,8 @@ export class ChatSessionManager {
       config1.provider === config2.provider &&
       config1.model === config2.model &&
       config1.apiKey === config2.apiKey &&
-      config1.authType === config2.authType
+      config1.authType === config2.authType &&
+      config1.usePaprProxy === config2.usePaprProxy
     );
   }
 

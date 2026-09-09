@@ -2370,6 +2370,23 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
+    app.post("/api/home/ensure-brief-setup", async (req, res) => {
+      try {
+        const { appId: bodyAppId } = (req.body ?? {}) as { appId?: string };
+        const { DEFAULT_HOME_APP_ID } = await import(
+          "./services/defaultHomeBundle.js"
+        );
+        const appId = bodyAppId?.trim() || DEFAULT_HOME_APP_ID;
+        const result = await getAppService().ensureHomeDailyBriefReady(appId);
+        res.json(result);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const status = message.includes("not found") ? 404 : 500;
+        res.status(status).json({ error: message });
+      }
+    });
+
     // Unified tasks (L3 goals + entity Open Items), projected into the Home DB.
     app.get("/api/workspace/tasks", async (req, res) => {
       try {

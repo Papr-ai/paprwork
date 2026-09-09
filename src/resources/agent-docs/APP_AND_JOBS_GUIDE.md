@@ -153,6 +153,7 @@ CREATE TABLE invoices (
 | Apply `migrations/*.sql` | `papr_db_apply_migration({ dbId, migrationId })` — Turso primary when online |
 | Row DML | `papr_db_exec({ dbId, sql })` or mini-app `/api/db/write` — **no DDL** under Plan A |
 | Sync status / recovery | `papr_db_sync_status`, `repair_cloud_sync` |
+| Local rows, empty Turso (copy/migration) | Restore backup if needed → strip sidecars → `papr_db_apply_migration_cloud` + `papr_db_push` — **not** `bootstrap_remote` |
 | Push / pull (recovery only) | `papr_db_push` / `papr_db_pull` — hidden from main agent when Plan A is on |
 | Code + publish | `push_cloud_sync({ appId })` or Publish / Publish changes in the app tab — git + replica push |
 

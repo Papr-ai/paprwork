@@ -329,6 +329,24 @@ async function resolvePaprApiKeyViaIpc(
   return undefined;
 }
 
+/** Shown when chat needs cloud access but no BYOK/OAuth and no Papr login key. */
+export const PAPR_PROXY_SIGN_IN_MESSAGE =
+  "Sign in with Papr to use cloud models without your own API keys (Settings → AI Models → Login with Papr), or add a provider API key / connect OAuth.";
+
+/**
+ * Resolve Papr AI proxy credentials (keychain in prod, IPC + env in dev).
+ * Prefer this over getApiKeys(["PAPR_API_KEY"]) — dev getApiKeys skips IPC.
+ */
+export async function resolvePaprProxyAuth(
+  ipcProcess: IpcProcessLike = process,
+): Promise<{ apiKey: string; usePaprProxy: true } | null> {
+  const paprApiKey = await getPaprApiKey(ipcProcess);
+  if (!paprApiKey) {
+    return null;
+  }
+  return { apiKey: paprApiKey, usePaprProxy: true };
+}
+
 export async function getPaprApiKey(
   ipcProcess: IpcProcessLike = process,
 ): Promise<string | undefined> {

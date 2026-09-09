@@ -19,6 +19,8 @@ import {
   type AppDataSourcesFile,
   buildAppDbTsContent,
   dbHasOnlyBaselineTables,
+  isUnlinkedDataSource,
+  omitUnlinkedDataSources,
   parseDataSourcesFile,
   resolveDataSourcesForWorkspace,
   serializeDataSourcesFile,
@@ -92,7 +94,9 @@ import {
   findHomeDailyBriefJobIdInRegistry,
   readHomeDailyBriefJobIdFromAppDir,
   resolveHomeBriefsRegistryDbPath,
+  resolveHomeDailyBriefJobId,
   resolveOrAllocateHomeDailyBriefJobId,
+  writeHomeDailyBriefJobIdToAppDir,
   type BundledDefaultJobDef,
 } from "./defaultHomeBundle.js";
 import type { JobRecord } from "./jobs/types.js";
@@ -4283,10 +4287,80 @@ export class AppService {
       }),
     );
 
-    return {
+    return omitUnlinkedDataSources({
       ...workspaceConfig,
       sources,
-    };
+    });
+  }
+
+  /**
+   * Lazy first-run setup for the bundled Home dashboard: install Daily Brief job,
+   * provision the briefs database, and link data-sources.json on demand.
+   */
+  async ensureHomeDailyBriefReady(
+    appId: string,
+  ): Promise<{ jobId: string; created: boolean }> {
+    const targetDir = path.join(this.appsDir, appId);
+    try {
+      await fs.access(path.join(targetDir, "default-job.json"));
+    } catch {
+      throw new Error(
+        `App ${appId} does not support on-demand Daily Brief setup`,
+      );
+    }
+
+    const { getJobsService } = await import("./JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+
+    const jobIdFromFile = await readHomeDailyBriefJobIdFromAppDir(targetDir);
+    const allJobs = await jobsService.listJobs();
+    const existingJobId = resolveHomeDailyBriefJobId({
+      appDir: targetDir,
+      jobIdFromFile,
+      jobExists: (id) => jobsService.hasJob(id),
+      findLinkedJobId: () =>
+        findHomeDailyBriefJobIdInRegistry(allJobs, {
+          preferJobId: jobIdFromFile,
+        }),
+    });
+
+    const config = await this.readDataSourcesConfigFromDisk(appId);
+    const hasBriefLink = config.sources.some(
+      (source) =>
+        !isUnlinkedDataSource(source) &&
+        source.tables?.includes("briefs") &&
+        Boolean(
+          source.jobId?.trim() || source.dbPath?.trim() || source.dbId?.trim(),
+        ),
+    );
+
+    if (existingJobId && hasBriefLink) {
+      if (!jobIdFromFile) {
+        await writeHomeDailyBriefJobIdToAppDir(targetDir, existingJobId);
+      }
+      return { jobId: existingJobId, created: false };
+    }
+
+    await this.doInstallDefaultJobForApp(targetDir, targetDir, appId);
+
+    const refreshedJobs = await jobsService.listJobs();
+    const jobId =
+      (await readHomeDailyBriefJobIdFromAppDir(targetDir)) ??
+      resolveHomeDailyBriefJobId({
+        appDir: targetDir,
+        jobExists: (id) => jobsService.hasJob(id),
+        findLinkedJobId: () =>
+          findHomeDailyBriefJobIdInRegistry(refreshedJobs, {
+            preferJobId: jobIdFromFile,
+          }),
+      });
+
+    if (!jobId) {
+      throw new Error("Daily Brief Generator job could not be created");
+    }
+
+    return { jobId, created: true };
   }
 
   async listAppDataSources(appId: string): Promise<AppDataSource[]> {

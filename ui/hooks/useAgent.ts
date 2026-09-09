@@ -1333,8 +1333,13 @@ export function useAgent() {
             // Extract provider-specific error messages
             let errorMsg = rawError;
 
+            // Pattern: AI SDK empty stream (often proxy/auth/model mismatch)
+            if (rawError.includes("No output generated")) {
+              errorMsg =
+                "The model returned an empty response. If you don't have your own API keys, sign in with Papr under Settings → AI Models — cloud models route through the Papr proxy. Otherwise try a different model.";
+            }
             // Pattern: Internal Server Error (500-level errors from any provider)
-            if (
+            else if (
                 rawError.includes("Internal Server Error") ||
                 rawError.includes("api_error") ||
                 rawError.includes("server error") ||

@@ -58,10 +58,13 @@ Same ordered pipeline for **Publish / Publish changes in the app tab** (UI) and 
 - `delete_database` / create new Turso when legacy already has data on `d-*`
 - `bash` / `sqlite3` INSERT on registry DB files (use `papr_db_*` or replica path)
 - Legacy `schema drift heal` under `replica-records` (disabled)
-- `force_local` when Turso has more rows than local (use `bootstrap_remote` after restore)
+- `force_local` when Turso has more rows than local (use `papr_db_push` after restore — not bash INSERT)
+- `bootstrap_remote` when local has rows but Turso is empty (reseed wipes local; use migration_cloud + push instead)
 
-## Recovery after mistaken delete/recreate
+## Recovery after mistaken delete/recreate or cross-namespace copy
 
-1. Restore `data.db` from `.pre-replica.bak` or known good backup
-2. Fix `databases.json` to original `tursoShortName`
-3. `repair_cloud_sync({ strategy: "bootstrap_remote" })` if Turso is empty/stale
+1. Restore `data.db` from `.pre-replica.bak`, `.sync-backup`, or known good backup if the live file is empty
+2. Fix `databases.json` to the target namespace `tursoShortName` (`d-{dbId8}`)
+3. Strip replica sidecars next to `data.db` (`-changes`, `-info`, `-shm`, `-wal`) — cross-namespace copy and community install do this automatically via portable replica prep
+4. Seed Turso: `papr_db_apply_migration_cloud({ dbId, migrationId })` for each pending migration, then `papr_db_push({ dbId })`
+5. Use `repair_cloud_sync({ strategy: "bootstrap_remote" })` **only** when Turso already has rows and you need to re-pull a verified remote into local — it verifies remote row count before reseed and **fails without wiping** if Turso stays empty

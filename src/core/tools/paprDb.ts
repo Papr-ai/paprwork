@@ -254,7 +254,9 @@ export const repairCloudSyncTool = createTool({
     "accept_cloud (LAST RESORT — wipe local replica, re-pull from Turso; only when Turso has the data you need). " +
     "Other strategies: push (pull-first then push rows), " +
     "force_local (replica sync push — does NOT upload rows inserted via bash/sqlite3), " +
-    "bootstrap_remote (Plan A: sync push to Turso then reseed replica; legacy syncMode: HTTP table snapshot), " +
+    "bootstrap_remote (Plan A: sync push to Turso, verify remote has rows, then reseed — skips reseed if Turso stays empty; " +
+    "NOT for empty-cloud + populated-local — use papr_db_apply_migration_cloud + papr_db_push instead; " +
+    "legacy syncMode: HTTP table snapshot), " +
     "export_conflicts (inspect migration ledger conflicts without changing data). " +
     "merge_lww is DEPRECATED — use papr_db_reconcile_sync instead.",
   inputSchema: z.object({

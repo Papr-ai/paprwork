@@ -44,6 +44,7 @@ import {
 import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
+import { ensureGettingStartedTab } from "./lib/ensureWorkspaceLandingTab";
 import {
   attachWorkspaceSwitchBroadcastListener,
   isWorkspaceSwitchReloading,
@@ -211,12 +212,10 @@ export function App() {
     const checkOnboarding = () => {
       if (!shouldShowOnboarding()) return;
 
-      const { tabs: currentTabs, createTab: openTab, switchToTab: activateTab } =
-        useTabStore.getState();
+      const { tabs: currentTabs } = useTabStore.getState();
       const existingTab = currentTabs.find((t) => t.type === "getting-started");
       if (!existingTab) {
-        const tabId = openTab("getting-started", "getting-started", "Getting Started");
-        activateTab(tabId);
+        ensureGettingStartedTab();
       }
     };
 

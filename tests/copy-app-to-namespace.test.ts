@@ -17,12 +17,19 @@ import {
   serializeDataSourcesFile,
 } from "../src/gateway/services/appDataSources.js";
 import { parseCloudAppMetadataFile } from "../src/core/utils/cloudAppMetadata.js";
+import {
+  bootstrapMarkerPath,
+  readBootstrapPendingMarker,
+} from "../src/gateway/services/tursoReplica/tursoReplicaBootstrapMarker.js";
 
 describe("copyAppToNamespace", () => {
   let originalHome: string | undefined;
+  let originalReplicaEnv: string | undefined;
   let testHomeDir: string;
 
   beforeEach(async () => {
+    originalReplicaEnv = process.env.PAPR_TURSO_REPLICA_SYNC;
+    process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
     originalHome = process.env.HOME;
     testHomeDir = path.join(
       os.tmpdir(),
@@ -33,6 +40,11 @@ describe("copyAppToNamespace", () => {
   });
 
   afterEach(async () => {
+    if (originalReplicaEnv === undefined) {
+      delete process.env.PAPR_TURSO_REPLICA_SYNC;
+    } else {
+      process.env.PAPR_TURSO_REPLICA_SYNC = originalReplicaEnv;
+    }
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
@@ -301,6 +313,102 @@ describe("copyAppToNamespace", () => {
     expect(dataSources.sources[0]?.dbPath).toBe(
       path.join(targetHome, "data", "databases", slug, "data.db"),
     );
+  });
+
+  test("prepares replica databases for cross-namespace Turso re-bootstrap", async () => {
+    const appId = "11111111-1111-1111-1111-111111111111";
+    const dbId = "db-replica-copy";
+    const slug = "replica-guide";
+    const app: MiniApp = {
+      id: appId,
+      title: "Replica App",
+      description: "Uses replica DB",
+      type: "app",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+
+    const sourceHome = await seedNamespace("org-replica", "ns-replica-src", [app], {
+      [appId]: {
+        html: "<h1>Replica</h1>",
+        dataSources: serializeDataSourcesFile({
+          sources: [
+            {
+              id: `${dbId}:main`,
+              type: "sqlite",
+              dbId,
+              alias: "main",
+              dbPath: "",
+              tables: [],
+              linkedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      },
+    });
+
+    const sourceDbPath = path.join(sourceHome, "data", "databases", slug, "data.db");
+    await fs.mkdir(path.dirname(sourceDbPath), { recursive: true });
+    await fs.writeFile(sourceDbPath, "sqlite-replica", "utf8");
+    await fs.writeFile(`${sourceDbPath}-info`, "stale-sidecar", "utf8");
+    await fs.writeFile(
+      path.join(sourceHome, "data", "databases.json"),
+      JSON.stringify(
+        {
+          version: 1,
+          databases: {
+            [dbId]: {
+              dbId,
+              localPath: sourceDbPath,
+              tursoShortName: "d-replica",
+              isolation: "shared",
+              status: "active",
+              syncMode: "replica",
+              createdAt: "2026-01-01T00:00:00.000Z",
+              updatedAt: "2026-01-01T00:00:00.000Z",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    await seedNamespace("org-replica", "ns-replica-tgt", [], {}, []);
+
+    const activePointer = await ensureWorkspaceLayout({
+      organizationId: "org-replica",
+      namespaceId: "ns-replica-src",
+    });
+    await writeActiveWorkspacePointer(activePointer);
+
+    await copyAppToNamespace({
+      appId,
+      targetOrganizationId: "org-replica",
+      targetNamespaceId: "ns-replica-tgt",
+      sourcePaprHome: sourceHome,
+    });
+
+    const targetDbPath = path.join(
+      testHomeDir,
+      "Papr",
+      "orgs",
+      "org-replica",
+      "namespaces",
+      "ns-replica-tgt",
+      "data",
+      "databases",
+      slug,
+      "data.db",
+    );
+
+    expect(await fs.readFile(targetDbPath, "utf8")).toBe("sqlite-replica");
+    expect(await fs.stat(`${targetDbPath}-info`).catch(() => null)).toBeNull();
+    expect(await fs.stat(bootstrapMarkerPath(targetDbPath)).catch(() => null)).not.toBeNull();
+
+    const marker = readBootstrapPendingMarker(targetDbPath);
+    expect(marker?.reason).toBe("cross_namespace_copy");
   });
 
   test("repairs hardcoded Papr paths in copied job commands", async () => {

@@ -672,6 +672,20 @@ function runDeferredWorkspaceSwitchMaintenance(pointer: ActiveWorkspacePointer):
   void (async () => {
     try {
       await refreshTursoForWorkspaceSwitch();
+
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.attempted > 0) {
+        console.log(
+          `[WorkspaceSwitch] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded` +
+            (replicaBootstrap.failed.length > 0
+              ? ` (${replicaBootstrap.failed.length} failed)`
+              : ""),
+        );
+      }
+
       await restartCloudSyncIfEnabled();
       await refreshVaultForWorkspaceSwitch();
 

@@ -514,6 +514,16 @@ export async function finalizeCopiedAppResources(
 
   removeAppPublishPrefs(input.appId, input.targetPaprHome);
 
+  const { preparePortableReplicaDatabases } = await import(
+    "./tursoReplica/portableReplicaBootstrap.js"
+  );
+  await preparePortableReplicaDatabases({
+    paprHome: input.targetPaprHome,
+    registryDbIds: input.registryDbIds,
+    copiedJobIds: input.copiedJobIds,
+    reason: "cross_namespace_copy",
+  });
+
   await runPostMigrationPathRepair({
     dryRun: false,
     includeApps: true,

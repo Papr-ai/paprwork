@@ -98,9 +98,10 @@ describe("repairCloudSync strategies", () => {
     expect(result.syncStatus?.dbId).toBe("db-1");
   });
 
-  it("bootstrap_remote sync-pushes then reseeds replica", async () => {
-    const pushReplicaBootstrapViaTursoSync = vi.fn(async () => ({ ok: true as const }));
-    const reseedTursoReplicaFromRemote = vi.fn(async () => undefined);
+  it("bootstrap_remote uses verified push+reseed when remote receives rows", async () => {
+    const pushReplicaBootstrapAndReseedVerified = vi.fn(async () => ({
+      ok: true as const,
+    }));
     const close = vi.fn(async () => undefined);
 
     vi.doMock("../src/gateway/services/DatabaseRegistryService.js", () => ({
@@ -122,8 +123,7 @@ describe("repairCloudSync strategies", () => {
     }));
 
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaProvision.js", () => ({
-      pushReplicaBootstrapViaTursoSync,
-      reseedTursoReplicaFromRemote,
+      pushReplicaBootstrapAndReseedVerified,
     }));
 
     vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
@@ -152,10 +152,71 @@ describe("repairCloudSync strategies", () => {
       strategy: "bootstrap_remote",
     });
 
-    expect(pushReplicaBootstrapViaTursoSync).toHaveBeenCalledOnce();
-    expect(reseedTursoReplicaFromRemote).toHaveBeenCalledOnce();
+    expect(pushReplicaBootstrapAndReseedVerified).toHaveBeenCalledOnce();
     expect(result.push?.ok).toBe(true);
     expect(result.pull?.pulled).toBe(true);
+  });
+
+  it("bootstrap_remote fails without reseed when verified push reports empty Turso", async () => {
+    const pushReplicaBootstrapAndReseedVerified = vi.fn(async () => ({
+      ok: false as const,
+      error: "Turso has no user rows",
+    }));
+    const updateReplicaPushState = vi.fn(async () => undefined);
+    const close = vi.fn(async () => undefined);
+
+    vi.doMock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+      initializeDatabaseRegistry: vi.fn(async () => undefined),
+      getDatabaseRegistryService: () => ({
+        getById: () => ({
+          dbId: "db-ec8821e8",
+          localPath: "/tmp/gtm/data.db",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          syncMode: "replica",
+        }),
+        updateReplicaPushState,
+      }),
+      tursoNameForRecord: () => "d-ec8821e8",
+    }));
+
+    vi.doMock("../src/gateway/services/tursoReplica/TursoReplicaService.js", () => ({
+      getTursoReplicaService: () => ({ close }),
+    }));
+
+    vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaProvision.js", () => ({
+      pushReplicaBootstrapAndReseedVerified,
+    }));
+
+    vi.doMock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js", () => ({
+      syncStatusForLinkedDb: vi.fn(async () => ({
+        online: true,
+        syncMode: "replica",
+        pendingPush: false,
+        pendingOps: 0,
+        cutoverBlocked: false,
+        cutoverBlockReason: null,
+        migrationConflict: false,
+        lastPushError: null,
+      })),
+    }));
+
+    vi.doMock("node:fs/promises", () => ({
+      copyFile: vi.fn(async () => undefined),
+    }));
+
+    const { repairCloudSync } = await import(
+      "../src/gateway/services/tursoReplica/PaprDbService.js"
+    );
+
+    const result = await repairCloudSync({
+      dbId: "db-ec8821e8",
+      strategy: "bootstrap_remote",
+    });
+
+    expect(pushReplicaBootstrapAndReseedVerified).toHaveBeenCalledOnce();
+    expect(updateReplicaPushState).toHaveBeenCalledOnce();
+    expect(result.push?.ok).toBe(false);
+    expect(result.push?.error).toContain("Turso has no user rows");
   });
 
   it("accept_cloud stops sync worker then reprovisions replica", async () => {
