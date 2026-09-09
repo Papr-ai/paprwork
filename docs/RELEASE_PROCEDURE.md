@@ -43,9 +43,10 @@ git push origin v2.x.y
 Watch: **Actions → Release** (triggered by the tag).
 
 The workflow now:
-- Builds Mac/Windows/Linux with `--publish never` (local artifacts only)
-- Collects `latest-mac.yml`, `latest.yml`, `latest-linux.yml` into artifacts
-- **Rewrites `latest-mac.yml` URLs** to match actual `Papr.Work-*-mac.zip` files (`fix-latest-mac-yml.mjs`)
+- Builds Mac **arm64** (`macos-14`) and **x64** (`macos-15-intel`) in **parallel** jobs with isolated `node_modules`
+- Builds Windows/Linux with `--publish never` (local artifacts only)
+- **Generates `latest-mac.yml`** from both Mac zip artifacts (`fix-latest-mac-yml.mjs`)
+- Collects `latest.yml`, `latest-linux.yml` from platform artifacts
 - **Fails the job** if yml URLs don't match zip artifacts on disk
 - Creates/updates the GitHub release with all binaries + metadata in one step
 

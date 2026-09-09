@@ -2,9 +2,9 @@
 /**
  * Swap macOS optional native packages to match the Electron target arch.
  *
- * CI runs on Apple Silicon (arm64) but must also ship an Intel (x64) build.
- * `npm ci` only installs host-arch optional deps, so a combined
- * `electron-builder --mac --arm64 --x64` bundles arm64 .node files into the x64 app.
+ * CI builds arm64 and x64 in separate jobs (isolated node_modules). On Apple Silicon
+ * runners, `npm ci` only installs host-arch optional deps — run this script before
+ * packaging so each job bundles the correct darwin-* native packages.
  *
  * Usage (from repo root, after npm ci + npm run build):
  *   node scripts/prepare-mac-native-deps.mjs arm64   # default host — strip x64-only clutter

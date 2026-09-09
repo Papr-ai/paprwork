@@ -10,8 +10,20 @@ permissions:
 
 jobs:
   build-mac:
-    runs-on: macos-14
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            app_path: release/mac-arm64/Papr Work.app
+            builder_flag: --arm64
+          - arch: x64
+            runner: macos-15-intel
+            app_path: release/mac/Papr Work.app
+            builder_flag: --x64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
 
@@ -74,37 +86,21 @@ jobs:
           PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
           PAPR_MEMORY_SERVER_URL: ${{ secrets.PAPR_MEMORY_SERVER_URL }}
 
-      - name: Prepare native deps (Apple Silicon)
-        run: node scripts/prepare-mac-native-deps.mjs arm64
+      - name: Prepare native deps (${{ matrix.arch }})
+        run: node scripts/prepare-mac-native-deps.mjs ${{ matrix.arch }}
 
-      - name: Build Mac distributables (arm64)
-        run: npx electron-builder --mac --arm64 --publish never
+      - name: Build Mac distributables (${{ matrix.arch }})
+        run: npx electron-builder --mac ${{ matrix.builder_flag }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Verify Mac arm64 native arch and SDK bundles
+      - name: Verify Mac native arch and SDK bundles (${{ matrix.arch }})
         run: |
-          node scripts/verify-packaged-native-arch.mjs "release/mac-arm64/Papr Work.app"
-          node scripts/verify-packaged-mini-app-sdk.mjs "release/mac-arm64/Papr Work.app"
-
-      - name: Prepare native deps (Intel)
-        run: node scripts/prepare-mac-native-deps.mjs x64
-
-      - name: Build Mac distributables (x64)
-        run: npx electron-builder --mac --x64 --publish never
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-
-      - name: Verify Mac x64 native arch and SDK bundles
-        run: |
-          node scripts/verify-packaged-native-arch.mjs "release/mac/Papr Work.app"
-          node scripts/verify-packaged-mini-app-sdk.mjs "release/mac/Papr Work.app"
+          node scripts/verify-packaged-native-arch.mjs "${{ matrix.app_path }}"
+          node scripts/verify-packaged-mini-app-sdk.mjs "${{ matrix.app_path }}"
 
       - name: Cleanup keychain
         if: always()
@@ -112,14 +108,13 @@ jobs:
           security delete-keychain $RUNNER_TEMP/build.keychain-db 2>/dev/null || true
           rm -f $RUNNER_TEMP/app_certificate.p12 $RUNNER_TEMP/installer_certificate.p12
 
-      - name: Upload Mac artifacts
+      - name: Upload Mac artifacts (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: mac-builds
+          name: mac-builds-${{ matrix.arch }}
           path: |
             release/*.pkg
             release/*.zip
-            release/latest-mac.yml
           if-no-files-found: error
           retention-days: 5
 
@@ -234,6 +229,9 @@ jobs:
       - name: List release files
         run: ls -lhR artifacts/
 
+      - name: Fix latest-mac.yml zip URLs
+        run: node scripts/fix-latest-mac-yml.mjs artifacts
+
       - name: Verify auto-update metadata
         run: |
           set -euo pipefail
@@ -244,9 +242,6 @@ jobs:
             fi
             echo "✓ ${file} ($(wc -c < "artifacts/${file}") bytes)"
           done
-
-      - name: Fix latest-mac.yml zip URLs
-        run: node scripts/fix-latest-mac-yml.mjs artifacts
 
       - name: Verify Mac yml URLs match zip artifacts
         run: |

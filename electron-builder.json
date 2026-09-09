@@ -49,22 +49,15 @@
       "to": "packaged-gateway-env.defaults.json"
     }
   ],
+  "npmRebuild": false,
   "mac": {
     "category": "public.app-category.productivity",
     "target": [
       {
-        "target": "pkg",
-        "arch": [
-          "arm64",
-          "x64"
-        ]
+        "target": "pkg"
       },
       {
-        "target": "zip",
-        "arch": [
-          "arm64",
-          "x64"
-        ]
+        "target": "zip"
       }
     ],
     "icon": "build/icon.icns",
