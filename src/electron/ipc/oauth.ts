@@ -201,13 +201,14 @@ async function syncOAuthTokenToApiKeys(
 async function removeOAuthManagedApiKey(
   provider: "openai" | "anthropic",
 ): Promise<void> {
-  if (!customKeysStorage) {
-    console.error("[OAuth IPC] CustomKeysStorage not initialized");
-    return;
-  }
-
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+
+  if (!customKeysStorage) {
+    console.error("[OAuth IPC] CustomKeysStorage not initialized");
+    invalidateKeyCache(keyName);
+    return;
+  }
 
   try {
     const existingKeyMetadata =
@@ -226,8 +227,12 @@ async function removeOAuthManagedApiKey(
         );
       }
     }
+    // Token was removed from OAuthTokenStorage even when a user-owned key remains.
+    // Gateway must drop oauthTokenCache + bump authEpoch or stale OAuth wins on next turn.
+    invalidateKeyCache(keyName);
   } catch (error) {
     console.error(`[OAuth IPC] Failed to remove ${keyName}:`, error);
+    invalidateKeyCache(keyName);
   }
 }
 

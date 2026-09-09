@@ -22,6 +22,8 @@ interface ClaudeTokenPastePanelProps {
   oauthSource: OAuthProviderSource;
   onCancel: () => void;
   onConnected: () => void;
+  /** When true, parent already showed install/sign-in steps above. */
+  hideIntro?: boolean;
 }
 
 export function ClaudeTokenPastePanel({
@@ -29,6 +31,7 @@ export function ClaudeTokenPastePanel({
   oauthSource,
   onCancel,
   onConnected,
+  hideIntro = false,
 }: ClaudeTokenPastePanelProps) {
   const [pastedToken, setPastedToken] = useState("");
   const [pasting, setPasting] = useState(false);
@@ -153,27 +156,41 @@ export function ClaudeTokenPastePanel({
 
   return (
     <div className="claude-token-paste">
-      <div className="claude-token-paste__hero">
-        <h4 className="claude-token-paste__headline">
-          {pasteMode === "terminal"
-            ? "Finish sign-in in your browser"
-            : "Paste your Claude sign-in code"}
-        </h4>
-        <p className="claude-token-paste__subhead">
-          {pasteMode === "terminal"
-            ? "We opened Terminal for you. After you sign in, we’ll try to connect automatically — or you can paste the code below."
-            : "Run claude setup-token in Terminal, sign in, then paste the code here."}
-        </p>
-      </div>
+      {!hideIntro && (
+        <>
+          <div className="claude-token-paste__hero">
+            <h4 className="claude-token-paste__headline">
+              {pasteMode === "terminal"
+                ? "Finish sign-in in your browser"
+                : "Paste your Claude sign-in code"}
+            </h4>
+            <p className="claude-token-paste__subhead">
+              {pasteMode === "terminal"
+                ? "We opened Terminal for you. After you sign in, we’ll try to connect automatically — or you can paste the code below."
+                : "Run claude setup-token in Terminal, sign in, then paste the code here."}
+            </p>
+          </div>
 
-      <ol className="claude-token-paste__steps">
-        <li>Complete sign-in when your browser opens</li>
-        <li>
-          In <strong>Terminal</strong>, find the long code starting with{" "}
-          <code>sk-ant-oat01-</code>
-        </li>
-        <li>Copy that entire line and paste it below (extra spaces are OK)</li>
-      </ol>
+          <ol className="claude-token-paste__steps">
+            <li>Complete sign-in when your browser opens</li>
+            <li>
+              In <strong>Terminal</strong>, find the long code starting with{" "}
+              <code>sk-ant-oat01-</code>
+            </li>
+            <li>Copy that entire line and paste it below (extra spaces are OK)</li>
+          </ol>
+        </>
+      )}
+
+      {hideIntro && (
+        <div className="claude-token-paste__hero">
+          <h4 className="claude-token-paste__headline">Paste your sign-in token</h4>
+          <p className="claude-token-paste__subhead">
+            After <code>claude setup-token</code>, copy the line starting with{" "}
+            <code>sk-ant-oat01-</code> and paste it below.
+          </p>
+        </div>
+      )}
 
       <div className="claude-token-paste__terminal-mock" aria-hidden="true">
         <div className="claude-token-paste__terminal-bar">Terminal</div>

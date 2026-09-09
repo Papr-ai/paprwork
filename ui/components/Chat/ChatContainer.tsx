@@ -325,8 +325,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   useEffect(() => {
     setSelectedModel((prev) => {
       const store = useChatStore.getState();
+      // Explicit per-chat pick always wins — do not downgrade to Sonnet just
+      // because isModelAvailable flickered false (e.g. PAPR_API_KEY not in the
+      // keys list yet while Papr login is active).
+      const perChatModelId = store.getLastSelectedModel(chatId);
+      if (perChatModelId) {
+        const explicitModel = getModelById(migratePickerModelId(perChatModelId));
+        if (explicitModel) return explicitModel;
+      }
+
       const lastId = resolveChatModelId({
-        perChatModelId: store.getLastSelectedModel(chatId),
         historyModelId,
         newChatDefaultModelId: store.getDefaultModelForNewChat(),
         hasHistory: chatHasHistory,
@@ -705,6 +713,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         thinkingBudget: selectedModel.defaultThinkingBudget,
         maxTokens: selectedModel.maxTokens, // Output token limit
       };
+
+      useChatStore.getState().setLastSelectedModel(chatId, selectedModel.id);
 
       // Track activation: first chat sent
       if (!localStorage.getItem("papr-activation-first-chat")) {

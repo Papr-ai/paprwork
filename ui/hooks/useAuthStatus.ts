@@ -36,12 +36,23 @@ export function useAuthStatus() {
   const anthropicOAuth = useOAuth("anthropic");
   const { keys, loadKeys } = useCustomKeys();
 
+  const [paprLoggedIn, setPaprLoggedIn] = useState(false);
+
   const [status, setStatus] = useState<AuthStatus>({
     openai: { oauth: false, apiKey: false },
     anthropic: { oauth: false, apiKey: false },
     google: { apiKey: false },
     paprProxy: false,
   });
+
+  const refreshPaprLogin = useCallback(async () => {
+    try {
+      const result = await window.electronAPI?.papr?.checkLoginStatus?.();
+      setPaprLoggedIn(Boolean(result?.success && result?.isLoggedIn));
+    } catch {
+      setPaprLoggedIn(false);
+    }
+  }, []);
 
   const refresh = useCallback(() => {
     const hasKey = (name: string) => keys.some((k) => k.name === name);
@@ -60,15 +71,31 @@ export function useAuthStatus() {
         apiKey:
           hasKey("GOOGLE_API_KEY") || hasKey("GOOGLE_GENERATIVE_AI_API_KEY"),
       },
-      paprProxy: hasKey("PAPR_API_KEY"), // Papr proxy enables all providers
+      // Key may not appear in the Settings keys list immediately after login;
+      // Papr session alone means proxy routing is available.
+      paprProxy: hasKey("PAPR_API_KEY") || paprLoggedIn,
     });
   }, [
     keys,
+    paprLoggedIn,
     openaiOAuth.status.connected,
     openaiOAuth.status.isExpired,
     anthropicOAuth.status.connected,
     anthropicOAuth.status.isExpired,
   ]);
+
+  useEffect(() => {
+    void refreshPaprLogin();
+    const onPaprAuthChange = () => {
+      void refreshPaprLogin();
+    };
+    window.addEventListener("papr-login-success", onPaprAuthChange);
+    window.addEventListener("papr-logout-success", onPaprAuthChange);
+    return () => {
+      window.removeEventListener("papr-login-success", onPaprAuthChange);
+      window.removeEventListener("papr-logout-success", onPaprAuthChange);
+    };
+  }, [refreshPaprLogin]);
 
   useEffect(() => {
     refresh();
@@ -131,6 +158,7 @@ export function useAuthStatus() {
       await openaiOAuth.refresh();
       await anthropicOAuth.refresh();
       await loadKeys();
+      await refreshPaprLogin();
       refresh();
     },
   };

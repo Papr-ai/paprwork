@@ -21,6 +21,8 @@ export interface OAuthStatus {
   timedOut?: boolean;
   /** Set when Claude flow opened a terminal -- UI should show paste field */
   showPasteField?: boolean;
+  /** Set when automatic Claude CLI install failed — show manual connection options */
+  cliInstallFailed?: boolean;
 }
 
 const OAUTH_TIMEOUT_MS = 30_000; // 30 seconds before showing fallback
@@ -117,6 +119,20 @@ export function useOAuth(
       const result = await oauthAPI.startOAuth({ source });
 
       if (!result.success) {
+        if (provider === "anthropic" && result.fallback === "manual") {
+          const message =
+            "Could not install Claude CLI automatically. Try manual connection below.";
+          trackOAuthProviderFailed(provider, message, { source, stage: "start" });
+          setStatus({
+            connected: false,
+            error: message,
+            cliInstallFailed: true,
+          });
+          setLoading(false);
+          if (cleanupRef.current) cleanupRef.current();
+          return;
+        }
+
         throw new Error(result.error || "OAuth flow failed");
       }
 
@@ -147,7 +163,7 @@ export function useOAuth(
         setLoading(false);
         const message =
           provider === "anthropic"
-            ? "Sign-in didn't complete. Use Manual Setup below."
+            ? "Sign-in didn't complete. Try manual connection below."
             : "Sign-in timed out. Please try again.";
         trackOAuthProviderStep(provider, "connect_timeout", { source, error: message });
         setStatus({

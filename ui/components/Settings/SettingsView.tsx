@@ -1011,6 +1011,45 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.13" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.13</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Claude Manual Connection Help</strong>
+                <p>
+                  Connect Claude Pro/Max with step-by-step CLI instructions for
+                  Mac, Windows, and Linux — or ask the agent to walk you through
+                  setup in a new chat.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Smarter OAuth Fallbacks</strong>
+                <p>
+                  When automatic Claude CLI install fails, Settings keeps the
+                  manual options visible instead of jumping straight to token
+                  paste. Disconnecting OAuth now clears stale gateway auth cache.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Papr Proxy Auth Detection</strong>
+                <p>
+                  Settings recognizes Papr login immediately for cloud model
+                  routing, even before the API key appears in the keys list.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.13"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.12" && (
           <div className="about-card">
             <h3>What's New in v2.6.12</h3>
