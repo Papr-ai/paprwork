@@ -1011,6 +1011,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.5" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.5</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Intel Mac Gateway Fix</strong>
+                <p>
+                  Intel Mac builds now ship the correct x64 native libraries
+                  (libsql, esbuild, sharp) so the gateway starts reliably instead
+                  of crashing on launch.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Release Verification</strong>
+                <p>
+                  CI verifies native CPU architecture and mini-app SDK bundles in
+                  both Apple Silicon and Intel packages before upload.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Intel Turso Sync</strong>
+                <p>
+                  Plan A replica sync stays disabled on Intel Mac until Turso ships
+                  a darwin-x64 binding; legacy HTTP sync continues to work.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.5"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.4" && (
           <div className="about-card">
             <h3>What's New in v2.6.4</h3>

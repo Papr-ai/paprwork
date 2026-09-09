@@ -92,4 +92,17 @@ describe("tursoReplicaEnabled", () => {
     expect(mod.defaultSyncModeForNewRegistryDb()).toBeUndefined();
     expect(mod.shouldDeferRegistrySqliteFileForReplica()).toBe(false);
   });
+
+  it("disables Plan A replica sync on Intel Mac (no darwin-x64 Turso binding)", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    vi.spyOn(process, "arch", "get").mockReturnValue("x64");
+    process.env.PAPR_TURSO_REPLICA_SYNC = "replica-records";
+    process.env.CLOUD_SYNC_ENABLED = "true";
+    const mod = await import("../src/gateway/utils/tursoReplicaEnabled.js");
+    expect(mod.isTursoReplicaNativeAvailable()).toBe(false);
+    expect(mod.isTursoReplicaSyncFeatureEnabled()).toBe(false);
+    expect(
+      mod.shouldUseTursoReplicaForDb({ syncMode: "replica" }),
+    ).toBe(false);
+  });
 });

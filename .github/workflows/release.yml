@@ -74,13 +74,34 @@ jobs:
           PAPR_APP_REPO_WRITER_URL: ${{ secrets.PAPR_APP_REPO_WRITER_URL }}
           PAPR_MEMORY_SERVER_URL: ${{ secrets.PAPR_MEMORY_SERVER_URL }}
 
-      - name: Build Mac distributables
-        run: npx electron-builder --mac --arm64 --x64 --publish never
+      - name: Prepare native deps (Apple Silicon)
+        run: node scripts/prepare-mac-native-deps.mjs arm64
+
+      - name: Build Mac distributables (arm64)
+        run: npx electron-builder --mac --arm64 --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Prepare native deps (Intel)
+        run: node scripts/prepare-mac-native-deps.mjs x64
+
+      - name: Build Mac distributables (x64)
+        run: npx electron-builder --mac --x64 --publish never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Verify packaged native architectures and SDK bundles
+        run: |
+          node scripts/verify-packaged-native-arch.mjs "release/mac-arm64/Papr Work.app"
+          node scripts/verify-packaged-native-arch.mjs "release/mac-x64/Papr Work.app"
+          node scripts/verify-packaged-mini-app-sdk.mjs "release/mac-arm64/Papr Work.app"
+          node scripts/verify-packaged-mini-app-sdk.mjs "release/mac-x64/Papr Work.app"
 
       - name: Cleanup keychain
         if: always()
@@ -234,6 +255,24 @@ jobs:
           }
           console.log('✓ latest-mac.yml URLs match artifacts');
           "
+
+      - name: Verify full release asset set
+        run: |
+          set -euo pipefail
+          cd artifacts
+          count() { ls -1 $1 2>/dev/null | wc -l | tr -d ' '; }
+          MAC_ZIP=$(count 'Papr.Work-*-mac.zip')
+          MAC_PKG=$(count 'Papr.Work-*-mac.pkg')
+          WIN_EXE=$(count 'PaprWork-Setup-*.exe')
+          LINUX_IMG=$(count 'PaprWork-*.AppImage')
+          LINUX_DEB=$(count 'paprwork_*.deb')
+          echo "Mac zip: ${MAC_ZIP}, Mac pkg: ${MAC_PKG}, Win exe: ${WIN_EXE}, Linux AppImage: ${LINUX_IMG}, Linux deb: ${LINUX_DEB}"
+          test "${MAC_ZIP}" -ge 2 || { echo "::error::Expected 2 Mac zip artifacts (arm64 + x64)"; exit 1; }
+          test "${MAC_PKG}" -ge 2 || { echo "::error::Expected 2 Mac pkg artifacts (arm64 + x64)"; exit 1; }
+          test "${WIN_EXE}" -ge 1 || { echo "::error::Missing Windows installer"; exit 1; }
+          test "${LINUX_IMG}" -ge 1 || { echo "::error::Missing Linux AppImage"; exit 1; }
+          test "${LINUX_DEB}" -ge 1 || { echo "::error::Missing Linux deb package"; exit 1; }
+          echo "✓ Full release asset set present"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

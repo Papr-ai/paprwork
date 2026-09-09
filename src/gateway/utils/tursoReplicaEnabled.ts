@@ -24,7 +24,18 @@ export function tursoReplicaRolloutMode(): TursoReplicaRolloutMode {
   return "off";
 }
 
+/**
+ * Turso Sync publishes `@tursodatabase/sync-darwin-arm64` but no darwin-x64 binding yet.
+ * Intel Mac must stay on legacy HTTP/libsql sync until upstream ships x64 natives.
+ */
+export function isTursoReplicaNativeAvailable(): boolean {
+  return !(process.platform === "darwin" && process.arch === "x64");
+}
+
 export function isTursoReplicaSyncFeatureEnabled(): boolean {
+  if (!isTursoReplicaNativeAvailable()) {
+    return false;
+  }
   return tursoReplicaRolloutMode() !== "off";
 }
 
@@ -110,6 +121,13 @@ export function shouldUseTursoReplicaForDb(options: {
 
 /** Log startup guard when Plan A rollout env is active. */
 export function logTursoReplicaStartupGuard(): void {
+  if (!isTursoReplicaNativeAvailable()) {
+    console.warn(
+      "[TursoReplica] Plan A replica sync disabled on Intel Mac — no @tursodatabase/sync-darwin-x64. " +
+        "Using legacy Turso HTTP sync.",
+    );
+    return;
+  }
   const mode = tursoReplicaRolloutMode();
   if (mode === "off") {
     return;
