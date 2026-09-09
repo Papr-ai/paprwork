@@ -36,7 +36,9 @@
     "node_modules/playwright-core/**",
     "dist/resources/default-apps/**",
     "dist/resources/default-jobs/**",
+    "dist/resources/job-sdk/**",
     "dist/resources/mini-app-sdk/**",
+    "src/resources/job-sdk/**",
     "src/resources/mini-app-sdk/**"
   ],
   "extraResources": [

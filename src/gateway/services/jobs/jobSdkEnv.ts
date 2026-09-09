@@ -18,6 +18,21 @@ import { existsSync } from "fs";
 
 let cachedRoot: string | null | undefined;
 
+function jobSdkMarkerPath(dir: string): string {
+  return path.join(dir, "papr_platform_browser.py");
+}
+
+/**
+ * Python runs as a child process and cannot read inside app.asar — same
+ * constraint as esbuild for mini-app-sdk. Prefer app.asar.unpacked when this
+ * module is loaded from inside an asar archive.
+ */
+function preferUnpackedAsarPath(candidate: string): string {
+  return candidate.includes(`app.asar${path.sep}`)
+    ? candidate.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
+    : candidate;
+}
+
 /**
  * Locate `job-sdk/`, which lives at `src/resources/job-sdk` in a dev checkout
  * and `dist/resources/job-sdk` in a packaged build. Both are probed because
@@ -30,18 +45,19 @@ export function getJobSdkRoot(): string | null {
   }
 
   const here = path.dirname(fileURLToPath(import.meta.url));
+  const bundled = path.resolve(here, "../../../resources/job-sdk");
   const candidates = [
-    // dist/gateway/services/jobs → dist/resources/job-sdk
-    path.resolve(here, "../../../resources/job-sdk"),
-    // src/gateway/services/jobs → src/resources/job-sdk
+    preferUnpackedAsarPath(bundled),
+    bundled,
     path.resolve(here, "../../../../src/resources/job-sdk"),
     path.resolve(here, "../../../../resources/job-sdk"),
   ];
 
-  cachedRoot = candidates.find((dir) => existsSync(path.join(dir, "papr_files.py"))) ?? null;
+  cachedRoot =
+    candidates.find((dir) => existsSync(jobSdkMarkerPath(dir))) ?? null;
   if (!cachedRoot) {
     console.warn(
-      "[JobSdk] job-sdk/ not found — `from papr_files import add` will fail in jobs.",
+      "[JobSdk] job-sdk/ not found — `from papr_platform_browser import connect_platform_browser` will fail in jobs.",
     );
   }
   return cachedRoot;

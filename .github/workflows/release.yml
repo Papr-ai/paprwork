@@ -101,6 +101,7 @@ jobs:
         run: |
           node scripts/verify-packaged-native-arch.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-mini-app-sdk.mjs "${{ matrix.app_path }}"
+          node scripts/verify-packaged-job-sdk.mjs "${{ matrix.app_path }}"
 
       - name: Cleanup keychain
         if: always()
@@ -155,8 +156,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify packaged mini-app SDK bundles (Windows)
-        run: node scripts/verify-packaged-mini-app-sdk.mjs release/win-unpacked
+      - name: Verify packaged SDK bundles (Windows)
+        run: |
+          node scripts/verify-packaged-mini-app-sdk.mjs release/win-unpacked
+          node scripts/verify-packaged-job-sdk.mjs release/win-unpacked
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -200,8 +203,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify packaged mini-app SDK bundles (Linux)
-        run: node scripts/verify-packaged-mini-app-sdk.mjs release/linux-unpacked
+      - name: Verify packaged SDK bundles (Linux)
+        run: |
+          node scripts/verify-packaged-mini-app-sdk.mjs release/linux-unpacked
+          node scripts/verify-packaged-job-sdk.mjs release/linux-unpacked
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4

@@ -1011,6 +1011,30 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.14" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.14</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Platform Browser Jobs in Packaged Apps</strong>
+                <p>
+                  Python jobs that use LinkedIn, X, or other platform browsers
+                  now work in downloaded builds — job-sdk is unpacked from the
+                  app archive so Run now finds papr_platform_browser.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.14"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.13" && (
           <div className="about-card">
             <h3>What's New in v2.6.13</h3>
