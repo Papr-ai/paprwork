@@ -3630,6 +3630,30 @@ if (delegationCardMap.size > 0) {
 
 ---
 
+### Issue 77: Spent Quota Reported as a Transient Rate Limit ✅ FIXED
+**Added:** 2026-09-10
+**Problem:** A message failed with "The AI provider is rate limited. Tap Resume when ready to continue." The real cause was an Anthropic spend cap — "You have reached your specified API usage limits. You will regain access on 2026-10-01 at 00:00 UTC" — and separately a claude.ai weekly quota at 100%. Switching OAuth → API key changed nothing, because both were exhausted for different reasons and the app described both the same way.
+**Root Causes:**
+1. **The provider's explanation was discarded.** `createRateLimitExhaustedError()` took no arguments and returned a fixed string. At all four raise sites in `PiCodexStreamWithToolLoop.ts` the real error was in scope (`err`, `apiError`, `chunk.error`) and dropped.
+2. **Spent allowance was classified as capacity pressure.** Anthropic returns both a per-minute burst limit and a monthly spend cap as HTTP 429 with `type: "rate_limit_error"`, so the status code cannot separate them — only the sentence can. `isRetryableProviderCapacityError` matched on `429`/`rate limit`, so a cap clearing in three weeks got three attempts a second apart and then offered **Resume**, an affordance that could not work.
+3. **`collectErrorStrings` never parsed `responseBody`.** Anthropic's message lives in `error.message` inside that JSON, so the raw string matched substrings but could not be quoted back.
+**Solution:** `detectProviderQuotaExhaustion()` classifies a refusal as spent allowance (`api_spend_cap` | `api_credits` | `subscription_quota`), extracts the provider's sentence verbatim and a reset time, and returns null for anything waiting could fix. Quota refusals get their own code (`provider_quota_exhausted`) so `useAgent` withholds Resume and shows the composed message naming the limit, the reset and where to change it.
+**Design notes:**
+- **Transient signals win.** `per-minute`, `tokens per minute`, `concurrent` short-circuit to transient, because the two mistakes are not symmetric: calling a burst limit "spent" deletes a retry that works, while the reverse only wastes three attempts.
+- **Reset times must be anchored** to a reset word (`resets`, `regain access on`, or the `usage limit reached|<epoch>` pipe). An unanchored date scan would report an unrelated timestamp as the reset, and a confidently wrong date is worse than none.
+**Files Changed:** `src/gateway/utils/providerRateLimitRetry.ts`, `src/gateway/services/providers/PiCodexStreamWithToolLoop.ts`, `ui/hooks/useAgent.ts`, `tests/provider-quota-exhaustion.test.ts` (16 tests)
+**Prevention:** When a provider hands you a reason, pass it on — a fixed string thrown over a specific error turns a solvable problem into a mystery. Do not classify on a status code that two different conditions share. Only offer a retry affordance for something retrying can fix.
+
+### Issue 78: Refresh Tick Warned About a Healthy Token ✅ FIXED
+**Added:** 2026-09-10
+**Problem:** Every two minutes the log read `Not adopting Claude Code credentials: access token expired 2026-04-24…`, which users reasonably read as their own token having expired. It had not — the stored token showed "Expires in 362d" and was in use.
+**Root Cause:** Two credentials, and the message named neither. The user's stored token was healthy; *Claude Code's* Keychain copy had been dead since April. The CLI-adoption repair ran before the expiry check on every tick — necessarily, since a pasted setup token carries an assumed year-long expiry and so never *looks* expired, making adoption the only path that can ever upgrade it. So a token good for another year triggered a Keychain read and an expiry warning on a timer, while nothing was wrong.
+**Solution:** Keep the repair reachable but stop it being constant — attempt it once per session (tracked in `cliAdoptionAttempted`, cleared on connect and disconnect) plus whenever expiry genuinely approaches. Reworded the message to lead with whose token is unaffected and to name Claude Code's copy as the stale one.
+**Files Changed:** `src/electron/ipc/oauth.ts`
+**Prevention:** Reordering a guard is not free when the check below it is the only thing that repairs a case the check above can never detect. And when two credentials are in play, a log line must say which one it means — "expired" plus a date reads as an alarm about whichever one the user is thinking about.
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
 
 ### Issue 66: Telemetry Anonymous ID Mismatch ✅ FIXED

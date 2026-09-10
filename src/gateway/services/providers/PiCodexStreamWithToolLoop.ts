@@ -58,7 +58,9 @@ import {
 import {
   MAX_PROVIDER_RATE_LIMIT_RETRIES,
   computeRateLimitBackoffMs,
+  createProviderQuotaExhaustedError,
   createRateLimitExhaustedError,
+  detectProviderQuotaExhaustion,
   isRetryableProviderCapacityError,
   sleepMs,
 } from "../../utils/providerRateLimitRetry.js";
@@ -66,8 +68,33 @@ import {
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
  */
-function yieldRateLimitExhausted(): { type: "error"; error: ReturnType<typeof createRateLimitExhaustedError> } {
-  return { type: "error", error: createRateLimitExhaustedError() };
+function yieldRateLimitExhausted(error?: unknown): {
+  type: "error";
+  error: ReturnType<typeof createRateLimitExhaustedError>;
+} {
+  return { type: "error", error: createRateLimitExhaustedError(error) };
+}
+
+/**
+ * A refusal that waiting cannot fix, described so the user knows where to go.
+ *
+ * Returns null when the failure is ordinary capacity pressure, leaving the
+ * retry-then-Resume path in charge. Checked before the retry branch at every
+ * site that can raise one, so a spent month never spends three attempts
+ * discovering it is still spent.
+ */
+function quotaExhaustedChunk(error: unknown): {
+  type: "error";
+  error: ReturnType<typeof createProviderQuotaExhaustedError>;
+} | null {
+  const detail = detectProviderQuotaExhaustion(error);
+  if (!detail) return null;
+  console.warn(
+    `[PiCodexToolLoop] Provider quota exhausted (${detail.remedy})` +
+      (detail.resetsAt ? `, resets ${detail.resetsAt.toISOString()}` : "") +
+      " — not retrying",
+  );
+  return { type: "error", error: createProviderQuotaExhaustedError(detail) };
 }
 
 function truncateToolCallId(id: string): string {
@@ -612,12 +639,18 @@ export async function* createPiCodexStreamWithToolLoop(
         try {
           piStream = streamSimple(piModel, context, streamOptions);
         } catch (err) {
+          const quotaChunk = quotaExhaustedChunk(err);
+          if (quotaChunk) {
+            yield quotaChunk;
+            emitTurnEnd("rate_limit_exhausted");
+            return;
+          }
           if (isRetryableProviderCapacityError(err)) {
             if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
               capacityError = err;
               shouldRetryCapacity = true;
             } else {
-              yield yieldRateLimitExhausted();
+              yield yieldRateLimitExhausted(err);
               emitTurnEnd("rate_limit_exhausted");
               return;
             }
@@ -655,13 +688,19 @@ export async function* createPiCodexStreamWithToolLoop(
             if (event.type === "error") {
               const apiError =
                 (event as { error?: unknown }).error ?? event;
+              const quotaChunk = quotaExhaustedChunk(apiError);
+              if (quotaChunk) {
+                yield quotaChunk;
+                emitTurnEnd("rate_limit_exhausted");
+                return;
+              }
               if (isRetryableProviderCapacityError(apiError)) {
                 if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
                   capacityError = apiError;
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted();
+                yield yieldRateLimitExhausted(apiError);
                 emitTurnEnd("rate_limit_exhausted");
                 return;
               }
@@ -746,13 +785,19 @@ export async function* createPiCodexStreamWithToolLoop(
 
             const chunk = adaptPiStreamToAISDKEvent(event);
             if (chunk?.type === "error") {
+              const quotaChunk = quotaExhaustedChunk(chunk.error);
+              if (quotaChunk) {
+                yield quotaChunk;
+                emitTurnEnd("rate_limit_exhausted");
+                return;
+              }
               if (isRetryableProviderCapacityError(chunk.error)) {
                 if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
                   capacityError = chunk.error;
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted();
+                yield yieldRateLimitExhausted(chunk.error);
                 emitTurnEnd("rate_limit_exhausted");
                 return;
               }
@@ -773,12 +818,18 @@ export async function* createPiCodexStreamWithToolLoop(
           }
         }
       } catch (err) {
+        const quotaChunk = quotaExhaustedChunk(err);
+        if (quotaChunk) {
+          yield quotaChunk;
+          emitTurnEnd("rate_limit_exhausted");
+          return;
+        }
         if (isRetryableProviderCapacityError(err)) {
           if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
             capacityError = err;
             shouldRetryCapacity = true;
           } else {
-            yield yieldRateLimitExhausted();
+            yield yieldRateLimitExhausted(err);
             emitTurnEnd("rate_limit_exhausted");
             return;
           }

@@ -118,6 +118,8 @@ async function persistOAuthConnection(
   },
 ): Promise<void> {
   await oauthTokenStorage!.storeToken(tokenInput);
+  // A new token is worth one fresh look at the CLI's credentials.
+  cliAdoptionAttempted.delete(provider);
   trackOAuthStep(provider, "token_stored", options);
 
   await syncOAuthTokenToApiKeys(provider, tokenInput.accessToken);
@@ -157,6 +159,15 @@ function sendOAuthStatus(provider: "openai" | "anthropic", status: "connected" |
 let refreshTimer: NodeJS.Timeout | null = null;
 const REFRESH_CHECK_INTERVAL = 2 * 60 * 1000; // Check every 2 minutes
 const REFRESH_BUFFER = 15 * 60; // Refresh 15 minutes before expiry
+
+/**
+ * Providers whose stored token we have already tried to upgrade from the CLI's
+ * own credentials this session.
+ *
+ * Cleared whenever the stored token changes, since a fresh sign-in is exactly
+ * the event that makes another look worthwhile.
+ */
+const cliAdoptionAttempted = new Set<"openai" | "anthropic">();
 
 /**
  * Sync OAuth token to CustomKeysStorage as an API key
@@ -360,10 +371,15 @@ async function adoptClaudeCredentialsFromCLIStorage(
   // working token for a dead one and — because the replacement is expired on
   // arrival — arms the very next refresh tick to do it again.
   if (!claudeAccessTokenIsLive(credentials)) {
+    // Lead with whose token is fine. The earlier wording opened with "access
+    // token expired" and a date, which reads as an alarm about the token the
+    // user is actually using — and the reassuring half was at the end.
     console.warn(
-      `[OAuth IPC] Not adopting Claude Code credentials: access token expired ` +
-        `${describeExpiry(credentials.expiresAt)}. Keeping the stored token; ` +
-        `sign in to Claude Code again to refresh this source.`,
+      `[OAuth IPC] Keeping your stored Claude token, which is unaffected. ` +
+        `Claude Code's own copy is stale (its access token lapsed ` +
+        `${describeExpiry(credentials.expiresAt)}), so there is no live ` +
+        `credential to adopt from it. Sign in to Claude Code again if you want ` +
+        `it usable as a refresh source.`,
     );
     return false;
   }
@@ -413,6 +429,11 @@ async function refreshTokenIfNeeded(
       return false;
     }
 
+    const needsRefreshSoon = oauthTokenStorage.isTokenExpired(
+      token,
+      REFRESH_BUFFER / 60,
+    );
+
     const canRedeemRefreshToken = isUsableRefreshToken(
       token.refreshToken,
       token.accessToken,
@@ -422,13 +443,24 @@ async function refreshTokenIfNeeded(
     // slot alongside an invented year-long expiry, so they can neither be
     // refreshed nor ever look expired. Re-reading Claude Code's own storage
     // replaces that copy with the real refresh token and expiry.
+    //
+    // The check cannot be moved below the expiry test — such a token never
+    // looks expired, so this is the only path that ever repairs it. What it can
+    // stop being is constant: the repair matters before the token lapses, not
+    // sixty times an hour while it is still good for a year. Attempting it once
+    // per session (and whenever expiry actually approaches) keeps the repair
+    // and drops the Keychain read, and with it a warning about Claude Code's
+    // stale copy that fired on a timer while nothing was wrong.
     if (provider === "anthropic" && !canRedeemRefreshToken) {
+      if (!needsRefreshSoon && cliAdoptionAttempted.has(provider)) {
+        return false;
+      }
+      cliAdoptionAttempted.add(provider);
       return await adoptClaudeCredentialsFromCLIStorage(token.id);
     }
 
-    // Check if token needs refresh (within buffer time)
-    if (!oauthTokenStorage.isTokenExpired(token, REFRESH_BUFFER / 60)) {
-      // Token is still valid, no refresh needed
+    if (!needsRefreshSoon) {
+      // Token is still valid, no refresh needed.
       return false;
     }
 
@@ -731,6 +763,7 @@ export async function initializeOAuthIPC(
       await oauthTokenStorage!.deleteTokenByProvider("openai");
       activeFlows.delete("openai");
       refreshRejections.clear("openai");
+      cliAdoptionAttempted.delete("openai");
 
       // Remove OAuth-managed API key from CustomKeysStorage
       await removeOAuthManagedApiKey("openai");
@@ -910,6 +943,7 @@ export async function initializeOAuthIPC(
       await oauthTokenStorage!.deleteTokenByProvider("anthropic");
       activeFlows.delete("anthropic");
       refreshRejections.clear("anthropic");
+      cliAdoptionAttempted.delete("anthropic");
 
       // Remove OAuth-managed API key from CustomKeysStorage
       await removeOAuthManagedApiKey("anthropic");
