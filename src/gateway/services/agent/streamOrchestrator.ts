@@ -5,7 +5,12 @@ import {
   extractProviderErrorPayload,
   formatProviderErrorPayload,
   providerFromRequestUrl,
+  type ProviderErrorPayload,
 } from "./providerErrorMessage.js";
+import {
+  describeQuotaExhaustion,
+  detectProviderQuotaExhaustion,
+} from "../../utils/providerRateLimitRetry.js";
 import {
   createChatStreamChunk,
   parseToolCallChunk,
@@ -159,6 +164,32 @@ function formatNetworkConnectivityMessage(error: unknown): string {
 }
 
 /**
+ * A 401 is the one provider refusal whose cause the status cannot narrow: a
+ * revoked key, a key that never reached the request, and an expired OAuth
+ * token are indistinguishable here, and all three send the user to Settings to
+ * check a key that may be fine. Record what does discriminate — the host
+ * actually called, and the provider's own wording. No credential is read.
+ */
+function logProviderAuthRejection(
+  url: string | undefined,
+  payload: ProviderErrorPayload | undefined,
+): void {
+  let host = "unknown host";
+  if (url) {
+    try {
+      host = new URL(url).host;
+    } catch {
+      host = url.slice(0, 80);
+    }
+  }
+  console.warn(
+    `[StreamOrchestrator] Provider rejected credentials (401) at ${host} — ` +
+      `type=${payload?.type ?? "(none)"} ` +
+      `message=${payload?.message ?? "(empty)"}`,
+  );
+}
+
+/**
  * Extract the underlying error from an AI SDK RetryError.
  * RetryError wraps an array of APICallError instances from each retry attempt.
  * We extract the last (most relevant) error's status code and message.
@@ -187,11 +218,11 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
   if (statusCode === 529 || apiErrorType === "overloaded_error") {
     return "Claude servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
   }
+  const quota = detectProviderQuotaExhaustion(err);
+  if (quota) return describeQuotaExhaustion(quota);
   if (statusCode === 429) {
     return "Rate limit exceeded. Please wait a moment and try again.";
   }
-  // Checked after 429 so a transient rate limit keeps its "try again" advice;
-  // a spend cap arrives as 400 and so reaches this branch instead.
   if (payload) {
     const limitMessage = describeUsageLimitError(
       payload,
@@ -200,6 +231,7 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
     if (limitMessage) return limitMessage;
   }
   if (statusCode === 401) {
+    logProviderAuthRejection(extractRequestUrl(err), payload);
     return "Invalid API key. Please check your Anthropic API key in Settings.";
   }
   if (statusCode === 403) {
@@ -282,7 +314,7 @@ function isNoModelOutputError(error: unknown): boolean {
  * Handles AI SDK RetryError (with nested APICallError), plain Error objects,
  * and common API error response shapes.
  */
-function extractErrorMessage(error: unknown): string {
+export function extractErrorMessage(error: unknown): string {
   if (isNoModelOutputError(error)) {
     return formatNoModelOutputMessage();
   }
@@ -340,6 +372,8 @@ function extractErrorMessage(error: unknown): string {
       if (statusCode === 529) {
         return "Claude servers are temporarily overloaded. Please wait a moment and try again.";
       }
+      const quota = detectProviderQuotaExhaustion(errorObj);
+      if (quota) return describeQuotaExhaustion(quota);
       if (statusCode === 429) {
         return "Rate limit exceeded. Please wait a moment and try again.";
       }
@@ -351,6 +385,7 @@ function extractErrorMessage(error: unknown): string {
         if (limitMessage) return limitMessage;
       }
       if (statusCode === 401) {
+        logProviderAuthRejection(errorObj.url as string, payload);
         return "Invalid API key. Please check your API key in Settings.";
       }
       const fromPayload = payload

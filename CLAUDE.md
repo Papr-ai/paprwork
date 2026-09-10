@@ -5073,6 +5073,15 @@ Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`)
 **Files Changed:** `src/gateway/services/KnowledgeGraphWikiService.ts`; `tests/wiki-related-memories.test.ts` (8 tests)
 **Prevention:** A React key warning names the symptom, not the bug. If a list is keyed by an id that also serves as a lookup key, uniqueness is a data invariant — enforce it where the data is produced.
 
+### Issue 82: The API-Key Path Repeated Issue 77's Mistake ✅ FIXED
+**Added:** 2026-09-10
+**Problem:** With an organization-wide Anthropic spend cap at 100% ($1,000.24 of $1,000, resetting Oct 1), a turn on the API-key route reported "Rate limit exceeded. Please wait a moment and try again." Waiting could not help for three weeks.
+**Root Cause:** Issue 77 fixed this for pi-ai (OAuth). The AI SDK route has its own error formatter, and it still answered on the status code first. Both sites in `streamOrchestrator.ts` returned on 429 *before* reading the body, so `describeUsageLimitError` — which was already sitting on the next line and would have said the right thing — was unreachable for any 429. The comment above it asserted "a spend cap arrives as 400 and so reaches this branch instead", and `isUsageLimitError`'s own doc said Anthropic reports the cap as `400`, "not 429". Anthropic does both, which is exactly why Issue 77 concluded the status cannot separate a spend cap from a burst limit.
+**Solution:** Call `detectProviderQuotaExhaustion()` — the transient-aware classifier from Issue 77, rather than a third copy — before the status branches at both sites. It returns null for anything waiting fixes, so a genuine per-minute limit still falls through to the retry advice. Corrected both doc comments.
+**Also:** a 401 now logs the host actually called plus the provider's error type and sentence. A revoked key, a key that never reached the request, and an expired OAuth token are indistinguishable from the status alone, and all three send the user to Settings to check a key that may be fine. No credential material is read.
+**Files Changed:** `src/gateway/services/agent/streamOrchestrator.ts`, `providerErrorMessage.ts`, `tests/api-key-path-quota-message.test.ts` (12 tests, 6 of which fail without the reorder)
+**Prevention:** Fixing a classification bug on one provider route does not fix it on the other — grep for every formatter that branches on the same status before closing it out. And when two modules encode contradictory premises about a provider's status codes, one of them is stale; the sentence is the ground truth, so classify on it before the code.
+
 ---
 
 **This file is living documentation. Update it as we learn and make decisions.**
