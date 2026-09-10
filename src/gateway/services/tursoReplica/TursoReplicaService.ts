@@ -58,6 +58,7 @@ import {
   resetReplicaSidecars,
 } from "./tursoReplicaSidecarWedge.js";
 import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
+import { retryWhileReplicaBusy } from "./replicaBusyRetry.js";
 import {
   noteReplicaReadPathFailure,
   scheduleReplicaBackgroundWedgeRecovery,
@@ -390,7 +391,10 @@ export class TursoReplicaService {
       };
 
       try {
-        return await executeRead(options.pullBeforeRead === true);
+        return await retryWhileReplicaBusy(
+          () => executeRead(options.pullBeforeRead === true),
+          `read ${options.tursoDatabase}`,
+        );
       } catch (error) {
         const message = (error as Error).message;
         if (!isReplicaReadTransportError(message)) {
@@ -457,7 +461,10 @@ export class TursoReplicaService {
       };
 
       try {
-        return await executeSchema(options?.pullBeforeRead === true);
+        return await retryWhileReplicaBusy(
+          () => executeSchema(options?.pullBeforeRead === true),
+          `schema ${tursoDatabase}`,
+        );
       } catch (error) {
         const message = (error as Error).message;
         if (!isReplicaReadTransportError(message)) {

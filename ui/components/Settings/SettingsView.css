@@ -1954,6 +1954,61 @@
   background: rgba(46, 125, 50, 0.1);
 }
 
+/* Amber, not red: the state needs the user but is not itself a failure, and
+   red beside a Disconnect button reads as danger rather than attention. */
+.oauth-badge--attention {
+  color: #92400e;
+  background: rgba(180, 83, 9, 0.12);
+}
+
+@media (prefers-color-scheme: dark) {
+  .oauth-badge--attention {
+    color: #fcd34d;
+    background: rgba(252, 211, 77, 0.14);
+  }
+}
+
+/* The one place the card explains itself, so it carries the weight the old
+   12px expiry line could not. Tinted glass rather than a solid banner. */
+.oauth-state-notice {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 4px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(180, 83, 9, 0.22);
+  border-radius: 10px;
+  background: rgba(180, 83, 9, 0.07);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+.oauth-state-notice__headline {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #92400e;
+}
+
+.oauth-state-notice__detail {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+@media (prefers-color-scheme: dark) {
+  .oauth-state-notice {
+    border-color: rgba(252, 211, 77, 0.22);
+    background: rgba(252, 211, 77, 0.08);
+  }
+
+  .oauth-state-notice__headline {
+    color: #fcd34d;
+  }
+}
+
 .oauth-card__description {
   font-size: 12px;
   color: var(--text-secondary);

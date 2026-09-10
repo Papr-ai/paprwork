@@ -9,6 +9,8 @@ import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProvi
 import { trackOAuthProviderStep } from "../../lib/oauthProviderTelemetry";
 import { getOnboardingState } from "../../utils/onboardingState";
 import { cleanClaudeOAuthToken } from "../../utils/claudeOAuthToken";
+import { useProviderAuthStore } from "../../stores/providerAuthStore";
+import { deriveProviderConnectionState } from "../../utils/providerConnectionState";
 import { ClaudeTokenPastePanel } from "./ClaudeTokenPastePanel";
 import { ClaudeManualSetupPanel } from "./ClaudeManualSetupPanel";
 import { useChat } from "../../hooks/useChat";
@@ -52,6 +54,14 @@ export function OAuthSection({
   const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider, {
     source: oauthSource,
   });
+  // A turn that failed on a 401 is the only proof we get that a token the
+  // provider still lists as valid has stopped working. Without it the card can
+  // only report what we stored, which is why it kept counting down while every
+  // request was being refused.
+  const authRejected = useProviderAuthStore(
+    state => state.rejections[provider] !== undefined,
+  );
+  const clearAuthRejection = useProviderAuthStore(state => state.clearRejection);
   // Persisted in the main process: it decides which credential the gateway ever
   // sees, so this is the mode the agent actually runs on, not just which form shows.
   const [useApiKey, setUseApiKey] = useState(false);
@@ -74,6 +84,26 @@ export function OAuthSection({
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
   const { keys, addKey, updateKey, getKeyValue, deleteKey } = useCustomKeys();
+
+  // A key row synced from the OAuth token is not a platform key, so it is not
+  // something requests can fall back to — only a key the user supplied is.
+  const platformApiKeyConfigured = useMemo(() => {
+    const stored = keys.find(k => k.name === apiKeyName);
+    return stored !== undefined && stored.managedBy !== "oauth";
+  }, [keys, apiKeyName]);
+
+  const connectionState = useMemo(
+    () =>
+      deriveProviderConnectionState({
+        mode: useApiKey ? "apiKey" : "oauth",
+        platformApiKeyConfigured,
+        status,
+        authRejected,
+      }),
+    [useApiKey, platformApiKeyConfigured, status, authRejected],
+  );
+
+  const needsReconnect = connectionState.kind === "needs_signin";
 
   const handleClaudeConnected = () => {
     window.location.reload();
@@ -271,19 +301,16 @@ export function OAuthSection({
     }
   };
 
-  const formatExpiry = (expiresAt?: string) => {
-    if (!expiresAt) return "";
-    const date = new Date(expiresAt);
-    const now = new Date();
-    const diffMs = date.getTime() - now.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
+  // Both remediations retire the recorded rejection: whatever happens next, the
+  // 401 we saw no longer describes the credential now stored.
+  const handleReconnect = async () => {
+    clearAuthRejection(provider);
+    await startOAuthLogin();
+  };
 
-    if (diffMins < 0) return "Expired";
-    if (diffMins < 60) return `Expires in ${diffMins}m`;
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `Expires in ${diffHours}h`;
-    const diffDays = Math.floor(diffHours / 24);
-    return `Expires in ${diffDays}d`;
+  const handleDisconnect = async () => {
+    clearAuthRejection(provider);
+    await disconnect();
   };
 
   return (
@@ -292,18 +319,23 @@ export function OAuthSection({
         <h3>{title}</h3>
         {/* In API key mode the OAuth token is deliberately unused, so showing it
             as connected is what made the switch look like it hadn't applied. */}
-        {useApiKey ? (
-          apiKeySaved && (
-            <span className="oauth-badge oauth-badge--connected">
-              ✓ Using API key
-            </span>
-          )
-        ) : (
-          status.connected && (
-            <span className="oauth-badge oauth-badge--connected">
-              ✓ Connected
-            </span>
-          )
+        {/* One badge, from one derived state. Rendering "stored" and "usable"
+            as separate green signals is what let the card say Connected while
+            the token was expired. */}
+        {connectionState.kind === "api_key_mode" && connectionState.configured && (
+          <span className="oauth-badge oauth-badge--connected">
+            ✓ Using API key
+          </span>
+        )}
+        {connectionState.kind === "connected" && (
+          <span className="oauth-badge oauth-badge--connected">
+            ✓ Connected
+          </span>
+        )}
+        {connectionState.kind === "needs_signin" && (
+          <span className="oauth-badge oauth-badge--attention">
+            Sign-in expired
+          </span>
         )}
       </div>
 
@@ -319,18 +351,41 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
-              {status.expiresAt && (
-                <div className="oauth-detail">
-                  <span className="oauth-detail-label">Token:</span>
-                  <span className="oauth-detail-value">
-                    {formatExpiry(status.expiresAt)}
-                  </span>
+              {/* No expiry countdown while healthy. It is not actionable, and
+                  as the only marker of a dead token it was missed — the badge
+                  beside it said Connected, in green, and won. */}
+              {connectionState.kind === "needs_signin" && (
+                <div className="oauth-state-notice" aria-live="polite">
+                  <p className="oauth-state-notice__headline">
+                    {connectionState.reason === "rejected"
+                      ? `${subscriptionName} rejected this sign-in.`
+                      : `Your ${subscriptionName} sign-in expired and cannot renew itself.`}
+                  </p>
+                  {/* Name the account actually being spent from. Staying quiet
+                      here is how a subscription at 11% usage came to report
+                      that its limits were exhausted: the cap belonged to the
+                      API key that had quietly taken over. */}
+                  <p className="oauth-state-notice__detail">
+                    {connectionState.fallsBackToApiKey
+                      ? `${title} is running on your API key, which is billed separately from your subscription.`
+                      : `${title} requests will fail until you sign in again.`}
+                  </p>
                 </div>
+              )}
+              {needsReconnect && (
+                <button
+                  className="settings-btn settings-btn--primary"
+                  onClick={handleReconnect}
+                  disabled={loading}
+                  style={{ width: "100%", marginBottom: "8px" }}
+                >
+                  {loading ? "Opening sign-in..." : "Sign in again"}
+                </button>
               )}
               <div style={{ display: "flex", gap: "8px" }}>
                 <button
                   className="settings-btn settings-btn--secondary"
-                  onClick={disconnect}
+                  onClick={handleDisconnect}
                   disabled={loading}
                   style={{ flex: 1 }}
                 >

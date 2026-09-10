@@ -3630,6 +3630,30 @@ if (delegationCardMap.size > 0) {
 
 ---
 
+### Issue 77: Spent Quota Reported as a Transient Rate Limit ✅ FIXED
+**Added:** 2026-09-10
+**Problem:** A message failed with "The AI provider is rate limited. Tap Resume when ready to continue." The real cause was an Anthropic spend cap — "You have reached your specified API usage limits. You will regain access on 2026-10-01 at 00:00 UTC" — and separately a claude.ai weekly quota at 100%. Switching OAuth → API key changed nothing, because both were exhausted for different reasons and the app described both the same way.
+**Root Causes:**
+1. **The provider's explanation was discarded.** `createRateLimitExhaustedError()` took no arguments and returned a fixed string. At all four raise sites in `PiCodexStreamWithToolLoop.ts` the real error was in scope (`err`, `apiError`, `chunk.error`) and dropped.
+2. **Spent allowance was classified as capacity pressure.** Anthropic returns both a per-minute burst limit and a monthly spend cap as HTTP 429 with `type: "rate_limit_error"`, so the status code cannot separate them — only the sentence can. `isRetryableProviderCapacityError` matched on `429`/`rate limit`, so a cap clearing in three weeks got three attempts a second apart and then offered **Resume**, an affordance that could not work.
+3. **`collectErrorStrings` never parsed `responseBody`.** Anthropic's message lives in `error.message` inside that JSON, so the raw string matched substrings but could not be quoted back.
+**Solution:** `detectProviderQuotaExhaustion()` classifies a refusal as spent allowance (`api_spend_cap` | `api_credits` | `subscription_quota`), extracts the provider's sentence verbatim and a reset time, and returns null for anything waiting could fix. Quota refusals get their own code (`provider_quota_exhausted`) so `useAgent` withholds Resume and shows the composed message naming the limit, the reset and where to change it.
+**Design notes:**
+- **Transient signals win.** `per-minute`, `tokens per minute`, `concurrent` short-circuit to transient, because the two mistakes are not symmetric: calling a burst limit "spent" deletes a retry that works, while the reverse only wastes three attempts.
+- **Reset times must be anchored** to a reset word (`resets`, `regain access on`, or the `usage limit reached|<epoch>` pipe). An unanchored date scan would report an unrelated timestamp as the reset, and a confidently wrong date is worse than none.
+**Files Changed:** `src/gateway/utils/providerRateLimitRetry.ts`, `src/gateway/services/providers/PiCodexStreamWithToolLoop.ts`, `ui/hooks/useAgent.ts`, `tests/provider-quota-exhaustion.test.ts` (16 tests)
+**Prevention:** When a provider hands you a reason, pass it on — a fixed string thrown over a specific error turns a solvable problem into a mystery. Do not classify on a status code that two different conditions share. Only offer a retry affordance for something retrying can fix.
+
+### Issue 78: Refresh Tick Warned About a Healthy Token ✅ FIXED
+**Added:** 2026-09-10
+**Problem:** Every two minutes the log read `Not adopting Claude Code credentials: access token expired 2026-04-24…`, which users reasonably read as their own token having expired. It had not — the stored token showed "Expires in 362d" and was in use.
+**Root Cause:** Two credentials, and the message named neither. The user's stored token was healthy; *Claude Code's* Keychain copy had been dead since April. The CLI-adoption repair ran before the expiry check on every tick — necessarily, since a pasted setup token carries an assumed year-long expiry and so never *looks* expired, making adoption the only path that can ever upgrade it. So a token good for another year triggered a Keychain read and an expiry warning on a timer, while nothing was wrong.
+**Solution:** Keep the repair reachable but stop it being constant — attempt it once per session (tracked in `cliAdoptionAttempted`, cleared on connect and disconnect) plus whenever expiry genuinely approaches. Reworded the message to lead with whose token is unaffected and to name Claude Code's copy as the stale one.
+**Files Changed:** `src/electron/ipc/oauth.ts`
+**Prevention:** Reordering a guard is not free when the check below it is the only thing that repairs a case the check above can never detect. And when two credentials are in play, a log line must say which one it means — "expired" plus a date reads as an alarm about whichever one the user is thinking about.
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
 
 ### Issue 66: Telemetry Anonymous ID Mismatch ✅ FIXED
@@ -4964,4 +4988,112 @@ That assumption holds only while the server list is the *whole* history. It isn'
 
 ---
 
+### Enhancement 77: Per-Chat Model Controls — Thinking, Fast, Context, Effort ✅ IMPLEMENTED
+**Added:** 2026-09-07
+**Problem:** The four things that decide what a turn costs were all unreachable from the composer, so a chat ran at whatever the model advertised. On a 1M-window model the history budget computes to ~636K tokens, and everything inside that budget is re-sent on **every step** of a turn that can run to 100 steps. Console usage for Sep 2–6 sits almost entirely in the `200k – 1M` bucket.
+**Not the cause:** the window is not a price *tier* — Anthropic dropped the >200K surcharge in March 2026. But input is billed per token, so the window is a spend dial either way.
+**Root Causes:** Three separate gaps, only one of which was a missing UI:
+1. **Effort was expressed as a separate model per level.** `gpt-5-6-sol-low` / `gpt-5-6-sol` / `gpt-5-6-sol-high` are one API model with three `reasoning.effort` values, and the picker listed all three as if they were different models — advertising packaging as capability while leaving the parameter itself unreachable.
+2. **No context cap existed** anywhere in `AgentConfig`, so `computeHistoryTokenBudget` had nothing to narrow against.
+3. **Thinking had no off switch**, even on the providers whose request carries one.
+**Solution:** One popover on the composer pill, governed by a single rule — **a row appears only when the request can actually carry it**. Capability is derived from the model (`ui/constants/modelControls.ts`) rather than hand-listed, because a switch wired to nothing is worse than no switch. Context options are **200K / 400K / 1M defaulting to 200K**; defaulting low is the part that saves money. Effort variants collapse into base + effort (picker: ~11 rows → ~7) with migration on both the visible list and each chat's stored settings.
+**Two traps worth naming:**
+- **`thinkingBudget: 0` cannot mean "thinking off."** Opus 5 and Fable 5.1 ship `defaultThinkingBudget: 0` and still think adaptively, so overloading it would have silently disabled reasoning on exactly the models people reach for it on. The off state is its own field: `AgentConfig.thinking?: false`, only ever `false`, absent meaning "provider default".
+- **Anthropic `effort` is an adaptive-thinking field.** Sonnet 4.6 / Haiku 4.5 / Opus 4.6 take `{type:"enabled", budgetTokens}` and have no effort field. UI gate and gateway gate call the *same* predicate (`anthropicModelUsesAdaptiveThinking`) instead of mirroring a list. `max` is offered only on Fable and Opus 5, matching the gateway's own `xhigh -> max` promotion.
+**Context is a cap, never a widener:** `resolveEffectiveContextWindow` = `min(modelWindow, max(userCap, 128K))`. The 128K floor exists because a turn carries ~86K of tool schemas before any conversation; a lower cap leaves no room for the history it is meant to be budgeting.
+**Files Created:**
+- `ui/constants/modelControls.ts`, `ui/utils/chatModelSettings.ts`, `ui/utils/buildAgentConfig.ts`
+- `ui/components/Chat/ModelSettingsPopover.tsx` / `.css`, `ui/components/Chat/ModelSettingsButton.tsx`
+- `tests/model-controls.test.ts` — 40 tests
+- `docs/PER_CHAT_MODEL_CONTROLS.md`
+**Files Changed:**
+- `src/core/types/agents.ts` — `contextLimit`, `thinking?: false`, `speed`
+- `src/gateway/services/agent/contextBudget.ts` — `resolveEffectiveContextWindow`
+- `src/gateway/services/AgentService.ts` — honour all four on the AI SDK route
+- `src/gateway/services/providers/piAiAnthropicAdaptiveThinking.ts` — off switch on the OAuth route
+- `ui/constants/modelPicker.ts`, `ui/components/Chat/{ChatContainer,InputBar,ModelPickerDropdown}.tsx`, `ui/hooks/useChat.ts`, `ui/stores/chatStore.ts`
+**Drift guards:** `MODEL_CONTEXT_WINDOWS` restates the gateway's `ModelFallback` (the renderer cannot import it — its relative imports carry `.js` specifiers Vite will not resolve back to `.ts`), and a test asserts every entry equals `ModelFallback.getModelInfo(id).contextWindow`.
+**Prevention:** Do not express a parameter as a separate model id. Do not overload a numeric default (`0`) to mean "off" when the provider already uses that value as a real default. And before wiring a control, confirm the SDK accepts the field — a toggle whose value is silently dropped is worse than no toggle.
+**Related:** Issue 74 (per-chat model scoping — same persistence pattern, and the reason a per-chat read never falls back to a global), Enhancement 51 (tool result truncation — the other half of what a step re-sends)
+**See:** `docs/PER_CHAT_MODEL_CONTROLS.md`
+
+---
+
+### Issue 78: Claude OAuth 401s — A Fabricated Token Lifetime ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** Switching Claude from an API key to OAuth produced `OAuth access token is invalid.` on the next turn, while Settings reported **Connected · Expires in 360d**.
+**Root Cause:** Adopting Claude Code's credentials read only `accessToken` and then *invented* the other two fields — `refreshToken` was set to a copy of the access token, and `expiresIn` to a flat 365 days. Claude Code's access token lasts about **8 hours**, so requests began failing the same day. Neither recovery path could fire:
+1. `isTokenExpired()` never returned true, because the invented year had not elapsed.
+2. Had it fired, the refresh grant would have posted an *access* token as a refresh token, which can only fail.
+
+Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`). We were reading one of them.
+**Solution:** Parse the credentials as stored, in one place. `src/core/services/claudeCliCredentials.ts` is a pure module answering two questions: is this refresh token actually redeemable (`isUsableRefreshToken` rejects the echoed-token shape, and the whitespace-only case a failing test caught), and when does this really expire. Used at the three sites that previously fabricated a lifetime. A pasted setup token — which genuinely has no refresh token — is still accepted.
+**Self-healing:** installs already holding a fabricated record repair themselves. `refreshTokenIfNeeded` re-reads Claude Code's storage and adopts its current refresh token and expiry rather than waiting for an expiry that never arrives. No disconnect/reconnect needed.
+**The badge could not be honest without the data fix:** it showed a countdown while every request 401'd. The renderer already sees that error when a turn fails, so no new network call or IPC was needed — `useAgent` records it against the provider (`providerAuthStore`) and the AI Models card swaps the countdown for **Reconnect needed** plus a Reconnect button. Cleared on the next successful turn, or on reconnect/disconnect. Deliberately **not persisted**: it records a rejection we *observed*, so after a restart we hold no evidence and should not claim any.
+**Files Created:**
+- `src/core/services/claudeCliCredentials.ts` — credential parsing + lifetime derivation
+- `ui/utils/providerAuthRejection.ts` — `isProviderAuthRejection`, shared with `useAgent`'s existing 401 branch so the two cannot drift on what counts as an auth failure
+- `ui/stores/providerAuthStore.ts` — transient rejection record
+- `tests/claude-cli-credentials.test.ts` (13), `tests/provider-auth-rejection.test.ts` (10)
+**Files Changed:**
+- `src/core/services/ClaudeSetupTokenService.ts` — `readCredentialsFromCLIStorage`
+- `src/electron/ipc/oauth.ts` — the three fabrication sites, plus repair-on-refresh
+- `ui/hooks/useAgent.ts`, `ui/components/Settings/OAuthSection.tsx`, `ui/components/Settings/SettingsView.css`
+**Prevention:** Never invent a value you could read. A fabricated expiry does not just fail — it disables the recovery that would have caught the failure, and it makes the UI confidently wrong. If a field is unknown, model it as absent rather than as a plausible-looking default.
+**Related:** Enhancement 63 (Claude CLI curl installer), Issue 65 (pi-ai OAuth path)
+
+---
+
+### Issue 80: "Today's Brief" Showed "database is locked" — The Missing `busy_timeout` ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** Clicking Home hung on "Loading today's brief" and surfaced `database is locked`. Startup logs also repeated `[TursoReplicaCutover] Startup migration repair failed … database is locked` and `Migration 0002_feed_schema is in schema_migrations but missing on the replica handle — re-applying` on **every** launch.
+**Root Cause:** A lock was treated as a permanent error at every layer it reached.
+1. **Nothing waited.** `connectTursoReplica` passes no busy timeout, and its retry ladder fires only for `isTursoHostNotReadyError`. Every `better-sqlite3` path in the repo waits out a contended file (3s on the mini-app read worker, 5s on the CDC writer); the replica engine had no equivalent, so a read landing during a push or migration failed on its first attempt.
+2. **The one retry that existed didn't recognise it.** `runQuery` recovers only when `isReplicaReadTransportError` matches — checkpoint errors, `timed out after`, `REPLICA_GEN_DRIFT`. `"database is locked"` matches none, so it rethrew immediately, through `DbRouter` → `/api/db/query-batch` → `res.status(500).json({ error: message })` → `data.js`, which renders the raw string. That is the verbatim path from engine to your screen.
+3. **The startup repair gave up for the session.** A busy error was caught, `console.warn`ed, and abandoned with no retry and no state marked — so the ledger/schema drift the function exists to heal stayed in place and the same warning reappeared next launch, forever.
+4. **The busy detector was too narrow to fire.** `isSqliteBusyError` checked only `code === "SQLITE_BUSY"`. Two engines touch these files and only one sets a code: better-sqlite3 raises the code, `@tursodatabase/sync` surfaces a bare `"database is locked"`. So every "DB busy, defer and retry" branch (`TursoLinkedDbWatcher`, `workspaceLogSync`) silently never ran for replica-backed databases. A **second, correct** copy of the predicate already lived in `registryDbSchemaReader.ts` and matched the message.
+**The trap:** the obvious fix — adding `"database is locked"` to `isReplicaReadTransportError` — is wrong and destructive. That classifier's recovery calls `recoverReadWedge`, which closes the handle and **resets the sync sidecars**. Doing sidecar surgery because another operation briefly held the lock is the wrong remedy: a lock means the previous holder is mid-flight, so the fix is to wait. Contention and damage need separate classifiers, and a test pins them disjoint.
+**Solution:**
+1. `isReplicaBusyError` — a distinct classifier for contention (`database is locked`, `database table is locked`, `sqlite_busy`), deliberately *not* wired into wedge recovery.
+2. `retryWhileReplicaBusy` (`replicaBusyRetry.ts`) — the missing `busy_timeout`: 5 attempts over ~2.4s, in the same range as the better-sqlite3 read path's 3s, well under `REPLICA_OPERATION_TIMEOUT_MS`. Retries **only** on a lock; anything else propagates on the first attempt. Waiting inside the caller's scheduler slot is intentional — that is what `busy_timeout` does too (it blocks the connection rather than yielding it). Applied to `runQuery` and `runSchema`.
+3. **Startup repair retries.** Databases that failed *only* because they were locked are collected and re-attempted (2 rounds, 30s apart) instead of abandoned, so the drift actually heals rather than re-logging every launch. A non-lock failure still reports immediately.
+4. **One busy detector.** Moved into `tursoReplicaErrors.ts` (the native-import-free classifier module, reachable from the sync worker), broadened to match code **or** message, re-exported from `tursoSyncBridgeCore` for existing importers, and the duplicate in `registryDbSchemaReader.ts` deleted.
+**Changed an existing assertion — deliberately.** `tests/turso-sync-bridge.test.ts` asserted `isSqliteBusyError(new Error("database is locked")) === false`. It carried no rationale and arrived inside a large squashed commit, so it pinned the implementation rather than a requirement — and it was wrong: the later sibling implementation matched the message, and every consumer uses this predicate to decide "defer and retry". Corrected, with the reasoning recorded in the test.
+**Files Created:** `src/gateway/services/tursoReplica/replicaBusyRetry.ts`, `tests/replica-busy-retry.test.ts` (15 tests)
+**Files Changed:** `tursoReplicaErrors.ts`, `TursoReplicaService.ts`, `cutover/tursoReplicaCutoverMigrationAuthority.ts`, `tursoSyncBridgeCore.ts`, `jobs/registryDbSchemaReader.ts`, `tests/turso-sync-bridge.test.ts`
+**Prevention:** Two engines on one file need one busy predicate, and it cannot key on a field only one of them sets. When a retry classifier's recovery has side effects, do not widen it — a transient condition and a damaged one need different remedies even though both surface as an error string. And an error that is retryable must be *recognised* as retryable at the layer that owns the retry; a wait budget nothing consults is not a wait.
+
+---
+
+### Issue 81: Duplicate React Keys in Related Memories ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** `Encountered two children with the same key` from `RelatedMemoriesPanel`, `WikiEntityPage`, `WikiLibrary`, and `MemoryView`.
+**Root Cause:** Papr search returns a memory **once per matching chunk**, so `_fetchRelatedMemories` emitted the same `id` several times. The UI keys the list by `id` *and* resolves "which one is open" with a find-by-id, so a repeat broke reconciliation and made the lookup ambiguous. A data defect, not a rendering one — fixing it at the `key` would have hidden it.
+**Solution:** `toRelatedMemories()` keeps the first hit per id (search returns strongest-first, so the best match wins), drops hits with no id or no content, and coerces the untyped payload's fields. Deduped at the source so every consumer benefits.
+**Files Changed:** `src/gateway/services/KnowledgeGraphWikiService.ts`; `tests/wiki-related-memories.test.ts` (8 tests)
+**Prevention:** A React key warning names the symptom, not the bug. If a list is keyed by an id that also serves as a lookup key, uniqueness is a data invariant — enforce it where the data is produced.
+
+---
+
 **This file is living documentation. Update it as we learn and make decisions.**
+
+### Issue 79: A Render Error Wiped the Composer and Looked Like an App Reload ✅ FIXED
+**Added:** 2026-09-07
+**Problem:** A render-time throw in one chat tab blanked the whole window and destroyed a half-typed message. Separately, `ChatContainer` logged `Maximum update depth exceeded` continuously while a mini-app tab was in use.
+**Three defects, only one of which was the crash:**
+1. **Nothing contained a render error.** With no error boundary anywhere in the tree, React unmounted the entire app on any throw — indistinguishable from a reload. React's own console output said as much (`Consider adding an error boundary`) and it had never been acted on.
+2. **The draft existed in exactly one place, and it was volatile.** `draftByChatId` was an in-memory `Map` in `chatStore`. Unsent text is the only chat state with no other copy — messages come back from the server, a half-typed message does not — so a reload, a renderer crash, or `resetForWorkspaceSwitch()` took it with them.
+3. **An infinite render loop.** `useModelPickerSettings` returned `pickerModels: getPickerModels(enabledIds)` — a new array identity every render. `ChatContainer` has an effect depending on it, so that effect re-ran every render, and inside it `setModelSettings(readChatSettings(chatId))` set a **freshly built object** every time. New identity in, state change reported out, render, repeat. The loop needed both halves; either alone is inert, which is why this only surfaced once the model-settings effect was added.
+**Not the cause:** the reported `ReferenceError: EFFORT_VARIANT_MODELS is not defined` was an HMR artifact — a partially-applied module graph mid-update, at `?t=1788797208544`. The imports are correct and the production build is clean. Chasing it would have fixed nothing; the app should not die on *any* render throw, whatever its origin.
+**Solution:**
+1. **`PaneErrorBoundary` around every pane** (`ContentArea`), keyed on `paneKey` so switching tabs clears a previous error rather than pinning it. Shows a retry card and states the draft is safe.
+2. **`chatDraftStore`** — durable per-chat drafts in `localStorage`, written on the debounce that already fed the map, with LRU eviction (50 chats), a 100K per-draft cap, and quota/corruption handled by degrading to memory-only. `getDraftMessage` falls back to it, so `InputBar`'s lazy `useState` seed repaints a surviving draft instead of an empty box. A `pagehide` listener plus an unmount flush closes the 300ms debounce window. Renamed on temp→permanent id (reachable: typing a second message while the first streams) and forgotten on delete.
+3. **Break the loop at both ends** — `useMemo` on `pickerModels`, and a `sameSettings` bail-out in the `setModelSettings` updater. Fixing only one end would leave the other as a live trap for the next effect added.
+**Files Created:**
+- `ui/utils/chatDraftStore.ts`, `ui/components/Layout/PaneErrorBoundary.tsx` / `.css`
+- `tests/chat-draft-store.test.ts` (21), `tests/render-loop-invariants.test.ts` (10), `ui/__tests__/hooks/useModelPickerSettings.test.tsx` (3)
+**Files Changed:**
+- `ui/stores/chatStore.ts` — durable drafts; side effects moved out of the `set` updater to keep it pure
+- `ui/components/Chat/InputBar.tsx`, `ui/hooks/useChat.ts`, `ui/hooks/useModelPickerSettings.ts`, `ui/components/Chat/ChatContainer.tsx`, `ui/components/Layout/ContentArea.tsx`, `ui/utils/chatModelSettings.ts`
+**Prevention:** A React tree with no error boundary treats every render throw as fatal to the whole app. State the user typed and has not sent needs a durable copy — it is the only state you cannot re-fetch. And an effect that both depends on a value and re-derives it must compare by content: a fresh object read is never reference-equal, so `setState` from one always reports a change.
+**Related:** Issue 75 (chat pane stranded after a store wipe), Issue 74 (per-chat model scoping), Enhancement 77 (per-chat model controls — the effect that completed the loop)

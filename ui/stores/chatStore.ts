@@ -25,6 +25,13 @@ import {
   writeChatModel,
   writeNewChatDefaultModel,
 } from "../utils/chatModelMemory";
+import { renameChatSettings } from "../utils/chatModelSettings";
+import {
+  forgetDraft,
+  readDraft,
+  renameDraft,
+  writeDraft,
+} from "../utils/chatDraftStore";
 
 // Re-export types for backward compatibility
 export type { ChatMetadata, ChatMessage, ChatState, StreamingState, SequenceItem, MessageAttachment };
@@ -358,9 +365,13 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((state) => {
       if (oldChatId === newChatId) return state;
 
-      // Carry the persisted model across the rename, or the chat loses it the
-      // moment its first message gives it a permanent id.
+      // Carry the persisted model and its dials across the rename, or the chat
+      // loses them the moment its first message gives it a permanent id.
       renameChatModel(oldChatId, newChatId);
+      renameChatSettings(oldChatId, newChatId);
+      // Reachable: a user can start typing a *second* message while the first
+      // is still streaming, which is exactly when this rename happens.
+      renameDraft(oldChatId, newChatId);
 
       const oldState = state.chatStates.get(oldChatId);
       const newChatStates = new Map(state.chatStates);
@@ -601,10 +612,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }),
 
   // Draft message management (separate map — avoids invalidating message list on save)
-  setDraftMessage: (chatId, draft) =>
+  //
+  // The map is a cache; `chatDraftStore` is the durable copy. Unsent text is
+  // the one piece of chat state that exists nowhere else — messages come back
+  // from the server, a half-typed message does not — so it is also written to
+  // localStorage here, on the same debounce that already fed this map.
+  setDraftMessage: (chatId, draft) => {
+    const prev = get().draftByChatId.get(chatId) ?? "";
+    if (prev === draft) return;
+    writeDraft(chatId, draft);
     set((state) => {
-      const prev = state.draftByChatId.get(chatId) ?? "";
-      if (prev === draft) return state;
       const draftByChatId = new Map(state.draftByChatId);
       if (draft) {
         draftByChatId.set(chatId, draft);
@@ -612,17 +629,26 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         draftByChatId.delete(chatId);
       }
       return { draftByChatId };
-    }),
+    });
+  },
 
-  getDraftMessage: (chatId) => get().draftByChatId.get(chatId) ?? "",
+  // Falls back to the durable copy, so a draft survives anything that empties
+  // the in-memory map: a reload, a renderer crash, a workspace switch.
+  getDraftMessage: (chatId) => {
+    const cached = get().draftByChatId.get(chatId);
+    if (cached !== undefined) return cached;
+    return readDraft(chatId);
+  },
 
-  clearDraftMessage: (chatId) =>
+  clearDraftMessage: (chatId) => {
+    forgetDraft(chatId);
     set((state) => {
       if (!state.draftByChatId.has(chatId)) return state;
       const draftByChatId = new Map(state.draftByChatId);
       draftByChatId.delete(chatId);
       return { draftByChatId };
-    }),
+    });
+  },
 
   setLastSelectedModel: (chatId, modelId) =>
     set((state) => {

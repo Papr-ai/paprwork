@@ -209,9 +209,22 @@ describe("tursoSyncBridgeCore", () => {
     },
   );
 
-  it("isSqliteBusyError detects SQLITE_BUSY", () => {
+  it("isSqliteBusyError detects a lock from either engine", () => {
+    // This assertion used to require `false` for the message-only form. That
+    // pinned the implementation rather than a requirement, and it was wrong:
+    // two engines touch these files and only one of them sets a code.
+    // better-sqlite3 raises `code: "SQLITE_BUSY"`; `@tursodatabase/sync`
+    // surfaces a bare "database is locked". Every caller uses this predicate to
+    // decide "defer and try again later", so not recognising the engine's form
+    // turned a wait into a hard failure for replica-backed databases — while
+    // the sibling copy of this function in registryDbSchemaReader.ts had always
+    // matched the message. One definition now, and it matches both.
     expect(isSqliteBusyError({ code: "SQLITE_BUSY" })).toBe(true);
-    expect(isSqliteBusyError(new Error("database is locked"))).toBe(false);
+    expect(isSqliteBusyError(new Error("database is locked"))).toBe(true);
+
+    // Still narrow enough to leave unrelated failures alone.
+    expect(isSqliteBusyError(new Error("no such table: briefs"))).toBe(false);
+    expect(isSqliteBusyError({ code: "SQLITE_NOTADB" })).toBe(false);
   });
 
   it("pushLocalDbToTurso skips missing database", async () => {

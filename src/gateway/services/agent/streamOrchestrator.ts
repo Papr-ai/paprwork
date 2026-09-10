@@ -1,6 +1,12 @@
 import { sanitizeToolOutput } from "../../../core/tools/index.js";
 import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
 import {
+  describeUsageLimitError,
+  extractProviderErrorPayload,
+  formatProviderErrorPayload,
+  providerFromRequestUrl,
+} from "./providerErrorMessage.js";
+import {
   createChatStreamChunk,
   parseToolCallChunk,
   parseToolErrorChunk,
@@ -175,30 +181,23 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
   const err = underlying as Record<string, unknown>;
   const statusCode = err.statusCode as number | undefined;
   const message = typeof err.message === "string" ? err.message : undefined;
-  const responseBody = typeof err.responseBody === "string" ? err.responseBody : undefined;
-
-  // Try to extract Anthropic's error type from response body (e.g. "overloaded_error")
-  let apiErrorType: string | undefined;
-  if (responseBody) {
-    try {
-      const body = JSON.parse(responseBody) as Record<string, unknown>;
-      const bodyError = body.error as Record<string, unknown> | undefined;
-      if (bodyError && typeof bodyError.type === "string") {
-        apiErrorType = bodyError.type;
-      }
-      if (bodyError && typeof bodyError.message === "string" && !message) {
-        return `API error${statusCode ? ` (${statusCode})` : ""}: ${bodyError.message}`;
-      }
-    } catch {
-      // Response body not JSON
-    }
-  }
+  const payload = extractProviderErrorPayload(err);
+  const apiErrorType = payload?.type;
 
   if (statusCode === 529 || apiErrorType === "overloaded_error") {
     return "Claude servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
   }
   if (statusCode === 429) {
     return "Rate limit exceeded. Please wait a moment and try again.";
+  }
+  // Checked after 429 so a transient rate limit keeps its "try again" advice;
+  // a spend cap arrives as 400 and so reaches this branch instead.
+  if (payload) {
+    const limitMessage = describeUsageLimitError(
+      payload,
+      providerFromRequestUrl(extractRequestUrl(err)),
+    );
+    if (limitMessage) return limitMessage;
   }
   if (statusCode === 401) {
     return "Invalid API key. Please check your Anthropic API key in Settings.";
@@ -212,6 +211,12 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
   if (statusCode && statusCode >= 500) {
     return `Anthropic server error (${statusCode}). Please try again in a moment.`;
   }
+  // Provider body before SDK message: the body describes this request, and the
+  // SDK leaves `message` empty for whole classes of error.
+  const fromPayload = payload
+    ? formatProviderErrorPayload(payload, statusCode)
+    : undefined;
+  if (fromPayload) return fromPayload;
   if (message) {
     return `API error${statusCode ? ` (${statusCode})` : ""}: ${message}`;
   }
@@ -328,15 +333,30 @@ function extractErrorMessage(error: unknown): string {
     if (typeof errorObj.statusCode === "number" && typeof errorObj.url === "string") {
       const statusCode = errorObj.statusCode as number;
       const message = typeof errorObj.message === "string" ? errorObj.message : "";
+      // The provider's own payload, which this branch used to skip entirely —
+      // hence "API error (400): " with nothing after the colon on a response
+      // whose body explained the problem in full.
+      const payload = extractProviderErrorPayload(errorObj);
       if (statusCode === 529) {
         return "Claude servers are temporarily overloaded. Please wait a moment and try again.";
       }
       if (statusCode === 429) {
         return "Rate limit exceeded. Please wait a moment and try again.";
       }
+      if (payload) {
+        const limitMessage = describeUsageLimitError(
+          payload,
+          providerFromRequestUrl(errorObj.url as string),
+        );
+        if (limitMessage) return limitMessage;
+      }
       if (statusCode === 401) {
         return "Invalid API key. Please check your API key in Settings.";
       }
+      const fromPayload = payload
+        ? formatProviderErrorPayload(payload, statusCode)
+        : undefined;
+      if (fromPayload) return fromPayload;
       return `API error (${statusCode}): ${message}`;
     }
 

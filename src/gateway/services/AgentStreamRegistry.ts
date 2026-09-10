@@ -344,6 +344,11 @@ export class AgentStreamRegistry {
     const agentService = getAgentService();
     const { chatId, requestId } = entry;
 
+    // The last error the model stream actually explained. Kept so a trailing
+    // NoOutputGeneratedError cannot replace it with a description of its own
+    // side effect.
+    let reportedModelError: string | undefined;
+
     try {
       getStreamProfiler(chatId)?.mark("registry.runStream.start");
 
@@ -365,6 +370,13 @@ export class AgentStreamRegistry {
           },
         )) {
           if (entry.cancelled) break;
+          if (chunk.type === "error") {
+            const reported = (chunk.payload as { error?: unknown } | undefined)
+              ?.error;
+            if (typeof reported === "string" && reported.trim().length > 0) {
+              reportedModelError = reported;
+            }
+          }
           this.bufferChunk(entry, chunk);
           this.broadcastChunk(entry, chunk);
         }
@@ -410,16 +422,35 @@ export class AgentStreamRegistry {
         `[AgentStreamRegistry] Stream complete for chat ${chatId} (${entry.chunks.length} chunks buffered)`,
       );
     } catch (streamError) {
-      console.error(
-        `[AgentStreamRegistry] Stream error for chat ${chatId}:`,
-        streamError,
+      const { isNoOutputGeneratedError } = await import(
+        "./agent/providerErrorMessage.js"
       );
+
+      // Prefer the error we already explained. NoOutputGeneratedError only
+      // tells us the stream produced no steps, which we can already see.
+      const preferReported =
+        reportedModelError !== undefined &&
+        isNoOutputGeneratedError(streamError);
+
+      if (preferReported) {
+        console.error(
+          `[AgentStreamRegistry] Stream error for chat ${chatId}: ` +
+            `reporting the model error instead of the trailing ` +
+            `NoOutputGeneratedError: ${reportedModelError}`,
+        );
+      } else {
+        console.error(
+          `[AgentStreamRegistry] Stream error for chat ${chatId}:`,
+          streamError,
+        );
+      }
 
       entry.status = "error";
       entry.errorData = {
         chatId,
-        error:
-          streamError instanceof Error
+        error: preferReported
+          ? (reportedModelError as string)
+          : streamError instanceof Error
             ? streamError.message
             : "Stream error",
       };

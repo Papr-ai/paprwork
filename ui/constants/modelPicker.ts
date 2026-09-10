@@ -8,13 +8,25 @@ import {
   getModelGroups,
   type AIModel,
 } from "./models";
+import { EFFORT_VARIANT_MODELS } from "./modelControls";
 
-/** Models kept for jobs/runtime but hidden from chat picker. */
+/**
+ * Models kept for jobs/runtime but hidden from chat picker.
+ *
+ * The `-low` / `-high` / `-max` entries are not separate models: each is one
+ * API model at a fixed reasoning effort, and listing them made the picker three
+ * rows deep for one model. Effort is now a control on the model, so these ids
+ * survive only as the thing a saved preference or pinned chat migrates *from*
+ * (see {@link EFFORT_VARIANT_MODELS}, which preserves the effort they implied).
+ */
 export const CHAT_PICKER_EXCLUDED_MODEL_IDS: readonly string[] = [
   "composer-2.5",
   "gpt-5.5-low",
   "gpt-5.5",
   "gpt-5.5-high",
+  "gpt-5-6-sol-low",
+  "gpt-5-6-sol-high",
+  "glm-5.2-max",
 ];
 
 export function isChatPickerModelId(modelId: string): boolean {
@@ -24,8 +36,18 @@ export function isChatPickerModelId(modelId: string): boolean {
   );
 }
 
-/** Map retired picker ids to their successors. */
+/**
+ * Map retired picker ids to their successors.
+ *
+ * Effort variants collapse onto their base model here. The effort itself is not
+ * dropped — {@link unpackEffortVariant} recovers it for a chat that was pinned
+ * to the variant, so the chat keeps reasoning at the depth it was chosen for.
+ */
 export function migratePickerModelId(modelId: string): string {
+  const effortVariant = EFFORT_VARIANT_MODELS[modelId];
+  if (effortVariant) {
+    return effortVariant.modelId;
+  }
   if (
     modelId === "gpt-5.5-low" ||
     modelId === "gpt-5.5" ||
@@ -45,10 +67,7 @@ export function migratePickerModelId(modelId: string): string {
   if (modelId === "gemini-3.5-flash") {
     return "gemini-3.8-flash";
   }
-  if (
-    modelId === "gemini-3.6-flash" ||
-    modelId === "gemini-3.7-flash"
-  ) {
+  if (modelId === "gemini-3.6-flash" || modelId === "gemini-3.7-flash") {
     return "gemini-3.8-flash";
   }
   return modelId;
@@ -60,7 +79,7 @@ export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-opus-5",
   "claude-fable-5-1",
   "gpt-5-6-sol",
-  "glm-5.2-max",
+  "glm-5.2",
   "qwen/qwen3-32b",
   "gemini-3.5-flash-lite",
   "gemini-3.8-flash",
@@ -118,10 +137,7 @@ export const PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "gemini-3.1-pro-preview",
 ];
 
-function sameModelIdSet(
-  a: readonly string[],
-  b: readonly string[],
-): boolean {
+function sameModelIdSet(a: readonly string[], b: readonly string[]): boolean {
   if (a.length !== b.length) return false;
   const setA = new Set(a);
   return b.every((id) => setA.has(id));
@@ -131,7 +147,7 @@ function sameModelIdSet(
 const CROSS_PROVIDER_DEFAULT_MARKERS: readonly string[] = [
   "gpt-5-6-sol",
   "gemini-3.8-flash",
-  "glm-5.2-max",
+  "glm-5.2",
   "qwen/qwen3-32b",
 ];
 

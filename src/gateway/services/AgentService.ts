@@ -22,7 +22,11 @@ import {
   flushSearchOutcomeFeedback,
   resetSearchOutcomes,
 } from "../../core/utils/searchOutcomeFeedback.js";
-import { allTools, getApiKeysForSanitization, legacyToolAliases } from "../../core/tools/index.js";
+import {
+  allTools,
+  getApiKeysForSanitization,
+  legacyToolAliases,
+} from "../../core/tools/index.js";
 import {
   ACTIVE_PLANS_MESSAGE_PREFIX,
   buildSystemPrompt,
@@ -84,7 +88,10 @@ import {
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./agent/streamChunks.js";
-import { orchestrateModelStream, sequenceEndsWithToolWithoutTrailingText } from "./agent/streamOrchestrator.js";
+import {
+  orchestrateModelStream,
+  sequenceEndsWithToolWithoutTrailingText,
+} from "./agent/streamOrchestrator.js";
 import {
   explainPostStreamWrapUp,
   logAgentTurnEnd,
@@ -223,9 +230,8 @@ export class AgentService {
       this.toolRegistry.registerLegacy(registryTool);
     }
 
-    const { isPlanACloudDbAuthority } = await import(
-      "./tursoReplica/replicaSchemaPolicy.js"
-    );
+    const { isPlanACloudDbAuthority } =
+      await import("./tursoReplica/replicaSchemaPolicy.js");
     if (isPlanACloudDbAuthority()) {
       for (const recoveryToolId of ["papr_db_push", "papr_db_pull"] as const) {
         const recoveryTool = this.toolRegistry.getTool(recoveryToolId);
@@ -348,11 +354,11 @@ export class AgentService {
 
       const fallback = generateFallbackTitle(firstMessage);
       await this.storageManager.updateChat(chatId, { title: fallback });
-      
+
       // Broadcast chat list update
       const { broadcast } = await import("../websocket/index.js");
       broadcast({ type: "chat:list-updated" });
-      
+
       return fallback;
     }
 
@@ -361,11 +367,11 @@ export class AgentService {
     await this.storageManager.updateChat(chatId, { title });
 
     console.log(`✓ Generated title for ${chatId}: "${title}"`);
-    
+
     // Broadcast chat list update
     const { broadcast } = await import("../websocket/index.js");
     broadcast({ type: "chat:list-updated" });
-    
+
     return title;
   }
 
@@ -374,7 +380,7 @@ export class AgentService {
    */
   async updateChatTitle(chatId: string, title: string): Promise<void> {
     await this.storageManager.updateChat(chatId, { title });
-    
+
     // Broadcast chat list update
     const { broadcast } = await import("../websocket/index.js");
     broadcast({ type: "chat:list-updated" });
@@ -527,9 +533,8 @@ export class AgentService {
     this.sessionManager.setAbortController(chatId, abortController);
 
     if (!skipConcurrencyGate) {
-      const { getAgentStreamConcurrencyGate } = await import(
-        "./agent/agentStreamConcurrency.js"
-      );
+      const { getAgentStreamConcurrencyGate } =
+        await import("./agent/agentStreamConcurrency.js");
       const gate = getAgentStreamConcurrencyGate();
       try {
         for await (const event of gate.acquireWithEvents(
@@ -821,68 +826,92 @@ export class AgentService {
       t = performance.now();
       const historyRaw = await this.storageManager.loadMessagesForLLM(chatId);
 
-      console.log(`\n${'='.repeat(100)}`);
-      console.log(`🔵 STAGE 2.5: MESSAGES RECEIVED FROM STORAGE (Before LLM formatting)`);
-      console.log(`${'='.repeat(100)}`);
-      console.log(`[STAGE 2.5] Received ${historyRaw.length} items from storage`);
-      
+      console.log(`\n${"=".repeat(100)}`);
+      console.log(
+        `🔵 STAGE 2.5: MESSAGES RECEIVED FROM STORAGE (Before LLM formatting)`,
+      );
+      console.log(`${"=".repeat(100)}`);
+      console.log(
+        `[STAGE 2.5] Received ${historyRaw.length} items from storage`,
+      );
+
       // Check for summary
-      const hasSummary = historyRaw.some(item => typeof item === "object" && item !== null && "__summary" in item);
+      const hasSummary = historyRaw.some(
+        (item) =>
+          typeof item === "object" && item !== null && "__summary" in item,
+      );
       console.log(`[STAGE 2.5] Contains __summary object: ${hasSummary}`);
-      
+
       // Log role distribution
       const roleCount = historyRaw.reduce((acc: any, item: any) => {
-        if ('__summary' in item) {
-          acc['__summary'] = (acc['__summary'] || 0) + 1;
+        if ("__summary" in item) {
+          acc["__summary"] = (acc["__summary"] || 0) + 1;
         } else {
           acc[item.role] = (acc[item.role] || 0) + 1;
         }
         return acc;
       }, {});
       console.log(`[STAGE 2.5] Item distribution:`, roleCount);
-      
+
       // Log first few items
       console.log(`[STAGE 2.5] First 5 items from storage:`);
       historyRaw.slice(0, 5).forEach((item: any, i: number) => {
-        if ('__summary' in item) {
+        if ("__summary" in item) {
           console.log(`  [${i}] __summary (${item.__summary.length} chars)`);
         } else {
-          const content = typeof item.content === 'string' ? item.content : JSON.stringify(item.content);
-          const timestamp = item.timestamp || item.createdAt || 'no-timestamp';
-          console.log(`  [${i}] ${item.role.padEnd(10)} | ${timestamp.substring(11, 19)} | ${content.substring(0, 50)}...`);
+          const content =
+            typeof item.content === "string"
+              ? item.content
+              : JSON.stringify(item.content);
+          const timestamp = item.timestamp || item.createdAt || "no-timestamp";
+          console.log(
+            `  [${i}] ${item.role.padEnd(10)} | ${timestamp.substring(11, 19)} | ${content.substring(0, 50)}...`,
+          );
         }
       });
 
       // Extract summary if present (injected by storage providers)
       let conversationSummary: string | undefined;
-      
+
       const history = historyRaw.filter((msg) => {
         if (typeof msg === "object" && msg !== null && "__summary" in msg) {
           conversationSummary = (msg as { __summary: string }).__summary;
-          console.log(`[STAGE 2.5] ✅ Extracted summary (${conversationSummary.length} chars)`);
+          console.log(
+            `[STAGE 2.5] ✅ Extracted summary (${conversationSummary.length} chars)`,
+          );
           return false; // Remove from history
         }
         return true; // Keep in history
       });
 
-      console.log(`[STAGE 2.5] After extracting summary: ${history.length} messages`);
-      
+      console.log(
+        `[STAGE 2.5] After extracting summary: ${history.length} messages`,
+      );
+
       // Log role distribution after summary extraction
       const historyRoleCount = history.reduce((acc: any, m: any) => {
         acc[m.role] = (acc[m.role] || 0) + 1;
         return acc;
       }, {});
-      console.log(`[STAGE 2.5] Role distribution (no summary):`, historyRoleCount);
-      
+      console.log(
+        `[STAGE 2.5] Role distribution (no summary):`,
+        historyRoleCount,
+      );
+
       // Log last 5 messages that will go to LLM
       console.log(`[STAGE 2.5] Last 5 messages going to LLM:`);
       history.slice(-5).forEach((msg: any, i: number) => {
-        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-        const timestamp = msg.timestamp || msg.createdAt || 'no-timestamp';
+        const content =
+          typeof msg.content === "string"
+            ? msg.content
+            : JSON.stringify(msg.content);
+        const timestamp = msg.timestamp || msg.createdAt || "no-timestamp";
         const actualIdx = history.length - 5 + i;
-        console.log(`  [${actualIdx}] ${msg.role.padEnd(10)} | ${timestamp.substring(11, 19)} | ${content.substring(0, 50)}...`);
+        console.log(
+          `  [${actualIdx}] ${msg.role.padEnd(10)} | ${timestamp.substring(11, 19)} | ${content.substring(0, 50)}...`,
+        );
       });
-      console.log(`${'='.repeat(100)}\n`);
+      console.log(`${"=".repeat(100)}\n`);
 
       timings.loadHistory = performance.now() - t;
 
@@ -914,7 +943,8 @@ export class AgentService {
         await this.triggerSummarization(chatId, {
           force: geminiResummarize || historyStats.has_summary,
         });
-        const reloadedRaw = await this.storageManager.loadMessagesForLLM(chatId);
+        const reloadedRaw =
+          await this.storageManager.loadMessagesForLLM(chatId);
         conversationSummary = undefined;
         history.length = 0;
         for (const msg of reloadedRaw) {
@@ -941,17 +971,27 @@ export class AgentService {
         const skillService = getSkillService();
         const allSkills = await skillService.listSkills();
         const active = allSkills.filter((s: SkillRecord) => s.enabled);
-        console.log(`[AgentService] 📚 Loaded ${active.length} enabled skills for system prompt`);
+        console.log(
+          `[AgentService] 📚 Loaded ${active.length} enabled skills for system prompt`,
+        );
         if (active.length > 0) {
           enabledSkills = active.map((s: SkillRecord) => ({
             id: s.id,
             name: s.name,
             description: s.description,
           }));
-          console.log(`[AgentService] Skills sample: ${enabledSkills.slice(0, 3).map(s => s.name).join(', ')}...`);
+          console.log(
+            `[AgentService] Skills sample: ${enabledSkills
+              .slice(0, 3)
+              .map((s) => s.name)
+              .join(", ")}...`,
+          );
         }
       } catch (error) {
-        console.warn('[AgentService] ⚠️  Skills not initialized yet:', (error as Error).message);
+        console.warn(
+          "[AgentService] ⚠️  Skills not initialized yet:",
+          (error as Error).message,
+        );
         // Skills not initialized yet — proceed without them
       }
       timings.loadSkills = performance.now() - t;
@@ -1012,9 +1052,8 @@ export class AgentService {
       const useAnthropicPromptCache =
         config.provider === "anthropic" && config.authType !== "oauth";
       if (useAnthropicPromptCache) {
-        const { applyAnthropicPromptCacheControl } = await import(
-          "./agent/promptCacheControl.js"
-        );
+        const { applyAnthropicPromptCacheControl } =
+          await import("./agent/promptCacheControl.js");
         const cachedMessages = applyAnthropicPromptCacheControl(messages, {
           provider: config.provider,
           authType: config.authType,
@@ -1071,11 +1110,15 @@ export class AgentService {
           ? priorJobEnv
           : collectJobEnvFromProcess();
       setToolContext(chatId, {
-        ...(Object.keys(mergedJobEnv).length > 0 ? { jobEnv: mergedJobEnv } : {}),
+        ...(Object.keys(mergedJobEnv).length > 0
+          ? { jobEnv: mergedJobEnv }
+          : {}),
       });
       const piToolContext = {
         chatId,
-        ...(Object.keys(mergedJobEnv).length > 0 ? { jobEnv: mergedJobEnv } : {}),
+        ...(Object.keys(mergedJobEnv).length > 0
+          ? { jobEnv: mergedJobEnv }
+          : {}),
       };
 
       // Get model from session
@@ -1107,15 +1150,18 @@ export class AgentService {
           };
         };
         anthropic?: {
-          thinking?: { type: "adaptive"; display?: "summarized" };
+          thinking?:
+            | { type: "adaptive"; display?: "summarized" }
+            | { type: "disabled" };
+          effort?: "low" | "medium" | "high" | "xhigh" | "max";
+          speed?: "fast" | "standard";
         };
       } = {};
 
       // For OpenAI GPT-5.x models with reasoning effort and summary
       if (config.provider === "openai" && config.reasoning?.effort) {
-        const { toOpenAIReasoningEffort } = await import(
-          "../utils/modelNormalizer.js"
-        );
+        const { toOpenAIReasoningEffort } =
+          await import("../utils/modelNormalizer.js");
         providerOptions.openai = {
           reasoningEffort: toOpenAIReasoningEffort(config.reasoning.effort),
           reasoningSummary: "detailed", // Enable detailed reasoning summaries for streaming
@@ -1123,7 +1169,13 @@ export class AgentService {
       }
 
       // For Google Gemini models with thinking capabilities
-      if (
+      if (config.provider === "google" && config.thinking === false) {
+        // Omitting the config lets Gemini apply its own default, which may
+        // think anyway — an explicit zero budget is what actually turns it off.
+        providerOptions.google = {
+          thinkingConfig: { includeThoughts: false, thinkingBudget: 0 },
+        };
+      } else if (
         config.provider === "google" &&
         config.thinkingBudget !== undefined &&
         config.thinkingBudget > 0
@@ -1138,19 +1190,28 @@ export class AgentService {
 
       // For Z.ai GLM models (OpenAI-compatible API with thinking + reasoning_effort)
       if (config.provider === "zai") {
-        const { buildZaiProviderOptions } = await import("../utils/zaiModel.js");
-        Object.assign(providerOptions, buildZaiProviderOptions(config.model, config.reasoning));
+        const { buildZaiProviderOptions } =
+          await import("../utils/zaiModel.js");
+        Object.assign(
+          providerOptions,
+          buildZaiProviderOptions(config.model, config.reasoning),
+        );
       }
 
       // For Groq models (OpenAI-compatible — GPT-OSS supports reasoning_effort)
       if (config.provider === "groq") {
-        const { buildGroqProviderOptions } = await import("../utils/groqModel.js");
-        Object.assign(providerOptions, buildGroqProviderOptions(config.model, config.reasoning));
+        const { buildGroqProviderOptions } =
+          await import("../utils/groqModel.js");
+        Object.assign(
+          providerOptions,
+          buildGroqProviderOptions(config.model, config.reasoning),
+        );
       }
 
       // For Moonshot Kimi K3 (OpenAI-compatible — reasoning_effort=max always)
       if (config.provider === "moonshot") {
-        const { buildMoonshotProviderOptions } = await import("../utils/moonshotModel.js");
+        const { buildMoonshotProviderOptions } =
+          await import("../utils/moonshotModel.js");
         Object.assign(
           providerOptions,
           buildMoonshotProviderOptions(config.model, config.reasoning),
@@ -1166,13 +1227,47 @@ export class AgentService {
       // drops unsigned reasoning with a warning rather than sending a block the API
       // would reject. Turning it off would discard the model's own signed reasoning
       // between tool steps for no safety gain.
-      if (
-        config.provider === "anthropic" &&
-        anthropicModelUsesAdaptiveThinking(config.model)
-      ) {
-        providerOptions.anthropic = {
-          thinking: { type: "adaptive", display: "summarized" },
-        };
+      //
+      // Effort and speed are set here rather than left to the API default so the
+      // AI SDK route matches the pi-ai one, which has always passed effort
+      // through. Without this the same chat reasons at a different depth
+      // depending only on whether the user signed in with a key or with OAuth.
+      if (config.provider === "anthropic") {
+        const anthropicOptions: NonNullable<typeof providerOptions.anthropic> =
+          {};
+
+        if (config.thinking === false) {
+          // The user turned reasoning off. `thinkingBudget: 0` cannot express
+          // this — Opus 5 and Fable 5.1 default to a 0 budget and still think.
+          anthropicOptions.thinking = { type: "disabled" };
+        } else if (anthropicModelUsesAdaptiveThinking(config.model)) {
+          anthropicOptions.thinking = {
+            type: "adaptive",
+            display: "summarized",
+          };
+        }
+
+        // `effort` belongs to the adaptive thinking surface. The budget-thinking
+        // models (Sonnet 4.6, Haiku 4.5, Opus 4.6) take a token budget instead
+        // and have no effort field, so sending it there would be a parameter the
+        // request cannot carry.
+        if (
+          config.reasoning?.effort &&
+          config.thinking !== false &&
+          anthropicModelUsesAdaptiveThinking(config.model)
+        ) {
+          anthropicOptions.effort = config.reasoning.effort;
+        }
+
+        // Fast mode roughly doubles the rate, so it is only ever on when the
+        // user asked for it explicitly.
+        if (config.speed === "fast") {
+          anthropicOptions.speed = "fast";
+        }
+
+        if (Object.keys(anthropicOptions).length > 0) {
+          providerOptions.anthropic = anthropicOptions;
+        }
       }
 
       // For Ollama models (Qwen, Gemma, etc.) — thinking + adaptive context
@@ -1189,7 +1284,7 @@ export class AgentService {
         }
 
         providerOptions.ollama = {
-          think: true,
+          think: config.thinking !== false,
           options: {
             // Context size: 8K for <16GB, 16K for 16-31GB, 32K for 32GB+
             num_ctx: totalRamGb < 16 ? 8192 : totalRamGb < 32 ? 16384 : 32768,
@@ -1247,9 +1342,12 @@ export class AgentService {
         modelId: config.model,
         toolTokenEstimate: toolTokens,
         maxOutputTokens: effectiveMaxTokens,
+        contextLimit: config.contextLimit,
       });
       console.log(
-        `  Model context window: ${modelContextWindow}, history budget: ~${historyTokenBudget} tokens`,
+        `  Model context window: ${modelContextWindow}` +
+          (config.contextLimit ? ` (user cap: ${config.contextLimit})` : "") +
+          `, history budget: ~${historyTokenBudget} tokens`,
       );
       console.log(
         `  Config: maxTokens=${config.maxTokens || "NOT SET"}, maxSteps=${options?.maxSteps || 100}`,
@@ -1262,8 +1360,7 @@ export class AgentService {
         maxTokens: historyTokenBudget,
       });
       if (preFlightTrim.trimmed) {
-        const postTrimEstimate =
-          estimateMessagesTokens(messages) + toolTokens;
+        const postTrimEstimate = estimateMessagesTokens(messages) + toolTokens;
         console.log(
           `[AgentService] Pre-flight context trim (${config.model}): ` +
             `removed ${preFlightTrim.removedTurns} turn(s), ` +
@@ -1292,6 +1389,7 @@ export class AgentService {
       let cumulativeSteps = 0;
       cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
+
       // Native provider search tools (OpenAI web_search, Gemini google_search) target
       // direct provider APIs — they break when the model routes through Papr proxy.
       const nativeSearchTools = config.usePaprProxy
@@ -1306,7 +1404,7 @@ export class AgentService {
       const streamTextOptions: any = {
         model,
         messages,
-        tools: { 
+        tools: {
           ...(tools as unknown as ToolSet),
           ...nativeSearchTools, // Merge native search tools
         },
@@ -1322,7 +1420,7 @@ export class AgentService {
           const stepCount = stopOptions.steps.length;
           const maxSteps = options?.maxSteps ?? 100;
           const FORCE_STOP = 95;
-          
+
           if (stepCount >= FORCE_STOP) {
             console.warn(
               `[AgentService] 🛑 Force stopping at step ${stepCount} (threshold: ${FORCE_STOP}/${maxSteps})`,
@@ -1338,7 +1436,7 @@ export class AgentService {
             );
             return true;
           }
-          
+
           return stepCount >= maxSteps;
         },
         // ⚡ NO TIMEOUT - Allow agents to work as long as needed
@@ -1368,7 +1466,9 @@ export class AgentService {
             usage?: { promptTokens?: number; completionTokens?: number };
           }>;
         }) => {
-          const stepMessageTokens = estimateMessagesTokens(stepOptions.messages);
+          const stepMessageTokens = estimateMessagesTokens(
+            stepOptions.messages,
+          );
           const totalPromptTokens =
             cumulativePromptTokens > 0
               ? cumulativePromptTokens
@@ -1408,9 +1508,8 @@ export class AgentService {
           });
 
           if (useAnthropicPromptCache) {
-            const { applyAnthropicPromptCacheControl } = await import(
-              "./agent/promptCacheControl.js"
-            );
+            const { applyAnthropicPromptCacheControl } =
+              await import("./agent/promptCacheControl.js");
             const cached = applyAnthropicPromptCacheControl(msgs, {
               provider: config.provider,
               authType: config.authType,
@@ -1443,9 +1542,8 @@ export class AgentService {
           cumulativePromptTokens = inputTokens;
 
           if (useAnthropicPromptCache) {
-            const { extractCacheUsageFromStep } = await import(
-              "./agent/promptCacheControl.js"
-            );
+            const { extractCacheUsageFromStep } =
+              await import("./agent/promptCacheControl.js");
             const cache = extractCacheUsageFromStep(step);
             lastCacheReadTokens = cache.cacheReadTokens;
             lastCacheWriteTokens = cache.cacheWriteTokens;
@@ -1480,13 +1578,15 @@ export class AgentService {
             streamOpts: Record<string, unknown>;
           }
         | undefined;
-      
+
       // Check if model is actually supported by pi-ai before using OAuth route
-      const { isOpenAICodexModel } = await import("../utils/modelNormalizer.js");
-      const modelSupportsPiAi = config.provider === "openai" || config.provider === "openai-codex"
-        ? isOpenAICodexModel(config.model)
-        : true; // Anthropic models always support pi-ai
-      
+      const { isOpenAICodexModel } =
+        await import("../utils/modelNormalizer.js");
+      const modelSupportsPiAi =
+        config.provider === "openai" || config.provider === "openai-codex"
+          ? isOpenAICodexModel(config.model)
+          : true; // Anthropic models always support pi-ai
+
       const usePiAiOpenAI =
         (config.provider === "openai" || config.provider === "openai-codex") &&
         config.authType === "oauth" &&
@@ -1523,7 +1623,7 @@ export class AgentService {
           ? "openai-codex-responses"
           : "anthropic-messages";
         const envKey = useCodex ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-        
+
         // Use apiKey from config (which includes OAuth tokens)
         const token = config.apiKey || process.env[envKey];
         const errorHint = useCodex
@@ -1532,8 +1632,8 @@ export class AgentService {
 
         console.log(
           `[AgentService] Pi-ai token check: provider=${piProvider} ` +
-          `hasConfigApiKey=${!!config.apiKey} hasEnvKey=${!!process.env[envKey]} ` +
-          `tokenLength=${token?.length || 0}`
+            `hasConfigApiKey=${!!config.apiKey} hasEnvKey=${!!process.env[envKey]} ` +
+            `tokenLength=${token?.length || 0}`,
         );
 
         if (!token) {
@@ -1541,7 +1641,7 @@ export class AgentService {
             `${piProvider === "anthropic" ? "Anthropic" : "OpenAI"} token not found. ${errorHint}`,
           );
         }
-        
+
         // Set token in environment for pi-ai (it reads from process.env)
         const piToken =
           useCodex && config.authType === "oauth"
@@ -1551,17 +1651,19 @@ export class AgentService {
             : token;
         // This env var doubles as the Platform API key, so keep the real one
         // recoverable for when the user switches this provider to API key mode.
-        (
-          await import("../utils/keyResolver.js")
-        ).preserveEnvKeyBeforeOverwrite(envKey);
+        (await import("../utils/keyResolver.js")).preserveEnvKeyBeforeOverwrite(
+          envKey,
+        );
         process.env[envKey] = piToken;
-        console.log(`[AgentService] Set ${envKey} in process.env (length: ${piToken.length})`);
+        console.log(
+          `[AgentService] Set ${envKey} in process.env (length: ${piToken.length})`,
+        );
 
         const piModel = (getModel as (p: string, m: string) => unknown)(
           piProvider,
           piModelId,
         );
-        
+
         // If model not found in pi-ai registry, create it manually
         // Both ChatGPT and Claude backends support models not yet in pi-ai registry
         let finalModel = piModel;
@@ -1570,7 +1672,7 @@ export class AgentService {
             console.log(
               `[AgentService] Model ${piModelId} not in pi-ai registry, creating manually for ChatGPT backend`,
             );
-            
+
             // Create model object matching pi-ai's Model interface
             // Manual registry entry when pi-ai has not listed the id yet
             const isMini = piModelId === "gpt-5.4-mini";
@@ -1618,7 +1720,7 @@ export class AgentService {
                       : isMini
                         ? "GPT-5.4 mini"
                         : "GPT-5.4";
-            
+
             finalModel = {
               id: piModelId,
               name: displayName,
@@ -1641,7 +1743,7 @@ export class AgentService {
             console.log(
               `[AgentService] Model ${piModelId} not in pi-ai registry, creating manually for Anthropic backend`,
             );
-            
+
             // Map model ID to display name and pricing
             const modelInfo = piModelId.includes("fable")
               ? {
@@ -1669,33 +1771,33 @@ export class AgentService {
                       contextWindow: 1000000,
                     }
                   : piModelId.includes("opus")
-                  ? {
-                      name: "Claude Opus 4.6",
-                      inputCost: 15.0,
-                      outputCost: 75.0,
-                      contextWindow: 200000,
-                    }
-                : piModelId.includes("sonnet-5")
-                  ? {
-                      name: "Claude Sonnet 5",
-                      inputCost: 3.0,
-                      outputCost: 15.0,
-                      contextWindow: 1000000,
-                    }
-                  : piModelId.includes("sonnet")
                     ? {
-                        name: "Claude Sonnet 4.6",
-                        inputCost: 3.0,
-                        outputCost: 15.0,
+                        name: "Claude Opus 4.6",
+                        inputCost: 15.0,
+                        outputCost: 75.0,
                         contextWindow: 200000,
                       }
-                    : {
-                        name: "Claude Haiku 4.5",
-                        inputCost: 0.8,
-                        outputCost: 4.0,
-                        contextWindow: 200000,
-                      };
-            
+                    : piModelId.includes("sonnet-5")
+                      ? {
+                          name: "Claude Sonnet 5",
+                          inputCost: 3.0,
+                          outputCost: 15.0,
+                          contextWindow: 1000000,
+                        }
+                      : piModelId.includes("sonnet")
+                        ? {
+                            name: "Claude Sonnet 4.6",
+                            inputCost: 3.0,
+                            outputCost: 15.0,
+                            contextWindow: 200000,
+                          }
+                        : {
+                            name: "Claude Haiku 4.5",
+                            inputCost: 0.8,
+                            outputCost: 4.0,
+                            contextWindow: 200000,
+                          };
+
             finalModel = {
               id: piModelId,
               name: modelInfo.name,
@@ -1724,16 +1826,17 @@ export class AgentService {
             };
           }
         }
-        
+
         console.log(
-          `[AgentService] Using pi-ai model: ${finalModel ? (finalModel as any).id : 'null'} ` +
-          `api=${finalModel ? (finalModel as any).api : 'null'} ` +
-          `baseUrl=${finalModel ? (finalModel as any).baseUrl : 'null'}`
+          `[AgentService] Using pi-ai model: ${finalModel ? (finalModel as any).id : "null"} ` +
+            `api=${finalModel ? (finalModel as any).api : "null"} ` +
+            `baseUrl=${finalModel ? (finalModel as any).baseUrl : "null"}`,
         );
-        
+
         // Build native web search tools for pi-ai providers
-        const nativeSearchTools = this.buildNativeSearchToolsForPiAi(piProvider);
-        
+        const nativeSearchTools =
+          this.buildNativeSearchToolsForPiAi(piProvider);
+
         const piContext = buildPiContext({
           messages: messages as any[],
           tools: tools as any,
@@ -1744,15 +1847,19 @@ export class AgentService {
         });
 
         // 🔍 LOG EXACT CONTEXT SENT TO PI-AI
-        console.log(`\n${'='.repeat(100)}`);
+        console.log(`\n${"=".repeat(100)}`);
         console.log(`🟡 STAGE 3: SENDING CONTEXT TO LLM (PI-AI)`);
-        console.log(`${'='.repeat(100)}`);
+        console.log(`${"=".repeat(100)}`);
         console.log(`[STAGE 3] Model: ${piModelId}`);
         console.log(`[STAGE 3] Provider: ${piProvider}`);
-        console.log(`[STAGE 3] Total messages: ${piContext.messages?.length || 0}`);
-        console.log(`[STAGE 3] System prompt length: ${piContext.systemPrompt?.length || 0} chars`);
+        console.log(
+          `[STAGE 3] Total messages: ${piContext.messages?.length || 0}`,
+        );
+        console.log(
+          `[STAGE 3] System prompt length: ${piContext.systemPrompt?.length || 0} chars`,
+        );
         console.log(`[STAGE 3] Tools available: ${Object.keys(tools).length}`);
-        
+
         // Log role distribution
         if (piContext.messages && Array.isArray(piContext.messages)) {
           const roleCount = piContext.messages.reduce((acc: any, m: any) => {
@@ -1761,36 +1868,42 @@ export class AgentService {
           }, {});
           console.log(`[STAGE 3] Role distribution in context:`, roleCount);
         }
-        
+
         console.log(`\n[STAGE 3] FIRST 5 MESSAGES (should be oldest):`);
-        console.log(`${'─'.repeat(100)}`);
+        console.log(`${"─".repeat(100)}`);
         if (piContext.messages && Array.isArray(piContext.messages)) {
           piContext.messages.slice(0, 5).forEach((msg: any, i: number) => {
-            const contentPreview = typeof msg.content === 'string' 
-              ? msg.content.substring(0, 80)
-              : Array.isArray(msg.content)
-                ? `Array[${msg.content.length}]: ${JSON.stringify(msg.content[0]).substring(0, 60)}...`
-                : JSON.stringify(msg.content).substring(0, 80);
-            const timestamp = msg.timestamp || 'no-timestamp';
-            console.log(`  [${i}] ${msg.role.padEnd(12)} | ts:${timestamp} | ${contentPreview}`);
+            const contentPreview =
+              typeof msg.content === "string"
+                ? msg.content.substring(0, 80)
+                : Array.isArray(msg.content)
+                  ? `Array[${msg.content.length}]: ${JSON.stringify(msg.content[0]).substring(0, 60)}...`
+                  : JSON.stringify(msg.content).substring(0, 80);
+            const timestamp = msg.timestamp || "no-timestamp";
+            console.log(
+              `  [${i}] ${msg.role.padEnd(12)} | ts:${timestamp} | ${contentPreview}`,
+            );
           });
         }
         console.log(`\n[STAGE 3] LAST 10 MESSAGES (should be newest):`);
-        console.log(`${'─'.repeat(100)}`);
+        console.log(`${"─".repeat(100)}`);
         if (piContext.messages && Array.isArray(piContext.messages)) {
           const startIdx = Math.max(0, piContext.messages.length - 10);
           piContext.messages.slice(startIdx).forEach((msg: any, i: number) => {
             const actualIdx = startIdx + i;
-            const contentPreview = typeof msg.content === 'string' 
-              ? msg.content.substring(0, 80)
-              : Array.isArray(msg.content)
-                ? `Array[${msg.content.length}]: ${JSON.stringify(msg.content[0]).substring(0, 60)}...`
-                : JSON.stringify(msg.content).substring(0, 80);
-            const timestamp = msg.timestamp || 'no-timestamp';
-            console.log(`  [${actualIdx}] ${msg.role.padEnd(12)} | ts:${timestamp} | ${contentPreview}`);
+            const contentPreview =
+              typeof msg.content === "string"
+                ? msg.content.substring(0, 80)
+                : Array.isArray(msg.content)
+                  ? `Array[${msg.content.length}]: ${JSON.stringify(msg.content[0]).substring(0, 60)}...`
+                  : JSON.stringify(msg.content).substring(0, 80);
+            const timestamp = msg.timestamp || "no-timestamp";
+            console.log(
+              `  [${actualIdx}] ${msg.role.padEnd(12)} | ts:${timestamp} | ${contentPreview}`,
+            );
           });
         }
-        console.log(`${'='.repeat(100)}\n`);
+        console.log(`${"=".repeat(100)}\n`);
 
         const piHistoryTrimBounds = computeHistoryTrimBounds(
           (piContext.messages ?? []) as Array<{
@@ -1837,18 +1950,17 @@ export class AgentService {
 
         let streamOpts: PiAiStreamOptions = baseStreamOpts;
         if (useCodex) {
-          const { augmentPiAiCodexStreamOptions } = await import(
-            "./providers/piAiCodexResponsesLite.js"
-          );
+          const { augmentPiAiCodexStreamOptions } =
+            await import("./providers/piAiCodexResponsesLite.js");
           streamOpts = augmentPiAiCodexStreamOptions(piModelId, baseStreamOpts);
         } else {
-          const { augmentPiAiAnthropicStreamOptions } = await import(
-            "./providers/piAiAnthropicAdaptiveThinking.js"
-          );
+          const { augmentPiAiAnthropicStreamOptions } =
+            await import("./providers/piAiAnthropicAdaptiveThinking.js");
           streamOpts = augmentPiAiAnthropicStreamOptions(
             piModelId,
             reasoningLevel,
             baseStreamOpts,
+            config.thinking !== false,
           );
         }
         const apiKeys = getApiKeysForSanitization();
@@ -1869,6 +1981,7 @@ export class AgentService {
           piToolContext,
           // Resume the loop when the model stops with plan work outstanding.
           async (stopInfo) => {
+
             if (abortController.signal.aborted) {
               return null;
             }
@@ -1914,6 +2027,7 @@ export class AgentService {
         getStreamProfiler(chatId)?.mark("gateway.piAiInit");
       } else {
         // Use AI SDK for standard providers (OpenAI Platform, Anthropic, Google)
+
         
         const streamProfiler = getStreamProfiler(chatId);
         await streamProfiler?.measure("gateway.aiSdk.contextLog", async () => {
@@ -1943,15 +2057,15 @@ export class AgentService {
 
         aiSdkStreamResult = await streamText(streamTextOptions);
         if (config.provider === "groq") {
-          const { adaptGroqAISDKFullStream } = await import(
-            "../utils/groqProvider.js"
-          );
+          const { adaptGroqAISDKFullStream } =
+            await import("../utils/groqProvider.js");
           fullStream = adaptGroqAISDKFullStream(aiSdkStreamResult.fullStream);
         } else if (config.provider === "moonshot") {
-          const { adaptMoonshotAISDKFullStream } = await import(
-            "../utils/moonshotProvider.js"
+          const { adaptMoonshotAISDKFullStream } =
+            await import("../utils/moonshotProvider.js");
+          fullStream = adaptMoonshotAISDKFullStream(
+            aiSdkStreamResult.fullStream,
           );
-          fullStream = adaptMoonshotAISDKFullStream(aiSdkStreamResult.fullStream);
         } else {
           fullStream = aiSdkStreamResult.fullStream;
         }
@@ -1968,12 +2082,17 @@ export class AgentService {
       // turn was saved with sequence=NULL and the UI rendered the legacy
       // duplicate-narration layout.
       sequence = [];
-      const streamIterator = orchestrateModelStream(fullStream, chatId, apiKeys, {
-        sequence,
-        ...(config.provider === "groq" || config.provider === "moonshot"
-          ? { textBufferMin: 1 }
-          : {}),
-      });
+      const streamIterator = orchestrateModelStream(
+        fullStream,
+        chatId,
+        apiKeys,
+        {
+          sequence,
+          ...(config.provider === "groq" || config.provider === "moonshot"
+            ? { textBufferMin: 1 }
+            : {}),
+        },
+      );
 
       // Tell the UI the stable row id before any content chunks so reconnect /
       // history merge cannot fork one turn into two message ids.
@@ -2120,23 +2239,29 @@ export class AgentService {
         // authoritative copy until it returns (next.done).
         const chunkType = next.value.type;
         if (chunkType === "text-delta") {
-          const textPayload = next.value.payload as { text?: string } | undefined;
+          const textPayload = next.value.payload as
+            | { text?: string }
+            | undefined;
           if (textPayload?.text) {
             assistantText += textPayload.text;
             checkpointBytesEstimate += textPayload.text.length;
           }
         } else if (chunkType === "reasoning-delta") {
-          const reasonPayload = next.value.payload as { text?: string } | undefined;
+          const reasonPayload = next.value.payload as
+            | { text?: string }
+            | undefined;
           if (reasonPayload?.text) {
             thinkingText += reasonPayload.text;
             checkpointBytesEstimate += reasonPayload.text.length;
           }
         } else if (chunkType === "tool-call") {
-          const tcPayload = next.value.payload as {
-            toolCallId?: string;
-            toolName?: string;
-            args?: Record<string, unknown>;
-          } | undefined;
+          const tcPayload = next.value.payload as
+            | {
+                toolCallId?: string;
+                toolName?: string;
+                args?: Record<string, unknown>;
+              }
+            | undefined;
           if (tcPayload?.toolCallId) {
             toolCalls.push({
               toolCallId: tcPayload.toolCallId,
@@ -2149,11 +2274,13 @@ export class AgentService {
             immediateCheckpoint();
           }
         } else if (chunkType === "tool-result") {
-          const trPayload = next.value.payload as {
-            toolCallId?: string;
-            toolName?: string;
-            result?: unknown;
-          } | undefined;
+          const trPayload = next.value.payload as
+            | {
+                toolCallId?: string;
+                toolName?: string;
+                result?: unknown;
+              }
+            | undefined;
           if (trPayload?.toolCallId) {
             recordInFlightToolResult(
               chatId,
@@ -2349,9 +2476,8 @@ export class AgentService {
       // turn is complete"; sending that while steps are still pending reports
       // unfinished work to the user as done, so pending steps switch it to an
       // honest status request instead.
-      const { WRAP_UP_WITH_PLAN_INCOMPLETE } = await import(
-        "./agent/wrapUpContinuation.js"
-      );
+      const { WRAP_UP_WITH_PLAN_INCOMPLETE } =
+        await import("./agent/wrapUpContinuation.js");
       const turnEndPlanState = await this.loadPendingPlanState(chatId);
       const wrapUpNeeded = shouldRequestWrapUpSummary({
         sequence,
@@ -2520,11 +2646,15 @@ export class AgentService {
         toolCalls.length === 0 &&
         !abortController.signal.aborted;
 
-      if (isEmpty && !options?._isSilentRetry && !options?._isContextCompressRetry) {
+      if (
+        isEmpty &&
+        !options?._isSilentRetry &&
+        !options?._isContextCompressRetry
+      ) {
         console.warn(
           `[AgentService] Empty completion detected (model returned 0 tokens of content). ` +
-          `Silently retrying once to self-heal — likely caused by a stale orphaned tool_use ` +
-          `in history that gets fixed on reload. chatId=${chatId} model=${config.model}`,
+            `Silently retrying once to self-heal — likely caused by a stale orphaned tool_use ` +
+            `in history that gets fixed on reload. chatId=${chatId} model=${config.model}`,
         );
 
         // Don't save the empty assistant message. Don't yield 'done'. Just
@@ -2556,7 +2686,7 @@ export class AgentService {
         // naturally retry the conversation with healed history.
         console.warn(
           `[AgentService] Silent retry also returned empty completion. ` +
-          `Skipping save to keep chat clean. chatId=${chatId}`,
+            `Skipping save to keep chat clean. chatId=${chatId}`,
         );
         // DON'T yield "done" here - if this is a nested call (compression retry),
         // the parent would pass it to UI and create an empty message. Just return.
@@ -2656,7 +2786,7 @@ export class AgentService {
       // 6. Check if summarization is needed
       // Use actual context size (from AI SDK or tokenUsage) not just message tokens
       const stats = await this.storageManager.getChatStats(chatId);
-      
+
       const actualContextTokens = this.resolveActualContextTokens({
         cumulativePromptTokens,
         piAiContextTokens,
@@ -2665,13 +2795,17 @@ export class AgentService {
         lastCacheWriteTokens,
       });
       const messageTokens = stats.token_count;
-      
+
       console.log(`[AgentService] 📊 Chat stats after stream:`);
-      console.log(`  Messages in DB: ${stats.message_count}, has_summary: ${stats.has_summary}`);
+      console.log(
+        `  Messages in DB: ${stats.message_count}, has_summary: ${stats.has_summary}`,
+      );
       console.log(`  Message tokens (DB): ${messageTokens}`);
       console.log(`  Actual context tokens: ${actualContextTokens}`);
-      console.log(`  Context overhead: ${actualContextTokens - messageTokens} tokens (system prompts, tools, attachments, etc.)`);
-      
+      console.log(
+        `  Context overhead: ${actualContextTokens - messageTokens} tokens (system prompts, tools, attachments, etc.)`,
+      );
+
       const estimatedFullContextTokens = Math.ceil(
         JSON.stringify(messages).length / 4,
       );
@@ -2712,9 +2846,8 @@ export class AgentService {
       await persistIncompleteAssistant({ asAbort: true });
 
       if (concurrencyLease) {
-        const { getAgentStreamConcurrencyGate } = await import(
-          "./agent/agentStreamConcurrency.js"
-        );
+        const { getAgentStreamConcurrencyGate } =
+          await import("./agent/agentStreamConcurrency.js");
         getAgentStreamConcurrencyGate().release(concurrencyLease);
       }
 
@@ -2748,9 +2881,8 @@ export class AgentService {
     // Release concurrency lease immediately so replacement streams don't queue.
     // The generator's finally block will also call release(), but that's a no-op
     // if the lease was already released (token won't match).
-    const { getAgentStreamConcurrencyGate } = await import(
-      "./agent/agentStreamConcurrency.js"
-    );
+    const { getAgentStreamConcurrencyGate } =
+      await import("./agent/agentStreamConcurrency.js");
     getAgentStreamConcurrencyGate().forceReleaseByChatId(chatId);
   }
 
@@ -2843,12 +2975,8 @@ export class AgentService {
     }
     return (
       (params.tokenUsage.promptTokens || 0) +
-      (params.tokenUsage.cacheReadTokens ||
-        params.lastCacheReadTokens ||
-        0) +
-      (params.tokenUsage.cacheWriteTokens ||
-        params.lastCacheWriteTokens ||
-        0)
+      (params.tokenUsage.cacheReadTokens || params.lastCacheReadTokens || 0) +
+      (params.tokenUsage.cacheWriteTokens || params.lastCacheWriteTokens || 0)
     );
   }
 
@@ -2938,9 +3066,8 @@ export class AgentService {
           });
           if (response.summaries) {
             const s = response.summaries;
-            const { extractEnhancedFields } = await import(
-              "./storage/summaryFormatting.js"
-            );
+            const { extractEnhancedFields } =
+              await import("./storage/summaryFormatting.js");
             const summary: import("./storage/IStorageProvider.js").StoredSummary =
               {
                 short_term: s.short_term ?? "",
@@ -3029,9 +3156,8 @@ export class AgentService {
         : conversationText;
 
     // Select cheapest available model (OAuth or API key)
-    const { generateCheapSummaryText } = await import(
-      "../utils/cheapSummarizerModel.js"
-    );
+    const { generateCheapSummaryText } =
+      await import("../utils/cheapSummarizerModel.js");
 
     const systemPrompt = `You are a conversation summarizer. Produce a JSON object with exactly these four fields:
 
@@ -3135,7 +3261,11 @@ ${last15.substring(0, 8_000)}`;
   /**
    * Get chat history
    */
-  async getChatHistory(chatId: string, limit?: number, skip?: number): Promise<StoredMessage[]> {
+  async getChatHistory(
+    chatId: string,
+    limit?: number,
+    skip?: number,
+  ): Promise<StoredMessage[]> {
     return await this.storageManager.loadMessages(chatId, limit, skip);
   }
 
@@ -3185,7 +3315,7 @@ ${last15.substring(0, 8_000)}`;
   /**
    * Get detailed context breakdown for inspection
    * Shows what will be sent to the LLM on next turn
-   * 
+   *
    * CRITICAL: This MUST use the exact same logic as streamText() to ensure
    * the context inspector shows exactly what the LLM sees
    */
@@ -3202,9 +3332,13 @@ ${last15.substring(0, 8_000)}`;
     const session = this.sessionManager.getSessionIfExists(chatId);
     if (session) {
       actualModel = session.config.model;
-      console.log(`[AgentService] Context inspector: using session model ${actualModel} instead of UI model ${selectedModel}`);
+      console.log(
+        `[AgentService] Context inspector: using session model ${actualModel} instead of UI model ${selectedModel}`,
+      );
     } else {
-      console.log(`[AgentService] Context inspector: no active session, using UI model ${selectedModel}`);
+      console.log(
+        `[AgentService] Context inspector: no active session, using UI model ${selectedModel}`,
+      );
     }
 
     // Load history - EXACTLY the same way as the actual agent run
@@ -3222,8 +3356,11 @@ ${last15.substring(0, 8_000)}`;
     });
 
     // Load skills
-    let enabledSkills: Array<{ id: string; name: string; description: string }> =
-      [];
+    let enabledSkills: Array<{
+      id: string;
+      name: string;
+      description: string;
+    }> = [];
     try {
       const { getSkillService } = await import("./SkillService.js");
       const skillService = getSkillService();
@@ -3249,14 +3386,16 @@ ${last15.substring(0, 8_000)}`;
 
     // Get all available tools
     const allTools = this.toolRegistry.getTools();
-    const toolSchemas = Object.entries(allTools).map(([id, tool]: [string, any]) => ({
-      id,
-      description: tool.description,
-      // Simplified schema for display
-      parameters: tool.inputSchema
-        ? JSON.parse(JSON.stringify(tool.inputSchema))
-        : null,
-    }));
+    const toolSchemas = Object.entries(allTools).map(
+      ([id, tool]: [string, any]) => ({
+        id,
+        description: tool.description,
+        // Simplified schema for display
+        parameters: tool.inputSchema
+          ? JSON.parse(JSON.stringify(tool.inputSchema))
+          : null,
+      }),
+    );
 
     // Load workspace context separately for display
     // NOTE: Workspace files are ALREADY in the system prompt
@@ -3319,7 +3458,10 @@ ${last15.substring(0, 8_000)}`;
           { mode: "inspect" },
         );
       } catch (error) {
-        console.warn("[AgentService] Context inspector memory bootstrap failed:", error);
+        console.warn(
+          "[AgentService] Context inspector memory bootstrap failed:",
+          error,
+        );
       }
     }
 
@@ -3372,14 +3514,11 @@ ${last15.substring(0, 8_000)}`;
       ? estimateTokens(relatedMemoryContent)
       : 0;
     const memoryBootstrapTokens =
-      goalsOkrsTokens +
-      useCasesTokens +
-      syncTiersTokens +
-      relatedMemoryTokens;
+      goalsOkrsTokens + useCasesTokens + syncTiersTokens + relatedMemoryTokens;
 
     // Break down token counts
     const systemPromptTokens = estimateTokens(systemPrompt);
-    
+
     // Conversation summary is injected as a USER message, not in system prompt
     const conversationSummaryTokens = conversationSummary
       ? estimateTokens(conversationSummary)
@@ -3455,12 +3594,14 @@ ${last15.substring(0, 8_000)}`;
         if (textParts.length > 0) {
           content = textParts.map((p: any) => p.text).join(" ");
         }
-        
+
         // If this assistant message has tool-calls, look for the next tool message
         if (toolCallParts.length > 0) {
-          const toolNames = toolCallParts.map((p: any) => p.toolName).join(", ");
+          const toolNames = toolCallParts
+            .map((p: any) => p.toolName)
+            .join(", ");
           content += `\n→ Called tools: ${toolNames}`;
-          
+
           // Look ahead for the tool results message (should be next)
           if (i + 1 < messages.length && messages[i + 1].role === "tool") {
             const toolMsg = messages[i + 1];
@@ -3542,8 +3683,10 @@ ${last15.substring(0, 8_000)}`;
         memoryBootstrap: {
           tokens: memoryBootstrapTokens,
           wouldRunOnNextTurn: memoryBootstrapOnNextTurn,
-          deferredBootstrap:
-            memoryContextService.willInjectOnNextSend(chatId, history),
+          deferredBootstrap: memoryContextService.willInjectOnNextSend(
+            chatId,
+            history,
+          ),
           note: memoryBootstrapOnNextTurn
             ? memoryContextService.willInjectOnNextSend(chatId, history)
               ? "Deferred bootstrap ready — injects as user messages on your next send (after summary, before history)"
@@ -3590,9 +3733,7 @@ ${last15.substring(0, 8_000)}`;
           note: "Skill references are in system prompt (counted there)",
         },
         plans: {
-          tokens: activePlansContext
-            ? estimateTokens(activePlansContext)
-            : 0,
+          tokens: activePlansContext ? estimateTokens(activePlansContext) : 0,
           count: activePlans.length,
           plans: activePlans,
           note: "Injected as user message after history (not in cached system prompt)",
@@ -3874,59 +4015,64 @@ ${last15.substring(0, 8_000)}`;
       }
 
       if (!resolvedExplicitFallback) {
-      // Try smart fallback based on original model capabilities
-      const { getBestFallbackModel } = await import("../utils/smartFallback.js");
-      const { getAvailableProviders } = await import("../utils/defaultProvider.js");
-      
-      const available = await getAvailableProviders();
-      const fallback = await getBestFallbackModel(
-        originalProvider,
-        input.model || "unknown",
-        available,
-      );
+        // Try smart fallback based on original model capabilities
+        const { getBestFallbackModel } =
+          await import("../utils/smartFallback.js");
+        const { getAvailableProviders } =
+          await import("../utils/defaultProvider.js");
 
-      if (fallback) {
-        provider = fallback.provider;
-        model = fallback.model;
-        console.log(
-          `[AgentService] Smart fallback: ${originalProvider}/${input.model || "default"} → ${provider}/${model} (capability-matched)`,
+        const available = await getAvailableProviders();
+        const fallback = await getBestFallbackModel(
+          originalProvider,
+          input.model || "unknown",
+          available,
         );
-      } else {
-        // No smart fallback available, use basic default
-        const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
-        const defaults = await getDefaultProviderAndModel();
-        provider = defaults.provider;
-        model = defaults.model;
-        console.log(
-          `[AgentService] Falling back from ${originalProvider} to ${provider}/${model}`,
-        );
-      }
 
-      // Re-check auth for fallback provider
-      if (provider === "openai" || provider === "anthropic") {
-        const auth = await getProviderAuth(provider);
-        if (!auth) {
-          throw new Error(
-            `No authentication found for fallback provider (${provider}). Please configure at least one provider.`,
+        if (fallback) {
+          provider = fallback.provider;
+          model = fallback.model;
+          console.log(
+            `[AgentService] Smart fallback: ${originalProvider}/${input.model || "default"} → ${provider}/${model} (capability-matched)`,
+          );
+        } else {
+          // No smart fallback available, use basic default
+          const { getDefaultProviderAndModel } =
+            await import("../utils/defaultProvider.js");
+          const defaults = await getDefaultProviderAndModel();
+          provider = defaults.provider;
+          model = defaults.model;
+          console.log(
+            `[AgentService] Falling back from ${originalProvider} to ${provider}/${model}`,
           );
         }
-        apiKey = auth.type === "oauth" ? auth.token : auth.key;
-        authType = auth.type;
-      } else if (provider === "google") {
-        const keys = await getApiKeys(["GOOGLE_API_KEY"]);
-        apiKey = keys.GOOGLE_API_KEY;
-        if (!apiKey) {
-          throw new Error(`Missing API key for fallback provider: GOOGLE_API_KEY`);
+
+        // Re-check auth for fallback provider
+        if (provider === "openai" || provider === "anthropic") {
+          const auth = await getProviderAuth(provider);
+          if (!auth) {
+            throw new Error(
+              `No authentication found for fallback provider (${provider}). Please configure at least one provider.`,
+            );
+          }
+          apiKey = auth.type === "oauth" ? auth.token : auth.key;
+          authType = auth.type;
+        } else if (provider === "google") {
+          const keys = await getApiKeys(["GOOGLE_API_KEY"]);
+          apiKey = keys.GOOGLE_API_KEY;
+          if (!apiKey) {
+            throw new Error(
+              `Missing API key for fallback provider: GOOGLE_API_KEY`,
+            );
+          }
+        } else if (provider === "ollama") {
+          // Ollama doesn't need auth
+          apiKey = ""; // Empty string for Ollama
+        } else {
+          // Unexpected provider without auth setup
+          throw new Error(
+            `No authentication configuration found for fallback provider: ${provider}`,
+          );
         }
-      } else if (provider === "ollama") {
-        // Ollama doesn't need auth
-        apiKey = ""; // Empty string for Ollama
-      } else {
-        // Unexpected provider without auth setup
-        throw new Error(
-          `No authentication configuration found for fallback provider: ${provider}`,
-        );
-      }
       }
     }
 
@@ -3956,113 +4102,118 @@ ${last15.substring(0, 8_000)}`;
 
     try {
       try {
-        for await (const chunk of this.streamAgent(chatId, input.prompt, config, {
-          allowedToolIds: input.allowedToolIds,
-          maxSteps: input.maxTurns,
-        })) {
-        if (chunk.type === "error") {
-          const errMsg =
-            (chunk.payload as { error?: string })?.error ?? "Model API error";
-          lastStreamError = errMsg;
+        for await (const chunk of this.streamAgent(
+          chatId,
+          input.prompt,
+          config,
+          {
+            allowedToolIds: input.allowedToolIds,
+            maxSteps: input.maxTurns,
+          },
+        )) {
+          if (chunk.type === "error") {
+            const errMsg =
+              (chunk.payload as { error?: string })?.error ?? "Model API error";
+            lastStreamError = errMsg;
 
-          // Check if this is an OAuth rate limit error
-          if (
-            authType === "oauth" &&
-            (errMsg.includes("usage limit") ||
-              errMsg.includes("rate limit") ||
-              errMsg.includes("Try again in"))
-          ) {
-            console.log(
-              `[AgentService] OAuth rate limit hit for ${provider}. Retrying with API key...`,
+            // Check if this is an OAuth rate limit error
+            if (
+              authType === "oauth" &&
+              (errMsg.includes("usage limit") ||
+                errMsg.includes("rate limit") ||
+                errMsg.includes("Try again in"))
+            ) {
+              console.log(
+                `[AgentService] OAuth rate limit hit for ${provider}. Retrying with API key...`,
+              );
+              retryWithApiKey = true;
+              break; // Exit the stream loop to retry
+            }
+
+            throw new Error(
+              `Agent job model error (${provider}/${model}): ${errMsg}`,
             );
-            retryWithApiKey = true;
-            break; // Exit the stream loop to retry
           }
 
-          throw new Error(
-            `Agent job model error (${provider}/${model}): ${errMsg}`,
-          );
-        }
-
-        // Log structured activity to job logs (thinking, tool calls, results)
-        if (chunk.type === "tool-call") {
-          toolCallCount += 1;
-        } else if (chunk.type === "tool-result") {
-          const payload = chunk.payload as ToolResultPayload;
-          const resultRecord =
-            payload.result != null && typeof payload.result === "object"
-              ? (payload.result as Record<string, unknown>)
-              : null;
-          if (resultRecord?.__orphan === true) {
-            orphanToolCount += 1;
-          }
-        }
-
-        if (input.appendLog) {
-          if (chunk.type === "reasoning-delta") {
-            const payload = chunk.payload as ReasoningDeltaPayload;
-            if (typeof payload.text === "string") {
-              thinkingBuffer += payload.text;
-            }
-          } else if (chunk.type === "tool-call") {
-            // Flush thinking buffer before logging tool call
-            if (thinkingBuffer.trim()) {
-              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
-              thinkingBuffer = "";
-            }
-            const payload = chunk.payload as ToolCallPayload;
-            const argsStr = payload.args
-              ? JSON.stringify(payload.args).slice(0, 200)
-              : "";
-            await input.appendLog(
-              `🔧 Tool: ${payload.toolName}${argsStr ? `(${argsStr}${argsStr.length >= 200 ? "..." : ""})` : "()"}`,
-            );
+          // Log structured activity to job logs (thinking, tool calls, results)
+          if (chunk.type === "tool-call") {
+            toolCallCount += 1;
           } else if (chunk.type === "tool-result") {
             const payload = chunk.payload as ToolResultPayload;
-            const resultStr =
-              typeof payload.result === "string"
-                ? payload.result.slice(0, 300)
-                : JSON.stringify(payload.result).slice(0, 300);
-            await input.appendLog(
-              `✅ Result: ${resultStr}${resultStr.length >= 300 ? "..." : ""}`,
-            );
-          } else if (chunk.type === "tool-error") {
-            const payload = chunk.payload as ErrorPayload;
-            await input.appendLog(
-              `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
-            );
-          } else if (chunk.type === "text-delta") {
-            // Flush thinking buffer when text starts (thinking is done)
-            if (thinkingBuffer.trim()) {
-              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
-              thinkingBuffer = "";
+            const resultRecord =
+              payload.result != null && typeof payload.result === "object"
+                ? (payload.result as Record<string, unknown>)
+                : null;
+            if (resultRecord?.__orphan === true) {
+              orphanToolCount += 1;
             }
           }
-        }
 
-        // Broadcast sub-agent activity to MiniChatCard (thinking, tool calls, results)
-        if (input.delegationId) {
-          const { broadcast } = await import("../websocket/index.js");
-          broadcast({
-            type: "subagent-chat:activity",
-            data: {
-              delegationId: input.delegationId,
-              chunk: {
-                type: chunk.type,
-                payload: chunk.payload,
-                timestamp: chunk.timestamp,
+          if (input.appendLog) {
+            if (chunk.type === "reasoning-delta") {
+              const payload = chunk.payload as ReasoningDeltaPayload;
+              if (typeof payload.text === "string") {
+                thinkingBuffer += payload.text;
+              }
+            } else if (chunk.type === "tool-call") {
+              // Flush thinking buffer before logging tool call
+              if (thinkingBuffer.trim()) {
+                await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+                thinkingBuffer = "";
+              }
+              const payload = chunk.payload as ToolCallPayload;
+              const argsStr = payload.args
+                ? JSON.stringify(payload.args).slice(0, 200)
+                : "";
+              await input.appendLog(
+                `🔧 Tool: ${payload.toolName}${argsStr ? `(${argsStr}${argsStr.length >= 200 ? "..." : ""})` : "()"}`,
+              );
+            } else if (chunk.type === "tool-result") {
+              const payload = chunk.payload as ToolResultPayload;
+              const resultStr =
+                typeof payload.result === "string"
+                  ? payload.result.slice(0, 300)
+                  : JSON.stringify(payload.result).slice(0, 300);
+              await input.appendLog(
+                `✅ Result: ${resultStr}${resultStr.length >= 300 ? "..." : ""}`,
+              );
+            } else if (chunk.type === "tool-error") {
+              const payload = chunk.payload as ErrorPayload;
+              await input.appendLog(
+                `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
+              );
+            } else if (chunk.type === "text-delta") {
+              // Flush thinking buffer when text starts (thinking is done)
+              if (thinkingBuffer.trim()) {
+                await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+                thinkingBuffer = "";
+              }
+            }
+          }
+
+          // Broadcast sub-agent activity to MiniChatCard (thinking, tool calls, results)
+          if (input.delegationId) {
+            const { broadcast } = await import("../websocket/index.js");
+            broadcast({
+              type: "subagent-chat:activity",
+              data: {
+                delegationId: input.delegationId,
+                chunk: {
+                  type: chunk.type,
+                  payload: chunk.payload,
+                  timestamp: chunk.timestamp,
+                },
               },
-            },
-          });
-        }
+            });
+          }
 
-        if (chunk.type !== "text-delta") {
-          continue;
-        }
-        const payload = chunk.payload as TextDeltaPayload;
-        if (typeof payload.text === "string") {
-          text += payload.text;
-        }
+          if (chunk.type !== "text-delta") {
+            continue;
+          }
+          const payload = chunk.payload as TextDeltaPayload;
+          if (typeof payload.text === "string") {
+            text += payload.text;
+          }
         }
 
         // Flush any remaining thinking buffer at end of stream
@@ -4077,122 +4228,122 @@ ${last15.substring(0, 8_000)}`;
 
       // Retry with API key if OAuth rate limit was hit
       if (retryWithApiKey && authType === "oauth") {
-      // Try to get API key
-      const authProvider = provider === "openai-codex" ? "openai" : provider;
-      const keyName =
-        authProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-      const keys = await getApiKeys([keyName]);
+        // Try to get API key
+        const authProvider = provider === "openai-codex" ? "openai" : provider;
+        const keyName =
+          authProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+        const keys = await getApiKeys([keyName]);
 
-      if (!keys[keyName]) {
-        throw new Error(
-          `OAuth rate limit reached and no API key available for ${provider}. ` +
-            `Add an API key in Settings or wait for rate limit to reset.`,
-        );
-      }
-
-      console.log(
-        `[AgentService] Retrying with API key for ${provider} (OAuth rate limited)`,
-      );
-
-      // Retry with API key
-      const apiKeyConfig: AgentConfigInternal = {
-        ...config,
-        apiKey: keys[keyName],
-        authType: "apiKey",
-      };
-
-      // Create new chatId for retry to avoid session cache
-      retryChatId = `${chatId}-retry`;
-      thinkingBuffer = ""; // Reset thinking buffer for retry
-
-      for await (const chunk of this.streamAgent(
-        retryChatId,
-        input.prompt,
-        apiKeyConfig,
-        {
-          allowedToolIds: input.allowedToolIds,
-          maxSteps: input.maxTurns,
-        },
-      )) {
-        if (chunk.type === "error") {
-          const errMsg =
-            (chunk.payload as { error?: string })?.error ?? "Model API error";
+        if (!keys[keyName]) {
           throw new Error(
-            `Agent job model error (${provider}/${model}) after API key fallback: ${errMsg}`,
+            `OAuth rate limit reached and no API key available for ${provider}. ` +
+              `Add an API key in Settings or wait for rate limit to reset.`,
           );
         }
 
-        // Log structured activity to job logs (same as main path)
-        if (input.appendLog) {
-          if (chunk.type === "reasoning-delta") {
-            const payload = chunk.payload as ReasoningDeltaPayload;
-            if (typeof payload.text === "string") {
-              thinkingBuffer += payload.text;
-            }
-          } else if (chunk.type === "tool-call") {
-            if (thinkingBuffer.trim()) {
-              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
-              thinkingBuffer = "";
-            }
-            const payload = chunk.payload as ToolCallPayload;
-            const argsStr = payload.args
-              ? JSON.stringify(payload.args).slice(0, 200)
-              : "";
-            await input.appendLog(
-              `🔧 Tool: ${payload.toolName}${argsStr ? `(${argsStr}${argsStr.length >= 200 ? "..." : ""})` : "()"}`,
+        console.log(
+          `[AgentService] Retrying with API key for ${provider} (OAuth rate limited)`,
+        );
+
+        // Retry with API key
+        const apiKeyConfig: AgentConfigInternal = {
+          ...config,
+          apiKey: keys[keyName],
+          authType: "apiKey",
+        };
+
+        // Create new chatId for retry to avoid session cache
+        retryChatId = `${chatId}-retry`;
+        thinkingBuffer = ""; // Reset thinking buffer for retry
+
+        for await (const chunk of this.streamAgent(
+          retryChatId,
+          input.prompt,
+          apiKeyConfig,
+          {
+            allowedToolIds: input.allowedToolIds,
+            maxSteps: input.maxTurns,
+          },
+        )) {
+          if (chunk.type === "error") {
+            const errMsg =
+              (chunk.payload as { error?: string })?.error ?? "Model API error";
+            throw new Error(
+              `Agent job model error (${provider}/${model}) after API key fallback: ${errMsg}`,
             );
-          } else if (chunk.type === "tool-result") {
-            const payload = chunk.payload as ToolResultPayload;
-            const resultStr =
-              typeof payload.result === "string"
-                ? payload.result.slice(0, 300)
-                : JSON.stringify(payload.result).slice(0, 300);
-            await input.appendLog(
-              `✅ Result: ${resultStr}${resultStr.length >= 300 ? "..." : ""}`,
-            );
-          } else if (chunk.type === "tool-error") {
-            const payload = chunk.payload as ErrorPayload;
-            await input.appendLog(
-              `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
-            );
-          } else if (chunk.type === "text-delta") {
-            if (thinkingBuffer.trim()) {
-              await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
-              thinkingBuffer = "";
+          }
+
+          // Log structured activity to job logs (same as main path)
+          if (input.appendLog) {
+            if (chunk.type === "reasoning-delta") {
+              const payload = chunk.payload as ReasoningDeltaPayload;
+              if (typeof payload.text === "string") {
+                thinkingBuffer += payload.text;
+              }
+            } else if (chunk.type === "tool-call") {
+              if (thinkingBuffer.trim()) {
+                await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+                thinkingBuffer = "";
+              }
+              const payload = chunk.payload as ToolCallPayload;
+              const argsStr = payload.args
+                ? JSON.stringify(payload.args).slice(0, 200)
+                : "";
+              await input.appendLog(
+                `🔧 Tool: ${payload.toolName}${argsStr ? `(${argsStr}${argsStr.length >= 200 ? "..." : ""})` : "()"}`,
+              );
+            } else if (chunk.type === "tool-result") {
+              const payload = chunk.payload as ToolResultPayload;
+              const resultStr =
+                typeof payload.result === "string"
+                  ? payload.result.slice(0, 300)
+                  : JSON.stringify(payload.result).slice(0, 300);
+              await input.appendLog(
+                `✅ Result: ${resultStr}${resultStr.length >= 300 ? "..." : ""}`,
+              );
+            } else if (chunk.type === "tool-error") {
+              const payload = chunk.payload as ErrorPayload;
+              await input.appendLog(
+                `❌ Error: ${typeof payload.error === "string" ? payload.error : JSON.stringify(payload.error)}`,
+              );
+            } else if (chunk.type === "text-delta") {
+              if (thinkingBuffer.trim()) {
+                await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+                thinkingBuffer = "";
+              }
             }
+          }
+
+          // Broadcast sub-agent activity to MiniChatCard (same as main path)
+          if (input.delegationId) {
+            const { broadcast } = await import("../websocket/index.js");
+            broadcast({
+              type: "subagent-chat:activity",
+              data: {
+                delegationId: input.delegationId,
+                chunk: {
+                  type: chunk.type,
+                  payload: chunk.payload,
+                  timestamp: chunk.timestamp,
+                },
+              },
+            });
+          }
+
+          if (chunk.type !== "text-delta") {
+            continue;
+          }
+          const payload = chunk.payload as TextDeltaPayload;
+          if (typeof payload.text === "string") {
+            text += payload.text;
           }
         }
 
-        // Broadcast sub-agent activity to MiniChatCard (same as main path)
-        if (input.delegationId) {
-          const { broadcast } = await import("../websocket/index.js");
-          broadcast({
-            type: "subagent-chat:activity",
-            data: {
-              delegationId: input.delegationId,
-              chunk: {
-                type: chunk.type,
-                payload: chunk.payload,
-                timestamp: chunk.timestamp,
-              },
-            },
-          });
+        // Flush any remaining thinking buffer at end of retry stream
+        if (input.appendLog && thinkingBuffer.trim()) {
+          await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
+          thinkingBuffer = "";
         }
-
-        if (chunk.type !== "text-delta") {
-          continue;
-        }
-        const payload = chunk.payload as TextDeltaPayload;
-        if (typeof payload.text === "string") {
-          text += payload.text;
-        }
-      }
-
-      // Flush any remaining thinking buffer at end of retry stream
-      if (input.appendLog && thinkingBuffer.trim()) {
-        await input.appendLog(`💭 Thinking: ${thinkingBuffer.trim()}`);
-        thinkingBuffer = "";
-      }
       }
 
       const trimmed = text.trim();
@@ -4310,10 +4461,15 @@ ${last15.substring(0, 8_000)}`;
     });
 
     let thinkingBuffer = "";
-    for await (const chunk of this.streamAgent(chatId, input.userMessage, config, {
-      allowedToolIds: input.allowedToolIds,
-      maxSteps: input.maxTurns,
-    })) {
+    for await (const chunk of this.streamAgent(
+      chatId,
+      input.userMessage,
+      config,
+      {
+        allowedToolIds: input.allowedToolIds,
+        maxSteps: input.maxTurns,
+      },
+    )) {
       if (input.appendLog) {
         if (chunk.type === "reasoning-delta") {
           const payload = chunk.payload as ReasoningDeltaPayload;
@@ -4381,13 +4537,16 @@ ${last15.substring(0, 8_000)}`;
     // Resolve default provider and model based on user's available authentication
     let provider = input.provider;
     let modelId = input.model;
-    
+
     if (!provider || !modelId) {
-      const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+      const { getDefaultProviderAndModel } =
+        await import("../utils/defaultProvider.js");
       const defaults = await getDefaultProviderAndModel();
       provider = provider ?? defaults.provider;
       modelId = modelId ?? defaults.model;
-      console.log(`[AgentService] Using default provider/model: ${provider}/${modelId}`);
+      console.log(
+        `[AgentService] Using default provider/model: ${provider}/${modelId}`,
+      );
     }
 
     const defaultModelByProvider: Record<Provider, string> = {
@@ -4447,9 +4606,11 @@ ${last15.substring(0, 8_000)}`;
     // If auth check failed, fall back to default provider
     if (authCheckFailed) {
       // Try smart fallback based on original model capabilities
-      const { getBestFallbackModel } = await import("../utils/smartFallback.js");
-      const { getAvailableProviders } = await import("../utils/defaultProvider.js");
-      
+      const { getBestFallbackModel } =
+        await import("../utils/smartFallback.js");
+      const { getAvailableProviders } =
+        await import("../utils/defaultProvider.js");
+
       const available = await getAvailableProviders();
       const fallback = await getBestFallbackModel(
         originalProvider,
@@ -4465,7 +4626,8 @@ ${last15.substring(0, 8_000)}`;
         );
       } else {
         // No smart fallback available, use basic default
-        const { getDefaultProviderAndModel } = await import("../utils/defaultProvider.js");
+        const { getDefaultProviderAndModel } =
+          await import("../utils/defaultProvider.js");
         const defaults = await getDefaultProviderAndModel();
         provider = defaults.provider;
         modelId = defaults.model;
@@ -4488,7 +4650,9 @@ ${last15.substring(0, 8_000)}`;
         const keys = await getApiKeys(["GOOGLE_API_KEY"]);
         apiKey = keys.GOOGLE_API_KEY;
         if (!apiKey) {
-          throw new Error(`Missing API key for fallback provider: GOOGLE_API_KEY`);
+          throw new Error(
+            `Missing API key for fallback provider: GOOGLE_API_KEY`,
+          );
         }
       } else if (provider === "ollama") {
         // Ollama doesn't need auth
@@ -4714,8 +4878,11 @@ ${last15.substring(0, 8_000)}`;
   ): Promise<LanguageModel> {
     // Route through Papr proxy if configured
     if (options?.usePaprProxy && options?.paprApiKey) {
-      const { createProxyModel } = await import("../utils/paprProxyProvider.js");
-      console.log(`[AgentService] Using Papr AI proxy for ${provider}/${modelId}`);
+      const { createProxyModel } =
+        await import("../utils/paprProxyProvider.js");
+      console.log(
+        `[AgentService] Using Papr AI proxy for ${provider}/${modelId}`,
+      );
       return createProxyModel(provider, modelId, options.paprApiKey);
     }
 
@@ -4767,7 +4934,8 @@ ${last15.substring(0, 8_000)}`;
         return zai.chat(normalizeZaiModelId(modelId)) as LanguageModel;
       }
       case "groq": {
-        const { createGroqChatModel } = await import("../utils/groqProvider.js");
+        const { createGroqChatModel } =
+          await import("../utils/groqProvider.js");
         const groqApiKey = process.env.GROQ_API_KEY;
         if (!groqApiKey) {
           throw new Error(
@@ -4780,14 +4948,16 @@ ${last15.substring(0, 8_000)}`;
         });
       }
       case "moonshot": {
-        const { createMoonshotChatModel } = await import("../utils/moonshotProvider.js");
+        const { createMoonshotChatModel } =
+          await import("../utils/moonshotProvider.js");
         const moonshotApiKey = process.env.MOONSHOT_API_KEY;
         if (!moonshotApiKey) {
           throw new Error(
             "Moonshot direct API requires MOONSHOT_API_KEY. Sign in with Papr to use Kimi via proxy.",
           );
         }
-        const { normalizeMoonshotModelId } = await import("../utils/moonshotModel.js");
+        const { normalizeMoonshotModelId } =
+          await import("../utils/moonshotModel.js");
         return createMoonshotChatModel(normalizeMoonshotModelId(modelId), {
           apiKey: moonshotApiKey,
         });
@@ -5064,13 +5234,15 @@ ${last15.substring(0, 8_000)}`;
 
   /**
    * Build native web search tools for supported providers (AI SDK format)
-   * 
+   *
    * Providers with native search:
    * - Google: google.tools.googleSearch({})
    * - OpenAI: openai.tools.webSearch({ maxUses: 10 })
    * - Anthropic: anthropic.tools.webSearch_20260209({ maxUses: 10 })
    */
-  private async buildNativeSearchTools(provider: Provider): Promise<Record<string, any>> {
+  private async buildNativeSearchTools(
+    provider: Provider,
+  ): Promise<Record<string, any>> {
     const tools: Record<string, any> = {};
 
     switch (provider) {
@@ -5086,10 +5258,15 @@ ${last15.substring(0, 8_000)}`;
             tools.google_search = google.tools.googleSearch({});
             console.log("[AgentService] ✅ Enabled Google Search for Gemini");
           } else {
-            console.warn("[AgentService] ⚠️  Google Search not available in this SDK version");
+            console.warn(
+              "[AgentService] ⚠️  Google Search not available in this SDK version",
+            );
           }
         } catch (error) {
-          console.warn("[AgentService] ⚠️  Failed to load Google Search tool:", (error as Error).message);
+          console.warn(
+            "[AgentService] ⚠️  Failed to load Google Search tool:",
+            (error as Error).message,
+          );
         }
         break;
 
@@ -5100,46 +5277,63 @@ ${last15.substring(0, 8_000)}`;
           if (openai.tools?.webSearch) {
             const webSearchTool = openai.tools.webSearch({
               externalWebAccess: true, // Enable live web access
-              searchContextSize: 'high', // Use high context for search results
+              searchContextSize: "high", // Use high context for search results
             });
             // Check if tool has ID property and sanitize it if needed
             // OpenAI tools may or may not expose 'id', use key name as fallback
-            const hasId = webSearchTool && typeof (webSearchTool as any).id === 'string';
-            const toolId = hasId && (webSearchTool as any).id.includes('.')
-              ? (webSearchTool as any).id.replace(/\./g, '_')
-              : 'web_search';
-            
+            const hasId =
+              webSearchTool && typeof (webSearchTool as any).id === "string";
+            const toolId =
+              hasId && (webSearchTool as any).id.includes(".")
+                ? (webSearchTool as any).id.replace(/\./g, "_")
+                : "web_search";
+
             // Override ID if it exists and has dots
-            if (hasId && (webSearchTool as any).id.includes('.')) {
+            if (hasId && (webSearchTool as any).id.includes(".")) {
               tools.web_search = {
                 ...webSearchTool,
                 id: toolId,
               };
-              console.log("[AgentService] ✅ Enabled OpenAI web search (sanitized tool ID: " + toolId + ")");
+              console.log(
+                "[AgentService] ✅ Enabled OpenAI web search (sanitized tool ID: " +
+                  toolId +
+                  ")",
+              );
             } else {
               tools.web_search = webSearchTool;
               console.log("[AgentService] ✅ Enabled OpenAI web search");
             }
           } else {
-            console.warn("[AgentService] ⚠️  OpenAI web search not available in this SDK version");
+            console.warn(
+              "[AgentService] ⚠️  OpenAI web search not available in this SDK version",
+            );
           }
         } catch (error) {
-          console.warn("[AgentService] ⚠️  Failed to load OpenAI web search tool:", (error as Error).message);
+          console.warn(
+            "[AgentService] ⚠️  Failed to load OpenAI web search tool:",
+            (error as Error).message,
+          );
         }
         break;
 
       case "anthropic":
         // Anthropic: web_search disabled for now due to compatibility issues
-        console.log("[AgentService] ℹ️  Anthropic: Web search disabled (use browser tools instead)");
+        console.log(
+          "[AgentService] ℹ️  Anthropic: Web search disabled (use browser tools instead)",
+        );
         break;
 
       case "ollama":
         // Ollama: No native search (local models)
-        console.log("[AgentService] ℹ️  Ollama: No native search (use browser tools instead)");
+        console.log(
+          "[AgentService] ℹ️  Ollama: No native search (use browser tools instead)",
+        );
         break;
 
       default:
-        console.log(`[AgentService] ℹ️  Provider ${provider}: No native search support`);
+        console.log(
+          `[AgentService] ℹ️  Provider ${provider}: No native search support`,
+        );
     }
 
     return tools;
@@ -5147,16 +5341,20 @@ ${last15.substring(0, 8_000)}`;
 
   /**
    * Build native web search tools for pi-ai providers (OAuth routes)
-   * 
+   *
    * Same as buildNativeSearchTools but returns pi-ai compatible format
    */
-  private buildNativeSearchToolsForPiAi(provider: string): Array<{ type: string; name?: string; max_uses?: number }> {
+  private buildNativeSearchToolsForPiAi(
+    provider: string,
+  ): Array<{ type: string; name?: string; max_uses?: number }> {
     const tools: Array<{ type: string; name?: string; max_uses?: number }> = [];
 
     switch (provider) {
       case "anthropic":
         // Anthropic: web_search disabled for now due to compatibility issues
-        console.log("[AgentService] ℹ️  Anthropic OAuth: Web search disabled (use browser tools instead)");
+        console.log(
+          "[AgentService] ℹ️  Anthropic OAuth: Web search disabled (use browser tools instead)",
+        );
         break;
 
       case "openai-codex":
@@ -5167,11 +5365,15 @@ ${last15.substring(0, 8_000)}`;
           name: "web_search",
           max_uses: 10,
         });
-        console.log("[AgentService] ⚠️  Added OpenAI Codex web_search via pi-ai (experimental)");
+        console.log(
+          "[AgentService] ⚠️  Added OpenAI Codex web_search via pi-ai (experimental)",
+        );
         break;
 
       default:
-        console.log(`[AgentService] ℹ️  Provider ${provider}: No native search via pi-ai`);
+        console.log(
+          `[AgentService] ℹ️  Provider ${provider}: No native search via pi-ai`,
+        );
     }
 
     return tools;
