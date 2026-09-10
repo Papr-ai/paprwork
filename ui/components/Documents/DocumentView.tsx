@@ -13,7 +13,6 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import Underline from "@tiptap/extension-underline";
 import Placeholder from "@tiptap/extension-placeholder";
 import { Table } from "@tiptap/extension-table";
 import { TableRow } from "@tiptap/extension-table-row";
@@ -73,7 +72,9 @@ function DocumentViewInner({ documentId }: DocumentViewProps) {
       TableHeader,
       TableCell,
       DocumentMarkdownItTables,
-      Underline,
+      // Underline is not listed here: StarterKit v3 bundles it, and registering
+      // it a second time makes Tiptap warn about a duplicate extension name.
+      // The toolbar's toggleUnderline()/isActive("underline") work regardless.
       Placeholder.configure({
         placeholder: 'Start typing or press "/" for commands...',
       }),
