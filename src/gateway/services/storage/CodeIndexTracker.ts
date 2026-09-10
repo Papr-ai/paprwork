@@ -512,6 +512,36 @@ export class CodeIndexTracker {
     };
   }
 
+  /**
+   * Papr memory id for a RAW indexed code file (not its summary).
+   *
+   * `indexed_files.memory_id` has existed since the table was created but was
+   * never written: SmartCodeIndexManager calls recordIndexedFile() without a
+   * memory_id, so every re-index had no id to update against and issued a
+   * fresh `memory.add()` instead. These two accessors close that gap.
+   */
+  getIndexedFileMemoryId(filePath: string): string | undefined {
+    if (this.closed) return undefined;
+    const row = this.db.prepare(
+      'SELECT memory_id FROM indexed_files WHERE file_path = ?'
+    ).get(filePath) as { memory_id?: string } | undefined;
+    return row?.memory_id ?? undefined;
+  }
+
+  /**
+   * Persist the memory id for an indexed file.
+   *
+   * UPDATE (not INSERT OR REPLACE) on purpose: recordIndexedFile() owns row
+   * creation and would clobber memory_id back to NULL if used here, which is
+   * the exact hazard that kept the column empty.
+   */
+  setIndexedFileMemoryId(filePath: string, memoryId: string): void {
+    if (this.closed) return;
+    this.db.prepare(
+      'UPDATE indexed_files SET memory_id = ? WHERE file_path = ?'
+    ).run(memoryId, filePath);
+  }
+
   getFileSummaryMemoryId(filePath: string): string | undefined {
     if (this.closed) return undefined;
     const row = this.db.prepare(
