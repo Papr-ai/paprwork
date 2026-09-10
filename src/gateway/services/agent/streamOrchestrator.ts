@@ -10,6 +10,7 @@ import {
 import {
   describeQuotaExhaustion,
   detectProviderQuotaExhaustion,
+  PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE,
 } from "../../utils/providerRateLimitRetry.js";
 import {
   createChatStreamChunk,
@@ -258,7 +259,11 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
 /**
  * Extract a machine-readable error code when present (e.g. rate_limit_exhausted).
  */
-function extractErrorCode(error: unknown): string | undefined {
+export function extractErrorCode(error: unknown): string | undefined {
+  if (detectProviderQuotaExhaustion(error)) {
+    return PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE;
+  }
+
   if (typeof error !== "object" || error === null) return undefined;
   const errorObj = error as Record<string, unknown>;
 

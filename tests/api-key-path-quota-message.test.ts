@@ -1,6 +1,9 @@
 import { describe, expect, test, vi, afterEach } from "vitest";
 
-import { extractErrorMessage } from "../src/gateway/services/agent/streamOrchestrator.js";
+import {
+  extractErrorCode,
+  extractErrorMessage,
+} from "../src/gateway/services/agent/streamOrchestrator.js";
 
 /**
  * The AI SDK path (API keys) reported a spent allowance as an ordinary burst
@@ -59,6 +62,9 @@ describe("spend cap vs burst limit on the API-key path", () => {
     expect(message).not.toContain("wait a moment and try again");
     expect(message).toContain("spend limit");
     expect(message).toContain("retrying won't help");
+    expect(
+      extractErrorCode(apiCallError(429, "rate_limit_error", SPEND_CAP_SENTENCE)),
+    ).toBe("provider_quota_exhausted");
   });
 
   test("the reset date the provider gave is surfaced", () => {

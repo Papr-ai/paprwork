@@ -5082,6 +5082,13 @@ Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`)
 **Files Changed:** `src/gateway/services/agent/streamOrchestrator.ts`, `providerErrorMessage.ts`, `tests/api-key-path-quota-message.test.ts` (12 tests, 6 of which fail without the reorder)
 **Prevention:** Fixing a classification bug on one provider route does not fix it on the other — grep for every formatter that branches on the same status before closing it out. And when two modules encode contradictory premises about a provider's status codes, one of them is stale; the sentence is the ground truth, so classify on it before the code.
 
+### Issue 83: Settings API key ignored in `npm start` ✅ FIXED
+**Added:** 2026-09-10
+**Problem:** User deleted an Anthropic key, pasted a new one in Settings, and still got "Invalid API key." The new key was valid; Console showed the org spend cap.
+**Root Cause:** `getApiKeys()` short-circuited on `NODE_ENV=development` (what `npm start` sets) and returned `process.env` only. The Settings/keychain value never left Electron. `.env` still held the old Platform key, which Anthropic now rejects as 401. The 429 spend-cap formatter never ran because the request never used the new key.
+**Solution:** IPC (Settings) first in both dev and prod; `.env` is fallback only. Ignore OAuth-shaped tokens in either source. Do not rewrite a spend-cap sentence as "Invalid API key" in the renderer.
+**Prevention:** A Settings write the running process never reads is indistinguishable from "the key is bad." If a path is labeled development, say which credential store it actually uses.
+
 ---
 
 **This file is living documentation. Update it as we learn and make decisions.**

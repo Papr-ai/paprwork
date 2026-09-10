@@ -25,6 +25,8 @@ import {
 import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 
 let keyCache: Record<string, string> = {};
+/** Names already asked of main this session, including misses — don't re-IPC. */
+const ipcAskedNames = new Set<string>();
 let oauthTokenCache: {
   openai?: { accessToken: string; expiresAt: string };
   anthropic?: { accessToken: string; expiresAt: string };
@@ -164,7 +166,21 @@ async function requestKeysViaIPC(
         if ("oauthTokens" in message) {
           oauthTokenCache = message.oauthTokens ?? {};
         }
-        resolve(message.keys || {});
+        const received = message.keys || {};
+        for (const name of keyNames) {
+          ipcAskedNames.add(name);
+        }
+        for (const [keyName, value] of Object.entries(received)) {
+          if (!value || isOAuthShapedToken(value)) continue;
+          if (
+            keyName === "PAPR_API_KEY" &&
+            !paprApiKeyMatchesBoundActiveWorkspace(value)
+          ) {
+            continue;
+          }
+          keyCache[keyName] = value;
+        }
+        resolve(received);
       }
     };
 
@@ -198,39 +214,30 @@ export async function getApiKeys(
   keyNames: string[],
   ipcProcess: IpcProcessLike = process,
 ): Promise<Record<string, string>> {
-  const isDev = process.env.NODE_ENV === "development";
   const keys: Record<string, string> = {};
 
-  if (isDev) {
-    // Development: use process.env (from .env.local)
-    console.log("[KeyResolver] Development mode - using process.env");
-    for (const keyName of keyNames) {
-      const value = overwrittenEnvKeys[keyName] ?? process.env[keyName];
-      if (!value) continue;
-      if (isOAuthShapedToken(value)) {
-        console.warn(
-          `[KeyResolver]   ✗ Ignoring ${keyName} — holds an OAuth token, not a Platform API key`,
-        );
-        continue;
-      }
-      keys[keyName] = value;
-      console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
-    }
-    return keys;
-  }
-
-  // Production: check cache first
-  const uncachedKeys = keyNames.filter((name) => !keyCache[name]);
+  // Settings / keychain via IPC wins over process.env in both dev and prod.
+  // `npm start` sets NODE_ENV=development, so the old env-only shortcut meant
+  // a key pasted in Settings was never the one sent to Anthropic — .env was.
+  const uncachedKeys = keyNames.filter(
+    (name) => !keyCache[name] && !ipcAskedNames.has(name),
+  );
 
   if (uncachedKeys.length > 0) {
     console.log(
       `[KeyResolver] Requesting ${uncachedKeys.length} keys from main process`,
     );
 
-    let missingAfterIpc = uncachedKeys;
     try {
       const resolved = await requestKeysViaIPC(uncachedKeys, ipcProcess);
       for (const [keyName, value] of Object.entries(resolved)) {
+        if (!value) continue;
+        if (isOAuthShapedToken(value)) {
+          console.warn(
+            `[KeyResolver]   ✗ Ignoring IPC ${keyName} — holds an OAuth token, not a Platform API key`,
+          );
+          continue;
+        }
         if (
           keyName === "PAPR_API_KEY" &&
           !paprApiKeyMatchesBoundActiveWorkspace(value)
@@ -242,9 +249,8 @@ export async function getApiKeys(
         }
         keyCache[keyName] = value;
       }
-      missingAfterIpc = uncachedKeys.filter((keyName) => !keyCache[keyName]);
       console.log(
-        `[KeyResolver] Received ${Object.keys(resolved).length} keys`,
+        `[KeyResolver] Received ${Object.keys(resolved).length} keys from Settings`,
       );
       
       // Trigger lazy code indexing if PAPR_API_KEY was just resolved
@@ -259,31 +265,35 @@ export async function getApiKeys(
       console.error("[KeyResolver] Failed to resolve keys via IPC:", error);
     }
 
-    // Fall back to env vars for unresolved keys.
-    // This keeps development usable while still preferring secure IPC lookups.
-    for (const keyName of missingAfterIpc) {
-      const value = process.env[keyName];
-      if (!value) {
-        continue;
-      }
-      if (
-        keyName === "PAPR_API_KEY" &&
-        !paprApiKeyMatchesActiveWorkspace(value)
-      ) {
-        console.warn(
-          "[KeyResolver] Ignoring PAPR_API_KEY env fallback — wrong org/namespace for active workspace",
-        );
-        continue;
-      }
-      keyCache[keyName] = value;
-    }
   }
 
-  // Return requested keys from cache
+  // Env is fallback only — never overrides a Settings key already in cache.
+  // Also runs when IPC already answered "not present" (ipcAskedNames).
   for (const keyName of keyNames) {
     if (keyCache[keyName]) {
       keys[keyName] = keyCache[keyName];
+      continue;
     }
+    const value = overwrittenEnvKeys[keyName] ?? process.env[keyName];
+    if (!value) continue;
+    if (isOAuthShapedToken(value)) {
+      console.warn(
+        `[KeyResolver]   ✗ Ignoring ${keyName} — holds an OAuth token, not a Platform API key`,
+      );
+      continue;
+    }
+    if (
+      keyName === "PAPR_API_KEY" &&
+      !paprApiKeyMatchesActiveWorkspace(value)
+    ) {
+      console.warn(
+        "[KeyResolver] Ignoring PAPR_API_KEY env fallback — wrong org/namespace for active workspace",
+      );
+      continue;
+    }
+    keyCache[keyName] = value;
+    keys[keyName] = value;
+    console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
   }
 
   return keys;
@@ -335,7 +345,8 @@ export const PAPR_PROXY_SIGN_IN_MESSAGE =
 
 /**
  * Resolve Papr AI proxy credentials (keychain in prod, IPC + env in dev).
- * Prefer this over getApiKeys(["PAPR_API_KEY"]) — dev getApiKeys skips IPC.
+ * Prefer this over getApiKeys(["PAPR_API_KEY"]) — it validates the key against
+ * the active workspace before returning.
  */
 export async function resolvePaprProxyAuth(
   ipcProcess: IpcProcessLike = process,
@@ -405,6 +416,7 @@ export function clearKeyCache(keyName?: string): void {
     .catch(() => undefined);
   if (keyName) {
     delete keyCache[keyName];
+    ipcAskedNames.delete(keyName);
     if (keyName === "PAPR_API_KEY") {
       paprApiKeyUnavailableUntil = 0;
     }
@@ -416,6 +428,7 @@ export function clearKeyCache(keyName?: string): void {
     console.log(`[KeyResolver] Cleared cache for key: ${keyName}`);
   } else {
     keyCache = {};
+    ipcAskedNames.clear();
     oauthTokenCache = {};
     console.log("[KeyResolver] Cleared entire key cache");
   }
