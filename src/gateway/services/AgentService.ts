@@ -104,6 +104,14 @@ import {
   shouldRequestWrapUpSummary,
 } from "./agent/wrapUpContinuation.js";
 import { addTurnUsage } from "./agent/turnUsageAccounting.js";
+import {
+  createTurnMetrics,
+  recordCompactionRun,
+  recordCompactionSkipped,
+  recordStep,
+  setToolCallCount,
+  summarizeTurnMetrics,
+} from "./agent/turnMetrics.js";
 import { RATE_LIMIT_EXHAUSTED_ERROR_CODE } from "../utils/providerRateLimitRetry.js";
 import { streamCursorAgentTurn } from "./providers/cursorAgentStream.js";
 import {
@@ -1116,13 +1124,19 @@ export class AgentService {
         Object.keys(priorJobEnv).length > 0
           ? priorJobEnv
           : collectJobEnvFromProcess();
+      // Ambient so tools that recover truncated results can record the fetch
+      // against the turn that provoked it.
+      const turnMetrics = createTurnMetrics();
+      const turnStartedAt = Date.now();
       setToolContext(chatId, {
+        turnMetrics,
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
           : {}),
       });
       const piToolContext = {
         chatId,
+        turnMetrics,
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
           : {}),
@@ -1360,8 +1374,20 @@ export class AgentService {
         `  Config: maxTokens=${config.maxTokens || "NOT SET"}, maxSteps=${options?.maxSteps || 100}`,
       );
 
+      // Whether compaction ran or the pressure gate declined is the measurement
+      // that makes a change to the truncation policy visible, so both are counted.
+      const compactWithMetrics = (msgs: unknown[]): void => {
+        const stats = compactStaleToolResults(msgs, { historyTokenBudget });
+        if (stats.skipped) {
+          recordCompactionSkipped(turnMetrics);
+        } else {
+          recordCompactionRun(turnMetrics, stats);
+        }
+      };
+
       // Pre-flight trim: use model-aware cap (not global 300K) so Groq/Ollama don't overflow.
-      compactStaleToolResults(messages);
+      // The same budget gates compaction, which does nothing until the context is under pressure.
+      compactWithMetrics(messages);
       const preFlightTrim = trimOldestHistoryTurns(messages, {
         ...historyTrimBounds,
         maxTokens: historyTokenBudget,
@@ -1480,6 +1506,10 @@ export class AgentService {
             cumulativePromptTokens > 0
               ? cumulativePromptTokens
               : stepMessageTokens + toolTokens;
+          recordStep(turnMetrics, {
+            estimatedTokens: stepMessageTokens + toolTokens,
+            historyTokenBudget,
+          });
           console.log(
             `[prepareStep] Step ${stepOptions.stepNumber}: ${Math.round(totalPromptTokens / 1000)}K tokens, ` +
               `${stepOptions.messages.length} messages`,
@@ -1499,7 +1529,7 @@ export class AgentService {
               content: `[SYSTEM NOTE: You've made ${stepNumber} tool calls out of ${maxSteps} maximum. Please complete your current task and provide a final response soon. Avoid unnecessary tool calls.]`,
             };
             const msgs = [...stepOptions.messages, warningMessage];
-            compactStaleToolResults(msgs);
+            compactWithMetrics(msgs);
             trimOldestHistoryTurns(msgs, {
               ...historyTrimBounds,
               maxTokens: historyTokenBudget,
@@ -1508,7 +1538,7 @@ export class AgentService {
           }
 
           const msgs = [...stepOptions.messages];
-          compactStaleToolResults(msgs);
+          compactWithMetrics(msgs);
           trimOldestHistoryTurns(msgs, {
             ...historyTrimBounds,
             maxTokens: historyTokenBudget,
@@ -1912,12 +1942,17 @@ export class AgentService {
         }
         console.log(`${"=".repeat(100)}\n`);
 
-        const piHistoryTrimBounds = computeHistoryTrimBounds(
-          (piContext.messages ?? []) as Array<{
-            role?: unknown;
-            content?: unknown;
-          }>,
-        );
+        const piHistoryTrimBounds = {
+          ...computeHistoryTrimBounds(
+            (piContext.messages ?? []) as Array<{
+              role?: unknown;
+              content?: unknown;
+            }>,
+          ),
+          // Same model-aware budget the AI SDK path trims to, so a user cap of
+          // 200K means 200K on the OAuth route too.
+          maxTokens: historyTokenBudget,
+        };
 
         const reasoningLevel = (config.reasoning?.effort ?? "medium") as
           | "minimal"
@@ -2779,6 +2814,69 @@ export class AgentService {
           await streamStorage.saveMessage(chatId, assistantMsg);
         }
         assistantMessageSaved = true;
+      }
+
+      // 4.4. Attach turn measurements to the row that was just written, then
+      // report the same numbers in aggregate. Both are best-effort: a
+      // measurement failure must not affect the turn it measured.
+      try {
+        setToolCallCount(turnMetrics, toolCalls.length);
+        const planProgress = await this.loadPendingPlanState(chatId);
+        const summary = summarizeTurnMetrics(turnMetrics, planProgress);
+        const durationMs = Date.now() - turnStartedAt;
+
+        if (assistantMessageSaved && streamStorage?.recordTurnMetrics) {
+          await streamStorage.recordTurnMetrics(
+            assistantMessageId,
+            summary,
+            durationMs,
+          );
+        }
+
+        const billedUsage = finalizeTokenUsageForBilling(
+          tokenUsage,
+          lastCacheReadTokens,
+          lastCacheWriteTokens,
+        );
+        const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
+        const { AmplitudeEvents } = await import(
+          "../../core/telemetry/events.js"
+        );
+        getGatewayTelemetry().trackFireAndForget(
+          AmplitudeEvents.AGENT_TURN_COMPLETED,
+          {
+            chat_id: chatId,
+            model: config.model,
+            provider: config.provider,
+            auth_type: config.authType ?? "apiKey",
+            steps: summary.steps,
+            tool_calls: summary.toolCalls,
+            duration_ms: durationMs,
+            prompt_tokens: billedUsage?.promptTokens ?? 0,
+            completion_tokens: billedUsage?.completionTokens ?? 0,
+            cache_read_tokens: billedUsage?.cacheReadTokens,
+            cache_write_tokens: billedUsage?.cacheWriteTokens,
+            compaction_runs: summary.compactionRuns,
+            compaction_skips: summary.compactionSkips,
+            stale_truncated: summary.staleResultsTruncated,
+            stale_inline: summary.staleResultsLeftInline,
+            recovery_fetches: summary.recoveryFetches,
+            redundant_recoveries: summary.redundantRecoveries,
+            redundant_recovery_rate: summary.redundantRecoveryRate,
+            peak_context_tokens: summary.peakContextTokens,
+            context_budget_tokens: summary.historyTokenBudget,
+            context_fill_ratio: summary.contextFillRatio,
+            plan_count: summary.planCount,
+            plan_total_steps: summary.planTotalSteps,
+            plan_completed_steps: summary.planCompletedSteps,
+            plan_completed: summary.planCompleted,
+          },
+        );
+      } catch (error) {
+        console.warn(
+          "[AgentService] Turn metrics recording failed:",
+          error instanceof Error ? error.message : error,
+        );
       }
 
       // 4.5. Yield done chunk to signal stream completion to frontend
@@ -5015,15 +5113,16 @@ ${last15.substring(0, 8_000)}`;
   private async loadPendingPlanState(chatId: string): Promise<{
     planCount: number;
     pendingSteps: number;
+    totalSteps: number;
+    completedSteps: number;
     nextStepDescription?: string;
   }> {
     try {
       const { getPlanService } = await import("./PlanService.js");
       const plans = await getPlanService().getActivePlansForChat(chatId);
-      const unfinished = plans.flatMap((plan) =>
-        plan.steps.filter(
-          (step) => step.status !== "completed" && step.status !== "skipped",
-        ),
+      const allSteps = plans.flatMap((plan) => plan.steps);
+      const unfinished = allSteps.filter(
+        (step) => step.status !== "completed" && step.status !== "skipped",
       );
       // Prefer the step the model said it was working on.
       const next =
@@ -5032,11 +5131,18 @@ ${last15.substring(0, 8_000)}`;
       return {
         planCount: plans.length,
         pendingSteps: unfinished.length,
+        totalSteps: allSteps.length,
+        completedSteps: allSteps.length - unfinished.length,
         nextStepDescription: next?.description,
       };
     } catch {
       // Best-effort: an unavailable PlanService must not change turn behavior.
-      return { planCount: 0, pendingSteps: 0 };
+      return {
+        planCount: 0,
+        pendingSteps: 0,
+        totalSteps: 0,
+        completedSteps: 0,
+      };
     }
   }
 

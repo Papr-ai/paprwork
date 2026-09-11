@@ -8,6 +8,7 @@
  */
 
 import { AsyncLocalStorage } from "async_hooks";
+import type { TurnMetrics } from "../../gateway/services/agent/turnMetrics.js";
 
 interface ToolContext {
   chatId: string;
@@ -15,6 +16,18 @@ interface ToolContext {
   delegationJobId?: string;
   /** Injected for agent jobs — APP_DB, PAPR_DB_*, JOB_DIR, etc. */
   jobEnv?: Record<string, string>;
+  /**
+   * Measurement sink for the turn a tool is running inside. Ambient because a
+   * tool cannot otherwise know which turn it belongs to. Absent for jobs and
+   * sub-agents, where recording is a no-op.
+   */
+  turnMetrics?: TurnMetrics;
+}
+
+interface ToolContextOptions {
+  delegationJobId?: string;
+  jobEnv?: Record<string, string>;
+  turnMetrics?: TurnMetrics;
 }
 
 const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
@@ -26,13 +39,14 @@ const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
 export function runWithToolContext<T>(
   chatId: string,
   fn: () => T | Promise<T>,
-  options?: { delegationJobId?: string; jobEnv?: Record<string, string> },
+  options?: ToolContextOptions,
 ): T | Promise<T> {
   return asyncLocalStorage.run(
     {
       chatId,
       delegationJobId: options?.delegationJobId,
       jobEnv: options?.jobEnv,
+      turnMetrics: options?.turnMetrics,
     },
     fn,
   );
@@ -44,12 +58,13 @@ export function runWithToolContext<T>(
  */
 export function setToolContext(
   chatId: string,
-  options?: { delegationJobId?: string; jobEnv?: Record<string, string> },
+  options?: ToolContextOptions,
 ): void {
   asyncLocalStorage.enterWith({
     chatId,
     delegationJobId: options?.delegationJobId,
     jobEnv: options?.jobEnv,
+    turnMetrics: options?.turnMetrics,
   });
 }
 
@@ -95,6 +110,15 @@ export function collectJobEnvFromProcess(
 export function getCurrentChatId(): string | null {
   const context = asyncLocalStorage.getStore();
   return context?.chatId ?? null;
+}
+
+/**
+ * Measurement sink for the turn the calling tool is running inside, when one
+ * exists. Null for jobs and sub-agents, where recording is a no-op.
+ */
+export function getCurrentTurnMetrics(): TurnMetrics | null {
+  const context = asyncLocalStorage.getStore();
+  return context?.turnMetrics ?? null;
 }
 
 /**

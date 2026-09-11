@@ -13,6 +13,7 @@ import type {
   StoredSummary,
   ChatMetadata,
 } from "./IStorageProvider";
+import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
 import { LocalStorageProvider } from "./LocalStorageProvider.js";
 import { PaprMemoryProvider, type PaprConfig } from "./PaprMemoryProvider.js";
 import { reportPaprQuotaError } from "../../../core/utils/paprQuota.js";
@@ -62,6 +63,15 @@ export class HybridStorageProvider implements IStorageProvider {
     toolCallId: string,
   ): Promise<string | null> {
     return this.local.readOffloadedToolResult(chatId, messageId, toolCallId);
+  }
+
+  /** Measurements stay local — they are not part of what syncs to memory. */
+  recordTurnMetrics(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void> {
+    return this.local.recordTurnMetrics(messageId, summary, durationMs);
   }
 
   // ===== Message Operations =====

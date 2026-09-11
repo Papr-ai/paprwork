@@ -56,6 +56,9 @@ export const AmplitudeEvents = {
   CHAT_RENAMED: "paprwork_chat_renamed",
   MODEL_CHANGED: "paprwork_model_changed",
 
+  /** One rollup per assistant turn — numeric only, no content. */
+  AGENT_TURN_COMPLETED: "paprwork_agent_turn_completed",
+
   // Tool Usage Events
   TOOL_CALLED: "paprwork_tool_called",
   BASH_COMMAND_EXECUTED: "paprwork_bash_command_executed",
@@ -233,6 +236,54 @@ export interface ToolCalledProperties extends BaseEventProperties {
   success: boolean;
   duration_ms: number;
   error_message?: string;
+}
+
+/**
+ * A finished assistant turn, as counts and ratios.
+ *
+ * A turn is the unit that costs money — every step within it re-sends the whole
+ * context — so this is the grain at which efficiency is comparable across
+ * users. `paprwork_tool_called` already covers individual calls, and at
+ * thousands of calls per chat it is the wrong grain for that question.
+ *
+ * Deliberately carries no message content, tool arguments, file paths, or tool
+ * names. Everything here is a number.
+ */
+export interface AgentTurnCompletedProperties extends BaseEventProperties {
+  chat_id: string;
+  model: string;
+  provider: string;
+  auth_type: string;
+
+  steps: number;
+  tool_calls: number;
+  duration_ms: number;
+
+  prompt_tokens: number;
+  completion_tokens: number;
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+
+  /** Truncation behaviour, so a policy change is measurable. */
+  compaction_runs: number;
+  compaction_skips: number;
+  stale_truncated: number;
+  stale_inline: number;
+
+  /** The recovery loop, directly. */
+  recovery_fetches: number;
+  redundant_recoveries: number;
+  redundant_recovery_rate: number | null;
+
+  peak_context_tokens: number;
+  context_budget_tokens: number;
+  context_fill_ratio: number | null;
+
+  /** Quality proxy: did the plan this turn was working on finish? */
+  plan_count: number;
+  plan_total_steps: number;
+  plan_completed_steps: number;
+  plan_completed: boolean | null;
 }
 
 export interface BashCommandProperties extends BaseEventProperties {
