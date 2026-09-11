@@ -445,7 +445,14 @@ describe("toolResultTruncation", () => {
     expect(truncated).toBe(longContent);
   });
 
-  test("get_full_tool_result stays full cross-turn (never memory_search 800 cap)", () => {
+  // Changed deliberately. This previously asserted `null` — exempt from truncation
+  // in every turn, forever. That made each recovery fetch permanently resident at
+  // full size, and the cost compounded with use: over six weeks it grew from 414
+  // calls / ~8K tokens to 7,559 calls / ~8M tokens, the second-largest tool payload
+  // in the corpus. It now stays full for the recent-turn window and then decays to
+  // the moderate limit, so the recovery still works in the turn that needs it.
+  // Mid-turn behaviour is unchanged: see tests/full-tool-result-retention.test.ts.
+  test("get_full_tool_result stays full for the recent-turn window, then decays", () => {
     const history = [
       { role: "user", content: "recover" },
       {
@@ -480,7 +487,9 @@ describe("toolResultTruncation", () => {
       isOrphan: false,
     });
 
-    expect(limit).toBeNull();
+    // Five user turns have passed, which is outside the four-turn window.
+    expect(limit).not.toBeNull();
+    expect(limit!).toBeLessThan(longContent.length);
 
     const truncated = truncateHistoryToolResult({
       toolName: "get_full_tool_result",
@@ -492,7 +501,23 @@ describe("toolResultTruncation", () => {
       isOrphan: false,
     });
 
-    expect(truncated).toBe(longContent);
+    expect(truncated.length).toBeLessThan(longContent.length);
+    // The decayed form names the tool that fetches it again, so nothing is stranded.
+    expect(truncated).toContain("get_full_tool_result");
+
+    // Inside the window it is still whole: the turn that fetched it can use it.
+    const inWindow = [history[0], history[1], { role: "user", content: "next" }];
+    expect(
+      truncateHistoryToolResult({
+        toolName: "get_full_tool_result",
+        toolCallId: "recover-1",
+        args: { toolCallId: "orig-1" },
+        resultStr: longContent,
+        history: inWindow,
+        messageIndex: 1,
+        isOrphan: false,
+      }),
+    ).toBe(longContent);
   });
 
   test("disableAllTruncation keeps bash results full cross-turn", () => {
