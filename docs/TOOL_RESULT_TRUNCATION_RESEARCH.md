@@ -191,19 +191,34 @@ progress. Independent of dollars, that:
 
 ## Part 4 — How comparable agents bound tool output
 
-| Agent | Inline bash budget | Compaction trigger | Over-budget handling |
-|---|---|---|---|
-| **Claude Code** | `bashOutputMaxChars` ~30,000 chars, raisable to 128,000; `BASH_MAX_OUTPUT_LENGTH` 30,000 default / 150,000 max | **~98% of context window** | spill to session file + preview |
-| **Codex CLI** | 10 KB or 256 lines; `tool_output_token_limit` 16,000 (8,000 recommended) | **configurable, hard cap 90%** | follow-up read |
-| **LCM** (research impl.) | extract to disk above 25,000 tokens | **`LCM_CONTEXT_THRESHOLD = 0.75`**, with `LCM_FRESH_TAIL_COUNT = 32` | DAG summary + `lcm_expand` |
-| **Paprwork today** | **400 chars once stale** | **none — every model call** | `get_full_tool_result` pointer |
+A tool result is bounded more than once, so a single number per agent is not comparable.
+The columns below separate the moments. Other agents publish a **fresh** cap — applied as
+output arrives — and have no distinct second pass; ours is where the 400 lives.
 
-Two things stand out, and the second is the bug:
+| Agent | Fresh cap, as output arrives | Re-cut later in the same turn | Compaction trigger | Recovering something cut |
+|---|---|---|---|---|
+| **Claude Code** | `BASH_MAX_OUTPUT_LENGTH` 30,000 chars (150,000 max); `bashOutputMaxChars` raisable to 128,000 | no separate stage | **~98% of context window** | spill to session file + preview |
+| **Codex CLI** | 10 KB or 256 lines; `tool_output_token_limit` 16,000 (8,000 recommended) | no separate stage | **configurable, hard cap 90%** | follow-up read |
+| **LCM** (research impl.) | extract to disk above 25,000 tokens | `LCM_FRESH_TAIL_COUNT = 32` messages protected | **`LCM_CONTEXT_THRESHOLD = 0.75`** | DAG summary + `lcm_expand` |
+| **Paprwork — before the fix** | 40,000 chars (`absoluteMaxChars`) | **400 chars once stale** | **none — every model call** | `get_full_tool_result` pointer |
+| **Paprwork — now** | 40,000 chars, unchanged | ≤4,000 stays whole; >4,000 → 400 | **70% of history budget** | `get_full_tool_result` + on-disk sidecar |
 
-1. **Our inline budget is 1–2 orders of magnitude tighter.** Codex's *most aggressive*
-   recommendation is 8,000 tokens; ours is 400 characters.
-2. **Nobody else compacts unconditionally.** Every system in this table gates on context
-   fill. Claude Code waits until 98%. We have no threshold at all.
+Two things stand out, and only the second is the bug:
+
+1. **Our fresh ceiling was never the outlier.** At 40,000 characters it is roughly a third
+   more generous than Claude Code's 30,000, and the 796-char result in Part 2 arrived
+   complete. An earlier draft of this table put our stale 400 in a column the other rows
+   filled with fresh caps, which read as "Claude Code admits 30,000 and we admit 400" —
+   untrue of a result the step it runs, and contradicted by Part 2's own walkthrough.
+2. **Nobody else compacts unconditionally.** Every system here gates on context fill.
+   Claude Code waits until 98%. We had no threshold at all.
+
+**Why the distinction decides the fix.** Read as a limits problem, the remedy is to raise
+400 across the board — which would not have stopped the loop, because the loop was caused
+by cutting *small* results at *low* fill, not by the ceiling being tight on large ones.
+Read as a trigger problem, the remedy is a pressure gate plus a floor below which cutting
+cannot pay. That is what shipped, and 55 of 57 results on the first instrumented turn were
+left inline as a result.
 
 Codex's own community has litigated the trade-off, and the pro-truncation argument is
 worth stating fairly — from r/codex: *"many people seem to assume that when/if this gets
