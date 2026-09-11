@@ -7,6 +7,8 @@
  * - HybridStorageProvider: Local cache + PAPR sync
  */
 
+import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
+
 /** File/context attached to a user message (UI + history). */
 export interface StoredMessageAttachment {
   id: string;
@@ -176,6 +178,19 @@ export interface IStorageProvider {
     messageId: string,
     toolCallId: string,
   ): Promise<string | null>;
+
+  /**
+   * Attach efficiency and quality measurements to a finished assistant turn.
+   *
+   * Only providers backed by the local database implement this — the metrics
+   * are numeric and are deliberately not part of the message content that syncs
+   * to a memory backend.
+   */
+  recordTurnMetrics?(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void>;
 
   // ===== Summary Operations =====
 
