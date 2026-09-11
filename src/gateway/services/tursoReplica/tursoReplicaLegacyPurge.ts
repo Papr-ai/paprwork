@@ -60,7 +60,14 @@ export async function purgeLegacySyncPathForReplicaRecord(
   const replica = getTursoReplicaService();
   await replica.close(dbPath);
 
-  const droppedTables = stripLegacySyncPathArtifacts(dbPath);
+  // This function only ever runs against `syncMode === "replica"` records, where
+  // `turso_cdc`, `turso_cdc_version`, and `turso_sync_last_change_id` are the engine's
+  // live bookkeeping rather than legacy debris. Dropping them here made every gateway
+  // startup discard the engine's sync cursor, and left a window in which something else
+  // could recreate one with the wrong shape — which aborts the sync worker.
+  const droppedTables = stripLegacySyncPathArtifacts(dbPath, {
+    preserveEngineTables: true,
+  });
   const clearedLegacySyncState = clearLegacyTursoSyncStateForDbPath(dbPath);
 
   let resetSidecars = false;
@@ -106,7 +113,12 @@ export async function purgeLegacySyncPathForAllReplicas(options?: {
 
   const results: ReplicaLegacyPurgeResult[] = [];
   for (const record of records) {
-    const legacyTables = listLegacySyncPathTablesForPath(record.localPath);
+    // Same scope as the purge itself. Without this the engine's own tables always
+    // counted as "legacy present", so this guard never short-circuited and a healthy
+    // replica was closed, purged, and re-pulled on every single startup.
+    const legacyTables = listLegacySyncPathTablesForPath(record.localPath, {
+      preserveEngineTables: true,
+    });
     const needsSidecarRepair = detectReplicaSidecarWedge(record.localPath);
     const hasLegacyState = hasLegacyTursoSyncStateForDbPath(record.localPath);
 
