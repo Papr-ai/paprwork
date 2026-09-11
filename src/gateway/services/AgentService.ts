@@ -103,6 +103,7 @@ import {
   runPiAiWrapUpContinuation,
   shouldRequestWrapUpSummary,
 } from "./agent/wrapUpContinuation.js";
+import { addTurnUsage } from "./agent/turnUsageAccounting.js";
 import { RATE_LIMIT_EXHAUSTED_ERROR_CODE } from "../utils/providerRateLimitRetry.js";
 import { streamCursorAgentTurn } from "./providers/cursorAgentStream.js";
 import {
@@ -601,6 +602,12 @@ export class AgentService {
     let toolResults: ToolResultEvent[] = [];
     let sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
     let tokenUsage: StoredTokenUsage | undefined;
+    /**
+     * Totals from streams of this turn that have already finished. Each stream
+     * reports cumulatively from zero, so a continuation's figures have to be added
+     * to this rather than replacing what came before. See turnUsageAccounting.ts.
+     */
+    let committedUsage: StoredTokenUsage | undefined;
     let piAiContextTokens = 0; // For pi-ai: last step's actual context window size
     let lastCacheReadTokens = 0;
     let lastCacheWriteTokens = 0;
@@ -2205,7 +2212,7 @@ export class AgentService {
         if (next.value.type === "done" || next.value.type === "step-usage") {
           const payload = next.value.payload as any;
           if (payload?.usage) {
-            tokenUsage = {
+            const streamUsage: StoredTokenUsage = {
               promptTokens: payload.usage.promptTokens || 0,
               completionTokens: payload.usage.completionTokens || 0,
               totalTokens: payload.usage.totalTokens || 0,
@@ -2214,6 +2221,9 @@ export class AgentService {
               cacheWriteTokens:
                 payload.usage.cacheWriteTokens ?? lastCacheWriteTokens,
             };
+            // This value is the running stream's total, so it supersedes the
+            // previous reading from the *same* stream and adds to earlier ones.
+            tokenUsage = addTurnUsage(committedUsage, streamUsage);
             // contextTokens = actual context window size from pi-ai (last step's
             // input + cacheRead + cacheWrite). Separate from billing totals.
             if (payload.usage.contextTokens) {
@@ -2416,6 +2426,10 @@ export class AgentService {
             })}`,
           );
 
+          // A continuation is a fresh stream that reports from zero, so close off
+          // what this turn has already spent before it starts.
+          committedUsage = tokenUsage;
+
           try {
             const continuationIterator = runAiSdkPlanContinuation({
               messages: continuationMessages,
@@ -2503,6 +2517,10 @@ export class AgentService {
           chatId,
           timestamp: new Date().toISOString(),
         } as StreamChunk & { chatId: string };
+
+        // Same as the plan continuation: the wrap-up runs a second stream, on
+        // either route, so its totals have to add to this turn rather than replace.
+        committedUsage = tokenUsage;
 
         try {
           let wrapUpState:
