@@ -12,6 +12,7 @@ import type {
   ChatMetadata,
   ChatSummarySnapshot,
 } from "./storage/IStorageProvider.js";
+import type { TurnMetricsSummary } from "./agent/turnMetrics.js";
 import { LocalStorageProvider } from "./storage/LocalStorageProvider.js";
 import { PaprMemoryProvider } from "./storage/PaprMemoryProvider.js";
 import { HybridStorageProvider } from "./storage/HybridStorageProvider.js";
@@ -139,6 +140,19 @@ export class StorageManager {
   async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
     const provider = this.ensureInitialized();
     await provider.saveMessage(chatId, message);
+  }
+
+  /**
+   * Attach turn measurements to a saved assistant message. A no-op on
+   * providers with no local database to write them to.
+   */
+  async recordTurnMetrics(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void> {
+    const provider = this.ensureInitialized();
+    await provider.recordTurnMetrics?.(messageId, summary, durationMs);
   }
 
   /**

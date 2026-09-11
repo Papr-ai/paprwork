@@ -296,6 +296,8 @@ function isToolResultMessage(msg: any): boolean {
  * @param opts - Compaction options
  */
 export interface CompactStats {
+  /** True when the pressure gate declined to run — distinct from running and cutting nothing. */
+  skipped: boolean;
   totalBatches: number;
   freshBatches: number;
   staleBatches: number;
@@ -487,6 +489,7 @@ export function compactStaleToolResults(
   const bytesBefore = approxBytes(messages);
   const batchStarts = findToolBatchBoundaries(messages);
   const stats: CompactStats = {
+    skipped: false,
     totalBatches: batchStarts.length,
     freshBatches: 0,
     staleBatches: 0,
@@ -499,7 +502,7 @@ export function compactStaleToolResults(
 
   if (!truncationSettings.midTurnCompactionEnabled) {
     console.log(`[compactToolResults] skipped (mid-turn compaction off)`);
-    return stats;
+    return { ...stats, skipped: true };
   }
 
   // Nothing to save while the context still fits the budget comfortably, and
@@ -518,7 +521,7 @@ export function compactStaleToolResults(
           `(${Math.round((estimatedTokens / opts.historyTokenBudget) * 100)}% full, ` +
           `compaction starts at ${Math.round(COMPACTION_PRESSURE_RATIO * 100)}%)`,
       );
-      return stats;
+      return { ...stats, skipped: true };
     }
   }
 
