@@ -184,6 +184,112 @@ console.log("\n== both defects in one file ==");
   check("app table untouched", tableNames(dbPath).includes("notes"));
 }
 
+console.log("\n== legacy vs live classification of the engine's tables ==");
+{
+  const {
+    isLegacySyncPathTable,
+    isReplicaEngineOwnedTable,
+    listLegacySyncPathTablesForPath,
+    stripLegacySyncPathArtifacts,
+  } = await import("../dist/gateway/services/legacyCdcArtifacts.js");
+
+  check(
+    "engine-owned set covers the three live tables",
+    isReplicaEngineOwnedTable("turso_cdc") &&
+      isReplicaEngineOwnedTable("turso_cdc_version") &&
+      isReplicaEngineOwnedTable("turso_sync_last_change_id"),
+  );
+  check(
+    "genuine legacy names are not engine-owned",
+    !isReplicaEngineOwnedTable("turso_sync_log") &&
+      !isReplicaEngineOwnedTable("_papr_sync_log") &&
+      !isReplicaEngineOwnedTable("_papr_sync_meta"),
+  );
+
+  // Default (pre-cutover) reading is unchanged, so cutover and provision still strip.
+  check(
+    "without the option they still read as legacy (cutover behaviour preserved)",
+    isLegacySyncPathTable("turso_cdc") &&
+      isLegacySyncPathTable("turso_sync_last_change_id"),
+  );
+  check(
+    "with preserveEngineTables they are live",
+    !isLegacySyncPathTable("turso_cdc", { preserveEngineTables: true }) &&
+      !isLegacySyncPathTable("turso_sync_last_change_id", {
+        preserveEngineTables: true,
+      }),
+  );
+  check(
+    "preserveEngineTables does not rescue real legacy debris",
+    isLegacySyncPathTable("_papr_sync_log", { preserveEngineTables: true }) &&
+      isLegacySyncPathTable("turso_sync_log", { preserveEngineTables: true }) &&
+      isLegacySyncPathTable("_papr_sync_meta", { preserveEngineTables: true }),
+  );
+  check(
+    "migration ledgers are never legacy either way",
+    !isLegacySyncPathTable("schema_migrations", { preserveEngineTables: true }) &&
+      !isLegacySyncPathTable("_papr_schema_migrations"),
+  );
+
+  // The startup purge's short-circuit: a healthy replica must look clean, or it gets
+  // closed, purged, and re-pulled on every launch.
+  const healthyReplica = makeDb((db) => {
+    db.exec(
+      "CREATE TABLE turso_sync_last_change_id " +
+        "(client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)",
+    );
+    db.exec("CREATE TABLE turso_cdc (change_id INTEGER PRIMARY KEY AUTOINCREMENT)");
+    db.exec("CREATE TABLE turso_cdc_version (version TEXT PRIMARY KEY)");
+    db.exec("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT)");
+    db.exec("INSERT INTO books VALUES ('b1', 'Dune')");
+  });
+
+  check(
+    "healthy replica reports no legacy tables (purge short-circuits)",
+    listLegacySyncPathTablesForPath(healthyReplica, { preserveEngineTables: true })
+      .length === 0,
+  );
+  check(
+    "…and would have reported three without the option (the old behaviour)",
+    listLegacySyncPathTablesForPath(healthyReplica).length === 3,
+  );
+  check(
+    "strip is a no-op on a healthy replica",
+    stripLegacySyncPathArtifacts(healthyReplica, { preserveEngineTables: true })
+      .length === 0,
+  );
+  check(
+    "engine tables survive the startup purge",
+    ["turso_cdc", "turso_cdc_version", "turso_sync_last_change_id"].every((t) =>
+      tableNames(healthyReplica).includes(t),
+    ),
+  );
+
+  // Real debris alongside live engine tables: drop the debris, keep the engine's.
+  const mixed = makeDb((db) => {
+    db.exec(
+      "CREATE TABLE turso_sync_last_change_id " +
+        "(client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)",
+    );
+    db.exec("CREATE TABLE _papr_sync_log (id TEXT, table_name TEXT)");
+    db.exec("CREATE TABLE _papr_sync_meta (id TEXT)");
+    db.exec("CREATE TABLE books (id TEXT PRIMARY KEY)");
+  });
+  const droppedMixed = stripLegacySyncPathArtifacts(mixed, {
+    preserveEngineTables: true,
+  });
+  check(
+    "drops the legacy tables",
+    droppedMixed.includes("_papr_sync_log") && droppedMixed.includes("_papr_sync_meta"),
+  );
+  check(
+    "keeps the engine table",
+    !droppedMixed.includes("turso_sync_last_change_id") &&
+      tableNames(mixed).includes("turso_sync_last_change_id"),
+  );
+  check("keeps app tables", tableNames(mixed).includes("books"));
+}
+
 fs.rmSync(tmpRoot, { recursive: true, force: true });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);
