@@ -11,6 +11,17 @@ import { CHAT_MODELS } from "../constants/models";
  * both shapes are matched here.
  */
 export function isProviderAuthRejection(rawError: string): boolean {
+  // A spent allowance can share a status or error type with auth failure.
+  // Rewriting those as "Invalid API key" is what sent people to re-create a
+  // key that could not help.
+  if (
+    /spend limit|usage limit|credit balance is empty|retrying won't help/i.test(
+      rawError,
+    )
+  ) {
+    return false;
+  }
+
   return (
     rawError.includes("Invalid API key") ||
     rawError.includes("invalid x-api-key") ||

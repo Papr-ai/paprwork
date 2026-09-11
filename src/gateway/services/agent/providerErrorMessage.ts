@@ -64,12 +64,17 @@ export function extractProviderErrorPayload(
 /**
  * A spend cap is not a rate limit.
  *
- * Anthropic reports an exhausted usage limit as `400 invalid_request_error`,
- * not `429`, so the rate-limit branch never sees it and "wait a moment and try
- * again" would be wrong advice — the limit resets on a date, and waiting will
- * not help. It is not `402` either: the account has credit, someone has capped
- * how much of it this workspace may spend. That distinction decides where the
- * user has to go, so it is worth detecting on its own.
+ * Anthropic reports an exhausted usage limit as `400 invalid_request_error` on
+ * some paths and as `429 rate_limit_error` on others, so the status code
+ * cannot tell a spend cap from a burst limit — only the sentence can. "Wait a
+ * moment and try again" is wrong advice for a limit that resets on a date. It
+ * is not `402` either: the account has credit, someone has capped how much of
+ * it this workspace may spend. That distinction decides where the user has to
+ * go, so it is worth detecting on its own.
+ *
+ * Callers must consult this — or `detectProviderQuotaExhaustion`, which also
+ * defers to transient markers and carries the reset time — *before* branching
+ * on the status code, or a 429 branch will answer for both conditions.
  */
 export function isUsageLimitError(payload: ProviderErrorPayload): boolean {
   const message = payload.message?.toLowerCase();
