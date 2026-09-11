@@ -24,7 +24,7 @@ import {
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
-import type { HistoryTrimBounds } from "../agent/midTurnContextTrim.js";
+import type { MidTurnTrimOpts } from "../agent/midTurnContextTrim.js";
 import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
@@ -404,7 +404,8 @@ export async function* createPiCodexStreamWithToolLoop(
   >,
   apiKeys: string[],
   maxSteps: number,
-  historyTrimBounds?: HistoryTrimBounds,
+  /** Bounds plus `maxTokens` — the model-aware budget this turn must stay inside. */
+  historyTrimBounds?: MidTurnTrimOpts,
   toolContext?: {
     chatId: string;
     jobEnv?: Record<string, string>;

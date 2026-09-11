@@ -1361,7 +1361,8 @@ export class AgentService {
       );
 
       // Pre-flight trim: use model-aware cap (not global 300K) so Groq/Ollama don't overflow.
-      compactStaleToolResults(messages);
+      // The same budget gates compaction, which does nothing until the context is under pressure.
+      compactStaleToolResults(messages, { historyTokenBudget });
       const preFlightTrim = trimOldestHistoryTurns(messages, {
         ...historyTrimBounds,
         maxTokens: historyTokenBudget,
@@ -1499,7 +1500,7 @@ export class AgentService {
               content: `[SYSTEM NOTE: You've made ${stepNumber} tool calls out of ${maxSteps} maximum. Please complete your current task and provide a final response soon. Avoid unnecessary tool calls.]`,
             };
             const msgs = [...stepOptions.messages, warningMessage];
-            compactStaleToolResults(msgs);
+            compactStaleToolResults(msgs, { historyTokenBudget });
             trimOldestHistoryTurns(msgs, {
               ...historyTrimBounds,
               maxTokens: historyTokenBudget,
@@ -1508,7 +1509,7 @@ export class AgentService {
           }
 
           const msgs = [...stepOptions.messages];
-          compactStaleToolResults(msgs);
+          compactStaleToolResults(msgs, { historyTokenBudget });
           trimOldestHistoryTurns(msgs, {
             ...historyTrimBounds,
             maxTokens: historyTokenBudget,
@@ -1912,12 +1913,17 @@ export class AgentService {
         }
         console.log(`${"=".repeat(100)}\n`);
 
-        const piHistoryTrimBounds = computeHistoryTrimBounds(
-          (piContext.messages ?? []) as Array<{
-            role?: unknown;
-            content?: unknown;
-          }>,
-        );
+        const piHistoryTrimBounds = {
+          ...computeHistoryTrimBounds(
+            (piContext.messages ?? []) as Array<{
+              role?: unknown;
+              content?: unknown;
+            }>,
+          ),
+          // Same model-aware budget the AI SDK path trims to, so a user cap of
+          // 200K means 200K on the OAuth route too.
+          maxTokens: historyTokenBudget,
+        };
 
         const reasoningLevel = (config.reasoning?.effort ?? "medium") as
           | "minimal"
