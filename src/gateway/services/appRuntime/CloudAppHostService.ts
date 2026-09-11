@@ -12,6 +12,7 @@ import type {
   TursoCredentialsProvider,
 } from "./types.js";
 import type { AppFileRow } from "../appFiles/appFilesSchema.js";
+import type { FilesDb } from "../appFiles/AppFilesService.js";
 import { TursoDbAdapter } from "./TursoDbAdapter.js";
 import { getJobEventHub } from "../JobEventHub.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
@@ -248,6 +249,17 @@ function cloudHostCacheTimingParts(perf: {
   };
 }
 
+/**
+ * Ceiling for uploads initiated from a published cloud app.
+ *
+ * Desktop uploads are unbounded because the uploader owns the storage. On the
+ * cloud host the ticket is minted with the publisher's credential, so an
+ * authorized team member spends the owner's quota — `canWrite` answers who may
+ * upload but nothing caps how much. Rejecting before the ticket is minted keeps
+ * the check cheap and server-side.
+ */
+const CLOUD_UPLOAD_MAX_BYTES = 100 * 1024 * 1024;
+
 export class CloudAppHostService {
   private readonly turso: TursoDbAdapter;
   private readonly auth = new CloudAppHostAuthService();
@@ -357,6 +369,14 @@ export class CloudAppHostService {
     // references a file 404s on apps.papr.ai.
     app.post("/api/files/url", (req, res) => void this.handleFileUrl(req, res));
     app.get("/api/files", (req, res) => void this.handleFileList(req, res));
+    // Writes are gated by access.canWrite — the same check /api/db/write uses —
+    // so a read-only link still cannot upload while a team member can.
+    app.post("/api/files/ticket", (req, res) =>
+      void this.handleFileTicket(req, res),
+    );
+    app.post("/api/files/commit", (req, res) =>
+      void this.handleFileCommit(req, res),
+    );
 
     app.get("/:namespaceId/:slug/__papr__/app-revision.json", (req, res) => {
       if (isReservedCloudPathSegment(req.params.namespaceId)) {
@@ -805,6 +825,199 @@ export class CloudAppHostService {
             row.object_key.includes(`/users/${runtimeAuth.externalUserId}/`)),
       );
       res.json({ files: visible });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  /**
+   * Back AppFilesService with Turso instead of a local SQLite handle.
+   *
+   * Every statement goes through the same adapter `/api/db/*` uses, so per-user
+   * database isolation is inherited rather than reimplemented: `tursoDbRequest`
+   * supplies both the publisher and the calling user, and the routing layer
+   * picks the shared or the per-user database off the registry record. The
+   * files layer never has to know which mode a database is in.
+   */
+  private cloudFilesDb(
+    access: AppAccessContext,
+    runtimeAuth: AppRuntimeRouteAuth,
+    appId: string,
+    config: AppDataSourcesFile,
+    sourceId: string | undefined,
+  ): FilesDb {
+    const base = {
+      orgId: access.orgId,
+      namespaceId: access.namespaceId,
+      ...this.tursoDbRequest(access, runtimeAuth),
+      runtimeAuth,
+      config,
+      sourceId,
+    };
+    return {
+      exec: async (sql: string) => {
+        // ensureSchema ships multi-statement DDL; Turso exec takes one script.
+        await this.turso.exec({ ...base, appId, sql });
+      },
+      run: async (sql: string, params?: unknown[]) => {
+        const result = await this.turso.write({ ...base, appId, sql, params });
+        return { changes: result.changes ?? 0 };
+      },
+      all: async <T,>(sql: string, params?: unknown[]) => {
+        const result = await this.turso.query({ ...base, sql, params });
+        return (result?.rows ?? []) as unknown as T[];
+      },
+    };
+  }
+
+  /**
+   * Shared preamble for cloud file writes: authorize, rate-limit, and build a
+   * Turso-backed FilesDb. Returns null when it has already answered the request.
+   */
+  private async resolveFileWriteContext(
+    req: Request,
+    res: Response,
+    requestedAppId: string | undefined,
+    sourceId: string | undefined,
+  ): Promise<{ db: FilesDb; appId: string } | null> {
+    if (!this.enforceDbRateLimit(req, res, "write")) return null;
+
+    const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
+    if (!ctx) return null;
+    const { runtimeAuth, access, appId } = ctx;
+
+    if (!access.canWrite) {
+      if (!access.canRead) {
+        await this.respondAccessDenied(req, res, runtimeAuth);
+      } else {
+        res.status(403).json({ error: "Write not allowed for this link" });
+      }
+      return null;
+    }
+
+    const config = await this.loadDataSources(runtimeAuth);
+    return {
+      db: this.cloudFilesDb(access, runtimeAuth, appId, config, sourceId),
+      appId,
+    };
+  }
+
+  /**
+   * POST /api/files/ticket — mint a resumable upload ticket from a published app.
+   *
+   * The bytes never transit this process: the browser PUTs straight to object
+   * storage, exactly as on desktop. What differs is only who is allowed to ask,
+   * which `resolveFileWriteContext` settles before any storage call is made.
+   *
+   * The size ceiling exists because the ticket is minted with the publisher's
+   * credential — an authorized team member uploads into the owner's quota, so
+   * "who" (canWrite) is not by itself a sufficient answer.
+   */
+  private async handleFileTicket(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        appId: requestedAppId,
+        sourceId,
+        fileName,
+        sizeBytes,
+        mime,
+        scope,
+        fingerprint,
+      } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        fileName?: string;
+        sizeBytes?: number;
+        mime?: string | null;
+        scope?: "app" | "user";
+        fingerprint?: string;
+      };
+
+      if (!fileName || typeof sizeBytes !== "number" || !fingerprint) {
+        res
+          .status(400)
+          .json({ error: "fileName, sizeBytes and fingerprint are required" });
+        return;
+      }
+      if (sizeBytes > CLOUD_UPLOAD_MAX_BYTES) {
+        res.status(413).json({
+          error: `File exceeds the ${Math.round(
+            CLOUD_UPLOAD_MAX_BYTES / 1024 / 1024,
+          )} MB limit for uploads from a published app`,
+        });
+        return;
+      }
+
+      const ctx = await this.resolveFileWriteContext(
+        req,
+        res,
+        requestedAppId,
+        sourceId,
+      );
+      if (!ctx) return;
+
+      const { ensureSchema, createBrowserTicket } = await import(
+        "../appFiles/AppFilesService.js"
+      );
+      await ensureSchema(ctx.db);
+      res.json(
+        await createBrowserTicket(ctx.db, {
+          appId: ctx.appId,
+          fileName,
+          sizeBytes,
+          mime,
+          scope,
+          fingerprint,
+        }),
+      );
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  }
+
+  /** POST /api/files/commit — verify a published-app upload once bytes land. */
+  private async handleFileCommit(req: Request, res: Response): Promise<void> {
+    try {
+      const {
+        appId: requestedAppId,
+        sourceId,
+        id,
+        objectKey,
+        sizeBytes,
+      } = req.body as {
+        appId?: string;
+        sourceId?: string;
+        id?: string;
+        objectKey?: string;
+        sizeBytes?: number;
+      };
+
+      if (!id || !objectKey || typeof sizeBytes !== "number") {
+        res
+          .status(400)
+          .json({ error: "id, objectKey and sizeBytes are required" });
+        return;
+      }
+
+      const ctx = await this.resolveFileWriteContext(
+        req,
+        res,
+        requestedAppId,
+        sourceId,
+      );
+      if (!ctx) return;
+
+      const { commitBrowserUpload } = await import(
+        "../appFiles/AppFilesService.js"
+      );
+      res.json(
+        await commitBrowserUpload(ctx.db, {
+          appId: ctx.appId,
+          id,
+          objectKey,
+          sizeBytes,
+        }),
+      );
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
     }

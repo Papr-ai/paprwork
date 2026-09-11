@@ -100,6 +100,7 @@ const PROXYABLE_API_PREFIXES = [
   "/api/access",
   "/api/members",
   "/api/db/",
+  "/api/files",
   "/api/bash/run",
   "/api/app/backend/",
   "/api/jobs/list",
@@ -139,6 +140,7 @@ async function resolveCloudAppId(ctx: CloudRouteContext): Promise<string | undef
 function apiPathNeedsAppId(path: string): boolean {
   return (
     path.startsWith("/api/db/") ||
+    path.startsWith("/api/files") ||
     path.startsWith("/api/app/backend/") ||
     path.startsWith("/api/jobs/") ||
     path.startsWith("/api/app-agent/")
