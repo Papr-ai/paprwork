@@ -11,6 +11,7 @@ import type { DbRouter } from "../appRuntime/DbRouter.js";
 import { ensureLocalDbChangeLogReady } from "../tursoSyncBridgeCore.js";
 import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
 import { assertReplaySafeRowSql } from "./replaySafeSql.js";
+import { assertNoEngineOwnedTableWrite } from "../appRuntime/engineOwnedTables.js";
 import { shouldUseTursoReplicaForSource, writeLinkedDbViaTursoReplica, writeLinkedDbBatchViaTursoReplica, execLinkedDbViaTursoReplica } from "../tursoReplica/tursoReplicaRouting.js";
 
 export interface LocalFirstWriteResult extends WriteResult {
@@ -41,6 +42,7 @@ export async function writeLinkedDbRowLocalFirst(
   params?: unknown[],
 ): Promise<LocalFirstWriteResult> {
   assertReplaySafeRowSql(sql);
+  assertNoEngineOwnedTableWrite(sql);
 
   if (shouldUseTursoReplicaForSource(source)) {
     const replicaResult = await writeLinkedDbViaTursoReplica(source, sql, params);
@@ -83,6 +85,7 @@ export async function writeLinkedDbBatchAtomic(
 ): Promise<{ source: AppDataSource; results: WriteResult[] }> {
   for (const stmt of statements) {
     assertReplaySafeRowSql(stmt.sql);
+    assertNoEngineOwnedTableWrite(stmt.sql);
   }
 
   if (shouldUseTursoReplicaForSource(source)) {
@@ -125,6 +128,11 @@ export async function execLinkedDbSchemaLocalFirst(
   source: AppDataSource,
   sql: string,
 ): Promise<{ cloudSyncScheduled: boolean; pendingPush?: boolean }> {
+  // Before the replica branch: the non-replica path below has no DDL policy of its own,
+  // and `CREATE TABLE IF NOT EXISTS turso_sync_last_change_id (...)` is the exact
+  // statement that plants an index-free engine table and aborts the sync worker.
+  assertNoEngineOwnedTableWrite(sql);
+
   if (shouldUseTursoReplicaForSource(source)) {
     const { assertReplicaDdlAllowed } = await import(
       "../tursoReplica/replicaSchemaPolicy.js"
