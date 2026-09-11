@@ -4,21 +4,41 @@
 **Source:** active namespace `chats.db` (`~/.paprwork-v2/orgs/Y8D4H7Yp3Z/namespaces/85ZIB7mD1V/chats.db`, 3.2 GB)
 **Status:** Part 1 (cost structure) and Part 2 (`get_full_tool_result`) complete. Part 4 lists what remains.
 
+> **Figures revised 2026-09-11 after CLAUDE.md Issue 90.** The first edition of this
+> document read costs that had been computed by billing each cached token twice — the
+> provider's reported prompt total was charged at full price and then the cache read/write
+> surcharges were added on top of it. Every dollar figure in Part 1 has been recomputed
+> from `messages.cost` after the backfill
+> (`scripts/recompute-message-costs.ts`). The direction of every conclusion is unchanged;
+> the magnitudes are sharper. Turn and chat counts moved slightly because a few turns
+> landed after the original snapshot. Token counts were never affected.
+>
+> One claim was **wrong, not merely imprecise**, and is corrected below: the original
+> reconciliation was read as confirming `CostCalculation.ts`. It could not, because the
+> estimate and the recorded figure were produced by the same faulty arithmetic.
+>
+> **Read every dollar figure here as a lower bound.** A second defect, found while
+> revising this document, records each turn as its *final step* rather than the sum of its
+> billed requests — see "Measurement blind spot 2". It understates multi-step turns by
+> roughly their step count, so it runs opposite to the double-count and the two partly
+> cancelled. That is not yet fixed.
+
 ---
 
 ## Summary
 
-$3,343.83 across 1,321 assistant turns in 320 chats. Three facts shape everything that
+$3,017.76 across 1,327 assistant turns in 321 chats. Three facts shape everything that
 follows:
 
-1. **85% of spend is context handling, not generation.** Cache reads alone are 58% of
-   opus-5 spend; output tokens are 6%. The unit of cost is therefore *a step*, because
-   every step re-sends the whole context — not *a payload*, which is what truncation
-   optimizes for.
-2. **Spend is extremely concentrated.** 10 of 320 chats account for 72% of it.
+1. **94% of spend is context handling, not generation.** Cache reads alone are 64% of
+   opus-5 spend; output tokens are 6%, and genuinely new input is 0.1%. The unit of cost
+   is therefore *a step*, because every step re-sends the whole context — not *a payload*,
+   which is what truncation optimizes for.
+2. **Spend is extremely concentrated.** 10 of 321 chats account for 70% of it.
 3. **13.5% of turns recorded no cost at all**, so the recorded total understates reality —
    and understates it specifically on the expensive turns. Fixed in
-   [PR #164](https://github.com/Papr-ai/paprwork/pull/164).
+   [PR #164](https://github.com/Papr-ai/paprwork/pull/164). The turns already affected
+   cannot be repaired: their prompt totals were overwritten, so the tokens are gone.
 
 The first completed deep-dive, `get_full_tool_result`, found that **98% of its 7,561
 successful calls recovered a tool result the model already had in full during that same
@@ -32,74 +52,105 @@ redundant cache reads.
 
 ### By model
 
-| Model | Turns | Recorded | Fresh in | Cache read | Output | Turns w/ no cost |
+| Model | Turns | Recorded | Prompt total | Cache read | Output | Turns w/ no cost |
 |---|---:|---:|---:|---:|---:|---:|
-| `claude-opus-5` | 908 | **$2,608.13** | 48.5M | 3,044.9M | 6.11M | 122 |
-| `claude-sonnet-5` | 163 | $202.56 | 7.0M | 337.2M | 1.14M | 10 |
+| `claude-opus-5` | 914 | **$2,370.78** | 49.8M | 3,045.8M | 6.12M | 123 |
+| `claude-sonnet-5` | 163 | $181.51 | 7.0M | 337.2M | 1.14M | 10 |
 | `claude-fable-5` | 37 | $174.73 | 0.0M | 94.2M | 0.29M | 5 |
-| `gpt-5-6-sol-high` | 43 | $109.38 | 6.5M | 130.9M | 0.38M | 7 |
-| `gpt-5-6-sol` | 49 | $75.58 | 4.9M | 90.3M | 0.19M | 10 |
-| `claude-fable-5-1` | 17 | $71.99 | 6.3M | 6.3M | 0.04M | 3 |
+| `gpt-5-6-sol-high` | 43 | $108.76 | 6.5M | 130.9M | 0.38M | 7 |
+| `gpt-5-6-sol` | 49 | $75.46 | 4.9M | 90.3M | 0.19M | 10 |
 | `gpt-5.6-sol` | 50 | $57.21 | 4.8M | 54.9M | 0.19M | 4 |
-| `claude-sonnet-4-6` | 35 | $24.09 | 0.8M | 28.9M | 0.24M | 9 |
-| others (4 models) | 19 | $20.16 | 0.2M | 5.1M | 0.06M | 8 |
-| **Total** | **1,321** | **$3,343.83** | **79.1M** | **3,792.7M** | **8.64M** | **178** |
+| `claude-sonnet-4-6` | 35 | $21.79 | 0.8M | 28.9M | 0.24M | 9 |
+| `claude-opus-4-6` | 9 | $18.65 | 0.1M | 5.0M | 0.05M | 2 |
+| `claude-fable-5-1` | 17 | $8.72 | 6.3M | 6.3M | 0.04M | 3 |
+| others (3 models) | 10 | $0.15 | 0.1M | 0.1M | 0.01M | 6 |
+| **Total** | **1,327** | **$3,017.76** | **80.4M** | **3,793.6M** | **8.65M** | **179** |
 
-`claude-opus-5` is 69% of turns and **78% of spend**.
+`claude-opus-5` is 69% of turns and **79% of spend**.
+
+The "Prompt total" column is the provider's reported figure, which *includes* the cached
+portion — it is not new input. That distinction is what the old cost arithmetic got wrong,
+and it is why `claude-fable-5-1` fell from $71.99 to $8.72: its prompt total was almost
+entirely cache reads, the cheapest token there is, being re-billed at full price.
 
 ### The token mix is the story
 
-| | Tokens | Ratio to fresh input |
+| | Tokens | Ratio to new input |
 |---|---:|---:|
-| Fresh input | 79.1M | 1× |
-| **Cache read** | **3,792.7M** | **47.9×** |
-| Cache write | 135.6M | 1.7× |
-| Output | 8.64M | 0.1× |
+| Genuinely new input | 16.7M | 1× |
+| **Cache read** | **3,793.6M** | **227×** |
+| Cache write | 135.9M | 8.1× |
+| Output | 8.65M | 0.5× |
 
-For every token of genuinely new input, we re-read 48 tokens of context we had already
-sent. That is not a defect by itself — it is what prompt caching is *for*, and a 48:1
-read ratio means caching is working. It does mean the cost curve is driven almost entirely
-by **how many times context is re-sent**, i.e. step count.
+"Genuinely new input" is the prompt total minus its cached portion, computed per row —
+not the prompt column summed, which double-counts every cached token. For every token of
+genuinely new input we re-read **227** tokens of context we had already sent. That is not
+a defect by itself — it is what prompt caching is *for*, and a ratio that high means
+caching is working. It does mean the cost curve is driven almost entirely by **how many
+times context is re-sent**, i.e. step count.
 
-### The cost decomposition reconciles exactly
+This figure is a lower bound. Issue 85 overwrote the prompt totals on 1,291 rows in this
+window, and on those rows the cached portion cannot be subtracted, so their new-input
+share is whatever the corrupted total happened to be. The cache read and write columns
+accumulated correctly and are unaffected.
+
+### The cost decomposition
 
 Applying list prices to `claude-opus-5` ($5/M input, $0.50/M cache read at the 10%
 multiplier, $6.25/M cache write at 1.25×, $25/M output):
 
 | Component | Estimated | Share |
 |---|---:|---:|
-| Fresh input | $243 | 9% |
-| **Cache read** | **$1,522** | **58%** |
-| Cache write | $690 | 26% |
+| Genuinely new input | $2 | 0.1% |
+| **Cache read** | **$1,523** | **64%** |
+| Cache write | $692 | 29% |
 | Output | $153 | 6% |
-| **Sum** | **$2,608** | |
-| **Recorded in DB** | **$2,608** | ✅ exact |
+| **Sum** | **$2,371** | |
+| **Recorded in DB** | **$2,371** | ✅ exact |
 
-The estimate matching the recorded figure to the dollar confirms both the pricing model
-and `CostCalculation.ts`. The conclusion follows directly: **84% of spend (cache read +
-write) is the cost of carrying context between steps.** Optimizing payload *size* attacks
-the 9% column. Optimizing *step count* attacks the 84%.
+**The conclusion: 93% of spend (cache read + write) is the cost of carrying context
+between steps.** Optimizing payload *size* attacks the 0.1% column. Optimizing *step
+count* attacks the 93%. This is the single most important framing for any future cost
+work here, and the correction has made it starker: new input is not a tenth of the bill,
+it is a rounding error.
 
-This is the single most important framing for any future cost work here.
+#### A reconciliation that confirmed nothing
+
+The first edition of this document reported the same "✅ exact" match and drew the wrong
+inference from it — that the match "confirms both the pricing model and
+`CostCalculation.ts`." It confirmed neither. Both sides of that comparison were computed
+by the same faulty arithmetic: the estimate charged the summed prompt column at full
+price, and so did the code. Agreement between two applications of one formula says
+nothing about whether the formula is right.
+
+What made the error visible was not a reconciliation but an **inequality**: a prompt total
+of 48.5M cannot be "fresh input" when the same rows report 3,155M cached tokens that the
+provider includes *inside* that total. The figures above still reconcile exactly, but now
+the estimate subtracts the cached portion per row, so the match is a genuine check rather
+than a restatement.
+
+The general lesson is worth keeping: a cross-check only has power when the two sides are
+derived **independently**. If both come from the same assumption, a match confirms the
+assumption is applied consistently — not that it is true.
 
 ### Spend is concentrated in a handful of chats
 
 | Band | Recorded | Turns | Share of spend |
 |---|---:|---:|---:|
-| Top 1 chat | $411 | 97 | 12% |
-| Top 5 chats | $1,640 | 489 | 49% |
-| **Top 10 chats** | **$2,406** | **706** | **72%** |
-| Top 25 chats | $2,880 | 892 | 86% |
-| All 320 chats | $3,344 | 1,321 | 100% |
+| Top 1 chat | $411 | 97 | 14% |
+| Top 5 chats | $1,430 | 455 | 47% |
+| **Top 10 chats** | **$2,121** | **709** | **70%** |
+| Top 25 chats | $2,594 | 895 | 86% |
+| All 356 chats | $3,018 | 1,327 | 100% |
 
-**3% of chats drive 72% of spend.** Average cost per turn is $2.53 overall and $3.41
+**3% of chats drive 70% of spend.** Average cost per turn is $2.27 overall and $2.99
 inside the top 10 — so the concentration is driven more by *turn volume per chat* than by
 unusually expensive individual turns. Long-running chats are the cost unit, which matches
 the cache-read finding: the longer a chat runs, the more context each step re-sends.
 
-### Measurement blind spot: 178 turns billed as free
+### Measurement blind spot: 179 turns billed as free
 
-178 turns (13.5%) recorded `cost = 0`, including **122 on `claude-opus-5`** — the most
+179 turns (13.5%) recorded `cost = 0`, including **123 on `claude-opus-5`** — the most
 expensive model — with zero errors against them. They succeeded and were simply not
 billed into the database.
 
@@ -114,6 +165,50 @@ toward the most expensive turns**. Recorded spend therefore understates reality 
 than 13.5% suggests. Fixed in [PR #164](https://github.com/Papr-ai/paprwork/pull/164) via
 `turnUsageAccounting.ts`; see CLAUDE.md Issue 85. **Expect recorded spend to rise after
 that merges** — the numbers becoming honest, not costs increasing.
+
+The damage already recorded is **permanent**. Overwriting is not the same as omitting: on
+1,291 rows in this window the prompt total was replaced by a smaller figure while the
+cache counters kept accumulating, leaving a row whose reported prompt is *less than* the
+cached portion it is supposed to contain. No recompute recovers the original, which is
+why the Issue 90 backfill deliberately left those rows untouched — it corrected the 248
+rows whose token data was still internally consistent and reported the rest as
+unrecoverable rather than writing a differently-wrong number over them. Any future
+analysis should treat rows satisfying
+`prompt_tokens < cache_read_tokens + cache_write_tokens` as untrustworthy.
+
+### Measurement blind spot 2: a turn is recorded as its final step
+
+Every figure in this document is a **lower bound**, and on multi-step turns a severe one.
+
+`AgentService` keeps per-step cache usage by assignment, not accumulation
+(`lastCacheReadTokens = cache.cacheReadTokens`), and the stored row falls back to those
+values. The premise — that each step's reported usage carries the stream's running total —
+is false. Cache *write* disproves it directly: on the 18:00 turn examined in Part 2, step
+1 wrote 384,388 tokens and step 4 wrote 1,497. A cumulative counter cannot decrease.
+Those are per-request figures, one per billed API call.
+
+The consequence, measured against the four turns that carry `turn_*` metrics:
+
+| Steps in turn | Stored prompt | Stored cost | If steps were summed |
+|---:|---:|---:|---|
+| 1 | 341.5K | $2.158 | same — nothing to sum |
+| 7 | 388.1K | $0.211 | ~$3.02 from the logged steps alone |
+| 39 | 369.6K | $0.238 | ~39 requests of 370K ≈ **$7** |
+
+A 39-step turn storing the same token count as a 7-step turn is the tell: the number does
+not scale with steps because only the last one is kept. Anthropic bills per request, so
+the turn's real cost is roughly the sum across its requests.
+
+**This runs opposite to the double-count**, which inflated the rate applied to whatever
+quantity was recorded. One error multiplied, the other truncated, and they partly
+cancelled — which is precisely why the original figures looked credible enough to be
+reported as "✅ exact". The Issue 90 backfill corrected the *rate*; the *quantity* is still
+one step. Recorded spend should therefore be read as "cost of the final step of each
+turn", and the true total is materially higher than any figure in this document.
+
+Not yet fixed. Fixing it needs a decision the data alone cannot settle: whether to
+accumulate per-step usage ourselves or read a provider-summed total, which requires
+confirming what `totalUsage` reports for cache fields in the installed AI SDK.
 
 ### Tool payload ranking
 
@@ -324,15 +419,15 @@ Cost columns live on `messages`: `prompt_tokens`, `completion_tokens`, `total_to
 
 | # | Area | Why | Signal so far |
 |---|---|---|---|
-| 1 | **Compaction trigger** | The 84% column. Largest single lever found. | Unconditional; every peer gates on fill |
+| 1 | **Compaction trigger** | The 93% column. Largest single lever found. | Unconditional; every peer gates on fill |
 | 2 | `search_agent_memory` | Largest per-call payload of any tool, uncapped | 151 calls, 63,576 chars/call |
 | 3 | `introspect_memory_graph` | Uncapped; memory-graph payloads are the heaviest per call | Flagged, not yet quantified in this window |
 | 4 | **Step count per turn** | The unit of cost. One turn made 171 tool calls. | Biggest turns: 171 / 125 / 82 |
 | 5 | `bash` byte bounds | 5.6MB from a `head -260` grep | `head -N` bounds lines, not bytes |
-| 6 | Per-chat concentration | 3% of chats = 72% of spend | Worth per-chat budget visibility in the UI |
+| 6 | Per-chat concentration | 3% of chats = 70% of spend | Worth per-chat budget visibility in the UI |
 | 7 | Payload encoding (TOON) | 58.8% reduction on uniform row sets | Only worth it for items 2–3; see research doc Part 7 |
 
-Item 4 deserves emphasis. Given that 84% of spend is context carriage, **reducing steps
+Item 4 deserves emphasis. Given that 93% of spend is context carriage, **reducing steps
 per turn is strictly more valuable than reducing bytes per result**, and we currently have
 no metric for it. The recommended first instrument is a `redundant-recovery rate`: log when
 a fetch recovers a result compaction had just cut, and by how much.
