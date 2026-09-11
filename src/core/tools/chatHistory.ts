@@ -100,6 +100,14 @@ export const getFullToolResultTool = createTool({
         };
       }
 
+      // Each call is its own model round-trip, so a paginated recovery is
+      // counted once per page — the cost is per step, not per result.
+      const { getCurrentTurnMetrics } = await import("./context.js");
+      const { recordRecoveryFetch } = await import(
+        "../../gateway/services/agent/turnMetrics.js"
+      );
+      recordRecoveryFetch(getCurrentTurnMetrics(), match.result.length);
+
       const sliced = sliceToolResult(match.result, args.startChar, args.length);
 
       if (args.startChar !== undefined) {

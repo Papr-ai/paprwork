@@ -24,7 +24,8 @@ import {
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
-import type { HistoryTrimBounds } from "../agent/midTurnContextTrim.js";
+import type { MidTurnTrimOpts } from "../agent/midTurnContextTrim.js";
+import { recordLoopSteps, type TurnMetrics } from "../agent/turnMetrics.js";
 import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
@@ -200,6 +201,7 @@ async function executeToolCall(
     chatId: string;
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
+    turnMetrics?: TurnMetrics;
   },
 ): Promise<{ toolCallId: string; toolName: string; result: unknown }> {
   const tool = mastraTools[toolCall.toolName];
@@ -218,6 +220,7 @@ async function executeToolCall(
       {
         jobEnv: toolContext.jobEnv,
         delegationJobId: toolContext.delegationJobId,
+        turnMetrics: toolContext.turnMetrics,
       },
     );
 
@@ -404,11 +407,13 @@ export async function* createPiCodexStreamWithToolLoop(
   >,
   apiKeys: string[],
   maxSteps: number,
-  historyTrimBounds?: HistoryTrimBounds,
+  /** Bounds plus `maxTokens` — the model-aware budget this turn must stay inside. */
+  historyTrimBounds?: MidTurnTrimOpts,
   toolContext?: {
     chatId: string;
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
+    turnMetrics?: TurnMetrics;
   },
   /**
    * Consulted when the model stops on its own. Returning a nudge keeps the loop
@@ -478,6 +483,12 @@ export async function* createPiCodexStreamWithToolLoop(
       return;
     }
     turnEndLogged = true;
+    // The loop counts its own steps, and this runs exactly once per turn.
+    recordLoopSteps(toolContext?.turnMetrics, {
+      steps: step,
+      estimatedTokens: cumulativeTokens,
+      historyTokenBudget: historyTrimBounds?.maxTokens,
+    });
     logPiTurnEnd({
       chatId: toolContext?.chatId,
       sessionId: streamOptions.sessionId,
