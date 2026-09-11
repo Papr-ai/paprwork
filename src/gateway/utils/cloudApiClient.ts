@@ -33,6 +33,8 @@ export interface CloudApiFetchOptions {
    * where acting-user scoping would hide other publishers' apps.
    */
   skipActingUser?: boolean;
+  /** Request-scoped key (cloud app host session enrichment). */
+  apiKey?: string;
 }
 
 const GZIP_MIN_BYTES = 1024;
@@ -60,7 +62,7 @@ export async function cloudApiFetch(
   cloudPath: string,
   opts: CloudApiFetchOptions = {},
 ): Promise<Response> {
-  const apiKey = await getPaprApiKey();
+  const apiKey = opts.apiKey ?? (await getPaprApiKey());
   if (!apiKey) {
     throw new Error("PAPR_API_KEY not configured. Login with Papr first.");
   }

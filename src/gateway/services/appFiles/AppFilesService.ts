@@ -185,6 +185,8 @@ export interface BrowserTicketArgs {
    * stable and collision-resistant enough to dedupe.
    */
   fingerprint: string;
+  /** Cloud app host: publisher namespace key from session (not desktop IPC). */
+  memoryApiKey?: string;
 }
 
 export interface BrowserTicket {
@@ -214,6 +216,7 @@ export async function createBrowserTicket(
     fileName: args.fileName,
     mime: args.mime ?? undefined,
     scope,
+    memoryApiKey: args.memoryApiKey,
   });
 
   const now = Date.now();
@@ -272,9 +275,20 @@ export async function createBrowserTicket(
  */
 export async function commitBrowserUpload(
   db: FilesDb,
-  args: { appId: string; id: string; objectKey: string; sizeBytes: number },
+  args: {
+    appId: string;
+    id: string;
+    objectKey: string;
+    sizeBytes: number;
+    memoryApiKey?: string;
+  },
 ): Promise<AddFileResult> {
-  const commit = await commitUpload(args.appId, args.objectKey, args.sizeBytes);
+  const commit = await commitUpload(
+    args.appId,
+    args.objectKey,
+    args.sizeBytes,
+    args.memoryApiKey,
+  );
   await markState(db, args.objectKey, commit.verified ? "verified" : "failed");
 
   const row = await getFile(db, args.id);

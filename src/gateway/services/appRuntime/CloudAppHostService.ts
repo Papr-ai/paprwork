@@ -13,6 +13,7 @@ import type {
 } from "./types.js";
 import type { AppFileRow } from "../appFiles/appFilesSchema.js";
 import type { FilesDb } from "../appFiles/AppFilesService.js";
+import { splitSqlStatements } from "../jobs/migrationSqlHelpers.js";
 import { TursoDbAdapter } from "./TursoDbAdapter.js";
 import { getJobEventHub } from "../JobEventHub.js";
 import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
@@ -856,8 +857,10 @@ export class CloudAppHostService {
     };
     return {
       exec: async (sql: string) => {
-        // ensureSchema ships multi-statement DDL; Turso exec takes one script.
-        await this.turso.exec({ ...base, appId, sql });
+        // ensureSchema ships multi-statement DDL; Turso rejects more than one.
+        for (const statement of splitSqlStatements(sql)) {
+          await this.turso.exec({ ...base, appId, sql: statement });
+        }
       },
       run: async (sql: string, params?: unknown[]) => {
         const result = await this.turso.write({ ...base, appId, sql, params });
@@ -879,7 +882,7 @@ export class CloudAppHostService {
     res: Response,
     requestedAppId: string | undefined,
     sourceId: string | undefined,
-  ): Promise<{ db: FilesDb; appId: string } | null> {
+  ): Promise<{ db: FilesDb; appId: string; memoryApiKey?: string } | null> {
     if (!this.enforceDbRateLimit(req, res, "write")) return null;
 
     const ctx = await this.resolveDbAppContext(req, res, requestedAppId);
@@ -895,10 +898,18 @@ export class CloudAppHostService {
       return null;
     }
 
+    if (!runtimeAuth.paprApiKey) {
+      res.status(401).json({
+        error: "Sign in to Papr to upload files from this app.",
+      });
+      return null;
+    }
+
     const config = await this.loadDataSources(runtimeAuth);
     return {
       db: this.cloudFilesDb(access, runtimeAuth, appId, config, sourceId),
       appId,
+      memoryApiKey: runtimeAuth.paprApiKey,
     };
   }
 
@@ -968,6 +979,7 @@ export class CloudAppHostService {
           mime,
           scope,
           fingerprint,
+          memoryApiKey: ctx.memoryApiKey,
         }),
       );
     } catch (err) {
@@ -1016,6 +1028,7 @@ export class CloudAppHostService {
           id,
           objectKey,
           sizeBytes,
+          memoryApiKey: ctx.memoryApiKey,
         }),
       );
     } catch (err) {

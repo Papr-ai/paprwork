@@ -31,8 +31,8 @@ export interface CommitResult {
   reason?: string;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await cloudApiFetch(path, { method: "POST", body });
+async function post<T>(path: string, body: unknown, apiKey?: string): Promise<T> {
+  const res = await cloudApiFetch(path, { method: "POST", body, apiKey });
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw Object.assign(
@@ -50,6 +50,7 @@ export interface RequestTicketArgs {
   fileName?: string;
   mime?: string;
   scope?: AppFileScope;
+  memoryApiKey?: string;
 }
 
 /**
@@ -69,7 +70,7 @@ export async function requestUploadTicket(
     file_name: args.fileName,
     mime: args.mime,
     scope: args.scope ?? "app",
-  });
+  }, args.memoryApiKey);
 }
 
 /** Have the server confirm the uploaded bytes match what we promised. */
@@ -77,12 +78,13 @@ export async function commitUpload(
   appId: string,
   objectKey: string,
   sizeBytes: number,
+  memoryApiKey?: string,
 ): Promise<CommitResult> {
   return post<CommitResult>("/v1/files/commit", {
     app_id: appId,
     object_key: objectKey,
     size_bytes: sizeBytes,
-  });
+  }, memoryApiKey);
 }
 
 /** Short-lived signed read URL for a private object. */
