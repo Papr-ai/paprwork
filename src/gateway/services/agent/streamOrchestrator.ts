@@ -28,6 +28,12 @@ export interface StreamOrchestratorResult {
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
   sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence for interleaving
+  /**
+   * The stream ended on a retryable transport failure rather than on the model
+   * finishing. Callers must not treat such a turn as complete — see
+   * {@link isRetryableProviderStreamFailure}.
+   */
+  providerStreamFailed?: boolean;
 }
 
 /** True when the turn ends on tool call(s) with no user-visible text after them. */
@@ -67,6 +73,10 @@ const NETWORK_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
+  // The peer closing a streaming connection mid-flight. Large requests hit
+  // this most: a turn carrying ~384K tokens of context spends long enough
+  // uploading that a reset lands before any response byte arrives.
+  "UND_ERR_SOCKET",
   "ECONNREFUSED",
   "ECONNRESET",
   "ETIMEDOUT",
@@ -147,8 +157,45 @@ function isNetworkConnectivityError(error: unknown): boolean {
       message.includes("fetch failed") ||
       message.includes("request timed out") ||
       message.includes("api connection timeout") ||
-      message.includes("network error")
+      message.includes("network error") ||
+      message.includes("other side closed") ||
+      message.includes("socket hang up")
     ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the stream ended because the connection to the provider failed,
+ * rather than because the model finished speaking.
+ *
+ * This is the distinction the post-stream wrap-up needs and never had. The
+ * wrap-up exists for a turn that ran tools and then went quiet: it asks the
+ * model for the closing message it never wrote. A dropped connection produces
+ * the identical shape — tools completed, no trailing text — but a different
+ * fact: the model never got the chance to finish. Asking for a summary there
+ * answers a question the user did not ask, and it overwrites the turn with a
+ * recap of tool calls. The renderer already marks such a turn interrupted for
+ * auto-continue, so resuming is what should happen instead.
+ *
+ * Deliberately narrower than "the stream errored". A provider refusal
+ * (quota, auth, an invalid request) is not retryable, so treating it as one
+ * would promise a resume that cannot happen.
+ */
+export function isRetryableProviderStreamFailure(error: unknown): boolean {
+  if (isNetworkConnectivityError(error)) {
+    return true;
+  }
+  for (const node of walkErrorChain(error)) {
+    if (typeof node !== "object" || node === null) continue;
+    const record = node as Record<string, unknown>;
+    // The AI SDK marks transport-level failures retryable and exhausts its own
+    // budget (3 attempts, seconds apart) before handing the error up. A request
+    // that takes ~47s to first byte is not served by that, so the turn arrives
+    // here mid-work with more attempts still worth making.
+    if (record.isRetryable === true && record.statusCode === undefined) {
       return true;
     }
   }
@@ -519,6 +566,8 @@ export async function* orchestrateModelStream(
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
 
+  let providerStreamFailed = false;
+
   // Buffer tool results so we can flush them together at turn boundaries.
   // NOTE: Results are yielded at FULL size — truncation of stale results across
   // turns is handled by compactStaleToolResults() before the next model call.
@@ -857,6 +906,12 @@ export async function* orchestrateModelStream(
         const sanitizedError = sanitizeToolOutput(chunk.error, apiKeys);
         const errorMessage = extractErrorMessage(sanitizedError);
         const errorCode = extractErrorCode(sanitizedError);
+        // Classify against the raw error: by the time this reaches AgentService
+        // it is a formatted string, and the cause chain that decides whether a
+        // resume is possible is gone.
+        if (isRetryableProviderStreamFailure(chunk.error)) {
+          providerStreamFailed = true;
+        }
         console.error(
           `[StreamOrchestrator] Model error for chat ${chatId}: ${errorMessage}`,
         );
@@ -1106,5 +1161,6 @@ export async function* orchestrateModelStream(
     toolCalls,
     toolResults,
     sequence, // Return V1-style sequence for interleaving
+    providerStreamFailed,
   };
 }

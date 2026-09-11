@@ -609,6 +609,12 @@ export class AgentService {
     let toolCalls: ToolCallEvent[] = [];
     let toolResults: ToolResultEvent[] = [];
     let sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
+    /**
+     * The stream ended in transport, not on the model finishing. Suppresses the
+     * post-stream wrap-up, whose premise ("tools ran, no closing message") is
+     * indistinguishable from this case but whose remedy is wrong for it.
+     */
+    let providerStreamFailed = false;
     let tokenUsage: StoredTokenUsage | undefined;
     /**
      * Totals from streams of this turn that have already finished. Each stream
@@ -620,6 +626,14 @@ export class AgentService {
     let lastCacheReadTokens = 0;
     let lastCacheWriteTokens = 0;
     let cumulativePromptTokens = 0;
+    /**
+     * Largest step context seen anywhere in this turn. `cumulativePromptTokens`
+     * describes the stream currently running and is reset when a second one
+     * starts, so it cannot answer "how full did this turn get" — a wrap-up of
+     * 11 messages would report 5K for a turn that peaked at 384K and no
+     * summarization would ever trigger.
+     */
+    let peakContextTokens = 0;
     let assistantMessageSaved = false;
 
     // ── Incremental checkpoint persistence ─────────────────────────────
@@ -1572,26 +1586,36 @@ export class AgentService {
 
           const { inputTokens, outputTokens } = step.usage;
 
-          // Update token tracking for next prepareStep.
-          // NOTE: inputTokens is the uncached portion only when Anthropic prompt cache is on.
-          // Summarization and pressure checks need the full context window:
-          // uncached input + cache read + cache write.
+          // Update token tracking for next prepareStep. Whether inputTokens
+          // already contains the cached portion is the provider's choice, not
+          // ours to assume — see resolveStepContextTokens.
           cumulativePromptTokens = inputTokens;
 
           if (useAnthropicPromptCache) {
             const { extractCacheUsageFromStep } =
               await import("./agent/promptCacheControl.js");
+            const { resolveStepContextTokens } = await import(
+              "./agent/stepContextTokens.js"
+            );
             const cache = extractCacheUsageFromStep(step);
             lastCacheReadTokens = cache.cacheReadTokens;
             lastCacheWriteTokens = cache.cacheWriteTokens;
-            cumulativePromptTokens =
-              inputTokens + cache.cacheReadTokens + cache.cacheWriteTokens;
+            cumulativePromptTokens = resolveStepContextTokens({
+              inputTokens,
+              cacheReadTokens: cache.cacheReadTokens,
+              cacheWriteTokens: cache.cacheWriteTokens,
+            });
             if (cache.cacheReadTokens > 0 || cache.cacheWriteTokens > 0) {
               console.log(
                 `[AgentService] 💾 Anthropic cache — read: ${cache.cacheReadTokens}, write: ${cache.cacheWriteTokens} tokens`,
               );
             }
           }
+
+          peakContextTokens = Math.max(
+            peakContextTokens,
+            cumulativePromptTokens,
+          );
 
           console.log(
             `[AgentService] 📈 Step ${cumulativeSteps} - input: ${inputTokens} tokens, output: ${outputTokens} tokens (full context: ${cumulativePromptTokens})`,
@@ -2182,6 +2206,7 @@ export class AgentService {
           toolCalls = next.value.toolCalls;
           toolResults = next.value.toolResults;
           sequence = next.value.sequence; // Get V1-style sequence
+          providerStreamFailed = Boolean(next.value.providerStreamFailed);
 
           // Log sequence for debugging
           console.log(
@@ -2212,7 +2237,10 @@ export class AgentService {
           ) {
             console.warn(
               `[AgentService] Turn ended on tool call(s) without trailing user text ` +
-                `(chatId=${chatId}). Post-stream wrap-up will run if not aborted.`,
+                `(chatId=${chatId}). ` +
+                (providerStreamFailed
+                  ? "Stream died in transport — wrap-up suppressed so the turn can resume."
+                  : "Post-stream wrap-up will run if not aborted."),
             );
           }
 
@@ -2464,6 +2492,9 @@ export class AgentService {
           // A continuation is a fresh stream that reports from zero, so close off
           // what this turn has already spent before it starts.
           committedUsage = tokenUsage;
+          // Its context starts fresh too. The peak is kept separately, so
+          // clearing this does not lose the turn's high-water mark.
+          cumulativePromptTokens = 0;
 
           try {
             const continuationIterator = runAiSdkPlanContinuation({
@@ -2533,6 +2564,7 @@ export class AgentService {
         toolCallCount: toolCalls.length,
         aborted: abortController.signal.aborted,
         isWrapUpContinuation: Boolean(options?._isWrapUpContinuation),
+        providerStreamFailed,
       });
       const wrapUpMessage =
         turnEndPlanState.pendingSteps > 0
@@ -2556,6 +2588,7 @@ export class AgentService {
         // Same as the plan continuation: the wrap-up runs a second stream, on
         // either route, so its totals have to add to this turn rather than replace.
         committedUsage = tokenUsage;
+        cumulativePromptTokens = 0;
 
         try {
           let wrapUpState:
@@ -2904,7 +2937,7 @@ export class AgentService {
       const stats = await this.storageManager.getChatStats(chatId);
 
       const actualContextTokens = this.resolveActualContextTokens({
-        cumulativePromptTokens,
+        peakContextTokens,
         piAiContextTokens,
         tokenUsage,
         lastCacheReadTokens,
@@ -3070,11 +3103,13 @@ export class AgentService {
 
   /**
    * Full context window for summarization decisions.
-   * pi-ai: contextTokens already includes cache. AI SDK + Anthropic cache:
-   * inputTokens is uncached only — cumulativePromptTokens adds cache read/write.
+   *
+   * Takes the turn's peak rather than the last stream's: a wrap-up or plan
+   * continuation runs on a fresh, small context, so reading the final figure
+   * would report a 384K turn as 5K and never summarize.
    */
   private resolveActualContextTokens(params: {
-    cumulativePromptTokens: number;
+    peakContextTokens: number;
     piAiContextTokens: number;
     tokenUsage?: StoredTokenUsage;
     lastCacheReadTokens: number;
@@ -3083,8 +3118,8 @@ export class AgentService {
     if (params.piAiContextTokens > 0) {
       return params.piAiContextTokens;
     }
-    if (params.cumulativePromptTokens > 0) {
-      return params.cumulativePromptTokens;
+    if (params.peakContextTokens > 0) {
+      return params.peakContextTokens;
     }
     if (!params.tokenUsage) {
       return 0;

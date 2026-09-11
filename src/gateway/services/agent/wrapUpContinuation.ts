@@ -93,6 +93,7 @@ export function shouldRequestWrapUpSummary(args: {
   toolCallCount: number;
   aborted: boolean;
   isWrapUpContinuation: boolean;
+  providerStreamFailed?: boolean;
 }): boolean {
   return explainPostStreamWrapUp(args).requested;
 }
