@@ -26,6 +26,19 @@ describe("isProviderAuthRejection", () => {
     expect(isProviderAuthRejection("invalid x-api-key")).toBe(true);
   });
 
+  it("does not treat a spent allowance as a bad key", () => {
+    expect(
+      isProviderAuthRejection(
+        "Your API spend limit is reached — retrying won't help until it resets.",
+      ),
+    ).toBe(false);
+    expect(
+      isProviderAuthRejection(
+        'authentication_error: You have reached your specified API usage limits.',
+      ),
+    ).toBe(false);
+  });
+
   it("ignores failures that are not about credentials", () => {
     // Misreading any of these as an auth failure would tell the user to
     // reconnect a connection that is fine.
