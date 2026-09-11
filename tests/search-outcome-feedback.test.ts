@@ -122,8 +122,14 @@ describe("deriveCitations", () => {
       search({ memoryCount: 25, candidates }),
       result,
     );
-    expect(grade.verdict).toBe("retrieved_unused");
-    expect(grade.score).toBe(2);
+    // Was `retrieved_unused` (2) when this only had to beat citations_unknown.
+    // Now separated further: 25 rows sharing ONE id is hydration fan-out — a
+    // server correctness fault, not a ranking miss — so it grades below an
+    // ordinary unused result rather than equal to one.
+    expect(grade.verdict).toBe("retrieved_degenerate");
+    expect(grade.score).toBe(1);
+    expect(grade.shape?.idFanOut).toBe(true);
+    expect(grade.feedbackText).toContain("id_fanout=24");
   });
 
   it("returns empty for an empty answer", () => {
