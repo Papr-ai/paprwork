@@ -101,8 +101,8 @@ export function shouldRequestWrapUpSummary(args: {
  * Merge a continuation's full result — text, thinking, tools and sequence — so
  * the resumed work persists as one assistant turn and renders in one card.
  *
- * Token usage from the continuation is not merged, matching the existing
- * wrap-up path.
+ * Token usage is not carried here: it arrives on stream chunks rather than in this
+ * result, and the caller accumulates it across streams. See turnUsageAccounting.ts.
  */
 export function mergeContinuationIntoState(
   base: StreamOrchestratorResult,

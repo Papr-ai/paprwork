@@ -24,7 +24,10 @@ export const OFFLOAD_THRESHOLD_CHARS = 256 * 1024;
  * away context the model would otherwise have received: the history formatter
  * caps every category at or below that ceiling, so it truncates from the
  * preview exactly as it would have from the full result. The tail beyond this
- * is only reachable via `get_full_tool_result`, which is a full-retention tool.
+ * is only reachable via `get_full_tool_result`, which arrives uncapped in the turn
+ * that calls it. That fetch becomes truncatable in later turns, but the sidecar
+ * stays on disk and the truncation notice points back at the same tool, so the
+ * tail remains reachable rather than being consumed once.
  *
  * Raising `absoluteMaxChars` above this in Settings -> Agent Context (or turning
  * truncation off) means results over the offload threshold reach the model as
