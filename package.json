@@ -141,6 +141,7 @@
     "test:app-agent-deploy-verify": "node scripts/verify-app-agent-chat-deploy.mjs",
     "test:subagents-metadata-e2e": "node --import tsx scripts/test-subagents-metadata-e2e.ts",
     "setup:apps-dns": "node scripts/setup-apps-papr-ai-dns.mjs",
+    "calibrate:token-estimator": "node scripts/calibrate-token-estimator.mjs",
     "test:payload-migration": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-tool-payload-migration.mjs",
     "test:engine-table-guard": "npm run build:gateway && ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-replica-engine-table-guard.mjs",
     "test:turso-auto-push": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/test-turso-auto-push.mjs",

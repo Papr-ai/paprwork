@@ -63,6 +63,8 @@ import { anthropicModelUsesAdaptiveThinking } from "../utils/anthropicAdaptiveTh
 import {
   computeHistoryTokenBudget,
   isContextLengthError,
+  resolveEffectiveContextWindow,
+  resolveProviderForModel,
   resolveModelContextWindow,
   resolveSummarizeHistoryTokenThreshold,
   shouldForceGeminiResummarize,
@@ -108,6 +110,7 @@ import {
   createTurnMetrics,
   recordCompactionRun,
   recordCompactionSkipped,
+  recordObservedContext,
   recordStep,
   setToolCallCount,
   summarizeTurnMetrics,
@@ -1585,6 +1588,10 @@ export class AgentService {
             peakContextTokens,
             cumulativePromptTokens,
           );
+          // The same figure the summarization decision uses. Recording it here
+          // is what makes `turn_peak_context_tokens` the billed prompt rather
+          // than the chars/4 estimate, which runs ~1.9× low on real turns.
+          recordObservedContext(turnMetrics, cumulativePromptTokens);
 
           console.log(
             `[AgentService] 📈 Step ${cumulativeSteps} - input: ${inputTokens} tokens, output: ${outputTokens} tokens (full context: ${cumulativePromptTokens})`,
@@ -2856,8 +2863,10 @@ export class AgentService {
             redundant_recoveries: summary.redundantRecoveries,
             redundant_recovery_rate: summary.redundantRecoveryRate,
             peak_context_tokens: summary.peakContextTokens,
+            estimated_context_tokens: summary.estimatedContextTokens,
             context_budget_tokens: summary.historyTokenBudget,
             context_fill_ratio: summary.contextFillRatio,
+            estimator_error_ratio: summary.estimatorErrorRatio,
             plan_count: summary.planCount,
             plan_total_steps: summary.planTotalSteps,
             plan_completed_steps: summary.planCompletedSteps,
@@ -3394,6 +3403,48 @@ ${last15.substring(0, 8_000)}`;
    */
   async getChatStats(chatId: string) {
     return await this.storageManager.getChatStats(chatId);
+  }
+
+  /**
+   * Cheap read for the context meter: how full the window is, and what the
+   * last turn cost.
+   *
+   * Deliberately does NOT build the system prompt or tool schemas — that is
+   * `inspectContext`, which costs hundreds of milliseconds and is only needed
+   * when the user opens the breakdown. Fill comes from `prompt_tokens` on the
+   * last billed turn, the figure the provider actually charged for, so the
+   * ring and the invoice cannot disagree.
+   */
+  async getContextMeter(chatId: string, selectedModel: string) {
+    const session = this.sessionManager.getSessionIfExists(chatId);
+    const model = session?.config.model ?? selectedModel;
+    const provider =
+      session?.config.provider ??
+      resolveProviderForModel(model);
+    const contextLimit = session?.config.contextLimit;
+
+    const modelWindow = resolveModelContextWindow(provider, model);
+    const effectiveWindow = resolveEffectiveContextWindow(
+      provider,
+      model,
+      contextLimit,
+    );
+
+    const { lastTurn, totals } = await this.storageManager.getTurnUsage(chatId);
+    const usedTokens = lastTurn
+      ? Math.max(lastTurn.promptTokens, lastTurn.peakContextTokens ?? 0)
+      : 0;
+
+    return {
+      model,
+      provider,
+      modelWindow,
+      effectiveWindow,
+      userCap: contextLimit ?? null,
+      usedTokens,
+      lastTurn,
+      totals,
+    };
   }
 
   /** Last user message in history, for memory search query in context inspector. */
