@@ -20,6 +20,7 @@ import {
   batchUpsertLocalRows,
 } from "./tursoLocalBulkWrite.js";
 import { migrateLocalTableSchema } from "./tursoSchemaMigration.js";
+import { isEngineOwnedTableName } from "./appRuntime/engineOwnedTables.js";
 import { shouldApplyIncomingRow } from "./rowSyncColumns.js";
 import {
   buildPkWhereClause,
@@ -108,6 +109,14 @@ async function ensureLocalTableReadyForPull(
   remote: Client,
   tableName: string,
 ): Promise<TableColumn[]> {
+  // The sync engine owns its own bookkeeping tables and creates them with the exact
+  // shape it later requires. Reconstructing one here from the remote's table_info
+  // loses whatever this generator cannot express, and the engine then aborts the
+  // process seeking an index the rebuilt table does not have. Empty means "skip".
+  if (isEngineOwnedTableName(tableName)) {
+    return [];
+  }
+
   let columns = readTableSchema(localDb, tableName);
   if (columns.length > 0) {
     await migrateLocalTableSchema(localDb, remote, tableName);
@@ -126,17 +135,35 @@ async function ensureLocalTableReadyForPull(
     return columns;
   }
 
+  // `pk` is the 1-based position within the key, not a boolean, and the order of a
+  // composite key decides its index. Keep it here rather than widening TableColumn.
+  const keyColumns = remoteCols.rows
+    .map((row) => ({
+      name: String(row.name ?? ""),
+      position: Number(row.pk ?? 0),
+    }))
+    .filter((col) => col.position > 0 && col.name)
+    .sort((a, b) => a.position - b.position);
+
+  const columnDefs = columns.map((col) => {
+    const inlinePk = keyColumns.length === 1 && col.primaryKey ? " PRIMARY KEY" : "";
+    return `${quoteIdent(col.name)} ${col.type || "TEXT"}${inlinePk}`;
+  });
+  // A composite key can only be declared at table level. Previously it was declared
+  // nowhere — the inline branch requires exactly one key column, so a two-column key
+  // produced a table with no unique index at all, which is what the engine panics on.
+  const tableConstraints =
+    keyColumns.length > 1
+      ? [
+          `PRIMARY KEY (${keyColumns
+            .map((col) => quoteIdent(col.name))
+            .join(", ")})`,
+        ]
+      : [];
+
   localDb.exec(
     `CREATE TABLE IF NOT EXISTS ${quoteIdent(tableName)} (` +
-      columns
-        .map((col) => {
-          const pk =
-            columns.filter((c) => c.primaryKey).length === 1 && col.primaryKey
-              ? " PRIMARY KEY"
-              : "";
-          return `${quoteIdent(col.name)} ${col.type || "TEXT"}${pk}`;
-        })
-        .join(", ") +
+      [...columnDefs, ...tableConstraints].join(", ") +
       `)`,
   );
   return readTableSchema(localDb, tableName);

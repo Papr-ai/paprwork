@@ -1,7 +1,12 @@
 /**
  * SQL statement guards for mini-app /api/db/* routes.
  * Shared by desktop gateway and cloud app host.
+ *
+ * Statement *kind* is only half of it: a well-formed INSERT or CREATE aimed at the sync
+ * engine's private tables aborts the native sync worker. See `engineOwnedTables.ts`.
  */
+
+import { assertNoEngineOwnedTableWrite } from "./engineOwnedTables.js";
 
 export function assertReadOnlySql(sql: string): void {
   const trimmed = sql.trim().toLowerCase();
@@ -30,6 +35,8 @@ export function assertWriteSql(sql: string): void {
       { status: 403 },
     );
   }
+
+  assertNoEngineOwnedTableWrite(sql);
 }
 
 export function assertExecSql(sql: string): void {
@@ -40,4 +47,6 @@ export function assertExecSql(sql: string): void {
       { status: 403 },
     );
   }
+
+  assertNoEngineOwnedTableWrite(sql);
 }

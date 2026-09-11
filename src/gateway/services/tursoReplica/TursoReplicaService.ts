@@ -57,6 +57,11 @@ import {
   repairReplicaSidecarsOnCheckpointError,
   resetReplicaSidecars,
 } from "./tursoReplicaSidecarWedge.js";
+import {
+  describeReplicaEngineTableDefects,
+  inspectReplicaEngineTables,
+  repairReplicaEngineTables,
+} from "./replicaEngineTableGuard.js";
 import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
 import { retryWhileReplicaBusy } from "./replicaBusyRetry.js";
 import {
@@ -596,9 +601,11 @@ export class TursoReplicaService {
     if (!bridge.enabled) {
       throw new Error("Turso sync bridge not available — sign in to Papr");
     }
-    // Cheap, file-only precheck for the one corruption shape we can see from outside: an
-    // `-info` watermark past the end of `-wal`. Catching it here saves a worker crash +
-    // respawn. Anything we *can't* see is caught by the worker crash policy instead.
+    // Cheap prechecks for the corruption shapes we can see from outside. Catching one
+    // here saves a worker crash + respawn. Anything we *can't* see is caught by the
+    // worker crash policy instead.
+    //
+    // Shape 1: an `-info` watermark past the end of `-wal`, which panics `find_frame`.
     const key = normalizeDbPath(localPath);
     const report = inspectReplicaSidecarWedge(localPath);
     if (report.wedged) {
@@ -608,6 +615,21 @@ export class TursoReplicaService {
       console.warn(
         `[TursoReplicaService] Reset wedged sync sidecars before open: ${localPath} — ` +
           describeReplicaSidecarWedge(report),
+      );
+    }
+
+    // Shape 2: an engine table present without the unique index the engine seeks during
+    // `init_cdc_version`, which panics the B-tree cursor. Unlike shape 1 this lives
+    // inside data.db, so resetting sidecars cannot cure it — the crash policy's retry
+    // would panic a second time. Repair drops the table for the engine to rebuild.
+    const engineTableDefects = inspectReplicaEngineTables(localPath);
+    if (engineTableDefects.length > 0) {
+      await getTursoReplicaSyncWorkerClient().close(localPath);
+      this.touchedPaths.delete(key);
+      const dropped = repairReplicaEngineTables(localPath);
+      console.warn(
+        `[TursoReplicaService] Dropped malformed engine tables before open: ${localPath} — ` +
+          `${describeReplicaEngineTableDefects(engineTableDefects)}; dropped ${dropped.join(", ")}`,
       );
     }
 
