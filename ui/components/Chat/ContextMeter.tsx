@@ -40,6 +40,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<ContextInfo | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
+  const [infoError, setInfoError] = useState<string | null>(null);
   const wasSending = useRef(isSending);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -64,8 +65,15 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
     wasSending.current = isSending;
   }, [isSending, loadMeter]);
 
+  /**
+   * Unlike `loadMeter`, this answers an explicit click, so a failure has to be
+   * reported. Silence here is indistinguishable from a no-op: the panel and
+   * the Full inspector button both key off `info`, so swallowing the error
+   * left a button that looked clickable and did nothing.
+   */
   const loadBreakdown = useCallback(async () => {
     setInfoLoading(true);
+    setInfoError(null);
     try {
       const focusContext = resolveAgentFocusContext(chatId);
       const response = await gateway.send("chat:inspect-context", {
@@ -73,9 +81,19 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
         model,
         ...(focusContext ? { focusContext } : {}),
       });
-      if (isContextInfo(response.data)) setInfo(response.data);
-    } catch {
+      if (isContextInfo(response.data)) {
+        setInfo(response.data);
+      } else {
+        // A reply that arrives in the wrong shape is a different failure from
+        // never getting one, and only this branch can tell them apart.
+        setInfo(null);
+        setInfoError("Gateway returned an unexpected context shape.");
+      }
+    } catch (error) {
       setInfo(null);
+      setInfoError(
+        error instanceof Error ? error.message : "Could not read the context.",
+      );
     } finally {
       setInfoLoading(false);
     }
@@ -121,12 +139,13 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
           meter={meter}
           info={info}
           infoLoading={infoLoading}
+          infoError={infoError}
           onClose={() => setOpen(false)}
+          onRetryBreakdown={() => void loadBreakdown()}
           onOpenFullInspector={() => {
-            if (info) {
-              onOpenFullInspector(info);
-              setOpen(false);
-            }
+            if (!info) return;
+            onOpenFullInspector(info);
+            setOpen(false);
           }}
         />
       ) : null}

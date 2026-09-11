@@ -26,6 +26,8 @@ interface ContextUsagePanelProps {
   meter: ContextMeter;
   info: ContextInfo | null;
   infoLoading: boolean;
+  infoError: string | null;
+  onRetryBreakdown: () => void;
   onClose: () => void;
   onOpenFullInspector: () => void;
 }
@@ -34,6 +36,8 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
   meter,
   info,
   infoLoading,
+  infoError,
+  onRetryBreakdown,
   onClose,
   onOpenFullInspector,
 }) => {
@@ -91,6 +95,19 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         <div className="ctx-panel__pending">Reading the next prompt…</div>
       ) : null}
 
+      {!infoLoading && infoError ? (
+        <div className="ctx-panel__failed">
+          <span>{infoError}</span>
+          <button
+            type="button"
+            className="ctx-panel__link"
+            onClick={onRetryBreakdown}
+          >
+            Try again
+          </button>
+        </div>
+      ) : null}
+
       <ul className="ctx-legend">
         {segments.map((segment) => {
           const isOpen = openSegment === segment.id;
@@ -132,10 +149,14 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         <span>
           {meter.totals.turns} turns · {formatCost(meter.totals.cost)} this chat
         </span>
+        {/* Disabled rather than a no-op: the breakdown it opens is the thing
+            that failed to load, so an enabled button would lie about that. */}
         <button
           type="button"
           className="ctx-panel__link"
           onClick={onOpenFullInspector}
+          disabled={!info}
+          title={info ? undefined : "The context breakdown could not be read."}
         >
           Full inspector ›
         </button>
