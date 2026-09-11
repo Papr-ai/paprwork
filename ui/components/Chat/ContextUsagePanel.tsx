@@ -17,6 +17,7 @@ import {
   formatCost,
   formatTokens,
   meterStatus,
+  rawFillFraction,
   type ContextMeter,
 } from "./contextMeterModel";
 import "./ContextMeter.css";
@@ -40,6 +41,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
 
   const fraction = fillFraction(meter);
   const status = meterStatus(fraction);
+  const shownPercent = Math.round(rawFillFraction(meter) * 100);
   const segments = info ? deriveSegments(info) : [];
 
   return (
@@ -60,11 +62,13 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
       <div className="ctx-panel__hero">
         <div>
           <div className={`ctx-panel__pct ctx-panel__pct--${status}`}>
-            {Math.round(fraction * 100)}%
+            {shownPercent}%
           </div>
           <div className="ctx-panel__sub">
             {formatTokens(meter.usedTokens)} of{" "}
             {formatTokens(meter.effectiveWindow)} tokens
+            {/* Say so when the last turn predates the peak measurement. */}
+            {meter.fillSource === "billed" ? " · estimated" : ""}
           </div>
         </div>
         <div className="ctx-panel__hero-right">

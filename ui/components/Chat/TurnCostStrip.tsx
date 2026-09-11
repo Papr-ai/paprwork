@@ -40,6 +40,13 @@ export const TurnCostStrip: React.FC<{ meter: ContextMeter }> = ({ meter }) => {
     : 0;
   const perStep = steps && steps > 0 ? turn.promptTokens / steps : null;
 
+  // How far the chars/4 estimator — the same one gating compaction and the
+  // history trim — was from the provider's own figure on this turn.
+  const drift =
+    turn.peakContextTokens && turn.estimatedContextTokens
+      ? turn.peakContextTokens / turn.estimatedContextTokens
+      : null;
+
   return (
     <div className="ctx-turn">
       <div className="ctx-turn__head">
@@ -67,21 +74,6 @@ export const TurnCostStrip: React.FC<{ meter: ContextMeter }> = ({ meter }) => {
       {open ? (
         <dl className="ctx-turn__detail">
           <div>
-            <dt>Context per step</dt>
-            <dd>{perStep ? formatTokens(Math.round(perStep)) : "—"}</dd>
-          </div>
-          <div>
-            <dt>Prompt / output</dt>
-            <dd>
-              {formatTokens(turn.promptTokens)} /{" "}
-              {formatTokens(turn.completionTokens)}
-            </dd>
-          </div>
-          <div>
-            <dt>Cached prompt</dt>
-            <dd>{Math.round(cachedShare * 100)}%</dd>
-          </div>
-          <div>
             <dt>Peak context</dt>
             <dd>
               {turn.peakContextTokens
@@ -89,6 +81,28 @@ export const TurnCostStrip: React.FC<{ meter: ContextMeter }> = ({ meter }) => {
                 : "—"}
             </dd>
           </div>
+          <div>
+            {/* Billed across every step — not the size of any one request. */}
+            <dt>Billed prompt / output</dt>
+            <dd>
+              {formatTokens(turn.promptTokens)} /{" "}
+              {formatTokens(turn.completionTokens)}
+            </dd>
+          </div>
+          <div>
+            <dt>Billed per step</dt>
+            <dd>{perStep ? formatTokens(Math.round(perStep)) : "—"}</dd>
+          </div>
+          <div>
+            <dt>Cached prompt</dt>
+            <dd>{Math.round(cachedShare * 100)}%</dd>
+          </div>
+          {drift ? (
+            <div>
+              <dt>Estimator drift</dt>
+              <dd>{drift.toFixed(2)}× under</dd>
+            </div>
+          ) : null}
           <div>
             <dt>Compaction</dt>
             <dd>
