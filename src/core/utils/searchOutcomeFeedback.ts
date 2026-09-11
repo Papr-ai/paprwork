@@ -41,6 +41,11 @@
  * every search would otherwise widen PII exposure across the whole corpus.
  */
 
+import {
+  analyzeResultSetShape,
+  type ResultSetShape,
+} from "./resultSetShape.js";
+
 /** One retrieved memory, with the rank it was returned at. */
 export interface RetrievedCandidate {
   id: string;
@@ -283,6 +288,7 @@ export function deriveCitations(
 export type SearchOutcomeVerdict =
   | "no_results"
   | "retrieved_unused"
+  | "retrieved_degenerate"
   | "cited_deep_rank"
   | "cited_mid_rank"
   | "cited_top_rank"
@@ -295,7 +301,17 @@ export interface SearchOutcomeGrade {
   citedIds: string[];
   /** Machine-parseable, PII-free (D2). */
   feedbackText: string;
+  /** Duplicate/fan-out shape of the candidate set. Null when unparseable. */
+  shape: ResultSetShape | null;
 }
+
+/**
+ * Ceiling applied to a cited search whose candidate set was mostly repeats.
+ * Retrieval DID surface something usable, so this is not a failure — but it is
+ * not a 5 either, because effective k was far below requested k. Capping at 3
+ * keeps the row out of the positive tail without flipping it to a negative.
+ */
+const DEGENERATE_CITED_SCORE_CAP = 3;
 
 /**
  * Grade a search by WHERE the useful result landed, not merely whether one
@@ -307,9 +323,28 @@ export function gradeSearchOutcome(
   search: RecordedSearch,
   derivation: CitationDerivation,
 ): SearchOutcomeGrade {
+  // Shape is only meaningful when the payload parsed. An unparsed payload has
+  // no candidates, and an empty candidate list must never be read as "no
+  // duplicates" — same failure class as candidatesKnown.
+  const shape = search.candidatesKnown
+    ? analyzeResultSetShape(search.candidates)
+    : null;
+
   const base = {
     citedIds: derivation.citedIds,
+    shape,
   };
+
+  /** Duplicate/fan-out counters appended to every graded row that has a shape. */
+  const shapeFields = (): Record<string, string | number> =>
+    shape
+      ? {
+          dup_ratio: shape.duplicateRatio,
+          distinct: shape.distinctContents,
+          max_repeat: shape.maxRepeat,
+          ...(shape.idFanOut ? { id_fanout: shape.total - shape.distinctIds } : {}),
+        }
+      : {};
 
   if (search.memoryCount === 0 && search.nodeCount === 0) {
     return {
@@ -335,6 +370,30 @@ export function gradeSearchOutcome(
     };
   }
 
+  const rank = derivation.bestCitedRank;
+
+  // Degeneracy is checked BEFORE `judgeableCount === 0`, and deliberately so.
+  // In a pure duplicate flood every term appears in every candidate, so the
+  // document-frequency filter strips them all and judgeableCount falls to 0 —
+  // which would otherwise be graded `citations_unknown` (a neutral 3). But this
+  // is not unknown: we know precisely what happened. The server returned one
+  // item N times. Emitting "unknown" for the single most diagnosable failure
+  // mode would bury it in the same bucket as unparseable payloads.
+  if (rank === null && shape?.degenerate) {
+    return {
+      ...base,
+      verdict: "retrieved_degenerate",
+      score: 1,
+      feedbackText: fmt({
+        verdict: "retrieved_degenerate",
+        retrieved: search.memoryCount,
+        cited: 0,
+        judgeable: derivation.judgeableCount,
+        ...shapeFields(),
+      }),
+    };
+  }
+
   if (derivation.judgeableCount === 0) {
     return {
       ...base,
@@ -345,11 +404,11 @@ export function gradeSearchOutcome(
         retrieved: search.memoryCount,
         cited: 0,
         note: "no_judgeable_candidates",
+        ...shapeFields(),
       }),
     };
   }
 
-  const rank = derivation.bestCitedRank;
   if (rank === null) {
     return {
       ...base,
@@ -360,13 +419,23 @@ export function gradeSearchOutcome(
         retrieved: search.memoryCount,
         cited: 0,
         judgeable: derivation.judgeableCount,
+        ...shapeFields(),
       }),
     };
   }
 
   const verdict: SearchOutcomeVerdict =
     rank <= 2 ? "cited_top_rank" : rank <= 9 ? "cited_mid_rank" : "cited_deep_rank";
-  const score = rank <= 2 ? 5 : rank <= 9 ? 4 : 3;
+  const rankScore = rank <= 2 ? 5 : rank <= 9 ? 4 : 3;
+
+  // A citation at rank 1 of ten near-identical rows is not a 5. Effective k was
+  // one; the remaining ranks carried no information the answer could have used.
+  // Without this cap a duplicate flood produces the SAME positive label as a
+  // genuinely well-ranked, diverse result set — which is how the ranker learns
+  // to keep flooding.
+  const score = shape?.degenerate
+    ? Math.min(rankScore, DEGENERATE_CITED_SCORE_CAP)
+    : rankScore;
 
   return {
     ...base,
@@ -378,6 +447,8 @@ export function gradeSearchOutcome(
       cited: derivation.citedIds.length,
       judgeable: derivation.judgeableCount,
       best_rank: rank,
+      ...(score !== rankScore ? { rank_score: rankScore, capped: "degenerate" } : {}),
+      ...shapeFields(),
       methods: derivation.citations.map((c) => c.method).join("|"),
       mean_confidence: Number(
         (

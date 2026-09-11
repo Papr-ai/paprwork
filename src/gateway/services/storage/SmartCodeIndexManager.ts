@@ -62,7 +62,14 @@ export class SmartCodeIndexManager {
     };
     
     this.tracker = new CodeIndexTracker(this.config.dataDir);
-    this.indexer = new CodeIndexerService(client, this.config.schemaId, this.config.paprDir);
+    // Tracker is passed so re-indexed files UPDATE their existing memory
+    // instead of inserting a duplicate (indexed_files.memory_id).
+    this.indexer = new CodeIndexerService(
+      client,
+      this.config.schemaId,
+      this.config.paprDir,
+      this.tracker,
+    );
     this.watcher = new CodeFileWatcher(client, this.config.schemaId, this.config.paprDir);
     this.summaryPipeline = new CodeSummaryIndexPipeline(
       client,
