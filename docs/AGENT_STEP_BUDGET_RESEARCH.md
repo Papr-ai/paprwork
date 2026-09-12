@@ -102,7 +102,14 @@ We ship **150 distinct tools ≈ 37,800 tokens against a 200K cap — about 19%*
 >
 > The distortion is not uniform, which is why it misled the recommendation below as well as the headline: `update_schema` and `register_schema` read as 12,750 and 12,712 tokens against a real 802 and 859 — **15× over** — because their `_def` trees are the deepest. They are 29% of the *estimate* and 4.3% of reality.
 >
-> This also explains an anomaly flagged later in Part 3: an estimated peak of 289,385 against a billed 177,020. Roughly half that gap is this one overstatement.
+> **The billed data alone falsifies the old figure**, which is the check that should have been run first — it needs no new instrument, just adding up our own parts:
+>
+> | | fixed tokens/request | against the measured 104,007 average |
+> |---|---:|---|
+> | system prompt 46,579 + **real** tools 37,798 | 84,377 | leaves 19,630 for history — sits right at the 15,971 budget plus the live message ✓ |
+> | system prompt 46,579 + **estimated** tools 87,363 | 133,942 | **exceeds the measured request** — impossible ✗ |
+>
+> This also explains an anomaly flagged later in Part 3: an estimated peak of 289,385 against a billed 177,020. Roughly half that gap is this one overstatement. Note in passing that the system prompt measures **46,579** tokens, not the ~61,000 estimated elsewhere in this doc — the same `chars/4` habit, in the other direction.
 
 Anthropic is equally clear about when the step-reduction lever does *not* pay: on τ²-bench, "where each turn makes one or two sequential tool calls, programmatic tool calling left scores unchanged and cost roughly 8% more. Sequential single-call workflows do not benefit" [13]. Batching helps fan-out, not inherently serial work.
 
