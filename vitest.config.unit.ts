@@ -6,6 +6,11 @@ export default defineConfig({
     name: "unit-backend",
     globals: true,
     environment: "node",
+    // Runs before test modules are imported, so modules that resolve the Papr
+    // workspace at import time get a temp root instead of the developer's real
+    // one. `useIsolatedPaprWorkspace()` still applies where a suite needs a
+    // fresh workspace per test — this only makes the default safe.
+    setupFiles: ["./tests/setup/defaultTempWorkspace.ts"],
     // Co-located `src/**` specs are included so tests living next to the code
     // they cover actually run in CI. Without this, repoHygiene.test.ts was
     // collected by no project and silently never executed.

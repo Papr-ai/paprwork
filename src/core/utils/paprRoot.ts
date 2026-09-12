@@ -57,13 +57,7 @@ function assertNotLeakingIntoRealWorkspace(resolvedRoot: string): string {
   }
 
   const tmpRoot = path.resolve(fs.realpathSync.native(os.tmpdir()));
-  let candidate = path.resolve(resolvedRoot);
-  try {
-    // macOS /var/folders is a symlink to /private/var/folders — compare real paths.
-    candidate = path.resolve(fs.realpathSync.native(candidate));
-  } catch {
-    /* not created yet — compare the literal path */
-  }
+  const candidate = realpathThroughMissingLeaves(path.resolve(resolvedRoot));
 
   if (candidate === tmpRoot || candidate.startsWith(`${tmpRoot}${path.sep}`)) {
     return resolvedRoot;
@@ -79,6 +73,43 @@ function assertNotLeakingIntoRealWorkspace(resolvedRoot: string): string {
       `Escape hatch (only for tests that intentionally read the real workspace): ` +
       `PAPR_ALLOW_REAL_WORKSPACE_IN_TESTS=1`,
   );
+}
+
+/**
+ * Resolve symlinks as far down `absolutePath` as actually exists on disk.
+ *
+ * The comparison above needs both sides in the same form, and `tmpRoot` is
+ * always realpath-resolved. A workspace path is routinely named *before* it is
+ * created, though, so `realpathSync` on the whole thing throws — and falling
+ * back to the literal path compares macOS's `/var/folders/...` against the
+ * resolved `/private/var/folders/...` and never matches. That rejected suites
+ * which were using a temp directory perfectly correctly, purely because their
+ * leaf directory did not exist yet.
+ *
+ * So resolve the deepest ancestor that does exist and re-attach the rest. This
+ * does not weaken the guard: a real workspace resolves through the real home
+ * and still lands outside the temp root.
+ */
+function realpathThroughMissingLeaves(absolutePath: string): string {
+  const missing: string[] = [];
+  let current = absolutePath;
+
+  for (;;) {
+    try {
+      const resolved = fs.realpathSync.native(current);
+      return missing.length > 0
+        ? path.join(resolved, ...missing.reverse())
+        : resolved;
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        // Reached the filesystem root without finding anything that exists.
+        return absolutePath;
+      }
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
 }
 
 export function getPaprJobsRoot(): string {
