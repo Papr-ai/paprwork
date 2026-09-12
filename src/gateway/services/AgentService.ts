@@ -63,6 +63,7 @@ import { anthropicModelUsesAdaptiveThinking } from "../utils/anthropicAdaptiveTh
 import {
   computeHistoryTokenBudget,
   isContextLengthError,
+  DEFAULT_SESSION_CONTEXT_LIMIT,
   resolveEffectiveContextWindow,
   resolveProviderForModel,
   resolveModelContextWindow,
@@ -4333,6 +4334,7 @@ ${last15.substring(0, 8_000)}`;
       apiKey,
       authType,
       systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
+      contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
 
     let text = "";
@@ -4694,6 +4696,7 @@ ${last15.substring(0, 8_000)}`;
       systemPrompt:
         input.systemPromptOverride ??
         `${this.systemPrompt}\n\n# Isolated Job Run\n${isolatedRunNote}\n- Keep output concise and actionable.`,
+      contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
 
     const { setToolContext, collectJobEnvFromProcess } =
@@ -4932,6 +4935,7 @@ ${last15.substring(0, 8_000)}`;
         apiKey,
         authType,
         systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
+        contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
       };
 
       let text = "";

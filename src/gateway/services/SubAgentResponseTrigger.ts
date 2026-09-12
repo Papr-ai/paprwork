@@ -12,6 +12,7 @@ import type { AgentConfigInternal, Provider } from "../../core/types/agents.js";
 import { getProviderAuth } from "../utils/keyResolver.js";
 import { getApiKeys } from "../utils/keyResolver.js";
 import type { JobRecord } from "./jobs/types.js";
+import { DEFAULT_SESSION_CONTEXT_LIMIT } from "./agent/contextBudget.js";
 
 const notifiedDelegationFinishes = new Set<string>();
 
@@ -111,6 +112,7 @@ async function resolveConfigForChat(
         authType: "apiKey",
         usePaprProxy: paprProxy.usePaprProxy,
         systemPrompt: "",
+        contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
       };
     }
     console.warn(
@@ -125,6 +127,9 @@ async function resolveConfigForChat(
     apiKey,
     authType,
     systemPrompt: "",
+    // Sub-agent replies have no composer to choose a cap; without this they
+    // budget against the model's advertised 1M window.
+    contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
   };
 }
 

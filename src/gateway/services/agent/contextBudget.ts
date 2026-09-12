@@ -108,6 +108,48 @@ export function resolveOutputReserve(
  */
 export const GEMINI_HISTORY_TOKEN_CAP = 150_000;
 
+/**
+ * Window for any session where no user-chosen cap is supplied.
+ *
+ * The interactive composer sends its own `contextLimit` (Enhancement 77) and so
+ * is unaffected by this. Every *other* caller that streams an agent has no
+ * control to send one — background jobs, sub-agent replies, app-agent chat —
+ * and each was built with the field unset.
+ *
+ * Unset is not a conservative default, it is the widest possible one:
+ * {@link resolveEffectiveContextWindow} then returns the model's *advertised*
+ * window, 1M on opus-5. Measured across the same models in one database:
+ *
+ *   interactive, 200K cap -> history budget  15,971, avg 104,007 tok/request
+ *   job, uncapped (1M)    -> history budget 746,637, avg 216,617 tok/request,
+ *                            peaking at 290,629
+ *
+ * A 47x budget gap, and jobs were duly the largest requests we made.
+ *
+ * The leak is mid-turn, not historical. These sessions open on a fresh chat id
+ * (`job:{jobId}:{runId}` and friends) with no prior conversation, so there is
+ * almost nothing for the trimmer to remove — what the 746K budget really
+ * permitted was unbounded accumulation of *tool results* inside one long turn.
+ *
+ * 200K matches the interactive default, so both are budgeted against a window
+ * we have measured rather than a guess. It cannot go far below: tool schemas
+ * alone are ~87K and {@link MIN_CONTEXT_LIMIT} is 128K, at which the budget
+ * clamps to its 8K floor and silently stops bounding anything.
+ *
+ * The resulting history budget is 66,637 — larger than an interactive chat's
+ * 15,971 at the same cap, because these callers leave `maxTokens` unset and so
+ * take the 16K default output reserve instead of the model's advertised 128K.
+ * That asymmetry is deliberate: they carry no conversation but do accumulate
+ * tool results across one long turn, so the spare room lands where it is used.
+ *
+ * Note this is a *budget*, not a price tier. Anthropic bills the full 1M window
+ * at standard rates ("a 900k-token request is billed at the same per-token rate
+ * as a 9k-token request"), so the saving here is purely in tokens not sent —
+ * which is also where the quality saving is, since long tool-heavy context
+ * degrades retrieval well before the window fills.
+ */
+export const DEFAULT_SESSION_CONTEXT_LIMIT = 200_000;
+
 /** Default history-token threshold before proactive summarization (non-Gemini). */
 export const DEFAULT_SUMMARIZE_HISTORY_TOKEN_THRESHOLD = 40_000;
 
