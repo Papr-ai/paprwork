@@ -21,7 +21,12 @@
 > revising this document, records each turn as its *final step* rather than the sum of its
 > billed requests — see "Measurement blind spot 2". It understates multi-step turns by
 > roughly their step count, so it runs opposite to the double-count and the two partly
-> cancelled. That is not yet fixed.
+> cancelled, which is what made the original figures look credible.
+>
+> That defect is now fixed for new turns, but **it cannot be backfilled**: the earlier
+> steps' token counts were never stored, so no recomputation can recover them. The
+> understatement in this document is permanent. On the one turn where the per-step figures
+> survive in a gateway log, the true cost was **14×** the recorded one.
 
 ---
 
@@ -206,9 +211,16 @@ reported as "✅ exact". The Issue 90 backfill corrected the *rate*; the *quanti
 one step. Recorded spend should therefore be read as "cost of the final step of each
 turn", and the true total is materially higher than any figure in this document.
 
-Not yet fixed. Fixing it needs a decision the data alone cannot settle: whether to
-accumulate per-step usage ourselves or read a provider-summed total, which requires
-confirming what `totalUsage` reports for cache fields in the installed AI SDK.
+**Fixed for turns recorded after 2026-09-11** (CLAUDE.md Issue 91). The AI SDK had been
+publishing its own cross-step sum the whole time, on the `finish` chunk as `totalUsage`,
+and the orchestrator was reading a field name belonging to the other provider — so the
+branch never fired on that route. It now folds each `finish-step` into a running total and
+prefers the SDK's own figure when the stream completes. On the 7-step turn above that
+takes the recorded cost from $0.211 to **$3.020**, matching the hand-summed $3.02.
+
+Unlike the double-count, **this cannot be backfilled.** Issue 90 was recoverable because
+every input was still on the row; here the earlier steps' token counts were never written
+anywhere. Every figure in this document therefore remains a lower bound, permanently.
 
 ### Tool payload ranking
 

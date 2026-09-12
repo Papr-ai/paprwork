@@ -131,21 +131,6 @@ import type { TokenUsageForCost } from "./CostCalculation.js";
 
 type StoredTokenUsage = TokenUsageForCost & { totalTokens: number };
 
-function finalizeTokenUsageForBilling(
-  usage: StoredTokenUsage | undefined,
-  cacheReadTokens: number,
-  cacheWriteTokens: number,
-): StoredTokenUsage | undefined {
-  if (!usage) {
-    return undefined;
-  }
-  return {
-    ...usage,
-    cacheReadTokens: usage.cacheReadTokens ?? cacheReadTokens,
-    cacheWriteTokens: usage.cacheWriteTokens ?? cacheWriteTokens,
-  };
-}
-
 /** Why an isolated agent job finished with no assistant text (for job logs). */
 export interface IsolatedJobRunDiagnostics {
   provider: Provider;
@@ -623,8 +608,6 @@ export class AgentService {
      */
     let committedUsage: StoredTokenUsage | undefined;
     let piAiContextTokens = 0; // For pi-ai: last step's actual context window size
-    let lastCacheReadTokens = 0;
-    let lastCacheWriteTokens = 0;
     let cumulativePromptTokens = 0;
     /**
      * Largest step context seen anywhere in this turn. `cumulativePromptTokens`
@@ -693,12 +676,6 @@ export class AgentService {
         return;
       }
 
-      const usage = finalizeTokenUsageForBilling(
-        tokenUsage,
-        lastCacheReadTokens,
-        lastCacheWriteTokens,
-      );
-
       const partialMsg = createPartialAssistantStoredMessage({
         chatId,
         model: config.model,
@@ -707,7 +684,7 @@ export class AgentService {
         toolCalls,
         toolResults,
         sequence,
-        usage,
+        usage: tokenUsage,
         stableId: assistantMessageId,
       });
 
@@ -771,12 +748,6 @@ export class AgentService {
         checkpointTimer = null;
       }
 
-      const usage = finalizeTokenUsageForBilling(
-        tokenUsage,
-        lastCacheReadTokens,
-        lastCacheWriteTokens,
-      );
-
       try {
         const message = params.asAbort
           ? createPartialAssistantStoredMessage({
@@ -787,7 +758,7 @@ export class AgentService {
               toolCalls,
               toolResults,
               sequence,
-              usage,
+              usage: tokenUsage,
               stableId: assistantMessageId,
             })
           : createErrorStoredMessage({
@@ -799,7 +770,7 @@ export class AgentService {
               toolResults,
               errorMessage: params.errorMessage ?? "Unknown error",
               sequence,
-              usage,
+              usage: tokenUsage,
               stableId: assistantMessageId,
             });
 
@@ -1598,8 +1569,6 @@ export class AgentService {
               "./agent/stepContextTokens.js"
             );
             const cache = extractCacheUsageFromStep(step);
-            lastCacheReadTokens = cache.cacheReadTokens;
-            lastCacheWriteTokens = cache.cacheWriteTokens;
             cumulativePromptTokens = resolveStepContextTokens({
               inputTokens,
               cacheReadTokens: cache.cacheReadTokens,
@@ -2279,12 +2248,11 @@ export class AgentService {
               promptTokens: payload.usage.promptTokens || 0,
               completionTokens: payload.usage.completionTokens || 0,
               totalTokens: payload.usage.totalTokens || 0,
-              cacheReadTokens:
-                payload.usage.cacheReadTokens ?? lastCacheReadTokens,
-              cacheWriteTokens:
-                payload.usage.cacheWriteTokens ?? lastCacheWriteTokens,
+              cacheReadTokens: payload.usage.cacheReadTokens,
+              cacheWriteTokens: payload.usage.cacheWriteTokens,
             };
-            // This value is the running stream's total, so it supersedes the
+            // This value is the running stream's total — the orchestrator folds
+            // per-step provider reports so it is one — so it supersedes the
             // previous reading from the *same* stream and adds to earlier ones.
             tokenUsage = addTurnUsage(committedUsage, streamUsage);
             // contextTokens = actual context window size from pi-ai (last step's
@@ -2828,11 +2796,7 @@ export class AgentService {
         toolResults,
         sequence, // Pass V1-style sequence
         stableId: assistantMessageId, // Reuse the same ID from checkpoints
-        usage: finalizeTokenUsageForBilling(
-          tokenUsage,
-          lastCacheReadTokens,
-          lastCacheWriteTokens,
-        ),
+        usage: tokenUsage,
       });
       const streamStorage = resolveStreamStorage();
       if (streamStorage) {
@@ -2866,11 +2830,6 @@ export class AgentService {
           );
         }
 
-        const billedUsage = finalizeTokenUsageForBilling(
-          tokenUsage,
-          lastCacheReadTokens,
-          lastCacheWriteTokens,
-        );
         const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
         const { AmplitudeEvents } = await import(
           "../../core/telemetry/events.js"
@@ -2885,10 +2844,10 @@ export class AgentService {
             steps: summary.steps,
             tool_calls: summary.toolCalls,
             duration_ms: durationMs,
-            prompt_tokens: billedUsage?.promptTokens ?? 0,
-            completion_tokens: billedUsage?.completionTokens ?? 0,
-            cache_read_tokens: billedUsage?.cacheReadTokens,
-            cache_write_tokens: billedUsage?.cacheWriteTokens,
+            prompt_tokens: tokenUsage?.promptTokens ?? 0,
+            completion_tokens: tokenUsage?.completionTokens ?? 0,
+            cache_read_tokens: tokenUsage?.cacheReadTokens,
+            cache_write_tokens: tokenUsage?.cacheWriteTokens,
             compaction_runs: summary.compactionRuns,
             compaction_skips: summary.compactionSkips,
             stale_truncated: summary.staleResultsTruncated,
@@ -2939,9 +2898,6 @@ export class AgentService {
       const actualContextTokens = this.resolveActualContextTokens({
         peakContextTokens,
         piAiContextTokens,
-        tokenUsage,
-        lastCacheReadTokens,
-        lastCacheWriteTokens,
       });
       const messageTokens = stats.token_count;
 
@@ -3107,28 +3063,21 @@ export class AgentService {
    * Takes the turn's peak rather than the last stream's: a wrap-up or plan
    * continuation runs on a fresh, small context, so reading the final figure
    * would report a 384K turn as 5K and never summarize.
+   *
+   * There is deliberately no fall back to the turn's token totals. Those are
+   * sums over every billed request in the turn, so a 4-step turn holding a
+   * 388K context reports 1.5M prompt tokens — a quantity, not a window size.
+   * Both surviving sources are per-step, and if neither was ever populated then
+   * no step was observed and there is no context to report.
    */
   private resolveActualContextTokens(params: {
     peakContextTokens: number;
     piAiContextTokens: number;
-    tokenUsage?: StoredTokenUsage;
-    lastCacheReadTokens: number;
-    lastCacheWriteTokens: number;
   }): number {
     if (params.piAiContextTokens > 0) {
       return params.piAiContextTokens;
     }
-    if (params.peakContextTokens > 0) {
-      return params.peakContextTokens;
-    }
-    if (!params.tokenUsage) {
-      return 0;
-    }
-    return (
-      (params.tokenUsage.promptTokens || 0) +
-      (params.tokenUsage.cacheReadTokens || params.lastCacheReadTokens || 0) +
-      (params.tokenUsage.cacheWriteTokens || params.lastCacheWriteTokens || 0)
-    );
+    return Math.max(0, params.peakContextTokens);
   }
 
   /** Manual or slash-command summarization. */
