@@ -17,6 +17,7 @@ import {
   formatCost,
   formatTokens,
   meterStatus,
+  rawFillFraction,
   type ContextMeter,
 } from "./contextMeterModel";
 import "./ContextMeter.css";
@@ -25,6 +26,8 @@ interface ContextUsagePanelProps {
   meter: ContextMeter;
   info: ContextInfo | null;
   infoLoading: boolean;
+  infoError: string | null;
+  onRetryBreakdown: () => void;
   onClose: () => void;
   onOpenFullInspector: () => void;
 }
@@ -33,6 +36,8 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
   meter,
   info,
   infoLoading,
+  infoError,
+  onRetryBreakdown,
   onClose,
   onOpenFullInspector,
 }) => {
@@ -40,6 +45,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
 
   const fraction = fillFraction(meter);
   const status = meterStatus(fraction);
+  const shownPercent = Math.round(rawFillFraction(meter) * 100);
   const segments = info ? deriveSegments(info) : [];
 
   return (
@@ -60,11 +66,13 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
       <div className="ctx-panel__hero">
         <div>
           <div className={`ctx-panel__pct ctx-panel__pct--${status}`}>
-            {Math.round(fraction * 100)}%
+            {shownPercent}%
           </div>
           <div className="ctx-panel__sub">
             {formatTokens(meter.usedTokens)} of{" "}
             {formatTokens(meter.effectiveWindow)} tokens
+            {/* Say so when the last turn predates the peak measurement. */}
+            {meter.fillSource === "billed" ? " · estimated" : ""}
           </div>
         </div>
         <div className="ctx-panel__hero-right">
@@ -85,6 +93,19 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
 
       {infoLoading && segments.length === 0 ? (
         <div className="ctx-panel__pending">Reading the next prompt…</div>
+      ) : null}
+
+      {!infoLoading && infoError ? (
+        <div className="ctx-panel__failed">
+          <span>{infoError}</span>
+          <button
+            type="button"
+            className="ctx-panel__link"
+            onClick={onRetryBreakdown}
+          >
+            Try again
+          </button>
+        </div>
       ) : null}
 
       <ul className="ctx-legend">
@@ -128,10 +149,14 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         <span>
           {meter.totals.turns} turns · {formatCost(meter.totals.cost)} this chat
         </span>
+        {/* Disabled rather than a no-op: the breakdown it opens is the thing
+            that failed to load, so an enabled button would lie about that. */}
         <button
           type="button"
           className="ctx-panel__link"
           onClick={onOpenFullInspector}
+          disabled={!info}
+          title={info ? undefined : "The context breakdown could not be read."}
         >
           Full inspector ›
         </button>

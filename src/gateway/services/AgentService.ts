@@ -432,7 +432,10 @@ export class AgentService {
   ): Promise<{ messageId: string; checkpointInserted: boolean }> {
     const explicitReuse = options?._reuseAssistantMessageId?.trim();
     if (explicitReuse) {
-      const exists = await this.assistantMessageRowExists(chatId, explicitReuse);
+      const exists = await this.assistantMessageRowExists(
+        chatId,
+        explicitReuse,
+      );
       return { messageId: explicitReuse, checkpointInserted: exists };
     }
 
@@ -626,8 +629,14 @@ export class AgentService {
     // Stable message ID shared with the UI via stream-start. Reused on
     // hidden continue, context compress retry, and silent retry so one turn
     // does not fork into duplicate assistant rows.
-    const { messageId: assistantMessageId, checkpointInserted: checkpointRowExists } =
-      await this.resolveStreamingAssistantMessageId(chatId, userMessage, options);
+    const {
+      messageId: assistantMessageId,
+      checkpointInserted: checkpointRowExists,
+    } = await this.resolveStreamingAssistantMessageId(
+      chatId,
+      userMessage,
+      options,
+    );
     getStreamProfiler(chatId)?.mark("gateway.resolveAssistantMessageId");
     let checkpointInserted = checkpointRowExists;
     let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1410,7 +1419,6 @@ export class AgentService {
       let cumulativeSteps = 0;
       cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
-
       // Native provider search tools (OpenAI web_search, Gemini google_search) target
       // direct provider APIs — they break when the model routes through Papr proxy.
       const nativeSearchTools = config.usePaprProxy
@@ -1568,9 +1576,8 @@ export class AgentService {
           if (useAnthropicPromptCache) {
             const { extractCacheUsageFromStep } =
               await import("./agent/promptCacheControl.js");
-            const { resolveStepContextTokens } = await import(
-              "./agent/stepContextTokens.js"
-            );
+            const { resolveStepContextTokens } =
+              await import("./agent/stepContextTokens.js");
             const cache = extractCacheUsageFromStep(step);
             cumulativePromptTokens = resolveStepContextTokens({
               inputTokens,
@@ -2023,13 +2030,11 @@ export class AgentService {
           piToolContext,
           // Resume the loop when the model stops with plan work outstanding.
           async (stopInfo) => {
-
             if (abortController.signal.aborted) {
               return null;
             }
-            const { decideTurnEnd, buildPlanContinuationNudge } = await import(
-              "./agent/turnContinuation.js"
-            );
+            const { decideTurnEnd, buildPlanContinuationNudge } =
+              await import("./agent/turnContinuation.js");
             const planState = await this.loadPendingPlanState(chatId);
             const decision = decideTurnEnd({
               pendingPlanSteps: planState.pendingSteps,
@@ -2070,7 +2075,6 @@ export class AgentService {
       } else {
         // Use AI SDK for standard providers (OpenAI Platform, Anthropic, Google)
 
-        
         const streamProfiler = getStreamProfiler(chatId);
         await streamProfiler?.measure("gateway.aiSdk.contextLog", async () => {
           // 🔍 LOG EXACT CONTEXT SENT TO AI SDK (can be slow on large histories)
@@ -2090,7 +2094,9 @@ export class AgentService {
           console.log(
             `\nTools available: ${Object.keys(streamTextOptions.tools || {}).length}`,
           );
-          console.log(`Max output tokens: ${streamTextOptions.maxOutputTokens}`);
+          console.log(
+            `Max output tokens: ${streamTextOptions.maxOutputTokens}`,
+          );
           console.log(
             `Max steps: ${streamTextOptions.stopWhen ? "custom" : "default"}`,
           );
@@ -2838,9 +2844,8 @@ export class AgentService {
         }
 
         const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
-        const { AmplitudeEvents } = await import(
-          "../../core/telemetry/events.js"
-        );
+        const { AmplitudeEvents } =
+          await import("../../core/telemetry/events.js");
         getGatewayTelemetry().trackFireAndForget(
           AmplitudeEvents.AGENT_TURN_COMPLETED,
           {
@@ -3411,16 +3416,14 @@ ${last15.substring(0, 8_000)}`;
    *
    * Deliberately does NOT build the system prompt or tool schemas — that is
    * `inspectContext`, which costs hundreds of milliseconds and is only needed
-   * when the user opens the breakdown. Fill comes from `prompt_tokens` on the
-   * last billed turn, the figure the provider actually charged for, so the
-   * ring and the invoice cannot disagree.
+   * when the user opens the breakdown. Both numbers are provider-reported
+   * rather than estimated, so the ring and the invoice cannot disagree — but
+   * they are two different measurements, see the fill comment below.
    */
   async getContextMeter(chatId: string, selectedModel: string) {
     const session = this.sessionManager.getSessionIfExists(chatId);
     const model = session?.config.model ?? selectedModel;
-    const provider =
-      session?.config.provider ??
-      resolveProviderForModel(model);
+    const provider = session?.config.provider ?? resolveProviderForModel(model);
     const contextLimit = session?.config.contextLimit;
 
     const modelWindow = resolveModelContextWindow(provider, model);
@@ -3431,8 +3434,28 @@ ${last15.substring(0, 8_000)}`;
     );
 
     const { lastTurn, totals } = await this.storageManager.getTurnUsage(chatId);
-    const usedTokens = lastTurn
-      ? Math.max(lastTurn.promptTokens, lastTurn.peakContextTokens ?? 0)
+
+    // Fill is the largest SINGLE request the turn made, not the turn's billed
+    // total. Those diverge by step count: a 107-step turn in this workspace
+    // billed 199,803 prompt tokens against a measured 148,410-token peak, and
+    // the gap grows without bound as steps do. `prompt_tokens` sums every
+    // step, so using it here would report the invoice as fullness and peg the
+    // ring at 100% on any long turn.
+    const measuredPeak = lastTurn?.peakContextTokens ?? 0;
+    const fillSource: "measured" | "billed" | "none" = !lastTurn
+      ? "none"
+      : measuredPeak > 0
+        ? "measured"
+        : "billed";
+
+    // A missing peak dates the row rather than just lacking a field: the peak
+    // and step columns arrived in the same migration and are always both set
+    // or both null (3,695 rows to 5 in this workspace, no mixed case). Those
+    // older rows also predate the turn total being summed, so their
+    // `prompt_tokens` still is one request and must NOT be divided by steps.
+    // Clamped because a stale row may name a window the current model lacks.
+    const fallback = lastTurn
+      ? Math.min(lastTurn.promptTokens, effectiveWindow)
       : 0;
 
     return {
@@ -3441,7 +3464,8 @@ ${last15.substring(0, 8_000)}`;
       modelWindow,
       effectiveWindow,
       userCap: contextLimit ?? null,
-      usedTokens,
+      usedTokens: fillSource === "measured" ? measuredPeak : fallback,
+      fillSource,
       lastTurn,
       totals,
     };

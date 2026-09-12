@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
 import { getPaprDocumentsDir } from "../utils/paprRoot.js";
+import { asToonOrRows } from "../utils/toonRows.js";
 
 const createDocumentSchema = z.object({
   title: z
@@ -140,7 +141,7 @@ export const listDocumentsTool = createTool({
       : await service.listDocuments();
     return {
       success: true,
-      data: documents,
+      data: asToonOrRows("documents", documents),
     };
   },
 });

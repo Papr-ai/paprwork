@@ -2,8 +2,11 @@
  * Data model behind the context meter.
  *
  * One question drives the whole surface: *is this turn about to run out of
- * room, and what did it cost?* Fill comes from the provider's own
- * `prompt_tokens`, not an estimate, so the dial and the invoice agree.
+ * room, and what did it cost?*
+ *
+ * Two provider-reported numbers answer it and they are not interchangeable:
+ * the peak single-request context says how full the window got, while the
+ * billed prompt total sums every step and says what it cost.
  */
 
 import type { ContextInfo } from "./ContextInspectorModal";
@@ -24,7 +27,10 @@ export interface TurnUsage {
   compactionSkips: number | null;
   recoveryFetches: number | null;
   redundantRecoveries: number | null;
+  /** Largest single request in the turn — the window-fill number. */
   peakContextTokens: number | null;
+  /** What the chars/4 estimator believed, for showing its drift. */
+  estimatedContextTokens: number | null;
   contextBudgetTokens: number | null;
 }
 
@@ -35,6 +41,12 @@ export interface ContextMeter {
   effectiveWindow: number;
   userCap: number | null;
   usedTokens: number;
+  /**
+   * Where fill came from. "billed" means the turn predates the peak
+   * measurement and the number is a per-step average, so the UI says so
+   * rather than implying a precision it does not have.
+   */
+  fillSource: "measured" | "billed" | "none";
   lastTurn: TurnUsage | null;
   totals: {
     turns: number;
@@ -64,9 +76,22 @@ export function meterStatus(fraction: number): MeterStatus {
   return "calm";
 }
 
+/** Clamped for geometry — a ring cannot draw more than full. */
 export function fillFraction(meter: ContextMeter): number {
+  return Math.min(rawFillFraction(meter), 1);
+}
+
+/**
+ * Unclamped, for the number the user reads.
+ *
+ * Over 100% is a real state, not an error: the last turn may have been
+ * measured on a wider model than the one now selected, in which case the next
+ * turn will not fit. Clamping that to "100%" would hide the one case where
+ * the meter has something urgent to say.
+ */
+export function rawFillFraction(meter: ContextMeter): number {
   if (!meter.effectiveWindow) return 0;
-  return Math.min(meter.usedTokens / meter.effectiveWindow, 1);
+  return meter.usedTokens / meter.effectiveWindow;
 }
 
 export function formatTokens(tokens: number): string {

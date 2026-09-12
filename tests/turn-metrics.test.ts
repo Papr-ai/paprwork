@@ -240,7 +240,12 @@ describe("compaction reports whether it ran", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call_1", name: "bash", arguments: { command: "ls" } },
+          {
+            type: "toolCall",
+            id: "call_1",
+            name: "bash",
+            arguments: { command: "ls" },
+          },
         ],
       },
       {
@@ -252,7 +257,12 @@ describe("compaction reports whether it ran", () => {
       {
         role: "assistant",
         content: [
-          { type: "toolCall", id: "call_2", name: "bash", arguments: { command: "pwd" } },
+          {
+            type: "toolCall",
+            id: "call_2",
+            name: "bash",
+            arguments: { command: "pwd" },
+          },
         ],
       },
       {
@@ -419,7 +429,10 @@ describe("context meter — reading measured usage", () => {
       summarizeTurnMetrics(
         (() => {
           const m = createTurnMetrics();
-          recordStep(m, { estimatedTokens: 180_000, historyTokenBudget: 200_000 });
+          recordStep(m, {
+            estimatedTokens: 180_000,
+            historyTokenBudget: 200_000,
+          });
           setToolCallCount(m, 12);
           return m;
         })(),
@@ -433,6 +446,34 @@ describe("context meter — reading measured usage", () => {
     expect(turn?.toolCalls).toBe(12);
     expect(turn?.durationMs).toBe(48_200);
     expect(turn?.peakContextTokens).toBe(180_000);
+  });
+
+  it("keeps the billed total and the context peak as separate figures", () => {
+    // The turn total sums every step, so it grows with step count while the
+    // peak does not. Reading the meter's fill off `prompt_tokens` would report
+    // the invoice as fullness — on a long turn, far past the window.
+    const db = openDb();
+    insert(db, {
+      id: "long",
+      chat_id: "c1",
+      role: "assistant",
+      sequence: 1,
+      prompt_tokens: 1_600_000,
+      cost: 1.07,
+    });
+    const m = createTurnMetrics();
+    for (let step = 0; step < 107; step++) {
+      recordStep(m, { estimatedTokens: 90_000, historyTokenBudget: 124_637 });
+    }
+    recordObservedContext(m, 148_410);
+    storeTurnMetrics(db, "long", summarizeTurnMetrics(m), 900_000);
+
+    const turn = readLastTurnUsage(db, "c1");
+    expect(turn?.promptTokens).toBe(1_600_000);
+    expect(turn?.peakContextTokens).toBe(148_410);
+    // The estimate is kept beside it, so the drift stays measurable.
+    expect(turn?.estimatedContextTokens).toBe(90_000);
+    expect(turn!.peakContextTokens!).toBeLessThan(turn!.promptTokens);
   });
 
   it("ignores user rows and unbilled assistant rows", () => {

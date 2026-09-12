@@ -91,9 +91,10 @@ export function storeTurnMetrics(
 /**
  * One turn's measured usage, for the context meter.
  *
- * Read straight off the last assistant row rather than re-estimated, because
- * `prompt_tokens` is what the provider actually billed for the context this
- * chat carries — an estimate would disagree with the invoice.
+ * Two different quantities live on this row and must not be confused:
+ * `promptTokens` is the turn's billed total across every step, and
+ * `peakContextTokens` is the largest single request inside it. Window fill is
+ * the second one; the invoice is the first.
  */
 export interface TurnUsageRow {
   messageId: string;
@@ -111,7 +112,16 @@ export interface TurnUsageRow {
   compactionSkips: number | null;
   recoveryFetches: number | null;
   redundantRecoveries: number | null;
+  /**
+   * Largest single-request context the provider reported for this turn.
+   *
+   * This — not `promptTokens` — is how full the window got. Since the turn
+   * total was fixed to sum every step, `prompt_tokens` grows with step count
+   * and is a billing figure, not a context size.
+   */
   peakContextTokens: number | null;
+  /** What the chars/4 estimator believed, for measuring its drift. */
+  estimatedContextTokens: number | null;
   contextBudgetTokens: number | null;
 }
 
@@ -133,7 +143,8 @@ const TURN_USAGE_SELECT = `
          turn_steps, turn_tool_calls, turn_duration_ms,
          turn_compaction_runs, turn_compaction_skips,
          turn_recovery_fetches, turn_redundant_recoveries,
-         turn_peak_context_tokens, turn_context_budget_tokens
+         turn_peak_context_tokens, turn_estimated_context_tokens,
+         turn_context_budget_tokens
   FROM messages
   WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
   ORDER BY sequence DESC, timestamp DESC
@@ -171,6 +182,7 @@ export function readLastTurnUsage(
     recoveryFetches: int("turn_recovery_fetches"),
     redundantRecoveries: int("turn_redundant_recoveries"),
     peakContextTokens: int("turn_peak_context_tokens"),
+    estimatedContextTokens: int("turn_estimated_context_tokens"),
     contextBudgetTokens: int("turn_context_budget_tokens"),
   };
 }

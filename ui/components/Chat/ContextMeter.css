@@ -234,6 +234,16 @@
   color: var(--text-tertiary);
 }
 
+.ctx-panel__failed {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
 /* ── legend ───────────────────────────────────────────────── */
 
 .ctx-legend {
@@ -481,6 +491,12 @@
   opacity: 0.85;
 }
 
-.ctx-panel__link:hover {
+.ctx-panel__link:hover:not(:disabled) {
   opacity: 1;
+}
+
+.ctx-panel__link:disabled {
+  color: var(--text-tertiary);
+  cursor: not-allowed;
+  opacity: 0.5;
 }
