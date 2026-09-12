@@ -33,7 +33,8 @@ interface ContextUsagePanelProps {
   infoError: string | null;
   onRetryBreakdown: () => void;
   onClose: () => void;
-  onOpenFullInspector: () => void;
+  /** A segment id opens the inspector already on that section. */
+  onOpenFullInspector: (sectionId?: string) => void;
 }
 
 export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
@@ -147,7 +148,11 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
               </button>
               {isOpen && info ? (
                 <div className="ctx-detail">
-                  <ContextSegmentDetail segmentId={segment.id} info={info} />
+                  <ContextSegmentDetail
+                    segment={segment}
+                    info={info}
+                    onOpenFull={onOpenFullInspector}
+                  />
                 </div>
               ) : null}
             </li>
@@ -166,7 +171,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         <button
           type="button"
           className="ctx-panel__link"
-          onClick={onOpenFullInspector}
+          onClick={() => onOpenFullInspector()}
           disabled={!info}
           title={info ? undefined : "The context breakdown could not be read."}
         >
