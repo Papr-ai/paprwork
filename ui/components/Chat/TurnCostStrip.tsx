@@ -13,6 +13,7 @@ import {
   formatDuration,
   formatTokens,
   type ContextMeter,
+  type LiveTurn,
 } from "./contextMeterModel";
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
@@ -22,9 +23,46 @@ const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   </div>
 );
 
-export const TurnCostStrip: React.FC<{ meter: ContextMeter }> = ({ meter }) => {
+export const TurnCostStrip: React.FC<{
+  meter: ContextMeter;
+  live: LiveTurn | null;
+}> = ({ meter, live }) => {
   const [open, setOpen] = useState(false);
   const turn = meter.lastTurn;
+
+  /**
+   * A running turn takes over the strip. The alternative — showing the
+   * previous turn's figures under the heading "This turn" — is what made the
+   * panel look broken: four em-dashes and a stale price, while the agent was
+   * visibly doing work.
+   */
+  if (live) {
+    return (
+      <div className="ctx-turn ctx-turn--live">
+        <div className="ctx-turn__head">
+          <span className="ctx-turn__title">This turn</span>
+          <span className="ctx-turn__running">running</span>
+        </div>
+        <div className="ctx-turn__stats">
+          <Stat label="steps" value={String(live.steps)} />
+          <Stat label="tools" value={String(live.toolCalls)} />
+          <Stat label="time" value={formatDuration(live.elapsedMs)} />
+          <Stat
+            label="context"
+            value={
+              live.peakContextTokens
+                ? formatTokens(live.peakContextTokens)
+                : "—"
+            }
+          />
+        </div>
+        {/* Cost is the one figure with no honest live value: providers report
+            it when the turn closes. Naming the omission beats a placeholder
+            number that silently changes. */}
+        <p className="ctx-turn__note">Cost is billed when the turn finishes.</p>
+      </div>
+    );
+  }
 
   if (!turn) {
     return (

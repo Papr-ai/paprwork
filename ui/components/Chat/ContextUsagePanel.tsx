@@ -15,15 +15,19 @@ import {
   deriveSegments,
   fillFraction,
   formatCost,
+  formatDuration,
   formatTokens,
   meterStatus,
   rawFillFraction,
   type ContextMeter,
+  type LiveTurn,
 } from "./contextMeterModel";
 import "./ContextMeter.css";
 
 interface ContextUsagePanelProps {
   meter: ContextMeter;
+  /** Non-null while a turn is running, with a client-ticked elapsed clock. */
+  live: LiveTurn | null;
   info: ContextInfo | null;
   infoLoading: boolean;
   infoError: string | null;
@@ -34,6 +38,7 @@ interface ContextUsagePanelProps {
 
 export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
   meter,
+  live,
   info,
   infoLoading,
   infoError,
@@ -52,6 +57,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
     <div className="ctx-panel" role="dialog" aria-label="Context usage">
       <header className="ctx-panel__head">
         <span className="ctx-panel__title">Context</span>
+        {live ? <span className="ctx-panel__live">Live</span> : null}
         <span className="ctx-panel__model">{meter.model}</span>
         <button
           type="button"
@@ -76,10 +82,16 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
           </div>
         </div>
         <div className="ctx-panel__hero-right">
+          {/* A running turn has no cost yet — the provider reports it when the
+              turn closes. The elapsed clock takes the slot instead, because
+              repeating the *previous* turn's price next to a "Live" badge is
+              the one reading that would be actively wrong. */}
           <div className="ctx-panel__cost">
-            {formatCost(meter.lastTurn?.cost ?? 0)}
+            {live
+              ? formatDuration(live.elapsedMs)
+              : formatCost(meter.lastTurn?.cost ?? 0)}
           </div>
-          <div className="ctx-panel__sub">last turn</div>
+          <div className="ctx-panel__sub">{live ? "running" : "last turn"}</div>
         </div>
       </div>
 
@@ -143,7 +155,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         })}
       </ul>
 
-      <TurnCostStrip meter={meter} />
+      <TurnCostStrip meter={meter} live={live} />
 
       <footer className="ctx-panel__foot">
         <span>

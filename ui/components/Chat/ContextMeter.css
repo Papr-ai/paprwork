@@ -500,3 +500,89 @@
   cursor: not-allowed;
   opacity: 0.5;
 }
+
+/* ── live turn ────────────────────────────────────────────── */
+
+/*
+ * Motion is the whole point of this block. Steps land seconds apart, so
+ * between them every number on the panel is legitimately unchanged — and a
+ * panel of unchanging numbers is exactly what "it's frozen" looks like. The
+ * sweep and the pulse carry the "still working" signal so the figures don't
+ * have to fake it.
+ */
+
+.ctx-ring__sweep {
+  stroke: var(--accent);
+  opacity: 0.35;
+  transform-origin: 50% 50%;
+  animation: ctx-sweep 1.6s linear infinite;
+}
+
+@keyframes ctx-sweep {
+  from {
+    transform: rotate(-90deg);
+  }
+  to {
+    transform: rotate(270deg);
+  }
+}
+
+/* The dial is 20px in a dense composer row: a scale/opacity pulse reads at
+   that size where a colour change does not. */
+.ctx-ring.is-live .ctx-ring__label {
+  animation: ctx-breathe 1.8s var(--ease) infinite;
+}
+
+@keyframes ctx-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.ctx-panel__live {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  animation: ctx-breathe 1.8s var(--ease) infinite;
+}
+
+.ctx-turn__running {
+  font-size: 10px;
+  color: var(--accent);
+  animation: ctx-breathe 1.8s var(--ease) infinite;
+}
+
+/* Live figures are provisional — every one of them is still going up. Tabular
+   numerals keep the row from reflowing as digits are added, which is its own
+   kind of flicker. */
+.ctx-turn--live .ctx-stat__value {
+  font-variant-numeric: tabular-nums;
+  transition: color var(--dur-2) var(--ease);
+}
+
+.ctx-turn__note {
+  margin: 8px 0 0;
+  font-size: 10px;
+  color: var(--text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctx-ring__sweep,
+  .ctx-ring.is-live .ctx-ring__label,
+  .ctx-panel__live,
+  .ctx-turn__running {
+    animation: none;
+  }
+  .ctx-ring__sweep {
+    opacity: 0.5;
+  }
+}

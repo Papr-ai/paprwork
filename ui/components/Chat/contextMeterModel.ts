@@ -34,6 +34,21 @@ export interface TurnUsage {
   contextBudgetTokens: number | null;
 }
 
+/**
+ * The turn currently running. Present only while the agent is working, and
+ * deliberately thinner than `TurnUsage`: cost and cache splits are not known
+ * until the provider closes the turn, and inventing them mid-flight would put
+ * a number on screen that later changes for no reason the user can see.
+ */
+export interface LiveTurn {
+  model: string;
+  startedAt: string;
+  elapsedMs: number;
+  steps: number;
+  toolCalls: number;
+  peakContextTokens: number;
+}
+
 export interface ContextMeter {
   model: string;
   provider: string;
@@ -42,11 +57,12 @@ export interface ContextMeter {
   userCap: number | null;
   usedTokens: number;
   /**
-   * Where fill came from. "billed" means the turn predates the peak
-   * measurement and the number is a per-step average, so the UI says so
-   * rather than implying a precision it does not have.
+   * Where fill came from. "live" is the turn in progress; "billed" means the
+   * turn predates the peak measurement and the number is a per-step average,
+   * so the UI says so rather than implying a precision it does not have.
    */
-  fillSource: "measured" | "billed" | "none";
+  fillSource: "live" | "measured" | "billed" | "none";
+  liveTurn?: LiveTurn | null;
   lastTurn: TurnUsage | null;
   totals: {
     turns: number;

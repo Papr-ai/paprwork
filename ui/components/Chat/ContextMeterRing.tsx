@@ -15,6 +15,12 @@ interface ContextMeterRingProps {
   size?: number;
   /** Render the percentage beside the ring. */
   showLabel?: boolean;
+  /**
+   * A turn is running. Steps land seconds apart, so between them the fill is
+   * genuinely unchanged — without this the dial is indistinguishable from a
+   * dead one during exactly the wait it is supposed to narrate.
+   */
+  live?: boolean;
 }
 
 const STROKE = 2.5;
@@ -24,6 +30,7 @@ export const ContextMeterRing: React.FC<ContextMeterRingProps> = ({
   status,
   size = 20,
   showLabel = false,
+  live = false,
 }) => {
   const radius = (size - STROKE) / 2;
   const circumference = 2 * Math.PI * radius;
@@ -31,7 +38,7 @@ export const ContextMeterRing: React.FC<ContextMeterRingProps> = ({
   const percent = Math.round(clamped * 100);
 
   return (
-    <span className={`ctx-ring ctx-ring--${status}`}>
+    <span className={`ctx-ring ctx-ring--${status}${live ? " is-live" : ""}`}>
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle
           className="ctx-ring__track"
@@ -41,6 +48,22 @@ export const ContextMeterRing: React.FC<ContextMeterRingProps> = ({
           strokeWidth={STROKE}
           fill="none"
         />
+        {/* Painted after the track and before the fill, so it reads as motion
+            *in* the empty part of the dial. It reports activity and nothing
+            else — deliberately not tied to progress, because the one thing a
+            running turn cannot know is how many steps are left. */}
+        {live ? (
+          <circle
+            className="ctx-ring__sweep"
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            strokeWidth={STROKE}
+            fill="none"
+            strokeLinecap="round"
+            strokeDasharray={`${circumference * 0.22} ${circumference}`}
+          />
+        ) : null}
         <circle
           className="ctx-ring__fill"
           cx={size / 2}

@@ -20,6 +20,13 @@ import {
 } from "./contextMeterModel";
 import "./ContextMeter.css";
 
+/**
+ * Cheap enough to run every second: one indexed SQLite row plus an in-memory
+ * map read, over a local socket. The ceiling on freshness is the agent's step
+ * boundary, not this.
+ */
+const LIVE_POLL_MS = 1000;
+
 interface ContextMeterProps {
   chatId: string;
   model: string;
@@ -41,6 +48,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
   const [info, setInfo] = useState<ContextInfo | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoError, setInfoError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
   const wasSending = useRef(isSending);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -60,10 +68,40 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
     void loadMeter();
   }, [loadMeter]);
 
+  /**
+   * While the agent works, re-read on a timer.
+   *
+   * The turn is the thing the user is watching and it is the one thing the
+   * old meter could not see: everything about a turn is written to SQLite
+   * once, at the end, so a refresh keyed only to the end of streaming left the
+   * dial frozen for the entire time it had something to say. A step boundary
+   * is seconds apart at best, so a 1s poll is never the limiting factor —
+   * `getContextMeter` is a single indexed row plus an in-memory read.
+   */
   useEffect(() => {
+    if (!isSending) return;
+    void loadMeter();
+    const timer = window.setInterval(() => void loadMeter(), LIVE_POLL_MS);
+    return () => window.clearInterval(timer);
+  }, [isSending, loadMeter]);
+
+  useEffect(() => {
+    // One final read after the turn lands, to swap the live figures for the
+    // billed ones — cost only exists once the provider closes the turn.
     if (wasSending.current && !isSending) void loadMeter();
     wasSending.current = isSending;
   }, [isSending, loadMeter]);
+
+  /**
+   * The elapsed clock ticks on its own rather than waiting for a poll: time is
+   * the one number that advances with no server involvement, and a "time" stat
+   * that jumps in one-second steps looks stalled next to a spinner.
+   */
+  useEffect(() => {
+    if (!meter?.liveTurn) return;
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [meter?.liveTurn]);
 
   /**
    * Unlike `loadMeter`, this answers an explicit click, so a failure has to be
@@ -131,12 +169,27 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
 
   const fraction = fillFraction(meter);
   const status = meterStatus(fraction);
+  // `tick` exists only to force this render; its value is never used. Elapsed
+  // is recomputed from the start time rather than accumulated, so a missed
+  // interval — a backgrounded window throttling timers — corrects itself
+  // instead of drifting permanently behind.
+  void tick;
+  const live = meter.liveTurn
+    ? {
+        ...meter.liveTurn,
+        elapsedMs: Math.max(
+          meter.liveTurn.elapsedMs,
+          Date.now() - new Date(meter.liveTurn.startedAt).getTime(),
+        ),
+      }
+    : null;
 
   return (
     <div className="ctx-meter" ref={containerRef}>
       {open ? (
         <ContextUsagePanel
           meter={meter}
+          live={live}
           info={info}
           infoLoading={infoLoading}
           infoError={infoError}
@@ -159,7 +212,10 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
         <ContextMeterRing
           fraction={fraction}
           status={status}
-          showLabel={status !== "calm"}
+          live={Boolean(live)}
+          // A running turn is the moment the number matters most, so the label
+          // stops being conditional on the window being nearly full.
+          showLabel={status !== "calm" || Boolean(live)}
         />
       </button>
     </div>
