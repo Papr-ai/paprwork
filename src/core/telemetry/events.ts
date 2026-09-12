@@ -257,6 +257,13 @@ export interface AgentTurnCompletedProperties extends BaseEventProperties {
 
   steps: number;
   tool_calls: number;
+  /**
+   * Tool calls per step — how wide each round-trip was. Steps are the billed
+   * unit (each re-sends the whole context), so this separates a turn that did a
+   * lot of work from one that merely took a lot of trips, and it is the metric
+   * the batching guidance moves.
+   */
+  tool_calls_per_step: number | null;
   duration_ms: number;
 
   prompt_tokens: number;

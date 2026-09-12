@@ -243,6 +243,16 @@ export interface TurnMetricsSummary {
   estimatorErrorRatio: number | null;
   /** Redundant recoveries per tool call — the loop's rate, directly. */
   redundantRecoveryRate: number | null;
+  /**
+   * Tool calls per step: how *wide* each round-trip was.
+   *
+   * Steps are what cost money — every one re-sends the whole context — so the
+   * same work batched three-wide costs a third of what it costs one-wide. This
+   * is the ratio the batching guidance targets, and the only way to tell a turn
+   * that did a lot of work from one that merely took a lot of trips. Null with
+   * no steps, so an empty turn does not report a confident 0.
+   */
+  toolCallsPerStep: number | null;
   planCount: number;
   planTotalSteps: number;
   planCompletedSteps: number;
@@ -270,6 +280,9 @@ export function summarizeTurnMetrics(
       ? round3(metrics.redundantRecoveries / metrics.toolCalls)
       : null;
 
+  const toolCallsPerStep =
+    metrics.steps > 0 ? round3(metrics.toolCalls / metrics.steps) : null;
+
   const planCount = plan?.planCount ?? 0;
 
   return {
@@ -288,6 +301,7 @@ export function summarizeTurnMetrics(
     contextFillRatio,
     estimatorErrorRatio,
     redundantRecoveryRate,
+    toolCallsPerStep,
     planCount,
     planTotalSteps: plan?.totalSteps ?? 0,
     planCompletedSteps: plan?.completedSteps ?? 0,
