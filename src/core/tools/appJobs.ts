@@ -28,10 +28,6 @@ import { validateMiniAppIcon } from "../utils/miniAppIconValidation.js";
 import { getPaprBundlesDir } from "../utils/paprRoot.js";
 import { asToonOrRows } from "../utils/toonRows.js";
 import { platformIdsFromRequirements } from "../../gateway/utils/platformCdpBridge.js";
-import {
-  getCloudAppPublishTool,
-  publishCloudAppTool,
-} from "./cloudPublish.js";
 import { getApiKeysForSanitization, sanitizeError } from "./security.js";
 import {
   buildCappedRuntimeErrorList,
@@ -4425,8 +4421,10 @@ export const appJobsTools = [
   importAppBundleTool,
   listAppBundlesTool,
   getAppBundleInfoTool,
-  getCloudAppPublishTool,
-  publishCloudAppTool,
+  // getCloudAppPublishTool / publishCloudAppTool are deliberately absent: they
+  // live in `cloudPublishTools`, which `allTools` already spreads. Listing them
+  // here too registered each twice, and `ToolRegistry.register` is a `Map.set`
+  // — so the second silently shadowed the first with no warning.
   listAppFileVersionsTool,
   getAppFileVersionTool,
   restoreAppFileVersionTool,
