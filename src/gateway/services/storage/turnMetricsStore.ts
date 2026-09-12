@@ -147,8 +147,15 @@ const TURN_USAGE_SELECT = `
          turn_context_budget_tokens
   FROM messages
   WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
-  ORDER BY sequence DESC, timestamp DESC
+  ORDER BY timestamp DESC, rowid DESC
   LIMIT 1`;
+// `sequence` looks like an ordinal and is not one: the column holds the turn's
+// parts array as JSON (`[{"type":"thinking",...}]`, ~100-300KB a row). Sorting
+// by it compared those blobs as text, so "last turn" was whichever turn began
+// with the alphabetically largest thinking block — in this workspace a turn
+// from nine days earlier, which is why the meter read 32 tokens and 0% while
+// showing a $2.74 cost from a different turn. Timestamps are ISO-8601, so
+// lexical DESC is chronological; rowid breaks ties inside the same second.
 
 /** Last billed assistant turn in a chat, or null before the first reply. */
 export function readLastTurnUsage(

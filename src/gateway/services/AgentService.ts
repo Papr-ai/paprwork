@@ -115,6 +115,12 @@ import {
   setToolCallCount,
   summarizeTurnMetrics,
 } from "./agent/turnMetrics.js";
+import {
+  beginLiveTurn,
+  endLiveTurn,
+  readFreshLiveTurn,
+  updateLiveTurn,
+} from "./agent/liveTurn.js";
 import { RATE_LIMIT_EXHAUSTED_ERROR_CODE } from "../utils/providerRateLimitRetry.js";
 import { streamCursorAgentTurn } from "./providers/cursorAgentStream.js";
 import {
@@ -593,6 +599,10 @@ export class AgentService {
     // Mark streaming only after a slot is acquired — pi-ai / AI SDK work has not started yet.
     this.sessionManager.setStreaming(chatId, true);
     clearInFlightToolResults(chatId);
+
+    // Declared out here so the outer `finally` can close the live meter. The
+    // turn itself is opened deeper in, once tool context exists.
+    let liveTurnToken: number | null = null;
 
     // Track response state for error recovery
     let assistantText = "";
@@ -1125,6 +1135,12 @@ export class AgentService {
       // against the turn that provoked it.
       const turnMetrics = createTurnMetrics();
       const turnStartedAt = Date.now();
+      // Opens the live snapshot the context meter polls. Registered before the
+      // first step rather than after it so the panel has an elapsed clock and a
+      // 0-step reading immediately — the first step of a long turn can take
+      // thirty seconds, and that is exactly the window where a frozen meter
+      // reads as broken.
+      liveTurnToken = beginLiveTurn(chatId, config.model);
       setToolContext(chatId, {
         turnMetrics,
         ...(Object.keys(mergedJobEnv).length > 0
@@ -1555,6 +1571,13 @@ export class AgentService {
 
         onStepFinish: async (step: StepResult<any>) => {
           cumulativeSteps++;
+          // Published before the usage guard below: a provider that reports no
+          // usage still ran a step, and the step count is the one number the
+          // meter can always honestly show.
+          updateLiveTurn(chatId, {
+            steps: cumulativeSteps,
+            toolCalls: toolCalls.length,
+          });
 
           // Debug: log the actual step structure to see what we're getting
           if (!step.usage || step.usage.inputTokens === undefined) {
@@ -1599,6 +1622,17 @@ export class AgentService {
           // is what makes `turn_peak_context_tokens` the billed prompt rather
           // than the chars/4 estimate, which runs ~1.9× low on real turns.
           recordObservedContext(turnMetrics, cumulativePromptTokens);
+
+          // Same numbers, published where a mid-turn read can see them. This
+          // is the only write path for the live meter; everything else about
+          // the turn is persisted once, at the end.
+          updateLiveTurn(chatId, {
+            steps: cumulativeSteps,
+            toolCalls: toolCalls.length,
+            peakContextTokens,
+            billedPromptTokens: cumulativePromptTokens,
+            billedCompletionTokens: outputTokens ?? 0,
+          });
 
           console.log(
             `[AgentService] 📈 Step ${cumulativeSteps} - input: ${inputTokens} tokens, output: ${outputTokens} tokens (full context: ${cumulativePromptTokens})`,
@@ -2975,6 +3009,9 @@ export class AgentService {
       // the controller already — don't clobber its state.
       this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
       clearInFlightToolResults(chatId);
+      // Token-guarded for the same reason as the line above: by the time this
+      // runs, the next turn may already own the chat.
+      if (liveTurnToken !== null) endLiveTurn(chatId, liveTurnToken);
 
       if (!options?.isSubAgentTrigger) {
         void import("./SubAgentResponseTrigger.js")
@@ -3442,7 +3479,7 @@ ${last15.substring(0, 8_000)}`;
     // step, so using it here would report the invoice as fullness and peg the
     // ring at 100% on any long turn.
     const measuredPeak = lastTurn?.peakContextTokens ?? 0;
-    const fillSource: "measured" | "billed" | "none" = !lastTurn
+    let fillSource: "live" | "measured" | "billed" | "none" = !lastTurn
       ? "none"
       : measuredPeak > 0
         ? "measured"
@@ -3454,9 +3491,28 @@ ${last15.substring(0, 8_000)}`;
     // older rows also predate the turn total being summed, so their
     // `prompt_tokens` still is one request and must NOT be divided by steps.
     // Clamped because a stale row may name a window the current model lacks.
-    const fallback = lastTurn
-      ? Math.min(lastTurn.promptTokens, effectiveWindow)
+    //
+    // `prompt_tokens` alone is not the request size on Anthropic: cached
+    // prefixes are billed and reported separately, so a well-cached turn
+    // records 32 input tokens against 3.1M cache reads. Reading only the
+    // first is how a full window measured 0%. Adding them back is what
+    // `resolveStepContextTokens` does for the live path, for the same reason.
+    const billedRequestTokens = lastTurn
+      ? lastTurn.promptTokens +
+        lastTurn.cacheReadTokens +
+        lastTurn.cacheWriteTokens
       : 0;
+    const fallback = Math.min(billedRequestTokens, effectiveWindow);
+
+    // An in-flight turn outranks the last finished one: it is the context the
+    // user is watching fill. Same measurement as `turn_peak_context_tokens`,
+    // so the number does not jump when the turn lands and the row is written.
+    // Before the first step lands there is nothing measured yet, and showing 0%
+    // would be a visible drop from whatever the ring read a second ago. Hold
+    // the previous turn's fill until the live number exists.
+    const restingFill = fillSource === "measured" ? measuredPeak : fallback;
+    const live = readFreshLiveTurn(chatId);
+    if (live?.peakContextTokens) fillSource = "live";
 
     return {
       model,
@@ -3464,10 +3520,22 @@ ${last15.substring(0, 8_000)}`;
       modelWindow,
       effectiveWindow,
       userCap: contextLimit ?? null,
-      usedTokens: fillSource === "measured" ? measuredPeak : fallback,
+      usedTokens: live?.peakContextTokens
+        ? Math.min(live.peakContextTokens, effectiveWindow)
+        : restingFill,
       fillSource,
       lastTurn,
       totals,
+      liveTurn: live
+        ? {
+            model: live.model,
+            startedAt: new Date(live.startedAt).toISOString(),
+            elapsedMs: Date.now() - live.startedAt,
+            steps: live.steps,
+            toolCalls: live.toolCalls,
+            peakContextTokens: live.peakContextTokens,
+          }
+        : null,
     };
   }
 
