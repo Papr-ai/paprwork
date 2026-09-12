@@ -70,7 +70,7 @@ interface InputBarProps {
   /** Bump to open the context panel from outside (the /context command). */
   contextPanelSignal?: number;
   /** Hand the loaded breakdown to the parent's full inspector. */
-  onOpenContextInspector?: (info: ContextInfo) => void;
+  onOpenContextInspector?: (info: ContextInfo, sectionId?: string) => void;
 }
 
 export interface InputBarRef {
@@ -508,7 +508,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                 model={selectedModel.id}
                 isSending={isSending}
                 openSignal={contextPanelSignal}
-                onOpenFullInspector={(info) => onOpenContextInspector?.(info)}
+                onOpenFullInspector={(info, sectionId) =>
+                  onOpenContextInspector?.(info, sectionId)
+                }
               />
             ) : null}
           </div>

@@ -33,7 +33,7 @@ interface ContextMeterProps {
   /** Refresh once the agent stops streaming — that is when a turn is billed. */
   isSending: boolean;
   openSignal?: number;
-  onOpenFullInspector: (info: ContextInfo) => void;
+  onOpenFullInspector: (info: ContextInfo, sectionId?: string) => void;
 }
 
 export const ContextMeter: React.FC<ContextMeterProps> = ({
@@ -195,9 +195,9 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
           infoError={infoError}
           onClose={() => setOpen(false)}
           onRetryBreakdown={() => void loadBreakdown()}
-          onOpenFullInspector={() => {
+          onOpenFullInspector={(sectionId) => {
             if (!info) return;
-            onOpenFullInspector(info);
+            onOpenFullInspector(info, sectionId);
             setOpen(false);
           }}
         />
