@@ -8,6 +8,9 @@
  */
 
 import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
+import type { ChatUsageTotals, TurnUsageRow } from "./turnMetricsStore.js";
+
+export type { ChatUsageTotals, TurnUsageRow };
 
 /** File/context attached to a user message (UI + history). */
 export interface StoredMessageAttachment {
@@ -284,6 +287,16 @@ export interface IStorageProvider {
     token_count: number;
     cost_total: number;
     has_summary: boolean;
+  }>;
+
+  /**
+   * Measured usage for the context meter: the last billed turn plus the
+   * chat rollup. Cheap by design — one row and one aggregate, no prompt build.
+   * @param chatId - Chat session ID
+   */
+  getTurnUsage(chatId: string): Promise<{
+    lastTurn: TurnUsageRow | null;
+    totals: ChatUsageTotals;
   }>;
 
   /**

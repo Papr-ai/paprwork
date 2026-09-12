@@ -25,6 +25,7 @@ const TURN_METRIC_COLUMNS = [
   { name: "turn_redundant_recoveries", sql: "INTEGER" },
   { name: "turn_recovered_chars", sql: "INTEGER" },
   { name: "turn_peak_context_tokens", sql: "INTEGER" },
+  { name: "turn_estimated_context_tokens", sql: "INTEGER" },
   { name: "turn_context_budget_tokens", sql: "INTEGER" },
   { name: "turn_plan_total_steps", sql: "INTEGER" },
   { name: "turn_plan_completed_steps", sql: "INTEGER" },
@@ -61,6 +62,7 @@ export function storeTurnMetrics(
          turn_redundant_recoveries = ?,
          turn_recovered_chars = ?,
          turn_peak_context_tokens = ?,
+         turn_estimated_context_tokens = ?,
          turn_context_budget_tokens = ?,
          turn_plan_total_steps = ?,
          turn_plan_completed_steps = ?,
@@ -77,10 +79,136 @@ export function storeTurnMetrics(
     summary.redundantRecoveries,
     summary.recoveredChars,
     summary.peakContextTokens,
+    summary.estimatedContextTokens,
     summary.historyTokenBudget,
     summary.planTotalSteps,
     summary.planCompletedSteps,
     durationMs ?? null,
     messageId,
   );
+}
+
+/**
+ * One turn's measured usage, for the context meter.
+ *
+ * Two different quantities live on this row and must not be confused:
+ * `promptTokens` is the turn's billed total across every step, and
+ * `peakContextTokens` is the largest single request inside it. Window fill is
+ * the second one; the invoice is the first.
+ */
+export interface TurnUsageRow {
+  messageId: string;
+  model: string | null;
+  timestamp: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  steps: number | null;
+  toolCalls: number | null;
+  durationMs: number | null;
+  compactionRuns: number | null;
+  compactionSkips: number | null;
+  recoveryFetches: number | null;
+  redundantRecoveries: number | null;
+  /**
+   * Largest single-request context the provider reported for this turn.
+   *
+   * This — not `promptTokens` — is how full the window got. Since the turn
+   * total was fixed to sum every step, `prompt_tokens` grows with step count
+   * and is a billing figure, not a context size.
+   */
+  peakContextTokens: number | null;
+  /** What the chars/4 estimator believed, for measuring its drift. */
+  estimatedContextTokens: number | null;
+  contextBudgetTokens: number | null;
+}
+
+export interface ChatUsageTotals {
+  turns: number;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+}
+
+const TURN_USAGE_SELECT = `
+  SELECT id, model, timestamp,
+         COALESCE(prompt_tokens, 0) AS prompt_tokens,
+         COALESCE(completion_tokens, 0) AS completion_tokens,
+         COALESCE(cache_read_tokens, 0) AS cache_read_tokens,
+         COALESCE(cache_write_tokens, 0) AS cache_write_tokens,
+         COALESCE(cost, 0) AS cost,
+         turn_steps, turn_tool_calls, turn_duration_ms,
+         turn_compaction_runs, turn_compaction_skips,
+         turn_recovery_fetches, turn_redundant_recoveries,
+         turn_peak_context_tokens, turn_estimated_context_tokens,
+         turn_context_budget_tokens
+  FROM messages
+  WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
+  ORDER BY sequence DESC, timestamp DESC
+  LIMIT 1`;
+
+/** Last billed assistant turn in a chat, or null before the first reply. */
+export function readLastTurnUsage(
+  db: Database.Database,
+  chatId: string,
+): TurnUsageRow | null {
+  const row = db.prepare(TURN_USAGE_SELECT).get(chatId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+
+  const int = (key: string): number | null => {
+    const value = row[key];
+    return typeof value === "number" ? value : null;
+  };
+
+  return {
+    messageId: String(row.id),
+    model: typeof row.model === "string" ? row.model : null,
+    timestamp: typeof row.timestamp === "string" ? row.timestamp : null,
+    promptTokens: Number(row.prompt_tokens ?? 0),
+    completionTokens: Number(row.completion_tokens ?? 0),
+    cacheReadTokens: Number(row.cache_read_tokens ?? 0),
+    cacheWriteTokens: Number(row.cache_write_tokens ?? 0),
+    cost: Number(row.cost ?? 0),
+    steps: int("turn_steps"),
+    toolCalls: int("turn_tool_calls"),
+    durationMs: int("turn_duration_ms"),
+    compactionRuns: int("turn_compaction_runs"),
+    compactionSkips: int("turn_compaction_skips"),
+    recoveryFetches: int("turn_recovery_fetches"),
+    redundantRecoveries: int("turn_redundant_recoveries"),
+    peakContextTokens: int("turn_peak_context_tokens"),
+    estimatedContextTokens: int("turn_estimated_context_tokens"),
+    contextBudgetTokens: int("turn_context_budget_tokens"),
+  };
+}
+
+/** Whole-chat rollup. Turns are billed assistant rows, not messages. */
+export function readChatUsageTotals(
+  db: Database.Database,
+  chatId: string,
+): ChatUsageTotals {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS turns,
+              COALESCE(SUM(cost), 0) AS cost,
+              COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+              COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens
+       FROM messages
+       WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0`,
+    )
+    .get(chatId) as Record<string, unknown> | undefined;
+
+  return {
+    turns: Number(row?.turns ?? 0),
+    cost: Number(row?.cost ?? 0),
+    promptTokens: Number(row?.prompt_tokens ?? 0),
+    completionTokens: Number(row?.completion_tokens ?? 0),
+    cacheReadTokens: Number(row?.cache_read_tokens ?? 0),
+  };
 }

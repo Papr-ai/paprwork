@@ -40,7 +40,13 @@ import {
 } from "./contextStatsCache.js";
 import {
   migrateTurnMetricsColumns,
+  readChatUsageTotals,
+  readLastTurnUsage,
   storeTurnMetrics,
+} from "./turnMetricsStore.js";
+import type {
+  ChatUsageTotals,
+  TurnUsageRow,
 } from "./turnMetricsStore.js";
 import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
 import {
@@ -1120,6 +1126,16 @@ export class LocalStorageProvider implements IStorageProvider {
         error instanceof Error ? error.message : error,
       );
     }
+  }
+
+  async getTurnUsage(chatId: string): Promise<{
+    lastTurn: TurnUsageRow | null;
+    totals: ChatUsageTotals;
+  }> {
+    return {
+      lastTurn: readLastTurnUsage(this.db, chatId),
+      totals: readChatUsageTotals(this.db, chatId),
+    };
   }
 
   async readOffloadedToolResult(

@@ -310,6 +310,15 @@ export interface CompactStats {
   bytesAfter: number;
 }
 
+/**
+ * Characters the model will be charged for, as far as we can see them.
+ *
+ * Tool *call* arguments are counted as well as tool *results*: a `write_file`
+ * call carries the whole file body in its arguments, and counting only what
+ * came back made everything the agent sent free. On real chat data those
+ * arguments are around a quarter of the result volume, so omitting them was a
+ * standing 1.25× underestimate on top of the `chars/4` ratio itself.
+ */
 function approxBytes(messages: any[]): number {
   let n = 0;
   for (const m of messages) {
@@ -325,11 +334,33 @@ function approxBytes(messages: any[]): number {
               ? readToolResultString(toolPart)
               : undefined;
           if (resultStr !== undefined) n += resultStr.length;
+          else n += approxToolCallBytes(p);
         }
       }
     }
   }
   return n;
+}
+
+/**
+ * Argument size of a tool call, across both message formats.
+ *
+ * AI SDK v6 puts them on `input`, pi-ai on `arguments` or `args`. A string is
+ * measured directly rather than re-serialised, since it is already the wire
+ * form and `JSON.stringify` would add escaping the provider does not bill.
+ */
+function approxToolCallBytes(part: unknown): number {
+  if (!part || typeof part !== "object") return 0;
+  const candidate = part as { type?: unknown; [key: string]: unknown };
+  if (candidate.type !== "tool-call" && candidate.type !== "tool_use") return 0;
+  const args = candidate.input ?? candidate.arguments ?? candidate.args;
+  if (args === undefined || args === null) return 0;
+  if (typeof args === "string") return args.length;
+  try {
+    return JSON.stringify(args).length;
+  } catch {
+    return 0;
+  }
 }
 
 export function estimateMessagesTokens(messages: any[]): number {

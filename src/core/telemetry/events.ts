@@ -276,8 +276,12 @@ export interface AgentTurnCompletedProperties extends BaseEventProperties {
   redundant_recovery_rate: number | null;
 
   peak_context_tokens: number;
+  /** The chars/4 estimate on its own, so estimator drift is measurable. */
+  estimated_context_tokens: number;
   context_budget_tokens: number;
   context_fill_ratio: number | null;
+  /** Billed prompt over estimate. Above 1 means the gate fires late. */
+  estimator_error_ratio: number | null;
 
   /** Quality proxy: did the plan this turn was working on finish? */
   plan_count: number;

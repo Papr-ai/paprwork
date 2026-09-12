@@ -369,6 +369,11 @@ export class HybridStorageProvider implements IStorageProvider {
     return this.local.getChatStats(chatId);
   }
 
+  /** Measurement stays local, like recordTurnMetrics — never synced. */
+  async getTurnUsage(chatId: string) {
+    return this.local.getTurnUsage(chatId);
+  }
+
   async getChatCost(chatId: string): Promise<{
     total: number;
     byModel: Record<string, number>;

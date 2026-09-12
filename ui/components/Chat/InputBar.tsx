@@ -20,6 +20,8 @@ import type { ChatModelSettings } from "../../utils/chatModelSettings";
 import type { ResolvedModelSettings } from "../../utils/buildAgentConfig";
 import { ChatMemoryScopeSelector } from "./ChatMemoryScopeSelector";
 import { ContextDropdown } from "./ContextDropdown";
+import { ContextMeter } from "./ContextMeter";
+import type { ContextInfo } from "./ContextInspectorModal";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
@@ -65,6 +67,10 @@ interface InputBarProps {
   authType?: "oauth" | "apiKey";
   /** Fires after file context pills are added (e.g. drag-drop) so parent can clear drag-over UI */
   onFileAttachmentsAdded?: () => void;
+  /** Bump to open the context panel from outside (the /context command). */
+  contextPanelSignal?: number;
+  /** Hand the loaded breakdown to the parent's full inspector. */
+  onOpenContextInspector?: (info: ContextInfo) => void;
 }
 
 export interface InputBarRef {
@@ -95,6 +101,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       modelSettings,
       onChangeModelSettings,
       authType,
+      contextPanelSignal,
+      onOpenContextInspector,
     },
     ref,
   ) => {
@@ -494,6 +502,15 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               placeholder={placeholder}
               rows={1}
             />
+            {selectedModel ? (
+              <ContextMeter
+                chatId={chatId}
+                model={selectedModel.id}
+                isSending={isSending}
+                openSignal={contextPanelSignal}
+                onOpenFullInspector={(info) => onOpenContextInspector?.(info)}
+              />
+            ) : null}
           </div>
 
           {/* Footer - below textarea, shown when focused */}

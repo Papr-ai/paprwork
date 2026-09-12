@@ -34,8 +34,18 @@ export interface TurnMetrics {
   /** Fetches recovering a result that would have fit the fresh ceiling. */
   redundantRecoveries: number;
   recoveredChars: number;
-  /** Largest context observed at a step boundary. */
-  peakContextTokens: number;
+  /**
+   * Largest whole-prompt context the *provider* reported for a step.
+   *
+   * Kept apart from the estimate below because the two answer different
+   * questions and disagree by roughly 1.9× on real turns: this is what was
+   * billed, that is what the truncation ladder believed. Conflating them meant
+   * every recorded peak was the belief, while the provider's own figure was
+   * computed a few lines away for the summarization decision and discarded.
+   */
+  observedPeakContextTokens: number;
+  /** Largest `chars/4` estimate seen at a step boundary — the ladder's own view. */
+  estimatedPeakContextTokens: number;
   historyTokenBudget: number;
 }
 
@@ -50,7 +60,8 @@ export function createTurnMetrics(): TurnMetrics {
     recoveryFetches: 0,
     redundantRecoveries: 0,
     recoveredChars: 0,
-    peakContextTokens: 0,
+    observedPeakContextTokens: 0,
+    estimatedPeakContextTokens: 0,
     historyTokenBudget: 0,
   };
 }
@@ -62,8 +73,8 @@ export function recordStep(
   if (!metrics) return;
   metrics.steps += 1;
   if (info.estimatedTokens !== undefined && Number.isFinite(info.estimatedTokens)) {
-    metrics.peakContextTokens = Math.max(
-      metrics.peakContextTokens,
+    metrics.estimatedPeakContextTokens = Math.max(
+      metrics.estimatedPeakContextTokens,
       Math.round(info.estimatedTokens),
     );
   }
@@ -108,8 +119,8 @@ export function recordLoopSteps(
     totals.estimatedTokens !== undefined &&
     Number.isFinite(totals.estimatedTokens)
   ) {
-    metrics.peakContextTokens = Math.max(
-      metrics.peakContextTokens,
+    metrics.estimatedPeakContextTokens = Math.max(
+      metrics.estimatedPeakContextTokens,
       Math.round(totals.estimatedTokens),
     );
   }
@@ -120,6 +131,27 @@ export function recordLoopSteps(
   ) {
     metrics.historyTokenBudget = totals.historyTokenBudget;
   }
+}
+
+/**
+ * Raise the peak from a figure the provider reported, rather than one we
+ * estimated.
+ *
+ * Both routes already compute this — the AI SDK route in `onStepFinish` and the
+ * OAuth loop when a step's usage arrives — and both then used it only for
+ * in-flight decisions. A turn that reports no usage at all leaves this at zero,
+ * which is the signal the summary uses to fall back to the estimate.
+ */
+export function recordObservedContext(
+  metrics: TurnMetrics | null | undefined,
+  contextTokens: number,
+): void {
+  if (!metrics) return;
+  if (!Number.isFinite(contextTokens) || contextTokens <= 0) return;
+  metrics.observedPeakContextTokens = Math.max(
+    metrics.observedPeakContextTokens,
+    Math.round(contextTokens),
+  );
 }
 
 export interface CompactionOutcome {
@@ -191,10 +223,24 @@ export interface TurnMetricsSummary {
   recoveryFetches: number;
   redundantRecoveries: number;
   recoveredChars: number;
+  /** The provider's figure when a step reported one, else the estimate. */
   peakContextTokens: number;
+  /** The `chars/4` estimate on its own, kept so estimator drift stays visible. */
+  estimatedContextTokens: number;
   historyTokenBudget: number;
-  /** Peak context as a fraction of the budget, or null when no budget applied. */
+  /**
+   * The *estimated* peak as a fraction of the budget — deliberately not the
+   * observed one. This measures how full the truncation ladder believed it was,
+   * which is the quantity its 70% gate actually compares, so substituting the
+   * provider's figure would break the one thing this ratio reports faithfully.
+   */
   contextFillRatio: number | null;
+  /**
+   * How many times larger the billed prompt was than the estimate, or null when
+   * one of the two is missing. This is the calibration signal: sustained values
+   * above 1 mean the ladder's gate fires later than its ratio implies.
+   */
+  estimatorErrorRatio: number | null;
   /** Redundant recoveries per tool call — the loop's rate, directly. */
   redundantRecoveryRate: number | null;
   planCount: number;
@@ -208,10 +254,16 @@ export function summarizeTurnMetrics(
   metrics: TurnMetrics,
   plan?: TurnPlanProgress,
 ): TurnMetricsSummary {
+  const estimated = metrics.estimatedPeakContextTokens;
+  const observed = metrics.observedPeakContextTokens;
+
   const contextFillRatio =
-    metrics.historyTokenBudget > 0
-      ? round3(metrics.peakContextTokens / metrics.historyTokenBudget)
+    metrics.historyTokenBudget > 0 && estimated > 0
+      ? round3(estimated / metrics.historyTokenBudget)
       : null;
+
+  const estimatorErrorRatio =
+    observed > 0 && estimated > 0 ? round3(observed / estimated) : null;
 
   const redundantRecoveryRate =
     metrics.toolCalls > 0
@@ -230,9 +282,11 @@ export function summarizeTurnMetrics(
     recoveryFetches: metrics.recoveryFetches,
     redundantRecoveries: metrics.redundantRecoveries,
     recoveredChars: metrics.recoveredChars,
-    peakContextTokens: metrics.peakContextTokens,
+    peakContextTokens: observed > 0 ? observed : estimated,
+    estimatedContextTokens: estimated,
     historyTokenBudget: metrics.historyTokenBudget,
     contextFillRatio,
+    estimatorErrorRatio,
     redundantRecoveryRate,
     planCount,
     planTotalSteps: plan?.totalSteps ?? 0,

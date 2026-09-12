@@ -9,7 +9,6 @@ import { InputBar, InputBarRef } from "./InputBar";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
 import { JobPermissionBanner } from "./JobPermissionBanner";
 import { useAgent } from "../../hooks/useAgent";
-import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { useAuthStatus } from "../../hooks/useAuthStatus";
 import { useOllama } from "../../hooks/useOllama";
 import { useChat } from "../../hooks/useChat";
@@ -27,7 +26,6 @@ import { useModelPickerSettings } from "../../hooks/useModelPickerSettings";
 import { gateway } from "../../src/lib/gateway";
 import {
   ContextInspectorModal,
-  isContextInfo,
   type ContextInfo,
 } from "./ContextInspectorModal";
 import {
@@ -189,6 +187,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
+  const [contextPanelSignal, setContextPanelSignal] = useState(0);
 
   // Thinking / effort / context / fast for this chat. Stored sparsely, so a
   // field the user never touched stays "unset" and follows the model.
@@ -574,32 +573,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           break;
         }
         case "context": {
-          try {
-            const response = await gateway.send("chat:inspect-context", {
-              chatId,
-              model: selectedModel.id,
-              ...(() => {
-                const focusContext = resolveAgentFocusContext(chatId);
-                return focusContext ? { focusContext } : {};
-              })(),
-            });
-            if (isContextInfo(response.data)) {
-              setContextInfo(response.data);
-            } else {
-              console.error(
-                "[ChatContainer] Invalid context response:",
-                response.data,
-              );
-              alert(
-                "Received invalid context data from gateway. Check console for details.",
-              );
-            }
-          } catch (err) {
-            console.error("[ChatContainer] Context inspection error:", err);
-            const message =
-              err instanceof Error ? err.message : "Unknown error";
-            alert(`Failed to load context information: ${message}`);
-          }
+          // The dial owns this surface now: bump it open rather than dumping
+          // the full breakdown on the user.
+          setContextPanelSignal((n) => n + 1);
           break;
         }
         case "help": {
@@ -1115,6 +1091,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         queuedCount={currentChatQueue.length}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
+        contextPanelSignal={contextPanelSignal}
+        onOpenContextInspector={(info) => setContextInfo(info)}
         isSending={isSending || isWaitingForModel}
         placeholder={
           (isWaitingForModel 

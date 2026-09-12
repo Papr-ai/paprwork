@@ -26,6 +26,7 @@ import {
 import { getPaprWorkspacePathsForAgent } from "../utils/paprAgentPaths.js";
 import { validateMiniAppIcon } from "../utils/miniAppIconValidation.js";
 import { getPaprBundlesDir } from "../utils/paprRoot.js";
+import { asToonOrRows } from "../utils/toonRows.js";
 import { platformIdsFromRequirements } from "../../gateway/utils/platformCdpBridge.js";
 import {
   getCloudAppPublishTool,
@@ -2437,7 +2438,7 @@ export const listAppsTool = createTool({
     return {
       success: true,
       data: {
-        apps: appsData,
+        apps: asToonOrRows("apps", appsData),
         count: appsData.length,
         appsRoot: workspace.appsRoot,
         paprHome: workspace.paprHome,
@@ -2862,6 +2863,24 @@ async function saveJobFileVersion(
   return versionId;
 }
 
+/**
+ * Directories holding installed dependencies rather than the job's own files.
+ * Measured across 103 real `list_job_files` calls: 95.5% of listed entries and
+ * 97.4% of the characters sat inside these, so the job's actual scripts arrived
+ * buried under ~790 dependency paths per call. Listed by name, not walked.
+ */
+const JOB_DEPENDENCY_DIRS = new Set([
+  "venv",
+  ".venv",
+  "node_modules",
+  "__pycache__",
+  ".git",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tox",
+]);
+
 export const listJobFilesTool = createTool({
   id: "list_job_files",
   description:
@@ -2885,6 +2904,8 @@ export const listJobFilesTool = createTool({
 
     console.log(`[list_job_files] Scanning job directory: ${jobDir}`);
 
+    const omittedDependencyDirs: string[] = [];
+
     const walk = async (dir: string, base: string): Promise<string[]> => {
       let entries: string[] = [];
       try {
@@ -2893,6 +2914,10 @@ export const listJobFilesTool = createTool({
           if (item.name === ".versions") continue;
           const rel = base ? `${base}/${item.name}` : item.name;
           if (item.isDirectory()) {
+            if (JOB_DEPENDENCY_DIRS.has(item.name)) {
+              omittedDependencyDirs.push(`${rel}/`);
+              continue;
+            }
             const sub = await walk(
               pathModule.default.join(dir, item.name),
               rel,
@@ -2920,6 +2945,14 @@ export const listJobFilesTool = createTool({
         name: job.name,
         dir: jobDir,
         files,
+        ...(omittedDependencyDirs.length > 0
+          ? {
+              dependencyDirsOmitted: omittedDependencyDirs,
+              dependencyNote:
+                "Installed-dependency directories are listed by name only, not walked. " +
+                "Use bash({ command: `ls <dir>/<name>` }) to inspect one.",
+            }
+          : {}),
         tip: "Use read_job_file({ jobId, filename }) to view a file, edit_file({ path: `${dir}/{filename}`, oldString, newString }) using dir above, or read_job_logs for last run output.",
       },
     };
@@ -3085,7 +3118,7 @@ IMPORTANT: Jobs with schedule.enabled: false are NOT deleted or broken — they 
       success: true,
       data: {
         total: jobsSummary.length,
-        jobs: jobsSummary,
+        jobs: asToonOrRows("jobs", jobsSummary),
         tip: "Use run_job({ jobId }) to run a job, read_job_logs({ jobId }) to inspect output, or bash({ command: 'sqlite3 <dir>/data/data.db .tables' }) to explore its database.",
       },
     };
@@ -4124,6 +4157,14 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
           ? `\n\n${formatJobEventsFixGuidance()}`
           : "";
 
+      const issueRows = result.issues.map((issue) => ({
+        file: issue.file,
+        line: issue.line,
+        severity: issue.severity,
+        message: issue.message,
+        rule: issue.rule,
+      }));
+
       if (errorCount === 0 && warningCount > 0) {
         return {
           success: true,
@@ -4131,13 +4172,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
             valid: true,
             hasWarnings: true,
             filesChecked: result.filesChecked,
-            issues: result.issues.map((issue) => ({
-              file: issue.file,
-              line: issue.line,
-              severity: issue.severity,
-              message: issue.message,
-              rule: issue.rule,
-            })),
+            issues: asToonOrRows("issues", issueRows),
             summary: `${warningCount} warning(s)`,
             message: `✓ Validation passed with ${warningCount} warning(s). Fix warnings before shipping.`,
             issueList,
@@ -4160,13 +4195,7 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         data: {
           valid: false,
           filesChecked: result.filesChecked,
-          issues: result.issues.map(issue => ({
-            file: issue.file,
-            line: issue.line,
-            severity: issue.severity,
-            message: issue.message,
-            rule: issue.rule,
-          })),
+          issues: asToonOrRows("issues", issueRows),
           summary: `${errorCount} error(s), ${warningCount} warning(s)`,
         },
       };
@@ -4264,24 +4293,25 @@ export const getJobHistoryTool = createTool({
     await runHistory.initialize();
 
     const runs = await runHistory.getRunsForJob(args.jobId, args.limit ?? 20);
+    const runRows = runs.map((r) => ({
+      runId: r.runId,
+      status: r.status,
+      startedAt: r.startedAt,
+      completedAt: r.completedAt,
+      duration: r.duration ? `${Math.round(r.duration / 1000)}s` : undefined,
+      exitCode: r.exitCode,
+      error: r.error ? r.error.slice(0, 200) : undefined, // Truncate long errors
+      scheduledDueAt: r.scheduledDueAt,
+      attempt: r.attempt,
+      maxAttempts: r.maxAttempts,
+    }));
 
     return {
       success: true,
       data: {
         jobId: args.jobId,
         totalReturned: runs.length,
-        runs: runs.map((r) => ({
-          runId: r.runId,
-          status: r.status,
-          startedAt: r.startedAt,
-          completedAt: r.completedAt,
-          duration: r.duration ? `${Math.round(r.duration / 1000)}s` : undefined,
-          exitCode: r.exitCode,
-          error: r.error ? r.error.slice(0, 200) : undefined, // Truncate long errors
-          scheduledDueAt: r.scheduledDueAt,
-          attempt: r.attempt,
-          maxAttempts: r.maxAttempts,
-        })),
+        runs: asToonOrRows("runs", runRows),
       },
     };
   },

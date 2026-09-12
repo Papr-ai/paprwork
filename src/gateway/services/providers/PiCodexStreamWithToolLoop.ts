@@ -25,7 +25,11 @@ import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
 import type { MidTurnTrimOpts } from "../agent/midTurnContextTrim.js";
-import { recordLoopSteps, type TurnMetrics } from "../agent/turnMetrics.js";
+import {
+  recordLoopSteps,
+  recordObservedContext,
+  type TurnMetrics,
+} from "../agent/turnMetrics.js";
 import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
@@ -457,7 +461,12 @@ export async function* createPiCodexStreamWithToolLoop(
   const REPETITION_ABORT_THRESHOLD = 8; // Hard abort on identical tool+args loops only
 
   // Fast char-based estimate — avoid JSON.stringify on 100K+ token contexts.
+  // Messages only: the system prompt and the tool schemas are separate fields
+  // on the pi-ai context, so the first request is far larger than this reads.
+  // Kept for the turn metric's estimate; the provider's own figure replaces
+  // `cumulativeTokens` as soon as a step reports usage.
   cumulativeTokens = estimateMessagesTokens(context.messages);
+  const initialEstimatedTokens = cumulativeTokens;
 
   console.log(
     `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens ` +
@@ -484,9 +493,11 @@ export async function* createPiCodexStreamWithToolLoop(
     }
     turnEndLogged = true;
     // The loop counts its own steps, and this runs exactly once per turn.
+    // `initialEstimatedTokens` rather than `cumulativeTokens`, which by now
+    // holds a provider-reported figure and belongs on the observed peak.
     recordLoopSteps(toolContext?.turnMetrics, {
       steps: step,
-      estimatedTokens: cumulativeTokens,
+      estimatedTokens: initialEstimatedTokens,
       historyTokenBudget: historyTrimBounds?.maxTokens,
     });
     logPiTurnEnd({
@@ -743,6 +754,10 @@ export async function* createPiCodexStreamWithToolLoop(
               }
               if (stepUsage) {
                 cumulativeTokens = getPiAiContextTokensFromStep(stepUsage);
+                recordObservedContext(
+                  toolContext?.turnMetrics,
+                  cumulativeTokens,
+                );
                 accumulatedBilling = accumulatePiAiBillingUsage(
                   accumulatedBilling,
                   stepUsage,
