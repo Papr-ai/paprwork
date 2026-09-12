@@ -187,6 +187,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
+  /** Section the inspector lands on when opened from a meter segment. */
+  const [contextSection, setContextSection] = useState<string | null>(null);
   const [contextPanelSignal, setContextPanelSignal] = useState(0);
 
   // Thinking / effort / context / fast for this chat. Stored sparsely, so a
@@ -1092,7 +1094,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
         contextPanelSignal={contextPanelSignal}
-        onOpenContextInspector={(info) => setContextInfo(info)}
+        onOpenContextInspector={(info, sectionId) => {
+          setContextSection(sectionId ?? null);
+          setContextInfo(info);
+        }}
         isSending={isSending || isWaitingForModel}
         placeholder={
           (isWaitingForModel 
@@ -1115,6 +1120,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       {contextInfo !== null ? (
         <ContextInspectorModal
           contextInfo={contextInfo}
+          initialSection={contextSection}
           onClose={() => setContextInfo(null)}
         />
       ) : null}
