@@ -326,57 +326,112 @@
   transform: rotate(90deg);
 }
 
+/* ── segment detail (level two) ───────────────────────────── */
+
+/*
+ * Two shapes only: ranked bars for things you can compare, an excerpt for
+ * things you can only read. The bar is scaled to the largest row in the
+ * segment, so the answer to "what is big here" is the widest thing — no
+ * arithmetic on five-digit numbers.
+ */
+
 .ctx-detail {
-  max-height: 190px;
-  overflow-y: auto;
   margin: 2px 0 8px 15px;
   padding: 8px 10px;
   background: var(--background-secondary);
   border-radius: 10px;
 }
 
-.ctx-detail__pre {
-  margin: 0;
-  font-size: 11px;
-  line-height: 1.5;
-  color: var(--text-secondary);
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.ctx-detail__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.ctx-detail__list li {
+.ctx-rank {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
-  padding: 3px 0;
-  font-size: 11.5px;
+  flex-direction: column;
+  gap: 1px;
 }
 
-.ctx-detail__name {
+.ctx-rank__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 7px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.ctx-rank__bar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-radius: 6px;
+  transition: width var(--dur-3) var(--ease);
+  pointer-events: none;
+}
+
+.ctx-rank__bar--accent {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+}
+.ctx-rank__bar--accent-soft {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.ctx-rank__bar--accent-faint {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.ctx-rank__bar--neutral {
+  background: color-mix(in srgb, var(--text-tertiary) 20%, transparent);
+}
+.ctx-rank__bar--neutral-soft {
+  background: color-mix(in srgb, var(--text-tertiary) 13%, transparent);
+}
+
+.ctx-rank__label {
+  position: relative;
   flex: 1;
-  color: var(--text-secondary);
+  font-size: 11.5px;
+  color: var(--text-primary);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
-.ctx-detail__role {
+.ctx-rank__meta {
   margin-right: 6px;
-  font-size: 10px;
+  font-size: 9.5px;
+  font-style: normal;
   text-transform: uppercase;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.05em;
   color: var(--text-tertiary);
 }
 
-.ctx-detail__value {
-  color: var(--text-tertiary);
+.ctx-rank__tokens {
+  position: relative;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-secondary);
   font-variant-numeric: tabular-nums;
+}
+
+.ctx-excerpt__text {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.ctx-more {
+  display: block;
+  margin-top: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.ctx-more:hover {
+  opacity: 1;
 }
 
 /* ── turn cost ────────────────────────────────────────────── */
