@@ -69,6 +69,40 @@ const HISTORY_BUDGET_RATIO = 0.85;
 const DEFAULT_OUTPUT_RESERVE = 16_000;
 
 /**
+ * Largest share of the effective window that may be held back for output.
+ *
+ * The reserve arrives as the model's *advertised maximum* output — 128K on
+ * opus-5, 131K on several others, straight from the model table — and used to
+ * be subtracted in full. Inside a 200K cap that set aside 64% of the window for
+ * a reply the turn will almost never write (a measured 7-step turn produced 340
+ * output tokens), which drove the budget to -45,363 and floored it at 8K.
+ *
+ * One third leaves every cap at or above 400K untouched, because 128K is
+ * already below a third of 400K. Only windows small enough for the reserve to
+ * dominate are affected — which is exactly the case that was broken.
+ *
+ * This does not rescue every small window: tool schemas are charged separately
+ * and can exceed the window on their own (~87K of schemas against a 128K cap),
+ * and no output-reserve arithmetic can fix that.
+ */
+const MAX_OUTPUT_RESERVE_RATIO = 1 / 3;
+
+/**
+ * Output reserve for a given window: what the request asked for, capped so it
+ * cannot crowd out the history it is being subtracted from.
+ */
+export function resolveOutputReserve(
+  contextWindow: number,
+  maxOutputTokens?: number,
+): number {
+  const requested = maxOutputTokens ?? DEFAULT_OUTPUT_RESERVE;
+  return Math.min(
+    requested,
+    Math.floor(contextWindow * MAX_OUTPUT_RESERVE_RATIO),
+  );
+}
+
+/**
  * Gemini models advertise a 1M window, but long tool-heavy history degrades quality.
  * Cap message-history budget and trigger summarize/trim above this.
  */
@@ -120,7 +154,10 @@ export function computeHistoryTokenBudget(params: {
     params.modelId,
     params.contextLimit,
   );
-  const outputReserve = params.maxOutputTokens ?? DEFAULT_OUTPUT_RESERVE;
+  const outputReserve = resolveOutputReserve(
+    contextWindow,
+    params.maxOutputTokens,
+  );
   const budget = Math.floor(
     contextWindow * HISTORY_BUDGET_RATIO -
       params.toolTokenEstimate -
