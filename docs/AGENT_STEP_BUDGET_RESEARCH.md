@@ -96,7 +96,13 @@ Anthropic has published the most directly applicable numbers, and all three of t
 
 The guidance is explicit and we violate it: *"Keep your three to five most-used tools always loaded, defer the rest"* [6]. And **Claude Code enables this automatically**: MCP tool search auto mode has been on by default since v2.1.7, deferring tool descriptions once they exceed **10% of the context window**, tunable via `ENABLE_TOOL_SEARCH=auto:N` [6].
 
-We ship **152 tools ≈ 86K tokens against a 200K cap — about 43%**, four times Claude Code's deferral threshold.
+We ship **150 distinct tools ≈ 37,800 tokens against a 200K cap — about 19%**, roughly twice Claude Code's deferral threshold.
+
+> **Measured, after an earlier draft of this doc got it wrong.** The first version of this section said "≈86K tokens, about 43%, four times the threshold", taking the figure from `AgentService`'s own estimate (`JSON.stringify(tools).length / 4` = 87,363). That measures the wrong object: a Zod schema's shape lives in `_def`, so stringifying a tool walks the whole internal tree, while the provider receives the compact JSON Schema. Measured with `cl100k_base` on the real wire payload — `{name, description, input_schema}` per tool — the block is **37,798 tokens**, so the estimate is **2.31× over**. Reproduce with `node scripts/measure-tool-schema-cost.mjs`.
+>
+> The distortion is not uniform, which is why it misled the recommendation below as well as the headline: `update_schema` and `register_schema` read as 12,750 and 12,712 tokens against a real 802 and 859 — **15× over** — because their `_def` trees are the deepest. They are 29% of the *estimate* and 4.3% of reality.
+>
+> This also explains an anomaly flagged later in Part 3: an estimated peak of 289,385 against a billed 177,020. Roughly half that gap is this one overstatement.
 
 Anthropic is equally clear about when the step-reduction lever does *not* pay: on τ²-bench, "where each turn makes one or two sequential tool calls, programmatic tool calling left scores unchanged and cost roughly 8% more. Sequential single-call workflows do not benefit" [13]. Batching helps fan-out, not inherently serial work.
 
@@ -197,7 +203,9 @@ Holding the work constant at 94 tool calls and using the measured average fixed 
 | 3 | 32 | **$3.18** |
 | 4 | 24 | $2.58 |
 
-And independently, tool-schema deferral at Anthropic's measured 85% [6] removes roughly 45K tokens from *every* request. Applied together — ~32 steps at ~59K tokens instead of 93 at ~104K — the same turn lands near **$2** rather than $8.97, without capping anything.
+And independently, tool-schema deferral at Anthropic's measured 85% [6] removes roughly **32K** tokens from *every* request (85% of the 37,798 actually on the wire, not of the 87,363 we were estimating). Applied together — ~32 steps at ~72K tokens instead of 93 at ~104K — the same turn lands near **$2.40** rather than $8.97, without capping anything.
+
+Note the ordering that falls out of this: batching is worth about 2.4× on its own and deferral about 1.4×, so **the step count is the bigger lever**, and it is the one that needs no provider feature.
 
 ### What is already working, and should not be touched
 
@@ -213,13 +221,19 @@ Worth stating so the doc is not read as a call to change everything:
 
 Ordered by evidence strength and effort. Nothing here is a step cap.
 
-### Tier 1 — Cut the per-step payload (strongest evidence, largest effect)
+### Tier 1 — Cut the per-step payload (strongest evidence, second-largest effect)
 
-**1. Defer tool definitions.** Keep the ~7 tools a turn actually uses loaded; make the rest discoverable. Anthropic measures 85% reduction *and* an accuracy gain [6]; Cursor measures 46.9% fewer total tokens in an A/B test on production traffic [15]. Claude Code triggers this automatically past 10% of context; we sit at ~43%. This is the single best-evidenced change available to us, and it is the one that also improves quality rather than trading against it.
+**1. Defer tool definitions.** Keep the ~7 tools a turn actually uses loaded; make the rest discoverable. Anthropic measures 85% reduction *and* an accuracy gain [6]; Cursor measures 46.9% fewer total tokens in an A/B test on production traffic [15]. Claude Code triggers this automatically past 10% of context; we sit at ~19%, so we are over the threshold but not by the margin an earlier draft of this doc claimed. Worth ~32K tokens per request, and it is the one lever that improves quality rather than trading against it.
 
-Concretely: adopt Anthropic's `defer_loading` on the API-key route where the platform supports it, and implement a `search_tools` equivalent for the OAuth route. Start with the obvious offenders — `register_schema` and `update_schema` together are ~30% of the tool block and were never called.
+Concretely: adopt Anthropic's `defer_loading` on the API-key route where the platform supports it, and implement a `search_tools` equivalent for the OAuth route.
+
+Pick the targets from the measured table, not from the estimate — that is the whole lesson of the correction above. By real wire cost the block is unconcentrated: the largest single tool is `create_job` at 5.8%, the top five come to 18.7%, and descriptions are 34% of the total. There is no pair of offenders to delete; the saving comes from deferring the long tail, which is exactly what the measured shape predicts (145 of 152 tools went uncalled on the 93-step turn).
 
 **2. Add tool use examples** to the handful of high-traffic tools. 72% → 90% parameter accuracy [6], and each avoided parameter error is an avoided step plus the "context rot" of the error text persisting in context [7].
+
+**A prerequisite, found while measuring the above.** `toolTokens` is not only reported — it is subtracted in `computeHistoryTokenBudget`. Overstating it by 49K means the history budget is ~49K smaller than the formula intends: at a 200K cap with a 128K output reserve it computes to **15,971** where the honest figure is **64,533**. So the broken estimate has been acting as an unintended 4× history cap.
+
+That is worth fixing, but not by simply making the number honest. Today's allowance is cheaper and — on this doc's own context-rot evidence — possibly *better* than the one the formula intends, so correcting the estimate in isolation would raise cost ~48K tokens per request and improve nothing we can point to. The right change is to make the measurement honest **and** the history allowance an explicit, tunable decision, so we stop depending on an accident. Precedent already exists in the same file: `GEMINI_HISTORY_TOKEN_CAP = 150_000` is exactly such a deliberate cap. Because that changes trimming behaviour, it needs its own evaluation and should not ride along with a cost change.
 
 ### Tier 2 — Cut the step count structurally (good evidence, medium effort)
 
@@ -252,13 +266,15 @@ We have the columns from Enhancement 87 already. The metrics that matter, matchi
 
 | Metric | Source | Today | Target |
 |---|---|---|---|
-| Tool calls per step | `turn_tool_calls / turn_steps` | 1.19 | ≥ 2.5 |
+| Tool calls per step | `tool_calls_per_step` (derived in `summarizeTurnMetrics`) | 1.19 | ≥ 2.5 |
 | Fixed tokens per request | `prompt_tokens / turn_steps` | 104,007 | < 60,000 |
-| Tool block share of window | `toolTokens / contextLimit` | ~43% | < 10% [6] |
+| Tool block share of window | `scripts/measure-tool-schema-cost.mjs` | ~19% measured | < 10% [6] |
 | Steps per turn | `turn_steps` | median 23, max 107 | no target — watch, don't cap |
 | Cost per turn | `cost` | $8.97 worst | < $3 |
 | Recovery fetches | `turn_recovery_fetches` | 0 | stays 0 |
 | Turn duration | `turn_duration_ms` | 25 min avg in 41–80 bucket | < 35 min [10] |
+
+Note the source column on the first and third rows. "Tool calls per step" is now derived once in `summarizeTurnMetrics` and carried on the turn-completed event, rather than left as a SQL join every reader has to remember — the ratio is the whole point of the batching work, so it should not be reconstructible only by hand. And the tool-block share is read from the measurement script, **not** from `toolTokens`, because that variable is the 2.31×-overstated estimate this doc was itself misled by.
 
 Two things to hold onto. First, **step count is a diagnostic, not a target** — if tool-schema deferral works, step count may not move at all while cost falls by half, and that is success. Second, every intervention here trades against quality somewhere in the literature, so a cost metric without a paired quality metric will rank a degraded agent as an improvement. That is exactly what LOCA-bench caught compaction doing. Enhancement 87's `plan_completed` is a tripwire, not a quality score; a real answer needs a fixed labelled task set, which is a separate build.
 
