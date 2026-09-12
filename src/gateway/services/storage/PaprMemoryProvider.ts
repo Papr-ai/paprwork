@@ -457,6 +457,20 @@ export class PaprMemoryProvider implements IStorageProvider {
     }
   }
 
+  /** Turn metrics are local-only columns, so the cloud-only path has none. */
+  async getTurnUsage(_chatId: string) {
+    return {
+      lastTurn: null,
+      totals: {
+        turns: 0,
+        cost: 0,
+        promptTokens: 0,
+        completionTokens: 0,
+        cacheReadTokens: 0,
+      },
+    };
+  }
+
   async getChatCost(_chatId: string): Promise<{
     total: number;
     byModel: Record<string, number>;

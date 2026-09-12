@@ -8,6 +8,7 @@ import {
   buildSearchPolicy,
 } from "../../gateway/utils/paprMemoryPolicy.js";
 import { buildAgentMemoryAddPolicy } from "../../gateway/utils/workspaceContextSchema.js";
+import { asToonOrRows } from "../utils/toonRows.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import {
@@ -1092,7 +1093,7 @@ export const listSchemasTool = createTool({
         success: true, 
         data: {
           count: summary.length,
-          schemas: summary,
+          schemas: asToonOrRows("schemas", summary),
           note: "Use get_schema(schemaId) to fetch full details for a specific schema",
         }
       };

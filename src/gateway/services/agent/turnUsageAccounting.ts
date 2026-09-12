@@ -1,8 +1,11 @@
 /**
  * Token accounting across the streams that make up one assistant turn.
  *
- * Providers report usage cumulatively *per stream*: each `step-usage` carries the
- * stream's running total, so "last value wins" is correct while one stream runs.
+ * Each `step-usage` report carries the running total for its stream, so "last
+ * value wins" is correct while one stream runs. That is a contract the
+ * orchestrator enforces (`streamUsageReport.ts`), not something every provider
+ * happens to do: pi-ai accumulates its own tool loop and reports once, while
+ * the AI SDK reports per step and has to be folded.
  *
  * A continuation is a second stream, and its totals start again from zero. Under
  * the same last-value-wins rule the continuation's figures therefore *replace* the

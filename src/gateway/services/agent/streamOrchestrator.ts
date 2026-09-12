@@ -21,6 +21,14 @@ import {
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./streamChunks.js";
+import {
+  addStreamUsage,
+  EMPTY_STREAM_USAGE,
+  readAiSdkStepUsage,
+  readAiSdkTotalUsage,
+  readPiAiStreamUsage,
+  type StreamUsageTotals,
+} from "./streamUsageReport.js";
 
 export interface StreamOrchestratorResult {
   assistantText: string;
@@ -563,6 +571,12 @@ export async function* orchestrateModelStream(
   const MAX_REASONING_SIZE = 100_000; // 100KB max reasoning per stream (enough for most cases)
   const MAX_TEXT_SIZE = 500_000; // 500KB max assistant text per stream
   
+  /**
+   * Running usage total for this stream. Held here because the scope of this
+   * generator *is* one stream, which is the boundary the total has to respect.
+   */
+  let streamUsage: StreamUsageTotals = EMPTY_STREAM_USAGE;
+
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
 
@@ -972,39 +986,28 @@ export async function* orchestrateModelStream(
           finishReason?: string;
         };
 
-        if (finishStepChunk.usage) {
-          const usage = finishStepChunk.usage;
-          const { extractCacheUsageFromUsage } = await import(
-            "./promptCacheControl.js"
-          );
-          const cache = extractCacheUsageFromUsage({
-            inputTokenDetails: usage.inputTokenDetails,
-            cachedInputTokens: usage.cachedInputTokens,
-            providerMetadata: finishStepChunk.providerMetadata,
-          });
+        const stepUsage = readAiSdkStepUsage(finishStepChunk);
+        if (stepUsage) {
+          // Fold into the stream total before reporting. The AI SDK reports per
+          // step, and the consumer reads each report as the stream's running
+          // total, so reporting the step alone discarded every earlier one.
+          streamUsage = addStreamUsage(streamUsage, stepUsage);
+
           console.log(
             `[StreamOrchestrator] 💰 Usage from finish-step: ` +
-              `${usage.totalTokens || 0} total ` +
-              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output` +
-              (cache.cacheReadTokens || cache.cacheWriteTokens
-                ? `, cache read ${cache.cacheReadTokens} / write ${cache.cacheWriteTokens}`
+              `${stepUsage.totalTokens} total ` +
+              `(${stepUsage.promptTokens} input + ${stepUsage.completionTokens} output` +
+              (stepUsage.cacheReadTokens || stepUsage.cacheWriteTokens
+                ? `, cache read ${stepUsage.cacheReadTokens} / write ${stepUsage.cacheWriteTokens}`
                 : "") +
-              `)`,
+              `) — stream so far ${streamUsage.totalTokens} total`,
           );
 
           // Yield a step-usage chunk (NOT "done") for AgentService to capture
           // This prevents frontend from finalizing prematurely
           yield createChatStreamChunk(
             "step-usage",
-            {
-              usage: {
-                promptTokens: usage.inputTokens || 0,
-                completionTokens: usage.outputTokens || 0,
-                totalTokens: usage.totalTokens || 0,
-                cacheReadTokens: cache.cacheReadTokens,
-                cacheWriteTokens: cache.cacheWriteTokens,
-              },
-            },
+            { usage: { ...streamUsage } },
             chatId,
           );
         }
@@ -1021,38 +1024,34 @@ export async function* orchestrateModelStream(
       case "finish": {
         const finishChunk = rawChunk as any;
         const finishReason = finishChunk.finishReason;
-        const usage = finishChunk.usage;
-        
+
         console.log(
           `[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || "unknown"}`,
         );
         
-        // If we have token usage from the model, yield it as a step-usage chunk
-        // so AgentService can use it for summarization decisions
-        if (usage?.promptTokens || usage?.contextTokens) {
+        // The AI SDK's `totalUsage` is its own sum across every step of this
+        // stream, cache figures included, so it is preferred over the total we
+        // folded from the step reports. pi-ai puts its already-accumulated
+        // figures on `usage` instead.
+        const finalUsage =
+          readAiSdkTotalUsage(finishChunk) ?? readPiAiStreamUsage(finishChunk);
+
+        if (finalUsage) {
+          const contextTokens = finishChunk.usage?.contextTokens as
+            | number
+            | undefined;
           console.log(
-            `[StreamOrchestrator] 💰 Token usage from model: ${usage.totalTokens || 0} total ` +
-              `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion` +
-              (usage.cacheReadTokens || usage.cacheWriteTokens
-                ? `, cache read ${usage.cacheReadTokens ?? 0} / write ${usage.cacheWriteTokens ?? 0}`
+            `[StreamOrchestrator] 💰 Stream total: ${finalUsage.totalTokens} total ` +
+              `(${finalUsage.promptTokens} prompt + ${finalUsage.completionTokens} completion` +
+              (finalUsage.cacheReadTokens || finalUsage.cacheWriteTokens
+                ? `, cache read ${finalUsage.cacheReadTokens} / write ${finalUsage.cacheWriteTokens}`
                 : "") +
-              (usage.contextTokens
-                ? `, context window: ${usage.contextTokens}`
-                : "") +
+              (contextTokens ? `, context window: ${contextTokens}` : "") +
               `)`,
           );
           yield createChatStreamChunk(
             "step-usage",
-            {
-              usage: {
-                promptTokens: usage.promptTokens,
-                completionTokens: usage.completionTokens ?? 0,
-                totalTokens: usage.totalTokens ?? 0,
-                cacheReadTokens: usage.cacheReadTokens,
-                cacheWriteTokens: usage.cacheWriteTokens,
-                contextTokens: usage.contextTokens,
-              },
-            },
+            { usage: { ...finalUsage, contextTokens } },
             chatId,
           );
         }

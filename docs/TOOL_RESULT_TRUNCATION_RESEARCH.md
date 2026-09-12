@@ -392,22 +392,58 @@ Two hard constraints:
    savings with **cascading parse failures in multi-turn loops** — the exact setting we
    run in.
 
-### Applied to us
+### Applied to us — implemented, and the predictions below were wrong
 
-**Good candidates** — many rows, one shape, well above the row threshold:
-- `search_agent_memory` (29,481 tokens/call, currently uncapped)
-- `introspect_memory_graph` (84,438 tokens/call, currently uncapped)
-- `list_jobs`, `list_apps`, `query_cloud_turso` result sets
+This section originally named `introspect_memory_graph` ("84,438 tokens/call") and
+`list_jobs` as the best candidates. Measuring 244 real stored payloads before writing any
+code refuted both, so the numbers here are now measured rather than estimated.
 
 **Bad candidates** — a bash result is
 `{success, data:{stdout, stderr, exitCode, command, duration}}`: small, nested, one
 instance. That is the 21.9% row at best, below the payoff threshold, and the stdout
-payload is unstructured text that TOON cannot compress at all.
+payload is unstructured text that TOON cannot compress at all. `webview_snapshot`
+(30,795 chars/call) is raw HTML plus visible text, and `list_job_files` (52,041
+chars/call, the largest per-call average in the corpus) is an array of path *strings*
+with no repeated keys to omit — neither has anything for TOON to remove.
 
-**Important:** TOON would shrink the *payload*. This bug is about **how often we cut**, not
-how we encode. Even a 58.8% smaller recovery payload still costs a full extra step, which
-is the dominant term. Pursue TOON for the two uncapped memory tools — where it is worth
-real money — and do not treat it as related to this fix.
+**What the measurement found.** Calling `encode()` on results as they are built made three
+of seven list tools *larger* than JSON — `list_jobs` −1.7%, `list_documents` −4.4%,
+`validate_app` −3.1% — because TOON only reaches its tabular form when every row carries
+the same keys in the same order with scalar values, and ours do not: optional fields are
+dropped entirely by `JSON.stringify`, and several carry nested objects. Normalising into a
+true table first reaches tabular form on 100% of them.
+
+**Measured at the wired call sites**, comparing *embedded* size (a TOON string inside a
+JSON envelope pays two characters per newline, which a raw-string comparison misses):
+
+| Tool | Calls | Gate accepts | Saving when accepted |
+|---|---:|---:|---:|
+| `validate_app` | 106 | 41 | **36.0%** |
+| `list_apps` | 199 | 152 | 20.0% |
+| `list_schemas` | 33 | 33 | 26.9% |
+| `get_job_history` | 37 | 7 | 34.3% |
+| `list_documents` | 200 | 26 | 15.3% |
+| `list_jobs` | 192 | 3 | 15.6% |
+
+`list_jobs` is the instructive one: the largest total volume of any list tool (12.85M
+chars) and almost never worth encoding, because its rows are mostly free text — commands,
+paths, descriptions — where key names are a rounding error. The saving is a property of
+the individual payload, not of the tool, which is why `src/core/utils/toonRows.ts`
+measures each call and keeps TOON only when it wins by at least 15%. Below that sits
+TOON's own agentic-tool-calling band (2–18%, *with* cascading parse failures in multi-turn
+loops), where the saving does not pay for handing the model a format it may misread.
+
+**Important:** TOON shrinks the *payload*. This bug is about **how often we cut**, not how
+we encode. Even a 58.8% smaller recovery payload still costs a full extra step, which is
+the dominant term — so TOON is worth doing on its own merits and is not related to this
+fix.
+
+**And the encoding was never where the money was.** Across the same corpus TOON saves
+~1.45M characters, while `list_job_files` was spending **6.28M on dependency paths**:
+95.5% of its listed entries, and 97.4% of its characters, sat inside `venv/`,
+`site-packages/`, `node_modules/` and `__pycache__`, because its directory walk excluded
+only `.versions`. The agent's own job scripts arrived buried under ~790 dependency paths
+per call. Measuring what a payload *is* beat compressing it by roughly four to one.
 
 ---
 

@@ -294,6 +294,11 @@ export class StorageManager {
     return await provider.getChatStats(chatId);
   }
 
+  async getTurnUsage(chatId: string) {
+    const provider = this.ensureInitialized();
+    return await provider.getTurnUsage(chatId);
+  }
+
   async getGlobalCostStats(): Promise<{
     today: number;
     thisWeek: number;

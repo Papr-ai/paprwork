@@ -30,6 +30,11 @@ export function resolveModelContextWindow(
   return PROVIDER_DEFAULT_CONTEXT[provider] ?? 128_000;
 }
 
+/** Provider that owns a model id, for callers holding only the id. */
+export function resolveProviderForModel(modelId: string): Provider {
+  return fallback.getModelInfo(modelId)?.provider ?? "anthropic";
+}
+
 /**
  * Smallest window we will budget against, whatever the user asks for.
  *

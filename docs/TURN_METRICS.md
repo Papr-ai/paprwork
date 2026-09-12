@@ -38,7 +38,8 @@ Written to `messages` as nullable INTEGER columns, one row per assistant turn.
 | `turn_recovery_fetches` | `get_full_tool_result` calls |
 | `turn_redundant_recoveries` | fetches recovering a result that would have fit the fresh ceiling |
 | `turn_recovered_chars` | total characters fetched back |
-| `turn_peak_context_tokens` | largest context observed at a step boundary |
+| `turn_peak_context_tokens` | largest whole prompt the provider reported for a step; falls back to the estimate only when no step reported usage |
+| `turn_estimated_context_tokens` | the `chars/4` estimate on its own — the truncation ladder's own view |
 | `turn_context_budget_tokens` | the budget that applied |
 | `turn_plan_total_steps` / `turn_plan_completed_steps` | plan progress at turn end |
 
@@ -46,6 +47,32 @@ Existing columns already carry the other half: `prompt_tokens`,
 `completion_tokens`, `cache_read_tokens`, `cache_write_tokens`, `cost`, `model`,
 plus `context_naive_tokens` / `context_optimized_tokens` from
 `contextFootprintStore.ts`.
+
+### Two context numbers, on purpose
+
+`turn_peak_context_tokens` is what was **billed**. `turn_estimated_context_tokens`
+is what the truncation ladder **believed**, and on real turns the first is around
+1.9× the second: the `chars/4` ratio is too generous for our content (measured
+2.83 chars per token overall, 2.72 for tool results), tool-call arguments were
+counted as zero until Issue 92, and JSON framing is never counted at all.
+
+Keeping both makes the estimator's error queryable rather than arguable:
+
+```sql
+SELECT ROUND(AVG(1.0 * turn_peak_context_tokens / turn_estimated_context_tokens), 2)
+FROM messages
+WHERE turn_estimated_context_tokens > 0 AND turn_peak_context_tokens > 0;
+```
+
+This matters beyond reporting. The same estimate drives the compaction gate,
+`trimOldestHistoryTurns`, and the post-trim budget check, so a sustained ratio
+above 1 means all three fire later than their thresholds imply. `npm run
+calibrate:token-estimator` measures the ratio half directly against a real
+tokenizer.
+
+`contextFillRatio` deliberately divides the **estimate** by the budget, not the
+billed figure — it reports how full the ladder thought it was, which is the
+quantity its own 70% gate compares.
 
 ### Redundant recovery
 
