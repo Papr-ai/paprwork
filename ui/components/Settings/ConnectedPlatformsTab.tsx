@@ -2,7 +2,7 @@
  * ConnectedPlatformsTab - Platform Connections for authenticated automation
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { openPlatformBrowserTab } from "../../lib/openPlatformBrowserTab";
 import "./ConnectedPlatformsTab.css";
@@ -94,9 +94,11 @@ export function ConnectedPlatformsTab() {
   const [externalChromeLogin, setExternalChromeLogin] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
   const [connectNotice, setConnectNotice] = useState<string | null>(null);
+  const [showAddSite, setShowAddSite] = useState(false);
   const [newSiteUrl, setNewSiteUrl] = useState("");
   const [newSiteName, setNewSiteName] = useState("");
   const [registerLoading, setRegisterLoading] = useState(false);
+  const addSiteUrlRef = useRef<HTMLInputElement>(null);
 
   const loadPlatforms = useCallback(async () => {
     try {
@@ -175,6 +177,7 @@ export function ConnectedPlatformsTab() {
       }
       setNewSiteUrl("");
       setNewSiteName("");
+      setShowAddSite(false);
       await loadPlatforms();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to register site");
@@ -182,6 +185,18 @@ export function ConnectedPlatformsTab() {
       setRegisterLoading(false);
     }
   }, [loadPlatforms, newSiteName, newSiteUrl]);
+
+  const handleOpenAddSite = useCallback(() => {
+    setShowAddSite(true);
+    setError(null);
+    requestAnimationFrame(() => addSiteUrlRef.current?.focus());
+  }, []);
+
+  const handleCloseAddSite = useCallback(() => {
+    setShowAddSite(false);
+    setNewSiteUrl("");
+    setNewSiteName("");
+  }, []);
 
   const handleRemoveSite = useCallback(
     async (platformId: string) => {
@@ -361,44 +376,86 @@ export function ConnectedPlatformsTab() {
 
   return (
     <div className="connected-platforms-tab">
-      <div className="connected-platforms-header">
-        <h2>Platform Connections</h2>
-        <p className="connected-platforms-description">
-          Connect sites that need login — social platforms and any custom web app.
-          Sessions stay in an in-app tab; the agent reuses them for automation.
-        </p>
+      <div className="settings-section__header connected-platforms-header">
+        <div>
+          <h2 className="settings-section__title">Platform Connections</h2>
+          <p className="settings-section__description">
+            Connect sites that need login — social platforms and any custom web app.
+            Sessions stay in an in-app tab; the agent reuses them for automation.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="settings-btn settings-btn--primary"
+          onClick={handleOpenAddSite}
+        >
+          + Add Site
+        </button>
       </div>
 
-      <div className="connected-platforms-add-site">
-        <h3>Add a site</h3>
-        <div className="connected-platforms-add-form">
-          <input
-            type="url"
-            className="connected-platforms-input"
-            placeholder="https://app.example.com"
-            value={newSiteUrl}
-            onChange={(event) => setNewSiteUrl(event.target.value)}
-          />
-          <input
-            type="text"
-            className="connected-platforms-input connected-platforms-input-name"
-            placeholder="Display name (optional)"
-            value={newSiteName}
-            onChange={(event) => setNewSiteName(event.target.value)}
-          />
-          <button
-            type="button"
-            className="connected-platform-btn connected-platform-btn-primary"
-            onClick={() => void handleRegisterSite()}
-            disabled={registerLoading || !newSiteUrl.trim()}
-          >
-            {registerLoading ? "Adding..." : "Add site"}
-          </button>
+      {showAddSite && (
+        <div className="key-add-form connected-platforms-add-form-panel">
+          <div className="form-group">
+            <label className="form-label" htmlFor="platform-add-site-url">
+              Site URL
+            </label>
+            <input
+              ref={addSiteUrlRef}
+              id="platform-add-site-url"
+              type="url"
+              className="form-input"
+              placeholder="https://app.example.com"
+              value={newSiteUrl}
+              onChange={(event) => setNewSiteUrl(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && newSiteUrl.trim() && !registerLoading) {
+                  void handleRegisterSite();
+                }
+              }}
+            />
+          </div>
+          <div className="form-group">
+            <label className="form-label" htmlFor="platform-add-site-name">
+              Display name <span className="form-label__optional">(optional)</span>
+            </label>
+            <input
+              id="platform-add-site-name"
+              type="text"
+              className="form-input"
+              placeholder="e.g., My Dashboard"
+              value={newSiteName}
+              onChange={(event) => setNewSiteName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && newSiteUrl.trim() && !registerLoading) {
+                  void handleRegisterSite();
+                }
+              }}
+            />
+          </div>
+          <p className="connected-platforms-add-hint">
+            Papr opens Google Chrome outside the app for login and automation. Requires Google
+            Chrome on desktop — without it, an in-app browser is used as fallback.
+          </p>
+          <div className="key-add-form__actions">
+            <button
+              type="button"
+              className="settings-btn settings-btn--secondary"
+              onClick={handleCloseAddSite}
+              disabled={registerLoading}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary"
+              onClick={() => void handleRegisterSite()}
+              disabled={registerLoading || !newSiteUrl.trim()}
+            >
+              {registerLoading ? "Adding..." : "Add Site"}
+            </button>
+          </div>
         </div>
-        <p className="connected-platforms-add-hint">
-          Papr opens Google Chrome outside the app (Chrome Manager style) for login and automation.
-        </p>
-      </div>
+      )}
 
       {error && (
         <div className="connected-platforms-error">

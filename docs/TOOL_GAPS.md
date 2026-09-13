@@ -224,15 +224,16 @@ if (googleConnected) {
 
 **Why:** Better file management UX
 
-**5. Apps (Mini-Apps)** (8 tools)
+**5. Apps (Mini-Apps)** (9 tools)
 - `create_app` - Create new app
 - `list_apps` - List all apps
 - `read_app_file` - Read app source
 - `edit_app_file` - Edit app code
 - `launch_app` - Run the app
 - `publish_app` - Share to marketplace
-- `install_app` - Install from marketplace
-- `list_community_apps` - Browse marketplace
+- `list_community_apps` - Browse forkable Papr Cloud apps (Community / Team tabs) ✅
+- `install_cloud_app` - Fork/track from cloud catalog ✅
+- `list_app_bundles` - List local OSS export bundles only (not Community discovery)
 
 **Why:** Unique feature, high differentiation
 

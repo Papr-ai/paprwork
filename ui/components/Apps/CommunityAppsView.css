@@ -332,6 +332,14 @@
   overflow: hidden;
 }
 
+.community-card__automation {
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 500;
+  color: var(--accent, #2563eb);
+}
+
 .community-card__meta {
   display: flex;
   align-items: center;

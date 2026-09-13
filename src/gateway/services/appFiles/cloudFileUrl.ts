@@ -92,8 +92,15 @@ export function resolveCloudFileUrl(
     return { kind: "signed", appId: row.app_id, objectKey: row.object_key };
   }
 
-  // Published app-scoped object: publish already flipped it CDN-public, so the
-  // permanent URL works for logged-out visitors with no round-trip.
+  // Signed reads work against private GCS objects. CDN URLs only work after
+  // publish (or post-upload setVisibility) makes the object world-readable.
+  // Logged-in team members and authors upload from the web without that flip.
+  if (req.userId && req.canRead) {
+    return { kind: "signed", appId: row.app_id, objectKey: row.object_key };
+  }
+
+  // Published app-scoped object, already CDN-public — anonymous visitors load
+  // without a signing round-trip.
   if (req.isPublished) {
     return { kind: "cdn", objectKey: row.object_key };
   }

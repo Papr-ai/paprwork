@@ -4,7 +4,11 @@
 
 export type IntegrationKeyOrgScope = "organization" | "all";
 
-export type IntegrationKeyVaultAudience = "user" | "namespace" | "org";
+export type IntegrationKeyVaultAudience =
+  | "user"
+  | "members"
+  | "namespace"
+  | "org";
 
 export interface CustomKey {
   id: string;
@@ -21,6 +25,17 @@ export interface CustomKey {
   orgScope?: IntegrationKeyOrgScope | "global";
   organizationId?: string;
   vaultAudience?: IntegrationKeyVaultAudience;
+  vaultOrigin?: "local" | "shared";
+  sharedShareScope?: Extract<
+    IntegrationKeyVaultAudience,
+    "namespace" | "org" | "members"
+  >;
+  sharedOwnerUserId?: string;
+  sharedSyncedAt?: string;
+  vaultSharedNameCollision?: boolean;
+  vaultAudienceMemberIds?: string[];
+  vaultShareBlocked?: boolean;
+  vaultShareBlockedOwnerUserId?: string;
 }
 
 export interface CustomKeyInput {
@@ -32,6 +47,7 @@ export interface CustomKeyInput {
   orgScope?: IntegrationKeyOrgScope;
   organizationId?: string;
   vaultAudience?: IntegrationKeyVaultAudience;
+  vaultAudienceMemberIds?: string[];
 }
 
 export interface ProviderConfig {
@@ -62,6 +78,7 @@ export type SettingsTab =
   | "databases"
   | "platforms"
   | "profile"
+  | "billing"
   | "permissions"
   | "privacy"
   | "migration"

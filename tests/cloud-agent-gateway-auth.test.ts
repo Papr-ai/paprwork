@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   reconcileCloudProviderAuth,
+  resolveCloudGatewayProviderAuthFromEnvToken,
   resolveCloudProviderAuthFromVaultKeys,
   resolveVaultKeySource,
 } from "../src/gateway/services/cloudAgentGateway/resolveCloudProviderAuth.js";
@@ -64,6 +65,29 @@ describe("resolveCloudProviderAuthFromVaultKeys", () => {
       keys: { OPENAI_API_KEY: "sk-platform-key" },
     });
     expect(result?.authType).toBe("apiKey");
+  });
+});
+
+describe("resolveCloudGatewayProviderAuthFromEnvToken", () => {
+  it("uses vault oauth metadata even when token is not sk-ant-oat shaped", () => {
+    const result = resolveCloudGatewayProviderAuthFromEnvToken({
+      provider: "anthropic",
+      token: "opaque-subscription-token",
+      keyMetadata: {
+        source: "oauth",
+        managedBy: "oauth",
+        oauthProvider: "anthropic",
+      },
+    });
+    expect(result.authType).toBe("oauth");
+  });
+
+  it("upgrades sk-ant-oat env tokens to oauth", () => {
+    const result = resolveCloudGatewayProviderAuthFromEnvToken({
+      provider: "anthropic",
+      token: "sk-ant-oat-from-vault",
+    });
+    expect(result.authType).toBe("oauth");
   });
 });
 

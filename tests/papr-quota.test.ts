@@ -4,16 +4,20 @@ import {
   extractErrorMessage,
   formatCloudPublishFailureMessage,
   formatPaprQuotaMessage,
+  isPaprCloudPaused,
   isPaprQuotaError,
+  isPaprSubscriptionBlockedMessage,
   notifyPaprQuotaStatus,
   parsePaprQuotaError,
   reportPaprQuotaError,
+  setPaprCloudPaused,
   setPaprQuotaExceededListener,
 } from "../src/core/utils/paprQuota.js";
 
 describe("paprQuota", () => {
   beforeEach(() => {
     setPaprQuotaExceededListener(null);
+    setPaprCloudPaused(false);
   });
 
   it("detects operation limit messages from memory server", () => {
@@ -85,10 +89,21 @@ describe("paprQuota", () => {
     expect(isPaprQuotaError(error)).toBe(true);
     const status = parsePaprQuotaError(error, "chat-sync");
     expect(status?.kind).toBe("subscription");
-    expect(status?.title).toBe("Papr Memory unavailable");
-    expect(status?.detail).toContain("couldn't verify");
+    expect(status?.title).toBe("Subscription cancelled.");
+    expect(status?.detail).toContain("Papr Cloud features paused");
     expect(status?.detail).not.toContain('"code"');
     expect(status?.suggestMeteredBilling).toBe(false);
+  });
+
+  it("detects compact schema-list subscription JSON without dashboard URL", () => {
+    const error = new Error(
+      '403 {"success":false,"data":[],"error":"No active subscription","code":403,"total":0}',
+    );
+    expect(isPaprQuotaError(error)).toBe(true);
+    const status = parsePaprQuotaError(error, "schema-list");
+    expect(status?.kind).toBe("subscription");
+    expect(status?.detail).toContain("Papr Cloud features paused");
+    expect(status?.detail).not.toContain('"code"');
   });
 
   it("never surfaces raw JSON payloads in banner detail", () => {
@@ -117,6 +132,23 @@ describe("paprQuota", () => {
     );
     expect(message).toContain("Operations limit reached");
     expect(message).not.toContain('"detail"');
+  });
+
+  it("detects subscription block messages", () => {
+    const msg = '403 {"details":{"error":"No active subscription"}}';
+    expect(isPaprSubscriptionBlockedMessage(msg)).toBe(true);
+    expect(
+      isPaprSubscriptionBlockedMessage("Namespace authorization denied"),
+    ).toBe(false);
+  });
+
+  it("pauses cloud features after subscription quota report", () => {
+    expect(isPaprCloudPaused()).toBe(false);
+    reportPaprQuotaError(
+      new Error('403 {"error":"No active subscription"}'),
+      "vault-sync",
+    );
+    expect(isPaprCloudPaused()).toBe(true);
   });
 
   it("notifyPaprQuotaStatus forwards to listener", () => {

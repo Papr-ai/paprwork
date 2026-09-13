@@ -38,4 +38,45 @@
   .key-item__scope-badge--shared {
     color: #30d158;
   }
+
+  .key-item__scope-badge--duplicate {
+    color: #fbbf24;
+  }
+
+  .key-item__scope-badge--blocked {
+    color: #ff9f0a;
+  }
+}
+
+.key-vault-refreshing {
+  font-size: 12px;
+  color: var(--text-tertiary, rgba(60, 60, 67, 0.55));
+  margin: 6px 0 0;
+}
+
+.key-item--shared {
+  border-color: color-mix(in srgb, #248a3d 25%, var(--border-color, rgba(0, 0, 0, 0.12)));
+}
+
+.key-item__view-note {
+  font-size: 12px;
+  color: var(--text-secondary, rgba(60, 60, 67, 0.72));
+  margin: 0 0 12px;
+  line-height: 1.45;
+}
+
+.key-item__view-field {
+  font-size: 13px;
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.key-item__scope-badge--duplicate {
+  background: rgba(245, 158, 11, 0.14);
+  color: #b45309;
+}
+
+.key-item__scope-badge--blocked {
+  background: rgba(255, 159, 10, 0.14);
+  color: #c2410c;
 }

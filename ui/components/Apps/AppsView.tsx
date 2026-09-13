@@ -137,6 +137,7 @@ export function AppsView() {
     linkedJobs: Array<{ id: string; name: string; type: string; hasTursoDb?: boolean }>;
     tursoDbCount: number;
   } | null>(null);
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
   const [otherNamespaceCount, setOtherNamespaceCount] = useState(0);
   const [otherOrganizationCount, setOtherOrganizationCount] = useState(0);
   const [currentOrganizationId, setCurrentOrganizationId] = useState<string | null>(
@@ -265,7 +266,7 @@ export function AppsView() {
       // First call to get the deletion preview
       const result = await deleteArtifact(id, "app");
       if (result?.preview) {
-        // Show the deletion modal with the preview
+        setDeleteModalError(null);
         setDeletePreview(result.preview);
       }
     } catch {
@@ -281,15 +282,19 @@ export function AppsView() {
     unpublishFromCloud: boolean;
   }) => {
     if (!deletePreview) return;
-    
+
+    setDeleteModalError(null);
     try {
       await deleteArtifact(deletePreview.appId, "app", {
         ...options,
         confirmed: true,
       });
       setDeletePreview(null);
-    } catch {
-      /* useArtifacts sets error */
+      setDeleteModalError(null);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Failed to delete app";
+      setDeleteModalError(message);
     }
   };
 
@@ -762,7 +767,11 @@ export function AppsView() {
       <DeleteAppModal
         isOpen={deletePreview !== null}
         preview={deletePreview}
-        onClose={() => setDeletePreview(null)}
+        deleteError={deleteModalError}
+        onClose={() => {
+          setDeletePreview(null);
+          setDeleteModalError(null);
+        }}
         onConfirm={handleConfirmDelete}
       />
     </div>

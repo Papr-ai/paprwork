@@ -3,6 +3,8 @@
  */
 
 import React from "react";
+import { PaprCloudRequirementsPanel } from "../common/PaprCloudRequirementsPanel";
+import { requestPaprCloudFeature } from "../../stores/paprCloudFeatureStore";
 import type {
   AppCloudItemPhase,
   AppCloudSyncStatus,
@@ -221,6 +223,12 @@ export function WebSyncPopover({
   className,
   style,
 }: WebSyncPopoverProps) {
+  const pushIfAllowed = (): void => {
+    if (!requestPaprCloudFeature("publish_share")) {
+      return;
+    }
+    onPushNow();
+  };
   const busy = pushing || pulling || applyingUpdates || loading || refreshing;
   const pushLabel = webSyncPushButtonLabel({ appLive, pushing });
   const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
@@ -273,6 +281,7 @@ export function WebSyncPopover({
         aria-label="Web sync"
       >
         <p className="mini-app-publish-bar__sync-popover-title">Web sync</p>
+        <PaprCloudRequirementsPanel featureId="publish_share" compact />
         <p className="mini-app-publish-bar__sync-popover-summary">Checking…</p>
         {uploadFailureMessage ? (
           <p className="mini-app-publish-bar__sync-popover-error">{uploadFailureMessage}</p>
@@ -303,7 +312,7 @@ export function WebSyncPopover({
                 : ""
             }`}
             disabled={busy}
-            onClick={() => void onPushNow()}
+            onClick={() => pushIfAllowed()}
           >
             {pushLabel}
           </button>
@@ -436,6 +445,8 @@ export function WebSyncPopover({
       aria-label="Web sync"
     >
       <p className="mini-app-publish-bar__sync-popover-title">Web sync</p>
+
+      <PaprCloudRequirementsPanel featureId="publish_share" compact />
 
       {showMergeReview ? (
         <div
@@ -571,7 +582,7 @@ export function WebSyncPopover({
               type="button"
               className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
               disabled={busy || metadataSync}
-              onClick={() => void onPushNow()}
+              onClick={() => pushIfAllowed()}
             >
               {pushLabel}
             </button>
@@ -599,7 +610,7 @@ export function WebSyncPopover({
               type="button"
               className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
               disabled={busy || metadataSync}
-              onClick={() => void onPushNow()}
+              onClick={() => pushIfAllowed()}
             >
               {pushLabel}
             </button>
@@ -688,7 +699,7 @@ export function WebSyncPopover({
                 type="button"
                 className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
                 disabled={busy || metadataSync}
-                onClick={() => void onPushNow()}
+                onClick={() => pushIfAllowed()}
               >
                 {pushLabel}
               </button>
@@ -728,7 +739,7 @@ export function WebSyncPopover({
                 type="button"
                 className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
                 disabled={busy || metadataSync}
-                onClick={() => void onPushNow()}
+                onClick={() => pushIfAllowed()}
               >
                 {pushLabel}
               </button>
@@ -768,7 +779,7 @@ export function WebSyncPopover({
                       : ""
                   }`}
                   disabled={busy || metadataSync}
-                  onClick={() => void onPushNow()}
+                  onClick={() => pushIfAllowed()}
                 >
                   {pushLabel}
                 </button>

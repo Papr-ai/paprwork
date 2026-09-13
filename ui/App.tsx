@@ -28,6 +28,9 @@ import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
 import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
 import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
+import { useCloudMemoryStatus } from "./hooks/useCloudMemoryStatus";
+import { usePaprCloudFeatureContext } from "./hooks/usePaprCloudFeatureContext";
+import { CloudFeatureLockModal } from "./components/common/CloudFeatureLockModal";
 import { useChatStore } from "./stores/chatStore";
 import { writeNewChatDefaultModel } from "./utils/chatModelMemory";
 import {
@@ -106,6 +109,8 @@ export function App() {
 
   // Initialize SQLite persistence for tabs/favorites (fast!)
   useAppStatePersistence();
+  useCloudMemoryStatus();
+  usePaprCloudFeatureContext();
 
   // Load UI preferences from settings BEFORE first render
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
@@ -618,6 +623,7 @@ export function App() {
         onClose={() => setCommandPaletteOpen(false)}
       />
       <PaprQuotaBanner />
+      <CloudFeatureLockModal />
       <ConnectionIndicator />
       <UpdateBanner />
     </>

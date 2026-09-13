@@ -1,6 +1,6 @@
 # Sync Replica, Genesis, and Authority Plan
 
-**Status:** Plan B fallback (2026-08-24) — **Primary direction is [`SYNC_TURSO_REPLICA_PLAN.md`](./SYNC_TURSO_REPLICA_PLAN.md)** (Turso embedded replica). Use this doc only if the spike fails.  
+**Status:** Plan B fallback (2026-08-24) — **Primary direction is [`SYNC_TURSO_REPLICA_PLAN.md`](./SYNC_TURSO_REPLICA_PLAN.md) (Plan A — latest, active).** Use this doc only if the Turso embedded-replica spike fails. As of 2026-09-10, web team shared DB is working under Plan A; local collaborate (shared owner replica) is specified here §5.3 and tracked in Plan A's [Fork vs collaborate (local)](./SYNC_TURSO_REPLICA_PLAN.md#fork-vs-collaborate-local).  
 **Extends:** [`SYNC_ARCHITECTURE_V3.md`](./SYNC_ARCHITECTURE_V3.md), [`SYNC_CONTRACT.md`](./SYNC_CONTRACT.md), [`SYNC_V3_IMPLEMENTATION_PLAN.md`](./SYNC_V3_IMPLEMENTATION_PLAN.md)
 
 **Context:** P0 skip-on-missing replay unblocked Upload for stale log entries (e.g. `person_tags` → `person_label`). That is triage, not the target model. This doc defines the long-term replica modes, authority rules, genesis/compaction, cloud-thin Turso, and fork/collaborator behavior.

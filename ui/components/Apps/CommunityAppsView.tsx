@@ -14,6 +14,7 @@ import {
 } from "./ImportSetupWizard";
 import type { CommunityCatalogEntry, CommunityCatalogScope } from "../../../src/core/types/communityCatalog";
 import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog";
+import { requiresInstallModeChoice } from "../../../src/core/utils/cloudCatalogInstallPolicy";
 import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/bundles";
 import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
@@ -50,7 +51,17 @@ import {
 } from "../../types/cloudCatalogPreviewTab";
 import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
-import { extractOptionalInstallDependencies } from "../../utils/cloudCatalogInstall";
+import {
+  buildCloudInstallTimeoutAgentMessage,
+  CLOUD_INSTALL_FETCH_TIMEOUT_MS,
+  CLOUD_INSTALL_TIMEOUT_MESSAGE,
+  extractOptionalInstallDependencies,
+  isCloudInstallTimeoutError,
+} from "../../utils/cloudCatalogInstall";
+import {
+  buildCloudInstallWelcomeMessage,
+  openCloudInstalledAppWithChat,
+} from "../../utils/openCloudInstalledAppWithChat";
 import type { CloudAppDependenciesFile } from "../../../src/core/types/cloudAppDependencies";
 
 const GATEWAY =
@@ -398,24 +409,26 @@ export function CommunityAppsView({
 
   const openAgentDatabaseSetup = useCallback(
     async (message: string, appId?: string, appTitle?: string) => {
+      if (appId && appTitle) {
+        await openCloudInstalledAppWithChat(createChat, {
+          appId,
+          appTitle,
+          agentMessage: message,
+          chatTabTitle: "App setup",
+        });
+        return;
+      }
+
       const chatId = await createChat();
       if (!chatId) return;
 
       const tabId = createTab("chat", chatId, "App setup");
       switchToTab(tabId);
 
-      let fullMessage = message;
-      if (appId) {
-        fullMessage +=
-          `\n\nWhen setup is complete, open the app tab (appId: ${appId}` +
-          (appTitle ? `, title: "${appTitle}"` : "") +
-          ").";
-      }
-
       setTimeout(() => {
         window.dispatchEvent(
           new CustomEvent("papr-onboarding-send", {
-            detail: { message: fullMessage },
+            detail: { message },
           }),
         );
       }, 300);
@@ -493,6 +506,11 @@ export function CommunityAppsView({
 
     setInstallingId(entry.catalogId);
     setInstallError(null);
+    const controller = new AbortController();
+    const installTimeout = setTimeout(
+      () => controller.abort(),
+      CLOUD_INSTALL_FETCH_TIMEOUT_MS,
+    );
     try {
       const res = await fetch(`${GATEWAY}/api/cloud/install`, {
         method: "POST",
@@ -501,7 +519,10 @@ export function CommunityAppsView({
           namespaceId: entry.namespaceId,
           slug: entry.slug,
           mode,
+          catalogScope: scope,
+          visibility: entry.visibility,
         }),
+        signal: controller.signal,
       });
       const body = (await res.json()) as {
         app?: { id: string; title?: string };
@@ -527,19 +548,15 @@ export function CommunityAppsView({
       const optionalDeps = extractOptionalInstallDependencies(body);
       const hasOptionalDeps = optionalDeps !== null;
 
-      const needsFollowUp =
-        Boolean(body.agentSetupMessage) ||
-        body.bootstrap?.needsSeed === true ||
-        (body.bootstrap?.warnings?.length ?? 0) > 0 ||
-        (body.installWarnings?.length ?? 0) > 0 ||
-        hasOptionalDeps;
+      const needsSeed = body.bootstrap?.needsSeed === true;
+      const needsAgentSetup = Boolean(body.agentSetupMessage);
 
-      if (needsFollowUp && body.agentSetupMessage) {
+      if (needsAgentSetup) {
         setInstallToast(
           `${modeLabel} "${title}" — finishing database setup in chat…`,
         );
         void openAgentDatabaseSetup(
-          body.agentSetupMessage,
+          body.agentSetupMessage!,
           body.app?.id,
           title,
         );
@@ -552,6 +569,10 @@ export function CommunityAppsView({
           appTitle: title,
           dependencies: optionalDeps,
         });
+      } else if (needsSeed) {
+        setInstallToast(
+          `${modeLabel} "${title}" — schema ready. Run linked jobs to seed data when needed.`,
+        );
       } else {
         setInstallToast(`${modeLabel} "${title}" into Paprwork`);
       }
@@ -570,29 +591,57 @@ export function CommunityAppsView({
           });
           return;
         }
-        if (!needsFollowUp) {
-          const tabId = createTab("app", body.app.id, title);
-          switchToTab(tabId);
-        }
+        await openCloudInstalledAppWithChat(createChat, {
+          appId: body.app.id,
+          appTitle: title,
+          agentMessage: buildCloudInstallWelcomeMessage({
+            appId: body.app.id,
+            appTitle: title,
+            mode,
+            needsSeed,
+          }),
+        });
       }
     } catch (err) {
       const message =
-        err instanceof Error ? err.message.slice(0, 240) : "Install failed";
+        err instanceof DOMException && err.name === "AbortError"
+          ? CLOUD_INSTALL_TIMEOUT_MESSAGE
+          : err instanceof Error
+            ? err.message.slice(0, 240)
+            : "Install failed";
       setInstallError(message);
-      void openAgentDatabaseSetup(
-        `Community app install for "${entry.name}" failed.\n\nError: ${message}\n\nPlease diagnose linked jobs, data-sources.json, databases.json, and migration files; fix paths; apply migrations; run Turso pull if cloud sync is on; then verify writes work.`,
-      );
+      if (isCloudInstallTimeoutError(message)) {
+        setInstallToast(
+          `Install timed out for "${entry.name}" — opening chat for help…`,
+        );
+        void openAgentDatabaseSetup(
+          buildCloudInstallTimeoutAgentMessage(entry, mode),
+        );
+      } else {
+        setInstallToast(`Install failed for "${entry.name}": ${message}`);
+      }
     } finally {
+      clearTimeout(installTimeout);
       setInstallingId(null);
     }
   };
 
   const startCloudInstall = (entry: CommunityCatalogEntry) => {
-    if (entry.codeInstallable) {
-      setInstallModeEntry(entry);
+    if (!entry.codeInstallable) {
+      void installCloudApp(entry);
       return;
     }
-    void installCloudApp(entry);
+    if (
+      !requiresInstallModeChoice({
+        catalogScope: scope,
+        visibility: entry.visibility,
+        codeInstallable: entry.codeInstallable,
+      })
+    ) {
+      void installCloudApp(entry, "fork");
+      return;
+    }
+    setInstallModeEntry(entry);
   };
 
   const openLocalApp = useCallback(
@@ -946,6 +995,7 @@ export function CommunityAppsView({
       {installModeEntry ? (
         <CloudCatalogInstallModal
           entry={installModeEntry}
+          catalogScope={scope}
           installing={installingId === installModeEntry.catalogId}
           onClose={() => setInstallModeEntry(null)}
           onSelectMode={(mode) => {
@@ -975,14 +1025,28 @@ export function CommunityAppsView({
           onComplete={() => {
             const { appId, appTitle } = cloudInstallWizard;
             setCloudInstallWizard(null);
-            const tabId = createTab("app", appId, appTitle);
-            switchToTab(tabId);
+            void openCloudInstalledAppWithChat(createChat, {
+              appId,
+              appTitle,
+              agentMessage: buildCloudInstallWelcomeMessage({
+                appId,
+                appTitle,
+                mode: "fork",
+              }),
+            });
           }}
           onCancel={() => {
             const { appId, appTitle } = cloudInstallWizard;
             setCloudInstallWizard(null);
-            const tabId = createTab("app", appId, appTitle);
-            switchToTab(tabId);
+            void openCloudInstalledAppWithChat(createChat, {
+              appId,
+              appTitle,
+              agentMessage: buildCloudInstallWelcomeMessage({
+                appId,
+                appTitle,
+                mode: "fork",
+              }),
+            });
           }}
           onRequestHelp={(req) => void handleWizardHelp(req)}
         />
@@ -1000,8 +1064,15 @@ export function CommunityAppsView({
           onContinue={() => {
             const { appId, appTitle } = optionalDepsNotice;
             setOptionalDepsNotice(null);
-            const tabId = createTab("app", appId, appTitle);
-            switchToTab(tabId);
+            void openCloudInstalledAppWithChat(createChat, {
+              appId,
+              appTitle,
+              agentMessage: buildCloudInstallWelcomeMessage({
+                appId,
+                appTitle,
+                mode: "fork",
+              }),
+            });
           }}
         />
       ) : null}
@@ -1119,6 +1190,8 @@ function CommunityAppCard({
   };
 
   const showInstall = canInstallCloudCatalogEntry(entry, localAppId);
+  /** Prefer local install over slow web preview when source is installable. */
+  const showWebOpen = Boolean(onOpen) && (!showInstall || Boolean(localAppId));
   const shareBadge = getCatalogShareBadge(entry);
   const byline = getCatalogByline(entry);
   const displayTags = filterCatalogDisplayTags(entry.tags);
@@ -1159,6 +1232,9 @@ function CommunityAppCard({
           ) : null}
         </div>
         <p className="community-card__description">{entry.description}</p>
+        {entry.catalogAutomation?.cardLine ? (
+          <p className="community-card__automation">{entry.catalogAutomation.cardLine}</p>
+        ) : null}
         <div className="community-card__meta">
           <span className="community-card__byline">{byline}</span>
           <button
@@ -1217,19 +1293,19 @@ function CommunityAppCard({
                 {entry.source === "cloud"
                   ? localAppId
                     ? "Open in My Apps"
-                    : entry.liveViewable
-                      ? "Live preview in Paprwork"
-                      : entry.codeInstallable
-                        ? "Customize locally (fork)"
+                    : entry.codeInstallable
+                      ? "Personalize locally (recommended)"
+                      : entry.liveViewable
+                        ? "Live preview in Paprwork"
                         : "Web app only"
                   : "GitHub bundle"}
               </span>
             </div>
             {entry.source === "cloud" && entry.codeInstallable ? (
               <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Customize</span>
+                <span className="community-card__detail-label">Personalize</span>
                 <span className="community-card__detail-value">
-                  Fork source to edit or contribute (optional)
+                  Install a personal copy to edit or contribute (optional)
                 </span>
               </div>
             ) : null}
@@ -1246,25 +1322,25 @@ function CommunityAppCard({
       {entry.source === "cloud" ? (
         <div className="community-card__actions">
           <div className="community-card__actions-row">
-            {onOpen ? (
+            {showWebOpen ? (
               <button
                 type="button"
-                className="community-card__action-btn community-card__action-btn--primary"
+                className={`community-card__action-btn${showInstall && localAppId ? "" : " community-card__action-btn--primary"}`}
                 onClick={onOpen}
                 onMouseEnter={onOpenHover}
                 onFocus={onOpenHover}
               >
-                Open
+                {localAppId ? "Open" : "Open in web"}
               </button>
             ) : null}
             {showInstall ? (
               <button
                 type="button"
-                className={`community-card__action-btn${onOpen ? "" : " community-card__action-btn--primary"}`}
+                className={`community-card__action-btn${showWebOpen ? "" : " community-card__action-btn--primary"}`}
                 onClick={onCloudInstall}
                 disabled={isInstalling}
               >
-                {isInstalling ? "Installing…" : "Customize"}
+                {isInstalling ? "Installing…" : "Personalize"}
               </button>
             ) : null}
           </div>

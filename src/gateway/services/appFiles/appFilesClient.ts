@@ -91,7 +91,11 @@ export async function commitUpload(
 export async function createReadUrl(
   appId: string,
   objectKey: string,
-  options: { download?: boolean; fileName?: string } = {},
+  options: {
+    download?: boolean;
+    fileName?: string;
+    memoryApiKey?: string;
+  } = {},
 ): Promise<{ url: string; expiresInSeconds: number }> {
   const res = await post<{ url: string; expires_in_seconds: number }>(
     "/v1/files/read-url",
@@ -100,7 +104,8 @@ export async function createReadUrl(
       object_key: objectKey,
       download: options.download ?? false,
       file_name: options.fileName,
-    }
+    },
+    options.memoryApiKey,
   );
   return { url: res.url, expiresInSeconds: res.expires_in_seconds };
 }
@@ -114,12 +119,17 @@ export async function setVisibility(
   appId: string,
   objectKey: string,
   isPublic: boolean,
+  memoryApiKey?: string,
 ): Promise<{ object_key: string; public: boolean; cdn_url: string | null }> {
-  return post("/v1/files/visibility", {
-    app_id: appId,
-    object_key: objectKey,
-    public: isPublic,
-  });
+  return post(
+    "/v1/files/visibility",
+    {
+      app_id: appId,
+      object_key: objectKey,
+      public: isPublic,
+    },
+    memoryApiKey,
+  );
 }
 
 export async function deleteObject(

@@ -1,3 +1,5 @@
+import { GLOBAL_INITIAL_DEFAULT_MODEL_ID } from "./authAwareModelDefaults";
+
 /**
  * Which model each chat is using, and which model a *new* chat should start on.
  *
@@ -151,6 +153,7 @@ export function renameChatModel(oldChatId: string, newChatId: string): void {
 /**
  * What a brand-new chat should open on: the last model the user picked
  * anywhere. Deliberately global — this is the one place that is correct.
+ * Before any pick or OAuth, defaults to Gemini.
  */
 export function readNewChatDefaultModel(): string | undefined {
   const store = storage();
@@ -158,7 +161,9 @@ export function readNewChatDefaultModel(): string | undefined {
     return undefined;
   }
   try {
-    return store.getItem(NEW_CHAT_DEFAULT_KEY) || undefined;
+    return (
+      store.getItem(NEW_CHAT_DEFAULT_KEY) || GLOBAL_INITIAL_DEFAULT_MODEL_ID
+    );
   } catch {
     return undefined;
   }

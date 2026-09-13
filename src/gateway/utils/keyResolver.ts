@@ -514,11 +514,33 @@ export async function getProviderAuth(
     }
   }
 
-  // Fall back to API key
+  // Fall back to API key (or vault OAuth token on cloud agent gateway)
   if (keys[keyName]) {
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      const { resolveCloudGatewayProviderAuthFromEnvToken } = await import(
+        "../services/cloudAgentGateway/resolveCloudProviderAuth.js"
+      );
+      const reconciled = resolveCloudGatewayProviderAuthFromEnvToken({
+        provider,
+        token: keys[keyName],
+      });
+      if (reconciled.authType === "oauth") {
+        console.log(
+          `[KeyResolver] Cloud vault auth for ${provider}: oauth ` +
+            `(length: ${reconciled.token.length}, prefix: ${reconciled.token.substring(0, 20)}...)`,
+        );
+        return { type: "oauth", token: reconciled.token };
+      }
+      console.log(
+        `[KeyResolver] Cloud vault auth for ${provider}: apiKey ` +
+          `(length: ${reconciled.token.length}, prefix: ${reconciled.token.substring(0, 20)}...)`,
+      );
+      return { type: "apiKey", key: reconciled.token };
+    }
+
     console.log(
       `[KeyResolver] Using API key for ${provider} ` +
-      `(length: ${keys[keyName].length}, prefix: ${keys[keyName].substring(0, 20)}...)`
+        `(length: ${keys[keyName].length}, prefix: ${keys[keyName].substring(0, 20)}...)`,
     );
     return { type: "apiKey", key: keys[keyName] };
   }

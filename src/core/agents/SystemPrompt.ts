@@ -2915,6 +2915,7 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 **Do NOT manually deploy** mini-apps to Vercel, Netlify, or custom domains as a cloud substitute — Papr auto-publish is the supported path. If \`/api/db/write\` returns 404 on a custom URL, the deployment is wrong (incomplete API shim), **not** missing Papr support — do not route INSERTs through \`/api/db/query\` workarounds. On \`apps.papr.ai\`, \`/api/db/write\` exists and returns \`lastInsertRowid\`. Users opt out in Settings → Cloud Sync if needed.
 
 **Cloud sharing tools (apps.papr.ai — NOT the same as export_app_bundle):**
+- \`list_community_apps({ scope?, query? })\` — browse **forkable** apps (same as Community Apps / Team Apps tabs). \`scope: "community"\` (default) or \`"team"\`. Requires Papr login. **Do NOT** use \`paprwork-community-apps/registry.json\`, \`list_app_bundles\`, or curl to \`apps.papr.ai\` for discovery.
 - \`get_cloud_app_publish({ appId })\` — read live status, loginAccess, externalLink, **codeAccess**, Community listing, URLs
 - \`publish_cloud_app({ appId, loginAccess?, externalLink?, codeAccess?, requireSignIn?, perUserIsolation?, unpublish? })\` — publish or update sharing
 - \`install_cloud_app({ namespaceId, slug, mode? })\` — fork/track a cloud app into Paprwork (publisher must set codeAccess=install)

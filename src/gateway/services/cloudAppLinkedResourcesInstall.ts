@@ -22,6 +22,7 @@ import {
 import type { CloudInstallHealthReport } from "../../core/types/cloudAppDependencies.js";
 import { readCloudAppDependenciesFile } from "./cloudAppResourceIntegrity.js";
 import type { CloudAppDependenciesFile } from "../../core/types/cloudAppDependencies.js";
+import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
 
 const UUID_PATTERN =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
@@ -221,6 +222,7 @@ export async function ensureRepoHasLinkedAppResources(input: {
 
   const initialPaths = [
     "data",
+    path.join("apps", input.publisherAppId, "jobs"),
     ...[...seedIds].map((jobId) => jobRelativePath(jobId)),
   ];
   const initialCheckout = await expandSparseCheckoutResilient(
@@ -255,6 +257,7 @@ export interface InstallCloudAppLinkedResourcesResult {
   skippedJobIds: string[];
   promotedJobIds: string[];
   skippedSparsePaths: string[];
+  registryDbIds: string[];
   dependencies: CloudAppDependenciesFile | null;
   health: CloudInstallHealthReport;
 }
@@ -264,6 +267,11 @@ export async function installCloudAppLinkedResources(input: {
   repoAppDir: string;
   publisherAppId: string;
   localAppId: string;
+  installDbPolicy?: InstallDbPolicy;
+  /** Track sync with shared DB: jobs/code only — skip registry SQLite copies. */
+  syncScope?: import("./copyAppToNamespace.js").SyncAppLinkedResourcesScope;
+  /** Skip portable replica prep (track sync should not re-mark databases). */
+  skipReplicaPrep?: boolean;
   env?: NodeJS.ProcessEnv;
 }): Promise<InstallCloudAppLinkedResourcesResult> {
   const checkout = await ensureRepoHasLinkedAppResources(input);
@@ -273,36 +281,36 @@ export async function installCloudAppLinkedResources(input: {
     sourceAppId: input.publisherAppId,
     sourcePaprHome: input.repoDir,
     targetPaprHome: getPaprRoot(),
+    installDbPolicy: input.installDbPolicy,
+    syncScope: input.syncScope,
   });
 
-  if (sync.registryDbIds.length > 0 || sync.copiedJobIds.length > 0) {
-    const { preparePortableReplicaDatabases } = await import(
-      "./tursoReplica/portableReplicaBootstrap.js"
-    );
+  if (
+    !input.skipReplicaPrep &&
+    input.installDbPolicy !== "fork_empty" &&
+    (sync.registryDbIds.length > 0 || sync.copiedJobIds.length > 0)
+  ) {
+    const {
+      preparePortableReplicaDatabases,
+      portableReplicaReasonForInstallPolicy,
+    } = await import("./tursoReplica/portableReplicaBootstrap.js");
     await preparePortableReplicaDatabases({
       paprHome: getPaprRoot(),
       registryDbIds: sync.registryDbIds,
       copiedJobIds: sync.copiedJobIds,
-      reason: "portable_install",
+      reason: portableReplicaReasonForInstallPolicy(input.installDbPolicy),
     });
   }
 
   const localAppDir = path.join(getPaprAppsRoot(), input.localAppId);
   let promotedJobIds: string[] = [];
-  const needsFallback = checkout.jobIds.some(
-    (jobId) => !existsSync(path.join(getPaprRoot(), "Jobs", jobId, "job.json")),
-  );
-
-  if (needsFallback && existsSync(localAppDir)) {
+  if (existsSync(localAppDir)) {
     const promoted = await promoteBundledAppJobsToRegistry({
       localAppId: input.localAppId,
       localAppDir,
       paprHome: getPaprRoot(),
     });
     promotedJobIds = promoted.promotedJobIds;
-    if (promotedJobIds.length > 0) {
-      await finalizePortableCloudAppResources();
-    }
   }
 
   const dependencies = await readCloudAppDependenciesFile(localAppDir);
@@ -319,29 +327,46 @@ export async function installCloudAppLinkedResources(input: {
     skippedJobIds: sync.skippedJobIds,
     promotedJobIds,
     skippedSparsePaths: checkout.skippedSparsePaths,
+    registryDbIds: sync.registryDbIds,
     dependencies,
     health,
   };
 }
 
-/** Repair data-sources, registry, and job command paths after cloud install/sync. */
-export async function finalizePortableCloudAppResources(): Promise<void> {
-  const { repairWorkspacePortableDataSources } = await import(
-    "./portableDataSources.js"
-  );
-  await repairWorkspacePortableDataSources();
+export type FinalizePortableCloudOptions = {
+  /**
+   * Fresh cloud install — skip full-workspace path repair scans.
+   * Publisher files are already portable; scanning every job blocks the gateway.
+   */
+  cloudInstall?: boolean;
+};
 
-  const { runPostMigrationPathRepair } = await import(
-    "./postMigrationPathRepair.js"
-  );
-  await runPostMigrationPathRepair({
-    dryRun: false,
-    includeApps: false,
-    delayMs: 0,
-    paprBase: getPaprRoot(),
-    scopePaprHome: getPaprRoot(),
-    skipDataSources: false,
-  });
+/** Repair data-sources, registry, and job command paths after cloud install/sync. */
+export async function finalizePortableCloudAppResources(
+  options?: FinalizePortableCloudOptions,
+): Promise<void> {
+  if (!options?.cloudInstall) {
+    const { repairWorkspacePortableDataSources } = await import(
+      "./portableDataSources.js"
+    );
+    await repairWorkspacePortableDataSources();
+
+    const { runPostMigrationPathRepair } = await import(
+      "./postMigrationPathRepair.js"
+    );
+    await runPostMigrationPathRepair({
+      dryRun: false,
+      includeApps: false,
+      delayMs: 0,
+      paprBase: getPaprRoot(),
+      scopePaprHome: getPaprRoot(),
+      skipDataSources: false,
+    });
+  } else {
+    console.log(
+      "[CloudAppInstall] Skipping full-workspace path repair (fresh cloud install)",
+    );
+  }
 
   try {
     const { getJobsService } = await import("./JobsService.js");

@@ -141,6 +141,9 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
           await setupChatGPTHandlers(ws, message);
         } else if (message.type.startsWith("code-indexing:")) {
           await setupCodeIndexingHandlers(ws, message);
+        } else if (message.type.startsWith("papr:")) {
+          const { setupPaprHandlers } = await import("./papr.js");
+          await setupPaprHandlers(ws, message);
         } else if (message.type.startsWith("memory:")) {
           await setupMemoryHandlers(ws, message);
         } else if (message.type.startsWith("platform:")) {

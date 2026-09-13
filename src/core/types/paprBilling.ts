@@ -60,6 +60,8 @@ export interface PaprPlanSummary {
   isWorkspaceAdmin: boolean;
   canManageBilling: boolean;
   stripeCustomerId?: string;
+  /** Stripe default payment method on file (from usage/metrics subscription). */
+  hasPaymentMethod?: boolean;
   subscriptionObjectId?: string;
   isMeteredBillingOn: boolean;
   usage: PaprUsageSnapshot;

@@ -35,8 +35,17 @@
 }
 
 .papr-section__dot--connected {
-  background: rgb(34, 197, 94);
-  box-shadow: 0 0 6px rgba(34, 197, 94, 0.4);
+  background: #7ed321;
+}
+
+.papr-section__dot--warning {
+  background: rgb(245, 158, 11);
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+}
+
+.papr-section__dot--paused {
+  background: rgb(249, 115, 22);
+  box-shadow: 0 0 6px rgba(249, 115, 22, 0.4);
 }
 
 .papr-section__login-icon {
@@ -325,13 +334,14 @@
 }
 
 .profile-merged__display-photo {
+  position: relative;
   flex-shrink: 0;
   width: 44px;
   height: 44px;
   padding: 0;
   border: 1px solid var(--border-color);
   border-radius: 50%;
-  overflow: hidden;
+  overflow: visible;
   background: var(--bg-secondary);
   cursor: pointer;
 }
@@ -341,6 +351,7 @@
   width: 100%;
   height: 100%;
   border-radius: 50%;
+  overflow: hidden;
 }
 
 .profile-merged__display-photo .profile-photo-placeholder {
@@ -427,10 +438,37 @@
 .profile-merged__display-status {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 6px;
   margin-top: 4px;
   font-size: 11px;
   color: var(--text-tertiary);
+}
+
+.profile-merged__display-status-text {
+  min-width: 0;
+}
+
+.profile-merged__billing-link {
+  flex-shrink: 0;
+  margin: 0;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: rgb(var(--accent-rgb));
+  background: rgba(var(--accent-rgb), 0.08);
+  border: 1px solid rgba(var(--accent-rgb), 0.28);
+  border-radius: 5px;
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease;
+}
+
+.profile-merged__billing-link:hover {
+  background: rgba(var(--accent-rgb), 0.14);
+  border-color: rgba(var(--accent-rgb), 0.45);
 }
 
 .profile-merged__logout-btn {
@@ -749,6 +787,11 @@
   font-size: 12px;
   color: var(--text-tertiary);
   padding: 8px 0 0 0;
+}
+
+.papr-schemas__empty--error {
+  color: var(--text-secondary);
+  line-height: 1.45;
 }
 
 .papr-schemas__empty code {
@@ -1081,10 +1124,22 @@
   color: var(--text-secondary);
 }
 
-.papr-team__avatar img {
+.papr-team__avatar img,
+.papr-team__avatar span {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.profile-photo-placeholder--initials {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-secondary);
 }
 
 .papr-team__member-info {
@@ -1116,6 +1171,21 @@
   border-radius: 999px;
   padding: 2px 8px;
   white-space: nowrap;
+}
+
+.papr-team__role-select {
+  flex-shrink: 0;
+  min-width: 96px;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--background-secondary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.papr-team__role-select:disabled {
+  opacity: 0.6;
 }
 
 .papr-team__empty {

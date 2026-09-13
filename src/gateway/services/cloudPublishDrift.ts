@@ -2,6 +2,7 @@
  * Detect when local cloud-publish prefs diverge from memory server publish config.
  */
 
+import type { CatalogAutomation } from "../../core/types/catalogAutomation.js";
 import type { RequiredKeySpec, ServiceCategory } from "../../core/types/bundles.js";
 import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
 import { catalogRequirementsForPublish } from "./cloudAppRequirements.js";
@@ -53,6 +54,7 @@ export interface PublishDriftInput {
     platform?: string[];
     requiresDesktop?: boolean;
   };
+  localCatalogAutomation?: CatalogAutomation | null;
 }
 
 function normalizedStringArray(values: string[] | undefined): string[] {
@@ -101,6 +103,34 @@ function detectCatalogMetadataDrift(
   }
 
   return reasons;
+}
+
+function catalogAutomationFingerprint(
+  value: CatalogAutomation | null | undefined,
+): string {
+  if (!value) {
+    return "";
+  }
+  return JSON.stringify({
+    scheduleLabel: value.scheduleLabel,
+    scheduledJobCount: value.scheduledJobCount,
+    hasAgentJob: value.hasAgentJob,
+    cardLine: value.cardLine,
+  });
+}
+
+function detectCatalogAutomationDrift(
+  memory: MemoryPublishResponseFields,
+  local: CatalogAutomation | null | undefined,
+): string[] {
+  const published = memory.catalogAutomation ?? null;
+  const localValue = local ?? null;
+  if (
+    catalogAutomationFingerprint(published) === catalogAutomationFingerprint(localValue)
+  ) {
+    return [];
+  }
+  return ["catalogAutomation"];
 }
 
 function catalogDriftFingerprint(requirements: RequiredKeySpec[]): string {
@@ -191,8 +221,14 @@ export function detectCatalogRequirementsDrift(
  * Sharing ACL changes require an explicit user or agent action.
  */
 export function detectAutoPublishDrift(input: PublishDriftInput): string[] {
-  const { memory, prefs, expectedSlug, localCatalogRequirements, localCatalogMetadata } =
-    input;
+  const {
+    memory,
+    prefs,
+    expectedSlug,
+    localCatalogRequirements,
+    localCatalogMetadata,
+    localCatalogAutomation,
+  } = input;
   if (!memory?.enabled) {
     return [];
   }
@@ -215,6 +251,10 @@ export function detectAutoPublishDrift(input: PublishDriftInput): string[] {
 
   if (localCatalogMetadata) {
     reasons.push(...detectCatalogMetadataDrift(memory, localCatalogMetadata));
+  }
+
+  if (localCatalogAutomation !== undefined) {
+    reasons.push(...detectCatalogAutomationDrift(memory, localCatalogAutomation));
   }
 
   return reasons;

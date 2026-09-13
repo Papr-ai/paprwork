@@ -2392,104 +2392,125 @@ export class AppService {
       return { deleted: false };
     }
 
-    // Check cloud publish status
+    const confirmed = options?.confirmed === true;
+    if (confirmed) {
+      console.log(`[AppService] Delete confirmed for app ${id} (${app.title})`);
+    }
+
+    const needsCloudStatus =
+      !confirmed || options?.unpublishFromCloud === true;
+    const needsExclusiveJobs =
+      !confirmed || options?.deleteLinkedJobs === true;
+
+    // Check cloud publish status (preview always; confirm only when unpublishing)
     let cloudStatus: { published: boolean; shareUrl: string | null } = {
       published: false,
       shareUrl: null,
     };
-    try {
-      const { getCloudAppPublishService } = await import(
-        "./CloudAppPublishService.js"
-      );
-      cloudStatus = await withTimeout(
-        getCloudAppPublishService().getCloudPublishStatus(id),
-        CLOUD_PUBLISH_STATUS_TIMEOUT_MS,
-        `cloud publish status for ${id}`,
-      );
-    } catch (error) {
-      console.warn(
-        `[AppService] Could not check cloud publish status for ${id}:`,
-        (error as Error).message.slice(0, 120),
-      );
+    if (needsCloudStatus) {
+      try {
+        const { getCloudAppPublishService } = await import(
+          "./CloudAppPublishService.js"
+        );
+        cloudStatus = await withTimeout(
+          getCloudAppPublishService().getCloudPublishStatus(id),
+          CLOUD_PUBLISH_STATUS_TIMEOUT_MS,
+          `cloud publish status for ${id}`,
+        );
+      } catch (error) {
+        console.warn(
+          `[AppService] Could not check cloud publish status for ${id}:`,
+          (error as Error).message.slice(0, 120),
+        );
+      }
     }
 
     // Check for exclusively linked jobs and Turso databases
     let exclusiveJobs: LinkedJobInfo[] = [];
     let tursoDbCount = 0;
     let linkedRegistryDatabases: LinkedRegistryDbPreview[] = [];
-    try {
-      const { getJobsService } = await import("./JobsService.js");
-      const jobsService = getJobsService();
-      const graph = await jobsService.getJobGraph();
-      
-      if (graph) {
-        const thisAppJobIds = new Set(graph.appLinks[id]?.jobIds ?? []);
-        
-        // Find jobs that are ONLY linked to this app
-        const jobIdsInOtherApps = new Set<string>();
-        for (const [appId, link] of Object.entries(graph.appLinks)) {
-          if (appId !== id) {
-            for (const jobId of link.jobIds) {
-              jobIdsInOtherApps.add(jobId);
+    if (needsExclusiveJobs) {
+      try {
+        const { getJobsService } = await import("./JobsService.js");
+        const jobsService = getJobsService();
+        const graph = await jobsService.getJobGraph();
+
+        if (graph) {
+          const thisAppJobIds = new Set(graph.appLinks[id]?.jobIds ?? []);
+
+          // Find jobs that are ONLY linked to this app
+          const jobIdsInOtherApps = new Set<string>();
+          for (const [appId, link] of Object.entries(graph.appLinks)) {
+            if (appId !== id) {
+              for (const jobId of link.jobIds) {
+                jobIdsInOtherApps.add(jobId);
+              }
             }
           }
+
+          const exclusiveJobIds = [...thisAppJobIds].filter(
+            (jobId) => !jobIdsInOtherApps.has(jobId),
+          );
+
+          if (exclusiveJobIds.length > 0) {
+            const allJobs = await jobsService.listJobs();
+
+            // Check for Turso databases
+            let tursoLinkedJobIds: string[] = [];
+            try {
+              const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+              const bridge = getTursoSyncBridge();
+              if (bridge) {
+                tursoLinkedJobIds = await bridge.listJobIdsForTursoSync();
+              }
+            } catch {
+              // Turso not configured
+            }
+
+            exclusiveJobs = exclusiveJobIds
+              .map((jobId): LinkedJobInfo | null => {
+                const job = allJobs.find((j) => j.id === jobId);
+                if (!job) return null;
+                const hasTursoDb = tursoLinkedJobIds.includes(jobId);
+                if (hasTursoDb) tursoDbCount++;
+                return {
+                  id: job.id,
+                  name: job.name,
+                  type: job.type as string,
+                  hasTursoDb,
+                };
+              })
+              .filter((j): j is LinkedJobInfo => j !== null);
+          }
         }
-        
-        const exclusiveJobIds = [...thisAppJobIds].filter(
-          (jobId) => !jobIdsInOtherApps.has(jobId)
+      } catch (error) {
+        console.warn(
+          `[AppService] Could not check linked jobs for ${id}:`,
+          (error as Error).message,
         );
-        
-        if (exclusiveJobIds.length > 0) {
-          const allJobs = await jobsService.listJobs();
-          
-          // Check for Turso databases
-          let tursoLinkedJobIds: string[] = [];
-          try {
-            const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
-            const bridge = getTursoSyncBridge();
-            if (bridge) {
-              tursoLinkedJobIds = await bridge.listJobIdsForTursoSync();
-            }
-          } catch {
-            // Turso not configured
-          }
-          
-          exclusiveJobs = exclusiveJobIds
-            .map((jobId): LinkedJobInfo | null => {
-              const job = allJobs.find((j) => j.id === jobId);
-              if (!job) return null;
-              const hasTursoDb = tursoLinkedJobIds.includes(jobId);
-              if (hasTursoDb) tursoDbCount++;
-              return { id: job.id, name: job.name, type: job.type as string, hasTursoDb };
-            })
-            .filter((j): j is LinkedJobInfo => j !== null);
-        }
       }
-    } catch (error) {
-      console.warn(
-        `[AppService] Could not check linked jobs for ${id}:`,
-        (error as Error).message,
-      );
     }
 
-    try {
-      const { buildLinkedRegistryDbPreview } = await import(
-        "./deleteAppLinkedDatabases.js"
-      );
-      linkedRegistryDatabases = await buildLinkedRegistryDbPreview(
-        id,
-        this.appsDir,
-        (otherAppId) => this.apps.get(otherAppId)?.title ?? otherAppId.slice(0, 8),
-      );
-    } catch (error) {
-      console.warn(
-        `[AppService] Could not check linked registry DBs for ${id}:`,
-        (error as Error).message,
-      );
+    if (!confirmed) {
+      try {
+        const { buildLinkedRegistryDbPreview } = await import(
+          "./deleteAppLinkedDatabases.js"
+        );
+        linkedRegistryDatabases = await buildLinkedRegistryDbPreview(
+          id,
+          this.appsDir,
+          (otherAppId) => this.apps.get(otherAppId)?.title ?? otherAppId.slice(0, 8),
+        );
+      } catch (error) {
+        console.warn(
+          `[AppService] Could not check linked registry DBs for ${id}:`,
+          (error as Error).message,
+        );
+      }
     }
 
     // If user hasn't confirmed, return preview for the deletion modal
-    if (!options?.confirmed) {
+    if (!confirmed) {
       return {
         deleted: false,
         preview: {

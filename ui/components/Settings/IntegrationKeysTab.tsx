@@ -2,10 +2,18 @@
  * IntegrationKeysTab - Non-AI API keys for jobs, automations, and integrations
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import type { CustomKey, CustomKeyInput } from "../../types/settings";
-import { OrgKeysVaultBanner } from "./OrgKeysVaultBanner";
+import type { IntegrationKeyVaultAudience } from "../../constants/integrationKeyVaultAudience";
+import {
+  pullSharedVaultKeys,
+  syncVaultKeyChange,
+} from "../../utils/vaultPullShared";
+import {
+  IntegrationKeyMemberPicker,
+  type WorkspaceMemberOption,
+} from "./IntegrationKeyMemberPicker";
 import {
   IntegrationKeyOrgScopeSelector,
   type IntegrationKeyOrgScopeValue,
@@ -18,7 +26,6 @@ import {
   IntegrationKeyVaultAudienceSelector,
   formatVaultAudienceLabel,
 } from "./IntegrationKeyVaultAudienceSelector";
-import type { IntegrationKeyVaultAudience } from "../../constants/integrationKeyVaultAudience";
 import {
   IntegrationKeyOptionsRow,
   IntegrationKeySelectField,
@@ -29,6 +36,7 @@ import {
 } from "./IntegrationKeyOptionsRow";
 import "./IntegrationKeyOrgScopeSelector.css";
 import "./IntegrationKeyVaultAudienceSelector.css";
+import "./IntegrationKeyMemberPicker.css";
 import "./IntegrationKeyOptionsRow.css";
 
 const AI_KEY_NAMES = [
@@ -50,9 +58,32 @@ function defaultOrgScopeValue(
 }
 
 export function IntegrationKeysTab() {
-  const { keys, vaultContext, loading, addKey, updateKey, deleteKey, getKeyValue } =
-    useCustomKeys();
+  const {
+    keys,
+    vaultContext,
+    loading,
+    loadKeys,
+    addKey,
+    updateKey,
+    deleteKey,
+    getKeyValue,
+  } = useCustomKeys();
   const [searchQuery, setSearchQuery] = useState("");
+  const [refreshingShared, setRefreshingShared] = useState(false);
+  const sharedPullStarted = useRef(false);
+  const [memberNameById, setMemberNameById] = useState<Map<string, string>>(
+    () => new Map(),
+  );
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMemberOption[]>(
+    [],
+  );
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [addMemberIds, setAddMemberIds] = useState<string[]>([]);
+  const [editMemberIds, setEditMemberIds] = useState<string[]>([]);
+  const [viewingKeyId, setViewingKeyId] = useState<string | null>(null);
+  const [viewValue, setViewValue] = useState("");
+  const [loadingViewValue, setLoadingViewValue] = useState(false);
+  const [showViewValue, setShowViewValue] = useState(false);
   const [organizations, setOrganizations] = useState<OrgScopeOption[]>([]);
   const [editingKeyId, setEditingKeyId] = useState<string | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -103,6 +134,65 @@ export function IntegrationKeysTab() {
     })();
   }, []);
 
+  useEffect(() => {
+    void (async () => {
+      const profileResult = await window.electronAPI?.papr?.getProfile?.();
+      const profileUserId = profileResult?.success
+        ? profileResult.profile?.userId?.trim().toLowerCase() ?? null
+        : null;
+      setCurrentUserId(profileUserId);
+
+      if (!window.electronAPI?.papr?.listWorkspaceMembers) {
+        return;
+      }
+      const result = await window.electronAPI.papr.listWorkspaceMembers();
+      if (!result.success || !result.members) {
+        return;
+      }
+      const map = new Map<string, string>();
+      const options: WorkspaceMemberOption[] = [];
+      for (const member of result.members) {
+        const userId = member.user.objectId?.trim();
+        if (!userId) {
+          continue;
+        }
+        const normalizedId = userId.toLowerCase();
+        const displayName =
+          member.user.displayName?.trim() ||
+          member.user.email?.trim() ||
+          userId;
+        map.set(normalizedId, displayName);
+        if (profileUserId && normalizedId === profileUserId) {
+          continue;
+        }
+        options.push({
+          userId,
+          displayName,
+          email: member.user.email,
+          role: member.user.role,
+        });
+      }
+      setMemberNameById(map);
+      setWorkspaceMembers(options);
+    })();
+  }, [vaultContext?.organizationId]);
+
+  useEffect(() => {
+    if (sharedPullStarted.current) {
+      return;
+    }
+    sharedPullStarted.current = true;
+    void (async () => {
+      setRefreshingShared(true);
+      try {
+        await pullSharedVaultKeys();
+        await loadKeys({ force: true });
+      } finally {
+        setRefreshingShared(false);
+      }
+    })();
+  }, [loadKeys]);
+
   const integrationKeys: KeyDisplayItem[] = useMemo(() => {
     return keys
       .filter((key) => !AI_KEY_NAMES.includes(key.name))
@@ -126,7 +216,85 @@ export function IntegrationKeysTab() {
       currentOrganizationLabel: vaultContext?.workspaceName,
     });
 
+  const isSharedMirror = (key: CustomKey): boolean => key.vaultOrigin === "shared";
+
+  const sharedOwnerLabel = (key: CustomKey): string | null => {
+    const ownerId = key.sharedOwnerUserId?.trim().toLowerCase();
+    if (!ownerId) {
+      return null;
+    }
+    return memberNameById.get(ownerId) ?? ownerId;
+  };
+
+  const sharedAudienceLabel = (key: CustomKey): string => {
+    const audience =
+      key.sharedShareScope === "org"
+        ? "Organization"
+        : key.sharedShareScope === "namespace"
+          ? "Team"
+          : key.sharedShareScope === "members"
+            ? "Selected members"
+            : "Shared";
+    const owner = sharedOwnerLabel(key);
+    if (owner) {
+      return `Shared by ${owner} · ${audience}`;
+    }
+    return `Shared · ${audience}`;
+  };
+
+  const shareBlockedLabel = (key: CustomKey): string => {
+    const ownerId = key.vaultShareBlockedOwnerUserId?.trim().toLowerCase();
+    const owner = ownerId ? memberNameById.get(ownerId) ?? ownerId : "a teammate";
+    const audience = formatVaultAudienceLabel(key.vaultAudience);
+    return `Not shared (${audience}) — ${key.name} already exists (${owner})`;
+  };
+
+  const syncVaultAfterOwnerChange = async (input: {
+    name: string;
+    previousAudience: IntegrationKeyVaultAudience;
+    nextAudience?: IntegrationKeyVaultAudience;
+    targetOrgId?: string;
+    mode: "delete" | "update";
+  }) => {
+    const result = await syncVaultKeyChange(input);
+    await loadKeys({ force: true });
+    if (!result.success) {
+      alert(`Vault sync failed: ${result.error ?? "Unknown error"}`);
+      return result;
+    }
+    const conflict = result.conflicts?.find(
+      (item) => item.name.toUpperCase() === input.name.toUpperCase(),
+    );
+    if (conflict) {
+      const ownerId = conflict.ownerUserId?.trim().toLowerCase();
+      const owner = ownerId ? memberNameById.get(ownerId) ?? ownerId : "a teammate";
+      alert(
+        `Not shared — ${input.name} already exists in the cloud vault (owned by ${owner}). ` +
+          "Your key still works locally on this device.",
+      );
+    }
+    return result;
+  };
+
+  const handleStartView = async (keyItem: KeyDisplayItem) => {
+    setViewingKeyId(keyItem.id);
+    setShowViewValue(false);
+    setViewValue("");
+    setLoadingViewValue(true);
+    try {
+      const value = await getKeyValue(keyItem.id);
+      setViewValue(value ?? "");
+    } catch {
+      setViewValue("");
+    } finally {
+      setLoadingViewValue(false);
+    }
+  };
+
   const handleStartEdit = async (keyItem: KeyDisplayItem) => {
+    if (isSharedMirror(keyItem)) {
+      return;
+    }
     setEditingKeyId(keyItem.id);
     setEditPermission(keyItem.permission);
     setEditClientAccess((keyItem.clientAccess ?? "server") as "server" | "client");
@@ -138,6 +306,7 @@ export function IntegrationKeysTab() {
       }),
     );
     setEditVaultAudience(keyItem.vaultAudience ?? "user");
+    setEditMemberIds(keyItem.vaultAudienceMemberIds ?? []);
     setShowEditValue(false);
     setEditValue("");
     setLoadingEditValue(true);
@@ -153,6 +322,10 @@ export function IntegrationKeysTab() {
 
   const handleSaveKey = async (keyItem: KeyDisplayItem) => {
     const valueToSave = editValue.trim();
+    if (editVaultAudience === "members" && editMemberIds.length === 0) {
+      alert("Select at least one workspace member to share this key with.");
+      return;
+    }
     try {
       const scopeInput = toOrgScopeInput(editOrgScope);
       const updates: Partial<CustomKeyInput> = {
@@ -161,6 +334,8 @@ export function IntegrationKeysTab() {
         permission: editPermission,
         clientAccess: editClientAccess,
         vaultAudience: editVaultAudience,
+        vaultAudienceMemberIds:
+          editVaultAudience === "members" ? editMemberIds : [],
         ...scopeInput,
       };
       if (valueToSave) {
@@ -172,10 +347,19 @@ export function IntegrationKeysTab() {
       ) {
         updates.value = (await getKeyValue(keyItem.id)) ?? "";
       }
+      const previousAudience = keyItem.vaultAudience ?? "user";
       await updateKey(keyItem.id, updates);
+      await syncVaultAfterOwnerChange({
+        name: keyItem.name,
+        previousAudience,
+        nextAudience: editVaultAudience,
+        targetOrgId: scopeInput.organizationId,
+        mode: "update",
+      });
       setEditingKeyId(null);
       setEditValue("");
       setShowEditValue(false);
+      setEditMemberIds([]);
     } catch (err) {
       console.error("Error saving key:", err);
       alert("Failed to save key. Please try again.");
@@ -183,9 +367,26 @@ export function IntegrationKeysTab() {
   };
 
   const handleDeleteKey = async (keyItem: KeyDisplayItem) => {
-    if (confirm(`Are you sure you want to delete ${keyItem.name}?`)) {
-      await deleteKey(keyItem.id);
+    const prompt = isSharedMirror(keyItem)
+      ? `Remove ${keyItem.name} from this device? The shared key will remain available in the cloud vault.`
+      : `Are you sure you want to delete ${keyItem.name}? This removes it from the cloud vault for your team.`;
+    if (!confirm(prompt)) {
+      return;
     }
+    if (isSharedMirror(keyItem)) {
+      await deleteKey(keyItem.id);
+      return;
+    }
+    const syncResult = await syncVaultAfterOwnerChange({
+      name: keyItem.name,
+      previousAudience: keyItem.vaultAudience ?? "user",
+      mode: "delete",
+      targetOrgId: keyItem.organizationId,
+    });
+    if (!syncResult.success) {
+      return;
+    }
+    await deleteKey(keyItem.id);
   };
 
   const handleAddCustomKey = async () => {
@@ -193,12 +394,37 @@ export function IntegrationKeysTab() {
       alert("Please enter both key name and value");
       return;
     }
+    if (addVaultAudience === "members" && addMemberIds.length === 0) {
+      alert("Select at least one workspace member to share this key with.");
+      return;
+    }
+    const existingShared = integrationKeys.find(
+      (item) =>
+        item.name.toUpperCase() === keyForm.name.toUpperCase() &&
+        item.vaultOrigin === "shared",
+    );
+    if (existingShared) {
+      alert(
+        `${keyForm.name} is already available as a shared key from a teammate. ` +
+          "Use View, or remove it from this device if you need your own copy.",
+      );
+      return;
+    }
     const success = await addKey({
       ...keyForm,
       vaultAudience: addVaultAudience,
+      vaultAudienceMemberIds:
+        addVaultAudience === "members" ? addMemberIds : undefined,
       ...toOrgScopeInput(addOrgScope),
     });
     if (success) {
+      await syncVaultAfterOwnerChange({
+        name: keyForm.name,
+        previousAudience: "user",
+        nextAudience: addVaultAudience,
+        targetOrgId: toOrgScopeInput(addOrgScope).organizationId,
+        mode: "update",
+      });
       setShowAddKey(false);
       setKeyForm({
         name: "",
@@ -209,6 +435,7 @@ export function IntegrationKeysTab() {
       });
       setAddOrgScope(defaultOrgScopeValue(vaultContext?.organizationId));
       setAddVaultAudience("user");
+      setAddMemberIds([]);
       setShowAddKeyValue(false);
     }
   };
@@ -221,11 +448,6 @@ export function IntegrationKeysTab() {
   return (
     <div className="settings-content settings-content--full-width">
       <div className="settings-section">
-        <OrgKeysVaultBanner
-          vaultContext={vaultContext}
-          workspaceName={vaultContext?.workspaceName}
-          namespaceName={vaultContext?.namespaceName}
-        />
         <div className="settings-section__header">
           <div>
             <h2 className="settings-section__title">Key Vault</h2>
@@ -233,6 +455,11 @@ export function IntegrationKeysTab() {
               API keys for jobs, automations, and third-party services.
               Choose organization scope and who can use each key (only you, team, or organization).
             </p>
+            {refreshingShared && (
+              <p className="key-vault-refreshing" aria-live="polite">
+                Refreshing shared keys…
+              </p>
+            )}
           </div>
           <button
             className="settings-btn settings-btn--primary"
@@ -299,6 +526,18 @@ export function IntegrationKeysTab() {
                 }
               />
             </IntegrationKeyOptionsRow>
+            {addVaultAudience === "members" && (
+              <IntegrationKeyMemberPicker
+                idPrefix="add-vault-members"
+                members={workspaceMembers.filter(
+                  (member) =>
+                    !currentUserId ||
+                    member.userId.toLowerCase() !== currentUserId.toLowerCase(),
+                )}
+                selectedUserIds={addMemberIds}
+                onChange={setAddMemberIds}
+              />
+            )}
             <div className="form-group">
               <label className="form-label">Key Name</label>
               <input
@@ -377,8 +616,76 @@ export function IntegrationKeysTab() {
         ) : (
           <div className="key-list">
             {filteredKeys.map((keyItem) => (
-              <div key={keyItem.id} className="key-item">
-                {editingKeyId === keyItem.id ? (
+              <div
+                key={keyItem.id}
+                className={`key-item${isSharedMirror(keyItem) ? " key-item--shared" : ""}`}
+              >
+                {viewingKeyId === keyItem.id ? (
+                  <div className="key-item__view">
+                    <div className="key-item__edit-header">
+                      <span className="key-item__name">{keyItem.name}</span>
+                      <span className="key-item__scope-badge key-item__scope-badge--shared">
+                        {sharedAudienceLabel(keyItem)}
+                      </span>
+                    </div>
+                    <p className="key-item__view-note">
+                      Read-only — shared by a teammate. You can use this key in jobs and bash,
+                      but only the owner can change audience or value in the cloud vault.
+                    </p>
+                    {keyItem.description && (
+                      <div className="form-group">
+                        <label className="form-label">Description</label>
+                        <p className="key-item__view-field">{keyItem.description}</p>
+                      </div>
+                    )}
+                    <IntegrationKeyOptionsRow>
+                      <IntegrationKeySelectField
+                        id={`integration-key-view-permission-${keyItem.id}`}
+                        label="Permission"
+                        info={INTEGRATION_KEY_PERMISSION_INFO}
+                        value={keyItem.permission}
+                        options={[...INTEGRATION_KEY_PERMISSION_OPTIONS]}
+                        onChange={() => undefined}
+                        disabled
+                      />
+                      <IntegrationKeySelectField
+                        id={`integration-key-view-client-access-${keyItem.id}`}
+                        label="Browser access"
+                        info={INTEGRATION_KEY_CLIENT_ACCESS_INFO}
+                        value={keyItem.clientAccess ?? "server"}
+                        options={[...INTEGRATION_KEY_CLIENT_ACCESS_OPTIONS]}
+                        onChange={() => undefined}
+                        disabled
+                      />
+                    </IntegrationKeyOptionsRow>
+                    <div className="form-group">
+                      <label className="form-label">Value</label>
+                      <input
+                        type={showViewValue ? "text" : "password"}
+                        className="form-input"
+                        value={loadingViewValue ? "Loading…" : viewValue}
+                        readOnly
+                        disabled={loadingViewValue}
+                      />
+                      <button
+                        className="settings-btn settings-btn--small"
+                        style={{ marginTop: 4 }}
+                        onClick={() => setShowViewValue(!showViewValue)}
+                        disabled={loadingViewValue || !viewValue}
+                      >
+                        {showViewValue ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                    <div className="key-item__edit-actions">
+                      <button
+                        className="settings-btn settings-btn--secondary"
+                        onClick={() => setViewingKeyId(null)}
+                      >
+                        Close
+                      </button>
+                    </div>
+                  </div>
+                ) : editingKeyId === keyItem.id ? (
                   <div className="key-item__edit">
                     <div className="key-item__edit-header">
                       <span className="key-item__name">{keyItem.name}</span>
@@ -420,6 +727,19 @@ export function IntegrationKeysTab() {
                         }
                       />
                     </IntegrationKeyOptionsRow>
+                    {editVaultAudience === "members" && (
+                      <IntegrationKeyMemberPicker
+                        idPrefix={`edit-vault-members-${keyItem.id}`}
+                        members={workspaceMembers.filter(
+                          (member) =>
+                            !currentUserId ||
+                            member.userId.toLowerCase() !==
+                              currentUserId.toLowerCase(),
+                        )}
+                        selectedUserIds={editMemberIds}
+                        onChange={setEditMemberIds}
+                      />
+                    )}
                     <div className="form-group">
                       <input
                         type={showEditValue ? "text" : "password"}
@@ -466,13 +786,39 @@ export function IntegrationKeysTab() {
                       )}
                     </div>
                     <div className="key-item__actions">
+                      {isSharedMirror(keyItem) && (
+                        <span
+                          className="key-item__scope-badge key-item__scope-badge--shared"
+                          title="Pulled from cloud vault — read-only on this device"
+                        >
+                          {sharedAudienceLabel(keyItem)}
+                        </span>
+                      )}
+                      {keyItem.vaultSharedNameCollision && !isSharedMirror(keyItem) && (
+                        <span
+                          className="key-item__scope-badge key-item__scope-badge--duplicate"
+                          title="A teammate also shared this name — your local key is used for ${KEY} substitution"
+                        >
+                          Duplicate name
+                        </span>
+                      )}
+                      {keyItem.vaultShareBlocked && !isSharedMirror(keyItem) && (
+                        <span
+                          className="key-item__scope-badge key-item__scope-badge--blocked"
+                          title={shareBlockedLabel(keyItem)}
+                        >
+                          Not shared
+                        </span>
+                      )}
                       <span
                         className={`key-item__scope-badge ${
                           keyItem.orgScope === "all" ? "key-item__scope-badge--shared" : ""
                         }`}
                       >
                         {scopeLabelForKey(keyItem)}
-                        {keyItem.vaultAudience && keyItem.vaultAudience !== "user"
+                        {!isSharedMirror(keyItem) &&
+                        keyItem.vaultAudience &&
+                        keyItem.vaultAudience !== "user"
                           ? ` · ${formatVaultAudienceLabel(keyItem.vaultAudience)}`
                           : ""}
                       </span>
@@ -486,17 +832,26 @@ export function IntegrationKeysTab() {
                           Browser
                         </span>
                       )}
-                      <button
-                        className="settings-btn settings-btn--small"
-                        onClick={() => handleStartEdit(keyItem)}
-                      >
-                        Edit
-                      </button>
+                      {isSharedMirror(keyItem) ? (
+                        <button
+                          className="settings-btn settings-btn--small"
+                          onClick={() => handleStartView(keyItem)}
+                        >
+                          View
+                        </button>
+                      ) : (
+                        <button
+                          className="settings-btn settings-btn--small"
+                          onClick={() => handleStartEdit(keyItem)}
+                        >
+                          Edit
+                        </button>
+                      )}
                       <button
                         className="settings-btn settings-btn--small settings-btn--danger"
                         onClick={() => handleDeleteKey(keyItem)}
                       >
-                        Delete
+                        {isSharedMirror(keyItem) ? "Remove" : "Delete"}
                       </button>
                     </div>
                   </div>

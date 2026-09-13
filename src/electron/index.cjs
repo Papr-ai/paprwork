@@ -1659,6 +1659,57 @@ class GatewayProcessSupervisor {
           console.error("[Electron] custom-keys:delete error:", error);
           if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
         }
+      } else if (msg.type === "CUSTOM_KEYS_SYNC_SHARED") {
+        try {
+          const organizationId = this.getActiveOrganizationId?.()?.trim();
+          if (organizationId && storage?.ensureOrganizationVault) {
+            await storage.ensureOrganizationVault(organizationId);
+          }
+          const result = await storage.syncSharedMirrors(msg.keys ?? []);
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              result,
+            });
+          }
+        } catch (error) {
+          console.error("[Electron] custom-keys:sync-shared error:", error);
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      } else if (msg.type === "CUSTOM_KEYS_RECONCILE_SHARE") {
+        try {
+          const organizationId = this.getActiveOrganizationId?.()?.trim();
+          if (organizationId && storage?.ensureOrganizationVault) {
+            await storage.ensureOrganizationVault(organizationId);
+          }
+          const reconcileResult = await storage.reconcileShareSyncResult({
+            conflicts: msg.conflicts ?? [],
+            syncedNames: msg.syncedNames ?? [],
+          });
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              reconcileResult,
+            });
+          }
+        } catch (error) {
+          console.error("[Electron] custom-keys:reconcile-share error:", error);
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
       }
     });
   }

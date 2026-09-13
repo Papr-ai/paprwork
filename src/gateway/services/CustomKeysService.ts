@@ -14,7 +14,9 @@ import { randomUUID } from "node:crypto";
 import type {
   CustomKeyInput,
   CustomKeyMetadata,
+  VaultShareConflictInput,
 } from "../../core/storage/CustomKeysStorage.js";
+import type { SharedVaultKeyInput } from "../../core/storage/sharedVaultMirror.js";
 import { loadCustomKeysMetadataFromFile } from "../utils/customKeysFile.js";
 
 interface CustomKeyWithValue extends CustomKeyMetadata {
@@ -34,6 +36,8 @@ interface CustomKeysIpcMessage {
   keys?: CustomKeyMetadata[];
   value?: string | null;
   key?: CustomKeyWithValue;
+  result?: { upserted: number; pruned: number };
+  reconcileResult?: { blocked: number; cleared: number };
 }
 
 /**
@@ -451,6 +455,50 @@ export class CustomKeysService {
     // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(input.name);
     return response.key;
+  }
+
+  /**
+   * Upsert read-only shared vault mirrors and prune stale copies.
+   */
+  async syncSharedMirrors(
+    keys: SharedVaultKeyInput[],
+  ): Promise<{ upserted: number; pruned: number }> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.ipcAvailable) {
+      return { upserted: 0, pruned: 0 };
+    }
+
+    const response = await this.sendIpcRequest(
+      { type: "CUSTOM_KEYS_SYNC_SHARED", keys },
+      "Shared vault mirror sync timed out",
+    );
+
+    this.invalidateCache();
+    return response.result ?? { upserted: 0, pruned: 0 };
+  }
+
+  async reconcileShareSyncResult(input: {
+    conflicts: VaultShareConflictInput[];
+    syncedNames: string[];
+  }): Promise<{ blocked: number; cleared: number }> {
+    if (!this.initialized) {
+      await this.initialize();
+    }
+
+    if (!this.ipcAvailable) {
+      return { blocked: 0, cleared: 0 };
+    }
+
+    const response = await this.sendIpcRequest(
+      { type: "CUSTOM_KEYS_RECONCILE_SHARE", ...input },
+      "Share sync reconcile timed out",
+    );
+
+    this.invalidateCache();
+    return response.reconcileResult ?? { blocked: 0, cleared: 0 };
   }
 
   /**

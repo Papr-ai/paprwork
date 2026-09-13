@@ -25,10 +25,19 @@ export function readActiveAppWorkspaceScope(): AppWorkspaceScope | null {
   const pointer = readActiveWorkspacePointer();
   const organizationId = pointer?.organizationId?.trim();
   const namespaceId = pointer?.namespaceId?.trim();
-  if (!organizationId || !namespaceId) {
-    return null;
+  if (organizationId && namespaceId) {
+    return { organizationId, namespaceId };
   }
-  return { organizationId, namespaceId };
+
+  if (process.env.GATEWAY_MODE === "cloud_agent") {
+    const envOrg = process.env.PAPR_ORG_ID?.trim();
+    const envNs = process.env.PAPR_NAMESPACE_ID?.trim();
+    if (envOrg && envNs) {
+      return { organizationId: envOrg, namespaceId: envNs };
+    }
+  }
+
+  return null;
 }
 
 export function isAppWorkspaceUnassigned(fields: AppWorkspaceFields): boolean {

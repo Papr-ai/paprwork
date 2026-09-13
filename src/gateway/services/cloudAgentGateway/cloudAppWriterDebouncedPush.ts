@@ -130,6 +130,14 @@ async function executeWriterFlush(
 
   for (const appId of appIds) {
     try {
+      const { writeCloudAppMetadataFile } = await import("../cloudAppMetadataFile.js");
+      await writeCloudAppMetadataFile(paprDir, appId).catch((err: unknown) => {
+        console.warn(
+          `[CloudAppWriterDebouncedPush] metadata write failed for ${appId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      });
+
       const result = await finalizeAppRepoMutation(paprDir, appId, {
         source: "cloud-sandbox",
         skipCatalog: true,

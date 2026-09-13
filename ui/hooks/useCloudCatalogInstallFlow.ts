@@ -3,7 +3,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { CommunityCatalogEntry } from "../../src/core/types/communityCatalog";
+import type {
+  CommunityCatalogEntry,
+  CommunityCatalogScope,
+} from "../../src/core/types/communityCatalog";
+import { requiresInstallModeChoice } from "../../src/core/utils/cloudCatalogInstallPolicy";
 import type { RequiredKeySpec } from "../../src/core/types/bundles";
 import type { HelpRequest } from "../components/Apps/ImportSetupWizard";
 import { useArtifacts } from "./useArtifacts";
@@ -11,12 +15,18 @@ import { useChat } from "./useChat";
 import { useTabs } from "./useTabs";
 import { trackEvent } from "../lib/telemetry";
 import {
+  buildCloudInstallTimeoutAgentMessage,
   fetchCloudLineageIndex,
   extractOptionalInstallDependencies,
   installCloudCatalogApp,
+  isCloudInstallTimeoutError,
   userProvidedRequirements,
   type CloudInstallMode,
 } from "../utils/cloudCatalogInstall";
+import {
+  buildCloudInstallWelcomeMessage,
+  openCloudInstalledAppWithChat,
+} from "../utils/openCloudInstalledAppWithChat";
 import type { CloudAppDependenciesFile } from "../../src/core/types/cloudAppDependencies";
 import {
   resolveLocalAppIdForCatalogEntry,
@@ -24,8 +34,10 @@ import {
 } from "../utils/communityAppLocalOpen";
 
 export function useCloudCatalogInstallFlow() {
-  const [installModeEntry, setInstallModeEntry] =
-    useState<CommunityCatalogEntry | null>(null);
+  const [installModeEntry, setInstallModeEntry] = useState<{
+    entry: CommunityCatalogEntry;
+    catalogScope?: CommunityCatalogScope;
+  } | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
@@ -73,24 +85,26 @@ export function useCloudCatalogInstallFlow() {
 
   const openAgentDatabaseSetup = useCallback(
     async (message: string, appId?: string, appTitle?: string) => {
+      if (appId && appTitle) {
+        await openCloudInstalledAppWithChat(createChat, {
+          appId,
+          appTitle,
+          agentMessage: message,
+          chatTabTitle: "App setup",
+        });
+        return;
+      }
+
       const chatId = await createChat();
       if (!chatId) return;
 
       const tabId = createTab("chat", chatId, "App setup");
       switchToTab(tabId);
 
-      let fullMessage = message;
-      if (appId) {
-        fullMessage +=
-          `\n\nWhen setup is complete, open the app tab (appId: ${appId}` +
-          (appTitle ? `, title: "${appTitle}"` : "") +
-          ").";
-      }
-
       window.setTimeout(() => {
         window.dispatchEvent(
           new CustomEvent("papr-onboarding-send", {
-            detail: { message: fullMessage },
+            detail: { message },
           }),
         );
       }, 300);
@@ -99,11 +113,24 @@ export function useCloudCatalogInstallFlow() {
   );
 
   const installCloudApp = useCallback(
-    async (entry: CommunityCatalogEntry, mode: CloudInstallMode = "fork") => {
+    async (
+      entry: CommunityCatalogEntry,
+      mode: CloudInstallMode = "fork",
+      catalogScope?: CommunityCatalogScope,
+    ) => {
       setInstallingId(entry.catalogId);
       try {
-        const result = await installCloudCatalogApp(entry, mode);
+        const result = await installCloudCatalogApp(entry, mode, { catalogScope });
         if (!result.ok) {
+          if (isCloudInstallTimeoutError(result.error)) {
+            setInstallToast(
+              `Install timed out for "${entry.name}" — opening chat for help…`,
+            );
+            void openAgentDatabaseSetup(
+              buildCloudInstallTimeoutAgentMessage(entry, mode),
+            );
+            return;
+          }
           throw new Error(result.error);
         }
 
@@ -118,19 +145,15 @@ export function useCloudCatalogInstallFlow() {
         const optionalDeps = extractOptionalInstallDependencies(body);
         const hasOptionalDeps = optionalDeps !== null;
 
-        const needsFollowUp =
-          Boolean(body.agentSetupMessage) ||
-          body.bootstrap?.needsSeed === true ||
-          (body.bootstrap?.warnings?.length ?? 0) > 0 ||
-          (body.installWarnings?.length ?? 0) > 0 ||
-          hasOptionalDeps;
+        const needsSeed = body.bootstrap?.needsSeed === true;
+        const needsAgentSetup = Boolean(body.agentSetupMessage);
 
-        if (needsFollowUp && body.agentSetupMessage) {
+        if (needsAgentSetup) {
           setInstallToast(
             `${modeLabel} "${title}" — finishing database setup in chat…`,
           );
           void openAgentDatabaseSetup(
-            body.agentSetupMessage,
+            body.agentSetupMessage!,
             body.app?.id,
             title,
           );
@@ -143,6 +166,10 @@ export function useCloudCatalogInstallFlow() {
             appTitle: title,
             dependencies: optionalDeps,
           });
+        } else if (needsSeed) {
+          setInstallToast(
+            `${modeLabel} "${title}" — schema ready. Run linked jobs to seed data when needed.`,
+          );
         } else {
           setInstallToast(`${modeLabel} "${title}" into Paprwork`);
         }
@@ -162,37 +189,49 @@ export function useCloudCatalogInstallFlow() {
             });
             return;
           }
-          if (!needsFollowUp) {
-            const tabId = createTab("app", body.app.id, title);
-            switchToTab(tabId);
-          }
+          await openCloudInstalledAppWithChat(createChat, {
+            appId: body.app.id,
+            appTitle: title,
+            agentMessage: buildCloudInstallWelcomeMessage({
+              appId: body.app.id,
+              appTitle: title,
+              mode,
+              needsSeed,
+            }),
+          });
         }
       } catch (err) {
         const message =
           err instanceof Error ? err.message.slice(0, 240) : "Install failed";
-        void openAgentDatabaseSetup(
-          `Community app install for "${entry.name}" failed.\n\nError: ${message}\n\nPlease diagnose linked jobs, data-sources.json, databases.json, and migration files; fix paths; apply migrations; run Turso pull if cloud sync is on; then verify writes work.`,
-        );
+        setInstallToast(`Install failed for "${entry.name}": ${message}`);
       } finally {
         setInstallingId(null);
       }
     },
-    [
-      createTab,
-      loadArtifacts,
-      openAgentDatabaseSetup,
-      refreshLineage,
-      switchToTab,
-    ],
+    [createChat, loadArtifacts, openAgentDatabaseSetup, refreshLineage],
   );
 
   const startCloudInstall = useCallback(
-    (entry: CommunityCatalogEntry) => {
-      if (entry.codeInstallable) {
-        setInstallModeEntry(entry);
+    (
+      entry: CommunityCatalogEntry,
+      options?: { catalogScope?: CommunityCatalogScope },
+    ) => {
+      const catalogScope = options?.catalogScope ?? "global";
+      if (!entry.codeInstallable) {
+        void installCloudApp(entry, "fork", catalogScope);
         return;
       }
-      void installCloudApp(entry);
+      if (
+        !requiresInstallModeChoice({
+          catalogScope,
+          visibility: entry.visibility,
+          codeInstallable: entry.codeInstallable,
+        })
+      ) {
+        void installCloudApp(entry, "fork", catalogScope);
+        return;
+      }
+      setInstallModeEntry({ entry, catalogScope });
     },
     [installCloudApp],
   );
@@ -203,21 +242,35 @@ export function useCloudCatalogInstallFlow() {
     [installedAppIds, lineageIndex],
   );
 
-  const finishInstallWizard = useCallback(() => {
+  const finishInstallWizard = useCallback(async () => {
     if (!cloudInstallWizard) return;
     const { appId, appTitle } = cloudInstallWizard;
     setCloudInstallWizard(null);
-    const tabId = createTab("app", appId, appTitle);
-    switchToTab(tabId);
-  }, [cloudInstallWizard, createTab, switchToTab]);
+    await openCloudInstalledAppWithChat(createChat, {
+      appId,
+      appTitle,
+      agentMessage: buildCloudInstallWelcomeMessage({
+        appId,
+        appTitle,
+        mode: "fork",
+      }),
+    });
+  }, [cloudInstallWizard, createChat]);
 
-  const continueFromOptionalDeps = useCallback(() => {
+  const continueFromOptionalDeps = useCallback(async () => {
     if (!optionalDepsNotice) return;
     const { appId, appTitle } = optionalDepsNotice;
     setOptionalDepsNotice(null);
-    const tabId = createTab("app", appId, appTitle);
-    switchToTab(tabId);
-  }, [optionalDepsNotice, createTab, switchToTab]);
+    await openCloudInstalledAppWithChat(createChat, {
+      appId,
+      appTitle,
+      agentMessage: buildCloudInstallWelcomeMessage({
+        appId,
+        appTitle,
+        mode: "fork",
+      }),
+    });
+  }, [optionalDepsNotice, createChat]);
 
   const openCommunityAppsFromOptionalDeps = useCallback(() => {
     setOptionalDepsNotice(null);

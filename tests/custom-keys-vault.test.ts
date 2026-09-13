@@ -57,5 +57,6 @@ describe("customKeysVault", () => {
     expect(normalizeIntegrationKeyVaultAudience(null)).toBe("user");
     expect(normalizeIntegrationKeyVaultAudience("namespace")).toBe("namespace");
     expect(normalizeIntegrationKeyVaultAudience("org")).toBe("org");
+    expect(normalizeIntegrationKeyVaultAudience("members")).toBe("members");
   });
 });

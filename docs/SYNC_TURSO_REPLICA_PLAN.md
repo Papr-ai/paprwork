@@ -1,9 +1,13 @@
 # Sync Plan — Turso Embedded Replica (Plan A)
 
-**Status:** Spike passed (2026-08-26) — see [`SYNC_TURSO_REPLICA_SPIKE_RESULTS.md`](./SYNC_TURSO_REPLICA_SPIKE_RESULTS.md)  
+**Status:** ✅ **Active plan (latest)** — Plan A is the current sync direction for paprwork-v2 + memory.  
+**Progress (2026-09-10):** Web/cloud runtime row sync is working (team shared Turso on `apps.papr.ai`). Desktop local replica parity for **team collaborate** (shared owner DB) is the next slice — see [Fork vs collaborate (local)](#fork-vs-collaborate-local) below and the full implementation plan: [`TEAM_COLLABORATE_LOCAL_INSTALL_PLAN.md`](./TEAM_COLLABORATE_LOCAL_INSTALL_PLAN.md).  
+**Spike:** Passed (2026-08-26) — see [`SYNC_TURSO_REPLICA_SPIKE_RESULTS.md`](./SYNC_TURSO_REPLICA_SPIKE_RESULTS.md)  
 **Decision gate:** ✅ Proceed with Plan A using **`@tursodatabase/sync`** (not `@libsql/client` embedded replicas).  
 **Supersedes as primary direction:** [`SYNC_REPLICA_GENESIS_AND_AUTHORITY_PLAN.md`](./SYNC_REPLICA_GENESIS_AND_AUTHORITY_PLAN.md) (Plan B — workspace log + checkpoint fallback)  
 **Still valid:** [`SYNC_CONTRACT.md`](./SYNC_CONTRACT.md) (product rules), git writer ops, per-app repos
+
+> **Note:** If another sync doc disagrees with this file on row authority or replica behavior, **Plan A wins**. Plan B / genesis docs are fallback only.
 
 ---
 
@@ -532,6 +536,30 @@ Schema files:        local migrations/*.sql (agent reads disk)
 Schema applied:      schema_migrations in Turso (when cloud on)
 Git:                 PR/collab for migration text — same timing as app code
 ```
+
+---
+
+## Fork vs collaborate (local)
+
+Product rule under Plan A — same mental model as web, two install paths:
+
+| Mode | Intent | Code | Database (`dbId` / Turso) | Local SQLite |
+|------|--------|------|---------------------------|--------------|
+| **Fork / copy** | "I want my own version" | New local `appId`; independent git lineage | **New owner** — new `dbId`, new empty Turso primary (seed optional) | Blank after install; user owns all rows |
+| **Collaborate / track** | "I'm on the same team app" | Track upstream (PRs to owner repo); may still get local `appId` for UI | **Same owner DB** — keep publisher's `dbId`, `isolation: shared`, Turso primary under owner's segment | Embedded replica of **owner's Turso**; `pull()` / `push()` like web |
+
+**Web today:** Collaborate = everyone reads/writes the owner's shared Turso primary (when `visibility: team` + `isolation: shared` + data pushed). ✅ Working.
+
+**Desktop gap (next build):** Install/bootstrap still opens the **installer's** Turso namespace after fork *or* track. Track mode today syncs **code** revisions only (`papr-cloud-lineage.json`, `CloudAppTrackSyncService`) — it does **not** yet attach local replica to the publisher's Turso primary. That is Phase 5 / team-collab work in [`SYNC_REPLICA_GENESIS_AND_AUTHORITY_PLAN.md`](./SYNC_REPLICA_GENESIS_AND_AUTHORITY_PLAN.md) §5.3, implemented on top of Plan A replica cutover (bucket C: reattach to existing Turso name, Turso wins).
+
+**Implementation checklist (local collaborate):**
+
+1. **Track install:** preserve publisher `dbId` in `data-sources.json` / registry (do not fork registry entry).
+2. **Bootstrap:** `pull()` from publisher's Turso primary (memory `runtime/db-token` with team ACL) into local `@tursodatabase/sync` replica — same name as web.
+3. **Writes:** route to owner Turso primary; all collaborators tail the same primary (Plan A write router).
+4. **Fork install:** explicitly mint new `dbId` + empty primary — never inherit publisher Turso allowlist.
+
+UI should ask: **"Use team database (shared with owner)"** vs **"My own copy (empty database)"** — maps to track+collaborate vs fork.
 
 ---
 

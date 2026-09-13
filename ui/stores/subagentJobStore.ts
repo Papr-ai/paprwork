@@ -20,6 +20,7 @@ interface SubagentJobStore {
   /** reportChatId -> latest running sub-agent job metadata */
   jobByReportChat: Map<string, SubagentJobInfo>;
   setJobForChat: (reportChatId: string, info: SubagentJobInfo) => void;
+  clearJobByJobId: (jobId: string) => void;
   getJobForChat: (reportChatId: string) => SubagentJobInfo | undefined;
   /** @deprecated Use getJobForChat */
   getJobIdForChat: (reportChatId: string) => string | undefined;
@@ -32,6 +33,17 @@ export const useSubagentJobStore = create<SubagentJobStore>((set, get) => ({
     set((state) => {
       const next = new Map(state.jobByReportChat);
       next.set(reportChatId, info);
+      return { jobByReportChat: next };
+    }),
+
+  clearJobByJobId: (jobId) =>
+    set((state) => {
+      const next = new Map(state.jobByReportChat);
+      for (const [reportChatId, info] of next) {
+        if (info.jobId === jobId) {
+          next.delete(reportChatId);
+        }
+      }
       return { jobByReportChat: next };
     }),
 
@@ -48,21 +60,37 @@ export function initSubagentJobStore(): void {
   const handler = (e: Event) => {
     const ev = e as CustomEvent<{ type: string; data?: unknown }>;
     const detail = ev.detail;
-    if (detail?.type !== "subagent-job-started") return;
-    const data = detail.data as {
-      jobId?: string;
-      reportChatId?: string;
-      subAgentId?: string;
-      agentName?: string;
-      agentIcon?: string;
-    };
-    if (data?.jobId && data?.reportChatId) {
-      useSubagentJobStore.getState().setJobForChat(data.reportChatId, {
-        jobId: data.jobId,
-        subAgentId: data.subAgentId,
-        agentName: data.agentName,
-        agentIcon: data.agentIcon,
-      });
+    if (!detail?.type) return;
+
+    if (detail.type === "subagent-job-started") {
+      const data = detail.data as {
+        jobId?: string;
+        reportChatId?: string;
+        subAgentId?: string;
+        agentName?: string;
+        agentIcon?: string;
+      };
+      if (data?.jobId && data?.reportChatId) {
+        useSubagentJobStore.getState().setJobForChat(data.reportChatId, {
+          jobId: data.jobId,
+          subAgentId: data.subAgentId,
+          agentName: data.agentName,
+          agentIcon: data.agentIcon,
+        });
+      }
+      return;
+    }
+
+    if (detail.type === "jobs:status-changed") {
+      const data = detail.data as { jobId?: string; status?: string };
+      if (!data?.jobId || !data.status) return;
+      if (
+        data.status === "completed" ||
+        data.status === "failed" ||
+        data.status === "cancelled"
+      ) {
+        useSubagentJobStore.getState().clearJobByJobId(data.jobId);
+      }
     }
   };
 

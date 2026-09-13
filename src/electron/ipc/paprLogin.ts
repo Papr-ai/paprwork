@@ -23,6 +23,7 @@ import {
   notifyGatewayPaprApiKeyUpdate,
   registerPaprWorkspaceHandlers,
 } from "./paprWorkspace.js";
+import { ensureDeveloperStripeSubscription, invalidatePlanSummaryCache } from "./paprBilling.js";
 import {
   startPaprAuthCallbackServer,
   stopPaprAuthCallbackServer,
@@ -39,6 +40,7 @@ import {
 import {
   fetchWorkspaceMembers,
   sendWorkspaceInvite,
+  updateWorkspaceMemberRole,
 } from "./paprWorkspaceTeam.js";
 import { registerPaprBillingHandlers } from "./paprBilling.js";
 import { coalesce, parseFetch } from "./parseTransport.js";
@@ -2668,6 +2670,8 @@ async function applyActiveNamespaceSwitch(input: {
     activeNamespaceName: input.namespaceName,
   });
 
+  invalidatePlanSummaryCache();
+
   await syncProfileToGatewaySettings(
     input.profile.email,
     input.profile.userId!,
@@ -3318,6 +3322,18 @@ async function finalizeLoginWithProvisioning(
     workspaceInfo.workspaceName,
   );
   trackLoginStep("profile_synced");
+
+  if (workspaceInfo.workspaceId && activeOrganizationId) {
+    await ensureDeveloperStripeSubscription({
+      sessionToken: parseSessionToken,
+      workspaceId: workspaceInfo.workspaceId,
+      organizationId: activeOrganizationId,
+    });
+    trackLoginStep("developer_subscription_ensured", {
+      organization_id: activeOrganizationId,
+      workspace_id: workspaceInfo.workspaceId,
+    });
+  }
 
   console.log("[PaprLogin] Login complete. API key stored as PAPR_API_KEY.");
   trackLoginCompleted(completedMode, completedSource);
@@ -4513,6 +4529,8 @@ export function initializePaprLoginIPC(
         organizationId: namespaceOrgId,
       });
 
+      invalidatePlanSummaryCache();
+
       await customKeysStorage.setActiveOrganization(namespaceOrgId);
       invalidateKeyCache();
 
@@ -4680,10 +4698,16 @@ export function initializePaprLoginIPC(
       }
 
       const members = await fetchWorkspaceMembers(profile.sessionToken, workspaceId);
+      const currentUserId = profile.userId;
+      const currentUserRole =
+        members.find((member) => member.user.objectId === currentUserId)?.user.role ??
+        "member";
       return {
         success: true,
         workspaceId,
         workspaceName: workspaceName || "Workspace",
+        currentUserId,
+        currentUserRole,
         members,
       };
     } catch (error) {
@@ -4722,37 +4746,23 @@ export function initializePaprLoginIPC(
         });
       }
 
-      const members = await fetchWorkspaceMembers(
-        profile.sessionToken,
-        workspaceInfo.workspaceId,
-      );
-      const existingEmails = new Set(
-        members.map((member) => member.user.email.toLowerCase()),
-      );
-
-      const result = await sendWorkspaceInvite(
-        {
-          sessionToken: profile.sessionToken,
-          workspaceId: workspaceInfo.workspaceId,
-          organizationId:
-            workspaceInfo.organizationId || profile.organizationId || workspaceInfo.workspaceId,
-          organizationName:
-            workspaceInfo.organizationName ||
-            workspaceInfo.workspaceName ||
-            "Papr",
-          workspaceName: workspaceInfo.workspaceName || "Workspace",
-          inviterId: profile.userId,
-          inviterName: profile.displayName || profile.email,
-          inviterImageUrl: profile.profileImage,
-          email,
-        },
-        existingEmails,
-      );
+      const result = await sendWorkspaceInvite({
+        sessionToken: profile.sessionToken,
+        workspaceId: workspaceInfo.workspaceId,
+        email,
+      });
 
       if (result.alreadyMember) {
         return {
           success: false,
           error: `${result.email} is already on your team`,
+        };
+      }
+
+      if (result.alreadyPending) {
+        return {
+          success: false,
+          error: `${result.email} already has a pending invite`,
         };
       }
 
@@ -4769,6 +4779,46 @@ export function initializePaprLoginIPC(
       };
     }
   });
+
+  ipcMain.handle(
+    "papr:update-workspace-member-role",
+    async (
+      _event,
+      input: { userId: string; currentRole: string; newRole: "owner" | "admin" | "member" },
+    ) => {
+      try {
+        const profile = settingsStorage.getPaprProfile();
+        if (!profile?.sessionToken || !profile.userId) {
+          return { success: false, error: "Not logged in" };
+        }
+
+        const workspaceInfo = await getSelectedWorkspaceInfo(
+          profile.sessionToken,
+          profile.userId,
+        );
+
+        if (!workspaceInfo.workspaceId) {
+          return { success: false, error: "No workspace found for your Papr account" };
+        }
+
+        await updateWorkspaceMemberRole({
+          sessionToken: profile.sessionToken,
+          workspaceId: workspaceInfo.workspaceId,
+          userId: input.userId,
+          currentRole: input.currentRole,
+          newRole: input.newRole,
+        });
+
+        return { success: true };
+      } catch (error) {
+        console.error("[PaprLogin] Failed to update workspace member role:", error);
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Failed to update role",
+        };
+      }
+    },
+  );
 
   ipcMain.handle("papr:open-workspace-team", async () => {
     const platformUrl = process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai";

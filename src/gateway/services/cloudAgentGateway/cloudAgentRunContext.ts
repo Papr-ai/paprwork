@@ -30,6 +30,7 @@ import {
 } from "./syncJobTursoBookends.js";
 import { reconcileCloudProviderAuth } from "./resolveCloudProviderAuth.js";
 import { clearKeyCache } from "../../utils/keyResolver.js";
+import { invalidatePaprUserIdCache } from "../../utils/paprUserId.js";
 import { hydrateSubAgentsRegistryForCloudRun, applySubAgentsHydrationFromMongo } from "./hydrateSubAgentsRegistryForCloudRun.js";
 import { fetchSubAgentsIndexFromCloudDirect } from "../syncV3/MetadataRegistryClient.js";
 import type { CloudAgentRunRequest, CloudLinkedSource, CloudTursoSource } from "./types.js";
@@ -68,6 +69,7 @@ interface CloudRunEnvSnapshot {
   previousAppDb?: string;
   previousAppDbAlias?: string;
   previousVaultEnv: Map<string, string | undefined>;
+  previousTelemetryPaprUserId?: string;
 }
 
 export function resolveCloudRunRoot(request: CloudAgentRunRequest): string {
@@ -161,6 +163,7 @@ function captureCloudRunEnv(): CloudRunEnvSnapshot {
     previousAppDb: process.env.APP_DB,
     previousAppDbAlias: process.env.APP_DB_ALIAS,
     previousVaultEnv: new Map(),
+    previousTelemetryPaprUserId: process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID,
   };
 }
 
@@ -214,6 +217,13 @@ async function restoreCloudRunEnv(snapshot: CloudRunEnvSnapshot): Promise<void> 
   else process.env.APP_DB = snapshot.previousAppDb;
   if (snapshot.previousAppDbAlias === undefined) delete process.env.APP_DB_ALIAS;
   else process.env.APP_DB_ALIAS = snapshot.previousAppDbAlias;
+
+  if (snapshot.previousTelemetryPaprUserId === undefined) {
+    delete process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID;
+  } else {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = snapshot.previousTelemetryPaprUserId;
+  }
+  invalidatePaprUserIdCache();
 
   for (const [keyName, previousValue] of snapshot.previousVaultEnv.entries()) {
     if (previousValue === undefined) delete process.env[keyName];
@@ -421,6 +431,11 @@ export async function beginCloudAgentRun(
   }
   if (request.namespaceId) {
     process.env.PAPR_NAMESPACE_ID = request.namespaceId;
+  }
+  const actingUserId = request.userId?.trim();
+  if (actingUserId) {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = actingUserId;
+    invalidatePaprUserIdCache();
   }
   process.env.HOME = runRoot;
   applyVaultKeys(request, envSnapshot);
@@ -660,6 +675,16 @@ export async function resolveCloudAgentJobStreamInput(
       : null;
   const streamOverrides = workspaceChatOverrides ?? appAgentOverrides;
   const chatId = streamOverrides?.chatId ?? resolveCloudAgentChatId(request);
+
+  if (workspaceChatOverrides) {
+    const { seedWorkspaceChatHistoryFromClient } = await import(
+      "./workspaceClientHistorySeed.js"
+    );
+    await seedWorkspaceChatHistoryFromClient(
+      chatId,
+      request.runtimeParams?.clientHistory,
+    );
+  }
 
   return {
     jobId: session.jobId,

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   buildPlanWarnings,
+  formatSubscriptionStatusLabel,
   getPlanLimitsForTier,
   hasActivePaprSubscription,
   normalizePlanTier,
@@ -84,6 +85,11 @@ describe("paprPlanLimits", () => {
 
   it("maps tiers to display names", () => {
     expect(planDisplayName("growth")).toBe("Growth");
+    expect(planDisplayName("developer")).toBe("Builder");
+  });
+
+  it("maps builder Stripe nicknames to developer tier limits", () => {
+    expect(normalizePlanTier("Papr Builder Monthly")).toBe("developer");
   });
 
   it("suppresses exceeded warnings when metered billing is on", () => {
@@ -147,5 +153,11 @@ describe("paprPlanLimits", () => {
     expect(hasActivePaprSubscription({ subscriptionStatus: "trialing" })).toBe(true);
     expect(hasActivePaprSubscription({ subscriptionStatus: "past_due" })).toBe(false);
     expect(hasActivePaprSubscription({ subscriptionStatus: undefined })).toBe(false);
+  });
+
+  it("formats subscription status labels for Settings", () => {
+    expect(formatSubscriptionStatusLabel("canceled")).toBe("Canceled");
+    expect(formatSubscriptionStatusLabel("active")).toBe("Active");
+    expect(formatSubscriptionStatusLabel(undefined)).toBe("No subscription");
   });
 });

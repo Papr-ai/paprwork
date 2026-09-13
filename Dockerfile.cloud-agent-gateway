@@ -20,6 +20,7 @@ RUN node -e "\
 " && npm install --omit=optional --no-audit --no-fund
 COPY tsconfig.gateway.json tsconfig.mini-app-sdk-node.json tsconfig.json ./
 COPY scripts/build-mini-app-sdk-browser-bundles.mjs scripts/build-mini-app-sdk-browser-bundles.mjs
+COPY scripts/verify-mini-app-sdk-bundles.mjs scripts/verify-mini-app-sdk-bundles.mjs
 COPY src ./src
 RUN npm run build:gateway
 

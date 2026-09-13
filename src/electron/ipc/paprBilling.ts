@@ -17,6 +17,7 @@ import {
   getPlanLimitsForTier,
   planDisplayName,
   planFeaturesForTier,
+  requiresPaymentMethodForMeteredBilling,
   resolvePlanTierForBilling,
 } from "../../core/utils/paprPlanLimits.js";
 import { fetchWorkspaceMembers } from "../../core/utils/paprWorkspaceTeam.js";
@@ -31,6 +32,8 @@ interface BillingServices {
   settingsStorage: SettingsStorage;
   runGraphQL: GraphQLRunner;
 }
+
+export type { BillingServices };
 
 const PAPR_PLATFORM_URL = (
   process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai"
@@ -56,6 +59,7 @@ interface UsageMetricsResponse {
     isActive?: boolean;
     parseTier?: string | null;
     isMeteredBillingOn?: boolean;
+    hasPaymentMethod?: boolean;
   } | null;
 }
 
@@ -64,6 +68,7 @@ interface UsageMetricsResult {
   subscriptionFromMetrics: PaprStripeSubscriptionInfo | null;
   parseTierFromMetrics?: string | null;
   isMeteredBillingOnFromMetrics?: boolean;
+  hasPaymentMethodFromMetrics?: boolean;
 }
 
 /** Parse `workspace.subscription` Object scalar from Parse GraphQL. */
@@ -301,7 +306,91 @@ async function fetchUsageMetrics(
     subscriptionFromMetrics,
     parseTierFromMetrics: metrics.subscription?.parseTier ?? null,
     isMeteredBillingOnFromMetrics: metrics.subscription?.isMeteredBillingOn,
+    hasPaymentMethodFromMetrics: metrics.subscription?.hasPaymentMethod,
   };
+}
+
+export interface EnsureDeveloperSubscriptionResponse {
+  created: boolean;
+  alreadyActive: boolean;
+  subscription: PaprStripeSubscriptionInfo | null;
+}
+
+/**
+ * Calls dashboard ensure-developer-subscription API (mirrors web onboarding).
+ * Non-throwing — login and plan summary should continue if billing setup fails.
+ */
+export async function ensureDeveloperStripeSubscription(input: {
+  sessionToken: string;
+  workspaceId: string;
+  organizationId: string;
+}): Promise<EnsureDeveloperSubscriptionResponse | null> {
+  const url = `${PAPR_PLATFORM_URL}/api/v1/billing/ensure-developer-subscription`;
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Parse-Session-Token": input.sessionToken,
+      },
+      body: JSON.stringify({
+        workspaceId: input.workspaceId,
+        organizationId: input.organizationId,
+      }),
+    });
+
+    const body = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      created?: boolean;
+      alreadyActive?: boolean;
+      subscription?: {
+        status?: string;
+        planNickname?: string | null;
+        planId?: string | null;
+        trialEnd?: number | null;
+        cancelAtPeriodEnd?: boolean;
+        isActive?: boolean;
+      } | null;
+    };
+
+    if (!response.ok) {
+      console.warn(
+        "[PaprBilling] ensure-developer-subscription failed:",
+        body.error || response.status,
+      );
+      return null;
+    }
+
+    const subscription = body.subscription
+      ? {
+          status: body.subscription.status,
+          planNickname: body.subscription.planNickname ?? null,
+          planId: body.subscription.planId ?? null,
+          trialEnd: body.subscription.trialEnd ?? null,
+          cancelAtPeriodEnd: body.subscription.cancelAtPeriodEnd ?? false,
+          isActive: body.subscription.isActive ?? false,
+        }
+      : null;
+
+    console.log("[PaprBilling] ensure-developer-subscription:", {
+      created: body.created ?? false,
+      alreadyActive: body.alreadyActive ?? false,
+      status: subscription?.status ?? null,
+    });
+
+    return {
+      created: body.created ?? false,
+      alreadyActive: body.alreadyActive ?? false,
+      subscription,
+    };
+  } catch (error) {
+    console.warn(
+      "[PaprBilling] ensure-developer-subscription error:",
+      error instanceof Error ? error.message : error,
+    );
+    return null;
+  }
 }
 
 async function resolveWorkspaceRole(
@@ -334,14 +423,21 @@ function invalidatePlanSummaryCache(): void {
   planSummaryCache = null;
 }
 
+export { invalidatePlanSummaryCache };
+
 /** Plan summary for read paths: cached, and concurrent callers share one build. */
 async function getPlanSummaryCached(
   services: BillingServices,
+  options?: { force?: boolean },
 ): Promise<PaprPlanSummary> {
   const profile = requireLoggedInProfile(services.settingsStorage);
   const key = `${profile.workspaceId}:${profile.organizationId}`;
 
-  if (planSummaryCache?.key === key && planSummaryCache.expiresAt > Date.now()) {
+  if (
+    !options?.force &&
+    planSummaryCache?.key === key &&
+    planSummaryCache.expiresAt > Date.now()
+  ) {
     return planSummaryCache.summary;
   }
   if (planSummaryInFlight?.key === key) {
@@ -427,12 +523,55 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
     organizationId,
   );
 
+  let stripeSubscription = usageMetricsResult.subscriptionFromMetrics;
+
+  const role = await resolveWorkspaceRole(
+    profile.sessionToken!,
+    workspaceId,
+    profile.userId,
+  );
+  const isWorkspaceOwner = role === "owner";
+  const isWorkspaceAdmin = role === "admin" || isWorkspaceOwner;
+
+  // Lazy repair: Paprwork Auth0 login provisions Parse but not Stripe (web onboarding does).
+  if (
+    isWorkspaceOwner &&
+    !stripeSubscription?.status &&
+    stripeCustomerId
+  ) {
+    const ensureResult = await ensureDeveloperStripeSubscription({
+      sessionToken: profile.sessionToken!,
+      workspaceId,
+      organizationId,
+    });
+    if (ensureResult?.subscription?.status) {
+      stripeSubscription = ensureResult.subscription;
+    } else if (ensureResult?.created || ensureResult?.alreadyActive) {
+      const refreshedMetrics = await fetchUsageMetrics(
+        profile.sessionToken!,
+        workspaceId,
+        organizationId,
+      );
+      stripeSubscription =
+        refreshedMetrics.subscriptionFromMetrics ?? stripeSubscription;
+    }
+  }
+
   // Stripe subscription comes from usage/metrics (same dashboard route + getSubscriptionInfo).
-  const stripeSubscription = usageMetricsResult.subscriptionFromMetrics;
+
+  if (!stripeSubscription?.status) {
+    console.warn(
+      "[PaprBilling] Usage metrics returned no Stripe subscription status — " +
+        "treating workspace as without active billing (Parse subscription.status is ignored)",
+      { workspaceId, organizationId, stripeCustomerId: stripeCustomerId ?? null },
+    );
+  }
 
   const parseSubscriptionLabels = stripeCustomerId
     ? await fetchParseSubscriptionLabels(services.runGraphQL, stripeCustomerId)
     : [];
+
+  const usage = usageMetricsResult.usage;
 
   const isTrialPeriod = stripeSubscription?.status === "trialing";
   const planTier = resolvePlanTierForBilling({
@@ -453,25 +592,18 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
   const limitsTier = isTrialPeriod ? "developer" : planTier;
   const limits = getPlanLimitsForTier(limitsTier);
 
-  const usage = usageMetricsResult.usage;
-
-  const role = await resolveWorkspaceRole(
-    profile.sessionToken!,
-    workspaceId,
-    profile.userId,
-  );
-  const isWorkspaceOwner = role === "owner";
-  const isWorkspaceAdmin = role === "admin" || isWorkspaceOwner;
   const isMeteredBillingOn =
     subscription?.isMeteredBillingOn ??
     usageMetricsResult.isMeteredBillingOnFromMetrics ??
     false;
 
+  const hasPaymentMethod = usageMetricsResult.hasPaymentMethodFromMetrics;
+
   return {
     planName: planDisplayName(planTier),
     planTier,
     planFeatures: planFeaturesForTier(planTier),
-    subscriptionStatus: stripeSubscription?.status ?? subscription?.status,
+    subscriptionStatus: stripeSubscription?.status,
     trialEnd:
       formatStripeTrialEnd(stripeSubscription?.trialEnd) ??
       subscription?.trialEnd ??
@@ -482,12 +614,68 @@ async function buildPlanSummary(services: BillingServices): Promise<PaprPlanSumm
     isWorkspaceAdmin,
     canManageBilling: isWorkspaceOwner,
     stripeCustomerId,
+    hasPaymentMethod,
     subscriptionObjectId: subscription?.objectId,
     isMeteredBillingOn,
     usage,
     limits,
     warnings: buildPlanWarnings(usage, limits, { isMeteredBillingOn }),
   };
+}
+
+export { buildPlanSummary };
+export { requiresPaymentMethodForMeteredBilling } from "../../core/utils/paprPlanLimits.js";
+
+export function buildMeteredBillingMutationVariables(
+  subscriptionObjectId: string,
+  enabled: boolean,
+): {
+  input: {
+    id: string;
+    fields: { isMeteredBillingOn: boolean };
+  };
+} {
+  return {
+    input: {
+      id: subscriptionObjectId,
+      fields: { isMeteredBillingOn: enabled },
+    },
+  };
+}
+
+/** Same Parse mutation as dashboard Settings → metered billing toggle. */
+export async function setSubscriptionMeteredBilling(
+  services: BillingServices,
+  enabled: boolean,
+): Promise<{ enabled: boolean }> {
+  const summary = await buildPlanSummary(services);
+  if (!summary.canManageBilling) {
+    throw new Error("Only the workspace owner can change metered billing.");
+  }
+  if (!summary.subscriptionObjectId) {
+    throw new Error("No active subscription found for this workspace.");
+  }
+  if (enabled) {
+    const status = summary.subscriptionStatus;
+    if (status !== "active" && status !== "trialing") {
+      throw new Error(
+        "Metered billing requires an active or trialing subscription.",
+      );
+    }
+    if (requiresPaymentMethodForMeteredBilling(summary)) {
+      throw new Error(
+        "Add a payment method before enabling metered billing on the Builder plan.",
+      );
+    }
+  }
+
+  await services.runGraphQL(
+    UPDATE_SUBSCRIPTION_METERED_BILLING,
+    buildMeteredBillingMutationVariables(summary.subscriptionObjectId, enabled),
+  );
+
+  invalidatePlanSummaryCache();
+  return { enabled };
 }
 
 async function createCustomerPortalUrl(customerId: string): Promise<string> {
@@ -539,9 +727,14 @@ export function registerPaprBillingHandlers(deps: {
     runGraphQL: deps.runGraphQLWithRefresh,
   };
 
-  ipcMain.handle("papr:get-plan-summary", async () => {
+  ipcMain.handle(
+    "papr:get-plan-summary",
+    async (_event, options?: { force?: boolean }) => {
     try {
-      const summary = await getPlanSummaryCached(services);
+      if (options?.force) {
+        invalidatePlanSummaryCache();
+      }
+      const summary = await getPlanSummaryCached(services, options);
       persistPlanSummaryToProfile(deps.settingsStorage, summary);
       return { success: true, summary };
     } catch (error) {
@@ -550,20 +743,36 @@ export function registerPaprBillingHandlers(deps: {
         error: error instanceof Error ? error.message : "Failed to load plan summary",
       };
     }
-  });
+    },
+  );
 
   ipcMain.handle(
     "papr:open-billing-portal",
-    async (_event, section?: "billing" | "subscriptions" | "invoices") => {
+    async (
+      _event,
+      input?:
+        | "billing"
+        | "subscriptions"
+        | "invoices"
+        | { section?: "billing" | "subscriptions" | "invoices"; stripeCustomerId?: string },
+    ) => {
       try {
-        const summary = await buildPlanSummary(services);
+        const section = typeof input === "string" ? input : input?.section;
+        const knownCustomerId =
+          typeof input === "object" && input?.stripeCustomerId
+            ? input.stripeCustomerId
+            : undefined;
+
+        const summary = await getPlanSummaryCached(services);
         if (!summary.canManageBilling) {
           throw new Error("Only the workspace owner can manage billing.");
         }
-        if (!summary.stripeCustomerId) {
+
+        const stripeCustomerId = knownCustomerId ?? summary.stripeCustomerId;
+        if (!stripeCustomerId) {
           throw new Error("No billing account found. Upgrade your plan first.");
         }
-        const baseUrl = await createCustomerPortalUrl(summary.stripeCustomerId);
+        const baseUrl = await createCustomerPortalUrl(stripeCustomerId);
         const url = section ? `${baseUrl}#${section}` : baseUrl;
         await shell.openExternal(url);
         return { success: true };
@@ -619,35 +828,52 @@ export function registerPaprBillingHandlers(deps: {
     },
   );
 
-  ipcMain.handle("papr:set-metered-billing", async (_event, enabled: boolean) => {
+  ipcMain.handle("papr:subscribe-developer-plan", async () => {
     try {
       const summary = await buildPlanSummary(services);
       if (!summary.canManageBilling) {
-        throw new Error("Only the workspace owner can change metered billing.");
+        throw new Error("Only the workspace owner can subscribe to a plan.");
       }
-      if (!summary.subscriptionObjectId) {
-        throw new Error("No active subscription found for this workspace.");
-      }
-      if (enabled) {
-        const status = summary.subscriptionStatus;
-        if (status !== "active" && status !== "trialing") {
-          throw new Error(
-            "Metered billing requires an active or trialing subscription.",
-          );
-        }
+      if (!summary.stripeCustomerId) {
+        throw new Error("No billing account found for this workspace.");
       }
 
-      await services.runGraphQL(UPDATE_SUBSCRIPTION_METERED_BILLING, {
-        input: {
-          id: summary.subscriptionObjectId,
-          fields: {
-            isMeteredBillingOn: enabled,
-          },
-        },
+      const profile = requireLoggedInProfile(deps.settingsStorage);
+      const ensureResult = await ensureDeveloperStripeSubscription({
+        sessionToken: profile.sessionToken!,
+        workspaceId: profile.workspaceId!,
+        organizationId: profile.organizationId!,
       });
 
+      if (!ensureResult) {
+        throw new Error("Could not activate the Builder plan.");
+      }
+
       invalidatePlanSummaryCache();
-      return { success: true, enabled };
+      const refreshed = await buildPlanSummary(services);
+      persistPlanSummaryToProfile(deps.settingsStorage, refreshed);
+
+      return {
+        success: true,
+        created: ensureResult.created,
+        alreadyActive: ensureResult.alreadyActive,
+        summary: refreshed,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to activate Builder plan",
+      };
+    }
+  });
+
+  ipcMain.handle("papr:set-metered-billing", async (_event, enabled: boolean) => {
+    try {
+      const result = await setSubscriptionMeteredBilling(services, enabled);
+      return { success: true, enabled: result.enabled };
     } catch (error) {
       return {
         success: false,

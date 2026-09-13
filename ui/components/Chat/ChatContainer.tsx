@@ -19,8 +19,8 @@ import type { Tab } from "../../stores/tabStore";
 import {
   CHAT_MODELS,
   getModelById,
-  DEFAULT_MODEL_IDS,
 } from "../../constants/models";
+import { resolveAuthAwareDefaultModelIds } from "../../utils/authAwareModelDefaults";
 import type { AIModel } from "../../constants/models";
 import { migratePickerModelId } from "../../constants/modelPicker";
 import { useModelPickerSettings } from "../../hooks/useModelPickerSettings";
@@ -42,6 +42,7 @@ import {
 } from "../../utils/resolveChatModel";
 import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
+import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn, shouldDrainMessageQueue } from "../../lib/agentStreamRecovery";
@@ -172,7 +173,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const { ensureModel, progress, installing } = useOllama();
   const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
-    CHAT_MODELS.find((m) => m.id === "claude-sonnet-5") || CHAT_MODELS[0];
+    CHAT_MODELS.find((m) => m.id === "gemini-3.8-flash") || CHAT_MODELS[0];
 
   const [selectedModel, setSelectedModel] = useState<AIModel>(fallbackModel);
   const [contextInfo, setContextInfo] = useState<ContextInfo | null>(null);
@@ -319,9 +320,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   });
 
   // When chatId or auth status changes: pick best default
-  // Priority: this chat's own selection > this chat's own history > global
-  // default (new chats only) > default order (sonnet-5 → gpt-5-6-sol →
-  // gemini-3-flash) > first available
+  // Priority: per-chat pick > this chat's history > global (new chats only) >
+  // auth-aware order (sonnet → gpt → gemini; papr-only → gemini) > picker
   useEffect(() => {
     setSelectedModel((prev) => {
       const store = useChatStore.getState();
@@ -331,7 +331,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       const perChatModelId = store.getLastSelectedModel(chatId);
       if (perChatModelId) {
         const explicitModel = getModelById(migratePickerModelId(perChatModelId));
-        if (explicitModel) return explicitModel;
+        if (explicitModel && isModelAvailable(explicitModel)) {
+          return explicitModel;
+        }
       }
 
       const lastId = resolveChatModelId({
@@ -345,8 +347,12 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         if (lastModel && isModelAvailable(lastModel)) return lastModel;
       }
       const pickerIds = new Set(pickerModels.map((model) => model.id));
-      const defaultAvailable = DEFAULT_MODEL_IDS.map(getModelById).find(
-        (m) => m && isModelAvailable(m) && pickerIds.has(m.id),
+      const authAwareDefaults = resolveAuthAwareDefaultModelIds(authStatus);
+      const defaultAvailable = authAwareDefaults.map(getModelById).find(
+        (m) =>
+          m &&
+          isModelAvailable(m) &&
+          (pickerIds.has(m.id) || m.provider === "ollama"),
       );
       if (defaultAvailable) return defaultAvailable;
       const pickerAvailable = pickerModels.find((m) => isModelAvailable(m));
@@ -680,11 +686,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       }
 
       if (!isModelAvailable(selectedModel)) {
-        setError(
-          authStatus.paprProxy
-            ? "This model isn't available right now. Try another model from the picker."
-            : "Sign in with Papr to use cloud models without your own API keys (Settings → AI Models), or add a provider API key / connect OAuth.",
-        );
+        setError(getUnavailableModelMessage(selectedModel));
         return;
       }
 
@@ -731,7 +733,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
           : undefined,
       );
     },
-    [selectedModel, sendMessage, chatId, ensureModel, isModelAvailable, authStatus.paprProxy, setError],
+    [selectedModel, sendMessage, chatId, ensureModel, isModelAvailable, setError],
   );
 
   const stopAgentAndClearQueue = useCallback(async () => {
@@ -774,7 +776,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     queueTransitionInFlightRef.current = true;
     isProcessingQueue.current = true;
     try {
-      await handleStopAgent();
+      await interruptActiveStream(chatId);
       await handleSendMessage(
         queued.text,
         queued.contextArtifacts,
@@ -783,7 +785,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       isProcessingQueue.current = false;
       queueTransitionInFlightRef.current = false;
     }
-  }, [messageQueue, handleSendMessage, handleStopAgent, chatId]);
+  }, [messageQueue, handleSendMessage, interruptActiveStream, chatId]);
+
+  const handleSendFirstQueuedNow = useCallback(async () => {
+    const first = currentChatQueue[0];
+    if (!first) return;
+    await handleSendQueuedNow(first.id);
+  }, [currentChatQueue, handleSendQueuedNow]);
 
   const handleInterruptAndSend = useCallback(
     async (message: string, contextArtifacts?: Artifact[]) => {
@@ -1049,6 +1057,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onInterruptAndSend={handleInterruptAndSend}
         onQueue={handleQueueMessage}
         queuedCount={currentChatQueue.length}
+        onSendFirstQueuedNow={handleSendFirstQueuedNow}
         onStop={handleStopAgent}
         onSlashCommand={handleSlashCommand}
         isSending={isSending || isWaitingForModel}

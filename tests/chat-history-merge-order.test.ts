@@ -106,6 +106,27 @@ describe("mergeHistoryWithLocal ordering", () => {
     ]);
   });
 
+  it("dedupes optimistic and persisted copies of the first user message", () => {
+    const shared =
+      "for paprwork-v2 in github folder on this mac, i want to revisit the onboard experience";
+    const local = [
+      { id: "msg-user-1700000000000", role: "user", content: shared } as ChatMessage,
+      ...conversation(29),
+    ];
+    const serverWindow = [
+      { id: "server-uuid-1", role: "user", content: shared } as ChatMessage,
+      ...local.slice(1),
+    ];
+
+    const merged = mergeHistoryWithLocal(local, serverWindow);
+    const userMessages = merged.filter((message) => message.role === "user");
+
+    expect(userMessages.filter((message) => message.content === shared)).toHaveLength(
+      1,
+    );
+    expect(userMessages[0]?.id).toBe("server-uuid-1");
+  });
+
   it("does not match duplicate content from paginated turns outside the window", () => {
     const shared = "I'll help with that.";
     const local = [

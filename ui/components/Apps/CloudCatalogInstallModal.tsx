@@ -2,12 +2,17 @@
  * Fork vs collaborate modal for installing a cloud catalog app locally.
  */
 
-import type { CommunityCatalogEntry } from "../../../src/core/types/communityCatalog";
+import type {
+  CommunityCatalogEntry,
+  CommunityCatalogScope,
+} from "../../../src/core/types/communityCatalog";
+import { getCloudCatalogInstallModeOptions } from "../../../src/core/utils/cloudCatalogInstallPolicy";
 import type { CloudInstallMode } from "../../utils/cloudCatalogInstall";
 import "./CommunityAppsView.css";
 
 interface CloudCatalogInstallModalProps {
   entry: CommunityCatalogEntry;
+  catalogScope?: CommunityCatalogScope;
   installing: boolean;
   onClose: () => void;
   onSelectMode: (mode: CloudInstallMode) => void;
@@ -15,10 +20,17 @@ interface CloudCatalogInstallModalProps {
 
 export function CloudCatalogInstallModal({
   entry,
+  catalogScope = "namespace",
   installing,
   onClose,
   onSelectMode,
 }: CloudCatalogInstallModalProps) {
+  const teamTab = catalogScope === "namespace";
+  const options = getCloudCatalogInstallModeOptions({
+    catalogScope,
+    visibility: entry.visibility,
+    codeInstallable: entry.codeInstallable === true,
+  });
   return (
     <div
       className="community-install-modal__backdrop"
@@ -33,33 +45,25 @@ export function CloudCatalogInstallModal({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 id="cloud-catalog-install-title" className="community-install-modal__title">
-          Customize {entry.name}
+          Personalize {entry.name}
         </h3>
         <p className="community-install-modal__desc">
-          Install this app in your Papr Work workspace to edit locally or contribute
-          changes back to the owner.
+          {teamTab
+            ? "Install this team app locally. Choose whether you want your own database or the shared team database."
+            : "Install an independent copy in your workspace. You get the app code and schema — not the publisher's live data."}
         </p>
-        <button
-          type="button"
-          className="community-install-modal__option"
-          disabled={installing}
-          onClick={() => onSelectMode("fork")}
-        >
-          <strong>Fork</strong>
-          <span>Independent copy — edit freely, send changes back to owner.</span>
-        </button>
-        <button
-          type="button"
-          className="community-install-modal__option"
-          disabled={installing}
-          onClick={() => onSelectMode("track")}
-        >
-          <strong>Collaborate and get updates</strong>
-          <span>
-            Stay connected to the publisher and pull their updates when you&apos;re
-            ready.
-          </span>
-        </button>
+        {options.map((option) => (
+          <button
+            key={option.mode}
+            type="button"
+            className="community-install-modal__option"
+            disabled={installing}
+            onClick={() => onSelectMode(option.mode)}
+          >
+            <strong>{option.label}</strong>
+            <span>{option.description}</span>
+          </button>
+        ))}
         <button
           type="button"
           className="community-install-modal__cancel"

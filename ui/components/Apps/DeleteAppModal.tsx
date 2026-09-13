@@ -42,7 +42,8 @@ interface DeleteAppModalProps {
     deleteRegistryDbIds: string[];
     deleteRegistryTurso: boolean;
     unpublishFromCloud: boolean;
-  }) => void;
+  }) => void | Promise<void>;
+  deleteError?: string | null;
 }
 
 export function DeleteAppModal({
@@ -50,8 +51,10 @@ export function DeleteAppModal({
   preview,
   onClose,
   onConfirm,
+  deleteError = null,
 }: DeleteAppModalProps) {
   const [confirmText, setConfirmText] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
   const [deleteJobs, setDeleteJobs] = useState(true);
   const [deleteTurso, setDeleteTurso] = useState(true);
   const [deleteRegistryDbs, setDeleteRegistryDbs] = useState(false);
@@ -75,6 +78,7 @@ export function DeleteAppModal({
       setDeleteTurso(true);
       setDeleteRegistryDbs(false);
       setDeleteRegistryTurso(true);
+      setIsDeleting(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
@@ -82,11 +86,12 @@ export function DeleteAppModal({
   useEffect(() => {
     if (!isOpen) return;
     const handleEscape = (e: KeyboardEvent) => {
+      if (isDeleting) return;
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", handleEscape);
     return () => window.removeEventListener("keydown", handleEscape);
-  }, [isOpen, onClose]);
+  }, [isOpen, onClose, isDeleting]);
 
   if (!isOpen || !preview) return null;
 
@@ -94,24 +99,35 @@ export function DeleteAppModal({
   const hasLinkedJobs = preview.linkedJobs.length > 0;
   const hasTursoDbs = preview.tursoDbCount > 0;
 
-  const handleConfirm = () => {
-    if (!isConfirmValid) return;
-    onConfirm({
-      deleteLinkedJobs: deleteJobs,
-      deleteTursoDatabases: deleteTurso && deleteJobs,
-      deleteRegistryDbIds: deleteRegistryDbs
-        ? soleLinkerRegistryDbs.map((db) => db.dbId)
-        : [],
-      deleteRegistryTurso: deleteRegistryTurso && deleteRegistryDbs,
-      unpublishFromCloud: preview.isPublished,
-    });
+  const handleConfirm = async () => {
+    if (!isConfirmValid || isDeleting) return;
+    setIsDeleting(true);
+    try {
+      await onConfirm({
+        deleteLinkedJobs: deleteJobs,
+        deleteTursoDatabases: deleteTurso && deleteJobs,
+        deleteRegistryDbIds: deleteRegistryDbs
+          ? soleLinkerRegistryDbs.map((db) => db.dbId)
+          : [],
+        deleteRegistryTurso: deleteRegistryTurso && deleteRegistryDbs,
+        unpublishFromCloud: preview.isPublished,
+      });
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const handleBackdropClick = () => {
+    if (isDeleting) return;
+    onClose();
   };
 
   return (
-    <div className="delete-app-modal__backdrop" onClick={onClose}>
+    <div className="delete-app-modal__backdrop" onClick={handleBackdropClick}>
       <div
-        className="delete-app-modal"
+        className={`delete-app-modal${isDeleting ? " delete-app-modal--busy" : ""}`}
         onClick={(e) => e.stopPropagation()}
+        aria-busy={isDeleting}
       >
         <div className="delete-app-modal__header">
           <div className="delete-app-modal__icon">
@@ -272,6 +288,22 @@ export function DeleteAppModal({
           )}
         </div>
 
+        {isDeleting && (
+          <div className="delete-app-modal__progress" role="status">
+            <span className="delete-app-modal__progress-spinner" aria-hidden />
+            <span>
+              Deleting app… This can take up to a minute if cloud unpublish or
+              linked jobs are included.
+            </span>
+          </div>
+        )}
+
+        {deleteError && !isDeleting && (
+          <p className="delete-app-modal__error" role="alert">
+            {deleteError}
+          </p>
+        )}
+
         <div className="delete-app-modal__confirm">
           <label className="delete-app-modal__confirm-label">
             Type <strong>{preview.appTitle}</strong> to confirm:
@@ -282,23 +314,37 @@ export function DeleteAppModal({
             className="delete-app-modal__input"
             placeholder={preview.appTitle}
             value={confirmText}
+            disabled={isDeleting}
             onChange={(e) => setConfirmText(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && isConfirmValid) handleConfirm();
+              if (e.key === "Enter" && isConfirmValid && !isDeleting) {
+                void handleConfirm();
+              }
             }}
           />
         </div>
 
         <div className="delete-app-modal__actions">
-          <button className="delete-app-modal__cancel" onClick={onClose}>
+          <button
+            className="delete-app-modal__cancel"
+            disabled={isDeleting}
+            onClick={onClose}
+          >
             Cancel
           </button>
           <button
             className="delete-app-modal__delete"
-            disabled={!isConfirmValid}
-            onClick={handleConfirm}
+            disabled={!isConfirmValid || isDeleting}
+            onClick={() => void handleConfirm()}
           >
-            Delete App
+            {isDeleting ? (
+              <>
+                <span className="delete-app-modal__progress-spinner delete-app-modal__progress-spinner--inline" aria-hidden />
+                Deleting…
+              </>
+            ) : (
+              "Delete App"
+            )}
           </button>
         </div>
       </div>

@@ -2,6 +2,7 @@
  * Unified Community Apps catalog — open-source bundles + Papr Cloud public apps.
  */
 
+import type { CatalogAutomation } from "./catalogAutomation.js";
 import type { RequirementItem } from "./bundles.js";
 
 export type CommunityCatalogSource = "opensource" | "cloud";
@@ -61,6 +62,8 @@ export interface CommunityCatalogEntry {
   shareLinkEnabled?: boolean;
   /** Publisher Papr user id — used to hide own apps from Shared with me */
   publisherUserId?: string;
+  /** Scheduled job summary (denormalized at publish time) */
+  catalogAutomation?: CatalogAutomation;
 }
 
 export interface CommunityCatalog {

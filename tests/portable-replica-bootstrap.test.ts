@@ -6,6 +6,7 @@ import {
   readBootstrapPendingMarker,
 } from "../src/gateway/services/tursoReplica/tursoReplicaBootstrapMarker.js";
 import {
+  portableReplicaReasonForInstallPolicy,
   preparePortableReplicaDatabases,
   prepareReplicaForPortableTransfer,
 } from "../src/gateway/services/tursoReplica/portableReplicaBootstrap.js";
@@ -26,6 +27,15 @@ describe("portableReplicaBootstrap", () => {
     } else {
       process.env.PAPR_TURSO_REPLICA_SYNC = originalReplicaEnv;
     }
+  });
+
+  test("portableReplicaReasonForInstallPolicy maps shared_primary to team_collaborate_attach", () => {
+    expect(portableReplicaReasonForInstallPolicy("shared_primary")).toBe(
+      "team_collaborate_attach",
+    );
+    expect(portableReplicaReasonForInstallPolicy("fork_empty")).toBe(
+      "portable_install",
+    );
   });
 
   test("prepareReplicaForPortableTransfer writes marker and removes sidecars", async () => {

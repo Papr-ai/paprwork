@@ -9,6 +9,7 @@ import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import type { StreamChunk } from "../types/core";
 import type { ChatMessage, SequenceItem } from "../types/chat";
 import type { ToolCall } from "../types/core";
+import { dedupeChatMessages } from "../utils/messageDedup";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -400,6 +401,7 @@ export function mergeHistoryWithLocal(
       if (localDup) {
         merged.push({
           ...localDup,
+          id: serverMsg.id,
           ...(serverMsg.attachments?.length && !localDup.attachments?.length
             ? { attachments: serverMsg.attachments }
             : {}),
@@ -459,7 +461,7 @@ export function mergeHistoryWithLocal(
     }
   });
 
-  return [...beforeWindow, ...merged, ...afterWindow];
+  return dedupeChatMessages([...beforeWindow, ...merged, ...afterWindow]);
 }
 
 /**

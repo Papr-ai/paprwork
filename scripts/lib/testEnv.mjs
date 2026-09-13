@@ -13,6 +13,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
+/** Some keychain entries were stored doubled — keep the first valid segment. */
+export function normalizePaprApiKey(key) {
+  const trimmed = key.trim();
+  const second = trimmed.indexOf("sk-org-", 1);
+  if (second > 0) {
+    return trimmed.slice(0, second);
+  }
+  return trimmed;
+}
+
 /** Load `.env.local` into process.env (does not override existing vars). */
 export function loadEnvLocal(cwd = process.cwd()) {
   try {
@@ -67,12 +77,14 @@ export async function resolvePaprApiKeyFromKeychain(cwd = process.cwd()) {
       encoding: "utf8",
       timeout: 30_000,
     });
-    const key = stdout.trim();
+    const key = normalizePaprApiKey(stdout);
     return key.startsWith("sk-") ? key : null;
   } catch (error) {
-    const err = /** @type {NodeJS.ErrnoException & { code?: number | string }} */ (
-      error
-    );
+    const err = /** @type {NodeJS.ErrnoException & { stdout?: string }} */ (error);
+    const fromStdout = normalizePaprApiKey(String(err.stdout ?? ""));
+    if (fromStdout.startsWith("sk-")) {
+      return fromStdout;
+    }
     if (err.code === 2) {
       return null;
     }
@@ -147,7 +159,7 @@ export async function resolvePaprApiKey(cwd = process.cwd()) {
   loadEnvLocal(cwd);
   const fromEnv = process.env.PAPR_API_KEY?.trim();
   if (fromEnv) {
-    return { key: fromEnv, source: "env" };
+    return { key: normalizePaprApiKey(fromEnv), source: "env" };
   }
 
   const fromKeychain = await resolvePaprApiKeyFromKeychain(cwd);

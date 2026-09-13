@@ -90,6 +90,12 @@ interface CloudCommunityApiEntry {
   }>;
   catalogPlatform?: string[];
   catalogRequiresDesktop?: boolean;
+  catalogAutomation?: {
+    scheduleLabel: string;
+    scheduledJobCount: number;
+    hasAgentJob?: boolean;
+    cardLine: string;
+  };
 }
 
 interface CloudCommunityApiResponse {
@@ -304,6 +310,14 @@ function cloudEntryFromApi(
     visibility: entry.visibility,
     shareLinkEnabled: entry.shareLinkEnabled,
     publisherUserId: entry.publisherUserId,
+    catalogAutomation: entry.catalogAutomation
+      ? {
+          scheduleLabel: entry.catalogAutomation.scheduleLabel,
+          scheduledJobCount: entry.catalogAutomation.scheduledJobCount,
+          hasAgentJob: entry.catalogAutomation.hasAgentJob ?? false,
+          cardLine: entry.catalogAutomation.cardLine,
+        }
+      : undefined,
   };
 }
 

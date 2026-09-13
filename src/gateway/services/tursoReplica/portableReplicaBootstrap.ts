@@ -32,11 +32,11 @@ import type { AppDataSource } from "../appDataSources.js";
 
 export type PortableReplicaTransferReason = Extract<
   BootstrapPendingReason,
-  "cross_namespace_copy" | "portable_install"
+  "cross_namespace_copy" | "portable_install" | "team_collaborate_attach"
 >;
 
 export const PORTABLE_REPLICA_TRANSFER_REASONS: readonly PortableReplicaTransferReason[] =
-  ["cross_namespace_copy", "portable_install"];
+  ["cross_namespace_copy", "portable_install", "team_collaborate_attach"];
 
 function recordAsDataSource(record: DatabaseRecord): AppDataSource {
   return {
@@ -88,6 +88,15 @@ export interface PreparePortableReplicaDatabasesInput {
   registryDbIds: readonly string[];
   copiedJobIds?: readonly string[];
   reason: PortableReplicaTransferReason;
+}
+
+export function portableReplicaReasonForInstallPolicy(
+  installDbPolicy?: import("../cloudInstallDbPolicy.js").InstallDbPolicy,
+): PortableReplicaTransferReason {
+  if (installDbPolicy === "shared_primary") {
+    return "team_collaborate_attach";
+  }
+  return "portable_install";
 }
 
 export interface PreparePortableReplicaDatabasesResult {
@@ -192,10 +201,21 @@ export async function rebootstrapPendingPortableReplicas(): Promise<RebootstrapP
     if (!isPortableTransferMarker(marker)) {
       continue;
     }
-
     result.attempted += 1;
 
     try {
+      if (marker.reason === "team_collaborate_attach") {
+        const { reseedTursoReplicaFromRemote } = await import(
+          "./tursoReplicaProvision.js"
+        );
+        await reseedTursoReplicaFromRemote(record);
+        result.succeeded += 1;
+        console.log(
+          `[PortableReplica] Pulled publisher primary for ${record.dbId} (${marker.reason})`,
+        );
+        continue;
+      }
+
       const { pushReplicaBootstrapAndReseedVerified } = await import(
         "./tursoReplicaProvision.js"
       );

@@ -54,9 +54,17 @@ const visitor = {
 describe("resolveCloudFileUrl", () => {
   it("serves a published app file over CDN to a logged-out visitor", () => {
     // The Phase 3 exit criterion: a 60 MB video must load for someone with no
-    // account, without a signing round-trip.
+    // account, without a signing round-trip — once the object is CDN-public.
     const d = resolveCloudFileUrl(appRow(), visitor);
     expect(d.kind).toBe("cdn");
+  });
+
+  it("signs for a logged-in reader on a published app (web upload is private in GCS until promoted)", () => {
+    const d = resolveCloudFileUrl(appRow(), {
+      ...visitor,
+      userId: "user-a",
+    });
+    expect(d.kind).toBe("signed");
   });
 
   it("keeps a private file private even when the app is public", () => {

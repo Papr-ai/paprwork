@@ -319,3 +319,67 @@
   opacity: 0.4;
   cursor: default;
 }
+
+.delete-app-modal--busy {
+  pointer-events: none;
+}
+
+.delete-app-modal--busy .delete-app-modal__actions {
+  pointer-events: auto;
+}
+
+.delete-app-modal__progress {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  background: color-mix(in srgb, var(--accent-color, #007aff) 8%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent-color, #007aff) 20%, transparent);
+}
+
+.delete-app-modal__error {
+  margin: 0 0 16px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  color: var(--error-color);
+  background: color-mix(in srgb, var(--error-color) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--error-color) 25%, transparent);
+}
+
+.delete-app-modal__progress-spinner {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 2px solid color-mix(in srgb, var(--accent-color, #007aff) 25%, transparent);
+  border-top-color: var(--accent-color, #007aff);
+  border-radius: 50%;
+  animation: deleteAppModalSpin 0.7s linear infinite;
+}
+
+.delete-app-modal__progress-spinner--inline {
+  display: inline-block;
+  width: 14px;
+  height: 14px;
+  margin-top: 0;
+  margin-right: 8px;
+  vertical-align: -2px;
+}
+
+.delete-app-modal__delete:not(:disabled) {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+@keyframes deleteAppModalSpin {
+  to {
+    transform: rotate(360deg);
+  }
+}

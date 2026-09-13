@@ -5,6 +5,10 @@
 
 import React, { useEffect } from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import { paprCloudStatusDotVariant } from "../../utils/cloudMemoryStatus";
+import { AvatarStatusDot } from "../common/AvatarStatusDot";
+import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
 import "./ProfileFooter.css";
 
@@ -13,15 +17,13 @@ interface ProfileFooterProps {
   onOpenSettings: () => void;
 }
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "";
-  const first = parts[0][0] ?? "";
-  const last = parts.length > 1 ? parts[parts.length - 1][0] ?? "" : "";
-  return (first + last).toUpperCase();
-}
-
 export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterProps) {
+  const planAttention = useCloudMemoryStatusStore((state) => state.planAttention);
+  const planStatus = useCloudMemoryStatusStore((state) => state.status);
+  const statusDotVariant = paprCloudStatusDotVariant(planStatus);
+  const planAttentionHint = planStatus
+    ? `${planStatus.label} — open Billing in Settings`
+    : "Billing needs attention — open Billing in Settings";
   const {
     name,
     imageUrl,
@@ -38,7 +40,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       namespaceName,
       workspaceName,
     }) ?? "";
-  const ini = initials(name);
+  const showPaprStatusDot = Boolean(organizationName.trim()) || planAttention;
 
   useEffect(() => {
     void loadProfile();
@@ -101,52 +103,74 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
 
   return (
     <div className="profile-footer">
-      <button
-        className="profile-footer__avatar"
-        onClick={onOpenProfile}
-        aria-label="Edit profile"
-        title="Edit profile"
-      >
-        {imageUrl ? (
-          <img src={imageUrl} alt={displayName} />
-        ) : ini ? (
-          <span className="profile-footer__initials">{ini}</span>
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.6" />
-            <path
-              d="M4 20c0-3.3 3.6-6 8-6s8 2.7 8 6"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
+      <div className="profile-footer__row">
+        <button
+          className="profile-footer__avatar"
+          onClick={onOpenProfile}
+          aria-label={
+            planAttention
+              ? `Edit profile — ${planAttentionHint}`
+              : showPaprStatusDot
+                ? "Edit profile — Papr logged in"
+                : "Edit profile"
+          }
+          title={
+            planAttention
+              ? planAttentionHint
+              : showPaprStatusDot
+                ? "Papr logged in"
+                : "Edit profile"
+          }
+        >
+          {showPaprStatusDot ? (
+            <AvatarStatusDot
+              variant={statusDotVariant}
+              title={planAttention ? planAttentionHint : "Papr logged in"}
             />
+          ) : null}
+          <UserAvatar
+            imageUrl={imageUrl}
+            displayName={name}
+            alt={displayName}
+            initialsClassName="profile-footer__initials"
+            fallback={
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.6" />
+                <path
+                  d="M4 20c0-3.3 3.6-6 8-6s8 2.7 8 6"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                />
+              </svg>
+            }
+          />
+        </button>
+
+        <button
+          className="profile-footer__id"
+          onClick={onOpenProfile}
+          title={workspaceLabel || undefined}
+        >
+          <span className="profile-footer__name">{displayName}</span>
+          {workspaceLabel ? (
+            <span className="profile-footer__plan">{workspaceLabel}</span>
+          ) : null}
+        </button>
+
+        <button
+          className="profile-footer__more"
+          onClick={onOpenSettings}
+          aria-label={planAttention ? `Settings — ${planAttentionHint}` : "Settings"}
+          title={planAttention ? planAttentionHint : "Settings"}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+            <circle cx="5" cy="12" r="1.6" />
+            <circle cx="12" cy="12" r="1.6" />
+            <circle cx="19" cy="12" r="1.6" />
           </svg>
-        )}
-      </button>
-
-      <button
-        className="profile-footer__id"
-        onClick={onOpenProfile}
-        title={workspaceLabel || undefined}
-      >
-        <span className="profile-footer__name">{displayName}</span>
-        {workspaceLabel ? (
-          <span className="profile-footer__plan">{workspaceLabel}</span>
-        ) : null}
-      </button>
-
-      <button
-        className="profile-footer__more"
-        onClick={onOpenSettings}
-        aria-label="Settings"
-        title="Settings"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <circle cx="5" cy="12" r="1.6" />
-          <circle cx="12" cy="12" r="1.6" />
-          <circle cx="19" cy="12" r="1.6" />
-        </svg>
-      </button>
+        </button>
+      </div>
     </div>
   );
 }

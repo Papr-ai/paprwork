@@ -4,6 +4,12 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
+import {
+  checkPaprCloudFeature,
+  requestPaprCloudFeature,
+  usePaprCloudFeatureStore,
+} from "../../stores/paprCloudFeatureStore";
+import { PaprCloudRequirementsPanel } from "../common/PaprCloudRequirementsPanel";
 import { CloudSyncDetails, type SyncItemsResponse } from "./CloudSyncDetails";
 import { ReplicaE2ePanel } from "./ReplicaE2ePanel";
 import {
@@ -58,6 +64,12 @@ function statusMeta(s?: string): { color: string; label: string } {
 }
 
 export function CloudSyncTab() {
+  const paprCloudContext = usePaprCloudFeatureStore((state) => state.context);
+  const cloudSyncAccess = paprCloudContext
+    ? checkPaprCloudFeature("cloud_sync")
+    : null;
+  const cloudSyncBlocked =
+    cloudSyncAccess !== null && cloudSyncAccess.allowed === false;
   const cached = readCloudSyncTabSnapshot();
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(true);
   const [cloudAutoPublishEnabled, setCloudAutoPublishEnabled] = useState(true);
@@ -225,6 +237,18 @@ export function CloudSyncTab() {
           independently for each app.
         </p>
 
+        <div className="cloud-sync-tab__requirements">
+          <PaprCloudRequirementsPanel featureId="cloud_sync" />
+        </div>
+
+        {cloudSyncEnabled && cloudSyncBlocked ? (
+          <div className="cloud-sync-tab__paused-note" role="status">
+            <strong>Cloud sync paused.</strong> Preferences stay on, but uploads,
+            vault sync, and publish will not run until Papr Cloud billing is
+            restored. Local apps and chat on this device still work.
+          </div>
+        ) : null}
+
         <div className="cloud-sync-tab__panel">
           <h3 className="cloud-sync-tab__panel-title">Preferences</h3>
           <p className="cloud-sync-tab__panel-desc">
@@ -237,10 +261,14 @@ export function CloudSyncTab() {
               checked={cloudSyncEnabled}
               disabled={saving}
               onChange={(e) => {
+                const enabled = e.target.checked;
+                if (enabled && !requestPaprCloudFeature("cloud_sync")) {
+                  return;
+                }
                 void savePreference(
-                  { cloudSyncEnabled: e.target.checked },
+                  { cloudSyncEnabled: enabled },
                   setCloudSyncEnabled,
-                  e.target.checked,
+                  enabled,
                 );
               }}
             />

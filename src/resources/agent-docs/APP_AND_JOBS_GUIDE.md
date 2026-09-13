@@ -212,7 +212,9 @@ Publish access and per-user DB isolation are **independent**. A team-visible app
 | `read_app_data_sources` | List linked data sources for an app |
 | `export_app_bundle` | Package app + jobs + schemas as portable app bundle |
 | `import_app_bundle` | Install app bundle from local path or GitHub URL |
-| `list_app_bundles` | List all installed app bundles |
+| `list_community_apps` | Browse forkable Papr Cloud apps (Community / Team Apps tabs) |
+| `install_cloud_app` | Fork or track a published cloud app into the workspace |
+| `list_app_bundles` | List **local** bundles in `$PAPR_HOME/bundles/` (from `export_app_bundle`, not Community discovery) |
 | `get_app_bundle_info` | Preview app bundle contents without importing |
 
 **Mini-App REST APIs** (called with `fetch()` from within the app — no auth, same-origin):
@@ -2846,9 +2848,11 @@ App bundles are Paprwork's sharing format - portable packages containing a mini-
 
 | Tool | Purpose |
 |------|---------|
+| `list_community_apps` | Browse forkable Papr Cloud apps (Community / Team Apps tabs; requires Papr login) |
+| `install_cloud_app` | Fork or track a published cloud app into the workspace |
 | `export_app_bundle` | Package an app with its jobs and schemas into a portable app bundle |
 | `import_app_bundle` | Install an app bundle from a local path or GitHub URL |
-| `list_app_bundles` | List all installed app bundles |
+| `list_app_bundles` | List **local** bundles in `$PAPR_HOME/bundles/` (exports you created — not the Community catalog) |
 | `get_app_bundle_info` | Preview app bundle contents without importing |
 
 ### Exporting an App Bundle
@@ -2917,6 +2921,19 @@ import_app_bundle({
 - Set `renameConflicts: false` to block import on conflicts
 - Manual rename via `update_job` if needed after import
 
+### Discover Community Apps (install, not publish)
+
+Browse forkable apps — same catalog as the **Community Apps** and **Team Apps** tabs (requires Papr login):
+
+```javascript
+list_community_apps()
+list_community_apps({ scope: "team", query: "dashboard" })
+```
+
+Each result includes `namespaceId`, `slug`, and an `installCommand`. Run `install_cloud_app({ namespaceId, slug, mode: "fork" })` to customize locally.
+
+**Do NOT** use `list_app_bundles()`, `paprwork-community-apps/registry.json`, or curl to `apps.papr.ai` for discovery.
+
 ### Sharing Workflow — Publish to the Community
 
 **Prefer Papr Cloud** when Cloud Sync and Papr login are enabled (recommended):
@@ -2962,7 +2979,7 @@ If `publish_cloud_app` returns an error (`Cloud Sync is disabled` or `Papr login
 
 **Fallback — open-source export** (works without Cloud Sync):
 
-**IMPORTANT:** When cloud is unavailable or the user wants OSS distribution, publish to the official **paprwork-community-apps** repo so it appears in the Community Apps tab for all Paprwork users.
+**IMPORTANT:** When cloud is unavailable or the user wants OSS distribution, publish to **paprwork-community-apps** via GitHub PR. This is a **legacy fallback** — it does **not** populate the in-app Community Apps tab (use `publish_cloud_app` with `codeAccess: "install"` for that).
 
 **1. Call the `export_app_bundle` tool (REQUIRED — do NOT manually create bundles):**
 ```javascript
@@ -3117,16 +3134,13 @@ Returns:
 - Database schemas (tables, columns)
 - Version requirements
 
-### List Installed App Bundles
+### List Local App Bundles (exports only)
 
 ```javascript
 list_app_bundles()
 ```
 
-Shows all app bundles in `$PAPR_HOME/bundles/` with:
-- Bundle ID, name, version
-- Creation date
-- Full path
+Lists bundles **you exported** to `$PAPR_HOME/bundles/` via `export_app_bundle` — not the Papr Cloud Community catalog. To browse forkable community apps, use `list_community_apps()` instead.
 
 ### Best Practices
 

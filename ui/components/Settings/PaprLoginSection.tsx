@@ -14,13 +14,28 @@ import {
   MEMORY_AUDIENCE_LABELS,
   type MemoryAudience,
 } from "../../constants/memoryScope";
-import { PaprPlanSection } from "./PaprPlanSection";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import {
+  formatPaprLoginStatusLine,
+  paprCloudStatusDotVariant,
+} from "../../utils/cloudMemoryStatus";
+import { AvatarStatusDot } from "../common/AvatarStatusDot";
+import { openPaprPlanSettings } from "../../utils/paprCloudFeatureUi";
 import { ProfileAiConnections } from "./ProfileAiConnections";
 import { formatNamespaceOptionLabel } from "./formatNamespaceOptionLabel";
 import {
   OrgNamespaceSetup,
   type OrgNamespaceSetupRequest,
 } from "../Auth/OrgNamespaceSetup";
+import {
+  WORKSPACE_ROLE_PRIORITY,
+  canAssignWorkspaceRole,
+  canModifyMemberRole,
+  formatWorkspaceRoleLabel,
+  normalizeWorkspaceRole,
+  type WorkspaceRoleName,
+} from "../../../src/core/utils/workspaceRolePermissions";
+import { UserAvatar } from "../common/UserAvatar";
 import "./PaprLoginSection.css";
 
 interface Namespace {
@@ -109,13 +124,17 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const [namespacesLoaded, setNamespacesLoaded] = useState(false);
 
   const [schemas, setSchemas] = useState<SchemaInfo[]>([]);
+  const [schemasError, setSchemasError] = useState<string | null>(null);
   const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
   const [schemasLoading, setSchemasLoading] = useState(false);
   const [expandedSchema, setExpandedSchema] = useState<string | null>(null);
 
   const [workspaceName, setWorkspaceName] = useState<string | null>(null);
   const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
+  const [workspaceCurrentUserId, setWorkspaceCurrentUserId] = useState<string | null>(null);
+  const [workspaceCurrentUserRole, setWorkspaceCurrentUserRole] = useState<string>("member");
   const [workspaceMembersLoading, setWorkspaceMembersLoading] = useState(false);
+  const [roleUpdatingUserId, setRoleUpdatingUserId] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteLoading, setInviteLoading] = useState(false);
   const [inviteMessage, setInviteMessage] = useState<string | null>(null);
@@ -125,6 +144,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
   const switchingOrganizationRef = useRef(false);
   const switchingNamespaceRef = useRef(false);
   const activeOrganizationIdRef = useRef<string | null>(null);
+  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
 
   useEffect(() => {
     activeOrganizationIdRef.current = activeOrganizationId;
@@ -211,6 +231,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
 
   const loadSchemas = useCallback(async () => {
     setSchemasLoading(true);
+    setSchemasError(null);
     try {
       const fetchSchemas = () =>
         gateway.send("memory:list-schemas", {}, { timeoutMs: 45_000 });
@@ -231,13 +252,14 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       const data = response.data as
         | { schemas?: SchemaInfo[]; error?: string }
         | undefined;
-      if (data?.error) {
-        console.warn("[PaprLoginSection] Schema list warning:", data.error);
-      }
       setSchemas(data?.schemas ?? []);
+      setSchemasError(data?.error?.trim() ? data.error.trim() : null);
     } catch (err) {
       console.error("Failed to load schemas:", err);
       setSchemas([]);
+      setSchemasError(
+        err instanceof Error ? err.message : "Failed to load schemas",
+      );
     } finally {
       setSchemasLoading(false);
     }
@@ -281,8 +303,12 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       if (result.success) {
         setWorkspaceName(result.workspaceName || null);
         setWorkspaceMembers(result.members || []);
+        setWorkspaceCurrentUserId(result.currentUserId || null);
+        setWorkspaceCurrentUserRole(result.currentUserRole || "member");
       } else {
         setWorkspaceMembers([]);
+        setWorkspaceCurrentUserId(null);
+        setWorkspaceCurrentUserRole("member");
         setInviteMessage(result.error || "Could not load team members");
       }
     } catch (err) {
@@ -292,6 +318,48 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setWorkspaceMembersLoading(false);
     }
   }, []);
+
+  const handleMemberRoleChange = async (
+    member: WorkspaceMember,
+    newRole: WorkspaceRoleName,
+  ) => {
+    if (!workspaceCurrentUserId) {
+      setInviteMessage("Could not verify your team permissions");
+      return;
+    }
+
+    const permission = canAssignWorkspaceRole(newRole, {
+      currentUserId: workspaceCurrentUserId,
+      currentUserRole: workspaceCurrentUserRole,
+      targetMember: member,
+      members: workspaceMembers,
+    });
+    if (!permission.allowed) {
+      setInviteMessage(permission.reason);
+      return;
+    }
+
+    setRoleUpdatingUserId(member.user.objectId);
+    setInviteMessage(null);
+    setError(null);
+    try {
+      const result = await window.electronAPI.papr.updateWorkspaceMemberRole({
+        userId: member.user.objectId,
+        currentRole: member.user.role,
+        newRole,
+      });
+      if (result.success) {
+        setInviteMessage(`Updated ${member.user.displayName} to ${formatWorkspaceRoleLabel(newRole)}`);
+        await loadWorkspaceMembers();
+      } else {
+        setInviteMessage(result.error || "Failed to update role");
+      }
+    } catch (err) {
+      setInviteMessage(err instanceof Error ? err.message : "Failed to update role");
+    } finally {
+      setRoleUpdatingUserId(null);
+    }
+  };
 
   const handleInviteMember = async () => {
     const email = inviteEmail.trim();
@@ -384,6 +452,7 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           setActiveOrganizationId(workspaceId);
           setActiveNamespaceId(result.activeNamespaceId || null);
           setSchemas([]);
+          setSchemasError(null);
           setWorkspaceMembers([]);
           setWorkspaceName(null);
           setInviteEmail("");
@@ -655,6 +724,10 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
     const activeNs = populatedGroups
       .flatMap((group) => group.namespaces)
       .find((ns) => ns.id === activeNamespaceId);
+    const compactLoginStatus = formatPaprLoginStatusLine({
+      connectedSince: profileFields?.connectedSince,
+      cloudStatus,
+    });
 
     return (
       <div className={`papr-section${profileFields ? " papr-section--profile" : ""}`}>
@@ -671,8 +744,8 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
         ) : (
           <div className="papr-section__header">
             <div className="papr-section__status">
-              <span className="papr-section__dot papr-section__dot--connected" />
-              <span className="papr-section__status-text">Connected to Papr</span>
+              <span className={`papr-section__dot ${compactLoginStatus.dotClass}`} />
+              <span className="papr-section__status-text">{compactLoginStatus.text}</span>
               {userEmail && (
                 <span className="papr-section__email">{userEmail}</span>
               )}
@@ -812,26 +885,28 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
           </p>
         </div>
 
-        <PaprPlanSection key={`${activeOrganizationId ?? "org"}-${activeNamespaceId ?? "ns"}`} />
-
         {/* Team members — needed for My team cloud app access */}
         <WorkspaceTeamSection
           workspaceName={workspaceName || undefined}
           members={workspaceMembers}
+          currentUserId={workspaceCurrentUserId}
+          currentUserRole={workspaceCurrentUserRole}
           loading={workspaceMembersLoading}
           inviteEmail={inviteEmail}
           inviteLoading={inviteLoading}
           inviteMessage={inviteMessage}
+          roleUpdatingUserId={roleUpdatingUserId}
           onInviteEmailChange={setInviteEmail}
           onInvite={handleInviteMember}
+          onRoleChange={handleMemberRoleChange}
           onRefresh={() => void loadWorkspaceMembers()}
-          onOpenDashboard={() => void window.electronAPI.papr.openWorkspaceTeam()}
         />
 
         {/* Schemas section */}
         <SchemasSection
           schemas={schemas}
           loading={schemasLoading}
+          error={schemasError}
           expandedSchema={expandedSchema}
           onToggleSchema={setExpandedSchema}
           onRefresh={loadSchemas}
@@ -1006,14 +1081,9 @@ function ProfileIdentitySection({
   const hasProfileInfo = name.trim().length > 0 || email.trim().length > 0;
   const [isEditing, setIsEditing] = useState(() => !hasProfileInfo);
   const editSnapshotRef = useRef({ name, email });
-
-  const connectedLabel = connectedSince
-    ? new Date(connectedSince).toLocaleDateString(undefined, {
-        month: "short",
-        day: "numeric",
-        year: "numeric",
-      })
-    : null;
+  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
+  const loginStatus = formatPaprLoginStatusLine({ connectedSince, cloudStatus });
+  const avatarStatusVariant = paprCloudStatusDotVariant(cloudStatus);
 
   const displayEmail = email.trim() || userEmail || "";
   const displayName = name.trim() || "Add your name";
@@ -1054,16 +1124,24 @@ function ProfileIdentitySection({
             onClick={() => fileInputRef.current?.click()}
             aria-label="Change profile photo"
           >
-            {imageUrl ? (
-              <img src={imageUrl} alt="" className="profile-photo-img" />
-            ) : (
-              <div className="profile-photo-placeholder">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                  <circle cx="12" cy="7" r="4" />
-                </svg>
-              </div>
-            )}
+            {isLoggedIn ? (
+              <AvatarStatusDot variant={avatarStatusVariant} size="lg" />
+            ) : null}
+            <UserAvatar
+              imageUrl={imageUrl}
+              displayName={name}
+              email={displayEmail}
+              className="profile-photo-img"
+              initialsClassName="profile-photo-placeholder profile-photo-placeholder--initials"
+              fallback={
+                <div className="profile-photo-placeholder">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </div>
+              }
+            />
           </button>
 
           <div className="profile-merged__display-info">
@@ -1092,8 +1170,17 @@ function ProfileIdentitySection({
             )}
             {isLoggedIn && (
               <div className="profile-merged__display-status">
-                <span className="papr-section__dot papr-section__dot--connected" />
-                <span>Papr connected{connectedLabel ? ` · ${connectedLabel}` : ""}</span>
+                <span className={`papr-section__dot ${loginStatus.dotClass}`} />
+                <span className="profile-merged__display-status-text">{loginStatus.text}</span>
+                {cloudStatus ? (
+                  <button
+                    type="button"
+                    className="profile-merged__billing-link"
+                    onClick={openPaprPlanSettings}
+                  >
+                    Billing
+                  </button>
+                ) : null}
               </div>
             )}
           </div>
@@ -1140,16 +1227,22 @@ function ProfileIdentitySection({
             className="profile-photo-preview"
             onClick={() => fileInputRef.current?.click()}
           >
-            {imageUrl ? (
-              <img src={imageUrl} alt="Profile" className="profile-photo-img" />
-            ) : (
-              <div className="profile-photo-placeholder">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                  <circle cx="12" cy="7" r="4" />
-                </svg>
-              </div>
-            )}
+            <UserAvatar
+              imageUrl={imageUrl}
+              displayName={name}
+              email={displayEmail}
+              alt="Profile"
+              className="profile-photo-img"
+              initialsClassName="profile-photo-placeholder profile-photo-placeholder--initials"
+              fallback={
+                <div className="profile-photo-placeholder">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                    <circle cx="12" cy="7" r="4" />
+                  </svg>
+                </div>
+              }
+            />
           </div>
           <div className="profile-photo-actions profile-photo-actions--compact">
             <button
@@ -1241,25 +1334,31 @@ function Spinner() {
 function WorkspaceTeamSection({
   workspaceName,
   members,
+  currentUserId,
+  currentUserRole,
   loading,
   inviteEmail,
   inviteLoading,
   inviteMessage,
+  roleUpdatingUserId,
   onInviteEmailChange,
   onInvite,
+  onRoleChange,
   onRefresh,
-  onOpenDashboard,
 }: {
   workspaceName?: string;
   members: WorkspaceMember[];
+  currentUserId: string | null;
+  currentUserRole: string;
   loading: boolean;
   inviteEmail: string;
   inviteLoading: boolean;
   inviteMessage: string | null;
+  roleUpdatingUserId: string | null;
   onInviteEmailChange: (value: string) => void;
   onInvite: () => void;
+  onRoleChange: (member: WorkspaceMember, newRole: WorkspaceRoleName) => void;
   onRefresh: () => void;
-  onOpenDashboard: () => void;
 }) {
   const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -1336,34 +1435,57 @@ function WorkspaceTeamSection({
           )}
 
           <ul className="papr-team__list">
-            {members.map((member) => (
-              <li key={member.objectId} className="papr-team__member">
-                <div className="papr-team__avatar">
-                  {member.user.profileImageUrl ? (
-                    <img src={member.user.profileImageUrl} alt="" />
+            {members.map((member) => {
+              const role = normalizeWorkspaceRole(member.user.role);
+              const canEditRole =
+                currentUserId !== null &&
+                canModifyMemberRole({
+                  currentUserId,
+                  currentUserRole,
+                  targetMember: member,
+                  members,
+                });
+              const isUpdatingRole = roleUpdatingUserId === member.user.objectId;
+
+              return (
+                <li key={member.objectId} className="papr-team__member">
+                  <div className="papr-team__avatar">
+                    <UserAvatar
+                      imageUrl={member.user.profileImageUrl}
+                      displayName={member.user.displayName}
+                      email={member.user.email}
+                    />
+                  </div>
+                  <div className="papr-team__member-info">
+                    <span className="papr-team__member-name">{member.user.displayName}</span>
+                    <span className="papr-team__member-email">{member.user.email}</span>
+                  </div>
+                  {canEditRole ? (
+                    <select
+                      className="papr-team__role-select"
+                      value={role}
+                      disabled={loading || isUpdatingRole}
+                      aria-label={`Role for ${member.user.displayName}`}
+                      onChange={(event) =>
+                        onRoleChange(member, event.target.value as WorkspaceRoleName)
+                      }
+                    >
+                      {WORKSPACE_ROLE_PRIORITY.map((option) => (
+                        <option key={option} value={option}>
+                          {formatWorkspaceRoleLabel(option)}
+                        </option>
+                      ))}
+                    </select>
                   ) : (
-                    <span>{member.user.displayName.charAt(0).toUpperCase()}</span>
+                    <span className="papr-team__role">{formatWorkspaceRoleLabel(role)}</span>
                   )}
-                </div>
-                <div className="papr-team__member-info">
-                  <span className="papr-team__member-name">{member.user.displayName}</span>
-                  <span className="papr-team__member-email">{member.user.email}</span>
-                </div>
-                <span className="papr-team__role">{member.user.role}</span>
-              </li>
-            ))}
+                </li>
+              );
+            })}
             {!loading && members.length === 0 && (
               <li className="papr-team__empty">No team members loaded yet.</li>
             )}
           </ul>
-
-          <button
-            type="button"
-            className="papr-team__dashboard-link"
-            onClick={onOpenDashboard}
-          >
-            Manage roles in dashboard
-          </button>
         </div>
       )}
     </div>
@@ -1373,6 +1495,7 @@ function WorkspaceTeamSection({
 function SchemasSection({
   schemas,
   loading,
+  error,
   expandedSchema,
   onToggleSchema,
   onRefresh,
@@ -1380,6 +1503,7 @@ function SchemasSection({
 }: {
   schemas: SchemaInfo[];
   loading: boolean;
+  error?: string | null;
   expandedSchema: string | null;
   onToggleSchema: (id: string | null) => void;
   onRefresh: () => void;
@@ -1441,11 +1565,17 @@ function SchemasSection({
 
       {!isCollapsed && (
         <>
-          {loading && schemas.length === 0 && (
+          {loading && schemas.length === 0 && !error && (
             <div className="papr-schemas__empty">Loading schemas...</div>
           )}
 
-          {!loading && schemas.length === 0 && (
+          {error && (
+            <div className="papr-schemas__empty papr-schemas__empty--error">
+              {error}
+            </div>
+          )}
+
+          {!loading && schemas.length === 0 && !error && (
             <div className="papr-schemas__empty">
               No schemas in this namespace. The agent can create schemas using <code>register_schema</code>.
             </div>

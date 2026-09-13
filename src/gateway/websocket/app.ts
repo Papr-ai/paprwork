@@ -281,6 +281,11 @@ export async function setupAppHandlers(
 
       case "app:delete": {
         const payload = message.payload as DeleteAppPayload;
+        if (payload.confirmed === true) {
+          console.log(
+            `[Gateway] app:delete confirmed for ${payload.appId.slice(0, 8)}…`,
+          );
+        }
         const result = await appService.deleteApp(payload.appId, {
           unpublishFromCloud: payload.unpublishFromCloud === true,
           deleteLinkedJobs: payload.deleteLinkedJobs === true,

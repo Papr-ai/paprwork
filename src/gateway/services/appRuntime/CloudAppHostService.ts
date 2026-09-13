@@ -748,10 +748,33 @@ export class CloudAppHostService {
 
       // Turso hands back untyped rows; app_files is our own schema, so the
       // shape is known even though the adapter cannot express it.
-      const row = (result?.rows?.[0] ?? null) as unknown as AppFileRow | null;
+      let row = (result?.rows?.[0] ?? null) as unknown as AppFileRow | null;
+
       const { resolveCloudFileUrl, buildCdnUrl } = await import(
         "../appFiles/cloudFileUrl.js"
       );
+
+      if (
+        row &&
+        row.upload_state !== "verified" &&
+        runtimeAuth.paprApiKey
+      ) {
+        const { tryFinalizeBrowserUpload } = await import(
+          "../appFiles/AppFilesService.js"
+        );
+        const filesDb = this.cloudFilesDb(
+          access,
+          runtimeAuth,
+          appId,
+          config,
+          sourceId,
+        );
+        row =
+          (await tryFinalizeBrowserUpload(filesDb, row, {
+            appId,
+            memoryApiKey: runtimeAuth.paprApiKey,
+          })) ?? row;
+      }
 
       const decision = resolveCloudFileUrl(row, {
         requestedAppId: appId,
@@ -774,7 +797,9 @@ export class CloudAppHostService {
       }
 
       const { createReadUrl } = await import("../appFiles/appFilesClient.js");
-      const { url } = await createReadUrl(decision.appId, decision.objectKey);
+      const { url } = await createReadUrl(decision.appId, decision.objectKey, {
+        memoryApiKey: runtimeAuth.paprApiKey,
+      });
       res.json({ location: { kind: "cloud" }, url });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });

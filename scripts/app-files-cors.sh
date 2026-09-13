@@ -34,7 +34,8 @@ cat > "$CONFIG" <<'JSON'
     "origin": [
       "https://apps.papr.ai",
       "https://files.papr.ai",
-      "http://localhost:18789"
+      "http://localhost:18789",
+      "http://127.0.0.1:18789"
     ],
     "method": ["GET", "HEAD", "PUT", "POST"],
     "responseHeader": [

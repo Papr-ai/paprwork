@@ -7,6 +7,7 @@
 import React, { useEffect } from "react";
 import type { ChatMessage } from "../../stores/chatStore";
 import { useChatStore } from "../../stores/chatStore";
+import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
 import { ThinkingCard } from "./ThinkingCard";
 import { ExploringCard } from "./ExploringCard";
@@ -584,11 +585,18 @@ function renderSequence(
       shouldShowWebviewSessionPreview(webviewSessionPreviewState);
 
     if (hasWorkingContent || delegationCardElements.length > 0) {
-      const hasCallingTool = sequence.some(
-        (item) =>
-          item.type === "tool" &&
-          (item.data as { status?: string }).status === "calling",
-      );
+      const hasCallingTool = sequence.some((item) => {
+        if (item.type !== "tool") return false;
+        const data = item.data as {
+          status?: string;
+          output?: unknown;
+          result?: unknown;
+        };
+        if (data.status !== "calling") return false;
+        if (data.output !== undefined && data.output !== null) return false;
+        if (data.result !== undefined && data.result !== null) return false;
+        return true;
+      });
       const isExploring =
         message.isStreaming || hasCallingTool || hasActiveDelegation;
 
@@ -742,18 +750,19 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
       {/* Avatar - matches v1 exactly */}
       <div className="message-avatar-container">
         {isUser ? (
-          // User avatar - profile photo or initials fallback
-          userImageUrl ? (
-            <img
-              src={userImageUrl}
-              alt={userName || "User"}
-              className="message-avatar-user"
-            />
-          ) : (
-            <div className="message-avatar-user message-avatar-user--initials">
-              {(userName || userEmail || "U").charAt(0).toUpperCase()}
-            </div>
-          )
+          <UserAvatar
+            imageUrl={userImageUrl}
+            displayName={userName}
+            email={userEmail}
+            alt={userName || "User"}
+            className="message-avatar-user"
+            initialsClassName="message-avatar-user message-avatar-user--initials"
+            fallback={
+              <div className="message-avatar-user message-avatar-user--initials">
+                U
+              </div>
+            }
+          />
         ) : (
           // Assistant avatar - Papr logo (actual v1 logo)
           <div className="message-avatar-assistant">

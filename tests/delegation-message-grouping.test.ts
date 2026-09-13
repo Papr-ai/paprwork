@@ -30,6 +30,63 @@ describe("groupDelegationFollowUpMessages", () => {
     expect(grouped[0]?.delegationFollowUps).toEqual([followUp]);
   });
 
+  test("folds deferred follow-up onto delegate by delegation id", () => {
+    const delegationMessage: ChatMessage = {
+      id: "msg-1",
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "t1",
+          toolName: "delegate_task",
+          args: {},
+          status: "success",
+          result: JSON.stringify({
+            id: "del-123",
+            task: "Architect brief",
+            status: "completed",
+          }),
+        },
+      ],
+    };
+    const middleUser: ChatMessage = {
+      id: "msg-2",
+      role: "user",
+      content: "Keep going",
+    };
+    const middleAssistant: ChatMessage = {
+      id: "msg-3",
+      role: "assistant",
+      content: "Building the prototype now.",
+    };
+    const syntheticTrigger: ChatMessage = {
+      id: "msg-4",
+      role: "user",
+      content:
+        "[Sub-agent delegation finished for del-123]\n\nThe Product Architect completed.",
+    };
+    const followUp: ChatMessage = {
+      id: "msg-5",
+      role: "assistant",
+      content: "Product Architect finished — full report is on the card above.",
+    };
+
+    const grouped = groupDelegationFollowUpMessages([
+      delegationMessage,
+      middleUser,
+      middleAssistant,
+      syntheticTrigger,
+      followUp,
+    ]);
+
+    expect(grouped.map((message) => message.id)).toEqual([
+      "msg-1",
+      "msg-2",
+      "msg-3",
+    ]);
+    expect(grouped[0]?.delegationFollowUps).toEqual([followUp]);
+  });
+
   test("stops folding when a user message appears", () => {
     const delegationMessage: ChatMessage = {
       id: "msg-1",

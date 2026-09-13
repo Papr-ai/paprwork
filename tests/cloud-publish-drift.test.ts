@@ -326,6 +326,36 @@ describe("cloudPublishDrift", () => {
     expect(reasons).toContain("linkPermission:read→read_write");
   });
 
+  it("detectAutoPublishDrift includes catalogAutomation drift", () => {
+    const reasons = detectAutoPublishDrift({
+      memory: {
+        enabled: true,
+        visibility: "public_read",
+        slug: "daily-digest",
+        catalogAutomation: {
+          scheduleLabel: "every hour",
+          scheduledJobCount: 1,
+          hasAgentJob: true,
+          cardLine: "App plus a job that runs every hour",
+        },
+      },
+      prefs: {
+        autoPublish: true,
+        accessMode: "public_read",
+        loginAccess: "public",
+        externalLink: "off",
+      },
+      expectedSlug: "daily-digest",
+      localCatalogAutomation: {
+        scheduleLabel: "every weekday at 8 am",
+        scheduledJobCount: 1,
+        hasAgentJob: true,
+        cardLine: "App plus a job that runs every weekday at 8 am",
+      },
+    });
+    expect(reasons).toContain("catalogAutomation");
+  });
+
   it("detectPublishDrift includes catalog key drift", () => {
     const reasons = detectPublishDrift({
       memory: {

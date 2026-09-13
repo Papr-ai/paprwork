@@ -3,9 +3,15 @@
  * Used by model picker to gray out models user doesn't have access to
  */
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useOAuth } from "./useOAuth";
 import { useCustomKeys } from "./useCustomKeys";
+import { isPaprProxyOnlyModel } from "../../src/core/constants/paprCloudFeatures";
+import { resolvePaprCloudFeatureAccess } from "../../src/core/utils/paprCloudFeatureAccess";
+import { usePaprCloudFeatureStore } from "../stores/paprCloudFeatureStore";
+import { resolveGlobalDefaultForAuth } from "../utils/authAwareModelDefaults";
+import { writeNewChatDefaultModel } from "../utils/chatModelMemory";
+import { gateway } from "../src/lib/gateway";
 
 export interface AuthStatus {
   openai: { oauth: boolean; apiKey: boolean };
@@ -37,6 +43,7 @@ export function useAuthStatus() {
   const { keys, loadKeys } = useCustomKeys();
 
   const [paprLoggedIn, setPaprLoggedIn] = useState(false);
+  const paprCloudContext = usePaprCloudFeatureStore((state) => state.context);
 
   const [status, setStatus] = useState<AuthStatus>({
     openai: { oauth: false, apiKey: false },
@@ -101,39 +108,58 @@ export function useAuthStatus() {
     refresh();
   }, [refresh]);
 
+  const prevOAuthRef = useRef<{ anthropic: boolean; openai: boolean } | null>(
+    null,
+  );
+
+  // Reseed global new-chat default when OAuth connects or disconnects.
+  useEffect(() => {
+    const current = {
+      anthropic: status.anthropic.oauth,
+      openai: status.openai.oauth,
+    };
+    const previous = prevOAuthRef.current;
+    prevOAuthRef.current = current;
+    if (previous === null) {
+      return;
+    }
+
+    const oauthChanged =
+      previous.anthropic !== current.anthropic ||
+      previous.openai !== current.openai;
+    if (!oauthChanged) {
+      return;
+    }
+
+    const modelId = resolveGlobalDefaultForAuth(status);
+    writeNewChatDefaultModel(modelId);
+    gateway
+      .send("settings:save-ui-preferences", { lastModelId: modelId })
+      .catch(() => {});
+  }, [status.anthropic.oauth, status.openai.oauth, status]);
+
   const isModelAvailable = useCallback(
     (model: { id: string; provider: string; requiresApiKey: string }) => {
       // Ollama runs locally, always available (no API key required)
       if (model.provider === "ollama") {
         return true;
       }
-      
-      // Papr proxy enables ALL cloud providers (OpenAI, Anthropic, Google)
-      if (status.paprProxy) {
+
+      if (isPaprProxyOnlyModel(model.provider)) {
+        if (!status.paprProxy) {
+          return false;
+        }
+        if (paprCloudContext) {
+          return resolvePaprCloudFeatureAccess("papr_ai_proxy", paprCloudContext)
+            .allowed;
+        }
         return true;
       }
 
-      // GLM requires Papr login (proxied through memory server)
-      if (model.provider === "zai") {
-        return status.paprProxy;
+      // Direct provider auth (OAuth / BYOK) — no Papr Cloud subscription required
+      if (model.provider === "google" && status.google.apiKey) {
+        return true;
       }
-
-      // Groq models require Papr login (proxied through memory server)
-      if (model.provider === "groq") {
-        return status.paprProxy;
-      }
-
-      // Moonshot Kimi models require Papr login (proxied through memory server)
-      if (model.provider === "moonshot") {
-        return status.paprProxy;
-      }
-
-      // gpt-5.3-codex retired on ChatGPT OAuth — requires Platform API key
-      if (model.id === "gpt-5.3-codex") {
-        return status.openai.apiKey;
-      }
-      
-      // Otherwise check provider-specific auth
       if (model.provider === "openai-codex") {
         return status.openai.oauth;
       }
@@ -143,12 +169,27 @@ export function useAuthStatus() {
       if (model.provider === "anthropic") {
         return status.anthropic.oauth || status.anthropic.apiKey;
       }
+
+      // Papr proxy routes models without direct auth — requires active subscription
+      if (status.paprProxy) {
+        if (paprCloudContext) {
+          return resolvePaprCloudFeatureAccess("papr_ai_proxy", paprCloudContext)
+            .allowed;
+        }
+        return true;
+      }
+
+      // gpt-5.3-codex retired on ChatGPT OAuth — requires Platform API key
+      if (model.id === "gpt-5.3-codex") {
+        return status.openai.apiKey;
+      }
+
       if (model.provider === "google") {
         return status.google.apiKey;
       }
       return false;
     },
-    [status],
+    [status, paprCloudContext],
   );
 
   return {

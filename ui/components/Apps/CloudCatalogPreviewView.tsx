@@ -173,7 +173,7 @@ export function CloudCatalogPreviewView({
     };
   }, [preview.liveUrl, preview.namespaceId, preview.slug]);
 
-  const showCustomize = useMemo(() => {
+  const showPersonalize = useMemo(() => {
     if (!catalogEntry) return false;
     const localAppId = resolveLocalAppId(catalogEntry);
     return canInstallCloudCatalogEntry(catalogEntry, localAppId);
@@ -282,7 +282,7 @@ export function CloudCatalogPreviewView({
     setIframeLoadKey((key) => key + 1);
   }, []);
 
-  const handleCustomize = useCallback(() => {
+  const handlePersonalize = useCallback(() => {
     if (!catalogEntry) return;
     startCloudInstall(catalogEntry);
   }, [catalogEntry, startCloudInstall]);
@@ -315,14 +315,16 @@ export function CloudCatalogPreviewView({
         onRefresh={refreshPreview}
         refreshDisabled={phase === "loading"}
         refreshTitle="Refresh web preview"
-        onOpenInBrowser={() => void openInBrowser()}
+        onOpenInBrowser={
+          showPersonalize ? undefined : () => void openInBrowser()
+        }
         onCopySuccess={notifyLinkCopied}
         onCopyError={notifyLinkCopyFailed}
         primaryAction={
-          showCustomize
+          showPersonalize
             ? {
-                label: isInstalling ? "Installing…" : "Customize",
-                onClick: handleCustomize,
+                label: isInstalling ? "Installing…" : "Personalize",
+                onClick: handlePersonalize,
                 disabled: isInstalling,
               }
             : undefined
@@ -378,13 +380,14 @@ export function CloudCatalogPreviewView({
 
       {installModeEntry ? (
         <CloudCatalogInstallModal
-          entry={installModeEntry}
-          installing={installingId === installModeEntry.catalogId}
+          entry={installModeEntry.entry}
+          catalogScope={installModeEntry.catalogScope}
+          installing={installingId === installModeEntry.entry.catalogId}
           onClose={() => setInstallModeEntry(null)}
           onSelectMode={(mode) => {
-            const target = installModeEntry;
+            const { entry: target, catalogScope } = installModeEntry;
             setInstallModeEntry(null);
-            void installCloudApp(target, mode);
+            void installCloudApp(target, mode, catalogScope);
           }}
         />
       ) : null}

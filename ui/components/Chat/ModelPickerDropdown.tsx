@@ -10,6 +10,12 @@ import {
   getRecommendedQwenModel,
   type AIModel,
 } from "../../constants/models";
+import { isPaprProxyOnlyModel } from "../../../src/core/constants/paprCloudFeatures";
+import {
+  checkPaprCloudFeature,
+} from "../../stores/paprCloudFeatureStore";
+import { showPaprCloudFeatureLock } from "../../utils/paprCloudFeatureUi";
+import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 
 interface ModelPickerDropdownProps {
   currentModelId: string;
@@ -48,9 +54,7 @@ function ModelPickerRow({
       onClick={onSelect}
       title={
         !available
-          ? model.id === "gpt-5.3-codex"
-            ? "Requires OpenAI API key — not available via ChatGPT OAuth"
-            : "Add API key or connect OAuth in Settings"
+          ? getUnavailableModelMessage(model)
           : ramTight
             ? "May need more RAM than this device"
             : needsInstall
@@ -129,14 +133,17 @@ export function ModelPickerDropdown({
   const [showLocal, setShowLocal] = useState(false);
 
   const ollamaModels = CHAT_MODELS.filter((model) => model.provider === "ollama");
+  const accessibleOllamaModels = isModelAvailable
+    ? ollamaModels.filter((model) => isModelAvailable(model))
+    : ollamaModels;
   const recommendedLocalId =
     hostTotalRamGb !== null
       ? getRecommendedQwenModel(hostTotalRamGb)
       : "qwen3.5:9b-q4_k_m";
-  const recommendedLocal = ollamaModels.find(
+  const recommendedLocal = accessibleOllamaModels.find(
     (model) => model.id === recommendedLocalId,
   );
-  const otherLocalModels = ollamaModels.filter(
+  const otherLocalModels = accessibleOllamaModels.filter(
     (model) => model.id !== recommendedLocalId,
   );
 
@@ -144,9 +151,30 @@ export function ModelPickerDropdown({
     const available = isModelAvailable?.(model) ?? true;
     if (available) {
       onSelect(model);
-    } else {
-      onOpenSettings();
+      return;
     }
+
+    if (isPaprProxyOnlyModel(model.provider)) {
+      const access = checkPaprCloudFeature("papr_ai_proxy");
+      if (access && !access.allowed) {
+        showPaprCloudFeatureLock(access);
+        return;
+      }
+    }
+
+    if (
+      model.provider === "google" ||
+      model.provider === "openai" ||
+      model.provider === "anthropic"
+    ) {
+      const access = checkPaprCloudFeature("papr_ai_proxy");
+      if (access && !access.allowed) {
+        showPaprCloudFeatureLock(access);
+        return;
+      }
+    }
+
+    onOpenSettings();
   };
 
   const renderModel = (model: AIModel, compact = true): React.ReactElement => {
@@ -177,7 +205,14 @@ export function ModelPickerDropdown({
       ref={dropdownRef}
       className="model-picker-dropdown model-picker-dropdown--simple"
     >
-      {pickerModels.map((model) => renderModel(model, true))}
+      {pickerModels.length > 0 ? (
+        pickerModels.map((model) => renderModel(model, true))
+      ) : (
+        <div className="model-picker-empty">
+          Connect Claude, ChatGPT, or add an API key in Settings to use cloud
+          models.
+        </div>
+      )}
 
       <div className="model-picker-divider" role="separator" />
 

@@ -120,22 +120,27 @@ create_job({
 
 ### 5. Import Community Apps or Create Starter Apps
 
-**Step A: Check the community app registry for relevant pre-built apps**
+**Step A: Browse forkable Papr Cloud apps (Community Apps tab)**
+
+Requires Papr login — same forkable listings as the in-app Community Apps tab:
+
 ```javascript
-import_app_bundle({ source: "https://github.com/Papr-ai/paprwork-community-apps" })
+list_community_apps()
+// list_community_apps({ scope: "team", query: "crm" })
 ```
 
-Before building apps from scratch, check if a community bundle already solves the user's need. Browse the community registry by listing available bundles:
-```javascript
-list_app_bundles()
-```
+Install with `install_cloud_app({ namespaceId, slug, mode: "fork" })` using values from the tool result.
 
-If a relevant community app exists (e.g., expense tracker for finance users), import it:
+**Do NOT** use `list_app_bundles()` or `paprwork-community-apps/registry.json` for discovery.
+
+**Step B (fallback): OSS bundles without Papr login**
+
 ```javascript
 import_app_bundle({ source: "https://github.com/Papr-ai/paprwork-community-apps/bundles/expense-tracker" })
 ```
 
-**Step B: Create custom apps for needs not covered by community bundles**
+**Step C: Create custom apps when the catalog has no match**
+
 ```javascript
 create_app({
   title: "Customer Dashboard",
@@ -143,7 +148,7 @@ create_app({
 })
 ```
 
-Prefer importing community apps over building from scratch — they're tested and ready to use. Only create custom apps when the user's needs aren't met by existing bundles.
+Prefer cloud catalog imports over building from scratch.
 
 ### 6. Create Setup Summary Document
 
@@ -209,10 +214,9 @@ create_job({
   deliver: { channel: "chat", targetId: "main" }
 })
 
-// 5. Check community apps first, then create custom ones
-list_app_bundles()  // See what's available
-// Import relevant community apps if they match user needs
-// Then create custom apps for anything not covered:
+// 5. Community apps first
+list_community_apps({ query: "real estate" })
+// install_cloud_app({ namespaceId, slug, mode: "fork" }) when matched
 create_app({ title: "Property Dashboard", description: "Track properties and leads" })
 
 // 6. Summary doc
@@ -226,7 +230,7 @@ create_document({ title: "Workspace Setup Summary", content: "# Your Paprwork Se
 1. **Be thorough in the interview** — understand workflow deeply before configuring
 2. **Search the skills catalog** — grep `$PAPR_HOME/skills-catalog.json` by keyword (never read the whole file); never browse the web for skills
 3. **Match skills to their domain** — install only relevant skills
-4. **Community apps first** — check community bundles before building apps from scratch. Import pre-built apps when they fit, create custom apps only for unmet needs
+4. **Community apps first** — `list_community_apps()` then `install_cloud_app`. Use `import_app_bundle` only when Papr login / Cloud Sync is unavailable.
 5. **Always use create_document** — never create DOCX directly
 6. **Test everything** — walk through each configured feature
 7. **Provide a summary** — create a document summarizing what was configured

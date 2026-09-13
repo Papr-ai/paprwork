@@ -53,20 +53,64 @@ describe("VaultSyncService", () => {
       "utf-8",
     );
     expect(content).toContain("async onKeyChanged(keyName: string)");
-    expect(content).toContain("async onKeyDeleted(keyName: string)");
+    expect(content).toContain("async onKeyDeleted(");
+    expect(content).toContain("syncKeyVaultChange");
   });
 
-  it("initialize calls pushAllKeys then pullKeys", () => {
+  it("has syncKeyVaultChange and deleteKeyByName for owner revoke", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("async syncKeyVaultChange(");
+    expect(content).toContain("async deleteKeyByName(");
+    expect(content).toContain("/api/cloud/vault/delete");
+    expect(content).not.toContain("vaultAudiencePaths");
+  });
+
+  it("initialize calls coalesced runFullSync", () => {
     const content = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
     const initBlock = content.slice(
       content.indexOf("async initialize()"),
-      content.indexOf("async pushAllKeys()"),
+      content.indexOf("async runFullSync()"),
     );
-    expect(initBlock).toContain("await this.pushAllKeys()");
-    expect(initBlock).toContain("await this.pullKeys()");
+    expect(initBlock).toContain("await this.runFullSync()");
+  });
+
+  it("coalesces push and full sync (runFullSync, enqueuePush)", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("async runFullSync()");
+    expect(content).toContain("enqueuePush()");
+    expect(content).toContain("waitForGatewayRoutesReady");
+    expect(content).toContain("scheduleDebouncedPushAll");
+  });
+
+  it("has pullSharedKeys method that calls /api/cloud/vault/pull-shared", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("async pullSharedKeys()");
+    expect(content).toContain("/api/cloud/vault/pull-shared");
+  });
+
+  it("skips shared mirrors when pushing keys to cloud", () => {
+    const vaultContent = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    const mirrorContent = fs.readFileSync(
+      path.join(SRC, "src/core/storage/sharedVaultMirror.ts"),
+      "utf-8",
+    );
+    expect(vaultContent).toContain("shouldPushKeyToCloud");
+    expect(mirrorContent).toContain('meta.vaultOrigin !== "shared"');
   });
 
   it("getState returns vault status", () => {
@@ -107,6 +151,7 @@ describe("VaultSyncService", () => {
     );
     expect(content).toContain("syncForWorkspaceSwitch(): void");
     expect(content).toContain("Re-syncing vault for workspace switch (background)");
+    expect(content).toContain("runFullSync()");
   });
 });
 
@@ -148,12 +193,14 @@ describe("Gateway wiring", () => {
   });
 
   it("initializes vault sync alongside cloud sync", () => {
-    expect(indexContent).toContain("initializeVaultSyncService({ gatewayPort");
+    expect(indexContent).toContain("initializeVaultSyncService");
+    expect(indexContent).toContain("gatewayPort: Number(PORT)");
   });
 
   it("hooks key change listener to vault sync", () => {
     expect(indexContent).toContain("getCustomKeysService().onKeyChange");
     expect(indexContent).toContain("vaultSync.onKeyChanged");
+    expect(indexContent).toContain("scheduleDebouncedPushAll");
   });
 
   it("has /api/vault/status endpoint", () => {
@@ -166,13 +213,19 @@ describe("Gateway wiring", () => {
     expect(indexContent).toContain("vault.pushAllKeys()");
   });
 
+  it("has /api/vault/sync-key endpoint for owner delete and audience revoke", () => {
+    expect(indexContent).toContain('"/api/vault/sync-key"');
+    expect(indexContent).toContain("vault.syncKeyVaultChange");
+  });
+
   it("vault sync is inside CLOUD_SYNC_ENABLED check", () => {
     const cloudSyncIdx = indexContent.indexOf(
-      'process.env.CLOUD_SYNC_ENABLED !== "false"',
+      'if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false")',
     );
     expect(cloudSyncIdx).toBeGreaterThan(-1);
-    const block = indexContent.slice(cloudSyncIdx, cloudSyncIdx + 2500);
+    const block = indexContent.slice(cloudSyncIdx, cloudSyncIdx + 6000);
     expect(block).toContain("initializeVaultSyncService");
+    expect(block).toContain("tryDeferredVaultSyncStartup");
   });
 });
 
@@ -198,6 +251,12 @@ describe("Vault API models alignment", () => {
     expect(vaultContent).toContain("created: string[]");
     expect(vaultContent).toContain("updated: string[]");
     expect(vaultContent).toContain("deleted: string[]");
+    expect(vaultContent).toContain("conflicts?: VaultShareConflict[]");
+  });
+
+  it("reconciles share conflicts after push", () => {
+    expect(vaultContent).toContain("reconcileShareSyncResult");
+    expect(vaultContent).toContain("result.conflicts");
   });
 
   it("VaultKeyInfo matches server model", () => {

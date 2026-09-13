@@ -48,6 +48,8 @@ import {
   CloudCompatibilityBadge,
   CloudCompatibilityPanel,
 } from "./CloudCompatibilityPanel";
+import { PaprCloudRequirementsPanel } from "../common/PaprCloudRequirementsPanel";
+import { requestPaprCloudFeature } from "../../stores/paprCloudFeatureStore";
 import {
   CloudPublishBlockedError,
   fetchCloudCompatibility,
@@ -127,7 +129,7 @@ const PERMISSION_OPTIONS: {
   {
     value: "edit",
     label: "Can edit code",
-    description: "Install into Paprwork to customize and send changes back",
+    description: "Install into Paprwork to personalize and send changes back",
   },
 ];
 
@@ -333,6 +335,13 @@ export function MiniAppPublishBar({
     previewTabVisible,
     previewShellLoaded,
   });
+
+  const guardedWebSyncPushNow = useCallback(async () => {
+    if (!requestPaprCloudFeature("publish_share")) {
+      return;
+    }
+    await webSyncPushNow();
+  }, [webSyncPushNow]);
 
   const autoUploadEnabled = resolveEffectiveAutoUpload(
     cloud.uploadMode,
@@ -625,7 +634,7 @@ export function MiniAppPublishBar({
       const needsCodeUpload = audienceModelNeedsInitialCodeUpload(model, cloud.live);
       if (needsCodeUpload) {
         setShareSyncNotice("Publishing app code and databases to the web…");
-        await webSyncPushNow();
+        await guardedWebSyncPushNow();
       }
       return { published: needsCodeUpload };
     } finally {
@@ -863,6 +872,9 @@ export function MiniAppPublishBar({
     if (publishBlockedByIntegrity) {
       return;
     }
+    if (!requestPaprCloudFeature("publish_share")) {
+      return;
+    }
     setShareSyncNotice("Publishing to the web…");
     try {
       let published = cloud.live;
@@ -879,7 +891,7 @@ export function MiniAppPublishBar({
         await cloud.publish();
         setNeedsDesktopAck(false);
         setShareSyncNotice("Publishing app code and databases to the web…");
-        await webSyncPushNow();
+        await guardedWebSyncPushNow();
       }
     } catch (err) {
       if (err instanceof CloudPublishBlockedError) {
@@ -898,7 +910,7 @@ export function MiniAppPublishBar({
       .then(async () => {
         setNeedsDesktopAck(false);
         setShareSyncNotice("Publishing app code and databases to the web…");
-        await webSyncPushNow();
+        await guardedWebSyncPushNow();
       })
       .catch((err: unknown) => {
         if (err instanceof CloudPublishBlockedError) {
@@ -916,7 +928,7 @@ export function MiniAppPublishBar({
       await handlePublishClick();
       return;
     }
-    await webSyncPushNow();
+    await guardedWebSyncPushNow();
   };
 
   return (
@@ -1114,7 +1126,7 @@ export function MiniAppPublishBar({
               if (webSyncActionKind === "updates") {
                 void webSyncPullUpdates();
               } else if (webSyncActionKind === "upload" || webSyncActionKind === "failed") {
-                void webSyncPushNow();
+                void guardedWebSyncPushNow();
               } else {
                 handleWebSyncDotClick();
               }
@@ -1154,6 +1166,8 @@ export function MiniAppPublishBar({
         <ShareSheet title={`Share “${appTitle}”`} onClose={() => setShareOpen(false)}>
 
           <div className="share-sheet__panel">
+            <PaprCloudRequirementsPanel featureId="publish_share" />
+
             {shareSyncBanner ? (
               <div
                 className={`share-sheet__sync-banner share-sheet__sync-banner--${shareSyncBanner.tone}`}
@@ -1480,7 +1494,7 @@ export function MiniAppPublishBar({
               <div className="share-sheet__section">
                 <p className="share-sheet__section-title">Code access</p>
                 <p className="share-sheet__section-desc">
-                  Others can install this app's source into their Paprwork to customize or contribute changes back.
+                  Others can install this app's source into their Paprwork to personalize or contribute changes back.
                 </p>
 
                 {showOwnerChangeRequests ? (

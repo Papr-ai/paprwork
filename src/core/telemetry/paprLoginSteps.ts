@@ -28,6 +28,7 @@ export type PaprLoginStep =
   | "gateway_switch_attempted"
   | "gateway_switch_failed"
   | "profile_synced"
+  | "developer_subscription_ensured"
   | "login_success_notified"
   | "poll_detected_login"
   | "login_timeout"

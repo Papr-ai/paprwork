@@ -874,14 +874,17 @@ async function handleListSchemas(
   message: WSMessage,
 ): Promise<void> {
   try {
-    const { getApiKey } = await import("../../gateway/utils/keyResolver.js");
-    const apiKey = await getApiKey("PAPR_API_KEY");
+    const { getPaprApiKey } = await import("../utils/keyResolver.js");
+    const apiKey = await getPaprApiKey();
 
     if (!apiKey) {
       sendResponse(ws, {
         id: message.id,
         success: true,
-        data: { schemas: [], error: "No PAPR_API_KEY configured" },
+        data: {
+          schemas: [],
+          error: "No PAPR_API_KEY configured for the active team",
+        },
       });
       return;
     }
@@ -942,6 +945,23 @@ async function handleListSchemas(
       data: { schemas },
     });
   } catch (error) {
+    const { formatPaprQuotaMessage, parsePaprQuotaError, reportPaprQuotaError } =
+      await import("../../core/utils/paprQuota.js");
+    const quota = parsePaprQuotaError(error, "schema-list");
+    if (quota) {
+      reportPaprQuotaError(error, "schema-list");
+      sendResponse(ws, {
+        id: message.id,
+        success: true,
+        data: {
+          schemas: [],
+          error: formatPaprQuotaMessage(quota),
+          quotaKind: quota.kind,
+        },
+      });
+      return;
+    }
+
     console.error("[Memory] Failed to list schemas:", error);
     sendResponse(ws, {
       id: message.id,

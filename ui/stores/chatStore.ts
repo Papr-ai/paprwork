@@ -18,6 +18,7 @@ import type { MemoryAudience } from "../constants/memoryScope";
 import type { ToolCall } from "../types/core";
 import { gateway } from "../src/lib/gateway";
 import { trackEvent } from "../lib/telemetry";
+import { userMessageDedupKey } from "../utils/messageDedup";
 import {
   readChatModel,
   readNewChatDefaultModel,
@@ -247,10 +248,19 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const chatState = state.chatStates.get(chatId) || {
         ...defaultChatState,
       };
-      
-      // Deduplicate: only prepend messages that don't already exist
-      const existingIds = new Set(chatState.messages.map(m => m.id));
-      const newMessages = messages.filter(m => !existingIds.has(m.id));
+
+      const existingIds = new Set(chatState.messages.map((m) => m.id));
+      const existingUserKeys = new Set(
+        chatState.messages
+          .map((m) => userMessageDedupKey(m))
+          .filter((key): key is string => key !== null),
+      );
+      const newMessages = messages.filter((message) => {
+        if (existingIds.has(message.id)) return false;
+        const userKey = userMessageDedupKey(message);
+        if (userKey && existingUserKeys.has(userKey)) return false;
+        return true;
+      });
       const updatedMessages = [...newMessages, ...chatState.messages];
 
       const newChatStates = new Map(state.chatStates);

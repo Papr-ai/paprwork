@@ -95,12 +95,17 @@ function withCloudContextHeaders(init?: RequestInit): RequestInit | undefined {
   return { ...init, headers };
 }
 
+function requestNeedsCloudContextHeaders(url: string): boolean {
+  const path = url.includes("://") ? new URL(url, window.location.origin).pathname : url;
+  return path.startsWith(API_PREFIX) || path.startsWith("/auth/");
+}
+
 function applyCloudContextToFetch(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): { input: RequestInfo | URL; init?: RequestInit } {
   const url = requestUrl(input);
-  if (!url.includes(API_PREFIX)) {
+  if (!requestNeedsCloudContextHeaders(url)) {
     return { input, init };
   }
 

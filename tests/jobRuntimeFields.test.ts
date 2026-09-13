@@ -56,6 +56,23 @@ describe("jobRuntimeFields", () => {
     expect(toConfigIndexEntry(job).status).toBeUndefined();
   });
 
+  test("requiredKeys round-trips through config split and parse", () => {
+    const job = sampleJob({ requiredKeys: ["BREX_API_KEY", "QBO_CLIENT_ID"] });
+    const { config } = splitJobRecord(job);
+    expect(config.requiredKeys).toEqual(["BREX_API_KEY", "QBO_CLIENT_ID"]);
+
+    const { config: parsed } = parseMonolithicJobJson({
+      id: job.id,
+      name: job.name,
+      type: job.type,
+      appIds: job.appIds,
+      createdAt: job.createdAt,
+      requiredKeys: job.requiredKeys,
+      status: job.status,
+    });
+    expect(parsed.requiredKeys).toEqual(job.requiredKeys);
+  });
+
   test("parseMonolithicJobJson splits mixed object", () => {
     const raw = {
       id: "x",

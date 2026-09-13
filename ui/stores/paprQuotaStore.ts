@@ -25,6 +25,7 @@ interface PaprQuotaStore {
   setQuotaStatus: (status: PaprQuotaBannerState) => void;
   dismiss: (status: PaprQuotaBannerState) => void;
   clearIfDismissed: () => void;
+  resetForWorkspaceSwitch: () => void;
 }
 
 function statusKey(status: PaprQuotaBannerState): string {
@@ -48,7 +49,18 @@ export const usePaprQuotaStore = create<PaprQuotaStore>((set, get) => ({
       set({ active: null });
     }
   },
+  resetForWorkspaceSwitch: () => set({ active: null, dismissedKey: null }),
 }));
+
+const WORKSPACE_SWITCH_EVENTS = [
+  "papr-workspace-switch-starting",
+  "papr-organization-changed",
+  "papr-namespace-changed",
+] as const;
+
+export function resetPaprQuotaForWorkspaceSwitch(): void {
+  usePaprQuotaStore.getState().resetForWorkspaceSwitch();
+}
 
 export function initPaprQuotaListener(): void {
   const handler = (event: Event) => {
@@ -58,5 +70,12 @@ export function initPaprQuotaListener(): void {
     usePaprQuotaStore.getState().setQuotaStatus(data);
   };
 
+  const workspaceSwitchHandler = () => {
+    resetPaprQuotaForWorkspaceSwitch();
+  };
+
   window.addEventListener("gateway-broadcast", handler as EventListener);
+  for (const eventName of WORKSPACE_SWITCH_EVENTS) {
+    window.addEventListener(eventName, workspaceSwitchHandler);
+  }
 }

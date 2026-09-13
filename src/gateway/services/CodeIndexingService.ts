@@ -217,6 +217,11 @@ export async function stopCodeIndexing(): Promise<void> {
   }
 }
 
+/** Resume indexing after Papr Cloud billing is restored. */
+export function resumeCodeIndexingAfterBillingRestore(): void {
+  indexManager?.resumeAfterSubscriptionRestore();
+}
+
 /** Reset code indexing after org/namespace workspace switch. */
 export async function resetCodeIndexingForWorkspaceSwitch(): Promise<void> {
   await stopCodeIndexing();

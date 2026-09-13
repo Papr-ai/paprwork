@@ -53,6 +53,10 @@ export interface CloudAppInstallInput {
   slug: string;
   mode?: CloudAppInstallMode;
   shareToken?: string;
+  /** Catalog tab scope — community (global) forbids track. */
+  catalogScope?: "global" | "namespace";
+  /** Publish visibility from catalog entry — track requires team. */
+  visibility?: string;
 }
 
 export interface CloudAppInstallResult {
@@ -185,8 +189,29 @@ export class CloudAppInstallService {
   }
 
   async installApp(input: CloudAppInstallInput): Promise<CloudAppInstallResult> {
-    const prepare = await this.prepareInstall(input);
+    const mode = input.mode ?? "fork";
+    const {
+      assertTrackAllowedForCatalog,
+      databasePolicyFromInstallPolicy,
+      readLinkedDbIsolations,
+      resolveInstallDbPolicy,
+    } = await import("./cloudInstallDbPolicy.js");
+
+    assertTrackAllowedForCatalog({
+      mode,
+      catalogScope: input.catalogScope,
+      visibility: input.visibility,
+    });
+
+    const prepare = await this.prepareInstall({ ...input, mode });
     const cloned = await cloneAppSource(prepare);
+
+    const linkedIsolations = await readLinkedDbIsolations({
+      repoPaprHome: cloned.repoDir,
+      repoAppDir: cloned.sourceDir,
+    });
+    const installDbPolicy = resolveInstallDbPolicy(mode, linkedIsolations);
+    const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
 
     let createdAppId: string | null = null;
 
@@ -231,6 +256,7 @@ export class CloudAppInstallService {
         repoAppDir: cloned.sourceDir,
         publisherAppId: prepare.source.appId,
         localAppId: app.id,
+        installDbPolicy,
       });
       if (linked.copiedJobIds.length > 0) {
         console.log(
@@ -238,7 +264,19 @@ export class CloudAppInstallService {
         );
       }
 
-      await finalizePortableCloudAppResources();
+      await finalizePortableCloudAppResources({ cloudInstall: true });
+
+      if (installDbPolicy === "shared_primary") {
+        const { registerSharedPrimaryTursoForInstalledApp } = await import(
+          "./cloudInstallTursoCredentials.js"
+        );
+        registerSharedPrimaryTursoForInstalledApp({
+          localAppId: app.id,
+          source: prepare.source,
+          registryDbIds: linked.registryDbIds,
+          shareToken: input.shareToken,
+        });
+      }
 
       const installWarnings = [...linked.health.warnings];
       if (linked.skippedSparsePaths.length > 0) {
@@ -268,7 +306,9 @@ export class CloudAppInstallService {
         bootstrapInstalledAppDatabases,
         buildCloudInstallAgentSetupMessage,
       } = await import("./cloudAppInstallBootstrap.js");
-      const bootstrap = await bootstrapInstalledAppDatabases(app.id);
+      const bootstrap = await bootstrapInstalledAppDatabases(app.id, {
+        installDbPolicy,
+      });
 
       if (bootstrap.errors.length > 0) {
         throw new Error(
@@ -277,15 +317,17 @@ export class CloudAppInstallService {
       }
 
       const agentSetupMessage =
-        !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
-          ? buildCloudInstallAgentSetupMessage({
-              appTitle: app.title,
-              appId: app.id,
-              sourceSlug: prepare.source.slug,
-              bootstrap,
-              linkedJobIds: linked.copiedJobIds,
-            })
-          : undefined;
+        installDbPolicy === "fork_empty"
+          ? undefined
+          : !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
+            ? buildCloudInstallAgentSetupMessage({
+                appTitle: app.title,
+                appId: app.id,
+                sourceSlug: prepare.source.slug,
+                bootstrap,
+                linkedJobIds: linked.copiedJobIds,
+              })
+            : undefined;
 
       if (bootstrap.warnings.length > 0) {
         console.warn(
@@ -295,10 +337,11 @@ export class CloudAppInstallService {
       }
 
       const lineage: CloudAppLineageFile = {
-        schemaVersion: "1.1.0",
+        schemaVersion: "1.2.0",
         lineageId: prepare.lineageId,
         mode: prepare.mode,
         source: prepare.source,
+        databasePolicy,
         installedAt: new Date().toISOString(),
         ...(prepare.mode === "track"
           ? {

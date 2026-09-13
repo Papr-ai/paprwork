@@ -179,11 +179,15 @@ export class CloudAppTrackSyncService {
       );
       await writeLineageFile(appId, this.appsDir, {
         ...lineage,
-        schemaVersion: "1.1.0",
+        schemaVersion: lineage.schemaVersion ?? "1.2.0",
         lastSyncedAt,
         syncSnapshot: nextSnapshot,
         ...(upstreamRevision ? { upstreamRevision } : {}),
       });
+
+      const sharedDatabase =
+        lineage.databasePolicy === "shared" ||
+        (lineage.databasePolicy === undefined && lineage.mode === "track");
 
       try {
         const {
@@ -196,6 +200,13 @@ export class CloudAppTrackSyncService {
           publisherAppId: lineage.source.appId,
           localAppId: appId,
           env,
+          ...(sharedDatabase
+            ? {
+                syncScope: "jobs_and_code" as const,
+                skipReplicaPrep: true,
+                installDbPolicy: "shared_primary" as const,
+              }
+            : {}),
         });
         if (linked.copiedJobIds.length > 0) {
           console.log(
@@ -203,10 +214,11 @@ export class CloudAppTrackSyncService {
           );
         }
         await finalizePortableCloudAppResources();
-        const { bootstrapInstalledAppDatabases } = await import(
-          "./cloudAppInstallBootstrap.js"
-        );
-        const bootstrap = await bootstrapInstalledAppDatabases(appId);
+        const { bootstrapInstalledAppDatabases, pullTrackSharedAppDatabase } =
+          await import("./cloudAppInstallBootstrap.js");
+        const bootstrap = sharedDatabase
+          ? await pullTrackSharedAppDatabase(appId)
+          : await bootstrapInstalledAppDatabases(appId);
         if (bootstrap.errors.length > 0) {
           console.warn(
             `[CloudTrackSync] Database bootstrap errors for ${appId}:`,

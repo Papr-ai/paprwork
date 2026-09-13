@@ -36,7 +36,9 @@ export type BootstrapPendingReason =
   /** Cross-namespace copy — local replica rows came from another namespace's Turso. */
   | "cross_namespace_copy"
   /** Community/team install — bundled replica SQLite from publisher workspace. */
-  | "portable_install";
+  | "portable_install"
+  /** Team collaborate — attach to publisher Turso primary (pull only, no local push). */
+  | "team_collaborate_attach";
 
 export interface BootstrapPendingMarker {
   reason: BootstrapPendingReason;

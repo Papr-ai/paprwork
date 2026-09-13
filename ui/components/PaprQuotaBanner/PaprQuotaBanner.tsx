@@ -1,51 +1,72 @@
 /**
- * PaprQuotaBanner — global plan-limit notice when Papr Memory ops/memories are exceeded.
- * Matches UpdateBanner liquid-glass styling; stacks above it when both are visible.
+ * PaprQuotaBanner — compact notice when Papr Memory cloud features are blocked.
  */
 
-import { useEffect, useState } from "react";
-import { hasActivePaprSubscription } from "../../../src/core/utils/paprPlanLimits";
+import { useEffect, useMemo, useState } from "react";
+import type { PaprQuotaKind } from "../../stores/paprQuotaStore";
 import { usePaprQuotaStore } from "../../stores/paprQuotaStore";
+import { PaprLogoMark } from "../common/PaprLogoMark";
+import { openPaprPlanSettings } from "../../utils/cloudMemoryStatus";
+import { useBillingSettingsVisible } from "../../hooks/useBillingSettingsVisible";
+import { hasActivePaprSubscription } from "../../../src/core/utils/paprPlanLimits";
 import "./PaprQuotaBanner.css";
 
-type SubscriptionDisplayMode = "needs_subscription" | "billing_mismatch" | null;
+function resolveBannerCopy(input: {
+  kind: PaprQuotaKind;
+  subscriptionMode: "needs_subscription" | "billing_mismatch" | null;
+  canManageBilling: boolean;
+}): { title: string; detail: string; primaryLabel: string } {
+  const localWorks = "Local chat works.";
 
-function resolveSubscriptionDisplay(
-  mode: SubscriptionDisplayMode,
-  fallbackTitle: string,
-  fallbackDetail: string,
-): { title: string; detail: string; hint: string | null } {
-  if (mode === "billing_mismatch") {
+  if (input.kind === "subscription") {
+    if (input.subscriptionMode === "billing_mismatch") {
+      return {
+        title: "Cloud sync issue",
+        detail: `${localWorks} Sign out and back in to refresh billing.`,
+        primaryLabel: "Plan & usage",
+      };
+    }
     return {
-      title: "Papr Memory sync issue",
-      detail:
-        "Settings shows an active subscription, but Papr Memory couldn't verify it for this workspace. Cloud sync and memory may be paused.",
-      hint:
-        "Try signing out and back in to refresh your API key. If the problem continues, contact Papr support — your billing is active but memory access isn't linked.",
+      title: "Subscription cancelled.",
+      detail: "Papr Cloud features paused. Local chat works.",
+      primaryLabel: "Plan & usage",
     };
   }
 
-  if (mode === "needs_subscription") {
+  if (
+    input.kind === "operations" ||
+    input.kind === "memories" ||
+    input.kind === "storage"
+  ) {
     return {
-      title: fallbackTitle,
-      detail: fallbackDetail,
-      hint:
-        "Check Plan & usage in Settings. If your plan looks correct, sign out and back in to refresh your API key. Otherwise start or renew your plan in Papr.",
+      title: "Plan limit reached",
+      detail: input.canManageBilling
+        ? `${localWorks} Upgrade or enable metered billing.`
+        : `${localWorks} Ask your workspace owner to upgrade.`,
+      primaryLabel: "Plan & usage",
     };
   }
 
-  return { title: fallbackTitle, detail: fallbackDetail, hint: null };
+  return {
+    title: "Papr Cloud paused",
+    detail: `${localWorks} Review Plan & usage in Settings.`,
+    primaryLabel: "Plan & usage",
+  };
 }
 
 export function PaprQuotaBanner() {
   const active = usePaprQuotaStore((state) => state.active);
   const dismiss = usePaprQuotaStore((state) => state.dismiss);
-  const [subscriptionDisplayMode, setSubscriptionDisplayMode] =
-    useState<SubscriptionDisplayMode>(null);
+  const billingSettingsVisible = useBillingSettingsVisible();
+  const [subscriptionMode, setSubscriptionMode] = useState<
+    "needs_subscription" | "billing_mismatch" | null
+  >(null);
+  const [canManageBilling, setCanManageBilling] = useState(false);
 
   useEffect(() => {
     if (!active || active.kind !== "subscription") {
-      setSubscriptionDisplayMode(null);
+      setSubscriptionMode(null);
+      setCanManageBilling(false);
       return;
     }
 
@@ -57,7 +78,8 @@ export function PaprQuotaBanner() {
         if (cancelled) return;
 
         if (result.success && result.summary) {
-          setSubscriptionDisplayMode(
+          setCanManageBilling(result.summary.canManageBilling);
+          setSubscriptionMode(
             hasActivePaprSubscription(result.summary)
               ? "billing_mismatch"
               : "needs_subscription",
@@ -69,7 +91,7 @@ export function PaprQuotaBanner() {
       }
 
       if (!cancelled) {
-        setSubscriptionDisplayMode("needs_subscription");
+        setSubscriptionMode("needs_subscription");
       }
     })();
 
@@ -78,35 +100,20 @@ export function PaprQuotaBanner() {
     };
   }, [active]);
 
-  if (!active) return null;
+  const copy = useMemo(() => {
+    if (!active) return null;
+    return resolveBannerCopy({
+      kind: active.kind,
+      subscriptionMode,
+      canManageBilling,
+    });
+  }, [active, subscriptionMode, canManageBilling]);
 
-  const subscriptionCopy =
-    active.kind === "subscription"
-      ? resolveSubscriptionDisplay(
-          subscriptionDisplayMode,
-          active.title,
-          active.detail,
-        )
-      : null;
+  if (!active || !copy || billingSettingsVisible) return null;
 
-  const title = subscriptionCopy?.title ?? active.title;
-  const detail = subscriptionCopy?.detail ?? active.detail;
-
-  const openPlanSettings = () => {
-    window.dispatchEvent(
-      new CustomEvent("papr:open-settings", {
-        detail: { tab: "models" },
-      }),
-    );
-    window.dispatchEvent(new CustomEvent("papr:focus-plan-section"));
-  };
-
-  const openUsageDashboard = async () => {
-    try {
-      await window.electronAPI.papr.openUsageDashboard();
-    } catch (error) {
-      console.error("[PaprQuotaBanner] Failed to open usage dashboard:", error);
-    }
+  const handleOpenBilling = () => {
+    openPaprPlanSettings();
+    dismiss(active);
   };
 
   return (
@@ -115,38 +122,19 @@ export function PaprQuotaBanner() {
       data-severity={active.severity}
       role="alert"
     >
+      <PaprLogoMark size={14} className="papr-quota-banner__mark" />
       <div className="papr-quota-banner__content">
-        <div className="papr-quota-banner__header">
-          <span className="papr-quota-banner__icon" aria-hidden>
-            {active.severity === "warning" ? "!" : "⚠"}
-          </span>
-          <div className="papr-quota-banner__text-block">
-            <span className="papr-quota-banner__title">{title}</span>
-            <span className="papr-quota-banner__detail">{detail}</span>
-            {subscriptionCopy?.hint ? (
-              <span className="papr-quota-banner__hint">{subscriptionCopy.hint}</span>
-            ) : active.suggestMeteredBilling ? (
-              <span className="papr-quota-banner__hint">
-                Upgrade your plan or add a payment method and enable metered
-                billing in Papr.
-              </span>
-            ) : null}
-          </div>
+        <div className="papr-quota-banner__text-block">
+          <span className="papr-quota-banner__title">{copy.title}</span>
+          <span className="papr-quota-banner__detail">{copy.detail}</span>
         </div>
         <div className="papr-quota-banner__actions">
           <button
             type="button"
             className="papr-quota-banner__action"
-            onClick={openPlanSettings}
+            onClick={handleOpenBilling}
           >
-            Manage plan
-          </button>
-          <button
-            type="button"
-            className="papr-quota-banner__secondary"
-            onClick={() => void openUsageDashboard()}
-          >
-            Usage dashboard
+            {copy.primaryLabel}
           </button>
         </div>
       </div>

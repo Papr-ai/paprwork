@@ -6,7 +6,7 @@ import type { IntegrationKeyOrgScope, IntegrationKeyVaultAudience } from "../sto
 import { normalizeIntegrationKeyVaultAudience } from "../storage/customKeysVault.js";
 import { readActiveWorkspacePointer } from "./paprWorkspace.js";
 
-export type CloudRepoScope = "user" | "namespace" | "org";
+export type CloudRepoScope = "user" | "members" | "namespace" | "org";
 
 export interface CloudReposRequestBody {
   scope: CloudRepoScope;
@@ -26,6 +26,8 @@ export interface CloudVaultKeyEntry {
   targetOrgId?: string;
   /** always_allow | ask — stored as label for future job gating. */
   permission?: string;
+  /** Members-scoped audience — Parse user IDs allowed to use this key. */
+  allowedUserIds?: string[];
 }
 
 export function buildCloudReposRequestBody(
@@ -52,6 +54,7 @@ export function mapCustomKeyMetadataToVaultEntry(input: {
     permission?: "always" | "ask";
     clientAccess?: "server" | "client";
     vaultAudience?: IntegrationKeyVaultAudience;
+    vaultAudienceMemberIds?: string[];
     orgScope?: IntegrationKeyOrgScope | "global";
     organizationId?: string;
     source?: "manual" | "oauth";
@@ -76,6 +79,12 @@ export function mapCustomKeyMetadataToVaultEntry(input: {
     shareScope,
     permission,
   };
+
+  if (shareScope === "members" && input.meta.vaultAudienceMemberIds?.length) {
+    entry.allowedUserIds = input.meta.vaultAudienceMemberIds
+      .map((id) => id.trim())
+      .filter(Boolean);
+  }
 
   if (
     input.meta.orgScope === "organization" &&

@@ -230,6 +230,7 @@ export async function createBrowserTicket(
      ON CONFLICT(object_key) DO UPDATE SET
        upload_session_uri = excluded.upload_session_uri,
        session_expires_at = excluded.session_expires_at,
+       upload_state       = excluded.upload_state,
        updated_at         = excluded.updated_at`,
     [
       id,
@@ -257,13 +258,80 @@ export async function createBrowserTicket(
     )
   )[0];
 
+  const rowId = existing?.id ?? id;
+
+  // GCS dedupe: bytes already exist, but a prior attempt may have left the row
+  // stuck in `uploading` because ON CONFLICT used to skip upload_state.
+  if (ticket.already_exists) {
+    await commitBrowserUpload(db, {
+      appId: args.appId,
+      id: rowId,
+      objectKey: ticket.object_key,
+      sizeBytes: args.sizeBytes,
+      memoryApiKey: args.memoryApiKey,
+    });
+  }
+
   return {
-    id: existing?.id ?? id,
+    id: rowId,
     objectKey: ticket.object_key,
     uploadUrl: ticket.already_exists ? null : (ticket.upload_url ?? null),
     alreadyExists: Boolean(ticket.already_exists),
     sha256: args.fingerprint,
   };
+}
+
+/**
+ * If bytes landed in GCS but the browser never reached `/api/files/commit`
+ * (common when the final chunk hits a CORS edge), finalize server-side.
+ */
+export async function tryFinalizeBrowserUpload(
+  db: FilesDb,
+  row: AppFileRow,
+  args: { appId: string; memoryApiKey?: string },
+): Promise<AppFileRow | null> {
+  if (row.upload_state === "verified") {
+    return row;
+  }
+  if (row.app_id !== args.appId) {
+    return null;
+  }
+  const result = await commitBrowserUpload(db, {
+    appId: args.appId,
+    id: row.id,
+    objectKey: row.object_key,
+    sizeBytes: row.size_bytes,
+    memoryApiKey: args.memoryApiKey,
+  });
+  if (!result.verified) {
+    return null;
+  }
+  return (await getFile(db, row.id)) ?? null;
+}
+
+/** After a verified web/desktop upload, mirror publish's CDN flip for app-scoped files. */
+export async function promoteAppScopedFileToCdnAfterUpload(args: {
+  appId: string;
+  objectKey: string;
+  visibility: FileVisibility;
+  scope: AppFileScope;
+  memoryApiKey?: string;
+}): Promise<void> {
+  if (!args.memoryApiKey) {
+    return;
+  }
+  if (args.visibility === "private") {
+    return;
+  }
+  if (args.scope === "user" || args.objectKey.includes("/users/")) {
+    return;
+  }
+  try {
+    const { setVisibility } = await import("./appFilesClient.js");
+    await setVisibility(args.appId, args.objectKey, true, args.memoryApiKey);
+  } catch {
+    // Signed URLs still work for logged-in readers if promotion fails.
+  }
 }
 
 /**
@@ -292,6 +360,17 @@ export async function commitBrowserUpload(
   await markState(db, args.objectKey, commit.verified ? "verified" : "failed");
 
   const row = await getFile(db, args.id);
+
+  if (commit.verified && row && args.memoryApiKey) {
+    await promoteAppScopedFileToCdnAfterUpload({
+      appId: args.appId,
+      objectKey: args.objectKey,
+      visibility: row.visibility,
+      scope: row.scope,
+      memoryApiKey: args.memoryApiKey,
+    });
+  }
+
   return {
     id: args.id,
     objectKey: args.objectKey,

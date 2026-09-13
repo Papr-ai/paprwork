@@ -3705,8 +3705,9 @@ After import, check the result for:
 
 export const listAppBundlesTool = createTool({
   id: "list_app_bundles",
-  description: `List all installed app bundles in $PAPR_HOME/bundles/.
-Shows bundle ID, name, version, path, and creation date for each shareable app.`,
+  description: `List local app bundles in $PAPR_HOME/bundles/ — exports created by export_app_bundle on this machine.
+
+NOT the Community Apps catalog. To browse forkable cloud apps, use list_community_apps() instead.`,
   inputSchema: z.object({}),
   execute: async () => {
     const startTime = performance.now();
@@ -3724,7 +3725,10 @@ Shows bundle ID, name, version, path, and creation date for each shareable app.`
         data: {
           total: bundles.length,
           bundles,
-          tip: "Use get_app_bundle_info({ source: bundleId }) to preview an app bundle's contents.",
+          tip:
+            bundles.length === 0
+              ? "No local bundles yet. To browse forkable community apps, call list_community_apps(). To create a bundle for OSS export, use export_app_bundle."
+              : "Use get_app_bundle_info({ source: bundleId }) to preview a bundle. These are local exports — not the Papr Cloud Community catalog (use list_community_apps for that).",
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),

@@ -1,0 +1,111 @@
+.cloud-feature-lock__backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+}
+
+.cloud-feature-lock {
+  width: min(420px, 100%);
+  padding: 20px 22px 18px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: var(--surface-elevated, #1c1c1e);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
+}
+
+.cloud-feature-lock__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.cloud-feature-lock__title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary, #fff);
+}
+
+.cloud-feature-lock__message {
+  margin: 0 0 8px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.78));
+}
+
+.cloud-feature-lock__fallback {
+  margin: 0 0 16px;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text-tertiary, rgba(255, 255, 255, 0.55));
+}
+
+.cloud-feature-lock__actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.cloud-feature-lock__primary {
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #0060e0 0%, #00acfa 60%, #0bcdff 100%);
+  cursor: pointer;
+}
+
+.cloud-feature-lock__primary:hover {
+  filter: brightness(1.05);
+}
+
+.cloud-feature-lock__secondary {
+  border: none;
+  border-radius: 999px;
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.72));
+  background: transparent;
+  cursor: pointer;
+}
+
+.cloud-feature-lock__secondary:hover {
+  color: var(--text-primary, #fff);
+}
+
+@media (prefers-color-scheme: light) {
+  .cloud-feature-lock {
+    background: #fff;
+    border-color: rgba(0, 0, 0, 0.08);
+  }
+
+  .cloud-feature-lock__title {
+    color: #1c1c1e;
+  }
+
+  .cloud-feature-lock__message {
+    color: rgba(0, 0, 0, 0.72);
+  }
+
+  .cloud-feature-lock__fallback {
+    color: rgba(0, 0, 0, 0.52);
+  }
+
+  .cloud-feature-lock__secondary {
+    color: rgba(0, 0, 0, 0.55);
+  }
+
+  .cloud-feature-lock__secondary:hover {
+    color: #1c1c1e;
+  }
+}

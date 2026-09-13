@@ -125,7 +125,10 @@ import {
 import {
   getCloudAppPublishService,
 } from "./services/CloudAppPublishService.js";
-import { getCloudAppInstallService } from "./services/CloudAppInstallService.js";
+import {
+  CloudCatalogInstallChoiceRequiredError,
+  runCloudCatalogInstall,
+} from "./services/runCloudCatalogInstall.js";
 import {
   discoverAppRequirements,
   writeAppRequirements,
@@ -167,11 +170,17 @@ const HOST = process.env.GATEWAY_HOST || "0.0.0.0";
 async function initializeServices(): Promise<void> {
   console.log("[Gateway] Initializing services...");
 
+  const { timeStartupStep, timeStartupSync } = await import(
+    "./services/gatewayStartupTiming.js"
+  );
+
   try {
-    const { refreshToolResultTruncationSettings } = await import(
-      "./services/agent/toolResultTruncationSettings.js"
-    );
-    await refreshToolResultTruncationSettings();
+    await timeStartupStep("services", "toolResultTruncationSettings", async () => {
+      const { refreshToolResultTruncationSettings } = await import(
+        "./services/agent/toolResultTruncationSettings.js"
+      );
+      await refreshToolResultTruncationSettings();
+    });
     console.log("[Gateway] Tool truncation settings loaded");
     // DON'T request keys on startup!
     // AgentService will lazy-load them when first message is sent
@@ -192,16 +201,20 @@ async function initializeServices(): Promise<void> {
     }
 
     console.log("[Gateway] Initializing AgentService...");
-    await initializeAgentService({
-      mode: storageMode,
-      paprApiKey: undefined, // Will be loaded lazily
-      openaiApiKey: undefined, // Will be loaded lazily
-    });
+    await timeStartupStep("services", "AgentService", () =>
+      initializeAgentService({
+        mode: storageMode,
+        paprApiKey: undefined, // Will be loaded lazily
+        openaiApiKey: undefined, // Will be loaded lazily
+      }),
+    );
     console.log("[Gateway] AgentService initialized");
 
     // Initialize workspace (creates ~/Papr/workspace/ and templates on first run)
     console.log("[Gateway] Initializing WorkspaceService...");
-    await initializeWorkspaceService();
+    await timeStartupStep("services", "WorkspaceService", () =>
+      initializeWorkspaceService(),
+    );
     console.log("[Gateway] WorkspaceService initialized");
 
     // Note: Code indexing now uses lazy initialization
@@ -209,51 +222,63 @@ async function initializeServices(): Promise<void> {
 
     // Initialize other services
     console.log("[Gateway] Initializing ChatService...");
-    await initializeChatService();
+    await timeStartupStep("services", "ChatService", () => initializeChatService());
     console.log("[Gateway] ChatService initialized");
 
     console.log("[Gateway] Initializing DocumentService...");
-    await initializeDocumentService();
+    await timeStartupStep("services", "DocumentService", () =>
+      initializeDocumentService(),
+    );
     console.log("[Gateway] DocumentService initialized");
 
     console.log("[Gateway] Initializing AppService...");
-    await initializeAppService();
+    await timeStartupStep("services", "AppService", () => initializeAppService());
     console.log("[Gateway] AppService initialized");
 
     console.log("[Gateway] Initializing JobsService...");
-    await initializeJobsService();
+    await timeStartupStep("services", "JobsService", () => initializeJobsService());
     console.log("[Gateway] JobsService core ready (maintenance in background)");
 
     if (
       process.env.CLOUD_SYNC_ENABLED !== "false" &&
       process.env.TURSO_SYNC_ENABLED !== "false"
     ) {
-      ensureTursoSyncBridge();
+      timeStartupSync("services", "TursoSyncBridge", () => {
+        ensureTursoSyncBridge();
+      });
       console.log(
         "[Gateway] TursoSyncBridge initialized (replica credentials ready)",
       );
     }
 
     console.log("[Gateway] Initializing SkillService...");
-    await initializeSkillService();
+    await timeStartupStep("services", "SkillService", () =>
+      initializeSkillService(),
+    );
     console.log("[Gateway] SkillService initialized");
 
     console.log("[Gateway] Initializing BundleService...");
-    await initializeBundleService();
+    await timeStartupStep("services", "BundleService", () =>
+      initializeBundleService(),
+    );
     console.log("[Gateway] BundleService initialized");
 
     console.log("[Gateway] Initializing SubAgentService...");
-    await initializeSubAgentService();
+    await timeStartupStep("services", "SubAgentService", () =>
+      initializeSubAgentService(),
+    );
     console.log("[Gateway] SubAgentService initialized");
 
     console.log("[Gateway] Initializing PlanService...");
-    await initializePlanService();
+    await timeStartupStep("services", "PlanService", () => initializePlanService());
     console.log("[Gateway] PlanService initialized");
 
-    const { startAppRepoRevisionSubscriber } = await import(
-      "./services/syncV3/appRepoRevisionSubscriber.js"
-    );
-    startAppRepoRevisionSubscriber();
+    await timeStartupStep("services", "appRepoRevisionSubscriber", async () => {
+      const { startAppRepoRevisionSubscriber } = await import(
+        "./services/syncV3/appRepoRevisionSubscriber.js"
+      );
+      startAppRepoRevisionSubscriber();
+    });
 
     console.log("[Gateway] All services initialized");
     console.log(
@@ -351,9 +376,21 @@ async function startGateway(): Promise<void> {
   }
 
   try {
+    const {
+      beginGatewayStartupTiming,
+      timeStartupStep,
+      timeStartupSync,
+      beginRouteRegistrationTiming,
+      lapRouteRegistrationSection,
+      printGatewayStartupSummary,
+    } = await import("./services/gatewayStartupTiming.js");
+    beginGatewayStartupTiming();
+
     // Initialize permission system
     console.log("[Gateway] Initializing permission system...");
-    initializePermissionBridge();
+    timeStartupSync("pre-http", "permissionBridge", () => {
+      initializePermissionBridge();
+    });
     setPermissionRequester(async (request: KeyPermissionRequest) => {
       return await requestPermissionFromMain(request);
     });
@@ -361,19 +398,23 @@ async function startGateway(): Promise<void> {
 
     // Set up key cache invalidation listener
     console.log("[Gateway] Setting up key cache invalidation listener...");
-    const { setupKeyCacheInvalidationListener } = await import(
-      "./utils/keyResolver.js"
-    );
-    setupKeyCacheInvalidationListener();
+    await timeStartupStep("pre-http", "keyCacheInvalidationListener", async () => {
+      const { setupKeyCacheInvalidationListener } = await import(
+        "./utils/keyResolver.js"
+      );
+      setupKeyCacheInvalidationListener();
+    });
     console.log("[Gateway] Key cache invalidation listener ready");
 
-    const { setPaprQuotaExceededListener } = await import(
-      "../core/utils/paprQuota.js"
-    );
-    const { broadcastPaprQuotaStatus } = await import(
-      "./utils/paprQuotaNotify.js"
-    );
-    setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
+    await timeStartupStep("pre-http", "paprQuotaListener", async () => {
+      const { setPaprQuotaExceededListener } = await import(
+        "../core/utils/paprQuota.js"
+      );
+      const { broadcastPaprQuotaStatus } = await import(
+        "./utils/paprQuotaNotify.js"
+      );
+      setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
+    });
     console.log("[Gateway] Papr quota status listener ready");
 
     // Bind HTTP early so supervisor health checks succeed while services load.
@@ -430,18 +471,28 @@ async function startGateway(): Promise<void> {
       });
     });
 
-    registerEarlyProductionUi(app);
+    timeStartupSync("pre-http", "expressAppAndHealthRoute", () => {
+      registerEarlyProductionUi(app);
+    });
 
-    await listenGatewayServer(server);
+    await timeStartupStep("pre-http", "listenGatewayServer", () =>
+      listenGatewayServer(server),
+    );
     console.log("[Gateway] Health endpoint live (services still loading)...");
 
-    await initializeServices();
+    await timeStartupStep("services", "initializeServices (total)", () =>
+      initializeServices(),
+    );
 
-    setupWebSocketHandlers(wss);
-    getJobEventHub().subscribe((event) => {
-      broadcast({ type: event.type, data: event.data });
+    timeStartupSync("routes", "websocketHandlers", () => {
+      setupWebSocketHandlers(wss);
+      getJobEventHub().subscribe((event) => {
+        broadcast({ type: event.type, data: event.data });
+      });
     });
     console.log("[Gateway] WebSocket server created");
+
+    beginRouteRegistrationTiming();
 
     // ── Mini-app SQLite query API ────────────────────────────────────────────
     // All synchronous better-sqlite3 calls run in a worker-thread pool so they
@@ -661,6 +712,8 @@ async function startGateway(): Promise<void> {
         res.status(500).json({ error: (err as Error).message });
       }
     });
+
+    lapRouteRegistrationSection("mini-app-db-query-api");
 
     // ── Database registry (independent first-class DBs) ──
     app.get("/api/databases", async (_req, res) => {
@@ -916,6 +969,8 @@ async function startGateway(): Promise<void> {
         res.status(status).json({ error: message });
       }
     });
+    lapRouteRegistrationSection("database-registry");
+
     // ── Mini-app batch read API ─────────────────────────────────────────────
     // Runs multiple read-only statements in one HTTP round trip. Mirrors the
     // Cloud App Host /api/db/batch contract so apps behave identically in
@@ -979,6 +1034,8 @@ async function startGateway(): Promise<void> {
     app.post("/api/db/batch", handleDbReadBatch);
     app.post("/api/db/query-batch", handleDbReadBatch);
     app.post("/api/db/read-batch", handleDbReadBatch);
+
+    lapRouteRegistrationSection("mini-app-batch-read-api");
 
     // ── Mini-app SQLite write API ────────────────────────────────────────────
     // Apps call: fetch('/api/db/write', { method: 'POST', body: JSON.stringify({ appId, sql, params }) })
@@ -1077,6 +1134,8 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("mini-app-write-api");
+
     // ── Mini-app SQLite write batch API ─────────────────────────────────────
     // Apps call: fetch('/api/db/write-batch', { method: 'POST', body: JSON.stringify({ appId, statements: [...] }) })
     // Same write rules as /api/db/write; up to 25 statements per request.
@@ -1139,6 +1198,8 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("mini-app-write-batch-api");
 
     // ── Backend handler DB proxy (loopback — same rules as /api/db/*) ───────
     // Python papr_db uses PAPR_DB_MODE=proxy to route query/write here instead
@@ -1210,6 +1271,8 @@ async function startGateway(): Promise<void> {
       }),
     );
 
+    lapRouteRegistrationSection("backend-db-proxy");
+
     // ── App Files API (large blobs → GCS, pointer rows in the app DB) ───────
     // Apps call: fetch('/api/files/upload', { body: { appId, filePath } }).
     // Bytes never go through git — repoHygiene rejects anything over 25 MB, so
@@ -1233,6 +1296,8 @@ async function startGateway(): Promise<void> {
         }));
       },
     });
+
+    lapRouteRegistrationSection("app-files-api");
 
     // ── Mini-app SQLite DDL API ──────────────────────────────────────────────
     // Apps call: fetch('/api/db/exec', { method: 'POST', body: JSON.stringify({ appId, sql }) })
@@ -1293,6 +1358,8 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("mini-app-ddl-api");
 
     // ── Mini-app Jobs API ─────────────────────────────────────────────────────
     // Gives mini-apps the same job-triggering capability that agents have via
@@ -1620,6 +1687,8 @@ async function startGateway(): Promise<void> {
       },
     });
 
+    lapRouteRegistrationSection("mini-app-jobs-api");
+
     // ── Mini-app Job Creation API ─────────────────────────────────────────────
     // Lets mini-apps programmatically create jobs (the same capability agents have
     // via the create_job tool). Intended for dynamic automation workflows where
@@ -1715,6 +1784,8 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("mini-app-job-create-api");
+
     // ── Brand API (mini-apps) ─────────────────────────────────────────────────
     //  GET /api/brand?appId=...     → merged brand tokens + cssVariables
     //  GET /api/brand/assets/:file  → logo/asset from workspace or app brand/
@@ -1770,6 +1841,8 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("brand-api");
+
     // ── Mini-app Bash API ─────────────────────────────────────────────────────
     // Lets mini-apps run quick shell commands (the same capability agents have
     // via the bash tool).  Intended for lightweight backend calls like resetting
@@ -1782,6 +1855,8 @@ async function startGateway(): Promise<void> {
     //    body: { command: string, timeoutMs?: number (default 30000) }
     //    returns: { stdout, stderr, exitCode }
     // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("mini-app-bash-api");
 
     // ── Cloud Publish (local handlers — must register before cloud proxy) ───
     app.get("/api/cloud/publish/:appId", async (req, res) => {
@@ -1968,15 +2043,42 @@ async function startGateway(): Promise<void> {
           slug: string;
           mode?: "fork" | "track";
           shareToken?: string;
+          catalogScope?: "global" | "namespace" | "community" | "team";
+          visibility?: string;
+          codeInstallable?: boolean;
         };
         if (!body.namespaceId || !body.slug) {
           res.status(400).json({ error: "namespaceId and slug are required" });
           return;
         }
-        const result = await getCloudAppInstallService().installApp(body);
+        const result = await runCloudCatalogInstall(body);
         res.json(result);
       } catch (err) {
-        res.status(500).json({ error: (err as Error).message });
+        const message = (err as Error).message;
+        const code =
+          err instanceof Error && "code" in err
+            ? String((err as { code?: string }).code)
+            : undefined;
+        if (err instanceof CloudCatalogInstallChoiceRequiredError) {
+          res.status(400).json({
+            error: message,
+            code: err.code,
+            catalogScope: err.catalogScope,
+            namespaceId: err.namespaceId,
+            slug: err.slug,
+            visibility: err.visibility,
+            options: err.options,
+          });
+          return;
+        }
+        const status =
+          code === "community_track_forbidden" ||
+          code === "non_team_track_forbidden" ||
+          code === "per_user_db" ||
+          code === "install_mode_choice_required"
+            ? 400
+            : 500;
+        res.status(status).json({ error: message, ...(code ? { code } : {}) });
       }
     });
 
@@ -2188,6 +2290,8 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    lapRouteRegistrationSection("cloud-publish-routes");
+
     // ── Cloud Proxy ──────────────────────────────────────────────────────────
     // Proxy /api/cloud/* → Memory Server /v1/cloud/*
     // Attaches user's PAPR_API_KEY from keychain automatically.
@@ -2263,6 +2367,8 @@ async function startGateway(): Promise<void> {
     app.post(cloudPathRegex, cloudProxyHandler);
     app.put(cloudPathRegex, cloudProxyHandler);
     app.delete(cloudPathRegex, cloudProxyHandler);
+
+    lapRouteRegistrationSection("cloud-proxy");
 
     // ── Cloud Sync Status + Triggers ─────────────────────────────────────
     app.get("/api/sync/status", (_req, res) => {
@@ -2744,6 +2850,8 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    lapRouteRegistrationSection("cloud-sync-routes");
+
     // ── Vault Sync Status + Triggers ──────────────────────────────────────
     app.get("/api/vault/status", (_req, res) => {
       const vault = getVaultSyncService();
@@ -2762,6 +2870,55 @@ async function startGateway(): Promise<void> {
       }
       try {
         const result = await vault.pushAllKeys();
+        res.json({ success: true, ...vault.getState(), result });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/vault/pull-shared", async (_req, res) => {
+      const vault = getVaultSyncService();
+      if (!vault) {
+        res.status(503).json({ error: "Vault sync not initialized" });
+        return;
+      }
+      try {
+        const upserted = await vault.pullSharedKeys();
+        res.json({ success: true, ...vault.getState(), upserted });
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    app.post("/api/vault/sync-key", async (req, res) => {
+      const vault = getVaultSyncService();
+      if (!vault) {
+        res.status(503).json({ error: "Vault sync not initialized" });
+        return;
+      }
+      const body = req.body as {
+        name?: string;
+        previousAudience?: string;
+        nextAudience?: string;
+        targetOrgId?: string;
+        mode?: "delete" | "update";
+      };
+      if (!body.name?.trim() || (body.mode !== "delete" && body.mode !== "update")) {
+        res.status(400).json({ error: "name and mode (delete|update) are required" });
+        return;
+      }
+      try {
+        const result = await vault.syncKeyVaultChange({
+          name: body.name.trim(),
+          previousAudience: body.previousAudience as
+            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
+            | undefined,
+          nextAudience: body.nextAudience as
+            | import("../core/storage/customKeysVault.js").IntegrationKeyVaultAudience
+            | undefined,
+          targetOrgId: body.targetOrgId,
+          mode: body.mode,
+        });
         res.json({ success: true, ...vault.getState(), result });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -2920,6 +3077,8 @@ async function startGateway(): Promise<void> {
     });
     // ─────────────────────────────────────────────────────────────────────────
 
+    lapRouteRegistrationSection("vault-sync-routes");
+
     // ── Job Files Endpoint ────────────────────────────────────────────────────
     // Serves files from job directories with correct MIME types
     // Supports videos, images, and other media files
@@ -3028,6 +3187,8 @@ async function startGateway(): Promise<void> {
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
+
+    lapRouteRegistrationSection("job-files-and-generated-media");
 
     registerCloudDesktopPreviewRoutes(app);
 
@@ -3259,7 +3420,14 @@ async function startGateway(): Promise<void> {
       console.log("[Gateway] Serving UI from:", productionUiPath);
     }
 
+    lapRouteRegistrationSection("mini-app-hosting-and-preview-routes");
+
     gatewayReady = true;
+    const { markGatewayRoutesReady } = await import(
+      "./services/gatewayReadiness.js"
+    );
+    markGatewayRoutesReady();
+    printGatewayStartupSummary();
     console.log("[Gateway] All routes registered — gateway fully ready");
 
     if (!isCloudAgentGatewayMode()) {
@@ -3268,7 +3436,9 @@ async function startGateway(): Promise<void> {
           markTursoPullSchedulerGatewayBoot();
         },
       );
-      getJobsScheduler().start();
+      timeStartupSync("post-ready", "JobsScheduler.start", () => {
+        getJobsScheduler().start();
+      });
       void import("./services/platforms/SessionKeeperService.js")
         .then(({ getSessionKeeperService }) => {
           getSessionKeeperService().start();
@@ -3304,20 +3474,22 @@ async function startGateway(): Promise<void> {
 
       const tryDeferredCloudSyncStartup = (): void => {
         void (async () => {
-          const { waitForWorkspaceReady } = await import(
-            "./services/workspaceReadiness.js"
-          );
-          await waitForWorkspaceReady();
-
-          if (getCloudSyncService()) {
-            console.log(
-              "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+          await timeStartupStep("deferred", "CloudSync.startup (wait+init)", async () => {
+            const { waitForWorkspaceReady } = await import(
+              "./services/workspaceReadiness.js"
             );
-            return;
-          }
-          const cloudSync = initializeCloudSyncService();
-          ensureTursoSyncBridge();
-          cloudSync.initialize().catch((err) => {
+            await waitForWorkspaceReady();
+
+            if (getCloudSyncService()) {
+              console.log(
+                "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+              );
+              return;
+            }
+            const cloudSync = initializeCloudSyncService();
+            ensureTursoSyncBridge();
+            await cloudSync.initialize();
+          }).catch((err) => {
             console.warn(
               "[Gateway] Cloud sync init failed (non-fatal):",
               (err as Error).message,
@@ -3334,49 +3506,68 @@ async function startGateway(): Promise<void> {
 
       setTimeout(tryDeferredCloudSyncStartup, cloudSyncStartupDelayMs);
 
-      setTimeout(() => {
-        initializeVaultSyncService({ gatewayPort: Number(PORT) })
-          .then((vaultSync) => {
+      const tryDeferredVaultSyncStartup = (): void => {
+        void (async () => {
+          await timeStartupStep("deferred", "VaultSync.startup (wait+init)", async () => {
+            const { waitForWorkspaceReady } = await import(
+              "./services/workspaceReadiness.js"
+            );
+            await waitForWorkspaceReady();
+
+            const vaultStartupDelayMs = Number(
+              process.env.VAULT_STARTUP_DELAY_MS ?? "5000",
+            );
+            if (vaultStartupDelayMs > 0) {
+              await new Promise((resolve) => setTimeout(resolve, vaultStartupDelayMs));
+            }
+
+            const vaultSync = await initializeVaultSyncService({
+              gatewayPort: Number(PORT),
+            });
             getCustomKeysService().onKeyChange((keyName) => {
               if (keyName) {
                 vaultSync.onKeyChanged(keyName).catch((e) =>
-                  console.warn("[Gateway] Vault key push failed:", (e as Error).message),
+                  console.warn(
+                    "[Gateway] Vault key push failed:",
+                    (e as Error).message,
+                  ),
                 );
               } else {
-                vaultSync.pushAllKeys().catch((e) =>
-                  console.warn("[Gateway] Vault full push failed:", (e as Error).message),
-                );
+                vaultSync.scheduleDebouncedPushAll();
               }
             });
-          })
-          .catch((err) => {
-            console.warn(
-              "[Gateway] Vault sync init failed (non-fatal):",
-              (err as Error).message,
-            );
           });
-      }, 45_000);
+        })().catch((err) => {
+          console.warn(
+            "[Gateway] Vault sync init failed (non-fatal):",
+            err instanceof Error ? err.message : err,
+          );
+        });
+      };
+
+      tryDeferredVaultSyncStartup();
 
       const tursoStartupDelayMs = Number(
         process.env.TURSO_STARTUP_DELAY_MS ?? "15000",
       );
       setTimeout(() => {
         const tursoBridge = ensureTursoSyncBridge();
-        void import("./services/TursoSyncBridge.js")
-          .then(({ syncTursoFromSyncIndex }) => syncTursoFromSyncIndex())
-          .then((summary) => {
-            if (summary.pulled > 0 || summary.pushed > 0) {
-              console.log(
-                `[Gateway] Turso startup sync-index: pulled=${summary.pulled} pushed=${summary.pushed}`,
-              );
-            }
-          })
-          .catch((err) =>
-            console.warn(
-              "[Gateway] Turso startup sync-index failed (non-fatal):",
-              (err as Error).message.slice(0, 120),
-            ),
+        void timeStartupStep("deferred", "Turso.syncTursoFromSyncIndex", async () => {
+          const { syncTursoFromSyncIndex } = await import(
+            "./services/TursoSyncBridge.js"
           );
+          const summary = await syncTursoFromSyncIndex();
+          if (summary.pulled > 0 || summary.pushed > 0) {
+            console.log(
+              `[Gateway] Turso startup sync-index: pulled=${summary.pulled} pushed=${summary.pushed}`,
+            );
+          }
+        }).catch((err) =>
+          console.warn(
+            "[Gateway] Turso startup sync-index failed (non-fatal):",
+            (err as Error).message.slice(0, 120),
+          ),
+        );
         if (process.env.TURSO_PULL_ON_STARTUP === "true") {
           void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
             console.warn(

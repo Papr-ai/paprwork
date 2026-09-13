@@ -64,7 +64,11 @@ export function normalizePlanTier(rawTier?: string | null): PaprSubscriptionTier
   if (normalized.includes("plus")) {
     return "starter";
   }
-  if (normalized.includes("developer") || normalized.includes("free")) {
+  if (
+    normalized.includes("developer") ||
+    normalized.includes("builder") ||
+    normalized.includes("free")
+  ) {
     return "developer";
   }
   return "developer";
@@ -128,7 +132,7 @@ export function planDisplayName(tier: PaprSubscriptionTier): string {
     case "growth":
       return "Growth";
     default:
-      return "Developer";
+      return "Builder";
   }
 }
 
@@ -256,6 +260,52 @@ export function hasActivePaprSubscription(input: {
 }): boolean {
   const status = input.subscriptionStatus?.trim().toLowerCase();
   return status === "active" || status === "trialing";
+}
+
+/** Builder/Developer plan requires a card on file before metered billing (matches dashboard). */
+export function requiresPaymentMethodForMeteredBilling(input: {
+  planTier: PaprSubscriptionTier;
+  hasPaymentMethod?: boolean;
+}): boolean {
+  return input.planTier === "developer" && input.hasPaymentMethod !== true;
+}
+
+export function formatSubscriptionStatusLabel(
+  subscriptionStatus?: string | null,
+): string {
+  const status = subscriptionStatus?.trim().toLowerCase();
+  if (!status) {
+    return "No subscription";
+  }
+  switch (status) {
+    case "active":
+      return "Active";
+    case "trialing":
+      return "Trial";
+    case "canceled":
+      return "Canceled";
+    case "past_due":
+      return "Past due";
+    case "unpaid":
+      return "Unpaid";
+    case "incomplete":
+      return "Incomplete";
+    default:
+      return status.charAt(0).toUpperCase() + status.slice(1);
+  }
+}
+
+export function subscriptionStatusTone(
+  subscriptionStatus?: string | null,
+): "active" | "warning" | "inactive" {
+  const status = subscriptionStatus?.trim().toLowerCase();
+  if (status === "active" || status === "trialing") {
+    return "active";
+  }
+  if (status === "past_due" || status === "unpaid") {
+    return "warning";
+  }
+  return "inactive";
 }
 
 export function usageBarPercent(current: number, limit: number): number {

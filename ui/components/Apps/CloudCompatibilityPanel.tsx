@@ -1,5 +1,7 @@
 import React from "react";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
+import { openPaprPlanSettings } from "../../utils/cloudMemoryStatus";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
 
 export function cloudCompatibilityLabel(level: CloudCompatibilityReport["level"]): string {
   switch (level) {
@@ -21,6 +23,8 @@ export function CloudCompatibilityBadge({
   report,
   loading = false,
 }: CloudCompatibilityBadgeProps) {
+  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
+
   if (loading) {
     return (
       <span className="cloud-compat-badge cloud-compat-badge--loading">
@@ -28,6 +32,20 @@ export function CloudCompatibilityBadge({
       </span>
     );
   }
+
+  if (cloudStatus?.level === "paused") {
+    return (
+      <button
+        type="button"
+        className="cloud-compat-badge cloud-compat-badge--paused"
+        title={cloudStatus.detail}
+        onClick={openPaprPlanSettings}
+      >
+        Papr Cloud paused
+      </button>
+    );
+  }
+
   if (!report) return null;
 
   return (

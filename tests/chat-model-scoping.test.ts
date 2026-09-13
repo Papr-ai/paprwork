@@ -94,6 +94,10 @@ describe("chatModelMemory", () => {
     expect(readChatModel("chat-opus")).toBe(OPUS);
   });
 
+  it("defaults new chats to Gemini before any pick or OAuth", () => {
+    expect(readNewChatDefaultModel()).toBe("gemini-3.8-flash");
+  });
+
   it("carries the selection across the temp -> permanent chat id rename", () => {
     writeChatModel("temp-123", FABLE);
     renameChatModel("temp-123", "real-456");

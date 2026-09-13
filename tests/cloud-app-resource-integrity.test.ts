@@ -187,6 +187,47 @@ describe("cloudAppResourceIntegrity", () => {
     expect(integrity.ok).toBe(true);
   });
 
+  it("promoteBundledAppJobsToRegistry registers jobs missing from jobs.json index", async () => {
+    const { promoteBundledAppJobsToRegistry } = await import(
+      "../src/gateway/services/cloudAppResourceIntegrity.js"
+    );
+    const orphanJobId = randomUUID();
+    const localAppId = randomUUID();
+    const localAppDir = path.join(paprHome, "apps", localAppId);
+    await fs.mkdir(path.join(localAppDir, "jobs", orphanJobId, "code"), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(localAppDir, "jobs", orphanJobId, "job.json"),
+      JSON.stringify({
+        id: orphanJobId,
+        name: "Orphan Job",
+        type: "python",
+        appIds: [localAppId],
+        command: "python3 code/run.py",
+      }),
+    );
+    await fs.cp(
+      path.join(localAppDir, "jobs", orphanJobId),
+      path.join(paprHome, "Jobs", orphanJobId),
+      { recursive: true },
+    );
+
+    const { promotedJobIds } = await promoteBundledAppJobsToRegistry({
+      localAppId,
+      localAppDir,
+      paprHome,
+    });
+    expect(promotedJobIds).toContain(orphanJobId);
+
+    const health = await assessCloudInstallHealth({
+      paprHome,
+      appId: localAppId,
+      expectedJobIds: [orphanJobId],
+    });
+    expect(health.ok).toBe(true);
+  });
+
   it("promotes bundled jobs into Jobs registry when missing", async () => {
     const onlyBundledJobId = randomUUID();
     const localAppId = randomUUID();

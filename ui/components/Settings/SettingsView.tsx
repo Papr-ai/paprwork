@@ -4,6 +4,11 @@
  */
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import {
+  paprCloudStatusDotVariant,
+} from "../../utils/cloudMemoryStatus";
+import { useSettingsNavigationStore } from "../../stores/settingsNavigationStore";
 import { useProfileStore } from "../../stores/profileStore";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
@@ -14,6 +19,7 @@ import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
 import { DatabasesTab } from "./DatabasesTab";
 import { ConnectedPlatformsTab } from "./ConnectedPlatformsTab";
+import { BillingTab } from "./BillingTab";
 import { PaprLoginSection } from "./PaprLoginSection";
 import { resizeProfilePhoto } from "../../utils/profilePhoto";
 import {
@@ -67,6 +73,29 @@ const SETTINGS_NAV: SettingsNavItem[] = [
     ),
   },
   {
+    id: "platforms",
+    label: "Platform Connections",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="18" cy="5" r="3" />
+        <circle cx="6" cy="12" r="3" />
+        <circle cx="18" cy="19" r="3" />
+        <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+        <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+      </svg>
+    ),
+  },
+  {
+    id: "billing",
+    label: "Billing",
+    icon: (
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="2" y="5" width="20" height="14" rx="2" />
+        <line x1="2" y1="10" x2="22" y2="10" />
+      </svg>
+    ),
+  },
+  {
     id: "cloud",
     label: "Cloud Sync",
     icon: (
@@ -83,17 +112,6 @@ const SETTINGS_NAV: SettingsNavItem[] = [
         <ellipse cx="12" cy="5" rx="9" ry="3" />
         <path d="M3 5v6c0 1.66 4 3 9 3s9-1.34 9-3V5" />
         <path d="M3 11v6c0 1.66 4 3 9 3s9-1.34 9-3v-6" />
-      </svg>
-    ),
-  },
-  {
-    id: "platforms",
-    label: "Platform Connections",
-    icon: (
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M16 8a6 6 0 0 1 6 6v7h-4v-7a2 2 0 0 0-2-2 2 2 0 0 0-2 2v7h-4v-7a6 6 0 0 1 6-6z" />
-        <rect width="4" height="12" x="2" y="9" />
-        <circle cx="4" cy="4" r="2" />
       </svg>
     ),
   },
@@ -132,9 +150,22 @@ const SETTINGS_NAV: SettingsNavItem[] = [
 ];
 
 export function SettingsView() {
-  const [activeTab, setActiveTabState] = useState<SettingsTab>(
-    () => readSettingsViewTab() ?? "profile",
-  );
+  const planAttention = useCloudMemoryStatusStore((state) => state.planAttention);
+  const planStatus = useCloudMemoryStatusStore((state) => state.status);
+  const planAttentionHint = planStatus
+    ? `${planStatus.label} — review Plan & usage`
+    : "Billing needs attention — review Plan & usage";
+  const navigationToken = useSettingsNavigationStore((state) => state.token);
+  const pendingSettingsTab = useSettingsNavigationStore((state) => state.pendingTab);
+  const [activeTab, setActiveTabState] = useState<SettingsTab>(() => {
+    const pendingTab = useSettingsNavigationStore.getState().pendingTab;
+    if (pendingTab) {
+      useSettingsNavigationStore.getState().acknowledgeTab();
+      writeSettingsViewTab(pendingTab);
+      return pendingTab;
+    }
+    return readSettingsViewTab() ?? "profile";
+  });
   const [scrollToPickerModels, setScrollToPickerModels] = useState(false);
 
   const setActiveTab = useCallback((tab: SettingsTab) => {
@@ -151,10 +182,21 @@ export function SettingsView() {
 
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ tab?: SettingsTab; section?: string }>)
-        .detail;
+      const detail = (
+        event as CustomEvent<{
+          tab?: SettingsTab;
+          section?: string;
+          focusPlan?: boolean;
+        }>
+      ).detail;
       if (detail?.tab) {
         setActiveTab(detail.tab);
+      }
+      if (detail?.focusPlan) {
+        useSettingsNavigationStore.getState().navigate({
+          tab: detail.tab ?? "billing",
+          focusPlan: true,
+        });
       }
       if (detail?.section === "picker-models") {
         setScrollToPickerModels(true);
@@ -163,6 +205,19 @@ export function SettingsView() {
     window.addEventListener("papr:open-settings", handler);
     return () => window.removeEventListener("papr:open-settings", handler);
   }, [setActiveTab]);
+
+  useEffect(() => {
+    if (!pendingSettingsTab) return;
+    setActiveTab(pendingSettingsTab);
+    useSettingsNavigationStore.getState().acknowledgeTab();
+  }, [navigationToken, pendingSettingsTab, setActiveTab]);
+
+  useEffect(() => {
+    useSettingsNavigationStore.getState().setCurrentTab(activeTab);
+    return () => {
+      useSettingsNavigationStore.getState().setCurrentTab(null);
+    };
+  }, [activeTab]);
 
   const handleNavClick = (tab: SettingsTab) => {
     setActiveTab(tab);
@@ -186,7 +241,14 @@ export function SettingsView() {
               onClick={() => handleNavClick(item.id)}
             >
               {item.icon}
-              {item.label}
+              <span className="settings-tab__label">{item.label}</span>
+              {item.id === "billing" && planAttention && planStatus ? (
+                <span
+                  className={`settings-tab__attention settings-tab__attention--${paprCloudStatusDotVariant(planStatus)}`}
+                  aria-label={planAttentionHint}
+                  title={planAttentionHint}
+                />
+              ) : null}
             </button>
           ))}
         </nav>
@@ -202,6 +264,7 @@ export function SettingsView() {
           {activeTab === "databases" && <DatabasesTab />}
           {activeTab === "platforms" && <ConnectedPlatformsTab />}
           {activeTab === "profile" && <ProfileTab />}
+          {activeTab === "billing" && <BillingTab />}
           {activeTab === "permissions" && <PermissionsTab />}
           {activeTab === "privacy" && <PrivacyTab />}
           {activeTab === "about" && <AboutTab />}

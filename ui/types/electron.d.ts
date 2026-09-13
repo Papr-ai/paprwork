@@ -356,6 +356,8 @@ export interface ElectronAPI {
       success: boolean;
       workspaceId?: string;
       workspaceName?: string;
+      currentUserId?: string;
+      currentUserRole?: string;
       members?: Array<{
         objectId: string;
         user: {
@@ -374,20 +376,39 @@ export interface ElectronAPI {
       inviteLink?: string;
       error?: string;
     }>;
+    updateWorkspaceMemberRole: (input: {
+      userId: string;
+      currentRole: string;
+      newRole: "owner" | "admin" | "member";
+    }) => Promise<{ success: boolean; error?: string }>;
     openWorkspaceTeam: () => Promise<{ success: boolean; error?: string }>;
-    getPlanSummary: () => Promise<{
+    getPlanSummary: (options?: { force?: boolean }) => Promise<{
       success: boolean;
       summary?: import("../../src/core/types/paprBilling").PaprPlanSummary;
       error?: string;
     }>;
     openBillingPortal: (
-      section?: "billing" | "subscriptions" | "invoices",
+      input?:
+        | "billing"
+        | "subscriptions"
+        | "invoices"
+        | {
+            section?: "billing" | "subscriptions" | "invoices";
+            stripeCustomerId?: string;
+          },
     ) => Promise<{ success: boolean; error?: string }>;
     openUsageDashboard: () => Promise<{ success: boolean; error?: string }>;
     startCheckout: (input: {
       tier: "starter" | "growth";
       billingCycle: "monthly" | "yearly";
     }) => Promise<{ success: boolean; error?: string }>;
+    subscribeDeveloperPlan: () => Promise<{
+      success: boolean;
+      created?: boolean;
+      alreadyActive?: boolean;
+      summary?: import("../../src/core/types/paprBilling").PaprPlanSummary;
+      error?: string;
+    }>;
     setMeteredBilling: (
       enabled: boolean,
     ) => Promise<{ success: boolean; enabled?: boolean; error?: string }>;

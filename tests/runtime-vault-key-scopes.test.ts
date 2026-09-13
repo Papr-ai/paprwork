@@ -12,15 +12,11 @@ describe("runtimeVaultKeyLookupScopes", () => {
     ]);
   });
 
-  it("queries user and namespace scopes for published apps", () => {
+  it("queries context scope for published apps (ACL union)", () => {
     expect(runtimeVaultKeyLookupScopes("85ZIB7mD1V")).toEqual([
       {
-        scope: "user",
-        query: "scope=user&namespace_id=85ZIB7mD1V",
-      },
-      {
-        scope: "namespace",
-        query: "scope=namespace&namespace_id=85ZIB7mD1V",
+        scope: "context",
+        query: "scope=context&namespace_id=85ZIB7mD1V",
       },
     ]);
   });

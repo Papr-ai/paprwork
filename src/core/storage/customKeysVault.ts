@@ -1,13 +1,31 @@
 /** User-selected visibility for integration keys. */
-export type IntegrationKeyVaultAudience = "user" | "namespace" | "org";
+export type IntegrationKeyVaultAudience =
+  | "user"
+  | "members"
+  | "namespace"
+  | "org";
 
 export function normalizeIntegrationKeyVaultAudience(
   value?: IntegrationKeyVaultAudience | null,
 ): IntegrationKeyVaultAudience {
-  if (value === "namespace" || value === "org") {
+  if (
+    value === "namespace" ||
+    value === "org" ||
+    value === "members"
+  ) {
     return value;
   }
   return "user";
+}
+
+export function isSharedVaultAudience(
+  audience?: IntegrationKeyVaultAudience | null,
+): boolean {
+  return (
+    audience === "namespace" ||
+    audience === "org" ||
+    audience === "members"
+  );
 }
 
 /** Cross-org integration keys (shared across all Papr workspaces). */

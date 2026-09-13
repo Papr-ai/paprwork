@@ -1,14 +1,30 @@
 .papr-plan {
-  margin-top: 14px;
-  border-top: 1px solid var(--border-color);
-  padding-top: 14px;
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
 }
 
 .papr-plan__header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
+}
+
+.papr-plan__header--compact {
+  margin-bottom: 4px;
+}
+
+.papr-plan__title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.papr-plan__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
 }
 
 .papr-plan__toggle {
@@ -33,17 +49,12 @@
 }
 
 .papr-plan__badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
+  display: inline-block;
+  width: 7px;
+  height: 7px;
   border-radius: 999px;
-  background: rgba(232, 76, 96, 0.15);
-  color: rgb(232, 76, 96);
-  font-size: 11px;
-  font-weight: 700;
+  background: var(--papr-blue-gradient);
+  box-shadow: 0 0 0 2px rgba(0, 172, 250, 0.15);
 }
 
 .papr-plan__refresh {
@@ -81,6 +92,28 @@
   color: var(--text-secondary);
 }
 
+.papr-plan__callout {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.papr-plan__callout-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.papr-plan__callout-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
 .papr-plan__summary {
   display: flex;
   align-items: flex-start;
@@ -88,10 +121,46 @@
   gap: 12px;
 }
 
+.papr-plan__plan-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 .papr-plan__plan-name {
   font-size: 15px;
   font-weight: 600;
   color: var(--text-primary);
+}
+
+.papr-plan__status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+
+.papr-plan__status-pill[data-tone="active"] {
+  color: rgb(22, 120, 72);
+  background: rgba(52, 199, 89, 0.12);
+  border-color: rgba(52, 199, 89, 0.25);
+}
+
+.papr-plan__status-pill[data-tone="warning"] {
+  color: rgb(180, 83, 9);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.papr-plan__status-pill[data-tone="inactive"] {
+  color: rgb(185, 28, 28);
+  background: rgba(232, 76, 96, 0.1);
+  border-color: rgba(232, 76, 96, 0.25);
 }
 
 .papr-plan__plan-features,
@@ -195,6 +264,89 @@
   gap: 8px;
 }
 
+.papr-plan__upgrade-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.papr-plan__upgrade-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.papr-plan__upgrade-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.papr-plan__upgrade-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.papr-plan__upgrade-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.04);
+  border: 1px solid var(--border-color);
+}
+
+.papr-plan__upgrade-card--current {
+  border-color: color-mix(in srgb, var(--accent, #0071e3) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent, #0071e3) 8%, var(--bg-secondary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #0071e3) 18%, transparent);
+}
+
+.papr-plan__upgrade-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.papr-plan__upgrade-card-badge {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #0071e3);
+}
+
+.papr-plan__upgrade-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-plan__upgrade-card-price {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.papr-plan__upgrade-card-features {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.papr-plan__upgrade-card-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.papr-plan__dashboard-btn {
+  align-self: flex-start;
+}
+
 .papr-plan__upgrade-label {
   font-size: 12px;
   font-weight: 600;
@@ -209,13 +361,43 @@
 
 .papr-plan__metered {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 12px;
   padding: 12px;
   border-radius: 8px;
   background: rgba(127, 127, 127, 0.06);
   border: 1px solid var(--border-color);
+}
+
+.papr-plan__metered-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.papr-plan__payment-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.papr-plan__payment-banner-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.papr-plan__payment-banner-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .papr-plan__metered-title {

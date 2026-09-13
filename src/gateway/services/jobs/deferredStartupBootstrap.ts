@@ -12,6 +12,14 @@ export async function runDeferredJobsWorkspaceBootstrap(): Promise<void> {
   await getJobsService().waitForStartupMaintenance();
 
   const maintenanceMs = Math.round(performance.now() - startedAt);
+  const { recordDeferredStartupStep } = await import(
+    "../gatewayStartupTiming.js"
+  );
+  recordDeferredStartupStep(
+    "deferred",
+    "JobsService.startupMaintenance",
+    maintenanceMs,
+  );
   console.log(
     `[Gateway] Background: jobs maintenance complete (${maintenanceMs}ms); home repair deferred`,
   );

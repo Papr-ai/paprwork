@@ -159,6 +159,94 @@ describe("cloud linked resources (install/sync)", () => {
     await fs.rm(targetHome, { recursive: true, force: true });
   });
 
+  it("syncAppLinkedResourcesToTarget copies jobs bundled under apps/{id}/jobs", async () => {
+    const bundledOnlyJobId = randomUUID();
+    const bundledSourceHome = await fs.mkdtemp(
+      path.join(os.tmpdir(), "papr-bundled-source-"),
+    );
+    await fs.mkdir(
+      path.join(bundledSourceHome, "apps", publisherAppId, "jobs", bundledOnlyJobId, "code"),
+      { recursive: true },
+    );
+    await fs.mkdir(path.join(bundledSourceHome, "apps", publisherAppId), {
+      recursive: true,
+    });
+    await fs.mkdir(path.join(bundledSourceHome, "data"), { recursive: true });
+    await fs.writeFile(
+      path.join(bundledSourceHome, "apps", publisherAppId, "data-sources.json"),
+      JSON.stringify({
+        sources: [
+          {
+            id: "main",
+            type: "sqlite",
+            jobId: bundledOnlyJobId,
+            alias: "main",
+            dbPath: "",
+            tables: [],
+            linkedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+    await fs.writeFile(
+      path.join(
+        bundledSourceHome,
+        "apps",
+        publisherAppId,
+        "jobs",
+        bundledOnlyJobId,
+        "job.json",
+      ),
+      JSON.stringify({
+        id: bundledOnlyJobId,
+        name: "Bundled Only",
+        type: "python",
+        appIds: [publisherAppId],
+        command: "python3 code/run.py",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    await fs.writeFile(
+      path.join(bundledSourceHome, "data", "jobs.json"),
+      JSON.stringify([]),
+    );
+
+    const bundledLocalAppId = randomUUID();
+    await fs.mkdir(path.join(targetHome, "apps", bundledLocalAppId), {
+      recursive: true,
+    });
+    await fs.writeFile(
+      path.join(targetHome, "apps", bundledLocalAppId, "data-sources.json"),
+      JSON.stringify({
+        sources: [
+          {
+            id: "main",
+            type: "sqlite",
+            jobId: bundledOnlyJobId,
+            alias: "main",
+            dbPath: "",
+            tables: [],
+            linkedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    );
+
+    const result = await syncAppLinkedResourcesToTarget({
+      appId: bundledLocalAppId,
+      sourceAppId: publisherAppId,
+      sourcePaprHome: bundledSourceHome,
+      targetPaprHome: targetHome,
+    });
+
+    expect(result.copiedJobIds).toContain(bundledOnlyJobId);
+    await expect(
+      fs.access(path.join(targetHome, "Jobs", bundledOnlyJobId, "job.json")),
+    ).resolves.toBeUndefined();
+
+    await fs.rm(bundledSourceHome, { recursive: true, force: true });
+  });
+
   it("syncAppLinkedResourcesToTarget copies jobs and remaps appIds", async () => {
     const result = await syncAppLinkedResourcesToTarget({
       appId: localAppId,

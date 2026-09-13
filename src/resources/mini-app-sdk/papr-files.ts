@@ -193,40 +193,45 @@ export const papr = {
       });
 
       if (ticket.alreadyExists || !ticket.uploadUrl) {
-        return {
+        return api<UploadResult>("/api/files/commit", {
           id: ticket.id,
           objectKey: ticket.objectKey,
-          sha256: ticket.sha256,
           sizeBytes: total,
-          deduped: true,
-          verified: true,
-        };
+        });
       }
 
       const startedAt = Date.now();
       let offset = await probe(ticket.uploadUrl, total);
 
-      while (offset < total) {
-        if (options.signal?.aborted) throw new Error("Upload aborted");
-        const step = await putChunk(
-          ticket.uploadUrl,
-          blob,
-          offset,
-          total,
-          options.signal,
-        );
-        offset = step.done ? total : step.committed;
+      try {
+        while (offset < total) {
+          if (options.signal?.aborted) throw new Error("Upload aborted");
+          const step = await putChunk(
+            ticket.uploadUrl,
+            blob,
+            offset,
+            total,
+            options.signal,
+          );
+          offset = step.done ? total : step.committed;
 
-        if (options.onProgress) {
-          const elapsed = (Date.now() - startedAt) / 1000;
-          const rate = elapsed > 0 ? offset / elapsed : 0;
-          options.onProgress({
-            uploadedBytes: offset,
-            totalBytes: total,
-            bytesPerSecond: rate,
-            etaSeconds: rate > 0 ? Math.round((total - offset) / rate) : null,
-          });
+          if (options.onProgress) {
+            const elapsed = (Date.now() - startedAt) / 1000;
+            const rate = elapsed > 0 ? offset / elapsed : 0;
+            options.onProgress({
+              uploadedBytes: offset,
+              totalBytes: total,
+              bytesPerSecond: rate,
+              etaSeconds: rate > 0 ? Math.round((total - offset) / rate) : null,
+            });
+          }
         }
+      } catch (uploadErr) {
+        if (options.signal?.aborted) throw uploadErr;
+        // GCS may have the full object even when the browser blocked reading the
+        // final PUT response (CORS). Probe before giving up.
+        offset = await probe(ticket.uploadUrl, total);
+        if (offset < total) throw uploadErr;
       }
 
       // The server verifies stored size and MD5 before trusting the bytes —

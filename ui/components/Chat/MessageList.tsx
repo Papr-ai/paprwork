@@ -57,8 +57,13 @@ export const MessageList: React.FC<MessageListProps> = ({
   const hasMoreMessages = chatState?.hasMoreMessages ?? false;
   const isLoadingMore = chatState?.isLoadingMore ?? false;
 
+  const groupedMessages = useMemo(
+    () => groupDelegationFollowUpMessages(messages),
+    [messages],
+  );
+
   // Filter out sub-agent trigger messages from main chat (they appear in MiniChatCard)
-  const filteredMessages = messages.filter((msg) => {
+  const filteredMessages = groupedMessages.filter((msg) => {
     // Hide synthetic sub-agent user messages
     if (msg.role === "user" && isHiddenContinueUserMessage(msg.content)) {
       return false;
@@ -87,11 +92,6 @@ export const MessageList: React.FC<MessageListProps> = ({
     }
     return true;
   });
-
-  const groupedMessages = useMemo(
-    () => groupDelegationFollowUpMessages(filteredMessages),
-    [filteredMessages],
-  );
 
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
@@ -257,7 +257,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           </span>
         </div>
       )}
-      {groupedMessages.map((message) => (
+      {filteredMessages.map((message) => (
         <MessageItem
           key={message.id}
           chatId={chatId}

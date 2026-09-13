@@ -255,12 +255,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
       listWorkspaceMembers: () => ipcRenderer.invoke("papr:list-workspace-members"),
       inviteWorkspaceMember: (email) =>
         ipcRenderer.invoke("papr:invite-workspace-member", email),
+      updateWorkspaceMemberRole: (input) =>
+        ipcRenderer.invoke("papr:update-workspace-member-role", input),
       openWorkspaceTeam: () => ipcRenderer.invoke("papr:open-workspace-team"),
-      getPlanSummary: () => ipcRenderer.invoke("papr:get-plan-summary"),
-      openBillingPortal: (section) =>
-        ipcRenderer.invoke("papr:open-billing-portal", section),
+      getPlanSummary: (options) =>
+        ipcRenderer.invoke("papr:get-plan-summary", options),
+      openBillingPortal: (input) =>
+        ipcRenderer.invoke("papr:open-billing-portal", input),
       openUsageDashboard: () => ipcRenderer.invoke("papr:open-usage-dashboard"),
       startCheckout: (input) => ipcRenderer.invoke("papr:start-checkout", input),
+      subscribeDeveloperPlan: () =>
+        ipcRenderer.invoke("papr:subscribe-developer-plan"),
       setMeteredBilling: (enabled) =>
         ipcRenderer.invoke("papr:set-metered-billing", enabled),
     };

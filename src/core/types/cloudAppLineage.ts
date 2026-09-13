@@ -4,6 +4,9 @@
 
 export type CloudAppInstallMode = "fork" | "track";
 
+/** Persisted DB attach mode after install (lineage v1.2+). */
+export type DatabasePolicy = "shared" | "forked";
+
 export interface CloudAppLineageSource {
   orgId: string;
   namespaceId: string;
@@ -13,10 +16,12 @@ export interface CloudAppLineageSource {
 }
 
 export interface CloudAppLineageFile {
-  schemaVersion: "1.0.0" | "1.1.0";
+  schemaVersion: "1.0.0" | "1.1.0" | "1.2.0";
   lineageId: string;
   mode: CloudAppInstallMode;
   source: CloudAppLineageSource;
+  /** fork → forked (installer DB); track + shared → shared (publisher primary). */
+  databasePolicy?: DatabasePolicy;
   installedAt: string;
   /** ISO timestamp of last successful upstream sync (track mode). */
   lastSyncedAt?: string;

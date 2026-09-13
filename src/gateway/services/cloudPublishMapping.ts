@@ -10,6 +10,7 @@ import {
   type CloudSharingSettings,
   type MemoryPublishSharingFields,
 } from "./cloudSharingSettings.js";
+import type { CatalogAutomation } from "../../core/types/catalogAutomation.js";
 import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
 
 export { formatShareLink, accessModeRequiresShareToken } from "../../core/utils/cloudShareLink.js";
@@ -65,6 +66,7 @@ export interface MemoryPublishResponseFields {
   catalogTags?: string[];
   catalogPlatform?: string[];
   catalogRequiresDesktop?: boolean;
+  catalogAutomation?: CatalogAutomation | null;
 }
 
 const ACCESS_MODES: readonly CloudAccessMode[] = [

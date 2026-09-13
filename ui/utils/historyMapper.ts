@@ -3,6 +3,7 @@ import {
   resolveToolCallStatus,
 } from "../../src/core/utils/interruptedToolResult";
 import type { ChatMessage, MessageAttachment } from "../types/chat";
+import { normalizeLoadedMessage } from "./normalizeHistoryTools";
 
 /** Synthetic user messages injected by SubAgentResponseTrigger - shown only in MiniChatCard, not main chat */
 function isSyntheticSubAgentMessage(msg: unknown): boolean {
@@ -172,7 +173,7 @@ export function mapHistoryMessages(
           })
         : undefined;
 
-    return {
+    return normalizeLoadedMessage({
       id:
         typeof candidate.id === "string"
           ? candidate.id
@@ -193,6 +194,6 @@ export function mapHistoryMessages(
       // reappearing as a finished answer.
       ...(candidate.incomplete === true ? { interrupted: true } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
-    };
+    });
   });
 }

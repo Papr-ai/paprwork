@@ -20,7 +20,8 @@ import {
   type AppDataSource,
 } from "./appDataSources.js";
 import { resolveAppDependentJobIds } from "./cloudSync/resolveAppDependentJobs.js";
-import type { JobRecord } from "./JobsService.js";
+import { mergeJobAppIds } from "./jobs/appIds.js";
+import type { JobRecord } from "./jobs/types.js";
 import { DATABASES_REGISTRY_FILENAME, type DatabasesRegistryFile } from "./DatabaseRegistryService.js";
 
 const UUID_RE =
@@ -364,31 +365,40 @@ export async function promoteBundledAppJobsToRegistry(input: {
   const jobsService = getJobsService();
   await jobsService.initialize();
 
+  const jobIndexIds = await readJobsIndexIds(input.paprHome);
   const promotedJobIds: string[] = [];
   for (const jobId of bundledIds) {
-    const targetDir = path.join(input.paprHome, "Jobs", jobId);
-    if (existsSync(path.join(targetDir, "job.json"))) {
+    if (jobRegisteredOnDisk(input.paprHome, jobId, jobIndexIds)) {
       continue;
     }
 
     const sourceDir = path.join(input.localAppDir, "jobs", jobId);
+    const targetDir = path.join(input.paprHome, "Jobs", jobId);
     let jobJson: Partial<JobRecord> & { id?: string };
     try {
       const raw = await fs.readFile(path.join(sourceDir, "job.json"), "utf8");
       jobJson = JSON.parse(raw) as Partial<JobRecord> & { id?: string };
     } catch {
-      continue;
+      try {
+        const raw = await fs.readFile(path.join(targetDir, "job.json"), "utf8");
+        jobJson = JSON.parse(raw) as Partial<JobRecord> & { id?: string };
+      } catch {
+        continue;
+      }
     }
 
     const name = jobJson.name?.trim() || jobId;
     const type = jobJson.type ?? "python";
+    const copyFrom = existsSync(path.join(sourceDir, "job.json"))
+      ? sourceDir
+      : undefined;
     await jobsService.upsertJob(
       {
         id: jobId,
         name,
         type,
         status: "pending",
-        appIds: [input.localAppId],
+        appIds: mergeJobAppIds(jobJson.appIds, [input.localAppId]),
         dependsOn: jobJson.dependsOn ?? [],
         runtimeCalls: jobJson.runtimeCalls ?? [],
         command: jobJson.command,
@@ -406,9 +416,10 @@ export async function promoteBundledAppJobsToRegistry(input: {
         createdAt: jobJson.createdAt ?? new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
-      sourceDir,
+      copyFrom,
     );
     promotedJobIds.push(jobId);
+    jobIndexIds.add(jobId);
   }
 
   return { promotedJobIds };

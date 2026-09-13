@@ -52,6 +52,8 @@ import {
 } from "../utils/uniqueAppNaming.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
 import { prepareCatalogIconForPublish } from "../utils/catalogIconForPublish.js";
+import type { CatalogAutomation } from "../../core/types/catalogAutomation.js";
+import { resolveCatalogAutomationForApp } from "./cloudCatalogAutomation.js";
 import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
@@ -365,12 +367,14 @@ export class CloudAppPublishService {
     const localCatalogRequirements =
       await this.resolveLocalCatalogRequirements(appId);
     const localCatalogMetadata = await this.resolveLocalCatalogMetadata(appId);
+    const localCatalogAutomation = await resolveCatalogAutomationForApp(appId);
     const drift = detectAutoPublishDrift({
       memory,
       prefs,
       expectedSlug,
       localCatalogRequirements,
       localCatalogMetadata,
+      localCatalogAutomation,
     });
 
     if (drift.length === 0) {
@@ -435,6 +439,8 @@ export class CloudAppPublishService {
       appDir,
     });
 
+    const catalogAutomation = await resolveCatalogAutomationForApp(appId);
+
     const data = await this.postPublishToMemory(appId, resolvedSlug, {
       intent: "catalog",
       skipPlatformScan: true,
@@ -450,6 +456,7 @@ export class CloudAppPublishService {
       catalogDescription: appMeta?.description,
       catalogIcon: catalogIconResult.icon,
       catalogTags: appMeta?.tags,
+      catalogAutomation,
     });
 
     const config = parsePublishConfig(appId, data, sharing);
@@ -618,6 +625,7 @@ export class CloudAppPublishService {
       catalogDescription?: string;
       catalogIcon?: string;
       catalogTags?: string[];
+      catalogAutomation?: CatalogAutomation | null;
     },
   ): Promise<PublishApiResponse> {
     if (!this.isWriteAllowed(`postPublishToMemory ${appId}`)) {
@@ -665,6 +673,9 @@ export class CloudAppPublishService {
             : {}),
           ...(body.catalogRequiresDesktop !== undefined
             ? { catalogRequiresDesktop: body.catalogRequiresDesktop }
+            : {}),
+          ...(body.catalogAutomation !== undefined
+            ? { catalogAutomation: body.catalogAutomation }
             : {}),
         },
       });
@@ -1008,6 +1019,8 @@ export class CloudAppPublishService {
       );
     }
 
+    const catalogAutomation = await resolveCatalogAutomationForApp(appId);
+
     let data: PublishApiResponse | null = null;
     let lastError = "";
     for (const slug of slugCandidates) {
@@ -1027,6 +1040,7 @@ export class CloudAppPublishService {
           catalogTags: appMeta?.tags,
           catalogPlatform: manifestPlatform,
           catalogRequiresDesktop: manifestRequiresDesktop,
+          catalogAutomation,
         });
         if (slug !== resolvedSlug) {
           console.log(

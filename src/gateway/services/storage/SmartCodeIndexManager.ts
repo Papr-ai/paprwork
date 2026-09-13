@@ -22,7 +22,7 @@ import {
 import * as path from 'path';
 import * as fs from 'fs';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
-import { reportPaprQuotaError } from '../../../core/utils/paprQuota.js';
+import { reportPaprQuotaError, isPaprSubscriptionBlockedMessage } from '../../../core/utils/paprQuota.js';
 
 /**
  * Max transient failures per file before it is dropped from the index queue.
@@ -50,6 +50,7 @@ export class SmartCodeIndexManager {
   private queueInterval: NodeJS.Timeout | null = null;
   private isIndexing: boolean = false;
   private rateLimitHit: boolean = false;
+  private subscriptionPaused: boolean = false;
   private stopped = false;
   
   constructor(client: Papr, config: IndexManagerConfig) {
@@ -324,7 +325,7 @@ export class SmartCodeIndexManager {
    * Run batch indexing
    */
   private async runBatch(): Promise<void> {
-    if (this.stopped || this.rateLimitHit) {
+    if (this.stopped || this.rateLimitHit || this.subscriptionPaused) {
       return;
     }
 
@@ -357,7 +358,7 @@ export class SmartCodeIndexManager {
 
       this.isIndexing = false;
 
-      if (!this.stopped && !this.rateLimitHit && this.tracker.getQueueSize() > 0) {
+      if (!this.stopped && !this.rateLimitHit && !this.subscriptionPaused && this.tracker.getQueueSize() > 0) {
         this.scheduleBatch(1000);
       }
     }
@@ -409,15 +410,28 @@ export class SmartCodeIndexManager {
         
       } catch (error) {
         const err = error as Error;
-        
+
+        if (isPaprSubscriptionBlockedMessage(err.message)) {
+          reportPaprQuotaError(error, "code-index");
+          console.error(`   ⏹️  Code indexing paused — no active Papr subscription.`);
+          console.error(`   💡 ${err.message.slice(0, 200)}`);
+          console.error(
+            "   💡 Fix billing in Settings → Plan & usage, then restart the app.",
+          );
+          this.subscriptionPaused = true;
+          this.tracker.dequeueFile(queuedFile.file_path);
+          break;
+        }
+
         // Check if it's a rate limit or service error from PAPR Memory
-        const isRateLimitError = error instanceof Papr.RateLimitError || 
-                                  error instanceof Papr.PermissionDeniedError ||
-                                  err.message.includes('403') || 
-                                  err.message.includes('503') || // Service unavailable (often rate limiting)
-                                  err.message.includes('429') || // Too many requests
-                                  err.message.includes('limit') ||
-                                  err.message.includes('quota');
+        const isRateLimitError =
+          error instanceof Papr.RateLimitError ||
+          err.message.includes("503") ||
+          err.message.includes("429") ||
+          err.message.includes("limit") ||
+          err.message.includes("quota") ||
+          (err.message.includes("403") &&
+            !isPaprSubscriptionBlockedMessage(err.message));
         
         if (isRateLimitError) {
           reportPaprQuotaError(error, "code-index");
@@ -549,6 +563,18 @@ export class SmartCodeIndexManager {
 
     this.queueInterval = setInterval(checkQueue, 10000);
 
+    if (this.tracker.getQueueSize() > 0) {
+      this.scheduleBatch(0);
+    }
+  }
+
+  /** Resume indexing after billing restore (active/trialing subscription). */
+  resumeAfterSubscriptionRestore(): void {
+    if (this.stopped || !this.subscriptionPaused) {
+      return;
+    }
+    this.subscriptionPaused = false;
+    console.log("[CodeIndexing] Resuming after billing restore");
     if (this.tracker.getQueueSize() > 0) {
       this.scheduleBatch(0);
     }

@@ -24,6 +24,14 @@ interface StoredCustomKeyRecord {
   managedBy?: "oauth";
   oauthProvider?: "openai" | "anthropic";
   vaultAudience?: "user" | "namespace" | "org";
+  vaultOrigin?: "local" | "shared";
+  sharedShareScope?: "namespace" | "org";
+  sharedOwnerUserId?: string;
+  sharedSyncedAt?: string;
+  vaultSharedNameCollision?: boolean;
+  vaultAudienceMemberIds?: string[];
+  vaultShareBlocked?: boolean;
+  vaultShareBlockedOwnerUserId?: string;
 }
 
 function resolveElectronDataDir(): string {
@@ -85,6 +93,22 @@ function mapStoredKey(
           : "organization",
     organizationId,
     vaultAudience: normalizeIntegrationKeyVaultAudience(key.vaultAudience),
+    ...(key.vaultOrigin ? { vaultOrigin: key.vaultOrigin } : {}),
+    ...(key.sharedShareScope ? { sharedShareScope: key.sharedShareScope } : {}),
+    ...(key.sharedOwnerUserId
+      ? { sharedOwnerUserId: key.sharedOwnerUserId }
+      : {}),
+    ...(key.sharedSyncedAt ? { sharedSyncedAt: key.sharedSyncedAt } : {}),
+    ...(key.vaultSharedNameCollision
+      ? { vaultSharedNameCollision: key.vaultSharedNameCollision }
+      : {}),
+    ...(key.vaultAudienceMemberIds?.length
+      ? { vaultAudienceMemberIds: key.vaultAudienceMemberIds }
+      : {}),
+    ...(key.vaultShareBlocked ? { vaultShareBlocked: key.vaultShareBlocked } : {}),
+    ...(key.vaultShareBlockedOwnerUserId
+      ? { vaultShareBlockedOwnerUserId: key.vaultShareBlockedOwnerUserId }
+      : {}),
   };
 }
 

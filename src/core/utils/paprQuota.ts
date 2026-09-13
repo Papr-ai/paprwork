@@ -29,6 +29,9 @@ type QuotaListener = (status: PaprQuotaStatus) => void;
 
 let quotaExceededListener: QuotaListener | null = null;
 
+/** Set when Papr Memory returns a subscription block — stops cloud sync retries. */
+let paprCloudPaused = false;
+
 /** Gateway registers this at startup to broadcast quota events to the UI. */
 export function setPaprQuotaExceededListener(listener: QuotaListener | null): void {
   quotaExceededListener = listener;
@@ -36,6 +39,20 @@ export function setPaprQuotaExceededListener(listener: QuotaListener | null): vo
 
 export function notifyPaprQuotaStatus(status: PaprQuotaStatus): void {
   quotaExceededListener?.(status);
+}
+
+export function isPaprCloudPaused(): boolean {
+  return paprCloudPaused;
+}
+
+export function setPaprCloudPaused(paused: boolean): void {
+  paprCloudPaused = paused;
+}
+
+export function isPaprSubscriptionBlockedMessage(message: string): boolean {
+  const normalized = extractErrorMessage(message).trim();
+  if (!normalized) return false;
+  return SUBSCRIPTION_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 const QUOTA_SIGNAL_PATTERNS = [
@@ -167,6 +184,9 @@ export function extractErrorMessage(error: unknown): string {
 function isLikelyQuotaMessage(message: string): boolean {
   const normalized = message.trim();
   if (!normalized) return false;
+  if (SUBSCRIPTION_PATTERNS.some((pattern) => pattern.test(normalized))) {
+    return true;
+  }
   if (NON_QUOTA_403_PATTERNS.some((pattern) => pattern.test(normalized))) {
     return QUOTA_SIGNAL_PATTERNS.some((pattern) => pattern.test(normalized));
   }
@@ -204,7 +224,7 @@ function defaultDetail(kind: PaprQuotaKind): string {
     case "rate_limit":
       return "Papr Memory is rate-limiting requests on your account.";
     case "subscription":
-      return "Papr Memory couldn't verify an active subscription for this workspace. Chat sync and memory features may be paused until billing is linked.";
+      return "Papr Cloud features paused. Local chat works.";
     default:
       return "Your Papr Memory plan limit has been reached.";
   }
@@ -221,7 +241,7 @@ function titleForKind(kind: PaprQuotaKind): string {
     case "rate_limit":
       return "Papr Memory rate limited";
     case "subscription":
-      return "Papr Memory unavailable";
+      return "Subscription cancelled.";
     default:
       return "Papr Memory limit reached";
   }
@@ -300,6 +320,9 @@ export function reportPaprQuotaError(
 ): PaprQuotaStatus | null {
   const status = parsePaprQuotaError(error, source);
   if (!status) return null;
+  if (status.kind === "subscription") {
+    paprCloudPaused = true;
+  }
   notifyPaprQuotaStatus(status);
   return status;
 }

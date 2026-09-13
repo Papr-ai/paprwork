@@ -1,8 +1,28 @@
+import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "crypto";
+
+// Vendored better-sqlite3 is built for Electron's ABI; skip under plain vitest when it won't load.
+let canUseBetterSqlite = false;
+try {
+  const probe = new Database(":memory:");
+  probe.close();
+  canUseBetterSqlite = true;
+} catch {
+  canUseBetterSqlite = false;
+}
+
+const syncTursoAfterAppInstall = vi.fn(async () => ({
+  attempted: 0,
+  pushed: 0,
+  pulled: 0,
+  skipped: 0,
+  failed: 0,
+  results: [],
+}));
 
 vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
   ensureTursoSyncBridge: vi.fn(() => ({
@@ -15,14 +35,8 @@ vi.mock("../src/gateway/services/TursoSyncBridge.js", () => ({
       results: [],
     })),
   })),
-  syncTursoAfterAppInstall: vi.fn(async () => ({
-    attempted: 0,
-    pushed: 0,
-    pulled: 0,
-    skipped: 0,
-    failed: 0,
-    results: [],
-  })),
+  syncTursoAfterAppInstall: (...args: unknown[]) =>
+    syncTursoAfterAppInstall(...args),
 }));
 
 import {
@@ -38,6 +52,7 @@ describe("cloud app install bootstrap", () => {
   let originalGatewayMode: string | undefined;
 
   beforeEach(async () => {
+    syncTursoAfterAppInstall.mockClear();
     appId = randomUUID();
     dbId = "db-2d6b4294";
     paprHome = await fs.mkdtemp(path.join(os.tmpdir(), "papr-bootstrap-"));
@@ -124,35 +139,41 @@ describe("cloud app install bootstrap", () => {
     await fs.rm(paprHome, { recursive: true, force: true });
   });
 
-  it("applies registry migrations and creates writable local db", async () => {
-    let bootstrap;
-    try {
-      bootstrap = await bootstrapInstalledAppDatabases(appId);
-    } catch (error) {
-      const message = (error as Error).message;
-      if (message.includes("NODE_MODULE_VERSION")) {
-        return;
-      }
-      throw error;
-    }
+  it.skipIf(!canUseBetterSqlite)(
+    "applies registry migrations and creates writable local db",
+    async () => {
+      const bootstrap = await bootstrapInstalledAppDatabases(appId);
 
-    if (
-      bootstrap.errors.some((entry) => entry.includes("NODE_MODULE_VERSION"))
-    ) {
-      return;
-    }
+      expect(bootstrap.errors).toEqual([]);
+      expect(bootstrap.ready).toBe(true);
+      expect(bootstrap.linkedDbs).toHaveLength(1);
+      expect(bootstrap.linkedDbs[0]?.migrationsApplied).toContain("0001_init.sql");
+      expect(bootstrap.linkedDbs[0]?.userTableCount).toBe(1);
+      expect(bootstrap.linkedDbs[0]?.writable).toBe(true);
 
-    expect(bootstrap.errors).toEqual([]);
-    expect(bootstrap.ready).toBe(true);
-    expect(bootstrap.linkedDbs).toHaveLength(1);
-    expect(bootstrap.linkedDbs[0]?.migrationsApplied).toContain("0001_init.sql");
-    expect(bootstrap.linkedDbs[0]?.userTableCount).toBe(1);
-    expect(bootstrap.linkedDbs[0]?.writable).toBe(true);
+      const dbPath = bootstrap.linkedDbs[0]?.localPath ?? "";
+      const stat = await fs.stat(dbPath);
+      expect(stat.size).toBeGreaterThan(0);
+    },
+  );
 
-    const dbPath = bootstrap.linkedDbs[0]?.localPath ?? "";
-    const stat = await fs.stat(dbPath);
-    expect(stat.size).toBeGreaterThan(0);
-  });
+  it.skipIf(!canUseBetterSqlite)(
+    "fork_empty skips Turso sync and applies local schema only",
+    async () => {
+      const bootstrap = await bootstrapInstalledAppDatabases(appId, {
+        installDbPolicy: "fork_empty",
+      });
+
+      expect(syncTursoAfterAppInstall).not.toHaveBeenCalled();
+      expect(bootstrap.errors).toEqual([]);
+      expect(bootstrap.ready).toBe(true);
+      expect(bootstrap.linkedDbs[0]?.tursoPull).toBe("skipped");
+      expect(bootstrap.linkedDbs[0]?.migrationsApplied).toContain("0001_init.sql");
+      expect(bootstrap.warnings.some((w) => w.includes("Turso pull skipped"))).toBe(
+        false,
+      );
+    },
+  );
 
   it("builds agent setup message with bootstrap details", () => {
     const message = buildCloudInstallAgentSetupMessage({

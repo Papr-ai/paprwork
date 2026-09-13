@@ -29,6 +29,7 @@ import { useChatStore } from "../../stores/chatStore";
 import { useOllama } from "../../hooks/useOllama";
 import { useDebouncedCallback } from "../../hooks/useDebouncedCallback";
 import { useDismissOnOutsideClick } from "../../hooks/useDismissOnOutsideClick";
+import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 import "./InputBar.css";
 
 interface InputBarProps {
@@ -42,6 +43,8 @@ interface InputBarProps {
   onQueue?: (message: string, context?: Artifact[]) => void;
   /** Number of messages currently queued for this chat. */
   queuedCount?: number;
+  /** Stop the in-flight turn and send the first queued message (double-enter on empty input). */
+  onSendFirstQueuedNow?: () => void | Promise<void>;
   onStop?: () => void;
   onSlashCommand?: (commandId: string) => void;
   isSending?: boolean;
@@ -74,6 +77,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       onInterruptAndSend,
       onQueue,
       queuedCount = 0,
+      onSendFirstQueuedNow,
       onStop,
       onSlashCommand,
       isSending = false,
@@ -138,6 +142,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     // Use first model as default if none selected
     const currentModel = selectedModel || CHAT_MODELS[0];
     const visiblePickerModels = pickerModels ?? [currentModel];
+    const modelAvailable = isModelAvailable?.(currentModel) ?? true;
+    const unavailableMessage = getUnavailableModelMessage(currentModel);
 
     // Sync message state with store when chatId changes
     useEffect(() => {
@@ -364,12 +370,15 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         e.preventDefault();
         // Double-Enter shortcut: first Enter queued the message + cleared
         // the input. A second Enter on an empty input while the agent is
-        // still working AND there is a queued message should stop the
-        // agent. The existing processNextQueued effect in ChatContainer
-        // automatically sends the queued message when isSending goes
-        // false, so we only need to call onStop here.
-        if (!message.trim() && isSending && queuedCount > 0 && onStop) {
-          onStop();
+        // still working should stop and send the queued message now.
+        if (
+          !message.trim() &&
+          isSending &&
+          queuedCount > 0 &&
+          onSendFirstQueuedNow
+        ) {
+          void onSendFirstQueuedNow();
+          lastSendAttemptRef.current = 0;
           return;
         }
         handleSend();
@@ -481,14 +490,30 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                 <button
                   ref={modelSelectorBtnRef}
                   type="button"
-                  className="model-selector-pill"
-                  title="Select model"
+                  className={`model-selector-pill${modelAvailable ? "" : " model-selector-pill--unavailable"}`}
+                  title={modelAvailable ? "Select model" : unavailableMessage}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => {
                     setShowModelPicker(!showModelPicker);
                     setShowContextDropdown(false);
                   }}
                 >
+                  {!modelAvailable && (
+                    <svg
+                      className="model-selector-pill-lock"
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="1.5"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      aria-hidden
+                    >
+                      <path d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                    </svg>
+                  )}
                   <span>{currentModel.name}</span>
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
                     <path
@@ -502,27 +527,36 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                 </button>
                 {/* Model Picker Dropdown */}
                 {showModelPicker && (
-                  <ModelPickerDropdown
-                    dropdownRef={modelPickerDropdownRef}
-                    currentModelId={currentModel.id}
-                    pickerModels={visiblePickerModels}
-                    isModelAvailable={isModelAvailable}
-                    hasModel={hasModel}
-                    hostTotalRamGb={hostTotalRamGb}
-                    onSelect={(model) => {
-                      onModelChange?.(model);
-                      setShowModelPicker(false);
-                      textareaRef.current?.focus();
-                    }}
-                    onOpenSettings={() => {
-                      onOpenSettings?.();
-                      setShowModelPicker(false);
-                    }}
-                    onOpenSettingsModels={() => {
-                      onOpenSettingsModels?.();
-                      setShowModelPicker(false);
-                    }}
-                  />
+                  <div
+                    ref={modelPickerDropdownRef}
+                    className="model-picker-anchor"
+                  >
+                    {!modelAvailable && (
+                      <p className="model-unavailable-notice">
+                        {unavailableMessage}
+                      </p>
+                    )}
+                    <ModelPickerDropdown
+                      currentModelId={currentModel.id}
+                      pickerModels={visiblePickerModels}
+                      isModelAvailable={isModelAvailable}
+                      hasModel={hasModel}
+                      hostTotalRamGb={hostTotalRamGb}
+                      onSelect={(model) => {
+                        onModelChange?.(model);
+                        setShowModelPicker(false);
+                        textareaRef.current?.focus();
+                      }}
+                      onOpenSettings={() => {
+                        onOpenSettings?.();
+                        setShowModelPicker(false);
+                      }}
+                      onOpenSettingsModels={() => {
+                        onOpenSettingsModels?.();
+                        setShowModelPicker(false);
+                      }}
+                    />
+                  </div>
                 )}
               </div>
               <div className="input-footer__actions">

@@ -18,6 +18,7 @@ import {
 } from "./jobs/databaseMigrations.js";
 import type { PullResult } from "./tursoSyncBridgeCore.js";
 import type { SyncSummary } from "./TursoSyncBridge.js";
+import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
 
 function isLocalDbReadable(dbPath: string): boolean {
   try {
@@ -123,21 +124,26 @@ function mapTursoPullOutcome(
 async function applyMigrationsForSource(
   source: AppDataSource,
   localPath: string,
+  options?: { localOnly?: boolean },
 ): Promise<string[]> {
+  const migrationOptions = options?.localOnly
+    ? { bypassReplicaEngine: true as const }
+    : undefined;
   if (source.dbId && !source.jobId) {
-    return applyRegistryDatabaseMigrations(localPath);
+    return applyRegistryDatabaseMigrations(localPath, migrationOptions);
   }
   if (source.jobId) {
     const jobDir = path.join(getPaprJobsRoot(), source.jobId);
-    return applyDatabaseMigrations(jobDir, localPath);
+    return applyDatabaseMigrations(jobDir, localPath, migrationOptions);
   }
-  return applyRegistryDatabaseMigrations(localPath);
+  return applyRegistryDatabaseMigrations(localPath, migrationOptions);
 }
 
 async function bootstrapLinkedSource(
   source: AppDataSource,
   tursoSummary: SyncSummary | null,
   pullResults: Map<string, PullResult | undefined>,
+  options?: { tursoPullOnly?: boolean; localOnly?: boolean },
 ): Promise<LinkedDbBootstrapResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
@@ -171,18 +177,26 @@ async function bootstrapLinkedSource(
   }
 
   let migrationsApplied: string[] = [];
-  try {
-    migrationsApplied = await applyMigrationsForSource(source, localPath);
-  } catch (error) {
-    errors.push(
-      `Migration failed for "${source.alias}" at ${localPath}: ${(error as Error).message}`,
-    );
+  if (!options?.tursoPullOnly) {
+    try {
+      migrationsApplied = await applyMigrationsForSource(source, localPath, {
+        localOnly: options?.localOnly,
+      });
+    } catch (error) {
+      errors.push(
+        `Migration failed for "${source.alias}" at ${localPath}: ${(error as Error).message}`,
+      );
+    }
   }
 
   const syncKey = source.dbId ?? source.jobId ?? localPath;
-  const tursoPull = mapTursoPullOutcome(tursoSummary, syncKey, pullResults);
+  const tursoPull: TursoPullOutcome = options?.localOnly
+    ? "skipped"
+    : mapTursoPullOutcome(tursoSummary, syncKey, pullResults);
 
-  if (tursoPull === "unavailable") {
+  if (options?.localOnly) {
+    /* Community fork: local schema only until the user publishes and syncs. */
+  } else if (tursoPull === "unavailable") {
     warnings.push(
       `Turso pull skipped for "${source.alias}" (cloud sync off, not logged in, or bridge unavailable). Local schema from git migrations was applied when present.`,
     );
@@ -196,7 +210,10 @@ async function bootstrapLinkedSource(
     );
   }
 
-  const userTableCount = countUserTables(localPath);
+  // Plan A replica files: never open with better-sqlite3 (even readonly) on pull-only track sync.
+  const userTableCount = options?.tursoPullOnly
+    ? -1
+    : countUserTables(localPath);
   const writable = isLocalDbReadable(localPath);
 
   if (!writable && errors.length === 0) {
@@ -205,7 +222,7 @@ async function bootstrapLinkedSource(
     );
   }
 
-  if (writable && userTableCount === 0 && errors.length === 0) {
+  if (writable && userTableCount === 0 && errors.length === 0 && !options?.tursoPullOnly) {
     warnings.push(
       `Database "${source.alias}" has no user tables yet. Run the linked job on this device or seed via the app setup flow.`,
     );
@@ -232,14 +249,37 @@ async function readAppDataSources(appId: string): Promise<AppDataSource[]> {
   return parseDataSourcesFile(raw).sources;
 }
 
+/** Re-pull publisher Turso for track-mode apps with shared database policy. */
+export async function pullTrackSharedAppDatabase(
+  appId: string,
+): Promise<InstallBootstrapResult> {
+  return bootstrapInstalledAppDatabases(appId, { tursoPullOnly: true });
+}
+
+export interface BootstrapInstalledAppOptions {
+  tursoPullOnly?: boolean;
+  /** Community fork: apply local migrations only; defer Turso until publish/sync. */
+  installDbPolicy?: InstallDbPolicy;
+}
+
+function isForkLocalOnlyBootstrap(
+  options?: BootstrapInstalledAppOptions,
+): boolean {
+  return (
+    options?.installDbPolicy === "fork_empty" && options.tursoPullOnly !== true
+  );
+}
+
 /** Apply migrations + optional Turso pull for one installed app. */
 export async function bootstrapInstalledAppDatabases(
   appId: string,
+  options?: BootstrapInstalledAppOptions,
 ): Promise<InstallBootstrapResult> {
   const sources = await readAppDataSources(appId);
   const linkedDbs: LinkedDbBootstrapResult[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
+  const localOnly = isForkLocalOnlyBootstrap(options);
 
   if (sources.length === 0) {
     return {
@@ -255,19 +295,26 @@ export async function bootstrapInstalledAppDatabases(
   let tursoSummary: SyncSummary | null = null;
   const pullResults = new Map<string, PullResult | undefined>();
 
-  try {
-    const { ensureTursoSyncBridge, syncTursoAfterAppInstall } = await import(
-      "./TursoSyncBridge.js"
-    );
-    ensureTursoSyncBridge();
-    tursoSummary = await syncTursoAfterAppInstall(appId);
-    for (const entry of tursoSummary.results) {
-      pullResults.set(entry.jobId, entry.pull);
+  if (!localOnly) {
+    try {
+      const { ensureTursoSyncBridge, syncTursoAfterAppInstall } = await import(
+        "./TursoSyncBridge.js"
+      );
+      ensureTursoSyncBridge();
+      if (options?.tursoPullOnly) {
+        const bridge = ensureTursoSyncBridge();
+        tursoSummary = await bridge.pullAppLinkedSources(appId, { force: true });
+      } else {
+        tursoSummary = await syncTursoAfterAppInstall(appId);
+      }
+      for (const entry of tursoSummary.results) {
+        pullResults.set(entry.jobId, entry.pull);
+      }
+    } catch (error) {
+      warnings.push(
+        `Turso bootstrap skipped: ${(error as Error).message.slice(0, 160)}`,
+      );
     }
-  } catch (error) {
-    warnings.push(
-      `Turso bootstrap skipped: ${(error as Error).message.slice(0, 160)}`,
-    );
   }
 
   for (const source of sources) {
@@ -280,7 +327,12 @@ export async function bootstrapInstalledAppDatabases(
       );
       continue;
     }
-    const result = await bootstrapLinkedSource(source, tursoSummary, pullResults);
+    const result = await bootstrapLinkedSource(
+      source,
+      tursoSummary,
+      pullResults,
+      { ...options, localOnly },
+    );
     linkedDbs.push(result);
     errors.push(...result.errors);
     warnings.push(...result.warnings);
@@ -292,20 +344,40 @@ export async function bootstrapInstalledAppDatabases(
   const needsSeed =
     ready && linkedDbs.some((db) => db.userTableCount === 0);
 
-  try {
-    const { rebootstrapPendingPortableReplicas } = await import(
-      "./tursoReplica/portableReplicaBootstrap.js"
-    );
-    const replicaBootstrap = await rebootstrapPendingPortableReplicas();
-    if (replicaBootstrap.attempted > 0) {
-      console.log(
-        `[CloudInstall] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+  if (localOnly) {
+    /* Fork install stays local-first — Turso pairing runs on publish/sync. */
+  } else if (!options?.tursoPullOnly) {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.attempted > 0) {
+        console.log(
+          `[CloudInstall] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
       );
     }
-  } catch (error) {
-    warnings.push(
-      `Portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
-    );
+  } else {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.succeeded > 0) {
+        console.log(
+          `[CloudTrackSync] Shared DB pull: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} replica(s) refreshed`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Shared DB replica pull skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
   }
 
   return {

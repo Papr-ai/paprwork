@@ -1,35 +1,31 @@
 /**
- * Cloud vault key listing scopes for credential gates.
+ * Cloud vault key listing scopes for credential gates (cloud app host).
  *
- * - user: caller's private keys ("Only me" in Integration Keys)
- * - namespace: team-shared keys for the active namespace ("Team")
+ * Canonical vault model: one secret per key name with ACL labels.
+ * Use scope=context to list all keys the caller may use in org/namespace.
  */
 
-export type RuntimeVaultListScope = "user" | "namespace";
+export type RuntimeVaultListScope = "user" | "context";
 
 export interface RuntimeVaultKeyLookup {
   scope: RuntimeVaultListScope;
   query: string;
 }
 
-/** Query user-scoped keys always; add namespace when the app has a namespace id. */
+/** Query user-scoped keys; when namespace is known, use context for full ACL union. */
 export function runtimeVaultKeyLookupScopes(
   namespaceId: string | undefined,
 ): RuntimeVaultKeyLookup[] {
   const trimmed = namespaceId?.trim();
-  const userQuery = trimmed
-    ? `scope=user&namespace_id=${encodeURIComponent(trimmed)}`
-    : "scope=user";
-  const lookups: RuntimeVaultKeyLookup[] = [
-    { scope: "user", query: userQuery },
-  ];
   if (trimmed) {
-    lookups.push({
-      scope: "namespace",
-      query: `scope=namespace&namespace_id=${encodeURIComponent(trimmed)}`,
-    });
+    return [
+      {
+        scope: "context",
+        query: `scope=context&namespace_id=${encodeURIComponent(trimmed)}`,
+      },
+    ];
   }
-  return lookups;
+  return [{ scope: "user", query: "scope=user" }];
 }
 
 export function mergeRuntimeVaultKeyNames(
