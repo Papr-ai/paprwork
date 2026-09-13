@@ -8,6 +8,7 @@ import {
   type ProviderErrorPayload,
 } from "./providerErrorMessage.js";
 import {
+  describeProviderRateLimit,
   describeQuotaExhaustion,
   detectProviderQuotaExhaustion,
   PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE,
@@ -250,6 +251,22 @@ function logProviderAuthRejection(
  * RetryError wraps an array of APICallError instances from each retry attempt.
  * We extract the last (most relevant) error's status code and message.
  */
+/**
+ * A 429 that is not spent allowance, described with the provider's own words.
+ *
+ * This route only ever runs on an API key — OAuth goes to pi-ai — so the
+ * credential needs no naming here; its sibling branches already say "API key".
+ * What was missing is the sentence, which is the only thing separating an
+ * organization per-minute ceiling from every other 429.
+ */
+function describeTransientRateLimit(error: unknown): string {
+  return describeProviderRateLimit(
+    error,
+    { kind: "apiKey", provider: providerFromRequestUrl(extractRequestUrl(error)) },
+    { resumable: false },
+  );
+}
+
 function extractFromRetryError(error: Record<string, unknown>): string | null {
   if (isNetworkConnectivityError(error)) {
     return formatNetworkConnectivityMessage(error);
@@ -277,7 +294,7 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
   const quota = detectProviderQuotaExhaustion(err);
   if (quota) return describeQuotaExhaustion(quota);
   if (statusCode === 429) {
-    return "Rate limit exceeded. Please wait a moment and try again.";
+    return describeTransientRateLimit(err);
   }
   if (payload) {
     const limitMessage = describeUsageLimitError(
@@ -435,7 +452,10 @@ export function extractErrorMessage(error: unknown): string {
       const quota = detectProviderQuotaExhaustion(errorObj);
       if (quota) return describeQuotaExhaustion(quota);
       if (statusCode === 429) {
-        return "Rate limit exceeded. Please wait a moment and try again.";
+        // Quote the provider. A bare "rate limit exceeded" is indistinguishable
+        // between an org per-minute ceiling and any other 429, and the sentence
+        // is the only thing that tells them apart.
+        return describeTransientRateLimit(errorObj);
       }
       if (payload) {
         const limitMessage = describeUsageLimitError(

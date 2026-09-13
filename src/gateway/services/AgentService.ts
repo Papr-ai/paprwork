@@ -2091,6 +2091,9 @@ export class AgentService {
               pendingSteps: planState.pendingSteps,
             };
           },
+          // Lets a refusal name which credential it refused. The kind is read
+          // from the token inside the loop, so only the provider is needed.
+          { provider: config.provider },
         );
         piWrapUpContext = piContext;
         piWrapUpDeps = {

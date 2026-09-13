@@ -92,7 +92,14 @@ describe("spend cap vs burst limit on the API-key path", () => {
       ),
     );
 
-    expect(message).toBe("Rate limit exceeded. Please wait a moment and try again.");
+    // Asserted as the requirement rather than as an exact string. The claim
+    // this test exists to defend is that a burst limit reads as retryable and
+    // not as spent allowance; the sentence carrying that claim now also names
+    // the credential, which the old `toBe` would have failed on purely for
+    // saying more.
+    expect(message).toContain("try again");
+    expect(message).not.toContain("spend limit");
+    expect(message).not.toContain("retrying won't help");
   });
 
   test("a spend cap delivered as 400 now names the reset, not just the limit", () => {
@@ -149,7 +156,12 @@ describe("the same guarantee through a RetryError wrapper", () => {
       ),
     );
 
-    expect(message).toBe("Rate limit exceeded. Please wait a moment and try again.");
+    // Same reasoning as its sibling above: the requirement is "retryable, not
+    // spent", and the message now also quotes the provider and names the
+    // credential — both additions this assertion should survive.
+    expect(message).toContain("try again");
+    expect(message).not.toContain("retrying won't help");
+    expect(message).toContain("requests per minute rate limit");
   });
 });
 

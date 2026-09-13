@@ -1348,7 +1348,11 @@ export function useAgent() {
               setSending(chatId, false);
               setConnectionPaused(chatId, false);
               setFinishingWork(chatId, false);
-              setNeedsStreamRecovery(chatId, true, "rateLimit");
+              // Carried into the banner rather than dropped. The gateway names
+              // which credential was refused and quotes the provider, and that
+              // is the only thing that tells a user whether switching between
+              // API key and subscription login changed anything.
+              setNeedsStreamRecovery(chatId, true, "rateLimit", rawError);
               setError(null);
 
               const streamingMessageId =

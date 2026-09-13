@@ -62,6 +62,8 @@ import {
 } from "./piAiUsage.js";
 import {
   MAX_PROVIDER_RATE_LIMIT_RETRIES,
+  type CredentialDescriptor,
+  classifyCredentialToken,
   computeRateLimitBackoffMs,
   createProviderQuotaExhaustedError,
   createRateLimitExhaustedError,
@@ -73,11 +75,17 @@ import {
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
  */
-function yieldRateLimitExhausted(error?: unknown): {
+function yieldRateLimitExhausted(
+  error?: unknown,
+  credential?: CredentialDescriptor,
+): {
   type: "error";
   error: ReturnType<typeof createRateLimitExhaustedError>;
 } {
-  return { type: "error", error: createRateLimitExhaustedError(error) };
+  return {
+    type: "error",
+    error: createRateLimitExhaustedError(error, credential),
+  };
 }
 
 /**
@@ -88,7 +96,10 @@ function yieldRateLimitExhausted(error?: unknown): {
  * site that can raise one, so a spent month never spends three attempts
  * discovering it is still spent.
  */
-function quotaExhaustedChunk(error: unknown): {
+function quotaExhaustedChunk(
+  error: unknown,
+  credential?: CredentialDescriptor,
+): {
   type: "error";
   error: ReturnType<typeof createProviderQuotaExhaustedError>;
 } | null {
@@ -97,9 +108,15 @@ function quotaExhaustedChunk(error: unknown): {
   console.warn(
     `[PiCodexToolLoop] Provider quota exhausted (${detail.remedy})` +
       (detail.resetsAt ? `, resets ${detail.resetsAt.toISOString()}` : "") +
+      (credential?.kind && credential.kind !== "unknown"
+        ? `, credential=${credential.kind}`
+        : "") +
       " — not retrying",
   );
-  return { type: "error", error: createProviderQuotaExhaustedError(detail) };
+  return {
+    type: "error",
+    error: createProviderQuotaExhaustedError(detail, credential),
+  };
 }
 
 function truncateToolCallId(id: string): string {
@@ -430,10 +447,23 @@ export async function* createPiCodexStreamWithToolLoop(
     totalToolCalls: number;
     continuationsUsed: number;
   }) => Promise<{ nudge: string; pendingSteps: number } | null>,
+  /**
+   * Which credential this turn goes out with, so a refusal can name it. Only
+   * the provider is worth passing — the kind is read off the token below.
+   */
+  credential?: { provider?: string },
 ): AsyncGenerator<OurChunk> {
   const context = {
     ...initialContext,
     messages: [...initialContext.messages],
+  };
+
+  // Read from the token rather than from the caller's auth-mode setting: a
+  // refusal has to say what was *sent*, since that is the only thing that can
+  // tell a user whether flipping the Settings toggle reached the request.
+  const activeCredential: CredentialDescriptor = {
+    provider: credential?.provider,
+    kind: classifyCredentialToken(streamOptions.apiKey),
   };
 
   let step = 0;
@@ -661,7 +691,7 @@ export async function* createPiCodexStreamWithToolLoop(
         try {
           piStream = streamSimple(piModel, context, streamOptions);
         } catch (err) {
-          const quotaChunk = quotaExhaustedChunk(err);
+          const quotaChunk = quotaExhaustedChunk(err, activeCredential);
           if (quotaChunk) {
             yield quotaChunk;
             emitTurnEnd("rate_limit_exhausted");
@@ -672,7 +702,7 @@ export async function* createPiCodexStreamWithToolLoop(
               capacityError = err;
               shouldRetryCapacity = true;
             } else {
-              yield yieldRateLimitExhausted(err);
+              yield yieldRateLimitExhausted(err, activeCredential);
               emitTurnEnd("rate_limit_exhausted");
               return;
             }
@@ -710,7 +740,7 @@ export async function* createPiCodexStreamWithToolLoop(
             if (event.type === "error") {
               const apiError =
                 (event as { error?: unknown }).error ?? event;
-              const quotaChunk = quotaExhaustedChunk(apiError);
+              const quotaChunk = quotaExhaustedChunk(apiError, activeCredential);
               if (quotaChunk) {
                 yield quotaChunk;
                 emitTurnEnd("rate_limit_exhausted");
@@ -722,7 +752,7 @@ export async function* createPiCodexStreamWithToolLoop(
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted(apiError);
+                yield yieldRateLimitExhausted(apiError, activeCredential);
                 emitTurnEnd("rate_limit_exhausted");
                 return;
               }
@@ -811,7 +841,7 @@ export async function* createPiCodexStreamWithToolLoop(
 
             const chunk = adaptPiStreamToAISDKEvent(event);
             if (chunk?.type === "error") {
-              const quotaChunk = quotaExhaustedChunk(chunk.error);
+              const quotaChunk = quotaExhaustedChunk(chunk.error, activeCredential);
               if (quotaChunk) {
                 yield quotaChunk;
                 emitTurnEnd("rate_limit_exhausted");
@@ -823,7 +853,7 @@ export async function* createPiCodexStreamWithToolLoop(
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted(chunk.error);
+                yield yieldRateLimitExhausted(chunk.error, activeCredential);
                 emitTurnEnd("rate_limit_exhausted");
                 return;
               }
@@ -844,7 +874,7 @@ export async function* createPiCodexStreamWithToolLoop(
           }
         }
       } catch (err) {
-        const quotaChunk = quotaExhaustedChunk(err);
+        const quotaChunk = quotaExhaustedChunk(err, activeCredential);
         if (quotaChunk) {
           yield quotaChunk;
           emitTurnEnd("rate_limit_exhausted");
@@ -855,7 +885,7 @@ export async function* createPiCodexStreamWithToolLoop(
             capacityError = err;
             shouldRetryCapacity = true;
           } else {
-            yield yieldRateLimitExhausted(err);
+            yield yieldRateLimitExhausted(err, activeCredential);
             emitTurnEnd("rate_limit_exhausted");
             return;
           }
