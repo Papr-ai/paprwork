@@ -6,6 +6,10 @@
 
 import { spawn, exec } from "child_process";
 import { promisify } from "util";
+import {
+  parseClaudeCliCredentials,
+  type ClaudeCliCredentials,
+} from "./claudeCliCredentials.js";
 
 const execAsync = promisify(exec);
 
@@ -348,6 +352,19 @@ export class ClaudeSetupTokenService {
    * - Linux: ~/.claude/.credentials.json
    */
   async readTokenFromCLIStorage(): Promise<string | null> {
+    const credentials = await this.readCredentialsFromCLIStorage();
+    return credentials?.accessToken ?? null;
+  }
+
+  /**
+   * Read Claude Code's full credential record, not just the access token.
+   *
+   * The refresh token and expiry live alongside the access token in the same
+   * blob. Callers that persist the token need all three: without the refresh
+   * token the copy cannot be renewed, and without the real expiry nothing
+   * knows when to try.
+   */
+  async readCredentialsFromCLIStorage(): Promise<ClaudeCliCredentials | null> {
     try {
       // Try platform-specific credential storage first
       if (process.platform === "darwin") {
@@ -362,18 +379,20 @@ export class ClaudeSetupTokenService {
             "security find-generic-password -s 'Claude Code-credentials' -w",
             { timeout: 5000 }
           );
-          
-          const credentialsJson = stdout.trim();
-          if (credentialsJson) {
-            const credentials = JSON.parse(credentialsJson);
-            const rawToken =
-              credentials?.claudeAiOauth?.accessToken ||
-              credentials?.accessToken;
-            if (rawToken && typeof rawToken === 'string') {
-              const token = rawToken.replace(/\s+/g, "");
-              console.log("[ClaudeSetupToken] Found token in Keychain (length: " + token.length + ")");
-              return token;
-            }
+
+          const credentials = parseClaudeCliCredentials(stdout);
+          if (credentials) {
+            console.log(
+              "[ClaudeSetupToken] Found credentials in Keychain " +
+                `(length: ${credentials.accessToken.length}, ` +
+                `refreshToken: ${credentials.refreshToken ? "yes" : "no"}, ` +
+                `expiresAt: ${
+                  credentials.expiresAt
+                    ? new Date(credentials.expiresAt).toISOString()
+                    : "unknown"
+                })`,
+            );
+            return credentials;
           }
         } catch (keychainError) {
           console.log("[ClaudeSetupToken] Could not read from Keychain:", (keychainError as Error).message);
@@ -390,11 +409,14 @@ export class ClaudeSetupTokenService {
       
       try {
         const content = await fs.readFile(credPath, "utf-8");
-        const credentials = JSON.parse(content);
-        
-        if (credentials.accessToken) {
-          console.log("[ClaudeSetupToken] Found token in ~/.claude/.credentials.json");
-          return String(credentials.accessToken).replace(/\s+/g, "");
+        // This file nests under claudeAiOauth like the Keychain entry does.
+        // Reading only a root-level accessToken missed it entirely, which is
+        // why the non-macOS paths never found a token.
+        const credentials = parseClaudeCliCredentials(content);
+
+        if (credentials) {
+          console.log("[ClaudeSetupToken] Found credentials in ~/.claude/.credentials.json");
+          return credentials;
         }
       } catch (fileError) {
         console.log("[ClaudeSetupToken] Could not read from ~/.claude/.credentials.json:", (fileError as Error).message);
@@ -404,15 +426,11 @@ export class ClaudeSetupTokenService {
       const tokenPath = `${homeDir}/.claude.json`;
       try {
         const content = await fs.readFile(tokenPath, "utf-8");
-        const config = JSON.parse(content);
+        const credentials = parseClaudeCliCredentials(content);
 
-        if (config.oauthAccount?.accessToken) {
-          console.log("[ClaudeSetupToken] Found token in ~/.claude.json");
-          return String(config.oauthAccount.accessToken).replace(/\s+/g, "");
-        }
-
-        if (config.accessToken) {
-          return String(config.accessToken).replace(/\s+/g, "");
+        if (credentials) {
+          console.log("[ClaudeSetupToken] Found credentials in ~/.claude.json");
+          return credentials;
         }
       } catch (jsonError) {
         console.log("[ClaudeSetupToken] Could not read from ~/.claude.json:", (jsonError as Error).message);

@@ -39,6 +39,16 @@ const TIMING_RING_LINES = 400;
  * diagnosis and keep the rest in the ring buffer only, so one crash cannot flood the log.
  */
 const STDERR_LOG_CHUNK_LIMIT = 5;
+/**
+ * Consecutive engine crashes on one replica before we stop opening it.
+ *
+ * The crash policy below resets sync sidecars and retries once, which cures a wedge
+ * whose cause is in the sidecars. A defect *inside* data.db survives that reset, so the
+ * retry panics too — and the next caller begins the same two-abort cycle, on every sync
+ * tick, indefinitely. Three strikes turns that unbounded loop into a bounded one and
+ * leaves a message that names the file instead of a stream of crash reports.
+ */
+const MAX_CONSECUTIVE_PATH_CRASHES = 3;
 
 export interface TursoSyncWorkerCommand {
   command: string;
@@ -91,6 +101,8 @@ export class TursoReplicaSyncWorkerClient {
   private shuttingDown = false;
   private readonly pending = new Map<string, PendingRequest>();
   private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
+  /** Consecutive engine crashes per replica path, cleared by a successful op. */
+  private readonly crashStreaks = new Map<string, number>();
 
   constructor(
     private readonly resolveCommand: () => TursoSyncWorkerCommand = defaultWorkerCommand,
@@ -168,13 +180,17 @@ export class TursoReplicaSyncWorkerClient {
    * Anything else surfaces as an error to the caller. The gateway never dies here.
    */
   async send(options: SendOptions): Promise<TursoSyncWorkerResult> {
+    this.assertNotCrashLooping(options);
     try {
-      return await this.sendOnce(options);
+      const result = await this.sendOnce(options);
+      this.noteHealthy(options);
+      return result;
     } catch (error) {
       if (!isTursoSyncWorkerCrash(error)) {
         throw error;
       }
       if (error.engineWasRunning) {
+        this.noteEngineCrash(error.localPath);
         console.warn(
           `[TursoSyncWorker] Engine crashed during ${error.op} on ${error.localPath} — ` +
             `resetting sync sidecars. ${error.stderrTail.slice(-200)}`,
@@ -188,8 +204,60 @@ export class TursoReplicaSyncWorkerClient {
       if (!retry) {
         throw error;
       }
-      return await this.sendOnce(options);
+      try {
+        const result = await this.sendOnce(options);
+        this.noteHealthy(options);
+        return result;
+      } catch (retryError) {
+        // The retry can abort too — when it does, that is the signal that resetting
+        // sidecars did not reach the cause, so it has to count against the streak.
+        if (isTursoSyncWorkerCrash(retryError) && retryError.engineWasRunning) {
+          this.noteEngineCrash(retryError.localPath);
+        }
+        throw retryError;
+      }
     }
+  }
+
+  /**
+   * Refuse to reopen a replica that keeps aborting the worker.
+   *
+   * `close` stays reachable so callers can still tear a parked path down, and so the
+   * crash handler above can close it on its way to resetting the sidecars.
+   */
+  private assertNotCrashLooping(options: SendOptions): void {
+    if (options.op === "close") {
+      return;
+    }
+    const streak = this.crashStreaks.get(options.localPath) ?? 0;
+    if (streak < MAX_CONSECUTIVE_PATH_CRASHES) {
+      return;
+    }
+    throw new Error(
+      `Turso replica ${options.localPath} aborted the sync engine ${streak} times in a row ` +
+        "and is parked for this session. Sync is paused for this database; local reads and " +
+        "writes still work. Restart the app to try again.",
+    );
+  }
+
+  private noteEngineCrash(localPath: string): void {
+    const streak = (this.crashStreaks.get(localPath) ?? 0) + 1;
+    this.crashStreaks.set(localPath, streak);
+    if (streak >= MAX_CONSECUTIVE_PATH_CRASHES) {
+      console.error(
+        `[TursoSyncWorker] Parking ${localPath} after ${streak} consecutive engine aborts. ` +
+          "A sidecar reset did not clear it, so the cause is inside data.db.",
+      );
+    }
+  }
+
+  private noteHealthy(options: SendOptions): void {
+    // A `close` on a path that was never opened succeeds without the engine running at
+    // all, so it must not be able to launder a streak.
+    if (options.op === "close") {
+      return;
+    }
+    this.crashStreaks.delete(options.localPath);
   }
 
   private async sendOnce(options: SendOptions): Promise<TursoSyncWorkerResult> {

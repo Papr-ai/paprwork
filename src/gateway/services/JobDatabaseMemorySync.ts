@@ -272,62 +272,88 @@ export async function syncJobDatabaseToMemory(
   let summarySynced = false;
   const memoryScope = await paprMemoryScopeSpread();
 
+  const { reserveMemoryWrite } = await import("./memoryWriteGuard.js");
+
   // 1. Store raw snapshot (existing behavior + new metadata)
-  try {
-    await client.memory.add({
-      content,
-      ...memoryScope,
-      metadata: {
-        role: "assistant",
-        category: "fact",
-        customMetadata: {
-          source: "job_database_snapshot",
-          content_type: "job_database_snapshot",
-          sync_date: syncDate,
-          jobId: input.job.id,
-          jobName: input.job.name,
-          jobType: input.job.type,
-          runId: input.runId,
-          tables: tableNames,
-          tableCount: String(snapshots.length),
-        },
-      },
-    });
+  //
+  // Content-hash guard: the per-database gate above is check-then-act against
+  // a state file written only after the network round-trip, so concurrent job
+  // runs both observe "changed" and both write. Measured groups feabf6be,
+  // 4fe06e85 and b7bad86b are job_database_snapshot rows created within the
+  // same second.
+  //
+  // A skip counts as SYNCED, not failed: the content is already in memory, so
+  // reporting failure here would mark the run sync_failed and invite a retry
+  // that writes nothing.
+  const snapshotReservation = reserveMemoryWrite(content, "job_database_snapshot");
+  if (!snapshotReservation.proceed) {
     snapshotSynced = true;
-  } catch (error) {
-    console.warn(
-      `[JobDatabaseMemorySync] Failed to sync snapshot for job ${input.job.id}:`,
-      error,
-    );
+  } else {
+    try {
+      await client.memory.add({
+        content,
+        ...memoryScope,
+        metadata: {
+          role: "assistant",
+          category: "fact",
+          customMetadata: {
+            source: "job_database_snapshot",
+            content_type: "job_database_snapshot",
+            sync_date: syncDate,
+            jobId: input.job.id,
+            jobName: input.job.name,
+            jobType: input.job.type,
+            runId: input.runId,
+            tables: tableNames,
+            tableCount: String(snapshots.length),
+          },
+        },
+      });
+      snapshotReservation.commit();
+      snapshotSynced = true;
+    } catch (error) {
+      snapshotReservation.release();
+      console.warn(
+        `[JobDatabaseMemorySync] Failed to sync snapshot for job ${input.job.id}:`,
+        error,
+      );
+    }
   }
 
   // 2. Store human-readable table summary (new — searchable by sleep agent)
-  try {
-    const summary = buildTableSummary(input.job, snapshots);
-    await client.memory.add({
-      content: summary,
-      ...memoryScope,
-      metadata: {
-        role: "assistant",
-        category: "fact",
-        customMetadata: {
-          source: "job_database_summary",
-          content_type: "job_database_summary",
-          sync_date: syncDate,
-          jobId: input.job.id,
-          jobName: input.job.name,
-          jobType: input.job.type,
-          tables: tableNames,
-          tableCount: String(snapshots.length),
-        },
-      },
-    });
+  const summary = buildTableSummary(input.job, snapshots);
+  const summaryReservation = reserveMemoryWrite(summary, "job_database_summary");
+  if (!summaryReservation.proceed) {
     summarySynced = true;
-  } catch (error) {
-    console.warn(
-      `[JobDatabaseMemorySync] Failed to sync summary for job ${input.job.id}:`,
-      error,
-    );
+  } else {
+    try {
+      await client.memory.add({
+        content: summary,
+        ...memoryScope,
+        metadata: {
+          role: "assistant",
+          category: "fact",
+          customMetadata: {
+            source: "job_database_summary",
+            content_type: "job_database_summary",
+            sync_date: syncDate,
+            jobId: input.job.id,
+            jobName: input.job.name,
+            jobType: input.job.type,
+            tables: tableNames,
+            tableCount: String(snapshots.length),
+          },
+        },
+      });
+      summaryReservation.commit();
+      summarySynced = true;
+    } catch (error) {
+      summaryReservation.release();
+      console.warn(
+        `[JobDatabaseMemorySync] Failed to sync summary for job ${input.job.id}:`,
+        error,
+      );
+    }
   }
 
   if (!snapshotSynced && !summarySynced) {

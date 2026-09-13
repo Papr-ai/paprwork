@@ -11,6 +11,9 @@ import Database from "better-sqlite3";
 import type { AppDataSource } from "../appDataSources.js";
 import type { DatabaseSyncMode } from "../tursoReplica/tursoReplicaTypes.js";
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
+// One definition, shared: this file's local copy was the only correct one, and
+// keeping it local let the other copy stay too narrow to match engine errors.
+import { isSqliteBusyError } from "../tursoReplica/tursoReplicaErrors.js";
 import { isTursoReplicaSyncFeatureEnabled } from "../../utils/tursoReplicaEnabled.js";
 
 export interface RegistryDbSchemaReadInput {
@@ -34,14 +37,6 @@ export interface RegistryDbSchemaSnapshot {
 export type RegistryDbSchemaReadResult =
   | { ok: true; schema: RegistryDbSchemaSnapshot }
   | { ok: false; code: RegistryDbSchemaReadErrorCode; message: string };
-
-function isSqliteBusyError(error: unknown): boolean {
-  const err = error as { code?: string; message?: string };
-  return (
-    err.code === "SQLITE_BUSY" ||
-    /database is locked/i.test(err.message ?? "")
-  );
-}
 
 function isSqliteNotDbError(error: unknown): boolean {
   const err = error as { code?: string; message?: string };

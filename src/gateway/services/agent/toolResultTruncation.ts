@@ -123,14 +123,39 @@ const SMALL_CRUD_TOOLS = new Set([
   "list_media_models",
 ]);
 
-/** Recovery + delegation status tools — never truncate (full payload must survive). */
-export const FULL_RETENTION_TOOLS = new Set([
-  "get_full_tool_result",
-  "get_delegation_run",
-]);
+/** Delegation status — never truncate, in any turn (full payload must survive). */
+export const FULL_RETENTION_TOOLS = new Set(["get_delegation_run"]);
 
+/**
+ * Full while the turn that fetched it is still recent, then truncatable.
+ *
+ * `get_full_tool_result` exists to recover a payload that was truncated, so capping
+ * it in the turn that asked for it would defeat the tool. But it was exempt
+ * *permanently*, in history as well as mid-turn — so every recovery fetch stayed
+ * resident at full size for the life of the chat, and the exemption compounded with
+ * use. Over six weeks it became the second-largest tool payload in the corpus
+ * (7,559 calls, ~8M tokens) having previously been negligible.
+ *
+ * Recent-turn retention keeps the recovery genuinely useful and lets it decay, and
+ * the truncation notice it decays into points back at this same tool.
+ */
+export const RECENT_TURN_FULL_RETENTION_TOOLS = new Set(["get_full_tool_result"]);
+
+/** Exempt from truncation everywhere, including cross-turn history. */
 export function isFullRetentionTool(toolName: string): boolean {
   return FULL_RETENTION_TOOLS.has(toolName);
+}
+
+/**
+ * Exempt while the turn is in flight. Wider than {@link isFullRetentionTool}: a
+ * recovery fetch must arrive whole in the turn that requested it, but need not stay
+ * whole forever.
+ */
+export function isMidTurnUncappedTool(toolName: string): boolean {
+  return (
+    FULL_RETENTION_TOOLS.has(toolName) ||
+    RECENT_TURN_FULL_RETENTION_TOOLS.has(toolName)
+  );
 }
 
 /**
@@ -191,6 +216,15 @@ function getConfiguredCategoryCharLimit(
     getToolResultTruncationSettings();
 
   if (toolName === "validate_app") {
+    return moderateMaxChars;
+  }
+
+  // A recovery fetch is something the agent explicitly asked for, so it decays to
+  // the moderate limit rather than the aggressive one its category would give. At
+  // 800 chars a re-fetch costs the whole payload again, which is the re-read loop
+  // that category-based truncation was introduced to stop; head+tail at this size
+  // leaves enough for the agent to tell whether it still needs the rest.
+  if (toolName === "get_full_tool_result") {
     return moderateMaxChars;
   }
 
@@ -355,7 +389,10 @@ function isRecentTurnDiscoveryRetentionEligible(
   if (isFullRetentionTool(toolName)) {
     return false;
   }
-  if (RECENT_TURN_DISCOVERY_TOOLS.has(toolName)) {
+  if (
+    RECENT_TURN_DISCOVERY_TOOLS.has(toolName) ||
+    RECENT_TURN_FULL_RETENTION_TOOLS.has(toolName)
+  ) {
     return true;
   }
   return category === "bash" || category === "directory_list";
@@ -409,7 +446,7 @@ export function truncateToolResultForModelContext(
   toolCallId: string,
   toolName: string,
 ): string {
-  if (isToolResultTruncationDisabled() || isFullRetentionTool(toolName)) {
+  if (isToolResultTruncationDisabled() || isMidTurnUncappedTool(toolName)) {
     return resultStr;
   }
   return truncateToCharLimit(
@@ -440,7 +477,7 @@ export function resolveMidTurnToolResultCharLimit(
   toolName: string | undefined,
   batchCeiling: number,
 ): number {
-  if (toolName && isFullRetentionTool(toolName)) {
+  if (toolName && isMidTurnUncappedTool(toolName)) {
     return Number.MAX_SAFE_INTEGER;
   }
 

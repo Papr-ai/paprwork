@@ -27,6 +27,12 @@ interface ModelPickerDropdownProps {
   onOpenSettings: () => void;
   onOpenSettingsModels: () => void;
   dropdownRef?: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Render as a panel inside an existing popover rather than as its own
+   * positioned surface — the model list is a sub-view of the settings popover,
+   * and two stacked absolutely-positioned layers would fight over placement.
+   */
+  embedded?: boolean;
 }
 
 function ModelPickerRow({
@@ -129,6 +135,7 @@ export function ModelPickerDropdown({
   onOpenSettings,
   onOpenSettingsModels,
   dropdownRef,
+  embedded = false,
 }: ModelPickerDropdownProps): React.ReactElement {
   const [showLocal, setShowLocal] = useState(false);
 
@@ -203,7 +210,11 @@ export function ModelPickerDropdown({
   return (
     <div
       ref={dropdownRef}
-      className="model-picker-dropdown model-picker-dropdown--simple"
+      className={
+        embedded
+          ? "model-picker-list model-picker-list--embedded"
+          : "model-picker-dropdown model-picker-dropdown--simple"
+      }
     >
       {pickerModels.length > 0 ? (
         pickerModels.map((model) => renderModel(model, true))

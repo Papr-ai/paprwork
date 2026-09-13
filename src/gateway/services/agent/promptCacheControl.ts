@@ -141,20 +141,3 @@ export function extractCacheUsageFromStep(step: {
 
   return { cacheReadTokens, cacheWriteTokens };
 }
-
-/** Extract cache usage from AI SDK usage object (finish-step / step-usage). */
-export function extractCacheUsageFromUsage(usage: {
-  inputTokenDetails?: {
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
-  };
-  cachedInputTokens?: number;
-  providerMetadata?: {
-    anthropic?: {
-      cacheCreationInputTokens?: number;
-      cacheReadInputTokens?: number;
-    };
-  };
-}): { cacheReadTokens: number; cacheWriteTokens: number } {
-  return extractCacheUsageFromStep({ usage, providerMetadata: usage.providerMetadata });
-}

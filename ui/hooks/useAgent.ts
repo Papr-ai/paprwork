@@ -17,6 +17,11 @@ import type {
 } from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
+import { useProviderAuthStore } from "../stores/providerAuthStore";
+import {
+  isProviderAuthRejection,
+  providerForModelId,
+} from "../utils/providerAuthRejection";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
@@ -69,6 +74,12 @@ import {
 } from "../lib/streamProfiler";
 
 const RATE_LIMIT_EXHAUSTED_ERROR_CODE = "rate_limit_exhausted";
+/**
+ * A limit that will not clear by waiting, so this deliberately does not reach
+ * for the Resume UI. Offering Resume for a spend cap that lifts in three weeks
+ * invites the user to keep pressing a button that cannot work.
+ */
+const PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE = "provider_quota_exhausted";
 const RATE_LIMIT_WAIT_TEXT_PATTERN =
   /\n\n_Rate limited — waiting \d+s before retrying…_\n\n/g;
 
@@ -845,6 +856,15 @@ export function useAgent() {
 
         case "done":
           {
+            // A completed turn proves the credentials work again, so retire any
+            // rejection we recorded for this provider.
+            const succeededProvider = providerForModelId(
+              useChatStore.getState().getLastSelectedModel(chatId),
+            );
+            if (succeededProvider) {
+              useProviderAuthStore.getState().clearRejection(succeededProvider);
+            }
+
             // Clear any pending batch update for this chat
             const existingTimeout = updateBatchRef.current.get(chatId);
             if (existingTimeout) {
@@ -1296,6 +1316,31 @@ export function useAgent() {
               }
             }
 
+            if (payload.code === PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE) {
+              console.warn(
+                `[useAgent] Provider quota exhausted for ${chatId} — surfacing the limit, no resume`,
+              );
+              setSending(chatId, false);
+              setConnectionPaused(chatId, false);
+              setFinishingWork(chatId, false);
+              // The gateway already composed a message naming the limit, the
+              // reset time and where to change it, so it is shown as-is rather
+              // than swapped for one of the generic rewrites below.
+              setError(rawError);
+
+              const streamingMessageId =
+                streamingMessageIdRef.current.get(chatId);
+              if (streamingMessageId) {
+                const cleaned = stripRateLimitWaitDeltas(
+                  streamingContentRef.current.get(chatId) || "",
+                );
+                streamingContentRef.current.set(chatId, cleaned);
+                flushStreamingState(chatId, { isStreaming: false });
+              }
+              untrackActiveStream(chatId);
+              break;
+            }
+
             if (payload.code === RATE_LIMIT_EXHAUSTED_ERROR_CODE) {
               console.warn(
                 `[useAgent] Rate limit retries exhausted for ${chatId} — showing resume UI`,
@@ -1395,13 +1440,20 @@ export function useAgent() {
                   "The cloud agent session expired before your message was processed. Send your message again — Paprwork will start a fresh cloud agent automatically.";
               }
               // Pattern: Invalid API key (specific patterns, not just "API key" anywhere)
-              else if (
-                rawError.includes("Invalid API key") ||
-                rawError.includes("invalid x-api-key") ||
-                rawError.includes("authentication_error") ||
-                rawError.includes("(401)")
-              ) {
+              else if (isProviderAuthRejection(rawError)) {
                 errorMsg = `Invalid API key. Please check your API key in Settings.`;
+
+                // Remember which account was rejected so the AI Models card can
+                // say "reconnect" rather than counting down a stored expiry the
+                // provider has stopped honouring.
+                const rejectedProvider = providerForModelId(
+                  useChatStore.getState().getLastSelectedModel(chatId),
+                );
+                if (rejectedProvider) {
+                  useProviderAuthStore
+                    .getState()
+                    .recordRejection(rejectedProvider, errorMsg);
+                }
               }
               // Pattern: AI SDK tool validation errors (Zod validation failures)
               else if (

@@ -121,15 +121,21 @@ export function AIModelsTab({ scrollToPickerModels = false }: AIModelsTabProps) 
             <div key={provider.id} className="ai-provider-card">
               <div className="ai-provider-card__header">
                 <h3 className="ai-provider-card__name">{provider.name}</h3>
-                {status.hasKey ? (
-                  <span className="ai-provider-badge ai-provider-badge--connected">
-                    ✓ {status.isOAuth ? "OAuth" : "API Key"}
-                  </span>
-                ) : (
-                  <span className="ai-provider-badge ai-provider-badge--none">
-                    Not configured
-                  </span>
-                )}
+                {/* Only for providers without an OAuth panel. Where there is
+                    one it owns the badge, because this one can only see that a
+                    key row exists — not whether it still authenticates. Two
+                    badges from two sources is how the card came to show
+                    "OAuth" and "Connected" in green over an expired token. */}
+                {!provider.hasOAuth &&
+                  (status.hasKey ? (
+                    <span className="ai-provider-badge ai-provider-badge--connected">
+                      ✓ API Key
+                    </span>
+                  ) : (
+                    <span className="ai-provider-badge ai-provider-badge--none">
+                      Not configured
+                    </span>
+                  ))}
               </div>
 
               {provider.hasOAuth && (

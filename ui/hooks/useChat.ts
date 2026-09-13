@@ -10,6 +10,8 @@ import { gateway } from "../src/lib/gateway";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { forgetChatModel } from "../utils/chatModelMemory";
+import { forgetChatSettings } from "../utils/chatModelSettings";
+import { forgetDraft } from "../utils/chatDraftStore";
 import {
   chatHasLiveStreamBlockingHistory,
   mergeHistoryWithLocal,
@@ -316,6 +318,8 @@ export function useChat() {
       try {
         await gateway.send("chat:delete", { chatId });
         forgetChatModel(chatId);
+        forgetChatSettings(chatId);
+        forgetDraft(chatId);
         await loadChats(true);
         // Note: Tab management handled by tabStore (closeTab)
       } catch (error) {

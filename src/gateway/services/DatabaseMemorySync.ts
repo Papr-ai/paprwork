@@ -19,6 +19,7 @@ import type { DbChangedData, JobEvent } from "../../core/types/jobEvents.js";
 import { getPaprDataDir, getPaprJobsRoot } from "../../core/utils/paprRoot.js";
 import { getApiKey } from "../utils/keyResolver.js";
 import { paprMemoryScopeSpread } from "../utils/memoryScopeResolver.js";
+import { reserveMemoryWrite } from "./memoryWriteGuard.js";
 import { getJobEventHub } from "./JobEventHub.js";
 import {
   extractJobDatabaseSnapshots,
@@ -208,32 +209,68 @@ async function syncTargetToMemory(target: SyncTarget): Promise<boolean> {
 
     const memoryScope = await paprMemoryScopeSpread();
 
-    await client.memory.add({
-      content: buildSnapshotContent(target, snapshots),
-      ...memoryScope,
-      metadata: {
-        role: "assistant",
-        category: "fact",
-        customMetadata: {
-          source: "database_snapshot",
-          content_type: "database_snapshot",
-          ...shared,
+    // Content-hash guard on top of the per-database gate above.
+    //
+    // shouldSyncDatabaseToMemory() works, but it is check-then-act against a
+    // state file written only AFTER the network round-trip. Two concurrent
+    // syncs both read "changed" and both write. Measured: memoryId 7ba04fb2
+    // has two rows at the identical second (2026-09-04T10:52:26), and
+    // 6660c916 has three such pairs. reserveMemoryWrite() closes that window
+    // because it claims the hash before the request goes out.
+    const snapshotContent = buildSnapshotContent(target, snapshots);
+    const snapshotReservation = reserveMemoryWrite(
+      snapshotContent,
+      "database_snapshot",
+    );
+    if (snapshotReservation.proceed) {
+      try {
+        await client.memory.add({
+          content: snapshotContent,
+          ...memoryScope,
+          metadata: {
+            role: "assistant",
+            category: "fact",
+            customMetadata: {
+              source: "database_snapshot",
+              content_type: "database_snapshot",
+              ...shared,
+            },
+          },
+        });
+        snapshotReservation.commit();
+      } catch (error) {
+        snapshotReservation.release();
+        throw error;
+      }
+    }
+
+    const summaryContent = buildSummaryContent(target, snapshots);
+    const summaryReservation = reserveMemoryWrite(
+      summaryContent,
+      "database_summary",
+    );
+    if (!summaryReservation.proceed) {
+      return true;
+    }
+    try {
+      await client.memory.add({
+        content: summaryContent,
+        ...memoryScope,
+        metadata: {
+          role: "assistant",
+          category: "fact",
+          customMetadata: {
+            source: "database_summary",
+            content_type: "database_summary",
+            ...shared,
+          },
         },
-      },
-    });
-    await client.memory.add({
-      content: buildSummaryContent(target, snapshots),
-      ...memoryScope,
-      metadata: {
-        role: "assistant",
-        category: "fact",
-        customMetadata: {
-          source: "database_summary",
-          content_type: "database_summary",
-          ...shared,
-        },
-      },
-    });
+      });
+      summaryReservation.commit();
+    } catch (error) {
+      summaryReservation.release();
+      throw error;
+    }
 
     recordDatabaseMemorySynced(target.dbPath, gate.hash);
     return true;

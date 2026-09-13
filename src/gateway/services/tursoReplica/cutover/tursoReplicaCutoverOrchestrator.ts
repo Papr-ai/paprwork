@@ -20,6 +20,7 @@ import {
   pushLocalLegacyFileToTursoPrimary,
 } from "../tursoReplicaProvision.js";
 import { classifyRecordForReplicaCutover } from "./tursoReplicaCutoverClassify.js";
+import { isRetiredCutoverBlockReason } from "./retiredCutoverBlocks.js";
 import {
   backupLocalDbPreReplica,
   restoreLocalDbFromPreReplicaBackup,
@@ -213,7 +214,23 @@ export async function runCutoverForRecord(
 ): Promise<CutoverRunResult> {
   const dryRun = options?.dryRun === true;
 
-  if (options?.forceRetry && record.cutoverBlocked) {
+  // A retired reason names a failure the current code cannot produce, so the
+  // block is a fossil rather than a live verdict. Clearing it here — not only
+  // under forceRetry — is what lets the automatic pass reconsider a database
+  // that would otherwise stay on the legacy path until someone clicked
+  // "Upload now", with no symptom pointing at why.
+  const blockRetired =
+    record.cutoverBlocked === true &&
+    isRetiredCutoverBlockReason(record.cutoverBlockReason);
+
+  if (blockRetired) {
+    console.warn(
+      `[TursoReplicaCutover] Clearing retired cutover block for ${record.dbId}: ` +
+        `${record.cutoverBlockReason} — this failure mode no longer exists, retrying cutover.`,
+    );
+  }
+
+  if ((options?.forceRetry || blockRetired) && record.cutoverBlocked) {
     const registry = getDatabaseRegistryService();
     await registry.updateReplicaPushState(record.dbId, {
       cutoverBlocked: false,

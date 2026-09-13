@@ -209,7 +209,10 @@
   background: var(--background-secondary);
   border: 1px solid var(--border-color);
   border-radius: 10px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+.model-controls .model-unavailable-notice {
+  box-shadow: none;
 }
 
 .send-button {

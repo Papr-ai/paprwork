@@ -39,6 +39,17 @@ import {
   scheduleContextStatsRebuild,
 } from "./contextStatsCache.js";
 import {
+  migrateTurnMetricsColumns,
+  readChatUsageTotals,
+  readLastTurnUsage,
+  storeTurnMetrics,
+} from "./turnMetricsStore.js";
+import type {
+  ChatUsageTotals,
+  TurnUsageRow,
+} from "./turnMetricsStore.js";
+import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
+import {
   computeRecentMessageLimit,
   expandRecentMessageLimit,
   RECENT_MESSAGES_WITHOUT_SUMMARY,
@@ -312,6 +323,7 @@ export class LocalStorageProvider implements IStorageProvider {
     }
 
     migrateFootprintColumns(this.db);
+    migrateTurnMetricsColumns(this.db);
 
     console.log("[LocalStorage] Database migration complete");
 
@@ -1097,6 +1109,35 @@ export class LocalStorageProvider implements IStorageProvider {
    * Read the full text of a tool result that was moved to sidecar storage.
    * Returns null when this tool call kept its result inline.
    */
+  /**
+   * Best-effort: a failed measurement write must never fail the turn that
+   * produced it.
+   */
+  async recordTurnMetrics(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void> {
+    try {
+      storeTurnMetrics(this.db, messageId, summary, durationMs);
+    } catch (error) {
+      console.warn(
+        "[TurnMetrics] Failed to record turn metrics:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  async getTurnUsage(chatId: string): Promise<{
+    lastTurn: TurnUsageRow | null;
+    totals: ChatUsageTotals;
+  }> {
+    return {
+      lastTurn: readLastTurnUsage(this.db, chatId),
+      totals: readChatUsageTotals(this.db, chatId),
+    };
+  }
+
   async readOffloadedToolResult(
     chatId: string,
     messageId: string,

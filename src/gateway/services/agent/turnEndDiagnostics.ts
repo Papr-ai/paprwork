@@ -172,9 +172,20 @@ export function explainPostStreamWrapUp(args: {
   toolCallCount: number;
   aborted: boolean;
   isWrapUpContinuation: boolean;
+  /** The stream died in transport rather than the model finishing. */
+  providerStreamFailed?: boolean;
 }): { requested: boolean; skipReason?: string } {
   if (args.aborted) {
     return { requested: false, skipReason: "aborted" };
+  }
+  // A dropped connection reaches here looking exactly like a turn that ran
+  // tools and went quiet, which is the one case the wrap-up is for. The
+  // difference is that the model never got to finish, so asking it to
+  // "summarize what you accomplished" answers a question the user did not ask
+  // and overwrites the turn with a recap of tool calls. Interruption is
+  // already surfaced for auto-continue; resuming is the correct recovery.
+  if (args.providerStreamFailed) {
+    return { requested: false, skipReason: "provider_stream_failed" };
   }
   if (args.isWrapUpContinuation) {
     return { requested: false, skipReason: "wrap_up_continuation" };

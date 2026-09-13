@@ -10,6 +10,10 @@
  */
 
 import { promises as fs } from "fs";
+import {
+  documentMetaNeedsRewrite,
+  normalizeDocumentMeta,
+} from "./documentMetaNormalize.js";
 import { markdownPreviewText } from "../../core/utils/markdownPreview.js";
 import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
@@ -96,14 +100,14 @@ export class DocumentService {
 
     await fs.mkdir(docsRoot, { recursive: true });
     await this.migrateLegacyIfNeeded();
-    const repaired = await this.reconcileMissingMetaFiles();
+    const repaired = await this.reconcileMetaFiles();
     this.initialized = true;
     this.initializedDocsRoot = docsRoot;
 
     const docIds = await this.listDocIds();
     console.log(
       `[DocumentService] Initialized with ${docIds.length} documents in ${docsRoot}` +
-        (repaired > 0 ? ` (${repaired} missing meta.json repaired)` : ""),
+        (repaired > 0 ? ` (${repaired} meta.json repaired)` : ""),
     );
   }
 
@@ -496,12 +500,21 @@ export class DocumentService {
   }
 
   private async readMeta(id: string): Promise<DocumentMeta | null> {
+    let parsed: unknown;
     try {
       const raw = await fs.readFile(this.metaPath(id), "utf-8");
-      return JSON.parse(raw) as DocumentMeta;
+      parsed = JSON.parse(raw);
     } catch {
       return this.repairMetaFromContent(id);
     }
+
+    // Normalize rather than cast: meta.json has several writers and is not
+    // guaranteed to hold every field. Casting used to mint records with
+    // `id: undefined`, which surfaced as a React key warning in the sidebar.
+    const meta = normalizeDocumentMeta(id, parsed, {
+      fallbackTitle: slugToDisplayTitle(id),
+    });
+    return meta ?? this.repairMetaFromContent(id);
   }
 
   /** Build meta.json when agents wrote content.md without going through createDocument(). */
@@ -538,17 +551,47 @@ export class DocumentService {
     return meta;
   }
 
-  private async reconcileMissingMetaFiles(): Promise<number> {
+  /**
+   * Heal meta.json files at startup: rebuild the ones that are missing, and
+   * rewrite the ones that exist but omit an id or type.
+   *
+   * `readMeta` already normalizes both cases for its callers, so this is not
+   * what keeps the app correct — it is what stops every read from re-deriving
+   * the same fields forever, and makes the file on disk say what the app
+   * believes.
+   */
+  private async reconcileMetaFiles(): Promise<number> {
     const ids = await this.listDocIds();
     let repaired = 0;
 
     for (const id of ids) {
+      let raw: string;
       try {
-        await fs.access(this.metaPath(id));
+        raw = await fs.readFile(this.metaPath(id), "utf-8");
       } catch {
         const meta = await this.repairMetaFromContent(id);
         if (meta) repaired++;
+        continue;
       }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        const meta = await this.repairMetaFromContent(id);
+        if (meta) repaired++;
+        continue;
+      }
+
+      if (!documentMetaNeedsRewrite(id, parsed)) continue;
+
+      const meta = normalizeDocumentMeta(id, parsed, {
+        fallbackTitle: slugToDisplayTitle(id),
+      });
+      if (!meta) continue;
+
+      await this.writeMeta(id, meta);
+      repaired++;
     }
 
     return repaired;

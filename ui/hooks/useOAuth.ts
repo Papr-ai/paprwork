@@ -17,6 +17,12 @@ export interface OAuthStatus {
   accountId?: string;
   expiresAt?: string;
   isExpired?: boolean;
+  /**
+   * Whether the stored refresh token can mint a new access token. An expired
+   * token that can renew fixes itself on the next request and must not be
+   * reported as broken; one that cannot is the only kind that needs the user.
+   */
+  canRenew?: boolean;
   error?: string;
   timedOut?: boolean;
   /** Set when Claude flow opened a terminal -- UI should show paste field */

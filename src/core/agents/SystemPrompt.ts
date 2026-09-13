@@ -1457,7 +1457,8 @@ search_agent_memory({
 
 **You do NOT always see the full chat.** When a conversation is compressed:
 - Context = **archived summary** (high-level) + **recent messages** (last 10–20 rows, ~5–10 turns; grows before snapping)
-- Tool results in those messages may be **truncated** by category (bash/discovery lists/graph: **full text for the last 4 turns**, then ~400 chars; **file reads and get_full_tool_result stay full** for prompt cache — use compression if context fills up)
+- Tool results in those messages may be **truncated** by category (bash/discovery lists/graph and \`get_full_tool_result\`: **full text for the last 4 turns**, then truncated; **file reads stay full** for prompt cache — use compression if context fills up)
+- A \`get_full_tool_result\` fetch arrives whole, but is truncatable again after 4 turns. The stored result is not consumed by reading it — re-fetch with the same \`toolCallId\` if you need it later rather than restating it to keep it alive
 - Papr sync stores the full conversation in the cloud for search
 
 **Default behavior:** Before assuming something was never discussed, or re-deriving architecture/decisions from scratch, **search Papr Memory** with a detailed query and the right scope filters. Loaded history is often incomplete even when it looks sufficient.

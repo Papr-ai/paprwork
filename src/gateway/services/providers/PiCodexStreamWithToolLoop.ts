@@ -24,7 +24,12 @@ import {
 import {
   sanitizeToolOutput,
 } from "../../../core/tools/index.js";
-import type { HistoryTrimBounds } from "../agent/midTurnContextTrim.js";
+import type { MidTurnTrimOpts } from "../agent/midTurnContextTrim.js";
+import {
+  recordLoopSteps,
+  recordObservedContext,
+  type TurnMetrics,
+} from "../agent/turnMetrics.js";
 import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
@@ -58,7 +63,9 @@ import {
 import {
   MAX_PROVIDER_RATE_LIMIT_RETRIES,
   computeRateLimitBackoffMs,
+  createProviderQuotaExhaustedError,
   createRateLimitExhaustedError,
+  detectProviderQuotaExhaustion,
   isRetryableProviderCapacityError,
   sleepMs,
 } from "../../utils/providerRateLimitRetry.js";
@@ -66,8 +73,33 @@ import {
  * Truncate tool call ID to 64 characters (OpenAI's maximum length requirement).
  * IDs from various APIs may exceed this limit, causing validation errors.
  */
-function yieldRateLimitExhausted(): { type: "error"; error: ReturnType<typeof createRateLimitExhaustedError> } {
-  return { type: "error", error: createRateLimitExhaustedError() };
+function yieldRateLimitExhausted(error?: unknown): {
+  type: "error";
+  error: ReturnType<typeof createRateLimitExhaustedError>;
+} {
+  return { type: "error", error: createRateLimitExhaustedError(error) };
+}
+
+/**
+ * A refusal that waiting cannot fix, described so the user knows where to go.
+ *
+ * Returns null when the failure is ordinary capacity pressure, leaving the
+ * retry-then-Resume path in charge. Checked before the retry branch at every
+ * site that can raise one, so a spent month never spends three attempts
+ * discovering it is still spent.
+ */
+function quotaExhaustedChunk(error: unknown): {
+  type: "error";
+  error: ReturnType<typeof createProviderQuotaExhaustedError>;
+} | null {
+  const detail = detectProviderQuotaExhaustion(error);
+  if (!detail) return null;
+  console.warn(
+    `[PiCodexToolLoop] Provider quota exhausted (${detail.remedy})` +
+      (detail.resetsAt ? `, resets ${detail.resetsAt.toISOString()}` : "") +
+      " — not retrying",
+  );
+  return { type: "error", error: createProviderQuotaExhaustedError(detail) };
 }
 
 function truncateToolCallId(id: string): string {
@@ -173,6 +205,7 @@ async function executeToolCall(
     chatId: string;
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
+    turnMetrics?: TurnMetrics;
   },
 ): Promise<{ toolCallId: string; toolName: string; result: unknown }> {
   const tool = mastraTools[toolCall.toolName];
@@ -191,6 +224,7 @@ async function executeToolCall(
       {
         jobEnv: toolContext.jobEnv,
         delegationJobId: toolContext.delegationJobId,
+        turnMetrics: toolContext.turnMetrics,
       },
     );
 
@@ -377,11 +411,13 @@ export async function* createPiCodexStreamWithToolLoop(
   >,
   apiKeys: string[],
   maxSteps: number,
-  historyTrimBounds?: HistoryTrimBounds,
+  /** Bounds plus `maxTokens` — the model-aware budget this turn must stay inside. */
+  historyTrimBounds?: MidTurnTrimOpts,
   toolContext?: {
     chatId: string;
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
+    turnMetrics?: TurnMetrics;
   },
   /**
    * Consulted when the model stops on its own. Returning a nudge keeps the loop
@@ -425,7 +461,12 @@ export async function* createPiCodexStreamWithToolLoop(
   const REPETITION_ABORT_THRESHOLD = 8; // Hard abort on identical tool+args loops only
 
   // Fast char-based estimate — avoid JSON.stringify on 100K+ token contexts.
+  // Messages only: the system prompt and the tool schemas are separate fields
+  // on the pi-ai context, so the first request is far larger than this reads.
+  // Kept for the turn metric's estimate; the provider's own figure replaces
+  // `cumulativeTokens` as soon as a step reports usage.
   cumulativeTokens = estimateMessagesTokens(context.messages);
+  const initialEstimatedTokens = cumulativeTokens;
 
   console.log(
     `[PiCodexToolLoop] Starting with ~${Math.round(cumulativeTokens / 1000)}K tokens ` +
@@ -451,6 +492,14 @@ export async function* createPiCodexStreamWithToolLoop(
       return;
     }
     turnEndLogged = true;
+    // The loop counts its own steps, and this runs exactly once per turn.
+    // `initialEstimatedTokens` rather than `cumulativeTokens`, which by now
+    // holds a provider-reported figure and belongs on the observed peak.
+    recordLoopSteps(toolContext?.turnMetrics, {
+      steps: step,
+      estimatedTokens: initialEstimatedTokens,
+      historyTokenBudget: historyTrimBounds?.maxTokens,
+    });
     logPiTurnEnd({
       chatId: toolContext?.chatId,
       sessionId: streamOptions.sessionId,
@@ -612,12 +661,18 @@ export async function* createPiCodexStreamWithToolLoop(
         try {
           piStream = streamSimple(piModel, context, streamOptions);
         } catch (err) {
+          const quotaChunk = quotaExhaustedChunk(err);
+          if (quotaChunk) {
+            yield quotaChunk;
+            emitTurnEnd("rate_limit_exhausted");
+            return;
+          }
           if (isRetryableProviderCapacityError(err)) {
             if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
               capacityError = err;
               shouldRetryCapacity = true;
             } else {
-              yield yieldRateLimitExhausted();
+              yield yieldRateLimitExhausted(err);
               emitTurnEnd("rate_limit_exhausted");
               return;
             }
@@ -655,13 +710,19 @@ export async function* createPiCodexStreamWithToolLoop(
             if (event.type === "error") {
               const apiError =
                 (event as { error?: unknown }).error ?? event;
+              const quotaChunk = quotaExhaustedChunk(apiError);
+              if (quotaChunk) {
+                yield quotaChunk;
+                emitTurnEnd("rate_limit_exhausted");
+                return;
+              }
               if (isRetryableProviderCapacityError(apiError)) {
                 if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
                   capacityError = apiError;
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted();
+                yield yieldRateLimitExhausted(apiError);
                 emitTurnEnd("rate_limit_exhausted");
                 return;
               }
@@ -693,6 +754,10 @@ export async function* createPiCodexStreamWithToolLoop(
               }
               if (stepUsage) {
                 cumulativeTokens = getPiAiContextTokensFromStep(stepUsage);
+                recordObservedContext(
+                  toolContext?.turnMetrics,
+                  cumulativeTokens,
+                );
                 accumulatedBilling = accumulatePiAiBillingUsage(
                   accumulatedBilling,
                   stepUsage,
@@ -746,13 +811,19 @@ export async function* createPiCodexStreamWithToolLoop(
 
             const chunk = adaptPiStreamToAISDKEvent(event);
             if (chunk?.type === "error") {
+              const quotaChunk = quotaExhaustedChunk(chunk.error);
+              if (quotaChunk) {
+                yield quotaChunk;
+                emitTurnEnd("rate_limit_exhausted");
+                return;
+              }
               if (isRetryableProviderCapacityError(chunk.error)) {
                 if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
                   capacityError = chunk.error;
                   shouldRetryCapacity = true;
                   break;
                 }
-                yield yieldRateLimitExhausted();
+                yield yieldRateLimitExhausted(chunk.error);
                 emitTurnEnd("rate_limit_exhausted");
                 return;
               }
@@ -773,12 +844,18 @@ export async function* createPiCodexStreamWithToolLoop(
           }
         }
       } catch (err) {
+        const quotaChunk = quotaExhaustedChunk(err);
+        if (quotaChunk) {
+          yield quotaChunk;
+          emitTurnEnd("rate_limit_exhausted");
+          return;
+        }
         if (isRetryableProviderCapacityError(err)) {
           if (rateLimitAttempt < MAX_PROVIDER_RATE_LIMIT_RETRIES) {
             capacityError = err;
             shouldRetryCapacity = true;
           } else {
-            yield yieldRateLimitExhausted();
+            yield yieldRateLimitExhausted(err);
             emitTurnEnd("rate_limit_exhausted");
             return;
           }

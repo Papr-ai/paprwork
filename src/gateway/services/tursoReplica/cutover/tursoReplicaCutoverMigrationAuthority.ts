@@ -19,10 +19,19 @@ import {
   readRemoteTursoMigrationIds,
 } from "../tursoReplicaMigrationConflict.js";
 import { isReplicaManagedDbPath } from "../tursoReplicaFileGuard.js";
+import { isReplicaBusyError } from "../tursoReplicaErrors.js";
 import { applyReplicaRegistryDatabaseMigrations } from "../tursoReplicaRegistryMigrations.js";
 import type { CutoverClassification, CutoverSnapshot } from "./tursoReplicaCutoverTypes.js";
 import { preReplicaBackupPath } from "./tursoReplicaCutoverBackup.js";
 import type { AppDataSource } from "../../appDataSources.js";
+
+/** Rounds of re-attempt for databases that were merely locked, not broken. */
+const BUSY_RETRY_ROUNDS = 2;
+const BUSY_RETRY_DELAY_MS = 30_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function readMigrationIdsFromSqlite(dbPath: string): string[] {
   if (!fs.existsSync(dbPath)) {
@@ -266,18 +275,39 @@ export async function repairAllReplicaMigrationAuthorityOnStartup(): Promise<num
   const records = registry.listActive().filter((record) => record.syncMode === "replica");
 
   let repaired = 0;
-  for (const record of records) {
-    try {
-      const result = await repairReplicaMigrationAuthorityAfterCutover(record);
-      if (result.ledgerInferred.length > 0 || result.migrationsApplied.length > 0) {
-        repaired += 1;
-      }
-    } catch (error) {
-      console.warn(
-        `[TursoReplicaCutover] Startup migration repair failed for ${record.dbId}: ` +
-          `${(error as Error).message.slice(0, 160)}`,
+  // A lock means "someone is mid-flight", not "this database is broken".
+  // Abandoning on the first SQLITE_BUSY left the drift this function exists to
+  // heal in place for the whole session, so the next launch re-logged the same
+  // "missing on the replica handle" warning for the same databases, forever.
+  let pending = records;
+  for (let round = 0; round <= BUSY_RETRY_ROUNDS && pending.length > 0; round++) {
+    if (round > 0) {
+      console.log(
+        `[TursoReplicaCutover] ${pending.length} database(s) locked — ` +
+          `retrying migration repair in ${BUSY_RETRY_DELAY_MS}ms`,
       );
+      await sleep(BUSY_RETRY_DELAY_MS);
     }
+
+    const stillLocked: DatabaseRecord[] = [];
+    for (const record of pending) {
+      try {
+        const result = await repairReplicaMigrationAuthorityAfterCutover(record);
+        if (result.ledgerInferred.length > 0 || result.migrationsApplied.length > 0) {
+          repaired += 1;
+        }
+      } catch (error) {
+        if (isReplicaBusyError(error) && round < BUSY_RETRY_ROUNDS) {
+          stillLocked.push(record);
+          continue;
+        }
+        console.warn(
+          `[TursoReplicaCutover] Startup migration repair failed for ${record.dbId}: ` +
+            `${(error as Error).message.slice(0, 160)}`,
+        );
+      }
+    }
+    pending = stillLocked;
   }
 
   if (repaired > 0) {

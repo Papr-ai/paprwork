@@ -474,6 +474,16 @@ export interface WikiRail {
   items: WikiNode[];
 }
 
+/** Mirrors `WikiRelatedMemory` in `ui/types/wiki.ts`, which consumes this. */
+export interface WikiRelatedMemory {
+  id: string;
+  content: string;
+  category: string;
+  source: string;
+  createdAt: string;
+  chatId: string;
+}
+
 export interface WikiHomeResult {
   featured: WikiNode | null;
   rails: WikiRail[];
@@ -1448,7 +1458,9 @@ export async function fetchWikiEntity(
   };
 }
 
-async function _fetchRelatedMemories(node: WikiNode): Promise<any[]> {
+async function _fetchRelatedMemories(
+  node: WikiNode,
+): Promise<WikiRelatedMemory[]> {
   try {
     const client = await getPaprClient();
     const query = [node.label, node.description].filter(Boolean).join(" ");
@@ -1461,20 +1473,39 @@ async function _fetchRelatedMemories(node: WikiNode): Promise<any[]> {
       enable_agentic_graph: false,
     });
     const { memories } = parseSearchPayload(response);
-    return memories
-      .map((m) => ({
-        id: asString(m.id),
-        content: asString(m.content),
-        category: asString(m.category),
-        source: asString(m.source),
-        createdAt: asString(m.created_at),
-        chatId: asString(m.chat_id),
-      }))
-      .filter((m) => m.id && m.content);
+    return toRelatedMemories(memories);
   } catch (e) {
     console.warn("[Wiki] Failed to fetch related memories:", e);
     return [];
   }
+}
+
+/**
+ * Map search hits to related memories, keeping the first hit per id.
+ *
+ * A memory can match a query on more than one chunk, so search returns it once
+ * per hit. Consumers key on the id — the UI as a React key, and its "which one
+ * is open" lookup as a find-by-id — and both need the id to identify exactly
+ * one memory. Hits stay in search order, so the strongest match still leads.
+ */
+export function toRelatedMemories(
+  memories: ReadonlyArray<Record<string, unknown>>,
+): WikiRelatedMemory[] {
+  const byId = new Map<string, WikiRelatedMemory>();
+  for (const m of memories) {
+    const id = asString(m.id);
+    const content = asString(m.content);
+    if (!id || !content || byId.has(id)) continue;
+    byId.set(id, {
+      id,
+      content,
+      category: asString(m.category),
+      source: asString(m.source),
+      createdAt: asString(m.created_at),
+      chatId: asString(m.chat_id),
+    });
+  }
+  return [...byId.values()];
 }
 
 async function _fetchGraphConnectedEntities(

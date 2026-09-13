@@ -2,7 +2,7 @@
  * Loads and persists which models appear in the chat picker.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { gateway } from "../src/lib/gateway";
 import {
   PICKER_DEFAULT_MODEL_IDS,
@@ -105,9 +105,15 @@ export function useModelPickerSettings(): {
     await saveEnabledIds([...PICKER_DEFAULT_MODEL_IDS]);
   }, [saveEnabledIds]);
 
+  // Memoised because this array is a dependency of effects in ChatContainer.
+  // Rebuilding it on every render made those effects re-run on every render,
+  // which is harmless only for as long as every one of them bails out without
+  // setting state — far too sharp an edge to leave in place.
+  const pickerModels = useMemo(() => getPickerModels(enabledIds), [enabledIds]);
+
   return {
     enabledIds,
-    pickerModels: getPickerModels(enabledIds),
+    pickerModels,
     loaded,
     saveEnabledIds,
     resetToDefaults,

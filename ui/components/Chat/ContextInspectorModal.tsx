@@ -1,25 +1,17 @@
 /**
- * ContextInspectorModal - Shows detailed breakdown of what's sent to the LLM
- * 
- * Displays:
- * - Total token count
- * - System prompt
- * - Conversation summary (if present)
- * - Papr memory bootstrap (sync tiers + related search)
- * - Message history
- * - Tool schemas
- * - Workspace files (.md files)
- * - Active skills
- * - Active plans
+ * Context inspector — the full read of the next prompt.
+ *
+ * One job: *show me exactly what is being sent, and let me find things in it.*
+ *
+ * The old version was nine stacked accordions, each with its own layout, and
+ * every section closed by default — so the answer to "what is in my context"
+ * was a list of nine questions. This is a rail and a page: pick a section on
+ * the left, read it on the right, filter it from the top. Nothing folds.
  */
 
-import React, { useState } from "react";
-import { Markdown } from "../common/Markdown";
-import {
-  parseMemoryBootstrapBlock,
-  type ParsedMemoryItem,
-} from "./memoryBootstrapDisplay";
-import "./ContextInspectorModal.css";
+import React, { useEffect, useMemo, useState } from "react";
+import { buildSections } from "./contextInspectorSections";
+import "./ContextInspector.css";
 
 interface ContextSection {
   tokens: number;
@@ -120,620 +112,123 @@ export function isContextInfo(data: unknown): data is ContextInfo {
 
 interface ContextInspectorModalProps {
   contextInfo: ContextInfo;
+  /** Section to land on, when opened from a segment in the meter panel. */
+  initialSection?: string | null;
   onClose: () => void;
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(1)}K`;
+  return String(tokens);
 }
 
 export const ContextInspectorModal: React.FC<ContextInspectorModalProps> = ({
   contextInfo,
+  initialSection,
   onClose,
 }) => {
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(
-    new Set(),
+  const sections = useMemo(() => buildSections(contextInfo), [contextInfo]);
+  const [activeId, setActiveId] = useState(
+    () => initialSection ?? sections[0]?.id ?? "",
   );
+  /* Query is per-section: carrying "tool" across to the system prompt would
+     silently hide most of it. */
+  const [query, setQuery] = useState("");
 
-  const toggleSection = (section: string) => {
-    setExpandedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(section)) {
-        next.delete(section);
-      } else {
-        next.add(section);
-      }
-      return next;
-    });
-  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
-  const formatNumber = (num: number) => num.toLocaleString();
-
-  const renderSection = (
-    id: string,
-    title: string,
-    tokens: number,
-    content: React.ReactNode,
-    note?: string,
-  ) => {
-    const isExpanded = expandedSections.has(id);
-    const percentage = ((tokens / contextInfo.totalTokens) * 100).toFixed(1);
-
-    return (
-      <div className="context-section" key={id}>
-        <button
-          className="context-section-header"
-          onClick={() => toggleSection(id)}
-        >
-          <span className="context-section-title">
-            <span className="context-section-icon">
-              {isExpanded ? "▼" : "▶"}
-            </span>
-            {title}
-            {note && <span className="context-note">({note})</span>}
-          </span>
-          <span className="context-section-stats">
-            <span className="context-token-count">
-              {formatNumber(tokens)} tokens
-            </span>
-            <span className="context-percentage">({percentage}%)</span>
-          </span>
-        </button>
-        {isExpanded && (
-          <div className="context-section-content">{content}</div>
-        )}
-      </div>
-    );
-  };
-
-  const renderSystemPrompt = () => {
-    const { systemPrompt } = contextInfo.breakdown;
-    return (
-      <div className="context-text-content">
-        {systemPrompt.note && (
-          <div className="context-section-note">
-            ℹ️ {systemPrompt.note}
-          </div>
-        )}
-        <pre>{systemPrompt.content}</pre>
-      </div>
-    );
-  };
-
-  const renderConversationSummary = () => {
-    const { conversationSummary } = contextInfo.breakdown;
-    if (!conversationSummary) return null;
-
-    return renderSection(
-      "summary",
-      "Conversation Summary",
-      conversationSummary.tokens,
-      <div className="context-text-content">
-        {conversationSummary.note && (
-          <div className="context-section-note">
-            ℹ️ {conversationSummary.note}
-          </div>
-        )}
-        <pre>{conversationSummary.content}</pre>
-      </div>,
-      "User message",
-    );
-  };
-
-  const renderMemoryItem = (item: ParsedMemoryItem, index: number) => (
-    <article key={index} className="memory-item-card">
-      <div className="memory-item-meta">
-        {item.category ? (
-          <span className="memory-item-badge">{item.category}</span>
-        ) : null}
-        {item.memoryType ? (
-          <span className="memory-item-type">{item.memoryType}</span>
-        ) : null}
-        {item.sessionId ? (
-          <span className="memory-item-session" title={item.sessionId}>
-            Session {item.sessionId.slice(0, 8)}…
-          </span>
-        ) : null}
-      </div>
-      {item.title ? (
-        <div className="memory-item-title">{item.title}</div>
-      ) : null}
-      <div className="memory-item-body">
-        <Markdown>{item.body}</Markdown>
-      </div>
-    </article>
-  );
-
-  const renderParsedMemoryBlock = (
-    content: string,
-    kind: "sync_tiers" | "related_memory",
-    tokenCount: number,
-    summaryLabel: string,
-    defaultOpen: boolean,
-  ) => {
-    const parsed = parseMemoryBootstrapBlock(content, kind);
-    const itemCount = parsed.sections.reduce(
-      (sum, section) => sum + section.items.length,
-      0,
-    );
-
-    return (
-      <details className="memory-block-details" open={defaultOpen}>
-        <summary>
-          {summaryLabel} — {formatNumber(tokenCount)} tokens ({itemCount}{" "}
-          {itemCount === 1 ? "memory" : "memories"})
-        </summary>
-        <div className="memory-block-parsed">
-          <p className="memory-block-intro">{parsed.intro}</p>
-          {parsed.sections.map((section) => (
-            <div key={section.title} className="memory-section">
-              <h4 className="memory-section-title">{section.title}</h4>
-              <div className="memory-item-list">
-                {section.items.map((item, index) =>
-                  renderMemoryItem(item, index),
-                )}
-              </div>
-            </div>
-          ))}
-          {parsed.truncated ? (
-            <p className="memory-block-truncated">
-              Block truncated for context limits — full memories live in Papr.
-            </p>
-          ) : null}
-          {parsed.footer ? (
-            <p className="memory-block-footer">{parsed.footer}</p>
-          ) : null}
-        </div>
-      </details>
-    );
-  };
-
-  const renderMemoryBootstrap = () => {
-    const memoryBootstrap = contextInfo.breakdown.memoryBootstrap;
-    if (!memoryBootstrap) {
-      return null;
-    }
-
-    const statusNote = memoryBootstrap.deferredBootstrap
-      ? "Injects on next send"
-      : memoryBootstrap.wouldRunOnNextTurn
-        ? "Loads in background (2nd message)"
-        : "Skipped on next send";
-
-    return renderSection(
-      "memory-bootstrap",
-      "Papr Memory Bootstrap",
-      memoryBootstrap.tokens,
-      <div className="context-memory-bootstrap">
-        {memoryBootstrap.note && (
-          <div className="context-section-note">ℹ️ {memoryBootstrap.note}</div>
-        )}
-        <div className="context-section-info">
-          {memoryBootstrap.deferredBootstrap
-            ? "Ready to inject on your next message — fetched in the background while the agent replied to your first message."
-            : memoryBootstrap.wouldRunOnNextTurn
-              ? "First message starts a background fetch (Parse goals, use cases, sync tiers). The agent responds immediately; context injects on your second message."
-              : "Bootstrap already injected this session, or no pending fetch"}
-        </div>
-        {memoryBootstrap.goalsOkrs
-          ? renderParsedMemoryBlock(
-              memoryBootstrap.goalsOkrs.content,
-              "parse_goals",
-              memoryBootstrap.goalsOkrs.tokens,
-              "Goals & OKRs (Parse Goal)",
-              true,
-            )
-          : memoryBootstrap.wouldRunOnNextTurn ? (
-            <div className="context-empty">
-              No Parse goals (need Papr login session token)
-            </div>
-          ) : null}
-        {memoryBootstrap.useCases
-          ? renderParsedMemoryBlock(
-              memoryBootstrap.useCases.content,
-              "parse_usecases",
-              memoryBootstrap.useCases.tokens,
-              "Use cases (Parse Usecase)",
-              false,
-            )
-          : null}
-        {memoryBootstrap.syncTiers
-          ? renderParsedMemoryBlock(
-              memoryBootstrap.syncTiers.content,
-              "sync_tiers",
-              memoryBootstrap.syncTiers.tokens,
-              "Sync tiers",
-              true,
-            )
-          : (
-            <div className="context-empty">No sync tier block on next turn</div>
-          )}
-        {memoryBootstrap.relatedMemory
-          ? renderParsedMemoryBlock(
-              memoryBootstrap.relatedMemory.content,
-              "related_memory",
-              memoryBootstrap.relatedMemory.tokens,
-              "Related memory search",
-              false,
-            )
-          : memoryBootstrap.wouldRunOnNextTurn ? (
-            <div className="context-empty">
-              No related memory matches for this query
-            </div>
-          ) : null}
-      </div>,
-      statusNote,
-    );
-  };
-
-  const renderMessages = () => {
-    const { messages } = contextInfo.breakdown;
-    return (
-      <div className="context-messages">
-        <div className="context-section-info">
-          {messages.count} messages in history
-        </div>
-        <div className="message-list">
-          {messages.breakdown.map((msg, idx) => (
-            <div key={idx} className={`message-preview message-${msg.role}`}>
-              <div className="message-preview-header">
-                <span className="message-role">{msg.role}</span>
-                <span className="message-tokens">
-                  {formatNumber(msg.tokens)} tokens
-                </span>
-              </div>
-              <div className="message-preview-content">{msg.preview}...</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderTools = () => {
-    const { tools } = contextInfo.breakdown;
-    return (
-      <div className="context-tools">
-        <div className="context-section-info">{tools.count} tools available</div>
-        <div className="tool-list">
-          {tools.schemas.map((tool) => (
-            <div key={tool.id} className="tool-item">
-              <div className="tool-header">
-                <span className="tool-id">{tool.id}</span>
-              </div>
-              <div className="tool-description">{tool.description}</div>
-              <details className="tool-schema">
-                <summary>View Schema</summary>
-                <pre>{JSON.stringify(tool.parameters, null, 2)}</pre>
-              </details>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderWorkspaceFiles = () => {
-    const { workspaceFiles } = contextInfo.breakdown;
-    if (workspaceFiles.count === 0) {
-      return (
-        <div className="context-empty">No workspace files loaded</div>
-      );
-    }
-
-    return (
-      <div className="context-workspace-files">
-        {workspaceFiles.note && (
-          <div className="context-section-note">
-            ℹ️ {workspaceFiles.note}
-          </div>
-        )}
-        <div className="context-section-info">
-          {workspaceFiles.count} workspace files (embedded in system prompt)
-        </div>
-        <div className="workspace-file-list">
-          {workspaceFiles.files.map((file) => (
-            <details key={file.name} className="workspace-file">
-              <summary>
-                <span className="file-name">{file.name}</span>
-                <span className="file-size">
-                  {formatNumber(Math.ceil(file.size / 4))} tokens
-                </span>
-              </summary>
-              <pre className="file-content">{file.content}</pre>
-            </details>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderSkills = () => {
-    const { skills } = contextInfo.breakdown;
-    if (skills.count === 0) {
-      return <div className="context-empty">No skills enabled</div>;
-    }
-
-    return (
-      <div className="context-skills">
-        <div className="context-section-info">{skills.count} skills enabled</div>
-        <div className="skill-list">
-          {skills.skills.map((skill) => (
-            <div key={skill.id} className="skill-item">
-              <div className="skill-name">{skill.name}</div>
-              <div className="skill-description">{skill.description}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  };
-
-  const renderPaprSync = () => {
-    const paprSync = contextInfo.breakdown.paprSync;
-    if (!paprSync) {
-      return <div className="context-empty">Sync status unavailable</div>;
-    }
-
-    const { messageCounts } = paprSync;
-    const pendingTotal =
-      messageCounts.sync_pending + messageCounts.sync_failed;
-
-    return (
-      <div className="context-papr-sync">
-        {paprSync.note && (
-          <div className="context-section-note">ℹ️ {paprSync.note}</div>
-        )}
-        <div className="sync-status-grid">
-          <div className="sync-status-item">
-            <span className="sync-label">Storage mode</span>
-            <span className="sync-value">{paprSync.storageMode}</span>
-          </div>
-          <div className="sync-status-item">
-            <span className="sync-label">Cloud sync</span>
-            <span className="sync-value">
-              {paprSync.syncEnabled ? "Enabled (hybrid)" : "Disabled"}
-            </span>
-          </div>
-          <div className="sync-status-item">
-            <span className="sync-label">Papr API key</span>
-            <span className="sync-value">
-              {paprSync.paprConfigured ? "Configured" : "Not configured"}
-            </span>
-          </div>
-          <div className="sync-status-item">
-            <span className="sync-label">Papr user ID</span>
-            <span className="sync-value">
-              {paprSync.paprUserId ?? "Not set"}
-            </span>
-          </div>
-          <div className="sync-status-item">
-            <span className="sync-label">Memory bootstrap (next turn)</span>
-            <span className="sync-value">
-              {paprSync.memoryBootstrapOnNextTurn ? "Would run" : "Skipped"}
-            </span>
-          </div>
-          <div className="sync-status-item">
-            <span className="sync-label">Summary in context</span>
-            <span className="sync-value">
-              {paprSync.conversationSummaryInContext
-                ? "Yes (from Papr)"
-                : paprSync.hasLocalSummary
-                  ? "Cached locally (not in this turn)"
-                  : "No"}
-            </span>
-          </div>
-        </div>
-
-        <div className="context-section-info">
-          {messageCounts.total} messages — {messageCounts.synced} synced,{" "}
-          {messageCounts.sync_pending} pending, {messageCounts.sync_failed}{" "}
-          failed, {messageCounts.local} local-only
-          {pendingTotal > 0 && (
-            <span className="sync-warning">
-              {" "}
-              ({pendingTotal} need sync)
-            </span>
-          )}
-        </div>
-
-        {paprSync.recentSyncFailures.length > 0 && (
-          <div className="sync-failures">
-            <div className="sync-failures-title">Recent sync failures</div>
-            {paprSync.recentSyncFailures.map((failure) => (
-              <div key={failure.messageId} className="sync-failure-item">
-                <span className="sync-failure-time">
-                  {failure.timestamp.substring(0, 19)}
-                </span>
-                <span className="sync-failure-error">{failure.error}</span>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const renderFocusContext = () => {
-    const focus = contextInfo.breakdown.focusContext;
-    if (!focus || focus.tokens === 0) {
-      return <div className="context-empty">No UI focus (open a mini-app or select a job to bind context)</div>;
-    }
-
-    const resolved = focus.resolved;
-    return (
-      <div className="context-focus">
-        {focus.note && (
-          <div className="context-section-note">ℹ️ {focus.note}</div>
-        )}
-        {resolved?.activeApp && (
-          <div className="context-focus-app">
-            <strong>Active app:</strong> {resolved.activeApp.title}{" "}
-            <code>{resolved.activeApp.appId}</code>
-            {resolved.activeApp.files && resolved.activeApp.files.length > 0 && (
-              <ul>
-                {resolved.activeApp.files.map((file) => (
-                  <li key={file}>{file}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        {resolved?.activeJob && (
-          <div className="context-focus-job">
-            <strong>Active job:</strong> {resolved.activeJob.name}{" "}
-            <code>{resolved.activeJob.jobId}</code>
-            {resolved.activeJob.files && resolved.activeJob.files.length > 0 && (
-              <ul>
-                {resolved.activeJob.files.map((file) => (
-                  <li key={file}>{file}</li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-        {resolved?.lastEdited && resolved.lastEdited.length > 0 && (
-          <div className="context-focus-edits">
-            <strong>Recent edits:</strong>
-            <ul>
-              {resolved.lastEdited.map((entry) => (
-                <li key={`${entry.kind}-${entry.path}-${entry.editedAt}`}>
-                  {entry.kind}: {entry.filename ?? entry.path}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
-        {focus.content && (
-          <pre className="context-preview">{focus.content}</pre>
-        )}
-      </div>
-    );
-  };
-
-  const renderPlans = () => {
-    const { plans } = contextInfo.breakdown;
-    if (plans.count === 0) {
-      return <div className="context-empty">No active plans</div>;
-    }
-
-    return (
-      <div className="context-plans">
-        <div className="context-section-info">{plans.count} active plans</div>
-        <div className="plan-list">
-          {plans.plans.map((plan) => (
-            <details key={plan.planId} className="plan-item">
-              <summary>{plan.title}</summary>
-              <div className="plan-steps">
-                {plan.steps.map((step) => (
-                  <div key={step.id} className="plan-step">
-                    <span className={`step-status step-${step.status}`}>
-                      {step.status === "completed"
-                        ? "✓"
-                        : step.status === "in_progress"
-                          ? "▶"
-                          : "○"}
-                    </span>
-                    <span className="step-description">{step.description}</span>
-                  </div>
-                ))}
-              </div>
-            </details>
-          ))}
-        </div>
-      </div>
-    );
-  };
+  const active = sections.find((s) => s.id === activeId) ?? sections[0];
+  const largest = Math.max(...sections.map((s) => s.tokens), 1);
 
   return (
-    <div className="context-inspector-overlay" onClick={onClose}>
+    <div className="ctxi-overlay" onClick={onClose}>
       <div
-        className="context-inspector-modal"
-        onClick={(e) => e.stopPropagation()}
+        className="ctxi"
+        role="dialog"
+        aria-label="Context inspector"
+        onClick={(event) => event.stopPropagation()}
       >
-        <div className="context-inspector-header">
-          <h2>Context Inspector</h2>
-          <button className="close-button" onClick={onClose}>
+        <header className="ctxi__head">
+          <div className="ctxi__heading">
+            <h2>Context</h2>
+            <p>
+              {contextInfo.totalTokens.toLocaleString()} tokens in the next
+              prompt · {contextInfo.model}
+            </p>
+          </div>
+          <button
+            type="button"
+            className="ctxi__close"
+            onClick={onClose}
+            aria-label="Close"
+          >
             ✕
           </button>
-        </div>
+        </header>
 
-        <div className="context-inspector-summary">
-          <div className="summary-item">
-            <span className="summary-label">Model:</span>
-            <span className="summary-value">{contextInfo.model}</span>
-          </div>
-          <div className="summary-item">
-            <span className="summary-label">Total Tokens:</span>
-            <span className="summary-value">
-              {formatNumber(contextInfo.totalTokens)}
-            </span>
-          </div>
-        </div>
+        <div className="ctxi__body">
+          <nav className="ctxi__rail" aria-label="Context sections">
+            {sections.map((section) => (
+              <button
+                type="button"
+                key={section.id}
+                className={`ctxi__tab${section.id === active?.id ? " is-active" : ""}`}
+                onClick={() => {
+                  setActiveId(section.id);
+                  setQuery("");
+                }}
+              >
+                <span className="ctxi__tab-top">
+                  <span className="ctxi__tab-title">{section.title}</span>
+                  <span className="ctxi__tab-tokens">
+                    {formatTokens(section.tokens)}
+                  </span>
+                </span>
+                <span className="ctxi__tab-bar">
+                  <i style={{ width: `${(section.tokens / largest) * 100}%` }} />
+                </span>
+              </button>
+            ))}
+          </nav>
 
-        <div className="context-inspector-body">
-          {renderSection(
-            "system-prompt",
-            "System Prompt",
-            contextInfo.breakdown.systemPrompt.tokens,
-            renderSystemPrompt(),
-            "Includes workspace files",
-          )}
-
-          {contextInfo.breakdown.conversationSummary &&
-            renderConversationSummary()}
-
-          {renderMemoryBootstrap()}
-
-          {renderSection(
-            "messages",
-            "Message History",
-            contextInfo.breakdown.messages.tokens,
-            renderMessages(),
-          )}
-
-          {renderSection(
-            "tools",
-            "Available Tools",
-            contextInfo.breakdown.tools.tokens,
-            renderTools(),
-          )}
-
-          {renderSection(
-            "workspace",
-            "Workspace Files",
-            contextInfo.breakdown.workspaceFiles.tokens,
-            renderWorkspaceFiles(),
-            "In system prompt",
-          )}
-
-          {renderSection(
-            "skills",
-            "Active Skills",
-            contextInfo.breakdown.skills.tokens,
-            renderSkills(),
-          )}
-
-          {renderSection(
-            "plans",
-            "Active Plans",
-            contextInfo.breakdown.plans.tokens,
-            renderPlans(),
-          )}
-
-          {contextInfo.breakdown.focusContext &&
-            renderSection(
-              "focus",
-              "UI Focus Context",
-              contextInfo.breakdown.focusContext.tokens,
-              renderFocusContext(),
-              "Volatile user message",
+          <section className="ctxi__pane">
+            {active ? (
+              <>
+                <div className="ctxi__pane-head">
+                  <div>
+                    <h3>{active.title}</h3>
+                    <p>
+                      {active.tokens.toLocaleString()} tokens ·{" "}
+                      {(
+                        (active.tokens / (contextInfo.totalTokens || 1)) *
+                        100
+                      ).toFixed(1)}
+                      % of prompt
+                      {active.note ? ` · ${active.note}` : ""}
+                    </p>
+                  </div>
+                  {active.searchable ? (
+                    <input
+                      className="ctxi__search"
+                      type="search"
+                      value={query}
+                      placeholder="Find in section"
+                      onChange={(event) => setQuery(event.target.value)}
+                    />
+                  ) : null}
+                </div>
+                <div className="ctxi__pane-body">{active.render(query)}</div>
+              </>
+            ) : (
+              <p className="ctxi-empty">Nothing in this prompt yet.</p>
             )}
-
-          {contextInfo.breakdown.paprSync &&
-            renderSection(
-              "papr-sync",
-              "Papr Sync & Memory",
-              0,
-              renderPaprSync(),
-              "Sync status only",
-            )}
+          </section>
         </div>
       </div>
     </div>

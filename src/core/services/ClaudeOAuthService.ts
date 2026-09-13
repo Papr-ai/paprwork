@@ -26,7 +26,12 @@ export class ClaudeOAuthService {
     // Official Claude Code client ID (public client, supports loopback redirects)
     clientId: "9d1c250a-e61b-44d9-88ed-5944d1962f5e",
     authorizationUrl: "https://claude.ai/oauth/authorize",
-    tokenUrl: "https://claude.ai/api/oauth/token",
+    // The platform API, not the consumer web app. `claude.ai/api/oauth/token`
+    // sits behind Cloudflare's managed bot check, which answers a non-browser
+    // POST with a 403 and an HTML challenge page — so every background refresh
+    // failed and the connection expired with no way to renew itself. This is
+    // the endpoint pi-ai uses on the streaming path, where refresh works.
+    tokenUrl: "https://platform.claude.com/v1/oauth/token",
     // Claude Code uses http://localhost:{PORT}/callback (not 127.0.0.1, not /auth/callback)
     redirectUri: "http://localhost:1456/callback",
     scopes: "user:profile user:inference",
@@ -78,9 +83,58 @@ export class ClaudeOAuthService {
   }
 
   /**
+   * POST a grant to the token endpoint.
+   *
+   * The body is JSON, not form-urlencoded. RFC 6749 §4.1.3 does specify
+   * form encoding, but this endpoint expects JSON and pi-ai — whose refresh
+   * works today — sends JSON. Following the spec over the server cost us every
+   * token renewal, so match the server.
+   */
+  private async postTokenGrant(
+    grant: Record<string, string>,
+    label: string,
+  ): Promise<{
+    access_token: string;
+    refresh_token?: string;
+    expires_in: number;
+  }> {
+    const response = await fetch(this.config.tokenUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify(grant),
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    const body = await response.text();
+
+    if (!response.ok) {
+      // Truncated: a bot-challenge or gateway error page runs to tens of
+      // kilobytes of HTML, and dumping it into the log buries the one line
+      // that says what went wrong.
+      throw new Error(
+        `${label} failed: ${response.status} - ${body.slice(0, 400)}`,
+      );
+    }
+
+    try {
+      return JSON.parse(body) as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in: number;
+      };
+    } catch {
+      throw new Error(
+        `${label} returned a non-JSON response: ${body.slice(0, 400)}`,
+      );
+    }
+  }
+
+  /**
    * Exchange authorization code for tokens
    * Note: Claude returns code and state as separate query parameters
-   * IMPORTANT: Must use application/x-www-form-urlencoded per OAuth 2.0 RFC 6749 Section 4.1.3
    */
   async handleCallback(
     code: string,
@@ -91,33 +145,26 @@ export class ClaudeOAuthService {
     if (state !== expectedState) {
       throw new Error("OAuth state mismatch - possible CSRF attack");
     }
-    // OAuth 2.0 RFC 6749 requires form-urlencoded, not JSON!
-    const params = new URLSearchParams({
-      code,
-      grant_type: "authorization_code",
-      client_id: this.config.clientId,
-      redirect_uri: this.config.redirectUri,
-      code_verifier: verifier,
-    });
-
-    const response = await fetch(this.config.tokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
+    const data = await this.postTokenGrant(
+      {
+        grant_type: "authorization_code",
+        client_id: this.config.clientId,
+        code,
+        // Sent alongside the code, matching pi-ai's working exchange.
+        state,
+        redirect_uri: this.config.redirectUri,
+        code_verifier: verifier,
       },
-      body: params.toString(),
-    });
+      "Token exchange",
+    );
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Token exchange failed: ${response.status} - ${error}`);
+    if (!data.refresh_token) {
+      // Fail loudly instead of storing a connection that can never renew
+      // itself — that silent gap is what produced 403s a day after connecting.
+      throw new Error(
+        "Token exchange succeeded but returned no refresh token; cannot establish a renewable connection",
+      );
     }
-
-    const data = (await response.json()) as {
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-    };
 
     return {
       provider: "anthropic",
@@ -129,34 +176,16 @@ export class ClaudeOAuthService {
 
   /**
    * Refresh access token using refresh token
-   * IMPORTANT: Must use application/x-www-form-urlencoded per OAuth 2.0 RFC 6749
    */
   async refreshToken(refreshToken: string): Promise<OAuthTokenInput> {
-    // OAuth 2.0 RFC 6749 requires form-urlencoded, not JSON!
-    const params = new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: this.config.clientId,
-    });
-
-    const response = await fetch(this.config.tokenUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
+    const data = await this.postTokenGrant(
+      {
+        grant_type: "refresh_token",
+        client_id: this.config.clientId,
+        refresh_token: refreshToken,
       },
-      body: params.toString(),
-    });
-
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Token refresh failed: ${response.status} - ${error}`);
-    }
-
-    const data = (await response.json()) as {
-      access_token: string;
-      refresh_token?: string;
-      expires_in: number;
-    };
+      "Token refresh",
+    );
 
     return {
       provider: "anthropic",

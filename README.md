@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🚀 Paprwork V2
+# Paprwork V2
 
 **AI-Powered Desktop Assistant** — Rebuilt with TypeScript and Mastra
 

@@ -5,6 +5,26 @@
 import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
+import { isPaprNotFoundError } from '../../../core/tools/paprClient.js';
+
+/**
+ * True only when the memory genuinely does not exist.
+ *
+ * Deliberately narrow: this is the single condition under which an update
+ * may fall back to `add`. Treating any error as "missing" is what turns a
+ * transient 5xx into a duplicate document.
+ *
+ * Checks the SDK error class first, then a raw status code — the update path
+ * can surface either depending on where the failure originates.
+ */
+export function isMemoryNotFound(error: unknown): boolean {
+  if (isPaprNotFoundError(error)) {
+    return true;
+  }
+  const status = (error as { status?: number; statusCode?: number } | null)?.status
+    ?? (error as { statusCode?: number } | null)?.statusCode;
+  return status === 404;
+}
 
 export type CodeSummaryMemoryKind = 'code_file_summary' | 'code_project_overview';
 
@@ -100,13 +120,42 @@ export class CodeSummaryMemoryStore {
     previousMemoryId?: string;
     customMetadata: Record<string, string | number | boolean>;
   }): Promise<string | undefined> {
+    const metadata = {
+      role: 'assistant' as const,
+      category: 'fact' as const,
+      customMetadata: input.customMetadata,
+    };
+
+    // UPDATE IN PLACE when we already own a memory id.
+    //
+    // This used to be delete-then-add, which duplicates on the unhappy path:
+    // the delete error was caught and logged, then `add` ran anyway, leaving
+    // the old memory AND a new one. Because the server derives memoryId from
+    // content, both documents carry the SAME memoryId — and every dedup in
+    // the search pipeline dedups *ids*, so one logical memory then occupies
+    // N result slots. Measured live: a single memoryId returned 25 times,
+    // filling max_memories entirely and crowding out every other candidate.
+    //
+    // `memory.update()` is atomic from the reader's perspective: no window
+    // where the summary is missing, and no way to end up with two documents.
     if (input.previousMemoryId) {
       try {
-        await this.client.memory.delete(input.previousMemoryId);
+        await this.client.memory.update(input.previousMemoryId, {
+          content: input.content,
+          metadata,
+        });
+        return input.previousMemoryId;
       } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        // 404 is the ONLY case where falling back to `add` is correct — the
+        // memory we were tracking is genuinely gone (deleted elsewhere, or a
+        // stale tracker row). Any other failure (5xx, network, auth) must
+        // propagate: retrying as `add` is exactly what created duplicates.
+        if (!isMemoryNotFound(error)) {
+          throw error;
+        }
         console.warn(
-          `[CodeSummaryMemoryStore] Failed to delete old ${input.memoryKind} memory ${input.previousMemoryId}: ${message}`,
+          `[CodeSummaryMemoryStore] ${input.memoryKind} memory ${input.previousMemoryId} ` +
+            `not found (404) — recreating.`,
         );
       }
     }
@@ -118,11 +167,7 @@ export class CodeSummaryMemoryStore {
     const response = await this.client.memory.add({
       content: input.content,
       ...memoryScope,
-      metadata: {
-        role: 'assistant',
-        category: 'fact',
-        customMetadata: input.customMetadata,
-      },
+      metadata,
     });
 
     return extractMemoryId(response);

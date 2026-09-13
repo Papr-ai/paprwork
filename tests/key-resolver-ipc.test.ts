@@ -63,6 +63,28 @@ describe("keyResolver IPC flow", () => {
     expect(keys.OPENAI_API_KEY).toBe("env-dev-key");
   });
 
+  test("Settings key wins over .env when IPC is available, even in development", async () => {
+    // npm start sets NODE_ENV=development. The previous shortcut returned
+    // process.env and never asked main for the key the user pasted in Settings.
+    process.env.NODE_ENV = "development";
+    process.env.ANTHROPIC_API_KEY = "sk-ant-api03-stale-from-dotenv";
+
+    class SettingsIpc extends EventEmitter {
+      send = (message: unknown): void => {
+        const typedMessage = message as RequestKeysMessage;
+        this.emit("message", {
+          type: "KEYS_RESPONSE",
+          requestId: typedMessage.requestId,
+          keys: { ANTHROPIC_API_KEY: "sk-ant-api03-from-settings" },
+        } satisfies KeysResponseMessage);
+      };
+    }
+
+    const keys = await getApiKeys(["ANTHROPIC_API_KEY"], new SettingsIpc());
+
+    expect(keys.ANTHROPIC_API_KEY).toBe("sk-ant-api03-from-settings");
+  });
+
   test("ignores an OAuth token sitting in a provider's API key env var", async () => {
     // The pi-ai OAuth path assigns the OAuth token to ANTHROPIC_API_KEY, and an
     // OAuth token is never a valid Platform key.

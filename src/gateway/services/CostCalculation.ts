@@ -4,6 +4,8 @@
  * Pricing as of 2026-04-24 (per 1M tokens)
  */
 
+import { resolveStepContextTokens } from "./agent/stepContextTokens.js";
+
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
   output: number; // USD per 1M output tokens
@@ -134,11 +136,43 @@ export const CACHE_READ_COST_MULTIPLIER = 0.1;
 export const CACHE_WRITE_COST_MULTIPLIER = 1.25;
 
 /**
+ * Input tokens that were neither read from nor written to the prompt cache.
+ *
+ * A cached token is part of the prompt, not an extra charge beside it: Anthropic,
+ * OpenAI and Google all report a prompt total that *contains* the cached portion
+ * (`@ai-sdk/anthropic` 3.x maps `inputTokens` to
+ * `input + cacheCreationTokens + cacheReadTokens`). Billing the reported total at
+ * full price and then adding the cache figures on top therefore charges the same
+ * tokens twice — which is what happened here, overstating September's Anthropic
+ * spend 5.8× and hitting well-cached turns hardest, since a cache *read* is the
+ * cheapest token there is and was being re-billed at 1.0×.
+ *
+ * The convention is detected rather than assumed, reusing
+ * {@link resolveStepContextTokens}: a comment asserting one convention is what
+ * produced the doubling, and the SDK had already changed underneath it. That
+ * helper returns the true prompt total under either convention, so subtracting
+ * the cached portion yields the uncached remainder under either one.
+ */
+function resolveUncachedPromptTokens(
+  promptTokens: number,
+  cacheRead: number,
+  cacheWrite: number,
+): number {
+  const cached = cacheRead + cacheWrite;
+  const total = resolveStepContextTokens({
+    inputTokens: promptTokens,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  });
+  return Math.max(0, total - cached);
+}
+
+/**
  * Calculate USD cost with prompt-cache token breakdown.
  *
- * `promptTokens` is regular (non-cache) input from the provider.
- * Cache read/write are billed at discounted/premium rates on top.
- * When cache tokens are 0, equivalent to {@link calculateCost}.
+ * Cache reads bill at 0.1× input and writes at 1.25×; the remaining uncached
+ * input bills at 1.0×. When cache tokens are 0, equivalent to
+ * {@link calculateCost}.
  */
 export function calculateCostWithCache(
   model: string,
@@ -158,8 +192,14 @@ export function calculateCostWithCache(
   const promptTokens = Math.max(0, usage.promptTokens);
   const completionTokens = Math.max(0, usage.completionTokens);
 
+  const uncachedPromptTokens = resolveUncachedPromptTokens(
+    promptTokens,
+    cacheRead,
+    cacheWrite,
+  );
+
   const inputCost =
-    (promptTokens / 1_000_000) * pricing.input +
+    (uncachedPromptTokens / 1_000_000) * pricing.input +
     (cacheRead / 1_000_000) * pricing.input * CACHE_READ_COST_MULTIPLIER +
     (cacheWrite / 1_000_000) * pricing.input * CACHE_WRITE_COST_MULTIPLIER;
   const outputCost = (completionTokens / 1_000_000) * pricing.output;

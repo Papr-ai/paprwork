@@ -6,7 +6,7 @@ import {
 import {
   MID_TURN_MAX_TOKENS,
   trimOldestHistoryTurns,
-  type HistoryTrimBounds,
+  type MidTurnTrimOpts,
 } from "../agent/midTurnContextTrim.js";
 import type { PiStreamMemoryCheck } from "./piStreamMemoryLimits.js";
 
@@ -43,9 +43,21 @@ export function resolvePiStreamMemoryLoopAction(
   return { kind: "continue", memoryPressure: check.overStreamWarning };
 }
 
+/**
+ * Token ceiling for in-flight history on this turn.
+ *
+ * `MID_TURN_MAX_TOKENS` is only a fallback for callers that cannot compute a
+ * model-aware budget. Preferring it over a supplied budget is what let a user
+ * who capped a chat at 200K keep filling to 300K — and on a 200K-window model
+ * put the ceiling above the window, so trimming could never fire at all.
+ */
+function resolveTrimCeiling(bounds: MidTurnTrimOpts): number {
+  return bounds.maxTokens ?? MID_TURN_MAX_TOKENS;
+}
+
 export function applyEmergencyMemoryCompaction(
   messages: unknown[],
-  historyTrimBounds: HistoryTrimBounds | undefined,
+  historyTrimBounds: MidTurnTrimOpts | undefined,
 ): void {
   compactMidTurnContextForMemoryPressure(messages);
   if (historyTrimBounds) {
@@ -53,7 +65,7 @@ export function applyEmergencyMemoryCompaction(
       messages as Array<{ role?: unknown; content?: unknown }>,
       {
         ...historyTrimBounds,
-        maxTokens: MID_TURN_MAX_TOKENS,
+        maxTokens: resolveTrimCeiling(historyTrimBounds),
       },
     );
   }
@@ -61,7 +73,7 @@ export function applyEmergencyMemoryCompaction(
 
 export function applyMidTurnContextShaping(
   messages: unknown[],
-  historyTrimBounds: HistoryTrimBounds | undefined,
+  historyTrimBounds: MidTurnTrimOpts | undefined,
   memoryPressure: boolean,
   opts?: { skipStaleToolCompaction?: boolean },
 ): void {
@@ -75,7 +87,9 @@ export function applyMidTurnContextShaping(
   } else {
     compactStaleAssistantReasoning(messages);
     if (!opts?.skipStaleToolCompaction) {
-      compactStaleToolResults(messages);
+      compactStaleToolResults(messages, {
+        historyTokenBudget: historyTrimBounds?.maxTokens,
+      });
     }
   }
 
@@ -84,7 +98,7 @@ export function applyMidTurnContextShaping(
       messages as Array<{ role?: unknown; content?: unknown }>,
       {
         ...historyTrimBounds,
-        maxTokens: MID_TURN_MAX_TOKENS,
+        maxTokens: resolveTrimCeiling(historyTrimBounds),
       },
     );
   }

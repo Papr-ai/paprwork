@@ -27,8 +27,15 @@ interface AnthropicThinkingConfig {
   display?: "summarized";
 }
 
+interface AnthropicDisabledThinking {
+  type: "disabled";
+}
+
 interface AnthropicMessagesParams {
-  thinking?: AnthropicThinkingConfig | { type: string; budget_tokens?: number };
+  thinking?:
+    | AnthropicThinkingConfig
+    | AnthropicDisabledThinking
+    | { type: string; budget_tokens?: number };
   output_config?: { effort?: AnthropicAdaptiveEffort; [key: string]: unknown };
   [key: string]: unknown;
 }
@@ -95,10 +102,30 @@ export function mapPiAiReasoningToAnthropicEffort(
 export function buildAdaptiveThinkingOnPayload(
   modelId: string,
   reasoningLevel: PiAiReasoningLevel,
+  thinkingEnabled = true,
 ): PiAiAnthropicStreamOptions["onPayload"] {
   const effort = mapPiAiReasoningToAnthropicEffort(reasoningLevel, modelId);
 
   return (params) => {
+    if (!thinkingEnabled) {
+      // The user turned reasoning off. Drop effort as well as the thinking
+      // block — an effort on a disabled thinking config is a contradiction the
+      // API would have to resolve for us.
+      const { output_config: existing, ...rest } = params;
+      const remaining =
+        existing && typeof existing === "object"
+          ? (({ effort: _dropped, ...others }) => others)(existing)
+          : undefined;
+
+      return {
+        ...rest,
+        ...(remaining && Object.keys(remaining).length > 0
+          ? { output_config: remaining }
+          : {}),
+        thinking: { type: "disabled" },
+      };
+    }
+
     const existingOutputConfig =
       params.output_config && typeof params.output_config === "object"
         ? params.output_config
@@ -122,6 +149,7 @@ export function augmentPiAiAnthropicStreamOptions(
   modelId: string,
   reasoningLevel: PiAiReasoningLevel,
   base: PiAiAnthropicStreamOptions,
+  thinkingEnabled = true,
 ): PiAiAnthropicStreamOptions {
   const isOAuth = base.apiKey.includes("sk-ant-oat");
   const headers = isOAuth
@@ -131,18 +159,26 @@ export function augmentPiAiAnthropicStreamOptions(
       }
     : base.headers;
 
-  if (!requiresPiAiAdaptiveThinkingOverride(modelId)) {
+  // A disabled-thinking request still needs patching even on models that do not
+  // otherwise need the adaptive override, or the off switch does nothing here.
+  if (thinkingEnabled && !requiresPiAiAdaptiveThinkingOverride(modelId)) {
     return headers === base.headers ? base : { ...base, headers };
   }
 
   console.log(
-    `[AgentService] Applying adaptive thinking override for ${modelId} ` +
-      `(effort=${mapPiAiReasoningToAnthropicEffort(reasoningLevel, modelId)}, display=summarized)`,
+    thinkingEnabled
+      ? `[AgentService] Applying adaptive thinking override for ${modelId} ` +
+          `(effort=${mapPiAiReasoningToAnthropicEffort(reasoningLevel, modelId)}, display=summarized)`
+      : `[AgentService] Thinking disabled by user for ${modelId}`,
   );
 
   return {
     ...base,
     headers,
-    onPayload: buildAdaptiveThinkingOnPayload(modelId, reasoningLevel),
+    onPayload: buildAdaptiveThinkingOnPayload(
+      modelId,
+      reasoningLevel,
+      thinkingEnabled,
+    ),
   };
 }
