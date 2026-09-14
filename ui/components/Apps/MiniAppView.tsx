@@ -29,7 +29,12 @@ import {
   isWaitingForLocalPreviewGateway,
 } from "../../utils/localPreviewGatewayGate";
 import { warmIframeActivationDelayMs } from "../../utils/appPreviewWarmActivation";
-import { resolveAppGetUserMessage } from "../../utils/appGetErrorMessage";
+import {
+  APP_LOOKUP_MAX_ATTEMPTS,
+  APP_LOOKUP_RETRY_MS,
+  appGetFailureUserMessage,
+  classifyAppGetFailure,
+} from "../../utils/appGetErrorMessage";
 import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
 import "./MiniAppPublishBar.css";
 
@@ -260,15 +265,44 @@ export function MiniAppView({
     if (isCatalogPreviewEntityId(appId)) {
       return;
     }
-    void (async () => {
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const probe = async (attempt: number): Promise<void> => {
+      // Only an explicit "not found" from a gateway that answered is evidence
+      // about *where the app lives*. A dropped socket, a timeout, or a gateway
+      // still starting says nothing about that — and claiming otherwise both
+      // misdirects the user and latches `appMissingInWorkspace`, which blanks
+      // the pane for the rest of the tab's life over a condition that clears
+      // itself in seconds.
+      const onFailure = (reason: string | undefined): void => {
+        const kind = classifyAppGetFailure(reason);
+        if (kind === "not_found") {
+          setAppMissingInWorkspace(true);
+          setIframeLoadError(appGetFailureUserMessage(kind));
+          return;
+        }
+
+        if (attempt < APP_LOOKUP_MAX_ATTEMPTS) {
+          setIframeLoadError(appGetFailureUserMessage(kind));
+          retryTimer = setTimeout(() => {
+            if (!cancelled) void probe(attempt + 1);
+          }, APP_LOOKUP_RETRY_MS);
+          return;
+        }
+
+        // Out of attempts. Still not a scoping claim — say what we know.
+        setIframeLoadError(
+          "Could not reach the local gateway to load this app. Your app is " +
+            "still on disk; reopen the tab once the gateway is running.",
+        );
+      };
+
       try {
         const resp = await gateway.send("app:get", { appId });
+        if (cancelled) return;
         if (!resp.success) {
-          const kindMessage = resolveAppGetUserMessage(resp.error);
-          setAppMissingInWorkspace(
-            kindMessage.includes("not in the current workspace"),
-          );
-          setIframeLoadError(kindMessage);
+          onFailure(resp.error);
           return;
         }
         const data = resp.data as {
@@ -278,16 +312,20 @@ export function MiniAppView({
         const title = data?.title?.trim();
         if (title) setAppTitle(title);
         setCloudLineage(data?.cloudLineage ?? null);
-      } catch (err) {
-        const kindMessage = resolveAppGetUserMessage(
-          err instanceof Error ? err.message : String(err),
-        );
-        setAppMissingInWorkspace(
-          kindMessage.includes("not in the current workspace"),
-        );
-        setIframeLoadError(kindMessage);
+        setAppMissingInWorkspace(false);
+        setIframeLoadError(null);
+      } catch (error) {
+        if (cancelled) return;
+        onFailure(error instanceof Error ? error.message : undefined);
       }
-    })();
+    };
+
+    void probe(1);
+
+    return () => {
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
+    };
   }, [appId, iframeActivated]);
 
   const refreshAppMetadata = async () => {

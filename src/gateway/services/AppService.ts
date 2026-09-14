@@ -64,6 +64,7 @@ import {
 } from "../../core/utils/appWorkspaceScope.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
 import {
+  assertPaprIdentityResolved,
   fetchForeignPublisherAppIds,
   isAppOwnedByCurrentUser,
   readAppDiskOwnershipHints,
@@ -2295,10 +2296,22 @@ export class AppService {
   }
 
   async getApp(id: string): Promise<MiniApp | null> {
+    // Every other read path awaits this. Without it the map is empty until
+    // initialize() happens to have run, so during boot a present app answers
+    // "not found" — which the caller reports as the app not being here.
+    await this.initialize();
+
     const app = this.apps.get(id);
     if (!app) {
       return null;
     }
+
+    // After the existence check above, so a genuinely missing app still
+    // answers null, and before the ownership filter below, whose null is
+    // reported to the user as "this app is not in the current workspace" —
+    // a specific, alarming claim to make on the strength of a read that
+    // failed.
+    assertPaprIdentityResolved();
 
     const hints = await readAppDiskOwnershipHints(
       path.join(this.appsDir, id),
@@ -2796,6 +2809,12 @@ export class AppService {
 
   async listApps(): Promise<MiniApp[]> {
     await this.initialize();
+
+    // Before filtering, not after: every owned app carries an ownerUserId, so
+    // running this loop against an identity we could not read removes all of
+    // them and returns [] with success — which the renderer caches as "you
+    // have no apps" and carries into the next launch.
+    assertPaprIdentityResolved();
 
     // Prune here, not only at startup. initialize() early-returns once it has
     // run, so a folder removed after boot (agent `rm -rf`, external delete,

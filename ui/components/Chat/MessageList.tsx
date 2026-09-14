@@ -5,6 +5,8 @@
 import React, { useLayoutEffect, useRef, useEffect, useMemo } from "react";
 import { MessageItem } from "./MessageItem";
 import { WelcomeMessage } from "./WelcomeMessage";
+import { HistoryUnavailable } from "./HistoryUnavailable";
+import { resolveEmptyChatPaneReason } from "../../utils/emptyChatPaneReason";
 import { PermissionCard } from "./PermissionCard";
 import { usePermissionStore } from "../../stores/permissionStore";
 import { useChatStore } from "../../stores/chatStore";
@@ -25,6 +27,8 @@ interface MessageListProps {
   onFilesDropped?: (files: File[]) => void;
   /** Called when user scrolls to the top (for loading older messages) */
   onLoadOlder?: () => void;
+  /** Re-fetch history after a failed load. See `historyLoadFailed`. */
+  onRetryHistory?: () => void;
 }
 
 /** Job auto-deliver placeholders — SubAgentResponseTrigger handles user-facing updates instead */
@@ -42,6 +46,7 @@ export const MessageList: React.FC<MessageListProps> = ({
   isWaitingForAgentSlot,
   onFilesDropped,
   onLoadOlder,
+  onRetryHistory,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -56,6 +61,13 @@ export const MessageList: React.FC<MessageListProps> = ({
   const chatState = useChatStore((state) => state.chatStates.get(chatId));
   const hasMoreMessages = chatState?.hasMoreMessages ?? false;
   const isLoadingMore = chatState?.isLoadingMore ?? false;
+  const knownMessageCount = useChatStore(
+    (state) => state.chats.find((chat) => chat.id === chatId)?.messageCount,
+  );
+  const emptyPaneReason = resolveEmptyChatPaneReason({
+    historyLoadFailed: chatState?.historyLoadFailed ?? false,
+    knownMessageCount,
+  });
 
   const groupedMessages = useMemo(
     () => groupDelegationFollowUpMessages(messages),
@@ -220,7 +232,18 @@ export const MessageList: React.FC<MessageListProps> = ({
             : undefined
         }
       >
-        <WelcomeMessage />
+        {/*
+          An empty list has two causes that look identical from here: this
+          chat has no messages, or the load that would have fetched them
+          failed. Greeting the user for the second is the more alarming
+          mistake — it says their conversation is gone when it is intact on
+          disk — so the failure is reported rather than papered over.
+        */}
+        {emptyPaneReason === "load-failed" ? (
+          <HistoryUnavailable onRetry={onRetryHistory} />
+        ) : (
+          <WelcomeMessage />
+        )}
       </div>
     );
   }

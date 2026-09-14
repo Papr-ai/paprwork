@@ -1109,6 +1109,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         isWaitingForAgentSlot={isWaitingForAgentSlot}
         onFilesDropped={handleFilesDroppedToChat}
         onLoadOlder={() => loadOlderMessages(chatId)}
+        onRetryHistory={() => syncHistoryFromServer({ force: true })}
       />
 
       <QueuedMessages

@@ -1,5 +1,6 @@
 import fs from "fs";
 import path from "path";
+import { readActiveAppWorkspaceScope } from "../../core/utils/appWorkspaceScope.js";
 import { spreadPaprMemoryUserIdentity } from "../../core/utils/paprMemoryUserIdentity.js";
 import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 
@@ -9,6 +10,89 @@ let cachedUserId: string | undefined;
 let cachedAt = 0;
 
 /**
+ * Whether we know who the local Papr user is — and if not, whether that is an
+ * answer or merely an absence of one.
+ *
+ * `absent` and `unresolved` both yield no id, but callers must treat them
+ * differently. "Nobody is signed in" licenses filtering another user's content
+ * out of view; "I could not tell, yet" licenses nothing, because acting on it
+ * hides the signed-in user's own content and reports the result as fact.
+ */
+export type PaprUserIdentityState = "known" | "absent" | "unresolved";
+
+export interface PaprUserIdentity {
+  userId?: string;
+  state: PaprUserIdentityState;
+}
+
+/**
+ * A namespaced workspace is only ever created for a signed-in Papr user, so
+ * inside one, "I cannot name the user" is a race and never a verdict. That is
+ * what separates the boot window — where the main process has not yet written
+ * the profile into settings.json — from an open-source install that genuinely
+ * has no Papr account.
+ */
+function workspaceImpliesSignedInUser(): boolean {
+  try {
+    return readActiveAppWorkspaceScope() !== null;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Resolve the local Papr user, reporting *why* when there is no id.
+ *
+ * Only a positive answer is cached. Caching a miss saves one small synchronous
+ * read and costs up to CACHE_TTL_MS of confidently wrong answers — and the miss
+ * is exactly the transient case, since it is what the boot window produces
+ * before the profile lands in settings.json.
+ */
+export function resolvePaprUserIdentity(): PaprUserIdentity {
+  const envId = process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID?.trim();
+  if (envId) {
+    return { userId: envId, state: "known" };
+  }
+
+  const now = Date.now();
+  if (cachedUserId && now - cachedAt < CACHE_TTL_MS) {
+    return { userId: cachedUserId, state: "known" };
+  }
+
+  let raw: string;
+  try {
+    raw = fs.readFileSync(path.join(getPaprDataDir(), "settings.json"), "utf-8");
+  } catch {
+    // No readable settings at all. In a namespaced workspace that file is
+    // expected, so its absence is a workspace still being assembled.
+    return { state: workspaceImpliesSignedInUser() ? "unresolved" : "absent" };
+  }
+
+  let found: string | undefined;
+  try {
+    const settings = JSON.parse(raw) as {
+      profile?: { paprUserId?: string };
+      paprProfile?: { userId?: string };
+    };
+    found =
+      settings.profile?.paprUserId?.trim() ||
+      settings.paprProfile?.userId?.trim() ||
+      undefined;
+  } catch {
+    // Malformed or mid-write. Nothing was learned either way.
+    return { state: workspaceImpliesSignedInUser() ? "unresolved" : "absent" };
+  }
+
+  if (found) {
+    cachedUserId = found;
+    cachedAt = now;
+    return { userId: found, state: "known" };
+  }
+
+  return { state: workspaceImpliesSignedInUser() ? "unresolved" : "absent" };
+}
+
+/**
  * Parse _User.objectId of the locally-authenticated Papr user.
  *
  * Pass as both `user_id` and `external_user_id` on Papr Memory API calls.
@@ -16,34 +100,13 @@ let cachedAt = 0;
  * while keeping `external_user_id` for backward compatibility.
  *
  * Prefers gateway env (set at spawn); falls back to settings.json after login.
+ *
+ * Returns undefined for both `absent` and `unresolved`. Callers that would
+ * *hide* something on the strength of that must use `resolvePaprUserIdentity`
+ * instead and distinguish the two.
  */
 export function getPaprUserId(): string | undefined {
-  const envId = process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID?.trim();
-  if (envId) {
-    return envId;
-  }
-
-  const now = Date.now();
-  if (cachedUserId !== undefined && now - cachedAt < CACHE_TTL_MS) {
-    return cachedUserId || undefined;
-  }
-
-  try {
-    const settingsPath = path.join(getPaprDataDir(), "settings.json");
-    const raw = fs.readFileSync(settingsPath, "utf-8");
-    const settings = JSON.parse(raw) as {
-      profile?: { paprUserId?: string };
-      paprProfile?: { userId?: string };
-    };
-    cachedUserId =
-      settings.profile?.paprUserId?.trim() ??
-      settings.paprProfile?.userId?.trim() ??
-      "";
-    cachedAt = now;
-    return cachedUserId || undefined;
-  } catch {
-    return undefined;
-  }
+  return resolvePaprUserIdentity().userId;
 }
 
 /** Clear cache after login sync so gateway picks up new userId immediately. */
