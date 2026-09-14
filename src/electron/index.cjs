@@ -1419,6 +1419,11 @@ class GatewayProcessSupervisor {
       if (proc !== this.process) return;
 
       if (isRequestKeysMessage(msg)) {
+        // Paired with the gateway's "Slow key IPC: Nms round trip" line. Together
+        // they localise a stall: a long round trip against a short handler means
+        // the message sat in this process's queue rather than being slow to serve,
+        // i.e. main's event loop was blocked by something else entirely.
+        const handlerStartedAt = Date.now();
         console.log("[Electron] Gateway requested keys:", msg.keys);
 
         const resolvedKeys = {};
@@ -1556,6 +1561,13 @@ class GatewayProcessSupervisor {
           }
         } catch (error) {
           console.error("[Electron] Failed to load OAuth tokens:", error);
+        }
+
+        const handlerMs = Date.now() - handlerStartedAt;
+        if (handlerMs >= 250) {
+          console.warn(
+            `[Electron] Slow key resolution: handled in ${handlerMs}ms`,
+          );
         }
 
         if (proc === this.process) {

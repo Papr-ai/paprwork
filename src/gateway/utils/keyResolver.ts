@@ -40,6 +40,12 @@ interface IpcProcessLike {
 }
 
 const IPC_KEY_RESOLVE_TIMEOUT_MS = 15_000;
+/**
+ * Above this, a key IPC round trip is worth a line in the log. A local pipe hop
+ * plus a keychain read is microseconds (measured: ~0.6µs per safeStorage decrypt),
+ * so anything near a second means time was spent somewhere other than the work.
+ */
+const SLOW_IPC_ROUND_TRIP_MS = 1_000;
 const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
 /** Re-read OAuth vs API-key decision from main without keychain on every agent turn. */
 const OAUTH_IPC_REFRESH_TTL_MS = 8_000;
@@ -153,6 +159,7 @@ async function requestKeysViaIPC(
     }
 
     const reqId = `keys-${++requestId}`;
+    const sentAt = Date.now();
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("Key resolution timeout"));
@@ -161,6 +168,17 @@ async function requestKeysViaIPC(
     const messageHandler = (message: unknown) => {
       if (isKeysResponseMessage(message) && message.requestId === reqId) {
         cleanup();
+        // Round trip for a local IPC hop and a keychain read should be single-digit
+        // milliseconds. When it is not, this plus main's own "handled in Xms" line
+        // says which side the time went: a long round trip against a short handler
+        // means the message sat in main's queue, i.e. its event loop was blocked.
+        const elapsedMs = Date.now() - sentAt;
+        if (elapsedMs >= SLOW_IPC_ROUND_TRIP_MS) {
+          console.warn(
+            `[KeyResolver] Slow key IPC: ${elapsedMs}ms round trip for ` +
+              `${keyNames.join(",")} (${reqId})`,
+          );
+        }
         // Main is authoritative: when it includes `oauthTokens`, replace cache (including `{}`
         // when no valid subscription tokens) so we never keep a stale accessToken after re-auth.
         if ("oauthTokens" in message) {
@@ -479,6 +497,22 @@ export function hasValidOAuthToken(provider: "openai" | "anthropic"): boolean {
 }
 
 /**
+ * Do we already hold something this provider could authenticate with?
+ *
+ * The distinction this draws is "re-checking what main thinks" versus "we have no
+ * credential at all", and only the second is worth making a caller wait for. Both
+ * shapes count: on the OAuth route main withholds the API key entirely, so
+ * keyCache is empty and the token is the credential; on the API-key route the
+ * reverse.
+ */
+function hasCachedCredentialFor(
+  provider: "openai" | "anthropic",
+  keyName: string,
+): boolean {
+  return hasValidOAuthToken(provider) || Boolean(keyCache[keyName]);
+}
+
+/**
  * Get authentication for a provider (prioritizes OAuth over API key)
  * Returns { type: 'oauth', token } or { type: 'apiKey', key } or null
  */
@@ -498,19 +532,44 @@ export async function getProviderAuth(
   // as an Electron child with IPC — so OAuth tokens from Settings must be loaded here.
   //
   // Main decides which credentials the gateway may see (withholds OAuth when the
-  // user picked API key). Refresh on a short TTL so tab switches do not spam
-  // keychain; setupKeyCacheInvalidationListener clears the TTL when settings change.
+  // user picked API key), so the gateway re-asks on a short TTL.
+  //
+  // That refresh is a BACKSTOP, not the mechanism. Main pushes
+  // INVALIDATE_KEY_CACHE on every credential change — auth-mode toggle, OAuth
+  // refresh, key add/edit/delete — and clearKeyCache drops the cached token and
+  // zeroes this TTL, so a switch always lands on the cold path below with nothing
+  // in hand. The TTL only catches whatever a push missed.
+  //
+  // Which is why a caller already holding a usable credential must not *wait* for
+  // it. Blocking up to IPC_KEY_RESOLVE_TIMEOUT_MS to re-learn something we already
+  // have, and then falling back to that same cached value when the wait fails, is
+  // pure dead time — and it sits on the hot path of every agent turn and every
+  // file the code indexer summarizes.
   const oauthIpcStale =
     Date.now() - oauthIpcLastRefreshAtMs >= OAUTH_IPC_REFRESH_TTL_MS;
   if (ipcProcess.send && oauthIpcStale) {
-    try {
-      await requestKeysViaIPC([keyName], ipcProcess);
-      oauthIpcLastRefreshAtMs = Date.now();
-    } catch (error) {
-      console.warn(
-        `[KeyResolver] OAuth IPC lookup failed for ${provider}:`,
-        (error as Error).message,
-      );
+    // Stamp the attempt, not the success. This used to be advanced only after a
+    // resolved request, so while main was slow every subsequent call still found
+    // the TTL stale and paid the full timeout again, back to back, for as long as
+    // main stayed slow. An attempt that failed is still an attempt.
+    oauthIpcLastRefreshAtMs = Date.now();
+
+    const refresh = requestKeysViaIPC([keyName], ipcProcess).catch(
+      (error: unknown) => {
+        console.warn(
+          `[KeyResolver] OAuth IPC lookup failed for ${provider}:`,
+          error instanceof Error ? error.message : error,
+        );
+        return undefined;
+      },
+    );
+
+    if (hasCachedCredentialFor(provider, keyName)) {
+      // Let it land in the cache behind us; the next call picks it up.
+      void refresh;
+    } else {
+      // Nothing cached: this call genuinely has no answer without main.
+      await refresh;
     }
   }
 
