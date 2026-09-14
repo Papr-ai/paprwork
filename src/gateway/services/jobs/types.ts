@@ -202,6 +202,15 @@ export interface JobScheduleState {
   lastIdempotencyKey?: string;
   /** Scheduled slot waiting for user to approve high-frequency agent schedule. */
   pendingDueAtForApproval?: string;
+  /**
+   * Runs in a row that failed for a reason retrying cannot fix (bad config, a
+   * missing database, a revoked credential). Counted so a misconfigured job
+   * stops burning a slot every interval forever; reset by a successful run.
+   */
+  consecutivePermanentFailures?: number;
+  /** Why scheduling was switched off automatically, for the UI to surface. */
+  parkedReason?: string;
+  parkedAt?: string;
 }
 
 export interface JobScheduleRiskPending {
