@@ -18,6 +18,96 @@ export type QuotaRemedy =
   | "api_spend_cap"
   | "api_credits";
 
+/** Which credential the request actually went out with. */
+export type CredentialKind = "oauth" | "apiKey" | "unknown";
+
+export interface CredentialDescriptor {
+  /** `anthropic`, `openai`, `openai-codex`, … Absent is fine; the kind still reads. */
+  provider?: string;
+  kind: CredentialKind;
+}
+
+/**
+ * Read the credential kind off the token itself.
+ *
+ * Deliberately not read back from the auth-mode setting: the question a user
+ * asks after flipping that toggle is "did that take effect", and a label
+ * sourced from the same setting they just changed agrees with them whether or
+ * not the switch reached the request. The token is the only witness to what
+ * was actually sent.
+ */
+export function classifyCredentialToken(
+  token: string | undefined,
+): CredentialKind {
+  const value = token?.trim();
+  if (!value) return "unknown";
+  // OAuth shapes first: `sk-oat…` would otherwise be caught by the `sk-` key rule.
+  if (
+    value.startsWith("sk-ant-oat") ||
+    value.startsWith("sk-ant-ort") ||
+    value.startsWith("sk-oat")
+  ) {
+    return "oauth";
+  }
+  if (value.includes("eyJ") && value.split(".").length >= 3) return "oauth";
+  if (value.startsWith("sk-")) return "apiKey";
+  return "unknown";
+}
+
+const CREDENTIAL_COPY: Record<
+  "anthropic" | "openai" | "other",
+  { oauth: string; apiKey: string; providerName: string }
+> = {
+  anthropic: {
+    oauth: "your Claude subscription login",
+    apiKey: "your Anthropic API key",
+    providerName: "Anthropic",
+  },
+  openai: {
+    oauth: "your ChatGPT subscription login",
+    apiKey: "your OpenAI API key",
+    providerName: "OpenAI",
+  },
+  other: {
+    oauth: "your subscription login",
+    apiKey: "your API key",
+    providerName: "The AI provider",
+  },
+};
+
+function credentialCopyFor(provider?: string) {
+  const key = provider?.toLowerCase() ?? "";
+  if (key.includes("anthropic") || key.includes("claude")) {
+    return CREDENTIAL_COPY.anthropic;
+  }
+  if (key.includes("openai") || key.includes("codex")) {
+    return CREDENTIAL_COPY.openai;
+  }
+  return CREDENTIAL_COPY.other;
+}
+
+/** "your Claude subscription login" — undefined when the token said nothing. */
+export function describeCredentialInUse(
+  credential?: CredentialDescriptor,
+): string | undefined {
+  if (!credential || credential.kind === "unknown") return undefined;
+  const copy = credentialCopyFor(credential.provider);
+  return credential.kind === "oauth" ? copy.oauth : copy.apiKey;
+}
+
+/**
+ * The other credential for the same provider — the switch the user is most
+ * likely reaching for, and the one worth naming so they can see it is not the
+ * one that just failed.
+ */
+export function describeAlternativeCredential(
+  credential?: CredentialDescriptor,
+): string | undefined {
+  if (!credential || credential.kind === "unknown") return undefined;
+  const copy = credentialCopyFor(credential.provider);
+  return credential.kind === "oauth" ? copy.apiKey : copy.oauth;
+}
+
 export interface ProviderQuotaExhaustion {
   remedy: QuotaRemedy;
   /** The provider's own sentence, verbatim — it is the ground truth. */
@@ -26,7 +116,10 @@ export interface ProviderQuotaExhaustion {
   resetsAt?: Date;
 }
 
-export function createRateLimitExhaustedError(error?: unknown): {
+export function createRateLimitExhaustedError(
+  error?: unknown,
+  credential?: CredentialDescriptor,
+): {
   type: "stream_pause";
   code: typeof RATE_LIMIT_EXHAUSTED_ERROR_CODE;
   message: string;
@@ -34,18 +127,55 @@ export function createRateLimitExhaustedError(error?: unknown): {
   // A burst limit really does clear on its own, so Resume is honest here. The
   // provider's sentence is still worth passing along when it says something
   // more specific than "429".
-  const detail = error ? extractProviderSentence(error) : undefined;
   return {
     type: "stream_pause",
     code: RATE_LIMIT_EXHAUSTED_ERROR_CODE,
-    message: detail
-      ? `The AI provider is rate limited. Tap Resume when ready to continue.\n\nProvider said: “${detail}”`
-      : "The AI provider is rate limited. Tap Resume when ready to continue.",
+    message: describeProviderRateLimit(error, credential, { resumable: true }),
   };
+}
+
+/**
+ * A transient limit, described so the user can tell one refusal from the next.
+ *
+ * Naming the credential is the point, not decoration: two credentials can be
+ * refused at the same time for unrelated reasons, and a message that names
+ * neither reads identically before and after the user switches between them —
+ * indistinguishable from the switch never having taken effect.
+ *
+ * `resumable` exists because only the pi-ai route raises this alongside a
+ * Resume button. Telling anyone else to tap Resume names a control that is not
+ * on their screen.
+ */
+export function describeProviderRateLimit(
+  error: unknown,
+  credential?: CredentialDescriptor,
+  options?: { resumable?: boolean },
+): string {
+  const providerMessage = error ? extractProviderSentence(error) : undefined;
+  const inUse = describeCredentialInUse(credential);
+  const alternative = describeAlternativeCredential(credential);
+  const retry = options?.resumable
+    ? "Tap Resume when ready to continue."
+    : "Wait a moment and try again.";
+
+  const headline = inUse
+    ? `${credentialCopyFor(credential?.provider).providerName} rate-limited ${inUse}, so the reply never started.`
+    : "The AI provider is rate limited.";
+
+  const action = alternative
+    ? `${retry} If it keeps happening, switch model — or switch to ${alternative} in Settings → AI Models.`
+    : retry;
+
+  // The unattributed case stays one sentence: structure is only worth adding
+  // once there is something specific to put in it.
+  const lines = inUse ? [headline, action] : [`${headline} ${action}`];
+  if (providerMessage) lines.push(`Provider said: “${providerMessage}”`);
+  return lines.join("\n\n");
 }
 
 export function createProviderQuotaExhaustedError(
   detail: ProviderQuotaExhaustion,
+  credential?: CredentialDescriptor,
 ): {
   type: "stream_pause";
   code: typeof PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE;
@@ -54,7 +184,7 @@ export function createProviderQuotaExhaustedError(
   return {
     type: "stream_pause",
     code: PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE,
-    message: describeQuotaExhaustion(detail),
+    message: describeQuotaExhaustion(detail, credential),
   };
 }
 
@@ -79,16 +209,13 @@ function collectErrorStrings(error: unknown, depth = 0): string[] {
     }
     if (typeof record.responseBody === "string") {
       parts.push(record.responseBody);
-      // Anthropic's explanation lives in `error.message` inside this JSON, so
-      // the raw string alone is enough to match against but useless to quote.
-      try {
-        const parsed: unknown = JSON.parse(record.responseBody);
-        if (typeof parsed === "object" && parsed !== null) {
-          parts.push(...collectErrorStrings(parsed, depth + 1));
-        }
-      } catch {
-        // Not JSON; the raw string above is all there is.
-      }
+      parts.push(...parseEmbeddedJsonStrings(record.responseBody, depth));
+    }
+    // pi-ai flattens the whole response into `message` as `429 {…}`, so the
+    // explanation is reachable only by parsing from the first brace. Without
+    // this the sole quotable candidate is the serialized blob.
+    if (typeof record.message === "string") {
+      parts.push(...parseEmbeddedJsonStrings(record.message, depth));
     }
     if (typeof record.error === "object" && record.error !== null) {
       parts.push(...collectErrorStrings(record.error, depth + 1));
@@ -161,6 +288,12 @@ const QUOTA_SIGNALS: ReadonlyArray<{ pattern: RegExp; remedy: QuotaRemedy }> = [
 const TRANSIENT_SIGNALS: ReadonlyArray<RegExp> = [
   /per[-\s]?minute/i,
   /per[-\s]?second/i,
+  // Anthropic's organization ceiling (ITPM/OTPM/RPM). Matched explicitly rather
+  // than left to fall through, because it sits one word from the subscription
+  // signal below — "your account's *rate* limit" against "your account's
+  // *usage* limit" — and only a listed transient signal is safe from a quota
+  // pattern that is later loosened by that one word.
+  /exceeds?\s+your\s+account'?s?\s+rate\s+limit/i,
   /tokens?\s+per\s+(?:minute|second|hour|day)/i,
   /requests?\s+per\s+(?:minute|second|hour|day)/i,
   /concurrent/i,
@@ -203,15 +336,43 @@ function parseQuotaResetsAt(haystack: string): Date | undefined {
   return undefined;
 }
 
-/** The longest sentence the provider gave us, which is usually the useful one. */
+/** Anything holding a JSON object is a serialized body, not a sentence. */
+const SERIALIZED_BODY = /[{[]\s*["{[]/;
+
+/**
+ * Pull the strings out of a JSON body embedded in a larger string.
+ *
+ * pi-ai reports `429 {"type":"error",…}`, so the sentence worth quoting is only
+ * reachable by parsing from the first brace onwards.
+ */
+function parseEmbeddedJsonStrings(raw: string, depth: number): string[] {
+  const start = raw.search(/[{[]/);
+  if (start < 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw.slice(start));
+    if (typeof parsed !== "object" || parsed === null) return [];
+    return collectErrorStrings(parsed, depth + 1);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * The longest sentence the provider gave us, which is usually the useful one.
+ *
+ * Serialized bodies are demoted rather than dropped: they are noise beside the
+ * message they contain, but they are better than quoting nothing at all when
+ * a provider hands us no prose.
+ */
 function extractProviderSentence(error: unknown): string | undefined {
   const candidates = collectErrorStrings(error)
     .map((part) => part.trim())
     .filter((part) => part.length > 24 && /[a-z]{4}/i.test(part))
-    // Serialized bodies are noise next to the message they contain.
-    .filter((part) => !part.startsWith("{") && !part.startsWith("["));
+    .sort((a, b) => b.length - a.length);
   if (candidates.length === 0) return undefined;
-  return candidates.sort((a, b) => b.length - a.length)[0];
+  return (
+    candidates.find((part) => !SERIALIZED_BODY.test(part)) ?? candidates[0]
+  );
 }
 
 /**
@@ -247,28 +408,44 @@ function formatResetInstant(date: Date): string {
   return `${formatted} UTC`;
 }
 
-const REMEDY_COPY: Record<QuotaRemedy, { headline: string; action: string }> = {
+const REMEDY_COPY: Record<
+  QuotaRemedy,
+  {
+    headline: string;
+    /** The same fact with the credential named, for when the token told us. */
+    attributed: (credential: string) => string;
+    action: string;
+  }
+> = {
   subscription_quota: {
     headline: "Your subscription's usage limit is reached",
+    attributed: (credential) => `${credential} has reached its usage limit`,
     action:
       "Switch to a model that still has quota, or use an API key instead — Settings → AI Models.",
   },
   api_spend_cap: {
     headline: "Your API spend limit is reached",
+    attributed: (credential) => `${credential} has reached its spend limit`,
     action:
       "Raise or remove the cap in your provider's console, or switch to a subscription login — Settings → AI Models.",
   },
   api_credits: {
     headline: "Your API credit balance is empty",
+    attributed: (credential) => `${credential} has no credit left`,
     action:
       "Add credits in your provider's billing settings, or switch to a subscription login — Settings → AI Models.",
   },
 };
 
+function sentenceCase(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
 export function describeQuotaExhaustion(
   detail: ProviderQuotaExhaustion,
+  credential?: CredentialDescriptor,
 ): string {
-  const { headline, action } = REMEDY_COPY[detail.remedy];
+  const { headline, attributed, action } = REMEDY_COPY[detail.remedy];
 
   // Naming the reset up front is the whole point: it is what tells the user
   // whether to wait or to go change a setting.
@@ -276,8 +453,14 @@ export function describeQuotaExhaustion(
     ? ` Access returns ${formatResetInstant(detail.resetsAt)}.`
     : "";
 
+  // Which credential this was spent on. Both can be exhausted at once for
+  // unrelated reasons, so an unattributed limit leaves the user unable to tell
+  // whether switching between them changed anything.
+  const inUse = describeCredentialInUse(credential);
+  const subject = inUse ? sentenceCase(attributed(inUse)) : headline;
+
   const lines = [
-    `${headline} — retrying won't help until it resets.${timing}`,
+    `${subject} — retrying won't help until it resets.${timing}`,
     action,
   ];
   if (detail.providerMessage) {

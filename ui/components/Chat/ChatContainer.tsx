@@ -173,6 +173,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const connectionPaused = chatState?.connectionPaused ?? false;
   const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
   const streamRecoveryReason = chatState?.streamRecoveryReason ?? "connection";
+  const streamRecoveryDetail = chatState?.streamRecoveryDetail;
 
   const error = useChatStore((state) => state.error);
 
@@ -1075,9 +1076,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       {needsStreamRecovery && (
         <div className="stream-recovery-banner">
           <span className="stream-recovery-banner__message">
-            {streamRecoveryReason === "rateLimit"
-              ? `${selectedModel.name} hit the provider's rate limit, so the reply never started. Wait a moment and tap Resume, or switch to another model.`
-              : "Connection restored, but the agent response may be incomplete."}
+            {/*
+              The provider's own explanation wins when there is one: it names
+              the credential that was refused, which a fixed sentence cannot,
+              and so is the only version that reads differently after the user
+              switches between API key and subscription login.
+            */}
+            {streamRecoveryDetail ||
+              (streamRecoveryReason === "rateLimit"
+                ? `${selectedModel.name} hit the provider's rate limit, so the reply never started. Wait a moment and tap Resume, or switch to another model.`
+                : "Connection restored, but the agent response may be incomplete.")}
           </span>
           <button
             type="button"

@@ -81,6 +81,7 @@ interface ChatStore {
     chatId: string,
     needs: boolean,
     reason?: StreamRecoveryReason,
+    detail?: string,
   ) => void;
   setError: (error: string | null) => void;
 
@@ -547,7 +548,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
-  setNeedsStreamRecovery: (chatId, needs, reason = "connection") =>
+  setNeedsStreamRecovery: (chatId, needs, reason = "connection", detail) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
@@ -557,8 +558,15 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         ...chatState,
         needsStreamRecovery: needs,
         ...(needs
-          ? { connectionPaused: false, streamRecoveryReason: reason }
-          : { streamRecoveryReason: undefined }),
+          ? {
+              connectionPaused: false,
+              streamRecoveryReason: reason,
+              streamRecoveryDetail: detail,
+            }
+          : {
+              streamRecoveryReason: undefined,
+              streamRecoveryDetail: undefined,
+            }),
       });
 
       return { chatStates: newChatStates };
