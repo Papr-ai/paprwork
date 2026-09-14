@@ -56,7 +56,11 @@ abort used to throw straight past it, leaving a row with a billed total and no
 peak. That gap was not benign: `getContextMeter` reads a missing peak as "fall
 back to the billed total", and since usage became a cross-step sum that total is
 several times any single request, so clamping it to the window pegged the meter
-at exactly 100%. 24 of 52 billed turns landed that way before the fix.
+at exactly 100%.
+
+It was uncommon — 2 of 31 billed turns before the fix — but the reading was not
+merely imprecise. One such row summed to 4,157,052 tokens across 13 steps and
+displayed as "1.0M of 1.0M", against a largest-ever single request of 344,633.
 
 The aggregate event carries `interrupted` so these can be told apart. Filter on
 it rather than assuming: interrupted turns are the *longest* ones, so dropping
