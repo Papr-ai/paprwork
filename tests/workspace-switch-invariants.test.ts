@@ -332,6 +332,34 @@ describe("workspace switch — Electron startup invariants", () => {
 
     expect(fn).toContain("paprApiKeyMatchesNamespaceBound");
     expect(fn).toContain("namespace mismatch");
+    expect(fn).not.toContain("using cached vault key");
+  });
+
+  it("gates workspace switch on a validated Papr API key (gateway + desktop)", () => {
+    const switchService = read("src/gateway/services/workspaceSwitchService.ts");
+    expect(switchService).toMatch(
+      /export async function switchActiveWorkspace[\s\S]*requirePaprApiKeyForWorkspaceSwitch/,
+    );
+
+    const notifyFn = sliceBetween(
+      read("src/electron/ipc/paprWorkspace.ts"),
+      "src/electron/ipc/paprWorkspace.ts",
+      "export async function notifyGatewayWorkspaceSwitch",
+      "export async function notifyGatewayPaprApiKeyUpdate",
+    );
+    expect(notifyFn).toContain("requirePaprApiKeyForWorkspaceSwitch");
+    expect(notifyFn).toMatch(
+      /postWorkspaceSwitchRequest[\s\S]*activatePaprWorkspaceLocally/,
+    );
+
+    const applySwitch = sliceBetween(
+      read("src/electron/ipc/paprLogin.ts"),
+      "src/electron/ipc/paprLogin.ts",
+      "async function applyActiveNamespaceSwitch",
+      "async function refreshActiveNamespaceApiKey",
+    );
+    expect(applySwitch).toContain("paprApiKeyAuthorizedForWorkspaceTarget");
+    expect(applySwitch).toContain("notifyGatewayWorkspaceSwitch");
   });
 });
 

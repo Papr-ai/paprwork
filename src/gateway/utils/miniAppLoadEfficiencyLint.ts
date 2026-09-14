@@ -162,8 +162,8 @@ export function checkMiniAppLoadEfficiencyPatterns(
         line: idx >= 0 ? lineNumber(content, idx) : undefined,
         severity: "warning",
         message:
-          "Polling /api/sync/items without ?refresh=1 forces heavy gateway reconcile on every tick — " +
-          "poll the cached route by default and use refresh=1 only after user action or job completion.",
+          "Poll /api/sync/items without ?refresh=1 (cached, no git reconcile). " +
+          "Use ?refresh=1 only after user upload/pull/merge or when upload wait finishes.",
         rule: "sync-items-poll-no-refresh",
       });
     }

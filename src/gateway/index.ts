@@ -2559,13 +2559,19 @@ async function startGateway(): Promise<void> {
         const isVaultSync = cloudPath.includes("/vault/sync");
         const isReposInit = cloudPath.includes("/repos/init");
         const isRuntimeJobRun = cloudPath.includes("/runtime/job-run");
-        const proxyTimeoutMs = isVaultSync
-          ? 120_000
-          : isRuntimeJobRun
-            ? 930_000
-            : isReposInit
-              ? 60_000
-              : 30_000;
+        let proxyTimeoutMs: number;
+        if (isVaultSync) {
+          const { resolveVaultPushTimeoutMs } = await import(
+            "./services/vaultSyncBackgroundPush.js"
+          );
+          proxyTimeoutMs = resolveVaultPushTimeoutMs();
+        } else if (isRuntimeJobRun) {
+          proxyTimeoutMs = 930_000;
+        } else if (isReposInit) {
+          proxyTimeoutMs = 60_000;
+        } else {
+          proxyTimeoutMs = 30_000;
+        }
         const proxyController = new AbortController();
         const proxyTimer = setTimeout(() => proxyController.abort(), proxyTimeoutMs);
 
@@ -2591,6 +2597,18 @@ async function startGateway(): Promise<void> {
         const upstream = await fetch(targetUrl, fetchOpts);
         clearTimeout(proxyTimer);
         const body = await upstream.text();
+
+        if (isVaultSync) {
+          const {
+            recordVaultSyncPlatformFailure,
+            recordVaultSyncPlatformSuccess,
+          } = await import("./services/vaultSyncPlatformBackoff.js");
+          if (upstream.ok) {
+            recordVaultSyncPlatformSuccess();
+          } else if (upstream.status >= 500) {
+            recordVaultSyncPlatformFailure(upstream.status, body);
+          }
+        }
 
         res.status(upstream.status);
         const ct = upstream.headers.get("content-type");
@@ -2666,7 +2684,11 @@ async function startGateway(): Promise<void> {
         });
         res.json(result);
       } catch (error) {
-        res.status(500).json({
+        const { WorkspaceSwitchApiKeyError: ApiKeyError } = await import(
+          "./services/workspaceSwitchService.js"
+        );
+        const status = error instanceof ApiKeyError ? 400 : 500;
+        res.status(status).json({
           success: false,
           error: error instanceof Error ? error.message : "Workspace switch failed",
         });
@@ -2839,16 +2861,8 @@ async function startGateway(): Promise<void> {
             "./services/cloudUploadMode.js"
           );
           if (forceRefresh) {
-            await sync.reconcileAppDependentPaths(appId);
-            timer.mark("reconcileAwait");
-          } else {
-            scheduleCoalescedBackgroundWork(
-              `cloud-sync:reconcile:${appId}`,
-              async () => {
-                await sync.reconcileAppDependentPaths(appId);
-              },
-            );
-            timer.mark("reconcileScheduled");
+            await sync.reconcileAppDependentPathsIfNeeded(appId);
+            timer.mark("reconcileIfNeeded");
           }
           let publishLive = false;
           let publishedAt: string | null = null;

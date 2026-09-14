@@ -3,10 +3,13 @@ import * as paprWorkspaceModule from "../src/core/utils/paprWorkspace.js";
 import {
   isActivePaprNamespace,
   isInternalPaprNamespaceApiKeyName,
+  paprApiKeyAuthorizedForWorkspaceTarget,
   paprApiKeyMatchesActiveWorkspace,
   paprApiKeyMatchesNamespace,
   paprNamespaceApiKeyName,
   parsePaprApiKeyScope,
+  requirePaprApiKeyForWorkspaceSwitch,
+  WorkspaceSwitchApiKeyError,
 } from "../src/core/utils/paprApiKey.js";
 
 describe("paprApiKeyMatchesNamespace", () => {
@@ -171,6 +174,67 @@ describe("paprApiKeyMatchesActiveWorkspace", () => {
     ).toBe(true);
 
     readSpy.mockRestore();
+  });
+});
+
+describe("paprApiKeyAuthorizedForWorkspaceTarget", () => {
+  it("accepts namespace-scoped keys for the target namespace", () => {
+    const key =
+      "sk-org-Y8D4H7Yp3Z-namespace-onnNQFe3DN-abc123";
+    expect(
+      paprApiKeyAuthorizedForWorkspaceTarget(key, "Y8D4H7Yp3Z", "onnNQFe3DN"),
+    ).toBe(true);
+  });
+
+  it("rejects namespace-scoped keys for a different namespace", () => {
+    const key =
+      "sk-org-Y8D4H7Yp3Z-namespace-onnNQFe3DN-abc123";
+    expect(
+      paprApiKeyAuthorizedForWorkspaceTarget(key, "Y8D4H7Yp3Z", "S7mQcHZCtj"),
+    ).toBe(false);
+  });
+
+  it("accepts org-scoped keys without embedded namespace for any namespace in the org", () => {
+    expect(
+      paprApiKeyAuthorizedForWorkspaceTarget(
+        "sk-org-Y8D4H7Yp3Z-only-org-secret",
+        "Y8D4H7Yp3Z",
+        "onnNQFe3DN",
+      ),
+    ).toBe(true);
+    expect(
+      paprApiKeyAuthorizedForWorkspaceTarget(
+        "sk-org-Y8D4H7Yp3Z-only-org-secret",
+        "Y8D4H7Yp3Z",
+        "S7mQcHZCtj",
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects org-scoped keys for a different organization", () => {
+    expect(
+      paprApiKeyAuthorizedForWorkspaceTarget(
+        "sk-org-OtherOrg-only-org-secret",
+        "Y8D4H7Yp3Z",
+        "onnNQFe3DN",
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("requirePaprApiKeyForWorkspaceSwitch", () => {
+  it("throws when the key is missing", () => {
+    expect(() =>
+      requirePaprApiKeyForWorkspaceSwitch(undefined, "org", "ns"),
+    ).toThrow(WorkspaceSwitchApiKeyError);
+  });
+
+  it("returns trimmed key when authorized", () => {
+    const key =
+      "sk-org-Y8D4H7Yp3Z-namespace-onnNQFe3DN-abc123";
+    expect(
+      requirePaprApiKeyForWorkspaceSwitch(key, "Y8D4H7Yp3Z", "onnNQFe3DN"),
+    ).toBe(key);
   });
 });
 

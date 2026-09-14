@@ -8,6 +8,7 @@ import {
   clearBackgroundTaskTimingsForTests,
   getRecentBackgroundTaskTimings,
   resetCoalescedBackgroundWorkForTests,
+  resolveSlowBackgroundTelemetryThresholdMs,
   scheduleCoalescedBackgroundWork,
   yieldToInteractiveHotPath,
 } from "../src/gateway/services/gatewayBackgroundWork.js";
@@ -55,6 +56,20 @@ describe("gatewayBackgroundWork", () => {
         delete process.env.GATEWAY_BG_MAX_WAIT_MS;
       } else {
         process.env.GATEWAY_BG_MAX_WAIT_MS = prevMax;
+      }
+    }
+  });
+
+  test("resolveSlowBackgroundTelemetryThresholdMs defaults to 10s", () => {
+    const prev = process.env.GATEWAY_BG_SLOW_TELEMETRY_MS;
+    delete process.env.GATEWAY_BG_SLOW_TELEMETRY_MS;
+    try {
+      expect(resolveSlowBackgroundTelemetryThresholdMs()).toBe(10_000);
+    } finally {
+      if (prev === undefined) {
+        delete process.env.GATEWAY_BG_SLOW_TELEMETRY_MS;
+      } else {
+        process.env.GATEWAY_BG_SLOW_TELEMETRY_MS = prev;
       }
     }
   });

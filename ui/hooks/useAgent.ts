@@ -1747,6 +1747,7 @@ export function useAgent() {
       setConnectionPaused(chatId, false);
       setFinishingWork(chatId, false);
       setNeedsStreamRecovery(chatId, false);
+      setError(null);
       setSending(chatId, true);
 
       const { setTabStreaming } = useTabStore.getState();
@@ -1758,8 +1759,9 @@ export function useAgent() {
         fromChunkIndex,
         (chunk) => handleStreamChunkRef.current(chunk),
       );
+      setError(null);
     },
-    [setConnectionPaused, setNeedsStreamRecovery, setSending, streamingRefs],
+    [setConnectionPaused, setNeedsStreamRecovery, setSending, setError, streamingRefs],
   );
 
   const syncStreamFromHistory = useCallback(
@@ -1809,9 +1811,6 @@ export function useAgent() {
             const requestId = ensureTrackedStream(chatId);
             setConnectionPaused(chatId, true);
             setNeedsStreamRecovery(chatId, false);
-            if (mode === "auto") {
-              setError("Agent still working — reconnecting to stream…");
-            }
             scheduleStreamResumeRetry(
               chatId,
               requestId,

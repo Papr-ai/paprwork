@@ -11,7 +11,16 @@ import {
   reportPaprQuotaError,
 } from "../../core/utils/paprQuota.js";
 
-const PUSH_TIMEOUT_MS = 120_000;
+export function resolveVaultPushTimeoutMs(): number {
+  const raw = process.env.VAULT_PUSH_TIMEOUT_MS?.trim();
+  if (raw) {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 5_000) {
+      return parsed;
+    }
+  }
+  return 45_000;
+}
 
 export interface VaultSyncPushResult {
   synced: number;
@@ -34,8 +43,16 @@ export async function pushVaultEntriesViaGatewayHttp(
     return null;
   }
 
+  const { isVaultSyncPlatformPaused, getVaultSyncPlatformPauseReason } =
+    await import("./vaultSyncPlatformBackoff.js");
+  if (isVaultSyncPlatformPaused()) {
+    const reason = getVaultSyncPlatformPauseReason();
+    throw new Error(reason ?? "Vault sync paused after platform errors");
+  }
+
+  const pushTimeoutMs = resolveVaultPushTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), pushTimeoutMs);
 
   try {
     const resp = await fetch(
@@ -57,9 +74,17 @@ export async function pushVaultEntriesViaGatewayHttp(
         );
         return null;
       }
+      const { recordVaultSyncPlatformFailure } = await import(
+        "./vaultSyncPlatformBackoff.js"
+      );
+      recordVaultSyncPlatformFailure(resp.status, text);
       throw new Error(`Vault sync failed (${resp.status}): ${text}`);
     }
 
+    const { recordVaultSyncPlatformSuccess } = await import(
+      "./vaultSyncPlatformBackoff.js"
+    );
+    recordVaultSyncPlatformSuccess();
     return (await resp.json()) as VaultSyncPushResult;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

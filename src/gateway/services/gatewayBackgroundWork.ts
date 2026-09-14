@@ -33,7 +33,41 @@ export interface BackgroundTaskTimingRecord {
 }
 
 const MAX_TIMING_RECORDS = 64;
+const DEFAULT_SLOW_BACKGROUND_TELEMETRY_MS = 10_000;
 const recentTaskTimings: BackgroundTaskTimingRecord[] = [];
+
+/** Threshold for opt-in paprwork_slow_operation from coalesced background tasks. */
+export function resolveSlowBackgroundTelemetryThresholdMs(): number {
+  const raw = process.env.GATEWAY_BG_SLOW_TELEMETRY_MS?.trim();
+  if (!raw) {
+    return DEFAULT_SLOW_BACKGROUND_TELEMETRY_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_SLOW_BACKGROUND_TELEMETRY_MS;
+}
+
+function maybeReportSlowBackgroundTaskTelemetry(
+  taskKey: string,
+  durationMs: number,
+  ok: boolean,
+): void {
+  const thresholdMs = resolveSlowBackgroundTelemetryThresholdMs();
+  if (durationMs < thresholdMs) {
+    return;
+  }
+  const operationName = ok ? taskKey : `${taskKey}:failed`;
+  void import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
+    void import("../../core/telemetry/events.js").then(({ AmplitudeEvents }) => {
+      getGatewayTelemetry().trackFireAndForget(AmplitudeEvents.SLOW_OPERATION, {
+        operation_name: operationName.slice(0, 200),
+        duration_ms: Math.round(durationMs),
+        threshold_ms: thresholdMs,
+      });
+    });
+  });
+}
 
 let backgroundSlotsInUse = 0;
 const backgroundSlotWaiters: Array<() => void> = [];
@@ -148,11 +182,18 @@ function recordBackgroundTaskTiming(
   if (recentTaskTimings.length > MAX_TIMING_RECORDS) {
     recentTaskTimings.splice(0, recentTaskTimings.length - MAX_TIMING_RECORDS);
   }
+  maybeReportSlowBackgroundTaskTelemetry(taskKey, finishedAtMs - startedAtMs, ok);
 }
 
 /** Recent coalesced background task runs (newest last). */
 export function getRecentBackgroundTaskTimings(): BackgroundTaskTimingRecord[] {
   return [...recentTaskTimings];
+}
+
+/** True while a coalesced task (e.g. vault:workspace-switch) is executing. */
+export function isCoalescedBackgroundTaskInFlight(taskKey: string): boolean {
+  const state = coalescedTasks.get(taskKey);
+  return state?.inFlight ?? false;
 }
 
 export function clearBackgroundTaskTimingsForTests(): void {

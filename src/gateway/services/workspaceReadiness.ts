@@ -82,6 +82,7 @@ export async function runWhenWorkspaceReady<T>(
 const READINESS_EXEMPT_PREFIXES = [
   "/health",
   "/api/workspace/",
+  "/api/debug/",
 ] as const;
 
 /** Returns 503 while the workspace gate is raised (except health + switch endpoints). */

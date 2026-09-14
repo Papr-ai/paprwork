@@ -2,7 +2,13 @@
  * Desktop workspace switch — re-point PAPR_HOME / PAPR_USER_DATA and reload services.
  */
 
-import { paprApiKeyMatchesNamespaceBound } from "../../core/utils/paprApiKey.js";
+import {
+  paprApiKeyMatchesNamespaceBound,
+  requirePaprApiKeyForWorkspaceSwitch,
+  WorkspaceSwitchApiKeyError,
+} from "../../core/utils/paprApiKey.js";
+
+export { WorkspaceSwitchApiKeyError };
 import {
   applyActiveWorkspaceEnv,
   ensureWorkspaceLayout,
@@ -479,10 +485,9 @@ export async function applyGatewayPaprApiKey(apiKey: string): Promise<void> {
       pointer.namespaceId,
     )
   ) {
-    console.warn(
-      "[WorkspaceSwitch] Ignoring Papr API key update — wrong org/namespace for active workspace",
+    throw new WorkspaceSwitchApiKeyError(
+      "Papr API key does not match the active workspace organization/namespace",
     );
-    return;
   }
 
   // Stop in-flight streams before closing SQLite — otherwise checkpoint timers on
@@ -616,6 +621,13 @@ export async function switchActiveWorkspace(
   );
 
   try {
+    const paprApiKey = requirePaprApiKeyForWorkspaceSwitch(
+      input.paprApiKey,
+      input.organizationId,
+      input.namespaceId,
+    );
+    input = { ...input, paprApiKey };
+
     await cancelActiveAgentStreamsQuick();
     await stopActiveJobsBeforeWorkspaceSwitch();
     bumpWorkspaceWriteGeneration("workspace switch started");
@@ -639,9 +651,7 @@ export async function switchActiveWorkspace(
     // Drop tab churn from the leaving org; renderer already flushed via sync save.
     discardDeferredTabSave("workspace switch pointer activated");
     resetAppStateStorageSingleton();
-    if (input.paprApiKey) {
-      process.env.PAPR_API_KEY = input.paprApiKey;
-    }
+    process.env.PAPR_API_KEY = paprApiKey;
     clearKeyCache("PAPR_API_KEY");
     invalidatePaprUserIdCache();
 

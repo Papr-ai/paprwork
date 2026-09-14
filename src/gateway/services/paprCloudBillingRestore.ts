@@ -6,7 +6,10 @@
 import { setPaprCloudPaused } from "../../core/utils/paprQuota.js";
 import { resumeCodeIndexingAfterBillingRestore } from "./CodeIndexingService.js";
 import { getVaultSyncService } from "./VaultSyncService.js";
-import { scheduleCoalescedBackgroundWork } from "./gatewayBackgroundWork.js";
+import {
+  isCoalescedBackgroundTaskInFlight,
+  scheduleCoalescedBackgroundWork,
+} from "./gatewayBackgroundWork.js";
 
 const PAPR_RESUME_CLOUD_TASK = "papr:resume-cloud";
 
@@ -18,7 +21,20 @@ export function schedulePaprCloudResumeAfterBillingRestore(): void {
   setPaprCloudPaused(false);
   resumeCodeIndexingAfterBillingRestore();
 
+  if (isCoalescedBackgroundTaskInFlight("vault:workspace-switch")) {
+    console.log(
+      "[PaprCloud] Skipping papr:resume-cloud — workspace vault sync already running",
+    );
+    return;
+  }
+
   scheduleCoalescedBackgroundWork(PAPR_RESUME_CLOUD_TASK, async () => {
+    if (isCoalescedBackgroundTaskInFlight("vault:workspace-switch")) {
+      console.log(
+        "[PaprCloud] Skipping papr:resume-cloud body — workspace vault sync in progress",
+      );
+      return;
+    }
     const vault = getVaultSyncService();
     if (!vault) {
       return;

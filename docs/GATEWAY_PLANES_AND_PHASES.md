@@ -68,7 +68,8 @@ The OS schedules processes on available cores. The app does **not** pin cores in
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `GATEWAY_BACKGROUND_PROCESS` | on (off in tests) | Spawn background child for delegated vault tasks |
+| `GATEWAY_BACKGROUND_PROCESS` | **on** (set `0`/`false`/`off` to disable; off in tests) | Spawn background child for delegated vault tasks |
+| `GATEWAY_BG_SLOW_TELEMETRY_MS` | 10000 | Emit opt-in `paprwork_slow_operation` when a coalesced background task exceeds this duration |
 | `GATEWAY_BG_MAX_CONCURRENCY` | `clamp(1, cpus−1, 4)` | Parallel coalesced background tasks |
 | `DB_QUERY_POOL_SIZE` | device-derived | SQLite worker threads |
 | `CODE_INDEX_IO_POOL_SIZE` | device-derived | Code index read workers |
@@ -82,7 +83,7 @@ npm run build:gateway && npm run test:gateway-background-phases
 
 ## Observability (gateway perf — not Amplitude)
 
-Product telemetry (opt-in) goes to Amplitude via `TelemetryClient` / `paprwork_*` events. **Sub-second hot-path timing stays local:**
+Product telemetry (opt-in) goes to Amplitude via `TelemetryClient` / `paprwork_*` events. Coalesced background tasks ≥ `GATEWAY_BG_SLOW_TELEMETRY_MS` (default 10s) emit `paprwork_slow_operation` with `operation_name`, `duration_ms`, `threshold_ms` only. **Sub-second hot-path timing stays local:**
 
 | Work | How to see duration |
 |------|---------------------|
@@ -100,3 +101,16 @@ Product telemetry (opt-in) goes to Amplitude via `TelemetryClient` / `paprwork_*
 curl -s http://127.0.0.1:18789/api/debug/gateway-background | jq
 curl -s 'http://127.0.0.1:18789/api/sync/items?appId=YOUR_APP_ID'  # compare first vs second call within 20s
 ```
+
+**Packaged app / support:** Settings → Privacy → **Copy gateway diagnostics** (Electron clipboard + 8s per-endpoint timeout; includes `/health` and workspace switch status). Home paths redacted; not uploaded automatically.
+
+### Workspace switch (what runs when)
+
+1. **Fast path:** cancel streams, raise readiness barrier, swap `PAPR_HOME` pointer, phased reinit (core → artifacts → services), release barrier.
+2. **Background (coalesced):** `vault:workspace-switch` → full vault push/pull; cloud git sync deferred **60s**; `/health` reports `switching` for up to **90s** after completion so the supervisor does not SIGKILL mid-vault.
+3. **UI billing:** `papr:resume-cloud` is rate-limited to **120s** and now **skips** if `vault:workspace-switch` is already in flight (avoids duplicate 90s vault work).
+
+### Vault / memory.papr.ai degradation
+
+- Generic `GET /health` on memory can be **200** while `POST /v1/cloud/vault/sync` returns **500** (platform bug or org-specific vault state).
+- After a **500**, gateway pauses vault HTTP with exponential backoff (30s → 15m cap). Override push wait with `VAULT_PUSH_TIMEOUT_MS` (default **45s**, was 120s).

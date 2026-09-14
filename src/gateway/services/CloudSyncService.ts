@@ -276,14 +276,38 @@ export class CloudSyncService implements CloudSyncInternals {
    * and clean in git (fixes stale "pending" when sync state was never updated).
    */
   async reconcileAppDependentPaths(appId: string): Promise<number> {
-    const { resolveAppDependentJobIds, jobRelativePath } = await import(
-      "./cloudSync/resolveAppDependentJobs.js"
+    const { listAppDependentSyncRelativePaths } = await import(
+      "./cloudSync/appGitReconcileGate.js"
     );
-    const relativePaths = resolveAppDependentJobIds(this.paprDir, appId).map(
-      jobRelativePath,
+    const relativePaths = listAppDependentSyncRelativePaths(
+      this.paprDir,
+      appId,
     );
     const reconciled = await this.reconcilePathsIfGitClean(relativePaths);
     return reconciled.length;
+  }
+
+  /**
+   * Git reconcile only when sync fingerprints say linked paths may be stale.
+   * Used for ?refresh=1 — not on background /api/sync/items polls.
+   */
+  async reconcileAppDependentPathsIfNeeded(
+    appId: string,
+  ): Promise<{ skipped: boolean; reconciled: number }> {
+    const { appDependentPathsNeedGitReconcile } = await import(
+      "./cloudSync/appGitReconcileGate.js"
+    );
+    if (
+      !appDependentPathsNeedGitReconcile(
+        this.paprDir,
+        appId,
+        this.stateManager,
+      )
+    ) {
+      return { skipped: true, reconciled: 0 };
+    }
+    const reconciled = await this.reconcileAppDependentPaths(appId);
+    return { skipped: false, reconciled };
   }
 
   runExclusiveGitOp<T>(fn: () => Promise<T>): Promise<T> {

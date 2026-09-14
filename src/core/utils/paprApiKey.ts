@@ -43,6 +43,75 @@ export function paprApiKeyMatchesNamespaceBound(
   });
 }
 
+/**
+ * Whether an API key may be used for requests scoped to the target workspace.
+ * Namespace-embedded keys must match the target namespace; org-only / legacy keys
+ * must match the target organization (org-scoped keys may address any namespace).
+ */
+export function paprApiKeyAuthorizedForWorkspaceTarget(
+  apiKey: string,
+  organizationId: string,
+  namespaceId: string,
+): boolean {
+  const trimmed = apiKey.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const scope = parsePaprApiKeyScope(trimmed);
+  if (scope) {
+    return scope.namespaceId === namespaceId.trim();
+  }
+
+  const orgMatch = trimmed.match(/^sk-org-([^-]+)/);
+  if (orgMatch) {
+    return orgMatch[1] === organizationId.trim();
+  }
+
+  return false;
+}
+
+export class WorkspaceSwitchApiKeyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceSwitchApiKeyError";
+  }
+}
+
+/** Validates and returns a trimmed Papr API key for workspace switch (gateway + desktop). */
+export function requirePaprApiKeyForWorkspaceSwitch(
+  apiKey: string | undefined,
+  organizationId: string,
+  namespaceId: string,
+): string {
+  const trimmed = typeof apiKey === "string" ? apiKey.trim() : "";
+  if (!trimmed) {
+    throw new WorkspaceSwitchApiKeyError(
+      "Papr API key is required before switching workspace. Sign in again or refresh your namespace key.",
+    );
+  }
+
+  if (
+    !paprApiKeyAuthorizedForWorkspaceTarget(
+      trimmed,
+      organizationId,
+      namespaceId,
+    )
+  ) {
+    const scope = parsePaprApiKeyScope(trimmed);
+    if (scope && scope.namespaceId !== namespaceId.trim()) {
+      throw new WorkspaceSwitchApiKeyError(
+        `Papr API key is bound to namespace ${scope.namespaceId}; cannot switch to ${namespaceId}. Refresh the namespace API key and try again.`,
+      );
+    }
+    throw new WorkspaceSwitchApiKeyError(
+      "Papr API key does not match the target workspace organization/namespace. Refresh your Papr login and try again.",
+    );
+  }
+
+  return trimmed;
+}
+
 /** Parse org + namespace embedded in a Papr API key, when present. */
 export function parsePaprApiKeyScope(
   apiKey: string,

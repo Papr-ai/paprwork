@@ -67,7 +67,7 @@ async function waitForUploadCompletion(
   while (Date.now() < deadline) {
     await sleep(2_000);
     const itemsRes = await fetch(
-      `${GATEWAY}/api/sync/items?refresh=1&appId=${encodeURIComponent(appId)}`,
+      `${GATEWAY}/api/sync/items?appId=${encodeURIComponent(appId)}`,
     );
     if (!itemsRes.ok) {
       continue;

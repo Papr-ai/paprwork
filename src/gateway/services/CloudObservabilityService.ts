@@ -338,7 +338,7 @@ export async function getCloudSyncStatus(options?: {
   const jobId = options?.jobId?.trim();
   const paprDir = getPaprRoot();
   if (appId) {
-    await sync.reconcileAppDependentPaths(appId);
+    await sync.reconcileAppDependentPathsIfNeeded(appId);
   }
 
   const githubFull = sync.getGitHubSyncItemsReport();

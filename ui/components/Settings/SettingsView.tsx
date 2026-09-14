@@ -13,6 +13,11 @@ import { useProfileStore } from "../../stores/profileStore";
 import { useAppUpdater } from "../../hooks/useAppUpdater";
 import { gateway } from "../../src/lib/gateway";
 import { trackEvent } from "../../lib/telemetry";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
+import {
+  diagnosticsBundleHasUsableData,
+  fetchGatewayDiagnosticsBundle,
+} from "../../utils/gatewayDiagnostics";
 import type { SettingsTab } from "../../types/settings";
 import { AIModelsTab } from "./AIModelsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
@@ -558,6 +563,86 @@ function ProfileTab() {
   );
 }
 
+function GatewayDiagnosticsCopySection() {
+  const [copyState, setCopyState] = useState<
+    "idle" | "loading" | "copied" | "error"
+  >("idle");
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
+
+  const handleCopy = async () => {
+    setCopyState("loading");
+    setErrorDetail(null);
+    const bundle = await fetchGatewayDiagnosticsBundle();
+    const text = JSON.stringify(bundle, null, 2);
+    const copied = await copyTextToClipboard(text);
+    if (copied) {
+      setCopyState("copied");
+      if (!diagnosticsBundleHasUsableData(bundle)) {
+        setErrorDetail(
+          "Copied partial bundle — gateway did not respond (timeout or not running). Paste anyway for support.",
+        );
+      }
+      window.setTimeout(() => {
+        setCopyState("idle");
+        setErrorDetail(null);
+      }, 2500);
+      return;
+    }
+    setCopyState("error");
+    setErrorDetail(
+      diagnosticsBundleHasUsableData(bundle)
+        ? "Collected diagnostics but clipboard access failed. Try again or copy from the gateway log."
+        : "Gateway unreachable and clipboard failed. Is Paprwork running?",
+    );
+    window.setTimeout(() => {
+      setCopyState("idle");
+      setErrorDetail(null);
+    }, 6000);
+  };
+
+  const buttonLabel =
+    copyState === "loading"
+      ? "Collecting…"
+      : copyState === "copied"
+        ? "Copied to clipboard"
+        : copyState === "error"
+          ? "Could not copy diagnostics"
+          : "Copy gateway diagnostics";
+
+  return (
+    <div
+      className="settings-section"
+      style={{ marginTop: "1.75rem", borderTop: "1px solid var(--border-subtle, #e5e5ea)", paddingTop: "1.25rem" }}
+    >
+      <h3 className="settings-section__title" style={{ fontSize: "1rem" }}>
+        Support diagnostics
+      </h3>
+      <p className="settings-section__description">
+        Copies recent gateway performance snapshots (background task timings,
+        replica worker stats). Home folder paths in errors are redacted. Nothing
+        is uploaded unless you paste it to support yourself.
+      </p>
+      <button
+        type="button"
+        className="settings-btn"
+        disabled={copyState === "loading"}
+        onClick={() => void handleCopy()}
+        style={{ marginTop: "0.75rem" }}
+      >
+        {buttonLabel}
+      </button>
+      {errorDetail ? (
+        <p
+          className="settings-section__description"
+          style={{ marginTop: "0.5rem", color: "var(--text-secondary, #666)" }}
+        >
+          {errorDetail}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function PrivacyTab() {
   const [telemetryEnabled, setTelemetryEnabled] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -611,6 +696,7 @@ function PrivacyTab() {
             Anonymous usage statistics can be configured in the desktop app
             (Electron). This build does not expose telemetry controls.
           </p>
+          <GatewayDiagnosticsCopySection />
         </div>
       </div>
     );
@@ -654,6 +740,8 @@ function PrivacyTab() {
           <span>Your messages, file contents, API keys, prompts, or any personal data. All events are
           anonymous unless you&apos;re signed in with Papr.</span>
         </div>
+
+        <GatewayDiagnosticsCopySection />
       </div>
     </div>
   );

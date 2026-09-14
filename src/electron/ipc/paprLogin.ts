@@ -54,6 +54,7 @@ import {
   type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
 import {
+  paprApiKeyAuthorizedForWorkspaceTarget,
   paprApiKeyMatchesNamespace,
   paprApiKeyMatchesNamespaceBound,
   paprNamespaceApiKeyName,
@@ -2658,6 +2659,18 @@ async function applyActiveNamespaceSwitch(input: {
     apiKey = resolved.apiKey;
   }
 
+  if (
+    !paprApiKeyAuthorizedForWorkspaceTarget(
+      apiKey,
+      input.organizationId,
+      input.namespaceId,
+    )
+  ) {
+    throw new Error(
+      "Papr API key does not match the target workspace. Sign in again or refresh your namespace key.",
+    );
+  }
+
   // Pointer file can match before gateway services/env do (e.g. partial switch or
   // API-key-only refresh). Always run a full gateway switch so team apps, memory,
   // and path-bound singletons reload for the target org/namespace.
@@ -3038,17 +3051,11 @@ async function ensureActiveNamespaceApiKeyInternal(
       deferGatewayNotify: options?.deferGatewayNotify,
     });
   } catch (error) {
-    if (vaultMatchesActive && storedKey) {
-      console.warn(
-        "[PaprLogin] Parse API key refresh failed; using cached vault key:",
-        error instanceof Error ? error.message : error,
-      );
-      if (!options?.deferGatewayNotify) {
-        await notifyGatewayPaprApiKeyUpdate(storedKey);
-      }
-      invalidateKeyCache("PAPR_API_KEY");
-      return storedKey;
-    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(
+      `[PaprLogin] Failed to refresh PAPR_API_KEY for workspace (${organizationId}/${namespaceId}):`,
+      message,
+    );
     throw error;
   }
 }
