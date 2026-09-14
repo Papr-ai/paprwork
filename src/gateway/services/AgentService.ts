@@ -641,6 +641,19 @@ export class AgentService {
     let peakContextTokens = 0;
     let assistantMessageSaved = false;
 
+    /**
+     * Turn measurements, declared out here rather than beside the first step
+     * so the `finally` can still write them when a turn is interrupted.
+     *
+     * `turnStartedAt` is seeded now and re-anchored at the first step, which
+     * keeps the duration measuring the same span as before while guaranteeing
+     * it is never 0 — a turn that aborts before the first step would otherwise
+     * report the whole Unix epoch as its duration.
+     */
+    const turnMetrics = createTurnMetrics();
+    let turnStartedAt = Date.now();
+    let turnMetricsRecorded = false;
+
     // ── Incremental checkpoint persistence ─────────────────────────────
     // Stable message ID shared with the UI via stream-start. Reused on
     // hidden continue, context compress retry, and silent retry so one turn
@@ -838,6 +851,91 @@ export class AgentService {
         console.error(
           `[AgentService] Failed to save incomplete assistant for chat ${chatId}:`,
           saveError,
+        );
+      }
+    };
+
+    /**
+     * Attach this turn's measurements to whichever assistant row reached disk,
+     * then report the same numbers in aggregate.
+     *
+     * Called from `finally` as well as the happy path. The write used to sit
+     * after the final message save, so an abort jumped straight past it into
+     * the catch and left a row carrying a billed total and no peak. A missing
+     * peak is not a neutral gap: the context meter reads it as "fall back to
+     * the billed total", and since usage became a cross-step sum that total is
+     * several times the size of any single request — clamped to the window, it
+     * pegs the ring at exactly 100% on the longest turns.
+     *
+     * Idempotent, so whichever caller arrives first wins and the happy path
+     * cannot double-write with the `finally`. Best-effort throughout: a failed
+     * measurement must not affect the turn it was measuring.
+     */
+    const recordTurnMetricsOnce = async (
+      outcome: "completed" | "interrupted",
+    ): Promise<void> => {
+      if (turnMetricsRecorded) return;
+      turnMetricsRecorded = true;
+      try {
+        setToolCallCount(turnMetrics, toolCalls.length);
+        const planProgress = await this.loadPendingPlanState(chatId);
+        const summary = summarizeTurnMetrics(turnMetrics, planProgress);
+        const durationMs = Date.now() - turnStartedAt;
+
+        // Re-resolved rather than captured: on the interrupted path this runs
+        // from `finally`, after `persistIncompleteAssistant` has written the
+        // row this annotates.
+        const storage = resolveStreamStorage();
+        if (assistantMessageSaved && storage?.recordTurnMetrics) {
+          await storage.recordTurnMetrics(
+            assistantMessageId,
+            summary,
+            durationMs,
+          );
+        }
+
+        const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
+        const { AmplitudeEvents } = await import(
+          "../../core/telemetry/events.js"
+        );
+        getGatewayTelemetry().trackFireAndForget(
+          AmplitudeEvents.AGENT_TURN_COMPLETED,
+          {
+            chat_id: chatId,
+            model: config.model,
+            provider: config.provider,
+            auth_type: config.authType ?? "apiKey",
+            steps: summary.steps,
+            tool_calls: summary.toolCalls,
+            tool_calls_per_step: summary.toolCallsPerStep,
+            duration_ms: durationMs,
+            prompt_tokens: tokenUsage?.promptTokens ?? 0,
+            completion_tokens: tokenUsage?.completionTokens ?? 0,
+            cache_read_tokens: tokenUsage?.cacheReadTokens,
+            cache_write_tokens: tokenUsage?.cacheWriteTokens,
+            compaction_runs: summary.compactionRuns,
+            compaction_skips: summary.compactionSkips,
+            stale_truncated: summary.staleResultsTruncated,
+            stale_inline: summary.staleResultsLeftInline,
+            recovery_fetches: summary.recoveryFetches,
+            redundant_recoveries: summary.redundantRecoveries,
+            redundant_recovery_rate: summary.redundantRecoveryRate,
+            peak_context_tokens: summary.peakContextTokens,
+            estimated_context_tokens: summary.estimatedContextTokens,
+            context_budget_tokens: summary.historyTokenBudget,
+            context_fill_ratio: summary.contextFillRatio,
+            estimator_error_ratio: summary.estimatorErrorRatio,
+            plan_count: summary.planCount,
+            plan_total_steps: summary.planTotalSteps,
+            plan_completed_steps: summary.planCompletedSteps,
+            plan_completed: summary.planCompleted,
+            interrupted: outcome === "interrupted",
+          },
+        );
+      } catch (error) {
+        console.warn(
+          "[AgentService] Turn metrics recording failed:",
+          error instanceof Error ? error.message : error,
         );
       }
     };
@@ -1149,9 +1247,9 @@ export class AgentService {
           ? priorJobEnv
           : collectJobEnvFromProcess();
       // Ambient so tools that recover truncated results can record the fetch
-      // against the turn that provoked it.
-      const turnMetrics = createTurnMetrics();
-      const turnStartedAt = Date.now();
+      // against the turn that provoked it. `turnMetrics` itself is declared at
+      // the top of the turn so an abort can still record it.
+      turnStartedAt = Date.now();
       // Opens the live snapshot the context meter polls. Registered before the
       // first step rather than after it so the panel has an elapsed clock and a
       // 0-step reading immediately — the first step of a long turn can take
@@ -2881,64 +2979,8 @@ export class AgentService {
       }
 
       // 4.4. Attach turn measurements to the row that was just written, then
-      // report the same numbers in aggregate. Both are best-effort: a
-      // measurement failure must not affect the turn it measured.
-      try {
-        setToolCallCount(turnMetrics, toolCalls.length);
-        const planProgress = await this.loadPendingPlanState(chatId);
-        const summary = summarizeTurnMetrics(turnMetrics, planProgress);
-        const durationMs = Date.now() - turnStartedAt;
-
-        if (assistantMessageSaved && streamStorage?.recordTurnMetrics) {
-          await streamStorage.recordTurnMetrics(
-            assistantMessageId,
-            summary,
-            durationMs,
-          );
-        }
-
-        const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
-        const { AmplitudeEvents } =
-          await import("../../core/telemetry/events.js");
-        getGatewayTelemetry().trackFireAndForget(
-          AmplitudeEvents.AGENT_TURN_COMPLETED,
-          {
-            chat_id: chatId,
-            model: config.model,
-            provider: config.provider,
-            auth_type: config.authType ?? "apiKey",
-            steps: summary.steps,
-            tool_calls: summary.toolCalls,
-            tool_calls_per_step: summary.toolCallsPerStep,
-            duration_ms: durationMs,
-            prompt_tokens: tokenUsage?.promptTokens ?? 0,
-            completion_tokens: tokenUsage?.completionTokens ?? 0,
-            cache_read_tokens: tokenUsage?.cacheReadTokens,
-            cache_write_tokens: tokenUsage?.cacheWriteTokens,
-            compaction_runs: summary.compactionRuns,
-            compaction_skips: summary.compactionSkips,
-            stale_truncated: summary.staleResultsTruncated,
-            stale_inline: summary.staleResultsLeftInline,
-            recovery_fetches: summary.recoveryFetches,
-            redundant_recoveries: summary.redundantRecoveries,
-            redundant_recovery_rate: summary.redundantRecoveryRate,
-            peak_context_tokens: summary.peakContextTokens,
-            estimated_context_tokens: summary.estimatedContextTokens,
-            context_budget_tokens: summary.historyTokenBudget,
-            context_fill_ratio: summary.contextFillRatio,
-            estimator_error_ratio: summary.estimatorErrorRatio,
-            plan_count: summary.planCount,
-            plan_total_steps: summary.planTotalSteps,
-            plan_completed_steps: summary.planCompletedSteps,
-            plan_completed: summary.planCompleted,
-          },
-        );
-      } catch (error) {
-        console.warn(
-          "[AgentService] Turn metrics recording failed:",
-          error instanceof Error ? error.message : error,
-        );
-      }
+      // report the same numbers in aggregate.
+      await recordTurnMetricsOnce("completed");
 
       // 4.5. Yield done chunk to signal stream completion to frontend
       // Include finalMessage so the UI finalizes with the server-assigned id.
@@ -3018,6 +3060,11 @@ export class AgentService {
         checkpointTimer = null;
       }
       await persistIncompleteAssistant({ asAbort: true });
+
+      // Strictly after the persist above: on the interrupted path that call is
+      // what writes the row these measurements annotate. A no-op when the
+      // happy path already recorded them.
+      await recordTurnMetricsOnce("interrupted");
 
       if (concurrencyLease) {
         const { getAgentStreamConcurrencyGate } =

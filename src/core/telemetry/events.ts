@@ -295,6 +295,14 @@ export interface AgentTurnCompletedProperties extends BaseEventProperties {
   plan_total_steps: number;
   plan_completed_steps: number;
   plan_completed: boolean | null;
+
+  /**
+   * The turn was stopped rather than finished. Interrupted turns are now
+   * measured too, and they are the longest ones — so dropping them would bias
+   * every aggregate built here downward, while folding them in silently would
+   * count an abandoned turn as a completed one. Filter on this instead.
+   */
+  interrupted: boolean;
 }
 
 export interface BashCommandProperties extends BaseEventProperties {

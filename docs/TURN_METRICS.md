@@ -48,6 +48,27 @@ Existing columns already carry the other half: `prompt_tokens`,
 plus `context_naive_tokens` / `context_optimized_tokens` from
 `contextFootprintStore.ts`.
 
+### Interrupted turns are measured too
+
+A stopped turn is still a turn that spent money, and the write now runs from
+`streamAgent`'s `finally` rather than only after the final message save — an
+abort used to throw straight past it, leaving a row with a billed total and no
+peak. That gap was not benign: `getContextMeter` reads a missing peak as "fall
+back to the billed total", and since usage became a cross-step sum that total is
+several times any single request, so clamping it to the window pegged the meter
+at exactly 100%.
+
+It was uncommon — 2 of 31 billed turns before the fix — but the reading was not
+merely imprecise. One such row summed to 4,157,052 tokens across 13 steps and
+displayed as "1.0M of 1.0M", against a largest-ever single request of 344,633.
+
+The aggregate event carries `interrupted` so these can be told apart. Filter on
+it rather than assuming: interrupted turns are the *longest* ones, so dropping
+them biases every average here downward, while folding them in silently counts
+an abandoned turn as a completed one. A turn killed before its first step
+records nothing — `turn_peak_context_tokens` stays 0 rather than inventing a
+figure for a request that never went out.
+
 ### Two context numbers, on purpose
 
 `turn_peak_context_tokens` is what was **billed**. `turn_estimated_context_tokens`
