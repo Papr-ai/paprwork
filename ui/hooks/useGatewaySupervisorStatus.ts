@@ -58,6 +58,12 @@ export function useGatewaySupervisorStatus(): {
 
     // If the renderer missed a "ready" IPC (common after sleep/wake), infer
     // readiness from a live WebSocket so banners do not stay stuck.
+    //
+    // Note what this can and cannot tell us: the handshake succeeds as soon as
+    // the port is bound, which the gateway does *before* registering its HTTP
+    // routes, so "connected" does not mean "routable". Fine for clearing a
+    // banner; not a basis for anything that would fail against a missing route.
+    // See gatewayBootGate.ts, which answers 503 for that window.
     const clearStaleSupervisorState = (): void => {
       if (!gateway.isConnected()) return;
       setStatus((prev) =>
