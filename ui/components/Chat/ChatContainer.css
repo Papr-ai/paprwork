@@ -92,6 +92,9 @@
   flex: 1;
   font-weight: 500;
   line-height: 1.4;
+  /* Provider explanations arrive as paragraphs; without this they collapse
+     into one run-on line and the quoted sentence is lost in it. */
+  white-space: pre-line;
 }
 
 .stream-recovery-banner__btn {

@@ -78,6 +78,12 @@ export interface ChatState {
   needsStreamRecovery?: boolean;
   /** Defaults to "connection" when unset, matching the original recovery banner. */
   streamRecoveryReason?: StreamRecoveryReason;
+  /**
+   * What the provider actually said, when it said something specific. The
+   * banner used to be a fixed sentence and the composed explanation — which
+   * credential was refused, and why — was dropped on the floor.
+   */
+  streamRecoveryDetail?: string;
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
   lastSelectedModelId?: string; // Last model user chose for this chat

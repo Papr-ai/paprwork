@@ -246,6 +246,10 @@ export function OAuthSection({
   const handleToggleAuthMode = async () => {
     const next = !useApiKey;
     setUseApiKey(next);
+    // The rejection we recorded belongs to the credential being switched away
+    // from, so keeping it would report the outgoing credential's failure
+    // against the incoming one — the switch would look like it changed nothing.
+    clearAuthRejection(provider);
     try {
       await window.electronAPI?.providerAuth?.setPreference(
         provider,
