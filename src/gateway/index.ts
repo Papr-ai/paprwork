@@ -64,6 +64,7 @@ import {
   getWorkspaceSwitchStatus,
 } from "./services/workspaceSwitchService.js";
 import { workspaceReadinessMiddleware } from "./services/workspaceReadiness.js";
+import { createGatewayBootGate } from "./services/gatewayBootGate.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService, getAppService } from "./services/AppService.js";
@@ -494,6 +495,15 @@ async function startGateway(): Promise<void> {
     timeStartupSync("pre-http", "expressAppAndHealthRoute", () => {
       registerEarlyProductionUi(app);
     });
+
+    // Everything below this point is registered after `initializeServices()`,
+    // which on a cold start can take longer than the 60s the main process waits
+    // before loading the UI anyway. Without this, requests arriving in that
+    // window fell through to Express's default 404 — so an app that was merely
+    // not-yet-routable rendered "Cannot GET /apps/<id>/index.html", which reads
+    // as "deleted". Registered after the early UI static handler so the app
+    // shell can still load, and before `listen` so it covers the whole window.
+    app.use(createGatewayBootGate(() => gatewayReady));
 
     await timeStartupStep("pre-http", "listenGatewayServer", () =>
       listenGatewayServer(server),
