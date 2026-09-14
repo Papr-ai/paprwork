@@ -714,7 +714,7 @@ Runtime params: `os.environ.get('THREAD_ID')`. API keys: declare requiredKeys an
 ## Job Triggering Patterns
 
 > **Live updates:** import from `/__papr__/papr-job-events.ts` (runtime SDK). See system prompt and this skill.
-> Run `validate_app` after edits — it returns a copy-paste snippet when polling anti-patterns are detected.
+> Run `validate_app` after edits — polling errors return a copy-paste snippet; **load warnings** flag multi-query mount without batch and `onDbChanged` without `debounceMs` (plus preview DB request counts on desktop).
 
 **Three ways a job can send data back to the app:**
 
@@ -780,7 +780,8 @@ const JOB_ID = 'your-job-id';
 // Auto-refresh when DB data changes (any write path: job, agent, Turso pull)
 const unsub = subscribeJobEvents({
   jobIds: [JOB_ID],
-  onDbChanged: () => loadData(),          // DB content changed → re-query
+  debounceMs: 300,                        // coalesce db-changed bursts during job writes
+  onDbChanged: () => loadData(),          // DB content changed → re-query (prefer batch inside)
   onStatusChanged: (e) => {               // Job lifecycle → update status badge
     if (e.status === 'completed' || e.status === 'failed') updateStatus(e);
   },

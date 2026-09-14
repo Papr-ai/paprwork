@@ -47,6 +47,8 @@ vi.mock("../src/gateway/services/jobs/databaseMigrations.js", () => ({
 
 import {
   applyRegistryMigrationsAfterPull,
+  hydrateAppFolderSchemaMigrationsToRegistry,
+  parseAppRelativeSchemaMigrationPath,
   parseRepoSchemaMigrationPath,
   persistPulledSchemaMigration,
 } from "../src/gateway/services/syncV3/syncPulledSchemaOwnerMigrations.js";
@@ -69,6 +71,66 @@ describe("parseRepoSchemaMigrationPath", () => {
     expect(
       parseRepoSchemaMigrationPath("apps/foo/databases/bar/migrations/0001.sql"),
     ).toBeNull();
+  });
+});
+
+describe("parseAppRelativeSchemaMigrationPath", () => {
+  it("parses databases/{slug}/migrations under app folder", () => {
+    expect(
+      parseAppRelativeSchemaMigrationPath(
+        "databases/lead-prospector/migrations/0001_init.sql",
+      ),
+    ).toEqual({
+      slug: "lead-prospector",
+      fileName: "0001_init.sql",
+      repoStylePath: "databases/lead-prospector/migrations/0001_init.sql",
+    });
+  });
+
+  it("parses full apps/{id}/databases/... paths", () => {
+    expect(
+      parseAppRelativeSchemaMigrationPath(
+        "apps/d97ad90c-e2d0-4022-9f1a-8b1c2d3e4f5a/databases/lead-prospector/migrations/0002_add.sql",
+      )?.fileName,
+    ).toBe("0002_add.sql");
+  });
+});
+
+describe("hydrateAppFolderSchemaMigrationsToRegistry", () => {
+  let tmpDir = "";
+
+  afterEach(async () => {
+    if (tmpDir) {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+      tmpDir = "";
+    }
+  });
+
+  it("mirrors SQL from apps/{id}/databases/{slug}/migrations into registry", async () => {
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-hydrate-mig-"));
+    const appsRoot = path.join(tmpDir, "apps");
+    const appDir = path.join(appsRoot, APP_ID, "databases", SLUG, "migrations");
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(
+      path.join(appDir, "0001_init.sql"),
+      "CREATE TABLE leads (id TEXT PRIMARY KEY);",
+      "utf8",
+    );
+
+    const result = await hydrateAppFolderSchemaMigrationsToRegistry({
+      appId: APP_ID,
+      paprRoot: tmpDir,
+      appsRoot,
+    });
+
+    expect(result.copied).toEqual([
+      `data/databases/${SLUG}/migrations/0001_init.sql`,
+    ]);
+    const onDisk = await fs.readFile(
+      path.join(tmpDir, "data", "databases", SLUG, "migrations", "0001_init.sql"),
+      "utf8",
+    );
+    expect(onDisk).toContain("CREATE TABLE leads");
   });
 });
 

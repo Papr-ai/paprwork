@@ -46,7 +46,16 @@ describe("tursoPullScheduler startup grace", () => {
     markTursoPullSchedulerGatewayBoot();
     vi.advanceTimersByTime(9_000);
 
+    const { notifyMiniAppFirstDataPaint } = await import(
+      "../src/gateway/services/tursoPullScheduler.js",
+    );
+
     scheduleTursoPullForAppOpen("app-test");
+    vi.advanceTimersByTime(3_500);
+    await Promise.resolve();
+    expect(reconcile).not.toHaveBeenCalled();
+
+    notifyMiniAppFirstDataPaint("app-test");
     vi.advanceTimersByTime(3_500);
     await Promise.resolve();
     await Promise.resolve();

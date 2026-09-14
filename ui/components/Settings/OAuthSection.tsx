@@ -13,6 +13,7 @@ import { useProviderAuthStore } from "../../stores/providerAuthStore";
 import { deriveProviderConnectionState } from "../../utils/providerConnectionState";
 import { ClaudeTokenPastePanel } from "./ClaudeTokenPastePanel";
 import { ClaudeManualSetupPanel } from "./ClaudeManualSetupPanel";
+import { ClaudeUsageLimitsPanel } from "./ClaudeUsageLimitsPanel";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import { startClaudeManualAgentChat } from "../../utils/startClaudeManualAgentChat";
@@ -351,6 +352,10 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
+              {provider === "anthropic" &&
+                connectionState.kind === "connected" && (
+                  <ClaudeUsageLimitsPanel />
+                )}
               {/* No expiry countdown while healthy. It is not actionable, and
                   as the only marker of a dead token it was missed — the badge
                   beside it said Connected, in green, and won. */}

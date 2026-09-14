@@ -13,6 +13,7 @@ export type TursoSyncWorkerOp =
   | "connect" // open (or reuse) the handle; no sync
   | "close" // close the handle if open
   | "query" // prepare + all()
+  | "queryBatch" // prepare + all() for each statement in one scheduler slot
   | "write" // prepare + run() for each statement
   | "exec" // db.exec(sql)
   | "pull"
@@ -25,6 +26,7 @@ export const IDEMPOTENT_WORKER_OPS: ReadonlySet<TursoSyncWorkerOp> = new Set<Tur
   "connect",
   "close",
   "query",
+  "queryBatch",
   "pull",
   "push",
   "pullPush",
@@ -52,12 +54,16 @@ export interface TursoSyncWorkerRequest extends TursoSyncWorkerOpenSpec {
   sql?: string;
   /** query */
   params?: unknown[];
-  /** write */
+  /** write / queryBatch */
   statements?: TursoSyncWorkerStatement[];
 }
 
 export interface TursoSyncWorkerQueryResult {
   rows: unknown[];
+}
+
+export interface TursoSyncWorkerQueryBatchResult {
+  results: TursoSyncWorkerQueryResult[];
 }
 
 export interface TursoSyncWorkerWriteResult {
@@ -75,6 +81,7 @@ export interface TursoSyncWorkerStatsResult {
 
 export type TursoSyncWorkerResult =
   | TursoSyncWorkerQueryResult
+  | TursoSyncWorkerQueryBatchResult
   | TursoSyncWorkerWriteResult
   | TursoSyncWorkerPullResult
   | TursoSyncWorkerStatsResult
@@ -86,10 +93,17 @@ export interface TursoSyncWorkerStarted {
   started: true;
 }
 
+export interface TursoSyncWorkerOpTiming {
+  queueMs: number;
+  execMs: number;
+  opened: boolean;
+}
+
 export interface TursoSyncWorkerOkResponse {
   id: string;
   ok: true;
   result: TursoSyncWorkerResult;
+  opTiming?: TursoSyncWorkerOpTiming;
 }
 
 export interface TursoSyncWorkerErrorResponse {
@@ -125,7 +139,8 @@ export function isSyncWorkerRequest(value: unknown): value is TursoSyncWorkerReq
     typeof c.op === "string" &&
     (IDEMPOTENT_WORKER_OPS.has(c.op as TursoSyncWorkerOp) ||
       c.op === "write" ||
-      c.op === "exec")
+      c.op === "exec" ||
+      c.op === "queryBatch")
   );
 }
 

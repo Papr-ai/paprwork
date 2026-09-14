@@ -18,6 +18,7 @@ import {
 } from "../tursoSyncBridgeCore.js";
 import { resolveTursoDatabaseNameForSource } from "../DatabaseRegistryService.js";
 import {
+  queryBatchLinkedDbViaTursoReplica,
   queryLinkedDbViaTursoReplica,
   recoverReplicaAfterCheckpointError,
   schemaLinkedDbViaTursoReplica,
@@ -42,6 +43,8 @@ import {
 } from "../tursoReplica/tursoReplicaBackgroundRecovery.js";
 import { isReplicaPathPublishQuiesced } from "../tursoReplica/tursoReplicaPublishQuiesce.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
+import { shouldMiniAppUseReplicaOnlyForReads } from "./miniAppInteractiveLoadWindow.js";
+import { timeReplicaReadPhase } from "../tursoReplica/replicaReadPhaseTrace.js";
 
 export type DbBackend = "local" | "turso" | "turso-replica";
 
@@ -57,14 +60,62 @@ const tursoClients = new Map<string, Client>();
 const tursoClientPromises = new Map<string, Promise<Client | null>>();
 const tursoUnavailableUntil = new Map<string, number>();
 const TURSO_UNAVAILABLE_COOLDOWN_MS = 30_000;
+function readEnvMs(name: string, fallback: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 /** Mini-app UI reads must not block on cloud pull or a stuck sync queue. */
-const REPLICA_MINI_APP_READ_TIMEOUT_MS = 2_500;
-const REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS = 8_000;
+const REPLICA_MINI_APP_READ_TIMEOUT_MS = readEnvMs(
+  "REPLICA_MINI_APP_READ_TIMEOUT_MS",
+  5_000,
+);
+const REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS = readEnvMs(
+  "REPLICA_MINI_APP_READ_RETRY_TIMEOUT_MS",
+  15_000,
+);
 /** When degraded, still prefer local replica before cloud (worker wedge ≠ cloud is faster). */
-const REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS = 5_000;
+const REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS = readEnvMs(
+  "REPLICA_DEGRADED_LOCAL_READ_TIMEOUT_MS",
+  5_000,
+);
 
 export function isReplicaMiniAppReadTimeoutError(message: string): boolean {
   return /timed out after \d+ms/i.test(message);
+}
+
+/** First fulfilled promise wins; reject only when every path fails. */
+export async function raceFirstSuccessful<T>(
+  paths: Array<{ label: string; run: () => Promise<T> }>,
+): Promise<{ value: T; label: string }> {
+  if (paths.length === 0) {
+    throw new Error("raceFirstSuccessful: no paths");
+  }
+  return new Promise((resolve, reject) => {
+    let failures = 0;
+    const errors: unknown[] = [];
+    for (const { label, run } of paths) {
+      void run().then(
+        (value) => resolve({ value, label }),
+        (err: unknown) => {
+          errors.push(err);
+          failures += 1;
+          if (failures === paths.length) {
+            const first = errors[0];
+            reject(
+              first instanceof Error
+                ? first
+                : new Error(String(first ?? "All read paths failed")),
+            );
+          }
+        },
+      );
+    }
+  });
 }
 
 function withMiniAppReplicaReadTimeout<T>(
@@ -72,21 +123,23 @@ function withMiniAppReplicaReadTimeout<T>(
   label: string,
   timeoutMs: number = REPLICA_MINI_APP_READ_TIMEOUT_MS,
 ): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-    promise.then(
-      (value) => {
-        clearTimeout(timer);
-        resolve(value);
-      },
-      (error: unknown) => {
-        clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+  return timeReplicaReadPhase("replicaReadAttemptMs", () =>
+    new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      promise.then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error: unknown) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+    }),
+  );
 }
 
 export function isLocalDbReadable(dbPath: string): boolean {
@@ -243,6 +296,39 @@ export class DbRouter {
     return result;
   }
 
+  /**
+   * Run multiple SELECTs against one replica source in a single sync-worker queue slot.
+   */
+  async queryReplicaBatch(
+    appId: string,
+    source: AppDataSource,
+    statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  ): Promise<RoutedQueryResult[]> {
+    if (statements.length === 0) {
+      return [];
+    }
+    const dbPath = source.dbPath;
+    if (dbPath && isReplicaPathPublishQuiesced(dbPath)) {
+      throw new Error(
+        `Database sync in progress for ${source.alias ?? source.dbId}. Retry in a moment.`,
+      );
+    }
+
+    const batch = await withMiniAppReplicaReadTimeout(
+      queryBatchLinkedDbViaTursoReplica(source, statements, {
+        pullBeforeRead: false,
+      }),
+      `replica read batch (${source.alias ?? source.dbId ?? "db"}, ${statements.length})`,
+    );
+    clearReplicaReadPathDegraded(source.dbPath);
+    const totalRows = batch.reduce((sum, part) => sum + part.count, 0);
+    console.log(
+      `[DbRouter] Turso replica query batch app=${appId} source=${source.alias} ` +
+        `statements=${statements.length} rows=${totalRows}`,
+    );
+    return batch.map((part) => ({ ...part, backend: "turso-replica" }));
+  }
+
   private async queryReplicaSource(
     appId: string,
     source: AppDataSource,
@@ -304,11 +390,56 @@ export class DbRouter {
     }
 
     try {
+      const alias = source.alias ?? source.dbId ?? "db";
+      const replicaOnlyLoad = shouldMiniAppUseReplicaOnlyForReads(appId);
+      if (isTursoReplicaOnline() && !replicaOnlyLoad) {
+        const { value, label } = await raceFirstSuccessful<RoutedQueryResult>([
+          {
+            label: "turso-replica",
+            run: async () => {
+              const local = await withMiniAppReplicaReadTimeout(
+                queryLinkedDbViaTursoReplica(source, sql, params, {
+                  pullBeforeRead: false,
+                }),
+                `replica read (${alias})`,
+              );
+              return { ...local, backend: "turso-replica" };
+            },
+          },
+          {
+            label: "turso",
+            run: async () => {
+              const remote = await this.queryViaTursoPrimary(
+                appId,
+                source,
+                sql,
+                params,
+              );
+              if (!remote) {
+                throw new Error("Turso primary unavailable");
+              }
+              return remote;
+            },
+          },
+        ]);
+        clearReplicaReadPathDegraded(source.dbPath);
+        console.log(
+          `[DbRouter] Turso ${label} query app=${appId} source=${source.alias} rows=${value.count}`,
+        );
+        return value;
+      }
+
+      if (replicaOnlyLoad) {
+        console.log(
+          `[DbRouter] Mini-app load window — replica-only read app=${appId} source=${source.alias}`,
+        );
+      }
+
       const result = await withMiniAppReplicaReadTimeout(
         queryLinkedDbViaTursoReplica(source, sql, params, {
           pullBeforeRead: false,
         }),
-        `replica read (${source.alias ?? source.dbId ?? "db"})`,
+        `replica read (${alias})`,
       );
       clearReplicaReadPathDegraded(source.dbPath);
       console.log(
@@ -354,9 +485,26 @@ export class DbRouter {
       }
 
       if (isReplicaMiniAppReadTimeoutError(message)) {
+        const allowPrimary = !shouldMiniAppUseReplicaOnlyForReads(appId);
         console.warn(
-          `[DbRouter] Replica read slow for ${source.alias ?? source.dbId} — retrying locally (no cloud fallback)`,
+          `[DbRouter] Replica read slow for ${source.alias ?? source.dbId} — ` +
+            (allowPrimary ? "Turso primary or local retry" : "local retry (load window)"),
         );
+        if (allowPrimary && isTursoReplicaOnline()) {
+          const remoteAfterTimeout = await this.queryViaTursoPrimary(
+            appId,
+            source,
+            sql,
+            params,
+          );
+          if (remoteAfterTimeout) {
+            console.warn(
+              `[DbRouter] Served ${source.alias ?? source.dbId} from Turso primary ` +
+                "after local replica read timeout",
+            );
+            return remoteAfterTimeout;
+          }
+        }
         try {
           const retry = await withMiniAppReplicaReadTimeout(
             queryLinkedDbViaTursoReplica(source, sql, params, {
@@ -371,9 +519,24 @@ export class DbRouter {
           );
           return { ...retry, backend: "turso-replica" };
         } catch (retryError) {
+          if (allowPrimary && isTursoReplicaOnline()) {
+            const remoteAfterRetry = await this.queryViaTursoPrimary(
+              appId,
+              source,
+              sql,
+              params,
+            );
+            if (remoteAfterRetry) {
+              console.warn(
+                `[DbRouter] Served ${source.alias ?? source.dbId} from Turso primary ` +
+                  "after local replica retry timeout",
+              );
+              return remoteAfterRetry;
+            }
+          }
           throw new Error(
             `Replica read timed out for ${source.alias ?? source.dbId}. ` +
-              "Gateway was busy — retry in a moment. " +
+              "The local database worker was still busy — retry in a moment. " +
               `Original: ${(retryError as Error).message.slice(0, 120)}`,
           );
         }

@@ -34,6 +34,8 @@ export class StorageManager {
   private provider: IStorageProvider | null = null;
   private currentMode: StorageMode | null = null;
   private config: StorageConfig | null = null;
+  /** In-flight initialize() — readers await this before touching the provider. */
+  private ready: Promise<void> = Promise.resolve();
 
   /**
    * Close the current provider before replacing it (re-init or mode switch).
@@ -69,41 +71,51 @@ export class StorageManager {
     this.currentMode = config.mode;
 
     console.log(`[StorageManager] Creating provider for mode: ${config.mode}`);
-    // Create appropriate provider based on mode
-    switch (config.mode) {
-      case "local":
-        this.provider = new LocalStorageProvider(
-          config.userDataPath || this.getDefaultUserDataPath(),
-        );
-        break;
 
-      case "papr":
-        if (!config.paprApiKey) {
-          throw new Error("PAPR API key required for PAPR mode");
-        }
-        this.provider = new PaprMemoryProvider({
-          apiKey: config.paprApiKey,
-        });
-        break;
+    const initTask = (async (): Promise<void> => {
+      let provider: IStorageProvider;
+      switch (config.mode) {
+        case "local":
+          provider = new LocalStorageProvider(
+            config.userDataPath || this.getDefaultUserDataPath(),
+          );
+          break;
 
-      case "hybrid":
-        if (!config.paprApiKey) {
-          throw new Error("PAPR API key required for Hybrid mode");
-        }
-        this.provider = new HybridStorageProvider(
-          config.userDataPath || this.getDefaultUserDataPath(),
-          { apiKey: config.paprApiKey },
-        );
-        break;
+        case "papr":
+          if (!config.paprApiKey) {
+            throw new Error("PAPR API key required for PAPR mode");
+          }
+          provider = new PaprMemoryProvider({
+            apiKey: config.paprApiKey,
+          });
+          break;
 
-      default:
-        throw new Error(`Unknown storage mode: ${config.mode}`);
-    }
+        case "hybrid":
+          if (!config.paprApiKey) {
+            throw new Error("PAPR API key required for Hybrid mode");
+          }
+          provider = new HybridStorageProvider(
+            config.userDataPath || this.getDefaultUserDataPath(),
+            { apiKey: config.paprApiKey },
+          );
+          break;
 
-    console.log(`[StorageManager] Provider created, initializing...`);
-    // Initialize the provider
-    await this.provider.initialize();
-    console.log(`✓ StorageManager initialized in ${config.mode} mode`);
+        default:
+          throw new Error(`Unknown storage mode: ${config.mode}`);
+      }
+
+      console.log(`[StorageManager] Provider created, initializing...`);
+      await provider.initialize();
+      this.provider = provider;
+      console.log(`✓ StorageManager initialized in ${config.mode} mode`);
+    })();
+
+    this.ready = initTask;
+    await initTask;
+  }
+
+  private async awaitReady(): Promise<void> {
+    await this.ready;
   }
 
   /**
@@ -295,6 +307,7 @@ export class StorageManager {
   }
 
   async getTurnUsage(chatId: string) {
+    await this.awaitReady();
     const provider = this.ensureInitialized();
     return await provider.getTurnUsage(chatId);
   }

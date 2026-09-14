@@ -307,10 +307,24 @@ async function readWorkspaceInput(): Promise<WorkspaceInput> {
   };
 }
 
+/** Stable hash of workspace sources that drive goals/tasks projection. */
+export async function computeGoalsWorkspaceFingerprint(): Promise<string> {
+  const input = await readWorkspaceInput();
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        identity: input.identity ?? "",
+        archive: input.archive ?? "",
+        entities: input.entities,
+      }),
+    )
+    .digest("hex");
+}
+
 const GATEWAY_PORT = Number(process.env.GATEWAY_PORT ?? 18789);
 
-/** Ensure goals/tasks DDL exists on the Home briefs DB (replica handle, not raw sqlite3). */
-async function ensureHomeGoalsTasksSchema(): Promise<void> {
+/** Cheap probe — no migrations. */
+export async function probeHomeGoalsTableExists(): Promise<boolean> {
   const dbPath = path.join(
     getPaprDataDir(),
     "databases",
@@ -320,7 +334,31 @@ async function ensureHomeGoalsTasksSchema(): Promise<void> {
   try {
     await fs.access(dbPath);
   } catch {
-    return;
+    return false;
+  }
+  try {
+    const rows = await homeDb(
+      "query",
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'goals' LIMIT 1",
+    );
+    return rows.length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Ensure goals/tasks DDL exists on the Home briefs DB (replica handle, not raw sqlite3). */
+export async function ensureHomeGoalsTasksSchema(): Promise<string[]> {
+  const dbPath = path.join(
+    getPaprDataDir(),
+    "databases",
+    DEFAULT_HOME_BRIEFS_DB_SLUG,
+    "data.db",
+  );
+  try {
+    await fs.access(dbPath);
+  } catch {
+    return [];
   }
   const { ensureHomeDailyBriefRegistrySchema } = await import(
     "./defaultHomeAppRepair.js"
@@ -331,31 +369,12 @@ async function ensureHomeGoalsTasksSchema(): Promise<void> {
       `[GoalsTasksProjection] Applied Home briefs migrations: ${applied.join(", ")}`,
     );
   }
+  return applied;
 }
 
 /** True when the Home briefs DB exists and has a goals table (projection can run). */
 export async function isHomeGoalsProjectionReady(): Promise<boolean> {
-  const dbPath = path.join(
-    getPaprDataDir(),
-    "databases",
-    DEFAULT_HOME_BRIEFS_DB_SLUG,
-    "data.db",
-  );
-  try {
-    await fs.access(dbPath);
-  } catch {
-    return false;
-  }
-  try {
-    await ensureHomeGoalsTasksSchema();
-    const rows = await homeDb(
-      "query",
-      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'goals' LIMIT 1",
-    );
-    return rows.length > 0;
-  } catch {
-    return false;
-  }
+  return probeHomeGoalsTableExists();
 }
 
 /**

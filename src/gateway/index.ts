@@ -45,6 +45,15 @@ import {
   isGatewaySyncBusyGraceActive,
 } from "./services/cloudSync/syncBusyState.js";
 import {
+  sampleEventLoopLagMs,
+  startGatewayEventLoopMonitor,
+} from "./services/gatewayEventLoopMonitor.js";
+import { scheduleCoalescedBackgroundWork } from "./services/gatewayBackgroundWork.js";
+import {
+  createSyncItemsRouteTimer,
+  logSyncItemsRoute,
+} from "./utils/syncItemsRouteLog.js";
+import {
   applyActiveWorkspaceEnv,
   readActiveWorkspacePointer,
 } from "../core/utils/paprWorkspace.js";
@@ -117,11 +126,20 @@ import {
   tursoSyncItemsCacheKey,
 } from "./services/tursoSyncItemsCache.js";
 import {
+  getCachedSyncItemsAppResponse,
+  invalidateSyncItemsAppResponseCache,
+  setCachedSyncItemsAppResponse,
+} from "./services/syncItemsAppResponseCache.js";
+import {
   buildLocalDbReadCacheKey,
   getCachedLocalDbReadResult,
   invalidateLocalDbReadCacheForApp,
   setCachedLocalDbReadResult,
 } from "./services/appRuntime/localDbReadCache.js";
+import {
+  buildLocalDbBatchCoalesceKey,
+  coalesceInFlightLocalDbRead,
+} from "./services/appRuntime/localDbReadCoalesce.js";
 import {
   getCloudAppPublishService,
 } from "./services/CloudAppPublishService.js";
@@ -464,10 +482,12 @@ async function startGateway(): Promise<void> {
       }
       clearStaleGatewaySyncBusy();
       const syncBusy = isGatewaySyncBusyGraceActive(readGatewaySyncBusyState());
+      const eventLoopLagMs = Math.round(sampleEventLoopLagMs(false));
       res.json({
         status: gatewayReady ? "ok" : "starting",
         timestamp: Date.now(),
         ...(syncBusy ? { syncBusy: true } : {}),
+        ...(eventLoopLagMs >= 200 ? { eventLoopLagMs } : {}),
       });
     });
 
@@ -478,6 +498,7 @@ async function startGateway(): Promise<void> {
     await timeStartupStep("pre-http", "listenGatewayServer", () =>
       listenGatewayServer(server),
     );
+    startGatewayEventLoopMonitor();
     console.log("[Gateway] Health endpoint live (services still loading)...");
 
     await timeStartupStep("services", "initializeServices (total)", () =>
@@ -513,8 +534,12 @@ async function startGateway(): Promise<void> {
     //  - Multiple sources without legacy default → sourceId required (400)
     // ─────────────────────────────────────────────────────────────────────────
 
+    const { resolveDbQueryPoolSize } = await import(
+      "./services/gatewayBackgroundConcurrency.js"
+    );
     const dbPool = initializeDbPool(
       new URL("./workers/db-query-worker.js", import.meta.url),
+      resolveDbQueryPoolSize(),
     );
     const dbRouter = initializeDbRouter(dbPool);
 
@@ -564,6 +589,11 @@ async function startGateway(): Promise<void> {
       return { appId: resolved.appId };
     }
 
+    app.use((req, _res, next) => {
+      (req as import("express").Request & { paprReceivedAt?: number }).paprReceivedAt =
+        performance.now();
+      next();
+    });
     app.use(express.json({ limit: "5mb" }));
 
     registerCloudDesktopPreviewApiProxy(app);
@@ -870,6 +900,70 @@ async function startGateway(): Promise<void> {
       res.json({ timings: getTursoReplicaSyncWorkerClient().getRecentTimings() });
     });
 
+    app.get("/api/debug/replica-read-phases", async (_req, res) => {
+      const { getRecentReplicaReadPhaseTraces } = await import(
+        "./services/tursoReplica/replicaReadPhaseTrace.js"
+      );
+      res.json({ traces: getRecentReplicaReadPhaseTraces() });
+    });
+
+    app.get("/api/debug/gateway-background", async (_req, res) => {
+      const { getRecentBackgroundTaskTimings } = await import(
+        "./services/gatewayBackgroundWork.js"
+      );
+      const { sampleEventLoopLagMs } = await import(
+        "./services/gatewayEventLoopMonitor.js"
+      );
+      res.json({
+        recentTasks: getRecentBackgroundTaskTimings(),
+        eventLoopLagMs: sampleEventLoopLagMs(false),
+      });
+    });
+
+    app.get("/api/dev/papr-api-catalog", async (req, res) => {
+      try {
+        const { getPaprApiCatalog } = await import(
+          "../core/paprApiCatalog/loadCatalog.js"
+        );
+        const { searchPaprApiCatalog, formatCatalogEntryForAgent } = await import(
+          "../core/paprApiCatalog/searchCatalog.js"
+        );
+        const catalog = getPaprApiCatalog();
+        const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
+        if (!q) {
+          res.json(catalog);
+          return;
+        }
+        const surfaceRaw = req.query.surface;
+        const surface =
+          typeof surfaceRaw === "string" && surfaceRaw.length > 0
+            ? surfaceRaw
+            : "any";
+        const limitRaw = req.query.limit;
+        const limit =
+          typeof limitRaw === "string" && /^\d+$/.test(limitRaw)
+            ? Number.parseInt(limitRaw, 10)
+            : 10;
+        const hits = searchPaprApiCatalog(catalog, {
+          query: q,
+          surface: surface as "any",
+          limit,
+        });
+        res.json({
+          query: q,
+          surface,
+          count: hits.length,
+          results: hits.map((hit) => ({
+            score: hit.score,
+            ...formatCatalogEntryForAgent(hit.entry, "full"),
+          })),
+        });
+      } catch (err) {
+        console.error("[Gateway] /api/dev/papr-api-catalog error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/apps/:appId/normalize-databases", async (req, res) => {
       try {
         const appId = req.params.appId;
@@ -895,6 +989,10 @@ async function startGateway(): Promise<void> {
     });
 
     app.post("/api/db/query", async (req, res) => {
+      const receivedAt =
+        (req as import("express").Request & { paprReceivedAt?: number }).paprReceivedAt ??
+        performance.now();
+      let traceActive = false;
       try {
         const { appId: bodyAppId, sourceId, sql, params } = req.body as {
           appId?: string;
@@ -914,6 +1012,10 @@ async function startGateway(): Promise<void> {
           return;
         }
         const appId = resolved.appId;
+        const { markMiniAppInteractiveLoadWindow } = await import(
+          "./services/appRuntime/miniAppInteractiveLoadWindow.js"
+        );
+        markMiniAppInteractiveLoadWindow(appId);
 
         const trimmed = sql.trim().toLowerCase();
         if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
@@ -924,6 +1026,7 @@ async function startGateway(): Promise<void> {
         }
 
         let source: import("./services/appDataSources.js").AppDataSource;
+        const resolveSourceStarted = performance.now();
         try {
           source = await resolveLinkedSource(appId, sourceId, sql, "read");
         } catch (err) {
@@ -943,12 +1046,65 @@ async function startGateway(): Promise<void> {
           });
           const cached = getCachedLocalDbReadResult(cacheKey);
           if (cached) {
+            const { notifyMiniAppFirstDataPaint } = await import(
+              "./services/tursoPullScheduler.js"
+            );
+            notifyMiniAppFirstDataPaint(appId);
             res.json(cached);
             return;
           }
         }
 
-        const result = await dbRouter.query(appId, source, sql, params);
+        const { shouldUseTursoReplicaForSource } = await import(
+          "./services/tursoReplica/tursoReplicaRouting.js"
+        );
+        const useReplicaTrace = shouldUseTursoReplicaForSource(source);
+        const {
+          withReplicaReadTrace,
+          finishReplicaReadTrace,
+          markReplicaReadPhase,
+        } = await import("./services/tursoReplica/replicaReadPhaseTrace.js");
+
+        const runQuery = async () => {
+          const { withInteractiveHotPath } = await import(
+            "./services/gatewayInteractivePriority.js"
+          );
+          const coalesceKey =
+            cacheKey ??
+            buildLocalDbReadCacheKey({ appId, sourceKey, sql, params });
+          const routerStarted = performance.now();
+          const result = await withInteractiveHotPath("mini-app:db-query", () =>
+            coalesceInFlightLocalDbRead(coalesceKey, () =>
+              dbRouter.query(appId, source, sql, params),
+            ),
+          );
+          markReplicaReadPhase("dbRouterCoalesceMs", performance.now() - routerStarted);
+          return result;
+        };
+
+        let result: Awaited<ReturnType<typeof dbRouter.query>>;
+        if (useReplicaTrace) {
+          traceActive = true;
+          const resolveSourceMs = performance.now() - resolveSourceStarted;
+          const httpQueueMs = performance.now() - receivedAt;
+          result = await withReplicaReadTrace(
+            `app=${appId} source=${source.alias ?? sourceKey}`,
+            { appId, source: String(source.alias ?? sourceKey) },
+            async () => {
+              markReplicaReadPhase("httpQueueMs", httpQueueMs);
+              markReplicaReadPhase("resolveSourceMs", resolveSourceMs);
+              const routed = await runQuery();
+              finishReplicaReadTrace({
+                backend: routed.backend,
+                rows: routed.count,
+              });
+              return routed;
+            },
+          );
+        } else {
+          result = await runQuery();
+        }
+
         console.log(
           `[Gateway] /api/db/query app=${appId} source=${source.alias} backend=${result.backend} rows=${result.count}`,
         );
@@ -956,14 +1112,30 @@ async function startGateway(): Promise<void> {
         if (cacheKey) {
           setCachedLocalDbReadResult(cacheKey, payload, appId);
         }
+        const { notifyMiniAppFirstDataPaint } = await import(
+          "./services/tursoPullScheduler.js"
+        );
+        notifyMiniAppFirstDataPaint(appId);
         res.json(payload);
       } catch (err) {
         const message = (err as Error).message;
+        if (traceActive) {
+          const { finishReplicaReadTrace, getReplicaReadTraceStore } = await import(
+            "./services/tursoReplica/replicaReadPhaseTrace.js"
+          );
+          if (getReplicaReadTraceStore()) {
+            finishReplicaReadTrace({ error: message.slice(0, 160) });
+          }
+        }
         console.error("[Gateway] /api/db/query error:", err);
         const status =
           message.includes("Turso fallback is unavailable") ||
           message.includes("Local database not found") ||
-          message.includes("No data sources linked")
+          message.includes("No data sources linked") ||
+          message.includes("Replica read timed out") ||
+          message.includes("Gateway was busy") ||
+          message.includes("Database sync in progress") ||
+          message.includes("Schema update pending")
             ? 503
             : 500;
         res.status(status).json({ error: message });
@@ -997,35 +1169,84 @@ async function startGateway(): Promise<void> {
           return;
         }
         const appId = resolved.appId;
+        const { markMiniAppInteractiveLoadWindow } = await import(
+          "./services/appRuntime/miniAppInteractiveLoadWindow.js"
+        );
+        markMiniAppInteractiveLoadWindow(appId);
         if (statements.length > 25) {
           res.status(400).json({ error: "Batch limited to 25 statements" });
           return;
         }
 
-        const results: Array<Record<string, unknown>> = [];
-        for (const stmt of statements) {
-          const sql = stmt?.sql;
-          if (!sql) {
-            results.push({ ok: false, error: "sql is required" });
-            continue;
-          }
-          const trimmed = sql.trim().toLowerCase();
-          if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
-            results.push({
-              ok: false,
-              error: "Only SELECT (and WITH ... SELECT) queries are allowed",
-            });
-            continue;
-          }
-          try {
-            const source = await resolveLinkedSource(appId, stmt.sourceId, sql, "read");
-            const result = await dbRouter.query(appId, source, sql, stmt.params);
-            results.push({ ok: true, ...result, source: source.alias });
-          } catch (stmtErr) {
-            results.push({ ok: false, error: (stmtErr as Error).message });
-          }
-        }
-        res.json({ results });
+        const { withInteractiveHotPath } = await import(
+          "./services/gatewayInteractivePriority.js"
+        );
+        const batchCoalesceKey = buildLocalDbBatchCoalesceKey(appId, statements);
+        const { executeMiniAppReadBatch } = await import(
+          "./services/appRuntime/miniAppDbReadBatch.js"
+        );
+        type Prepared = import("./services/appRuntime/miniAppDbReadBatch.js").PreparedMiniAppReadStatement;
+        const payload = await withInteractiveHotPath("mini-app:db-query-batch", () =>
+          coalesceInFlightLocalDbRead(batchCoalesceKey, async () => {
+            const prepared: Prepared[] = [];
+            const validationRows: Array<Record<string, unknown>> = new Array(
+              statements.length,
+            );
+            for (let index = 0; index < statements.length; index++) {
+              const stmt = statements[index];
+              const sql = stmt?.sql;
+              if (!sql) {
+                validationRows[index] = { ok: false, error: "sql is required" };
+                continue;
+              }
+              const trimmed = sql.trim().toLowerCase();
+              if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
+                validationRows[index] = {
+                  ok: false,
+                  error: "Only SELECT (and WITH ... SELECT) queries are allowed",
+                };
+                continue;
+              }
+              try {
+                const source = await resolveLinkedSource(
+                  appId,
+                  stmt.sourceId,
+                  sql,
+                  "read",
+                );
+                prepared.push({ index, source, sql, params: stmt.params });
+              } catch (resolveErr) {
+                validationRows[index] = {
+                  ok: false,
+                  error: (resolveErr as Error).message,
+                };
+              }
+            }
+
+            const results: Array<Record<string, unknown>> = validationRows.map(
+              (row) => row ?? { ok: false, error: "Statement was not executed" },
+            );
+            if (prepared.length > 0) {
+              const executed = await executeMiniAppReadBatch(
+                dbRouter,
+                appId,
+                prepared,
+                statements.length,
+              );
+              for (let i = 0; i < statements.length; i++) {
+                if (executed[i] !== undefined) {
+                  results[i] = executed[i];
+                }
+              }
+            }
+            return { results };
+          }),
+        );
+        const { notifyMiniAppFirstDataPaint } = await import(
+          "./services/tursoPullScheduler.js"
+        );
+        notifyMiniAppFirstDataPaint(appId);
+        res.json(payload);
       } catch (err) {
         console.error("[Gateway] /api/db/batch error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -1121,6 +1342,7 @@ async function startGateway(): Promise<void> {
         );
         invalidateLocalDbReadCacheForApp(appId);
         invalidateTursoSyncItemsCache(appId);
+        invalidateSyncItemsAppResponseCache(appId);
         res.json(result);
       } catch (err) {
         const e = err as Error & { status?: number; name?: string };
@@ -1186,6 +1408,7 @@ async function startGateway(): Promise<void> {
         );
         invalidateLocalDbReadCacheForApp(appId);
         invalidateTursoSyncItemsCache(appId);
+        invalidateSyncItemsAppResponseCache(appId);
         res.json(payload);
       } catch (err) {
         const e = err as Error & { status?: number };
@@ -1248,7 +1471,12 @@ async function startGateway(): Promise<void> {
           };
         },
         query: async (appId, source, sql, params) => {
-          const result = await dbRouter.query(appId, source, sql, params);
+          const { withInteractiveHotPath } = await import(
+            "./services/gatewayInteractivePriority.js"
+          );
+          const result = await withInteractiveHotPath("mini-app:db-query", () =>
+            dbRouter.query(appId, source, sql, params),
+          );
           return { rows: result.rows, count: result.count };
         },
         write: async (appId, source, sql, params) => {
@@ -1865,10 +2093,22 @@ async function startGateway(): Promise<void> {
           req.params.appId,
         );
         const prefs = getAppPublishPrefs(req.params.appId);
-        const { scanAppCloudCompatibility } = await import(
-          "./services/cloudAppCompatibility.js"
-        );
-        const compatibility = await scanAppCloudCompatibility(req.params.appId);
+        let compatibility: unknown = null;
+        try {
+          const { scanAppCloudCompatibility } = await import(
+            "./services/cloudAppCompatibility.js"
+          );
+          compatibility = await scanAppCloudCompatibility(req.params.appId);
+        } catch (compatErr) {
+          console.warn(
+            `[Gateway] /api/cloud/publish/${req.params.appId} compatibility scan failed:`,
+            compatErr,
+          );
+          compatibility = {
+            ok: false,
+            error: (compatErr as Error).message,
+          };
+        }
         res.json({ ...config, prefs, compatibility });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -2559,6 +2799,26 @@ async function startGateway(): Promise<void> {
           ? req.query.appId.trim()
           : undefined;
 
+      const timer = createSyncItemsRouteTimer();
+      let tursoFromCache = false;
+      let responseFromCache = false;
+
+      if (appId && !forceRefresh) {
+        const cachedPayload = getCachedSyncItemsAppResponse(appId);
+        if (cachedPayload) {
+          responseFromCache = true;
+          timer.mark("appResponseCache");
+          res.json(cachedPayload);
+          logSyncItemsRoute(timer, {
+            appId,
+            forceRefresh,
+            tursoCached: cachedPayload.tursoCached === true,
+            responseCached: true,
+          });
+          return;
+        }
+      }
+
       try {
         let appContext:
           | {
@@ -2578,9 +2838,18 @@ async function startGateway(): Promise<void> {
           const { isCloudAutoUploadGloballyEnabled } = await import(
             "./services/cloudUploadMode.js"
           );
-          // Reconcile whenever the UI asks for this app — git-clean folders
-          // should show green even if mtime-only drift fooled the hash cache.
-          await sync.reconcileAppDependentPaths(appId);
+          if (forceRefresh) {
+            await sync.reconcileAppDependentPaths(appId);
+            timer.mark("reconcileAwait");
+          } else {
+            scheduleCoalescedBackgroundWork(
+              `cloud-sync:reconcile:${appId}`,
+              async () => {
+                await sync.reconcileAppDependentPaths(appId);
+              },
+            );
+            timer.mark("reconcileScheduled");
+          }
           let publishLive = false;
           let publishedAt: string | null = null;
           try {
@@ -2596,6 +2865,7 @@ async function startGateway(): Promise<void> {
           } catch {
             /* publish lookup optional for sync status */
           }
+          timer.mark("publishConfig");
           appContext = {
             appId,
             dependentJobIds: resolveAppDependentJobIds(
@@ -2614,7 +2884,7 @@ async function startGateway(): Promise<void> {
         let turso = !forceRefresh
           ? getCachedTursoSyncItemsReport(tursoCacheKey)
           : null;
-        let tursoFromCache = turso !== null;
+        tursoFromCache = turso !== null;
         if (!turso) {
           turso = await buildTursoSyncItemsReport(getPaprAppsRoot(), appId, {
             liveReplicaProbe: forceRefresh,
@@ -2624,6 +2894,7 @@ async function startGateway(): Promise<void> {
           }
           tursoFromCache = false;
         }
+        timer.mark("turso");
 
         let publish = null;
         if (appId) {
@@ -2634,7 +2905,9 @@ async function startGateway(): Promise<void> {
             paprDir: getPaprRoot(),
             cloudPublishing: sync.isCloudPublishingForApp(appId),
             publishLive: appContext?.publishLive === true,
+            tursoReport: turso,
           });
+          timer.mark("publishLayer");
         }
 
         let upload = null;
@@ -2655,6 +2928,7 @@ async function startGateway(): Promise<void> {
           );
           const coordinator = getSyncCoordinator();
           upload = buildCoordinatorStatusReport(coordinator, appId);
+          timer.mark("uploadCoordinator");
           if (appId) {
             const coordErr = coordinator?.getFlushError(appId);
             const syncErr = sync.getManualFlushError(appId);
@@ -2692,6 +2966,7 @@ async function startGateway(): Promise<void> {
               flushErrorMessage: uploadError?.message ?? null,
               flushErrorKind: uploadError?.kind,
             });
+            timer.mark("appSyncV3");
           }
         }
 
@@ -2704,9 +2979,22 @@ async function startGateway(): Promise<void> {
             cloudLinks = await buildCloudLinkSyncReport();
             setCachedCloudLinkSyncReport(cloudLinks);
           }
+          timer.mark("cloudLinks");
         }
 
-        res.json({
+        let oversizedAppFiles = undefined;
+        if (appId) {
+          const { buildOversizedAppFilesReport } = await import(
+            "./services/cloudSync/oversizedAppFilesReport.js"
+          );
+          oversizedAppFiles = await buildOversizedAppFilesReport(
+            getPaprRoot(),
+            appId,
+          );
+          timer.mark("oversizedFiles");
+        }
+
+        const payload = {
           enabled: true,
           github,
           turso,
@@ -2720,17 +3008,27 @@ async function startGateway(): Promise<void> {
           ...(appId
             ? {
                 uploadError,
-                oversizedAppFiles: await (async () => {
-                  const { buildOversizedAppFilesReport } = await import(
-                    "./services/cloudSync/oversizedAppFilesReport.js"
-                  );
-                  return buildOversizedAppFilesReport(getPaprRoot(), appId);
-                })(),
+                oversizedAppFiles,
               }
             : {}),
-        });
+        };
+        if (appId && !forceRefresh) {
+          setCachedSyncItemsAppResponse(
+            appId,
+            payload as Record<string, unknown>,
+          );
+        }
+        res.json(payload);
       } catch (err) {
+        timer.mark("error");
         res.status(500).json({ error: (err as Error).message });
+      } finally {
+        logSyncItemsRoute(timer, {
+          appId,
+          forceRefresh,
+          tursoCached: tursoFromCache,
+          responseCached: responseFromCache,
+        });
       }
     });
 
@@ -3196,16 +3494,33 @@ async function startGateway(): Promise<void> {
     // Supports on-the-fly TypeScript transpilation via esbuild.
     // Use RegExp route for Express/path-to-regexp compatibility.
     app.get(/^\/apps\/([^/]+)\/?(.*)$/, async (req, res) => {
+      const staticReceivedAt = performance.now();
+      let staticAppId = "";
+      let staticRequestedPath = "index.html";
+      let staticStatusCode = 500;
+      let staticByteLength: number | undefined;
+      const { createMiniAppStaticServeTimer } = await import(
+        "./utils/miniAppStaticServeLog.js"
+      );
+      const staticServeTimer = createMiniAppStaticServeTimer(staticReceivedAt);
+      const { enterInteractiveHotPath, leaveInteractiveHotPath } = await import(
+        "./services/gatewayInteractivePriority.js"
+      );
+      enterInteractiveHotPath("mini-app:static");
       try {
         const appService = getAppService();
         const appId = req.params[0];
+        staticAppId = appId;
         const wildcard = req.params[1];
         const requestedPath =
           typeof wildcard === "string" && wildcard.length > 0
             ? wildcard
             : "index.html";
+        staticRequestedPath = requestedPath;
+        staticServeTimer.markPhase("setupMs");
 
         if (requestedPath.includes("..")) {
+          staticStatusCode = 400;
           res.status(400).send("Invalid app path");
           return;
         }
@@ -3222,12 +3537,15 @@ async function startGateway(): Promise<void> {
             appId,
             requestedPath,
           );
+          staticServeTimer.markPhase("resolveMs");
           if (!filePath) {
+            staticStatusCode = 404;
             res.status(404).send("Not found");
             return;
           }
           res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
           res.setHeader("Content-Type", getMiniAppContentType(ext));
+          staticStatusCode = 200;
           res.sendFile(filePath);
           return;
         }
@@ -3236,7 +3554,9 @@ async function startGateway(): Promise<void> {
         // The iframe's index.html references dist/app.js and dist/app.css.
         if (requestedPath.startsWith("dist/")) {
           const distPath = await appService.resolveAppFilePath(appId, requestedPath);
+          staticServeTimer.markPhase("resolveMs");
           if (!distPath) {
+            staticStatusCode = 404;
             res.status(404).send("Not found — run build first");
             return;
           }
@@ -3245,9 +3565,11 @@ async function startGateway(): Promise<void> {
           try {
             distStat = await fs.stat(distPath);
           } catch {
+            staticStatusCode = 404;
             res.status(404).send("Not found — run build first");
             return;
           }
+          staticServeTimer.markPhase("statMs");
           const {
             buildMiniAppDistEtag,
             ifNoneMatchIncludes,
@@ -3261,23 +3583,33 @@ async function startGateway(): Promise<void> {
           if (
             ifNoneMatchIncludes(readIfNoneMatchHeader(req.headers), etag)
           ) {
+            staticStatusCode = 304;
             res.status(304).end();
             return;
           }
           const distContent = await fs.readFile(distPath, "utf8");
+          staticServeTimer.markPhase("readMs");
+          staticByteLength = Buffer.byteLength(distContent, "utf8");
           if (ext === ".js") {
             const { appendModuleRanMarker } = await import(
               "./utils/miniAppBootWatchdog.js"
             );
-            res.send(appendModuleRanMarker(distContent));
+            const body = appendModuleRanMarker(distContent);
+            staticByteLength = Buffer.byteLength(body, "utf8");
+            staticServeTimer.markPhase("transformMs");
+            staticStatusCode = 200;
+            res.send(body);
             return;
           }
+          staticStatusCode = 200;
           res.send(distContent);
           return;
         }
 
         let content = await appService.readAppFile(appId, requestedPath);
+        staticServeTimer.markPhase("readMs");
         if (content === null) {
+          staticStatusCode = 404;
           res.status(404).send("Not found");
           return;
         }
@@ -3334,6 +3666,7 @@ async function startGateway(): Promise<void> {
                 `[Gateway] TypeScript transpile error for ${requestedPath}:`,
                 message,
               );
+              staticStatusCode = 500;
               res.status(500).send(message);
               return;
             }
@@ -3344,6 +3677,7 @@ async function startGateway(): Promise<void> {
               );
               content = appendModuleRanMarker(transpileResult.code ?? contentStr);
             }
+            staticServeTimer.markPhase("transpileMs");
           } catch (transpileError) {
             const { formatEsbuildErrorMessage } = await import(
               "./utils/miniAppTranspile.js"
@@ -3355,6 +3689,7 @@ async function startGateway(): Promise<void> {
               `[Gateway] TypeScript transpile error for ${requestedPath}:`,
               transpileError,
             );
+            staticStatusCode = 500;
             res.status(500).send(`TypeScript compilation error:\n${formatted}`);
             return;
           }
@@ -3395,12 +3730,17 @@ async function startGateway(): Promise<void> {
             "./utils/miniAppBootWatchdog.js"
           );
           content = injectMiniAppBootWatchdog(content);
+          staticServeTimer.markPhase("htmlInjectMs");
         }
 
         res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate");
         res.setHeader("Content-Type", getMiniAppContentType(ext));
+        if (typeof content === "string") {
+          staticByteLength = Buffer.byteLength(content, "utf8");
+        }
+        staticStatusCode = 200;
         res.send(content);
-        // Defer Turso reconcile until after the shell is on the wire — user hot path first.
+        // Register app-open reconcile; cloud→local pull runs after first DB read (data paint).
         if (requestedPath === "index.html") {
           void import("./services/tursoPullScheduler.js").then(
             ({ scheduleTursoPullForAppOpen }) => {
@@ -3410,7 +3750,16 @@ async function startGateway(): Promise<void> {
         }
       } catch (error) {
         console.error("[Gateway] Failed to serve app file:", error);
+        staticStatusCode = 500;
         res.status(500).send("Failed to read app file");
+      } finally {
+        leaveInteractiveHotPath("mini-app:static");
+        staticServeTimer.finishIfNeeded({
+          appId: staticAppId,
+          requestedPath: staticRequestedPath,
+          statusCode: staticStatusCode,
+          byteLength: staticByteLength,
+        });
       }
     });
 
@@ -3429,6 +3778,17 @@ async function startGateway(): Promise<void> {
     markGatewayRoutesReady();
     printGatewayStartupSummary();
     console.log("[Gateway] All routes registered — gateway fully ready");
+
+    void import("./services/GatewayBackgroundWorkerClient.js")
+      .then(({ ensureGatewayBackgroundWorkerStarted }) =>
+        ensureGatewayBackgroundWorkerStarted(),
+      )
+      .catch((err) => {
+        console.warn(
+          "[Gateway] Background worker start failed (non-fatal):",
+          err instanceof Error ? err.message : err,
+        );
+      });
 
     if (!isCloudAgentGatewayMode()) {
       void import("./services/tursoPullScheduler.js").then(
@@ -3480,6 +3840,12 @@ async function startGateway(): Promise<void> {
             );
             await waitForWorkspaceReady();
 
+            const { waitForInteractiveQuietBeforeBackgroundWork } =
+              await import("./services/gatewayInteractivePriority.js");
+            await waitForInteractiveQuietBeforeBackgroundWork(
+              "CloudSync.startup",
+            );
+
             if (getCloudSyncService()) {
               console.log(
                 "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
@@ -3513,6 +3879,12 @@ async function startGateway(): Promise<void> {
               "./services/workspaceReadiness.js"
             );
             await waitForWorkspaceReady();
+
+            const { waitForInteractiveQuietBeforeBackgroundWork } =
+              await import("./services/gatewayInteractivePriority.js");
+            await waitForInteractiveQuietBeforeBackgroundWork(
+              "VaultSync.startup",
+            );
 
             const vaultStartupDelayMs = Number(
               process.env.VAULT_STARTUP_DELAY_MS ?? "5000",
@@ -3552,22 +3924,36 @@ async function startGateway(): Promise<void> {
       );
       setTimeout(() => {
         const tursoBridge = ensureTursoSyncBridge();
-        void timeStartupStep("deferred", "Turso.syncTursoFromSyncIndex", async () => {
-          const { syncTursoFromSyncIndex } = await import(
-            "./services/TursoSyncBridge.js"
-          );
-          const summary = await syncTursoFromSyncIndex();
-          if (summary.pulled > 0 || summary.pushed > 0) {
-            console.log(
-              `[Gateway] Turso startup sync-index: pulled=${summary.pulled} pushed=${summary.pushed}`,
+        void import("./services/tursoSyncSession.js")
+          .then(({ isTursoStartupSyncIndexEnabled }) => {
+            if (!isTursoStartupSyncIndexEnabled()) {
+              console.log(
+                "[Gateway] Turso startup sync-index skipped (set TURSO_STARTUP_SYNC_INDEX=true to enable; heartbeat + app-open reconcile remain active)",
+              );
+              return;
+            }
+            return timeStartupStep(
+              "deferred",
+              "Turso.syncTursoFromSyncIndex",
+              async () => {
+                const { syncTursoFromSyncIndex } = await import(
+                  "./services/TursoSyncBridge.js"
+                );
+                const summary = await syncTursoFromSyncIndex();
+                if (summary.pulled > 0 || summary.pushed > 0) {
+                  console.log(
+                    `[Gateway] Turso startup sync-index: pulled=${summary.pulled} pushed=${summary.pushed}`,
+                  );
+                }
+              },
             );
-          }
-        }).catch((err) =>
-          console.warn(
-            "[Gateway] Turso startup sync-index failed (non-fatal):",
-            (err as Error).message.slice(0, 120),
-          ),
-        );
+          })
+          .catch((err) =>
+            console.warn(
+              "[Gateway] Turso startup sync-index failed (non-fatal):",
+              (err as Error).message.slice(0, 120),
+            ),
+          );
         if (process.env.TURSO_PULL_ON_STARTUP === "true") {
           void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
             console.warn(
@@ -3692,6 +4078,15 @@ async function startGateway(): Promise<void> {
     const shutdown = async () => {
       console.log("[Gateway] Shutting down gracefully...");
 
+      try {
+        const { shutdownGatewayBackgroundWorker } = await import(
+          "./services/GatewayBackgroundWorkerClient.js"
+        );
+        await shutdownGatewayBackgroundWorker();
+      } catch (error) {
+        console.error("[Gateway] Failed to stop background worker:", error);
+      }
+
       // Stop code indexing
       try {
         const { stopCodeIndexing } = await import(
@@ -3805,21 +4200,24 @@ async function startGateway(): Promise<void> {
         // Note: Node.js process will be suspended by OS, no cleanup needed
         // The OS will freeze all timers and I/O operations
       } else if (msg.type === "SYSTEM_RESUME") {
-        console.log("[Gateway] System resumed - reconciling state");
-        
-        try {
-          // Immediately reconcile jobs that may have been missed during sleep
-          const jobsService = getJobsService();
-          await jobsService.reconcileStaleRunningJobs();
-          
-          // Force scheduler to re-evaluate all jobs immediately
-          const scheduler = getJobsScheduler();
-          await scheduler.tickNow();
-          
-          console.log("[Gateway] State reconciliation complete after system resume");
-        } catch (error) {
-          console.error("[Gateway] Failed to reconcile state after resume:", error);
-        }
+        console.log(
+          "[Gateway] System resumed — scheduling job reconcile (deferred until interactive quiet)",
+        );
+        scheduleCoalescedBackgroundWork("system:resume-jobs", async () => {
+          try {
+            const jobsService = getJobsService();
+            await jobsService.reconcileStaleRunningJobs();
+            await getJobsScheduler().tickNow();
+            console.log(
+              "[Gateway] Job reconcile complete after system resume (background)",
+            );
+          } catch (error) {
+            console.error(
+              "[Gateway] Failed to reconcile jobs after system resume:",
+              error,
+            );
+          }
+        });
       }
     });
     

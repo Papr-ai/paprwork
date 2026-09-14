@@ -10,6 +10,7 @@ import type { StreamChunk } from "../types/core";
 import type { ChatMessage, SequenceItem } from "../types/chat";
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
+import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -25,13 +26,62 @@ export interface StreamingRefs {
   currentTextSegmentRef: MutableRefObject<Map<string, string>>;
 }
 
+/**
+ * Ensure the in-memory streaming message id has a matching assistant row in the
+ * store. Refs survive tab switches and history merges; the message row may not.
+ */
+export function ensureStreamingAssistantMessageRow(
+  chatId: string,
+  messageId: string,
+  refs: StreamingRefs,
+): void {
+  const store = useChatStore.getState();
+  const chatState = store.chatStates.get(chatId);
+  const existing = chatState?.messages.find((m) => m.id === messageId);
+
+  if (existing) {
+    if (!existing.isStreaming) {
+      store.reactivateAssistantMessage(chatId, messageId);
+    }
+    return;
+  }
+
+  const sequence = refs.sequenceRef.current.get(chatId) ?? [];
+  const toolCallsMap = refs.toolCallsMapRef.current.get(chatId);
+  const toolCalls = toolCallsMap ? Array.from(toolCallsMap.values()) : [];
+  const content = refs.streamingContentRef.current.get(chatId) ?? "";
+  const reasoning = refs.streamingReasoningRef.current.get(chatId) ?? "";
+
+  store.addMessage(
+    {
+      id: messageId,
+      role: "assistant",
+      content,
+      streamingContent: content,
+      reasoning,
+      streamingReasoning: reasoning,
+      isStreaming: true,
+      toolCalls,
+      sequence: sequence as SequenceItem[],
+    },
+    chatId,
+  );
+  store.setChatStreaming(chatId, true);
+  store.initStreamingState(chatId, messageId);
+}
+
 /** Restore streaming refs from persisted chat store (after tab switch / remount) */
 export function rehydrateStreamingRefsForChat(
   chatId: string,
   refs: StreamingRefs,
 ): string | undefined {
   const existingId = refs.streamingMessageIdRef.current.get(chatId);
-  if (existingId) return existingId;
+  if (existingId) {
+    const chatState = useChatStore.getState().chatStates.get(chatId);
+    const row = chatState?.messages.find((m) => m.id === existingId);
+    if (row) return existingId;
+    refs.streamingMessageIdRef.current.delete(chatId);
+  }
 
   const chatState = useChatStore.getState().chatStates.get(chatId);
   const streamingMsg = chatState?.messages.find(
@@ -473,10 +523,13 @@ export function chatHasLiveStreamBlockingHistory(chatId: string): boolean {
   const chatState = useChatStore.getState().chatStates.get(chatId);
   if (!chatState) return false;
 
+  // isSending without a visible isStreaming row is the broken state that drops
+  // tool/text updates — still block history reload until the turn finishes.
+  if (chatState.isSending) return true;
+
   const hasActiveRequest =
     activeStreamRequests.has(chatId) || isResumingStream(chatId);
 
-  if (chatState.isSending && hasActiveRequest) return true;
   if (hasActiveRequest && chatState.connectionPaused === true) return true;
   if (
     hasActiveRequest &&
@@ -655,6 +708,7 @@ async function clearStaleConnectionPaused(): Promise<void> {
 }
 
 async function recoverAfterReconnect(): Promise<void> {
+  startPostReconnectStreamRecoveryWave();
   if (recoverStreamsAfterReconnect) {
     await recoverStreamsAfterReconnect();
   } else {
@@ -662,9 +716,67 @@ async function recoverAfterReconnect(): Promise<void> {
   }
 }
 
+/** Latest stream chunk handler (useAgent registers; survives tab unmount). */
+const agentStreamChunkHandlerRef: {
+  current: StreamChunkHandler | null;
+} = { current: null };
+
+let agentStreamBroadcastRegistered = false;
+
+export function setAgentStreamChunkHandler(
+  handler: StreamChunkHandler | null,
+): void {
+  agentStreamChunkHandlerRef.current = handler;
+}
+
+/** One global listener — ChatContainer mount/unmount must not drop agent chunks. */
+export function ensureAgentStreamBroadcastListener(): void {
+  if (agentStreamBroadcastRegistered) return;
+  agentStreamBroadcastRegistered = true;
+
+  window.addEventListener("gateway-broadcast", (event: Event) => {
+    const handler = agentStreamChunkHandlerRef.current;
+    if (!handler) return;
+
+    const detail = (event as CustomEvent<{ type: string; data?: unknown }>)
+      .detail;
+    if (!detail?.type?.startsWith("agent:")) return;
+
+    if (detail.type === "agent:chunk" && detail.data) {
+      handler(detail.data as StreamChunk);
+    } else if (detail.type === "agent:complete" && detail.data) {
+      const data = detail.data as Record<string, unknown>;
+      const chatId = data.chatId as string | undefined;
+      if (chatId) {
+        handler({
+          type: "done",
+          chatId,
+          payload: { finalMessage: data.finalMessage },
+        } as StreamChunk);
+      }
+    } else if (detail.type === "agent:error" && detail.data) {
+      const data = detail.data as Record<string, unknown>;
+      const chatId = data.chatId as string | undefined;
+      const error = data.error as string | undefined;
+      if (chatId && error && isExpectedStreamCancellation(error)) {
+        return;
+      }
+      if (chatId) {
+        handler({
+          type: "error",
+          chatId,
+          payload: { error: error || "Stream error" },
+        } as StreamChunk);
+      }
+    }
+  });
+}
+
 export function ensureGatewayRecoveryRegistered(): void {
   if (gatewayRecoveryRegistered) return;
   gatewayRecoveryRegistered = true;
+
+  ensureAgentStreamBroadcastListener();
 
   gateway.onConnectionChange((connected) => {
     if (!connected) {
@@ -822,6 +934,58 @@ export function recordAutoContinueAttempt(
   return next;
 }
 
+export type AutoContinueBlockReason =
+  | "isSending"
+  | "gatewayNotReady"
+  | "resumingStream"
+  | "turnComplete"
+  | "userStopped"
+  | "awaitingStreamResubscribe"
+  | "maxAttempts";
+
+/** Why auto-continue did not run — for logs and support. */
+export function getAutoContinueBlockReason(args: {
+  chatId: string;
+  messages: ChatMessage[];
+  isSending: boolean;
+  connectionPaused: boolean;
+  needsStreamRecovery: boolean;
+  gatewayReady: boolean;
+}): AutoContinueBlockReason | null {
+  if (args.isSending) return "isSending";
+  if (!args.gatewayReady) return "gatewayNotReady";
+  if (isResumingStream(args.chatId)) return "resumingStream";
+
+  const lastAssistant = [...args.messages]
+    .reverse()
+    .find((message) => message.role === "assistant");
+  if (!lastAssistant?.interrupted) {
+    if (!lastUserTurnNeedsContinue(args.messages)) return "turnComplete";
+    const lastUser = findLastVisibleUserMessage(args.messages);
+    if (!lastUser) return "turnComplete";
+    const lastUserIndex = args.messages.findIndex((m) => m.id === lastUser.id);
+    const hasAssistantForTurn = args.messages
+      .slice(lastUserIndex + 1)
+      .some((m) => m.role === "assistant");
+    if (hasAssistantForTurn) return "turnComplete";
+  } else if (assistantMessageWasStopped(lastAssistant)) {
+    return "userStopped";
+  }
+
+  if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {
+    return "awaitingStreamResubscribe";
+  }
+
+  if (
+    getAutoContinueAttempts(args.chatId, args.messages) >=
+    MAX_AUTO_CONTINUE_ATTEMPTS
+  ) {
+    return "maxAttempts";
+  }
+
+  return null;
+}
+
 /** True when the UI shows "Interrupted" and we should auto-send a hidden continue. */
 export function shouldAutoContinueInterruptedTurn(args: {
   chatId: string;
@@ -831,31 +995,55 @@ export function shouldAutoContinueInterruptedTurn(args: {
   needsStreamRecovery: boolean;
   gatewayReady: boolean;
 }): boolean {
-  if (args.isSending || !args.gatewayReady || isResumingStream(args.chatId)) {
+  return getAutoContinueBlockReason(args) === null;
+}
+
+const postReconnectStreamRecoveryAttempted = new Set<string>();
+
+/** Cleared at the start of each gateway reconnect recovery wave. */
+export function startPostReconnectStreamRecoveryWave(): void {
+  postReconnectStreamRecoveryAttempted.clear();
+}
+
+export function resetPostReconnectStreamRecoveryForTests(): void {
+  postReconnectStreamRecoveryAttempted.clear();
+}
+
+export function markPostReconnectStreamRecoveryAttempted(chatId: string): void {
+  postReconnectStreamRecoveryAttempted.add(chatId);
+}
+
+/** Chats that showed "Continue" after subscribe retries exhausted — retry once per reconnect. */
+export function shouldAutoRetryStreamRecoveryAfterReconnect(args: {
+  chatId: string;
+  needsStreamRecovery: boolean;
+  streamRecoveryReason?: string;
+  isSending: boolean;
+}): boolean {
+  if (postReconnectStreamRecoveryAttempted.has(args.chatId)) {
     return false;
   }
+  if (!args.needsStreamRecovery) return false;
+  if (args.streamRecoveryReason === "rateLimit") return false;
+  if (args.isSending) return false;
+  if (activeStreamRequests.has(args.chatId)) return false;
+  return true;
+}
 
-  const lastAssistant = [...args.messages]
-    .reverse()
-    .find((message) => message.role === "assistant");
-  if (!lastAssistant?.interrupted) {
-    // Provider dropped before any assistant row existed for this user turn.
-    if (!lastUserTurnNeedsContinue(args.messages)) return false;
-    const lastUser = findLastVisibleUserMessage(args.messages);
-    if (!lastUser) return false;
-    const lastUserIndex = args.messages.findIndex((m) => m.id === lastUser.id);
-    const hasAssistantForTurn = args.messages
-      .slice(lastUserIndex + 1)
-      .some((m) => m.role === "assistant");
-    if (hasAssistantForTurn) return false;
-  } else if (assistantMessageWasStopped(lastAssistant)) {
-    return false;
+export function listChatsForPostReconnectStreamRecovery(): string[] {
+  const store = useChatStore.getState();
+  const chatIds: string[] = [];
+  for (const [chatId, state] of store.chatStates.entries()) {
+    if (
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId,
+        needsStreamRecovery: state.needsStreamRecovery ?? false,
+        streamRecoveryReason: state.streamRecoveryReason,
+        isSending: state.isSending ?? false,
+      })
+    ) {
+      chatIds.push(chatId);
+    }
   }
-
-  // Live-stream re-subscribe is still in flight — wait before hidden continue.
-  if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {
-    return false;
-  }
-
-  return getAutoContinueAttempts(args.chatId, args.messages) < MAX_AUTO_CONTINUE_ATTEMPTS;
+  return chatIds;
 }

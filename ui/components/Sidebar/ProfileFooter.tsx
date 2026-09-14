@@ -6,8 +6,6 @@
 import React, { useEffect } from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
-import { paprCloudStatusDotVariant } from "../../utils/cloudMemoryStatus";
-import { AvatarStatusDot } from "../common/AvatarStatusDot";
 import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
 import "./ProfileFooter.css";
@@ -20,7 +18,6 @@ interface ProfileFooterProps {
 export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterProps) {
   const planAttention = useCloudMemoryStatusStore((state) => state.planAttention);
   const planStatus = useCloudMemoryStatusStore((state) => state.status);
-  const statusDotVariant = paprCloudStatusDotVariant(planStatus);
   const planAttentionHint = planStatus
     ? `${planStatus.label} — open Billing in Settings`
     : "Billing needs attention — open Billing in Settings";
@@ -40,8 +37,6 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       namespaceName,
       workspaceName,
     }) ?? "";
-  const showPaprStatusDot = Boolean(organizationName.trim()) || planAttention;
-
   useEffect(() => {
     void loadProfile();
 
@@ -108,26 +103,10 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
           className="profile-footer__avatar"
           onClick={onOpenProfile}
           aria-label={
-            planAttention
-              ? `Edit profile — ${planAttentionHint}`
-              : showPaprStatusDot
-                ? "Edit profile — Papr logged in"
-                : "Edit profile"
+            planAttention ? `Edit profile — ${planAttentionHint}` : "Edit profile"
           }
-          title={
-            planAttention
-              ? planAttentionHint
-              : showPaprStatusDot
-                ? "Papr logged in"
-                : "Edit profile"
-          }
+          title={planAttention ? planAttentionHint : "Edit profile"}
         >
-          {showPaprStatusDot ? (
-            <AvatarStatusDot
-              variant={statusDotVariant}
-              title={planAttention ? planAttentionHint : "Papr logged in"}
-            />
-          ) : null}
           <UserAvatar
             imageUrl={imageUrl}
             displayName={name}

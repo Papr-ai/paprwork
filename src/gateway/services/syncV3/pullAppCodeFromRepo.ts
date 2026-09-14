@@ -36,6 +36,7 @@ import {
 } from "./OidCache.js";
 import {
   applyRegistryMigrationsAfterPull,
+  hydrateAppFolderSchemaMigrationsToRegistry,
   persistPulledSchemaMigration,
 } from "./syncPulledSchemaOwnerMigrations.js";
 
@@ -358,6 +359,13 @@ export async function pullAppCodeFromRepo(
 
     if (conflictFiles.length === 0) {
       await writeAppRepoCommitCursor(trimmed, head.commitSha);
+    }
+
+    const hydratedFromAppTree = await hydrateAppFolderSchemaMigrationsToRegistry({
+      appId: trimmed,
+    });
+    for (const registryRelativePath of hydratedFromAppTree.copied) {
+      registryMigrationsCopied.push(registryRelativePath);
     }
 
     return {

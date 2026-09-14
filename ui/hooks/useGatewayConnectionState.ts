@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { gateway } from "../src/lib/gateway";
+import { gateway, type GatewayConnectionState } from "../src/lib/gateway";
 
-export type GatewayConnectionState = "connected" | "reconnecting" | "disconnected";
+export type { GatewayConnectionState };
 
 export function useGatewayConnectionState(): GatewayConnectionState {
   const [connectionState, setConnectionState] = useState<GatewayConnectionState>(

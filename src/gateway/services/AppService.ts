@@ -621,6 +621,50 @@ export class AppService {
     }
   }
 
+  /** Cheap Home data-source checks — no replica migrations. */
+  async homeLinkedSourcesInvariantsOk(): Promise<boolean> {
+    try {
+      const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      const { homeLinkedSourcesInvariantsOk } = await import(
+        "./homeWorkspaceBootInvariants.js"
+      );
+      return homeLinkedSourcesInvariantsOk({
+        appsDir: this.appsDir,
+        jobExists: (jobId) => jobsService.hasJob(jobId),
+        resolveBriefReadTarget: async (jobId) => {
+          const registryPath = resolveHomeBriefsRegistryDbPath(getPaprDataDir());
+          const { initializeDatabaseRegistry } = await import(
+            "./DatabaseRegistryService.js"
+          );
+          if (existsSync(registryPath)) {
+            const registry = await initializeDatabaseRegistry();
+            const record = registry.getByPath(registryPath);
+            return { dbPath: registryPath, dbId: record?.dbId };
+          }
+          const job = await jobsService.getJob(jobId);
+          const writeDbId = job?.writeDbIds?.[0]?.trim();
+          if (writeDbId) {
+            const registry = await initializeDatabaseRegistry();
+            const record = registry.getById(writeDbId);
+            if (record?.localPath && existsSync(record.localPath)) {
+              return { dbPath: record.localPath, dbId: writeDbId };
+            }
+          }
+          const jobDbPath = path.join(
+            jobsService.getJobsRootPath(),
+            jobId,
+            "data",
+            "data.db",
+          );
+          return { dbPath: existsSync(jobDbPath) ? jobDbPath : "" };
+        },
+      });
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Idempotent startup repair for the bundled Home app in the active namespace.
    * Rewrites foreign dbPath pointers and persists default-job-id.txt — no file copies.
@@ -2979,6 +3023,66 @@ export class AppService {
     const app = await this.getApp(appId);
     if (!app) return false;
 
+    const normalizedFilename = filename.replace(/\\/g, "/");
+    try {
+      const {
+        parseAppRelativeSchemaMigrationPath,
+        mirrorSchemaMigrationToRegistry,
+        schemaOwnerSlugMapForApp,
+      } = await import("./syncV3/syncPulledSchemaOwnerMigrations.js");
+      const { applyRegistryDatabaseMigrations } = await import(
+        "./jobs/databaseMigrations.js"
+      );
+      const migrationPath = parseAppRelativeSchemaMigrationPath(normalizedFilename);
+      if (migrationPath) {
+        const outcome = await mirrorSchemaMigrationToRegistry({
+          appId,
+          repoPath: migrationPath.repoStylePath,
+          content,
+          paprRoot: this.paprRootDir,
+        });
+        if (outcome.kind === "written") {
+          const dbPath = schemaOwnerSlugMapForApp(appId).get(migrationPath.slug);
+          if (dbPath) {
+            await applyRegistryDatabaseMigrations(dbPath);
+          }
+          console.log(
+            `[AppService] Redirected migration write to registry: ${outcome.registryRelativePath} (not ${normalizedFilename} under app)`,
+          );
+          return true;
+        }
+        if (outcome.kind === "unchanged") {
+          return true;
+        }
+        if (outcome.kind === "conflict") {
+          throw new Error(
+            `Registry migration for "${migrationPath.slug}" conflicts with upstream. Edit data/databases/${migrationPath.slug}/migrations/ directly.`,
+          );
+        }
+        if (outcome.kind === "skipped") {
+          if (outcome.reason === "not schema owner for slug") {
+            throw new Error(
+              `App folder path databases/${migrationPath.slug}/migrations/ is not applied. ` +
+                `Write migrations under data/databases/${migrationPath.slug}/migrations/ instead.`,
+            );
+          }
+          throw new Error(
+            `Registry migration data/databases/${migrationPath.slug}/migrations/${migrationPath.fileName} already exists. Edit that file instead of apps/.../databases/.`,
+          );
+        }
+      }
+    } catch (redirectError) {
+      if (
+        redirectError instanceof Error &&
+        (redirectError.message.includes("data/databases/") ||
+          redirectError.message.includes("Registry migration"))
+      ) {
+        console.error(`[AppService] Migration redirect failed:`, redirectError.message);
+        return false;
+      }
+      throw redirectError;
+    }
+
     const filePath = path.join(this.appsDir, appId, filename);
     try {
       // Save a version of the current file before overwriting
@@ -3033,7 +3137,6 @@ export class AppService {
         }
       }
 
-      const normalizedFilename = filename.replace(/\\/g, "/");
       let registrySyncedFromMetadata = false;
       if (normalizedFilename === "metadata.json") {
         registrySyncedFromMetadata = this.syncRegistryFromMetadataContent(
@@ -3571,6 +3674,14 @@ export class AppService {
       issues.push(...checkMiniAppCloudReadPatterns(fileContents));
     } catch (lintError) {
       console.warn("[AppService] Cloud read lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppLoadEfficiencyPatterns } = await import(
+        "../utils/miniAppLoadEfficiencyLint.js"
+      );
+      issues.push(...checkMiniAppLoadEfficiencyPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Load efficiency lint failed:", lintError);
     }
     try {
       const {
@@ -4244,6 +4355,48 @@ export class AppService {
     if (!app) {
       throw new Error(`App not found: ${appId}`);
     }
+
+    const { getDatabaseRegistryService } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const registry = getDatabaseRegistryService();
+    const jobsRoot = getPaprJobsRoot();
+    const paprRoot = this.paprRootDir;
+
+    const {
+      buildAppDataSourcesCacheSignature,
+      getCachedAppDataSourcesResolvedConfig,
+      setCachedAppDataSourcesResolvedConfig,
+      recordAppDataSourcesConfigCacheMiss,
+    } = await import("./appDataSourcesResolvedCache.js");
+
+    const signatureInput = {
+      appId,
+      appsDir: this.appsDir,
+      paprRoot,
+      jobsRoot,
+      registryPath: registry.getRegistryPath(),
+    };
+    const signature = buildAppDataSourcesCacheSignature(signatureInput);
+    const cached = getCachedAppDataSourcesResolvedConfig(appId, signature);
+    if (cached) {
+      return cached;
+    }
+
+    recordAppDataSourcesConfigCacheMiss(appId);
+    const resolved = await this.resolveDataSourcesConfigUncached(appId);
+
+    const postSignature = buildAppDataSourcesCacheSignature({
+      ...signatureInput,
+      registryPath: registry.getRegistryPath(),
+    });
+    setCachedAppDataSourcesResolvedConfig(appId, postSignature, resolved);
+    return resolved;
+  }
+
+  private async resolveDataSourcesConfigUncached(
+    appId: string,
+  ): Promise<AppDataSourcesFile> {
     const config = await this.readDataSourcesConfigFromDisk(appId);
     const workspaceConfig = resolveDataSourcesForWorkspace(
       config,

@@ -60,8 +60,12 @@ describe("workspace switch — JobsService invariants", () => {
       content.indexOf("private voidDeleteJobCloudArtifacts"),
     );
 
-    const installIdx = initFn.indexOf('step("install default jobs")');
-    const reconcileIdx = initFn.indexOf('step("reconcile duplicate Home Daily Brief")');
+    const installIdx = initFn.indexOf(
+      'logJobsStartupStep("Maintenance", "install default jobs")',
+    );
+    const reconcileIdx = initFn.indexOf(
+      'logJobsStartupStep("Maintenance", "reconcile duplicate Home Daily Brief")',
+    );
     expect(installIdx).toBeGreaterThan(-1);
     expect(reconcileIdx).toBeGreaterThan(installIdx);
   });
@@ -157,9 +161,10 @@ describe("workspace switch — registry write guard invariants", () => {
 
   it("DatabaseRegistry.save respects workspace write guard", () => {
     const content = read("src/gateway/services/DatabaseRegistryService.ts");
+    const saveStart = content.indexOf("private async save(");
     const saveFn = content.slice(
-      content.indexOf("private async save(state:"),
-      content.indexOf("private getState():"),
+      saveStart,
+      content.indexOf("private getState():", saveStart),
     );
 
     expect(saveFn).toContain('isWriteContextValid("databases.json save")');
@@ -178,20 +183,34 @@ describe("workspace switch — registry write guard invariants", () => {
 });
 
 describe("workspace switch — Electron startup invariants", () => {
-  it("reconciles pointer and API key before profile sync and gateway spawn", () => {
+  it("reconciles workspace before gateway spawn; syncs namespace API key after gateway is up", () => {
     const content = read("src/electron/index.cjs");
 
     const reconcileIdx = content.indexOf("ensureActiveWorkspaceReconciled(settingsStorage)");
-    const apiKeyIdx = content.indexOf(
-      "ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage)",
-    );
     const profileSyncIdx = content.indexOf("syncProfileToGatewaySettings(");
     const supervisorIdx = content.indexOf("await supervisor.start()");
+    const apiKeyIdx = content.indexOf("refreshFromParse: true");
 
     expect(reconcileIdx).toBeGreaterThan(-1);
-    expect(apiKeyIdx).toBeGreaterThan(reconcileIdx);
-    expect(profileSyncIdx).toBeGreaterThan(apiKeyIdx);
+    expect(profileSyncIdx).toBeGreaterThan(reconcileIdx);
     expect(supervisorIdx).toBeGreaterThan(profileSyncIdx);
+    expect(apiKeyIdx).toBeGreaterThan(supervisorIdx);
+  });
+
+  it("updates schedule index only through setJobInMemory funnel", () => {
+    const content = read("src/gateway/services/JobsService.ts");
+    const setMatches = [...content.matchAll(/this\.jobs\.set\(/g)];
+    expect(setMatches.length).toBe(1);
+    expect(content).toContain("private setJobInMemory(job: JobRecord)");
+    expect(content).toContain("scheduleIndex.syncJob(job)");
+    expect(content).toContain("rebuildScheduleIndex");
+  });
+
+  it("JobsScheduler uses schedule index for due jobs", () => {
+    const content = read("src/gateway/services/JobsScheduler.ts");
+    expect(content).toContain("getDueScheduledJobIds");
+    expect(content).toContain("getScheduledJobsForWake");
+    expect(content).not.toContain("isScheduleDue");
   });
 
   it("validates cached API key matches active namespace before reuse", () => {

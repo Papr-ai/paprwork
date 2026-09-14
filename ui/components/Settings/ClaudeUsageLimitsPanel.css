@@ -1,0 +1,121 @@
+.claude-usage-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.04));
+}
+
+.claude-usage-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.claude-usage-panel__title {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.claude-usage-panel__refresh {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 4px 8px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.claude-usage-panel__refresh:hover:not(:disabled) {
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.06));
+}
+
+.claude-usage-panel__section {
+  margin-top: 8px;
+}
+
+.claude-usage-panel__section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 0 0 8px;
+}
+
+.claude-usage-row {
+  margin-bottom: 12px;
+}
+
+.claude-usage-row__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 12px;
+  margin-bottom: 4px;
+}
+
+.claude-usage-row__label {
+  font-weight: 500;
+}
+
+.claude-usage-row__pct {
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.claude-usage-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-subtle, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+}
+
+.claude-usage-bar__fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent, #3b82f6);
+  transition: width 0.2s ease;
+}
+
+.claude-usage-bar__fill--warning {
+  background: #f59e0b;
+}
+
+.claude-usage-bar__fill--critical {
+  background: #ef4444;
+}
+
+.claude-usage-row__reset {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.claude-usage-panel__muted {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.claude-usage-panel__error p {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.claude-usage-panel__retry {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.claude-usage-panel__footnote {
+  margin: 10px 0 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}

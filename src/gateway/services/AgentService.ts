@@ -283,51 +283,56 @@ export class AgentService {
   }
 
   /**
-   * Lazy-load API keys (only called on first message)
-   * This ensures ZERO keychain popups on app startup
+   * Warm hybrid storage from Papr login (post-connect warmup or first message).
+   * Gateway starts in local mode; upgrades once PAPR_API_KEY is confirmed.
    */
-  private async ensureKeysLoaded(): Promise<void> {
-    if (this.keysLoaded) return;
-
-    console.log("[AgentService] Lazy-loading API keys (first message)...");
+  async warmHybridStorageFromPaprKey(): Promise<void> {
+    if (this.keysLoaded) {
+      return;
+    }
 
     try {
       const { getApiKeys } = await import("../utils/keyResolver.js");
       const keys = await getApiKeys(["PAPR_API_KEY", "OPENAI_API_KEY"]);
 
-      // Upgrade storage to hybrid mode if PAPR key is available
-      // This always runs on first message - gateway starts in local mode,
-      // then upgrades to hybrid once we can confirm the PAPR key exists
       if (keys.PAPR_API_KEY) {
-        console.log(
-          "[AgentService] PAPR key available - upgrading to hybrid mode",
-        );
-        await this.storageManager.initialize({
-          mode: "hybrid",
-          userDataPath: this.userDataPath,
-          paprApiKey: keys.PAPR_API_KEY,
-        });
-        this.storageMode = "hybrid";
+        if (this.storageMode !== "hybrid") {
+          console.log(
+            "[AgentService] PAPR key available - upgrading to hybrid mode",
+          );
+          await this.storageManager.initialize({
+            mode: "hybrid",
+            userDataPath: this.userDataPath,
+            paprApiKey: keys.PAPR_API_KEY,
+          });
+          this.storageMode = "hybrid";
+        }
       } else {
         console.log("[AgentService] No PAPR key found - staying in local mode");
       }
 
-      // Title service initialized at startup (handles OAuth/API key routing internally)
       if (!this.titleService) {
         this.titleService = new TitleGenerationService();
-        console.log("[AgentService] Title generation enabled");
       }
 
-      // Only mark keys as fully loaded once we're in hybrid mode (or confirmed no PAPR key)
       this.keysLoaded = true;
       console.log(
-        `[AgentService] Keys loaded. Storage mode: ${this.storageMode}`,
+        `[AgentService] Storage warm complete. Storage mode: ${this.storageMode}`,
       );
     } catch (error) {
-      console.warn("[AgentService] Failed to load keys:", error);
-      // Don't set keysLoaded=true on error so we retry next message
-      // But avoid infinite retry loops by marking loaded after N failures (handled by caller)
+      console.warn("[AgentService] Storage warm failed:", error);
     }
+  }
+
+  /**
+   * Lazy-load API keys (only called on first message if warmup did not run)
+   */
+  private async ensureKeysLoaded(): Promise<void> {
+    if (this.keysLoaded) {
+      return;
+    }
+    console.log("[AgentService] Lazy-loading API keys (first message)...");
+    await this.warmHybridStorageFromPaprKey();
   }
 
   // ===== Chat Management =====
@@ -649,6 +654,17 @@ export class AgentService {
       options,
     );
     getStreamProfiler(chatId)?.mark("gateway.resolveAssistantMessageId");
+
+    // Tell the UI the stable row id before history load / LLM setup so turns are
+    // not silent for 30s+ while Papr merge or message formatting runs.
+    getStreamProfiler(chatId)?.mark("gateway.streamStart.earlyYield");
+    yield {
+      type: "stream-start",
+      chatId,
+      payload: { messageId: assistantMessageId },
+      timestamp: new Date().toISOString(),
+    } as StreamChunk & { chatId: string };
+
     let checkpointInserted = checkpointRowExists;
     let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
     // Running estimate of checkpoint payload size (text + tool results).
@@ -3458,11 +3474,21 @@ ${last15.substring(0, 8_000)}`;
    * rather than estimated, so the ring and the invoice cannot disagree — but
    * they are two different measurements, see the fill comment below.
    */
-  async getContextMeter(chatId: string, selectedModel: string) {
+  async getContextMeter(
+    chatId: string,
+    selectedModel: string,
+    uiContextLimit?: number,
+  ) {
     const session = this.sessionManager.getSessionIfExists(chatId);
     const model = session?.config.model ?? selectedModel;
     const provider = session?.config.provider ?? resolveProviderForModel(model);
-    const contextLimit = session?.config.contextLimit;
+    const contextLimit =
+      session?.config.contextLimit ??
+      (typeof uiContextLimit === "number" &&
+      Number.isFinite(uiContextLimit) &&
+      uiContextLimit > 0
+        ? uiContextLimit
+        : undefined);
 
     const modelWindow = resolveModelContextWindow(provider, model);
     const effectiveWindow = resolveEffectiveContextWindow(
@@ -3471,7 +3497,32 @@ ${last15.substring(0, 8_000)}`;
       contextLimit,
     );
 
-    const { lastTurn, totals } = await this.storageManager.getTurnUsage(chatId);
+    let lastTurn: Awaited<
+      ReturnType<StorageManager["getTurnUsage"]>
+    >["lastTurn"] = null;
+    let recentTurns: Awaited<
+      ReturnType<StorageManager["getTurnUsage"]>
+    >["recentTurns"] = [];
+    let totals: Awaited<
+      ReturnType<StorageManager["getTurnUsage"]>
+    >["totals"] = {
+      turns: 0,
+      cost: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      cacheReadTokens: 0,
+    };
+    try {
+      const usage = await this.storageManager.getTurnUsage(chatId);
+      lastTurn = usage.lastTurn;
+      recentTurns = usage.recentTurns;
+      totals = usage.totals;
+    } catch (error) {
+      console.warn(
+        "[AgentService] getContextMeter: turn usage unavailable:",
+        error instanceof Error ? error.message : error,
+      );
+    }
 
     // Fill is the largest SINGLE request the turn made, not the turn's billed
     // total. Those diverge by step count: a 107-step turn in this workspace
@@ -3521,11 +3572,12 @@ ${last15.substring(0, 8_000)}`;
       modelWindow,
       effectiveWindow,
       userCap: contextLimit ?? null,
-      usedTokens: live?.peakContextTokens
-        ? Math.min(live.peakContextTokens, effectiveWindow)
-        : restingFill,
+      // Never clamp peak — the ring may exceed 100% when the last request was
+      // larger than the user's history cap (tools + system are not capped).
+      usedTokens: live?.peakContextTokens ?? restingFill,
       fillSource,
       lastTurn,
+      recentTurns,
       totals,
       liveTurn: live
         ? {
@@ -3955,6 +4007,7 @@ ${last15.substring(0, 8_000)}`;
           tokens: historyTokens,
           count: messageBreakdown.length, // Count only what we actually show
           breakdown: messageBreakdown,
+          note: "Each row is one message in the next prompt. Assistant rows include truncated tool results (~500 chars each) when that turn used tools.",
         },
         tools: {
           tokens: toolTokens,

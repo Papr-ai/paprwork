@@ -14,6 +14,7 @@ import {
   shouldUseTursoReplicaForDb,
 } from "../../utils/tursoReplicaEnabled.js";
 import { clearBootstrapPendingMarker } from "./tursoReplicaBootstrapMarker.js";
+import { isJobScratchDatabasePath } from "../jobs/jobScratchDatabasePath.js";
 
 const REPLICA_SIDEcar_SUFFIXES = [
   "-changes",
@@ -29,6 +30,10 @@ export function isReplicaManagedDbPath(dbPath: string): boolean {
     return false;
   }
   const normalized = path.normalize(dbPath);
+  // Job scratch is local-only infra — never Plan A, even if mis-registered.
+  if (isJobScratchDatabasePath(normalized)) {
+    return false;
+  }
   const registry = getDatabaseRegistryService();
   const record = registry.getByPath(normalized);
   if (!record) {

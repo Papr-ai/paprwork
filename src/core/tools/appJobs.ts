@@ -4127,6 +4127,8 @@ Checks:
 - **JavaScript/TypeScript syntax**: Mismatched delimiters (braces, parens, brackets)
 - **Code quality**: console.log statements (should be removed)
 - **Runtime preview (automatic)**: Launches hidden preview, reads console errors, merges errors forwarded from the user's app iframe
+- **Load efficiency (static)**: Flags 3+ /api/db/query in one loadData() without /api/db/batch; onDbChanged → loadData without debounceMs
+- **Load efficiency (preview)**: Counts /api/db/query vs batch during ~2s hidden load — warnings if many sequential queries
 
 Returns validation result with list of issues (errors and warnings).
 IMPORTANT: Run this after creating/editing app files to catch issues early!`,
@@ -4210,6 +4212,19 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
     );
     const runtimeCheck = await runPostValidationRuntimeCheck(args.appId);
 
+    const previewLoadIssues = runtimeCheck.loadWarnings.map((message, index) => ({
+      file: "preview",
+      severity: "warning" as const,
+      message,
+      rule: "preview-load-efficiency",
+      line: index + 1,
+    }));
+
+    const mergedWarnings = [
+      ...result.issues.filter((i) => i.severity === "warning"),
+      ...previewLoadIssues,
+    ];
+
     if (runtimeCheck.allErrors.length > 0) {
       const errorList = buildCappedRuntimeErrorList(runtimeCheck.allErrors);
       return {
@@ -4243,16 +4258,37 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
       };
     }
 
+    const warningCount = mergedWarnings.length;
+    const loadSummary = runtimeCheck.preview.networkProfile
+      ? ` Preview network: ${runtimeCheck.preview.networkProfile.dbQueryCount} query, ${runtimeCheck.preview.networkProfile.dbBatchCount} batch.`
+      : "";
+
     return {
       success: true,
       data: {
         valid: true,
+        hasWarnings: warningCount > 0,
         filesChecked: result.filesChecked,
-        message: `✓ All ${result.filesChecked} files passed validation + runtime preview (no console errors)`,
+        message:
+          warningCount > 0
+            ? `✓ Validation + runtime preview passed with ${warningCount} load/efficiency warning(s).${loadSummary}`
+            : `✓ All ${result.filesChecked} files passed validation + runtime preview (no console errors).${loadSummary}`,
+        ...(warningCount > 0
+          ? {
+              warnings: mergedWarnings.map((w) => ({
+                file: w.file,
+                severity: w.severity,
+                message: w.message,
+                rule: w.rule,
+              })),
+            }
+          : {}),
         runtimeCheck: {
           previewAvailable: runtimeCheck.preview.available,
           previewSkippedReason: runtimeCheck.preview.skippedReason,
           consoleLogCount: runtimeCheck.preview.consoleLogs.length,
+          networkProfile: runtimeCheck.preview.networkProfile,
+          loadWarnings: runtimeCheck.loadWarnings,
         },
         ...(runtimeCheck.preview.previewScreenshot
           ? { previewScreenshot: runtimeCheck.preview.previewScreenshot }

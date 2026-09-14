@@ -266,6 +266,18 @@ export class CloudAppInstallService {
 
       await finalizePortableCloudAppResources({ cloudInstall: true });
 
+      const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+        "./syncV3/syncPulledSchemaOwnerMigrations.js"
+      );
+      const hydratedMigrations = await hydrateAppFolderSchemaMigrationsToRegistry({
+        appId: app.id,
+      });
+      if (hydratedMigrations.copied.length > 0) {
+        console.log(
+          `[CloudAppInstall] Mirrored ${hydratedMigrations.copied.length} migration(s) from app folder into registry for ${app.id}`,
+        );
+      }
+
       if (installDbPolicy === "shared_primary") {
         const { registerSharedPrimaryTursoForInstalledApp } = await import(
           "./cloudInstallTursoCredentials.js"

@@ -87,6 +87,7 @@ export class SystemPromptBuilder {
       this.buildIdentitySection(),
       this.buildProactiveIntegrationSection(),
       this.buildCapabilityMatrixSection(),
+      this.buildPaprApiDiscoverySection(),
       this.buildToolCallStyleSection(), // Merged with narration
       this.buildAgentDocsSection(),
       this.buildSkillsSection(),
@@ -760,6 +761,12 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         details: "skill registry usage",
       },
       {
+        area: "Papr API catalog",
+        enabled: has("get_papr_api_reference"),
+        details:
+          "lookup HTTP /api/*, mini-app SDK, and agent tool contracts — use before curl/grep/memory for API discovery",
+      },
+      {
         area: "Browser",
         enabled: has("browser_navigate") || has("browser_snapshot"),
         details:
@@ -927,6 +934,35 @@ run_job({ jobId: "<jobId>" })
   }
 
   /**
+   * Mandatory lookup path for Papr API contracts (HTTP, SDK, agent tools).
+   */
+  private buildPaprApiDiscoverySection(): string {
+    const hasLookup = this.options.availableTools.includes("get_papr_api_reference");
+    if (!hasLookup) {
+      return "";
+    }
+    return `# Papr API Discovery (contracts)
+
+**Before** curl/grep/memory search for Papr endpoints, SDK imports, or "which tool do I use?":
+
+\`\`\`javascript
+get_papr_api_reference({ query: "db write batch", surface: "mini-app-http" })
+get_papr_api_reference({ query: "create job", surface: "agent-tool" })
+get_papr_api_reference({ query: "papr files upload", surface: "mini-app-sdk" })
+\`\`\`
+
+| Question type | Use |
+|---------------|-----|
+| Method, path, body, limits, example | \`get_papr_api_reference\` |
+| Workflow, stages, anti-patterns | \`read_skill({ skillId: "preloaded-app-and-jobs-guide" })\` |
+| Deep HTTP + job patterns | \`read_skill({ skillId: "preloaded-papr-api-reference" })\` |
+
+**Do NOT** use \`search_agent_memory\`, \`grep\`, or trial \`curl localhost:18789\` to **discover** Papr API shapes. One catalog lookup replaces many exploration steps.
+
+**OK:** curl/bash **once** to test a call **after** you have the contract from the catalog.`;
+  }
+
+  /**
    * How to call tools effectively
    */
   private buildToolCallStyleSection(): string {
@@ -977,6 +1013,7 @@ read_skill({ skillId: "preloaded-app-and-jobs-guide" })
 | When | Command |
 |------|---------|
 | Routing / which doc to open | read_file({ path: "src/resources/agent-docs/00-START-HERE.md" }) |
+| Papr API contracts (HTTP, SDK, tools) | get_papr_api_reference({ query: "..." }) or read_skill({ skillId: "preloaded-papr-api-reference" }) |
 | Apps, jobs, SQLite, /api/db/* | read_file({ path: "src/resources/agent-docs/APP_AND_JOBS_GUIDE.md" }) |
 | Large binaries (video, PDF >10MB) — App Files | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) |
 | Image/video generation + App Files wiring | read_file({ path: "src/resources/agent-docs/APP_FILES_GUIDE.md" }) § Agent-generated images |
@@ -1551,11 +1588,13 @@ search_agent_memory({
 
 ### Full Tool Result Recovery
 
-When a tool result was **truncated** (you see a truncation notice with toolCallId), use:
+When a tool result was **truncated** (truncation notice with \`toolCallId\`), recover **only what you still need** — not every notice in bulk:
 \`\`\`javascript
 get_full_tool_result({ toolCallId: "toolu_abc123" })
 \`\`\`
-This retrieves from local storage — NOT memory search. Use for tool-call truncation recovery only.
+- **Files:** prefer \`read_app_file\` / \`read_job_file\` again with the same path — do not recover file reads unless the notice is for a non-file tool.
+- **Queries:** prefer a **narrower** \`query_cloud_turso\`, \`get_job_history({ limit: N })\`, or \`bash\` — not a dozen recoveries for one investigation.
+- One recovery per missing fact. This reads local storage — NOT memory search.
 
 ## Two Types of Schemas — Don't Confuse Them!
 
@@ -2236,7 +2275,7 @@ See \`docs/APP_AGENT_CHAT.md\` and \`read_file({ path: "src/resources/agent-docs
 **Routing rules (prevents wrong-agent delegation):**
 1. Call \`list_sub_agents()\` before every \`delegate_task\` (returns compact id/name list — built-ins listed first)
 2. \`useAgentId\` is **required** — pass the exact \`id\` field (e.g. \`product-architect\`, \`research-specialist\`)
-3. **Built-in ids are always available** (\`product-architect\`, \`research-specialist\`, \`implementation-specialist\`) — delegate directly if you already know the id
+3. **Built-in ids are always available** (\`product-architect\`, \`codebase-explorer\`, \`research-specialist\`, \`implementation-specialist\`) — delegate directly if you already know the id
 4. After \`create_sub_agent()\`, use the returned \`id\` in \`_delegationHint\` — do not guess or omit \`useAgentId\`
 5. Omitting \`useAgentId\` fails with an error (no silent fallback to another agent)
 
@@ -2244,8 +2283,19 @@ See \`docs/APP_AGENT_CHAT.md\` and \`read_file({ path: "src/resources/agent-docs
 | Agent id | Use when |
 |----------|----------|
 | \`product-architect\` | **Before building** complex app+job automation — brief, SQLite schema, job DAG, UI plan (see Product Architect section) |
-| \`research-specialist\` | Deep research, synthesis, no Paprwork build |
+| \`codebase-explorer\` | **Before fixing** when you need 4+ read/query steps (files, jobs, logs, Turso) — cheap read-only investigation; main agent implements |
+| \`research-specialist\` | External/web/memory research and synthesis — not Paprwork repo/job forensics |
+| \`implementation-specialist\` | Isolated coding/validation when main chat should not carry the edit loop |
 | Custom agents | User-created specialists — match task to their description |
+
+**When to delegate to \`codebase-explorer\` (vs doing it yourself):**
+- ✅ Next phase is **gather only** (read_file, read_app_file, list_jobs, get_job_history, query_cloud_turso, grep) and you expect **≥4 tool calls** before the first write/run/fix
+- ✅ Main model is expensive and user did not ask to watch every tool in this thread
+- ✅ You can write a bounded \`task\` + \`context\` (paths, jobIds, appIds, hypothesis) — sub-agents do not see this chat
+- ❌ Skip for 1–2 reads then one edit, pair-debugging with the user, or product briefs (use \`product-architect\`)
+- After completion: read \`get_delegation_run\` once — **do not repeat** the same reads unless the handoff is missing a named path/id
+
+**codebase-explorer handoff:** Full report on the delegation card + large auto-summary to you. Includes markdown sections and a JSON block (\`findings\`, \`snippets\`, \`recommendedNextSteps\`). Implement from that — do not re-grep the same strings.
 
 **Sub-agents run in isolated sessions.** Always include in \`context\`:
 - File paths (absolute or ~/relative)
@@ -2865,10 +2915,11 @@ import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';
 // DB-backed app (preferred for dashboards):
 subscribeJobEvents({
   jobIds: [JOB_ID],
+  debounceMs: 300,                         // optional — coalesce db-changed bursts (server ~400ms)
   onDbChanged: () => loadData(),           // refresh after job writes $APP_DB
   onStatusChanged: (e) => updateBadge(e), // running/completed badge
 });
-loadData(); // initial query — still required on page load
+loadData(); // initial query — still required on page load; use POST /api/db/batch for 2+ reads
 
 // Trigger (fire-and-forget — events handle refresh; default on desktop AND cloud):
 await fetch('/api/jobs/run', { method: 'POST', body: JSON.stringify({ jobId: JOB_ID }) });

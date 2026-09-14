@@ -1,6 +1,9 @@
 /**
  * Debounced cloud→local Turso pull when user opens a mini-app (local preview).
  * Mirrors push-side watcher pattern — event-triggered, not periodic polling.
+ *
+ * App-open reconcile waits for first successful mini-app DB read (data paint)
+ * so the per-DB replica lane is not held by pull during initial load.
  */
 
 import type { AppDataSource } from "./appDataSources.js";
@@ -24,6 +27,8 @@ const DEFAULT_APP_OPEN_DEBOUNCE_MS = 3_000;
 const DEFAULT_APP_OPEN_COOLDOWN_MS = 60_000;
 /** After gateway boot, defer app-open pulls so the first restored app stays responsive. */
 const DEFAULT_STARTUP_GRACE_MS = 8_000;
+/** If the app never hits /api/db/*, still reconcile eventually (static / no linked reads). */
+const DEFAULT_FIRST_PAINT_MAX_WAIT_MS = 120_000;
 
 let gatewayStartedAtMs = Date.now();
 
@@ -31,6 +36,9 @@ const appOpenTimers = new Map<string, NodeJS.Timeout>();
 const appOpenInFlight = new Set<string>();
 const appOpenLastReconciledAt = new Map<string, number>();
 const dbIdPullInFlight = new Set<string>();
+
+/** Registered on index.html; debounced flush starts after first data read or max wait. */
+const pendingFirstPaint = new Map<string, { maxWaitTimer: NodeJS.Timeout }>();
 
 function cooldownMs(): number {
   const raw = process.env.TURSO_PULL_APP_OPEN_COOLDOWN_MS;
@@ -65,11 +73,53 @@ function startupGraceMs(): number {
     : DEFAULT_STARTUP_GRACE_MS;
 }
 
+function firstPaintMaxWaitMs(): number {
+  const raw = process.env.TURSO_PULL_FIRST_PAINT_MAX_WAIT_MS?.trim();
+  if (!raw) {
+    return DEFAULT_FIRST_PAINT_MAX_WAIT_MS;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0
+    ? parsed
+    : DEFAULT_FIRST_PAINT_MAX_WAIT_MS;
+}
+
+function clearPendingFirstPaint(appId: string): void {
+  const pending = pendingFirstPaint.get(appId);
+  if (pending) {
+    clearTimeout(pending.maxWaitTimer);
+    pendingFirstPaint.delete(appId);
+  }
+}
+
+function beginAppOpenPullDebounce(appId: string): void {
+  clearPendingFirstPaint(appId);
+
+  const existing = appOpenTimers.get(appId);
+  if (existing) {
+    clearTimeout(existing);
+  }
+
+  const timer = setTimeout(() => {
+    appOpenTimers.delete(appId);
+    void flushTursoPullForAppOpen(appId);
+  }, debounceMs());
+
+  appOpenTimers.set(appId, timer);
+  console.log(
+    `[TursoPullScheduler] App-open pull debounced for app ${appId} (${debounceMs()}ms)`,
+  );
+}
+
 /** Mark gateway boot time — app-open pulls are suppressed briefly after this. */
 export function markTursoPullSchedulerGatewayBoot(): void {
   gatewayStartedAtMs = Date.now();
 }
 
+/**
+ * Register intent to reconcile when the user opens a mini-app. Does not touch
+ * the replica lane until {@link notifyMiniAppFirstDataPaint} or max-wait fires.
+ */
 export function scheduleTursoPullForAppOpen(appId: string): void {
   const bridge = getTursoSyncBridge();
   if (!bridge?.enabled) {
@@ -91,21 +141,36 @@ export function scheduleTursoPullForAppOpen(appId: string): void {
     return;
   }
 
-  const existing = appOpenTimers.get(trimmed);
-  if (existing) {
-    clearTimeout(existing);
-  }
+  clearPendingFirstPaint(trimmed);
 
-  const timer = setTimeout(() => {
-    appOpenTimers.delete(trimmed);
-    void flushTursoPullForAppOpen(trimmed);
-  }, debounceMs());
+  const maxWait = firstPaintMaxWaitMs();
+  const maxWaitTimer = setTimeout(() => {
+    console.log(
+      `[TursoPullScheduler] App-open pull max-wait (${maxWait}ms) for app ${trimmed} — no DB read signal`,
+    );
+    beginAppOpenPullDebounce(trimmed);
+  }, maxWait);
 
-  appOpenTimers.set(trimmed, timer);
+  pendingFirstPaint.set(trimmed, { maxWaitTimer });
   console.log(
-    `[TursoPullScheduler] Scheduled cloud→local pull for app ${trimmed} ` +
-      `(debounce ${debounceMs()}ms)`,
+    `[TursoPullScheduler] App-open pull pending first data paint for app ${trimmed} ` +
+      `(max wait ${maxWait}ms)`,
   );
+}
+
+/**
+ * Call after the mini-app's first successful read batch/query — initial UI data
+ * is on screen; safe to debounce cloud→local reconcile.
+ */
+export function notifyMiniAppFirstDataPaint(appId: string): void {
+  const trimmed = appId.trim();
+  if (!trimmed || !pendingFirstPaint.has(trimmed)) {
+    return;
+  }
+  console.log(
+    `[TursoPullScheduler] First data paint for app ${trimmed} — scheduling app-open pull`,
+  );
+  beginAppOpenPullDebounce(trimmed);
 }
 
 async function flushTursoPullForAppOpen(appId: string): Promise<void> {
@@ -203,6 +268,10 @@ export function resetTursoPullSchedulerForTests(): void {
     clearTimeout(timer);
   }
   appOpenTimers.clear();
+  for (const pending of pendingFirstPaint.values()) {
+    clearTimeout(pending.maxWaitTimer);
+  }
+  pendingFirstPaint.clear();
   appOpenInFlight.clear();
   appOpenLastReconciledAt.clear();
   dbIdPullInFlight.clear();

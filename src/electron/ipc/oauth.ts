@@ -29,6 +29,11 @@ import {
   type OAuthProviderId,
   type OAuthProviderStep,
 } from "../../core/telemetry/oauthProviderSteps.js";
+import { fetchClaudeSubscriptionUsageFromCandidates } from "../../core/services/claudeOAuthUsage.js";
+import {
+  dedupeAccessTokens,
+  readClaudeAuthStatusFromCli,
+} from "../../core/services/claudeCodeUsageSource.js";
 
 type OAuthTelemetryTracker = (
   eventName: string,
@@ -933,6 +938,62 @@ export async function initializeOAuthIPC(
     } catch (error) {
       console.error("[OAuth IPC] Failed to get Claude token:", error);
       return { success: false, error: (error as Error).message };
+    }
+  });
+
+  ipcMain.handle("auth:claude:get-usage-limits", async () => {
+    try {
+      const authStatus = await readClaudeAuthStatusFromCli();
+      const candidates: {
+        accessToken: string;
+        source: "claude_code_keychain" | "papr_stored";
+      }[] = [];
+
+      if (claudeSetupTokenService) {
+        const raw =
+          await claudeSetupTokenService.readCredentialsFromCLIStorage();
+        if (raw) {
+          const usable =
+            (await resolveAdoptableClaudeCredentials(raw)) ??
+            (claudeAccessTokenIsLive(raw) ? raw : null);
+          if (usable?.accessToken) {
+            candidates.push({
+              accessToken: usable.accessToken,
+              source: "claude_code_keychain",
+            });
+          }
+        }
+      }
+
+      await refreshTokenIfNeeded("anthropic");
+      const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
+      if (paprToken?.accessToken) {
+        candidates.push({
+          accessToken: paprToken.accessToken,
+          source: "papr_stored",
+        });
+      }
+
+      const unique = dedupeAccessTokens(candidates);
+      if (unique.length === 0) {
+        const hint =
+          authStatus?.loggedIn === true
+            ? "Claude CLI is signed in but no usable token was found — run claude auth login again."
+            : "Connect Claude subscription first, or sign in with claude auth login in Terminal.";
+        return { success: false, error: hint, authStatus };
+      }
+
+      return await fetchClaudeSubscriptionUsageFromCandidates(unique, {
+        orgUuidHint: authStatus?.orgId ?? undefined,
+        subscriptionType: authStatus?.subscriptionType,
+        orgName: authStatus?.orgName,
+      });
+    } catch (error) {
+      console.error("[OAuth IPC] Failed to fetch Claude usage:", error);
+      return {
+        success: false,
+        error: (error as Error).message,
+      };
     }
   });
 

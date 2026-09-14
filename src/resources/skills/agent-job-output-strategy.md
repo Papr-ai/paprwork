@@ -47,6 +47,7 @@ import { subscribeJobEvents } from "/__papr__/papr-job-events.ts";
 
 subscribeJobEvents({
   dbIds: ["db-abcdef12"],  // registry dbId from data-sources.json
+  debounceMs: 300,
   onDbChanged: () => loadData(),
 });
 ```

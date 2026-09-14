@@ -20,6 +20,7 @@ import { setupChatGPTHandlers } from "./chatgpt.js";
 import { setupCodeIndexingHandlers } from "./code-indexing.js";
 import { setupMemoryHandlers } from "./memory.js";
 import { setupPlatformHandlers } from "./platform.js";
+import { logEventLoopLagIfHigh } from "../services/gatewayEventLoopMonitor.js";
 
 export interface WSMessage {
   id: string;
@@ -100,6 +101,12 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
     const connectionTime = Date.now();
     console.log(`[WebSocket] Client connected at ${new Date(connectionTime).toISOString()}`);
 
+    void import("../services/gatewayInteractiveWarmup.js").then(
+      ({ scheduleGatewayInteractiveWarmup }) => {
+        scheduleGatewayInteractiveWarmup();
+      },
+    );
+
     // Setup message handlers
     ws.on("message", async (data: Buffer) => {
       //const messageStartTime = Date.now();
@@ -109,7 +116,7 @@ export function setupWebSocketHandlers(wss: WebSocketServer): void {
 
         // Route to appropriate handler
         if (message.type === "ping") {
-          // Heartbeat ping - respond with pong
+          logEventLoopLagIfHigh("websocket_ping");
           sendResponse(ws, {
             id: message.id,
             success: true,

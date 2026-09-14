@@ -5,7 +5,7 @@ import {
   resolveStaleLengthAllowance,
   shouldCompactMidTurn,
 } from "../src/gateway/services/agent/compactionPressure.js";
-import { compactStaleToolResults } from "../src/gateway/services/agent/compactToolResults.js";
+import { compactStaleToolResults, DEFAULT_KEEP_LAST_BATCHES } from "../src/gateway/services/agent/compactToolResults.js";
 
 /**
  * Build a two-batch pi-ai conversation. The first result is stale (an assistant
@@ -173,5 +173,66 @@ describe("compactStaleToolResults with a budget", () => {
     compactStaleToolResults(messages);
 
     expect(staleText(messages).length).toBeLessThan(big.length);
+  });
+
+  test("keeps the last three tool steps fresh before cutting older batches", () => {
+    expect(DEFAULT_KEEP_LAST_BATCHES).toBe(3);
+
+    const stalePayload = "s".repeat(8_000);
+    const middlePayload = "m".repeat(1_500);
+    const recentPayload = "q".repeat(1_500);
+    const messages = [
+      { role: "user", content: "go" },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c1", name: "bash", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c1",
+        toolName: "bash",
+        content: [{ type: "text", text: stalePayload }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c2", name: "bash", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c2",
+        toolName: "get_job_history",
+        content: [{ type: "text", text: middlePayload }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c3", name: "bash", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c3",
+        toolName: "query_cloud_turso",
+        content: [{ type: "text", text: recentPayload }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c4", name: "bash", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "c4",
+        toolName: "bash",
+        content: [{ type: "text", text: "fresh".repeat(100) }],
+      },
+    ];
+
+    compactStaleToolResults(messages, { historyTokenBudget: 1_000 });
+
+    const batch1 = (messages[2] as { content: Array<{ text: string }> }).content[0].text;
+    const batch2 = (messages[4] as { content: Array<{ text: string }> }).content[0].text;
+    const batch3 = (messages[6] as { content: Array<{ text: string }> }).content[0].text;
+
+    expect(batch1.length).toBeLessThan(stalePayload.length);
+    expect(batch2).toBe(middlePayload);
+    expect(batch3).toBe(recentPayload);
   });
 });

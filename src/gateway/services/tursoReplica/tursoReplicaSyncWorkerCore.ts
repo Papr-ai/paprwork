@@ -13,6 +13,7 @@ import type {
   TursoSyncWorkerResult,
 } from "./tursoReplicaSyncWorkerProtocol.js";
 import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
+import type { TursoSyncWorkerOpTiming } from "./tursoReplicaSyncWorkerProtocol.js";
 
 type Db = Awaited<ReturnType<typeof connectTursoReplica>>;
 
@@ -25,21 +26,31 @@ interface Handle {
 
 export type WorkerLogger = (message: string) => void;
 
-function isInteractiveWorkerOp(op: TursoSyncWorkerRequest["op"]): boolean {
-  return op === "query" || op === "write" || op === "exec" || op === "connect" || op === "close";
+function isParallelReadWorkerOp(op: TursoSyncWorkerRequest["op"]): boolean {
+  return op === "query" || op === "queryBatch";
+}
+
+function isExclusiveInteractiveWorkerOp(op: TursoSyncWorkerRequest["op"]): boolean {
+  return op === "write" || op === "exec" || op === "connect" || op === "close";
 }
 
 export class TursoSyncWorkerCore {
   private readonly handles = new Map<string, Handle>();
+  private readonly opening = new Map<string, Promise<Db>>();
   private readonly scheduler = new TursoReplicaPathScheduler();
 
   constructor(private readonly log: WorkerLogger = () => {}) {}
 
-  /** Serialise per path; interactive ops preempt queued pull/push. */
-  run(request: TursoSyncWorkerRequest): Promise<TursoSyncWorkerResult> {
+  /** Per-path scheduling; read queries may run parallel to pull when relaxed. */
+  run(
+    request: TursoSyncWorkerRequest,
+  ): Promise<{ result: TursoSyncWorkerResult; opTiming: TursoSyncWorkerOpTiming }> {
     const queuedAt = Date.now();
     const runTask = () => this.handle(request, queuedAt);
-    if (isInteractiveWorkerOp(request.op)) {
+    if (isParallelReadWorkerOp(request.op)) {
+      return this.scheduler.runParallelRead(request.localPath, runTask);
+    }
+    if (isExclusiveInteractiveWorkerOp(request.op)) {
       return this.scheduler.runInteractive(request.localPath, runTask);
     }
     return this.scheduler.runBackground(request.localPath, runTask);
@@ -56,12 +67,21 @@ export class TursoSyncWorkerCore {
   private async handle(
     request: TursoSyncWorkerRequest,
     queuedAt: number,
-  ): Promise<TursoSyncWorkerResult> {
+  ): Promise<{ result: TursoSyncWorkerResult; opTiming: TursoSyncWorkerOpTiming }> {
     const startedAt = Date.now();
     const hadHandle = this.handles.has(request.localPath);
     let outcome = "ok";
+    let result: TursoSyncWorkerResult = {};
     try {
-      return await this.execute(request);
+      result = await this.execute(request);
+      return {
+        result,
+        opTiming: {
+          queueMs: startedAt - queuedAt,
+          execMs: Date.now() - startedAt,
+          opened: !hadHandle,
+        },
+      };
     } catch (error) {
       outcome = "error";
       // An engine error may leave the handle poisoned; drop it so the next request reopens.
@@ -92,6 +112,15 @@ export class TursoSyncWorkerCore {
         const stmt = await db.prepare(request.sql ?? "");
         const rows = await stmt.all(...(request.params ?? []));
         return { rows: Array.isArray(rows) ? rows : [] };
+      }
+      case "queryBatch": {
+        const results: { rows: unknown[] }[] = [];
+        for (const statement of request.statements ?? []) {
+          const stmt = await db.prepare(statement.sql);
+          const rows = await stmt.all(...(statement.params ?? []));
+          results.push({ rows: Array.isArray(rows) ? rows : [] });
+        }
+        return { results };
       }
       case "write": {
         let last = { changes: 0, lastInsertRowid: 0 };
@@ -130,15 +159,26 @@ export class TursoSyncWorkerCore {
     if (existing) {
       return existing.db;
     }
-    const db = await connectTursoReplica({
+    const pending = this.opening.get(request.localPath);
+    if (pending) {
+      return pending;
+    }
+    const openPromise = connectTursoReplica({
       localPath: request.localPath,
       tursoUrl: request.tursoUrl,
       authToken: request.authToken,
       bootstrapIfEmpty: request.bootstrapIfEmpty,
       clientName: request.clientName,
+    }).then((db) => {
+      this.handles.set(request.localPath, { db, idleTimer: null });
+      return db;
     });
-    this.handles.set(request.localPath, { db, idleTimer: null });
-    return db;
+    this.opening.set(request.localPath, openPromise);
+    try {
+      return await openPromise;
+    } finally {
+      this.opening.delete(request.localPath);
+    }
   }
 
   private armIdleClose(localPath: string): void {

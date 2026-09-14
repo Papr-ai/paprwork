@@ -30,6 +30,15 @@ describe('System Prompt Builder', () => {
       expect(prompt).toContain('tool');
       expect(prompt.toLowerCase()).toContain('use');
     });
+
+    test('includes Papr API discovery when lookup tool is available', () => {
+      const prompt = buildSystemPrompt({
+        availableTools: ['get_papr_api_reference', 'bash'],
+      });
+      expect(prompt).toContain('Papr API Discovery');
+      expect(prompt).toContain('get_papr_api_reference');
+      expect(prompt).toContain('preloaded-papr-api-reference');
+    });
   });
 
   describe('API Key Documentation', () => {

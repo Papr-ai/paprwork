@@ -240,27 +240,39 @@ export async function setupAppHandlers(
 
       case "app:get": {
         const payload = message.payload as GetAppPayload;
-        const app = await appService.getApp(payload.appId);
-        if (!app) {
+        const { withInteractiveHotPath } = await import(
+          "../services/gatewayInteractivePriority.js"
+        );
+        await withInteractiveHotPath("app:get", async () => {
+          const { markMiniAppInteractiveLoadWindow } = await import(
+            "../services/appRuntime/miniAppInteractiveLoadWindow.js"
+          );
+          markMiniAppInteractiveLoadWindow(payload.appId);
+          const app = await appService.getApp(payload.appId);
+          if (!app) {
+            ws.send(
+              JSON.stringify({
+                id: message.id,
+                type: "app:get:response",
+                success: false,
+                error: "App not found",
+              }),
+            );
+            return;
+          }
+          const enriched = await enrichAppWithLineage(
+            app,
+            appService.getAppsRootPath(),
+          );
           ws.send(
             JSON.stringify({
               id: message.id,
               type: "app:get:response",
-              success: false,
-              error: "App not found",
+              success: true,
+              data: enriched,
             }),
           );
-          break;
-        }
-        const enriched = await enrichAppWithLineage(app, appService.getAppsRootPath());
-        ws.send(
-          JSON.stringify({
-            id: message.id,
-            type: "app:get:response",
-            success: true,
-            data: enriched,
-          }),
-        );
+        });
         break;
       }
 

@@ -334,14 +334,13 @@
 }
 
 .profile-merged__display-photo {
-  position: relative;
   flex-shrink: 0;
   width: 44px;
   height: 44px;
   padding: 0;
   border: 1px solid var(--border-color);
   border-radius: 50%;
-  overflow: visible;
+  overflow: hidden;
   background: var(--bg-secondary);
   cursor: pointer;
 }
@@ -351,7 +350,6 @@
   width: 100%;
   height: 100%;
   border-radius: 50%;
-  overflow: hidden;
 }
 
 .profile-merged__display-photo .profile-photo-placeholder {

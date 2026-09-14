@@ -35,6 +35,17 @@
   color: #f57c00;
 }
 
+.connection-indicator--degraded {
+  background: rgba(33, 150, 243, 0.12);
+  border: 1px solid rgba(33, 150, 243, 0.35);
+  color: #1565c0;
+}
+
+.connection-indicator--degraded .connection-indicator__dot {
+  background: #1565c0;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
 .connection-indicator--disconnected {
   background: rgba(244, 67, 54, 0.15);
   border: 1px solid rgba(244, 67, 54, 0.4);

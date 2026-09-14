@@ -68,6 +68,10 @@ interface InputBarProps {
   onChangeModelSettings: (patch: ChatModelSettings) => void;
   /** Fast mode is API-key only — pi-ai carries no `speed` parameter. */
   authType?: "oauth" | "apiKey";
+  /** Subscription OAuth hides API-dollar estimates in the context panel. */
+  billingMode?: "metered" | "subscription";
+  /** Load Claude plan % for the context panel (Anthropic OAuth only). */
+  fetchClaudePlanUsage?: boolean;
   /** Fires after file context pills are added (e.g. drag-drop) so parent can clear drag-over UI */
   onFileAttachmentsAdded?: () => void;
   /** Bump to open the context panel from outside (the /context command). */
@@ -105,6 +109,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       modelSettings,
       onChangeModelSettings,
       authType,
+      billingMode = "metered",
+      fetchClaudePlanUsage = false,
       contextPanelSignal,
       onOpenContextInspector,
     },
@@ -515,8 +521,11 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               <ContextMeter
                 chatId={chatId}
                 model={selectedModel.id}
+                contextLimit={modelSettings.contextLimit}
                 isSending={isSending}
                 openSignal={contextPanelSignal}
+                billingMode={billingMode}
+                fetchClaudePlanUsage={fetchClaudePlanUsage}
                 onOpenFullInspector={(info, sectionId) =>
                   onOpenContextInspector?.(info, sectionId)
                 }

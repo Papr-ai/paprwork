@@ -11,6 +11,7 @@
   display: flex;
   align-items: center;
   flex-shrink: 0;
+  overflow: visible;
 }
 
 .ctx-meter__btn {
@@ -86,9 +87,11 @@
   position: absolute;
   bottom: calc(100% + 10px);
   right: 0;
+  display: flex;
+  flex-direction: column;
   width: 360px;
   max-height: 62vh;
-  overflow-y: auto;
+  overflow: visible;
   padding: 14px 16px 12px;
   background: var(--popover-bg);
   border: 1px solid var(--border-color);
@@ -96,6 +99,18 @@
   box-shadow: var(--popover-shadow);
   z-index: 10000;
   animation: ctxPanelIn 0.18s var(--ease);
+}
+
+.ctx-panel__chrome {
+  flex-shrink: 0;
+  overflow: visible;
+}
+
+.ctx-panel__body {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 @keyframes ctxPanelIn {
@@ -147,9 +162,103 @@
 
 .ctx-panel__hero {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
+  gap: 12px;
   margin: 10px 0 12px;
+}
+
+.ctx-panel__hero-left {
+  min-width: 0;
+}
+
+.ctx-panel__pct-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.ctx-panel__info-wrap {
+  position: relative;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+.ctx-panel__info-wrap--end .ctx-panel__info-tip {
+  left: auto;
+  right: 0;
+}
+
+.ctx-panel__info {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-family: var(--font-ui, system-ui);
+  font-size: 11px;
+  font-weight: 600;
+  font-style: italic;
+  line-height: 1;
+  color: var(--text-tertiary);
+  cursor: help;
+  opacity: 0.7;
+  transition:
+    opacity var(--dur-2, 0.15s) var(--ease, ease),
+    background var(--dur-2, 0.15s) var(--ease, ease),
+    color var(--dur-2, 0.15s) var(--ease, ease);
+}
+
+.ctx-panel__info-wrap:hover .ctx-panel__info,
+.ctx-panel__info-wrap:focus-within .ctx-panel__info {
+  opacity: 1;
+  background: var(--popover-bg-hover);
+  color: var(--text-primary);
+}
+
+.ctx-panel__info-tip {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  top: auto;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  box-sizing: border-box;
+  width: max(12rem, min(17rem, calc(360px - 32px)));
+  max-width: min(17rem, calc(100vw - 48px));
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--popover-bg);
+  box-shadow: var(--popover-shadow, 0 8px 24px rgb(0 0 0 / 0.28));
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-primary);
+  white-space: normal;
+  overflow-wrap: anywhere;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(4px);
+  transition:
+    opacity var(--dur-2, 0.15s) var(--ease, ease),
+    transform var(--dur-2, 0.15s) var(--ease, ease);
+}
+
+.ctx-panel__info-tip-line {
+  display: block;
+}
+
+.ctx-panel__info-wrap:hover .ctx-panel__info-tip,
+.ctx-panel__info-wrap:focus-within .ctx-panel__info-tip {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .ctx-panel__pct {
@@ -182,6 +291,38 @@
 
 .ctx-panel__hero-right {
   text-align: right;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.ctx-panel__plan-compact {
+  display: inline-flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.ctx-panel__plan-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 1px;
+  line-height: 1.15;
+  text-align: right;
+}
+
+.ctx-panel__plan-stack-line {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.ctx-panel__cost--included {
+  font-size: 16px;
+  margin-top: 2px;
 }
 
 .ctx-panel__sub {
@@ -476,7 +617,7 @@
 
 .ctx-turn__stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(52px, 1fr));
   gap: 6px;
   margin-top: 8px;
 }
@@ -628,6 +769,24 @@
   margin: 8px 0 0;
   font-size: 10px;
   color: var(--text-tertiary);
+}
+
+.ctx-panel__plan-note {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.ctx-panel__link--inline {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: var(--accent, #3b82f6);
+  cursor: pointer;
+  text-decoration: underline;
 }
 
 @media (prefers-reduced-motion: reduce) {

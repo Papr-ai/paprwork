@@ -39,9 +39,11 @@ import {
   scheduleContextStatsRebuild,
 } from "./contextStatsCache.js";
 import {
+  EMPTY_CHAT_USAGE_TOTALS,
   migrateTurnMetricsColumns,
   readChatUsageTotals,
   readLastTurnUsage,
+  readRecentTurnUsage,
   storeTurnMetrics,
 } from "./turnMetricsStore.js";
 import type {
@@ -74,6 +76,7 @@ import { startToolPayloadMigration } from "./toolPayloadMigration.js";
 
 export class LocalStorageProvider implements IStorageProvider {
   private db!: Database.Database;
+  private dbReady = false;
   private dbPath: string;
   private exporter: ChatExporter;
   private contextEfficiencyCache: {
@@ -120,6 +123,7 @@ export class LocalStorageProvider implements IStorageProvider {
     // tool payload and can be large enough to exhaust the heap when a chat is
     // opened. Compact them in the background rather than blocking startup.
     startToolPayloadMigration(this.db, this.dbDir);
+    this.dbReady = true;
   }
 
   private createSchema(): void {
@@ -1130,10 +1134,19 @@ export class LocalStorageProvider implements IStorageProvider {
 
   async getTurnUsage(chatId: string): Promise<{
     lastTurn: TurnUsageRow | null;
+    recentTurns: TurnUsageRow[];
     totals: ChatUsageTotals;
   }> {
+    if (!this.dbReady) {
+      return {
+        lastTurn: null,
+        recentTurns: [],
+        totals: { ...EMPTY_CHAT_USAGE_TOTALS },
+      };
+    }
     return {
       lastTurn: readLastTurnUsage(this.db, chatId),
+      recentTurns: readRecentTurnUsage(this.db, chatId),
       totals: readChatUsageTotals(this.db, chatId),
     };
   }
@@ -1913,6 +1926,7 @@ export class LocalStorageProvider implements IStorageProvider {
    * Close database connection
    */
   close(): void {
+    this.dbReady = false;
     if (this.db) {
       this.db.close();
     }

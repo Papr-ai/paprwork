@@ -62,7 +62,7 @@ function isPermanentPushSkip(result: PushResult): boolean {
 /** Minimum gap between repeated max-wait flush logs for the same sync key. */
 const MAX_WAIT_LOG_COOLDOWN_MS = 30_000;
 
-export type TursoPushPriority = "normal" | "completion";
+export type TursoPushPriority = "normal" | "completion" | "interactive";
 
 export type TursoPushTrigger =
   | "watcher"
@@ -144,7 +144,19 @@ let queueProcessing = false;
 let rateLimitUntilMs = 0;
 let rateLimitBackoffMs = DEFAULT_RATE_LIMIT_BACKOFF_MS;
 
+const INTERACTIVE_DEBOUNCE_MS = 2_500;
+
 function debounceMs(priority: TursoPushPriority): number {
+  if (priority === "interactive") {
+    const raw = process.env.TURSO_PUSH_INTERACTIVE_DEBOUNCE_MS;
+    if (raw) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+    return INTERACTIVE_DEBOUNCE_MS;
+  }
   if (priority === "completion") {
     const raw = process.env.TURSO_PUSH_COMPLETION_DEBOUNCE_MS;
     if (raw) {

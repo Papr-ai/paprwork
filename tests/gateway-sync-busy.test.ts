@@ -65,4 +65,21 @@ describe("gateway sync busy state", () => {
     };
     expect(isGatewaySyncBusyGraceActive(state)).toBe(false);
   });
+
+  test("turso_replica operation qualifies for grace", () => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-sync-busy-"));
+    markGatewaySyncBusy(
+      {
+        appId: "replica:lead-prospector",
+        operation: "turso_replica",
+        startedAtMs: Date.now(),
+        trigger: "replica_pullPush",
+        replicaPath: "/tmp/data.db",
+      },
+      tempDir,
+    );
+    const state = readGatewaySyncBusyState(tempDir);
+    expect(state?.operation).toBe("turso_replica");
+    expect(isGatewaySyncBusyGraceActive(state)).toBe(true);
+  });
 });

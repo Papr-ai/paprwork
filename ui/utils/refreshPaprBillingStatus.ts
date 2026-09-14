@@ -6,9 +6,15 @@ import { resetPaprQuotaForWorkspaceSwitch } from "../stores/paprQuotaStore";
 import { useProfileStore } from "../stores/profileStore";
 import { deriveCloudMemoryStatus } from "./cloudMemoryStatus";
 
+/** Min interval between papr:resume-cloud gateway calls (avoids timeout loops when degraded). */
+const RESUME_CLOUD_MIN_INTERVAL_MS = 120_000;
+
+let lastResumeCloudAttemptMs = 0;
+
 export function resetBillingUiForWorkspaceSwitch(): void {
   resetPaprQuotaForWorkspaceSwitch();
   useCloudMemoryStatusStore.getState().setBillingState(null);
+  lastResumeCloudAttemptMs = 0;
 }
 
 export async function refreshPaprBillingStatus(options?: {
@@ -34,10 +40,24 @@ export async function refreshPaprBillingStatus(options?: {
     );
 
     if (hasActivePaprSubscription(summary)) {
-      try {
-        await gateway.send("papr:resume-cloud", {});
-      } catch (error) {
-        console.warn("[Billing] Failed to resume Papr Cloud:", error);
+      const connectionState = gateway.getConnectionState();
+      if (connectionState === "degraded") {
+        console.warn(
+          "[Billing] Skipping papr:resume-cloud — gateway busy (will retry on next refresh)",
+        );
+      } else {
+        const now = Date.now();
+        const mayResume =
+          options?.force === true ||
+          now - lastResumeCloudAttemptMs >= RESUME_CLOUD_MIN_INTERVAL_MS;
+        if (mayResume) {
+          lastResumeCloudAttemptMs = now;
+          try {
+            await gateway.send("papr:resume-cloud", {});
+          } catch (error) {
+            console.warn("[Billing] Failed to resume Papr Cloud:", error);
+          }
+        }
       }
     }
 

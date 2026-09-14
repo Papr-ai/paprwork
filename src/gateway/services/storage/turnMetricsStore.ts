@@ -133,7 +133,17 @@ export interface ChatUsageTotals {
   cacheReadTokens: number;
 }
 
-const TURN_USAGE_SELECT = `
+export const EMPTY_CHAT_USAGE_TOTALS: ChatUsageTotals = {
+  turns: 0,
+  cost: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  cacheReadTokens: 0,
+};
+
+export const RECENT_TURN_USAGE_LIMIT = 12;
+
+const TURN_USAGE_SELECT_BASE = `
   SELECT id, model, timestamp,
          COALESCE(prompt_tokens, 0) AS prompt_tokens,
          COALESCE(completion_tokens, 0) AS completion_tokens,
@@ -147,26 +157,12 @@ const TURN_USAGE_SELECT = `
          turn_context_budget_tokens
   FROM messages
   WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
-  ORDER BY timestamp DESC, rowid DESC
+  ORDER BY timestamp DESC, rowid DESC`;
+
+const TURN_USAGE_SELECT = `${TURN_USAGE_SELECT_BASE}
   LIMIT 1`;
-// `sequence` looks like an ordinal and is not one: the column holds the turn's
-// parts array as JSON (`[{"type":"thinking",...}]`, ~100-300KB a row). Sorting
-// by it compared those blobs as text, so "last turn" was whichever turn began
-// with the alphabetically largest thinking block — in this workspace a turn
-// from nine days earlier, which is why the meter read 32 tokens and 0% while
-// showing a $2.74 cost from a different turn. Timestamps are ISO-8601, so
-// lexical DESC is chronological; rowid breaks ties inside the same second.
 
-/** Last billed assistant turn in a chat, or null before the first reply. */
-export function readLastTurnUsage(
-  db: Database.Database,
-  chatId: string,
-): TurnUsageRow | null {
-  const row = db.prepare(TURN_USAGE_SELECT).get(chatId) as
-    | Record<string, unknown>
-    | undefined;
-  if (!row) return null;
-
+function mapTurnUsageRow(row: Record<string, unknown>): TurnUsageRow {
   const int = (key: string): number | null => {
     const value = row[key];
     return typeof value === "number" ? value : null;
@@ -193,12 +189,47 @@ export function readLastTurnUsage(
     contextBudgetTokens: int("turn_context_budget_tokens"),
   };
 }
+// `sequence` looks like an ordinal and is not one: the column holds the turn's
+// parts array as JSON (`[{"type":"thinking",...}]`, ~100-300KB a row). Sorting
+// by it compared those blobs as text, so "last turn" was whichever turn began
+// with the alphabetically largest thinking block — in this workspace a turn
+// from nine days earlier, which is why the meter read 32 tokens and 0% while
+// showing a $2.74 cost from a different turn. Timestamps are ISO-8601, so
+// lexical DESC is chronological; rowid breaks ties inside the same second.
+
+/** Last billed assistant turn in a chat, or null before the first reply. */
+export function readLastTurnUsage(
+  db: Database.Database | undefined,
+  chatId: string,
+): TurnUsageRow | null {
+  if (!db) return null;
+  const row = db.prepare(TURN_USAGE_SELECT).get(chatId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+
+  return mapTurnUsageRow(row);
+}
+
+/** Recent billed turns, newest first — for per-turn context % in the meter panel. */
+export function readRecentTurnUsage(
+  db: Database.Database | undefined,
+  chatId: string,
+  limit: number = RECENT_TURN_USAGE_LIMIT,
+): TurnUsageRow[] {
+  if (!db || limit <= 0) return [];
+  const rows = db
+    .prepare(`${TURN_USAGE_SELECT_BASE}\n  LIMIT ?`)
+    .all(chatId, limit) as Record<string, unknown>[];
+  return rows.map(mapTurnUsageRow);
+}
 
 /** Whole-chat rollup. Turns are billed assistant rows, not messages. */
 export function readChatUsageTotals(
-  db: Database.Database,
+  db: Database.Database | undefined,
   chatId: string,
 ): ChatUsageTotals {
+  if (!db) return { ...EMPTY_CHAT_USAGE_TOTALS };
   const row = db
     .prepare(
       `SELECT COUNT(*) AS turns,

@@ -55,11 +55,27 @@ export async function resolveJobTursoSyncKeysAsync(
     }
   }
 
+  // Legacy: Turso sync keyed by job UUID targets Jobs/{id}/data/data.db scratch.
+  // Prefer writeDbIds / registry targets — scratch stays local-only (see jobScratchDatabasePath).
   if (keys.size === 0) {
     keys.add(job.id);
   }
 
   return [...keys];
+}
+
+/** Sync keys for Turso bookends — never include job UUID when registry writeDbIds are set. */
+export function resolveJobTursoSyncKeysForBookends(
+  job: Pick<JobRecord, "id" | "writeDbIds">,
+  resolvedKeys: readonly string[],
+): string[] {
+  const explicitDbIds = (job.writeDbIds ?? [])
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  if (explicitDbIds.length > 0) {
+    return [...new Set(explicitDbIds)];
+  }
+  return [...resolvedKeys];
 }
 
 export async function pullJobTursoBeforeRun(
@@ -71,7 +87,10 @@ export async function pullJobTursoBeforeRun(
     return;
   }
 
-  const syncKeys = await resolveJobTursoSyncKeysAsync(job);
+  const syncKeys = resolveJobTursoSyncKeysForBookends(
+    job,
+    await resolveJobTursoSyncKeysAsync(job),
+  );
   const sources = await bridge.listLinkedSources();
 
   for (const syncKey of syncKeys) {
@@ -129,7 +148,10 @@ export async function scheduleJobTursoPushAfterRun(
   job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
 ): Promise<void> {
   const bridge = getTursoSyncBridge();
-  const syncKeys = await resolveJobTursoSyncKeysAsync(job);
+  const syncKeys = resolveJobTursoSyncKeysForBookends(
+    job,
+    await resolveJobTursoSyncKeysAsync(job),
+  );
   const coordinator = getSyncCoordinator();
   const sources = bridge ? await bridge.listLinkedSources(true) : [];
 

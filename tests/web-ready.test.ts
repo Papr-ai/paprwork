@@ -111,6 +111,36 @@ describe("webReady", () => {
     expect(result.ready).toBe(false);
     expect(result.reason).toBe("turso_pending");
   });
+
+  it("skips buildTursoSyncItemsReport when tursoReport is precomputed", async () => {
+    vi.mocked(isAppWriterSyncReady).mockResolvedValue({ ready: true });
+    vi.mocked(buildTursoSyncItemsReport).mockClear();
+
+    const tursoReport = {
+      sources: [
+        {
+          appId: "app-1",
+          alias: "main",
+          jobId: "job-1",
+          status: "synced" as const,
+          localTableCount: 1,
+          remoteTableCount: 1,
+        },
+      ],
+      summary: {
+        synced: 1,
+        pending: 0,
+        empty: 0,
+        quarantined: 0,
+        unavailable: 0,
+        total: 1,
+      },
+    };
+
+    const result = await webReady("app-1", "/tmp/papr", { tursoReport });
+    expect(result.ready).toBe(true);
+    expect(buildTursoSyncItemsReport).not.toHaveBeenCalled();
+  });
 });
 
 describe("buildPublishLayerReport", () => {

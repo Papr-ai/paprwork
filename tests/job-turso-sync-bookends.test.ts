@@ -9,6 +9,7 @@ vi.mock("../src/gateway/services/jobAppDatabase.js", () => ({
 import {
   resolveJobTursoSyncKeys,
   resolveJobTursoSyncKeysAsync,
+  resolveJobTursoSyncKeysForBookends,
 } from "../src/gateway/services/jobTursoSyncBookends.js";
 
 describe("resolveJobTursoSyncKeys", () => {
@@ -97,5 +98,19 @@ describe("resolveJobTursoSyncKeysAsync", () => {
         appIds: ["app-1"],
       }),
     ).resolves.toEqual(["job-broken"]);
+  });
+});
+
+describe("resolveJobTursoSyncKeysForBookends", () => {
+  it("never syncs job UUID when writeDbIds is non-empty", () => {
+    expect(
+      resolveJobTursoSyncKeysForBookends(
+        {
+          id: "51f1493e",
+          writeDbIds: ["db-registry"],
+        },
+        ["51f1493e", "db-registry"],
+      ),
+    ).toEqual(["db-registry"]);
   });
 });

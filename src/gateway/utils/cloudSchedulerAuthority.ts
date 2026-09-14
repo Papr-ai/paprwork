@@ -17,6 +17,8 @@ export {
 
 /** Avoid keychain IPC + settings read on every 60s scheduler tick. */
 const CLOUD_SCHEDULER_AUTH_CACHE_MS = 120_000;
+/** Never block the scheduler tick on a wedged Papr-key IPC call. */
+const PAPR_API_KEY_LOOKUP_TIMEOUT_MS = 2_000;
 let cloudSchedulerAuthCache:
   | { value: boolean; expiresAt: number }
   | null = null;
@@ -32,13 +34,28 @@ export async function isCloudSchedulerAuthoritative(): Promise<boolean> {
     return cloudSchedulerAuthCache.value;
   }
 
-  let value = false;
+  let value = cloudSchedulerAuthCache?.value ?? false;
   if (isSyncV3FlagEnabled("SYNC_V3_DISPATCH_PUSH")) {
     const settings = await loadSettings();
     if (settings.preferences.cloudSyncEnabled !== false) {
-      const apiKey = await getPaprApiKey();
-      value = Boolean(apiKey);
+      try {
+        const apiKey = await Promise.race([
+          getPaprApiKey(),
+          new Promise<undefined>((resolve) => {
+            setTimeout(() => resolve(undefined), PAPR_API_KEY_LOOKUP_TIMEOUT_MS);
+          }),
+        ]);
+        if (apiKey !== undefined) {
+          value = Boolean(apiKey);
+        }
+      } catch {
+        value = false;
+      }
+    } else {
+      value = false;
     }
+  } else {
+    value = false;
   }
 
   cloudSchedulerAuthCache = {

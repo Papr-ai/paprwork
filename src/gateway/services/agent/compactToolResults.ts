@@ -57,10 +57,13 @@ export interface CompactOpts {
   historyTokenBudget?: number;
 }
 
+/** Stale batches beyond this many recent tool steps stay full before mid-turn cuts. */
+export const DEFAULT_KEEP_LAST_BATCHES = 3;
+
 const DEFAULTS: Required<
   Pick<CompactOpts, "keepLastBatches" | "maxStaleLength" | "maxFreshLength">
 > = {
-  keepLastBatches: 1,
+  keepLastBatches: DEFAULT_KEEP_LAST_BATCHES,
   maxStaleLength: 2000,
   maxFreshLength: ABSOLUTE_TOOL_RESULT_MAX_CHARS,
 };
@@ -567,7 +570,7 @@ export function compactStaleToolResults(
   }
 
   // The "stale boundary": everything before the Nth-from-last batch start is stale.
-  // keepLastBatches=1 means: the last batch's results are fresh, everything else is stale.
+  // keepLastBatches=3 keeps the last three tool steps full (reduces get_full_tool_result loops).
   const freshCutoffIdx =
     batchStarts.length > o.keepLastBatches
       ? batchStarts[batchStarts.length - o.keepLastBatches]

@@ -4,7 +4,10 @@
 
 import * as path from "path";
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
-import { buildTursoSyncItemsReport } from "../tursoSyncStatus.js";
+import {
+  buildTursoSyncItemsReport,
+  type TursoSyncItemsReport,
+} from "../tursoSyncStatus.js";
 
 export type WebReadyBlockReason =
   | "schema_drift"
@@ -39,13 +42,17 @@ export async function buildPublishLayerReport(
     cloudPublishing?: boolean;
     /** App has an active Papr cloud share link (enabled + shareUrl). */
     publishLive?: boolean;
+    /** When set, webReady skips a second buildTursoSyncItemsReport (e.g. /api/sync/items). */
+    tursoReport?: TursoSyncItemsReport;
   },
 ): Promise<PublishLayerReport> {
   if (options?.cloudPublishing) {
     return { status: "republishing", detail: "Updating publish catalog…" };
   }
 
-  const ready = await webReady(appId, options?.paprDir);
+  const ready = await webReady(appId, options?.paprDir, {
+    tursoReport: options?.tursoReport,
+  });
   if (ready.ready) {
     return ready.detail
       ? { status: "synced", detail: ready.detail }
@@ -80,25 +87,10 @@ export async function buildPublishLayerReport(
   };
 }
 
-export async function webReady(
+export function evaluateTursoReportForWebReady(
   appId: string,
-  paprDir?: string,
-): Promise<WebReadyResult> {
-  const root = paprDir ?? getPaprRoot();
-  const appsRoot = path.join(root, "apps");
-
-  const { isAppWriterSyncReady } = await import("../syncV3/writerSyncStatus.js");
-  const writerReady = await isAppWriterSyncReady(appId);
-  if (!writerReady.ready) {
-    const isConflict = writerReady.detail?.includes("conflict");
-    return {
-      ready: false,
-      reason: isConflict ? "writer_conflict" : "writer_pending",
-      detail: writerReady.detail,
-    };
-  }
-
-  const turso = await buildTursoSyncItemsReport(appsRoot, appId);
+  turso: TursoSyncItemsReport,
+): WebReadyResult {
   const sources = turso.sources.filter((source) => source.appId === appId);
 
   for (const source of sources) {
@@ -133,4 +125,30 @@ export async function webReady(
   }
 
   return { ready: true };
+}
+
+export async function webReady(
+  appId: string,
+  paprDir?: string,
+  options?: { tursoReport?: TursoSyncItemsReport },
+): Promise<WebReadyResult> {
+  const root = paprDir ?? getPaprRoot();
+  const appsRoot = path.join(root, "apps");
+
+  const { isAppWriterSyncReady } = await import("../syncV3/writerSyncStatus.js");
+  const writerReady = await isAppWriterSyncReady(appId);
+  if (!writerReady.ready) {
+    const isConflict = writerReady.detail?.includes("conflict");
+    return {
+      ready: false,
+      reason: isConflict ? "writer_conflict" : "writer_pending",
+      detail: writerReady.detail,
+    };
+  }
+
+  const turso =
+    options?.tursoReport ??
+    (await buildTursoSyncItemsReport(appsRoot, appId));
+
+  return evaluateTursoReportForWebReady(appId, turso);
 }

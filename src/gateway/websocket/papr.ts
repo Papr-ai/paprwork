@@ -5,7 +5,7 @@
 import type { WebSocket } from "ws";
 import type { WSMessage } from "./index.js";
 import { sendResponse, sendError } from "./index.js";
-import { resumePaprCloudAfterBillingRestore } from "../services/paprCloudBillingRestore.js";
+import { schedulePaprCloudResumeAfterBillingRestore } from "../services/paprCloudBillingRestore.js";
 
 export async function setupPaprHandlers(
   ws: WebSocket,
@@ -14,8 +14,12 @@ export async function setupPaprHandlers(
   try {
     switch (message.type) {
       case "papr:resume-cloud": {
-        await resumePaprCloudAfterBillingRestore();
-        sendResponse(ws, { id: message.id, success: true, data: { resumed: true } });
+        schedulePaprCloudResumeAfterBillingRestore();
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { resumed: true, scheduled: true },
+        });
         break;
       }
 

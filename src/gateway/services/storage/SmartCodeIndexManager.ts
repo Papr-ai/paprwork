@@ -23,6 +23,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
 import { reportPaprQuotaError, isPaprSubscriptionBlockedMessage } from '../../../core/utils/paprQuota.js';
+import { readCodeFileForIndex } from '../CodeIndexIoPool.js';
 
 /**
  * Max transient failures per file before it is dropped from the index queue.
@@ -336,6 +337,17 @@ export class SmartCodeIndexManager {
       return;
     }
 
+    const { isHeavyBackgroundWorkDeferred } = await import(
+      "../gatewayBackgroundWork.js"
+    );
+    if (await isHeavyBackgroundWorkDeferred()) {
+      console.log(
+        "[CodeIndexing] Deferring batch — interactive hot path or gateway load",
+      );
+      this.scheduleBatch(5000);
+      return;
+    }
+
     if (this.isIndexing) {
       this.scheduleBatch(5000);
       return;
@@ -397,15 +409,15 @@ export class SmartCodeIndexManager {
           continue;
         }
         
-        // Re-check if still needs indexing (may have been indexed by another process)
-        if (!this.tracker.needsIndexing(queuedFile.file_path)) {
+        const fileIo = await readCodeFileForIndex(queuedFile.file_path);
+
+        if (!this.tracker.needsIndexingWithHash(queuedFile.file_path, fileIo.hash)) {
           console.log(`   ⏭️  Skipped (unchanged): ${path.basename(queuedFile.file_path)}`);
           this.tracker.dequeueFile(queuedFile.file_path);
           continue;
         }
-        
-        // Index the file
-        await this.indexSingleFile(queuedFile.file_path);
+
+        await this.indexSingleFile(queuedFile.file_path, fileIo);
         
         // Remove from queue
         this.tracker.dequeueFile(queuedFile.file_path);
@@ -510,33 +522,35 @@ export class SmartCodeIndexManager {
   /**
    * Index a single file
    */
-  private async indexSingleFile(filePath: string): Promise<void> {
-    const hash = this.tracker.calculateFileHash(filePath);
-    const content = fs.readFileSync(filePath, 'utf-8');
-    
+  private async indexSingleFile(
+    filePath: string,
+    fileIo: { content: string; hash: string; lineCount: number },
+  ): Promise<void> {
     const projectInfo = getProjectPathInfo(filePath, this.config.paprDir);
     if (!projectInfo) {
       throw new Error('File is not indexable — must be inside apps/{id}/ or Jobs/{id}/');
     }
 
     try {
-      await this.summaryPipeline.processChangedFile(filePath);
+      await this.summaryPipeline.processChangedFile(filePath, {
+        content: fileIo.content,
+        hash: fileIo.hash,
+      });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       console.warn(`[CodeSummary] File summary failed for ${path.basename(filePath)}: ${message}`);
     }
 
-    await this.indexer.indexSingleCodeFile(filePath);
-    
-    // Record in tracker after successful API indexing
+    await this.indexer.indexSingleCodeFile(filePath, fileIo);
+
     this.tracker.recordIndexedFile({
       file_path: filePath,
-      content_hash: hash,
+      content_hash: fileIo.hash,
       last_indexed_at: new Date(),
       schema_version: this.config.schemaId,
       project_id: projectInfo.projectId,
-      lines_of_code: content.split('\n').length,
-      language: this.detectLanguage(path.extname(filePath))
+      lines_of_code: fileIo.lineCount,
+      language: this.detectLanguage(path.extname(filePath)),
     });
   }
   

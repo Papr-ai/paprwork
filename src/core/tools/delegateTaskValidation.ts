@@ -3,8 +3,14 @@ import type { ZodError } from "zod";
 /** Built-in id for app/job architecture briefs — copy verbatim into useAgentId. */
 export const PRODUCT_ARCHITECT_DELEGATE_ID = "product-architect";
 
+/** Built-in id for read-only investigation before expensive main-agent tool loops. */
+export const CODEBASE_EXPLORER_DELEGATE_ID = "codebase-explorer";
+
 export const DELEGATE_TASK_EXAMPLE =
   'delegate_task({ useAgentId: "product-architect", task: "Product brief + architecture for: [goal]", context: "User constraints: ..." })';
+
+export const CODEBASE_EXPLORER_DELEGATE_EXAMPLE =
+  'delegate_task({ useAgentId: "codebase-explorer", task: "Investigate why job X fails", context: "jobId: ..., appId: ..., hypothesis: ..." })';
 
 const FORBIDDEN_DELEGATE_PARAM_KEYS = [
   "agentId",

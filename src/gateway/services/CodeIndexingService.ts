@@ -11,6 +11,10 @@
 import { Papr } from '@papr/memory';
 import { registerCodeSchema, seedControlledVocabulary } from './CodeSchemaRegistration.js';
 import { SmartCodeIndexManager } from './storage/SmartCodeIndexManager.js';
+import {
+  initializeCodeIndexIoPool,
+  terminateCodeIndexIoPool,
+} from "./CodeIndexIoPool.js";
 import { CodeIndexTracker } from './storage/CodeIndexTracker.js';
 import { resolvePaprUserDataPath } from '../../core/utils/paprWorkspace.js';
 import * as fs from 'fs';
@@ -157,7 +161,11 @@ export async function initializeCodeIndexing(paprApiKey: string): Promise<void> 
     
     // Ensure schema is registered
     schemaId = await ensureCodeSchema(client);
-    
+
+    initializeCodeIndexIoPool(
+      new URL("../workers/code-index-io-worker.js", import.meta.url),
+    );
+
     // Start smart index manager
     indexManager = new SmartCodeIndexManager(client, {
       schemaId,
@@ -215,6 +223,7 @@ export async function stopCodeIndexing(): Promise<void> {
     await indexManager.stopAsync();
     indexManager = null;
   }
+  terminateCodeIndexIoPool();
 }
 
 /** Resume indexing after Papr Cloud billing is restored. */

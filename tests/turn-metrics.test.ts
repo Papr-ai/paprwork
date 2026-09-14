@@ -540,4 +540,9 @@ describe("context meter — reading measured usage", () => {
       cacheReadTokens: 0,
     });
   });
+
+  it("returns empty usage when the database handle is not open yet", () => {
+    expect(readLastTurnUsage(undefined, "c1")).toBeNull();
+    expect(readChatUsageTotals(undefined, "c1").turns).toBe(0);
+  });
 });

@@ -4,7 +4,6 @@ import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import {
   computeFollowingNextRunAt,
   computeInitialNextRunAt,
-  isScheduleDue,
   msUntilSoonestNextRun,
 } from "./jobs/scheduleEngine.js";
 import {
@@ -166,15 +165,20 @@ export class JobsScheduler {
       );
     });
 
-    let jobs = await jobsService.listJobs();
+    const registrySize = (await jobsService.listJobs()).length;
     timer.mark("listJobs");
-    console.log(`[JobsScheduler] Checking ${jobs.length} total jobs`);
 
     const now = new Date();
+    const dueJobIds = jobsService.getDueScheduledJobIds(now);
+    const scheduledEnabled = jobsService.getScheduleIndexScheduledCount();
+    console.log(
+      `[JobsScheduler] Registry ${registrySize} job(s), ${scheduledEnabled} scheduled-enabled, ${dueJobIds.length} due now`,
+    );
+
     const launches: Array<Promise<void>> = [];
     const launchedCount = { value: 0 };
-    let enabledCount = 0;
-    let dueCount = 0;
+    let enabledCount = scheduledEnabled;
+    let dueCount = dueJobIds.length;
     let skippedRunning = 0;
     let skippedCloudPreferred = 0;
     let skippedRunLease = 0;
@@ -182,16 +186,11 @@ export class JobsScheduler {
     timer.mark("cloudSchedulerAuth");
 
     const scanStarted = performance.now();
-    for (const job of jobs) {
-      if (!job.schedule?.enabled) {
+    for (const jobId of dueJobIds) {
+      const job = await jobsService.getJob(jobId);
+      if (!job?.schedule?.enabled) {
         continue;
       }
-      enabledCount++;
-      
-      if (!isScheduleDue(job.schedule, job.scheduleState, now)) {
-        continue;
-      }
-      dueCount++;
 
       if (!shouldDesktopSchedulerRunJob(job, cloudSchedulerAuthoritative)) {
         skippedCloudPreferred++;
@@ -320,9 +319,9 @@ export class JobsScheduler {
     await Promise.all(launches);
     timer.mark(`launches(${launchedCount.value})`);
 
-    jobs = await jobsService.listJobs();
+    const wakeJobs = jobsService.getScheduledJobsForWake();
     timer.mark("listJobsAfter");
-    this.queueWake(jobs, cloudSchedulerAuthoritative);
+    this.queueWake(wakeJobs, cloudSchedulerAuthoritative);
     timer.mark("queueWake");
 
     const elapsed = timer.totalMs();

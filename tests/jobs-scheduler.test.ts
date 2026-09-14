@@ -4,6 +4,30 @@ import { JobsScheduler } from "../src/gateway/services/JobsScheduler.js";
 import type { JobRecord } from "../src/gateway/services/JobsService.js";
 import * as cloudSchedulerAuthority from "../src/gateway/utils/cloudSchedulerAuthority.js";
 import * as jobSchedulerRunLease from "../src/gateway/services/jobs/jobSchedulerRunLease.js";
+import { isScheduleDue } from "../src/gateway/services/jobs/scheduleEngine.js";
+import type { getJobsService as GetJobsServiceFn } from "../src/gateway/services/JobsService.js";
+
+function mockSchedulerJobCatalog(
+  jobsService: ReturnType<GetJobsServiceFn>,
+  registryJobs: JobRecord[],
+  dueJobs: JobRecord[] = registryJobs,
+): void {
+  vi.spyOn(jobsService, "listJobs").mockResolvedValue(registryJobs);
+  vi.spyOn(jobsService, "getDueScheduledJobIds").mockImplementation((now: Date) =>
+    dueJobs
+      .filter((j) =>
+        isScheduleDue(j.schedule, j.scheduleState, now),
+      )
+      .map((j) => j.id),
+  );
+  const scheduled = registryJobs.filter(
+    (j) => j.schedule?.enabled && j.scheduleState?.nextRunAt,
+  );
+  vi.spyOn(jobsService, "getScheduleIndexScheduledCount").mockReturnValue(
+    scheduled.length,
+  );
+  vi.spyOn(jobsService, "getScheduledJobsForWake").mockReturnValue(scheduled);
+}
 
 describe("JobsScheduler", () => {
   test("runs due interval job through JobsService", async () => {
@@ -41,7 +65,8 @@ describe("JobsScheduler", () => {
     const initializeSpy = vi
       .spyOn(jobsService, "initialize")
       .mockResolvedValue(undefined);
-    const listSpy = vi.spyOn(jobsService, "listJobs").mockResolvedValue([dueJob]);
+    mockSchedulerJobCatalog(jobsService, [dueJob]);
+    const listSpy = vi.mocked(jobsService.listJobs);
     const runSpy = vi
       .spyOn(jobsService, "runJobFromScheduler")
       .mockResolvedValue({
@@ -71,7 +96,7 @@ describe("JobsScheduler", () => {
     expect(listSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(runSpy).toHaveBeenCalledOnce();
     expect(runSpy).toHaveBeenCalledWith(dueJob.id, dueAt);
-    expect(getJobSpy).toHaveBeenCalledOnce();
+    expect(getJobSpy).toHaveBeenCalledTimes(2);
     expect(upsertSpy).toHaveBeenCalledOnce();
 
     initializeSpy.mockRestore();
@@ -118,7 +143,8 @@ describe("JobsScheduler", () => {
     const initializeSpy = vi
       .spyOn(jobsService, "initialize")
       .mockResolvedValue(undefined);
-    const listSpy = vi.spyOn(jobsService, "listJobs").mockResolvedValue([dueJob]);
+    mockSchedulerJobCatalog(jobsService, [dueJob]);
+    const listSpy = vi.mocked(jobsService.listJobs);
     const runSpy = vi
       .spyOn(jobsService, "runJobFromScheduler")
       .mockResolvedValue({
@@ -147,7 +173,7 @@ describe("JobsScheduler", () => {
     expect(listSpy.mock.calls.length).toBeGreaterThanOrEqual(1);
     expect(runSpy).toHaveBeenCalledOnce();
     expect(runSpy).toHaveBeenCalledWith(dueJob.id, dueAt);
-    expect(getJobSpy).toHaveBeenCalledOnce();
+    expect(getJobSpy).toHaveBeenCalledTimes(2);
     expect(upsertSpy).toHaveBeenCalledOnce();
 
     const upsertArg = upsertSpy.mock.calls[0]?.[0];
@@ -192,7 +218,8 @@ describe("JobsScheduler", () => {
     };
 
     vi.spyOn(jobsService, "initialize").mockResolvedValue(undefined);
-    vi.spyOn(jobsService, "listJobs").mockResolvedValue([dueJob]);
+    mockSchedulerJobCatalog(jobsService, [dueJob]);
+    vi.spyOn(jobsService, "getJob").mockResolvedValue(dueJob);
     const runSpy = vi
       .spyOn(jobsService, "runJobFromScheduler")
       .mockResolvedValue({ ...dueJob, status: "completed" });
@@ -241,7 +268,7 @@ describe("JobsScheduler", () => {
     };
 
     vi.spyOn(jobsService, "initialize").mockResolvedValue(undefined);
-    vi.spyOn(jobsService, "listJobs").mockResolvedValue([dueJob]);
+    mockSchedulerJobCatalog(jobsService, [dueJob]);
     // Plain Error: not architecture validation, not SQLITE_NOTADB.
     const runSpy = vi
       .spyOn(jobsService, "runJobFromScheduler")
@@ -296,7 +323,7 @@ describe("JobsScheduler", () => {
     };
 
     vi.spyOn(jobsService, "initialize").mockResolvedValue(undefined);
-    vi.spyOn(jobsService, "listJobs").mockResolvedValue([dueJob]);
+    mockSchedulerJobCatalog(jobsService, [dueJob]);
     const runSpy = vi
       .spyOn(jobsService, "runJobFromScheduler")
       .mockRejectedValue(new Error("still broken"));

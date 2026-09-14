@@ -34,6 +34,7 @@ import {
   resolveAppIdForAutoOpen,
   shouldAutoOpenArtifactTab,
 } from "../utils/resolveAppIdForAutoOpen";
+import { buildRecoveryAgentConfigForChat } from "../utils/buildRecoveryAgentConfig";
 import {
   activeStreamRequests,
   appliedChunkCounts,
@@ -42,6 +43,7 @@ import {
   clearResumeRetry,
   clearStalePausedChats,
   ensureGatewayRecoveryRegistered,
+  setAgentStreamChunkHandler,
   ensureTrackedStream,
   finalizeStreamingMessages,
   HIDDEN_CONTINUE_USER_MESSAGE,
@@ -53,10 +55,13 @@ import {
   resetAutoContinueAttempts,
   markAssistantTurnInterrupted,
   shouldAutoContinueInterruptedTurn,
+  listChatsForPostReconnectStreamRecovery,
+  markPostReconnectStreamRecoveryAttempted,
   shouldIgnoreDuplicateDoneChunk,
   resolveChatIdForStreamRequest,
   markResuming,
   mergeHistoryWithLocal,
+  ensureStreamingAssistantMessageRow,
   rehydrateStreamingRefsForChat,
   scheduleStreamResumeRetry,
   serverHasCompletedAssistantForStreamingTurn,
@@ -64,8 +69,11 @@ import {
   subscribeWithRetry,
   trackActiveStream,
   untrackActiveStream,
-  type StreamingRefs,
 } from "../lib/agentStreamRecovery";
+import {
+  getAgentStreamingRefs,
+  resetAgentStreamingRefsForChat,
+} from "../lib/agentStreamingRefs";
 import type { ToolCall } from "../types/core";
 import {
   finishUiStreamProfiler,
@@ -117,32 +125,20 @@ export function useAgent() {
   const flushStreamingState = useChatStore((s) => s.flushStreamingState);
   const clearStreamingState = useChatStore((s) => s.clearStreamingState);
 
-  // ✅ FIX: Use Maps keyed by chatId to support parallel streaming
-  const streamingMessageIdRef = useRef<Map<string, string>>(new Map());
-  const streamingContentRef = useRef<Map<string, string>>(new Map());
-  const streamingReasoningRef = useRef<Map<string, string>>(new Map());
-  const toolCallsMapRef = useRef<Map<string, Map<string, ToolCall>>>(new Map());
+  const streamingRefs = getAgentStreamingRefs();
+  const streamingMessageIdRef = streamingRefs.streamingMessageIdRef;
+  const streamingContentRef = streamingRefs.streamingContentRef;
+  const streamingReasoningRef = streamingRefs.streamingReasoningRef;
+  const toolCallsMapRef = streamingRefs.toolCallsMapRef;
+  const sequenceRef = streamingRefs.sequenceRef;
+  const currentTextSegmentRef = streamingRefs.currentTextSegmentRef;
+
   const updateBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const reasoningBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   /** Request IDs whose chunks should be ignored after interrupt/stop */
   const rejectedRequestIdsRef = useRef<Set<string>>(new Set());
   /** Serialize sendMessage per chat so interrupt + new stream don't overlap */
   const sendMessageLockRef = useRef<Map<string, Promise<void>>>(new Map());
-
-  // Sequence tracking (V1-style interleaving)
-  const sequenceRef = useRef<
-    Map<string, Array<{ type: "text" | "tool" | "thinking"; data: any }>>
-  >(new Map());
-  const currentTextSegmentRef = useRef<Map<string, string>>(new Map());
-
-  const streamingRefs: StreamingRefs = {
-    streamingMessageIdRef,
-    streamingContentRef,
-    streamingReasoningRef,
-    toolCallsMapRef,
-    sequenceRef,
-    currentTextSegmentRef,
-  };
 
   // Listen for Gateway connection changes — populated after handleStreamChunk
   const handleStreamChunkRef = useRef<
@@ -205,13 +201,23 @@ export function useAgent() {
 
       // Ensure we have a streaming message for all chunk types
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
+      const boundStreamingId = streamingMessageIdRef.current.get(chatId);
+      if (boundStreamingId) {
+        ensureStreamingAssistantMessageRow(
+          chatId,
+          boundStreamingId,
+          streamingRefs,
+        );
+      }
       if (
         !streamingMessageIdRef.current.has(chatId) &&
         chunk.type !== "stream-start" &&
         chunk.type !== "done" &&
         chunk.type !== "error" &&
         chunk.type !== "start-step" &&
-        chunk.type !== "step-usage"
+        chunk.type !== "step-usage" &&
+        chunk.type !== "concurrency-queued" &&
+        chunk.type !== "concurrency-acquired"
       ) {
         const messageId = `msg-${Date.now()}`;
         streamingMessageIdRef.current.set(chatId, messageId);
@@ -235,6 +241,7 @@ export function useAgent() {
           },
           chatId,
         );
+        initStreamingState(chatId, messageId);
       }
 
       switch (chunk.type) {
@@ -253,6 +260,12 @@ export function useAgent() {
             if (existingId === messageId) {
               if (existingRow?.interrupted) {
                 reactivateAssistantMessage(chatId, messageId);
+              } else if (!existingRow) {
+                ensureStreamingAssistantMessageRow(
+                  chatId,
+                  messageId,
+                  streamingRefs,
+                );
               }
               return;
             }
@@ -295,6 +308,7 @@ export function useAgent() {
                 },
                 chatId,
               );
+              initStreamingState(chatId, messageId);
             }
           });
 
@@ -378,6 +392,19 @@ export function useAgent() {
 
         case "tool-call":
           {
+            const pendingTextBatch = updateBatchRef.current.get(chatId);
+            if (pendingTextBatch) {
+              clearTimeout(pendingTextBatch);
+              updateBatchRef.current.delete(chatId);
+              const flushMessageId =
+                streamingMessageIdRef.current.get(chatId);
+              const flushContent =
+                streamingContentRef.current.get(chatId);
+              if (flushMessageId && flushContent !== undefined) {
+                updateStreamingMessage(flushMessageId, flushContent, chatId);
+              }
+            }
+
             // Add or update tool call
             const payload = chunk.payload as {
               toolName: string;
@@ -2063,15 +2090,14 @@ export function useAgent() {
     ],
   );
 
+  const retryStreamRecoveryRef = useRef(retryStreamRecovery);
+  retryStreamRecoveryRef.current = retryStreamRecovery;
+
   useEffect(() => {
     ensureGatewayRecoveryRegistered();
 
     const resumeAllActiveStreams = async () => {
       const activeStreams = [...activeStreamRequests.entries()];
-      if (activeStreams.length === 0) {
-        await clearStalePausedChats();
-        return;
-      }
 
       for (const [chatId, requestId] of activeStreams) {
         if (isResumingStream(chatId)) continue;
@@ -2103,6 +2129,26 @@ export function useAgent() {
           markResuming(chatId, false);
         }
       }
+
+      await clearStalePausedChats();
+
+      const retryStreamRecoveryFn = retryStreamRecoveryRef.current;
+      for (const chatId of listChatsForPostReconnectStreamRecovery()) {
+        const config = buildRecoveryAgentConfigForChat(chatId);
+        if (!config) continue;
+        markPostReconnectStreamRecoveryAttempted(chatId);
+        console.log(
+          `[useAgent] Auto-retrying stream recovery for ${chatId} after reconnect`,
+        );
+        try {
+          await retryStreamRecoveryFn(chatId, config);
+        } catch (error) {
+          console.warn(
+            `[useAgent] Post-reconnect stream recovery failed for ${chatId}:`,
+            error,
+          );
+        }
+      }
     };
 
     setRecoverStreamsHandler(resumeAllActiveStreams);
@@ -2112,47 +2158,12 @@ export function useAgent() {
     resumeInterruptedStream,
     syncStreamFromHistory,
     setConnectionPaused,
+    retryStreamRecovery,
   ]);
 
-  // Listen for broadcast agent chunks (e.g. auto-response to sub-agent questions)
+  // Global gateway-broadcast listener (see ensureAgentStreamBroadcastListener).
   useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ type: string; data?: unknown }>)
-        .detail;
-      if (!detail?.type?.startsWith("agent:")) return;
-
-      if (detail.type === "agent:chunk" && detail.data) {
-        const chunk = detail.data as Record<string, unknown>;
-        handleStreamChunk(chunk as StreamChunk);
-      } else if (detail.type === "agent:complete" && detail.data) {
-        const data = detail.data as Record<string, unknown>;
-        const chatId = data.chatId as string | undefined;
-        if (chatId) {
-          handleStreamChunk({
-            type: "done",
-            chatId,
-            payload: { finalMessage: data.finalMessage },
-          } as StreamChunk);
-        }
-      } else if (detail.type === "agent:error" && detail.data) {
-        const data = detail.data as Record<string, unknown>;
-        const chatId = data.chatId as string | undefined;
-        const error = data.error as string | undefined;
-        if (chatId && error && isExpectedStreamCancellation(error)) {
-          return;
-        }
-        if (chatId) {
-          handleStreamChunk({
-            type: "error",
-            chatId,
-            payload: { error: error || "Stream error" },
-          } as StreamChunk);
-        }
-      }
-    };
-
-    window.addEventListener("gateway-broadcast", handler);
-    return () => window.removeEventListener("gateway-broadcast", handler);
+    setAgentStreamChunkHandler(handleStreamChunk);
   }, [handleStreamChunk]);
 
   // Send message to agent
@@ -2279,10 +2290,7 @@ export function useAgent() {
         console.log("[useAgent] User message added to store");
 
         // Reset streaming state for this chatId
-        streamingMessageIdRef.current.delete(finalChatId);
-        streamingContentRef.current.delete(finalChatId);
-        streamingReasoningRef.current.delete(finalChatId);
-        toolCallsMapRef.current.delete(finalChatId);
+        resetAgentStreamingRefsForChat(finalChatId);
         appliedChunkCounts.set(finalChatId, 0);
 
         setError(null);

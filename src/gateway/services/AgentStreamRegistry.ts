@@ -135,6 +135,16 @@ export class AgentStreamRegistry {
     return this.streamsByRequestId.get(requestId)?.status === "running";
   }
 
+  countRunningStreams(): number {
+    let count = 0;
+    for (const entry of this.streamsByRequestId.values()) {
+      if (entry.status === "running") {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   addSubscriber(
     ws: WebSocket,
     responseId: string,
@@ -349,6 +359,10 @@ export class AgentStreamRegistry {
     // side effect.
     let reportedModelError: string | undefined;
 
+    const { withInteractiveHotPath } = await import(
+      "./gatewayInteractivePriority.js"
+    );
+
     try {
       getStreamProfiler(chatId)?.mark("registry.runStream.start");
 
@@ -356,7 +370,8 @@ export class AgentStreamRegistry {
         "../../core/tools/context.js"
       );
 
-      await runWithToolContext(chatId, async () => {
+      await withInteractiveHotPath("agent:stream", async () =>
+        runWithToolContext(chatId, async () => {
         for await (const chunk of agentService.streamAgent(
           chatId,
           userMessage,
@@ -380,7 +395,8 @@ export class AgentStreamRegistry {
           this.bufferChunk(entry, chunk);
           this.broadcastChunk(entry, chunk);
         }
-      });
+        }),
+      );
 
       if (entry.cancelled) {
         console.log(

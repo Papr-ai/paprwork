@@ -24,7 +24,6 @@ import {
   sha256Hex,
 } from "./jobMigrationManifest.js";
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
-
 export type PersistedDatabaseKind = "registry" | "job";
 
 export interface PersistedDatabaseLayout {
@@ -212,7 +211,13 @@ export async function applyDatabaseMigrations(
   dbPath: string,
   options?: { bypassReplicaEngine?: boolean },
 ): Promise<string[]> {
-  if (!options?.bypassReplicaEngine && isReplicaManagedDbPath(dbPath)) {
+  const layout = resolvePersistedDatabaseLayout(dbPath);
+  const useReplicaEngine =
+    !options?.bypassReplicaEngine &&
+    layout?.kind === "registry" &&
+    isReplicaManagedDbPath(dbPath);
+
+  if (useReplicaEngine) {
     const { applyReplicaRegistryDatabaseMigrations } = await import(
       "../tursoReplica/tursoReplicaRegistryMigrations.js"
     );

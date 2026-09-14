@@ -13,10 +13,10 @@ import { readAgentChatSidecarSync } from "../appAgentChatSidecar.js";
 
 /** Built-in slugs — must stay aligned with SubAgentService DEFAULT_SUB_AGENTS. */
 const BUILTIN_SUB_AGENT_IDS = new Set([
+  "codebase-explorer",
   "implementation-specialist",
   "product-architect",
   "research-specialist",
-  "sync-code-explorer",
 ]);
 
 export function isBuiltInSubAgentId(agentId: string): boolean {

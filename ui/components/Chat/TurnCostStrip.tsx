@@ -9,12 +9,17 @@
 
 import React, { useState } from "react";
 import {
+  formatCachedInputShare,
   formatCost,
   formatDuration,
   formatTokens,
+  formatTurnPeakFillPercent,
+  turnPeakFillPercent,
+  resolveStepContextTokensForTurn,
   type ContextMeter,
   type LiveTurn,
 } from "./contextMeterModel";
+import type { BillingMode } from "../../utils/subscriptionPlanUsage";
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="ctx-stat">
@@ -26,7 +31,8 @@ const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
 export const TurnCostStrip: React.FC<{
   meter: ContextMeter;
   live: LiveTurn | null;
-}> = ({ meter, live }) => {
+  billingMode: BillingMode;
+}> = ({ meter, live, billingMode }) => {
   const [open, setOpen] = useState(false);
   const turn = meter.lastTurn;
 
@@ -37,6 +43,17 @@ export const TurnCostStrip: React.FC<{
    * visibly doing work.
    */
   if (live) {
+    const livePct = live.peakContextTokens
+      ? turnPeakFillPercent(
+          {
+            peakContextTokens: live.peakContextTokens,
+            promptTokens: 0,
+            cacheReadTokens: 0,
+            cacheWriteTokens: 0,
+          },
+          meter.effectiveWindow,
+        )
+      : null;
     return (
       <div className="ctx-turn ctx-turn--live">
         <div className="ctx-turn__head">
@@ -49,17 +66,17 @@ export const TurnCostStrip: React.FC<{
           <Stat label="time" value={formatDuration(live.elapsedMs)} />
           <Stat
             label="context"
-            value={
-              live.peakContextTokens
-                ? formatTokens(live.peakContextTokens)
-                : "—"
-            }
+            value={formatTurnPeakFillPercent(livePct)}
           />
         </div>
         {/* Cost is the one figure with no honest live value: providers report
             it when the turn closes. Naming the omission beats a placeholder
             number that silently changes. */}
-        <p className="ctx-turn__note">Cost is billed when the turn finishes.</p>
+        <p className="ctx-turn__note">
+          {billingMode === "subscription"
+            ? "Counts toward your plan when the turn finishes."
+            : "Cost is billed when the turn finishes."}
+        </p>
       </div>
     );
   }
@@ -73,10 +90,17 @@ export const TurnCostStrip: React.FC<{
   }
 
   const steps = turn.steps ?? null;
-  const cachedShare = turn.promptTokens
-    ? turn.cacheReadTokens / turn.promptTokens
-    : 0;
-  const perStep = steps && steps > 0 ? turn.promptTokens / steps : null;
+  const totalInputTokens = resolveStepContextTokensForTurn({
+    inputTokens: turn.promptTokens,
+    cacheReadTokens: turn.cacheReadTokens,
+    cacheWriteTokens: turn.cacheWriteTokens,
+  });
+  const perStep =
+    steps && steps > 0 && totalInputTokens > 0
+      ? totalInputTokens / steps
+      : null;
+
+  const peakFillPct = turnPeakFillPercent(turn, meter.effectiveWindow);
 
   // How far the chars/4 estimator — the same one gating compaction and the
   // history trim — was from the provider's own figure on this turn.
@@ -106,7 +130,13 @@ export const TurnCostStrip: React.FC<{
           value={turn.toolCalls === null ? "—" : String(turn.toolCalls)}
         />
         <Stat label="time" value={formatDuration(turn.durationMs)} />
-        <Stat label="cost" value={formatCost(turn.cost)} />
+        <Stat
+          label="context"
+          value={formatTurnPeakFillPercent(peakFillPct)}
+        />
+        {billingMode === "metered" ? (
+          <Stat label="cost" value={formatCost(turn.cost)} />
+        ) : null}
       </div>
 
       {open ? (
@@ -115,7 +145,7 @@ export const TurnCostStrip: React.FC<{
             <dt>Peak context</dt>
             <dd>
               {turn.peakContextTokens
-                ? formatTokens(turn.peakContextTokens)
+                ? `${formatTokens(turn.peakContextTokens)} of ${formatTokens(meter.effectiveWindow)} window`
                 : "—"}
             </dd>
           </div>
@@ -133,7 +163,7 @@ export const TurnCostStrip: React.FC<{
           </div>
           <div>
             <dt>Cached prompt</dt>
-            <dd>{Math.round(cachedShare * 100)}%</dd>
+            <dd>{formatCachedInputShare(turn)}</dd>
           </div>
           {drift ? (
             <div>

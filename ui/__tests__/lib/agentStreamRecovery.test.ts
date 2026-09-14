@@ -8,7 +8,11 @@ import {
   priorUserTurnSettledForQueue,
   recordAutoContinueAttempt,
   resetAutoContinueAttempts,
+  getAutoContinueBlockReason,
+  resetPostReconnectStreamRecoveryForTests,
   shouldAutoContinueInterruptedTurn,
+  shouldAutoRetryStreamRecoveryAfterReconnect,
+  markPostReconnectStreamRecoveryAttempted,
   shouldDrainMessageQueue,
   shouldIgnoreDuplicateDoneChunk,
   isStreamDoneChunkWithChatId,
@@ -656,6 +660,55 @@ describe("autoContinueInterruptedTurn helpers", () => {
         connectionPaused: false,
         needsStreamRecovery: false,
         gatewayReady: true,
+      }),
+    ).toBe(false);
+    expect(
+      getAutoContinueBlockReason({
+        chatId: "chat-1",
+        messages,
+        isSending: false,
+        connectionPaused: false,
+        needsStreamRecovery: false,
+        gatewayReady: true,
+      }),
+    ).toBe("turnComplete");
+  });
+});
+
+describe("post-reconnect stream recovery", () => {
+  beforeEach(() => {
+    resetPostReconnectStreamRecoveryForTests();
+  });
+
+  it("allows one auto retry per chat when needsStreamRecovery is set", () => {
+    expect(
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId: "c1",
+        needsStreamRecovery: true,
+        streamRecoveryReason: "connection",
+        isSending: false,
+      }),
+    ).toBe(true);
+
+    markPostReconnectStreamRecoveryAttempted("c1");
+
+    expect(
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId: "c1",
+        needsStreamRecovery: true,
+        streamRecoveryReason: "connection",
+        isSending: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("does not auto retry rate-limited recovery", () => {
+    expect(
+      shouldAutoRetryStreamRecoveryAfterReconnect({
+        chatId: "c1",
+        needsStreamRecovery: true,
+        streamRecoveryReason: "rateLimit",
+        isSending: false,
       }),
     ).toBe(false);
   });

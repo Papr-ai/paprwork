@@ -196,6 +196,10 @@ export class VaultSyncService {
   }
 
   private async runFullSyncOnce(): Promise<VaultSyncResponse | null> {
+    const { yieldToInteractiveHotPath } = await import(
+      "./gatewayBackgroundWork.js"
+    );
+    await yieldToInteractiveHotPath("VaultSync.runFullSync");
     const pushed = await this.enqueuePush();
     await this.pullKeys();
     await this.pullSharedKeys();
@@ -244,21 +248,17 @@ export class VaultSyncService {
     this.schedulePushAfterKeyChange("(all keys)", "changed");
   }
 
-  private async pushAllKeysUncoalesced(): Promise<VaultSyncResponse | null> {
+  /** Build vault push payload on gateway (keychain IPC stays in parent). */
+  async buildVaultPushEntriesForBackground(): Promise<CloudVaultKeyEntry[]> {
     if (isPaprCloudPaused()) {
-      console.log(
-        "[VaultSync] Skipping push — Papr Cloud paused (no active subscription)",
-      );
-      return null;
+      return [];
     }
 
     const customKeys = getCustomKeysService();
-
     const keyList = await customKeys.listKeys();
     if (keyList.length === 0) {
-      console.log("[VaultSync] No local keys to push");
       this.state.keyCount = 0;
-      return null;
+      return [];
     }
 
     const vaultEntries: CloudVaultKeyEntry[] = [];
@@ -311,72 +311,72 @@ export class VaultSyncService {
       }
     }
 
+    return vaultEntries;
+  }
+
+  async applyVaultPushResultFromBackground(
+    result: VaultSyncResponse,
+  ): Promise<void> {
+    this.state.status = "idle";
+    this.state.lastSyncAt = new Date().toISOString();
+    this.state.lastError = null;
+    this.state.keyCount = result.synced;
+
+    const customKeys = getCustomKeysService();
+    await customKeys.reconcileShareSyncResult({
+      conflicts: result.conflicts ?? [],
+      syncedNames: [...result.created, ...result.updated],
+    });
+
+    if (result.conflicts && result.conflicts.length > 0) {
+      console.warn(
+        `[VaultSync] ${result.conflicts.length} key(s) not shared — name already taken in cloud vault`,
+      );
+    }
+
+    console.log(
+      `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,
+    );
+  }
+
+  private async pushAllKeysUncoalesced(): Promise<VaultSyncResponse | null> {
+    const { yieldToInteractiveHotPath } = await import(
+      "./gatewayBackgroundWork.js"
+    );
+    await yieldToInteractiveHotPath("VaultSync.pushAll");
+    if (isPaprCloudPaused()) {
+      console.log(
+        "[VaultSync] Skipping push — Papr Cloud paused (no active subscription)",
+      );
+      return null;
+    }
+
+    const vaultEntries = await this.buildVaultPushEntriesForBackground();
     if (vaultEntries.length === 0) {
       console.log("[VaultSync] No readable key values to push");
       return null;
     }
 
     this.state.status = "syncing";
+    this.state.keyCount = vaultEntries.length;
     console.log(
       `[VaultSync] Pushing ${vaultEntries.length} keys to vault (per-key shareScope)...`,
     );
 
     try {
       await this.ensureGatewayRoutesReady();
-
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), PUSH_TIMEOUT_MS);
-
-      const resp = await fetch(
-        `http://localhost:${this.gatewayPort}/api/cloud/vault/sync`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            buildCloudVaultRequestBody(vaultEntries, "user"),
-          ),
-          signal: controller.signal,
-        },
+      const { pushVaultEntriesViaGatewayHttp } = await import(
+        "./vaultSyncBackgroundPush.js"
       );
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        if (isPaprSubscriptionBlockedMessage(text)) {
-          reportPaprQuotaError(
-            new Error(`Vault sync failed (${resp.status}): ${text}`),
-            "vault-sync",
-          );
-          console.warn(
-            "[VaultSync] Push paused — Papr Cloud subscription inactive",
-          );
-          return null;
-        }
-        throw new Error(`Vault sync failed (${resp.status}): ${text}`);
-      }
-
-      clearTimeout(timer);
-
-      const result = (await resp.json()) as VaultSyncResponse;
-      this.state.status = "idle";
-      this.state.lastSyncAt = new Date().toISOString();
-      this.state.lastError = null;
-      this.state.keyCount = vaultEntries.length;
-
-      const customKeys = getCustomKeysService();
-      await customKeys.reconcileShareSyncResult({
-        conflicts: result.conflicts ?? [],
-        syncedNames: [...result.created, ...result.updated],
-      });
-
-      if (result.conflicts && result.conflicts.length > 0) {
-        console.warn(
-          `[VaultSync] ${result.conflicts.length} key(s) not shared — name already taken in cloud vault`,
-        );
-      }
-
-      console.log(
-        `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,
+      const result = await pushVaultEntriesViaGatewayHttp(
+        this.gatewayPort,
+        vaultEntries,
       );
+      if (!result) {
+        this.state.status = "idle";
+        return null;
+      }
+      await this.applyVaultPushResultFromBackground(result);
       return result;
     } catch (err) {
       const msg = (err as Error).message;
@@ -630,11 +630,10 @@ export class VaultSyncService {
   /** Push + pull after org/namespace workspace switch (non-blocking). */
   syncForWorkspaceSwitch(): void {
     console.log("[VaultSync] Re-syncing vault for workspace switch (background)...");
-    void this.runFullSync().catch((err: unknown) => {
-      console.warn(
-        "[VaultSync] Workspace switch re-sync failed:",
-        err instanceof Error ? err.message : err,
-      );
+    void import("./gatewayBackgroundWork.js").then(({ scheduleCoalescedBackgroundWork }) => {
+      scheduleCoalescedBackgroundWork("vault:workspace-switch", async () => {
+        await this.runFullSync();
+      });
     });
   }
 

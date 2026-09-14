@@ -23,6 +23,7 @@ import {
   type TursoSyncWorkerOpenSpec,
   type TursoSyncWorkerPullResult,
   type TursoSyncWorkerQueryResult,
+  type TursoSyncWorkerQueryBatchResult,
   type TursoSyncWorkerRequest,
   type TursoSyncWorkerResult,
   type TursoSyncWorkerStatement,
@@ -30,6 +31,12 @@ import {
   type TursoSyncWorkerWriteResult,
 } from "./tursoReplicaSyncWorkerProtocol.js";
 import { resetReplicaSidecars } from "./tursoReplicaSidecarWedge.js";
+import {
+  markReplicaReadPhase,
+  setReplicaReadMeta,
+  timeReplicaReadPhase,
+} from "./replicaReadPhaseTrace.js";
+import type { TursoSyncWorkerOpTiming } from "./tursoReplicaSyncWorkerProtocol.js";
 
 const WORKER_BOOT_TIMEOUT_MS = 20_000;
 const STDERR_RING_BYTES = 4_000;
@@ -72,6 +79,7 @@ interface PendingRequest {
   op: TursoSyncWorkerOp;
   localPath: string;
   started: boolean;
+  sentAt: number;
   resolve: (result: TursoSyncWorkerResult) => void;
   reject: (error: Error) => void;
   timer: NodeJS.Timeout;
@@ -124,6 +132,15 @@ export class TursoReplicaSyncWorkerClient {
     options: Omit<SendOptions, "op" | "statements">,
   ): Promise<TursoSyncWorkerQueryResult> {
     return (await this.send({ ...options, op: "query" })) as TursoSyncWorkerQueryResult;
+  }
+
+  async queryBatch(
+    options: Omit<SendOptions, "op" | "sql" | "params">,
+  ): Promise<TursoSyncWorkerQueryBatchResult> {
+    return (await this.send({
+      ...options,
+      op: "queryBatch",
+    })) as TursoSyncWorkerQueryBatchResult;
   }
 
   async write(
@@ -261,7 +278,7 @@ export class TursoReplicaSyncWorkerClient {
   }
 
   private async sendOnce(options: SendOptions): Promise<TursoSyncWorkerResult> {
-    await this.ensureBooted();
+    await timeReplicaReadPhase("ipcWorkerBootMs", () => this.ensureBooted());
     const child = this.child;
     if (!child?.stdin?.writable) {
       throw new Error("Turso sync worker is not writable");
@@ -295,10 +312,12 @@ export class TursoReplicaSyncWorkerClient {
         );
       }, options.timeoutMs);
 
+      const sentAt = performance.now();
       this.pending.set(id, {
         op: options.op,
         localPath: options.localPath,
         started: false,
+        sentAt,
         resolve,
         reject,
         timer,
@@ -473,6 +492,10 @@ export class TursoReplicaSyncWorkerClient {
 
     if ("started" in parsed) {
       pending.started = true;
+      markReplicaReadPhase(
+        "ipcToWorkerStartedMs",
+        performance.now() - pending.sentAt,
+      );
       return;
     }
     if (!("ok" in parsed)) {
@@ -481,7 +504,14 @@ export class TursoReplicaSyncWorkerClient {
 
     clearTimeout(pending.timer);
     this.pending.delete(id);
+    markReplicaReadPhase("ipcRoundTripMs", performance.now() - pending.sentAt);
     if (parsed.ok === true) {
+      const opTiming = parsed.opTiming as TursoSyncWorkerOpTiming | undefined;
+      if (opTiming) {
+        markReplicaReadPhase("workerQueueMs", opTiming.queueMs);
+        markReplicaReadPhase("workerExecMs", opTiming.execMs);
+        setReplicaReadMeta({ workerOpened: opTiming.opened });
+      }
       pending.resolve(parsed.result ?? {});
     } else {
       pending.reject(new Error(parsed.error || "Turso sync worker error"));

@@ -65,11 +65,17 @@ import {
 import { isTursoHostNotReadyError } from "./tursoReplicaErrors.js";
 import { retryWhileReplicaBusy } from "./replicaBusyRetry.js";
 import {
+  markReplicaReadPhase,
+  timeReplicaReadPhase,
+} from "./replicaReadPhaseTrace.js";
+import {
   noteReplicaReadPathFailure,
   scheduleReplicaBackgroundWedgeRecovery,
 } from "./tursoReplicaBackgroundRecovery.js";
 import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
 import { computeReplicaPendingPush } from "./replicaPendingPush.js";
+import { scheduleTursoReplicaPushForSyncKey } from "./tursoReplicaPushScheduler.js";
+import { withTursoReplicaSyncBusy } from "./gatewayTursoSyncBusy.js";
 
 const REPLICA_STATUS_TIMEOUT_MS = 12_000;
 const REPLICA_SYNC_TIMEOUT_MS = 15_000;
@@ -161,7 +167,7 @@ export class TursoReplicaService {
     statements: ReadonlyArray<{ sql: string; params?: unknown[] }>;
     writeOptions?: TursoReplicaWriteOptions;
   }): Promise<TursoReplicaWriteResult> {
-    const pushAfterWrite = options.writeOptions?.pushAfterWrite !== false;
+    const pushMode = this.resolvePushMode(options.writeOptions);
     return this.withInteractivePath(options.localPath, async () => {
       const spec = await this.openSpec(options.localPath, options.tursoDatabase);
       const client = getTursoReplicaSyncWorkerClient();
@@ -172,7 +178,11 @@ export class TursoReplicaService {
         timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
       });
 
-      const pendingPush = await this.syncAfterWrite(spec, pushAfterWrite);
+      const pendingPush = await this.syncAfterWrite(
+        spec,
+        options.localPath,
+        pushMode,
+      );
       return {
         changes: metrics.changes,
         lastInsertRowid: metrics.lastInsertRowid,
@@ -188,7 +198,7 @@ export class TursoReplicaService {
     sql: string,
     writeOptions?: TursoReplicaWriteOptions,
   ): Promise<{ pendingPush: boolean }> {
-    const pushAfterWrite = writeOptions?.pushAfterWrite !== false;
+    const pushMode = this.resolvePushMode(writeOptions);
     return this.withInteractivePath(localPath, async () => {
       const spec = await this.openSpec(localPath, tursoDatabase);
       await getTursoReplicaSyncWorkerClient().exec({
@@ -196,13 +206,42 @@ export class TursoReplicaService {
         sql,
         timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
       });
-      const pendingPush = await this.syncAfterWrite(spec, pushAfterWrite);
+      const pendingPush = await this.syncAfterWrite(spec, localPath, pushMode);
       return { pendingPush };
     });
   }
 
-  private async syncAfterWrite(spec: OpenSpec, pushAfterWrite: boolean): Promise<boolean> {
-    if (!isTursoReplicaOnline() || !pushAfterWrite) {
+  private resolvePushMode(
+    writeOptions?: TursoReplicaWriteOptions,
+  ): "none" | "sync" | "background" {
+    if (writeOptions?.pushAfterWrite === false) {
+      return "none";
+    }
+    if (writeOptions?.pushAfterWrite === true) {
+      return "sync";
+    }
+    return "background";
+  }
+
+  private scheduleBackgroundReplicaPush(localPath: string): void {
+    scheduleTursoReplicaPushForSyncKey(
+      path.normalize(localPath),
+      "interactive",
+      "api_write",
+    );
+  }
+
+  /** Returns true when cloud push is still pending (local write applied). */
+  private async syncAfterWrite(
+    spec: OpenSpec,
+    localPath: string,
+    pushMode: "none" | "sync" | "background",
+  ): Promise<boolean> {
+    if (pushMode === "none" || !isTursoReplicaOnline()) {
+      return true;
+    }
+    if (pushMode === "background") {
+      this.scheduleBackgroundReplicaPush(localPath);
       return true;
     }
     try {
@@ -317,10 +356,12 @@ export class TursoReplicaService {
   ): Promise<boolean> {
     const client = getTursoReplicaSyncWorkerClient();
     const run = () =>
-      withTimeout(
-        client.sync({ ...spec, timeoutMs: REPLICA_SYNC_TIMEOUT_MS }, op),
-        REPLICA_SYNC_TIMEOUT_MS + 1_000,
-        `replica ${op}`,
+      withTursoReplicaSyncBusy(spec.localPath, `replica_${op}`, () =>
+        withTimeout(
+          client.sync({ ...spec, timeoutMs: REPLICA_SYNC_TIMEOUT_MS }, op),
+          REPLICA_SYNC_TIMEOUT_MS + 1_000,
+          `replica ${op}`,
+        ),
       );
     try {
       const pulled = await run();
@@ -377,19 +418,25 @@ export class TursoReplicaService {
     params?: unknown[];
     pullBeforeRead?: boolean;
   }): Promise<import("../DbQueryPool.js").QueryResult> {
-    return this.withInteractivePath(options.localPath, async () => {
+    return this.withReadPath(options.localPath, async () => {
       const executeRead = async (pullFirst: boolean) => {
-        const spec = await this.openSpec(options.localPath, options.tursoDatabase);
+        const spec = await timeReplicaReadPhase("openSpecMs", () =>
+          this.openSpec(options.localPath, options.tursoDatabase),
+        );
         const client = getTursoReplicaSyncWorkerClient();
         if (isTursoReplicaOnline() && pullFirst) {
-          await this.syncWithRecovery(spec, "pull");
+          await timeReplicaReadPhase("pullBeforeReadMs", () =>
+            this.syncWithRecovery(spec, "pull"),
+          );
         }
-        const { rows: rawRows } = await client.query({
-          ...spec,
-          sql: options.sql,
-          params: options.params,
-          timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
-        });
+        const { rows: rawRows } = await timeReplicaReadPhase("ipcQueryMs", () =>
+          client.query({
+            ...spec,
+            sql: options.sql,
+            params: options.params,
+            timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
+          }),
+        );
         const rows = normalizeReplicaRows(rawRows);
         const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
         return { rows, columns, count: rows.length };
@@ -426,12 +473,74 @@ export class TursoReplicaService {
     });
   }
 
+  async runQueryBatch(options: {
+    localPath: string;
+    tursoDatabase: string;
+    statements: ReadonlyArray<{ sql: string; params?: unknown[] }>;
+    pullBeforeRead?: boolean;
+  }): Promise<import("../DbQueryPool.js").QueryResult[]> {
+    if (options.statements.length === 0) {
+      return [];
+    }
+    return this.withReadPath(options.localPath, async () => {
+      const executeRead = async (pullFirst: boolean) => {
+        const spec = await this.openSpec(options.localPath, options.tursoDatabase);
+        const client = getTursoReplicaSyncWorkerClient();
+        if (isTursoReplicaOnline() && pullFirst) {
+          await this.syncWithRecovery(spec, "pull");
+        }
+        const { results: rawResults } = await client.queryBatch({
+          ...spec,
+          statements: options.statements.map((s) => ({
+            sql: s.sql,
+            params: s.params,
+          })),
+          timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
+        });
+        return rawResults.map((part) => {
+          const rows = normalizeReplicaRows(part.rows);
+          const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+          return { rows, columns, count: rows.length };
+        });
+      };
+
+      try {
+        return await retryWhileReplicaBusy(
+          () => executeRead(options.pullBeforeRead === true),
+          `read batch ${options.tursoDatabase} (${options.statements.length})`,
+        );
+      } catch (error) {
+        const message = (error as Error).message;
+        if (!isReplicaReadTransportError(message)) {
+          throw error;
+        }
+        console.warn(
+          `[TursoReplicaService] Read batch wedge on ${options.tursoDatabase} — ` +
+            `deferring recovery: ${message.slice(0, 160)}`,
+        );
+        noteReplicaReadPathFailure(options.localPath);
+        scheduleReplicaBackgroundWedgeRecovery(
+          this,
+          options.localPath,
+          options.tursoDatabase,
+        );
+        try {
+          await this.recoverReadWedge(options.localPath);
+          return await executeRead(false);
+        } catch (retryError) {
+          noteTursoReplicaTransportError(retryError);
+          throw error;
+        }
+      }
+    });
+  }
+
   async runSchema(
     localPath: string,
     tursoDatabase: string,
     options?: { pullBeforeRead?: boolean },
   ): Promise<import("../DbQueryPool.js").SchemaResult> {
-    return this.withInteractivePath(localPath, async () => {
+    return this.withReadPath(localPath, async () => {
       const executeSchema = async (pullFirst: boolean) => {
         const spec = await this.openSpec(localPath, tursoDatabase);
         const client = getTursoReplicaSyncWorkerClient();
@@ -601,11 +710,15 @@ export class TursoReplicaService {
     if (!bridge.enabled) {
       throw new Error("Turso sync bridge not available — sign in to Papr");
     }
+    // Gateway-side preflight before IPC (timed as openSpecMs). Not the worker open —
+    // that happens inside the worker on query/pull and shows up as workerExecMs.
+    //
     // Cheap prechecks for the corruption shapes we can see from outside. Catching one
     // here saves a worker crash + respawn. Anything we *can't* see is caught by the
     // worker crash policy instead.
     //
     // Shape 1: an `-info` watermark past the end of `-wal`, which panics `find_frame`.
+    const preflightStarted = performance.now();
     const key = normalizeDbPath(localPath);
     const report = inspectReplicaSidecarWedge(localPath);
     if (report.wedged) {
@@ -646,10 +759,13 @@ export class TursoReplicaService {
     // The marker is the durable record that the follow-up pull never happened.
     const localReplicaExists = fs.existsSync(localPath);
     const bootstrapPending = hasBootstrapPendingMarker(localPath);
+    markReplicaReadPhase("openSpecPreflightMs", performance.now() - preflightStarted);
     try {
-      const creds = await bridge.resolveCredentialsForReplicaOpen(tursoDatabase, {
-        localReplicaExists: localReplicaExists && !bootstrapPending,
-      });
+      const creds = await timeReplicaReadPhase("openSpecCredentialsMs", () =>
+        bridge.resolveCredentialsForReplicaOpen(tursoDatabase, {
+          localReplicaExists: localReplicaExists && !bootstrapPending,
+        }),
+      );
       this.touchedPaths.add(key);
       return {
         localPath,
@@ -662,6 +778,16 @@ export class TursoReplicaService {
       noteTursoReplicaTransportError(error);
       throw error;
     }
+  }
+
+  private async withReadPath<T>(
+    localPath: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const key = normalizeDbPath(localPath);
+    return this.pathScheduler.runParallelRead(key, () =>
+      withTimeout(fn(), REPLICA_OPERATION_TIMEOUT_MS, `replica read (${key})`),
+    );
   }
 
   private async withInteractivePath<T>(

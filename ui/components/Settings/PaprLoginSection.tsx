@@ -15,11 +15,7 @@ import {
   type MemoryAudience,
 } from "../../constants/memoryScope";
 import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
-import {
-  formatPaprLoginStatusLine,
-  paprCloudStatusDotVariant,
-} from "../../utils/cloudMemoryStatus";
-import { AvatarStatusDot } from "../common/AvatarStatusDot";
+import { formatPaprLoginStatusLine } from "../../utils/cloudMemoryStatus";
 import { openPaprPlanSettings } from "../../utils/paprCloudFeatureUi";
 import { ProfileAiConnections } from "./ProfileAiConnections";
 import { formatNamespaceOptionLabel } from "./formatNamespaceOptionLabel";
@@ -1083,7 +1079,6 @@ function ProfileIdentitySection({
   const editSnapshotRef = useRef({ name, email });
   const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
   const loginStatus = formatPaprLoginStatusLine({ connectedSince, cloudStatus });
-  const avatarStatusVariant = paprCloudStatusDotVariant(cloudStatus);
 
   const displayEmail = email.trim() || userEmail || "";
   const displayName = name.trim() || "Add your name";
@@ -1124,9 +1119,6 @@ function ProfileIdentitySection({
             onClick={() => fileInputRef.current?.click()}
             aria-label="Change profile photo"
           >
-            {isLoggedIn ? (
-              <AvatarStatusDot variant={avatarStatusVariant} size="lg" />
-            ) : null}
             <UserAvatar
               imageUrl={imageUrl}
               displayName={name}
@@ -1170,7 +1162,6 @@ function ProfileIdentitySection({
             )}
             {isLoggedIn && (
               <div className="profile-merged__display-status">
-                <span className={`papr-section__dot ${loginStatus.dotClass}`} />
                 <span className="profile-merged__display-status-text">{loginStatus.text}</span>
                 {cloudStatus ? (
                   <button

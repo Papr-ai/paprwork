@@ -2,6 +2,8 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import {
   buildDelegateTaskValidationError,
+  CODEBASE_EXPLORER_DELEGATE_EXAMPLE,
+  CODEBASE_EXPLORER_DELEGATE_ID,
   DELEGATE_TASK_EXAMPLE,
   formatDelegateTaskZodError,
   PRODUCT_ARCHITECT_DELEGATE_ID,
@@ -212,6 +214,7 @@ export const delegateTaskTool = createTool({
     "Delegate work to a sub-agent (background job + MiniChat). " +
     "REQUIRED before create_app: list_sub_agents() then " +
     `${DELEGATE_TASK_EXAMPLE}. ` +
+    `For multi-step read-only investigation (4+ tool calls before any write), prefer ${CODEBASE_EXPLORER_DELEGATE_ID}: ${CODEBASE_EXPLORER_DELEGATE_EXAMPLE}. ` +
     "Parameter name is useAgentId only — not agentId or subAgentId. Wait for completion before create_app.",
   inputSchema: delegateTaskSchema,
   execute: async (input) => {
@@ -270,7 +273,9 @@ export const delegateTaskTool = createTool({
 
 export const getDelegationRunTool = createTool({
   id: "get_delegation_run",
-  description: "Get status/details for one delegated sub-agent run",
+  description:
+    "Get status/details for one delegated sub-agent run. resultText is the full handoff (not truncated for agent jobs). " +
+    "codebase-explorer returns markdown + JSON findings — read once, then implement without repeating the same reads.",
   inputSchema: getDelegationRunSchema,
   execute: async (input) => {
     const args = (input as { context?: GetDelegationRunArgs }).context ?? input;

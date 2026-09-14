@@ -196,6 +196,8 @@ Job write  →  onDbChanged → reload affected queries only
 - Nested `(SELECT COUNT(*) FROM big_table)` subqueries in frontend SQL
 - `render()` / tab switch calling `loadAll()` with no cache
 - 5+ raw `/api/db/query` calls without backend handlers
+- 3+ `/api/db/query` inside one `loadData()` without `/api/db/batch` (`mount-multi-db-query`)
+- `onDbChanged` → `loadData()` with no `debounceMs` or debounce/abort in handler (`on-db-changed-no-debounce`)
 - `setInterval` + `/api/db/query` (polling)
 
 **Sync note (Plan A — cloud sync on):** Three lanes — do not conflate: **(1) Git (Sync V3)** per-app GitHub repo for app source + `jobs/{id}/`; **(2) Turso (Plan A)** registry DB schema + rows via `attach_database` / `data-sources.json`; **(3) Vault** Integration Keys + platform cookies (cloud jobs read vault, not desktop keychain). Registry DB **schema** = migration files + `papr_db_apply_migration` (Turso primary when online). **Rows** = local replica → `push()` to Turso (auto when online). **Publish / Publish changes in the app tab** / `push_cloud_sync({ appId })` = git + Turso ordered flush (same engine). Git publish ships migration **files** for collaboration — it does not execute schema. Debug start: `get_cloud_sync_status({ appId?, jobId? })`. High Turso read spikes usually come from **bad app query patterns**, **agent debug tools** (`query_cloud_turso`), or **legacy bootstrap** — not routine replica push/pull.

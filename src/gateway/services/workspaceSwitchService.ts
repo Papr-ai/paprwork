@@ -205,6 +205,10 @@ async function resetPathBoundSingletons(): Promise<void> {
   clearWikiHomeRemoteCache();
   const { clearMemoryPreviewCache } = await import("./MemoryPreviewCache.js");
   await clearMemoryPreviewCache();
+  const { clearGatewayDeferredBootState } = await import(
+    "./gatewayDeferredBootState.js"
+  );
+  await clearGatewayDeferredBootState();
 
   resetCommunityCatalogServiceForWorkspaceSwitch();
   resetPlanServiceForWorkspaceSwitch();
@@ -214,6 +218,10 @@ async function resetPathBoundSingletons(): Promise<void> {
   resetDocumentServiceForWorkspaceSwitch();
   resetDatabaseRegistryForWorkspaceSwitch();
   resetJobRunHistoryForWorkspaceSwitch();
+  const { invalidateAppDataSourcesConfigCache } = await import(
+    "./appDataSourcesResolvedCache.js"
+  );
+  invalidateAppDataSourcesConfigCache();
   await yieldEventLoop();
 
   await resetCodeIndexingForWorkspaceSwitch();

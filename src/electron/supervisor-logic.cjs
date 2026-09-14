@@ -30,25 +30,27 @@ function shouldKillProcess(consecutiveFailures, isSuccess, threshold = 3) {
   return { newCount, shouldKill: newCount >= threshold };
 }
 
-/** Parse /health JSON body. Gateway returns { status: "ok" | "starting" | "switching", syncBusy?: boolean }. */
+/** Parse /health JSON body. Gateway returns { status, syncBusy?, eventLoopLagMs? }. */
 function parseHealthResponse(body) {
   try {
     const parsed = JSON.parse(body);
     const syncBusy = parsed.syncBusy === true;
+    const eventLoopLagMs =
+      typeof parsed.eventLoopLagMs === "number" ? parsed.eventLoopLagMs : undefined;
     // syncBusy is a grace hint for periodic health (don't SIGKILL during upload).
     // Once status is "ok", the gateway is ready — do not block startup on syncBusy.
     if (parsed.status === "ok") {
       return syncBusy
-        ? { alive: true, ready: true, syncBusy: true }
-        : { alive: true, ready: true };
+        ? { alive: true, ready: true, syncBusy: true, eventLoopLagMs }
+        : { alive: true, ready: true, eventLoopLagMs };
     }
     if (syncBusy) {
-      return { alive: true, ready: false, syncBusy: true };
+      return { alive: true, ready: false, syncBusy: true, eventLoopLagMs };
     }
     if (parsed.status === "starting" || parsed.status === "switching") {
-      return { alive: true, ready: false };
+      return { alive: true, ready: false, eventLoopLagMs };
     }
-    return { alive: false, ready: false };
+    return { alive: false, ready: false, eventLoopLagMs };
   } catch {
     return { alive: false, ready: false };
   }

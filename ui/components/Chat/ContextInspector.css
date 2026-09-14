@@ -20,6 +20,16 @@
   animation: ctxiFade 0.2s var(--ease);
 }
 
+/* Opened from chat — stay inside the pane, not over the whole app. */
+.ctxi-overlay--anchored {
+  position: absolute;
+  inset: 0;
+  z-index: 200;
+  padding: 8px;
+  align-items: stretch;
+  justify-content: stretch;
+}
+
 @keyframes ctxiFade {
   from {
     opacity: 0;
@@ -39,6 +49,14 @@
     0 24px 64px rgba(0, 0, 0, 0.28),
     0 0 0 0.5px rgba(255, 255, 255, 0.12) inset;
   animation: ctxiIn 0.22s var(--ease);
+}
+
+.ctxi--anchored {
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  min-height: 0;
+  border-radius: var(--r-lg);
 }
 
 @keyframes ctxiIn {
@@ -99,9 +117,37 @@
 
 .ctxi__body {
   display: grid;
-  grid-template-columns: 232px 1fr;
+  grid-template-columns: minmax(160px, 232px) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
+}
+
+@media (max-width: 720px) {
+  .ctxi__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .ctxi__rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+    max-height: 140px;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+  }
+
+  .ctxi__tab {
+    flex: 1 1 calc(50% - 4px);
+    min-width: 120px;
+  }
+
+  .ctxi__head {
+    padding: var(--space-4);
+  }
+
+  .ctxi__heading h2 {
+    font-size: 18px;
+  }
 }
 
 .ctxi__rail {
@@ -253,8 +299,10 @@
 .ctxi-row__head {
   position: relative;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-2);
+  row-gap: 4px;
   width: 100%;
   padding: 8px 10px;
   border: none;
@@ -301,12 +349,15 @@
 
 .ctxi-row__label {
   position: relative;
-  flex: 1;
+  flex: 1 1 120px;
+  min-width: 0;
   font-size: 13px;
   color: var(--text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  line-height: 1.35;
+  text-align: left;
 }
 
 .ctxi-row__tokens {

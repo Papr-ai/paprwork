@@ -1,0 +1,4073 @@
+{
+  "version": 1,
+  "generatedAt": "2026-09-14T20:18:30.511Z",
+  "entryCount": 189,
+  "entries": [
+    {
+      "id": "access-members",
+      "title": "Cloud team access",
+      "summary": "Who can access published app (cloud host).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "cloud"
+      ],
+      "method": "GET",
+      "path": "/api/access",
+      "pathAliases": [
+        "/api/members"
+      ],
+      "keywords": [
+        "auth",
+        "team",
+        "members",
+        "access"
+      ]
+    },
+    {
+      "id": "agent-tool-add_agent_memory",
+      "title": "add_agent_memory",
+      "summary": "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "add_agent_memory",
+      "keywords": [
+        "add_agent_memory",
+        "add",
+        "agent",
+        "memory",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-add_agent_memory_batch",
+      "title": "add_agent_memory_batch",
+      "summary": "Write multiple memory items in ONE request. Use whenever you are storing 3+ related items (entity backfills, a set of tasks, imported records) — far cheaper than looping add_agent_memory. Applies the same WorkspaceContext graph schema and ACL scope as add_agent_memory. Returns a batch_id; poll get_memory_batch_status to confirm all writes landed.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "add_agent_memory_batch",
+      "keywords": [
+        "add_agent_memory_batch",
+        "add",
+        "agent",
+        "memory",
+        "batch",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-attach_database",
+      "title": "attach_database",
+      "summary": "Link a registry database to a mini-app. Apps may attach many DBs. Mini-app code names the DB on every call: sourceId = alias (e.g. 'billing'). Reads: POST /api/db/query. Writes: POST /api/db/write. Both endpoints accept sourceId.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "attach_database",
+      "keywords": [
+        "attach_database",
+        "attach",
+        "database",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-bash",
+      "title": "bash",
+      "summary": "Execute bash commands on the system.\n\nWHEN TO USE BASH TOOL:\n✓ Short commands that complete in <60 seconds\n✓ Commands with output <100MB\n✓ One-off operations: file operations, git commands, package installs, quick scripts, API probes (curl), sqlite peeks on job scratch DBs\n✗ NEVER sqlite3/sqlite3.connect on a registry DB (data/databases/*/data.db) — even SELECT truncates the WAL and wedges cloud sync; blocked. Use query_cloud_turso / papr_db_sync_status, or sqlite3 \"file:$PATH?mode=ro\"\n✓ Commands where you need to see the full output immediately\n✓ Exploring data shape BEFORE committing to c...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "bash",
+      "keywords": [
+        "bash",
+        "bash",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_click",
+      "title": "browser_click",
+      "summary": "Click an element on the current browser page",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_click",
+      "keywords": [
+        "browser_click",
+        "browser",
+        "click",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_console_logs",
+      "title": "browser_console_logs",
+      "summary": "Read browser console logs from the current session. Works after prepare_browser (Papr Chrome, headless Playwright, or embedded Electron fallback). Use to debug JS errors while reverse-engineering site APIs.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_console_logs",
+      "keywords": [
+        "browser_console_logs",
+        "browser",
+        "console",
+        "logs",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_fill_form",
+      "title": "browser_fill_form",
+      "summary": "Fill multiple form fields at once. More efficient than multiple browser_type calls.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_fill_form",
+      "keywords": [
+        "browser_fill_form",
+        "browser",
+        "fill",
+        "form",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_navigate",
+      "title": "browser_navigate",
+      "summary": "Navigate the browser session to a URL. Automatically waits for the page to settle after navigation (platform-aware pacing for LinkedIn/social — ~4s on LinkedIn). For LinkedIn/social/custom sites: call connect_platform prepare_browser FIRST (Papr Chrome on desktop; headless Playwright with keychain cookies otherwise). Then navigate/snapshot/click.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_navigate",
+      "keywords": [
+        "browser_navigate",
+        "browser",
+        "navigate",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_network_logs",
+      "title": "browser_network_logs",
+      "summary": "Network tab for the current browser session — xhr/fetch URLs, methods, status codes. After prepare_browser on LinkedIn/social, use this (NOT bash curl) to discover APIs and debug empty pages. Works on Papr Chrome, headless Playwright, and embedded Electron fallback.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_network_logs",
+      "keywords": [
+        "browser_network_logs",
+        "browser",
+        "network",
+        "logs",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_scroll",
+      "title": "browser_scroll",
+      "summary": "Scroll page by direction/amount or scroll element into view. Required before clicking off-screen elements.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_scroll",
+      "keywords": [
+        "browser_scroll",
+        "browser",
+        "scroll",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_snapshot",
+      "title": "browser_snapshot",
+      "summary": "How the agent SEES the page: returns HTML (truncated). After prepare_browser, read LinkedIn/social UIs here, find CSS selectors, then browser_click/browser_type. Primary vision tool — not screenshots.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_snapshot",
+      "keywords": [
+        "browser_snapshot",
+        "browser",
+        "snapshot",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_tabs",
+      "title": "browser_tabs",
+      "summary": "List or close browser sessions",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_tabs",
+      "keywords": [
+        "browser_tabs",
+        "browser",
+        "tabs",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_test_script",
+      "title": "browser_test_script",
+      "summary": "Run a browser page script for UI testing and return the result",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_test_script",
+      "keywords": [
+        "browser_test_script",
+        "browser",
+        "test",
+        "script",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_type",
+      "title": "browser_type",
+      "summary": "Fill text into an element on the current browser page",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_type",
+      "keywords": [
+        "browser_type",
+        "browser",
+        "type",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_wait_for",
+      "title": "browser_wait_for",
+      "summary": "DEPRECATED — use page_wait_for. If a mini-app preview is open, waits in the preview; otherwise waits in the headless browser (requires browser_navigate first).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_wait_for",
+      "keywords": [
+        "browser_wait_for",
+        "browser",
+        "wait",
+        "for",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-complete_delegation",
+      "title": "complete_delegation",
+      "summary": "Mark your delegation task as complete and return the final result. Use this when you have finished the assigned task and have a result to deliver.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "complete_delegation",
+      "keywords": [
+        "complete_delegation",
+        "complete",
+        "delegation",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-connect_platform",
+      "title": "connect_platform",
+      "summary": "Check status or manage Platform Connections (built-in social sites + user/agent-registered login sites).\n\nUse this to:\n- Register a login-required site: action=\"register\" with url — then request_connect\n- Check if connected: action=\"status\"\n- **Automate with agent browser tools: action=\"prepare_browser\"** (desktop: real Chrome window outside Papr when installed; embedded tab fallback)\n- Ask user to connect: action=\"request_connect\"\n- Remove a custom site: action=\"unregister\"\n- Open a visible window for the user: action=\"browse\" (NOT for agent automation)\n\nBuilt-in: linkedin, instagram, redd...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "connect_platform",
+      "keywords": [
+        "connect_platform",
+        "connect",
+        "platform",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_app",
+      "title": "create_app",
+      "summary": "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. ENFORCED: Every new app requires a completed product-architect delegation in this chat first — delegate_task({ useAgentId: \"product-architect\", task: \"...\", context: \"...\" }) after list_sub_agents(). Simple todo/CRUD apps still require the brief (fast). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_app",
+      "keywords": [
+        "create_app",
+        "create",
+        "app",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-create_database",
+      "title": "create_database",
+      "summary": "Create an independent SQLite database (registry entry + local file). Schema: write_file on data/databases/{slug}/migrations/000N_….sql — applied on job run + Turso sync. Every synced table MUST have a PRIMARY KEY (INTEGER or TEXT) — required for cloud sync and row versioning. Next: attach_database({ appId, dbId, alias }) so the mini-app can read/write via /api/db/* with sourceId. Jobs that fill the DB: create_job({ writeDbIds: [dbId] }). isolation: 'shared' (default) or 'per-user' (separate Turso DB per signed-in user). For anonymous public apps use shared DB + owner_session column; for pri...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_database",
+      "keywords": [
+        "create_database",
+        "create",
+        "database",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_document",
+      "title": "create_document",
+      "summary": "Create a new markdown document in Paprwork. Use a clear, descriptive title (e.g. 'Knowledge Graphs Overview'). The document opens automatically in the editor. Returns filePath for bash edits.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_document",
+      "keywords": [
+        "create_document",
+        "create",
+        "document",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_entities",
+      "title": "create_entities",
+      "summary": "Create entities (nodes) and relationships in the knowledge graph with exact specifications. Use this for structured data imports, API integrations, or when you need complete control over graph structure. Nodes and relationships must conform to types defined in your registered schema. Supports the same read ACL options as add_agent_memory (readAcl, shareWithUserIds, shareWithTeam, shareWithOrganization). Call list_namespace_users before sharing with specific users.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_entities",
+      "keywords": [
+        "create_entities",
+        "create",
+        "entities",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_job",
+      "title": "create_job",
+      "summary": "Create a persistent, rerunnable job — NOT for one-time probes. Use the bash tool for quick one-offs (curl, sqlite peek, test script once). ENFORCED for app-linked/scheduled/agent jobs: complete product-architect delegation in this chat before create_job. Create a job when: mini-app button (/api/jobs/run), schedule, appIds linkage, dependsOn pipeline, or user will rerun by name. REQUIRED fields: name, type (exact field name — python|node|agent|bash|shell|swift|subagent), appIds. Do NOT use jobType or workingDirectory — those are not valid parameters. REQUIRED: appIds — pass one or more mini-...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_job",
+      "keywords": [
+        "create_job",
+        "create",
+        "job",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-create_plan",
+      "title": "create_plan",
+      "summary": "REQUIRED for any multi-step task, especially app/job creation or updates. Create a step-by-step plan shown to the user as a progress card. Plans are persisted and associated with the chat. Use BEFORE starting any mini-app or job work (creating OR updating). **Recommendation (not required):** If you have not run product-architect yet, consider delegating for a brief + architecture before building — then align this plan with approved Phase 1. **ENFORCED: Only ONE active plan per chat** - if an active plan exists, this tool will return it instead of creating a duplicate. To start a new plan, f...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_plan",
+      "keywords": [
+        "create_plan",
+        "create",
+        "plan",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_platform_issue",
+      "title": "create_platform_issue",
+      "summary": "Submit a PUBLIC bug report or feature request to Papr-ai/paprwork on GitHub (title+body posted as-is). Use for Papr Work platform issues: crashes, UI bugs, settings/sync/update problems, feature requests. Also when user uses Settings → About → Report Issue / Feature Request. Do NOT use for bugs in the user's mini-apps, jobs, or private projects. Sanitize title and body for public GitHub. contactEmail is optional and Mongo-only (never in body). Submitter identity attached via Papr login, not in GitHub. Requires Papr login. Show draft, get userConfirmed: true.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_platform_issue",
+      "keywords": [
+        "create_platform_issue",
+        "create",
+        "platform",
+        "issue",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_skill",
+      "title": "create_skill",
+      "summary": "Create a new reusable skill",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_skill",
+      "keywords": [
+        "create_skill",
+        "create",
+        "skill",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-create_sub_agent",
+      "title": "create_sub_agent",
+      "summary": "Create or update a persistent sub-agent profile. Specify icon (robot, search, code, pen, chart) for sidebar/mini-chat. If allowedToolIds not specified, defaults to ['bash', 'read_file', 'write_file'].",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "create_sub_agent",
+      "keywords": [
+        "create_sub_agent",
+        "create",
+        "sub",
+        "agent",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-delegate_task",
+      "title": "delegate_task",
+      "summary": "Delegate work to a sub-agent (background job + MiniChat). REQUIRED before create_app: list_sub_agents() then delegate_task({ useAgentId: \"product-architect\", task: \"Product brief + architecture for: [goal]\", context: \"User constraints: ...\" }). For multi-step read-only investigation (4+ tool calls before any write), prefer codebase-explorer: delegate_task({ useAgentId: \"codebase-explorer\", task: \"Investigate why job X fails\", context: \"jobId: ..., appId: ..., hypothesis: ...\" }). Parameter name is useAgentId only — not agentId or subAgentId. Wait for completion before create_app.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delegate_task",
+      "keywords": [
+        "delegate_task",
+        "delegate",
+        "task",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-delete_app",
+      "title": "delete_app",
+      "summary": "Delete a mini-app by id. Removes the app from $PAPR_HOME/data/apps.json, deletes its app folder under appsRoot, and notifies the UI.\n\n**Two-step flow:**\n1. First call WITHOUT confirmed: Returns a preview of what will be deleted (linked jobs, Turso DBs, published status)\n2. After confirming with user, call WITH confirmed: true and the appropriate options\n\nIf the app is published to the web, set unpublishFromCloud: true.\nIf the app has linked jobs, set deleteLinkedJobs: true to also delete them.\nIf jobs have Turso cloud databases, set deleteTursoDatabases: true to delete those too.\n**Registry...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_app",
+      "keywords": [
+        "delete_app",
+        "delete",
+        "app",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-delete_database",
+      "title": "delete_database",
+      "summary": "Tombstone a registry database when no apps reference it. Optionally delete Turso replica when deleteTurso=true. NEVER use to fix schema drift or cutover — that destroys cloud row data. For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing Turso instance).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_database",
+      "keywords": [
+        "delete_database",
+        "delete",
+        "database",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-delete_job",
+      "title": "delete_job",
+      "summary": "Delete a job by id. Stops it first if currently running.\nBy default, keeps the job's files on disk (scripts, logs, database) but removes it from the job index.\nSet deleteFiles: true to also wipe the directory — use this for jobs created by mistake with no useful data.\nDoes NOT affect other jobs that depend on this job; update or recreate those separately.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_job",
+      "keywords": [
+        "delete_job",
+        "delete",
+        "job",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-delete_key",
+      "title": "delete_key",
+      "summary": "Delete a custom API key. Use this when the user wants to remove a key they no longer need. The key will be permanently removed from secure storage.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_key",
+      "keywords": [
+        "delete_key",
+        "delete",
+        "key",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-delete_memory",
+      "title": "delete_memory",
+      "summary": "Delete a specific memory item by ID. This permanently removes the memory from your knowledge graph.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_memory",
+      "keywords": [
+        "delete_memory",
+        "delete",
+        "memory",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-delete_plan",
+      "title": "delete_plan",
+      "summary": "Delete an existing plan to start fresh. Use this when you need to create a completely new plan but there's already an active plan for this chat. After deleting, you can call create_plan to start a new plan. Only delete plans when explicitly needed - if you just want to update the approach, use update_plan instead.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_plan",
+      "keywords": [
+        "delete_plan",
+        "delete",
+        "plan",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-delete_schema",
+      "title": "delete_schema",
+      "summary": "Soft-delete a schema by marking it as archived. The schema data is preserved but marked inactive. This does not permanently remove the schema - use update_schema with status='active' to restore it.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_schema",
+      "keywords": [
+        "delete_schema",
+        "delete",
+        "schema",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-delete_sub_agent",
+      "title": "delete_sub_agent",
+      "summary": "Delete a persistent sub-agent profile. Blocked when apps (agent chat) or subagent jobs still reference the profile unless force: true.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "delete_sub_agent",
+      "keywords": [
+        "delete_sub_agent",
+        "delete",
+        "sub",
+        "agent",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-edit_app_file_lines",
+      "title": "edit_app_file_lines",
+      "summary": "Edit a mini-app file by replacing a range of lines with new content.\nThis is more reliable than edit_app_file for code changes because:\n- Line numbers are unambiguous (no string matching issues)\n- You can read the file first to see exact line numbers\n- Works even with special characters, escape sequences, etc.\n\nWorkflow:\n1. read_app_file to see the content with line numbers\n2. edit_app_file_lines to replace specific line range\n3. Verify with read_app_file or webview_snapshot\n\nExample: Replace lines 168-215 in index.html with new HTML structure.\nAfter EVERY edit: validate_app + preview test ...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "edit_app_file_lines",
+      "keywords": [
+        "edit_app_file_lines",
+        "edit",
+        "app",
+        "file",
+        "lines",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-edit_file",
+      "title": "edit_file",
+      "summary": "Edit any file by replacing an exact string with a new string. Use for quick patches in mini-apps, jobs, GitHub repos, or any path on disk. Always read_file (or read_app_file) first to get exact current content. Paths under $PAPR_HOME/apps/ automatically run esbuild + validate_app after the edit. Paths under $PAPR_HOME/Jobs/ save a version snapshot before editing. External repo paths are auto-staged in git when applicable. For multi-line HTML/JS/CSS blocks in mini-apps, prefer edit_app_file_lines (line ranges). If oldString appears more than once, pass occurrence or add more surrounding cont...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "edit_file",
+      "keywords": [
+        "edit_file",
+        "edit",
+        "file",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-enable_app_agent_chat",
+      "title": "enable_app_agent_chat",
+      "summary": "Enable embedded sub-agent chat for any mini-app (path 3 — end-user in-app assistant). Users get a floating bubble; desktop opens a multi-turn session via /api/app-agent/sessions (NOT delegate_task). REQUIRES create_sub_agent first with app-appropriate tools (read_app_file, edit_app_file, read_app_data_sources; add bash for sqlite/API if needed). Do NOT test this feature with delegate_task in Pen chat — open the app bubble instead.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "enable_app_agent_chat",
+      "keywords": [
+        "enable_app_agent_chat",
+        "enable",
+        "app",
+        "agent",
+        "chat",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-evaluate_run",
+      "title": "evaluate_run",
+      "summary": "Manually trigger evaluation of a job run against its execution recipe. Returns detailed scoring across all rubric dimensions. Use when autoEvaluate is off, or to re-evaluate a specific run.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "evaluate_run",
+      "keywords": [
+        "evaluate_run",
+        "evaluate",
+        "run",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-export_app_bundle",
+      "title": "export_app_bundle",
+      "summary": "Export a mini-app with its jobs and database schemas as a portable app bundle.\nCreates an app bundle folder at $PAPR_HOME/bundles/{bundleId}/ containing:\n- manifest.json: App + job metadata, database schemas\n- apps/{appId}/: Mini app HTML/CSS/JS/TS files\n- jobs/{jobId}/: Job code, migrations\n- README.md: Auto-generated installation instructions\n- .gitignore: Excludes large data files\n\nAutomatically discovers the FULL job pipeline via three methods: (1) scans app source files for job IDs referenced in code (e.g. fetch('/api/jobs/run', { jobId })), (2) walks dependsOn dependency chains, and (...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "export_app_bundle",
+      "keywords": [
+        "export_app_bundle",
+        "export",
+        "app",
+        "bundle",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-generate_media",
+      "title": "generate_media",
+      "summary": "Generate an image or video using a configured provider model. Google models use GOOGLE_API_KEY; OpenAI images use Platform API key OR ChatGPT Plus/Pro OAuth (Codex image_generation). For mini-apps: ALWAYS pass appId — output registers in App Files and returns appFileId (store in SQLite; mini-app uses papr.files.url(id)). Do NOT copy generated bytes into apps/{id}/ code, read_file JPEGs, or embed base64. Use list_media_models first to see which models and auth paths are available. Prefer this over bash+curl — keys stay server-side and output is stored reliably.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "generate_media",
+      "keywords": [
+        "generate_media",
+        "generate",
+        "media",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_app_bundle_info",
+      "title": "get_app_bundle_info",
+      "summary": "Preview an app bundle's contents without importing it.\nReads and parses the manifest.json to show app info, job specs, and database schemas.\nUse this to inspect an app bundle before deciding to import it.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_app_bundle_info",
+      "keywords": [
+        "get_app_bundle_info",
+        "get",
+        "app",
+        "bundle",
+        "info",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_app_file_version",
+      "title": "get_app_file_version",
+      "summary": "Get the full content of a specific saved version of a mini-app file",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_app_file_version",
+      "keywords": [
+        "get_app_file_version",
+        "get",
+        "app",
+        "file",
+        "version",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_cloud_app_publish",
+      "title": "get_cloud_app_publish",
+      "summary": "Get cloud publish status for a mini-app (apps.papr.ai).\n\nReturns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, and URLs.\n\n**Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.\nIf Cloud Sync is off, the tool returns an error — use export_app_bundle instead (recommend enabling Cloud first).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_cloud_app_publish",
+      "keywords": [
+        "get_cloud_app_publish",
+        "get",
+        "cloud",
+        "app",
+        "publish",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_cloud_sync_status",
+      "title": "get_cloud_sync_status",
+      "summary": "Inspect Papr Cloud health for the active workspace — one call for sync + jobs.\n\nReturns:\n- workspaceApps — apps in this workspace from local apps.json (what exists on disk)\n- appWriterRepo (when appId set) — per-app GitHub repo URL, last commit, Sync V3 upload status (use this to verify cloud code)\n- github — legacy namespace monorepo (workspace/, Jobs/ only — apps/ rows omitted as misleading)\n- Turso sync per linked database — check syncMode first: legacy = old Papr CDC/log path; replica = Plan A Turso Sync (pendingPush, pendingOps/cdcOperations are normal unpushed DML on replica — NOT leg...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_cloud_sync_status",
+      "keywords": [
+        "get_cloud_sync_status",
+        "get",
+        "cloud",
+        "sync",
+        "status",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_delegation_run",
+      "title": "get_delegation_run",
+      "summary": "Get status/details for one delegated sub-agent run. resultText is the full handoff (not truncated for agent jobs). codebase-explorer returns markdown + JSON findings — read once, then implement without repeating the same reads.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_delegation_run",
+      "keywords": [
+        "get_delegation_run",
+        "get",
+        "delegation",
+        "run",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_document_upload_status",
+      "title": "get_document_upload_status",
+      "summary": "Poll Papr Memory document processing status for an upload_id. Returns progress (0–1), status_type (processing/completed/failed), page_id, and memory_items when available. Call repeatedly until status_type is completed or failed.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_document_upload_status",
+      "keywords": [
+        "get_document_upload_status",
+        "get",
+        "document",
+        "upload",
+        "status",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_file_code_summary",
+      "title": "get_file_code_summary",
+      "summary": "Fetch the cached summary for a single source file in a project. Use before read_app_file when you only need orientation, not full source.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_file_code_summary",
+      "keywords": [
+        "get_file_code_summary",
+        "get",
+        "file",
+        "code",
+        "summary",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_full_tool_result",
+      "title": "get_full_tool_result",
+      "summary": "Retrieve the FULL stored result for ONE tool call (by toolCallId) when you still need data hidden by a truncation notice. Call sparingly — one toolCallId at a time, not in bulk. For files, prefer read_app_file/read_job_file again. Default scope is the active chat. Use startChar/length to paginate very large results.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_full_tool_result",
+      "keywords": [
+        "get_full_tool_result",
+        "get",
+        "full",
+        "tool",
+        "result",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_job_file_version",
+      "title": "get_job_file_version",
+      "summary": "Get the full content of a specific saved version of a job file",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_job_file_version",
+      "keywords": [
+        "get_job_file_version",
+        "get",
+        "job",
+        "file",
+        "version",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_job_graph",
+      "title": "get_job_graph",
+      "summary": "Get the full job dependency graph including folder groupings, app linkages, and dependency edges.\n\n**Always call this before creating new jobs** for an existing pipeline to understand what already exists and how jobs relate to each other.\n\nReturns:\n- folders: which jobs belong to each folder\n- appLinks: which apps are linked to which jobs (via data-sources)\n- edges: dependency edges (job A must complete before job B)\n\nOptionally filter to a specific app to see only its relevant jobs.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_job_graph",
+      "keywords": [
+        "get_job_graph",
+        "get",
+        "job",
+        "graph",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_job_history",
+      "title": "get_job_history",
+      "summary": "Get run history for a job (last N runs with status, duration, timestamps). Use this to debug patterns: 'why did this fail 5 times yesterday?', 'how long do runs typically take?', 'when did this last succeed?'",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_job_history",
+      "keywords": [
+        "get_job_history",
+        "get",
+        "job",
+        "history",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_job_stats",
+      "title": "get_job_stats",
+      "summary": "Get statistics for a job (total runs, success/failure counts, average duration). Use this to assess job reliability and performance.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_job_stats",
+      "keywords": [
+        "get_job_stats",
+        "get",
+        "job",
+        "stats",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_key",
+      "title": "get_key",
+      "summary": "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → API Keys → Custom API Keys.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_key",
+      "keywords": [
+        "get_key",
+        "get",
+        "key",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_memory_batch_status",
+      "title": "get_memory_batch_status",
+      "summary": "Check processing status of an add_agent_memory_batch write. Memory writes are asynchronous (embedding + graph extraction + Parse persistence), so use this to distinguish a SLOW write from a FAILED one before retrying or reporting an error.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_memory_batch_status",
+      "keywords": [
+        "get_memory_batch_status",
+        "get",
+        "memory",
+        "batch",
+        "status",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_memory_feedback",
+      "title": "get_memory_feedback",
+      "summary": "Fetch a previously submitted feedback record by feedback_id. Use to verify feedback was persisted server-side, or to inspect what was recorded for a given search.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_memory_feedback",
+      "keywords": [
+        "get_memory_feedback",
+        "get",
+        "memory",
+        "feedback",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_papr_api_reference",
+      "title": "get_papr_api_reference",
+      "summary": "Lookup Papr platform API contracts BEFORE curl/grep/memory search: mini-app HTTP (/api/db/*, jobs, files), mini-app SDK (papr.*), and agent tools. Returns method, path, body fields, limits, and examples. For workflow/playbooks use read_skill({ skillId: 'preloaded-papr-api-reference' }) or preloaded-app-and-jobs-guide.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_papr_api_reference",
+      "keywords": [
+        "get_papr_api_reference",
+        "get",
+        "papr",
+        "api",
+        "reference",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_papr_workspace",
+      "title": "get_papr_workspace",
+      "summary": "Return the active Papr org/namespace workspace paths (paprHome, appsRoot, jobsRoot, dataDir, organizationId, namespaceId). Call this before constructing $PAPR_HOME paths — prefer app/job tools over raw paths.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_papr_workspace",
+      "keywords": [
+        "get_papr_workspace",
+        "get",
+        "papr",
+        "workspace",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_project_code_overview",
+      "title": "get_project_code_overview",
+      "summary": "Fetch the cached project code overview (architecture summary synthesized from file summaries). Use this FIRST before reading individual files — instant local lookup, not semantic search.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_project_code_overview",
+      "keywords": [
+        "get_project_code_overview",
+        "get",
+        "project",
+        "code",
+        "overview",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_schema",
+      "title": "get_schema",
+      "summary": "Fetch detailed information about a specific Papr memory schema by ID. Returns full schema definition including node types, relationships, properties, and metadata. Use this after list_schemas to get complete details for a specific schema.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_schema",
+      "keywords": [
+        "get_schema",
+        "get",
+        "schema",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-get_wiki_entity",
+      "title": "get_wiki_entity",
+      "summary": "Fetch a full wiki entity page (person, company, project, app…) from the local knowledge graph. Use when the user asks about someone or something by name — BEFORE saying you have no memory. Pass entityId from the WIKI GRAPH catalog, or name to search. Returns relationships, evidence, and narrative context.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_wiki_entity",
+      "keywords": [
+        "get_wiki_entity",
+        "get",
+        "wiki",
+        "entity",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-import_app_bundle",
+      "title": "import_app_bundle",
+      "summary": "Import an app bundle from a local path or GitHub URL.\nValidates manifest, checks for conflicts, and installs the complete app with all jobs and database schemas.\n\nSupports:\n- Local paths: ~/Downloads/my-app-bundle\n- GitHub URLs: github.com/user/repo or https://github.com/user/repo\n- Community repo with subPath: source=\"github.com/Papr-ai/paprwork-community-apps\" subPath=\"bundles/meetings-manager\"\n\nUse subPath when the bundle is inside a subdirectory of the repo (e.g., the Paprwork community apps repo).\nIf app/job IDs conflict with existing ones, generates new UUIDs when renameConflicts is t...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "import_app_bundle",
+      "keywords": [
+        "import_app_bundle",
+        "import",
+        "app",
+        "bundle",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-import_document",
+      "title": "import_document",
+      "summary": "Import a file from the user's device into Papr as a document. Supports Markdown, text, and Word (.docx) files. DOCX files are automatically converted to Markdown. Use this when a user says 'open', 'import', or 'edit' a file from their filesystem.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "import_document",
+      "keywords": [
+        "import_document",
+        "import",
+        "document",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-inspect_cloud_repo",
+      "title": "inspect_cloud_repo",
+      "summary": "Check app code in the Sync V3 per-app writer GitHub repo (canonical \"check app repo\" tool).\n\naction=read — fetch a file, e.g. relativePath: \"dist/app.js\" with appId set.\n\naction=list — list files in the per-app repo. Requires appId. Use prefix dist/, backend/, jobs/, etc.\n\nDo NOT use paths like apps/{appId}/dist/app.js without appId — that hits the wrong legacy namespace repo and returns 404 even after a successful upload.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "inspect_cloud_repo",
+      "keywords": [
+        "inspect_cloud_repo",
+        "inspect",
+        "cloud",
+        "repo",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-install_cloud_app",
+      "title": "install_cloud_app",
+      "summary": "Install a Papr Cloud mini-app source into the user's Paprwork workspace.\n\nUses the same install pipeline as the Community / Team Apps UI (POST /api/cloud/install).\n\nRequires Papr login. Publisher must enable **Edit the code** (codeAccess=install).\n\nFor team-shared apps, ask the user fork vs collaborate before calling — or omit mode to receive the same options as the UI modal.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "install_cloud_app",
+      "keywords": [
+        "install_cloud_app",
+        "install",
+        "cloud",
+        "app",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-introspect_memory_graph",
+      "title": "introspect_memory_graph",
+      "summary": "Discover the PAPR Memory knowledge graph schema via GraphQL introspection. Returns schema read order (WorkspaceContext first, then other active schemas), available types, fields, and relationships. Call this BEFORE query_memory_graph to understand the schema structure. Omit typeName for an overview, or provide a specific type name for detailed field info.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "introspect_memory_graph",
+      "keywords": [
+        "introspect_memory_graph",
+        "introspect",
+        "memory",
+        "graph",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-link_app_data_source",
+      "title": "link_app_data_source",
+      "summary": "Attach a registry database to a mini-app (apps may link multiple DBs). Workflow: create_database → attach_database({ appId, dbId, alias }). Mini-apps pass sourceId (alias) on every /api/db/* call — like naming the DB in backend code.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "link_app_data_source",
+      "keywords": [
+        "link_app_data_source",
+        "link",
+        "app",
+        "data",
+        "source",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_app_bundles",
+      "title": "list_app_bundles",
+      "summary": "List local app bundles in $PAPR_HOME/bundles/ — exports created by export_app_bundle on this machine.\n\nNOT the Community Apps catalog. To browse forkable cloud apps, use list_community_apps() instead.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_app_bundles",
+      "keywords": [
+        "list_app_bundles",
+        "list",
+        "app",
+        "bundles",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_app_file_versions",
+      "title": "list_app_file_versions",
+      "summary": "List all saved versions of a mini-app file (newest first).\nEvery time a file is edited, the previous content is automatically saved.\nUse this to see what changed and when, or to find a version to restore.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_app_file_versions",
+      "keywords": [
+        "list_app_file_versions",
+        "list",
+        "app",
+        "file",
+        "versions",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_app_files",
+      "title": "list_app_files",
+      "summary": "List all source files in a mini-app (recursive). Includes content/reports/*.md for report text. Use before read_app_file to confirm paths.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_app_files",
+      "keywords": [
+        "list_app_files",
+        "list",
+        "app",
+        "files",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_apps",
+      "title": "list_apps",
+      "summary": "List all mini-apps. **ALWAYS call this BEFORE creating a new app** to check if a similar app already exists that you can update instead.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_apps",
+      "keywords": [
+        "list_apps",
+        "list",
+        "apps",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_cloud_app_changes",
+      "title": "list_cloud_app_changes",
+      "summary": "List incoming contribute-back pull requests for apps you own (OWNER ONLY — published upstream apps).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_cloud_app_changes",
+      "keywords": [
+        "list_cloud_app_changes",
+        "list",
+        "cloud",
+        "app",
+        "changes",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_community_apps",
+      "title": "list_community_apps",
+      "summary": "List forkable/customizable Papr Cloud apps — the same catalog as the Community Apps and Team Apps tabs.\n\nRequires Papr login. Returns only apps with codeAccess=install (Customize / fork via install_cloud_app).\n\nDo NOT discover apps via paprwork-community-apps/registry.json, list_app_bundles, curl to apps.papr.ai, or /api/cloud/catalog — those are wrong or deprecated.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_community_apps",
+      "keywords": [
+        "list_community_apps",
+        "list",
+        "community",
+        "apps",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_delegation_runs",
+      "title": "list_delegation_runs",
+      "summary": "List recent delegated sub-agent runs",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_delegation_runs",
+      "keywords": [
+        "list_delegation_runs",
+        "list",
+        "delegation",
+        "runs",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_directory",
+      "title": "list_directory",
+      "summary": "List files and directories. Supports recursive listing and pattern filtering.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_directory",
+      "keywords": [
+        "list_directory",
+        "list",
+        "directory",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_documents",
+      "title": "list_documents",
+      "summary": "List documents, optionally filtered by search query",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_documents",
+      "keywords": [
+        "list_documents",
+        "list",
+        "documents",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_evaluations",
+      "title": "list_evaluations",
+      "summary": "List all evaluation results for a job. Shows score history across runs.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_evaluations",
+      "keywords": [
+        "list_evaluations",
+        "list",
+        "evaluations",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_file_code_summaries",
+      "title": "list_file_code_summaries",
+      "summary": "List all cached per-file code summaries for a project. Use to see what files exist and what each does without reading source.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_file_code_summaries",
+      "keywords": [
+        "list_file_code_summaries",
+        "list",
+        "file",
+        "code",
+        "summaries",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_job_file_versions",
+      "title": "list_job_file_versions",
+      "summary": "List all saved versions of a job file (newest first).\nEvery time a job file is edited, the previous content is automatically saved.\nUse this to see what changed and when, or to find a version to restore.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_job_file_versions",
+      "keywords": [
+        "list_job_file_versions",
+        "list",
+        "job",
+        "file",
+        "versions",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_job_files",
+      "title": "list_job_files",
+      "summary": "List all files in a job's directory — scripts, logs, requirements.txt, etc. Use this before read_job_file or edit_file to confirm filenames.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_job_files",
+      "keywords": [
+        "list_job_files",
+        "list",
+        "job",
+        "files",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_job_folders",
+      "title": "list_job_folders",
+      "summary": "List all distinct folder names currently assigned to jobs. Call this before creating or assigning folders to understand existing groupings and avoid duplicates.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_job_folders",
+      "keywords": [
+        "list_job_folders",
+        "list",
+        "job",
+        "folders",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_jobs",
+      "title": "list_jobs",
+      "summary": "List all jobs with their status, type, dependencies, schedule, and directory path.\nUse this to:\n- See what jobs exist before creating a new one (avoid duplicates)\n- Find a jobId to pass to run_job or read_job_logs\n- Understand the dependency graph of a pipeline\n- Check which jobs are running, failed, or completed\n- Detect jobs stuck in waiting_permission (need API key approval) — check waitingPermissionKeys\n- See schedule status: schedule.enabled: true (scheduled), schedule.enabled: false (disabled), schedule: undefined (never scheduled)\nReturns jobs sorted newest-first. Filter by status or...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_jobs",
+      "keywords": [
+        "list_jobs",
+        "list",
+        "jobs",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-list_keys",
+      "title": "list_keys",
+      "summary": "List all custom API keys configured in Settings. Returns metadata (name, description, permission) but NOT values. Use this to check what keys are available before trying to use them.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_keys",
+      "keywords": [
+        "list_keys",
+        "list",
+        "keys",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_media_models",
+      "title": "list_media_models",
+      "summary": "List image/video generation models available to generate_media, filtered by configured auth (Google API key, OpenAI Platform key, or ChatGPT OAuth). Call this before generate_media when you need to pick a model or explain options to the user.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_media_models",
+      "keywords": [
+        "list_media_models",
+        "list",
+        "media",
+        "models",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_namespace_users",
+      "title": "list_namespace_users",
+      "summary": "List Papr users in the active workspace/namespace team. Returns Parse objectIds as externalUserId and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory and create_entities ACL. Call before sharing memories with specific attendees.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_namespace_users",
+      "keywords": [
+        "list_namespace_users",
+        "list",
+        "namespace",
+        "users",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_schemas",
+      "title": "list_schemas",
+      "summary": "List KNOWLEDGE GRAPH schemas (user-created entity/relationship schemas). Returns schemas with node types and relationships. WorkspaceContext is the primary schema for wiki/sleep reads — query its GraphQL types first. Use get_schema to fetch full details (node types, relationships, properties) for a specific schema. ⚠️ NOTE: For signal domains (vector/transform policy), use list_signal_domains instead.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_schemas",
+      "keywords": [
+        "list_schemas",
+        "list",
+        "schemas",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_signal_domains",
+      "title": "list_signal_domains",
+      "summary": "List available signal domains for Papr Memory vector search and transform embedding. Use domain IDs with signalDomain in add_agent_memory and vectorPolicy.domainId in search_agent_memory. Returns built-in domains (e.g. 'general', 'code', 'cosqa', 'scifact') and their signal band counts. ⚠️ NOTE: These are different from knowledge graph schemas (use list_schemas for those).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_signal_domains",
+      "keywords": [
+        "list_signal_domains",
+        "list",
+        "signal",
+        "domains",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-list_sub_agents",
+      "title": "list_sub_agents",
+      "summary": "List sub-agent profiles. REQUIRED before delegate_task — copy the exact id field into useAgentId. For every create_app: delegate to id \"product-architect\" first (tool-enforced).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "list_sub_agents",
+      "keywords": [
+        "list_sub_agents",
+        "list",
+        "sub",
+        "agents",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-normalize_app_databases",
+      "title": "normalize_app_databases",
+      "summary": "Preview or clean stray SQLite files (empty stubs in app folder, non-canonical job paths). NEVER runs automatically. Default is dry-run preview only; set apply=true to delete empty/baseline-only strays. Does not delete databases with user data.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "normalize_app_databases",
+      "keywords": [
+        "normalize_app_databases",
+        "normalize",
+        "app",
+        "databases",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-page_wait_for",
+      "title": "page_wait_for",
+      "summary": "Wait for page content. Pick target based on what you are testing:\n• target='mini_app' — AFTER webview_launch_app when verifying a Papr mini-app preview\n• target='browser' — AFTER browser_navigate or prepare_browser (Papr Chrome, headless Playwright, or embedded Electron fallback)\nEMBEDDED ELECTRON FALLBACK ONLY (when Google Chrome is not installed): use ONLY time — page_wait_for({ target: 'browser', time: 3 }). text/textGone/selector require Playwright and FAIL on the embedded fallback — use browser_snapshot then browser_click instead.\nOn Papr Chrome and headless Playwright, text/selector w...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "page_wait_for",
+      "keywords": [
+        "page_wait_for",
+        "page",
+        "wait",
+        "for",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_apply_migration",
+      "title": "papr_db_apply_migration",
+      "summary": "Apply migrations/{id}.sql to a registry database (Plan A schema path). Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. Never pushes DDL via replica push — avoids schema drift on Turso. Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Publish changes. For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_apply_migration",
+      "keywords": [
+        "papr_db_apply_migration",
+        "papr",
+        "db",
+        "apply",
+        "migration",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-papr_db_apply_migration_cloud",
+      "title": "papr_db_apply_migration_cloud",
+      "summary": "Apply the same migration on Turso primary via HTTP. Requires applyToken from papr_db_apply_migration_replica (checksum must match). Then run papr_db_reconcile_sync({ action: 'pull_and_align' }) to align replica frames.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_apply_migration_cloud",
+      "keywords": [
+        "papr_db_apply_migration_cloud",
+        "papr",
+        "db",
+        "apply",
+        "migration",
+        "cloud",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-papr_db_apply_migration_replica",
+      "title": "papr_db_apply_migration_replica",
+      "summary": "Apply migrations/{id}.sql on the embedded replica only (no push to Turso primary). Returns applyToken and sqlChecksum — pass both to papr_db_apply_migration_cloud. Use when debugging split-brain or when cloud apply must be verified separately.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_apply_migration_replica",
+      "keywords": [
+        "papr_db_apply_migration_replica",
+        "papr",
+        "db",
+        "apply",
+        "migration",
+        "replica",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-papr_db_exec",
+      "title": "papr_db_exec",
+      "summary": "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a Plan A registry database. Writes local replica then push() to Turso primary when online. Schema is NOT allowed — write migrations/*.sql and use papr_db_apply_migration.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_exec",
+      "keywords": [
+        "papr_db_exec",
+        "papr",
+        "db",
+        "exec",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_migration_parity",
+      "title": "papr_db_migration_parity",
+      "summary": "Compare **replica** vs **cloud** for a registry DB: migration ledgers AND user table lists. ledgerPaired can be true while schemaPaired is false (split-brain — the bug merge_lww hides). Inspect replicaOnlyTables / cloudOnlyTables before declaring recovery done.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_migration_parity",
+      "keywords": [
+        "papr_db_migration_parity",
+        "papr",
+        "db",
+        "migration",
+        "parity",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_pull",
+      "title": "papr_db_pull",
+      "summary": "Recovery only: pull Turso primary into local replica. Prefer repair_cloud_sync({ strategy: 'pull' | 'accept_cloud' }) under Plan A. Hidden from main agent when cloud sync + replica rollout are active.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_pull",
+      "keywords": [
+        "papr_db_pull",
+        "papr",
+        "db",
+        "pull",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_push",
+      "title": "papr_db_push",
+      "summary": "Recovery only: push local replica rows to Turso primary. Under Plan A cloud sync, DML auto-pushes when online — use repair_cloud_sync instead. Hidden from main agent when cloud sync + replica rollout are active.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_push",
+      "keywords": [
+        "papr_db_push",
+        "papr",
+        "db",
+        "push",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_reconcile_sync",
+      "title": "papr_db_reconcile_sync",
+      "summary": "Repair Plan A replica sync without pushing DDL. Try these before accept_cloud. Actions: repair_sidecar_wedge (reset corrupt sidecars + pull; escalates to full reseed if WAL I/O persists), pull_and_align (pull after cloud migration), clear_push_error (clear lastReplicaPushError), complete_pairing (mark replica+cloud paired after manual steps), full_parity_check (ledger + wedge report), dedupe_migration_ledger (remove legacy duplicate ids like 0001_init.sql when 0001_init exists). Prefer this over repair_cloud_sync merge_lww for schema issues.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_reconcile_sync",
+      "keywords": [
+        "papr_db_reconcile_sync",
+        "papr",
+        "db",
+        "reconcile",
+        "sync",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-papr_db_sync_status",
+      "title": "papr_db_sync_status",
+      "summary": "Plan A sync status for a registry database. Two tiers only: **replica** (embedded @tursodatabase/sync handle on desktop) and **cloud** (Turso primary). Returns online, syncMode, pendingPush, pendingOps, sidecarWedge, cutoverBlocked, lastPushError. pendingOps/cdcOperations on syncMode=replica is normal Turso Sync pending push — NOT legacy CDC; check syncMode first. sidecarWedge means the recorded WAL watermark names a frame the WAL does not hold. Connecting now resets those sidecars automatically, so this is normally false; if it stays true the replica could not be opened at all and needs re...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_sync_status",
+      "keywords": [
+        "papr_db_sync_status",
+        "papr",
+        "db",
+        "sync",
+        "status",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-parse_pdf",
+      "title": "parse_pdf",
+      "summary": "Extract text from a local PDF using Python pypdf. **Checks Papr Memory first** — if this file was already uploaded or parsed, returns cached extracted text (no re-parse). Only parses locally when memory has no match. Prefer search_agent_memory({ memoryId }) or upload_document_to_memory when Papr is configured. Install pypdf first if missing: pip install pypdf (or ask user permission).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "parse_pdf",
+      "keywords": [
+        "parse_pdf",
+        "parse",
+        "pdf",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-provision_service",
+      "title": "provision_service",
+      "summary": "Provision a cloud service via Stripe Projects and automatically store credentials in keychain. This is the ONLY Stripe Projects tool - for everything else (checking catalog, authentication, status), use the Stripe CLI directly via bash. Example: provision_service({ provider: 'neon', service: 'database' }) → provisions AND stores NEON_DATABASE_URL automatically. The tool guarantees credentials are stored, preventing jobs/apps from failing due to missing keys.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "provision_service",
+      "keywords": [
+        "provision_service",
+        "provision",
+        "service",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-publish_cloud_app",
+      "title": "publish_cloud_app",
+      "summary": "Publish or update cloud sharing for a mini-app on apps.papr.ai.\n\n**Preferred path for sharing** (when Cloud Sync + Papr login are on):\n- **Community + fork/install:** loginAccess=public, codeAccess=install\n- **Live web only:** loginAccess=public (or team/link), codeAccess=off\n- **Private cloud:** loginAccess=private, externalLink=off\n\nThree axes (memory server ACL):\n1. loginAccess — private | team | public | none  → maps to visibility on memory server\n2. externalLink — off | read | read_write\n3. codeAccess — off (view/use live app) | install (Community fork + install_cloud_app)\n\n**Share she...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "publish_cloud_app",
+      "keywords": [
+        "publish_cloud_app",
+        "publish",
+        "cloud",
+        "app",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-push_cloud_sync",
+      "title": "push_cloud_sync",
+      "summary": "Force Cloud Sync push (same engine as Publish / Publish changes in the app tab) with **required scope** — full-workspace push is rejected.\n\nTargets (default: both github + turso — use this for appId when the live web app should update):\n- github — apps/{id}, Jobs/{id}, data/ to GitHub (code only — skips database + live link refresh)\n- turso — linked SQLite → Turso (syncMode=legacy: old CDC/log path; syncMode=replica: Plan A push — pendingOps is not legacy)\n\nFor registry DBs on Plan A replica path (syncMode=replica), turso target uses papr_db_push semantics (pull-before-push, migration confl...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "push_cloud_sync",
+      "keywords": [
+        "push_cloud_sync",
+        "push",
+        "cloud",
+        "sync",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-query_cloud_turso",
+      "title": "query_cloud_turso",
+      "summary": "Run a read-only SQL query against a Turso cloud replica.\n\nTarget the database with ONE of:\n- tursoDatabase (short name from get_cloud_sync_status)\n- jobId (linked job UUID)\n- appId + alias (from data-sources.json)\n\nExamples:\n- query_cloud_turso({ jobId: \"...\", sql: \"SELECT name FROM sqlite_master WHERE type='table'\" })\n- query_cloud_turso({ appId: \"...\", alias: \"app\", sql: \"SELECT * FROM audits ORDER BY created_at DESC\" })\n\nUse to verify cloud web apps see the same rows as local SQLite after sync.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "query_cloud_turso",
+      "keywords": [
+        "query_cloud_turso",
+        "query",
+        "cloud",
+        "turso",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-query_memory_graph",
+      "title": "query_memory_graph",
+      "summary": "Execute a GraphQL query against the PAPR Memory knowledge graph. Queries are automatically filtered by user_id and workspace_id for security. Use introspect_memory_graph first to discover available types and fields before writing queries.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "query_memory_graph",
+      "keywords": [
+        "query_memory_graph",
+        "query",
+        "memory",
+        "graph",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_app_data_health",
+      "title": "read_app_data_health",
+      "summary": "Inspect mini-app database health: primary DB path, table row counts, data-contract validation, linked sources, stray/orphan DB files",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_app_data_health",
+      "keywords": [
+        "read_app_data_health",
+        "read",
+        "app",
+        "data",
+        "health",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_app_data_sources",
+      "title": "read_app_data_sources",
+      "summary": "List app data-source bindings for job/database wiring",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_app_data_sources",
+      "keywords": [
+        "read_app_data_sources",
+        "read",
+        "app",
+        "data",
+        "sources",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_app_file",
+      "title": "read_app_file",
+      "summary": "Read a file from a mini-app (code or content). Supports nested paths like content/reports/q1-audit.md for long report text. Use list_app_files first to discover paths.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_app_file",
+      "keywords": [
+        "read_app_file",
+        "read",
+        "app",
+        "file",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_document",
+      "title": "read_document",
+      "summary": "Read a document by id. Returns content and filePath for bash editing.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_document",
+      "keywords": [
+        "read_document",
+        "read",
+        "document",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-read_file",
+      "title": "read_file",
+      "summary": "Read file contents (max 50KB default). For large files: use offset/limit to read chunks, or bash with head/tail/grep for targeted reading. Supports UTF-8, base64, and binary encodings.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_file",
+      "keywords": [
+        "read_file",
+        "read",
+        "file",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-read_job_file",
+      "title": "read_job_file",
+      "summary": "Read a source file from a job's directory (e.g. the Python/Node script). Use list_job_files first to confirm the filename.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_job_file",
+      "keywords": [
+        "read_job_file",
+        "read",
+        "job",
+        "file",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_job_logs",
+      "title": "read_job_logs",
+      "summary": "Read job stdout/stderr logs for debugging. PREFER this over bash cat/tail/head on log files — it uses the correct workspace job path, sanitizes API keys, and returns structured job metadata. For cloud sync/Turso/heartbeat context, also call get_cloud_sync_status({ jobId, includeJobLogs: true }).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_job_logs",
+      "keywords": [
+        "read_job_logs",
+        "read",
+        "job",
+        "logs",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_recipe",
+      "title": "read_recipe",
+      "summary": "Read a job's execution recipe. Returns the full markdown content and parsed structure.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_recipe",
+      "keywords": [
+        "read_recipe",
+        "read",
+        "recipe",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-read_skill",
+      "title": "read_skill",
+      "summary": "Read a skill's full content by ID/name, or list installed/enabled skills only. Call with NO arguments for the installed directory (~28 preloaded). For the 800+ marketplace catalog, grep $PAPR_HOME/skills-catalog.json (see system prompt) — do not read the whole file. Example: read_skill() returns installed list; read_skill({ skillId: 'preloaded-social-media-auth' }) loads full content.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_skill",
+      "keywords": [
+        "read_skill",
+        "read",
+        "skill",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-register_schema",
+      "title": "register_schema",
+      "summary": "Register a Papr memory schema with custom entity types and relationships. Creates node types (entities like Company, Contact) and relationship types (connections like WORKS_AT, MANAGES). Pass node_types and relationship_types as dictionaries to create a fully functional schema. Set status='active' to immediately enable the schema, or leave as 'draft' (default) to save without activating.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "register_schema",
+      "keywords": [
+        "register_schema",
+        "register",
+        "schema",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-reload_jobs",
+      "title": "reload_jobs",
+      "summary": "Reload jobs from disk and reconcile job directories with the index.\n\nUse when:\n- Job folders exist on disk but list_jobs does not show them (orphaned directories)\n- You used update_job and want to confirm scheduler state\n\nAlso runs index rebuild (recovers jobs on disk missing from jobs.json) and prunes stale index entries.\n\nNOT needed for:\n- Stuck jobs → Process-backed jobs auto-recover in 20-60s\n- Creating jobs → use create_job(), never bash/jq on jobs.json\n- Normal job operations → use update_job(), run_job() instead",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "reload_jobs",
+      "keywords": [
+        "reload_jobs",
+        "reload",
+        "jobs",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-repair_cloud_sync",
+      "title": "repair_cloud_sync",
+      "summary": "Repair Plan A Turso replica sync for a registry database. Use when row push fails or local/cloud data diverged. For schema/migration issues prefer papr_db_migration_parity + papr_db_reconcile_sync and explicit papr_db_apply_migration_replica/cloud — NOT merge_lww. Try strategies in order: pull (refresh from cloud) → papr_db_reconcile_sync repair_sidecar_wedge (sidecar/WAL) → accept_cloud (LAST RESORT — wipe local replica, re-pull from Turso; only when Turso has the data you need). Other strategies: push (pull-first then push rows), force_local (replica sync push — does NOT upload rows inser...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "repair_cloud_sync",
+      "keywords": [
+        "repair_cloud_sync",
+        "repair",
+        "cloud",
+        "sync",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-request_agent_input",
+      "title": "request_agent_input",
+      "summary": "Ask the main agent for clarification or guidance. Use when you need additional context to complete your task. The main agent will see your question in the mini-chat and respond. You will receive their response and can continue.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "request_agent_input",
+      "keywords": [
+        "request_agent_input",
+        "request",
+        "agent",
+        "input",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-request_key",
+      "title": "request_key",
+      "summary": "Request a missing API key from the user with an inline input card. Use this when you need a key that doesn't exist yet. The user will see a card in the chat where they can enter the key value directly, without leaving the conversation. Better UX than directing to Settings.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "request_key",
+      "keywords": [
+        "request_key",
+        "request",
+        "key",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-reset_writer_baseline_and_publish",
+      "title": "reset_writer_baseline_and_publish",
+      "summary": "Repair a stuck Sync V3 writer publish baseline, then publish (agent-only escape hatch).\n\nUse when:\n- push_cloud_sync or Publish changes fails with \"Writer conflict\" / HTTP 409\n- get_cloud_sync_status shows writerConflict or deadLetterWriterOps\n- Get updates has nothing to pull (gitUpdatesAvailable false) but publish still fails\n\nWhat it does (does NOT delete or overwrite local app source files):\n1. Fetches per-app writer repo HEAD and overwrites local OID cache (publish baseline)\n2. Clears dead-letter / failed writer outbox entries and conflict telemetry for this app\n3. Runs push_cloud_sync...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "reset_writer_baseline_and_publish",
+      "keywords": [
+        "reset_writer_baseline_and_publish",
+        "reset",
+        "writer",
+        "baseline",
+        "and",
+        "publish",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-resolve_cloud_app_change",
+      "title": "resolve_cloud_app_change",
+      "summary": "Approve or reject an incoming contribute-back PR (OWNER ONLY). Approve merges the GitHub PR and triggers a local sync pull. Use list_cloud_app_changes first to get requestId and prUrl.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "resolve_cloud_app_change",
+      "keywords": [
+        "resolve_cloud_app_change",
+        "resolve",
+        "cloud",
+        "app",
+        "change",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-respond_to_sub_agent",
+      "title": "respond_to_sub_agent",
+      "summary": "Respond to a sub-agent's question. Answer yourself using your knowledge and context; only ask the user if you truly cannot answer (e.g. missing credentials, subjective preference, or info only they have). The sub-agent receives your message and continues.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "respond_to_sub_agent",
+      "keywords": [
+        "respond_to_sub_agent",
+        "respond",
+        "to",
+        "sub",
+        "agent",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-restore_app_file_version",
+      "title": "restore_app_file_version",
+      "summary": "Restore a mini-app file to a previous version. The current content is saved as a \"before-restore\" version first (so you can undo the restore if needed).\nUse list_app_file_versions first to find the versionId.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "restore_app_file_version",
+      "keywords": [
+        "restore_app_file_version",
+        "restore",
+        "app",
+        "file",
+        "version",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-restore_job_file_version",
+      "title": "restore_job_file_version",
+      "summary": "Restore a job file to a previous version. The current content is saved as a \"before-restore\" version first (so you can undo the restore if needed).\nUse list_job_file_versions first to find the versionId.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "restore_job_file_version",
+      "keywords": [
+        "restore_job_file_version",
+        "restore",
+        "job",
+        "file",
+        "version",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-run_job",
+      "title": "run_job",
+      "summary": "Run a job by id and return status/logs/database info. Preflight: python/node jobs must reference an existing script (usually under code/). If the command points to fetch.py but the file is at code/fetch.py, run_job blocks with a fix hint. Set runtime='cloud' to execute on Papr Cloud while the desktop is awake (pushes git, runs via memory server, pulls results back). If a cloud mini-app job is stuck pending, call get_cloud_sync_status first — check desktopAwake and pendingCloudRuns before re-running.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "run_job",
+      "keywords": [
+        "run_job",
+        "run",
+        "job",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-search_agent_memory",
+      "title": "search_agent_memory",
+      "summary": "Search or fetch Papr memories. Pass memoryId to get full content of one memory by ID (from document upload or prior results). Pass query for semantic search (2-3 sentences). Use customMetadataFilters for exact filters (upload_id, content_type, file_name, chat_id, etc.). For THIS chat: chatId \"current_chat\". For code: category='code' + projectId/projectType/language/fileName.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "search_agent_memory",
+      "keywords": [
+        "search_agent_memory",
+        "search",
+        "agent",
+        "memory",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-search_files",
+      "title": "search_files",
+      "summary": "Search for text in files (grep-like). Supports regex and file patterns.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "search_files",
+      "keywords": [
+        "search_files",
+        "search",
+        "files",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-search_wiki_entities",
+      "title": "search_wiki_entities",
+      "summary": "Search the local wiki graph entity index by name or keyword. Returns matching entity ids — follow up with get_wiki_entity for full details. Instant local search (no Papr API latency).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "search_wiki_entities",
+      "keywords": [
+        "search_wiki_entities",
+        "search",
+        "wiki",
+        "entities",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-set_job_folder",
+      "title": "set_job_folder",
+      "summary": "Assign a job to a folder group for organisation. Folders are free-form string labels — they don't need to be created first, just assign the same name to related jobs.\n\nGood folder names represent pipeline stages or functional groups:\n- \"ingestion\" — jobs that fetch or receive raw data\n- \"processing\" — transformation, enrichment, aggregation\n- \"reporting\" — build reports, PDFs, dashboards\n- \"notifications\" — send emails, Slack messages, webhooks\n\nAvoid naming folders after apps (apps can link to jobs from multiple folders). Omit folder to clear the assignment.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "set_job_folder",
+      "keywords": [
+        "set_job_folder",
+        "set",
+        "job",
+        "folder",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-set_key",
+      "title": "set_key",
+      "summary": "Add or update a custom API key. **Only use this when the user explicitly provides the key value.** Never ask users to paste keys in chat - direct them to Settings UI instead. This tool is for when the user wants to automate key setup programmatically.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "set_key",
+      "keywords": [
+        "set_key",
+        "set",
+        "key",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-submit_cloud_app_change",
+      "title": "submit_cloud_app_change",
+      "summary": "Propose contribute-back changes to the upstream app owner (CONTRIBUTOR ONLY — you must have a local fork installed via install_cloud_app).\n\nOpens a pull request with your fork's app source, linked Jobs, and migration SQL on the owner's papr-work repo. Returns prUrl, branch, and headSha.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "submit_cloud_app_change",
+      "keywords": [
+        "submit_cloud_app_change",
+        "submit",
+        "cloud",
+        "app",
+        "change",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-submit_memory_feedback",
+      "title": "submit_memory_feedback",
+      "summary": "Submit retrieval-quality feedback to Papr Memory after evaluating search_agent_memory results. Use the searchId from that search response. Cited memories are derived automatically from your answer at turn end, so do NOT submit just to report that results helped. DO submit when results were MIXED (some on-target, some off) — that is the highest-value signal and must not be skipped — or when results looked relevant but were stale, wrong, or unusable. For wrong memory content, prefer delete_memory or add_agent_memory instead of correction feedback alone.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "submit_memory_feedback",
+      "keywords": [
+        "submit_memory_feedback",
+        "submit",
+        "memory",
+        "feedback",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-submit_memory_feedback_batch",
+      "title": "submit_memory_feedback_batch",
+      "summary": "Submit retrieval feedback for MULTIPLE searches in one request. Use at the end of a session when several searches are being rated together, instead of calling submit_memory_feedback repeatedly.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "submit_memory_feedback_batch",
+      "keywords": [
+        "submit_memory_feedback_batch",
+        "submit",
+        "memory",
+        "feedback",
+        "batch",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-update_job",
+      "title": "update_job",
+      "summary": "Update an existing job's configuration. Only the fields you provide are changed — everything else stays the same.\nCannot update a currently running job (stop it first with bash or wait for it to finish).\nCommon use cases:\n- Fix a buggy command: { jobId, command: \"python3 fixed_script.py\" }\n- Add missing requirements: { jobId, requirements: [\"requests\", \"beautifulsoup4\"] }\n- Change a dependency: { jobId, dependsOn: [{ jobId: \"...\", onStatus: \"completed\", autoTrigger: true }] } — include autoTrigger: true whenever the job should start automatically when the parent completes; omitting it remov...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "update_job",
+      "keywords": [
+        "update_job",
+        "update",
+        "job",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-update_memory",
+      "title": "update_memory",
+      "summary": "Update an existing memory item in place by ID — corrects a fact WITHOUT creating a duplicate. Prefer this over add_agent_memory when a stored value changed (e.g. a revised total, status, or owner); re-adding creates near-duplicate memories that degrade retrieval ranking. Use delete_memory only when the memory should no longer exist at all.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "update_memory",
+      "keywords": [
+        "update_memory",
+        "update",
+        "memory",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-update_plan",
+      "title": "update_plan",
+      "summary": "Update step statuses in an existing plan. CRITICAL: Call this AFTER EACH STEP completes, not at the end. This shows real-time progress to the user. Mark steps as in_progress when starting, completed when done. Plans are persisted to disk. Each update must include the step id: use `id` or `stepId` — same value as each step's `id` from create_plan.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "update_plan",
+      "keywords": [
+        "update_plan",
+        "update",
+        "plan",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-update_schema",
+      "title": "update_schema",
+      "summary": "Update an existing Papr memory schema. Allows modification of schema properties, node types, relationships, and status. Updates create a new version while preserving existing data. Set status='active' to activate, 'draft' to deactivate, or 'archived' to soft-delete.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "update_schema",
+      "keywords": [
+        "update_schema",
+        "update",
+        "schema",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-upload_document_to_memory",
+      "title": "upload_document_to_memory",
+      "summary": "Upload a PDF or image to Papr Memory for OCR, chunking, and semantic indexing. Returns upload_id and memory_item IDs immediately; processing continues async. Poll get_document_upload_status until completed, then search_agent_memory({ memoryId }) on returned memory IDs to read extracted text. Prefer this over read_file base64 for PDFs and images when PAPR_API_KEY is configured.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "upload_document_to_memory",
+      "keywords": [
+        "upload_document_to_memory",
+        "upload",
+        "document",
+        "to",
+        "memory",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-validate_app",
+      "title": "validate_app",
+      "summary": "Validate a mini-app for code quality issues and enforcement rules.\nAlways runs a fresh esbuild.build() before checking (never uses stale cache).\nChecks:\n- **Job events SDK import**: Errors if subscribeJobEvents is called without import from /__papr__/papr-job-events.ts (declare function does NOT work at runtime)\n- **Job event polling**: Errors if app polls instead of subscribeJobEvents — returns copy-paste fix snippet\n- **TypeScript/TSX build (esbuild)**: Same bundler for validate_app, local iframe, and cloud publish. Import from `/__papr__/papr-job-events.ts` is supported — left external i...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "validate_app",
+      "keywords": [
+        "validate_app",
+        "validate",
+        "app",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-validate_job",
+      "title": "validate_job",
+      "summary": "Audit an existing job before running it. Checks command/prompt portability, APP_DB vs JOB_DB usage, read-only API misuse, primary database tables and columns, multi-job data-contract requirements, and acceptance-recipe coverage. Run this after editing job code or configuration and before claiming an app/job workflow is complete.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "validate_job",
+      "keywords": [
+        "validate_job",
+        "validate",
+        "job",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-webview_click",
+      "title": "webview_click",
+      "summary": "Click an element in the mini-app preview session by CSS selector. Use instead of browser_click when webview_launch_app preview is open.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_click",
+      "keywords": [
+        "webview_click",
+        "webview",
+        "click",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_close",
+      "title": "webview_close",
+      "summary": "Close a webview test session",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_close",
+      "keywords": [
+        "webview_close",
+        "webview",
+        "close",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_execute",
+      "title": "webview_execute",
+      "summary": "One-shot DOM read/write in mini-app preview. Script MUST return a value. Prefer webview_fill_form / webview_click for forms and buttons. DO NOT use for API/DB/job checks — use bash+curl to localhost:18789 instead.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_execute",
+      "keywords": [
+        "webview_execute",
+        "webview",
+        "execute",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_fill_form",
+      "title": "webview_fill_form",
+      "summary": "Fill form fields in the mini-app preview session (after webview_launch_app). Use instead of browser_fill_form when testing Papr mini-apps — browser_* tools use a separate Playwright browser.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_fill_form",
+      "keywords": [
+        "webview_fill_form",
+        "webview",
+        "fill",
+        "form",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_get_console",
+      "title": "webview_get_console",
+      "summary": "Read captured webview console logs — PRIMARY tool for runtime errors (ReferenceError, fetch failures). Run after webview_launch_app before webview_execute or declaring preview broken.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_get_console",
+      "keywords": [
+        "webview_get_console",
+        "webview",
+        "get",
+        "console",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_get_network",
+      "title": "webview_get_network",
+      "summary": "Read captured webview network logs",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_get_network",
+      "keywords": [
+        "webview_get_network",
+        "webview",
+        "get",
+        "network",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_launch_app",
+      "title": "webview_launch_app",
+      "summary": "Launch a headless mini-app preview session (always invisible — inline chat preview + screenshots show the UI). previewTarget: 'local' (default) tests local files/DB; 'published' tests Web preview (cloud bundle + ACL via /cloud-preview/). Then: page_wait_for({ target: 'mini_app', time: 2 }) → webview_get_console (runtime errors) → webview_snapshot (visual). For API/DB/job verification use bash+curl to localhost:18789 — NOT webview_execute.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_launch_app",
+      "keywords": [
+        "webview_launch_app",
+        "webview",
+        "launch",
+        "app",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-webview_list",
+      "title": "webview_list",
+      "summary": "List active webview test sessions",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_list",
+      "keywords": [
+        "webview_list",
+        "webview",
+        "list",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_snapshot",
+      "title": "webview_snapshot",
+      "summary": "Capture HTML + visible text + visualState from mini-app preview (NOT a screenshot, no vision tokens). Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_snapshot",
+      "keywords": [
+        "webview_snapshot",
+        "webview",
+        "snapshot",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-webview_wait_for",
+      "title": "webview_wait_for",
+      "summary": "DEPRECATED — use page_wait_for({ target: 'mini_app', ... }) after webview_launch_app.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "webview_wait_for",
+      "keywords": [
+        "webview_wait_for",
+        "webview",
+        "wait",
+        "for",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-write_file",
+      "title": "write_file",
+      "summary": "Write content to a file. OVERWRITES existing files in place — you do NOT need to delete a file before recreating it. Creates parent directories if needed. Creates backup if specified. For $PAPR_HOME/apps/{appId}/… paths: creates or overwrites mini-app files and auto-runs esbuild + validate_app (same as edit_file). Use edit_file for surgical patches (oldString/newString); use write_file to create new mini-app files or replace a whole file. ANTI-PATTERN: Never run `rm <file>` followed by `write_file({ path: <file> })` in the same turn — if the stream is interrupted between the two, the file i...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "write_file",
+      "keywords": [
+        "write_file",
+        "write",
+        "file",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-write_recipe",
+      "title": "write_recipe",
+      "summary": "Write an execution recipe for a job. The recipe defines intent, success criteria, quality rubric, anti-patterns, and edge cases. When autoEvaluate is true, an agent will automatically score each run against the recipe after completion. Use this to ensure jobs consistently meet quality standards.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "write_recipe",
+      "keywords": [
+        "write_recipe",
+        "write",
+        "recipe",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "app-agent-sessions",
+      "title": "Embedded app agent chat",
+      "summary": "Sessions, messages, SSE stream for in-app assistant bubble.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/app-agent/sessions",
+      "pathAliases": [
+        "/api/app-agent/sessions/:sessionId/messages",
+        "/api/app-agent/sessions/:sessionId/stream"
+      ],
+      "keywords": [
+        "agent",
+        "chat",
+        "bubble",
+        "assistant",
+        "app-agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "app-backend",
+      "title": "App Python/Node backend actions",
+      "summary": "POST /api/app/backend/:action — runs handlers in app backend/ folder.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/app/backend/:action",
+      "keywords": [
+        "backend",
+        "python",
+        "server",
+        "action"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "bash-run",
+      "title": "Sandboxed bash (mini-app)",
+      "summary": "Run shell with ${KEY_NAME} substitution server-side. Not full agent bash.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/bash/run",
+      "bodyFields": [
+        {
+          "name": "command",
+          "description": "Shell command string",
+          "required": true
+        }
+      ],
+      "keywords": [
+        "bash",
+        "shell",
+        "curl",
+        "psql",
+        "keys"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "cloud-publish",
+      "title": "Publish app to cloud",
+      "summary": "Read/patch publish config, publish, unpublish — agent tools mirror these.",
+      "surfaces": [
+        "desktop-gateway"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "method": "GET",
+      "path": "/api/cloud/publish/:appId",
+      "pathAliases": [
+        "/api/cloud/publish/:appId/readiness",
+        "/api/cloud/publish/:appId/compatibility"
+      ],
+      "keywords": [
+        "cloud",
+        "publish",
+        "share",
+        "link"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "credentials-client-keys",
+      "title": "Client-side key names",
+      "summary": "Lists which custom key names exist for substitution (not values).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/credentials/client-keys",
+      "keywords": [
+        "keys",
+        "credentials",
+        "custom keys"
+      ]
+    },
+    {
+      "id": "db-batch-read",
+      "title": "Batch read queries",
+      "summary": "Up to 25 SELECT/WITH statements in one HTTP round trip. Same contract on desktop and cloud.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/db/batch",
+      "pathAliases": [
+        "/api/db/query-batch",
+        "/api/db/read-batch"
+      ],
+      "bodyFields": [
+        {
+          "name": "appId",
+          "description": "Mini-app id (optional in iframe)"
+        },
+        {
+          "name": "statements",
+          "description": "Array of { sourceId?, sql, params? }",
+          "required": true
+        }
+      ],
+      "limits": [
+        "Max 25 statements per request",
+        "Each sql must be SELECT or WITH ... SELECT"
+      ],
+      "keywords": [
+        "db",
+        "batch",
+        "read-batch",
+        "query-batch",
+        "bulk",
+        "multiple",
+        "select"
+      ],
+      "example": "fetch('/api/db/batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ statements: [{ sql: 'SELECT COUNT(*) AS n FROM leads' }, { sql: 'SELECT * FROM settings LIMIT 1' }] }) })",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "db-exec",
+      "title": "DDL / pragma exec",
+      "summary": "Schema migrations and PRAGMA on linked DBs (restricted). Use app migrations folder for schema owner apps.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/db/exec",
+      "keywords": [
+        "db",
+        "exec",
+        "ddl",
+        "migration",
+        "pragma"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "db-query",
+      "title": "Single read query",
+      "summary": "One SELECT/WITH against a linked source. Prefer /api/db/batch for multiple reads.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/db/query",
+      "bodyFields": [
+        {
+          "name": "appId",
+          "description": "Mini-app id (optional in iframe — inferred from Referer)"
+        },
+        {
+          "name": "sourceId",
+          "description": "Linked DB alias from data-sources.json",
+          "required": false
+        },
+        {
+          "name": "sql",
+          "description": "SELECT or WITH ... SELECT",
+          "required": true
+        },
+        {
+          "name": "params",
+          "description": "Bound parameters array",
+          "required": false
+        }
+      ],
+      "keywords": [
+        "db",
+        "query",
+        "select",
+        "read",
+        "sqlite"
+      ],
+      "example": "fetch('/api/db/query', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: 'SELECT * FROM leads LIMIT 10', params: [] }) })",
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "db-schema",
+      "title": "Linked database schema",
+      "summary": "Column info for linked SQLite sources (app data-sources.json).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "GET",
+      "path": "/api/db/schema",
+      "keywords": [
+        "db",
+        "schema",
+        "sqlite",
+        "columns",
+        "table"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "db-write",
+      "title": "Single write statement",
+      "summary": "One INSERT/UPDATE/DELETE/REPLACE/UPSERT. Prefer write-batch for many rows.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/db/write",
+      "bodyFields": [
+        {
+          "name": "sourceId",
+          "description": "Linked DB alias",
+          "required": false
+        },
+        {
+          "name": "sql",
+          "description": "DML statement",
+          "required": true
+        },
+        {
+          "name": "params",
+          "description": "Bound parameters",
+          "required": false
+        }
+      ],
+      "keywords": [
+        "db",
+        "write",
+        "insert",
+        "update",
+        "delete",
+        "upsert"
+      ],
+      "example": "fetch('/api/db/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ sql: 'INSERT INTO leads (name) VALUES (?)', params: ['Acme'] }) })"
+    },
+    {
+      "id": "db-write-batch",
+      "title": "Batch write statements",
+      "summary": "Up to 25 DML statements. atomic:true wraps one SQLite transaction (same linked DB only).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/db/write-batch",
+      "bodyFields": [
+        {
+          "name": "statements",
+          "description": "Array of { sourceId?, sql, params? }",
+          "required": true
+        },
+        {
+          "name": "atomic",
+          "description": "If true, all statements in one transaction (same source)",
+          "required": false
+        }
+      ],
+      "limits": [
+        "Max 25 statements",
+        "atomic:true requires same sourceId for all statements"
+      ],
+      "keywords": [
+        "db",
+        "write-batch",
+        "bulk",
+        "transaction",
+        "atomic",
+        "batch"
+      ],
+      "example": "fetch('/api/db/write-batch', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ atomic: true, statements: [{ sql: 'INSERT INTO t (k) VALUES (?)', params: ['a'] }, { sql: 'INSERT INTO t (k) VALUES (?)', params: ['b'] }] }) })",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "dev-papr-api-catalog",
+      "title": "Papr API catalog (JSON)",
+      "summary": "Full generated catalog for debugging; agents should use get_papr_api_reference tool.",
+      "surfaces": [
+        "desktop-gateway"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "method": "GET",
+      "path": "/api/dev/papr-api-catalog",
+      "keywords": [
+        "catalog",
+        "openapi",
+        "docs",
+        "reference"
+      ]
+    },
+    {
+      "id": "files-list",
+      "title": "List App Files",
+      "summary": "Large binaries stored via App Files (not in SQLite).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "GET",
+      "path": "/api/files",
+      "keywords": [
+        "files",
+        "upload",
+        "pdf",
+        "binary",
+        "app files"
+      ],
+      "playbookRef": "src/resources/agent-docs/APP_FILES_GUIDE.md"
+    },
+    {
+      "id": "files-ticket-commit",
+      "title": "Browser upload ticket + commit",
+      "summary": "Two-step upload for large files from the browser.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/files/ticket",
+      "pathAliases": [
+        "/api/files/commit",
+        "/api/files/url"
+      ],
+      "keywords": [
+        "files",
+        "upload",
+        "ticket",
+        "commit",
+        "signed url"
+      ],
+      "playbookRef": "src/resources/agent-docs/APP_FILES_GUIDE.md"
+    },
+    {
+      "id": "jobs-create",
+      "title": "Create job from mini-app",
+      "summary": "Programmatic job creation (rate limited). Agent equivalent: create_job tool.",
+      "surfaces": [
+        "mini-app-http"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "method": "POST",
+      "path": "/api/jobs/create",
+      "limits": [
+        "10 jobs/minute per app",
+        "command max 100KB"
+      ],
+      "keywords": [
+        "jobs",
+        "create",
+        "dynamic"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "jobs-events-sse",
+      "title": "Job and DB change SSE",
+      "summary": "Server-Sent Events for job completion and linked DB changes. Prefer papr.jobs.subscribe SDK wrapper.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "GET",
+      "path": "/api/jobs/events",
+      "keywords": [
+        "sse",
+        "events",
+        "subscribe",
+        "live",
+        "refresh",
+        "onDbChanged",
+        "job"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "jobs-list",
+      "title": "List jobs",
+      "summary": "Jobs visible to the mini-app (linked job ids).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "GET",
+      "path": "/api/jobs/list",
+      "keywords": [
+        "jobs",
+        "list",
+        "cron",
+        "pipeline"
+      ]
+    },
+    {
+      "id": "jobs-run",
+      "title": "Run job once",
+      "summary": "Trigger a linked job immediately (respects auth on cloud).",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "POST",
+      "path": "/api/jobs/run",
+      "bodyFields": [
+        {
+          "name": "jobId",
+          "description": "Job uuid",
+          "required": true
+        }
+      ],
+      "keywords": [
+        "jobs",
+        "run",
+        "trigger",
+        "execute"
+      ]
+    },
+    {
+      "id": "jobs-status",
+      "title": "Job run status",
+      "summary": "Latest status for one job id.",
+      "surfaces": [
+        "mini-app-http",
+        "cloud-gateway"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "method": "GET",
+      "path": "/api/jobs/status/:jobId",
+      "keywords": [
+        "jobs",
+        "status",
+        "running",
+        "failed"
+      ]
+    },
+    {
+      "id": "sdk-papr-agent-chat",
+      "title": "papr-agent-chat.ts",
+      "summary": "Embedded assistant bubble script (after enable_app_agent_chat)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-agent-chat.js",
+      "keywords": [
+        "papr-agent-chat.ts",
+        "/__papr__/papr-agent-chat.js",
+        "<script",
+        "src=...>",
+        "auto-mount",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-agent-chat.js';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-agent-chat-activity",
+      "title": "papr-agent-chat-activity.ts",
+      "summary": "Mini-app SDK module (papr-agent-chat-activity.ts)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-agent-chat-activity.ts",
+      "keywords": [
+        "papr-agent-chat-activity.ts",
+        "/__papr__/papr-agent-chat-activity.ts",
+        "(see",
+        "source",
+        "file)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-agent-chat-activity.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-agent-chat-plan",
+      "title": "papr-agent-chat-plan.ts",
+      "summary": "Plan card UI for agent-chat (internal)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-agent-chat-plan.js",
+      "keywords": [
+        "papr-agent-chat-plan.ts",
+        "/__papr__/papr-agent-chat-plan.js",
+        "(internal)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-agent-chat-sequence",
+      "title": "papr-agent-chat-sequence.ts",
+      "summary": "Mini-app SDK module (papr-agent-chat-sequence.ts)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-agent-chat-sequence.ts",
+      "keywords": [
+        "papr-agent-chat-sequence.ts",
+        "/__papr__/papr-agent-chat-sequence.ts",
+        "(see",
+        "source",
+        "file)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-agent-chat-sequence.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-agent-chat-tool-display",
+      "title": "papr-agent-chat-tool-display.ts",
+      "summary": "Mini-app SDK module (papr-agent-chat-tool-display.ts)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-agent-chat-tool-display.ts",
+      "keywords": [
+        "papr-agent-chat-tool-display.ts",
+        "/__papr__/papr-agent-chat-tool-display.ts",
+        "(see",
+        "source",
+        "file)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-agent-chat-tool-display.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-auth-guard",
+      "title": "papr-auth-guard.ts",
+      "summary": "Auto-injected cloud auth guard",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-auth-guard.js",
+      "keywords": [
+        "papr-auth-guard.ts",
+        "/__papr__/papr-auth-guard.js",
+        "(platform",
+        "—",
+        "do",
+        "not",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-auth-ui",
+      "title": "papr-auth-ui.ts",
+      "summary": "Auth overlay markup (internal)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-auth-ui.js",
+      "keywords": [
+        "papr-auth-ui.ts",
+        "/__papr__/papr-auth-ui.js",
+        "(internal)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-dialog",
+      "title": "papr-dialog.ts",
+      "summary": "Modal text input / confirm / alert (legacy direct import)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-dialog.ts",
+      "keywords": [
+        "papr-dialog.ts",
+        "/__papr__/papr-dialog.ts",
+        "askText",
+        "askConfirm",
+        "showAlert",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-dialog.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-files",
+      "title": "papr-files.ts",
+      "summary": "Large file upload / list / signed URL / remove",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-files.js",
+      "keywords": [
+        "papr-files.ts",
+        "/__papr__/papr-files.js",
+        "papr.files.*",
+        "(prefer",
+        "papr-sdk",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-files.js';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-job-events",
+      "title": "papr-job-events.ts",
+      "summary": "SSE job + DB live updates",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-job-events.ts",
+      "keywords": [
+        "papr-job-events.ts",
+        "/__papr__/papr-job-events.ts",
+        "subscribeJobEvents",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-job-events.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-markdown",
+      "title": "papr-markdown.ts",
+      "summary": "Markdown helper for agent-chat (internal)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-markdown.js",
+      "keywords": [
+        "papr-markdown.ts",
+        "/__papr__/papr-markdown.js",
+        "(internal)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-native-dialog-shim",
+      "title": "papr-native-dialog-shim.ts",
+      "summary": "Auto-injected legacy prompt/confirm/alert polyfill",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-native-dialog-shim.js",
+      "keywords": [
+        "papr-native-dialog-shim.ts",
+        "/__papr__/papr-native-dialog-shim.js",
+        "(platform",
+        "—",
+        "do",
+        "not",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-preview-fetch-gate",
+      "title": "papr-preview-fetch-gate.ts",
+      "summary": "Auto-injected fetch gate — pauses /api/* while preview hidden",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-preview-fetch-gate.js",
+      "keywords": [
+        "papr-preview-fetch-gate.ts",
+        "/__papr__/papr-preview-fetch-gate.js",
+        "(platform",
+        "—",
+        "do",
+        "not",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-preview-lifecycle",
+      "title": "papr-preview-lifecycle.ts",
+      "summary": "Pause pollers when preview tab is backgrounded",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-preview-lifecycle.ts",
+      "keywords": [
+        "papr-preview-lifecycle.ts",
+        "/__papr__/papr-preview-lifecycle.ts",
+        "onPreviewLifecycle",
+        "registerPausablePreviewResource",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-preview-lifecycle.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-sdk",
+      "title": "papr-sdk.ts",
+      "summary": "Unified SDK entry — prefer this single import",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-sdk.ts",
+      "keywords": [
+        "papr-sdk.ts",
+        "/__papr__/papr-sdk.ts",
+        "papr.dialog.*",
+        "papr.jobs.*",
+        "papr.files.*",
+        "papr.preview.*",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "example": "import { papr } from '/__papr__/papr-sdk.ts';",
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-version-check",
+      "title": "papr-version-check.ts",
+      "summary": "Auto-injected publish revision nudge",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-version-check.js",
+      "keywords": [
+        "papr-version-check.ts",
+        "/__papr__/papr-version-check.js",
+        "(platform",
+        "—",
+        "do",
+        "not",
+        "import)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sync-status",
+      "title": "Git + Turso sync status",
+      "summary": "Workspace sync chip data for apps and jobs.",
+      "surfaces": [
+        "desktop-gateway"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "method": "GET",
+      "path": "/api/sync/status",
+      "pathAliases": [
+        "/api/sync/items",
+        "/api/sync/push",
+        "/api/sync/pull"
+      ],
+      "keywords": [
+        "sync",
+        "git",
+        "turso",
+        "cloud"
+      ]
+    }
+  ]
+}

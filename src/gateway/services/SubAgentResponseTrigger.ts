@@ -13,10 +13,9 @@ import { getProviderAuth } from "../utils/keyResolver.js";
 import { getApiKeys } from "../utils/keyResolver.js";
 import type { JobRecord } from "./jobs/types.js";
 import { DEFAULT_SESSION_CONTEXT_LIMIT } from "./agent/contextBudget.js";
+import { resolveDelegationResultExcerptChars } from "../../core/subagents/codebaseExplorer.js";
 
 const notifiedDelegationFinishes = new Set<string>();
-
-const RESULT_EXCERPT_CHARS = 4000;
 
 interface PendingDelegationFinish {
   delegationId: string;
@@ -212,11 +211,11 @@ async function loadDelegationResultText(
   return { text: best, agentName };
 }
 
-function buildResultExcerpt(text: string): string {
-  if (text.length <= RESULT_EXCERPT_CHARS) return text;
+function buildResultExcerpt(text: string, excerptChars: number): string {
+  if (text.length <= excerptChars) return text;
   return (
-    `${text.slice(0, RESULT_EXCERPT_CHARS)}\n\n` +
-    `[... ${text.length - RESULT_EXCERPT_CHARS} more chars — use get_delegation_run({ runId }) for full text]`
+    `${text.slice(0, excerptChars)}\n\n` +
+    `[... ${text.length - excerptChars} more chars — use get_delegation_run({ runId }) for full text]`
   );
 }
 
@@ -278,8 +277,9 @@ export async function triggerMainAgentOnDelegationFinished(
       `**Your job:** Tell the user what happened in this chat. Explain the failure briefly and suggest concrete next steps (retry delegation, fix config, gather missing info). ` +
       `Do NOT start another delegation unless the user asks.`;
   } else {
+    const excerptChars = resolveDelegationResultExcerptChars(job.subAgentId);
     const excerpt = resultText
-      ? buildResultExcerpt(resultText)
+      ? buildResultExcerpt(resultText, excerptChars)
       : "(No textual output produced)";
     const fullLen = resultText.length;
 

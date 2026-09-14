@@ -32,19 +32,66 @@ export async function runDeferredJobsWorkspaceBootstrap(): Promise<void> {
   });
 }
 
+/** After fresh replica migrations — brief pause for sync handle (not env-configurable). */
+const REPLICA_SCHEMA_SETTLE_MS = 2_000;
+
 async function runDeferredHomeWorkspaceRepair(): Promise<void> {
   const startedAt = performance.now();
+
+  const { DEFERRED_HOME_WORKSPACE_BOOT_EPOCH } = await import(
+    "../deferredHomeWorkspaceBootEpoch.js"
+  );
+  const { loadGatewayDeferredBootState, saveGatewayDeferredBootState } =
+    await import("../gatewayDeferredBootState.js");
+
+  const prior = await loadGatewayDeferredBootState();
+  const epochOk = (prior?.appliedEpoch ?? 0) >= DEFERRED_HOME_WORKSPACE_BOOT_EPOCH;
+
+  const {
+    computeGoalsWorkspaceFingerprint,
+    probeHomeGoalsTableExists,
+    ensureHomeGoalsTasksSchema,
+    projectGoalsAndTasks,
+  } = await import("../goalsTasksProjection.js");
+  const workspaceFp = await computeGoalsWorkspaceFingerprint();
+  const workspaceFpOk = prior?.goalsWorkspaceFingerprint === workspaceFp;
 
   const { getAppService } = await import("../AppService.js");
   const appService = getAppService();
   await appService.installPendingDefaultJobs();
-  await appService.repairHomeAndWorkspaceOnStartup();
 
-  const { projectGoalsAndTasks, isHomeGoalsProjectionReady } = await import(
-    "../goalsTasksProjection.js"
-  );
-  if (await isHomeGoalsProjectionReady()) {
+  const homeOk = await appService.homeLinkedSourcesInvariantsOk();
+  let repairRan = false;
+  if (!epochOk || !homeOk) {
+    await appService.repairHomeAndWorkspaceOnStartup();
+    repairRan = true;
+  }
+
+  let goalsReady = await probeHomeGoalsTableExists();
+  let schemaApplied: string[] = [];
+  if (!goalsReady) {
+    schemaApplied = await ensureHomeGoalsTasksSchema();
+    goalsReady = await probeHomeGoalsTableExists();
+  }
+
+  if (schemaApplied.length > 0 && REPLICA_SCHEMA_SETTLE_MS > 0) {
+    console.log(
+      `[GoalsTasksProjection] migrations applied (${schemaApplied.join(", ")}); settling ${REPLICA_SCHEMA_SETTLE_MS}ms`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, REPLICA_SCHEMA_SETTLE_MS));
+  }
+
+  const skipProjection =
+    epochOk && workspaceFpOk && !repairRan && goalsReady;
+  let projectionOutcome: "ran" | "skipped" | "not-ready" = "not-ready";
+  if (skipProjection) {
+    projectionOutcome = "skipped";
+    console.log(
+      "[GoalsTasksProjection] boot skipped (epoch current, workspace unchanged, home links ok)",
+    );
+  } else if (goalsReady) {
     await projectGoalsAndTasks("boot");
+    projectionOutcome = "ran";
   } else {
     console.log(
       "[GoalsTasksProjection] boot skipped: Home briefs goals schema not ready",
@@ -55,8 +102,15 @@ async function runDeferredHomeWorkspaceRepair(): Promise<void> {
   await getWorkspaceService().ensureSleepJob();
   await getWorkspaceService().ensureWikiWriterJob();
 
+  await saveGatewayDeferredBootState({
+    appliedEpoch: DEFERRED_HOME_WORKSPACE_BOOT_EPOCH,
+    goalsWorkspaceFingerprint: workspaceFp,
+    completedAt: new Date().toISOString(),
+  });
+
   const elapsedMs = Math.round(performance.now() - startedAt);
   console.log(
-    `[Gateway] Background: home repair + built-in jobs complete (${elapsedMs}ms)`,
+    `[Gateway] Background: deferred workspace boot complete (${elapsedMs}ms; ` +
+      `repair=${repairRan ? "ran" : "skipped"} projection=${projectionOutcome})`,
   );
 }

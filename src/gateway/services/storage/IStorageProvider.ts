@@ -296,6 +296,7 @@ export interface IStorageProvider {
    */
   getTurnUsage(chatId: string): Promise<{
     lastTurn: TurnUsageRow | null;
+    recentTurns: TurnUsageRow[];
     totals: ChatUsageTotals;
   }>;
 

@@ -157,6 +157,20 @@ describe("MessageList", () => {
 
       expect(screen.getByTestId("agent-loading-indicator")).toBeDefined();
     });
+
+    it("does not show history loading dots while waiting for agent reply", () => {
+      render(
+        <MessageList
+          chatId="test-chat"
+          messages={[{ id: "user-1", role: "user", content: "Hello" }]}
+          isLoading={true}
+          isSending={true}
+        />,
+      );
+
+      expect(screen.getByTestId("agent-loading-indicator")).toBeDefined();
+      expect(screen.queryByTestId("chat-history-loading-indicator")).toBeNull();
+    });
   });
 
   describe("Message Timestamps", () => {

@@ -7,7 +7,7 @@
  */
 
 import React, { useState } from "react";
-import type { ContextInfo } from "./ContextInspectorModal";
+import type { ContextInfo } from "./contextInfo";
 import { ContextSegmentDetail } from "./ContextSegmentDetail";
 import { ContextStackBar } from "./ContextStackBar";
 import { TurnCostStrip } from "./TurnCostStrip";
@@ -17,11 +17,18 @@ import {
   formatCost,
   formatDuration,
   formatTokens,
-  meterStatus,
+  meterVisualStatus,
   rawFillFraction,
   type ContextMeter,
   type LiveTurn,
 } from "./contextMeterModel";
+import {
+  formatChatTotalsLine,
+  type BillingMode,
+  type PlanUsageSummary,
+} from "../../utils/subscriptionPlanUsage";
+import { ContextMeteredCostHero } from "./ContextMeteredCostHero";
+import { ContextPlanUsageHero } from "./ContextPlanUsageHero";
 import "./ContextMeter.css";
 
 interface ContextUsagePanelProps {
@@ -31,10 +38,40 @@ interface ContextUsagePanelProps {
   info: ContextInfo | null;
   infoLoading: boolean;
   infoError: string | null;
+  billingMode: BillingMode;
+  planUsage: PlanUsageSummary | null;
+  /** When false (e.g. ChatGPT OAuth), show "Included" without plan %. */
+  showClaudePlanUsage: boolean;
+  chatModelId: string;
   onRetryBreakdown: () => void;
   onClose: () => void;
   /** A segment id opens the inspector already on that section. */
   onOpenFullInspector: (sectionId?: string) => void;
+}
+
+function contextFillTooltipLines(
+  meter: ContextMeter,
+  info: ContextInfo | null,
+  shownPercent: number,
+): string[] {
+  const lines: string[] = [];
+  const windowLabel = formatTokens(meter.effectiveWindow);
+  const usedLabel = formatTokens(meter.usedTokens);
+  if (meter.fillSource === "billed") {
+    lines.push(`${usedLabel} of ${windowLabel} · estimated peak`);
+  } else {
+    lines.push(`${usedLabel} of ${windowLabel} · largest request`);
+  }
+
+  if (shownPercent > 100 && meter.userCap) {
+    lines.push(
+      `${formatTokens(meter.userCap)} cap applies to history only. Tools and system prompt are extra, so this can exceed 100%.`,
+    );
+  } else if (info && info.totalTokens > 0) {
+    lines.push(`Next send ~${formatTokens(info.totalTokens)} total.`);
+  }
+
+  return lines;
 }
 
 export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
@@ -43,6 +80,10 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
   info,
   infoLoading,
   infoError,
+  billingMode,
+  planUsage,
+  showClaudePlanUsage,
+  chatModelId,
   onRetryBreakdown,
   onClose,
   onOpenFullInspector,
@@ -50,52 +91,76 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
   const [openSegment, setOpenSegment] = useState<string | null>(null);
 
   const fraction = fillFraction(meter);
-  const status = meterStatus(fraction);
+  const status = meterVisualStatus(fraction);
   const shownPercent = Math.round(rawFillFraction(meter) * 100);
   const segments = info ? deriveSegments(info) : [];
+  const fillTooltipLines = contextFillTooltipLines(
+    meter,
+    info,
+    shownPercent,
+  );
 
   return (
     <div className="ctx-panel" role="dialog" aria-label="Context usage">
-      <header className="ctx-panel__head">
-        <span className="ctx-panel__title">Context</span>
-        {live ? <span className="ctx-panel__live">Live</span> : null}
-        <span className="ctx-panel__model">{meter.model}</span>
-        <button
-          type="button"
-          className="ctx-panel__close"
-          onClick={onClose}
-          aria-label="Close"
-        >
-          ✕
-        </button>
-      </header>
+      <div className="ctx-panel__chrome">
+        <header className="ctx-panel__head">
+          <span className="ctx-panel__title">Context</span>
+          {live ? <span className="ctx-panel__live">Live</span> : null}
+          <span className="ctx-panel__model">{meter.model}</span>
+          <button
+            type="button"
+            className="ctx-panel__close"
+            onClick={onClose}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </header>
 
-      <div className="ctx-panel__hero">
-        <div>
-          <div className={`ctx-panel__pct ctx-panel__pct--${status}`}>
-            {shownPercent}%
-          </div>
-          <div className="ctx-panel__sub">
-            {formatTokens(meter.usedTokens)} of{" "}
-            {formatTokens(meter.effectiveWindow)} tokens
-            {/* Say so when the last turn predates the peak measurement. */}
-            {meter.fillSource === "billed" ? " · estimated" : ""}
+        <div className="ctx-panel__hero">
+        <div className="ctx-panel__hero-left">
+          <div className="ctx-panel__pct-row">
+            <div className={`ctx-panel__pct ctx-panel__pct--${status}`}>
+              {shownPercent}%
+            </div>
+            <span className="ctx-panel__info-wrap">
+              <button
+                type="button"
+                className="ctx-panel__info"
+                aria-label="How this percentage is calculated"
+              >
+                i
+              </button>
+              <span className="ctx-panel__info-tip" role="tooltip">
+                {fillTooltipLines.map((line) => (
+                  <span key={line} className="ctx-panel__info-tip-line">
+                    {line}
+                  </span>
+                ))}
+              </span>
+            </span>
           </div>
         </div>
         <div className="ctx-panel__hero-right">
-          {/* A running turn has no cost yet — the provider reports it when the
-              turn closes. The elapsed clock takes the slot instead, because
-              repeating the *previous* turn's price next to a "Live" badge is
-              the one reading that would be actively wrong. */}
-          <div className="ctx-panel__cost">
-            {live
-              ? formatDuration(live.elapsedMs)
-              : formatCost(meter.lastTurn?.cost ?? 0)}
-          </div>
-          <div className="ctx-panel__sub">{live ? "running" : "last turn"}</div>
+          {billingMode === "subscription" ? (
+            <ContextPlanUsageHero
+              liveElapsedMs={live ? live.elapsedMs : null}
+              showClaudePlanUsage={showClaudePlanUsage}
+              chatModelId={chatModelId}
+              planUsage={planUsage}
+            />
+          ) : (
+            <ContextMeteredCostHero
+              liveElapsedMs={live ? live.elapsedMs : null}
+              lastTurnCost={meter.lastTurn?.cost ?? 0}
+              formatMeteredCost={formatCost}
+            />
+          )}
+        </div>
         </div>
       </div>
 
+      <div className="ctx-panel__body">
       <ContextStackBar
         segments={segments}
         usedTokens={meter.usedTokens}
@@ -160,11 +225,19 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         })}
       </ul>
 
-      <TurnCostStrip meter={meter} live={live} />
+      <TurnCostStrip
+        meter={meter}
+        live={live}
+        billingMode={billingMode}
+      />
 
       <footer className="ctx-panel__foot">
         <span>
-          {meter.totals.turns} turns · {formatCost(meter.totals.cost)} this chat
+          {formatChatTotalsLine(
+            billingMode,
+            meter.totals.turns,
+            meter.totals.cost,
+          )}
         </span>
         {/* Disabled rather than a no-op: the breakdown it opens is the thing
             that failed to load, so an enabled button would lie about that. */}
@@ -178,6 +251,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
           Full inspector ›
         </button>
       </footer>
+      </div>
     </div>
   );
 };

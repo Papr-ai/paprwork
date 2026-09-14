@@ -51,6 +51,12 @@ import {
 } from "../../utils/generatedMediaPreview";
 import { useJobLiveLogsStore } from "../../stores/jobLiveLogsStore";
 import { useSubagentJobStore, type SubagentJobInfo } from "../../stores/subagentJobStore";
+import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
+import { MessageCopyButton } from "./MessageCopyButton";
+import { getAssistantCopyText } from "../../utils/getAssistantCopyText";
+import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
+import { AgentLoadingDots } from "./AgentLoadingDots";
+import "./MessageItem.css";
 
 function resolveDelegationAgentDisplay(
   requestedAgentId: string | undefined,
@@ -66,12 +72,6 @@ function resolveDelegationAgentDisplay(
     "Sub-agent";
   return { agentId, agentName };
 }
-import { useSubAgentNameStore } from "../../stores/subAgentNameStore";
-import { MessageCopyButton } from "./MessageCopyButton";
-import { getAssistantCopyText } from "../../utils/getAssistantCopyText";
-import { assistantMessageHasVisibleContent } from "../../utils/assistantMessageVisibility";
-import { AgentLoadingDots } from "./AgentLoadingDots";
-import "./MessageItem.css";
 
 interface MessageItemProps {
   chatId: string;
@@ -1086,6 +1086,7 @@ export const MessageItem = React.memo(MessageItemInner, (prev, next) => {
   if (prev.message.isStreaming !== next.message.isStreaming) return false;
   if (prev.message.attachments !== next.message.attachments) return false;
   if (prev.message.sequence !== next.message.sequence) return false;
+  if (prev.message.toolCalls !== next.message.toolCalls) return false;
   if (prev.chatId !== next.chatId) return false;
   if (prev.delegationFollowUps !== next.delegationFollowUps) return false;
   return true;

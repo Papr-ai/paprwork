@@ -19,6 +19,21 @@ export function ConnectionIndicator() {
     return null;
   }
 
+  if (connectionState === "degraded") {
+    return (
+      <div
+        className="connection-indicator connection-indicator--degraded"
+        role="status"
+        aria-live="polite"
+      >
+        <div className="connection-indicator__dot" />
+        <span className="connection-indicator__text">
+          Gateway busy — still working
+        </span>
+      </div>
+    );
+  }
+
   const showSupervisorMessage =
     gatewaySupervisorStarting &&
     (connectionState === "disconnected" || gatewaySupervisorRestarting);
@@ -30,7 +45,7 @@ export function ConnectionIndicator() {
         : "Gateway starting..."))
     : connectionState === "reconnecting"
       ? "Reconnecting..."
-      : "Connection lost";
+      : "Connection lost — check Gateway";
 
   const visualState = showSupervisorMessage
     ? "reconnecting"

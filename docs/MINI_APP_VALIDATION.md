@@ -72,6 +72,21 @@ Checks for:
 ⚠️ utils.ts:34 - Remove console.log statements before production
 ```
 
+### 5. **Load efficiency (static + preview)**
+
+Static lint (always):
+
+- **`mount-multi-db-query`**: 3+ `POST /api/db/query` inside one `loadData()` / `loadAll()` when the app does not use `/api/db/batch` → use batch reads on mount.
+- **`on-db-changed-no-debounce`**: `onDbChanged` calls `loadData()` without `debounceMs` on `subscribeJobEvents` (or debounce/AbortController in the handler).
+
+After esbuild passes, **hidden preview** (Electron gateway child only) counts DB HTTP calls in ~2s:
+
+- **`preview-load-efficiency`**: many sequential `/api/db/query` with zero batch.
+
+**SDK:** `subscribeJobEvents({ debounceMs: 300, onDbChanged: () => loadData() })` — server coalesces `jobs:db-changed` ~400ms; client debounce avoids refresh storms during job writes.
+
+See `src/resources/skills/miniapp-contracts.md` and `APP_AND_JOBS_GUIDE.md` (SSE section).
+
 ## How It Works
 
 ### Automatic Validation

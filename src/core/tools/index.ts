@@ -40,6 +40,7 @@ import { wikiGraphTools } from "./wikiGraph.js";
 import { paprWorkspaceTools } from "./paprWorkspace.js";
 import { platformFeedbackTools } from "./platformFeedback.js";
 import { paprDbTools } from "./paprDb.js";
+import { paprApiReferenceTools } from "./paprApiReference.js";
 
 export const databaseTools = [
   createDatabaseTool,
@@ -81,6 +82,7 @@ export const allTools = [
   ...mediaGenerationTools,
   ...appAgentChatTools,
   ...platformFeedbackTools,
+  ...paprApiReferenceTools,
 ];
 
 /**
@@ -97,7 +99,13 @@ export const toolsByCategory = {
   filesystem: [...filesystemTools, editFileTool],
   browser: browserTools,
   webview: webviewTools,
-  papr: [...paprMemoryTools, ...paprDocumentMemoryTools, ...paprWorkspaceTools, ...wikiGraphTools],
+  papr: [
+    ...paprMemoryTools,
+    ...paprDocumentMemoryTools,
+    ...paprWorkspaceTools,
+    ...wikiGraphTools,
+    ...paprApiReferenceTools,
+  ],
   documents: documentTools,
   skills: skillsTools,
   automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
@@ -189,6 +197,7 @@ export {
   parsePdfTool,
 } from "./paprDocumentMemory.js";
 export { skillsTools } from "./skills.js";
+export { getPaprApiReferenceTool, paprApiReferenceTools } from "./paprApiReference.js";
 export {
   appJobsTools,
   createAppTool,

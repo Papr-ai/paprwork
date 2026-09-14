@@ -590,6 +590,42 @@ export async function reconcileFromCloudDbChanges(
   return results;
 }
 
+const SYNC_INDEX_RECONCILE_CONCURRENCY = 3;
+
+interface SyncIndexCandidate {
+  linked: TursoLinkedSource;
+  syncKey: string;
+  indexVersion: number;
+}
+
+async function mapWithConcurrency<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  if (items.length === 0) {
+    return [];
+  }
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, limit), items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      for (;;) {
+        const index = nextIndex;
+        nextIndex += 1;
+        if (index >= items.length) {
+          return;
+        }
+        results[index] = await fn(items[index]!);
+      }
+    }),
+  );
+
+  return results;
+}
+
 /**
  * Poll workspace sync-index DB — one query lists which linked replicas advanced.
  * Index is a hint only; per-DB CDC + cursors remain source of truth.
@@ -615,8 +651,9 @@ export async function reconcileFromSyncIndex(
 
   const sources = await bridge.listLinkedSources();
   const state = loadTursoSyncState();
-  const results: TursoCloudSyncSessionResult[] = [];
   const trigger = options?.trigger ?? "sync_index";
+  const candidates: SyncIndexCandidate[] = [];
+  const seenSyncKeys = new Set<string>();
 
   for (const linked of sources) {
     let shortName: string;
@@ -644,17 +681,32 @@ export async function reconcileFromSyncIndex(
       continue;
     }
 
-    const result = await syncLinkedSourceFromCloud(bridge, syncKey, {
-      assumeRemoteChanged: true,
-      trigger,
-    });
-    recordSessionResult(result);
-    results.push(result);
-
-    if (result.action !== "failed") {
-      recordTursoIndexVersion(syncKey, linked.dbPath, indexVersion);
+    if (seenSyncKeys.has(syncKey)) {
+      continue;
     }
+    seenSyncKeys.add(syncKey);
+    candidates.push({ linked, syncKey, indexVersion });
   }
+
+  const results = await mapWithConcurrency(
+    candidates,
+    SYNC_INDEX_RECONCILE_CONCURRENCY,
+    async (candidate) => {
+      const result = await syncLinkedSourceFromCloud(bridge, candidate.syncKey, {
+        trigger,
+      });
+      recordSessionResult(result);
+
+      if (result.action !== "failed") {
+        recordTursoIndexVersion(
+          candidate.syncKey,
+          candidate.linked.dbPath,
+          candidate.indexVersion,
+        );
+      }
+      return result;
+    },
+  );
 
   if (results.length > 0) {
     const pulled = results.filter((r) => r.action === "pulled").length;
@@ -662,13 +714,23 @@ export async function reconcileFromSyncIndex(
       (r) => r.action === "pushed" || r.action === "pushed_then_pulled",
     ).length;
     const skipped = results.filter((r) => r.action === "skipped").length;
+    const remoteUnchanged = results.filter(
+      (r) => r.reason === "remote_unchanged",
+    ).length;
     const failed = results.filter((r) => r.action === "failed").length;
 
     console.log(
-      `[TursoSync] Sync-index session: sources=${results.length} ` +
-        `pulled=${pulled} pushed=${pushed} skipped=${skipped} failed=${failed}`,
+      `[TursoSync] Sync-index session: checked=${results.length} ` +
+        `pulled=${pulled} pushed=${pushed} skipped=${skipped} ` +
+        `remote_unchanged=${remoteUnchanged} failed=${failed}`,
     );
   }
 
   return results;
+}
+
+/** Opt-in full workspace sync-index reconcile on gateway startup (default off). */
+export function isTursoStartupSyncIndexEnabled(): boolean {
+  const raw = process.env.TURSO_STARTUP_SYNC_INDEX?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes";
 }

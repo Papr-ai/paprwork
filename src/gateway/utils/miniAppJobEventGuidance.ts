@@ -16,6 +16,7 @@ const JOB_ID = 'your-job-id';
 // Subscribe once on load — tear down on page unload if needed
 const unsub = subscribeJobEvents({
   jobIds: [JOB_ID],
+  debounceMs: 300,                         // coalesce SSE db-changed bursts during job writes
   onDbChanged: () => loadData(),           // PRIMARY when job writes $APP_DB
   onStatusChanged: (e) => updateBadge(e),  // lifecycle badge; parse lastOutput if no DB
 });

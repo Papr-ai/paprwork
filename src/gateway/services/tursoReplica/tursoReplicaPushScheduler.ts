@@ -33,6 +33,8 @@ import type {
   TursoPushPriority,
   TursoPushTrigger,
 } from "../tursoPushScheduler.js";
+import { yieldToInteractiveHotPath } from "../gatewayBackgroundWork.js";
+import { shouldDeferReplicaPushWhileInteractive } from "./tursoReplicaPushInteractiveDefer.js";
 
 const DEFAULT_DEBOUNCE_MS = 60_000;
 const COMPLETION_DEBOUNCE_MS = 5_000;
@@ -44,15 +46,33 @@ const MAX_WAIT_LOG_COOLDOWN_MS = 30_000;
 const jobTimers = new Map<string, NodeJS.Timeout>();
 const maxWaitTimers = new Map<string, NodeJS.Timeout>();
 const firstDirtyAtMs = new Map<string, number>();
-const pushQueue: string[] = [];
+interface QueuedReplicaPush {
+  syncKey: string;
+  trigger: TursoPushTrigger;
+}
+
+const pushQueue: QueuedReplicaPush[] = [];
 const queuedSyncKeys = new Set<string>();
+const INTERACTIVE_DEFER_POLL_MS = 500;
 const pushInFlightSyncKeys = new Set<string>();
 const pushFailureBackoffUntilMs = new Map<string, number>();
 const lastMaxWaitLogAtMs = new Map<string, number>();
 let allLinkedTimer: NodeJS.Timeout | null = null;
 let queueProcessing = false;
 
+const INTERACTIVE_DEBOUNCE_MS = 2_500;
+
 function debounceMs(priority: TursoPushPriority): number {
+  if (priority === "interactive") {
+    const raw = process.env.TURSO_PUSH_INTERACTIVE_DEBOUNCE_MS;
+    if (raw) {
+      const parsed = Number(raw);
+      if (Number.isFinite(parsed) && parsed >= 0) {
+        return parsed;
+      }
+    }
+    return INTERACTIVE_DEBOUNCE_MS;
+  }
   if (priority === "completion") {
     const raw = process.env.TURSO_PUSH_COMPLETION_DEBOUNCE_MS;
     if (raw) {
@@ -102,6 +122,24 @@ function pushFailureBackoffMs(): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readTursoPushInteractiveQuietMs(): number {
+  const raw = process.env.TURSO_PUSH_YIELD_QUIET_MS;
+  if (!raw) {
+    return 1_500;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 1_500;
+}
+
+function readTursoPushInteractiveMaxWaitMs(): number {
+  const raw = process.env.TURSO_PUSH_YIELD_MAX_WAIT_MS;
+  if (!raw) {
+    return 60_000;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60_000;
 }
 
 function logReplicaSchedule(
@@ -173,7 +211,7 @@ function armMaxWaitTimer(syncKey: string): void {
       return;
     }
     logReplicaSchedule(syncKey, "max_wait", `elapsed ${maxWaitMs()}ms`);
-    enqueueReplicaPush(syncKey, true);
+    enqueueReplicaPush(syncKey, { front: true, trigger: "max_wait" });
   }, remaining);
   maxWaitTimers.set(syncKey, timer);
 }
@@ -196,7 +234,7 @@ function flushIfMaxWaitElapsed(
     logReplicaSchedule(syncKey, trigger, "max-wait elapsed — flushing now");
     lastMaxWaitLogAtMs.set(syncKey, Date.now());
   }
-  enqueueReplicaPush(syncKey, true);
+  enqueueReplicaPush(syncKey, { front: true, trigger });
   return true;
 }
 
@@ -303,7 +341,7 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
       const stillPending = await replicaSourceNeedsPush(source);
       if (stillPending) {
         noteDirty(syncKey);
-        enqueueReplicaPush(syncKey, true);
+        enqueueReplicaPush(syncKey, { front: true, trigger: "unknown" });
         console.log(
           `[TursoReplicaPushScheduler] Backlog remains for ${syncKey} — queued follow-up push`,
         );
@@ -327,15 +365,20 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
   }
 }
 
-function enqueueReplicaPush(syncKey: string, front = false): void {
+function enqueueReplicaPush(
+  syncKey: string,
+  options: { front?: boolean; trigger?: TursoPushTrigger } = {},
+): void {
   if (queuedSyncKeys.has(syncKey)) {
     return;
   }
+  const trigger = options.trigger ?? "unknown";
   queuedSyncKeys.add(syncKey);
-  if (front) {
-    pushQueue.unshift(syncKey);
+  const item: QueuedReplicaPush = { syncKey, trigger };
+  if (options.front) {
+    pushQueue.unshift(item);
   } else {
-    pushQueue.push(syncKey);
+    pushQueue.push(item);
   }
   void processReplicaPushQueue();
 }
@@ -355,13 +398,23 @@ async function processReplicaPushQueue(): Promise<void> {
 
   try {
     while (pushQueue.length > 0) {
-      const syncKey = pushQueue.shift();
-      if (!syncKey) {
+      const head = pushQueue[0];
+      if (head && (await shouldDeferReplicaPushWhileInteractive(head.trigger))) {
+        await sleep(INTERACTIVE_DEFER_POLL_MS);
+        continue;
+      }
+      const item = pushQueue.shift();
+      if (!item) {
         break;
       }
+      const { syncKey, trigger } = item;
       queuedSyncKeys.delete(syncKey);
       pushInFlightSyncKeys.add(syncKey);
       try {
+        await yieldToInteractiveHotPath(`turso-replica-push:${syncKey}:${trigger}`, {
+          minQuietMs: readTursoPushInteractiveQuietMs(),
+          maxWaitMs: readTursoPushInteractiveMaxWaitMs(),
+        });
         await executeReplicaPushForSyncKey(syncKey);
       } finally {
         pushInFlightSyncKeys.delete(syncKey);
@@ -414,7 +467,7 @@ export function scheduleTursoReplicaPushForSyncKey(
   const timer = setTimeout(() => {
     jobTimers.delete(syncKey);
     logReplicaSchedule(syncKey, trigger, "debounce elapsed");
-    enqueueReplicaPush(syncKey);
+    enqueueReplicaPush(syncKey, { trigger });
   }, debounceMs(priority));
   jobTimers.set(syncKey, timer);
 }
@@ -474,7 +527,7 @@ async function enqueuePendingReplicaLinkedSources(
     logReplicaSchedule(syncKey, trigger, "pending replica source");
     noteDirty(syncKey);
     if (!flushIfMaxWaitElapsed(syncKey, trigger)) {
-      enqueueReplicaPush(syncKey);
+      enqueueReplicaPush(syncKey, { trigger });
     }
     enqueued += 1;
   }
@@ -507,7 +560,7 @@ export function cancelScheduledTursoReplicaPushes(
     }
     clearDirtyTracking(syncKey);
     for (let index = pushQueue.length - 1; index >= 0; index -= 1) {
-      if (pushQueue[index] === syncKey) {
+      if (pushQueue[index]?.syncKey === syncKey) {
         pushQueue.splice(index, 1);
       }
     }

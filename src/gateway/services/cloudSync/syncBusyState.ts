@@ -12,9 +12,11 @@ export const GATEWAY_SYNC_BUSY_FILENAME = ".gateway-sync-busy.json";
 
 export interface GatewaySyncBusyState {
   appId: string;
-  operation: "flush" | "cloud_init";
+  operation: "flush" | "cloud_init" | "turso_replica";
   startedAtMs: number;
   trigger?: string;
+  /** Normalized path for Turso replica busy (supervisor grace only). */
+  replicaPath?: string;
   /** Apps waiting in namespace flush queue (excluding active app). */
   queueDepth?: number;
   queuedAppIds?: string[];

@@ -100,6 +100,7 @@ import {
   computeInitialNextRunAt,
   computeMisfireSkipNextRunAt,
 } from "./jobs/scheduleEngine.js";
+import { JobScheduleIndex } from "./jobs/jobScheduleIndex.js";
 import {
   JOB_RUNTIME_FILE_NAME,
   jobRecordToRuntimePatch,
@@ -166,6 +167,7 @@ export class JobsService {
   /** Throttle fs.stat/readdir stale-job scans (was blocking gateway ~15s with 200+ jobs). */
   private lastStalePruneAtMs = 0;
   private static readonly STALE_PRUNE_INTERVAL_MS = 10 * 60 * 1000;
+  private readonly scheduleIndex = new JobScheduleIndex();
 
   constructor() {
     const homeDir = os.homedir();
@@ -209,6 +211,20 @@ export class JobsService {
   private bindWorkspaceWriteContext(): void {
     this.boundPaprDir = getPaprRoot();
     this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private setJobInMemory(job: JobRecord): void {
+    this.jobs.set(job.id, job);
+    this.scheduleIndex.syncJob(job);
+  }
+
+  private deleteJobFromMemory(jobId: string): void {
+    this.deleteJobFromMemory(jobId);
+    this.scheduleIndex.remove(jobId);
+  }
+
+  private rebuildScheduleIndex(): void {
+    this.scheduleIndex.rebuildFromJobs(this.jobs.values());
   }
 
   private isWriteContextValid(context: string): boolean {
@@ -381,7 +397,7 @@ export class JobsService {
           completedAt: undefined,
         };
 
-        this.jobs.set(jobId, job);
+        this.setJobInMemory(job);
         installedCount++;
         console.log(`[JobsService] Registered default job: ${jobId} - ${job.name}`);
       }
@@ -502,7 +518,7 @@ export class JobsService {
       updatedAt: new Date().toISOString(),
     };
 
-    this.jobs.set(jobId, updated);
+    this.setJobInMemory(updated);
     try {
       await this.persistJobRecord(updated);
       await this.syncBundledHomeDailyBriefRecipe(bundledAppsDir, jobId);
@@ -810,7 +826,7 @@ export class JobsService {
           ? [...inferred]
           : [STANDALONE_APP_ID];
 
-      this.jobs.set(jobId, { ...job, appIds });
+      this.setJobInMemory({ ...job, appIds, id: jobId });
       changed = true;
 
       try {
@@ -844,7 +860,7 @@ export class JobsService {
       appIds,
       updatedAt: new Date().toISOString(),
     };
-    this.jobs.set(jobId, updated);
+    this.setJobInMemory(updated);
     await this.persistJobRecord(updated);
     await this.saveJobs();
   }
@@ -872,10 +888,12 @@ export class JobsService {
       const raw = await fs.readFile(this.jobsIndexPath, "utf8");
       const jobs = JSON.parse(raw) as JobRecord[];
       this.jobs = new Map(jobs.map((job) => [job.id, job]));
+      this.rebuildScheduleIndex();
     } catch (error) {
       const err = error as NodeJS.ErrnoException;
       if (err.code === "ENOENT") {
         this.jobs = new Map();
+        this.rebuildScheduleIndex();
         return;
       }
       console.error("[JobsService] Failed to load jobs:", error);
@@ -889,6 +907,7 @@ export class JobsService {
         // backup failed — not critical
       }
       this.jobs = new Map();
+      this.rebuildScheduleIndex();
     }
   }
 
@@ -942,7 +961,7 @@ export class JobsService {
 
     for (const id of staleIds) {
       this.running.delete(id);
-      this.jobs.delete(id);
+      this.deleteJobFromMemory(id);
       console.log(`[JobsService] Pruned stale job index entry (folder missing or empty): ${id}`);
     }
     await this.saveJobs();
@@ -991,7 +1010,7 @@ export class JobsService {
     const removed: string[] = [];
     for (const jobId of tombstones) {
       if (this.jobs.has(jobId)) {
-        this.jobs.delete(jobId);
+        this.deleteJobFromMemory(jobId);
         removed.push(jobId);
       }
     }
@@ -1133,7 +1152,7 @@ export class JobsService {
     for (const jobId of this.jobs.keys()) {
       const merged = await this.readMergedJobRecordFromDisk(jobId);
       if (merged) {
-        this.jobs.set(jobId, merged);
+        this.setJobInMemory(merged);
       }
     }
   }
@@ -1255,7 +1274,7 @@ export class JobsService {
         };
 
         const merged = mergeJobConfigAndRuntime(configBase, mergedRuntime);
-        this.jobs.set(jobId, merged);
+        this.setJobInMemory(merged);
 
         if (needsSplit || !runtimeRaw) {
           await this.persistJobRecord(merged);
@@ -1514,6 +1533,27 @@ export class JobsService {
     }
 
     return jobs.filter((job) => !isWorkspaceChatJob(job.id));
+  }
+
+  /** Due scheduled jobs (index); caller still applies leases, cloud defer, running status. */
+  getDueScheduledJobIds(now: Date): string[] {
+    return this.scheduleIndex.getDueJobIds(now.getTime());
+  }
+
+  /** Enabled jobs with nextRunAt for wake timer (subset of registry). */
+  getScheduledJobsForWake(): JobRecord[] {
+    const jobs: JobRecord[] = [];
+    for (const jobId of this.scheduleIndex.getScheduledJobIds()) {
+      const job = this.jobs.get(jobId);
+      if (job && !isWorkspaceChatJob(job.id)) {
+        jobs.push(job);
+      }
+    }
+    return jobs;
+  }
+
+  getScheduleIndexScheduledCount(): number {
+    return this.scheduleIndex.scheduledCount();
   }
 
   /** Returns sorted list of distinct folder labels across all jobs. */
@@ -1828,7 +1868,7 @@ export class JobsService {
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     await fs.mkdir(path.join(jobDir, "data"), { recursive: true });
     await this.jobDatabase.ensureDatabase(jobDir);
-    this.jobs.set(id, job);
+    this.setJobInMemory(job);
     await this.persistJobRecord(job);
     if (input.requirements && input.requirements.length > 0) {
       await fs.writeFile(
@@ -1851,7 +1891,7 @@ export class JobsService {
       console.log(`[JobsService] Created checkpoint template for ${id}`);
     }
 
-    this.jobs.set(id, job);
+    this.setJobInMemory(job);
     await this.saveJobs();
     notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
@@ -1961,7 +2001,7 @@ export class JobsService {
       }
     }
 
-    this.jobs.set(job.id, job);
+    this.setJobInMemory(job);
     await this.saveJobs();
     notifyJobOwnershipChanged(getPaprRoot());
     console.log(`[JobsService] Installed default job: ${job.id} - ${job.name}`);
@@ -2012,7 +2052,7 @@ export class JobsService {
           timestamp: evaluation.timestamp,
         };
         updated.updatedAt = new Date().toISOString();
-        this.jobs.set(job.id, updated);
+        this.setJobInMemory(updated);
         await this.saveJobs();
 
         // Broadcast evaluation result to UI
@@ -2150,7 +2190,7 @@ export class JobsService {
         next.scheduleState,
       );
     }
-    this.jobs.set(jobId, next);
+    this.setJobInMemory(next);
     await this.persistJobRecord(next);
     await this.saveJobs();
 
@@ -2417,7 +2457,7 @@ export class JobsService {
         executionCapability: UNLINKED_JOB_EXECUTION_CAPABILITY,
         updatedAt: new Date().toISOString(),
       };
-      this.jobs.set(job.id, updated);
+      this.setJobInMemory(updated);
       await this.persistJobRecord(updated);
       changed += 1;
     }
@@ -3398,7 +3438,7 @@ export class JobsService {
         ? this.computeScheduleState(s, {})
         : undefined;
     }
-    this.jobs.set(jobId, updated);
+    this.setJobInMemory(updated);
     await this.persistJobRecord(updated);
     await this.saveJobs();
     if (jobUpdateAffectsOwnership(updates)) {
@@ -3483,7 +3523,7 @@ export class JobsService {
     }
 
     // Remove from index and upload updated catalog (job absent = deleted in cloud metadata)
-    this.jobs.delete(jobId);
+    this.deleteJobFromMemory(jobId);
     await this.saveJobs();
     notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
@@ -3567,7 +3607,7 @@ export class JobsService {
           waitingPermissionKeys: undefined,
         };
 
-        this.jobs.set(jobId, updated);
+        this.setJobInMemory(updated);
 
         await this.persistJobRecord(updated);
 
@@ -4067,7 +4107,7 @@ export class JobsService {
       await fs.cp(sourceDir, destination, { recursive: true });
     }
     await this.jobDatabase.ensureDatabase(destination);
-    this.jobs.set(job.id, job);
+    this.setJobInMemory(job);
     await this.persistJobRecord(job);
     await this.saveJobs();
     return job;

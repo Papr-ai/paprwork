@@ -13,7 +13,7 @@ import {
   parseMemoryBootstrapBlock,
   type ParsedMemoryItem,
 } from "./memoryBootstrapDisplay";
-import type { ContextInfo } from "./ContextInspectorModal";
+import type { ContextInfo } from "./contextInfo";
 
 export interface Row {
   key: string;
@@ -23,6 +23,17 @@ export interface Row {
   body?: string;
   /** Memory blocks are structured text — rendered as cards, not a blob. */
   renderBody?: () => React.ReactNode;
+}
+
+/** One-line rail label — the full preview can be thousands of chars. */
+function conversationRowLabel(preview: string): string {
+  const line =
+    preview
+      .split("\n")
+      .map((entry) => entry.trim())
+      .find((entry) => entry.length > 0) ?? "(empty)";
+  if (line.length <= 80) return line;
+  return `${line.slice(0, 80)}…`;
 }
 
 const MemoryCards: React.FC<{
@@ -219,12 +230,13 @@ export function buildSections(info: ContextInfo): Section[] {
     b.messages.tokens,
     b.messages.breakdown.map((msg, index) => ({
       key: `msg-${index}`,
-      label: msg.preview || "(empty)",
+      label: conversationRowLabel(msg.preview || "(empty)"),
       meta: msg.role,
       tokens: msg.tokens,
       body: msg.preview,
     })),
-    `${b.messages.count ?? 0} messages`,
+    b.messages.note ??
+      `${b.messages.count ?? 0} messages · assistant rows include tool results sent to the model`,
   );
 
   if (b.conversationSummary) {

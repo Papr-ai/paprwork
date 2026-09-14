@@ -971,6 +971,21 @@ export async function syncAppDatabaseResourcesToTarget(
     input.targetPaprHome,
   );
 
+  const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+    "./syncV3/syncPulledSchemaOwnerMigrations.js"
+  );
+  const appsRoot = path.join(input.targetPaprHome, "apps");
+  const hydratedMigrations = await hydrateAppFolderSchemaMigrationsToRegistry({
+    appId: input.appId,
+    paprRoot: input.targetPaprHome,
+    appsRoot,
+  });
+  if (hydratedMigrations.copied.length > 0) {
+    console.log(
+      `[CopyApp] Mirrored ${hydratedMigrations.copied.length} migration(s) from app folder into registry for ${input.appId}`,
+    );
+  }
+
   return {
     copiedRegistryDbSlugs,
     registryDbIds: [...registryDbIds],

@@ -12,7 +12,7 @@
  */
 
 import React from "react";
-import type { ContextInfo } from "./ContextInspectorModal";
+import type { ContextInfo } from "./contextInfo";
 import { formatTokens, type ContextSegment } from "./contextMeterModel";
 
 /** Five rows fit without a scrollbar; the rest is the inspector's job. */

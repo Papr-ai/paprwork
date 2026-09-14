@@ -45,6 +45,8 @@ await papr.files.upload(file, { onProgress: (p) => updateBar(p) });
 
 **Do NOT curl, fetch, or guess \`/__papr__/...\` URLs** — there is no \`papr-tooltip\`, \`papr-popover\`, or \`papr-ui\`. Runtime URLs are bundles for **imports**, not docs.
 
+**Lookup contracts first:** \`get_papr_api_reference({ query: "papr sdk jobs subscribe", surface: "mini-app-sdk" })\`.
+
 **Inspect source (once):** \`read_file\` on \`src/resources/mini-app-sdk/papr-sdk.ts\` or \`${MINI_APP_SDK_MANIFEST_PATH}\` for the auto-discovered module list.
 
 Legacy direct imports (\`/__papr__/papr-dialog.ts\`, \`papr-job-events.ts\`, etc.) still work. Prefer \`${primary.route}\` for new code.

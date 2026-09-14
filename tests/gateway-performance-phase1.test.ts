@@ -159,7 +159,118 @@ describe("tursoReplicaBackgroundRecovery", () => {
 });
 
 describe("tursoReplicaPathScheduler", () => {
-  it("runs interactive ops before queued background ops", async () => {
+  it("does not overlap reads with background sync in relaxed mode (default)", async () => {
+    const prevStrict = process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    const prevDuring = process.env.PAPR_REPLICA_READ_DURING_SYNC;
+    delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    delete process.env.PAPR_REPLICA_READ_DURING_SYNC;
+    const scheduler = new TursoReplicaPathScheduler();
+    const order: string[] = [];
+    let releaseBg: () => void = () => undefined;
+    const bgGate = new Promise<void>((resolve) => {
+      releaseBg = resolve;
+    });
+
+    const bg = scheduler.runBackground("/tmp/data.db", async () => {
+      order.push("bg-start");
+      await bgGate;
+      order.push("bg-end");
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const read = scheduler.runParallelRead("/tmp/data.db", async () => {
+      order.push("read");
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    releaseBg();
+    await bg;
+    await read;
+
+    expect(order).toEqual(["bg-start", "bg-end", "read"]);
+    if (prevStrict === undefined) {
+      delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    } else {
+      process.env.PAPR_REPLICA_STRICT_PATH_QUEUE = prevStrict;
+    }
+    if (prevDuring === undefined) {
+      delete process.env.PAPR_REPLICA_READ_DURING_SYNC;
+    } else {
+      process.env.PAPR_REPLICA_READ_DURING_SYNC = prevDuring;
+    }
+  });
+
+  it("allows read during background sync when PAPR_REPLICA_READ_DURING_SYNC=1", async () => {
+    const prevStrict = process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    const prevDuring = process.env.PAPR_REPLICA_READ_DURING_SYNC;
+    delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    process.env.PAPR_REPLICA_READ_DURING_SYNC = "1";
+    const scheduler = new TursoReplicaPathScheduler();
+    const order: string[] = [];
+    let releaseBg: () => void = () => undefined;
+    const bgGate = new Promise<void>((resolve) => {
+      releaseBg = resolve;
+    });
+
+    const bg = scheduler.runBackground("/tmp/data.db", async () => {
+      order.push("bg-start");
+      await bgGate;
+      order.push("bg-end");
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const read = scheduler.runParallelRead("/tmp/data.db", async () => {
+      order.push("read");
+    });
+
+    await read;
+    releaseBg();
+    await bg;
+
+    expect(order).toEqual(["bg-start", "read", "bg-end"]);
+    if (prevStrict === undefined) {
+      delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    } else {
+      process.env.PAPR_REPLICA_STRICT_PATH_QUEUE = prevStrict;
+    }
+    if (prevDuring === undefined) {
+      delete process.env.PAPR_REPLICA_READ_DURING_SYNC;
+    } else {
+      process.env.PAPR_REPLICA_READ_DURING_SYNC = prevDuring;
+    }
+  });
+
+  it("runs multiple parallel reads in relaxed mode", async () => {
+    const prevStrict = process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    const scheduler = new TursoReplicaPathScheduler();
+    let concurrent = 0;
+    let maxConcurrent = 0;
+
+    await Promise.all(
+      [1, 2, 3].map(() =>
+        scheduler.runParallelRead("/tmp/data.db", async () => {
+          concurrent += 1;
+          maxConcurrent = Math.max(maxConcurrent, concurrent);
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          concurrent -= 1;
+        }),
+      ),
+    );
+
+    expect(maxConcurrent).toBeGreaterThan(1);
+    if (prevStrict === undefined) {
+      delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    } else {
+      process.env.PAPR_REPLICA_STRICT_PATH_QUEUE = prevStrict;
+    }
+  });
+
+  it("runs interactive ops before queued background ops in strict mode", async () => {
+    const prev = process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    process.env.PAPR_REPLICA_STRICT_PATH_QUEUE = "1";
     const scheduler = new TursoReplicaPathScheduler();
     const order: string[] = [];
     let releaseBg1: () => void = () => undefined;
@@ -187,5 +298,10 @@ describe("tursoReplicaPathScheduler", () => {
     await Promise.all([bg1, bg2, interactive]);
 
     expect(order).toEqual(["bg1-start", "bg1-end", "interactive", "bg2"]);
+    if (prev === undefined) {
+      delete process.env.PAPR_REPLICA_STRICT_PATH_QUEUE;
+    } else {
+      process.env.PAPR_REPLICA_STRICT_PATH_QUEUE = prev;
+    }
   });
 });

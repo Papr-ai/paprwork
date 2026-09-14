@@ -22,6 +22,14 @@ import * as fs from "fs";
 import Database from "better-sqlite3";
 
 /**
+ * Fail fast when the sync worker already holds this replica file.
+ * better-sqlite3's default busy timeout is 5000ms of *synchronous* main-thread sleep,
+ * which matches ~5s `[GatewayEventLoop]` spikes and inflates `openSpecMs` on every read.
+ * @see tursoSyncState.ts LEGACY_PROBE_BUSY_TIMEOUT_MS
+ */
+export const REPLICA_ENGINE_INSPECT_BUSY_TIMEOUT_MS = 100;
+
+/**
  * Engine tables that must carry a unique index when present.
  *
  * Verified against healthy replicas, which show
@@ -81,9 +89,13 @@ export function inspectReplicaEngineTables(
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = new Database(dbPath, {
+      readonly: true,
+      fileMustExist: true,
+      timeout: REPLICA_ENGINE_INSPECT_BUSY_TIMEOUT_MS,
+    });
   } catch {
-    // Unreadable here says nothing about the engine's view; leave it alone.
+    // Unreadable or contended — do not block the gateway; the worker validates on connect.
     return [];
   }
 
@@ -132,7 +144,14 @@ export function repairReplicaEngineTables(dbPath: string): string[] {
     return [];
   }
 
-  const db = new Database(dbPath);
+  let db: Database.Database;
+  try {
+    db = new Database(dbPath, {
+      timeout: REPLICA_ENGINE_INSPECT_BUSY_TIMEOUT_MS,
+    });
+  } catch {
+    return [];
+  }
   try {
     const dropped: string[] = [];
     for (const defect of defects) {

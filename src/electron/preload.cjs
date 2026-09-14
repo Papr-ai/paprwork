@@ -72,6 +72,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       trySyncFromStorage: (options) =>
         ipcRenderer.invoke("auth:claude:try-sync-from-storage", options),
       getToken: () => ipcRenderer.invoke("auth:claude:get-token"),
+      getUsageLimits: () => ipcRenderer.invoke("auth:claude:get-usage-limits"),
     },
     // Generic paste token that maps providers correctly
     pasteToken: (provider, token, options) => {

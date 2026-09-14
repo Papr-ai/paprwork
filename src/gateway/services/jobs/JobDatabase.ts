@@ -5,6 +5,11 @@ import {
   applyDatabaseMigrations,
   applySqlitePerformancePragmas,
 } from "./databaseMigrations.js";
+import {
+  recoverCorruptJobScratchDatabase,
+  shouldRecoverJobScratchAfterMigrationError,
+} from "./jobScratchRecovery.js";
+import { assertNotReplicaManagedSqliteAccess } from "../tursoReplica/tursoReplicaFileGuard.js";
 
 export class JobDatabase {
   private getDbPath(jobDir: string): string {
@@ -16,6 +21,7 @@ export class JobDatabase {
     action: (db: Database.Database) => T,
   ): Promise<T | null> {
     const dbPath = this.getDbPath(jobDir);
+    assertNotReplicaManagedSqliteAccess(dbPath, "JobDatabase.ensureDatabase");
     let db: Database.Database | null = null;
     try {
       db = new Database(dbPath);
@@ -106,7 +112,17 @@ export class JobDatabase {
   }
 
   async applyMigrations(jobDir: string): Promise<string[]> {
-    return applyDatabaseMigrations(jobDir, this.getDbPath(jobDir));
+    const dbPath = this.getDbPath(jobDir);
+    try {
+      return await applyDatabaseMigrations(jobDir, dbPath);
+    } catch (error) {
+      if (!shouldRecoverJobScratchAfterMigrationError(dbPath, error)) {
+        throw error;
+      }
+      await recoverCorruptJobScratchDatabase(dbPath);
+      await this.ensureDatabase(jobDir);
+      return applyDatabaseMigrations(jobDir, dbPath);
+    }
   }
 
   async recordRunStart(

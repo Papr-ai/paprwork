@@ -17,6 +17,7 @@ import {
 const DEFAULT_GATEWAY_PORT = 18789;
 const WORKSPACE_SWITCH_FETCH_TIMEOUT_MS = 8_000;
 const WORKSPACE_SWITCH_FETCH_RETRIES = 3;
+const PAPR_API_KEY_POST_TIMEOUT_MS = 5_000;
 
 let restartGatewayAfterWorkspaceSwitch: (() => Promise<void>) | null = null;
 
@@ -223,6 +224,7 @@ export async function notifyGatewayPaprApiKeyUpdate(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paprApiKey: apiKey }),
+        signal: AbortSignal.timeout(PAPR_API_KEY_POST_TIMEOUT_MS),
       },
     );
     if (!response.ok) {

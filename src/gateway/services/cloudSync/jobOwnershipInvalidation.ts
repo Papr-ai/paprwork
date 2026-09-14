@@ -6,10 +6,12 @@
  */
 
 import { getPaprRoot } from "../../../core/utils/paprRoot.js";
+import { bumpAppDataSourcesResolvedCacheForJobTopologyChange } from "../appDataSourcesResolvedCache.js";
 import { invalidateJobOwnerIndex } from "../cloudUploadMode.js";
 
 export function notifyJobOwnershipChanged(paprDir?: string): void {
   invalidateJobOwnerIndex(paprDir ?? getPaprRoot());
+  bumpAppDataSourcesResolvedCacheForJobTopologyChange();
 }
 
 export function jobUpdateAffectsOwnership(

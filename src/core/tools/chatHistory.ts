@@ -39,9 +39,9 @@ export const GET_FULL_TOOL_RESULT_ALL_CHATS_LIMIT = 20;
 export const getFullToolResultTool = createTool({
   id: "get_full_tool_result",
   description:
-    "Retrieve the FULL stored result for ONE tool call (by toolCallId) when context shows a truncation notice. " +
-    "Default scope is the active chat. Use startChar/length to paginate very large results. " +
-    "This reads the complete output from local storage — not a semantic search.",
+    "Retrieve the FULL stored result for ONE tool call (by toolCallId) when you still need data hidden by a truncation notice. " +
+    "Call sparingly — one toolCallId at a time, not in bulk. For files, prefer read_app_file/read_job_file again. " +
+    "Default scope is the active chat. Use startChar/length to paginate very large results.",
   inputSchema: getFullToolResultSchema,
   execute: async (args) => {
     try {

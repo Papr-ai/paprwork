@@ -93,6 +93,14 @@ export const MessageList: React.FC<MessageListProps> = ({
     return true;
   });
 
+  const hasStreamingAssistantMessage = filteredMessages.some(
+    (m) => m.isStreaming,
+  );
+
+  /** History reload dots — hide while the agent turn placeholder or streaming row is shown. */
+  const showHistoryLoadingIndicator =
+    isLoading && !isSending && !hasStreamingAssistantMessage;
+
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
     const listElement = listRef.current;
@@ -288,8 +296,8 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isLoading && (
-        <div className="loading-indicator">
+      {showHistoryLoadingIndicator && (
+        <div className="loading-indicator" data-testid="chat-history-loading-indicator">
           <div className="loading-dots">
             <span></span>
             <span></span>
@@ -299,7 +307,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       )}
       {isWaitingForAgentSlot &&
         isSending &&
-        !filteredMessages.some((m) => m.isStreaming) && (
+        !hasStreamingAssistantMessage && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">
@@ -351,7 +359,7 @@ export const MessageList: React.FC<MessageListProps> = ({
       )}
       {isSending &&
         !isWaitingForAgentSlot &&
-        !filteredMessages.some((m) => m.isStreaming) && (
+        !hasStreamingAssistantMessage && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">

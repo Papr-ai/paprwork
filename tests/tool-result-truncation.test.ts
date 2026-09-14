@@ -8,6 +8,7 @@ import {
   HISTORY_TOOL_RESULT_MAX_CHARS,
   RECENT_TURN_RETENTION_COUNT,
   resolveHistoryToolResultCharLimit,
+  resolveMidTurnToolResultCharLimit,
   truncateHistoryToolResult,
   truncateToCharLimit,
   truncateToolResultForModelContext,
@@ -33,6 +34,26 @@ describe("toolResultTruncation", () => {
     expect(categorizeTool("create_plan")).toBe("small_crud");
     expect(categorizeTool("generate_media")).toBe("small_crud");
     expect(categorizeTool("list_media_models")).toBe("small_crud");
+    expect(categorizeTool("query_cloud_turso")).toBe("small_crud");
+    expect(categorizeTool("get_job_history")).toBe("job_run");
+  });
+
+  test("structured job and cloud query tools use moderate limits, not bash 400", () => {
+    expect(getDefaultHistoryCharLimit("job_run", "get_job_history")).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars,
+    );
+    expect(getDefaultHistoryCharLimit("small_crud", "query_cloud_turso")).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars,
+    );
+    expect(
+      resolveMidTurnToolResultCharLimit("get_job_history", 10_000),
+    ).toBe(DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars);
+    expect(
+      resolveMidTurnToolResultCharLimit("query_cloud_turso", 10_000),
+    ).toBe(DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.moderateMaxChars);
+    expect(resolveMidTurnToolResultCharLimit("bash", 10_000)).toBe(
+      DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS.aggressiveMaxChars,
+    );
   });
 
   test("generate_media results use moderate history limit not bash 400", () => {

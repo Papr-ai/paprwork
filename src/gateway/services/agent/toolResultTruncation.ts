@@ -121,6 +121,9 @@ const SMALL_CRUD_TOOLS = new Set([
   "list_sub_agents",
   "generate_media",
   "list_media_models",
+  "query_cloud_turso",
+  "papr_db_sync_status",
+  "read_app_data_health",
 ]);
 
 /** Delegation status — never truncate, in any turn (full payload must survive). */
@@ -238,10 +241,11 @@ function getConfiguredCategoryCharLimit(
       return moderateMaxChars;
     case "memory_search":
       return memorySearchMaxChars;
+    case "job_run":
+      return moderateMaxChars;
     case "bash":
     case "directory_list":
     case "validation_preview":
-    case "job_run":
     default:
       return aggressiveMaxChars;
   }

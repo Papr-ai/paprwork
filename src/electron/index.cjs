@@ -193,6 +193,7 @@ async function loadESMModules() {
   );
   TelemetryClientClass = telemetryClientModule.TelemetryClient;
   isTelemetrySendingEnabledFn = telemetryClientModule.isTelemetrySendingEnabled;
+  console.log("[Electron] Startup: ESM modules loaded");
 }
 
 // Configuration
@@ -201,6 +202,8 @@ const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "18789", 10);
 const IS_PRODUCTION = process.env.NODE_ENV === "production" || require("path").dirname(__dirname).includes("app.asar");
 
 let mainWindow = null;
+/** False until Papr/custom-keys IPC is registered in whenReady (macOS activate can fire earlier). */
+let electronStartupReady = false;
 let isQuitting = false;
 let isInstallingUpdate = false;
 let gatewayProcess = null;
@@ -821,6 +824,14 @@ async function waitForGatewayFullyReady(
 }
 
 async function createMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+    mainWindow.focus();
+    return;
+  }
+
   const preloadPath = path.join(__dirname, "preload.cjs");
   console.log(`[Electron] Preload script path: ${preloadPath}`);
 
@@ -1907,7 +1918,13 @@ class GatewayProcessSupervisor {
         "[Supervisor] Gateway busy uploading (health slow/unreachable — grace active)",
       );
     } else if (!health.alive && this.hasEverBeenHealthy) {
-      console.warn(`[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})`);
+      const lagSuffix =
+        typeof health.eventLoopLagMs === "number"
+          ? `, last eventLoopLagMs=${health.eventLoopLagMs}`
+          : "";
+      console.warn(
+        `[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})${lagSuffix}`,
+      );
     } else if (health.alive && !health.ready) {
       console.log("[Supervisor] Gateway still starting (services loading)...");
     }
@@ -2561,6 +2578,7 @@ app.whenReady().then(async () => {
   await loadESMModules();
 
   // Initialize storage and IPC (use outer scope variables for second-instance handler)
+  console.log("[Electron] Startup: opening key storage (Keychain)…");
   customKeysStorage = new CustomKeysStorage();
   keyPermissionsStorage = new KeyPermissionsStorage();
   settingsStorage = new SettingsStorage(undefined, {
@@ -2568,6 +2586,7 @@ app.whenReady().then(async () => {
   });
 
   await customKeysStorage.initialize();
+  console.log("[Electron] Startup: key storage ready");
   const paprProfileForKeys = settingsStorage.getPaprProfile();
   if (migrateOrgVaultIsolation) {
     const migrationResult = await migrateOrgVaultIsolation(
@@ -2596,7 +2615,20 @@ app.whenReady().then(async () => {
   if (paprProfileForKeys?.organizationId) {
     await customKeysStorage.setActiveOrganization(paprProfileForKeys.organizationId);
   }
+  console.log("[Electron] Startup: org key migrations complete");
   // Note: KeyPermissionsStorage and SettingsStorage auto-initialize via electron-store
+
+  // Register Papr IPC before any slow network (namespace API key, OAuth). macOS
+  // "activate" can open the window while those await; handlers must exist first.
+  initializePaprLoginIPC(customKeysStorage, settingsStorage, {
+    trackLoginEvent: (eventName, properties) => {
+      if (telemetryClientInstance) {
+        telemetryClientInstance.trackFireAndForget(eventName, properties);
+      }
+    },
+  });
+  electronStartupReady = true;
+  console.log("[Electron] Startup: Papr login IPC registered");
 
   if (initializeTelemetryIPC) {
     initializeTelemetryIPC(settingsStorage);
@@ -2668,21 +2700,15 @@ app.whenReady().then(async () => {
   // Reconcile workspace pointer + API key before any writes to namespace-scoped paths
   if (ensureActiveWorkspaceReconciled) {
     try {
+      const workspaceReconcileStartedAt = Date.now();
+      console.log("[Electron] Startup: reconciling workspace pointer…");
       await ensureActiveWorkspaceReconciled(settingsStorage);
+      console.log(
+        `[Electron] Startup: workspace reconcile finished (${Date.now() - workspaceReconcileStartedAt}ms)`,
+      );
     } catch (error) {
       console.warn(
         "[Electron] Startup workspace reconciliation failed:",
-        error instanceof Error ? error.message : error,
-      );
-    }
-  }
-
-  if (ensureActiveNamespaceApiKey) {
-    try {
-      await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage);
-    } catch (error) {
-      console.warn(
-        "[Electron] Startup namespace API key sync failed:",
         error instanceof Error ? error.message : error,
       );
     }
@@ -2724,17 +2750,9 @@ app.whenReady().then(async () => {
   });
 
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
+  console.log("[Electron] Startup: initializing OAuth IPC…");
   await initializeOAuthIPC(customKeysStorage, {
     trackOAuthEvent: (eventName, properties) => {
-      if (telemetryClientInstance) {
-        telemetryClientInstance.trackFireAndForget(eventName, properties);
-      }
-    },
-  });
-
-  // Initialize Papr Login IPC handlers
-  initializePaprLoginIPC(customKeysStorage, settingsStorage, {
-    trackLoginEvent: (eventName, properties) => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);
       }
@@ -2970,9 +2988,33 @@ app.whenReady().then(async () => {
     settingsStorage,
   });
 
+  console.log("[Electron] Startup: spawning gateway…");
   await supervisor.start();
+
+  if (ensureActiveNamespaceApiKey) {
+    try {
+      const namespaceKeySyncStartedAt = Date.now();
+      console.log(
+        "[Electron] Startup: syncing namespace API key from Parse (gateway ready)…",
+      );
+      await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage, {
+        refreshFromParse: true,
+      });
+      console.log(
+        `[Electron] Startup: namespace API key sync finished (${Date.now() - namespaceKeySyncStartedAt}ms)`,
+      );
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup namespace API key sync failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  console.log("[Electron] Startup: opening main window…");
   await createMainWindow();
   authDeepLinksReady = true;
+  console.log("[Electron] Startup: complete");
 
   // Process auth deep links after Gateway + window are ready (callback needs both)
   const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
@@ -3084,6 +3126,10 @@ app.on("window-all-closed", () => {
 app.on("activate", async () => {
   if (isInstallingUpdate) {
     console.log("[Electron] Ignoring dock activate during update install");
+    return;
+  }
+
+  if (!electronStartupReady) {
     return;
   }
 

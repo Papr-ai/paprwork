@@ -407,6 +407,22 @@ export async function queryLinkedDbViaTursoReplica(
   });
 }
 
+export async function queryBatchLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  options?: { pullBeforeRead?: boolean },
+): Promise<import("../DbQueryPool.js").QueryResult[]> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  return replica.runQueryBatch({
+    localPath: source.dbPath,
+    tursoDatabase,
+    statements,
+    pullBeforeRead: options?.pullBeforeRead,
+  });
+}
+
 export async function schemaLinkedDbViaTursoReplica(
   source: AppDataSource,
 ): Promise<import("../DbQueryPool.js").SchemaResult> {

@@ -24,6 +24,7 @@ import {
 } from "./appDataSources.js";
 import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
 import { defaultSyncModeForNewRegistryDb } from "../utils/tursoReplicaEnabled.js";
+import { isJobScratchDatabasePath } from "./jobs/jobScratchDatabasePath.js";
 
 export const DATABASES_REGISTRY_FILENAME = "databases.json";
 
@@ -405,6 +406,12 @@ export class DatabaseRegistryService {
     tursoShortName?: string;
   }): Promise<DatabaseRecord> {
     const normalizedPath = normalizeDbPath(input.localPath);
+    if (isJobScratchDatabasePath(normalizedPath)) {
+      throw new Error(
+        `Refusing to register job scratch in databases.json: ${normalizedPath}. ` +
+          "Use data/databases/{slug}/data.db for app data; Jobs/{id}/data/data.db is local job infra only.",
+      );
+    }
     const existing = this.getByPath(normalizedPath);
     if (existing) {
       return existing;
@@ -683,6 +690,12 @@ export class DatabaseRegistryService {
             continue;
           }
           const normalized = normalizeDbPath(source.dbPath);
+          if (isJobScratchDatabasePath(normalized)) {
+            console.warn(
+              `[DatabaseRegistry] Skipping job scratch dbPath in data-sources sync: ${normalized}`,
+            );
+            continue;
+          }
           const existing = byPath.get(normalized);
           if (!existing) {
             byPath.set(normalized, {

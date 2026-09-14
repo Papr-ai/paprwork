@@ -63,7 +63,11 @@ export interface TursoReplicaWriteResult {
   backend: "turso-replica";
 }
 
-/** When pushAfterWrite is false, apply on replica only — no pull/push to Turso primary. */
+/**
+ * When false: replica-only write, no Turso push.
+ * When true: await pull/push before returning (migrations / explicit sync).
+ * When omitted: debounced background push (mini-app API default).
+ */
 export interface TursoReplicaWriteOptions {
   pushAfterWrite?: boolean;
 }

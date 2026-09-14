@@ -30,8 +30,8 @@ const core = new TursoSyncWorkerCore(log);
 async function serve(request: TursoSyncWorkerRequest): Promise<void> {
   emit({ id: request.id, started: true });
   try {
-    const result = await core.run(request);
-    emit({ id: request.id, ok: true, result });
+    const { result, opTiming } = await core.run(request);
+    emit({ id: request.id, ok: true, result, opTiming });
   } catch (error) {
     emit({
       id: request.id,

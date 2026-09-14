@@ -235,7 +235,10 @@ export function isTursoLocalDatabaseCorruptError(message: string): boolean {
     lower.includes("file is not a database") ||
     lower.includes("sqlite_corrupt") ||
     lower.includes("database corruption") ||
-    lower.includes("malformed database schema")
+    lower.includes("malformed database schema") ||
+    lower.includes("invalid page type") ||
+    lower.includes("corrupt database") ||
+    lower.includes("database is corrupt")
   );
 }
 

@@ -38,6 +38,7 @@ With a contract:
 - Queries: exact SQL the app will run
 - Refresh: on app load + **push events** via `subscribeJobEvents()` (`/api/jobs/events` SSE)
 - Use `onDbChanged` to auto-refresh when any write path changes the DB (job, agent, Turso pull)
+- **`debounceMs: 200–500`** on `subscribeJobEvents` when `onDbChanged` calls heavy `loadData()` — server coalesces db-changed ~400ms; SDK debounce avoids refresh storms
 - Use `onStatusChanged` to react to job lifecycle (completed, failed, running)
 - **Never** poll `/api/db/query` on an interval — cloud apps bill Turso per row read
 - **Batch page-load reads**: use **`POST /api/db/batch`** (aliases: **`/api/db/query-batch`**, **`/api/db/read-batch`**) with `{ appId, statements: [{ sql, params?, sourceId? }, ...] }` (max 25) → `{ results: [{ ok, rows?, error? }, ...] }`. **SELECT / WITH only** — INSERT/UPDATE/DELETE in this call returns `{ ok: false, error: "Only SELECT..." }` per statement.
@@ -145,6 +146,30 @@ if not user_id:
 ```
 
 Users can disable auto-publish globally or per-app in Settings.
+
+## Load efficiency & `validate_app`
+
+Run **`validate_app({ appId })` after implementing or editing app code** (esbuild + lints + optional hidden preview). Opening the app tab in the UI does **not** replace this — the agent should validate after changes.
+
+**Contract expectations the linter enforces:**
+
+- **Initial load:** 2+ reads on mount → **`POST /api/db/batch`** (one round-trip), not many sequential `/api/db/query` calls (`mount-multi-db-query`).
+- **Live refresh:** `onDbChanged` → `loadData()` should use **`debounceMs`** on `subscribeJobEvents` or debounce/AbortController inside `loadData` (`on-db-changed-no-debounce`).
+- **Tabs:** load once, cache in memory, refresh on `onDbChanged` only — not on every tab switch (`cloud-tab-refetch-storm`).
+- **Preview (desktop):** after lint passes, hidden webview counts DB HTTP calls; warns if startup fires many queries with no batch (`preview-load-efficiency`).
+
+**Example subscribe block in the contract:**
+
+```typescript
+import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';
+
+subscribeJobEvents({
+  jobIds: [JOB_ID],
+  debounceMs: 300,
+  onDbChanged: () => loadData(),
+});
+loadData(); // once on page load — batch reads inside loadData()
+```
 
 ## Required UX States
 

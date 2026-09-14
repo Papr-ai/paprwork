@@ -123,6 +123,13 @@ export interface ElectronAPI {
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
       getToken: () => Promise<{ success: boolean; token?: string; error?: string }>;
+      getUsageLimits: () => Promise<
+        | {
+            success: true;
+            data: import("../../src/core/services/claudeOAuthUsage").ClaudeUsageLimitsSnapshot;
+          }
+        | { success: false; error: string; httpStatus?: number }
+      >;
       trySyncFromStorage: (options?: {
         source?: "settings" | "onboarding" | "unknown";
       }) => Promise<{

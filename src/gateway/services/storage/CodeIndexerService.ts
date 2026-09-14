@@ -172,7 +172,10 @@ export class CodeIndexerService {
   /**
    * Index one code file to PAPR (used by incremental queue processing).
    */
-  async indexSingleCodeFile(filePath: string): Promise<void> {
+  async indexSingleCodeFile(
+    filePath: string,
+    snapshot?: { content: string; hash: string; lineCount: number },
+  ): Promise<void> {
     const projectInfo = getProjectPathInfo(filePath, this.paprDir);
     if (!projectInfo) {
       throw new Error(`File is not indexable — must be inside apps/{id}/ or Jobs/{id}/`);
@@ -183,8 +186,10 @@ export class CodeIndexerService {
         ? await this.extractMiniAppMetadata(projectInfo.projectDir, projectInfo.projectId)
         : await this.extractJobMetadata(projectInfo.projectDir, projectInfo.projectId);
 
-    const fileMetadata = this.extractCodeFileMetadata(filePath, metadata);
-    await this.indexCodeFile(fileMetadata, metadata);
+    const fileMetadata = snapshot
+      ? this.extractCodeFileMetadataWithContent(filePath, metadata, snapshot)
+      : this.extractCodeFileMetadata(filePath, metadata);
+    await this.indexCodeFile(fileMetadata, metadata, snapshot?.content);
   }
 
   /**
@@ -450,18 +455,39 @@ export class CodeIndexerService {
     projectMetadata: ProjectMetadata
   ): CodeFileMetadata {
     const content = fs.readFileSync(filePath, 'utf-8');
+    return this.buildCodeFileMetadata(filePath, projectMetadata, content);
+  }
+
+  private extractCodeFileMetadataWithContent(
+    filePath: string,
+    projectMetadata: ProjectMetadata,
+    snapshot: { content: string; lineCount: number },
+  ): CodeFileMetadata {
+    return this.buildCodeFileMetadata(
+      filePath,
+      projectMetadata,
+      snapshot.content,
+      snapshot.lineCount,
+    );
+  }
+
+  private buildCodeFileMetadata(
+    filePath: string,
+    projectMetadata: ProjectMetadata,
+    content: string,
+    lineCountOverride?: number,
+  ): CodeFileMetadata {
     const stat = fs.statSync(filePath);
     const ext = path.extname(filePath);
-    
+
     const metadata: CodeFileMetadata = {
       file_path: filePath,
       file_name: path.basename(filePath),
       language: this.detectLanguage(ext),
-      lines_of_code: content.split('\n').length,
-      last_modified: stat.mtime
+      lines_of_code: lineCountOverride ?? content.split("\n").length,
+      last_modified: stat.mtime,
     };
-    
-    // Check if file accesses data sources
+
     if (projectMetadata.data_sources && projectMetadata.data_sources.length > 0) {
       for (const ds of projectMetadata.data_sources) {
         if (content.includes(ds.dbPath) || content.includes(ds.alias)) {
@@ -470,7 +496,7 @@ export class CodeIndexerService {
         }
       }
     }
-    
+
     return metadata;
   }
   
@@ -562,7 +588,8 @@ export class CodeIndexerService {
    */
   private async indexCodeFile(
     fileMetadata: CodeFileMetadata,
-    projectMetadata: ProjectMetadata
+    projectMetadata: ProjectMetadata,
+    prefetchedContent?: string,
   ): Promise<void> {
     // Raw file bodies are OFF by default. See codeIndexPolicy.ts.
     //
@@ -578,7 +605,8 @@ export class CodeIndexerService {
       return;
     }
 
-    const content = fs.readFileSync(fileMetadata.file_path, 'utf-8');
+    const content =
+      prefetchedContent ?? fs.readFileSync(fileMetadata.file_path, "utf-8");
     
     // Truncate very long files for indexing
     const maxContentLength = 50000; // ~50KB

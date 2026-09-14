@@ -197,11 +197,16 @@ export async function setupChatHandlers(
       }
 
       case "chat:context-meter": {
-        const { chatId, model } = message.payload as {
+        const { chatId, model, contextLimit } = message.payload as {
           chatId: string;
           model: string;
+          contextLimit?: number;
         };
-        const meter = await agentService.getContextMeter(chatId, model);
+        const meter = await agentService.getContextMeter(
+          chatId,
+          model,
+          contextLimit,
+        );
 
         sendResponse(ws, {
           id: message.id,

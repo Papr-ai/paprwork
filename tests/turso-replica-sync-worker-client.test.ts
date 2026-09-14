@@ -60,12 +60,21 @@ describe("TursoReplicaSyncWorkerClient", () => {
     const client = new TursoReplicaSyncWorkerClient(
       fakeWorker(`
         if (req.op === "query") reply({ id: req.id, ok: true, result: { rows: [{ a: 1 }] } });
+        else if (req.op === "queryBatch") reply({ id: req.id, ok: true, result: { results: [{ rows: [{ a: 1 }] }, { rows: [{ b: 2 }] }] } });
         else if (req.op === "write") reply({ id: req.id, ok: true, result: { changes: 2, lastInsertRowid: 9 } });
         else reply({ id: req.id, ok: true, result: {} });
       `),
     );
     await expect(client.query({ ...spec(), sql: "select 1" })).resolves.toEqual({
       rows: [{ a: 1 }],
+    });
+    await expect(
+      client.queryBatch({
+        ...spec(),
+        statements: [{ sql: "select 1" }, { sql: "select 2" }],
+      }),
+    ).resolves.toEqual({
+      results: [{ rows: [{ a: 1 }] }, { rows: [{ b: 2 }] }],
     });
     await expect(
       client.write({ ...spec(), statements: [{ sql: "insert" }] }),

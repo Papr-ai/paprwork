@@ -21,6 +21,11 @@ import {
 } from "./subagents/subAgentIntegrity.js";
 import { listCustomSubAgentConfigEntries } from "./subagents/subAgentMetadataSlice.js";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import {
+  buildCodebaseExplorerSystemPrompt,
+  CODEBASE_EXPLORER_SUB_AGENT_ID,
+  CODEBASE_EXPLORER_TOOL_IDS,
+} from "../../core/subagents/codebaseExplorer.js";
 
 /** Chat ID prefix for delegation sub-agent ↔ main-agent conversations */
 export const DELEGATION_CHAT_PREFIX = "delegation:";
@@ -158,6 +163,24 @@ const DEFAULT_SUB_AGENTS: Array<
       "search_files",
       "search_agent_memory",
     ],
+    assignedSkills: [],
+    outputMode: "natural",
+    maxTurns: DEFAULT_AGENT_MAX_TURNS,
+    memoryPolicy: "none",
+    icon: "search",
+    lastRunAt: undefined,
+  },
+  {
+    id: CODEBASE_EXPLORER_SUB_AGENT_ID,
+    name: "Codebase Explorer",
+    description:
+      "Read-only repo/job/DB investigation — hands structured evidence to the main agent (cheap model)",
+    systemPrompt: buildCodebaseExplorerSystemPrompt(DEFAULT_AGENT_MAX_TURNS),
+    provider: "google",
+    model: "gemini-3.8-flash",
+    fallbackProvider: "openai",
+    fallbackModel: "gpt-5.4-mini",
+    allowedToolIds: [...CODEBASE_EXPLORER_TOOL_IDS],
     assignedSkills: [],
     outputMode: "natural",
     maxTurns: DEFAULT_AGENT_MAX_TURNS,

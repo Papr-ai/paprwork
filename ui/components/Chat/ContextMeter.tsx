@@ -11,13 +11,19 @@ import { gateway } from "../../src/lib/gateway";
 import { resolveAgentFocusContext } from "../../utils/agentFocusContext";
 import { ContextMeterRing } from "./ContextMeterRing";
 import { ContextUsagePanel } from "./ContextUsagePanel";
-import { isContextInfo, type ContextInfo } from "./ContextInspectorModal";
+import { isContextInfo, type ContextInfo } from "./contextInfo";
 import {
   fillFraction,
   isContextMeter,
-  meterStatus,
+  meterVisualStatus,
   type ContextMeter as ContextMeterData,
 } from "./contextMeterModel";
+import {
+  planUsageRingHint,
+  summarizeClaudePlanUsage,
+  type BillingMode,
+  type PlanUsageSummary,
+} from "../../utils/subscriptionPlanUsage";
 import "./ContextMeter.css";
 
 /**
@@ -26,43 +32,64 @@ import "./ContextMeter.css";
  * boundary, not this.
  */
 const LIVE_POLL_MS = 1000;
+const PLAN_USAGE_MIN_INTERVAL_MS = 45_000;
 
 interface ContextMeterProps {
   chatId: string;
   model: string;
+  /** Per-chat cap from composer settings — used when no gateway session is loaded yet. */
+  contextLimit: number;
   /** Refresh once the agent stops streaming — that is when a turn is billed. */
   isSending: boolean;
   openSignal?: number;
   onOpenFullInspector: (info: ContextInfo, sectionId?: string) => void;
+  billingMode?: BillingMode;
+  /** When true, fetch Claude plan % from the same API as Settings → Usage. */
+  fetchClaudePlanUsage?: boolean;
 }
 
 export const ContextMeter: React.FC<ContextMeterProps> = ({
   chatId,
   model,
+  contextLimit,
   isSending,
   openSignal,
   onOpenFullInspector,
+  billingMode = "metered",
+  fetchClaudePlanUsage = false,
 }) => {
   const [meter, setMeter] = useState<ContextMeterData | null>(null);
+  const [meterReady, setMeterReady] = useState(false);
   const [open, setOpen] = useState(false);
   const [info, setInfo] = useState<ContextInfo | null>(null);
   const [infoLoading, setInfoLoading] = useState(false);
   const [infoError, setInfoError] = useState<string | null>(null);
+  const [planUsage, setPlanUsage] = useState<PlanUsageSummary | null>(null);
   const [tick, setTick] = useState(0);
   const wasSending = useRef(isSending);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastPlanFetchMs = useRef(0);
 
   const loadMeter = useCallback(async () => {
     try {
       const response = await gateway.send("chat:context-meter", {
         chatId,
         model,
+        contextLimit,
       });
-      if (isContextMeter(response.data)) setMeter(response.data);
+      if (isContextMeter(response.data)) {
+        setMeter(response.data);
+        setMeterReady(true);
+      }
     } catch {
       /* the dial is ambient: a failed read shows nothing, never an error */
     }
-  }, [chatId, model]);
+  }, [chatId, model, contextLimit]);
+
+  useEffect(() => {
+    setMeter(null);
+    setMeterReady(false);
+  }, [chatId, contextLimit]);
 
   useEffect(() => {
     void loadMeter();
@@ -84,24 +111,6 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
     const timer = window.setInterval(() => void loadMeter(), LIVE_POLL_MS);
     return () => window.clearInterval(timer);
   }, [isSending, loadMeter]);
-
-  useEffect(() => {
-    // One final read after the turn lands, to swap the live figures for the
-    // billed ones — cost only exists once the provider closes the turn.
-    if (wasSending.current && !isSending) void loadMeter();
-    wasSending.current = isSending;
-  }, [isSending, loadMeter]);
-
-  /**
-   * The elapsed clock ticks on its own rather than waiting for a poll: time is
-   * the one number that advances with no server involvement, and a "time" stat
-   * that jumps in one-second steps looks stalled next to a spinner.
-   */
-  useEffect(() => {
-    if (!meter?.liveTurn) return;
-    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
-    return () => window.clearInterval(timer);
-  }, [meter?.liveTurn]);
 
   /**
    * Unlike `loadMeter`, this answers an explicit click, so a failure has to be
@@ -137,11 +146,66 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
     }
   }, [chatId, model]);
 
+  const loadPlanUsage = useCallback(
+    async (force?: boolean) => {
+      if (!fetchClaudePlanUsage) {
+        setPlanUsage(null);
+        return;
+      }
+      const now = Date.now();
+      if (!force && now - lastPlanFetchMs.current < PLAN_USAGE_MIN_INTERVAL_MS) {
+        return;
+      }
+      try {
+        const result =
+          await window.electronAPI?.oauth?.claude?.getUsageLimits?.();
+        if (!result) {
+          return;
+        }
+        if (result.success && result.data) {
+          lastPlanFetchMs.current = now;
+          setPlanUsage(summarizeClaudePlanUsage(result.data));
+        }
+      } catch {
+        // Hero stays on "Claude plan usage"; details live in Settings → Claude.
+      }
+    },
+    [fetchClaudePlanUsage],
+  );
+
+  useEffect(() => {
+    // One final read after the turn lands, to swap the live figures for the
+    // billed ones — cost only exists once the provider closes the turn.
+    if (wasSending.current && !isSending) {
+      void loadMeter();
+      void loadPlanUsage(true);
+    }
+    wasSending.current = isSending;
+  }, [isSending, loadMeter, loadPlanUsage]);
+
+  /**
+   * The elapsed clock ticks on its own rather than waiting for a poll: time is
+   * the one number that advances with no server involvement, and a "time" stat
+   * that jumps in one-second steps looks stalled next to a spinner.
+   */
+  useEffect(() => {
+    if (!meter?.liveTurn) return;
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1000);
+    return () => window.clearInterval(timer);
+  }, [meter?.liveTurn]);
+
+  useEffect(() => {
+    if (fetchClaudePlanUsage && meterReady) {
+      void loadPlanUsage();
+    }
+  }, [fetchClaudePlanUsage, meterReady, loadPlanUsage]);
+
   const openPanel = useCallback(() => {
     setOpen(true);
     void loadMeter();
     void loadBreakdown();
-  }, [loadMeter, loadBreakdown]);
+    void loadPlanUsage(true);
+  }, [loadMeter, loadBreakdown, loadPlanUsage]);
 
   useEffect(() => {
     if (openSignal) openPanel();
@@ -165,10 +229,11 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
     };
   }, [open]);
 
-  if (!meter) return null;
+  if (!meterReady || !meter) return null;
 
   const fraction = fillFraction(meter);
-  const status = meterStatus(fraction);
+  const status = meterVisualStatus(fraction);
+  const planHint = planUsageRingHint(planUsage, model);
   // `tick` exists only to force this render; its value is never used. Elapsed
   // is recomputed from the start time rather than accumulated, so a missed
   // interval — a backgrounded window throttling timers — corrects itself
@@ -193,6 +258,10 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
           info={info}
           infoLoading={infoLoading}
           infoError={infoError}
+          billingMode={billingMode}
+          planUsage={planUsage}
+          showClaudePlanUsage={fetchClaudePlanUsage}
+          chatModelId={model}
           onClose={() => setOpen(false)}
           onRetryBreakdown={() => void loadBreakdown()}
           onOpenFullInspector={(sectionId) => {
@@ -206,8 +275,8 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
         type="button"
         className={`ctx-meter__btn ctx-meter__btn--${status}`}
         onClick={() => (open ? setOpen(false) : openPanel())}
-        aria-label={`Context ${Math.round(fraction * 100)}% full`}
-        title={`Context ${Math.round(fraction * 100)}% full · ${meter.model}`}
+        aria-label={`Context ${Math.round(fraction * 100)}% full${planHint ? ` · ${planHint}` : ""}`}
+        title={`Context ${Math.round(fraction * 100)}% full · ${meter.model}${planHint ? ` · ${planHint}` : ""}`}
       >
         <ContextMeterRing
           fraction={fraction}
@@ -215,7 +284,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
           live={Boolean(live)}
           // A running turn is the moment the number matters most, so the label
           // stops being conditional on the window being nearly full.
-          showLabel={status !== "calm" || Boolean(live)}
+          showLabel={fraction >= 0.75 || Boolean(live)}
         />
       </button>
     </div>

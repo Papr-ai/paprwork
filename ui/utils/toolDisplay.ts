@@ -442,6 +442,10 @@ export const TOOL_DESCRIPTIONS: Record<
   // Skills
   create_skill: { running: "Creating skill", complete: "Skill created" },
   read_skill: { running: "Reading skill", complete: "Skill loaded" },
+  get_papr_api_reference: {
+    running: "Looking up Papr APIs",
+    complete: "API reference loaded",
+  },
   list_media_models: {
     running: "Listing media models",
     complete: "Media models listed",

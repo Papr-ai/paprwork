@@ -31,7 +31,10 @@ export class CodeSummaryIndexPipeline {
     this.memoryStore = new CodeSummaryMemoryStore(client, schemaId);
   }
 
-  async processChangedFile(filePath: string): Promise<void> {
+  async processChangedFile(
+    filePath: string,
+    snapshot?: { content: string; hash: string },
+  ): Promise<void> {
     if (!fs.existsSync(filePath)) {
       return;
     }
@@ -41,13 +44,14 @@ export class CodeSummaryIndexPipeline {
       return;
     }
 
-    const hash = this.tracker.calculateFileHash(filePath);
+    const hash =
+      snapshot?.hash ?? this.tracker.calculateFileHash(filePath);
     if (!this.tracker.needsSummaryUpdate(filePath, hash)) {
       return;
     }
 
     const display = this.loadProjectDisplayInfo(projectInfo);
-    const content = fs.readFileSync(filePath, 'utf-8');
+    const content = snapshot?.content ?? fs.readFileSync(filePath, "utf-8");
     const fileName = path.basename(filePath);
     const language = this.generator.detectLanguage(path.extname(filePath));
 

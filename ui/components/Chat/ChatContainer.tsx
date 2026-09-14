@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { MessageList } from "./MessageList";
 import { InputBar, InputBarRef } from "./InputBar";
 import { QueuedMessages, type QueuedMessage } from "./QueuedMessages";
@@ -56,7 +57,11 @@ import {
 } from "../../utils/buildAgentConfig";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
-import { chatHasLiveStreamBlockingHistory, shouldAutoContinueInterruptedTurn, shouldDrainMessageQueue } from "../../lib/agentStreamRecovery";
+import {
+  chatHasLiveStreamBlockingHistory,
+  getAutoContinueBlockReason,
+  shouldDrainMessageQueue,
+} from "../../lib/agentStreamRecovery";
 import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
@@ -164,15 +169,30 @@ interface ChatContainerProps {
 }
 
 export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.ReactElement => {
-  // Combined selector — single subscription instead of three, reduces re-render triggers
-  const chatState = useChatStore((state) => state.chatStates.get(chatId));
-  const messages = chatState?.messages ?? EMPTY_MESSAGES;
-  const chatIsLoading = chatState?.isLoading ?? false;
-  const isSending = chatState?.isSending ?? false;
-  const isWaitingForAgentSlot = chatState?.isWaitingForAgentSlot ?? false;
-  const connectionPaused = chatState?.connectionPaused ?? false;
-  const needsStreamRecovery = chatState?.needsStreamRecovery ?? false;
-  const streamRecoveryReason = chatState?.streamRecoveryReason ?? "connection";
+  const {
+    chatState,
+    messages,
+    chatIsLoading,
+    isSending,
+    isWaitingForAgentSlot,
+    connectionPaused,
+    needsStreamRecovery,
+    streamRecoveryReason,
+  } = useChatStore(
+    useShallow((state) => {
+      const cs = state.chatStates.get(chatId);
+      return {
+        chatState: cs,
+        messages: cs?.messages ?? EMPTY_MESSAGES,
+        chatIsLoading: cs?.isLoading ?? false,
+        isSending: cs?.isSending ?? false,
+        isWaitingForAgentSlot: cs?.isWaitingForAgentSlot ?? false,
+        connectionPaused: cs?.connectionPaused ?? false,
+        needsStreamRecovery: cs?.needsStreamRecovery ?? false,
+        streamRecoveryReason: cs?.streamRecoveryReason ?? "connection",
+      };
+    }),
+  );
 
   const error = useChatStore((state) => state.error);
 
@@ -214,6 +234,20 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     if (authStatus.anthropic.apiKey) return "apiKey";
     return undefined;
   }, [selectedModel.provider, authStatus]);
+
+  const billingMode = useMemo<"metered" | "subscription">(() => {
+    const provider = selectedModel.provider;
+    if (provider === "anthropic" && authStatus.anthropic.oauth) {
+      return "subscription";
+    }
+    if (provider === "openai" && authStatus.openai.oauth) {
+      return "subscription";
+    }
+    return "metered";
+  }, [selectedModel.provider, authStatus]);
+
+  const fetchClaudePlanUsage =
+    selectedModel.provider === "anthropic" && authStatus.anthropic.oauth;
 
   const handleChangeModelSettings = useCallback(
     (patch: ChatModelSettings) => {
@@ -301,16 +335,24 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   // Auto-continue interrupted turns (provider drop, gateway abort, etc.) up to 3 times.
   useEffect(() => {
     if (autoContinueInFlightRef.current) return;
-    if (
-      !shouldAutoContinueInterruptedTurn({
-        chatId,
-        messages,
-        isSending: isSending || isWaitingForAgentSlot,
-        connectionPaused,
-        needsStreamRecovery,
-        gatewayReady: gatewaySupervisorReady,
-      })
-    ) {
+    const autoContinueArgs = {
+      chatId,
+      messages,
+      isSending: isSending || isWaitingForAgentSlot,
+      connectionPaused,
+      needsStreamRecovery,
+      gatewayReady: gatewaySupervisorReady,
+    };
+    const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
+    if (autoContinueBlock) {
+      const lastAssistant = [...messages]
+        .reverse()
+        .find((m) => m.role === "assistant");
+      if (lastAssistant?.interrupted || autoContinueBlock === "gatewayNotReady") {
+        console.log(
+          `[AutoContinue] blocked for ${chatId}: ${autoContinueBlock}`,
+        );
+      }
       return;
     }
 
@@ -345,7 +387,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const gatewayBanner =
     gatewaySupervisorStarting &&
-    gatewayConnectionState !== "connected"
+    gatewayConnectionState !== "connected" &&
+    gatewayConnectionState !== "degraded"
       ? {
           message:
             gatewaySupervisorMessage ??
@@ -1123,12 +1166,15 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         modelSettings={resolvedModelSettings}
         onChangeModelSettings={handleChangeModelSettings}
         authType={authType}
+        billingMode={billingMode}
+        fetchClaudePlanUsage={fetchClaudePlanUsage}
       />
 
       {contextInfo !== null ? (
         <ContextInspectorModal
           contextInfo={contextInfo}
           initialSection={contextSection}
+          anchored
           onClose={() => setContextInfo(null)}
         />
       ) : null}

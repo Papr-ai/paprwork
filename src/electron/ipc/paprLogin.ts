@@ -2186,8 +2186,24 @@ async function resolveOrgApiKey(
   namespaceId: string,
   namespaceName: string,
   workspaceId: string,
+  authStores?: {
+    customKeysStorage: CustomKeysStorage;
+    settingsStorage: SettingsStorage;
+  },
 ): Promise<ProvisionResult> {
-  const keyData = (await parseGraphQL(sessionToken, GET_NAMESPACE_API_KEYS, {
+  const runGraphQL = authStores
+    ? (query: string, variables: Record<string, unknown>) =>
+        parseGraphQLWithRefresh(
+          sessionToken,
+          query,
+          variables,
+          authStores.customKeysStorage,
+          authStores.settingsStorage,
+        )
+    : (query: string, variables: Record<string, unknown>) =>
+        parseGraphQL(sessionToken, query, variables);
+
+  const keyData = (await runGraphQL(GET_NAMESPACE_API_KEYS, {
     namespaceId,
   })) as {
     aPIKeys?: { edges?: Array<{ node?: { key?: string } }> };
@@ -2706,6 +2722,7 @@ async function refreshActiveNamespaceApiKey(input: {
   organizationId: string;
   namespaceId: string;
   namespaceName: string;
+  deferGatewayNotify?: boolean;
 }): Promise<string | null> {
   const auth = await resolvePaprAuthContext(
     input.customKeysStorage,
@@ -2730,6 +2747,10 @@ async function refreshActiveNamespaceApiKey(input: {
     input.namespaceId,
     input.namespaceName,
     workspaceId,
+    {
+      customKeysStorage: input.customKeysStorage,
+      settingsStorage: input.settingsStorage,
+    },
   );
 
   await persistNamespaceApiKeys(
@@ -2745,7 +2766,9 @@ async function refreshActiveNamespaceApiKey(input: {
     activeNamespaceName: input.namespaceName,
   });
 
-  await notifyGatewayPaprApiKeyUpdate(resolved.apiKey);
+  if (!input.deferGatewayNotify) {
+    await notifyGatewayPaprApiKeyUpdate(resolved.apiKey);
+  }
   invalidateKeyCache("PAPR_API_KEY");
 
   return resolved.apiKey;
@@ -2917,10 +2940,18 @@ async function syncNamespaceApiKeyIfNeeded(input: {
 
 let ensureActiveNamespaceApiKeyInFlight: Promise<string | null> | null = null;
 
+export interface EnsureActiveNamespaceApiKeyOptions {
+  /** Re-fetch from Parse even when the vault key already matches the active namespace. */
+  refreshFromParse?: boolean;
+  /** Skip POST to gateway (use when gateway is not listening yet). */
+  deferGatewayNotify?: boolean;
+}
+
 /** Ensure startup uses the API key for the active workspace pointer (not just profile). */
 export async function ensureActiveNamespaceApiKey(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
+  options?: EnsureActiveNamespaceApiKeyOptions,
 ): Promise<string | null> {
   if (ensureActiveNamespaceApiKeyInFlight) {
     return ensureActiveNamespaceApiKeyInFlight;
@@ -2929,6 +2960,7 @@ export async function ensureActiveNamespaceApiKey(
   ensureActiveNamespaceApiKeyInFlight = ensureActiveNamespaceApiKeyInternal(
     customKeysStorage,
     settingsStorage,
+    options,
   ).finally(() => {
     ensureActiveNamespaceApiKeyInFlight = null;
   });
@@ -2939,6 +2971,7 @@ export async function ensureActiveNamespaceApiKey(
 async function ensureActiveNamespaceApiKeyInternal(
   customKeysStorage: CustomKeysStorage,
   settingsStorage: SettingsStorage,
+  options?: EnsureActiveNamespaceApiKeyOptions,
 ): Promise<string | null> {
   const auth = await resolvePaprAuthContext(customKeysStorage, settingsStorage);
   if (!auth) {
@@ -2969,16 +3002,23 @@ async function ensureActiveNamespaceApiKeyInternal(
   await customKeysStorage.setActiveOrganization(organizationId);
 
   const storedKey = await resolveActivePaprApiKey(customKeysStorage);
-  if (
-    storedKey &&
-    paprApiKeyMatchesNamespaceBound(storedKey, organizationId, namespaceId)
-  ) {
-    await notifyGatewayPaprApiKeyUpdate(storedKey);
+  const vaultMatchesActive =
+    !!storedKey &&
+    paprApiKeyMatchesNamespaceBound(storedKey, organizationId, namespaceId);
+
+  if (vaultMatchesActive && !options?.refreshFromParse) {
+    if (!options?.deferGatewayNotify) {
+      await notifyGatewayPaprApiKeyUpdate(storedKey);
+    }
     invalidateKeyCache("PAPR_API_KEY");
     return storedKey;
   }
 
-  if (storedKey) {
+  if (vaultMatchesActive && options?.refreshFromParse) {
+    console.log(
+      `[PaprLogin] Refreshing PAPR_API_KEY from Parse for active workspace (${organizationId}/${namespaceId})…`,
+    );
+  } else if (storedKey) {
     console.log(
       `[PaprLogin] PAPR_API_KEY namespace mismatch for active workspace (${organizationId}/${namespaceId}) — refreshing…`,
     );
@@ -2988,13 +3028,29 @@ async function ensureActiveNamespaceApiKeyInternal(
     );
   }
 
-  return refreshActiveNamespaceApiKey({
-    customKeysStorage,
-    settingsStorage,
-    organizationId,
-    namespaceId,
-    namespaceName,
-  });
+  try {
+    return await refreshActiveNamespaceApiKey({
+      customKeysStorage,
+      settingsStorage,
+      organizationId,
+      namespaceId,
+      namespaceName,
+      deferGatewayNotify: options?.deferGatewayNotify,
+    });
+  } catch (error) {
+    if (vaultMatchesActive && storedKey) {
+      console.warn(
+        "[PaprLogin] Parse API key refresh failed; using cached vault key:",
+        error instanceof Error ? error.message : error,
+      );
+      if (!options?.deferGatewayNotify) {
+        await notifyGatewayPaprApiKeyUpdate(storedKey);
+      }
+      invalidateKeyCache("PAPR_API_KEY");
+      return storedKey;
+    }
+    throw error;
+  }
 }
 
 export interface EnsureActiveWorkspaceReconciledResult {

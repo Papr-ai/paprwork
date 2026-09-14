@@ -18,6 +18,45 @@ import { LocalStorageProvider } from "./LocalStorageProvider.js";
 import { PaprMemoryProvider, type PaprConfig } from "./PaprMemoryProvider.js";
 import { reportPaprQuotaError } from "../../../core/utils/paprQuota.js";
 
+/** Best-effort cloud merge — agent turns must not wait on the full SDK timeout. */
+const PAPR_LLM_MERGE_TIMEOUT_MS = 5_000;
+
+/** True when local SQLite already injected a conversation summary for the LLM path. */
+export function localLlmHistoryIncludesSummary(
+  localMessages: readonly unknown[],
+): boolean {
+  return localMessages.some(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      "__summary" in (item as Record<string, unknown>),
+  );
+}
+
+async function loadPaprLlmHistoryWithTimeout(
+  load: () => Promise<unknown[]>,
+  timeoutMs: number,
+): Promise<unknown[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      load(),
+      new Promise<unknown[]>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(
+            `[HybridStorage] PAPR LLM merge timed out after ${timeoutMs}ms — using local only`,
+          );
+          resolve([]);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 export class HybridStorageProvider implements IStorageProvider {
   private local: LocalStorageProvider;
   private papr: PaprMemoryProvider;
@@ -180,21 +219,20 @@ export class HybridStorageProvider implements IStorageProvider {
       return localMessages;
     }
 
+    const localHasSummary = localLlmHistoryIncludesSummary(localMessages);
+
+    // Local already has summary + full history — skip cloud fetch that blocks agent
+    // turns on APIConnectionTimeoutError even though the result would be discarded.
+    if (localHasSummary) {
+      return localMessages;
+    }
+
     // If sync enabled, fetch PAPR summary and merge with local messages
     try {
-      const paprData = await this.papr.loadMessagesForLLM(chatId);
-
-      const localHasSummary = localMessages.some(
-        (item: unknown) =>
-          typeof item === "object" &&
-          item !== null &&
-          "__summary" in (item as Record<string, unknown>),
-      );
-
-      // Local summary is authoritative — avoid duplicate __summary blocks (confuses the model)
-      if (localHasSummary) {
-        return localMessages;
-      }
+      const paprData = (await loadPaprLlmHistoryWithTimeout(
+        () => this.papr.loadMessagesForLLM(chatId),
+        PAPR_LLM_MERGE_TIMEOUT_MS,
+      )) as any[];
 
       // Extract summary from PAPR (if it exists)
       const summaryItem = paprData.find((item: any) => item.__summary);

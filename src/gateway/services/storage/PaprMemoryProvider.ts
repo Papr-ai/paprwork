@@ -461,6 +461,7 @@ export class PaprMemoryProvider implements IStorageProvider {
   async getTurnUsage(_chatId: string) {
     return {
       lastTurn: null,
+      recentTurns: [],
       totals: {
         turns: 0,
         cost: 0,

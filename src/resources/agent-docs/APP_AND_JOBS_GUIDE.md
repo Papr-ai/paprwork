@@ -1020,9 +1020,11 @@ const SCORER_JOB = 'your-job-id';
 
 let unsub = subscribeJobEvents({
   jobIds: [SCORER_JOB],
+  debounceMs: 300,  // coalesce db-changed bursts during job writes (gateway ~400ms coalesce)
+  onDbChanged: () => void reloadFromDb(),  // preferred when job writes $APP_DB
   onStatusChanged: (data) => {
     if (data.status === 'completed' || data.status === 'failed') {
-      void reloadFromDb();  // ONE /api/db/query after job finishes
+      updateStatusBadge(data);  // lifecycle only — use onDbChanged for table refresh
     }
   },
   onProgress: (data) => {
@@ -1060,6 +1062,17 @@ await fetch('/api/jobs/run', {
 ```
 
 `validate_app` **errors** if it finds `setInterval` + `/api/db/query` polling. Fix before shipping.
+
+**Load efficiency (run `validate_app` after edits — not only when opening the app tab):**
+
+| Check | Severity | Rule | Fix |
+|-------|----------|------|-----|
+| 3+ `POST /api/db/query` inside one `loadData()` / `loadAll()` with no `/api/db/batch` in the app | warning | `mount-multi-db-query` | One `POST /api/db/batch` with up to 25 SELECTs on mount |
+| `onDbChanged: () => loadData()` without `debounceMs` or in-handler debounce/AbortController | warning | `on-db-changed-no-debounce` | `subscribeJobEvents({ debounceMs: 300, onDbChanged: () => loadData() })` |
+| Hidden preview sees ≥4 `/api/db/query` and 0 batch in ~2s | warning | `preview-load-efficiency` | Same as batch reads; check double `loadData()` on init |
+| Polling / missing job-events import | error | `no-db-polling`, etc. | Use SDK snippet from tool output |
+
+Server already coalesces `jobs:db-changed` (~400ms per db). **`debounceMs` on the SDK** (200–500ms) collapses UI refresh when a job writes many rows — optional but recommended for heavy `loadData()`.
 
 ### Anti-pattern: polling SQL (NEVER on cloud)
 

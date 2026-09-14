@@ -9,7 +9,7 @@
  * billed prompt total sums every step and says what it cost.
  */
 
-import type { ContextInfo } from "./ContextInspectorModal";
+import type { ContextInfo } from "./contextInfo";
 
 export interface TurnUsage {
   messageId: string;
@@ -64,6 +64,8 @@ export interface ContextMeter {
   fillSource: "live" | "measured" | "billed" | "none";
   liveTurn?: LiveTurn | null;
   lastTurn: TurnUsage | null;
+  /** Newest first; same shape as lastTurn, for per-turn context % in the panel. */
+  recentTurns?: TurnUsage[];
   totals: {
     turns: number;
     cost: number;
@@ -92,6 +94,14 @@ export function meterStatus(fraction: number): MeterStatus {
   return "calm";
 }
 
+/**
+ * Colour for the context dial and panel. Always calm — a full window is normal
+ * on long chats; warn/critical tiers stay in `meterStatus` for diagnostics only.
+ */
+export function meterVisualStatus(_fraction: number): MeterStatus {
+  return "calm";
+}
+
 /** Clamped for geometry — a ring cannot draw more than full. */
 export function fillFraction(meter: ContextMeter): number {
   return Math.min(rawFillFraction(meter), 1);
@@ -108,6 +118,41 @@ export function fillFraction(meter: ContextMeter): number {
 export function rawFillFraction(meter: ContextMeter): number {
   if (!meter.effectiveWindow) return 0;
   return meter.usedTokens / meter.effectiveWindow;
+}
+
+/**
+ * Peak single-request context as a % of the effective window (same basis as
+ * the hero dial). Peak includes tools + system + history; do not divide by
+ * `contextBudgetTokens` — that is the history slice only (~15K on a 200K cap).
+ */
+export function turnPeakFillPercent(
+  turn: Pick<
+    TurnUsage,
+    | "peakContextTokens"
+    | "promptTokens"
+    | "cacheReadTokens"
+    | "cacheWriteTokens"
+  >,
+  effectiveWindow: number,
+): number | null {
+  if (!effectiveWindow) return null;
+
+  const peak = turn.peakContextTokens ?? 0;
+  if (peak > 0) {
+    return Math.round((peak / effectiveWindow) * 100);
+  }
+
+  const billed =
+    turn.promptTokens + turn.cacheReadTokens + turn.cacheWriteTokens;
+  if (billed <= 0) return null;
+  return Math.round((Math.min(billed, effectiveWindow) / effectiveWindow) * 100);
+}
+
+export function formatTurnPeakFillPercent(
+  percent: number | null,
+): string {
+  if (percent === null) return "—";
+  return `${percent}%`;
 }
 
 export function formatTokens(tokens: number): string {
@@ -132,6 +177,60 @@ export function formatDuration(ms: number | null): string {
   const minutes = Math.floor(ms / 60_000);
   const seconds = Math.round((ms % 60_000) / 1000);
   return `${minutes}m ${seconds}s`;
+}
+
+/**
+ * Prompt size for one provider step (matches gateway `resolveStepContextTokens`).
+ * Cached tokens are part of the prompt; convention differs by provider/SDK version.
+ */
+export function resolveStepContextTokensForTurn(usage: {
+  inputTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+}): number {
+  const cached = (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
+  if (cached === 0) {
+    return usage.inputTokens;
+  }
+  return usage.inputTokens >= cached
+    ? usage.inputTokens
+    : usage.inputTokens + cached;
+}
+
+/**
+ * Share of billed *input* served from prompt cache (0–1), or null when unknown.
+ *
+ * Do not divide cache reads by `promptTokens` alone — on multi-step Anthropic
+ * turns the stored prompt total can be almost entirely fresh/uncached tallies
+ * while cache reads sum across every step.
+ */
+export function computeTurnCachedInputShare(
+  turn: Pick<TurnUsage, "promptTokens" | "cacheReadTokens" | "cacheWriteTokens">,
+): number | null {
+  const cacheRead = turn.cacheReadTokens ?? 0;
+  const cacheWrite = turn.cacheWriteTokens ?? 0;
+  if (cacheRead === 0 && cacheWrite === 0) {
+    return null;
+  }
+  const totalInput = resolveStepContextTokensForTurn({
+    inputTokens: turn.promptTokens,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  });
+  if (totalInput <= 0) {
+    return null;
+  }
+  return Math.min(1, cacheRead / totalInput);
+}
+
+export function formatCachedInputShare(
+  turn: Pick<TurnUsage, "promptTokens" | "cacheReadTokens" | "cacheWriteTokens">,
+): string {
+  const share = computeTurnCachedInputShare(turn);
+  if (share === null) {
+    return "—";
+  }
+  return `${Math.round(share * 100)}%`;
 }
 
 export interface ContextSegment {

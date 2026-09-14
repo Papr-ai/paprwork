@@ -29,6 +29,7 @@ import {
   isWaitingForLocalPreviewGateway,
 } from "../../utils/localPreviewGatewayGate";
 import { warmIframeActivationDelayMs } from "../../utils/appPreviewWarmActivation";
+import { resolveAppGetUserMessage } from "../../utils/appGetErrorMessage";
 import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
 import "./MiniAppPublishBar.css";
 
@@ -263,10 +264,11 @@ export function MiniAppView({
       try {
         const resp = await gateway.send("app:get", { appId });
         if (!resp.success) {
-          setAppMissingInWorkspace(true);
-          setIframeLoadError(
-            "This app is not in the current workspace. Close this tab or switch back to the workspace where it lives.",
+          const kindMessage = resolveAppGetUserMessage(resp.error);
+          setAppMissingInWorkspace(
+            kindMessage.includes("not in the current workspace"),
           );
+          setIframeLoadError(kindMessage);
           return;
         }
         const data = resp.data as {
@@ -276,11 +278,14 @@ export function MiniAppView({
         const title = data?.title?.trim();
         if (title) setAppTitle(title);
         setCloudLineage(data?.cloudLineage ?? null);
-      } catch {
-        setAppMissingInWorkspace(true);
-        setIframeLoadError(
-          "This app is not in the current workspace. Close this tab or switch back to the workspace where it lives.",
+      } catch (err) {
+        const kindMessage = resolveAppGetUserMessage(
+          err instanceof Error ? err.message : String(err),
         );
+        setAppMissingInWorkspace(
+          kindMessage.includes("not in the current workspace"),
+        );
+        setIframeLoadError(kindMessage);
       }
     })();
   }, [appId, iframeActivated]);

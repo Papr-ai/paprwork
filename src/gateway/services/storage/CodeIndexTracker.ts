@@ -176,16 +176,22 @@ export class CodeIndexTracker {
   needsIndexing(filePath: string): boolean {
     if (this.closed) return false;
     const currentHash = this.calculateFileHash(filePath);
-    
+    return this.needsIndexingWithHash(filePath, currentHash);
+  }
+
+  /** Same as needsIndexing but caller already read content off the main thread. */
+  needsIndexingWithHash(filePath: string, contentHash: string): boolean {
+    if (this.closed) return false;
+
     const row = this.db.prepare(
-      'SELECT content_hash FROM indexed_files WHERE file_path = ?'
+      "SELECT content_hash FROM indexed_files WHERE file_path = ?",
     ).get(filePath) as { content_hash: string } | undefined;
-    
+
     if (!row) {
-      return true; // New file
+      return true;
     }
-    
-    return row.content_hash !== currentHash; // Changed file
+
+    return row.content_hash !== contentHash;
   }
   
   /**

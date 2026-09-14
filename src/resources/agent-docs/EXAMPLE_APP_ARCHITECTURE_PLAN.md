@@ -150,7 +150,7 @@ RSS URLs (user_settings)
     → UI: /api/db/query SELECT draft
 ```
 
-**Frontend refresh:** `subscribeJobEvents({ jobIds, onDbChanged: () => loadData() })` — never poll `/api/jobs/status`.
+**Frontend refresh:** `subscribeJobEvents({ jobIds, debounceMs: 300, onDbChanged: () => loadData() })` — batch reads inside `loadData()`; never poll `/api/jobs/status`. Run `validate_app` after edits for load-efficiency warnings.
 
 #### 2.6 API endpoint map (frontend)
 

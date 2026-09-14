@@ -7,6 +7,11 @@ import {
   normalizePreviewConsoleLevel,
   type AppRuntimeLogEntry,
 } from "../services/AppRuntimeLogService.js";
+import {
+  analyzePreviewNetworkLogs,
+  type PreviewNetworkProfile,
+  type WebviewNetworkLogEntry,
+} from "./miniAppPreviewNetworkProfile.js";
 
 export interface PreviewConsoleLog {
   level: number | string;
@@ -27,6 +32,8 @@ export interface MiniAppRuntimePreviewResult {
   previewErrors: string[];
   /** PNG data URL captured from the hidden preview window. */
   previewScreenshot?: string;
+  /** DB/API request counts during preview window (Electron webview only). */
+  networkProfile?: PreviewNetworkProfile;
 }
 
 const PREVIEW_WAIT_MS = 2000;
@@ -93,6 +100,23 @@ export async function runMiniAppRuntimePreview(
         ? snapshotData.screenshot
         : undefined;
 
+    const networkRes = await requestWebviewTest({
+      action: "get_network",
+      payload: { webviewId, limit: 200, clearAfterRead: true },
+    });
+
+    const networkData = networkRes.data;
+    const networkLogs: WebviewNetworkLogEntry[] =
+      networkRes.success &&
+      networkData !== undefined &&
+      networkData !== null &&
+      typeof networkData === "object" &&
+      "logs" in networkData &&
+      Array.isArray((networkData as { logs: unknown }).logs)
+        ? ((networkData as { logs: WebviewNetworkLogEntry[] }).logs ?? [])
+        : [];
+    const networkProfile = analyzePreviewNetworkLogs(networkLogs);
+
     const consoleRes = await requestWebviewTest({
       action: "get_console",
       payload: { webviewId, limit: 100, clearAfterRead: true },
@@ -140,6 +164,7 @@ export async function runMiniAppRuntimePreview(
       consoleLogs: logs,
       previewErrors,
       previewScreenshot,
+      networkProfile,
     };
   } catch (error) {
     return {
@@ -161,6 +186,7 @@ export interface PostValidationRuntimeCheck {
   preview: MiniAppRuntimePreviewResult;
   iframeErrors: string[];
   allErrors: string[];
+  loadWarnings: string[];
 }
 
 /** After esbuild validation passes: auto-launch preview + merge iframe error buffer. */
@@ -170,5 +196,6 @@ export async function runPostValidationRuntimeCheck(
   const preview = await runMiniAppRuntimePreview(appId);
   const iframeErrors = collectRecentRuntimeErrors(appId);
   const allErrors = [...new Set([...preview.previewErrors, ...iframeErrors])];
-  return { preview, iframeErrors, allErrors };
+  const loadWarnings = preview.networkProfile?.warnings ?? [];
+  return { preview, iframeErrors, allErrors, loadWarnings };
 }
