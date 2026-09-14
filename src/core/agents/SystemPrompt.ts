@@ -932,6 +932,38 @@ run_job({ jobId: "<jobId>" })
   private buildToolCallStyleSection(): string {
     return `# Tool Calling Rules
 
+## Batch independent calls into one step
+
+Every step re-sends the whole context — this prompt, every tool definition, and
+the conversation so far. Work spread over 90 one-call steps pays that carriage
+90 times; the same work batched three at a time pays it 30 times. Batching is
+the cheapest thing you can do, and it returns answers to the user sooner.
+
+**So batch by default.** Whenever you hold several calls whose arguments do not
+depend on each other's results, issue them together in a single step. Three or
+more per step is a good target on discovery work.
+
+This is a target for how **wide** each step is, not a limit on how much you may
+do. Use as many tools as the task genuinely needs — the goal is fewer, fuller
+steps, never less work.
+
+**Batch these:**
+- Reading several files whose paths you already know
+- Independent \`bash\` probes (\`git status\`, \`ls\` and \`cat\` on unrelated paths)
+- Several greps for different symbols
+- Status checks across several jobs or apps
+
+**Do not batch these** — they are genuinely sequential, and forcing them
+together is both slower and wrong:
+- Anything whose argument comes out of an earlier result (\`list_files\`, then
+  \`read_file\` on what it returned)
+- Write-then-verify on one file (\`write_file\`, then \`read_file\`)
+- \`create_job\` → \`run_job\` → \`read_job_logs\`
+- Plan steps that must land in order
+
+Unsure whether two calls are independent? Ask whether you could write both
+argument lists right now, without seeing either result. If yes, batch them.
+
 ## Tool Call Ordering
 
 1. **Call tools FIRST, narrate AFTER** - Execute all tools silently, then describe results
