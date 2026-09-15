@@ -11,6 +11,7 @@ import type { ChatMessage, SequenceItem } from "../types/chat";
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -622,6 +623,10 @@ export function untrackActiveStream(chatId: string): void {
   appliedChunkCounts.delete(chatId);
   clearResumeRetry(chatId);
   cancelSubscribeHandler(chatId);
+  // Single disarm point for every path that retires a stream (done, error,
+  // user stop, supersede). Disarming at each of the dozen call sites would
+  // leave a timer armed the first time a new one is added.
+  disarmFirstChunkWatchdog(chatId);
 }
 
 export function clearResumeRetry(chatId: string): void {
@@ -953,7 +958,6 @@ export function getAutoContinueBlockReason(args: {
   gatewayReady: boolean;
 }): AutoContinueBlockReason | null {
   if (args.isSending) return "isSending";
-  if (!args.gatewayReady) return "gatewayNotReady";
   if (isResumingStream(args.chatId)) return "resumingStream";
 
   const lastAssistant = [...args.messages]
@@ -971,6 +975,12 @@ export function getAutoContinueBlockReason(args: {
   } else if (assistantMessageWasStopped(lastAssistant)) {
     return "userStopped";
   }
+
+  // Deliberately below the turn-state checks. Whether auto-continue runs is
+  // unaffected by the order — only which reason is reported when several apply
+  // — and a finished turn is finished whether or not the gateway is ready.
+  // Reporting readiness for it sent people looking at a healthy gateway.
+  if (!args.gatewayReady) return "gatewayNotReady";
 
   if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {
     return "awaitingStreamResubscribe";

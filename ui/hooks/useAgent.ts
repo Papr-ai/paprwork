@@ -72,6 +72,12 @@ import {
   untrackActiveStream,
 } from "../lib/agentStreamRecovery";
 import {
+  armFirstChunkWatchdog,
+  FIRST_CHUNK_STALL_CANCEL_REASON,
+  noteStreamChunkArrived,
+  type FirstChunkStall,
+} from "../lib/agentFirstChunkWatchdog";
+import {
   getAgentStreamingRefs,
   resetAgentStreamingRefsForChat,
 } from "../lib/agentStreamingRefs";
@@ -199,6 +205,11 @@ export function useAgent() {
           return;
         }
       }
+
+      // The turn is reaching us. Retire the first-chunk watchdog permanently —
+      // placed after the filters above so a stale or rejected chunk cannot
+      // vouch for a stream that is still silent.
+      noteStreamChunkArrived(chatId, requestId);
 
       // Ensure we have a streaming message for all chunk types
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
@@ -2110,6 +2121,59 @@ export function useAgent() {
   const retryStreamRecoveryRef = useRef(retryStreamRecovery);
   retryStreamRecoveryRef.current = retryStreamRecovery;
 
+  /**
+   * A turn delivered no first chunk at all. Two causes, and they need different
+   * remedies, so probe rather than guess:
+   *
+   * - Socket dead (half-open: we think it is open, the server has already run
+   *   `removeSubscriber`). Closing it runs the existing reconnect + resume path,
+   *   so there is nothing more to do here.
+   * - Socket fine, but the server no longer lists us as a subscriber for this
+   *   stream. Resubscribe; `retryStreamRecovery` falls back to history if the
+   *   stream is already finished.
+   *
+   * The original promise is released first so the send lock frees and the
+   * heartbeat drops back to its strict cadence. `isSending` is deliberately
+   * left true — the answer is still coming, and recovery owns that state.
+   */
+  const handleFirstChunkStall = useCallback(
+    async (stall: FirstChunkStall, config?: AgentConfig) => {
+      const { chatId, requestId, waitedMs } = stall;
+      console.warn(
+        `[useAgent] No first chunk for ${chatId} after ${waitedMs}ms ` +
+          `(stream ${requestId}) — probing the socket before recovering`,
+      );
+
+      gateway.cancelRequest(requestId, FIRST_CHUNK_STALL_CANCEL_REASON);
+
+      const alive = await gateway.probeConnection();
+      if (!alive) {
+        // onclose → rejectActiveStreamHandlers → reconnect → resume.
+        console.warn(
+          `[useAgent] Socket was dead for ${chatId} — reconnect will resume the stream`,
+        );
+        setConnectionPaused(chatId, true);
+        return;
+      }
+
+      try {
+        await retryStreamRecoveryRef.current(chatId, config);
+      } catch (error) {
+        console.error(
+          `[useAgent] First-chunk recovery failed for ${chatId}:`,
+          error,
+        );
+        setError(
+          error instanceof Error
+            ? error.message
+            : "Lost contact with the agent. Send a new message to continue.",
+        );
+        setSending(chatId, false);
+      }
+    },
+    [setConnectionPaused, setError, setSending],
+  );
+
   useEffect(() => {
     ensureGatewayRecoveryRegistered();
 
@@ -2330,6 +2394,13 @@ export function useAgent() {
           (chunk) => handleStreamChunk(chunk as StreamChunk),
           (requestId) => {
             trackActiveStream(finalChatId, requestId);
+            armFirstChunkWatchdog({
+              chatId: finalChatId,
+              requestId,
+              onStall: (stall) => {
+                void handleFirstChunkStall(stall, config);
+              },
+            });
           },
         );
         console.log("[useAgent] gateway.stream completed successfully");

@@ -19,7 +19,11 @@ import {
   WriterRepoNotFoundError,
 } from "./services/appRepoWriter/AppRepoWriterService.js";
 
+// `.env.local` before `.env`: dotenv never overwrites an already-set
+// variable, so the first file to define a key wins. Both are gitignored, so
+// in Cloud Run neither exists and these calls no-op.
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 const PORT = Number(process.env.PORT ?? process.env.PAPR_APP_REPO_WRITER_PORT ?? 8789);
 

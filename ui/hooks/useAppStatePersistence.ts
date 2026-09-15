@@ -16,6 +16,11 @@ import { ensureWorkspaceLandingTab } from '../lib/ensureWorkspaceLandingTab';
 import { serializeTabForGatewayPersistence } from '../lib/tabPersistenceMetadata';
 import { isWorkspaceSwitchReloading } from '../lib/workspaceSwitchReload';
 import {
+  allowTabPersistence,
+  blockTabPersistence,
+  isTabPersistenceBlocked,
+} from '../lib/tabPersistenceGuard';
+import {
   buildWorkspaceUiCacheKey,
   getActiveWorkspaceUiCacheKey,
   setActiveWorkspaceUiCacheKey,
@@ -50,6 +55,15 @@ export function useAppStatePersistence() {
         if (!snapshot) {
           ensureWorkspaceLandingTab();
           return;
+        }
+
+        // An empty tab bar is a real answer; a declined read is not, and saving
+        // over it would replace the saved rows with whatever scaffolding the
+        // store picked up while the read was failing.
+        if (snapshot.tabsReadOk) {
+          allowTabPersistence();
+        } else {
+          blockTabPersistence("saved tab bar read was declined by the gateway");
         }
 
         const { tabs: currentTabs, activeTabId: currentActiveTabId } =
@@ -107,6 +121,7 @@ export function useAppStatePersistence() {
       })
       .catch((error: Error) => {
         console.error('[Persistence] Failed to load tabs/state:', error);
+        blockTabPersistence('saved tab bar could not be loaded at startup');
       })
       .finally(() => {
         (window as any).__paprSqliteLoaded = true;
@@ -118,6 +133,11 @@ export function useAppStatePersistence() {
   useEffect(() => {
     if (tabs.length === 0 || isWorkspaceSwitchReloading()) return;
 
+    // `app:save_tabs` is DELETE-then-insert, so saving a tab bar assembled
+    // without the saved rows destroys them. Checked here and again inside the
+    // debounced callback, because the block can land during the wait.
+    if (isTabPersistenceBlocked()) return;
+
     const fingerprint = buildTabStructureFingerprint(tabs);
     if (fingerprint === lastTabStructureFingerprintRef.current) {
       return;
@@ -125,6 +145,13 @@ export function useAppStatePersistence() {
     lastTabStructureFingerprintRef.current = fingerprint;
 
     scheduleTabStructureSave(async () => {
+      if (isTabPersistenceBlocked()) {
+        // Clear the fingerprint so this tab set is reconsidered once the block
+        // lifts, rather than being treated as already saved.
+        lastTabStructureFingerprintRef.current = null;
+        return;
+      }
+
       const tabsToSave = tabs.map((tab, index) =>
         serializeTabForGatewayPersistence(tab, index),
       );
