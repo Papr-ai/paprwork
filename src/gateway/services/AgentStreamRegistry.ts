@@ -82,9 +82,11 @@ function wsOpen(ws: WebSocket): boolean {
   return ws.readyState === ws.OPEN;
 }
 
-function sendJson(ws: WebSocket, payload: Record<string, unknown>): void {
-  if (!wsOpen(ws)) return;
+/** Returns false when the socket is not open — the send was a no-op. */
+function sendJson(ws: WebSocket, payload: Record<string, unknown>): boolean {
+  if (!wsOpen(ws)) return false;
   ws.send(JSON.stringify(payload));
+  return true;
 }
 
 function sendChunk(
@@ -99,8 +101,8 @@ function sendComplete(
   ws: WebSocket,
   responseId: string,
   data: ActiveStream["completeData"],
-): void {
-  sendJson(ws, {
+): boolean {
+  return sendJson(ws, {
     id: responseId,
     type: "agent:complete",
     success: true,
@@ -112,8 +114,8 @@ function sendError(
   ws: WebSocket,
   responseId: string,
   data: ActiveStream["errorData"],
-): void {
-  sendJson(ws, {
+): boolean {
+  return sendJson(ws, {
     id: responseId,
     type: "agent:error",
     success: false,
@@ -194,9 +196,22 @@ export class AgentStreamRegistry {
     };
   }
 
+  /**
+   * A socket closed. Dropping it used to be silent, which meant a running turn
+   * could lose its last listener with nothing in the log to say so — and the
+   * completion then had nobody to go to. Say it, so the log shows the loss
+   * before the completion rather than only the absence of one.
+   */
   removeSubscriber(ws: WebSocket): void {
     for (const entry of this.streamsByRequestId.values()) {
-      entry.subscribers.delete(ws);
+      if (!entry.subscribers.delete(ws)) continue;
+      if (entry.status === "running" && entry.subscribers.size === 0) {
+        console.warn(
+          `[AgentStreamRegistry] Running stream ${entry.requestId} for chat ` +
+            `${entry.chatId} lost its last subscriber. The turn continues; ` +
+            `its result will be broadcast if nobody resubscribes.`,
+        );
+      }
     }
   }
 
@@ -553,18 +568,80 @@ export class AgentStreamRegistry {
 
   private broadcastComplete(entry: ActiveStream): void {
     if (!entry.completeData) return;
+    const tracked = entry.subscribers.size;
+    let delivered = 0;
     for (const sub of entry.subscribers.values()) {
-      sendComplete(sub.ws, sub.responseId, entry.completeData);
+      if (sendComplete(sub.ws, sub.responseId, entry.completeData)) {
+        delivered += 1;
+      }
     }
     entry.subscribers.clear();
+    if (delivered === 0) {
+      this.reportUndeliveredTerminalState(
+        entry,
+        "agent:complete",
+        entry.completeData,
+        tracked,
+      );
+    }
   }
 
   private broadcastError(entry: ActiveStream): void {
     if (!entry.errorData) return;
+    const tracked = entry.subscribers.size;
+    let delivered = 0;
     for (const sub of entry.subscribers.values()) {
-      sendError(sub.ws, sub.responseId, entry.errorData);
+      if (sendError(sub.ws, sub.responseId, entry.errorData)) {
+        delivered += 1;
+      }
     }
     entry.subscribers.clear();
+    if (delivered === 0) {
+      this.reportUndeliveredTerminalState(
+        entry,
+        "agent:error",
+        entry.errorData,
+        tracked,
+      );
+    }
+  }
+
+  /**
+   * A finished turn that reached nobody. Two ways to get here: the subscriber
+   * list is empty (the socket closed, so `removeSubscriber` dropped it), or it
+   * is non-empty but every socket is closing — `sendJson` is a silent no-op on
+   * a socket that is not open, which is why this used to leave no trace at all
+   * and had to be diagnosed by querying the database.
+   *
+   * Log it, then fall back to a workspace broadcast keyed by chatId so any
+   * other live client — a second window, or the same client on a socket it
+   * reopened without resubscribing — can still finish the turn. Same mechanism
+   * and same payload shape SubAgentResponseTrigger already uses for completions
+   * with no requesting socket.
+   */
+  private reportUndeliveredTerminalState(
+    entry: ActiveStream,
+    type: "agent:complete" | "agent:error",
+    data: ActiveStream["completeData"] | ActiveStream["errorData"],
+    trackedSubscribers: number,
+  ): void {
+    console.warn(
+      `[AgentStreamRegistry] ${type} for chat ${entry.chatId} ` +
+        `(stream ${entry.requestId}) reached no open subscriber ` +
+        `(${trackedSubscribers} tracked, 0 open). The turn is persisted — ` +
+        `falling back to a workspace broadcast so a live client can render it.`,
+    );
+
+    void import("../websocket/index.js")
+      .then(({ broadcast }) => {
+        broadcast({ type, data });
+      })
+      .catch((error) => {
+        console.error(
+          `[AgentStreamRegistry] Broadcast fallback failed for chat ${entry.chatId}:`,
+          error,
+        );
+      });
   }
 
   private scheduleCleanup(requestId: string): void {
