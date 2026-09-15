@@ -953,7 +953,6 @@ export function getAutoContinueBlockReason(args: {
   gatewayReady: boolean;
 }): AutoContinueBlockReason | null {
   if (args.isSending) return "isSending";
-  if (!args.gatewayReady) return "gatewayNotReady";
   if (isResumingStream(args.chatId)) return "resumingStream";
 
   const lastAssistant = [...args.messages]
@@ -971,6 +970,12 @@ export function getAutoContinueBlockReason(args: {
   } else if (assistantMessageWasStopped(lastAssistant)) {
     return "userStopped";
   }
+
+  // Deliberately below the turn-state checks. Whether auto-continue runs is
+  // unaffected by the order — only which reason is reported when several apply
+  // — and a finished turn is finished whether or not the gateway is ready.
+  // Reporting readiness for it sent people looking at a healthy gateway.
+  if (!args.gatewayReady) return "gatewayNotReady";
 
   if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {
     return "awaitingStreamResubscribe";

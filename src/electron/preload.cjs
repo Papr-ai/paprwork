@@ -313,6 +313,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeStatusListener: () => {
       ipcRenderer.removeAllListeners("gateway:status");
     },
+    // For a renderer that loaded after the one-shot push (reload, HMR, crash
+    // recovery) and would otherwise sit at "unknown" forever.
+    getStatus: () => ipcRenderer.invoke("gateway:get-status"),
   },
 
   // Auto-updater API

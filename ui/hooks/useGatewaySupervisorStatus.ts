@@ -42,6 +42,7 @@ export function useGatewaySupervisorStatus(): {
           gateway?: {
             onStatusChange?: (cb: (data: GatewayStatusPayload) => void) => void;
             removeStatusListener?: () => void;
+            getStatus?: () => Promise<GatewayStatusPayload | null>;
           };
         };
       }
@@ -51,9 +52,22 @@ export function useGatewaySupervisorStatus(): {
       return undefined;
     }
 
+    let pushed = false;
     api.onStatusChange((data) => {
+      pushed = true;
       setStatus(normalizeStatus(data.status));
       setMessage(data.message);
+    });
+
+    // The supervisor pushes each status exactly once and latches it, so a
+    // renderer that loaded after "ready" (reload, HMR, crash recovery) never
+    // hears it and stays at "unknown" forever — which reads as a dead gateway.
+    // Ask for the last pushed status; only apply it if nothing has arrived
+    // since, so this answer can never overwrite a newer push.
+    void api.getStatus?.().then((current) => {
+      if (pushed || !current) return;
+      setStatus(normalizeStatus(current.status));
+      setMessage(current.message);
     });
 
     // If the renderer missed a "ready" IPC (common after sleep/wake), infer
