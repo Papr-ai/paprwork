@@ -52,6 +52,13 @@ export class CustomKeysService {
   private readonly MAX_IPC_WAIT_ATTEMPTS = 10; // Wait up to 1 second
   private readonly IPC_WAIT_INTERVAL_MS = 100;
   private readonly IPC_TIMEOUT_MS = 15_000;
+  // The REQUEST_KEYS fallback reaches main over the same channel as the primary, so
+  // when the primary has already timed out the peer is not answering and a second
+  // full-length wait buys nothing — it only doubles every miss to 30s. A responsive
+  // main replies in single-digit milliseconds, so a short budget keeps the case the
+  // fallback exists for (a broken CUSTOM_KEYS_GET_BY_NAME handler, working
+  // REQUEST_KEYS) without paying for the case it cannot fix.
+  private readonly FALLBACK_IPC_TIMEOUT_MS = 2_000;
   private readonly CACHE_TTL_MS = 30_000;
 
   private ipcDispatcherRegistered = false;
@@ -397,12 +404,40 @@ export class CustomKeysService {
           return null;
         }
 
-        // IPC timeout: try the REQUEST_KEYS path as a fallback
-        // (still goes through IPC to Electron main — no env var fallback)
+        // IPC timeout: try the REQUEST_KEYS path as a fallback. It is a different
+        // message type with its own handler in main, so it can answer when the
+        // primary handler misbehaves — but it is the same channel to the same
+        // process, so it cannot answer when main itself is not answering. Bounded to
+        // FALLBACK_IPC_TIMEOUT_MS so an unresponsive main costs one wait, not two.
+        // The underlying request is left running rather than cancelled: if it lands
+        // late it still populates the resolver's own cache for the next caller.
         try {
           const { resolveKeysViaIpc } = await import("../utils/keyResolver.js");
-          const resolved = await resolveKeysViaIpc([name], process);
-          const value = resolved[name] ?? null;
+          let budgetTimer: NodeJS.Timeout | undefined;
+          const BUDGET_EXPIRED = Symbol("fallback-budget-expired");
+          // Promise.race attaches handlers to both inputs eagerly, so the resolver's
+          // own rejection at its full timeout is still observed and never surfaces
+          // as an unhandled rejection after the budget has already won.
+          const outcome = await Promise.race<string | null | typeof BUDGET_EXPIRED>([
+            resolveKeysViaIpc([name], process).then((r) => r[name] ?? null),
+            new Promise<typeof BUDGET_EXPIRED>((resolve) => {
+              budgetTimer = setTimeout(
+                () => resolve(BUDGET_EXPIRED),
+                this.FALLBACK_IPC_TIMEOUT_MS,
+              );
+            }),
+          ]).finally(() => {
+            if (budgetTimer) clearTimeout(budgetTimer);
+          });
+
+          if (outcome === BUDGET_EXPIRED) {
+            console.warn(
+              `[CustomKeysService] REQUEST_KEYS fallback for "${name}" abandoned after ${this.FALLBACK_IPC_TIMEOUT_MS}ms — main is not answering`,
+            );
+            return null;
+          }
+
+          const value = outcome;
           if (value) {
             console.warn(
               `[CustomKeysService] Primary IPC timed out for "${name}" — resolved via REQUEST_KEYS`,

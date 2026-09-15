@@ -11,6 +11,7 @@ import type { ChatMessage, SequenceItem } from "../types/chat";
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -622,6 +623,10 @@ export function untrackActiveStream(chatId: string): void {
   appliedChunkCounts.delete(chatId);
   clearResumeRetry(chatId);
   cancelSubscribeHandler(chatId);
+  // Single disarm point for every path that retires a stream (done, error,
+  // user stop, supersede). Disarming at each of the dozen call sites would
+  // leave a timer armed the first time a new one is added.
+  disarmFirstChunkWatchdog(chatId);
 }
 
 export function clearResumeRetry(chatId: string): void {
