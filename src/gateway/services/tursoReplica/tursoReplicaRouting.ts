@@ -14,12 +14,15 @@ import { getTursoReplicaService } from "./TursoReplicaService.js";
 import type { TursoReplicaPushResponse, TursoReplicaWriteResult, TursoReplicaWriteOptions } from "./tursoReplicaTypes.js";
 import {
   isTursoReplicaOnline,
-  isTursoReplicaSyncFeatureEnabled,
   shouldUseTursoReplicaForDb,
 } from "../../utils/tursoReplicaEnabled.js";
 import {
   noteTursoReplicaTransportError,
 } from "../../utils/tursoReplicaConnectivity.js";
+import {
+  isReplicaOwnedRecord,
+  warnReplicaOwnedWithoutEngine,
+} from "./tursoReplicaOwnership.js";
 import {
   checkMigrationPushConflict,
   MIGRATION_CONFLICT_CODE,
@@ -167,24 +170,34 @@ function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
   return tursoDatabase;
 }
 
-/** Skip legacy CDC / workspace-log Turso push when Plan A owns this linked source. */
+/**
+ * Skip legacy CDC / workspace-log Turso push when Plan A owns this linked source.
+ *
+ * Deliberately not gated on `isTursoReplicaSyncFeatureEnabled()`. Ownership is
+ * recorded in the registry and outlives the flag, so a replica-owned database
+ * stays off the legacy path even where the replica engine cannot run. Legacy
+ * adopting it would reconcile against a remote it does not own — which is how
+ * the drift heal came to re-ship the same migrations forever.
+ */
 export function shouldSuppressLegacyTursoPush(options: {
   syncKey: string;
   dbPath?: string;
   dbId?: string;
 }): boolean {
-  if (!isTursoReplicaSyncFeatureEnabled()) {
-    return false;
-  }
   const registry = getDatabaseRegistryService();
   const record =
     (options.dbId ? registry.getById(options.dbId) : undefined) ??
     (options.dbPath ? registry.getByPath(options.dbPath) : undefined) ??
     registry.getById(options.syncKey);
-  if (!record) {
+  if (!isReplicaOwnedRecord(record) || !record) {
     return false;
   }
-  return shouldUseTursoReplicaForDb({ syncMode: record.syncMode });
+  if (!shouldUseTursoReplicaForDb({ syncMode: record.syncMode })) {
+    // Owned by an engine this process cannot run: decline rather than let
+    // legacy take over, and say so once so it is not a silent stall.
+    warnReplicaOwnedWithoutEngine(record);
+  }
+  return true;
 }
 
 export function shouldSuppressLegacyTursoPushForLinkedSource(

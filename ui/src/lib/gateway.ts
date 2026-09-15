@@ -10,6 +10,11 @@ import {
   getUiStreamProfiler,
   isUiStreamProfilingEnabled,
 } from "../../lib/streamProfiler";
+import {
+  resolveGatewayConnectionState,
+  type GatewayConnectionState,
+} from "../../utils/gatewayConnectionState";
+import { scheduleSuspendAwareTimeout } from "../../utils/suspendAwareDeadline";
 
 export interface GatewayMessage {
   id: string;
@@ -30,11 +35,7 @@ type ConnectionStatusHandler = (connected: boolean) => void;
 
 export const GATEWAY_DISCONNECTED_ERROR = "Gateway disconnected";
 
-export type GatewayConnectionState =
-  | "connected"
-  | "degraded"
-  | "reconnecting"
-  | "disconnected";
+export type { GatewayConnectionState };
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const HEARTBEAT_INTERVAL_ACTIVE_STREAM_MS = 20_000;
@@ -58,8 +59,18 @@ class GatewayClient {
   private missedHeartbeats = 0;
   private activeAgentStreams = 0;
   private connectionDegraded = false;
+  /**
+   * Whether a socket has ever opened this session. Distinguishes a reconnect
+   * from the initial connect, which the backoff counter cannot do once it has
+   * been reset (see resolveGatewayConnectionState).
+   */
+  private hasEverConnected = false;
+  /** Epoch ms of the last `system:resume`, read by suspend-aware deadlines. */
+  private lastResumeAtMs = 0;
   /** Resolvers waiting for the first successful connection */
   private connectionWaiters: Array<() => void> = [];
+  /** Resolvers waiting on a one-shot liveness probe (see probeConnection) */
+  private pongWaiters = new Set<() => void>();
 
   constructor() {
     // Use localhost (which resolves to 127.0.0.1) for WebSocket connections
@@ -73,11 +84,30 @@ class GatewayClient {
     // Listen for system resume events from Electron
     if (typeof window !== 'undefined') {
       window.addEventListener('system:resume', () => {
-        console.log('[Gateway] System resumed - reconnecting immediately');
-        this.reconnectAttempts = 0; // Reset backoff on system resume
-        if (!this.isConnected()) {
-          this.connect();
+        this.lastResumeAtMs = Date.now();
+        // Reset backoff: a long sleep should not leave us waiting out a 30s
+        // delay. The connection state no longer reads "am I reconnecting" off
+        // this counter, so zeroing it cannot mislabel the indicator.
+        this.reconnectAttempts = 0;
+
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          // `isConnected()` cannot detect the one condition a resume
+          // guarantees: a socket whose peer vanished while both ends were
+          // frozen still reports OPEN — that is what half-open means. So the
+          // old `if (!this.isConnected())` did nothing here, and detection fell
+          // to the heartbeat, which while a stream is active tolerates 12
+          // missed beats at 20s each (240s).
+          //
+          // Probe instead. No pong closes the socket, which runs the existing
+          // onclose path (reject in-flight handlers → reconnect → resume
+          // tracked streams) rather than adding a second recovery mechanism.
+          console.log('[Gateway] System resumed — probing socket liveness');
+          void this.probeConnection();
+          return;
         }
+
+        console.log('[Gateway] System resumed - reconnecting immediately');
+        this.connect();
       });
     }
   }
@@ -100,6 +130,7 @@ class GatewayClient {
         console.log("[Gateway] Connected");
         this.reconnectAttempts = 0;
         this.missedHeartbeats = 0;
+        this.hasEverConnected = true;
         this.notifyConnectionStatus(true);
         this.startHeartbeat();
         
@@ -121,6 +152,10 @@ class GatewayClient {
               clearTimeout(this.heartbeatTimeout);
               this.heartbeatTimeout = null;
             }
+            for (const resolve of [...this.pongWaiters]) {
+              resolve();
+            }
+            this.pongWaiters.clear();
             return;
           }
 
@@ -250,6 +285,55 @@ class GatewayClient {
   }
 
   /**
+   * One-shot liveness probe, for callers that have their own reason to suspect
+   * the socket is dead before the heartbeat would say so.
+   *
+   * The heartbeat is deliberately lax while a stream is active (12 missed beats
+   * × 20s = 240s) so a heavy turn is never interrupted. That is the right
+   * trade-off for the heartbeat, which cannot tell a slow turn from a dead
+   * socket — but a caller that already knows a turn has delivered *nothing*
+   * has evidence the heartbeat does not, and should not have to wait out that
+   * budget.
+   *
+   * Resolves true if a pong arrives in time. Otherwise closes the socket, which
+   * runs the existing `onclose` path (reject in-flight handlers → reconnect →
+   * resume tracked streams) rather than adding a second recovery mechanism.
+   */
+  async probeConnection(timeoutMs = PONG_WAIT_MS): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    try {
+      this.ws.send(JSON.stringify({ type: "ping", id: "heartbeat" }));
+    } catch (err) {
+      console.warn("[Gateway] Liveness probe could not send — closing:", err);
+      this.ws.close();
+      return false;
+    }
+
+    const alive = await new Promise<boolean>((resolve) => {
+      const onPong = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        this.pongWaiters.delete(onPong);
+        resolve(false);
+      }, timeoutMs);
+      this.pongWaiters.add(onPong);
+    });
+
+    if (!alive) {
+      console.warn(
+        `[Gateway] Liveness probe got no pong in ${timeoutMs}ms — closing socket to force reconnect`,
+      );
+      this.ws?.close();
+    }
+    return alive;
+  }
+
+  /**
    * Stop heartbeat mechanism
    */
   private stopHeartbeat(): void {
@@ -263,6 +347,9 @@ class GatewayClient {
     }
     this.missedHeartbeats = 0;
     this.setConnectionDegraded(false);
+    // A probe in flight when the socket closes will never see a pong; let it
+    // fall through to its own timeout rather than resolving it as alive.
+    this.pongWaiters.clear();
   }
 
   /**
@@ -325,13 +412,25 @@ class GatewayClient {
     }
     return new Promise<void>((resolve, reject) => {
       this.connectionWaiters.push(resolve);
-      setTimeout(() => {
-        const idx = this.connectionWaiters.indexOf(resolve);
-        if (idx !== -1) {
-          this.connectionWaiters.splice(idx, 1);
-          reject(new Error("Gateway connection timeout"));
-        }
-      }, timeoutMs);
+      // Suspend-aware: this deadline is the one users hit on wake, because the
+      // frozen renderer fires it overdue the instant the lid opens.
+      scheduleSuspendAwareTimeout({
+        delayMs: timeoutMs,
+        getLastResumeAtMs: () => this.lastResumeAtMs,
+        onRearm: ({ attempt, elapsedMs }) =>
+          console.warn(
+            `[Gateway] waitForConnection deadline spanned a suspend ` +
+              `(${Math.round(elapsedMs / 1000)}s elapsed for a ${timeoutMs}ms budget) — ` +
+              `re-arming (${attempt}/2) instead of reporting a timeout`,
+          ),
+        onExpire: () => {
+          const idx = this.connectionWaiters.indexOf(resolve);
+          if (idx !== -1) {
+            this.connectionWaiters.splice(idx, 1);
+            reject(new Error("Gateway connection timeout"));
+          }
+        },
+      });
     });
   }
 
@@ -384,12 +483,22 @@ class GatewayClient {
       // Send message
       this.ws.send(JSON.stringify(message));
 
-      setTimeout(() => {
-        if (this.handlers.has(id)) {
-          this.handlers.delete(id);
-          reject(new Error("Request timeout"));
-        }
-      }, timeoutMs);
+      scheduleSuspendAwareTimeout({
+        delayMs: timeoutMs,
+        getLastResumeAtMs: () => this.lastResumeAtMs,
+        onRearm: ({ attempt, elapsedMs }) =>
+          console.warn(
+            `[Gateway] Request "${type}" deadline spanned a suspend ` +
+              `(${Math.round(elapsedMs / 1000)}s elapsed for a ${timeoutMs}ms budget) — ` +
+              `re-arming (${attempt}/2) instead of reporting a timeout`,
+          ),
+        onExpire: () => {
+          if (this.handlers.has(id)) {
+            this.handlers.delete(id);
+            reject(new Error("Request timeout"));
+          }
+        },
+      });
     });
   }
 
@@ -712,16 +821,13 @@ class GatewayClient {
    * Get connection state for UI indicator
    */
   getConnectionState(): GatewayConnectionState {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return this.connectionDegraded ? "degraded" : "connected";
-    }
-    if (
-      this.reconnectAttempts > 0 &&
-      this.reconnectAttempts < this.maxReconnectAttempts
-    ) {
-      return "reconnecting";
-    }
-    return "disconnected";
+    return resolveGatewayConnectionState({
+      readyState: this.ws?.readyState ?? null,
+      degraded: this.connectionDegraded,
+      reconnectAttempts: this.reconnectAttempts,
+      maxReconnectAttempts: this.maxReconnectAttempts,
+      hasEverConnected: this.hasEverConnected,
+    });
   }
 
   /**
