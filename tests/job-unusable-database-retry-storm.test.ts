@@ -23,6 +23,7 @@ import path from "path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 import { validateJobAgainstAppDatabase } from "../src/gateway/services/jobs/jobDatabaseArchitectureValidation.js";
+import { isPermanentJobRunFailure } from "../src/gateway/services/jobs/schedulePark.js";
 
 // The vendored better-sqlite3 is built for Electron's ABI. Under plain vitest
 // it fails to load, which would make the "unusable database" tests pass for the
@@ -57,19 +58,17 @@ afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
 });
 
-/** Mirrors the scheduler's classification in JobsScheduler.tick(). */
-function schedulerTreatsAsPermanent(error: unknown): boolean {
-  const err = error instanceof Error ? error : new Error(String(error));
-  const isUnusableDatabase =
-    (error as { code?: string })?.code === "SQLITE_NOTADB" ||
-    /file is not a database|database disk image is malformed|malformed database schema/i.test(
-      err.message,
-    );
-  return (
-    err.message.includes("Job architecture validation failed") ||
-    isUnusableDatabase
-  );
-}
+/**
+ * The scheduler's real classification, imported rather than mirrored.
+ *
+ * This was a local copy of the predicate, which is how the two drifted: the
+ * copy said an unusable database is permanent while the scheduler's park
+ * policy — deferring to `classifyError`, which has no notion of SQLite —
+ * called it transient, so the storm this file exists to prevent could not
+ * reach the threshold that stops scheduling. A copy of a rule passes while
+ * the rule it copies is wrong.
+ */
+const schedulerTreatsAsPermanent = isPermanentJobRunFailure;
 
 describe("validateJobAgainstAppDatabase with an unusable database", () => {
   it.skipIf(!canUseBetterSqlite)(

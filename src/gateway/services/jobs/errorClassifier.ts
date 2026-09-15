@@ -1,5 +1,16 @@
 export type ErrorType = "transient" | "permanent";
 
+function toErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message ?? "";
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  const message = (error as { message?: unknown } | null | undefined)?.message;
+  return typeof message === "string" ? message : "";
+}
+
 /**
  * Classifies errors as transient (retryable) or permanent (should not retry).
  * 
@@ -16,8 +27,11 @@ export type ErrorType = "transient" | "permanent";
  * - Validation errors
  */
 export function classifyError(error: unknown): ErrorType {
-  const msg = (error as Error).message?.toLowerCase() ?? "";
-  const code = (error as any).code;
+  // `(error as Error).message` throws outright on null/undefined — the
+  // optional chain guards a missing property, not a missing object — and a
+  // rejection with no value is exactly the case a caller cannot anticipate.
+  const msg = toErrorMessage(error).toLowerCase();
+  const code = (error as { code?: unknown } | null | undefined)?.code;
 
   // Transient (retryable) errors
   if (msg.includes("rate limit") || msg.includes("429")) return "transient";
@@ -86,8 +100,8 @@ export function classifyError(error: unknown): ErrorType {
  * Returns a human-readable reason for the error classification.
  */
 export function getErrorClassificationReason(error: unknown): string {
-  const msg = (error as Error).message?.toLowerCase() ?? "";
-  const code = (error as any).code;
+  const msg = toErrorMessage(error).toLowerCase();
+  const code = (error as { code?: unknown } | null | undefined)?.code;
 
   if (msg.includes("rate limit") || msg.includes("429"))
     return "Rate limit exceeded (will retry with backoff)";

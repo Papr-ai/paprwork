@@ -650,6 +650,18 @@ export class JobsService {
       logJobsStartupStep("Maintenance", "migrate unlinked jobs");
       await this.migrateUnlinkedJobsToLocalOnly();
 
+      // The misfire policy has to run again here, because the pass during core
+      // init happens before any of this loaded a real scheduleState. jobs.json
+      // is a config-only index — scheduleState is null in it for every job — so
+      // the init pass sees no nextRunAt, computes a fresh future slot, and is
+      // satisfied. The stored timestamps only arrive above, from
+      // job.runtime.json (migrateAndHydrateJobRuntimeFiles) and from cloud
+      // patches (hydrateJobRuntimeFromCloud), either of which can reinstate a
+      // slot from weeks ago. Without this second pass the guard never sees the
+      // value it exists to guard.
+      logJobsStartupStep("Maintenance", "reconcile schedule states after hydrate");
+      await this.reconcileScheduleStates();
+
       void this.rebuildGraph();
 
       const elapsedMs = Math.round(performance.now() - startedAt);

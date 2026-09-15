@@ -96,6 +96,62 @@ export function computeFollowingNextRunAt(
 }
 
 /**
+ * Advance past the slot that just fired, landing strictly in the future.
+ *
+ * `computeFollowingNextRunAt` steps exactly once from `anchor`, which is right
+ * while the anchor is recent: stepping from the scheduled slot rather than from
+ * "now" is what keeps a 10-minute job firing at :00/:10/:20 instead of drifting
+ * by however long each run took. But one step is not enough when the anchor is
+ * far behind — the slot it produces is *also* in the past, so the job is
+ * immediately due again and relaunches on the very next tick. A job eight days
+ * stale on a 30-minute schedule needs 390 of those launches to crawl back to
+ * the present, which reads as a hung scheduler.
+ *
+ * Stepping by whole grid units settles both requirements at once, so this is
+ * not a trade against phase stability: the result sits on the same grid the
+ * anchor did *and* is in the future.
+ */
+export function computeNextRunAtAfterSlot(
+  schedule: JobSchedule,
+  anchor: Date,
+  now: Date,
+): string | undefined {
+  if (!schedule.enabled) {
+    return undefined;
+  }
+
+  if (schedule.intervalMs && schedule.intervalMs > 0) {
+    const interval = schedule.intervalMs;
+    const elapsed = now.getTime() - anchor.getTime();
+    // elapsed < interval covers the healthy case and a future anchor (clock
+    // skew), both of which want a single step and nothing more.
+    const steps =
+      elapsed < interval ? 1 : Math.floor(elapsed / interval) + 1;
+    return new Date(anchor.getTime() + steps * interval).toISOString();
+  }
+
+  if (schedule.atTime) {
+    return undefined;
+  }
+
+  if (schedule.cron) {
+    const following = getCronNextIsoAfter(
+      schedule.cron,
+      anchor,
+      schedule.timezone,
+    );
+    if (following && new Date(following).getTime() > now.getTime()) {
+      return following;
+    }
+    // Cron slots are absolute wall-clock times, so the next one after `now`
+    // is already on the anchor's grid — there is no phase to preserve and
+    // nothing to correct for.
+    return getCronNextIsoAfter(schedule.cron, now, schedule.timezone);
+  }
+  return undefined;
+}
+
+/**
  * When `nextRunAt` is in the past and catch-up is disabled, jump to the next future slot.
  */
 export function computeMisfireSkipNextRunAt(

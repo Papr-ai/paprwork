@@ -1,9 +1,13 @@
 import { getJobsService, JobsService } from "./JobsService.js";
-import type { JobRecord, JobSchedule } from "./jobs/types.js";
+import type {
+  JobRecord,
+  JobSchedule,
+  JobScheduleState,
+} from "./jobs/types.js";
 import { getGatewayTelemetry } from "./gatewayTelemetry.js";
 import {
-  computeFollowingNextRunAt,
   computeInitialNextRunAt,
+  computeNextRunAtAfterSlot,
   msUntilSoonestNextRun,
 } from "./jobs/scheduleEngine.js";
 import {
@@ -15,6 +19,12 @@ import {
   releaseSchedulerRunLease,
   tryAcquireSchedulerRunLease,
 } from "./jobs/jobSchedulerRunLease.js";
+import {
+  buildParkedJobPatch,
+  clearPermanentFailureStreak,
+  isUnusableDatabaseError,
+  resolveScheduleFailureOutcome,
+} from "./jobs/schedulePark.js";
 import { PhaseTimer } from "../utils/phaseTiming.js";
 
 let jobsSchedulerInstance: JobsScheduler | null = null;
@@ -68,18 +78,24 @@ export class JobsScheduler {
     schedule: JobSchedule,
     scheduledDueAt: string,
     triggeredAt: string,
+    /** Merged over the carried-forward schedule state (failure streak, etc.). */
+    scheduleStatePatch: Partial<JobScheduleState> = {},
   ): Promise<void> {
     const jobsService = getJobsService();
+    const now = new Date();
     if (schedule.intervalMs && schedule.intervalMs > 0) {
-      // Use the scheduled due time as anchor for consistent intervals
+      // Anchor on the scheduled due time, not on now, so intervals stay on
+      // their grid — but step far enough to land in the future (see
+      // computeNextRunAtAfterSlot).
       const anchor = new Date(scheduledDueAt);
-      const nextRunAt = computeFollowingNextRunAt(schedule, anchor);
+      const nextRunAt = computeNextRunAtAfterSlot(schedule, anchor, now);
       await jobsService.upsertJob({
         ...job,
         scheduleState: {
           ...job.scheduleState,
           ...(nextRunAt ? { nextRunAt } : {}),
           lastTriggeredAt: triggeredAt,
+          ...scheduleStatePatch,
         },
         updatedAt: new Date().toISOString(),
       });
@@ -93,6 +109,7 @@ export class JobsScheduler {
           ...job.scheduleState,
           nextRunAt: undefined,
           lastTriggeredAt: triggeredAt,
+          ...scheduleStatePatch,
         },
         updatedAt: new Date().toISOString(),
       });
@@ -101,7 +118,7 @@ export class JobsScheduler {
     if (schedule.cron) {
       // Use the scheduled due time as anchor for cron
       const anchor = new Date(scheduledDueAt);
-      let nextRunAt = computeFollowingNextRunAt(schedule, anchor);
+      let nextRunAt = computeNextRunAtAfterSlot(schedule, anchor, now);
       if (!nextRunAt) {
         nextRunAt = computeInitialNextRunAt(schedule, anchor, job.scheduleState);
       }
@@ -111,6 +128,7 @@ export class JobsScheduler {
           ...job.scheduleState,
           ...(nextRunAt ? { nextRunAt } : {}),
           lastTriggeredAt: triggeredAt,
+          ...scheduleStatePatch,
         },
         updatedAt: new Date().toISOString(),
       });
@@ -229,7 +247,15 @@ export class JobsScheduler {
           await jobsService.runJobFromScheduler(job.id, dueAt);
           const latest = await jobsService.getJob(job.id);
           if (latest?.schedule?.enabled && latest.schedule) {
-            await this.patchNextRun(latest, latest.schedule, dueAt, triggeredAt);
+            // Getting this far means the job passed validation and launched,
+            // which is the signal that clears any permanent-failure streak.
+            await this.patchNextRun(
+              latest,
+              latest.schedule,
+              dueAt,
+              triggeredAt,
+              clearPermanentFailureStreak(),
+            );
           }
           const sched = job.schedule as JobSchedule;
           const scheduleType = sched.cron
@@ -265,11 +291,10 @@ export class JobsScheduler {
             // week that way. DependencyRunningError is the only legitimate
             // retry-next-tick case and is handled in the branch above; every
             // other error advances the schedule and waits for the next slot.
-            const isUnusableDatabase =
-              (error as { code?: string })?.code === "SQLITE_NOTADB" ||
-              /file is not a database|database disk image is malformed|malformed database schema/i.test(
-                err.message,
-              );
+            // Shared with the park policy rather than re-tested here: the
+            // remediation this logs and the decision to stop scheduling have
+            // to be about the same set of errors.
+            const isUnusableDatabase = isUnusableDatabaseError(error);
             if (isUnusableDatabase) {
               console.error(
                 `[JobsScheduler] Job ${job.id} is linked to an unusable database — ` +
@@ -277,16 +302,48 @@ export class JobsScheduler {
               );
             }
             let scheduleAdvanced = false;
+            let parked = false;
             try {
               const latest = await jobsService.getJob(job.id);
               if (latest?.schedule?.enabled && latest.schedule) {
-                await this.patchNextRun(
-                  latest,
-                  latest.schedule,
-                  dueAt,
-                  triggeredAt,
+                const outcome = resolveScheduleFailureOutcome(
+                  latest.scheduleState,
+                  err,
                 );
-                scheduleAdvanced = true;
+                if (outcome.kind === "park") {
+                  // Advancing the slot stops the tick-rate loop but still
+                  // burns a run, logs a stack trace, and reports a failure
+                  // every interval indefinitely. Once the same
+                  // retry-cannot-help error has come back this many times,
+                  // scheduling is the thing that is wrong — so stop it and
+                  // leave the reason on the record instead of repeating it
+                  // forever.
+                  await jobsService.upsertJob(
+                    buildParkedJobPatch(
+                      { ...latest, schedule: latest.schedule },
+                      outcome,
+                      triggeredAt,
+                      new Date().toISOString(),
+                    ),
+                  );
+                  parked = true;
+                  console.error(
+                    `[JobsScheduler] Paused schedule for ${job.id} (${job.name}): ` +
+                      outcome.reason,
+                  );
+                } else {
+                  await this.patchNextRun(
+                    latest,
+                    latest.schedule,
+                    dueAt,
+                    triggeredAt,
+                    {
+                      consecutivePermanentFailures:
+                        outcome.consecutivePermanentFailures || undefined,
+                    },
+                  );
+                  scheduleAdvanced = true;
+                }
               }
             } catch (patchError) {
               // Never let bookkeeping failure mask the original run failure.
@@ -301,6 +358,7 @@ export class JobsScheduler {
                 job_id: job.id,
                 error_type: err.constructor.name,
                 schedule_advanced: scheduleAdvanced,
+                schedule_parked: parked,
                 unusable_database: isUnusableDatabase,
               },
             );
