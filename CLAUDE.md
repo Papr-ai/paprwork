@@ -5493,7 +5493,7 @@ Claude Code stores all three fields (`accessToken`, `refreshToken`, `expiresAt`)
 
 ---
 
-### Issue 101: The Provider's Refusal Was Erased Milliseconds After It Arrived, and a Spent Plan Was Called "Included" ✅ FIXED
+### Issue 108: The Provider's Refusal Was Erased Milliseconds After It Arrived, and a Spent Plan Was Called "Included" ✅ FIXED
 **Added:** 2026-09-15
 **Problem:** A turn on `claude-opus-5` over Claude OAuth produced no reply and no error. The gateway had the explanation and logged it verbatim — `429 {"type":"rate_limit_error","message":"This request would exceed your account's rate limit."}`, composed by Issue 96 into a message naming the credential, the provider's own sentence and the Resume affordance — and the renderer logged `Rate limit retries exhausted … showing resume UI`. Both ends worked. The screen showed nothing. Separately, the context panel had stopped showing any dollar figure on this workspace, while the account was thousands of dollars past its $200 included allowance.
 **Root Causes:** Two independent defects to start with — a third surfaced once these were fixed, and is recorded below — each turning a fact the code already holds into a claim the user cannot act on.
