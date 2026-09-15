@@ -25,6 +25,7 @@ import {
 import type { Browser, BrowserContext, Cookie } from "playwright";
 import { getPaprDataDir, getPaprRoot } from "../../../core/utils/paprRoot.js";
 import { getCustomKeysService } from "../CustomKeysService.js";
+import { missingCookieKeyNames } from "./platformCookiePresence.js";
 import {
   type PlatformConfig,
   type PlatformId,
@@ -1814,9 +1815,32 @@ export class PlatformSessionService {
     }
 
     const keysService = getCustomKeysService();
+    const requiredKeyNames = config.requiredCookies.map((cookieName) =>
+      getPlatformKeyName(platformId, cookieName),
+    );
 
-    for (const cookieName of config.requiredCookies) {
-      const keyName = getPlatformKeyName(platformId, cookieName);
+    // Absence is decided from key names, never by reading a secret. An unconnected
+    // platform has no stored key, and `getKeyByName` can only say so by waiting out
+    // its IPC timeout twice (primary plus the REQUEST_KEYS fallback) — the cost that
+    // starved the gateway of a quiet window for two minutes after a resume. One
+    // `listKeys` call covers every platform, is cached for 30s, is invalidated on any
+    // key write, and falls back to `custom-keys.json` when main is unresponsive.
+    let storedKeyNames: string[];
+    try {
+      const keys = await keysService.listKeys();
+      storedKeyNames = keys.map((key) => key.name);
+    } catch {
+      return false;
+    }
+
+    if (missingCookieKeyNames(requiredKeyNames, storedKeyNames).length > 0) {
+      return false;
+    }
+
+    // The names are stored, so these reads are the cheap path: main holds the values,
+    // answers, and the results cache. Still read them — a key that cannot be decrypted
+    // is not a usable session, which is what the value check has always been for.
+    for (const keyName of requiredKeyNames) {
       try {
         const value = await keysService.getKeyByName(keyName);
         if (!value) return false;

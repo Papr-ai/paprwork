@@ -1,6 +1,13 @@
 import type { CustomKey } from "./CustomKeysStorage.js";
 
-function normalizeCustomKeyName(input: string): string {
+/**
+ * The comparison rule every key lookup uses.
+ *
+ * Exported because callers that decide a key's *presence* from names alone must
+ * compare the way the authoritative lookup does. A stricter comparison reports a
+ * stored key as missing, which reads as "not connected" for something that is.
+ */
+export function normalizeCustomKeyName(input: string): string {
   return input.trim().toUpperCase();
 }
 
