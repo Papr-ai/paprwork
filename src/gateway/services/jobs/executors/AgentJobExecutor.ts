@@ -20,6 +20,8 @@ import {
 import { isHomeDailyBriefJob } from "../dailyBriefVerification.js";
 import { todayBriefDateKey } from "../../../../core/utils/briefDateKey.js";
 import type { SubAgentIconName } from "../../../../core/types/subagents.js";
+import { CODEBASE_EXPLORER_SUB_AGENT_ID } from "../../../../core/subagents/codebaseExplorer.js";
+import { resolveCodebaseExplorerProviderModel } from "../../../utils/explorationSubAgentModel.js";
 import {
   jobWriteDatabaseEnv,
   jobWriteDatabasePromptLines,
@@ -148,6 +150,17 @@ export class AgentJobExecutor implements IJobExecutor {
       subAgentName = profile.name;
       subAgentSystemPrompt = profile.systemPrompt;
       subAgentIcon = profile.icon;
+
+      if (params.job.subAgentId === CODEBASE_EXPLORER_SUB_AGENT_ID) {
+        const exploration = await resolveCodebaseExplorerProviderModel();
+        provider = exploration.provider;
+        model = exploration.model;
+        fallbackProvider = undefined;
+        fallbackModel = undefined;
+        console.log(
+          `[AgentJobExecutor] codebase-explorer auth-aware model: ${provider}/${model}`,
+        );
+      }
     }
 
     const envBlock = await this.buildEnvironmentBlock(params);

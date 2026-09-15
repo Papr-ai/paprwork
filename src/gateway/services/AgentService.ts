@@ -48,6 +48,7 @@ import type {
   Provider,
 } from "../../core/types/agents.js";
 import { StorageManager, getStorageManager } from "./StorageManager.js";
+import { HybridStorageProvider } from "./storage/HybridStorageProvider.js";
 import { ChatSessionManager } from "./ChatSessionManager.js";
 import { TitleGenerationService } from "./TitleGenerationService.js";
 import { getSkillService, type SkillRecord } from "./SkillService.js";
@@ -128,6 +129,7 @@ import {
   createAssistantStoredMessage,
   createErrorStoredMessage,
   createPartialAssistantStoredMessage,
+  delegationIdFromTriggerUserMessage,
   hasPersistableAssistantContent,
 } from "./agent/messagePersistence.js";
 import {
@@ -287,15 +289,15 @@ export class AgentService {
    * Gateway starts in local mode; upgrades once PAPR_API_KEY is confirmed.
    */
   async warmHybridStorageFromPaprKey(): Promise<void> {
-    if (this.keysLoaded) {
+    if (this.keysLoaded && this.storageMode === "hybrid") {
       return;
     }
 
     try {
-      const { getApiKeys } = await import("../utils/keyResolver.js");
-      const keys = await getApiKeys(["PAPR_API_KEY", "OPENAI_API_KEY"]);
+      const { getPaprApiKey } = await import("../utils/keyResolver.js");
+      const paprApiKey = await getPaprApiKey();
 
-      if (keys.PAPR_API_KEY) {
+      if (paprApiKey) {
         if (this.storageMode !== "hybrid") {
           console.log(
             "[AgentService] PAPR key available - upgrading to hybrid mode",
@@ -303,25 +305,66 @@ export class AgentService {
           await this.storageManager.initialize({
             mode: "hybrid",
             userDataPath: this.userDataPath,
-            paprApiKey: keys.PAPR_API_KEY,
+            paprApiKey,
           });
           this.storageMode = "hybrid";
+          await this.queueLocalMessagesForPaprSyncAfterHybridUpgrade();
         }
+        this.keysLoaded = true;
       } else {
-        console.log("[AgentService] No PAPR key found - staying in local mode");
+        console.log(
+          "[AgentService] No PAPR key yet for active workspace — chat sync deferred (will retry on next message)",
+        );
       }
 
       if (!this.titleService) {
         this.titleService = new TitleGenerationService();
       }
 
-      this.keysLoaded = true;
       console.log(
         `[AgentService] Storage warm complete. Storage mode: ${this.storageMode}`,
       );
     } catch (error) {
       console.warn("[AgentService] Storage warm failed:", error);
     }
+  }
+
+  /** Messages saved while storage was local-only are not picked up by bulk sync until re-queued. */
+  private async queueLocalMessagesForPaprSyncAfterHybridUpgrade(): Promise<void> {
+    const provider = this.storageManager.currentProvider;
+    if (!(provider instanceof HybridStorageProvider)) {
+      return;
+    }
+    const local = provider.getLocalProvider();
+    const queued = local.markLocalMessagesPendingSync();
+    if (queued > 0) {
+      console.log(
+        `[AgentService] Queued ${queued} local-only message(s) for Papr sync`,
+      );
+    }
+
+    const chatIds = local.listChatIdsWithPendingPaprSync(30);
+    if (chatIds.length === 0) {
+      return;
+    }
+
+    void (async () => {
+      for (const chatId of chatIds) {
+        try {
+          const result = await provider.bulkSyncToPapr(chatId);
+          if (result.synced > 0) {
+            console.log(
+              `[AgentService] Backfilled ${result.synced}/${result.total} message(s) to Papr for chat ${chatId}`,
+            );
+          }
+        } catch (error) {
+          console.warn(
+            `[AgentService] Papr backfill failed for chat ${chatId}:`,
+            error instanceof Error ? error.message : error,
+          );
+        }
+      }
+    })();
   }
 
   /**
@@ -502,6 +545,11 @@ export class AgentService {
     const perfStart = performance.now();
     const timings: Record<string, number> = {};
     let t = performance.now();
+
+    const delegationFinishFor =
+      options?.isSubAgentTrigger === true
+        ? delegationIdFromTriggerUserMessage(userMessage)
+        : undefined;
 
     // Lazy-load API keys on first message (no keychain popup on startup!)
     await this.ensureKeysLoaded();
@@ -895,11 +943,11 @@ export class AgentService {
         }
 
         const { getGatewayTelemetry } = await import("./gatewayTelemetry.js");
-        const { AmplitudeEvents } = await import(
+        const { TelemetryEvents } = await import(
           "../../core/telemetry/events.js"
         );
         getGatewayTelemetry().trackFireAndForget(
-          AmplitudeEvents.AGENT_TURN_COMPLETED,
+          TelemetryEvents.AGENT_TURN_COMPLETED,
           {
             chat_id: chatId,
             model: config.model,
@@ -2962,6 +3010,7 @@ export class AgentService {
         sequence, // Pass V1-style sequence
         stableId: assistantMessageId, // Reuse the same ID from checkpoints
         usage: tokenUsage,
+        delegationFinishFor: delegationFinishFor ?? undefined,
       });
       const streamStorage = resolveStreamStorage();
       if (streamStorage) {
@@ -4219,6 +4268,17 @@ ${last15.substring(0, 8_000)}`;
       throw new Error("AgentService not initialized");
     }
 
+    const useSubagentHotPath =
+      typeof input.delegationId === "string" &&
+      input.delegationId.trim().length > 0;
+    if (useSubagentHotPath) {
+      const { enterInteractiveHotPath } = await import(
+        "./gatewayInteractivePriority.js"
+      );
+      enterInteractiveHotPath("agent:subagent");
+    }
+
+    try {
     await this.ensureKeysLoaded();
 
     // Resolve default provider and model based on user's available authentication
@@ -4720,6 +4780,14 @@ ${last15.substring(0, 8_000)}`;
       await this.sessionManager.clearSession(chatId);
       if (retryChatId) {
         await this.sessionManager.clearSession(retryChatId);
+      }
+    }
+    } finally {
+      if (useSubagentHotPath) {
+        const { leaveInteractiveHotPath } = await import(
+          "./gatewayInteractivePriority.js"
+        );
+        leaveInteractiveHotPath("agent:subagent");
       }
     }
   }

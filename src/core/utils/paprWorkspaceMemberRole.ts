@@ -8,9 +8,7 @@ import {
   type WorkspaceRoleName,
 } from "./workspaceRolePermissions.js";
 
-const PAPR_PLATFORM_URL = (
-  process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai"
-).replace(/\/$/, "");
+import { getPaprTeamPlatformUrl } from "./paprPlatformUrl.js";
 
 export interface UpdateWorkspaceMemberRoleInput {
   sessionToken: string;
@@ -27,7 +25,7 @@ async function callWorkspaceRoleRoute(
   userId: string,
   role: "owner" | "admin",
 ): Promise<void> {
-  const response = await fetch(`${PAPR_PLATFORM_URL}/api/workspace/${route}`, {
+  const response = await fetch(`${getPaprTeamPlatformUrl()}/api/workspace/${route}`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -21,19 +21,12 @@ function isSyntheticSubAgentMessage(msg: unknown): boolean {
   );
 }
 
-/** Filter out synthetic sub-agent exchange (user + assistant response) - shown only in MiniChatCard */
+/** Hide synthetic trigger user rows; assistant summaries fold onto the delegate message. */
 function filterSyntheticSubAgentExchange(history: unknown[]): unknown[] {
   const result: unknown[] = [];
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     if (isSyntheticSubAgentMessage(msg)) {
-      // Skip synthetic user message and the immediately following assistant response
-      const next = history[i + 1];
-      const nextIsAssistant =
-        typeof next === "object" &&
-        next !== null &&
-        (next as Record<string, unknown>).role === "assistant";
-      if (nextIsAssistant) i++; // Skip next too
       continue;
     }
     if (
@@ -194,6 +187,10 @@ export function mapHistoryMessages(
       // reappearing as a finished answer.
       ...(candidate.incomplete === true ? { interrupted: true } : {}),
       ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(typeof candidate.delegation_finish_for === "string" &&
+      candidate.delegation_finish_for
+        ? { delegationFinishFor: candidate.delegation_finish_for }
+        : {}),
     });
   });
 }

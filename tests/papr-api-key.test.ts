@@ -236,6 +236,14 @@ describe("requirePaprApiKeyForWorkspaceSwitch", () => {
       requirePaprApiKeyForWorkspaceSwitch(key, "Y8D4H7Yp3Z", "onnNQFe3DN"),
     ).toBe(key);
   });
+
+  it("accepts namespace-bound keys when org id in key differs from target org (team workspaces)", () => {
+    const key =
+      "sk-org-HhpgrhMrKA-namespace-onnNQFe3DN-abc123";
+    expect(
+      requirePaprApiKeyForWorkspaceSwitch(key, "Y8D4H7Yp3Z", "onnNQFe3DN"),
+    ).toBe(key);
+  });
 });
 
 describe("paprNamespaceApiKeyName", () => {

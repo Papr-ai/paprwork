@@ -358,7 +358,7 @@ describe("workspace switch — Electron startup invariants", () => {
       "async function applyActiveNamespaceSwitch",
       "async function refreshActiveNamespaceApiKey",
     );
-    expect(applySwitch).toContain("paprApiKeyAuthorizedForWorkspaceTarget");
+    expect(applySwitch).toContain("paprApiKeyMatchesNamespaceBound");
     expect(applySwitch).toContain("notifyGatewayWorkspaceSwitch");
   });
 });

@@ -124,6 +124,7 @@ export class VaultSyncService {
   private pushPendingAfterInflight = false;
   private fullSyncInFlight: Promise<VaultSyncResponse | null> | null = null;
   private fullSyncRerunPending = false;
+  private initializeInFlight: Promise<void> | null = null;
 
   private readonly gatewayPort: number;
 
@@ -135,10 +136,33 @@ export class VaultSyncService {
     return { ...this.state };
   }
 
+  /** True while startup init or a coalesced full sync / push is in flight. */
+  isSyncBusy(): boolean {
+    return (
+      this.initializeInFlight !== null ||
+      this.fullSyncInFlight !== null ||
+      this.pushInFlight !== null
+    );
+  }
+
   /**
    * Initialize: push local keys to cloud, then pull to discover cross-device keys.
    */
   async initialize(): Promise<void> {
+    if (this.initializeInFlight) {
+      await this.initializeInFlight;
+      return;
+    }
+
+    this.initializeInFlight = this.initializeOnce();
+    try {
+      await this.initializeInFlight;
+    } finally {
+      this.initializeInFlight = null;
+    }
+  }
+
+  private async initializeOnce(): Promise<void> {
     console.log("[VaultSync] Initializing...");
 
     const paprKey = await getPaprApiKey();

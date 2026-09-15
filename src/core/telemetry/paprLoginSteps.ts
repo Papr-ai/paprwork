@@ -32,7 +32,11 @@ export type PaprLoginStep =
   | "login_success_notified"
   | "poll_detected_login"
   | "login_timeout"
-  | "check_again_clicked";
+  | "check_again_clicked"
+  | "manual_code_submitted"
+  | "manual_code_success"
+  | "manual_code_failed"
+  | "manual_code_error";
 
 export type PaprLoginMode = "login" | "signup";
 export type PaprLoginSource = "auth_wall" | "settings" | "unknown";

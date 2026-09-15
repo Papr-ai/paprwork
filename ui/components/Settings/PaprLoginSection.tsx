@@ -425,16 +425,16 @@ export function PaprLoginSection({ onApiKeyReceived, profileFields }: PaprLoginS
       setError(null);
 
       try {
+        const targetWorkspaceKey =
+          target !== undefined
+            ? buildWorkspaceUiCacheKey(target.organizationId, target.namespaceId)
+            : org.organizationId && org.defaultNamespaceId
+              ? buildWorkspaceUiCacheKey(org.organizationId, org.defaultNamespaceId)
+              : undefined;
+
         await prepareWorkspaceSwitchReload({
           organizationName: org.name,
-          ...(target
-            ? {
-                targetWorkspaceKey: buildWorkspaceUiCacheKey(
-                  target.organizationId,
-                  target.namespaceId,
-                ),
-              }
-            : {}),
+          ...(targetWorkspaceKey ? { targetWorkspaceKey } : {}),
         });
         const result = await window.electronAPI.papr.switchOrganization(
           workspaceId,

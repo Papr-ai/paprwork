@@ -577,8 +577,8 @@ let clientInstance: TursoReplicaSyncWorkerClient | null = null;
 function reportWorkerCrash(error: TursoSyncWorkerCrashError): void {
   void import("../gatewayTelemetry.js")
     .then(({ getGatewayTelemetry }) =>
-      import("../../../core/telemetry/events.js").then(({ AmplitudeEvents }) => {
-        getGatewayTelemetry().trackFireAndForget(AmplitudeEvents.TURSO_SYNC_WORKER_CRASH, {
+      import("../../../core/telemetry/events.js").then(({ TelemetryEvents }) => {
+        getGatewayTelemetry().trackFireAndForget(TelemetryEvents.TURSO_SYNC_WORKER_CRASH, {
           op: error.op,
           signal: error.signal ?? "",
           exit_code: error.exitCode ?? -1,

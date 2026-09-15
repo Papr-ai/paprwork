@@ -92,11 +92,7 @@ export function requirePaprApiKeyForWorkspaceSwitch(
   }
 
   if (
-    !paprApiKeyAuthorizedForWorkspaceTarget(
-      trimmed,
-      organizationId,
-      namespaceId,
-    )
+    !paprApiKeyMatchesNamespaceBound(trimmed, organizationId, namespaceId)
   ) {
     const scope = parsePaprApiKeyScope(trimmed);
     if (scope && scope.namespaceId !== namespaceId.trim()) {
