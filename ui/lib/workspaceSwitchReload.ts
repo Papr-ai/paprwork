@@ -13,7 +13,7 @@ import { useArtifactsStore, type Artifact } from "../stores/artifactsStore";
 import { useChatStore } from "../stores/chatStore";
 import { useSubAgentsStore } from "../stores/subAgentsStore";
 import { useTabStore } from "../stores/tabStore";
-import { gateway } from "../src/lib/gateway";
+import { gateway, type GatewayResponse } from "../src/lib/gateway";
 import type { ChatMetadata } from "../types/chat";
 import { clearCloudPublishCache } from "../utils/cloudPublishCache";
 import { clearCommunityCatalogCache } from "../utils/communityCatalogCache";
@@ -25,6 +25,13 @@ import {
   type WorkspaceEntityIdSets,
 } from "./persistedAppState";
 import { ensureSettingsTab } from "./ensureSettingsTab";
+import {
+  allowTabPersistence,
+  blockTabPersistence,
+  resetTabPersistenceGuardForTests,
+  shouldBlockTabPersistence,
+  type WorkspaceTabReadOutcome,
+} from "./tabPersistenceGuard";
 import {
   ensureWorkspaceLandingTab,
   needsWorkspaceLandingTab,
@@ -117,6 +124,7 @@ export function resetWorkspaceReloadForTests(): void {
   clearWorkspaceUiCacheForTests();
   resetDefaultChatTabGuardForTests();
   resetWorkspaceSwitchOverlayForTests();
+  resetTabPersistenceGuardForTests();
 }
 
 export { parseWorkspaceSwitchLabels } from "./workspaceSwitchOverlay";
@@ -180,6 +188,9 @@ function hydrateWorkspaceFromCache(targetKey: string): boolean {
     splitRatios: cached.splitRatios,
     history: cached.history,
     historyIndex: cached.historyIndex,
+    // Read from the in-memory workspace cache, not SQLite. This is a paint to
+    // avoid a blank frame; the SQLite read that follows sets the real outcome.
+    tabsReadOk: true,
   });
   // Artifacts always reload from gateway — cache is tabs-only to avoid wrong My Apps / team apps.
   setActiveWorkspaceUiCacheKey(targetKey);
@@ -197,15 +208,23 @@ function clearLegacyGlobalTabCache(): void {
   }
 }
 
-/** Restore tab bar from workspace SQLite. Returns count of non-settings tabs loaded/applied. */
+/**
+ * Restore tab bar from workspace SQLite.
+ *
+ * Reports whether the read succeeded, not how many tabs came back: a workspace
+ * with no saved tabs and a workspace whose tabs could not be read both yield
+ * zero, and only the first may be persisted over. See `tabPersistenceGuard`.
+ */
 async function loadTabsForWorkspaceWithRetry(
   targetWorkspaceKey?: string,
   entityIds?: WorkspaceEntityIdSets,
-): Promise<number> {
+): Promise<WorkspaceTabReadOutcome> {
   for (let attempt = 0; attempt < TABS_LOAD_MAX_ATTEMPTS; attempt += 1) {
     try {
       const snapshot = await fetchPersistedAppStateFromGateway();
-      if (snapshot) {
+      // A declined read yields an empty snapshot that is indistinguishable from
+      // an empty workspace, so retry it rather than accepting it as the answer.
+      if (snapshot && snapshot.tabsReadOk) {
         applyPersistedAppStateToTabStore(snapshot, {
           ...entityIds,
           emptyActiveTabFallback: "none",
@@ -231,7 +250,10 @@ async function loadTabsForWorkspaceWithRetry(
             artifacts,
           });
         }
-        return countNonSettingsTabs(useTabStore.getState().tabs);
+        return {
+          status: "loaded",
+          tabCount: countNonSettingsTabs(useTabStore.getState().tabs),
+        };
       }
     } catch (error) {
       if (attempt === TABS_LOAD_MAX_ATTEMPTS - 1) {
@@ -240,7 +262,7 @@ async function loadTabsForWorkspaceWithRetry(
     }
     await new Promise((resolve) => setTimeout(resolve, GATEWAY_RETRY_MS));
   }
-  return 0;
+  return { status: "unreadable" };
 }
 
 function countNonSettingsTabs(
@@ -249,27 +271,59 @@ function countNonSettingsTabs(
   return tabs.filter((tab) => tab.type !== "settings").length;
 }
 
-/** Load workspace apps/documents into artifacts store (My Apps + tab validation). */
-async function loadArtifactsForWorkspaceWithRetry(): Promise<boolean> {
+/** Which workspace entity lists were actually read back from the gateway. */
+interface WorkspaceEntityLoadOutcome {
+  chatsLoaded: boolean;
+  appsLoaded: boolean;
+  documentsLoaded: boolean;
+}
+
+/**
+ * Load workspace apps/documents into artifacts store (My Apps + tab validation).
+ *
+ * Reports the two lists separately. They are fetched independently, so one can
+ * arrive without the other — and treating a missing list as an empty one
+ * authorises pruning every tab of that kind.
+ */
+async function loadArtifactsForWorkspaceWithRetry(): Promise<{
+  appsLoaded: boolean;
+  documentsLoaded: boolean;
+}> {
+  let documents: Artifact[] | null = null;
+  let apps: Artifact[] | null = null;
+
   for (let attempt = 0; attempt < CHAT_LIST_MAX_ATTEMPTS; attempt += 1) {
     try {
+      // Annotated so the conditional fetches do not form an inference cycle
+      // with the `documents`/`apps` they are guarded by.
+      const docsPromise: Promise<GatewayResponse | null> =
+        documents === null ? gateway.send("document:list") : Promise.resolve(null);
+      const appsPromise: Promise<GatewayResponse | null> =
+        apps === null
+          ? gateway.send("app:list", {}, { timeoutMs: 90_000 })
+          : Promise.resolve(null);
+
       const [docsResult, appsResult] = await Promise.allSettled([
-        gateway.send("document:list"),
-        gateway.send("app:list", {}, { timeoutMs: 90_000 }),
+        docsPromise,
+        appsPromise,
       ]);
 
-      const documents =
-        docsResult.status === "fulfilled"
-          ? ((docsResult.value.data as Artifact[]) ?? [])
-          : [];
-      const apps =
-        appsResult.status === "fulfilled"
-          ? ((appsResult.value.data as Artifact[]) ?? [])
-          : [];
+      if (docsResult.status === "fulfilled" && docsResult.value) {
+        documents = (docsResult.value.data as Artifact[]) ?? [];
+      }
+      if (appsResult.status === "fulfilled" && appsResult.value) {
+        apps = (appsResult.value.data as Artifact[]) ?? [];
+      }
 
-      if (docsResult.status === "fulfilled" || appsResult.status === "fulfilled") {
-        useArtifactsStore.getState().setArtifacts([...documents, ...apps]);
-        return true;
+      // Publish whatever arrived so My Apps is populated, then keep retrying the
+      // list that did not — its absence must not be mistaken for emptiness.
+      if (documents !== null || apps !== null) {
+        useArtifactsStore
+          .getState()
+          .setArtifacts([...(documents ?? []), ...(apps ?? [])]);
+      }
+      if (documents !== null && apps !== null) {
+        break;
       }
     } catch (error) {
       if (attempt === CHAT_LIST_MAX_ATTEMPTS - 1) {
@@ -278,22 +332,37 @@ async function loadArtifactsForWorkspaceWithRetry(): Promise<boolean> {
     }
     await new Promise((resolve) => setTimeout(resolve, CHAT_LIST_RETRY_MS));
   }
-  return false;
+
+  return { appsLoaded: apps !== null, documentsLoaded: documents !== null };
 }
 
-function buildEntityIdSetsFromStores(): WorkspaceEntityIdSets {
+/**
+ * Entity ids to prune tabs against.
+ *
+ * A list that failed to load is left `undefined` rather than empty, because
+ * `pruneStaleEntityTabs` reads a missing set as "unknown — keep the tab" and an
+ * empty set as "this workspace has none of these — drop them all". Handing it an
+ * empty set for a list we never received closes every tab of that kind.
+ */
+function buildEntityIdSetsFromStores(
+  outcome: WorkspaceEntityLoadOutcome,
+): WorkspaceEntityIdSets {
   const chats = useChatStore.getState().chats;
   const artifacts = useArtifactsStore.getState().artifacts;
   return {
-    validChatIds: new Set(chats.map((chat) => chat.id)),
-    validAppIds: new Set(
-      artifacts.filter((item) => item.type === "app").map((item) => item.id),
-    ),
-    validDocumentIds: new Set(
-      artifacts
-        .filter((item) => item.type === "document")
-        .map((item) => item.id),
-    ),
+    validChatIds: outcome.chatsLoaded
+      ? new Set(chats.map((chat) => chat.id))
+      : undefined,
+    validAppIds: outcome.appsLoaded
+      ? new Set(artifacts.filter((item) => item.type === "app").map((item) => item.id))
+      : undefined,
+    validDocumentIds: outcome.documentsLoaded
+      ? new Set(
+          artifacts
+            .filter((item) => item.type === "document")
+            .map((item) => item.id),
+        )
+      : undefined,
   };
 }
 
@@ -301,22 +370,33 @@ function buildEntityIdSetsFromStores(): WorkspaceEntityIdSets {
 async function restoreWorkspaceTabsAndEntities(
   generation: number,
   targetWorkspaceKey?: string,
-): Promise<number> {
+): Promise<WorkspaceTabReadOutcome> {
   if (generation !== workspaceReloadGeneration) {
-    return 0;
+    return { status: "unreadable" };
   }
 
-  await Promise.all([
+  const [artifacts, chatsLoaded] = await Promise.all([
     loadArtifactsForWorkspaceWithRetry(),
     loadChatsForWorkspaceWithRetry(),
   ]);
 
   if (generation !== workspaceReloadGeneration) {
-    return 0;
+    return { status: "unreadable" };
   }
 
-  const entityIds = buildEntityIdSetsFromStores();
-  return loadTabsForWorkspaceWithRetry(targetWorkspaceKey, entityIds);
+  const entityIds = buildEntityIdSetsFromStores({ ...artifacts, chatsLoaded });
+  const outcome = await loadTabsForWorkspaceWithRetry(targetWorkspaceKey, entityIds);
+
+  // The tab store was cleared at the start of this reload. If the saved tab bar
+  // could not be read back, whatever is in the store now is scaffolding, and
+  // saving it would replace the real rows — so hold saves until a read succeeds.
+  if (shouldBlockTabPersistence(outcome)) {
+    blockTabPersistence("workspace tab bar could not be read from SQLite");
+  } else {
+    allowTabPersistence();
+  }
+
+  return outcome;
 }
 
 /** Load workspace tabs from SQLite once gateway AppStateStorage is on the new workspace. */
@@ -332,7 +412,7 @@ async function applyWorkspaceTabsAfterGatewayReady(
 
   const targetWorkspaceKey = reloadTargetWorkspaceKeyByGeneration.get(generation);
 
-  const loaded = await restoreWorkspaceTabsAndEntities(
+  const outcome = await restoreWorkspaceTabsAndEntities(
     generation,
     targetWorkspaceKey,
   );
@@ -341,9 +421,9 @@ async function applyWorkspaceTabsAfterGatewayReady(
     return;
   }
 
-  if (loaded > 0) {
+  if (outcome.status === "loaded" && outcome.tabCount > 0) {
     console.log(
-      `[WorkspaceSwitch] Restored ${loaded} workspace tab(s) after gateway switch complete`,
+      `[WorkspaceSwitch] Restored ${outcome.tabCount} workspace tab(s) after gateway switch complete`,
     );
   }
 }
@@ -520,9 +600,8 @@ export function abortWorkspaceSwitchReload(): void {
   restoreProfileSidebarAfterAbortedSwitch();
 }
 
-async function loadChatsForWorkspaceWithRetry(): Promise<Set<string>> {
-  const validChatIds = new Set<string>();
-
+/** Load the workspace chat list. Returns whether the list was actually read. */
+async function loadChatsForWorkspaceWithRetry(): Promise<boolean> {
   for (let attempt = 0; attempt < CHAT_LIST_MAX_ATTEMPTS; attempt += 1) {
     try {
       const response = await gateway.send("chat:list");
@@ -541,10 +620,7 @@ async function loadChatsForWorkspaceWithRetry(): Promise<Set<string>> {
           hasUnread: chat.hasUnread,
         }));
         useChatStore.getState().setChats(chats);
-        for (const chat of chats) {
-          validChatIds.add(chat.id);
-        }
-        return validChatIds;
+        return true;
       }
     } catch (error) {
       if (attempt === CHAT_LIST_MAX_ATTEMPTS - 1) {
@@ -554,7 +630,7 @@ async function loadChatsForWorkspaceWithRetry(): Promise<Set<string>> {
     await new Promise((resolve) => setTimeout(resolve, CHAT_LIST_RETRY_MS));
   }
 
-  return validChatIds;
+  return false;
 }
 
 async function runReloadForGeneration(generation: number): Promise<void> {
