@@ -4,7 +4,9 @@ import {
   chatModelIsFable,
   CLAUDE_PLAN_USAGE_BRAND,
   CLAUDE_PLAN_USAGE_TITLE,
+  formatCostAmount,
   getPlanUsageTooltipLines,
+  resolveCostBasis,
   type PlanUsageSummary,
 } from "../../utils/subscriptionPlanUsage";
 
@@ -13,6 +15,7 @@ type ContextPlanUsageHeroProps = {
   showClaudePlanUsage: boolean;
   chatModelId: string;
   planUsage: PlanUsageSummary | null;
+  lastTurnCost: number | null;
 };
 
 function PlanInfoButton({
@@ -51,12 +54,30 @@ export const ContextPlanUsageHero: React.FC<ContextPlanUsageHeroProps> = ({
   showClaudePlanUsage,
   chatModelId,
   planUsage,
+  lastTurnCost,
 }) => {
   if (liveElapsedMs !== null) {
     return (
       <>
         <div className="ctx-panel__cost">{formatDuration(liveElapsedMs)}</div>
         <div className="ctx-panel__sub">running</div>
+      </>
+    );
+  }
+
+  /**
+   * Once the included allowance is spent the provider bills per token on top
+   * of the plan, so the plan percentage is no longer the headline — the money
+   * is. Showing "Included" here was the defect: it is only true up to the
+   * limit, and it read as reassurance to anyone already past it.
+   */
+  const overage =
+    resolveCostBasis("subscription", planUsage) === "plan_overage";
+  if (overage && lastTurnCost !== null) {
+    return (
+      <>
+        <div className="ctx-panel__cost">{formatCostAmount(lastTurnCost)}</div>
+        <div className="ctx-panel__sub">on top of plan</div>
       </>
     );
   }

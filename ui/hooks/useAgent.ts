@@ -28,6 +28,7 @@ import { mapHistoryMessages } from "../utils/historyMapper";
 import { resolveAgentFocusContext } from "../utils/agentFocusContext";
 import { isAppTabMergedWithChat, isPlatformTabMergedWithChat } from "../utils/appTabMerge";
 import { openPlatformBrowserTab } from "../lib/openPlatformBrowserTab";
+import { recoveryBannerSurvivesStreamEnd } from "../lib/streamRecoveryPersistence";
 import {
   isAppAutoOpenToolName,
   isUserOnChatTab,
@@ -1170,8 +1171,21 @@ export function useAgent() {
             setSending(chatId, false);
             setConnectionPaused(chatId, false);
             setFinishingWork(chatId, false);
-            setNeedsStreamRecovery(chatId, false);
-            
+            // A provider refusal closes the stream cleanly, so `done` lands
+            // just after the error chunk raised the resume banner. Clearing it
+            // here would erase the only explanation the user gets.
+            {
+              const cs = useChatStore.getState().chatStates.get(chatId);
+              if (
+                !recoveryBannerSurvivesStreamEnd({
+                  needsStreamRecovery: cs?.needsStreamRecovery ?? false,
+                  reason: cs?.streamRecoveryReason,
+                })
+              ) {
+                setNeedsStreamRecovery(chatId, false);
+              }
+            }
+
             // Clear streaming status (blue dot) for THIS chat's tab
             const { setTabStreaming } = useTabStore.getState();
             setTabStreaming(`chat-${chatId}`, false);

@@ -112,7 +112,60 @@ export function summarizeClaudePlanUsage(
   };
 }
 
-function planAtIncludedLimit(plan: PlanUsageSummary): boolean {
+/**
+ * What the dollar figure on a turn actually means.
+ *
+ * A subscription login does not make a turn free — it makes it free *until the
+ * included allowance runs out*, after which the provider bills per token on top
+ * of the plan. So the basis is decided by the plan's own reported utilization,
+ * never by which credential was used to authenticate.
+ */
+export type CostBasis =
+  | "metered"
+  /** Inside the included allowance: the figure is list price, not a charge. */
+  | "plan_included"
+  /** Included allowance exhausted: the figure is money actually being spent. */
+  | "plan_overage"
+  /** Subscription, but plan utilization could not be read. */
+  | "plan_unknown";
+
+export function resolveCostBasis(
+  billingMode: BillingMode,
+  plan: PlanUsageSummary | null,
+): CostBasis {
+  if (billingMode === "metered") return "metered";
+  if (!plan) return "plan_unknown";
+  if (!planAtIncludedLimit(plan)) return "plan_included";
+  // `extraUsageEnabled === false` means the provider refuses the request
+  // rather than billing for it, so nothing is being spent.
+  return plan.extraUsageEnabled === false ? "plan_included" : "plan_overage";
+}
+
+/** True when the figure is money charged, rather than a list-price estimate. */
+export function costBasisIsCharged(basis: CostBasis): boolean {
+  return basis === "metered" || basis === "plan_overage";
+}
+
+/** Stat label beside the figure — says which of the two things it is. */
+export function costBasisStatLabel(basis: CostBasis): string {
+  return costBasisIsCharged(basis) ? "cost" : "list";
+}
+
+/** Note under a running turn. Never claims "included" once the plan is spent. */
+export function costBasisRunningNote(basis: CostBasis): string {
+  switch (basis) {
+    case "metered":
+      return "Cost is billed when the turn finishes.";
+    case "plan_overage":
+      return "Billed on top of your plan when the turn finishes.";
+    case "plan_included":
+      return "Counts toward your plan when the turn finishes.";
+    case "plan_unknown":
+      return "Counts toward your plan; extra usage is billed on top.";
+  }
+}
+
+export function planAtIncludedLimit(plan: PlanUsageSummary): boolean {
   const percents: number[] = [];
   if (plan.sessionPercent !== null) percents.push(plan.sessionPercent);
   if (plan.weeklyPercent !== null) percents.push(plan.weeklyPercent);
@@ -207,22 +260,41 @@ export function getPlanUsageTooltipLines(
   return lines;
 }
 
+/**
+ * Chat footer totals.
+ *
+ * The figure is always shown. Suppressing it on a subscription hid real spend
+ * from anyone past their included allowance, which is exactly when the number
+ * matters most; the wording carries whether it is a charge or a list estimate.
+ */
 export function formatChatTotalsLine(
   billingMode: BillingMode,
   turns: number,
   cost: number,
+  plan: PlanUsageSummary | null = null,
 ): string {
-  if (billingMode === "subscription") {
-    return `${turns} turn${turns === 1 ? "" : "s"} · included usage`;
+  const turnLabel = `${turns} turn${turns === 1 ? "" : "s"}`;
+  const basis = resolveCostBasis(billingMode, plan);
+  const amount = formatCostAmount(cost);
+
+  switch (basis) {
+    case "metered":
+      return `${turnLabel} · ${amount} this chat`;
+    case "plan_overage":
+      return `${turnLabel} · ${amount} this chat, on top of your plan`;
+    case "plan_included":
+      return `${turnLabel} · ≈${amount} at list, included`;
+    case "plan_unknown":
+      return `${turnLabel} · ≈${amount} at list`;
   }
-  return `${turns} turn${turns === 1 ? "" : "s"} · ${formatMeteredCost(cost)}`;
 }
 
-function formatMeteredCost(cost: number): string {
-  if (!cost) return "$0 this chat";
-  if (cost < 0.01) return `$${cost.toFixed(4)} this chat`;
-  if (cost < 1) return `$${cost.toFixed(3)} this chat`;
-  return `$${cost.toFixed(2)} this chat`;
+/** Bare amount, with enough precision to stay non-zero on cheap turns. */
+export function formatCostAmount(cost: number): string {
+  if (!cost) return "$0";
+  if (cost < 0.01) return `$${cost.toFixed(4)}`;
+  if (cost < 1) return `$${cost.toFixed(3)}`;
+  return `$${cost.toFixed(2)}`;
 }
 
 export function planUsageRingHint(

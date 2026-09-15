@@ -10,7 +10,6 @@
 import React, { useState } from "react";
 import {
   formatCachedInputShare,
-  formatCost,
   formatDuration,
   formatTokens,
   formatTurnPeakFillPercent,
@@ -19,7 +18,15 @@ import {
   type ContextMeter,
   type LiveTurn,
 } from "./contextMeterModel";
-import type { BillingMode } from "../../utils/subscriptionPlanUsage";
+import {
+  costBasisRunningNote,
+  costBasisStatLabel,
+  costBasisIsCharged,
+  formatCostAmount,
+  resolveCostBasis,
+  type BillingMode,
+  type PlanUsageSummary,
+} from "../../utils/subscriptionPlanUsage";
 
 const Stat: React.FC<{ label: string; value: string }> = ({ label, value }) => (
   <div className="ctx-stat">
@@ -32,9 +39,11 @@ export const TurnCostStrip: React.FC<{
   meter: ContextMeter;
   live: LiveTurn | null;
   billingMode: BillingMode;
-}> = ({ meter, live, billingMode }) => {
+  planUsage: PlanUsageSummary | null;
+}> = ({ meter, live, billingMode, planUsage }) => {
   const [open, setOpen] = useState(false);
   const turn = meter.lastTurn;
+  const basis = resolveCostBasis(billingMode, planUsage);
 
   /**
    * A running turn takes over the strip. The alternative — showing the
@@ -72,11 +81,7 @@ export const TurnCostStrip: React.FC<{
         {/* Cost is the one figure with no honest live value: providers report
             it when the turn closes. Naming the omission beats a placeholder
             number that silently changes. */}
-        <p className="ctx-turn__note">
-          {billingMode === "subscription"
-            ? "Counts toward your plan when the turn finishes."
-            : "Cost is billed when the turn finishes."}
-        </p>
+        <p className="ctx-turn__note">{costBasisRunningNote(basis)}</p>
       </div>
     );
   }
@@ -134,9 +139,19 @@ export const TurnCostStrip: React.FC<{
           label="context"
           value={formatTurnPeakFillPercent(peakFillPct)}
         />
-        {billingMode === "metered" ? (
-          <Stat label="cost" value={formatCost(turn.cost)} />
-        ) : null}
+        {/* Always shown. A subscription past its included allowance is
+            spending real money per turn, so hiding the figure there removed
+            it from exactly the users who needed to see it. */}
+        <Stat
+          label={costBasisStatLabel(basis)}
+          value={
+            turn.cost === null
+              ? "—"
+              : costBasisIsCharged(basis)
+                ? formatCostAmount(turn.cost)
+                : `≈${formatCostAmount(turn.cost)}`
+          }
+        />
       </div>
 
       {open ? (

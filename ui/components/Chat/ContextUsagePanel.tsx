@@ -148,6 +148,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
               showClaudePlanUsage={showClaudePlanUsage}
               chatModelId={chatModelId}
               planUsage={planUsage}
+              lastTurnCost={meter.lastTurn?.cost ?? null}
             />
           ) : (
             <ContextMeteredCostHero
@@ -229,6 +230,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         meter={meter}
         live={live}
         billingMode={billingMode}
+        planUsage={planUsage}
       />
 
       <footer className="ctx-panel__foot">
@@ -237,6 +239,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
             billingMode,
             meter.totals.turns,
             meter.totals.cost,
+            planUsage,
           )}
         </span>
         {/* Disabled rather than a no-op: the breakdown it opens is the thing
