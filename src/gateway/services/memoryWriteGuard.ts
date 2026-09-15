@@ -124,8 +124,18 @@ function saveJournal(journal: Journal): void {
 
     // Write-then-rename: a crash mid-write must not leave a truncated journal
     // that reads as empty and silently disables the guard.
+    //
+    // The tmp name is process-unique. A shared `.tmp` path meant two gateway
+    // processes could interleave write/rename and publish a half-written file.
     const target = journalPath();
-    const tmp = `${target}.tmp`;
+
+    // Ensure the directory exists. Without this, a missing data dir makes
+    // writeFileSync throw ENOENT, the catch below swallows it, and the guard
+    // silently degrades to in-process-only — no cross-run dedup at all, with
+    // no error anywhere to explain why duplicates reappeared.
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+
+    const tmp = `${target}.${process.pid}.tmp`;
     fs.writeFileSync(tmp, JSON.stringify(next), "utf8");
     fs.renameSync(tmp, target);
   } catch {
@@ -190,10 +200,23 @@ export function reserveMemoryWrite(
       proceed: true,
       hash,
       commit: () => {
-        inFlight.delete(hash);
-        const current = loadJournal();
-        current[hash] = { at: new Date().toISOString(), source };
-        saveJournal(current);
+        // Journal FIRST, then release the in-process lock.
+        //
+        // The previous order dropped `inFlight` before the journal landed, so
+        // a second write of the same content starting in that window saw
+        // neither barrier and proceeded. Measured: 9 rows written after their
+        // own hash was already journaled (~0.8% of ~1,100 guarded writes),
+        // e.g. hash f9b601326c0e journaled 09-11T06:04:44 with another row
+        // created 68s later.
+        try {
+          const current = loadJournal();
+          current[hash] = { at: new Date().toISOString(), source };
+          saveJournal(current);
+        } finally {
+          // Always release, even if the journal write threw — holding the
+          // hash forever would silently block legitimate future writes.
+          inFlight.delete(hash);
+        }
       },
       release: () => {
         inFlight.delete(hash);
