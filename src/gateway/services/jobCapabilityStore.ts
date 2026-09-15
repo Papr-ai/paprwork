@@ -28,6 +28,7 @@ import type { JobRecord } from "./jobs/types.js";
 import {
   buildJobCapabilityCard,
   jobCapabilitySourceKey,
+  readJobReliability,
   readJobTableShapes,
   type JobTableShape,
 } from "./jobCapabilityCard.js";
@@ -98,15 +99,26 @@ export async function syncJobCapabilityCard(input: {
   try {
     const dbPath = path.join(input.jobDir, "data", "data.db");
     let tables: JobTableShape[] = [];
+    // Reliability comes from job_runs in the same data.db, so an explicit
+    // caller value wins but we fall back to reading history ourselves.
+    let successRate = input.successRate;
+    let runSampleSize = input.runSampleSize;
     if (fs.existsSync(dbPath)) {
       tables = readJobTableShapes(dbPath);
+      if (successRate === undefined) {
+        const reliability = readJobReliability(dbPath);
+        if (reliability) {
+          successRate = reliability.successRate;
+          runSampleSize = reliability.runSampleSize;
+        }
+      }
     }
 
     const content = buildJobCapabilityCard({
       job: input.job,
       tables,
-      successRate: input.successRate,
-      runSampleSize: input.runSampleSize,
+      successRate,
+      runSampleSize,
     });
 
     const sourceKey = jobCapabilitySourceKey(input.job.id);

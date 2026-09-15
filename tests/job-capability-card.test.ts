@@ -7,6 +7,7 @@ import {
   buildJobCapabilityCard,
   isJobSystemTable,
   jobCapabilitySourceKey,
+  readJobReliability,
   readJobTableShapes,
 } from "../src/gateway/services/jobCapabilityCard.js";
 import type { JobRecord } from "../src/gateway/services/jobs/types.js";
@@ -178,5 +179,94 @@ describe("buildJobCapabilityCard", () => {
 
   test("source key is stable and unique per job", () => {
     expect(jobCapabilitySourceKey(job.id)).toBe(`job:${job.id}/capability`);
+  });
+});
+
+describe("readJobReliability", () => {
+  let dir: string;
+  let dbPath: string;
+
+  function seed(statuses: string[]): void {
+    const db = new Database(dbPath);
+    db.exec("DROP TABLE IF EXISTS job_runs");
+    db.exec(
+      `CREATE TABLE job_runs (id TEXT PRIMARY KEY, job_id TEXT, status TEXT,
+       started_at TEXT, completed_at TEXT, exit_code INTEGER, error TEXT)`,
+    );
+    statuses.forEach((s, i) => {
+      db.prepare(
+        "INSERT INTO job_runs (id, job_id, status, started_at) VALUES (?,?,?,?)",
+      ).run(`r${i}`, job.id, s, `2026-09-${String(i + 1).padStart(2, "0")}`);
+    });
+    db.close();
+  }
+
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-jobrel-"));
+    dbPath = path.join(dir, "data.db");
+  });
+
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }));
+
+  test("computes success rate over recent runs", () => {
+    seed([...Array(48).fill("completed"), "failed", "failed"]);
+    const r = readJobReliability(dbPath);
+    expect(r?.runSampleSize).toBe(50);
+    expect(r?.successRate).toBeCloseTo(0.96, 2);
+  });
+
+  test("returns undefined for a sample too small to mean anything", () => {
+    // 1 of 1 failing is not "flaky" — an unsupported claim is worse than none.
+    seed(["failed"]);
+    expect(readJobReliability(dbPath)).toBeUndefined();
+  });
+
+  test("ignores in-flight runs", () => {
+    seed([...Array(10).fill("completed"), "running", "pending"]);
+    expect(readJobReliability(dbPath)?.runSampleSize).toBe(10);
+  });
+
+  test("returns undefined when the job has no job_runs table", () => {
+    const bare = path.join(dir, "bare.db");
+    new Database(bare).close();
+    expect(readJobReliability(bare)).toBeUndefined();
+  });
+
+  test("banding keeps the card hash stable as the rate drifts", () => {
+    // THE POINT: an exact percentage would change on nearly every run and
+    // rewrite the memory each time. Two different rates in the same band must
+    // produce identical card text.
+    const tables = [{ table: "t", rowCount: 5, columns: ["id"] }];
+    const a = buildJobCapabilityCard({
+      job,
+      tables,
+      successRate: 0.96,
+      runSampleSize: 50,
+    });
+    const b = buildJobCapabilityCard({
+      job,
+      tables,
+      successRate: 0.98,
+      runSampleSize: 50,
+    });
+    expect(a).toBe(b);
+  });
+
+  test("a band change DOES alter the card, so real degradation surfaces", () => {
+    const tables = [{ table: "t", rowCount: 5, columns: ["id"] }];
+    const healthy = buildJobCapabilityCard({
+      job,
+      tables,
+      successRate: 0.96,
+      runSampleSize: 50,
+    });
+    const broken = buildJobCapabilityCard({
+      job,
+      tables,
+      successRate: 0.4,
+      runSampleSize: 50,
+    });
+    expect(healthy).not.toBe(broken);
+    expect(broken).toContain("flaky");
   });
 });

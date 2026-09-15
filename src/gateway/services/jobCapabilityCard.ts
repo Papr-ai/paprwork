@@ -66,6 +66,57 @@ export function isJobSystemTable(name: string): boolean {
   return SYSTEM_TABLE_PREFIXES.some((prefix) => name.startsWith(prefix));
 }
 
+export interface JobReliability {
+  successRate: number;
+  runSampleSize: number;
+}
+
+/**
+ * Recent success rate from the job's own `job_runs` scratch table.
+ *
+ * Read from the SAME data.db the table shapes come from — reliability is not
+ * in job.json (it is run history, not configuration), which is exactly why it
+ * passes the "cannot be computed from local config" test for inclusion.
+ *
+ * Bounded to the last N runs so a job that was broken months ago and has been
+ * healthy since does not read as flaky forever. Returns undefined when there
+ * is no history worth reporting: an unsupported claim is worse than silence.
+ */
+export function readJobReliability(
+  dbPath: string,
+  sampleSize = 50,
+): JobReliability | undefined {
+  let db: Database.Database | undefined;
+  try {
+    db = new Database(dbPath, { readonly: true });
+    const exists = db
+      .prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='job_runs'`,
+      )
+      .get();
+    if (!exists) return undefined;
+
+    const rows = db
+      .prepare(
+        `SELECT status FROM job_runs
+         WHERE status IN ('completed', 'failed')
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(sampleSize) as Array<{ status: string }>;
+
+    // Too small a sample says nothing: 1 of 1 failing is not "flaky".
+    if (rows.length < 5) return undefined;
+
+    const ok = rows.filter((r) => r.status === "completed").length;
+    return { successRate: ok / rows.length, runSampleSize: rows.length };
+  } catch {
+    return undefined;
+  } finally {
+    db?.close();
+  }
+}
+
 /**
  * Read table shapes (name, row count, columns) without reading row DATA.
  *
