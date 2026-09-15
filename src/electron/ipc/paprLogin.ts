@@ -48,13 +48,17 @@ import * as crypto from "crypto";
 import path from "node:path";
 import { getPaprDataDir } from "../../core/utils/paprRoot.js";
 import {
+  getConfiguredParseGraphqlUrl,
+  getConfiguredPaprPlatformUrl,
+  getPaprTeamPlatformUrl,
+} from "../../core/utils/paprPlatformUrl.js";
+import {
   getPaprBaseDir,
   isWorkspacePointerAlignedWithProfile,
   readActiveWorkspacePointer,
   type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
 import {
-  paprApiKeyAuthorizedForWorkspaceTarget,
   paprApiKeyMatchesNamespace,
   paprApiKeyMatchesNamespaceBound,
   paprNamespaceApiKeyName,
@@ -2597,20 +2601,6 @@ async function applyActiveNamespaceSwitch(input: {
 }): Promise<{ apiKey: string }> {
   await input.customKeysStorage.setActiveOrganization(input.organizationId);
 
-  const win = BrowserWindow.getAllWindows()[0];
-  if (win) {
-    win.webContents.send("papr:workspace-switch-starting", {
-      organizationId: input.organizationId,
-      parseOrganizationId: input.organizationId,
-      namespaceId: input.namespaceId,
-      namespaceName: input.namespaceName,
-      organizationName:
-        input.organizationName?.trim() ||
-        input.profile.workspaceName?.trim() ||
-        undefined,
-    });
-  }
-
   const pointer = readActiveWorkspacePointer();
   const pointerMatches =
     pointer?.organizationId === input.organizationId &&
@@ -2655,20 +2645,46 @@ async function applyActiveNamespaceSwitch(input: {
       input.namespaceId,
       input.namespaceName,
       workspaceId,
+      {
+        customKeysStorage: input.customKeysStorage,
+        settingsStorage: input.settingsStorage,
+      },
     );
     apiKey = resolved.apiKey;
   }
 
   if (
-    !paprApiKeyAuthorizedForWorkspaceTarget(
+    !paprApiKeyMatchesNamespaceBound(
       apiKey,
       input.organizationId,
       input.namespaceId,
     )
   ) {
+    const scope = parsePaprApiKeyScope(apiKey);
+    console.error(
+      `[PaprLogin] Namespace API key rejected for org=${input.organizationId} ` +
+        `namespace=${input.namespaceId}` +
+        (scope
+          ? ` (key bound to namespace ${scope.namespaceId})`
+          : " (legacy/unscoped key)"),
+    );
     throw new Error(
       "Papr API key does not match the target workspace. Sign in again or refresh your namespace key.",
     );
+  }
+
+  const win = BrowserWindow.getAllWindows()[0];
+  if (win) {
+    win.webContents.send("papr:workspace-switch-starting", {
+      organizationId: input.organizationId,
+      parseOrganizationId: input.organizationId,
+      namespaceId: input.namespaceId,
+      namespaceName: input.namespaceName,
+      organizationName:
+        input.organizationName?.trim() ||
+        input.profile.workspaceName?.trim() ||
+        undefined,
+    });
   }
 
   // Pointer file can match before gateway services/env do (e.g. partial switch or
@@ -3191,6 +3207,115 @@ async function getSelectedWorkspaceInfo(
     organizationId: workspace?.organization?.objectId,
     organizationName: workspace?.organization?.name,
   };
+}
+
+/**
+ * Workspace id for team list/invite — same source as dashboard Settings → People:
+ * a workspace the user is a member of, not organization.workspace from namespace GraphQL
+ * (that pointer can name a row invite API cannot load → "Workspace not found").
+ */
+async function resolveElectronTeamWorkspaceId(
+  profile: PaprProfile,
+  customKeysStorage: CustomKeysStorage,
+  settingsStorage: SettingsStorage,
+): Promise<{ workspaceId: string; workspaceName?: string }> {
+  if (!profile.sessionToken || !profile.userId) {
+    throw new Error("Not logged in");
+  }
+
+  const orgId = profile.organizationId?.trim();
+  const namespaceId =
+    readActiveWorkspacePointer()?.namespaceId?.trim() ??
+    profile.activeNamespaceId?.trim();
+
+  let workspaces: UserWorkspaceOption[] = [];
+  try {
+    workspaces = await fetchUserWorkspacesWithRefresh(
+      profile,
+      customKeysStorage,
+      settingsStorage,
+    );
+  } catch (error) {
+    console.warn("[PaprLogin] Could not load workspace memberships for team ops:", error);
+  }
+
+  const pickFromMembership = (): UserWorkspaceOption | undefined => {
+    if (workspaces.length === 0) {
+      return undefined;
+    }
+
+    const remap = (workspaceId: string): string =>
+      resolveAuthoritativeWorkspaceId(workspaces.map(toCachedWorkspace), workspaceId);
+
+    if (profile.workspaceId) {
+      const authoritative = remap(profile.workspaceId);
+      const byProfile = workspaces.find((row) => row.workspaceId === authoritative);
+      if (byProfile) {
+        return byProfile;
+      }
+    }
+
+    if (orgId) {
+      const inOrg = workspaces.filter((row) => row.organizationId === orgId);
+      if (namespaceId) {
+        const byNamespace = inOrg.find((row) => row.defaultNamespaceId === namespaceId);
+        if (byNamespace) {
+          return byNamespace;
+        }
+      }
+      const selectedInOrg = inOrg.find((row) => row.isSelected);
+      if (selectedInOrg) {
+        return selectedInOrg;
+      }
+      if (inOrg.length === 1) {
+        return inOrg[0];
+      }
+    }
+
+    const selected = workspaces.find((row) => row.isSelected);
+    if (selected) {
+      return selected;
+    }
+
+    return workspaces[0];
+  };
+
+  const active = pickFromMembership();
+  if (active) {
+    console.log(
+      `[PaprLogin] Team workspace from membership: ${active.workspaceId} (${active.workspaceName})`,
+    );
+    return { workspaceId: active.workspaceId, workspaceName: active.workspaceName };
+  }
+
+  const sessionToken = profile.sessionToken;
+  const selected = await getSelectedWorkspaceInfo(sessionToken, profile.userId);
+  if (selected.workspaceId) {
+    console.warn(
+      `[PaprLogin] Team workspace fell back to Parse selected follower: ${selected.workspaceId}`,
+    );
+    return {
+      workspaceId: selected.workspaceId,
+      workspaceName: selected.workspaceName,
+    };
+  }
+
+  throw new Error("No workspace found for your Papr account");
+}
+
+function syncTeamWorkspaceToProfile(
+  profile: PaprProfile,
+  workspaceId: string,
+  workspaceName: string | undefined,
+  settingsStorage: SettingsStorage,
+): void {
+  if (workspaceId !== profile.workspaceId || workspaceName !== profile.workspaceName) {
+    settingsStorage.setPaprProfile({
+      ...profile,
+      workspaceId,
+      workspaceName,
+    });
+  }
 }
 
 // ─── IPC Handlers ──────────────────────────────────────────────
@@ -4567,19 +4692,8 @@ export function initializePaprLoginIPC(
         workspaces.find((workspace) => workspace.isSelected) ??
         workspaces.find((workspace) => workspace.workspaceId === profile.workspaceId);
 
-      await switchSelectedWorkspaceOnServer({
-        sessionToken: profile.sessionToken,
-        userId: profile.userId,
-        targetFollowerId: target.followerId,
-        previousFollowerId: previous?.followerId,
-      });
-
-      const updatedProfile = {
-        ...profile,
-        workspaceId: target.workspaceId,
-        workspaceName: target.workspaceName,
-      };
-      settingsStorage.setPaprProfile(updatedProfile);
+      const profileBeforeSwitch: PaprProfile = { ...profile };
+      let parseWorkspaceSwitched = false;
 
       const namespaceOrgId =
         options?.preferredOrganizationId?.trim() || target.organizationId;
@@ -4587,19 +4701,12 @@ export function initializePaprLoginIPC(
         return { success: false, error: "Could not resolve organization for namespaces" };
       }
 
-      settingsStorage.setPaprProfile({
-        ...updatedProfile,
+      const updatedProfile = {
+        ...profile,
+        workspaceId: target.workspaceId,
+        workspaceName: target.workspaceName,
         organizationId: namespaceOrgId,
-      });
-
-      invalidatePlanSummaryCache();
-
-      await customKeysStorage.setActiveOrganization(namespaceOrgId);
-      invalidateKeyCache();
-
-      console.log(
-        `[PaprLogin] Switched to workspace: ${displayName} (workspace ${target.workspaceId}, namespace org ${namespaceOrgId}, workspace org ${target.organizationId})`,
-      );
+      };
 
       const { namespaces, choice: defaultNs } = await resolveNamespaceForWorkspaceSwitch({
         sessionToken: profile.sessionToken,
@@ -4612,41 +4719,115 @@ export function initializePaprLoginIPC(
 
       const win = BrowserWindow.getAllWindows()[0];
 
-      if (!defaultNs) {
-        settingsStorage.setPaprProfile({
-          ...settingsStorage.getPaprProfile()!,
-          activeNamespaceId: undefined,
-          activeNamespaceName: undefined,
-        });
+      const revertParseWorkspaceSelection = async (): Promise<void> => {
+        if (!parseWorkspaceSwitched || !previous?.followerId) {
+          return;
+        }
+        try {
+          await switchSelectedWorkspaceOnServer({
+            sessionToken: profileBeforeSwitch.sessionToken!,
+            userId: profileBeforeSwitch.userId!,
+            targetFollowerId: previous.followerId,
+            previousFollowerId: target.followerId,
+          });
+        } catch (revertError) {
+          console.warn(
+            "[PaprLogin] Failed to revert Parse workspace selection after switch error:",
+            revertError,
+          );
+        }
+      };
 
-        if (win) {
-          win.webContents.send("papr:organization-changed", {
+      const revertLocalWorkspaceProfile = async (): Promise<void> => {
+        settingsStorage.setPaprProfile(profileBeforeSwitch);
+        const revertOrgId = profileBeforeSwitch.organizationId?.trim();
+        if (revertOrgId) {
+          await customKeysStorage.setActiveOrganization(revertOrgId);
+        }
+        invalidateKeyCache();
+        invalidatePlanSummaryCache();
+      };
+
+      if (!defaultNs) {
+        await switchSelectedWorkspaceOnServer({
+          sessionToken: profile.sessionToken,
+          userId: profile.userId,
+          targetFollowerId: target.followerId,
+          previousFollowerId: previous?.followerId,
+        });
+        parseWorkspaceSwitched = true;
+
+        try {
+          settingsStorage.setPaprProfile({
+            ...updatedProfile,
+            activeNamespaceId: undefined,
+            activeNamespaceName: undefined,
+          });
+          await customKeysStorage.setActiveOrganization(namespaceOrgId);
+          invalidateKeyCache();
+          invalidatePlanSummaryCache();
+
+          if (win) {
+            win.webContents.send("papr:organization-changed", {
+              organizationId: target.workspaceId,
+              parseOrganizationId: namespaceOrgId,
+              organizationName: displayName,
+              namespaces,
+            });
+          }
+
+          console.log(
+            `[PaprLogin] Switched to workspace: ${displayName} (workspace ${target.workspaceId}, namespace org ${namespaceOrgId})`,
+          );
+
+          return {
+            success: true,
             organizationId: target.workspaceId,
             parseOrganizationId: namespaceOrgId,
             organizationName: displayName,
             namespaces,
-          });
+          };
+        } catch (error) {
+          await revertParseWorkspaceSelection();
+          await revertLocalWorkspaceProfile();
+          throw error;
         }
-
-        return {
-          success: true,
-          organizationId: target.workspaceId,
-          parseOrganizationId: namespaceOrgId,
-          organizationName: displayName,
-          namespaces,
-        };
       }
 
-      const { apiKey } = await applyActiveNamespaceSwitch({
-        profile: { ...updatedProfile, organizationId: namespaceOrgId },
-        organizationId: namespaceOrgId,
-        namespaceId: defaultNs.namespaceId,
-        namespaceName: defaultNs.namespaceName,
-        organizationName: displayName,
-        customKeysStorage,
-        settingsStorage,
-        notifyRenderer: false,
-      });
+      let apiKey: string;
+      try {
+        await switchSelectedWorkspaceOnServer({
+          sessionToken: profile.sessionToken,
+          userId: profile.userId,
+          targetFollowerId: target.followerId,
+          previousFollowerId: previous?.followerId,
+        });
+        parseWorkspaceSwitched = true;
+
+        settingsStorage.setPaprProfile(updatedProfile);
+        await customKeysStorage.setActiveOrganization(namespaceOrgId);
+        invalidateKeyCache();
+        invalidatePlanSummaryCache();
+
+        console.log(
+          `[PaprLogin] Switched to workspace: ${displayName} (workspace ${target.workspaceId}, namespace org ${namespaceOrgId}, workspace org ${target.organizationId})`,
+        );
+
+        ({ apiKey } = await applyActiveNamespaceSwitch({
+          profile: updatedProfile,
+          organizationId: namespaceOrgId,
+          namespaceId: defaultNs.namespaceId,
+          namespaceName: defaultNs.namespaceName,
+          organizationName: displayName,
+          customKeysStorage,
+          settingsStorage,
+          notifyRenderer: false,
+        }));
+      } catch (error) {
+        await revertParseWorkspaceSelection();
+        await revertLocalWorkspaceProfile();
+        throw error;
+      }
 
       console.log(
         `[PaprLogin] Auto-selected default namespace: ${defaultNs.namespaceName} (${defaultNs.namespaceId})`,
@@ -4738,27 +4919,12 @@ export function initializePaprLoginIPC(
         return { success: false, error: "Not logged in" };
       }
 
-      let workspaceId = profile.workspaceId;
-      let workspaceName = profile.workspaceName;
-      if (!workspaceId && profile.userId) {
-        const workspaceInfo = await getSelectedWorkspaceInfo(
-          profile.sessionToken,
-          profile.userId,
-        );
-        workspaceId = workspaceInfo.workspaceId;
-        workspaceName = workspaceInfo.workspaceName;
-        if (workspaceId) {
-          settingsStorage.setPaprProfile({
-            ...profile,
-            workspaceId,
-            workspaceName,
-          });
-        }
-      }
-
-      if (!workspaceId) {
-        return { success: false, error: "No workspace found for your Papr account" };
-      }
+      const { workspaceId, workspaceName } = await resolveElectronTeamWorkspaceId(
+        profile,
+        customKeysStorage,
+        settingsStorage,
+      );
+      syncTeamWorkspaceToProfile(profile, workspaceId, workspaceName, settingsStorage);
 
       const members = await fetchWorkspaceMembers(profile.sessionToken, workspaceId);
       const currentUserId = profile.userId;
@@ -4783,35 +4949,24 @@ export function initializePaprLoginIPC(
   });
 
   ipcMain.handle("papr:invite-workspace-member", async (_event, email: string) => {
+    let resolvedWorkspaceId: string | undefined;
     try {
       const profile = settingsStorage.getPaprProfile();
       if (!profile?.sessionToken || !profile.userId) {
         return { success: false, error: "Not logged in" };
       }
 
-      const workspaceInfo = await getSelectedWorkspaceInfo(
-        profile.sessionToken,
-        profile.userId,
+      const { workspaceId, workspaceName } = await resolveElectronTeamWorkspaceId(
+        profile,
+        customKeysStorage,
+        settingsStorage,
       );
-
-      if (!workspaceInfo.workspaceId) {
-        return { success: false, error: "No workspace found for your Papr account" };
-      }
-
-      if (
-        workspaceInfo.workspaceId !== profile.workspaceId ||
-        workspaceInfo.workspaceName !== profile.workspaceName
-      ) {
-        settingsStorage.setPaprProfile({
-          ...profile,
-          workspaceId: workspaceInfo.workspaceId,
-          workspaceName: workspaceInfo.workspaceName,
-        });
-      }
+      resolvedWorkspaceId = workspaceId;
+      syncTeamWorkspaceToProfile(profile, workspaceId, workspaceName, settingsStorage);
 
       const result = await sendWorkspaceInvite({
         sessionToken: profile.sessionToken,
-        workspaceId: workspaceInfo.workspaceId,
+        workspaceId,
         email,
       });
 
@@ -4835,10 +4990,26 @@ export function initializePaprLoginIPC(
         inviteLink: result.inviteLink,
       };
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to send invite";
+      if (message.includes("Workspace not found")) {
+        console.error(
+          `[PaprLogin] sendInvite 404 — workspaceId=${resolvedWorkspaceId ?? "unknown"} ` +
+            `teamPlatform=${getPaprTeamPlatformUrl()} billingPlatform=${getConfiguredPaprPlatformUrl()} ` +
+            `parse=${getConfiguredParseGraphqlUrl()}`,
+        );
+        return {
+          success: false,
+          error:
+            "Workspace not found on the dashboard server (team invite API). " +
+            "Confirm PAPR_PLATFORM_URL points at a papr-dev-platform build with a working " +
+            "/api/workspace/sendInvite, and that its Parse env matches PARSE_GRAPHQL_URL. " +
+            "Workspace id is not the organization id shown in Integration Keys.",
+        };
+      }
       console.error("[PaprLogin] Failed to invite workspace member:", error);
       return {
         success: false,
-        error: error instanceof Error ? error.message : "Failed to send invite",
+        error: message,
       };
     }
   });
@@ -4884,8 +5055,7 @@ export function initializePaprLoginIPC(
   );
 
   ipcMain.handle("papr:open-workspace-team", async () => {
-    const platformUrl = process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai";
-    await shell.openExternal(`${platformUrl.replace(/\/$/, "")}/people`);
+    await shell.openExternal(`${getPaprTeamPlatformUrl()}/people`);
     return { success: true };
   });
 

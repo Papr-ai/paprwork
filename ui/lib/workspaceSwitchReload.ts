@@ -49,6 +49,7 @@ import {
 import {
   readProfileSidebarCache,
   writeProfileSidebarCache,
+  type ProfileSidebarCache,
 } from "../utils/profileSidebarCache";
 import {
   fetchGatewayWorkspaceSwitchStatus,
@@ -79,6 +80,8 @@ const reloadLabelsByGeneration = new Map<
   number,
   { organizationName?: string; namespaceName?: string }
 >();
+/** Sidebar labels before optimistic switch overlay — restored when IPC fails. */
+let profileSidebarSnapshotBeforeSwitch: ProfileSidebarCache | null = null;
 
 export interface ReloadWorkspaceSwitchOptions {
   /**
@@ -110,6 +113,7 @@ export function resetWorkspaceReloadForTests(): void {
   reloadWaitForGatewayByGeneration.clear();
   reloadTargetWorkspaceKeyByGeneration.clear();
   reloadLabelsByGeneration.clear();
+  profileSidebarSnapshotBeforeSwitch = null;
   clearWorkspaceUiCacheForTests();
   resetDefaultChatTabGuardForTests();
   resetWorkspaceSwitchOverlayForTests();
@@ -398,6 +402,7 @@ async function completeWorkspaceSwitchReload(generation: number): Promise<void> 
   }
   ensureLandingTabAfterWorkspaceRestore();
   endWorkspaceSwitchOverlay();
+  profileSidebarSnapshotBeforeSwitch = null;
   applySwitchLabelsToProfileCache(reloadLabelsByGeneration.get(generation));
   window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
   window.dispatchEvent(new CustomEvent("papr-workspace-switch-complete"));
@@ -480,11 +485,39 @@ export async function prepareWorkspaceSwitchReload(
   });
 }
 
+function restoreProfileSidebarAfterAbortedSwitch(): void {
+  const snapshot = profileSidebarSnapshotBeforeSwitch;
+  profileSidebarSnapshotBeforeSwitch = null;
+  if (!snapshot) {
+    window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
+    return;
+  }
+  writeProfileSidebarCache({
+    name: snapshot.name,
+    email: snapshot.email,
+    imageUrl: snapshot.imageUrl,
+    plan: snapshot.plan,
+    organizationName: snapshot.organizationName,
+    namespaceName: snapshot.namespaceName,
+    workspaceName: snapshot.workspaceName,
+  });
+  window.dispatchEvent(
+    new CustomEvent("papr-workspace-labels-updated", {
+      detail: {
+        organizationName: snapshot.organizationName,
+        namespaceName: snapshot.namespaceName,
+      },
+    }),
+  );
+  window.dispatchEvent(new CustomEvent("papr-workspace-reload"));
+}
+
 /** Cancel in-flight reload when workspace switch IPC fails. */
 export function abortWorkspaceSwitchReload(): void {
   workspaceReloadGeneration += 1;
   awaitingSwitchTabRecovery = null;
   endWorkspaceSwitchOverlay();
+  restoreProfileSidebarAfterAbortedSwitch();
 }
 
 async function loadChatsForWorkspaceWithRetry(): Promise<Set<string>> {
@@ -619,6 +652,7 @@ async function reloadUiForWorkspaceSwitchInner(
   const targetWorkspaceKey = reloadTargetWorkspaceKeyByGeneration.get(generation);
   const labels = reloadLabelsByGeneration.get(generation);
   if (waitForGateway) {
+    profileSidebarSnapshotBeforeSwitch = readProfileSidebarCache();
     beginWorkspaceSwitchOverlay(labels);
     applySwitchLabelsToProfileCache(labels);
   }

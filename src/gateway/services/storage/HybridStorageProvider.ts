@@ -166,17 +166,20 @@ export class HybridStorageProvider implements IStorageProvider {
     chatId: string,
     message: StoredMessage,
   ): Promise<void> {
-    try {
-      // Save to PAPR
-      await this.papr.saveMessage(chatId, message);
+    await this.papr.saveMessage(chatId, message);
 
-      // Mark as synced in local DB
-      if (message.papr_message_id) {
-        await this.local.markMessageSynced(message.id, message.papr_message_id);
-      }
-    } catch (error) {
-      throw error;
+    if (message.papr_message_id) {
+      await this.local.markMessageSynced(message.id, message.papr_message_id);
+      return;
     }
+
+    await this.local.markSyncFailed(
+      message.id,
+      "Papr messages.store succeeded but returned no objectId",
+    );
+    throw new Error(
+      `Papr store for message ${message.id} returned no objectId`,
+    );
   }
 
   async loadMessages(

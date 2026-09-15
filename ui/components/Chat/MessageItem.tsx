@@ -1066,6 +1066,20 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                 )}
               </div>
             )}
+
+            {delegationFollowUps.map((followUp) => {
+              const followUpText =
+                getAssistantCopyText(followUp) || followUp.content.trim();
+              if (!followUpText) return null;
+              return (
+                <div
+                  key={`delegation-followup-fallback-${followUp.id}`}
+                  className="message-text"
+                >
+                  <Markdown>{followUpText}</Markdown>
+                </div>
+              );
+            })}
           </>
         )}
 

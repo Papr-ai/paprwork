@@ -65,8 +65,9 @@ export function isGatewayBackgroundProcessEnabled(): boolean {
   return true;
 }
 
-/** Task keys executed in the background child process (Phase C). */
-export const GATEWAY_BACKGROUND_CHILD_TASKS = new Set<string>([
-  "papr:resume-cloud",
-  "vault:workspace-switch",
-]);
+/**
+ * Task keys executed in the background child process (Phase C).
+ * Vault full-sync tasks stay in the gateway parent so they share {@link VaultSyncService.runFullSync}
+ * with {@link VaultSyncService.initialize} — the child only ran HTTP push and duplicated startup sync.
+ */
+export const GATEWAY_BACKGROUND_CHILD_TASKS = new Set<string>([]);

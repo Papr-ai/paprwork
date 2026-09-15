@@ -1,24 +1,22 @@
 /**
- * AuthWall - Full-screen authentication gate for commercial builds
+ * AuthWall - Sign-in step for commercial builds.
  * Split-screen design: Sign in form (left) + Papr branding (right)
+ *
+ * Owns only Papr sign-in detection. Org setup and what happens next are
+ * decided by <AuthFlow>; this component just reports "they're signed in".
  */
 
-import React, { useState, useEffect, useCallback, useRef } from "react";
-import { setTelemetryPaprUserId } from "../../lib/telemetry";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { trackPaprLoginStep } from "../../lib/paprLoginTelemetry";
 import {
   type PaprLoginMode,
   type PaprLoginStep,
 } from "../../../src/core/telemetry/paprLoginSteps";
-import { useProfileStore } from "../../stores/profileStore";
-import {
-  OrgNamespaceSetup,
-  type OrgNamespaceSetupRequest,
-} from "./OrgNamespaceSetup";
 import "./AuthWall.css";
 
 interface AuthWallProps {
-  onAuthenticated: () => void;
+  /** Fired once Papr login is confirmed, by any detection path. */
+  onSignedIn: () => void;
 }
 
 function trackAuthWallStep(
@@ -28,19 +26,7 @@ function trackAuthWallStep(
   trackPaprLoginStep(step, { source: "auth_wall", ...properties });
 }
 
-async function identifyTelemetryAfterLogin(): Promise<void> {
-  try {
-    const profileResult = await window.electronAPI.papr.getProfile();
-    const userId = profileResult?.profile?.userId;
-    if (userId) {
-      setTelemetryPaprUserId(userId);
-    }
-  } catch {
-    // Non-fatal — login still succeeded
-  }
-}
-
-export function AuthWall({ onAuthenticated }: AuthWallProps) {
+export function AuthWall({ onSignedIn }: AuthWallProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,15 +34,17 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
   const [showManualCode, setShowManualCode] = useState(false);
   const [manualCode, setManualCode] = useState("");
   const [isVerifyingCode, setIsVerifyingCode] = useState(false);
-  const [setupRequest, setSetupRequest] = useState<OrgNamespaceSetupRequest | null>(null);
   const authWallViewedTracked = useRef(false);
   const waitingForCallbackTracked = useRef(false);
+  const signedInReported = useRef(false);
 
+  // Four paths can detect login (DOM event, IPC, 2s poll, manual code) and
+  // several fire together. Report upward exactly once.
   const handleAuthenticated = useCallback(async () => {
-    await identifyTelemetryAfterLogin();
-    void useProfileStore.getState().loadProfile({ force: true });
-    onAuthenticated();
-  }, [onAuthenticated]);
+    if (signedInReported.current) return;
+    signedInReported.current = true;
+    onSignedIn();
+  }, [onSignedIn]);
 
   const checkAuthentication = useCallback(
     async (options?: { fromPoll?: boolean }) => {
@@ -158,19 +146,12 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
       setError(data.error);
       setIsAuthenticating(false);
     };
-    const onSetupRequired = (data: OrgNamespaceSetupRequest) => {
-      setSetupRequest(data);
-      setIsAuthenticating(false);
-      setError(null);
-    };
 
     papr.onLoginSuccess(onSuccess);
     papr.onLoginError(onError);
-    papr.onSetupRequired(onSetupRequired);
     return () => {
       papr.removeLoginSuccessListener(onSuccess);
       papr.removeLoginErrorListener(onError);
-      papr.removeSetupRequiredListener(onSetupRequired);
     };
   }, [handleAuthenticated]);
 
@@ -221,16 +202,17 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
     }
   };
 
+  // Org setup is owned by <AuthFlow>; stop the spinner so we don't sit on a
+  // "waiting for browser" state behind the setup screen.
   useEffect(() => {
-    const handleSetupRequired = (event: CustomEvent<OrgNamespaceSetupRequest>) => {
-      setSetupRequest(event.detail);
+    const handleSetupRequired = () => {
       setIsAuthenticating(false);
       setError(null);
     };
 
-    window.addEventListener("papr-setup-required", handleSetupRequired as EventListener);
+    window.addEventListener("papr-setup-required", handleSetupRequired);
     return () => {
-      window.removeEventListener("papr-setup-required", handleSetupRequired as EventListener);
+      window.removeEventListener("papr-setup-required", handleSetupRequired);
     };
   }, []);
 
@@ -297,19 +279,6 @@ export function AuthWall({ onAuthenticated }: AuthWallProps) {
         <div className="auth-wall-spinner" />
         <p className="auth-wall-loading-text">Loading...</p>
       </div>
-    );
-  }
-
-  if (setupRequest) {
-    return (
-      <OrgNamespaceSetup
-        request={setupRequest}
-        source="auth_wall"
-        onComplete={() => {
-          setSetupRequest(null);
-          void handleAuthenticated();
-        }}
-      />
     );
   }
 

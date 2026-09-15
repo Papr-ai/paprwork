@@ -80,6 +80,9 @@ export interface StoredMessage {
   // Agent attribution (for SubAgents)
   source_agent_id?: string; // Override default "main-agent"
   source_agent_name?: string; // Override default "Paprwork Assistant"
+
+  /** SubAgentResponseTrigger summary tied to a delegate_task run id */
+  delegation_finish_for?: string;
 }
 
 export interface StoredSummary {
