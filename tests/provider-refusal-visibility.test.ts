@@ -24,6 +24,7 @@ function stripComments(source: string): string {
 
 function plan(over: Partial<PlanUsageSummary> = {}): PlanUsageSummary {
   return {
+    provider: "anthropic",
     sessionPercent: 10,
     weeklyPercent: 10,
     sessionIsActive: true,

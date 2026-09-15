@@ -10,7 +10,10 @@ import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 import { invalidateKeyCache } from "./customKeys.js";
-import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
+import {
+  extractChatGptAccountIdFromOAuthToken,
+  sanitizeOAuthAccessToken,
+} from "../../core/utils/oauthTokenSanitize.js";
 import {
   claudeAccessTokenIsLive,
   claudeCredentialsToTokenLifetime,
@@ -30,6 +33,7 @@ import {
   type OAuthProviderStep,
 } from "../../core/telemetry/oauthProviderSteps.js";
 import { fetchClaudeSubscriptionUsageFromCandidates } from "../../core/services/claudeOAuthUsage.js";
+import { fetchCodexSubscriptionUsage } from "../../core/services/codexOAuthUsage.js";
 import {
   dedupeAccessTokens,
   readClaudeAuthStatusFromCli,
@@ -758,6 +762,38 @@ export async function initializeOAuthIPC(
     } catch (error) {
       console.error("[OAuth IPC] Failed to get OpenAI status:", error);
       return { connected: false, error: (error as Error).message };
+    }
+  });
+
+  /**
+   * ChatGPT plan usage, so the cost panel can tell "included" from "billed on
+   * top" on the OpenAI route as well as the Anthropic one. Without it a
+   * subscription login has no utilization signal at all, and the panel has to
+   * assume — which it did, by hardcoding "Included" for anyone on ChatGPT
+   * regardless of how far past their windows they were.
+   */
+  ipcMain.handle("auth:openai:get-usage-limits", async () => {
+    try {
+      await refreshTokenIfNeeded("openai");
+      const token = oauthTokenStorage!.getTokenByProvider("openai");
+      if (!token?.accessToken) {
+        return {
+          success: false,
+          error: "Connect your ChatGPT subscription first.",
+        };
+      }
+      // `accountId` has only been persisted since account-scoping was added,
+      // so a token stored before that carries it in the JWT and nowhere else.
+      // Without it the backend answers for the personal workspace, which is
+      // the wrong allowance for anyone on a team plan.
+      return await fetchCodexSubscriptionUsage(token.accessToken, {
+        accountId:
+          token.accountId ??
+          extractChatGptAccountIdFromOAuthToken(token.accessToken),
+      });
+    } catch (error) {
+      console.error("[OAuth IPC] Failed to fetch ChatGPT usage:", error);
+      return { success: false, error: (error as Error).message };
     }
   });
 

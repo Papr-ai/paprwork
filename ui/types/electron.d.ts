@@ -104,6 +104,13 @@ export interface ElectronAPI {
         error?: string;
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
+      getUsageLimits: () => Promise<
+        | {
+            success: true;
+            data: import("../../src/core/services/codexOAuthUsage").CodexUsageLimitsSnapshot;
+          }
+        | { success: false; error: string; httpStatus?: number }
+      >;
     };
     claude: {
       startOAuth: (options?: { source?: "settings" | "onboarding" | "unknown" }) => Promise<{

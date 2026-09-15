@@ -1,5 +1,13 @@
 export type BillingMode = "metered" | "subscription";
 
+/**
+ * Which subscription the plan figures describe.
+ *
+ * Carried on the summary rather than passed alongside it: the brand label and
+ * the percentages have to agree, and two separate props can drift apart.
+ */
+export type PlanProvider = "anthropic" | "openai";
+
 /** Input from IPC / Settings usage fetch (see claudeOAuthUsage.ts). */
 export type ClaudeUsageLimitsSnapshotInput = {
   fetchedAt: string;
@@ -19,8 +27,23 @@ export type PlanUsageScopedWeekly = {
   isActive: boolean;
 };
 
+/** Input from IPC (see codexOAuthUsage.ts) — ChatGPT/Codex plan windows. */
+export type CodexUsageLimitsSnapshotInput = {
+  fetchedAt: string;
+  rows: Array<{
+    id: string;
+    label: string;
+    percent: number;
+    isActive: boolean;
+  }>;
+  /** Credits past the included window: real spend, or a refusal. */
+  extraUsageEnabled?: boolean | null;
+  subscriptionType?: string | null;
+};
+
 /** Compact plan snapshot for the context panel (from Settings usage API). */
 export type PlanUsageSummary = {
+  provider: PlanProvider;
   sessionPercent: number | null;
   weeklyPercent: number | null;
   sessionIsActive: boolean;
@@ -50,6 +73,11 @@ export type PlanUsageHeroLineOptions = {
 /** Matches claude.ai Settings → Usage / Claude Code `/usage` wording. */
 export const CLAUDE_PLAN_USAGE_BRAND = "Claude";
 export const CLAUDE_PLAN_USAGE_TITLE = "Plan usage";
+
+/** Brand shown above "Plan usage" — names whose allowance is being reported. */
+export function planUsageBrand(provider: PlanProvider): string {
+  return provider === "openai" ? "ChatGPT" : CLAUDE_PLAN_USAGE_BRAND;
+}
 
 /** Default subline when plan % is not loaded yet. */
 export const CLAUDE_PLAN_USAGE_SUBLINE = "Included · shared across Claude";
@@ -99,6 +127,7 @@ export function summarizeClaudePlanUsage(
 
   const active = data.rows.find((r) => r.isActive);
   return {
+    provider: "anthropic",
     sessionPercent,
     weeklyPercent,
     sessionIsActive,
@@ -110,6 +139,27 @@ export function summarizeClaudePlanUsage(
     extraUsageEnabled: data.extraUsageEnabled ?? null,
     fetchedAt: data.fetchedAt,
   };
+}
+
+/**
+ * ChatGPT/Codex plan usage.
+ *
+ * `codexOAuthUsage.ts` already normalises the ChatGPT payload's windows into
+ * the same `session` / `weekly_all` ids Anthropic uses, so the row walk is
+ * shared rather than duplicated — the two providers differ in where the
+ * numbers come from, not in what they mean once read. ChatGPT reports no
+ * model-scoped window, so `scopedWeekly` is always empty here.
+ */
+export function summarizeCodexPlanUsage(
+  data: CodexUsageLimitsSnapshotInput,
+): PlanUsageSummary {
+  const base = summarizeClaudePlanUsage({
+    fetchedAt: data.fetchedAt,
+    rows: data.rows,
+    extraUsageEnabled: data.extraUsageEnabled,
+    subscriptionType: data.subscriptionType,
+  });
+  return { ...base, provider: "openai" };
 }
 
 /**
@@ -129,15 +179,30 @@ export type CostBasis =
   /** Subscription, but plan utilization could not be read. */
   | "plan_unknown";
 
+/**
+ * A model-scoped weekly window (Anthropic's Fable row) only constrains that
+ * model, so counting it while another model is selected would report an
+ * additional cost that is not being charged. The hero rows already gate on
+ * this; the basis has to use the same rule or the headline and the breakdown
+ * disagree. Absent, the row counts — that direction over-states the charge,
+ * which is recoverable, where under-stating it is the defect this exists for.
+ */
+export type CostBasisOptions = {
+  scopedWeeklyApplies?: boolean;
+};
+
 export function resolveCostBasis(
   billingMode: BillingMode,
   plan: PlanUsageSummary | null,
+  options?: CostBasisOptions,
 ): CostBasis {
   if (billingMode === "metered") return "metered";
   if (!plan) return "plan_unknown";
-  if (!planAtIncludedLimit(plan)) return "plan_included";
+  if (!planAtIncludedLimit(plan, options)) return "plan_included";
   // `extraUsageEnabled === false` means the provider refuses the request
-  // rather than billing for it, so nothing is being spent.
+  // rather than billing for it, so nothing is being spent. `null` is not the
+  // same as `false`: we could not read the setting, and at the limit the
+  // likelier of the two is that spend is continuing.
   return plan.extraUsageEnabled === false ? "plan_included" : "plan_overage";
 }
 
@@ -151,26 +216,40 @@ export function costBasisStatLabel(basis: CostBasis): string {
   return costBasisIsCharged(basis) ? "cost" : "list";
 }
 
-/** Note under a running turn. Never claims "included" once the plan is spent. */
+/**
+ * Note under a running turn.
+ *
+ * The two subscription cases have to be stated in opposite terms, not shaded:
+ * inside the allowance the turn costs nothing extra, and past it the turn is
+ * real money. Hedged wording covering both ("extra usage is billed on top")
+ * reads as reassurance to the person who is spending and as a warning to the
+ * person who is not, so it is reserved for the one case where we genuinely
+ * cannot tell which they are.
+ */
 export function costBasisRunningNote(basis: CostBasis): string {
   switch (basis) {
     case "metered":
       return "Cost is billed when the turn finishes.";
     case "plan_overage":
-      return "Billed on top of your plan when the turn finishes.";
+      return "Additional cost — billed on top of your plan.";
     case "plan_included":
-      return "Counts toward your plan when the turn finishes.";
+      return "No additional cost — included in your plan.";
     case "plan_unknown":
-      return "Counts toward your plan; extra usage is billed on top.";
+      return "Plan usage unavailable — cannot tell if this is billed on top.";
   }
 }
 
-export function planAtIncludedLimit(plan: PlanUsageSummary): boolean {
+export function planAtIncludedLimit(
+  plan: PlanUsageSummary,
+  options?: CostBasisOptions,
+): boolean {
   const percents: number[] = [];
   if (plan.sessionPercent !== null) percents.push(plan.sessionPercent);
   if (plan.weeklyPercent !== null) percents.push(plan.weeklyPercent);
-  for (const scoped of plan.scopedWeekly) {
-    percents.push(scoped.percent);
+  if (options?.scopedWeeklyApplies !== false) {
+    for (const scoped of plan.scopedWeekly) {
+      percents.push(scoped.percent);
+    }
   }
   return percents.some((p) => p >= 100);
 }
@@ -181,18 +260,25 @@ export function planAtIncludedLimit(plan: PlanUsageSummary): boolean {
  */
 export function formatClaudeSubscriptionSubline(
   plan: PlanUsageSummary | null,
+  options?: CostBasisOptions,
 ): string {
   if (!plan) {
     return CLAUDE_PLAN_USAGE_SUBLINE;
   }
 
-  const atLimit = planAtIncludedLimit(plan);
+  const brand = planUsageBrand(plan.provider);
+  const included = `Included · shared across ${brand}`;
+  const atLimit = planAtIncludedLimit(plan, options);
 
   if (atLimit && plan.extraUsageEnabled === true) {
     return "Extra usage · billed on top of your plan";
   }
   if (atLimit && plan.extraUsageEnabled === false) {
-    return "At included limit · extra usage is off";
+    // ChatGPT refuses by running out of credits, Anthropic by having extra
+    // usage switched off. Both mean the same thing to the user — nothing more
+    // is being spent — so the wording says that instead of naming a mechanism
+    // that differs per provider.
+    return "At included limit · no additional cost";
   }
   if (atLimit) {
     return "At included limit";
@@ -200,9 +286,9 @@ export function formatClaudeSubscriptionSubline(
 
   if (plan.subscriptionType) {
     const tier = plan.subscriptionType.replace(/_/g, " ");
-    return `${tier} · ${CLAUDE_PLAN_USAGE_SUBLINE}`;
+    return `${tier} · ${included}`;
   }
-  return CLAUDE_PLAN_USAGE_SUBLINE;
+  return included;
 }
 
 /** Labeled rows for the context panel — never a bare number without a window name. */
@@ -252,11 +338,20 @@ export function getPlanUsageTooltipLines(
     for (const row of getPlanUsageHeroLines(plan, options)) {
       lines.push(`${row.percent}% · ${row.label}`);
     }
-    lines.push(formatClaudeSubscriptionSubline(plan));
+    lines.push(
+      formatClaudeSubscriptionSubline(plan, {
+        scopedWeeklyApplies: options?.includeFableWeekly ?? true,
+      }),
+    );
+    lines.push(
+      plan.provider === "openai"
+        ? "Same as the ChatGPT usage Codex reports (whole account)."
+        : "Same as claude.ai Settings → Usage (whole account).",
+    );
   } else {
     lines.push(CLAUDE_PLAN_USAGE_SUBLINE);
+    lines.push("Same as claude.ai Settings → Usage (whole account).");
   }
-  lines.push("Same as claude.ai Settings → Usage (whole account).");
   return lines;
 }
 
@@ -272,9 +367,10 @@ export function formatChatTotalsLine(
   turns: number,
   cost: number,
   plan: PlanUsageSummary | null = null,
+  options?: CostBasisOptions,
 ): string {
   const turnLabel = `${turns} turn${turns === 1 ? "" : "s"}`;
-  const basis = resolveCostBasis(billingMode, plan);
+  const basis = resolveCostBasis(billingMode, plan, options);
   const amount = formatCostAmount(cost);
 
   switch (basis) {
@@ -283,7 +379,7 @@ export function formatChatTotalsLine(
     case "plan_overage":
       return `${turnLabel} · ${amount} this chat, on top of your plan`;
     case "plan_included":
-      return `${turnLabel} · ≈${amount} at list, included`;
+      return `${turnLabel} · ≈${amount} at list · no additional cost`;
     case "plan_unknown":
       return `${turnLabel} · ≈${amount} at list`;
   }

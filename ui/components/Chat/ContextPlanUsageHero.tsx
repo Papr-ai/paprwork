@@ -2,17 +2,18 @@ import React from "react";
 import { formatDuration } from "./contextMeterModel";
 import {
   chatModelIsFable,
-  CLAUDE_PLAN_USAGE_BRAND,
   CLAUDE_PLAN_USAGE_TITLE,
   formatCostAmount,
   getPlanUsageTooltipLines,
+  planUsageBrand,
   resolveCostBasis,
+  type PlanProvider,
   type PlanUsageSummary,
 } from "../../utils/subscriptionPlanUsage";
 
 type ContextPlanUsageHeroProps = {
   liveElapsedMs: number | null;
-  showClaudePlanUsage: boolean;
+  planProvider: PlanProvider | null;
   chatModelId: string;
   planUsage: PlanUsageSummary | null;
   lastTurnCost: number | null;
@@ -51,7 +52,7 @@ function PlanInfoButton({
 
 export const ContextPlanUsageHero: React.FC<ContextPlanUsageHeroProps> = ({
   liveElapsedMs,
-  showClaudePlanUsage,
+  planProvider,
   chatModelId,
   planUsage,
   lastTurnCost,
@@ -71,9 +72,12 @@ export const ContextPlanUsageHero: React.FC<ContextPlanUsageHeroProps> = ({
    * is. Showing "Included" here was the defect: it is only true up to the
    * limit, and it read as reassurance to anyone already past it.
    */
-  const overage =
-    resolveCostBasis("subscription", planUsage) === "plan_overage";
-  if (overage && lastTurnCost !== null) {
+  const scopedWeeklyApplies = chatModelIsFable(chatModelId);
+  const basis = resolveCostBasis("subscription", planUsage, {
+    scopedWeeklyApplies,
+  });
+
+  if (basis === "plan_overage" && lastTurnCost !== null) {
     return (
       <>
         <div className="ctx-panel__cost">{formatCostAmount(lastTurnCost)}</div>
@@ -82,28 +86,38 @@ export const ContextPlanUsageHero: React.FC<ContextPlanUsageHeroProps> = ({
     );
   }
 
-  if (!showClaudePlanUsage) {
+  /**
+   * With no readable plan there is nothing to be confident about.
+   *
+   * This branch used to render "Included / Subscription", which is only true
+   * up to the limit — and since ChatGPT plan usage was never fetched at all,
+   * every ChatGPT turn landed here and was declared included no matter how
+   * far past its windows the account was. Saying the reading is unavailable
+   * is less satisfying and does not mislead the one user it matters to.
+   */
+  if (!planProvider || !planUsage) {
     return (
       <>
-        <div className="ctx-panel__cost">Included</div>
-        <div className="ctx-panel__sub">Subscription</div>
+        <div className="ctx-panel__cost">Plan</div>
+        <div className="ctx-panel__sub">usage unavailable</div>
       </>
     );
   }
 
+  const brand = planUsageBrand(planUsage.provider);
   const tooltipLines = getPlanUsageTooltipLines(planUsage, {
-    includeFableWeekly: chatModelIsFable(chatModelId),
+    includeFableWeekly: scopedWeeklyApplies,
   });
 
   return (
     <div className="ctx-panel__plan-compact">
       <div className="ctx-panel__plan-stack">
-        <span className="ctx-panel__plan-stack-line">{CLAUDE_PLAN_USAGE_BRAND}</span>
+        <span className="ctx-panel__plan-stack-line">{brand}</span>
         <span className="ctx-panel__plan-stack-line">{CLAUDE_PLAN_USAGE_TITLE}</span>
       </div>
       <PlanInfoButton
         tooltipLines={tooltipLines}
-        ariaLabel="Claude plan usage details"
+        ariaLabel={`${brand} plan usage details`}
         alignEnd
       />
     </div>

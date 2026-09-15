@@ -21,7 +21,9 @@ import {
 import {
   planUsageRingHint,
   summarizeClaudePlanUsage,
+  summarizeCodexPlanUsage,
   type BillingMode,
+  type PlanProvider,
   type PlanUsageSummary,
 } from "../../utils/subscriptionPlanUsage";
 import "./ContextMeter.css";
@@ -44,8 +46,15 @@ interface ContextMeterProps {
   openSignal?: number;
   onOpenFullInspector: (info: ContextInfo, sectionId?: string) => void;
   billingMode?: BillingMode;
-  /** When true, fetch Claude plan % from the same API as Settings → Usage. */
-  fetchClaudePlanUsage?: boolean;
+  /**
+   * Whose subscription allowance to read, or null on an API key.
+   *
+   * Both providers expose utilization, and the panel needs it from whichever
+   * one is in use: without it a subscription turn cannot be told apart from a
+   * turn being billed on top of a spent plan, which is the difference the
+   * cost figures exist to report.
+   */
+  planProvider?: PlanProvider | null;
 }
 
 export const ContextMeter: React.FC<ContextMeterProps> = ({
@@ -56,7 +65,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
   openSignal,
   onOpenFullInspector,
   billingMode = "metered",
-  fetchClaudePlanUsage = false,
+  planProvider = null,
 }) => {
   const [meter, setMeter] = useState<ContextMeterData | null>(null);
   const [meterReady, setMeterReady] = useState(false);
@@ -148,7 +157,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
 
   const loadPlanUsage = useCallback(
     async (force?: boolean) => {
-      if (!fetchClaudePlanUsage) {
+      if (!planProvider) {
         setPlanUsage(null);
         return;
       }
@@ -157,20 +166,27 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
         return;
       }
       try {
-        const result =
-          await window.electronAPI?.oauth?.claude?.getUsageLimits?.();
-        if (!result) {
+        const oauth = window.electronAPI?.oauth;
+        if (planProvider === "openai") {
+          const result = await oauth?.openai?.getUsageLimits?.();
+          if (result?.success && result.data) {
+            lastPlanFetchMs.current = now;
+            setPlanUsage(summarizeCodexPlanUsage(result.data));
+          }
           return;
         }
-        if (result.success && result.data) {
+        const result = await oauth?.claude?.getUsageLimits?.();
+        if (result?.success && result.data) {
           lastPlanFetchMs.current = now;
           setPlanUsage(summarizeClaudePlanUsage(result.data));
         }
       } catch {
-        // Hero stays on "Claude plan usage"; details live in Settings → Claude.
+        // A failed read leaves `planUsage` null, which the panel reports as
+        // "plan usage unavailable" rather than as either "included" or
+        // "billed on top" — both of which would be a guess.
       }
     },
-    [fetchClaudePlanUsage],
+    [planProvider],
   );
 
   useEffect(() => {
@@ -195,10 +211,10 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
   }, [meter?.liveTurn]);
 
   useEffect(() => {
-    if (fetchClaudePlanUsage && meterReady) {
+    if (planProvider && meterReady) {
       void loadPlanUsage();
     }
-  }, [fetchClaudePlanUsage, meterReady, loadPlanUsage]);
+  }, [planProvider, meterReady, loadPlanUsage]);
 
   const openPanel = useCallback(() => {
     setOpen(true);
@@ -260,7 +276,7 @@ export const ContextMeter: React.FC<ContextMeterProps> = ({
           infoError={infoError}
           billingMode={billingMode}
           planUsage={planUsage}
-          showClaudePlanUsage={fetchClaudePlanUsage}
+          planProvider={planProvider}
           chatModelId={model}
           onClose={() => setOpen(false)}
           onRetryBreakdown={() => void loadBreakdown()}

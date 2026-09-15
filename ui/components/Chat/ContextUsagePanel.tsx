@@ -23,8 +23,10 @@ import {
   type LiveTurn,
 } from "./contextMeterModel";
 import {
+  chatModelIsFable,
   formatChatTotalsLine,
   type BillingMode,
+  type PlanProvider,
   type PlanUsageSummary,
 } from "../../utils/subscriptionPlanUsage";
 import { ContextMeteredCostHero } from "./ContextMeteredCostHero";
@@ -40,8 +42,8 @@ interface ContextUsagePanelProps {
   infoError: string | null;
   billingMode: BillingMode;
   planUsage: PlanUsageSummary | null;
-  /** When false (e.g. ChatGPT OAuth), show "Included" without plan %. */
-  showClaudePlanUsage: boolean;
+  /** Whose allowance `planUsage` describes, or null on an API key. */
+  planProvider: PlanProvider | null;
   chatModelId: string;
   onRetryBreakdown: () => void;
   onClose: () => void;
@@ -82,7 +84,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
   infoError,
   billingMode,
   planUsage,
-  showClaudePlanUsage,
+  planProvider,
   chatModelId,
   onRetryBreakdown,
   onClose,
@@ -99,6 +101,11 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
     info,
     shownPercent,
   );
+  // A model-scoped weekly limit only bills the model it scopes to, so it
+  // decides the cost basis only while that model is selected.
+  const costBasisOptions = {
+    scopedWeeklyApplies: chatModelIsFable(chatModelId),
+  };
 
   return (
     <div className="ctx-panel" role="dialog" aria-label="Context usage">
@@ -145,7 +152,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
           {billingMode === "subscription" ? (
             <ContextPlanUsageHero
               liveElapsedMs={live ? live.elapsedMs : null}
-              showClaudePlanUsage={showClaudePlanUsage}
+              planProvider={planProvider}
               chatModelId={chatModelId}
               planUsage={planUsage}
               lastTurnCost={meter.lastTurn?.cost ?? null}
@@ -231,6 +238,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
         live={live}
         billingMode={billingMode}
         planUsage={planUsage}
+        costBasisOptions={costBasisOptions}
       />
 
       <footer className="ctx-panel__foot">
@@ -240,6 +248,7 @@ export const ContextUsagePanel: React.FC<ContextUsagePanelProps> = ({
             meter.totals.turns,
             meter.totals.cost,
             planUsage,
+            costBasisOptions,
           )}
         </span>
         {/* Disabled rather than a no-op: the breakdown it opens is the thing

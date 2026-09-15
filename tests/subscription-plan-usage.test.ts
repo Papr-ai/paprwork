@@ -80,9 +80,18 @@ describe("formatClaudeSubscriptionSubline", () => {
     ).toBe("Extra usage · billed on top of your plan");
   });
 
-  it("shows hard stop when at limit and extra usage is off", () => {
+  /**
+   * Changed deliberately from "extra usage is off".
+   *
+   * That phrase names Anthropic's mechanism, and this line now also renders
+   * for ChatGPT, which stops by running out of credits rather than by having
+   * a setting switched off. The two mechanisms differ; what the user needs to
+   * know does not, so the copy states the consequence instead. The assertion
+   * this replaces pinned the phrasing, not a requirement.
+   */
+  it("says nothing more is being spent when refused at the limit", () => {
     expect(formatClaudeSubscriptionSubline(basePlan)).toBe(
-      "At included limit · extra usage is off",
+      "At included limit · no additional cost",
     );
   });
 

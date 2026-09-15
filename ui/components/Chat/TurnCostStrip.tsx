@@ -25,6 +25,7 @@ import {
   formatCostAmount,
   resolveCostBasis,
   type BillingMode,
+  type CostBasisOptions,
   type PlanUsageSummary,
 } from "../../utils/subscriptionPlanUsage";
 
@@ -40,10 +41,12 @@ export const TurnCostStrip: React.FC<{
   live: LiveTurn | null;
   billingMode: BillingMode;
   planUsage: PlanUsageSummary | null;
-}> = ({ meter, live, billingMode, planUsage }) => {
+  /** Passed through so the strip and the hero resolve the same basis. */
+  costBasisOptions?: CostBasisOptions;
+}> = ({ meter, live, billingMode, planUsage, costBasisOptions }) => {
   const [open, setOpen] = useState(false);
   const turn = meter.lastTurn;
-  const basis = resolveCostBasis(billingMode, planUsage);
+  const basis = resolveCostBasis(billingMode, planUsage, costBasisOptions);
 
   /**
    * A running turn takes over the strip. The alternative — showing the

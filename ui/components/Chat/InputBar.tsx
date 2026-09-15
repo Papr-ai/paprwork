@@ -4,6 +4,7 @@
  */
 
 import * as React from "react";
+import type { PlanProvider } from "../../utils/subscriptionPlanUsage";
 import {
   useState,
   useRef,
@@ -70,8 +71,8 @@ interface InputBarProps {
   authType?: "oauth" | "apiKey";
   /** Subscription OAuth hides API-dollar estimates in the context panel. */
   billingMode?: "metered" | "subscription";
-  /** Load Claude plan % for the context panel (Anthropic OAuth only). */
-  fetchClaudePlanUsage?: boolean;
+  /** Whose subscription allowance the context panel should read. */
+  planProvider?: PlanProvider | null;
   /** Fires after file context pills are added (e.g. drag-drop) so parent can clear drag-over UI */
   onFileAttachmentsAdded?: () => void;
   /** Bump to open the context panel from outside (the /context command). */
@@ -110,7 +111,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       onChangeModelSettings,
       authType,
       billingMode = "metered",
-      fetchClaudePlanUsage = false,
+      planProvider = null,
       contextPanelSignal,
       onOpenContextInspector,
     },
@@ -525,7 +526,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
                 isSending={isSending}
                 openSignal={contextPanelSignal}
                 billingMode={billingMode}
-                fetchClaudePlanUsage={fetchClaudePlanUsage}
+                planProvider={planProvider}
                 onOpenFullInspector={(info, sectionId) =>
                   onOpenContextInspector?.(info, sectionId)
                 }
