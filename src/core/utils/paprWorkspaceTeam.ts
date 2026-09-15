@@ -2,9 +2,7 @@
  * Workspace team APIs shared by Electron IPC and the gateway agent tools.
  */
 
-const PAPR_PLATFORM_URL = (
-  process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai"
-).replace(/\/$/, "");
+import { getPaprTeamPlatformUrl } from "./paprPlatformUrl.js";
 
 export interface WorkspaceMemberUser {
   objectId: string;
@@ -106,7 +104,7 @@ export async function fetchWorkspaceMembers(
   sessionToken: string,
   workspaceId: string,
 ): Promise<WorkspaceMember[]> {
-  const url = new URL(`${PAPR_PLATFORM_URL}/api/workspace/members`);
+  const url = new URL(`${getPaprTeamPlatformUrl()}/api/workspace/members`);
   url.searchParams.set("workspaceId", workspaceId);
 
   const response = await fetch(url.toString(), {

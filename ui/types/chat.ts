@@ -53,6 +53,9 @@ export interface ChatMessage extends CoreMessage {
    */
   model?: string;
 
+  /** Assistant summary after a sub-agent delegation finished (SubAgentResponseTrigger) */
+  delegationFinishFor?: string;
+
   // V1-style sequence for interleaving text and tool calls
   sequence?: SequenceItem[];
 }

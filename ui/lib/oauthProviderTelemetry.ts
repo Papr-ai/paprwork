@@ -1,4 +1,4 @@
-import { AmplitudeEvents } from "../../src/core/telemetry/events";
+import { TelemetryEvents } from "../../src/core/telemetry/events";
 import {
   getOAuthCompletedEventName,
   getOAuthFailedEventName,
@@ -25,7 +25,7 @@ export function trackOAuthProviderCompleted(
   properties?: Record<string, unknown> & { source?: OAuthProviderSource },
 ): void {
   trackEvent(getOAuthCompletedEventName(provider), properties);
-  trackEvent(AmplitudeEvents.PROVIDER_CONFIGURED, {
+  trackEvent(TelemetryEvents.PROVIDER_CONFIGURED, {
     provider,
     method: "oauth",
     ...properties,

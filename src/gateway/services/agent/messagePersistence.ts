@@ -3,6 +3,15 @@ import { resolveToolCallStatus } from "../../../core/utils/interruptedToolResult
 import type { StoredMessage } from "../storage/IStorageProvider.js";
 import type { ToolCallEvent, ToolResultEvent } from "./streamChunks.js";
 import { calculateCostWithCache, type TokenUsageForCost } from "../CostCalculation.js";
+const DELEGATION_FINISHED_USER =
+  /^\[Sub-agent delegation finished for ([^\]]+)\]/;
+
+export function delegationIdFromTriggerUserMessage(
+  userMessage: string,
+): string | null {
+  const match = userMessage.trim().match(DELEGATION_FINISHED_USER);
+  return match?.[1]?.trim() ?? null;
+}
 
 function getPersistedToolCallStatus(
   toolCallId: string,
@@ -77,6 +86,7 @@ export function createAssistantStoredMessage(args: {
   usage?: TokenUsageForCost & { totalTokens?: number };
   /** Optional pre-generated stable ID for checkpoint persistence */
   stableId?: string;
+  delegationFinishFor?: string;
 }): StoredMessage {
   const cost = args.usage
     ? calculateCostWithCache(args.model, {
@@ -115,6 +125,9 @@ export function createAssistantStoredMessage(args: {
     sequence: args.sequence, // Include V1-style sequence for interleaving
     timestamp: new Date().toISOString(),
     model: args.model,
+    ...(args.delegationFinishFor
+      ? { delegation_finish_for: args.delegationFinishFor }
+      : {}),
     prompt_tokens: args.usage?.promptTokens,
     completion_tokens: args.usage?.completionTokens,
     total_tokens: args.usage?.totalTokens,

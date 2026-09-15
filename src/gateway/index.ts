@@ -3743,6 +3743,11 @@ async function startGateway(): Promise<void> {
           );
           content = injectMiniAppNativeDialogShim(content);
 
+          const { injectMiniAppApiErrorFetch } = await import(
+            "./utils/injectMiniAppApiErrorFetch.js"
+          );
+          content = injectMiniAppApiErrorFetch(content);
+
           const { injectMiniAppPreviewFetchGate } = await import(
             "./utils/injectMiniAppPreviewFetchGate.js"
           );

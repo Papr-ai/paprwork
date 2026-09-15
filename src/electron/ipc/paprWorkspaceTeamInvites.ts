@@ -4,9 +4,7 @@
  * with dashboard Settings → People → Add members.
  */
 
-const PAPR_PLATFORM_URL = (
-  process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai"
-).replace(/\/$/, "");
+import { getPaprTeamPlatformUrl } from "../../core/utils/paprPlatformUrl.js";
 
 export interface WorkspaceInviteInput {
   sessionToken: string;
@@ -40,7 +38,8 @@ export async function sendWorkspaceInvite(
     throw new Error("Enter a valid email address");
   }
 
-  const response = await fetch(`${PAPR_PLATFORM_URL}/api/workspace/sendInvite`, {
+  const platformUrl = getPaprTeamPlatformUrl();
+  const response = await fetch(`${platformUrl}/api/workspace/sendInvite`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

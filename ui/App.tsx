@@ -9,7 +9,7 @@ import { Sidebar } from "./components/Sidebar/Sidebar";
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
-import { AuthWall } from "./components/Auth/AuthWall";
+import { AuthFlow } from "./components/Auth/AuthFlow";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import { PlatformConnectModal } from "./components/Platforms/PlatformConnectModal";
 import { initPlatformConnectListener } from "./components/Platforms/platformConnectStore";
@@ -590,7 +590,7 @@ export function App() {
   }
 
   if (REQUIRE_PAPR_AUTH && !isAuthenticated) {
-    return <AuthWall onAuthenticated={() => setIsAuthenticated(true)} />;
+    return <AuthFlow onComplete={() => setIsAuthenticated(true)} />;
   }
 
   // Don't render app until preferences AND SQLite are loaded

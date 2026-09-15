@@ -294,7 +294,10 @@
   flex: 1;
   min-width: 0;
   display: flex;
+  flex-direction: column;
+  align-items: flex-end;
   justify-content: flex-end;
+  gap: 2px;
 }
 
 .ctx-panel__plan-compact {

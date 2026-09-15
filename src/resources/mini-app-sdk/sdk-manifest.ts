@@ -33,6 +33,7 @@ const SKIP_DISCOVERY = new Set(["sdk-manifest.ts"]);
 /** Platform-injected or internal — served for bundling, not app imports. */
 const PLATFORM_OR_INTERNAL = new Set([
   "papr-native-dialog-shim.ts",
+  "papr-api-error-fetch.ts",
   "papr-preview-fetch-gate.ts",
   "papr-auth-guard.ts",
   "papr-auth-ui.ts",

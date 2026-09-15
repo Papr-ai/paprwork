@@ -92,15 +92,50 @@ export function OnboardingView() {
   const [checkingKeys, setCheckingKeys] = useState(true);
   const [paprLoggedIn, setPaprLoggedIn] = useState(false);
   const [checkingPapr, setCheckingPapr] = useState(true);
+  const [hasOAuthConnection, setHasOAuthConnection] = useState(false);
   const onboardingStartedAtRef = useRef(Date.now());
 
   // Check if user has any AI model key configured
-  const hasModelKey = keys.some(
+  const hasModelApiKey = keys.some(
     (k) =>
       k.name === "OPENAI_API_KEY" ||
       k.name === "ANTHROPIC_API_KEY" ||
       k.name === "GOOGLE_API_KEY",
   );
+
+  // A subscription connected via OAuth (Claude Max, ChatGPT Plus) is a real
+  // model connection and leaves no API key behind. Without this, anyone who
+  // connected through OAuth was stuck on connect_model forever.
+  const hasModelKey = hasModelApiKey || hasOAuthConnection;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshOAuthStatus = async () => {
+      const [claude, openai] = await Promise.all([
+        window.electronAPI.oauth.claude.getStatus().catch(() => null),
+        window.electronAPI.oauth.openai.getStatus().catch(() => null),
+      ]);
+      if (cancelled) return;
+      setHasOAuthConnection(
+        Boolean(
+          (claude?.connected && !claude.isExpired) ||
+            (openai?.connected && !openai.isExpired),
+        ),
+      );
+    };
+
+    void refreshOAuthStatus();
+
+    // Settings can connect a provider while this view is open.
+    const unsubscribe = window.electronAPI.oauth.onAuthStatus?.(() => {
+      void refreshOAuthStatus();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
 
   // Check Papr login status on mount and after auth events
   useEffect(() => {
@@ -144,7 +179,18 @@ export function OnboardingView() {
       const next = markModelConnected();
       setState(next);
     }
-    // Skip connect_papr if already logged in
+    // connect_papr is retired — <AuthFlow> owns sign-in. Anyone left parked on
+    // that phase from a previous build gets moved on rather than stranded.
+    if (state.phase === "connect_papr") {
+      const next = transitionTo(hasModelKey ? "choose_intent" : "connect_model", {
+        paprConnected: paprLoggedIn,
+        modelConnected: hasModelKey,
+      });
+      setState(next);
+      return;
+    }
+
+    // Skip straight past welcome if already logged in
     if (paprLoggedIn && state.phase === "welcome") {
       if (hasModelKey) {
         const next = transitionTo("choose_intent", {
@@ -203,29 +249,13 @@ export function OnboardingView() {
         modelConnected: true,
       });
       setState(next);
-    } else if (paprLoggedIn) {
-      const next = transitionTo("connect_model", { paprConnected: true });
-      setState(next);
     } else {
-      const next = transitionTo("connect_papr");
+      // Sign-in is owned by <AuthFlow> before the app renders, so there is no
+      // connect_papr step to send anyone to.
+      const next = transitionTo("connect_model", { paprConnected: paprLoggedIn });
       setState(next);
     }
     trackEvent("paprwork_onboarding_step_completed", { step_name: "welcome" } as Record<string, unknown>);
-  };
-
-  const handleOpenProfile = () => {
-    const tabId = createTab("settings", "settings", "Settings");
-    switchToTab(tabId);
-    window.dispatchEvent(
-      new CustomEvent("papr:open-settings", { detail: { tab: "profile" } }),
-    );
-    trackEvent("paprwork_onboarding_open_profile", {} as Record<string, unknown>);
-  };
-
-  const handlePaprConnected = () => {
-    const next = markPaprConnected();
-    setState(next);
-    trackEvent("paprwork_onboarding_step_completed", { step_name: "connect_papr" } as Record<string, unknown>);
   };
 
   const handleOpenModels = () => {
@@ -335,49 +365,8 @@ export function OnboardingView() {
           </>
         )}
 
-        {/* ---- CONNECT PAPR PHASE ---- */}
-        {state.phase === "connect_papr" && (
-          <>
-            <div className="onboarding-view-header">
-              <span className="onboarding-view-icon onboarding-view-icon--key">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none">
-                  <path
-                    d="M12 2a5 5 0 00-5 5v2H6a2 2 0 00-2 2v10a2 2 0 002 2h12a2 2 0 002-2V11a2 2 0 00-2-2h-1V7a5 5 0 00-5-5z"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  />
-                  <circle cx="12" cy="16" r="1.5" fill="currentColor" />
-                </svg>
-              </span>
-              <h1 className="onboarding-view-title">Connect to Papr</h1>
-              <p className="onboarding-view-subtitle">
-                Sign in to Papr for memory, cloud sync, and team workspaces. This takes about 30 seconds.
-              </p>
-            </div>
-
-            <div className="onboarding-view-actions">
-              {paprLoggedIn ? (
-                <button className="onboarding-primary-btn" onClick={handlePaprConnected}>
-                  ✓ Connected to Papr — Continue
-                </button>
-              ) : (
-                <>
-                  <button className="onboarding-primary-btn" onClick={handleOpenProfile}>
-                    Open Profile to Sign In
-                  </button>
-                  <p className="onboarding-model-hint">
-                    Settings → Profile → Sign in with Papr
-                  </p>
-                </>
-              )}
-              <button className="onboarding-skip-btn" onClick={handleSkip}>
-                I'll do this later
-              </button>
-            </div>
-          </>
-        )}
+        {/* connect_papr retired — <AuthFlow> owns sign-in before the app loads.
+            Stale states are migrated forward in the effect above. */}
 
         {/* ---- CONNECT MODEL PHASE ---- */}
         {state.phase === "connect_model" && (

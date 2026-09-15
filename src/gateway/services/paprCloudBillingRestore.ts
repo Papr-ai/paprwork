@@ -21,9 +21,20 @@ export function schedulePaprCloudResumeAfterBillingRestore(): void {
   setPaprCloudPaused(false);
   resumeCodeIndexingAfterBillingRestore();
 
-  if (isCoalescedBackgroundTaskInFlight("vault:workspace-switch")) {
+  if (
+    isCoalescedBackgroundTaskInFlight("vault:workspace-switch") ||
+    isCoalescedBackgroundTaskInFlight(PAPR_RESUME_CLOUD_TASK)
+  ) {
     console.log(
-      "[PaprCloud] Skipping papr:resume-cloud — workspace vault sync already running",
+      "[PaprCloud] Skipping papr:resume-cloud schedule — vault full sync already queued",
+    );
+    return;
+  }
+
+  const vault = getVaultSyncService();
+  if (vault?.isSyncBusy()) {
+    console.log(
+      "[PaprCloud] Skipping papr:resume-cloud schedule — VaultSync.initialize or runFullSync in progress",
     );
     return;
   }
@@ -35,11 +46,11 @@ export function schedulePaprCloudResumeAfterBillingRestore(): void {
       );
       return;
     }
-    const vault = getVaultSyncService();
-    if (!vault) {
+    const activeVault = getVaultSyncService();
+    if (!activeVault) {
       return;
     }
-    await vault.runFullSync();
+    await activeVault.runFullSync();
   });
 }
 

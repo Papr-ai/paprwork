@@ -23,6 +23,10 @@ import {
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
+import {
+  normalizeMiniAppRuntimeErrorMessage,
+  shouldShowDataSourcesMigrationHint,
+} from "../../../src/core/utils/miniAppHttpError";
 import { confirmRefreshIfNewRevision } from "../../utils/publishedAppRevisionCheck";
 import {
   canLoadLocalAppPreview,
@@ -609,7 +613,7 @@ export function MiniAppView({
       if (entry.level === "error") {
         const message = entry.message.trim();
         if (message.length > 0 && !isBenignPreviewFetchAbortMessage(message)) {
-          setRuntimeError(message);
+          setRuntimeError(normalizeMiniAppRuntimeErrorMessage(message));
         }
       }
       void gateway
@@ -787,11 +791,12 @@ export function MiniAppView({
           ) : null}
           {runtimeError && !waitingForGateway ? (
             <div className="mini-app-view__overlay mini-app-view__overlay--hint">
-              <p className="mini-app-view__runtime-error-title">App failed to load</p>
+              <p className="mini-app-view__runtime-error-title">App error</p>
               <pre className="mini-app-view__runtime-error">{runtimeError}</pre>
-              {!isBenignPreviewFetchAbortMessage(runtimeError) ? (
+              {!isBenignPreviewFetchAbortMessage(runtimeError) &&
+              shouldShowDataSourcesMigrationHint(runtimeError) ? (
                 <p className="mini-app-view__runtime-error-hint">
-                  This often means a linked database path is missing after workspace
+                  This can mean a linked database path is missing after workspace
                   migration. Check the Apps page warning icon or ask the agent to fix
                   data-sources.json.
                 </p>

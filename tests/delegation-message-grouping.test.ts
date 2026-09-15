@@ -87,6 +87,51 @@ describe("groupDelegationFollowUpMessages", () => {
     expect(grouped[0]?.delegationFollowUps).toEqual([followUp]);
   });
 
+  test("folds deferred follow-up that used get_delegation_run", () => {
+    const delegationMessage: ChatMessage = {
+      id: "msg-1",
+      role: "assistant",
+      content: "",
+      toolCalls: [
+        {
+          id: "t1",
+          toolName: "delegate_task",
+          args: {},
+          status: "success",
+          result: JSON.stringify({ id: "del-456", task: "Explore repo" }),
+        },
+      ],
+    };
+    const middleUser: ChatMessage = {
+      id: "msg-2",
+      role: "user",
+      content: "how do tokens come into play here?",
+    };
+    const followUp: ChatMessage = {
+      id: "msg-3",
+      role: "assistant",
+      content: "Codebase Explorer failed — model not supported on Codex OAuth.",
+      toolCalls: [
+        {
+          id: "t2",
+          toolName: "get_delegation_run",
+          args: { runId: "del-456" },
+          status: "success",
+        },
+      ],
+      delegationFinishFor: "del-456",
+    };
+
+    const grouped = groupDelegationFollowUpMessages([
+      delegationMessage,
+      middleUser,
+      followUp,
+    ]);
+
+    expect(grouped.map((message) => message.id)).toEqual(["msg-1", "msg-2"]);
+    expect(grouped[0]?.delegationFollowUps).toEqual([followUp]);
+  });
+
   test("stops folding when a user message appears", () => {
     const delegationMessage: ChatMessage = {
       id: "msg-1",

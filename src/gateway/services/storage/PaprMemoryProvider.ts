@@ -28,6 +28,7 @@ import {
   type PaprMessageStoreBody,
 } from "./paprSyncPayload.js";
 import { buildPaprMemoryWriteScope } from "../../utils/memoryScopeResolver.js";
+import { PAPR_DEFAULT_HEADERS } from "../../../core/tools/paprSurface.js";
 
 export interface PaprConfig {
   apiKey: string; // X-API-Key from macOS Keychain
@@ -65,6 +66,7 @@ export class PaprMemoryProvider implements IStorageProvider {
       xAPIKey: config.apiKey, // X-API-Key header from macOS Keychain
       maxRetries: 3,
       timeout: 30000, // 30 seconds
+      defaultHeaders: PAPR_DEFAULT_HEADERS,
     });
   }
 

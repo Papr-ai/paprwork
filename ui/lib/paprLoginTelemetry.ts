@@ -1,4 +1,4 @@
-import { AmplitudeEvents } from "../../src/core/telemetry/events";
+import { TelemetryEvents } from "../../src/core/telemetry/events";
 import {
   logPaprLoginStep,
   type PaprLoginSource,
@@ -12,5 +12,5 @@ export function trackPaprLoginStep(
 ): void {
   const payload = { step, ...properties };
   logPaprLoginStep(step, payload);
-  trackEvent(AmplitudeEvents.PAPR_LOGIN_STEP, payload);
+  trackEvent(TelemetryEvents.PAPR_LOGIN_STEP, payload);
 }
