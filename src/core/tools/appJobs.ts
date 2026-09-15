@@ -1150,6 +1150,31 @@ export const createJobTool = createTool({
     const scriptPathReminder = buildJobScriptPathReminder(scriptPathIssues);
     const platformCdpReminder = buildPlatformCdpReminder(args.type, args.requirements);
 
+    // Duplicate-capability check (advisory only).
+    //
+    // create_job previously did no discovery at all, so with hundreds of jobs
+    // on disk an agent had no way to notice that the job it was about to build
+    // already exists — it cannot recall them and cannot look one up by a name
+    // it does not know. This searches capability cards for the new job's
+    // stated purpose and surfaces close matches.
+    //
+    // It runs AFTER creation and never blocks: semantic similarity is a
+    // heuristic, and a wrong block is worse than a duplicate job.
+    let duplicateCapabilityNote: string | undefined;
+    try {
+      const { findSimilarJobCapabilities, formatSimilarJobsWarning } =
+        await import("../../gateway/services/jobCapabilitySearch.js");
+      const intent = [args.name, args.delegationTask, args.command]
+        .filter(Boolean)
+        .join(" — ");
+      const matches = (await findSimilarJobCapabilities(intent, 3)).filter(
+        (m) => m.jobId !== job.id,
+      );
+      duplicateCapabilityNote = formatSimilarJobsWarning(matches);
+    } catch {
+      // Discovery is advisory — never fail job creation because of it.
+    }
+
     return {
       success: true,
       data: job,
@@ -1165,6 +1190,9 @@ export const createJobTool = createTool({
         : {}),
       ...(writeDbSummary ? { _writeDbReminder: writeDbSummary } : {}),
       ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
+      ...(duplicateCapabilityNote
+        ? { _duplicateCapabilityNote: duplicateCapabilityNote }
+        : {}),
     };
   },
 });

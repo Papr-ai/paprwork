@@ -19,6 +19,10 @@ import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
 import path from "path";
 import os from "os";
+import {
+  cancelDocumentPostSync,
+  scheduleDocumentPostSync,
+} from "./documentPostScheduler.js";
 // uuid no longer needed — document IDs are title-based slugs
 
 // ---------- Public Types ----------
@@ -181,6 +185,11 @@ export class DocumentService {
     await fs.writeFile(this.contentPath(id), content, "utf-8");
     await this.writeMeta(id, meta);
 
+    // Mirror to a Parse Post so the document reaches Papr Memory. The Parse
+    // beforeSave/afterSave hooks handle similarity gating, memory writes and
+    // PageVersion snapshots — see documentPostSync.ts.
+    scheduleDocumentPostSync({ documentId: id, title, content });
+
     console.log(`[DocumentService] Created document: ${id} - ${title}`);
     return { ...meta, content, filePath: this.contentPath(id) };
   }
@@ -258,6 +267,16 @@ export class DocumentService {
     };
 
     await this.writeMeta(id, updatedMeta);
+
+    // Debounced: an editor fires this on nearly every keystroke. The 30s idle
+    // window collapses a typing burst into one request; the server's
+    // similarity gate then decides whether it is worth a memory write.
+    scheduleDocumentPostSync({
+      documentId: id,
+      title: updatedMeta.title,
+      content,
+    });
+
     console.log(`[DocumentService] Updated document: ${id}`);
     return { ...updatedMeta, content, filePath: this.contentPath(id) };
   }
@@ -265,6 +284,12 @@ export class DocumentService {
   async deleteDocument(id: string): Promise<boolean> {
     const docDir = this.docDir(id);
     try {
+      // Drop any queued sync first — pushing content for a document the user
+      // just deleted would be surprising, and the Post row would outlive it.
+      // The existing Post (if any) is deliberately left in place: it is the
+      // durable record in Papr Memory, and deleting local files should not
+      // silently destroy remote history. See design doc open question 4.
+      cancelDocumentPostSync(id);
       await fs.rm(docDir, { recursive: true, force: true });
       this.unwatchDocument(id);
       console.log(`[DocumentService] Deleted document: ${id}`);
