@@ -118,6 +118,7 @@ export function useAgent() {
   const setConnectionPaused = useChatStore((s) => s.setConnectionPaused);
   const setFinishingWork = useChatStore((s) => s.setFinishingWork);
   const setNeedsStreamRecovery = useChatStore((s) => s.setNeedsStreamRecovery);
+  const setLastTurnOutcome = useChatStore((s) => s.setLastTurnOutcome);
   const setError = useChatStore((s) => s.setError);
   
   // Streaming state management functions
@@ -1379,6 +1380,10 @@ export function useAgent() {
               // reset time and where to change it, so it is shown as-is rather
               // than swapped for one of the generic rewrites below.
               setError(rawError);
+              // The provider refused this turn outright. Recorded separately
+              // from the banner because a spent quota offers no Resume, so the
+              // banner state alone never carries a refusal.
+              setLastTurnOutcome(chatId, "providerRefused");
 
               const streamingMessageId =
                 streamingMessageIdRef.current.get(chatId);
@@ -1405,6 +1410,10 @@ export function useAgent() {
               // is the only thing that tells a user whether switching between
               // API key and subscription login changed anything.
               setNeedsStreamRecovery(chatId, true, "rateLimit", rawError);
+              // Survives Stop, which clears the banner. Without it, stopping a
+              // refused turn erased the evidence of the refusal at exactly the
+              // moment the user asked us to stop retrying.
+              setLastTurnOutcome(chatId, "providerRefused");
               setError(null);
 
               const streamingMessageId =
@@ -2027,6 +2036,9 @@ export function useAgent() {
         useChatStore.getState().chatStates.get(chatId)?.needsStreamRecovery ??
         false;
       setNeedsStreamRecovery(chatId, false);
+      // Tapping Resume is the user deciding to try again, so the refusal or
+      // stop that blocked auto-continue no longer applies.
+      setLastTurnOutcome(chatId, undefined);
       clearResumeRetry(chatId);
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
 
@@ -2301,6 +2313,7 @@ export function useAgent() {
       try {
         if (!isHiddenContinueUserMessage(message)) {
           resetAutoContinueAttempts(chatId);
+          setLastTurnOutcome(chatId, undefined);
         }
 
         // V1 APPROACH: Create permanent chat BEFORE streaming if temp
@@ -2531,6 +2544,11 @@ export function useAgent() {
           needsStreamRecovery:
             useChatStore.getState().chatStates.get(chatId)
               ?.needsStreamRecovery ?? false,
+          streamRecoveryReason:
+            useChatStore.getState().chatStates.get(chatId)
+              ?.streamRecoveryReason,
+          lastTurnOutcome:
+            useChatStore.getState().chatStates.get(chatId)?.lastTurnOutcome,
           gatewayReady: gateway.isConnected(),
         })
       ) {

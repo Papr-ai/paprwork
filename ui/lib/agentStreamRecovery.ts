@@ -7,7 +7,12 @@ import type { MutableRefObject } from "react";
 import { useChatStore } from "../stores/chatStore";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import type { StreamChunk } from "../types/core";
-import type { ChatMessage, SequenceItem } from "../types/chat";
+import type {
+  ChatMessage,
+  LastTurnOutcome,
+  SequenceItem,
+  StreamRecoveryReason,
+} from "../types/chat";
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
@@ -944,6 +949,7 @@ export type AutoContinueBlockReason =
   | "gatewayNotReady"
   | "resumingStream"
   | "turnComplete"
+  | "providerRefused"
   | "userStopped"
   | "awaitingStreamResubscribe"
   | "maxAttempts";
@@ -955,10 +961,26 @@ export function getAutoContinueBlockReason(args: {
   isSending: boolean;
   connectionPaused: boolean;
   needsStreamRecovery: boolean;
+  streamRecoveryReason?: StreamRecoveryReason;
+  lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
 }): AutoContinueBlockReason | null {
   if (args.isSending) return "isSending";
   if (isResumingStream(args.chatId)) return "resumingStream";
+
+  // Above the turn-state tests, because a refusal produces no assistant message
+  // at all: `assistantMessageWasStopped` below has nothing to inspect, and the
+  // turn reads as merely interrupted. Retrying it sends another full context at
+  // an account the provider has already told us is at its ceiling.
+  if (args.lastTurnOutcome === "providerRefused") return "providerRefused";
+  if (args.lastTurnOutcome === "userStopped") return "userStopped";
+
+  // The rule `shouldAutoRetryStreamRecoveryAfterReconnect` has always applied,
+  // kept here as well because a live rate-limit banner is sufficient evidence
+  // on its own — `lastTurnOutcome` is set at the raise sites and this is not.
+  if (args.needsStreamRecovery && args.streamRecoveryReason === "rateLimit") {
+    return "providerRefused";
+  }
 
   const lastAssistant = [...args.messages]
     .reverse()
@@ -1003,6 +1025,8 @@ export function shouldAutoContinueInterruptedTurn(args: {
   isSending: boolean;
   connectionPaused: boolean;
   needsStreamRecovery: boolean;
+  streamRecoveryReason?: StreamRecoveryReason;
+  lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
 }): boolean {
   return getAutoContinueBlockReason(args) === null;
