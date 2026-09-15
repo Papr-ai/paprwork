@@ -282,6 +282,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
   const prevIsSendingRef = useRef(isSending);
   const autoContinueInFlightRef = useRef(false);
+  const lastLoggedAutoContinueBlockRef = useRef<string | null>(null);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
@@ -350,13 +351,25 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       const lastAssistant = [...messages]
         .reverse()
         .find((m) => m.role === "assistant");
-      if (lastAssistant?.interrupted || autoContinueBlock === "gatewayNotReady") {
+      // Once per (chat, reason), not once per render: this effect depends on
+      // `messages`, which gets a fresh array identity on every store write, so
+      // logging unconditionally floods the console at render frequency — and
+      // with DevTools attached every line crosses the CDP channel.
+      if (
+        (lastAssistant?.interrupted ||
+          autoContinueBlock === "gatewayNotReady") &&
+        lastLoggedAutoContinueBlockRef.current !== autoContinueBlock
+      ) {
+        lastLoggedAutoContinueBlockRef.current = autoContinueBlock;
         console.log(
           `[AutoContinue] blocked for ${chatId}: ${autoContinueBlock}`,
         );
       }
       return;
     }
+
+    // Unblocked — a later block is new information and should be logged again.
+    lastLoggedAutoContinueBlockRef.current = null;
 
     const mergedArtifact = findMergedArtifact(chatId);
     const idKey =

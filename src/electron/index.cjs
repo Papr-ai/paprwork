@@ -1196,6 +1196,9 @@ class GatewayProcessSupervisor {
     this.healthFailures = 0;
     this.hasEverBeenHealthy = false;
     this.gatewayReadyNotified = false;
+    // Last status pushed to the renderer, so a renderer that reloaded after the
+    // push can ask for it. Every notification here is one-shot and latched.
+    this.lastStatus = null;
     this.backoffTimer = null;
     this.isStopping = false;
 
@@ -1993,9 +1996,17 @@ class GatewayProcessSupervisor {
   }
 
   _sendStatusToRenderer(status, message) {
+    // Recorded before the send, and regardless of whether a window is there to
+    // receive it: the case this exists for is a renderer that was not listening.
+    this.lastStatus = { status, message };
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("gateway:status", { status, message });
     }
+  }
+
+  /** The last status pushed, for a renderer that missed the push. */
+  getLastStatus() {
+    return this.lastStatus;
   }
 
   _waitForReady(maxAttempts = 240, intervalMs = 500) {
@@ -2660,6 +2671,10 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle("app:get-version", () => app.getVersion());
+
+  // Gateway status is pushed once and latched, so a renderer that reloaded after
+  // the push has no way to learn it. Let it ask instead of infer.
+  ipcMain.handle("gateway:get-status", () => supervisor?.getLastStatus() ?? null);
 
   ipcMain.handle("agent-preview:show", (_event, webviewId) =>
     showWebviewSession(webviewId),
