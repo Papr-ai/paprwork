@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startOAuth: (options) => ipcRenderer.invoke("auth:openai:start-oauth", options),
       getStatus: () => ipcRenderer.invoke("auth:openai:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:openai:disconnect"),
+      getUsageLimits: () => ipcRenderer.invoke("auth:openai:get-usage-limits"),
     },
     claude: {
       startOAuth: (options) => ipcRenderer.invoke("auth:claude:start-oauth", options),

@@ -3,6 +3,7 @@
  * Brings together MessageList and InputBar with agent integration
  */
 
+import type { PlanProvider } from "../../utils/subscriptionPlanUsage";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageList } from "./MessageList";
@@ -248,8 +249,22 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     return "metered";
   }, [selectedModel.provider, authStatus]);
 
-  const fetchClaudePlanUsage =
-    selectedModel.provider === "anthropic" && authStatus.anthropic.oauth;
+  /**
+   * Both ChatGPT and Claude subscriptions report utilization, and the cost
+   * panel needs whichever one is paying for this chat. Reading only Claude's
+   * left the ChatGPT route with no signal at all, so it fell back to claiming
+   * every turn was included — wrong for anyone past their windows, which is
+   * precisely who the figure is for.
+   */
+  const planProvider = useMemo<PlanProvider | null>(() => {
+    if (selectedModel.provider === "anthropic" && authStatus.anthropic.oauth) {
+      return "anthropic";
+    }
+    if (selectedModel.provider === "openai" && authStatus.openai.oauth) {
+      return "openai";
+    }
+    return null;
+  }, [selectedModel.provider, authStatus]);
 
   const handleChangeModelSettings = useCallback(
     (patch: ChatModelSettings) => {
@@ -1190,7 +1205,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onChangeModelSettings={handleChangeModelSettings}
         authType={authType}
         billingMode={billingMode}
-        fetchClaudePlanUsage={fetchClaudePlanUsage}
+        planProvider={planProvider}
       />
 
       {contextInfo !== null ? (
