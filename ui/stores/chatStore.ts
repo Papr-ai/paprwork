@@ -524,6 +524,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
+  // NOTE: unpausing clears `needsStreamRecovery` (and with it the reason and
+  // the provider's message, via setNeedsStreamRecovery's own reset). A caller
+  // that needs to decide whether a banner survives must therefore read the
+  // state BEFORE calling this, not after — reading after always sees false.
   setConnectionPaused: (chatId, paused) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);

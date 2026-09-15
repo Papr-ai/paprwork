@@ -1179,23 +1179,34 @@ export function useAgent() {
               sequenceRef.current.set(chatId, sequence);
             }
 
+            // A provider refusal closes the stream cleanly, so `done` lands
+            // just after the error chunk raised the resume banner. The banner
+            // has to be read here, before the clearing calls below:
+            // setConnectionPaused(false) drops needsStreamRecovery as a side
+            // effect, so a read taken after it always sees false and the
+            // survival check would erase the only explanation the user gets.
+            const banner = useChatStore.getState().chatStates.get(chatId);
+            const keepRecoveryBanner = recoveryBannerSurvivesStreamEnd({
+              needsStreamRecovery: banner?.needsStreamRecovery ?? false,
+              reason: banner?.streamRecoveryReason,
+            });
+
             // Set isSending to false FIRST to prevent empty loading indicator from appearing
             setSending(chatId, false);
             setConnectionPaused(chatId, false);
             setFinishingWork(chatId, false);
-            // A provider refusal closes the stream cleanly, so `done` lands
-            // just after the error chunk raised the resume banner. Clearing it
-            // here would erase the only explanation the user gets.
-            {
-              const cs = useChatStore.getState().chatStates.get(chatId);
-              if (
-                !recoveryBannerSurvivesStreamEnd({
-                  needsStreamRecovery: cs?.needsStreamRecovery ?? false,
-                  reason: cs?.streamRecoveryReason,
-                })
-              ) {
-                setNeedsStreamRecovery(chatId, false);
-              }
+            if (keepRecoveryBanner) {
+              // Re-asserted rather than left alone: setConnectionPaused above
+              // has already cleared it, so the reason and the provider's own
+              // sentence have to be put back for the banner to render.
+              setNeedsStreamRecovery(
+                chatId,
+                true,
+                banner?.streamRecoveryReason,
+                banner?.streamRecoveryDetail,
+              );
+            } else {
+              setNeedsStreamRecovery(chatId, false);
             }
 
             // Clear streaming status (blue dot) for THIS chat's tab

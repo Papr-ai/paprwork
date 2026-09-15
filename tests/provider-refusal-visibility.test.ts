@@ -206,3 +206,55 @@ describe("the dollar figure is always shown", () => {
     expect(source).toContain("formatCostAmount(lastTurnCost)");
   });
 });
+
+/** The body of one `case "x":` arm, so offsets cannot match another arm. */
+function sliceCase(source: string, label: string): string {
+  const start = source.indexOf(`case "${label}":`);
+  expect(start).toBeGreaterThan(-1);
+  const next = source.indexOf('case "', start + label.length + 8);
+  return source.slice(start, next > -1 ? next : source.length);
+}
+
+describe("the banner is read before the calls that clear it", () => {
+  /**
+   * Why the guard above was dead code. `setConnectionPaused(false)` drops
+   * `needsStreamRecovery` as a side effect, and the done handler ran it one
+   * line before reading the banner — so the survival check saw `false` no
+   * matter what the provider had said, and cleared the banner anyway.
+   */
+  it("setConnectionPaused(false) clears needsStreamRecovery", async () => {
+    const { useChatStore, defaultChatState } = await import(
+      "../ui/stores/chatStore"
+    );
+    const id = "chat-unpause-clears-banner";
+    useChatStore.setState((s) => ({
+      chatStates: new Map(s.chatStates).set(id, { ...defaultChatState }),
+    }));
+
+    const store = () => useChatStore.getState();
+    store().setNeedsStreamRecovery(id, true, "rateLimit", "429 from Anthropic");
+    expect(store().chatStates.get(id)?.needsStreamRecovery).toBe(true);
+
+    store().setConnectionPaused(id, false);
+    expect(store().chatStates.get(id)?.needsStreamRecovery).toBe(false);
+  });
+
+  it("the done arm reads the banner before it unpauses", () => {
+    // The earlier unpauses in this arm are the duplicate/stale-done guards,
+    // which clear the banner deliberately. The one that matters is the last:
+    // the finalization path, where the survival check decides.
+    const done = sliceCase(stripComments(read("ui/hooks/useAgent.ts")), "done");
+    const readAt = done.indexOf("recoveryBannerSurvivesStreamEnd({");
+    const clearAt = done.lastIndexOf("setConnectionPaused(chatId, false)");
+    expect(readAt).toBeGreaterThan(-1);
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(readAt).toBeLessThan(clearAt);
+  });
+
+  it("the done arm puts the reason and the provider's sentence back", () => {
+    // Unpausing already dropped the flag, so a surviving banner has to be
+    // re-asserted with its reason and detail or it renders as nothing.
+    const done = sliceCase(stripComments(read("ui/hooks/useAgent.ts")), "done");
+    expect(done).toContain("streamRecoveryDetail");
+  });
+});
