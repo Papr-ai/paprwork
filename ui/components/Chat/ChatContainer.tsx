@@ -180,6 +180,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     needsStreamRecovery,
     streamRecoveryReason,
     streamRecoveryDetail,
+    lastTurnOutcome,
   } = useChatStore(
     useShallow((state) => {
       const cs = state.chatStates.get(chatId);
@@ -193,11 +194,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         needsStreamRecovery: cs?.needsStreamRecovery ?? false,
         streamRecoveryReason: cs?.streamRecoveryReason ?? "connection",
         streamRecoveryDetail: cs?.streamRecoveryDetail,
+        lastTurnOutcome: cs?.lastTurnOutcome,
       };
     }),
   );
 
   const error = useChatStore((state) => state.error);
+  const setLastTurnOutcome = useChatStore((state) => state.setLastTurnOutcome);
 
   const { sendMessage, interruptActiveStream, retryStreamRecovery, autoContinueInterruptedTurn } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
@@ -359,6 +362,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       isSending: isSending || isWaitingForAgentSlot,
       connectionPaused,
       needsStreamRecovery,
+      streamRecoveryReason,
+      lastTurnOutcome,
       gatewayReady: gatewaySupervisorReady,
     };
     const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
@@ -412,6 +417,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isWaitingForAgentSlot,
     messages,
     needsStreamRecovery,
+    streamRecoveryReason,
+    lastTurnOutcome,
     makeAgentConfig,
   ]);
 
@@ -859,8 +866,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const stopAgentAndClearQueue = useCallback(async () => {
     setMessageQueue((prev) => clearQueuedMessagesForChat(prev, chatId));
+    // Recorded before the teardown, not after: `interruptActiveStream` awaits
+    // the gateway, and the auto-continue effect can run during that wait. It
+    // also clears the recovery banner, so on a refused turn this is the only
+    // surviving record that the user asked us to stop.
+    setLastTurnOutcome(chatId, "userStopped");
     await interruptActiveStream(chatId);
-  }, [chatId, interruptActiveStream]);
+  }, [chatId, interruptActiveStream, setLastTurnOutcome]);
 
   const handleStopAgent = useCallback(async () => {
     // Block auto-drain — Stop means halt, not "stop then send whatever was queued".

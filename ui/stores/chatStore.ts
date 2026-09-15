@@ -12,6 +12,7 @@ import type {
   StreamingState,
   SequenceItem,
   StreamRecoveryReason,
+  LastTurnOutcome,
   MessageAttachment,
 } from "../types/chat";
 import type { MemoryAudience } from "../constants/memoryScope";
@@ -82,6 +83,10 @@ interface ChatStore {
     needs: boolean,
     reason?: StreamRecoveryReason,
     detail?: string,
+  ) => void;
+  setLastTurnOutcome: (
+    chatId: string,
+    outcome: LastTurnOutcome | undefined,
   ) => void;
   setError: (error: string | null) => void;
 
@@ -568,6 +573,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               streamRecoveryDetail: undefined,
             }),
       });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setLastTurnOutcome: (chatId, outcome) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+      if (chatState.lastTurnOutcome === outcome) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, lastTurnOutcome: outcome });
 
       return { chatStates: newChatStates };
     }),

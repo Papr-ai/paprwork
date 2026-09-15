@@ -66,6 +66,18 @@ export interface ChatMessage extends CoreMessage {
  */
 export type StreamRecoveryReason = "connection" | "rateLimit";
 
+/**
+ * Why the last turn ended, when it ended in a way auto-continue must respect.
+ * Absent means nothing blocks a retry.
+ *
+ * This cannot be read off `needsStreamRecovery`, for two reasons that pull in
+ * opposite directions. A spent quota deliberately offers no Resume (Issue 77),
+ * so the banner state never carries it. And `interruptActiveStream` clears the
+ * banner — so a Stop pressed on a refused turn would erase the evidence of the
+ * refusal at exactly the moment the user asked us to stop retrying.
+ */
+export type LastTurnOutcome = "providerRefused" | "userStopped";
+
 export interface ChatState {
   messages: ChatMessage[];
   isLoading: boolean;
@@ -87,6 +99,12 @@ export interface ChatState {
    * credential was refused, and why — was dropped on the floor.
    */
   streamRecoveryDetail?: string;
+  /**
+   * Set when the provider refused the turn or the user stopped it. Cleared only
+   * by a deliberate new attempt (sending a message, or tapping Resume), so a
+   * retry is never something the app decided on the user's behalf.
+   */
+  lastTurnOutcome?: LastTurnOutcome;
   hasUnread: boolean;
   draftMessage?: string; // Persisted draft message for this chat
   lastSelectedModelId?: string; // Last model user chose for this chat
