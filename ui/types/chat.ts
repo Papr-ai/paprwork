@@ -89,6 +89,16 @@ export interface ChatState {
   lastSelectedModelId?: string; // Last model user chose for this chat
   hasMoreMessages?: boolean; // Whether there are older messages to load
   isLoadingMore?: boolean; // Whether currently loading older messages
+  /**
+   * The last history load threw rather than returning a (possibly empty) list.
+   *
+   * A failed load leaves `messages` empty, which is the same shape as a chat
+   * that genuinely has none — so without this the pane renders the "What would
+   * you like to build?" welcome screen over a conversation that is sitting
+   * intact in SQLite. Not persisted: it records an attempt we watched fail, so
+   * after a reload we hold no evidence and should not claim any.
+   */
+  historyLoadFailed?: boolean;
 }
 
 /**

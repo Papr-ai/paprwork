@@ -142,8 +142,20 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           );
         }
 
-        setArtifacts([...documents, ...apps]);
-        persistArtifactsToWorkspaceCache(apps);
+        // A rejected app:list leaves `apps` empty, which is not the same fact
+        // as "there are no apps" — keep what we already had rather than
+        // replacing a good list with the shape of a failure, and above all do
+        // not write that emptiness to the cache the next launch hydrates from.
+        const keepExistingApps = appsResult.status === "rejected";
+        const existingApps = useArtifactsStore
+          .getState()
+          .artifacts.filter((item) => item.type === "app");
+        const nextApps = keepExistingApps ? existingApps : apps;
+
+        setArtifacts([...documents, ...nextApps]);
+        if (!keepExistingApps) {
+          persistArtifactsToWorkspaceCache(nextApps);
+        }
       }
     } catch (err) {
       const message =

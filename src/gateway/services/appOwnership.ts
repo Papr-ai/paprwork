@@ -10,8 +10,46 @@ import { parseCloudAppMetadataFile } from "../../core/utils/cloudAppMetadata.js"
 import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import { CLOUD_LINEAGE_FILENAME } from "./CloudAppLineageService.js";
 import type { MiniApp } from "./AppService.js";
-import { getPaprUserId } from "../utils/paprUserId.js";
+import {
+  getPaprUserId,
+  resolvePaprUserIdentity,
+} from "../utils/paprUserId.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
+
+/**
+ * Raised instead of returning a list filtered against an identity we do not
+ * have. Every owned app carries an `ownerUserId`, so filtering on an unknown
+ * user removes all of them — and an empty array is indistinguishable from
+ * "you own nothing", which callers cache and render as fact.
+ *
+ * Failing is recoverable: the caller retries a second later and gets the real
+ * list. A wrong empty answer is not, because nothing about it looks wrong.
+ */
+export class PaprIdentityUnresolvedError extends Error {
+  readonly code = "papr_identity_unresolved";
+
+  constructor() {
+    super(
+      "Could not determine the signed-in Papr user yet — the workspace is " +
+        "still starting. Your apps are on disk; retry in a moment.",
+    );
+    this.name = "PaprIdentityUnresolvedError";
+  }
+}
+
+/**
+ * Guard an ownership-filtered read.
+ *
+ * Only raises inside a namespaced workspace, which exists solely for a
+ * signed-in user. An open-source install with no Papr account resolves to
+ * `absent`, and filtering another user's apps out of view there is the
+ * intended behaviour rather than a race.
+ */
+export function assertPaprIdentityResolved(): void {
+  if (resolvePaprUserIdentity().state === "unresolved") {
+    throw new PaprIdentityUnresolvedError();
+  }
+}
 
 export interface AppDiskOwnershipHints {
   metadataOwnerUserId?: string;

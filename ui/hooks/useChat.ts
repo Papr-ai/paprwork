@@ -183,11 +183,26 @@ export function useChat() {
             messages,
             isLoading: false,
             hasMoreMessages: serverMessages.length === limit,
+            historyLoadFailed: false,
           });
           return { chatStates: newChatStates };
         });
       } catch (error) {
         console.error("Failed to load messages:", error);
+        // Record that we failed rather than leaving `messages` empty and
+        // indistinguishable from a chat that has none — otherwise the pane
+        // greets the user as if their conversation never existed.
+        useChatStore.setState((state) => {
+          const existingState = state.chatStates.get(chatId) || {
+            ...defaultChatState,
+          };
+          const newChatStates = new Map(state.chatStates);
+          newChatStates.set(chatId, {
+            ...existingState,
+            historyLoadFailed: true,
+          });
+          return { chatStates: newChatStates };
+        });
       } finally {
         useChatStore.setState((state) => {
           const existingState = state.chatStates.get(chatId) || {
