@@ -12,7 +12,7 @@ import type {
 // Event Names (Centralized)
 // ============================================
 
-export const AmplitudeEvents = {
+export const TelemetryEvents = {
   // Lifecycle Events
   APP_STARTED: "paprwork_app_started",
   APP_QUIT: "paprwork_app_quit",
@@ -482,8 +482,8 @@ export interface SyncV3MetricProperties extends BaseEventProperties {
 
 export function isValidEventName(
   name: string,
-): name is keyof typeof AmplitudeEvents {
-  return Object.values(AmplitudeEvents).includes(name as any);
+): name is keyof typeof TelemetryEvents {
+  return Object.values(TelemetryEvents).includes(name as any);
 }
 
 // ============================================

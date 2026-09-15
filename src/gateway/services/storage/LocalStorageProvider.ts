@@ -1277,6 +1277,36 @@ export class LocalStorageProvider implements IStorageProvider {
       .run(paprObjectId, messageId);
   }
 
+  /**
+   * Messages written while storage was local-only use sync_status `local`.
+   * Re-queue them when upgrading to hybrid so bulk/per-message Papr sync can run.
+   */
+  markLocalMessagesPendingSync(): number {
+    const result = this.db
+      .prepare(`
+      UPDATE messages
+      SET sync_status = 'sync_pending',
+          sync_error = NULL
+      WHERE sync_status = 'local'
+        AND (incomplete IS NULL OR incomplete = 0)
+    `)
+      .run();
+    return result.changes;
+  }
+
+  listChatIdsWithPendingPaprSync(limit = 50): string[] {
+    const rows = this.db
+      .prepare(`
+      SELECT DISTINCT chat_id AS chatId
+      FROM messages
+      WHERE sync_status IN ('sync_pending', 'sync_failed')
+      ORDER BY chat_id
+      LIMIT ?
+    `)
+      .all(limit) as Array<{ chatId: string }>;
+    return rows.map((row) => row.chatId);
+  }
+
   async markSyncFailed(messageId: string, error: string): Promise<void> {
     this.db
       .prepare(`

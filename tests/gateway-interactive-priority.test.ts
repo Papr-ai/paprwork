@@ -32,6 +32,13 @@ describe("gatewayInteractivePriority", () => {
     await expect(isInteractiveHotPathBusy()).resolves.toBe(false);
   });
 
+  test("agent:subagent hot path blocks background deferral", async () => {
+    enterInteractiveHotPath("agent:subagent");
+    await expect(isInteractiveHotPathBusy()).resolves.toBe(true);
+    leaveInteractiveHotPath("agent:subagent");
+    await expect(isInteractiveHotPathBusy()).resolves.toBe(false);
+  });
+
   test("waitForInteractiveQuiet proceeds after sustained idle", async () => {
     const started = Date.now();
     await waitForInteractiveQuietBeforeBackgroundWork("test", {
@@ -52,5 +59,19 @@ describe("gatewayInteractivePriority", () => {
     });
     expect(Date.now() - started).toBeGreaterThanOrEqual(70);
     leaveInteractiveHotPath();
+  });
+});
+
+describe("vault full sync coalescing", () => {
+  test("papr:resume-cloud runs in gateway parent (not background child push)", async () => {
+    const { GATEWAY_BACKGROUND_CHILD_TASKS } = await import(
+      "../src/gateway/services/gatewayBackgroundConcurrency.js"
+    );
+    expect(GATEWAY_BACKGROUND_CHILD_TASKS.has("papr:resume-cloud")).toBe(
+      false,
+    );
+    expect(GATEWAY_BACKGROUND_CHILD_TASKS.has("vault:workspace-switch")).toBe(
+      false,
+    );
   });
 });

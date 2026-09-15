@@ -36,16 +36,52 @@ function messageHasDelegateTask(message: ChatMessage): boolean {
   );
 }
 
-/** Text-only assistant turns after delegation (SubAgentResponseTrigger summaries). */
+/** Tools a SubAgentResponseTrigger summary may call while posting for the user. */
+const DELEGATION_FINISH_ALLOWED_TOOLS = new Set([
+  "respond_to_sub_agent",
+  "get_delegation_run",
+  "list_delegations",
+]);
+
+/** SubAgentResponseTrigger summaries (text-only or finish housekeeping tools). */
 function isDelegationFollowUp(message: ChatMessage): boolean {
   if (message.role !== "assistant") {
     return false;
+  }
+  if (message.delegationFinishFor) {
+    return true;
   }
   const tools = message.toolCalls ?? [];
   if (tools.length === 0) {
     return true;
   }
-  return tools.every((toolCall) => toolCall.toolName === "respond_to_sub_agent");
+  return tools.every((toolCall) =>
+    DELEGATION_FINISH_ALLOWED_TOOLS.has(toolCall.toolName),
+  );
+}
+
+function collectFollowUpAfterSynthetic(
+  messages: ChatMessage[],
+  startIndex: number,
+  delegationId: string,
+): { followUps: ChatMessage[]; nextIndex: number } {
+  const followUps: ChatMessage[] = [];
+  let nextIndex = startIndex;
+  while (nextIndex < messages.length && messages[nextIndex].role === "assistant") {
+    const candidate = messages[nextIndex];
+    if (
+      candidate.delegationFinishFor === delegationId ||
+      (isDelegationFollowUp(candidate) &&
+        (candidate.delegationFinishFor === undefined ||
+          candidate.delegationFinishFor === delegationId))
+    ) {
+      followUps.push(candidate);
+      nextIndex += 1;
+      break;
+    }
+    break;
+  }
+  return { followUps, nextIndex };
 }
 
 function collectDelegationIds(message: ChatMessage): string[] {
@@ -97,24 +133,34 @@ function buildFollowUpsByDelegationId(
 ): Map<string, ChatMessage[]> {
   const followUpsByDelegationId = new Map<string, ChatMessage[]>();
 
+  const pushFollowUp = (delegationId: string, followUp: ChatMessage): void => {
+    const existing = followUpsByDelegationId.get(delegationId) ?? [];
+    if (existing.some((item) => item.id === followUp.id)) {
+      return;
+    }
+    followUpsByDelegationId.set(delegationId, [...existing, followUp]);
+  };
+
+  for (const message of messages) {
+    const taggedId = message.delegationFinishFor;
+    if (taggedId) {
+      pushFollowUp(taggedId, message);
+    }
+  }
+
   for (let index = 0; index < messages.length; index += 1) {
     const message = messages[index];
     const delegationId = extractDelegationFinishedId(message.content);
     if (!delegationId) continue;
 
-    const followUps: ChatMessage[] = [];
-    let nextIndex = index + 1;
-    while (
-      nextIndex < messages.length &&
-      isDelegationFollowUp(messages[nextIndex])
-    ) {
-      followUps.push(messages[nextIndex]);
-      nextIndex += 1;
-    }
+    const { followUps, nextIndex } = collectFollowUpAfterSynthetic(
+      messages,
+      index + 1,
+      delegationId,
+    );
 
-    if (followUps.length > 0) {
-      const existing = followUpsByDelegationId.get(delegationId) ?? [];
-      followUpsByDelegationId.set(delegationId, [...existing, ...followUps]);
+    for (const followUp of followUps) {
+      pushFollowUp(delegationId, followUp);
     }
   }
 

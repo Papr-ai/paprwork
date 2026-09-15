@@ -1,5 +1,5 @@
 import { TelemetryClient } from "../../core/telemetry/TelemetryClient.js";
-import { AmplitudeEvents } from "../../core/telemetry/events.js";
+import { TelemetryEvents } from "../../core/telemetry/events.js";
 import { isTelemetryPackagedFromEnv } from "../../core/telemetry/telemetryProductContext.js";
 import { isTelemetrySendingEnabled } from "../../core/telemetry/telemetryEnv.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
@@ -17,7 +17,7 @@ function ensureSyncV3TelemetrySink(telemetry: TelemetryClient): void {
   if (syncV3SinkRegistered) return;
   syncV3SinkRegistered = true;
   registerSyncV3TelemetrySink((name: SyncV3MetricName, value: number) => {
-    telemetry.trackFireAndForget(AmplitudeEvents.SYNC_V3_METRIC, {
+    telemetry.trackFireAndForget(TelemetryEvents.SYNC_V3_METRIC, {
       metric_name: name,
       metric_value: value,
       sync_protocol: getDesktopSyncProtocol(),

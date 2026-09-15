@@ -107,6 +107,108 @@ export async function syncBundledHomeMigrationsToRegistry(
   return copied;
 }
 
+/**
+ * True when bundled migrations are on disk and every migration is recorded and
+ * schema-valid on the Turso replica handle. Used to skip startup repair noise.
+ */
+export async function isHomeDailyBriefRegistrySchemaCurrent(
+  dbPath: string,
+  options?: { appsDir?: string },
+): Promise<boolean> {
+  if (!isHomeDailyBriefRegistryDbPath(dbPath)) {
+    return true;
+  }
+
+  const { resolvePersistedDatabaseLayout } = await import(
+    "./jobs/databaseMigrations.js"
+  );
+  const layout = resolvePersistedDatabaseLayout(dbPath);
+  if (!layout) {
+    return true;
+  }
+
+  const { getPaprAppsRoot } = await import("../../core/utils/paprRoot.js");
+  const appsDir = options?.appsDir ?? getPaprAppsRoot();
+  const bundledDir = path.join(
+    appsDir,
+    DEFAULT_HOME_APP_ID,
+    DEFAULT_HOME_DB_MIGRATIONS_DIR,
+  );
+  const targetDir = path.join(layout.migrationRoot, "migrations");
+
+  let bundledFiles: string[];
+  try {
+    bundledFiles = (await fs.readdir(bundledDir))
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
+  } catch {
+    bundledFiles = [];
+  }
+
+  for (const file of bundledFiles) {
+    const target = path.join(targetDir, file);
+    if (!existsSync(target)) {
+      return false;
+    }
+  }
+
+  const { getDatabaseRegistryService } = await import(
+    "./DatabaseRegistryService.js"
+  );
+  const record = getDatabaseRegistryService().getByPath(dbPath);
+  if (!record) {
+    return false;
+  }
+
+  let migrationFiles: string[];
+  try {
+    migrationFiles = (await fs.readdir(targetDir))
+      .filter((name) => name.endsWith(".sql"))
+      .sort();
+  } catch {
+    return true;
+  }
+
+  if (migrationFiles.length === 0) {
+    return true;
+  }
+
+  const { migrationSatisfiedOnReplica } = await import(
+    "./tursoReplica/tursoReplicaMigrationVerify.js"
+  );
+  const source: AppDataSource = {
+    id: record.dbId,
+    type: "sqlite",
+    dbId: record.dbId,
+    alias: record.label ?? record.dbId,
+    dbPath: record.localPath,
+    tables: [],
+    linkedAt: record.createdAt,
+  };
+
+  for (const file of migrationFiles) {
+    const bareId = file.replace(/\.sql$/, "");
+    try {
+      const satisfied = await migrationSatisfiedOnReplica(
+        source,
+        layout.migrationRoot,
+        bareId,
+      );
+      if (!satisfied) {
+        return false;
+      }
+    } catch (err) {
+      console.warn(
+        "[DefaultHomeAppRepair] Replica schema check unavailable — skipping repair this boot:",
+        (err as Error).message.slice(0, 160),
+      );
+      return true;
+    }
+  }
+
+  return true;
+}
+
 /** Apply registry migrations on the Turso replica handle and refresh the worker. */
 export async function ensureHomeDailyBriefRegistrySchema(
   dbPath: string,
@@ -124,70 +226,14 @@ export async function ensureHomeDailyBriefRegistrySchema(
     console.log(
       `[DefaultHomeAppRepair] Copied bundled Home migrations: ${copied.join(", ")}`,
     );
+  } else if (await isHomeDailyBriefRegistrySchemaCurrent(dbPath, options)) {
+    return [];
   }
 
   const { applyRegistryDatabaseMigrations } = await import(
     "./jobs/databaseMigrations.js"
   );
   const applied = await applyRegistryDatabaseMigrations(dbPath);
-
-  const { getDatabaseRegistryService } = await import(
-    "./DatabaseRegistryService.js"
-  );
-  const record = getDatabaseRegistryService().getByPath(dbPath);
-  if (record) {
-    const { migrationSatisfiedOnReplica } = await import(
-      "./tursoReplica/tursoReplicaMigrationVerify.js"
-    );
-    const { applyRegistryMigrationOnReplicaOnly } = await import(
-      "./tursoReplica/tursoReplicaMigrationDualApply.js"
-    );
-    const { resolvePersistedDatabaseLayout } = await import(
-      "./jobs/databaseMigrations.js"
-    );
-    const layout = resolvePersistedDatabaseLayout(dbPath);
-    const source: AppDataSource = {
-      id: record.dbId,
-      type: "sqlite",
-      dbId: record.dbId,
-      alias: record.label ?? record.dbId,
-      dbPath: record.localPath,
-      tables: [],
-      linkedAt: record.createdAt,
-    };
-    if (layout) {
-      const migrationsDir = path.join(layout.migrationRoot, "migrations");
-      let migrationFiles: string[] = [];
-      try {
-        migrationFiles = (await fs.readdir(migrationsDir))
-          .filter((name) => name.endsWith(".sql"))
-          .sort();
-      } catch {
-        migrationFiles = [];
-      }
-
-      for (const file of migrationFiles) {
-        const bareId = file.replace(/\.sql$/, "");
-        const satisfied = await migrationSatisfiedOnReplica(
-          source,
-          layout.migrationRoot,
-          bareId,
-        ).catch(() => false);
-        if (satisfied) {
-          continue;
-        }
-        console.warn(
-          `[DefaultHomeAppRepair] Migration ${file} not satisfied on replica — applying`,
-        );
-        await applyRegistryMigrationOnReplicaOnly(
-          source,
-          layout.migrationRoot,
-          file,
-        );
-        applied.push(file);
-      }
-    }
-  }
 
   const { getTursoReplicaSyncWorkerClient } = await import(
     "./tursoReplica/TursoReplicaSyncWorkerClient.js"
@@ -438,18 +484,28 @@ export async function repairDefaultHomeAppLinkedSources(params: {
       result.isolationUpgraded += 1;
     }
 
-    const applied = await ensureHomeDailyBriefRegistrySchema(
+    const schemaCurrent = await isHomeDailyBriefRegistrySchemaCurrent(
       registryDbPath,
       { appsDir: params.appsDir },
-    ).catch((err) => {
-      console.warn(
-        "[DefaultHomeAppRepair] Final registry schema repair failed:",
-        err,
-      );
-      return [] as string[];
-    });
-    if (applied.length > 0) {
-      result.schemaRepaired += 1;
+    );
+    if (
+      !schemaCurrent ||
+      result.registryUpgraded > 0 ||
+      result.isolationUpgraded > 0
+    ) {
+      const applied = await ensureHomeDailyBriefRegistrySchema(
+        registryDbPath,
+        { appsDir: params.appsDir },
+      ).catch((err) => {
+        console.warn(
+          "[DefaultHomeAppRepair] Final registry schema repair failed:",
+          err,
+        );
+        return [] as string[];
+      });
+      if (applied.length > 0) {
+        result.schemaRepaired += 1;
+      }
     }
   }
 
