@@ -4,7 +4,7 @@
  */
 
 import type {
-  AmplitudeEvents,
+  TelemetryEvents,
   BaseEventProperties,
 } from "../../src/core/telemetry/events";
 import { mergeTelemetryEnvelope } from "../../src/core/telemetry/telemetryProductContext";
@@ -197,7 +197,7 @@ export function setTelemetryPaprUserId(paprUserId: string | null): void {
  * Track an event (renderer side). Events before init are queued and flushed once ready.
  */
 export function trackEvent(
-  eventName: keyof typeof AmplitudeEvents | string,
+  eventName: keyof typeof TelemetryEvents | string,
   properties?: BaseEventProperties,
 ): void {
   const payload = properties as Record<string, unknown> | undefined;

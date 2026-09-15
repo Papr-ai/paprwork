@@ -59,8 +59,8 @@ function maybeReportSlowBackgroundTaskTelemetry(
   }
   const operationName = ok ? taskKey : `${taskKey}:failed`;
   void import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
-    void import("../../core/telemetry/events.js").then(({ AmplitudeEvents }) => {
-      getGatewayTelemetry().trackFireAndForget(AmplitudeEvents.SLOW_OPERATION, {
+    void import("../../core/telemetry/events.js").then(({ TelemetryEvents }) => {
+      getGatewayTelemetry().trackFireAndForget(TelemetryEvents.SLOW_OPERATION, {
         operation_name: operationName.slice(0, 200),
         duration_ms: Math.round(durationMs),
         threshold_ms: thresholdMs,
