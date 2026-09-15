@@ -18,6 +18,22 @@ import type {
   DbWorkerResponse,
 } from "../workers/db-query-worker.js";
 import { assertNotReplicaManagedSqliteAccess } from "./tursoReplica/tursoReplicaFileGuard.js";
+import { runWithBusyRetry } from "./appRuntime/dbBusyRetry.js";
+
+/**
+ * Rebuild a worker failure as an Error that still carries SQLite's code.
+ *
+ * An Error cannot cross a postMessage intact, so the worker sends the message
+ * and the code as plain fields. Reattaching the code lets the busy classifier
+ * match on `SQLITE_BUSY` itself instead of only on the wording of the message.
+ */
+function toWorkerError(res: DbWorkerResponse): Error {
+  const err = new Error(res.error ?? "Worker query failed");
+  if (res.errorCode) {
+    (err as Error & { code?: string }).code = res.errorCode;
+  }
+  return err;
+}
 
 // ── Result types exposed to callers ───────────────────────────────────────
 
@@ -315,10 +331,34 @@ export class DbQueryPool {
       partial.dbPath,
       `DbQueryPool.${partial.type}`,
     );
-    const req: DbWorkerRequest = { ...partial, id: this.nextId++ } as DbWorkerRequest;
-    const res = await this.pick().execute(req);
-    if (!res.success) throw new Error(res.error ?? "Worker query failed");
-    return res;
+
+    return runWithBusyRetry(
+      partial.type,
+      async () => {
+        // A fresh id per attempt: the previous one has already been settled and
+        // removed from the worker's pending map.
+        const req: DbWorkerRequest = {
+          ...partial,
+          id: this.nextId++,
+        } as DbWorkerRequest;
+        const res = await this.pick().execute(req);
+        if (res.success) return res;
+        throw toWorkerError(res);
+      },
+      ({ busyAttempts, recovered }) => {
+        if (recovered) {
+          console.log(
+            `[DbQueryPool] ${partial.type} recovered after ${busyAttempts} ` +
+              `lock wait(s): ${partial.dbPath}`,
+          );
+        } else if (busyAttempts > 0) {
+          console.warn(
+            `[DbQueryPool] ${partial.type} still locked after ${busyAttempts} ` +
+              `wait(s) — reporting to caller: ${partial.dbPath}`,
+          );
+        }
+      },
+    );
   }
 
   /** Pick the worker with the smallest queue depth. */

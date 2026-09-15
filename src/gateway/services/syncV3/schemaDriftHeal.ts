@@ -38,6 +38,14 @@ import {
 import { computeSchemaPayloadContentHash } from "../jobs/migrationContentHash.js";
 import { isSyncV3SchemaLogEnabled } from "./syncV3Flags.js";
 import { resolveReplicaIdForLinkedSource } from "./workspaceLogSync.js";
+import {
+  beginDriftHealPass,
+  clearDriftHealProgress,
+  driftHealWorkSignature,
+  MAX_UNCHANGED_HEAL_PASSES,
+  PARKED_RECHECK_INTERVAL_MS,
+  recordDriftHealWork,
+} from "./schemaDriftHealProgress.js";
 
 const DRIFT_HEAL_PREFIX = "__schema_drift_heal__";
 
@@ -498,6 +506,13 @@ export async function runSchemaDriftHeal(
   }
 
   const label = linkedSourceLabel(linked);
+  const syncKey = linked.dbId ?? linked.dbPath;
+
+  const gate = beginDriftHealPass(syncKey);
+  if (!gate.proceed) {
+    return 0;
+  }
+
   console.log(`[SchemaDriftHeal] Starting for ${label}`);
 
   const remoteWork = await withRemoteClient(linked, async (remote) => {
@@ -541,6 +556,32 @@ export async function runSchemaDriftHeal(
   const healCount = remoteWork.healOps.length > 0 ? 1 : 0;
   const batchCount = migrationCount + healCount;
 
+  if (batchCount === 0) {
+    clearDriftHealProgress(syncKey);
+  } else {
+    const decision = recordDriftHealWork(
+      syncKey,
+      driftHealWorkSignature(remoteWork),
+    );
+    if (decision.resumed) {
+      console.log(
+        `[SchemaDriftHeal] Work changed for ${label} — resuming after park`,
+      );
+    }
+    if (decision.justParked) {
+      console.warn(
+        `[SchemaDriftHeal] Parking ${label} — the same ${batchCount} schema entry(ies) were shipped ` +
+          `${MAX_UNCHANGED_HEAL_PASSES} times with no change to the drift. Shipping reports entries sent, ` +
+          `not applied, so this cannot be confirmed from here. Stuck migrations: ` +
+          `${remoteWork.unsatisfied.join(", ") || "(none)"}; heal ops: ${remoteWork.healOps.length}. ` +
+          `Re-measuring every ${PARKED_RECHECK_INTERVAL_MS / 60000} minutes.`,
+      );
+    }
+    if (!decision.ship) {
+      return 0;
+    }
+  }
+
   if (batchCount > 0) {
     if (linked.appId) {
       const { reportFlushProgress } = await import(
@@ -572,8 +613,11 @@ export async function runSchemaDriftHeal(
   }
 
   if (shipped > 0) {
+    // "Shipped", not "applied": shipSchemaLogBatch reports entries accepted by
+    // the workspace log, which the memory server applies asynchronously. A
+    // count here is not evidence the DDL reached Turso.
     console.log(
-      `[SchemaDriftHeal] Memory applied ${shipped} schema entry(ies) for ${label}`,
+      `[SchemaDriftHeal] Shipped ${shipped} schema entry(ies) for ${label} (sent — apply is asynchronous)`,
     );
   }
 
