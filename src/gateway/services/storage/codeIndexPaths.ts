@@ -8,6 +8,40 @@ import * as path from 'path';
 
 const CODE_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py']);
 
+/**
+ * Canonical identity for an indexed file.
+ *
+ * WHY: the index key was the raw path string, so the SAME file on disk could
+ * be indexed several times under different spellings, and each copy paid for
+ * its own LLM enrichment:
+ *
+ *   - case-variant roots — ~/Papr/... vs ~/PAPR/... (macOS/APFS is
+ *     case-INSENSITIVE, so both resolve to one inode)
+ *   - symlinked or /private-prefixed paths on macOS
+ *
+ * Measured in the pre-namespace code-index DB: 727 rows for 534 distinct
+ * files — 193 files (36%) stored under two spellings, e.g.
+ * `PAPR/Jobs/.../main.py` and `Papr/Jobs/.../main.py` as separate rows with
+ * separate memory ids.
+ *
+ * realpathSync.native asks the filesystem for the true on-disk spelling, which
+ * collapses every variant onto one canonical path WITHOUT lowercasing — so the
+ * value stays correct on case-SENSITIVE volumes, where Papr and PAPR really
+ * are two different directories and must stay distinct. Lowercasing would
+ * corrupt those.
+ *
+ * Falls back to path.resolve when the file does not exist yet (deleted
+ * entries, queued-then-removed files) so callers always get an absolute path.
+ */
+export function normalizeIndexPath(filePath: string): string {
+  if (!filePath) return filePath;
+  try {
+    return fs.realpathSync.native(filePath);
+  } catch {
+    return path.resolve(filePath);
+  }
+}
+
 export interface ProjectPathInfo {
   projectId: string;
   type: 'mini_app' | 'job';

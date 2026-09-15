@@ -10,6 +10,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { resolvePaprUserDataPath } from '../../../core/utils/paprWorkspace.js';
+import { normalizeIndexPath } from './codeIndexPaths.js';
 
 export interface IndexedFile {
   file_path: string;
@@ -185,7 +186,7 @@ export class CodeIndexTracker {
 
     const row = this.db.prepare(
       "SELECT content_hash FROM indexed_files WHERE file_path = ?",
-    ).get(filePath) as { content_hash: string } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { content_hash: string } | undefined;
 
     if (!row) {
       return true;
@@ -204,7 +205,7 @@ export class CodeIndexTracker {
       (file_path, content_hash, last_indexed_at, schema_version, memory_id, project_id, lines_of_code, language)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      file.file_path,
+      normalizeIndexPath(file.file_path),
       file.content_hash,
       file.last_indexed_at.toISOString(),
       file.schema_version,
@@ -246,7 +247,7 @@ export class CodeIndexTracker {
       ON CONFLICT(file_path) DO UPDATE SET
         queued_at = excluded.queued_at,
         priority = excluded.priority
-    `).run(filePath, new Date().toISOString(), priority);
+    `).run(normalizeIndexPath(filePath), new Date().toISOString(), priority);
   }
 
   /**
@@ -259,11 +260,11 @@ export class CodeIndexTracker {
       UPDATE index_queue
       SET attempts = COALESCE(attempts, 0) + 1, last_error = ?
       WHERE file_path = ?
-    `).run(errorMessage.slice(0, 500), filePath);
+    `).run(errorMessage.slice(0, 500), normalizeIndexPath(filePath));
 
     const row = this.db.prepare(
       'SELECT attempts FROM index_queue WHERE file_path = ?'
-    ).get(filePath) as { attempts: number } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { attempts: number } | undefined;
 
     return row?.attempts ?? 0;
   }
@@ -292,7 +293,9 @@ export class CodeIndexTracker {
    */
   dequeueFile(filePath: string): void {
     if (this.closed) return;
-    this.db.prepare('DELETE FROM index_queue WHERE file_path = ?').run(filePath);
+    // Canonical AND raw: rows written before normalization keep their spelling.
+    this.db.prepare('DELETE FROM index_queue WHERE file_path IN (?, ?)')
+      .run(normalizeIndexPath(filePath), filePath);
   }
   
   /**
@@ -385,7 +388,7 @@ export class CodeIndexTracker {
     if (this.closed) return false;
     const row = this.db.prepare(
       'SELECT content_hash FROM file_summaries WHERE file_path = ?'
-    ).get(filePath) as { content_hash: string } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { content_hash: string } | undefined;
 
     if (!row) {
       return true;
@@ -401,7 +404,7 @@ export class CodeIndexTracker {
       (file_path, project_id, file_name, summary_text, content_hash, memory_id, language, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
-      summary.file_path,
+      normalizeIndexPath(summary.file_path),
       summary.project_id,
       summary.file_name,
       summary.summary_text,
@@ -416,7 +419,7 @@ export class CodeIndexTracker {
     if (this.closed) return null;
     const row = this.db.prepare(
       'SELECT * FROM file_summaries WHERE file_path = ?'
-    ).get(filePath) as {
+    ).get(normalizeIndexPath(filePath)) as {
       file_path: string;
       project_id: string;
       file_name: string;
@@ -472,7 +475,8 @@ export class CodeIndexTracker {
 
   deleteFileSummary(filePath: string): void {
     if (this.closed) return;
-    this.db.prepare('DELETE FROM file_summaries WHERE file_path = ?').run(filePath);
+    this.db.prepare('DELETE FROM file_summaries WHERE file_path IN (?, ?)')
+      .run(normalizeIndexPath(filePath), filePath);
   }
 
   saveProjectOverview(overview: ProjectOverviewRecord): void {
@@ -530,7 +534,7 @@ export class CodeIndexTracker {
     if (this.closed) return undefined;
     const row = this.db.prepare(
       'SELECT memory_id FROM indexed_files WHERE file_path = ?'
-    ).get(filePath) as { memory_id?: string } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { memory_id?: string } | undefined;
     return row?.memory_id ?? undefined;
   }
 
@@ -545,14 +549,14 @@ export class CodeIndexTracker {
     if (this.closed) return;
     this.db.prepare(
       'UPDATE indexed_files SET memory_id = ? WHERE file_path = ?'
-    ).run(memoryId, filePath);
+    ).run(memoryId, normalizeIndexPath(filePath));
   }
 
   getFileSummaryMemoryId(filePath: string): string | undefined {
     if (this.closed) return undefined;
     const row = this.db.prepare(
       'SELECT memory_id FROM file_summaries WHERE file_path = ?'
-    ).get(filePath) as { memory_id?: string } | undefined;
+    ).get(normalizeIndexPath(filePath)) as { memory_id?: string } | undefined;
     return row?.memory_id;
   }
 
@@ -566,7 +570,8 @@ export class CodeIndexTracker {
 
   removeIndexedFile(filePath: string): void {
     if (this.closed) return;
-    this.db.prepare('DELETE FROM indexed_files WHERE file_path = ?').run(filePath);
+    this.db.prepare('DELETE FROM indexed_files WHERE file_path IN (?, ?)')
+      .run(normalizeIndexPath(filePath), filePath);
   }
 
   /**
