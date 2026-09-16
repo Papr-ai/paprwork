@@ -40,7 +40,7 @@ import {
   findHistoryModelId,
   resolveChatModelId,
 } from "../../utils/resolveChatModel";
-import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import { readIncomingFiles } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 import {
@@ -1065,7 +1065,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       e.preventDefault();
       e.stopPropagation();
       setIsFileDragOver(false);
-      const files = extractFilesFromDataTransfer(e.dataTransfer);
+      const files = readIncomingFiles(e.dataTransfer);
       if (files.length === 0) return;
       handleFilesDroppedToChat(files);
     },

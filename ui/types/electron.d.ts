@@ -550,6 +550,15 @@ export interface ElectronAPI {
     }>;
   };
 
+  /**
+   * Electron 32 removed File.path; webUtils is the documented replacement.
+   * Returns "" for a File with no disk backing (a pasted blob) rather than
+   * throwing, so callers can treat "" as "copy it instead".
+   */
+  files: {
+    getPathForFile: (file: File) => string;
+  };
+
   agentPreview: {
     show: (webviewId?: string) => Promise<{
       success: boolean;
