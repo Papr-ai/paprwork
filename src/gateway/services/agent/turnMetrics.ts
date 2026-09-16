@@ -47,6 +47,18 @@ export interface TurnMetrics {
   /** Largest `chars/4` estimate seen at a step boundary — the ladder's own view. */
   estimatedPeakContextTokens: number;
   historyTokenBudget: number;
+  /**
+   * Batching nudges appended this turn, and the tool schemas withheld from it.
+   *
+   * Both are the intervention side of `toolCallsPerStep` and the tool-block
+   * size: without them a change in either ratio cannot be attributed, since a
+   * turn whose width rose on its own and one that was nudged four times read
+   * identically. Recorded rather than inferred from the prompt, which is not
+   * kept.
+   */
+  widthNudgesIssued: number;
+  deferredToolCount: number;
+  deferredToolTokens: number;
 }
 
 export function createTurnMetrics(): TurnMetrics {
@@ -63,7 +75,34 @@ export function createTurnMetrics(): TurnMetrics {
     observedPeakContextTokens: 0,
     estimatedPeakContextTokens: 0,
     historyTokenBudget: 0,
+    widthNudgesIssued: 0,
+    deferredToolCount: 0,
+    deferredToolTokens: 0,
   };
+}
+
+/**
+ * Set once per turn, from the selection made before the first step.
+ *
+ * Set rather than accumulated because the selection is fixed for the whole turn
+ * by design — see `toolDeferral.ts`. If this ever starts accumulating, the tool
+ * block is changing mid-turn and the cache write is costing more than the
+ * deferral saves.
+ */
+export function recordToolDeferral(
+  metrics: TurnMetrics | null | undefined,
+  selection: { deferredCount: number; savedTokens: number },
+): void {
+  if (!metrics) return;
+  metrics.deferredToolCount = Math.max(0, selection.deferredCount);
+  metrics.deferredToolTokens = Math.max(0, selection.savedTokens);
+}
+
+export function recordWidthNudge(
+  metrics: TurnMetrics | null | undefined,
+): void {
+  if (!metrics) return;
+  metrics.widthNudgesIssued += 1;
 }
 
 export function recordStep(
@@ -253,6 +292,10 @@ export interface TurnMetricsSummary {
    * no steps, so an empty turn does not report a confident 0.
    */
   toolCallsPerStep: number | null;
+  /** Batching nudges appended, and schemas withheld — see {@link TurnMetrics}. */
+  widthNudgesIssued: number;
+  deferredToolCount: number;
+  deferredToolTokens: number;
   planCount: number;
   planTotalSteps: number;
   planCompletedSteps: number;
@@ -302,6 +345,9 @@ export function summarizeTurnMetrics(
     estimatorErrorRatio,
     redundantRecoveryRate,
     toolCallsPerStep,
+    widthNudgesIssued: metrics.widthNudgesIssued,
+    deferredToolCount: metrics.deferredToolCount,
+    deferredToolTokens: metrics.deferredToolTokens,
     planCount,
     planTotalSteps: plan?.totalSteps ?? 0,
     planCompletedSteps: plan?.completedSteps ?? 0,
