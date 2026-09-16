@@ -72,11 +72,11 @@ export function TabBar({
 
   // Define handleNewTab before useEffect so it can be in the dependency array
   const handleNewTab = async () => {
-    // Create new chat - createTab will handle empty chat detection automatically
     const chatId = await createChat();
     if (chatId) {
-      // createTab will check for empty chats and reuse if found
-      const tabId = createTab("chat", chatId, "New Chat");
+      // Explicit user action (+ button / Cmd+T) — forceNew skips blank-chat
+      // reuse so the click always produces a visible new tab.
+      const tabId = createTab("chat", chatId, "New Chat", {}, { forceNew: true });
       switchToTab(tabId);
     }
   };
