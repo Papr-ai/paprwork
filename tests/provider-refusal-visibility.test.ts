@@ -322,11 +322,38 @@ describe("a refusal is recorded somewhere a per-chat write cannot drop it", () =
     }
   });
 
-  it("the two banners never render together", () => {
-    // Both surfaces now hold the same sentence, so without this the refusal
-    // would be reported twice, one above the other.
+  it("the refusal is reported once, never twice", () => {
+    // Both sources hold the same sentence, so reporting each on its own
+    // surface showed the refusal twice, one above the other. This used to be
+    // a conjunction on the error banner's render condition; the banners have
+    // since been collapsed into one notice, which is a stronger guarantee of
+    // the same requirement. Pinned as the requirement rather than the old
+    // location, because scoping an assertion to one implementation is what
+    // let four other exits go unguarded (Issue 111).
     const source = stripComments(read("ui/components/Chat/ChatContainer.tsx"));
-    expect(source).toContain("{error && !needsStreamRecovery && (");
+
+    // Nothing left that could double up: the two banners are gone.
+    expect(source).not.toContain("error-banner");
+    expect(source).not.toContain("stream-recovery-banner");
+
+    // The two sources merge into a single nullable value, so there is one
+    // notice or none — two cannot exist to be rendered together.
+    expect(source).toContain("const providerNotice = useMemo<ProviderNotice | null>");
+
+    // And exactly one surface consumes it. Matched on the value rather than
+    // the prop name: a second surface under a different name is the original
+    // two-banner defect, and naming the prop would let it back in.
+    const renders = source.match(/=\{providerNotice\}/g) ?? [];
+    expect(renders).toHaveLength(1);
+
+    // `error` short-circuits before the recovery state is read as a producer,
+    // which is the precedence the old conjunction encoded: the provider's own
+    // words win, because only they name the credential that was refused.
+    const notice = sliceFunction(source, "const providerNotice = useMemo");
+    const errorWins = notice.indexOf("if (error) {");
+    const recoveryProduces = notice.indexOf("if (!needsStreamRecovery) return null;");
+    expect(errorWins).toBeGreaterThan(-1);
+    expect(recoveryProduces).toBeGreaterThan(errorWins);
   });
 
   it("Resume clears the error as well as the banner", () => {
