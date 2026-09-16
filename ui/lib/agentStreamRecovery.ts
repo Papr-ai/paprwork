@@ -17,6 +17,7 @@ import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
 import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
+import { recoveryBannerSurvivesStreamEnd } from "./streamRecoveryPersistence";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -710,8 +711,23 @@ async function clearStaleConnectionPaused(): Promise<void> {
       }
     }
 
-    // Clear needsStreamRecovery if nothing to recover
-    if (state.needsStreamRecovery && isStale) {
+    // Clear needsStreamRecovery if nothing to recover.
+    //
+    // `isStale` means "no stream is in flight on the client", which is not the
+    // same as "nothing to recover": a provider refusal retires its stream and
+    // then raises this banner, so the banner's whole existence presupposes a
+    // stale chat. A reconnect also says nothing about whether the account's
+    // quota cleared, and `shouldAutoRetryStreamRecoveryAfterReconnect` already
+    // declines to retry a rate-limit banner — so sweeping it here would leave
+    // the user with neither an explanation nor an automatic retry.
+    if (
+      state.needsStreamRecovery &&
+      isStale &&
+      !recoveryBannerSurvivesStreamEnd({
+        needsStreamRecovery: state.needsStreamRecovery,
+        reason: state.streamRecoveryReason,
+      })
+    ) {
       store.setNeedsStreamRecovery(chatId, false);
     }
   }

@@ -153,6 +153,52 @@ export function useAgent() {
     (chunk: StreamChunk) => void
   >(() => {});
 
+  /**
+   * Terminal chat state for every `done` path, settled in one place.
+   *
+   * The `done` arm has four exits — duplicate done, stale done, backend
+   * finalMessage with no local stream data, and full finalization — and each
+   * repeated this sequence. Three of them dropped the recovery banner
+   * unconditionally, so a provider refusal (which raises the banner
+   * milliseconds before `done` arrives, and produces no local stream data of
+   * its own) had its only explanation erased on the way out.
+   */
+  const settleChatAfterStreamEnd = useCallback(
+    (chatId: string) => {
+      // Read before the clears: setConnectionPaused(false) drops
+      // needsStreamRecovery as a side effect, so a read taken afterwards
+      // always sees false and the survival check can never fire.
+      const banner = useChatStore.getState().chatStates.get(chatId);
+      const keepRecoveryBanner = recoveryBannerSurvivesStreamEnd({
+        needsStreamRecovery: banner?.needsStreamRecovery ?? false,
+        reason: banner?.streamRecoveryReason,
+      });
+
+      setSending(chatId, false);
+      setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
+      if (keepRecoveryBanner) {
+        // Re-asserted rather than left alone: setConnectionPaused above has
+        // already cleared it, so the reason and the provider's own sentence
+        // have to be put back for the banner to render.
+        setNeedsStreamRecovery(
+          chatId,
+          true,
+          banner?.streamRecoveryReason,
+          banner?.streamRecoveryDetail,
+        );
+      } else {
+        setNeedsStreamRecovery(chatId, false);
+      }
+    },
+    [
+      setConnectionPaused,
+      setFinishingWork,
+      setNeedsStreamRecovery,
+      setSending,
+    ],
+  );
+
   // Handle streaming chunks
   const handleStreamChunk = useCallback(
     (chunk: StreamChunk) => {
@@ -951,10 +997,7 @@ export function useAgent() {
                 `[useAgent] Ignoring duplicate done for ${chatId} (stream already finalized)`,
               );
               untrackActiveStream(chatId);
-              setSending(chatId, false);
-              setConnectionPaused(chatId, false);
-              setFinishingWork(chatId, false);
-              setNeedsStreamRecovery(chatId, false);
+              settleChatAfterStreamEnd(chatId);
               const { setTabStreaming: clearTabStreaming } =
                 useTabStore.getState();
               clearTabStreaming(`chat-${chatId}`, false);
@@ -980,10 +1023,7 @@ export function useAgent() {
               sequenceRef.current.delete(chatId);
               currentTextSegmentRef.current.delete(chatId);
               untrackActiveStream(chatId);
-              setSending(chatId, false);
-              setConnectionPaused(chatId, false);
-              setFinishingWork(chatId, false);
-              setNeedsStreamRecovery(chatId, false);
+              settleChatAfterStreamEnd(chatId);
               const { setTabStreaming: clearTabStreaming } =
                 useTabStore.getState();
               clearTabStreaming(`chat-${chatId}`, false);
@@ -1058,10 +1098,7 @@ export function useAgent() {
                 sequenceRef.current.delete(chatId);
                 currentTextSegmentRef.current.delete(chatId);
                 untrackActiveStream(chatId);
-                setSending(chatId, false);
-                setConnectionPaused(chatId, false);
-                setFinishingWork(chatId, false);
-                setNeedsStreamRecovery(chatId, false);
+                settleChatAfterStreamEnd(chatId);
                 const { setTabStreaming } = useTabStore.getState();
                 setTabStreaming(`chat-${chatId}`, false);
                 break;
@@ -1179,24 +1216,10 @@ export function useAgent() {
               sequenceRef.current.set(chatId, sequence);
             }
 
-            // Set isSending to false FIRST to prevent empty loading indicator from appearing
-            setSending(chatId, false);
-            setConnectionPaused(chatId, false);
-            setFinishingWork(chatId, false);
-            // A provider refusal closes the stream cleanly, so `done` lands
-            // just after the error chunk raised the resume banner. Clearing it
-            // here would erase the only explanation the user gets.
-            {
-              const cs = useChatStore.getState().chatStates.get(chatId);
-              if (
-                !recoveryBannerSurvivesStreamEnd({
-                  needsStreamRecovery: cs?.needsStreamRecovery ?? false,
-                  reason: cs?.streamRecoveryReason,
-                })
-              ) {
-                setNeedsStreamRecovery(chatId, false);
-              }
-            }
+            // Settles isSending first so no empty loading indicator appears,
+            // and preserves a refusal banner the error chunk raised moments
+            // ago — see settleChatAfterStreamEnd.
+            settleChatAfterStreamEnd(chatId);
 
             // Clear streaming status (blue dot) for THIS chat's tab
             const { setTabStreaming } = useTabStore.getState();
@@ -1414,7 +1437,17 @@ export function useAgent() {
               // refused turn erased the evidence of the refusal at exactly the
               // moment the user asked us to stop retrying.
               setLastTurnOutcome(chatId, "providerRefused");
-              setError(null);
+              // Also recorded on `error`, which is global rather than per-chat
+              // and so cannot be dropped by a write to this chat's state.
+              // Every other copy of this sentence lives in the per-chat banner,
+              // and that banner is cleared as a side effect by several callers
+              // (setConnectionPaused, cleanupStreamState, the stale sweep) — so
+              // relying on it alone is what made a refusal show nothing at all.
+              // The sibling quota branch above has always used `error` and has
+              // always been visible; this is the same refusal and gets the same
+              // treatment. ChatContainer renders whichever one it has, never
+              // both, so this does not double up on the banner.
+              setError(rawError);
 
               const streamingMessageId =
                 streamingMessageIdRef.current.get(chatId);
@@ -1635,6 +1668,7 @@ export function useAgent() {
       setConnectionPaused,
       setFinishingWork,
       setNeedsStreamRecovery,
+      settleChatAfterStreamEnd,
       setError,
       initStreamingState,
       setStreamingText,
@@ -1823,10 +1857,11 @@ export function useAgent() {
         sequenceRef.current.delete(chatId);
         currentTextSegmentRef.current.delete(chatId);
         untrackActiveStream(chatId);
-        setSending(chatId, false);
-        setConnectionPaused(chatId, false);
-        setFinishingWork(chatId, false);
-        setNeedsStreamRecovery(chatId, false);
+        // Same four settles as every `done` path, and for the same reason: this
+        // runs on reconnect, where finding no live stream is exactly what a
+        // refused turn looks like — so clearing unconditionally would erase the
+        // refusal we are reconnecting to explain.
+        settleChatAfterStreamEnd(chatId);
         setTabStreaming(`chat-${chatId}`, false);
         clearStreamingState(chatId);
       };
@@ -1970,6 +2005,7 @@ export function useAgent() {
       setConnectionPaused,
       setFinishingWork,
       setNeedsStreamRecovery,
+      settleChatAfterStreamEnd,
       setError,
       setSending,
       streamingRefs,
@@ -2039,6 +2075,11 @@ export function useAgent() {
       // Tapping Resume is the user deciding to try again, so the refusal or
       // stop that blocked auto-continue no longer applies.
       setLastTurnOutcome(chatId, undefined);
+      // Cleared here rather than only on the resumable branch below: a refusal
+      // records its sentence on `error` as well as on the banner, so clearing
+      // the banner without clearing `error` would reveal the copy underneath
+      // and report the refusal a second time on the turn retrying it.
+      setError(null);
       clearResumeRetry(chatId);
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
 
@@ -2314,6 +2355,12 @@ export function useAgent() {
         if (!isHiddenContinueUserMessage(message)) {
           resetAutoContinueAttempts(chatId);
           setLastTurnOutcome(chatId, undefined);
+          // Retired alongside the outcome: a refusal banner now outlives the
+          // stream that raised it, so without this a real user message leaves
+          // a Resume button offering to retry the turn they just replaced.
+          // Gated on the same hidden-continue check, so an auto-continue
+          // cannot clear the banner that is meant to be blocking it.
+          setNeedsStreamRecovery(chatId, false);
         }
 
         // V1 APPROACH: Create permanent chat BEFORE streaming if temp

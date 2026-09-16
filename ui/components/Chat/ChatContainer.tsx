@@ -1081,7 +1081,14 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       onDragOver={handleChatDragOver}
       onDrop={handleChatDrop}
     >
-      {error && (
+      {/*
+        Suppressed while the recovery banner is up, because a provider refusal
+        now records its sentence in both places: the banner (which also offers
+        Resume) and `error` (which is global, so a write to this chat's state
+        cannot drop it). Whichever one survives is the one shown, and they never
+        render together.
+      */}
+      {error && !needsStreamRecovery && (
         <div className="error-banner">
           <span className="error-icon">⚠️</span>
           <span className="error-message">{error}</span>
