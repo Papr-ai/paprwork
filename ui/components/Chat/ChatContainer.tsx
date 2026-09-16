@@ -61,6 +61,7 @@ import {
   buildAgentConfig,
   resolveModelSettings,
 } from "../../utils/buildAgentConfig";
+import { resolveEffectiveAuthForModel } from "../../utils/effectiveProviderAuth";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -237,28 +238,39 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   );
 
   /**
-   * Which credential this turn will actually run on. Only Anthropic needs it —
-   * Fast mode is an API-key-only parameter, and OAuth turns go through pi-ai,
-   * which has no `speed` field to carry it. The gateway prefers OAuth when both
-   * exist, so this mirrors that order rather than guessing.
+   * Which credential this turn will actually run on.
+   *
+   * Every billing question below is downstream of this one, so it is resolved
+   * once. Asking `authStatus.anthropic.oauth` instead — "is a token stored" —
+   * was the defect: with a subscription connected and API key selected, main
+   * withholds the token and the turn bills to the key, while the panel went on
+   * reporting a plan it was not using.
+   */
+  const effectiveAuth = useMemo<"oauth" | "apiKey" | null>(() => {
+    const provider = selectedModel.provider;
+    if (provider === "anthropic") {
+      return resolveEffectiveAuthForModel(authStatus.anthropic, selectedModel);
+    }
+    if (provider === "openai" || provider === "openai-codex") {
+      return resolveEffectiveAuthForModel(authStatus.openai, selectedModel);
+    }
+    return null;
+  }, [selectedModel, authStatus]);
+
+  /**
+   * Only Anthropic needs it — Fast mode is an API-key-only parameter, and
+   * OAuth turns go through pi-ai, which has no `speed` field to carry it.
    */
   const authType = useMemo<"oauth" | "apiKey" | undefined>(() => {
     if (selectedModel.provider !== "anthropic") return undefined;
-    if (authStatus.anthropic.oauth) return "oauth";
-    if (authStatus.anthropic.apiKey) return "apiKey";
-    return undefined;
-  }, [selectedModel.provider, authStatus]);
+    return effectiveAuth ?? undefined;
+  }, [selectedModel.provider, effectiveAuth]);
 
-  const billingMode = useMemo<"metered" | "subscription">(() => {
-    const provider = selectedModel.provider;
-    if (provider === "anthropic" && authStatus.anthropic.oauth) {
-      return "subscription";
-    }
-    if (provider === "openai" && authStatus.openai.oauth) {
-      return "subscription";
-    }
-    return "metered";
-  }, [selectedModel.provider, authStatus]);
+  /** A subscription bills the plan; anything else bills per token. */
+  const billingMode = useMemo<"metered" | "subscription">(
+    () => (effectiveAuth === "oauth" ? "subscription" : "metered"),
+    [effectiveAuth],
+  );
 
   /**
    * Both ChatGPT and Claude subscriptions report utilization, and the cost
@@ -268,14 +280,16 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
    * precisely who the figure is for.
    */
   const planProvider = useMemo<PlanProvider | null>(() => {
-    if (selectedModel.provider === "anthropic" && authStatus.anthropic.oauth) {
-      return "anthropic";
-    }
-    if (selectedModel.provider === "openai" && authStatus.openai.oauth) {
+    if (effectiveAuth !== "oauth") return null;
+    if (selectedModel.provider === "anthropic") return "anthropic";
+    if (
+      selectedModel.provider === "openai" ||
+      selectedModel.provider === "openai-codex"
+    ) {
       return "openai";
     }
     return null;
-  }, [selectedModel.provider, authStatus]);
+  }, [selectedModel.provider, effectiveAuth]);
 
   const handleChangeModelSettings = useCallback(
     (patch: ChatModelSettings) => {

@@ -5,6 +5,7 @@
 import React, { useState, useMemo, useEffect } from "react";
 import { useOAuth } from "../../hooks/useOAuth";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { PROVIDER_AUTH_CHANGED_EVENT } from "../../hooks/useAuthStatus";
 import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProviderSteps";
 import { trackOAuthProviderStep } from "../../lib/oauthProviderTelemetry";
 import { getOnboardingState } from "../../utils/onboardingState";
@@ -255,6 +256,9 @@ export function OAuthSection({
         provider,
         next ? "apiKey" : "oauth",
       );
+      // Chat derives its billing readout from this, and Settings can be open
+      // beside a live chat — so tell the app rather than wait for a remount.
+      window.dispatchEvent(new Event(PROVIDER_AUTH_CHANGED_EVENT));
     } catch (error) {
       console.error("Failed to save provider auth preference:", error);
       setUseApiKey(!next);

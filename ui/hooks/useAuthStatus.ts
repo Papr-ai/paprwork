@@ -12,10 +12,25 @@ import { usePaprCloudFeatureStore } from "../stores/paprCloudFeatureStore";
 import { resolveGlobalDefaultForAuth } from "../utils/authAwareModelDefaults";
 import { writeNewChatDefaultModel } from "../utils/chatModelMemory";
 import { gateway } from "../src/lib/gateway";
+import type { ProviderAuthPreference } from "../utils/effectiveProviderAuth";
+
+/** Fired by Settings when the OAuth/API-key toggle flips. */
+export const PROVIDER_AUTH_CHANGED_EVENT = "papr-provider-auth-changed";
 
 export interface AuthStatus {
-  openai: { oauth: boolean; apiKey: boolean };
-  anthropic: { oauth: boolean; apiKey: boolean };
+  /**
+   * `preference` is which credential the user picked when both exist. It is
+   * load-bearing, not cosmetic: main withholds the OAuth token from the
+   * gateway when it is "apiKey", so reading `oauth` alone describes a route
+   * the turn may never take. Use `resolveEffectiveAuth` rather than these
+   * flags directly when the question is "what is this turn running on".
+   */
+  openai: { oauth: boolean; apiKey: boolean; preference: ProviderAuthPreference };
+  anthropic: {
+    oauth: boolean;
+    apiKey: boolean;
+    preference: ProviderAuthPreference;
+  };
   google: { apiKey: boolean };
   paprProxy: boolean; // PAPR_API_KEY enables all providers via proxy
 }
@@ -44,13 +59,40 @@ export function useAuthStatus() {
 
   const [paprLoggedIn, setPaprLoggedIn] = useState(false);
   const paprCloudContext = usePaprCloudFeatureStore((state) => state.context);
+  const [preferences, setPreferences] = useState<{
+    openai: ProviderAuthPreference;
+    anthropic: ProviderAuthPreference;
+  }>({ openai: "oauth", anthropic: "oauth" });
 
   const [status, setStatus] = useState<AuthStatus>({
-    openai: { oauth: false, apiKey: false },
-    anthropic: { oauth: false, apiKey: false },
+    openai: { oauth: false, apiKey: false, preference: "oauth" },
+    anthropic: { oauth: false, apiKey: false, preference: "oauth" },
     google: { apiKey: false },
     paprProxy: false,
   });
+
+  /**
+   * Read from main rather than mirrored in the renderer: main is the only
+   * process that can say which credential it will hand the gateway, and a
+   * second copy here is a second thing to get out of sync.
+   */
+  const refreshPreferences = useCallback(async () => {
+    try {
+      const api = window.electronAPI?.providerAuth;
+      if (!api) return;
+      const [openai, anthropic] = await Promise.all([
+        api.getPreference("openai"),
+        api.getPreference("anthropic"),
+      ]);
+      setPreferences({
+        openai: openai?.preference === "apiKey" ? "apiKey" : "oauth",
+        anthropic: anthropic?.preference === "apiKey" ? "apiKey" : "oauth",
+      });
+    } catch {
+      // Leaving the default alone means we describe the historical behaviour
+      // (OAuth preferred), which is what an unreadable preference means.
+    }
+  }, []);
 
   const refreshPaprLogin = useCallback(async () => {
     try {
@@ -68,11 +110,13 @@ export function useAuthStatus() {
       openai: {
         oauth: openaiOAuth.status.connected && !openaiOAuth.status.isExpired,
         apiKey: hasKey("OPENAI_API_KEY"),
+        preference: preferences.openai,
       },
       anthropic: {
         oauth:
           anthropicOAuth.status.connected && !anthropicOAuth.status.isExpired,
         apiKey: hasKey("ANTHROPIC_API_KEY"),
+        preference: preferences.anthropic,
       },
       google: {
         apiKey:
@@ -89,7 +133,21 @@ export function useAuthStatus() {
     openaiOAuth.status.isExpired,
     anthropicOAuth.status.connected,
     anthropicOAuth.status.isExpired,
+    preferences.openai,
+    preferences.anthropic,
   ]);
+
+  // The toggle lives in Settings, which can be open beside a chat, so the
+  // panel has to hear about the switch rather than wait for a remount.
+  useEffect(() => {
+    void refreshPreferences();
+    const onChange = () => {
+      void refreshPreferences();
+    };
+    window.addEventListener(PROVIDER_AUTH_CHANGED_EVENT, onChange);
+    return () =>
+      window.removeEventListener(PROVIDER_AUTH_CHANGED_EVENT, onChange);
+  }, [refreshPreferences]);
 
   useEffect(() => {
     void refreshPaprLogin();
@@ -200,6 +258,7 @@ export function useAuthStatus() {
       await anthropicOAuth.refresh();
       await loadKeys();
       await refreshPaprLogin();
+      await refreshPreferences();
       refresh();
     },
   };
