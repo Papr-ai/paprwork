@@ -11,7 +11,7 @@ import { PermissionCard } from "./PermissionCard";
 import { usePermissionStore } from "../../stores/permissionStore";
 import { useChatStore } from "../../stores/chatStore";
 import type { ChatMessage } from "../../stores/chatStore";
-import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import { readIncomingFiles } from "../../utils/chatAttachmentFiles";
 import { isHiddenContinueUserMessage } from "../../lib/agentStreamRecovery";
 import { groupDelegationFollowUpMessages } from "../../utils/delegationMessageGrouping";
 import { AgentLoadingDots } from "./AgentLoadingDots";
@@ -224,7 +224,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             ? (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const files = extractFilesFromDataTransfer(e.dataTransfer);
+                const files = readIncomingFiles(e.dataTransfer);
                 if (files.length > 0) {
                   onFilesDropped(files);
                 }
@@ -268,7 +268,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           ? (e) => {
               e.preventDefault();
               e.stopPropagation();
-              const files = extractFilesFromDataTransfer(e.dataTransfer);
+              const files = readIncomingFiles(e.dataTransfer);
               if (files.length > 0) {
                 onFilesDropped(files);
               }
