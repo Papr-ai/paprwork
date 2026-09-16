@@ -132,9 +132,15 @@ export const GEMINI_HISTORY_TOKEN_CAP = 150_000;
  * permitted was unbounded accumulation of *tool results* inside one long turn.
  *
  * 200K matches the interactive default, so both are budgeted against a window
- * we have measured rather than a guess. It cannot go far below: tool schemas
- * alone are ~87K and {@link MIN_CONTEXT_LIMIT} is 128K, at which the budget
- * clamps to its 8K floor and silently stops bounding anything.
+ * we have measured rather than a guess.
+ *
+ * It used to be the case that a 128K window clamped the budget to its 8K floor
+ * and silently stopped bounding anything. That is no longer true, and the two
+ * reasons are worth keeping: the output reserve is now a third of the window
+ * rather than the model's advertised maximum, and the tool block is measured at
+ * its real ~38.5K on the wire rather than the ~87K over-estimate. At 128K the
+ * budget is now 27,608 — small, but a real budget. (This comment previously
+ * read ~87K, which was the over-estimate corrected in `toolSchemaTokens.ts`.)
  *
  * The resulting history budget is 66,637 — larger than an interactive chat's
  * 15,971 at the same cap, because these callers leave `maxTokens` unset and so
@@ -152,6 +158,31 @@ export const DEFAULT_SESSION_CONTEXT_LIMIT = 200_000;
 
 /** Default history-token threshold before proactive summarization (non-Gemini). */
 export const DEFAULT_SUMMARIZE_HISTORY_TOKEN_THRESHOLD = 40_000;
+
+/**
+ * Ceiling on the history allowance, independent of how much room the window
+ * arithmetic leaves. Applied by {@link resolveHistoryTokenBudget}, which is
+ * what a live turn calls — not by `computeHistoryTokenBudget`, for the reason
+ * recorded there.
+ *
+ * Needed because correcting the tool-block measurement *widens* this budget:
+ * the old estimate over-stated the block by 2.31x (88,477 against a real
+ * 38,526) and the block is subtracted here, so the error was withholding room.
+ * At a 400K cap the honest figure raises the budget from 123,523 to 173,474,
+ * and deferring unused schemas raises it again.
+ *
+ * 128,000 is the largest history allowance we have actually run: turns on this
+ * workspace recorded budgets of 123,523 (400K cap) and worked. Capping there
+ * means no chat is handed more room than has been validated, while the tiers
+ * the measurement error had starved — a 200K cap was budgeting 15,971 where the
+ * arithmetic intends 64,807 — are allowed to recover.
+ *
+ * The freed room is only *spent* when there is history to spend it on, so a
+ * short chat simply sends 27K fewer tokens; a long one keeps context it was
+ * previously trimming away. Raising this is a quality-vs-cost decision and
+ * should be evaluated on recorded turn metrics, not adjusted by feel.
+ */
+export const DEFAULT_HISTORY_TOKEN_CAP = 128_000;
 
 export function isGoogleGeminiProvider(provider: Provider): boolean {
   return provider === "google";
@@ -183,14 +214,18 @@ export function shouldForceGeminiResummarize(
  * Returns at least 8K so trimming still runs on small windows.
  * Google/Gemini: capped at {@link GEMINI_HISTORY_TOKEN_CAP} for quality.
  */
-export function computeHistoryTokenBudget(params: {
+export interface HistoryBudgetParams {
   provider: Provider;
   modelId: string;
   toolTokenEstimate: number;
   maxOutputTokens?: number;
   /** User-chosen cap; narrows the model's window, never widens it. */
   contextLimit?: number;
-}): number {
+}
+
+export function computeHistoryTokenBudget(
+  params: HistoryBudgetParams,
+): number {
   const contextWindow = resolveEffectiveContextWindow(
     params.provider,
     params.modelId,
@@ -205,11 +240,32 @@ export function computeHistoryTokenBudget(params: {
       params.toolTokenEstimate -
       outputReserve,
   );
-  let capped = Math.max(budget, 8_000);
+  const capped = Math.max(budget, 8_000);
   if (isGoogleGeminiProvider(params.provider)) {
-    capped = Math.min(capped, GEMINI_HISTORY_TOKEN_CAP);
+    return Math.min(capped, GEMINI_HISTORY_TOKEN_CAP);
   }
   return capped;
+}
+
+/**
+ * The budget a live turn actually uses: the arithmetic above, held to
+ * {@link DEFAULT_HISTORY_TOKEN_CAP}.
+ *
+ * Deliberately *not* folded into `computeHistoryTokenBudget`. A cap at the end
+ * of that function is the last word, so it swallows everything upstream: at a
+ * 400K cap it would flatten the output-reserve fix (Issue 89) and the Gemini
+ * ceiling to the same 128,000, leaving neither guarantee observable through the
+ * public function and turning both of their tests into assertions about this
+ * constant. Keeping the arithmetic pure and applying the ceiling as caller
+ * policy leaves those guards checking what they were written to check.
+ */
+export function resolveHistoryTokenBudget(
+  params: HistoryBudgetParams,
+): number {
+  return Math.min(
+    computeHistoryTokenBudget(params),
+    DEFAULT_HISTORY_TOKEN_CAP,
+  );
 }
 
 /** Whether an API/stream error indicates the prompt exceeded the model context window. */

@@ -264,6 +264,15 @@ export interface AgentTurnCompletedProperties extends BaseEventProperties {
    * the batching guidance moves.
    */
   tool_calls_per_step: number | null;
+  /**
+   * The interventions on the two numbers above, so a change in either can be
+   * attributed. A turn whose width rose on its own and one that was nudged four
+   * times are otherwise indistinguishable, and a deferral that turns out to
+   * cost discovery round-trips would look like a width regression.
+   */
+  width_nudges_issued: number;
+  deferred_tool_count: number;
+  deferred_tool_tokens: number;
   duration_ms: number;
 
   prompt_tokens: number;
