@@ -258,3 +258,124 @@ export async function syncDocumentToPost(input: {
     return { synced: false, reason: "error" };
   }
 }
+
+export type DocumentPostLifecycleReason =
+  | "ok"
+  | "no_post"
+  | "no_session"
+  | "error";
+
+export interface DocumentPostLifecycleResult {
+  ok: boolean;
+  reason: DocumentPostLifecycleReason;
+  postId?: string;
+}
+
+/**
+ * Flip `archive` on the Post backing a document.
+ *
+ * parseServer's batchSavePostToMemory drains `archive == false`, so setting
+ * this stops future memory writes at the source while leaving memories that
+ * were already written intact. That is what makes archive the reversible half
+ * of the archive/delete pair — nothing is destroyed, the document just stops
+ * feeding memory.
+ *
+ * Never throws: a local archive must not fail because the network did.
+ */
+export async function setDocumentPostArchived(
+  documentId: string,
+  archived: boolean,
+): Promise<DocumentPostLifecycleResult> {
+  try {
+    const sourceKey = documentSourceKey(documentId);
+    const index = loadIndex();
+    const existing = index[sourceKey];
+
+    // A document that never synced (too short, or created while signed out)
+    // has nothing to archive remotely. Not an error.
+    if (!existing?.postId) return { ok: true, reason: "no_post" };
+
+    const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
+    if (!sessionToken) return { ok: false, reason: "no_session" };
+
+    const res = await fetch(
+      `https://parseserver-staging-223473570766.us-west1.run.app/classes/Post/${existing.postId}`,
+      {
+        method: "PUT",
+        headers: parseHeaders(sessionToken),
+        body: JSON.stringify({ archive: archived }),
+      },
+    );
+
+    if (res.status === 404) {
+      // Post is already gone server-side; drop the stale pointer so a later
+      // edit creates a fresh one instead of PUTting into the void.
+      delete index[sourceKey];
+      saveIndex(index);
+      return { ok: true, reason: "no_post" };
+    }
+
+    if (!res.ok) {
+      console.warn(
+        `[documentPostSync] archive(${archived}) failed for ${documentId}: ${res.status}`,
+      );
+      return { ok: false, reason: "error", postId: existing.postId };
+    }
+
+    return { ok: true, reason: "ok", postId: existing.postId };
+  } catch (error) {
+    console.warn(`[documentPostSync] archive failed for ${documentId}:`, error);
+    return { ok: false, reason: "error" };
+  }
+}
+
+/**
+ * Delete the Post backing a document.
+ *
+ * parseServer cascades from the Post to its PostSocial rows and memories, so
+ * paprwork deliberately does not try to unpick those itself — doing it here
+ * would race the server's own cleanup.
+ *
+ * The index entry is dropped either way: once the caller has decided to delete
+ * the document, keeping a pointer to a Post we may no longer own is worse than
+ * losing it.
+ */
+export async function deleteDocumentPost(
+  documentId: string,
+): Promise<DocumentPostLifecycleResult> {
+  const sourceKey = documentSourceKey(documentId);
+  const index = loadIndex();
+  const existing = index[sourceKey];
+
+  if (!existing?.postId) return { ok: true, reason: "no_post" };
+
+  const dropIndexEntry = () => {
+    const current = loadIndex();
+    delete current[sourceKey];
+    saveIndex(current);
+  };
+
+  try {
+    const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
+    if (!sessionToken) return { ok: false, reason: "no_session" };
+
+    const res = await fetch(
+      `https://parseserver-staging-223473570766.us-west1.run.app/classes/Post/${existing.postId}`,
+      { method: "DELETE", headers: parseHeaders(sessionToken) },
+    );
+
+    // 404 means someone else already deleted it — the desired end state.
+    if (!res.ok && res.status !== 404) {
+      console.warn(
+        `[documentPostSync] delete failed for ${documentId}: ${res.status}`,
+      );
+      return { ok: false, reason: "error", postId: existing.postId };
+    }
+
+    dropIndexEntry();
+    return { ok: true, reason: "ok", postId: existing.postId };
+  } catch (error) {
+    console.warn(`[documentPostSync] delete failed for ${documentId}:`, error);
+    return { ok: false, reason: "error", postId: existing.postId };
+  }
+}

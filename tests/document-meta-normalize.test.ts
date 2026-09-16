@@ -135,3 +135,47 @@ describe("documentMetaNeedsRewrite", () => {
     ).toBe(false);
   });
 });
+
+/**
+ * `normalizeDocumentMeta` rebuilds the record field by field, so anything not
+ * named in it is dropped on every read. `archived` is round-tripped through
+ * that function on the way to the UI, and a silent drop would not look like a
+ * normalization bug — it would look like archiving a document simply did not
+ * stick, with the card reverting the next time the list loaded.
+ */
+describe("normalizeDocumentMeta — archived flag", () => {
+  it("carries archived: true through a read", () => {
+    const meta = normalizeDocumentMeta(
+      "doc-001",
+      { ...SEEDED_META_WITHOUT_ID, archived: true },
+      OPTIONS,
+    );
+    expect(meta?.archived).toBe(true);
+  });
+
+  it("leaves archived unset when the file omits it", () => {
+    // Absent means not archived. Writing an explicit `false` here would dirty
+    // every existing meta.json for a value that is already the default.
+    const meta = normalizeDocumentMeta("doc-001", SEEDED_META_WITHOUT_ID, OPTIONS);
+    expect(meta?.archived).toBeUndefined();
+  });
+
+  it("does not treat a truthy non-boolean as archived", () => {
+    const meta = normalizeDocumentMeta(
+      "doc-001",
+      { ...SEEDED_META_WITHOUT_ID, archived: "yes" },
+      OPTIONS,
+    );
+    expect(meta?.archived).toBeUndefined();
+  });
+
+  it("does not force a rewrite just because a document is archived", () => {
+    expect(
+      documentMetaNeedsRewrite("doc-001", {
+        id: "doc-001",
+        type: "document",
+        archived: true,
+      }),
+    ).toBe(false);
+  });
+});
