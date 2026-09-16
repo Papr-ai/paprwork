@@ -44,6 +44,11 @@ import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
 import {
+  connectionRecoveryNotice,
+  describeProviderNotice,
+  type ProviderNotice,
+} from "../../utils/providerErrorPresentation";
+import {
   adoptEffortFromVariant,
   readChatSettings,
   readNewChatDefaultSettings,
@@ -207,6 +212,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const setError = useChatStore((state) => state.setError);
+  const setNeedsStreamRecovery = useChatStore(
+    (state) => state.setNeedsStreamRecovery,
+  );
   const { ensureModel, progress, installing } = useOllama();
   const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
@@ -1060,6 +1068,68 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     }
   }, [chatId, isResumingStream, retryStreamRecovery, makeAgentConfig]);
 
+  /**
+   * The single provider notice for this chat, or nothing.
+   *
+   * Two sources used to draw two different banners at once — a red one from
+   * `error` and an amber one from the recovery state — which is how a single
+   * rate limit could appear twice in two voices. They are collapsed here, and
+   * the provider's own words win whenever there are any: only they name the
+   * credential that was refused, which is the difference a user needs to see
+   * after switching between an API key and a subscription login.
+   */
+  const providerNotice = useMemo<ProviderNotice | null>(() => {
+    const provider = selectedModel?.provider;
+    const modelName = selectedModel?.name;
+    const detail = streamRecoveryDetail?.trim();
+
+    if (error) {
+      return describeProviderNotice({
+        message: error,
+        canResume: needsStreamRecovery,
+        provider,
+        modelName,
+      });
+    }
+
+    if (!needsStreamRecovery) return null;
+
+    if (detail) {
+      return describeProviderNotice({
+        message: detail,
+        canResume: true,
+        provider,
+        modelName,
+      });
+    }
+
+    if (streamRecoveryReason === "rateLimit") {
+      // Phrased from the same branch the real message takes, then stripped of
+      // its detail: there is no provider text here, and a disclosure holding
+      // our own synthetic string would only pretend to be evidence.
+      const notice = describeProviderNotice({
+        message: "rate limit exceeded",
+        canResume: true,
+        provider,
+        modelName,
+      });
+      return { ...notice, detail: "" };
+    }
+
+    return connectionRecoveryNotice();
+  }, [
+    error,
+    needsStreamRecovery,
+    streamRecoveryDetail,
+    streamRecoveryReason,
+    selectedModel,
+  ]);
+
+  const handleDismissProviderNotice = useCallback(() => {
+    setError(null);
+    setNeedsStreamRecovery(chatId, false);
+  }, [chatId, setError, setNeedsStreamRecovery]);
+
   const handleChatDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
@@ -1081,20 +1151,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       onDragOver={handleChatDragOver}
       onDrop={handleChatDrop}
     >
-      {/*
-        Suppressed while the recovery banner is up, because a provider refusal
-        now records its sentence in both places: the banner (which also offers
-        Resume) and `error` (which is global, so a write to this chat's state
-        cannot drop it). Whichever one survives is the one shown, and they never
-        render together.
-      */}
-      {error && !needsStreamRecovery && (
-        <div className="error-banner">
-          <span className="error-icon">⚠️</span>
-          <span className="error-message">{error}</span>
-        </div>
-      )}
-
       {gatewayBanner && (
         <div className="reconnecting-banner">
           <span className="reconnecting-icon">↻</span>
@@ -1165,31 +1221,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onRemove={handleRemoveQueued}
       />
 
-      {needsStreamRecovery && (
-        <div className="stream-recovery-banner">
-          <span className="stream-recovery-banner__message">
-            {/*
-              The provider's own explanation wins when there is one: it names
-              the credential that was refused, which a fixed sentence cannot,
-              and so is the only version that reads differently after the user
-              switches between API key and subscription login.
-            */}
-            {streamRecoveryDetail ||
-              (streamRecoveryReason === "rateLimit"
-                ? `${selectedModel.name} hit the provider's rate limit, so the reply never started. Wait a moment and tap Resume, or switch to another model.`
-                : "Connection restored, but the agent response may be incomplete.")}
-          </span>
-          <button
-            type="button"
-            className="stream-recovery-banner__btn"
-            disabled={isResumingStream}
-            onClick={() => void handleResumeStream()}
-          >
-            {isResumingStream ? "Resuming…" : "Resume"}
-          </button>
-        </div>
-      )}
-
       <InputBar
         ref={inputBarRef}
         chatId={chatId}
@@ -1225,6 +1256,10 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         authType={authType}
         billingMode={billingMode}
         planProvider={planProvider}
+        providerNotice={providerNotice}
+        isResumingStream={isResumingStream}
+        onResumeStream={() => void handleResumeStream()}
+        onDismissProviderNotice={handleDismissProviderNotice}
       />
 
       {contextInfo !== null ? (
