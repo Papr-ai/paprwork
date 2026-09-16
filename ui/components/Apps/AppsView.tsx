@@ -333,9 +333,14 @@ export function AppsView() {
         return;
       }
       await gateway.send("app:update", { appId: id, status });
+      // Archiving used to make the card vanish with no feedback, which reads as
+      // "deleted" — so a misclick felt unrecoverable. Move the list to Archived
+      // instead: the user sees exactly where the app went, and Unarchive is one
+      // menu away rather than something they have to go hunting for.
+      if (status === "archived") setStatusFilter("archived");
       loadArtifacts();
     },
-    [loadArtifacts],
+    [loadArtifacts, setStatusFilter],
   );
 
   const handleRename = useCallback(
