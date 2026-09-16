@@ -132,6 +132,93 @@ describe("turn tool selection", () => {
     expect(sel.deferredToolIds.length).toBeGreaterThan(30);
   });
 
+  it("selects a job tool when the request says job", () => {
+    // The reported phrasing. At a four-character floor "job" was dropped from
+    // both the request and the id, so a request naming the thing outright
+    // selected nothing, and "create a job that runs every morning" matched
+    // only by accident on `create` — `create_job` reached a turn by luck of
+    // wording. Empty description, so only the id arm can be what fires.
+    const tools = [deferrable("create_job", 2_252), ...bulkTools(30)];
+    const sel = selectTurnToolIds({
+      tools,
+      requestText: "add a background job to the app so it refreshes data",
+    });
+
+    expect(sel.activeToolIds).toContain("create_job");
+  });
+
+  it("reaches the three-character nouns the registry is built on", () => {
+    // `app` names 26 tools and `key` 4. Neither request shares any other
+    // segment with its tool, so the short noun is doing the work.
+    const tools = [
+      deferrable("provision_app", 500),
+      deferrable("rotate_key", 500),
+      ...bulkTools(30),
+    ];
+
+    expect(
+      selectTurnToolIds({ tools, requestText: "my app needs a database" }).activeToolIds,
+    ).toContain("provision_app");
+    expect(
+      selectTurnToolIds({ tools, requestText: "I need a new key" }).activeToolIds,
+    ).toContain("rotate_key");
+  });
+
+  it("does not let a generic three-character verb select its whole family", () => {
+    // The lower tier admits the generic segments along with the nouns, and
+    // `get` alone names 22 tools — so "get me the numbers" would defer almost
+    // nothing. A token only costs anything if it matches an id segment, which
+    // is why stoplisting the six generic ones covers the whole risk.
+    // `get_key` and `get_full_tool_result` are core and so always active —
+    // these three are the deferrable members of the family.
+    const tools = [
+      deferrable("get_job_stats", 400),
+      deferrable("get_job_history", 400),
+      deferrable("get_schema", 400),
+      ...bulkTools(30),
+    ];
+    const sel = selectTurnToolIds({ tools, requestText: "get me the latest numbers" });
+
+    expect(sel.deferredToolIds).toContain("get_job_stats");
+    expect(sel.deferredToolIds).toContain("get_job_history");
+    expect(sel.deferredToolIds).toContain("get_schema");
+  });
+
+  it("keeps the description arm at the longer floor", () => {
+    // What confines the lower tier to the id arm is that the description's own
+    // word set is built at the longer floor, so a three-character request
+    // token has nothing there to match. This description is all short words
+    // and the request repeats them: lower that floor and two coincidences
+    // select a tool the request never named, which is the "selects
+    // everything, saves nothing" failure the stopword list exists to prevent.
+    const tools = [
+      deferrable("provision_database", 700, "set up an app for the job"),
+      ...bulkTools(30),
+    ];
+    const sel = selectTurnToolIds({ tools, requestText: "the app and the job" });
+
+    expect(sel.deferredToolIds).toContain("provision_database");
+  });
+
+  it("stays enabled when a request names a whole family", () => {
+    // The widest realistic request pulls in both families at once. The saving
+    // has to keep clearing the threshold, or deferral switches itself off on
+    // exactly the turns big enough to have needed it.
+    const tools = [
+      ...MEASURED_CORE_TOOL_IDS.map((id) => deferrable(id, 265)),
+      ...Array.from({ length: 26 }, (_, i) => deferrable(`app_capability_${i}`, 265)),
+      ...Array.from({ length: 17 }, (_, i) => deferrable(`job_capability_${i}`, 265)),
+      ...bulkTools(60, 400),
+    ];
+    const sel = selectTurnToolIds({
+      tools,
+      requestText: "add a background job to the app so it refreshes data",
+    });
+
+    expect(sel.enabled).toBe(true);
+    expect(sel.savedTokens).toBeGreaterThan(MIN_DEFERRAL_SAVING_TOKENS);
+  });
+
   it("sends everything when the saving would not pay for the machinery", () => {
     // Two small tools outside the core set: deferring them buys back less than
     // the dispatcher's own description costs.

@@ -129,10 +129,42 @@ const WORD_SPLIT = /[^a-z0-9]+/;
 const MIN_KEYWORD_LENGTH = 4;
 
 /**
+ * Floor for matching a whole segment of a tool id.
+ *
+ * Three rather than four because the registry's most discriminating segments
+ * are three characters — `app` names 26 tools, `job` 17, `key` 4 — and they are
+ * the words a request naturally uses. At four the id arm was blind to exactly
+ * the phrasing it exists to catch: "add a background job to the app so it
+ * refreshes data" selected nothing, and "create a job that runs every morning"
+ * matched only by accident on `create`, so `create_job` reached a turn by luck
+ * of wording. Re-derive the segment list with
+ * `tr '_' '\n' < ids | awk 'length($0)==3' | sort | uniq -c`.
+ *
+ * Lowered for id segments only. The description arm keeps {@link
+ * MIN_KEYWORD_LENGTH}, where across 150-odd prose descriptions a three-letter
+ * word really is noise.
+ */
+const MIN_ID_SEGMENT_LENGTH = 3;
+
+/**
  * Words too common in tool descriptions to discriminate. Without this, "file"
  * or "create" in a request would match most of the registry and defer nothing.
+ *
+ * The three-character entries are there because {@link MIN_ID_SEGMENT_LENGTH}
+ * admits that tier, and a token only costs anything if it matches an id
+ * segment — so the complete risk is the twelve segments the registry actually
+ * has. Six name a domain and are kept (`app`, `job`, `key`, `sub`, `pdf`,
+ * `api`); the six below are generic verbs and prepositions that would select
+ * their whole family for nothing, `get` alone reaching 22 tools.
  */
 const STOPWORDS = new Set([
+  // Generic three-character id segments — see MIN_ID_SEGMENT_LENGTH.
+  "get",
+  "run",
+  "set",
+  "add",
+  "for",
+  "and",
   "this",
   "that",
   "with",
@@ -163,10 +195,10 @@ const STOPWORDS = new Set([
   "required",
 ]);
 
-function extractKeywords(text: string): Set<string> {
+function extractKeywords(text: string, minLength = MIN_KEYWORD_LENGTH): Set<string> {
   const out = new Set<string>();
   for (const raw of text.toLowerCase().split(WORD_SPLIT)) {
-    if (raw.length < MIN_KEYWORD_LENGTH) continue;
+    if (raw.length < minLength) continue;
     if (STOPWORDS.has(raw)) continue;
     out.add(raw);
   }
@@ -176,19 +208,28 @@ function extractKeywords(text: string): Set<string> {
 /**
  * Whether a deferred tool looks relevant to the request.
  *
- * Matching on the id is the strong signal — a request naming "job" should pull
- * in the job tools. The description is matched only on an exact keyword hit for
- * the same reason the stopword list exists: descriptions are long and prose-y,
- * so loose matching selects everything and saves nothing.
+ * Matching on the id is the strong signal, and it reaches the three-character
+ * tier so that a request naming "job" or "app" actually selects those tools.
+ * The description is matched only on an exact keyword hit, for the same reason
+ * the stopword list exists: descriptions are long and prose-y, so loose
+ * matching selects everything and saves nothing.
+ *
+ * The lower tier reaches the id arm alone, and what confines it there is that
+ * `descWords` is built at {@link MIN_KEYWORD_LENGTH} — a three-character
+ * request token cannot match a set that holds no three-character words. So
+ * lowering the description floor is the change that would let two short
+ * coincidences select a tool the request never named.
+ *
+ * @param requestTokens Request words at {@link MIN_ID_SEGMENT_LENGTH} or longer.
  */
-function matchesRequest(tool: DeferrableTool, keywords: Set<string>): boolean {
+function matchesRequest(tool: DeferrableTool, requestTokens: Set<string>): boolean {
   const idWords = tool.id.toLowerCase().split(WORD_SPLIT);
   for (const w of idWords) {
-    if (w.length >= MIN_KEYWORD_LENGTH && keywords.has(w)) return true;
+    if (w.length >= MIN_ID_SEGMENT_LENGTH && requestTokens.has(w)) return true;
   }
   const descWords = extractKeywords(tool.description);
   let hits = 0;
-  for (const w of keywords) {
+  for (const w of requestTokens) {
     if (descWords.has(w)) hits += 1;
     // Two independent description hits stand in for an id match; one is noise.
     if (hits >= 2) return true;
@@ -220,10 +261,10 @@ export function selectTurnToolIds(params: {
     if (available.has(id)) keep.add(id);
   }
 
-  const keywords = extractKeywords(params.requestText);
+  const requestTokens = extractKeywords(params.requestText, MIN_ID_SEGMENT_LENGTH);
   for (const tool of params.tools) {
     if (keep.has(tool.id)) continue;
-    if (matchesRequest(tool, keywords)) keep.add(tool.id);
+    if (matchesRequest(tool, requestTokens)) keep.add(tool.id);
   }
 
   const deferred = params.tools.filter((t) => !keep.has(t.id));
