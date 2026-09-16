@@ -30,13 +30,19 @@ describe("cloudInstallDbPolicy", () => {
     expect(databasePolicyFromInstallPolicy("shared_primary")).toBe("shared");
   });
 
-  it("rejects track on global community catalog", () => {
+  it("allows track on global community catalog (code lineage, private data)", () => {
     expect(() =>
       assertTrackAllowedForCatalog({
         mode: "track",
         catalogScope: "global",
       }),
-    ).toThrow(/Community apps can only be installed as an independent copy/);
+    ).not.toThrow();
+  });
+
+  it("never attaches the publisher database for community collaborate", () => {
+    expect(resolveInstallDbPolicy("track", ["shared"], "global")).toBe(
+      "fork_empty",
+    );
   });
 
   it("rejects track when visibility is not team", () => {

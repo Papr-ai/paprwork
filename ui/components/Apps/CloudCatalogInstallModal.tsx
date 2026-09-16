@@ -45,12 +45,20 @@ export function CloudCatalogInstallModal({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 id="cloud-catalog-install-title" className="community-install-modal__title">
-          Personalize {entry.name}
+          Install {entry.name}
         </h3>
+        {/*
+          Community installs used to describe themselves as "an independent
+          copy" because that was the only option. Now the question is intent —
+          are you running it, or helping build it — so ask that instead of
+          narrating what the installer is about to do. Either way the
+          publisher's live data stays private; only team collaborate shares a
+          database.
+        */}
         <p className="community-install-modal__desc">
           {teamTab
             ? "Install this team app locally. Choose whether you want your own database or the shared team database."
-            : "Install an independent copy in your workspace. You get the app code and schema — not the publisher's live data."}
+            : "Your data stays private either way. The only question is whether this copy stays connected to the original."}
         </p>
         {options.map((option) => (
           <button

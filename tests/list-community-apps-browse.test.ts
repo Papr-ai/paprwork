@@ -90,13 +90,19 @@ describe("communityCatalogAgentBrowse", () => {
     );
 
     expect(listings).toHaveLength(3);
+    // Forkable community apps now ask copy vs collaborate, so there is no
+    // single command to pre-bake — the agent surfaces installOptions instead.
     expect(listings[0]?.name).toBe("Fork me");
-    expect(listings[0]?.installCommand).toContain('mode: "fork"');
-    expect(listings[0]?.installCommand).toContain('catalogScope: "community"');
+    expect(listings[0]?.requiresInstallModeChoice).toBe(true);
+    expect(listings[0]?.installCommand).toBeNull();
+    expect(listings[0]?.installOptions.map((option) => option.mode)).toEqual([
+      "fork",
+      "track",
+    ]);
     expect(listings[1]?.name).toBe("Mine");
     expect(listings[1]?.installCommand).toBeNull();
     expect(listings[2]?.name).toBe("Team shared");
-    expect(listings[2]?.installCommand).toContain('mode: "fork"');
+    expect(listings[2]?.requiresInstallModeChoice).toBe(true);
   });
 
   it("requires install mode choice for team-shared namespace apps", () => {

@@ -32,15 +32,34 @@ export function databasePolicyFromInstallPolicy(
 }
 
 /**
- * track + all linked sources isolation === "shared" → shared_primary
- * track + any per-user source → error (require web or fork)
- * fork → fork_empty
+ * Install mode is about CODE lineage; this function decides DATA.
+ *
+ * The two were conflated: "track" always meant "attach the publisher's
+ * primary database", which is correct inside a team and unacceptable across
+ * the public Community catalog — so collaborating on a community app was
+ * banned outright, leaving fork as the only option. That is why contributors
+ * ended up with a detached copy when what they wanted was to help build the
+ * original.
+ *
+ * Splitting the axes fixes it:
+ *   fork                     → fork_empty     (no lineage, own data)
+ *   track + team app         → shared_primary (teammates share one database)
+ *   track + community app    → fork_empty     (own data, upstream code link)
+ *
+ * Community collaborate therefore keeps the lineage that powers Get updates
+ * and Propose changes, while every installer still gets their own rows. The
+ * publisher's data is never exposed to the public catalog.
  */
 export function resolveInstallDbPolicy(
   mode: CloudAppInstallMode,
   linkedIsolations: readonly DatabaseIsolation[],
+  catalogScope?: "global" | "namespace",
 ): InstallDbPolicy {
   if (mode === "fork") {
+    return "fork_empty";
+  }
+
+  if (catalogScope === "global") {
     return "fork_empty";
   }
 
@@ -118,11 +137,12 @@ export function assertTrackAllowedForCatalog(input: {
     return;
   }
 
+  // Community collaborate is allowed because it no longer implies a shared
+  // database — resolveInstallDbPolicy forces fork_empty for global scope, so
+  // the only thing tracked is code. What was being blocked here was the data
+  // leak, not the collaboration.
   if (input.catalogScope === "global") {
-    throw new CloudInstallDbPolicyError(
-      "community_track_forbidden",
-      "Community apps can only be installed as an independent copy (fork). Track/collaborate is available for team apps.",
-    );
+    return;
   }
 
   const visibility = input.visibility?.trim();
