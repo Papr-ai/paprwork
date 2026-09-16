@@ -330,3 +330,77 @@
     );
   }
 }
+
+/* ===== Overflow menu (mirrors .app-card__menu) ===== */
+
+.document-card__menu-wrap {
+  position: relative;
+  display: flex;
+}
+
+.document-card__menu {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  width: 184px;
+  padding: 6px;
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 12px;
+  background: var(--popover-bg, rgba(255, 255, 255, 0.96));
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  z-index: 10;
+}
+
+.document-card__menu button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.document-card__menu button:hover {
+  background: var(--glass-bg-hover);
+}
+
+/* Delete is the only irreversible action here, so it is the only one that
+   reads as dangerous. Archive deliberately looks ordinary. */
+.document-card__menu button.document-card__menu-item--danger {
+  color: var(--error);
+}
+
+.document-card__menu button.document-card__menu-item--danger:hover {
+  background: var(--error);
+  color: #fff;
+}
+
+/* ===== Archived state ===== */
+
+/* Dimmed, not hidden: an archived document is still a real document. The
+   badge carries the meaning; opacity just stops it competing for attention. */
+.document-card--archived {
+  opacity: 0.62;
+}
+
+.document-card--archived:hover {
+  opacity: 1;
+}
+
+.document-card__badge {
+  padding: 2px 7px;
+  border: 1px solid var(--glass-border, var(--border));
+  border-radius: 999px;
+  background: var(--glass-bg);
+  color: var(--text-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}

@@ -24,6 +24,12 @@ interface DeleteDocumentPayload {
   documentId: string;
 }
 
+interface ArchiveDocumentPayload {
+  documentId: string;
+  /** Omitted means archive; pass false to restore. */
+  archived?: boolean;
+}
+
 interface GetDocumentPayload {
   documentId: string;
 }
@@ -147,6 +153,26 @@ export async function setupDocumentHandlers(
             type: "document:delete:response",
             success: true,
             data: { success },
+          }),
+        );
+        break;
+      }
+
+      case "document:archive": {
+        const payload = message.payload as ArchiveDocumentPayload;
+        // Default to archiving: `document:archive` with no flag reads as
+        // "archive this", and restoring is the explicit archived: false.
+        const archived = payload.archived !== false;
+        const document = await documentService.archiveDocument(
+          payload.documentId,
+          archived,
+        );
+        ws.send(
+          JSON.stringify({
+            id: message.id,
+            type: "document:archive:response",
+            success: true,
+            data: document,
           }),
         );
         break;

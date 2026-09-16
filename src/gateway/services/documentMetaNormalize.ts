@@ -69,6 +69,13 @@ export function normalizeDocumentMeta(
         : 0,
   };
 
+  // Lifecycle flag. Absent means not archived, and it is only carried through
+  // when true so existing meta.json files are not all rewritten to add a
+  // redundant `archived: false`. This whitelist is exhaustive by design — a
+  // field missing from it is silently dropped on every read, which for
+  // `archived` would look like archiving simply not sticking.
+  if (raw.archived === true) meta.archived = true;
+
   const createdByAgentId = readString(raw.createdByAgentId);
   if (createdByAgentId) meta.createdByAgentId = createdByAgentId;
   const createdByAgentName = readString(raw.createdByAgentName);

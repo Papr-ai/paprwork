@@ -142,4 +142,85 @@ describe("DocumentService", () => {
     const metaRaw = await fs.readFile(path.join(docDir, "meta.json"), "utf-8");
     expect(JSON.parse(metaRaw).title).toBe("Agent Draft");
   });
+
+  /**
+   * Archive is the reversible half of the archive/delete pair, so the flag has
+   * to survive a reload — it is written to meta.json and read back through
+   * normalizeDocumentMeta, which rebuilds the record field by field and drops
+   * anything it does not explicitly name.
+   *
+   * No session token exists under test, so the Post hop short-circuits before
+   * any network call and only the local half is exercised here.
+   */
+  test("archives a document and the flag survives a reload", async () => {
+    const created = await documentService.createDocument(
+      "Archivable",
+      "Long enough to be a real document with content worth keeping.",
+    );
+
+    const archived = await documentService.archiveDocument(created.id);
+    expect(archived?.archived).toBe(true);
+
+    const reloaded = await documentService.getDocument(created.id);
+    expect(reloaded?.archived).toBe(true);
+  });
+
+  test("restores an archived document", async () => {
+    const created = await documentService.createDocument(
+      "Restorable",
+      "Long enough to be a real document with content worth keeping.",
+    );
+    await documentService.archiveDocument(created.id);
+
+    const restored = await documentService.archiveDocument(created.id, false);
+    expect(restored?.archived).toBe(false);
+
+    // Absent and false are the same state on disk: normalization only carries
+    // `archived` through when true, so a restored document reads back as
+    // undefined rather than false. Either one means "not archived".
+    const reloaded = await documentService.getDocument(created.id);
+    expect(reloaded?.archived ?? false).toBe(false);
+  });
+
+  test("archiving does not bump updatedAt", async () => {
+    // Archiving is a lifecycle change, not an edit. Bumping updatedAt would
+    // make a restored document claim it was edited today and jump to the top
+    // of the "Recent" sort.
+    const created = await documentService.createDocument(
+      "Timestamped",
+      "Long enough to be a real document with content worth keeping.",
+    );
+
+    const archived = await documentService.archiveDocument(created.id);
+    expect(archived?.updatedAt).toBe(created.updatedAt);
+  });
+
+  test("keeps archived documents in listDocuments", async () => {
+    // The gateway does not hide them — the view decides. Filtering here would
+    // make archived documents unreachable from every surface at once.
+    const created = await documentService.createDocument(
+      "Listed",
+      "Long enough to be a real document with content worth keeping.",
+    );
+    await documentService.archiveDocument(created.id);
+
+    const listed = await documentService.listDocuments();
+    expect(listed.find((doc) => doc.id === created.id)?.archived).toBe(true);
+  });
+
+  test("archiving an unknown document resolves null rather than throwing", async () => {
+    await expect(
+      documentService.archiveDocument("no-such-document"),
+    ).resolves.toBeNull();
+  });
+
+  test("deletes a document that never synced to a Post", async () => {
+    // deleteDocument now calls deleteDocumentPost first. With no index entry
+    // that must short-circuit to success and still remove the local files —
+    // the Post hop must never become a precondition for local deletion.
+    const created = await documentService.createDocument("Doomed", "Bye");
+
+    await expect(documentService.deleteDocument(created.id)).resolves.toBe(true);
+    await expect(documentService.getDocument(created.id)).resolves.toBeNull();
+  });
 });
