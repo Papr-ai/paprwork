@@ -22,6 +22,8 @@ import type { ResolvedModelSettings } from "../../utils/buildAgentConfig";
 import { ChatMemoryScopeSelector } from "./ChatMemoryScopeSelector";
 import { ContextDropdown } from "./ContextDropdown";
 import { ContextMeter } from "./ContextMeter";
+import { ProviderErrorChip } from "./ProviderErrorChip";
+import type { ProviderNotice } from "../../utils/providerErrorPresentation";
 import type { ContextInfo } from "./ContextInspectorModal";
 import { ContextPills } from "./ContextPills";
 import { SlashCommandMenu } from "./SlashCommandMenu";
@@ -79,6 +81,19 @@ interface InputBarProps {
   contextPanelSignal?: number;
   /** Hand the loaded breakdown to the parent's full inspector. */
   onOpenContextInspector?: (info: ContextInfo, sectionId?: string) => void;
+  /**
+   * The current provider failure, already phrased for a person, or null.
+   *
+   * It renders here rather than above the transcript because a failed turn is
+   * a fact about the message you just sent: the answer belongs next to the
+   * send button and the context dial, not pinned to the top of the window
+   * where it outranks the conversation.
+   */
+  providerNotice?: ProviderNotice | null;
+  /** Retry in flight, so the notice's one button can show its own progress. */
+  isResumingStream?: boolean;
+  onResumeStream?: () => void;
+  onDismissProviderNotice?: () => void;
 }
 
 export interface InputBarRef {
@@ -114,6 +129,10 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       planProvider = null,
       contextPanelSignal,
       onOpenContextInspector,
+      providerNotice = null,
+      isResumingStream = false,
+      onResumeStream,
+      onDismissProviderNotice,
     },
     ref,
   ) => {
@@ -518,6 +537,14 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               placeholder={placeholder}
               rows={1}
             />
+            {providerNotice ? (
+              <ProviderErrorChip
+                notice={providerNotice}
+                isResuming={isResumingStream}
+                onResume={onResumeStream}
+                onDismiss={onDismissProviderNotice}
+              />
+            ) : null}
             {selectedModel ? (
               <ContextMeter
                 chatId={chatId}
