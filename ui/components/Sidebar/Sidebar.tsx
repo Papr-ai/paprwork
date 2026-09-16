@@ -78,7 +78,10 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
   const handleNewChat = useCallback(async () => {
     const chatId = await createChat();
     if (chatId) {
-      const tabId = createTab("chat", chatId, "New Chat");
+      // Explicit click: always open a fresh standalone chat. Folding into an
+      // existing blank chat looked like a dead button whenever that chat was
+      // already on screen (e.g. merged with an app in split view).
+      const tabId = createTab("chat", chatId, "New Chat", {}, { forceNew: true });
       switchToTab(tabId);
     }
   }, [createChat, createTab, switchToTab]);
