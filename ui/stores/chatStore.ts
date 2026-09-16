@@ -163,6 +163,29 @@ export const defaultChatState: ChatState = {
   isLoadingMore: false,
 };
 
+/**
+ * Names the call site that drops a provider-refusal banner.
+ *
+ * That banner is the only per-chat record of a refused turn, and two actions
+ * clear it as a side effect rather than as their stated purpose — so when it
+ * disappears there is nothing in the log saying which one did it, and the
+ * clearing call has to be guessed at from the surrounding chunk order. Logged
+ * only for a refusal, which happens at most once a turn, so the ordinary
+ * connection banner costs nothing.
+ */
+function warnIfRefusalBannerCleared(
+  chatId: string,
+  previous: ChatState,
+  clearedBy: string,
+): void {
+  if (!previous.needsStreamRecovery) return;
+  if (previous.streamRecoveryReason !== "rateLimit") return;
+  console.warn(
+    `[chatStore] Refusal banner cleared for ${chatId} by ${clearedBy}`,
+    new Error("refusal banner cleared").stack,
+  );
+}
+
 export const useChatStore = create<ChatStore>((set, get) => ({
   // Initial state
   chats: [],
@@ -533,6 +556,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
 
+      if (!paused) {
+        warnIfRefusalBannerCleared(chatId, chatState, "setConnectionPaused");
+      }
+
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {
         ...chatState,
@@ -561,6 +588,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
+
+      if (!needs) {
+        warnIfRefusalBannerCleared(chatId, chatState, "setNeedsStreamRecovery");
+      }
 
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {

@@ -207,11 +207,17 @@ describe("the dollar figure is always shown", () => {
   });
 });
 
-/** The body of one `case "x":` arm, so offsets cannot match another arm. */
-function sliceCase(source: string, label: string): string {
-  const start = source.indexOf(`case "${label}":`);
-  expect(start).toBeGreaterThan(-1);
-  const next = source.indexOf('case "', start + label.length + 8);
+/**
+ * The body of one hook-scoped declaration, up to the next sibling.
+ *
+ * Ends at the next `\n  const ` — two spaces exactly, which is the indent of a
+ * declaration in the hook body and not of anything nested inside one. A brace
+ * scan would be defeated by the braces in the object literals within.
+ */
+function sliceFunction(source: string, anchor: string): string {
+  const start = source.indexOf(anchor);
+  expect(start, anchor).toBeGreaterThan(-1);
+  const next = source.indexOf("\n  const ", start + anchor.length);
   return source.slice(start, next > -1 ? next : source.length);
 }
 
@@ -239,22 +245,152 @@ describe("the banner is read before the calls that clear it", () => {
     expect(store().chatStates.get(id)?.needsStreamRecovery).toBe(false);
   });
 
-  it("the done arm reads the banner before it unpauses", () => {
-    // The earlier unpauses in this arm are the duplicate/stale-done guards,
-    // which clear the banner deliberately. The one that matters is the last:
-    // the finalization path, where the survival check decides.
-    const done = sliceCase(stripComments(read("ui/hooks/useAgent.ts")), "done");
-    const readAt = done.indexOf("recoveryBannerSurvivesStreamEnd({");
-    const clearAt = done.lastIndexOf("setConnectionPaused(chatId, false)");
+  /**
+   * Re-scoped from the `done` arm to `settleChatAfterStreamEnd`.
+   *
+   * These two originally sliced the `case "done":` arm, because that is where
+   * the read-then-clear sequence lived. It has since moved into one helper
+   * shared by all four `done` exits and by the reconnect cleanup — three of
+   * which previously cleared the banner unconditionally, so scoping the
+   * assertion to the arm left those exits unguarded. The requirement is
+   * unchanged: read the banner before the calls that clear it, and put it
+   * back. Only the place that requirement is met has moved.
+   */
+  it("the settle helper reads the banner before it unpauses", () => {
+    const settle = sliceFunction(
+      stripComments(read("ui/hooks/useAgent.ts")),
+      "const settleChatAfterStreamEnd",
+    );
+    const readAt = settle.indexOf("recoveryBannerSurvivesStreamEnd({");
+    const clearAt = settle.indexOf("setConnectionPaused(chatId, false)");
     expect(readAt).toBeGreaterThan(-1);
     expect(clearAt).toBeGreaterThan(-1);
     expect(readAt).toBeLessThan(clearAt);
   });
 
-  it("the done arm puts the reason and the provider's sentence back", () => {
+  it("the settle helper puts the reason and the provider's sentence back", () => {
     // Unpausing already dropped the flag, so a surviving banner has to be
     // re-asserted with its reason and detail or it renders as nothing.
-    const done = sliceCase(stripComments(read("ui/hooks/useAgent.ts")), "done");
-    expect(done).toContain("streamRecoveryDetail");
+    const settle = sliceFunction(
+      stripComments(read("ui/hooks/useAgent.ts")),
+      "const settleChatAfterStreamEnd",
+    );
+    expect(settle).toContain("streamRecoveryDetail");
+  });
+
+  it("every done exit and the reconnect cleanup go through the helper", () => {
+    // The count is the point: four `done` exits plus cleanupStreamState. A new
+    // exit that settles state by hand is the defect this issue was, so it must
+    // not be able to pass by leaving the helper in place beside it.
+    const source = stripComments(read("ui/hooks/useAgent.ts"));
+    const calls = source.match(/settleChatAfterStreamEnd\(chatId\)/g) ?? [];
+    expect(calls.length).toBe(5);
+  });
+});
+
+describe("a refusal is recorded somewhere a per-chat write cannot drop it", () => {
+  /**
+   * The reported failure, and the asymmetry behind it. Both branches handle a
+   * provider refusing the turn outright, and they chose different surfaces:
+   *
+   *   quota exhausted  -> setError(rawError)   -> global, survived, was seen
+   *   rate limited     -> setError(null)       -> per-chat only, was not
+   *
+   * The per-chat banner is cleared as a side effect by several callers, so the
+   * rate-limit branch had thrown away its only surviving copy of the message.
+   * That is why the message appeared on an API key (org spend cap -> quota) and
+   * not on a subscription login (per-minute ceiling -> rate limit).
+   */
+  it("the rate-limit branch no longer discards the provider's sentence", () => {
+    const source = stripComments(read("ui/hooks/useAgent.ts"));
+    const arm = source.slice(source.indexOf("RATE_LIMIT_EXHAUSTED_ERROR_CODE)"));
+    const body = arm.slice(0, arm.indexOf("untrackActiveStream"));
+    expect(body).toContain("setError(rawError)");
+    expect(body).not.toContain("setError(null)");
+  });
+
+  it("both refusal branches record the sentence on the same surface", () => {
+    const source = stripComments(read("ui/hooks/useAgent.ts"));
+    for (const code of [
+      "PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE)",
+      "RATE_LIMIT_EXHAUSTED_ERROR_CODE)",
+    ]) {
+      const arm = source.slice(source.indexOf(code));
+      const body = arm.slice(0, arm.indexOf("untrackActiveStream"));
+      expect(body, code).toContain("setError(rawError)");
+      expect(body, code).toContain('setLastTurnOutcome(chatId, "providerRefused")');
+    }
+  });
+
+  it("the two banners never render together", () => {
+    // Both surfaces now hold the same sentence, so without this the refusal
+    // would be reported twice, one above the other.
+    const source = stripComments(read("ui/components/Chat/ChatContainer.tsx"));
+    expect(source).toContain("{error && !needsStreamRecovery && (");
+  });
+
+  it("Resume clears the error as well as the banner", () => {
+    // Resume dismisses the banner. Leaving `error` set would reveal the copy
+    // underneath and report the refusal again on the turn retrying it.
+    const retry = sliceFunction(
+      stripComments(read("ui/hooks/useAgent.ts")),
+      "const retryStreamRecovery",
+    );
+    const clearBanner = retry.indexOf("setNeedsStreamRecovery(chatId, false)");
+    const clearError = retry.indexOf("setError(null)");
+    expect(clearBanner).toBeGreaterThan(-1);
+    expect(clearError).toBeGreaterThan(-1);
+    // Must be unconditional, i.e. before the `if (requestId)` branch that used
+    // to be the only place it happened.
+    expect(clearError).toBeLessThan(retry.indexOf("if (requestId)"));
+  });
+
+  it("a real user message retires the banner but a hidden continue does not", () => {
+    // A refusal banner now outlives its stream, so a new message has to retire
+    // it or Resume offers to retry a turn the user already replaced. Gated on
+    // the hidden-continue check so auto-continue cannot clear the very banner
+    // that is meant to be blocking it (Issue 109).
+    const source = stripComments(read("ui/hooks/useAgent.ts"));
+    const gate = source.indexOf("if (!isHiddenContinueUserMessage(message)) {");
+    expect(gate).toBeGreaterThan(-1);
+    const block = source.slice(gate, source.indexOf("}", gate));
+    expect(block).toContain("setLastTurnOutcome(chatId, undefined)");
+    expect(block).toContain("setNeedsStreamRecovery(chatId, false)");
+  });
+
+  it("names the call site when a refusal banner is cleared", async () => {
+    // The flag is cleared as a side effect by actions whose stated purpose is
+    // something else, so when it vanished nothing in the log said which one
+    // did it and the culprit had to be guessed at from chunk order.
+    const { useChatStore, defaultChatState } = await import(
+      "../ui/stores/chatStore"
+    );
+    const id = "chat-refusal-clear-is-logged";
+    useChatStore.setState((s) => ({
+      chatStates: new Map(s.chatStates).set(id, { ...defaultChatState }),
+    }));
+
+    const store = () => useChatStore.getState();
+    const warnings: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      warnings.push(String(args[0]));
+    };
+    try {
+      store().setNeedsStreamRecovery(id, true, "rateLimit", "429 from Anthropic");
+      store().setConnectionPaused(id, false);
+    } finally {
+      console.warn = original;
+    }
+
+    expect(warnings.some((w) => w.includes("setConnectionPaused"))).toBe(true);
+    expect(warnings.some((w) => w.includes(id))).toBe(true);
+  });
+
+  it("stays quiet for an ordinary connection banner", () => {
+    // Bounded noise: a refusal happens at most once a turn, a reconnect does
+    // not, so only the refusal is worth a stack trace.
+    const source = stripComments(read("ui/stores/chatStore.ts"));
+    expect(source).toContain('streamRecoveryReason !== "rateLimit"');
   });
 });
