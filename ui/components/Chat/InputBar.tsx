@@ -30,7 +30,9 @@ import { SlashCommandMenu } from "./SlashCommandMenu";
 import type { Artifact } from "../../stores/artifactsStore";
 import {
   createArtifactsFromIncomingFiles,
-  extractFilesFromDataTransfer,
+  readIncomingFiles,
+  classifyAttachmentFiles,
+  describeRejectedAttachments,
 } from "../../utils/chatAttachmentFiles";
 import { useChatStore } from "../../stores/chatStore";
 import { useOllama } from "../../hooks/useOllama";
@@ -226,13 +228,29 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     }, [setDraftMessage]);
 
     const appendFileArtifacts = useCallback(
-      async (files: File[]) => {
-        if (files.length === 0) return;
+      async (incoming: File[]) => {
+        if (incoming.length === 0) return;
+
+        // Classify here rather than at each drop target: the drop surfaces
+        // (whole chat, message list, input bar) and paste all funnel through
+        // this one function, and it is the only one of them that owns an error
+        // surface to report a rejection on.
+        const { accepted, rejected } = classifyAttachmentFiles(incoming);
+        const rejectionMessage = describeRejectedAttachments(rejected);
+
+        if (accepted.length === 0) {
+          setAttachmentError(
+            rejectionMessage ??
+              "Could not attach file. Try again or check that Paprwork can access the file.",
+          );
+          return;
+        }
+
         setIsSavingAttachments(true);
         setAttachmentError(null);
         try {
           const newArtifacts = await createArtifactsFromIncomingFiles(
-            files,
+            accepted,
             chatId,
           );
           if (newArtifacts.length === 0) {
@@ -240,6 +258,15 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
               "Could not attach file. Try again or check that Paprwork can access the file.",
             );
             return;
+          }
+          if (newArtifacts.length < accepted.length) {
+            // A partial failure used to be invisible: some files attached and
+            // the rest vanished with nothing said.
+            setAttachmentError(
+              `Attached ${newArtifacts.length} of ${accepted.length} files. The rest could not be read.`,
+            );
+          } else if (rejectionMessage) {
+            setAttachmentError(rejectionMessage);
           }
           setSelectedArtifacts((prev) => {
             const out = [...prev];
@@ -251,6 +278,17 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           setIsFocused(true);
           onFileAttachmentsAdded?.();
           queueMicrotask(() => textareaRef.current?.focus());
+        } catch (error) {
+          // This was a try/finally with no catch, so anything thrown on the way
+          // in — the base64 encode running out of stack on a large file, an IPC
+          // rejection — became an unhandled rejection and the drop looked like
+          // it had simply been ignored.
+          console.error("[InputBar] Failed to attach files:", error);
+          setAttachmentError(
+            `Could not attach file: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
         } finally {
           setIsSavingAttachments(false);
         }
@@ -267,7 +305,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
     const handleFileDrop = useCallback(
       (e: React.DragEvent) => {
-        const files = extractFilesFromDataTransfer(e.dataTransfer);
+        const files = readIncomingFiles(e.dataTransfer);
         if (files.length === 0) return;
         e.preventDefault();
         e.stopPropagation();
@@ -278,7 +316,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
 
     const handlePaste = useCallback(
       (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-        const files = extractFilesFromDataTransfer(e.clipboardData);
+        const files = readIncomingFiles(e.clipboardData);
         if (files.length === 0) return;
         e.preventDefault();
         void appendFileArtifacts(files);
