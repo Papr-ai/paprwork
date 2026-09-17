@@ -114,24 +114,53 @@ const registries = new Map<string, RunRegistry>();
 /** Used only when no tool context is set (direct unit-test calls). */
 const DEFAULT_RUN_KEY = "__no_run_context__";
 
-/**
- * Hard cap on tracked runs. A leaked registry is a slow memory leak, not a
- * correctness bug, so evict oldest-first rather than throwing.
- */
-const MAX_TRACKED_RUNS = 64;
+// Hard cap on tracked runs, so a leaked registry stays a bounded memory cost.
+// Kept modest on purpose: a pending search holds its candidates' CONTENT, and
+// production searches return ~60k chars per memory, so tracked runs are not
+// free. The cap is a memory bound, not a correctness mechanism — correctness
+// comes from evicting the right entry (below).
+export const MAX_TRACKED_RUNS = 128;
 
 function resolveRunKey(explicit?: string): string {
   if (explicit) return explicit;
   return getCurrentChatId() ?? DEFAULT_RUN_KEY;
 }
 
+/**
+ * Make room for a new run.
+ *
+ * Insertion-order eviction was wrong: the OLDEST entry is typically the
+ * long-lived chat turn that is still collecting searches, while the newest are
+ * short subagent runs. A turn that searched and then delegated many times
+ * would have its own ungraded searches dropped — silently, which is exactly how
+ * the original global-registry bug survived for so long.
+ *
+ * So: evict a DRAINED run first. After a flush, `pending` is empty and only the
+ * `submitted` dedupe set remains, so dropping it can at worst allow one
+ * duplicate submission — never a lost label. Only if every tracked run still
+ * holds ungraded searches do we drop one, and then we say so out loud.
+ */
+function evictOneRun(): void {
+  for (const [key, reg] of registries) {
+    if (reg.pending.length === 0) {
+      registries.delete(key);
+      return;
+    }
+  }
+  const oldest = registries.keys().next().value;
+  if (oldest === undefined) return;
+  console.warn(
+    `[searchOutcomeFeedback] run registry at capacity (${MAX_TRACKED_RUNS}); ` +
+      `evicting run=${oldest} with ${registries.get(oldest)?.pending.length ?? 0} ` +
+      `ungraded search(es) — these labels are lost`,
+  );
+  registries.delete(oldest);
+}
+
 function registryFor(runKey: string): RunRegistry {
   let reg = registries.get(runKey);
   if (!reg) {
-    if (registries.size >= MAX_TRACKED_RUNS) {
-      const oldest = registries.keys().next().value;
-      if (oldest !== undefined) registries.delete(oldest);
-    }
+    if (registries.size >= MAX_TRACKED_RUNS) evictOneRun();
     reg = { pending: [], submitted: new Set() };
     registries.set(runKey, reg);
   }
@@ -343,14 +372,44 @@ export function deriveCitations(
     }
   });
 
-  const bestCitedRank = citations.length
-    ? Math.min(...citations.map((c) => c.rank))
+  // Collapse id fan-out before emitting anything.
+  //
+  // One memory returned at several ranks yields one citation PER ROW, so
+  // `citedMemoryIds` could carry the same id twice. Observed in production:
+  // UserFeedbackLog row d77a41cd reported
+  //   cited=2  citedMemoryIds=['1e432d82-…','1e432d82-…']
+  // for a SINGLE document. Downstream that is two positives for one piece of
+  // evidence — a trainer would weight it double — and `mean_confidence` gets
+  // averaged over the same match repeatedly.
+  //
+  // Keep the STRONGEST citation per id: an explicit id mention beats term
+  // overlap, and among equals the best (lowest) rank wins, since that is the
+  // rank the ranker should actually be credited with.
+  const strongestById = new Map<string, DerivedCitation>();
+  for (const citation of citations) {
+    const previous = strongestById.get(citation.id);
+    if (!previous) {
+      strongestById.set(citation.id, citation);
+      continue;
+    }
+    const stronger =
+      (citation.method === "explicit_id" && previous.method !== "explicit_id") ||
+      (citation.method === previous.method && citation.rank < previous.rank);
+    if (stronger) strongestById.set(citation.id, citation);
+  }
+  const uniqueCitations = [...strongestById.values()];
+
+  const bestCitedRank = uniqueCitations.length
+    ? Math.min(...uniqueCitations.map((c) => c.rank))
     : null;
 
   return {
-    citations,
-    citedIds: citations.map((c) => c.id),
+    citations: uniqueCitations,
+    citedIds: uniqueCitations.map((c) => c.id),
     bestCitedRank,
+    // Deliberately NOT deduplicated: this counts judgeable ROWS in the result
+    // set, which is what the `judgeable=` telemetry describes. Duplicate-row
+    // floods are reported separately by the degeneracy verdict.
     judgeableCount,
   };
 }
