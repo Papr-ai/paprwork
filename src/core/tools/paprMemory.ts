@@ -154,13 +154,18 @@ const searchMemorySchema = z
   maxMemories: z
     .number()
     .int()
-    .min(10)
+    // Floor raised 10 -> 15 to match the memory API's own guidance
+    // ("use max_memories: 15-20 for comprehensive memory coverage").
+    // Recall is also the cheap side of the trade here: the reranker reorders
+    // whatever it is given, so a candidate never retrieved cannot be recovered
+    // downstream, whereas a surplus candidate is merely ranked low.
+    .min(15)
     .max(30)
     .optional()
     .describe(
-      "Number of memories to return (min 10, max 30). Default 20. " +
+      "Number of memories to return (min 15, max 30). Default 20. " +
       "Use 25-30 for architecture/concept queries where breadth matters. " +
-      "Use 10-15 for narrow lookups where you know exactly what you want.",
+      "Use 15-20 for narrow lookups where you know exactly what you want.",
     ),
   category: z
     .enum([
