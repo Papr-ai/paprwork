@@ -22,6 +22,10 @@ import {
   type RetrievedCandidate,
 } from "../utils/searchOutcomeFeedback.js";
 import {
+  armDisablesReranking,
+  decideRetrievalProbeArm,
+} from "../utils/retrievalProbe.js";
+import {
   analyzeResultSetShape,
   describeResultSetShape,
 } from "../utils/resultSetShape.js";
@@ -655,7 +659,15 @@ export async function submitEmptySearchFeedback(
       feedbackData: {
         feedbackSource: "inline",
         feedbackType: "memory_relevance",
-        feedbackText: "Search returned zero memories for the query.",
+        // Machine-authored, despite feedbackSource "inline". The Parse enum has
+        // no value for "auto, submitted by the client", so the marker lives in
+        // the text: without it the corpus cannot separate THIS row from a row
+        // an agent wrote by calling submit_memory_feedback, and 36 of the 44
+        // rows in UserFeedbackLog are "inline" with no way to tell which is
+        // which. A source field that conflates machine and agent authorship is
+        // the same defect as a class called UserFeedbackLog that is 82% not
+        // user feedback.
+        feedbackText: "auto=empty_search_v1 verdict=no_results retrieved=0 cited=0",
         feedbackScore: 1,
       },
     });
@@ -937,8 +949,19 @@ export const searchAgentMemoryTool = createTool({
         chatId: scopeChatId,
       });
 
+      // Randomised-exposure holdout (A13). Assigned BEFORE the request so the
+      // arm cannot depend on anything about the results — that independence is
+      // the entire source of the propensity. Never overrides an explicit
+      // rerankingProvider: silently ignoring a caller's argument would make the
+      // tool misreport what it did.
+      const probeArm = decideRetrievalProbeArm({
+        callerChoseProvider: args.rerankingProvider !== undefined,
+      });
+
       // Pass reranking config directly from agent's chosen provider/model
-      const chosenProvider = args.rerankingProvider ?? "cohere";
+      const chosenProvider = armDisablesReranking(probeArm)
+        ? "none"
+        : (args.rerankingProvider ?? "cohere");
       const chosenModel = args.rerankingModel ?? (chosenProvider === "cohere" ? "rerank-v3.5" : undefined);
 
       // withResponse() exposes the raw Response so we can read the server's
@@ -994,12 +1017,16 @@ export const searchAgentMemoryTool = createTool({
       }
 
       if (formatted.searchId !== null) {
+        // No explicit run key: it is inherited from the AsyncLocalStorage tool
+        // context (chat id, or `job:{jobId}:{runId}` for job runs). Passing one
+        // here would be guessing at which run we are inside.
         recordSearchOutcome({
           searchId: formatted.searchId,
           memoryCount: formatted.memoryCount,
           nodeCount: formatted.nodeCount,
           candidatesKnown: candidates !== null,
           candidates: candidates ?? [],
+          ...(probeArm ? { probeArm } : {}),
         });
 
         if (isGenuinelyEmpty) {

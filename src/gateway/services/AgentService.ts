@@ -18,10 +18,8 @@ import {
   initializeMemorySearchGate,
   wrapToolsWithMemorySearchFirstGate,
 } from "../../core/utils/memorySearchFirstGate.js";
-import {
-  flushSearchOutcomeFeedback,
-  resetSearchOutcomes,
-} from "../../core/utils/searchOutcomeFeedback.js";
+import { resetSearchOutcomes } from "../../core/utils/searchOutcomeFeedback.js";
+import { gradeRunSearchOutcomes } from "./agent/gradeSearchOutcomes.js";
 import {
   allTools,
   getApiKeysForSanitization,
@@ -1521,7 +1519,7 @@ export class AgentService {
       // Searches recorded this turn are graded against the final answer at
       // turn end. Reset here so a previous turn's searches can never be
       // attributed to this turn's answer.
-      resetSearchOutcomes();
+      resetSearchOutcomes(chatId);
       const registryTools = wrapToolsWithMemorySearchFirstGate(
         this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
       );
@@ -3060,36 +3058,15 @@ export class AgentService {
       // retrieved memory as unused and mint false negatives at scale.
       //
       // Fire-and-forget — retrieval telemetry must never delay or fail a turn.
-      if (hasPaprApiKey && assistantText.trim().length > 0) {
-        void (async () => {
-          try {
-            const [{ getPaprClient }, { paprUserScope }] = await Promise.all([
-              import("../../core/tools/paprClient.js"),
-              import("../utils/paprUserId.js"),
-            ]);
-            const client = await getPaprClient();
-            const result = await flushSearchOutcomeFeedback(
-              client as unknown as Parameters<
-                typeof flushSearchOutcomeFeedback
-              >[0],
-              assistantText,
-              paprUserScope(),
-            );
-            if (result.submitted > 0) {
-              console.log(
-                `[AgentService] search-outcome feedback: submitted=${result.submitted} ` +
-                  `skipped=${result.skipped} verdicts=${result.grades
-                    .map((g) => g.verdict)
-                    .join(",")}`,
-              );
-            }
-          } catch (error) {
-            console.warn(
-              "[AgentService] search-outcome feedback flush failed:",
-              error instanceof Error ? error.message : error,
-            );
-          }
-        })();
+      if (assistantText.trim().length > 0) {
+        // Chat turns stay fire-and-forget: the process outlives the turn, so a
+        // detached submit completes. Job runs must AWAIT the same helper (see
+        // runIsolatedJobSession) because their process can exit first.
+        void gradeRunSearchOutcomes({
+          runKey: chatId,
+          answerText: assistantText,
+          surface: "chat",
+        });
       }
 
       // 4. Save assistant message with thinking and tool calls
@@ -4871,6 +4848,16 @@ ${last15.substring(0, 8_000)}`;
             (lastStreamError ? ` lastError=${lastStreamError}` : ""),
         );
       }
+      // Grade this run's memory searches against the answer it produced.
+      // Awaited, not fire-and-forget: a job process can exit immediately after
+      // this returns, and a detached promise would be killed before the HTTP
+      // submit lands. That is why job labels were missing even where the chat
+      // path worked.
+      await gradeRunSearchOutcomes({
+        runKey: chatId,
+        answerText: trimmed,
+        surface: "job:agent",
+      });
       return { chatId, text: trimmed, diagnostics };
     } finally {
       await this.sessionManager.clearSession(chatId);
@@ -5267,6 +5254,14 @@ ${last15.substring(0, 8_000)}`;
       } else {
         // No retry needed, parse and return
         const parsed = this.parseJsonFromResponse(text);
+        // Structured jobs still search memory, so they still owe labels. The
+        // "answer" is the JSON it produced — citation derivation is plain term
+        // containment, so a serialised object works the same as prose.
+        await gradeRunSearchOutcomes({
+          runKey: chatId,
+          answerText: JSON.stringify(parsed),
+          surface: "job:structured",
+        });
         return { chatId, object: parsed };
       }
     }
@@ -5284,6 +5279,11 @@ ${last15.substring(0, 8_000)}`;
       system: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return data matching the requested schema exactly.`,
     });
 
+    await gradeRunSearchOutcomes({
+      runKey: chatId,
+      answerText: JSON.stringify(result.object),
+      surface: "job:structured",
+    });
     return { chatId, object: result.object };
   }
 

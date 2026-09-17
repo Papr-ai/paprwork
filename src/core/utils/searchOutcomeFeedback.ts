@@ -41,6 +41,7 @@
  * every search would otherwise widen PII exposure across the whole corpus.
  */
 
+import { getCurrentChatId } from "../tools/context.js";
 import {
   analyzeResultSetShape,
   type ResultSetShape,
@@ -67,35 +68,108 @@ export interface RecordedSearch {
    */
   candidatesKnown: boolean;
   candidates: RetrievedCandidate[];
+  /**
+   * Randomised-exposure arm for this search (A13 holdout). Present only when
+   * the search was assigned to a probe arm; absent means "not assigned", which
+   * is NOT the same as the control arm and must not be analysed as one.
+   *
+   * Without this field every label is confounded: the agent chose the query
+   * AND decided what to do next, so "what happened after" cannot separate
+   * "this document was cited because it was relevant" from "it was cited
+   * because the ranker put it on top." Randomising the ranking on a small
+   * slice makes exposure exogenous, so the arm assignment gives an exact
+   * propensity by construction.
+   */
+  probeArm?: string;
 }
 
-/** Per-turn registry. Reset at the start of every user turn. */
-let pendingSearches: RecordedSearch[] = [];
-const submittedSearchIds = new Set<string>();
-
-export function resetSearchOutcomes(): void {
-  pendingSearches = [];
-  submittedSearchIds.clear();
+// ---------------------------------------------------------------------------
+// Registry — keyed PER RUN, not per process
+// ---------------------------------------------------------------------------
+//
+// This was a single module-level array, and that was wrong in a way that
+// produced incorrect labels rather than missing ones.
+//
+// Agent jobs and subagents execute IN the gateway process (AgentJobExecutor →
+// getAgentService()), concurrently with chat turns. With one shared array:
+//
+//   1. a job's searches landed in the same array as the chat's, so the chat's
+//      turn-end flush graded the JOB's retrievals against the CHAT's answer —
+//      minting citations for text that could not have used them;
+//   2. `resetSearchOutcomes()` at chat turn start discarded a job's in-flight
+//      searches, silently dropping the label;
+//   3. `submittedSearchIds` was global, so a job's id could suppress a chat's
+//      legitimate submission.
+//
+// The run key is the tool-context chatId, which is already unique per run:
+// chat turns use the chat id, job runs use `job:{jobId}:{runId}` (set by
+// AgentJobExecutor). So scoping costs nothing at the call sites.
+interface RunRegistry {
+  pending: RecordedSearch[];
+  submitted: Set<string>;
 }
 
-export function recordSearchOutcome(search: RecordedSearch): void {
+const registries = new Map<string, RunRegistry>();
+
+/** Used only when no tool context is set (direct unit-test calls). */
+const DEFAULT_RUN_KEY = "__no_run_context__";
+
+/**
+ * Hard cap on tracked runs. A leaked registry is a slow memory leak, not a
+ * correctness bug, so evict oldest-first rather than throwing.
+ */
+const MAX_TRACKED_RUNS = 64;
+
+function resolveRunKey(explicit?: string): string {
+  if (explicit) return explicit;
+  return getCurrentChatId() ?? DEFAULT_RUN_KEY;
+}
+
+function registryFor(runKey: string): RunRegistry {
+  let reg = registries.get(runKey);
+  if (!reg) {
+    if (registries.size >= MAX_TRACKED_RUNS) {
+      const oldest = registries.keys().next().value;
+      if (oldest !== undefined) registries.delete(oldest);
+    }
+    reg = { pending: [], submitted: new Set() };
+    registries.set(runKey, reg);
+  }
+  return reg;
+}
+
+export function resetSearchOutcomes(runKey?: string): void {
+  registries.delete(resolveRunKey(runKey));
+}
+
+export function recordSearchOutcome(
+  search: RecordedSearch,
+  runKey?: string,
+): void {
   if (!search.searchId) return;
-  // A searchId can only be recorded once per turn.
-  if (pendingSearches.some((s) => s.searchId === search.searchId)) return;
-  pendingSearches.push(search);
+  const reg = registryFor(resolveRunKey(runKey));
+  // A searchId can only be recorded once per run.
+  if (reg.pending.some((s) => s.searchId === search.searchId)) return;
+  reg.pending.push(search);
 }
 
-export function getPendingSearchOutcomes(): readonly RecordedSearch[] {
-  return pendingSearches;
+export function getPendingSearchOutcomes(
+  runKey?: string,
+): readonly RecordedSearch[] {
+  return registries.get(resolveRunKey(runKey))?.pending ?? [];
 }
 
 /**
- * Claim a searchId so the turn-end flush skips it. Used by the immediate
+ * Claim a searchId so the run-end flush skips it. Used by the immediate
  * empty-search path, which submits inline — without this the same searchId
  * would receive two feedback rows for one retrieval.
  */
-export function markSearchOutcomeSubmitted(searchId: string): void {
-  if (searchId) submittedSearchIds.add(searchId);
+export function markSearchOutcomeSubmitted(
+  searchId: string,
+  runKey?: string,
+): void {
+  if (!searchId) return;
+  registryFor(resolveRunKey(runKey)).submitted.add(searchId);
 }
 
 // ---------------------------------------------------------------------------
@@ -336,22 +410,36 @@ export function gradeSearchOutcome(
   };
 
   /** Duplicate/fan-out counters appended to every graded row that has a shape. */
-  const shapeFields = (): Record<string, string | number> =>
-    shape
+  // The probe arm rides in EVERY verdict, including the degenerate and
+  // unknown ones. Emitting it only on graded rows would make the holdout
+  // self-selecting on outcome, which is the exact bias the holdout exists to
+  // remove.
+  const probeFields = (): Record<string, string | number> =>
+    search.probeArm ? { probe: search.probeArm } : {};
+
+  const shapeFields = (): Record<string, string | number> => ({
+    ...probeFields(),
+    ...(shape
       ? {
           dup_ratio: shape.duplicateRatio,
           distinct: shape.distinctContents,
           max_repeat: shape.maxRepeat,
           ...(shape.idFanOut ? { id_fanout: shape.total - shape.distinctIds } : {}),
         }
-      : {};
+      : {}),
+  });
 
   if (search.memoryCount === 0 && search.nodeCount === 0) {
     return {
       ...base,
       verdict: "no_results",
       score: 1,
-      feedbackText: fmt({ verdict: "no_results", retrieved: 0, cited: 0 }),
+      feedbackText: fmt({
+        verdict: "no_results",
+        retrieved: 0,
+        cited: 0,
+        ...probeFields(),
+      }),
     };
   }
 
@@ -366,6 +454,7 @@ export function gradeSearchOutcome(
         retrieved: search.memoryCount,
         cited: 0,
         note: "payload_unparsed",
+        ...probeFields(),
       }),
     };
   }
@@ -498,14 +587,17 @@ export async function flushSearchOutcomeFeedback(
   // `object`, not Record<string, unknown>: paprUserScope() returns a union
   // (identity fields, or {} when no user is resolved) and both spread fine.
   userScope: object = {},
+  runKey?: string,
 ): Promise<FlushResult> {
-  const searches = pendingSearches;
-  pendingSearches = [];
+  const key = resolveRunKey(runKey);
+  const reg = registries.get(key);
+  const searches = reg?.pending ?? [];
+  if (reg) reg.pending = [];
 
   const result: FlushResult = { submitted: 0, skipped: 0, grades: [] };
 
   for (const search of searches) {
-    if (submittedSearchIds.has(search.searchId)) {
+    if (reg?.submitted.has(search.searchId)) {
       result.skipped += 1;
       continue;
     }
@@ -525,7 +617,7 @@ export async function flushSearchOutcomeFeedback(
           citedMemoryIds: grade.citedIds,
         },
       });
-      submittedSearchIds.add(search.searchId);
+      registryFor(key).submitted.add(search.searchId);
       result.submitted += 1;
     } catch (error) {
       result.skipped += 1;
