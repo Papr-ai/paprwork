@@ -154,7 +154,12 @@ describe("papr memory feedback", () => {
         feedbackData: {
           feedbackSource: "inline",
           feedbackType: "memory_relevance",
-          feedbackText: "Search returned zero memories for the query.",
+          // Machine-parseable and explicitly marked machine-authored. The
+          // prose version was indistinguishable from an agent-written row once
+          // it landed in UserFeedbackLog, because feedbackSource is "inline"
+          // for both.
+          feedbackText:
+            "auto=empty_search_v1 verdict=no_results retrieved=0 cited=0",
           feedbackScore: 1,
         },
       });
