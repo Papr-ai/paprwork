@@ -641,28 +641,51 @@ const SEARCH_RAIL_QUERIES: Array<{
   wikiType: string;
   railTitle: string;
 }> = [
-  { query: "goals and objectives", wikiType: "goal", railTitle: "Your goals" },
+  // These are the ONLY keyword-style queries Papr issues. Measured against 500
+  // recent production QueryLog rows: median query length is 320 words and 62%
+  // already meet the "2-3 sentences with specific details" guidance — but 9%
+  // are short, and every one of those short queries came from this list.
+  //
+  // The memory API is explicit that short keyword queries retrieve worse, so
+  // these are written as descriptive sentences naming the entity type, the kind
+  // of artifact wanted, and a recency frame. The `wikiType` filter still does
+  // the structural work; the query text is what the retriever embeds.
   {
-    query: "projects and initiatives",
+    query:
+      "Find my current goals and objectives, including OKRs and key results I am actively tracking. Focus on what I am trying to achieve now rather than completed or abandoned goals.",
+    wikiType: "goal",
+    railTitle: "Your goals",
+  },
+  {
+    query:
+      "Find the projects and initiatives I am actively working on, including their current status, owners, and recent progress. Focus on work in flight rather than finished or archived projects.",
     wikiType: "project",
     railTitle: "Projects",
   },
   {
-    query: "people contacts stakeholders",
+    query:
+      "Find the people I work with — colleagues, contacts, customers, and stakeholders — and what my relationship to each of them is. Focus on people who have appeared in recent conversations and meetings.",
     wikiType: "person",
     railTitle: "People",
   },
   {
-    query: "memories notes conversations",
+    query:
+      "Find my most recent memories, notes, and saved conversations from the past few weeks. Focus on substantive notes I recorded rather than routine or automated entries.",
     wikiType: "memory",
     railTitle: "Recent memories",
   },
   {
-    query: "insights decisions learnings",
+    query:
+      "Find insights, decisions, and learnings I have captured recently, including conclusions reached and the reasoning behind them. Focus on durable takeaways rather than day-to-day status updates.",
     wikiType: "insight",
     railTitle: "Insights",
   },
-  { query: "tasks action items todos", wikiType: "task", railTitle: "Tasks" },
+  {
+    query:
+      "Find my open tasks, action items, and todos, including who owns each one and when it is due. Focus on work that is still outstanding rather than already completed.",
+    wikiType: "task",
+    railTitle: "Tasks",
+  },
 ];
 
 function isConversationBatchMemory(record: Record<string, unknown>): boolean {
