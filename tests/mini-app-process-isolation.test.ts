@@ -602,4 +602,19 @@ describe("proving isolation actually took effect", () => {
     expect(view).toContain("describeIsolationOutcome");
     expect(view).toContain("originAgentCluster");
   });
+
+  it("reads the flag from the shell as well as from .env files", () => {
+    // The three readers of PAPR_MINI_APP_ISOLATION have to agree or the
+    // deployment is half-on: the gateway serves per-app origins while the
+    // renderer keeps pointing iframes at the shared one, and isolation
+    // silently does nothing. The main process and gateway read process.env;
+    // Vite's loadEnv covers .env files ONLY, so the renderer needs process.env
+    // named explicitly or a shell-exported flag reaches two readers of three.
+    const config = readSource("ui/vite.config.ts");
+    const mapping = config.slice(
+      config.indexOf("'import.meta.env.VITE_PAPR_MINI_APP_ISOLATION'"),
+    );
+    const body = mapping.slice(0, mapping.indexOf("),") + 2);
+    expect(body).toContain("process.env.PAPR_MINI_APP_ISOLATION");
+  });
 });

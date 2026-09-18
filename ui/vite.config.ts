@@ -40,8 +40,17 @@ export default defineConfig(({ mode }) => {
     // directly. Vite only exposes VITE_-prefixed vars to client code (Issue 64),
     // so the unprefixed name has to be mapped here or the renderer keeps
     // building same-origin iframe srcs while the gateway serves isolated ones.
+    //
+    // process.env is read as well as loadEnv: loadEnv covers .env files only, so
+    // without this a shell `PAPR_MINI_APP_ISOLATION=1 npm run dev` enables the
+    // flag in the main process and gateway and silently leaves the renderer on
+    // the shared origin — the half-on state this mapping exists to prevent.
     'import.meta.env.VITE_PAPR_MINI_APP_ISOLATION': JSON.stringify(
-      env.VITE_PAPR_MINI_APP_ISOLATION || env.PAPR_MINI_APP_ISOLATION || '0'
+      env.VITE_PAPR_MINI_APP_ISOLATION ||
+        env.PAPR_MINI_APP_ISOLATION ||
+        process.env.VITE_PAPR_MINI_APP_ISOLATION ||
+        process.env.PAPR_MINI_APP_ISOLATION ||
+        '0'
     ),
   },
   base: "./",
