@@ -91,18 +91,10 @@ class GatewayClient {
         this.reconnectAttempts = 0;
 
         if (this.ws?.readyState === WebSocket.OPEN) {
-          // `isConnected()` cannot detect the one condition a resume
-          // guarantees: a socket whose peer vanished while both ends were
-          // frozen still reports OPEN — that is what half-open means. So the
-          // old `if (!this.isConnected())` did nothing here, and detection fell
-          // to the heartbeat, which while a stream is active tolerates 12
-          // missed beats at 20s each (240s).
-          //
-          // Probe instead. No pong closes the socket, which runs the existing
-          // onclose path (reject in-flight handlers → reconnect → resume
-          // tracked streams) rather than adding a second recovery mechanism.
-          console.log("[Gateway] System resumed — probing socket liveness");
-          void this.probeConnection();
+          // After sleep the socket often still reports OPEN while TCP/streams are
+          // dead. Ping can succeed on a half-open link while agent state is broken,
+          // so always tear down and reconnect on wake (see reconnectAfterSystemWake).
+          this.reconnectAfterSystemWake("resume");
           return;
         }
 
