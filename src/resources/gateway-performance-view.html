@@ -7,6 +7,10 @@ header{padding:20px 28px;display:flex;align-items:center;gap:18px;border-bottom:
 <main><section id="timelineSection"><span class="badge">Execution overview</span><h2 style="font-size:22px;margin-top:4px">Event timeline</h2><p class="hint">One row per operation, one shared clock. Select any bar or incident to inspect what was happening.</p><div id="stats" class="stats"></div>
 <div class="toolbar"><input id="search" type="search" aria-label="Search operations" placeholder="Search operations, chats, database owners…"><select id="kind" aria-label="Operation type"><option value="all">All activity</option></select><select id="order" aria-label="Sort operations"><option value="start">Start time ↑</option><option value="duration">Longest first</option></select><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomIn" aria-label="Zoom in">+</button><button id="fit">Fit</button><button id="download">Download JSON</button></div>
 <div id="legend" class="legend"></div><div class="timeline-layout"><div class="timeline-viewport" id="timelineWrap"><div class="waterfall" id="timeline"></div></div><aside id="inspector" class="inspector" aria-live="polite"></aside></div><p id="coverage" class="hint" style="margin-top:12px"></p></section>
+    <section><h2>Renderer and mini-app activity</h2>
+      <p class="hint">Pause acknowledgement confirms the fetch gate received the state, not that all app code stopped. Request counts are cumulative since each frame loaded and exclude XHR, SSE and bypassed fetches. Long tasks identify UI contention, not the app responsible.</p>
+      <div id="rendererActivity">Waiting for renderer measurements…</div>
+    </section>
     <section>
       <h2>Memory pressure and process usage</h2>
       <p class="hint" id="watchdogStatus">Waiting for independent observer…</p>
@@ -40,7 +44,7 @@ header{padding:20px 28px;display:flex;align-items:center;gap:18px;border-bottom:
     </section>
 </main><script>
 const API="/api/debug/gateway-performance";
-const types={chat:["Chat turn","#6c9fff"],model:["Model request","#27d8ab"],tool:["Tool","#c19bff"],background:["Background","#ffb760"],indexing:["Indexing","#61cbe7"],setup:["Setup","#e895ce"],"heap-snapshot":["Heap snapshot","#c5ce79"],database:["Database","#7dd3b3"]};
+const types={renderer:["Renderer delay","#f2a6dc"],chat:["Chat turn","#6c9fff"],model:["Model request","#27d8ab"],tool:["Tool","#c19bff"],background:["Background","#ffb760"],indexing:["Indexing","#61cbe7"],setup:["Setup","#e895ce"],"heap-snapshot":["Heap snapshot","#c5ce79"],database:["Database","#7dd3b3"]};
 let lastPayload=null,selected=null,zoom=1,inflight=false;
 const $=id=>document.getElementById(id);
 const ms=iso=>Date.parse(iso);
@@ -55,6 +59,10 @@ function data(payload){
  function addDb(c,o,end,outcome){const id="db:"+c.connectionId+":"+o.id;ops.set(id,{id,kind:"database",name:c.owner+" · "+o.kind,queuedAt:o.startedAt,startedAt:o.startedAt,finishedAt:end,status:end?(outcome==="error"?"error":"completed"):"running",databasePath:c.databasePath,connectionId:c.connectionId,pid:c.pid,threadId:c.threadId,transaction:c.transaction.state});}
  for(const completion of db?.recent||[])addDb(completion.connection,completion.operation,completion.finishedAt,completion.outcome);
  for(const c of db?.connections||[])for(const o of c.operations)addDb(c,o);
+ for(const session of payload.renderer?.sessions||[])for(const sample of session.samples||[])for(const [index,incident] of (sample.incidents||[]).entries()){
+  const id="renderer:"+session.sessionId+":"+sample.sequence+":"+index;
+  ops.set(id,{id,kind:"renderer",name:incident.kind,queuedAt:incident.startedAt,startedAt:incident.startedAt,finishedAt:new Date(ms(incident.startedAt)+incident.durationMs).toISOString(),durationMs:incident.durationMs,status:"completed"});
+ }
  const markers=(payload.timeline?.healthEvents||[]).map(e=>({...e,type:"health",color:e.status==="failed"?"#ff647c":"#59dcad",name:e.status==="failed"?"Health check failed":"Health check recovered"}));
  for(const stall of snapshot?.stalls||[])markers.push({id:"stall:"+stall.detectedAt,timestamp:stall.detectedAt,type:"stall",name:"Watchdog heartbeat missing",color:"#ffbc66",reason:"Independent watchdog detected a missing heartbeat; this is separate from an HTTP health-check failure.",...stall});
  return {ops:[...ops.values()],markers,samples:payload.resources?.samples||[]};
@@ -167,7 +175,20 @@ function renderSlowTable(timeline){const tbody=document.querySelector("#slowTabl
     }
 
 
-async function load(){if(inflight)return;inflight=true;try{const res=await fetch(API);if(!res.ok)throw new Error(res.status+" "+res.statusText);lastPayload=await res.json();$("meta").textContent="Captured "+clock(lastPayload.capturedAt)+" · current lag "+fmtMs(lastPayload.eventLoopLagMs);renderTimeline();renderWatchdog(lastPayload);renderSlowTable(lastPayload.timeline);}catch(e){$("meta").textContent="Could not refresh: "+e.message+". Showing the last received snapshot.";}finally{inflight=false;}}
+function renderRenderer(payload){
+ const root=$("rendererActivity");root.replaceChildren();
+ const sessions=payload.renderer?.sessions||[];
+ if(!sessions.length){root.append(el("p","No renderer reports received. Rebuild/restart the desktop UI; this does not mean it is idle.","hint"));return;}
+ for(const session of sessions){
+  const sample=session.samples?.at(-1);if(!sample)continue;
+  root.append(el("p",(session.stale?"STALE · ":"Live · ")+"Report age "+fmtMs(session.ageMs)+" · "+(sample.documentVisible?"window visible":"window hidden")+" · Long tasks: "+(sample.longTasksSupported?sample.longTaskCount+" / "+fmtMs(sample.longTaskTotalMs):"unsupported")+" · Max input wait: "+(sample.inputTimingSupported?fmtMs(sample.maxInputDelayMs):"unsupported")+" · Max timer delay: "+fmtMs(sample.maxTimerDelayMs)+" · Failed reports: "+sample.failedReports+" · Omitted incidents this interval: "+sample.droppedIncidents,"hint"));
+  const table=el("table"),head=el("tr");for(const title of ["App","Frame","Requested","Gate acknowledged","Ack age","API allowed / blocked","Other fetches"] )head.append(el("th",title));table.append(head);
+  for(const app of sample.apps||[]){const row=el("tr");for(const value of [app.appId,app.loaded?"loaded":"not mounted",app.expectedPhase,app.acknowledgedPhase||"unknown",fmtMs(app.acknowledgementAgeMs),app.gate?app.gate.allowedApi+" / "+app.gate.blockedApi:"unknown",app.gate?.allowedOther??"unknown"])row.append(el("td",value));table.append(row);}
+  root.append(table);
+ }
+ root.append(el("p",payload.renderer?.note||"","hint"));
+}
+async function load(){if(inflight)return;inflight=true;try{const res=await fetch(API);if(!res.ok)throw new Error(res.status+" "+res.statusText);lastPayload=await res.json();$("meta").textContent="Captured "+clock(lastPayload.capturedAt)+" · current lag "+fmtMs(lastPayload.eventLoopLagMs);renderTimeline();renderRenderer(lastPayload);renderWatchdog(lastPayload);renderSlowTable(lastPayload.timeline);}catch(e){$("meta").textContent="Could not refresh: "+e.message+". Showing the last received snapshot.";}finally{inflight=false;}}
 for(const [kind,[label,color]] of Object.entries(types)){const option=el("option",label);option.value=kind;$("kind").append(option);const item=el("span",label),swatch=el("i",null,"swatch");swatch.style.background=color;item.prepend(swatch);$("legend").append(item);}
 for(const [label,color,cls] of [["Queued / waiting",null,"wait-swatch"],["Health failure","#ff647c"],["Recovery","#59dcad"],["Watchdog stall","#ffbc66"]]){const item=el("span",label),swatch=el("i",null,"swatch "+(cls||""));if(color)swatch.style.background=color;item.prepend(swatch);$("legend").append(item);}
 $("search").oninput=renderTimeline;$("kind").onchange=renderTimeline;$("order").onchange=renderTimeline;$("zoomIn").onclick=()=>{zoom=Math.min(16,zoom*2);renderTimeline();};$("zoomOut").onclick=()=>{zoom=Math.max(1,zoom/2);renderTimeline();};$("fit").onclick=()=>{zoom=1;renderTimeline();};$("refresh").onclick=load;$("download").onclick=()=>{if(!lastPayload)return;const url=URL.createObjectURL(new Blob([JSON.stringify(lastPayload,null,2)],{type:"application/json"}));const a=el("a");a.href=url;a.download="gateway-performance-"+lastPayload.capturedAt.replace(/[:.]/g,"-")+".json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};

@@ -47,11 +47,50 @@ function prebuiltBundlePath(sdkFileName: string): string {
   return path.join(SDK_DIR, "bundled", base);
 }
 
-function sendSdkJavaScript(res: Response, code: string, cacheImmutable: boolean): void {
+// Share one compilation between concurrent cold previews. Packaged builds use
+// prebuilt bundles, avoiding an esbuild process on the HTML critical path.
+const inlineBundles = new Map<string, Promise<string>>();
+export function loadInlineMiniAppSdk(sdkFileName: string): Promise<string> {
+  const cached = inlineBundles.get(sdkFileName);
+  if (cached) return cached;
+  const pending = (async () => {
+    const prebuilt = prebuiltBundlePath(sdkFileName);
+    let code: string;
+    if (existsSync(prebuilt)) {
+      code = readFileSync(prebuilt, "utf8");
+    } else {
+      const esbuild = await import("esbuild");
+      const result = await esbuild.build({
+        entryPoints: [path.join(SDK_DIR, sdkFileName)],
+        bundle: true,
+        format: "iife",
+        platform: "browser",
+        target: "es2020",
+        write: false,
+      });
+      code = result.outputFiles[0].text;
+    }
+    // Escape HTML end tags even when they appear inside JS string literals.
+    return code
+      .replace(/\n?\/\/# sourceMappingURL=data:[^\n]*/g, "")
+      .replace(/<\/script/gi, "<\\/script");
+  })();
+  inlineBundles.set(sdkFileName, pending);
+  pending.catch(() => inlineBundles.delete(sdkFileName));
+  return pending;
+}
+
+function sendSdkJavaScript(
+  res: Response,
+  code: string,
+  cacheImmutable: boolean,
+): void {
   res.setHeader("Content-Type", "application/javascript; charset=utf-8");
   res.setHeader(
     "Cache-Control",
-    cacheImmutable ? "public, max-age=31536000, immutable" : "public, max-age=60",
+    cacheImmutable
+      ? "public, max-age=31536000, immutable"
+      : "public, max-age=60",
   );
   res.send(code);
 }

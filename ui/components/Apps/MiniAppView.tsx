@@ -197,7 +197,7 @@ export function MiniAppView({
     publishedIframeBaseUrl,
   ]);
 
-  usePreviewTabLifecycle(iframeRef, previewTabVisible);
+  usePreviewTabLifecycle(iframeRef, previewTabVisible, appId, iframeSrc);
 
   useEffect(() => {
     setPreviewShellLoaded(false);
@@ -808,9 +808,13 @@ export function MiniAppView({
               className="mini-app-view__frame"
               src={iframeSrc}
               title={`mini-app-${appId}`}
+              name={previewTabVisible ? "papr-preview:visible" : "papr-preview:hidden"}
               sandbox="allow-scripts allow-forms allow-modals allow-same-origin allow-popups allow-popups-to-escape-sandbox"
               allow="microphone; camera"
               onLoad={() => {
+                iframeRef.current?.contentWindow?.postMessage({
+                  type: previewTabVisible ? "papr:preview-visible" : "papr:preview-hidden",
+                }, iframeSrc ? new URL(iframeSrc).origin : "*");
                 if (isPublishedPreview) return;
                 const doc = iframeRef.current?.contentDocument;
                 const title = doc?.title?.toLowerCase() ?? "";

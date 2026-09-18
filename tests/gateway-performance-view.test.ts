@@ -68,3 +68,28 @@ test("waterfall aligns waits, failures and samples and supports inspection and f
     expect(doc.querySelectorAll(".marker")).toHaveLength(1);
   } finally { dom.window.close(); }
 });
+
+
+test("renderer delays share the timeline and missing acknowledgements stay unknown", async () => {
+  const html = await readFile(new URL("../src/resources/gateway-performance-view.html", import.meta.url), "utf8");
+  const startedAt = "2026-09-18T00:00:00.000Z", finishedAt = "2026-09-18T00:00:05.000Z";
+  const payload = { capturedAt: finishedAt, timeline: { operations: [] }, renderer: { note: "Not per-app CPU attribution", sessions: [
+    { sessionId: "renderer-1", ageMs: 20000, stale: true, samples: [{ sequence: 1, startedAt, finishedAt,
+      documentVisible: true, longTasksSupported: true, inputTimingSupported: false, longTaskCount: 1,
+      longTaskTotalMs: 120, maxTimerDelayMs: 0, failedReports: 0, droppedIncidents: 0,
+      apps: [{ appId: "<img src=x>", loaded: true, expectedPhase: "hidden", acknowledgedPhase: null,
+        acknowledgementAgeMs: null, gate: null }],
+      incidents: [{ kind: "long-task", startedAt, durationMs: 120 }] }] }
+  ] } };
+  const dom = new JSDOM(html, { runScripts: "dangerously", url: "http://localhost/", beforeParse(w) {
+    w.fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => payload });
+  } });
+  try {
+    const doc = dom.window.document;
+    await vi.waitFor(() => expect(doc.querySelector("#rendererActivity")?.textContent).toContain("STALE"));
+    expect(doc.querySelector("#rendererActivity")?.textContent).toContain("unknown");
+    expect(doc.querySelector("#rendererActivity")?.textContent).toContain("unsupported");
+    expect(doc.querySelectorAll("#rendererActivity img")).toHaveLength(0);
+    expect(doc.querySelector('[data-operation-id="renderer:renderer-1:1:0"]')).not.toBeNull();
+  } finally { dom.window.close(); }
+});

@@ -281,3 +281,41 @@ Stall evidence also includes connected `otherOpenConnections` for the same datab
 including idle Turso handles with unknown native transaction state. These are potential
 owners to investigate, not proof of an active transaction or an OS lock. Disconnected
 sources remain excluded from this evidence.
+
+## Renderer and mini-app observations (schema 7)
+
+The desktop renderer posts one bounded snapshot every five seconds to
+`POST /api/debug/renderer-performance`. The existing performance endpoint returns
+these under `renderer`; the view shows app state and adds renderer delays to the
+shared timeline. Rebuild both gateway and UI to activate this instrumentation.
+
+Each renderer session retains 120 snapshots (normally ten minutes); at most four
+sessions survive reloads. A report older than 15 seconds is labelled stale.
+The sender allows one request in flight, times out after three seconds and does
+not replay failed snapshots. `failedReports` exposes gaps. Each interval retains
+at most 20 incident details with an omitted count; aggregate long-task counts
+and duration still include all observed entries. Up to 32 mounted preview hosts
+are tracked per renderer. No request URL, body, app content or script name is sent.
+
+- App rows report the requested visibility, gate acknowledgement and its age,
+  a per-document ID and cumulative allowed API / blocked API / other-fetch counts.
+  A new document resets the counters. Acknowledgement proves the fetch gate saw
+  the state; it does not prove every app timer or subscription paused. Missing
+  acknowledgements remain unknown, including published apps without this gate.
+- Long-task observations and input dispatch delays use browser PerformanceObserver
+  support; unsupported measurements are labelled, not treated as zero. Input
+  timings cover browser-reported events, not every click or completed paint.
+- A one-second timer measures scheduling delay while the document is visible.
+  OS sleep or scheduling starvation may also produce delay; it is not CPU time.
+- Frame counters cover calls through the installed fetch wrapper. They cannot
+  account for XHR, SSE, custom sockets or calls bypassing the wrapper. Long tasks
+  share a renderer context and do not establish which app consumed CPU.
+
+The fetch gate is inlined before app scripts, with a blocking SDK-route fallback.
+The iframe name conveys initial visibility without navigation on tab switches;
+ready/load handshakes and periodic state requests repair missed notifications.
+Late lifecycle SDK imports inherit the gate's current phase. Hidden API requests
+still reject immediately, with no queue or resume replay; in-flight requests are
+not cancelled. This preserves existing save behavior rather than silently
+queuing mutations. The seven-preview cache and process-isolation setting are
+unchanged.

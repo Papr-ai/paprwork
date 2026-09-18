@@ -1,35 +1,25 @@
 /**
- * Pause same-origin /api/* fetch while the preview tab is backgrounded.
- *
- * Paprwork keeps LRU-mounted iframes alive for fast tab switch; this gate
- * stops hidden previews from hammering the gateway with DB/job queries.
- * While hidden, same-origin /api fetches fail fast (no queue buildup from pollers).
+ * Installed inline before app scripts. Hidden API calls fail immediately;
+ * nothing is queued or replayed. In-flight requests are left alone.
+ * Metrics count calls through this wrapper, not XHR/SSE or all network traffic.
  */
-
-type PreviewPhase = "hidden" | "visible" | "evicting";
+import type { PreviewPhase } from "../../core/types/rendererPerformance.js";
 
 declare global {
   interface Window {
     __paprPreviewFetchGateInstalled?: boolean;
+    __paprPreviewPhase?: PreviewPhase;
   }
-}
-
-function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
-  return input.url;
 }
 
 function isSameOriginApiRequest(input: RequestInfo | URL): boolean {
   try {
-    const raw = resolveRequestUrl(input);
-    if (raw.startsWith("/api/")) {
-      return true;
-    }
+    const raw =
+      typeof input === "string"
+        ? input
+        : input instanceof URL
+          ? input.href
+          : input.url;
     const parsed = new URL(raw, window.location.href);
     return (
       parsed.origin === window.location.origin &&
@@ -40,47 +30,69 @@ function isSameOriginApiRequest(input: RequestInfo | URL): boolean {
   }
 }
 
-export function installPreviewFetchGate(): void {
-  if (typeof window === "undefined" || typeof window.fetch !== "function") {
+export function installPreviewFetchGate(): (() => void) | undefined {
+  if (
+    typeof window === "undefined" ||
+    typeof window.fetch !== "function" ||
+    window.__paprPreviewFetchGateInstalled
+  )
     return;
-  }
-  if (window.__paprPreviewFetchGateInstalled) {
-    return;
-  }
   window.__paprPreviewFetchGateInstalled = true;
-
-  // Default visible — same as papr-preview-lifecycle.ts. The parent sends
-  // papr:preview-hidden only after backgrounding; until then fetches must run
-  // during iframe bootstrap or the app stays on "Loading…" forever.
-  let phase: PreviewPhase = "visible";
-
-  window.addEventListener("message", (event: MessageEvent) => {
+  // iframe.name is accessible before app scripts even across origins. The host
+  // supplies it without changing src (which would reload on every tab switch).
+  let phase: PreviewPhase =
+    window.name === "papr-preview:hidden" ? "hidden" : "visible";
+  window.__paprPreviewPhase = phase;
+  const documentId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  let allowedApi = 0,
+    blockedApi = 0,
+    allowedOther = 0;
+  const report = (sequence?: number) => {
+    if (window.parent === window) return;
+    window.parent.postMessage(
+      {
+        type: "papr:preview-gate-report",
+        sequence,
+        gate: { documentId, phase, allowedApi, blockedApi, allowedOther },
+      },
+      "*",
+    );
+  };
+  const onMessage = (event: MessageEvent) => {
+    if (event.source !== window.parent) return;
     const type = event.data?.type;
-    if (type === "papr:preview-hidden") {
-      phase = "hidden";
-      return;
-    }
-    if (type === "papr:preview-visible") {
-      phase = "visible";
-      return;
-    }
-    if (type === "papr:preview-evicting") {
-      phase = "evicting";
-    }
-  });
-
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    if (phase === "visible" || !isSameOriginApiRequest(input)) {
+    if (type === "papr:preview-hidden") phase = "hidden";
+    else if (type === "papr:preview-visible") phase = "visible";
+    else if (type === "papr:preview-evicting") phase = "evicting";
+    else return;
+    window.__paprPreviewPhase = phase;
+    report(event.data?.sequence);
+  };
+  window.addEventListener("message", onMessage);
+  const originalFetch = window.fetch;
+  const nativeFetch = originalFetch.bind(window);
+  const wrapped: typeof fetch = (input, init) => {
+    if (!isSameOriginApiRequest(input)) {
+      allowedOther += 1;
       return nativeFetch(input, init);
     }
-    return Promise.reject(
-      new DOMException("Preview backgrounded", "AbortError"),
-    );
+    if (phase !== "visible") {
+      blockedApi += 1;
+      return Promise.reject(
+        new DOMException("Preview backgrounded", "AbortError"),
+      );
+    }
+    allowedApi += 1;
+    return nativeFetch(input, init);
+  };
+  window.fetch = wrapped;
+  report(); // Host replies with current state; does not depend on iframe load.
+  return () => {
+    window.removeEventListener("message", onMessage);
+    if (window.fetch === wrapped) window.fetch = originalFetch;
+    delete window.__paprPreviewFetchGateInstalled;
+    delete window.__paprPreviewPhase;
   };
 }
 
-installPreviewFetchGate();
+export const disposePreviewFetchGate = installPreviewFetchGate();

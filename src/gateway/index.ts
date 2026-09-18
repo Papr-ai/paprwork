@@ -923,6 +923,16 @@ async function startGateway(): Promise<void> {
       res.json({ traces: getRecentReplicaReadPhaseTraces() });
     });
 
+    // Small, bounded diagnostic snapshots; no request contents or URLs retained.
+    app.post("/api/debug/renderer-performance", async (req, res) => {
+      const { rendererPerformanceDiagnostics } = await import("./services/rendererPerformanceDiagnostics.js");
+      if (!rendererPerformanceDiagnostics.record(req.body)) {
+        res.status(400).json({ error: "Invalid or out-of-order renderer sample" });
+        return;
+      }
+      res.status(204).end();
+    });
+
     app.get(["/api/debug/gateway-background", "/api/debug/gateway-performance"], async (_req, res) => {
       const { getRecentBackgroundTaskTimings } = await import(
         "./services/gatewayBackgroundWork.js"
@@ -946,7 +956,8 @@ async function startGateway(): Promise<void> {
         recent: operations.recent,
       });
       res.json({
-        schemaVersion: 6,
+        schemaVersion: 7,
+        renderer: (await import("./services/rendererPerformanceDiagnostics.js")).rendererPerformanceDiagnostics.snapshot(),
         cloudPause: (await import("../core/utils/paprQuota.js")).getPaprCloudPauseDiagnostics(),
         capturedAt,
         process: { pid: process.pid, uptimeSeconds: process.uptime() },
@@ -3813,7 +3824,7 @@ async function startGateway(): Promise<void> {
           const { injectMiniAppPreviewFetchGate } = await import(
             "./utils/injectMiniAppPreviewFetchGate.js"
           );
-          content = injectMiniAppPreviewFetchGate(content);
+          content = await injectMiniAppPreviewFetchGate(content);
 
           // Boot watchdog: turns a silent blank iframe into a labeled
           // diagnostic banner (entry module never ran / threw / rendered nothing).
