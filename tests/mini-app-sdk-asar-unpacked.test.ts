@@ -40,26 +40,36 @@ describe("mini-app SDK packaging", () => {
   });
 
   it("resolves SDK_DIR to app.asar.unpacked when loaded from inside an asar", () => {
+    // Now owned by miniAppSdkSource, shared by the /__papr__/ route and the
+    // HTML inliner (docs/MINI_APP_PROCESS_ISOLATION.md). Two copies of this
+    // redirect would be two chances to get the asar path wrong, and the
+    // failure is silent — a blank app with an empty console.
     const source = fs.readFileSync(
-      path.join(
-        repoRoot,
-        "src/gateway/utils/registerPaprMiniAppSdkRoutes.ts",
-      ),
+      path.join(repoRoot, "src/gateway/utils/miniAppSdkSource.ts"),
       "utf8",
     );
 
-    // The route must redirect into the unpacked tree rather than handing
-    // esbuild a path inside the archive.
+    // Must redirect into the unpacked tree rather than handing esbuild a path
+    // inside the archive.
     expect(source).toContain("app.asar.unpacked");
 
     // Packaged builds must serve prebuilt bundles — no runtime esbuild dependency.
     expect(source).toContain("bundled");
 
-    // resolveSdkDir must not probe with fs.existsSync — Electron's patched fs
+    // The resolution must not probe with fs.existsSync — Electron's patched fs
     // reports the in-asar path as readable, which is the broken one for esbuild.
-    const resolveSdkDirFn =
-      source.match(/function resolveSdkDir\(\)[\s\S]*?^}/m)?.[0] ?? "";
-    expect(resolveSdkDirFn).not.toMatch(/existsSync/);
+    const resolveFn =
+      source.match(/function resolveMiniAppSdkDir\(\)[\s\S]*?^}/m)?.[0] ?? "";
+    expect(resolveFn).not.toBe("");
+    expect(resolveFn).not.toMatch(/existsSync/);
+
+    // The route must consume that shared resolution, not restate it.
+    const routeSource = fs.readFileSync(
+      path.join(repoRoot, "src/gateway/utils/registerPaprMiniAppSdkRoutes.ts"),
+      "utf8",
+    );
+    expect(routeSource).toContain("resolveMiniAppSdkDir");
+    expect(routeSource).not.toMatch(/function resolveSdkDir\(/);
   });
 
   it("keeps every SDK entry point inside the unpacked directory", () => {

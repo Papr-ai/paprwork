@@ -5,47 +5,21 @@
 import type { Express, Request, Response } from "express";
 import { existsSync, readFileSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
 import {
   MINI_APP_SDK_MODULES,
   type MiniAppSdkFormat,
 } from "../../resources/mini-app-sdk/sdk-manifest.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+import {
+  prebuiltMiniAppSdkBundlePath,
+  resolveMiniAppSdkDir,
+} from "./miniAppSdkSource.js";
 
 /**
- * SDK sources must live OUTSIDE app.asar in packaged builds.
- *
- * esbuild bundles these files, and esbuild is a native binary running as a
- * separate process. The asar virtual filesystem is patched into Electron's
- * `fs` module only — a child process sees `app.asar` as a single opaque
- * file, so every bundle failed with:
- *
- *   Could not resolve ".../app.asar/dist/resources/mini-app-sdk/papr-job-events.ts"
- *
- * Mini-apps import `/__papr__/papr-job-events.ts`, so that 500 meant the app
- * bundle never evaluated and rendered blank — with an empty console, because
- * a failed module fetch logs nothing.
- *
- * `dist/resources/mini-app-sdk/**` is in electron-builder `asarUnpack`, so
- * prefer the unpacked copy whenever this file is loaded from inside an asar.
- * Do NOT probe with fs.existsSync to choose: Electron's patched `fs` reports
- * the in-asar path as readable, which is exactly the path esbuild cannot use.
+ * SDK sources must live OUTSIDE app.asar in packaged builds — see
+ * `resolveMiniAppSdkDir`, which this route and the HTML inliner share so the
+ * asar reasoning lives in exactly one place.
  */
-function resolveSdkDir(): string {
-  const bundled = path.join(__dirname, "../../resources/mini-app-sdk");
-  return bundled.includes(`app.asar${path.sep}`)
-    ? bundled.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`)
-    : bundled;
-}
-
-const SDK_DIR = resolveSdkDir();
-
-function prebuiltBundlePath(sdkFileName: string): string {
-  const base = sdkFileName.replace(/\.ts$/, ".js");
-  return path.join(SDK_DIR, "bundled", base);
-}
+const SDK_DIR = resolveMiniAppSdkDir();
 
 function sendSdkJavaScript(res: Response, code: string, cacheImmutable: boolean): void {
   res.setHeader("Content-Type", "application/javascript; charset=utf-8");
@@ -63,7 +37,7 @@ async function serveSdkFile(
   format: MiniAppSdkFormat = "iife",
 ): Promise<void> {
   try {
-    const prebuiltPath = prebuiltBundlePath(sdkFileName);
+    const prebuiltPath = prebuiltMiniAppSdkBundlePath(sdkFileName);
     if (existsSync(prebuiltPath)) {
       sendSdkJavaScript(res, readFileSync(prebuiltPath, "utf8"), true);
       return;

@@ -5,6 +5,8 @@
 
 import type { IncomingHttpHeaders } from "node:http";
 
+import { appIdFromHost } from "../../core/miniApps/miniAppOrigin.js";
+
 const MINI_APP_UUID =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -43,10 +45,22 @@ export function inferMiniAppIdFromUrl(urlString: string): string | undefined {
   }
 }
 
-/** Prefer Referer (includes app path); Origin is host-only and not used. */
+/**
+ * Prefer Host, then Referer. Origin is host-only and not used.
+ *
+ * Under per-app origins the Host names the app directly and cannot be
+ * suppressed the way a referrer policy can suppress Referer, so it is both the
+ * more reliable and the harder-to-forge signal. Referer stays as the fallback
+ * for the shared-origin path, which is still how apps are served when
+ * PAPR_MINI_APP_ISOLATION is off.
+ */
 export function inferMiniAppIdFromRequestHeaders(
   headers: IncomingHttpHeaders,
 ): string | undefined {
+  const fromHost = appIdFromHost(headerValue(headers.host));
+  if (fromHost && MINI_APP_UUID.test(fromHost)) {
+    return fromHost;
+  }
   const referer = headerValue(headers.referer);
   if (referer) {
     const fromReferer = inferMiniAppIdFromUrl(referer);
@@ -67,6 +81,27 @@ export function resolveMiniAppIdFromRequest(
 ): ResolveMiniAppIdResult {
   const explicit = explicitAppId?.trim() || undefined;
   const inferred = inferMiniAppIdFromRequestHeaders(headers);
+
+  // A Host that names one app while the Referer names another is a request
+  // from inside app A's origin claiming to be app B. Under isolation the Host
+  // is the boundary the browser itself enforces, so the disagreement is the
+  // signal — refuse rather than quietly trusting the one we happen to prefer.
+  const hostAppId = appIdFromHost(headerValue(headers.host));
+  const refererAppId = (() => {
+    const referer = headerValue(headers.referer);
+    return referer ? inferMiniAppIdFromUrl(referer) : undefined;
+  })();
+  if (
+    hostAppId &&
+    refererAppId &&
+    hostAppId.toLowerCase() !== refererAppId.toLowerCase()
+  ) {
+    return {
+      appId: undefined,
+      error: "appId does not match the requesting mini-app",
+      status: 403,
+    };
+  }
 
   if (explicit && inferred && explicit.toLowerCase() !== inferred.toLowerCase()) {
     return {

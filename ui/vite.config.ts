@@ -36,6 +36,13 @@ export default defineConfig(({ mode }) => {
     'import.meta.env.VITE_PAPR_STREAM_PROFILE': JSON.stringify(
       env.VITE_PAPR_STREAM_PROFILE || env.PAPR_STREAM_PROFILE || 'false'
     ),
+    // Mirrors PAPR_MINI_APP_ISOLATION, which the main process and gateway read
+    // directly. Vite only exposes VITE_-prefixed vars to client code (Issue 64),
+    // so the unprefixed name has to be mapped here or the renderer keeps
+    // building same-origin iframe srcs while the gateway serves isolated ones.
+    'import.meta.env.VITE_PAPR_MINI_APP_ISOLATION': JSON.stringify(
+      env.VITE_PAPR_MINI_APP_ISOLATION || env.PAPR_MINI_APP_ISOLATION || '0'
+    ),
   },
   base: "./",
   resolve: {

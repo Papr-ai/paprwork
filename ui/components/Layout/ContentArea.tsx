@@ -18,6 +18,7 @@ import { JobsView } from "../Jobs/JobsView";
 import type { Tab } from "../../types/tabs";
 import { AppTabKeepAliveHost, type AppTabKeepAlivePlacement } from "./AppTabKeepAliveHost";
 import { selectMountedAppTabIds } from "../../utils/appPreviewMemoryPolicy";
+import { miniAppPreviewIsolationEnabled } from "../../utils/miniAppPreviewOrigin";
 import "./AppTabKeepAliveHost.css";
 import { SkillsView } from "../Skills/SkillsView";
 import { AgentsView } from "../Agents/AgentsViewCards";
@@ -291,18 +292,27 @@ export function ContentArea() {
     [tabs],
   );
 
-  // Always keep the LRU warm set (cap = max(7, visible + 1)) — including in
-  // split view. Passing { visibleOnly: true } here evicted every hidden app
-  // iframe whenever a parent chat with child tabs became active, so returning
-  // to a standalone app tab paid a full cold reload (queries, Turso pulls).
+  // Always keep the LRU warm set — including in split view. Passing
+  // { visibleOnly: true } here evicted every hidden app iframe whenever a
+  // parent chat with child tabs became active, so returning to a standalone
+  // app tab paid a full cold reload (queries, Turso pulls).
+  //
+  // The cap depends on where previews load from: an isolated preview is warm
+  // in its own process, a shared one is warm on *this* thread.
+  const isolatedPreviewOrigins = useMemo(
+    () =>
+      miniAppPreviewIsolationEnabled({
+        host: import.meta.env.VITE_GATEWAY_HOST || "localhost",
+        isolationFlag: import.meta.env.VITE_PAPR_MINI_APP_ISOLATION,
+      }),
+    [],
+  );
   const mountedAppTabIds = useMemo(
     () =>
-      selectMountedAppTabIds(
-        appTabs,
-        visiblePaneTabIds,
-        lastActiveAtRef.current,
-      ),
-    [appTabs, visiblePaneTabIds, lastActiveTick],
+        selectMountedAppTabIds(appTabs, visiblePaneTabIds, lastActiveAtRef.current, {
+        isolatedOrigins: isolatedPreviewOrigins,
+      }),
+    [appTabs, visiblePaneTabIds, lastActiveTick, isolatedPreviewOrigins],
   );
 
   const [documentVisible, setDocumentVisible] = useState(

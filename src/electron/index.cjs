@@ -42,6 +42,32 @@ if (process.env.PAPR_PLATFORM_EMBEDDED_CDP === "1") {
   );
 }
 
+// Mini-app process isolation (docs/MINI_APP_PROCESS_ISOLATION.md).
+//
+// A website can only *ask* for an origin-keyed process via the
+// Origin-Agent-Cluster header — Chromium is free to decline. We ship the
+// browser, so we can turn the hint into a guarantee. Without this an app's
+// JavaScript runs on the chat UI's main thread and one busy app freezes the
+// whole window.
+//
+// host-resolver-rules is not optional cosmetics: Chromium resolves
+// *.localhost to loopback itself, but Windows' OS resolver historically does
+// not, so mapping it here keeps behaviour identical across platforms instead
+// of depending on whichever resolver answers first.
+if (process.env.PAPR_MINI_APP_ISOLATION === "1") {
+  app.commandLine.appendSwitch(
+    "enable-features",
+    "OriginKeyedProcessesByDefault",
+  );
+  app.commandLine.appendSwitch(
+    "host-resolver-rules",
+    "MAP *.localhost 127.0.0.1",
+  );
+  console.log(
+    "[Electron] Mini-app process isolation enabled (per-app *.localhost origins)",
+  );
+}
+
 // Import ESM modules dynamically
 let CustomKeysStorage;
 let KeyPermissionsStorage;
