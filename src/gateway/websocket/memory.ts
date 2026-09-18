@@ -6,6 +6,8 @@
  * - Schema listing for UI
  */
 
+import { openDiagnosticDatabase } from "../services/databaseDiagnostics/sqlite.js";
+
 import type { WebSocket } from "ws";
 import { getPaprRoot, getPaprWorkspaceDir } from "../../core/utils/paprRoot.js";
 import { resolvePaprAgentPath } from "../../core/utils/paprAgentPaths.js";
@@ -296,7 +298,7 @@ async function handleChatStats(
     if (fs.existsSync(chatsDbPath)) {
       try {
         const Database = (await import("better-sqlite3")).default;
-        const db = new Database(chatsDbPath, { readonly: true });
+        const db = openDiagnosticDatabase(Database, "websocket/memory", chatsDbPath, { readonly: true });
 
         // Count conversations
         const conversationsRow = db

@@ -9,6 +9,10 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+  subscribeOllamaDownloadProgress,
+  type OllamaDownloadProgressPayload,
+} from './ollamaDownloadProgressSubscription';
 
 interface OllamaStatus {
   isRunning: boolean;
@@ -16,14 +20,15 @@ interface OllamaStatus {
   checking: boolean;
 }
 
-interface ModelInstallProgress {
-  modelName: string;
-  status: 'downloading' | 'extracting' | 'complete' | 'error';
-  percent: number;
-  error?: string;
+type ModelInstallProgress = OllamaDownloadProgressPayload;
+
+export interface UseOllamaOptions {
+  /** Default false — only enable where install UI runs (e.g. ChatContainer). */
+  subscribeDownloadProgress?: boolean;
 }
 
-export function useOllama() {
+export function useOllama(options: UseOllamaOptions = {}) {
+  const subscribeDownloadProgress = options.subscribeDownloadProgress === true;
   const [status, setStatus] = useState<OllamaStatus>({
     isRunning: false,
     installedModels: [],
@@ -95,19 +100,17 @@ export function useOllama() {
       }
     })();
 
-    // Listen for download progress with stable callback
-    if (window.electronAPI?.ollama && handleProgressRef.current) {
-      window.electronAPI.ollama.onDownloadProgress(handleProgressRef.current);
-    }
-
     return () => {
       cancelled = true;
-      // Remove the exact same callback reference
-      if (window.electronAPI?.ollama && handleProgressRef.current) {
-        window.electronAPI.ollama.removeDownloadProgressListener(handleProgressRef.current);
-      }
     };
   }, [checkStatus]);
+
+  useEffect(() => {
+    if (!subscribeDownloadProgress || !handleProgressRef.current) {
+      return;
+    }
+    return subscribeOllamaDownloadProgress(handleProgressRef.current);
+  }, [subscribeDownloadProgress]);
 
   /**
    * Ensure model is ready (auto-installs if needed)

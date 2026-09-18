@@ -1870,24 +1870,31 @@ class GatewayProcessSupervisor {
     this.healthFailures = 0;
     this._stopHealthCheck();
     this.healthCheckTimer = setInterval(() => {
+      const observedProcess = this.process;
+      let settled = false;
+      const report = (health) => {
+        if (settled || this.process !== observedProcess) return;
+        settled = true;
+        this._onHealthCheckResult(health);
+      };
       const req = http.get(`http://localhost:${this.port}/health`, (res) => {
         let body = "";
         res.on("data", (d) => (body += d));
         res.on("end", () => {
           const health = parseHealthResponse(body);
-          this._onHealthCheckResult(health);
+          report(health);
         });
       });
       req.on("error", () => {
         const busyGrace = this._readSyncBusyGraceHealth();
-        this._onHealthCheckResult(
+        report(
           busyGrace ?? { alive: false, ready: false },
         );
       });
       req.setTimeout(this.HEALTH_REQUEST_TIMEOUT_MS, () => {
         req.destroy();
         const busyGrace = this._readSyncBusyGraceHealth();
-        this._onHealthCheckResult(
+        report(
           busyGrace ?? { alive: false, ready: false },
         );
       });
@@ -1902,6 +1909,17 @@ class GatewayProcessSupervisor {
   }
 
   _onHealthCheckResult(health) {
+    const failed = !health.alive || health.syncBusy === true;
+    if (failed || this.lastDiagnosticHealthFailed) {
+      const event = {
+        id: `${this.process?.pid}:${Date.now()}:${++this.healthObservationSequence || (this.healthObservationSequence = 1)}`,
+        timestamp: new Date().toISOString(), status: failed ? "failed" : "recovered",
+        reason: health.syncBusy ? "Health request failed during sync grace" : failed ? "Health request failed or timed out" : "Health request responded again",
+        gatewayPid: this.process?.pid,
+      };
+      if (this.process?.connected) this.process.send({ type: "HEALTH_OBSERVATION", event }, () => {});
+    }
+    this.lastDiagnosticHealthFailed = failed;
     if (health.ready) {
       this.hasEverBeenHealthy = true;
       if (!this.gatewayReadyNotified) {
@@ -2006,7 +2024,14 @@ class GatewayProcessSupervisor {
           return;
         }
         attempts++;
-        const req = http.get(`http://localhost:${this.port}/health`, (res) => {
+        const observedProcess = this.process;
+      let settled = false;
+      const report = (health) => {
+        if (settled || this.process !== observedProcess) return;
+        settled = true;
+        this._onHealthCheckResult(health);
+      };
+      const req = http.get(`http://localhost:${this.port}/health`, (res) => {
           let body = "";
           res.on("data", (d) => (body += d));
           res.on("end", () => {

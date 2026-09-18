@@ -20,6 +20,58 @@ const CHATS_DB_RE = /(?:~\/\.paprwork(?:-v2)?\/|\.paprwork(?:-v2)?\/).*chats\.db
 const LEGACY_JOBS_DIR_RE = /\/Papr\/jobs\//i;
 const JOBS_JSON_SQLITE_RE = /jobs\.json/i;
 
+const REGISTRY_DB_ID_RE = /\bdb-[0-9a-f]{8}\b/gi;
+
+export function findRegistryDbIdsInText(text: string): string[] {
+  const matches = text.match(REGISTRY_DB_ID_RE);
+  if (!matches) {
+    return [];
+  }
+  return [...new Set(matches.map((id) => id.toLowerCase()))];
+}
+
+/**
+ * Warn when agent commands embed raw db- IDs instead of writeDbIds / PAPR_DB_* / aliases.
+ */
+export function buildHardcodedRegistryDbIdReminder(
+  command: string | undefined,
+  writeDbIds: readonly string[],
+): string | undefined {
+  if (!command?.trim()) {
+    return undefined;
+  }
+  const embedded = findRegistryDbIdsInText(command);
+  if (embedded.length === 0) {
+    return undefined;
+  }
+  const declared = new Set(
+    writeDbIds.map((id) => id.trim().toLowerCase()).filter(Boolean),
+  );
+  const undeclared = embedded.filter((id) => !declared.has(id));
+  const mentionsPortableEnv =
+    /\$APP_DB\b|\bAPP_DB\b|\bPAPR_DB_/i.test(command) ||
+    /\bpapr_db(?:_exec|\.connect)\s*\(\s*["'][a-z]/i.test(command);
+
+  if (undeclared.length === 0 && mentionsPortableEnv) {
+    return undefined;
+  }
+
+  const lines: string[] = [
+    "⚠️ HARDCODED DB ID: Agent job commands must not rely on raw db-… strings in prompts.",
+  ];
+  if (undeclared.length > 0) {
+    lines.push(
+      `Found ${undeclared.join(", ")} in command but not in writeDbIds — set writeDbIds on create_job/update_job and refer to PAPR_DB_* / APP_DB / source alias instead of pasting dbIds.`,
+    );
+  } else if (!mentionsPortableEnv) {
+    lines.push(
+      `Command mentions ${embedded.join(", ")} literally. Prefer writeDbIds + runtime env (PAPR_DB_* / APP_DB) or papr_db.connect("alias") — dbIds change after fork/install.`,
+    );
+  }
+  lines.push(APP_DB_QUICK_REFERENCE);
+  return lines.join(" ");
+}
+
 const PERSIST_INTENT_RE =
   /\b(save|store|persist|write|insert|update|database|table|rows|results|insights|sync|record)\b/i;
 

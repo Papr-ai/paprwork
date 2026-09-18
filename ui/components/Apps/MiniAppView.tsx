@@ -23,6 +23,7 @@ import {
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
 import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
+import { shouldSuppressMiniAppRuntimeBanner } from "../../utils/previewNetworkErrors";
 import {
   normalizeMiniAppRuntimeErrorMessage,
   shouldShowDataSourcesMigrationHint,
@@ -32,7 +33,6 @@ import {
   canLoadLocalAppPreview,
   isWaitingForLocalPreviewGateway,
 } from "../../utils/localPreviewGatewayGate";
-import { warmIframeActivationDelayMs } from "../../utils/appPreviewWarmActivation";
 import {
   APP_LOOKUP_MAX_ATTEMPTS,
   APP_LOOKUP_RETRY_MS,
@@ -55,9 +55,10 @@ interface MiniAppViewProps {
 export function MiniAppView({
   appId,
   previewTabVisible = true,
-  previewKeepAliveWarm = false,
+  previewKeepAliveWarm: _previewKeepAliveWarm = false,
   embedded = false,
 }: MiniAppViewProps) {
+  void _previewKeepAliveWarm;
   const { reloadKey, triggerReload } = useApp(appId);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [appTitle, setAppTitle] = useState("Mini-app");
@@ -66,10 +67,8 @@ export function MiniAppView({
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
   const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
   const linkedJobCount = useAppLinkedJobCount(appId);
-  /** LRU warm tabs load iframes in the background; visible tab loads immediately. */
-  const [iframeActivated, setIframeActivated] = useState(
-    () => previewTabVisible || !previewKeepAliveWarm,
-  );
+  /** Visible tab loads iframe; hidden LRU tabs stay inert until selected again. */
+  const [iframeActivated, setIframeActivated] = useState(() => previewTabVisible);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
   const [publishedIframeBaseUrl, setPublishedIframeBaseUrl] = useState<string | null>(
@@ -79,6 +78,7 @@ export function MiniAppView({
     useState(false);
   const [iframeLoadError, setIframeLoadError] = useState<string | null>(null);
   const [runtimeError, setRuntimeError] = useState<string | null>(null);
+  const [runtimeBannerDismissed, setRuntimeBannerDismissed] = useState(false);
   const [appMissingInWorkspace, setAppMissingInWorkspace] = useState(false);
   const iframeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cloud = useCloudPublish(appId, appTitle);
@@ -201,23 +201,23 @@ export function MiniAppView({
 
   useEffect(() => {
     setPreviewShellLoaded(false);
+    setRuntimeError(null);
+    setRuntimeBannerDismissed(false);
+    setIframeLoadError(null);
   }, [appId, reloadKey, iframeLoadKey, viewMode, isPublishedPreview]);
+
+  useEffect(() => {
+    setRuntimeBannerDismissed(false);
+  }, [runtimeError]);
 
   useEffect(() => {
     if (previewTabVisible) {
       setIframeActivated(true);
-      setRuntimeError(null);
       return;
     }
-    if (!previewKeepAliveWarm) {
-      return;
-    }
-    const delayMs = warmIframeActivationDelayMs(appId);
-    const timer = setTimeout(() => {
-      setIframeActivated(true);
-    }, delayMs);
-    return () => clearTimeout(timer);
-  }, [previewTabVisible, previewKeepAliveWarm, appId]);
+    setIframeActivated(false);
+    setPreviewShellLoaded(false);
+  }, [previewTabVisible]);
 
   const scheduleIframeRetry = useCallback((reason: string) => {
     setIframeLoadError(reason);
@@ -259,26 +259,18 @@ export function MiniAppView({
     localPreviewGatewayGate,
   );
 
-  useEffect(() => {
-    if (!iframeActivated) {
-      return;
+  const runAppGetProbe = useCallback(() => {
+    if (!iframeActivated || !gatewayConnected || isCatalogPreviewEntityId(appId)) {
+      return () => {};
     }
+
     setAppMissingInWorkspace(false);
     setIframeLoadError(null);
-    setRuntimeError(null);
-    if (isCatalogPreviewEntityId(appId)) {
-      return;
-    }
+
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const probe = async (attempt: number): Promise<void> => {
-      // Only an explicit "not found" from a gateway that answered is evidence
-      // about *where the app lives*. A dropped socket, a timeout, or a gateway
-      // still starting says nothing about that — and claiming otherwise both
-      // misdirects the user and latches `appMissingInWorkspace`, which blanks
-      // the pane for the rest of the tab's life over a condition that clears
-      // itself in seconds.
       const onFailure = (reason: string | undefined): void => {
         const kind = classifyAppGetFailure(reason);
         if (kind === "not_found") {
@@ -295,7 +287,6 @@ export function MiniAppView({
           return;
         }
 
-        // Out of attempts. Still not a scoping claim — say what we know.
         setIframeLoadError(
           "Could not reach the local gateway to load this app. Your app is " +
             "still on disk; reopen the tab once the gateway is running.",
@@ -330,7 +321,49 @@ export function MiniAppView({
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [appId, iframeActivated]);
+  }, [appId, iframeActivated, gatewayConnected]);
+
+  useEffect(() => {
+    return runAppGetProbe();
+  }, [runAppGetProbe]);
+
+  const lookupErrorLatchRef = useRef({
+    missing: false,
+    loadError: null as string | null,
+  });
+  lookupErrorLatchRef.current = {
+    missing: appMissingInWorkspace,
+    loadError: iframeLoadError,
+  };
+
+  useEffect(() => {
+    if (!iframeActivated || !gatewayConnected || isCatalogPreviewEntityId(appId)) {
+      return;
+    }
+
+    let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as { type?: string } | undefined;
+      if (detail?.type !== "app:list-updated") {
+        return;
+      }
+      const latch = lookupErrorLatchRef.current;
+      if (!latch.missing && !latch.loadError) {
+        return;
+      }
+      if (debounceTimer) clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        runAppGetProbe();
+      }, 400);
+    };
+
+    window.addEventListener("gateway-broadcast", handler);
+    return () => {
+      window.removeEventListener("gateway-broadcast", handler);
+      if (debounceTimer) clearTimeout(debounceTimer);
+    };
+  }, [appId, iframeActivated, gatewayConnected, runAppGetProbe]);
 
   const refreshAppMetadata = async () => {
     try {
@@ -612,9 +645,20 @@ export function MiniAppView({
       if (!entry?.message) return;
       if (entry.level === "error") {
         const message = entry.message.trim();
-        if (message.length > 0 && !isBenignPreviewFetchAbortMessage(message)) {
-          setRuntimeError(normalizeMiniAppRuntimeErrorMessage(message));
+        if (message.length === 0 || isBenignPreviewFetchAbortMessage(message)) {
+          return;
         }
+        if (
+          shouldSuppressMiniAppRuntimeBanner({
+            message,
+            waitingForGateway,
+            gatewaySupervisorStarting,
+            gatewaySupervisorReady,
+          })
+        ) {
+          return;
+        }
+        setRuntimeError(normalizeMiniAppRuntimeErrorMessage(message));
       }
       void gateway
         .send("app:runtime-log", {
@@ -636,7 +680,13 @@ export function MiniAppView({
 
     window.addEventListener("message", handleRuntimeLog);
     return () => window.removeEventListener("message", handleRuntimeLog);
-  }, [appId, isPublishedPreview]);
+  }, [
+    appId,
+    isPublishedPreview,
+    waitingForGateway,
+    gatewaySupervisorStarting,
+    gatewaySupervisorReady,
+  ]);
 
   useEffect(() => {
     if (isPublishedPreview) return;
@@ -773,7 +823,6 @@ export function MiniAppView({
                   return;
                 }
                 setIframeLoadError(null);
-                setRuntimeError(null);
                 setPreviewShellLoaded(true);
               }}
               onError={() => {
@@ -789,22 +838,55 @@ export function MiniAppView({
               <p>Connecting to apps.papr.ai…</p>
             </div>
           ) : null}
-          {runtimeError && !waitingForGateway ? (
-            <div className="mini-app-view__overlay mini-app-view__overlay--hint">
-              <p className="mini-app-view__runtime-error-title">App error</p>
-              <pre className="mini-app-view__runtime-error">{runtimeError}</pre>
-              {!isBenignPreviewFetchAbortMessage(runtimeError) &&
-              shouldShowDataSourcesMigrationHint(runtimeError) ? (
-                <p className="mini-app-view__runtime-error-hint">
-                  This can mean a linked database path is missing after workspace
-                  migration. Check the Apps page warning icon or ask the agent to fix
-                  data-sources.json.
+          {runtimeError && !waitingForGateway && !runtimeBannerDismissed ? (
+            <div
+              className="mini-app-view__runtime-banner"
+              role="alert"
+              aria-live="polite"
+            >
+              <div className="mini-app-view__runtime-banner-body">
+                <p className="mini-app-view__runtime-banner-title">
+                  Something went wrong
                 </p>
-              ) : null}
+                <pre className="mini-app-view__runtime-banner-message">
+                  {runtimeError}
+                </pre>
+                {!isBenignPreviewFetchAbortMessage(runtimeError) &&
+                shouldShowDataSourcesMigrationHint(runtimeError) ? (
+                  <p className="mini-app-view__runtime-banner-hint">
+                    This can mean a linked database path is missing after workspace
+                    migration. Check the Apps page warning icon or ask the agent to
+                    fix data-sources.json.
+                  </p>
+                ) : null}
+              </div>
+              <div className="mini-app-view__runtime-banner-actions">
+                <button
+                  type="button"
+                  className="mini-app-view__runtime-banner-btn"
+                  onClick={() => {
+                    triggerReload();
+                    setRuntimeBannerDismissed(true);
+                  }}
+                >
+                  Reload
+                </button>
+                <button
+                  type="button"
+                  className="mini-app-view__runtime-banner-btn mini-app-view__runtime-banner-btn--ghost"
+                  onClick={() => setRuntimeBannerDismissed(true)}
+                >
+                  Dismiss
+                </button>
+              </div>
             </div>
           ) : null}
-          {iframeLoadError && !waitingForGateway && !runtimeError ? (
-            <div className="mini-app-view__overlay mini-app-view__overlay--hint">
+          {iframeLoadError && !waitingForGateway ? (
+            <div
+              className="mini-app-view__status-banner"
+              role="status"
+              aria-live="polite"
+            >
               <p>{iframeLoadError}</p>
             </div>
           ) : null}

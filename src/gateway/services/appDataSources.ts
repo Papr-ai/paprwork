@@ -6,6 +6,8 @@
  * Those act only as a fallback when sourceId is omitted — never written on new saves.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { existsSync, statSync } from "fs";
 import path from "path";
 import Database from "better-sqlite3";
@@ -209,6 +211,22 @@ export function getSingleLinkedSource(
   return config.sources.length === 1 ? config.sources[0] : undefined;
 }
 
+/** Per-statement sourceId wins; otherwise use a request-level default from batch bodies. */
+export function coalesceBatchSourceId(
+  statementSourceId: string | undefined,
+  requestSourceId: string | undefined,
+): string | undefined {
+  const fromStatement = statementSourceId?.trim();
+  if (fromStatement) {
+    return fromStatement;
+  }
+  const fromRequest = requestSourceId?.trim();
+  if (fromRequest) {
+    return fromRequest;
+  }
+  return undefined;
+}
+
 /**
  * Default linked source for legacy configs and convenience fallbacks.
  * New apps should pass sourceId explicitly; this does not reintroduce "primary" as a feature.
@@ -383,7 +401,7 @@ export function dbHasOnlyBaselineTables(dbPath: string): boolean {
     if (isReplicaManagedDbPath(dbPath)) {
       return statSync(dbPath).size === 0;
     }
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDiagnosticDatabase(Database, "services/appDataSources", dbPath, { readonly: true });
     const tables = db
       .prepare(
         "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",

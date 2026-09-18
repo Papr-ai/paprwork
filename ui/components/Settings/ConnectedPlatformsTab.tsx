@@ -71,6 +71,11 @@ function getStatusColor(status: PlatformStatus): string {
   }
 }
 
+/** Matches gateway `allowsPersonalChromeCookieImport` — LinkedIn must use Papr Chrome only. */
+function allowsImportFromPersonalChrome(platformId: string): boolean {
+  return platformId !== "linkedin";
+}
+
 function getStatusLabel(status: PlatformStatus): string {
   switch (status) {
     case "connected":
@@ -98,6 +103,14 @@ export function ConnectedPlatformsTab() {
   const [newSiteUrl, setNewSiteUrl] = useState("");
   const [newSiteName, setNewSiteName] = useState("");
   const [registerLoading, setRegisterLoading] = useState(false);
+  const [showChromeImport, setShowChromeImport] = useState(false);
+  const [chromeImportSelected, setChromeImportSelected] = useState<Set<string>>(
+    () => new Set(),
+  );
+  const [chromeImportLoading, setChromeImportLoading] = useState(false);
+  const [chromeImportResults, setChromeImportResults] = useState<
+    PlatformSessionState[] | null
+  >(null);
   const addSiteUrlRef = useRef<HTMLInputElement>(null);
 
   const loadPlatforms = useCallback(async () => {
@@ -351,6 +364,51 @@ export function ConnectedPlatformsTab() {
     }
   };
 
+  const importablePlatforms = platforms.filter((p) =>
+    allowsImportFromPersonalChrome(p.id),
+  );
+
+  const toggleChromeImportPlatform = (platformId: string) => {
+    setChromeImportSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(platformId)) {
+        next.delete(platformId);
+      } else {
+        next.add(platformId);
+      }
+      return next;
+    });
+    setChromeImportResults(null);
+  };
+
+  const handleImportFromChrome = async () => {
+    const platformIds = Array.from(chromeImportSelected);
+    if (platformIds.length === 0) {
+      return;
+    }
+
+    setChromeImportLoading(true);
+    setError(null);
+    setChromeImportResults(null);
+
+    try {
+      const response = await gateway.send("platform:import-from-chrome", {
+        platformIds,
+      });
+      if (!response.success) {
+        throw new Error(response.error || "Import failed");
+      }
+      const data = response.data as { results?: PlatformSessionState[] };
+      const results = data.results ?? [];
+      setChromeImportResults(results);
+      await loadPlatforms();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Import from Chrome failed");
+    } finally {
+      setChromeImportLoading(false);
+    }
+  };
+
   const handleRefresh = async (platformId: string) => {
     setActionLoading(platformId);
     setError(null);
@@ -469,6 +527,97 @@ export function ConnectedPlatformsTab() {
         </div>
       )}
 
+      {importablePlatforms.length > 0 && (
+        <div className="connected-platforms-chrome-import">
+          <div className="connected-platforms-chrome-import-header">
+            <div>
+              <h3 className="connected-platforms-chrome-import-title">
+                Import from Google Chrome
+              </h3>
+              <p className="connected-platforms-chrome-import-desc">
+                Optional — copy session cookies from your personal Chrome into Papr.
+                Choose which platforms to import (one Keychain prompt per platform on
+                macOS). Connect still uses Papr&apos;s browser when import is not used.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="settings-btn settings-btn--secondary"
+              onClick={() => {
+                setShowChromeImport((open) => !open);
+                setChromeImportResults(null);
+              }}
+            >
+              {showChromeImport ? "Hide" : "Import…"}
+            </button>
+          </div>
+
+          {showChromeImport && (
+            <div className="connected-platforms-chrome-import-panel">
+              <div className="connected-platforms-chrome-import-checkboxes">
+                {importablePlatforms.map((platform) => (
+                  <label
+                    key={platform.id}
+                    className="connected-platforms-chrome-import-row"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={chromeImportSelected.has(platform.id)}
+                      onChange={() => toggleChromeImportPlatform(platform.id)}
+                      disabled={chromeImportLoading}
+                    />
+                    <span>{platform.name}</span>
+                  </label>
+                ))}
+              </div>
+              <p className="connected-platforms-chrome-import-hint">
+                LinkedIn is not listed — sign in through Papr&apos;s Chrome window only.
+                You must already be logged in to each site in Google Chrome.
+              </p>
+              <div className="connected-platforms-chrome-import-actions">
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--primary"
+                  onClick={() => void handleImportFromChrome()}
+                  disabled={
+                    chromeImportLoading || chromeImportSelected.size === 0
+                  }
+                >
+                  {chromeImportLoading
+                    ? "Importing…"
+                    : `Import selected (${chromeImportSelected.size})`}
+                </button>
+              </div>
+              {chromeImportResults && chromeImportResults.length > 0 && (
+                <ul className="connected-platforms-chrome-import-results">
+                  {chromeImportResults.map((result) => {
+                    const name =
+                      platforms.find((p) => p.id === result.platformId)?.name ??
+                      result.platformId;
+                    const ok = result.status === "connected";
+                    return (
+                      <li
+                        key={result.platformId}
+                        className={
+                          ok
+                            ? "connected-platforms-chrome-import-result--ok"
+                            : "connected-platforms-chrome-import-result--err"
+                        }
+                      >
+                        <strong>{name}:</strong>{" "}
+                        {ok
+                          ? "Imported and connected."
+                          : result.error ?? "Import failed."}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="connected-platforms-list">
         {platforms.map((platform) => {
           const status = platform.status;
@@ -527,8 +676,9 @@ export function ConnectedPlatformsTab() {
                         <strong>Log in in the {platform.name} tab</strong> that opened in Papr.
                         <br />
                         <span className="connected-platform-waiting-note">
-                          If you&apos;re already logged into Chrome, Papr imports those cookies first.
-                          Otherwise finish sign-in in the Papr tab — we detect it automatically.
+                          Finish sign-in in the Papr tab — we detect it automatically.
+                          To use an existing Chrome login instead, use Import from Google
+                          Chrome above (after you cancel or finish this flow).
                         </span>
                       </>
                     )}
@@ -650,7 +800,7 @@ export function ConnectedPlatformsTab() {
             <strong>LinkedIn:</strong> Connect opens Papr-managed Chrome — sign in there (we never import from your personal Chrome)
           </li>
           <li>
-            <strong>Other platforms:</strong> if you&apos;re already logged into Google Chrome, Papr imports cookies and connects instantly; otherwise Papr Chrome opens for sign-in
+            <strong>Other platforms:</strong> Connect opens Papr&apos;s browser for sign-in; optionally use <strong>Import from Google Chrome</strong> above if you&apos;re already logged in there
           </li>
           <li>
             <strong>Multiple platforms:</strong> one Papr Chrome window — each platform gets its own tab (connecting Reddit won&apos;t replace your LinkedIn tab)
@@ -659,7 +809,7 @@ export function ConnectedPlatformsTab() {
           <li>The agent uses Papr-managed Chrome for automation (LinkedIn always; others when a live browser is needed)</li>
         </ol>
         <p className="connected-platforms-note">
-          <strong>Note:</strong> LinkedIn requires sign-in in Papr&apos;s Chrome window. X, Reddit, and others can connect instantly when you&apos;re already logged into your regular Chrome.
+          <strong>Note:</strong> LinkedIn always uses Papr&apos;s Chrome window. For other sites, import from personal Chrome only when you choose to — Papr does not read your Chrome cookies in the background.
         </p>
       </div>
     </div>

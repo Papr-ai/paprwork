@@ -1,6 +1,6 @@
+import { installPlaywrightChromium } from "../utils/installPlaywrightChromium.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
-import { execSync } from "node:child_process";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { isCloudAgentGatewayMode } from "../utils/paprRoot.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
@@ -36,7 +36,6 @@ function requirePlaywrightPage(session: BrowserSessionState): Page {
 }
 
 // Track if we've already tried installing Playwright browsers
-let playwrightInstallAttempted = false;
 
 export interface BrowserConsoleLog {
   type: string;
@@ -453,16 +452,12 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
     const errorMessage =
       importError instanceof Error ? importError.message : String(importError);
 
-    if (!playwrightInstallAttempted && isPlaywrightMissingError(errorMessage)) {
+    if (isPlaywrightMissingError(errorMessage)) {
       console.log("[Browser Tool] Playwright not found, installing Chromium...");
       console.log("[Browser Tool] Error was:", errorMessage);
-      playwrightInstallAttempted = true;
 
       try {
-        execSync("npx playwright install chromium", {
-          stdio: "inherit",
-          timeout: 5 * 60 * 1000,
-        });
+        await installPlaywrightChromium();
         console.log("[Browser Tool] Chromium installed successfully");
         module = await import("playwright");
       } catch (installError) {
@@ -508,18 +503,14 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
       launchError instanceof Error ? launchError.message : String(launchError);
 
     // Check if it's a browser not found error and we haven't tried installing yet
-    if (!playwrightInstallAttempted && isPlaywrightMissingError(errorMessage)) {
+    if (isPlaywrightMissingError(errorMessage)) {
       console.log(
         "[Browser Tool] Playwright browsers not found, installing Chromium...",
       );
-      playwrightInstallAttempted = true;
 
       try {
         // Install only Chromium (faster than all browsers)
-        execSync("npx playwright install chromium", {
-          stdio: "inherit",
-          timeout: 5 * 60 * 1000, // 5 minute timeout for download
-        });
+        await installPlaywrightChromium();
         console.log("[Browser Tool] Chromium installed successfully");
 
         // Retry launch

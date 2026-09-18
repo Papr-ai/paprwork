@@ -25,6 +25,11 @@ export interface CloudAgentRunRequest {
   userId: string;
   jobId: string;
   runId: string;
+  /**
+   * Scheduler slot idempotency (`scheduleState.nextRunAt` ISO). Memory server should
+   * send this for cloud scheduled agent jobs so retries reuse the same runId/chatId.
+   */
+  scheduledDueAt?: string;
   provider: string;
   model?: string;
   /** Per-run parameters from memory / mini-app (merged into prompt via AgentJobExecutor). */

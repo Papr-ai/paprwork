@@ -3,7 +3,8 @@
   "compilerOptions": {
     "declaration": false,
     "declarationMap": false,
-    "sourceMap": false
+    "sourceMap": false,
+    "tsBuildInfoFile": "./dist/.tsbuildinfo-mini-app-sdk-node"
   },
   "include": [
     "src/resources/mini-app-sdk/sdk-manifest.ts",

@@ -5,6 +5,8 @@
  * is empty, alignMigrationLedgers records satisfied migrations without replaying DDL.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import { createClient } from "@libsql/client";
 import Database from "better-sqlite3";
 import path from "path";
@@ -148,7 +150,7 @@ function countLocalSyncableTables(dbPath: string): number {
   }
   let db: Database.Database | undefined;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = openDiagnosticDatabase(Database, "services/syncV3/backfillMigrationLedgers", dbPath, { readonly: true, fileMustExist: true });
     return filterSyncableTables(listUserTables(db)).length;
   } catch {
     return 0;

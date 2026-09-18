@@ -1,3 +1,4 @@
+import { DiagnosticOperation } from "../../core/utils/performanceDiagnostics.js";
 /**
  * MemoryWatchdog — records how the gateway heap grows, and captures a heap
  * snapshot while there is still room to serialize one.
@@ -138,7 +139,15 @@ function captureSnapshot(heapUsed: number, limit: number): void {
         `writing snapshot (this pauses the gateway briefly)...`,
     );
 
-    v8.writeHeapSnapshot(target);
+    const snapshotTrace = new DiagnosticOperation("heap-snapshot", "gateway-heap");
+    try {
+      v8.writeHeapSnapshot(target);
+      snapshotTrace.finish("completed");
+    } catch (error) {
+      snapshotTrace.error(error);
+      snapshotTrace.finish("error");
+      throw error;
+    }
 
     console.warn(
       `[MemoryWatchdog] Snapshot written: ${target} ` +

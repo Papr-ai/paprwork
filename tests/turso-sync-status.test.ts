@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  inspectLegacyArtifactsForStatus,
   resolveReplicaTursoSourceStatus,
   resolveTursoSourceStatus,
 } from "../src/gateway/services/tursoSyncStatus.js";
@@ -165,4 +166,13 @@ describe("deriveAppCloudSyncStatus database detail", () => {
     );
     expect(status.databases[0]?.rowsSyncing).toBeUndefined();
   });
+});
+
+it("never probes replica files for legacy status, but still checks true legacy files", () => {
+ const inspect = vi.fn(() => ["turso_cdc"]);
+ expect(inspectLegacyArtifactsForStatus("replica.db", true, inspect)).toEqual({ tables: [], status: "not-applicable" });
+ expect(inspect).not.toHaveBeenCalled();
+ expect(inspectLegacyArtifactsForStatus("old.db", false, inspect)).toEqual({ tables: ["turso_cdc"], status: "checked" });
+ expect(inspect).toHaveBeenCalledWith("old.db");
+ expect(inspectLegacyArtifactsForStatus("busy.db", false, () => { throw new Error("busy"); }).status).toBe("unavailable");
 });

@@ -48,10 +48,39 @@ vi.mock("../src/gateway/services/jobs/databaseMigrations.js", () => ({
 import {
   applyRegistryMigrationsAfterPull,
   hydrateAppFolderSchemaMigrationsToRegistry,
+  loadSchemaOwnerSlugMapFromPaprHome,
   parseAppRelativeSchemaMigrationPath,
   parseRepoSchemaMigrationPath,
   persistPulledSchemaMigration,
 } from "../src/gateway/services/syncV3/syncPulledSchemaOwnerMigrations.js";
+
+async function writeSchemaOwnerRegistry(
+  paprRoot: string,
+  appId: string,
+  slug: string,
+): Promise<void> {
+  await fs.mkdir(path.join(paprRoot, "data"), { recursive: true });
+  const dbPath = path.join(paprRoot, "data", "databases", slug, "data.db");
+  await fs.writeFile(
+    path.join(paprRoot, "data", "databases.json"),
+    JSON.stringify({
+      version: 1,
+      databases: {
+        "db-test1234": {
+          dbId: "db-test1234",
+          localPath: dbPath,
+          tursoShortName: "d-test1234",
+          isolation: "shared",
+          status: "active",
+          schemaOwnerAppId: appId,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      },
+    }),
+    "utf8",
+  );
+}
 
 describe("parseRepoSchemaMigrationPath", () => {
   it("parses databases/{slug}/migrations/*.sql repo paths", () => {
@@ -100,6 +129,23 @@ describe("hydrateAppFolderSchemaMigrationsToRegistry", () => {
   let tmpDir = "";
 
   afterEach(async () => {
+    mockListBySchemaOwnerApp.mockImplementation((appId: string) => {
+      if (appId !== APP_ID) {
+        return [];
+      }
+      return [
+        {
+          dbId: "db-test1234",
+          localPath: `/tmp/Papr/data/databases/${SLUG}/data.db`,
+          tursoShortName: "d-test1234",
+          isolation: "shared" as const,
+          status: "active" as const,
+          schemaOwnerAppId: APP_ID,
+          createdAt: "2026-01-01T00:00:00.000Z",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+        },
+      ];
+    });
     if (tmpDir) {
       await fs.rm(tmpDir, { recursive: true, force: true });
       tmpDir = "";
@@ -108,6 +154,7 @@ describe("hydrateAppFolderSchemaMigrationsToRegistry", () => {
 
   it("mirrors SQL from apps/{id}/databases/{slug}/migrations into registry", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-hydrate-mig-"));
+    await writeSchemaOwnerRegistry(tmpDir, APP_ID, SLUG);
     const appsRoot = path.join(tmpDir, "apps");
     const appDir = path.join(appsRoot, APP_ID, "databases", SLUG, "migrations");
     await fs.mkdir(appDir, { recursive: true });
@@ -132,6 +179,36 @@ describe("hydrateAppFolderSchemaMigrationsToRegistry", () => {
     );
     expect(onDisk).toContain("CREATE TABLE leads");
   });
+
+  it("reads schema ownership from target databases.json when in-memory registry is empty", async () => {
+    const forkAppId = "fork-app-new-id";
+    mockListBySchemaOwnerApp.mockImplementation(() => []);
+
+    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-hydrate-mig-"));
+    await writeSchemaOwnerRegistry(tmpDir, forkAppId, SLUG);
+
+    const appsRoot = path.join(tmpDir, "apps");
+    const appDir = path.join(appsRoot, forkAppId, "databases", SLUG, "migrations");
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(
+      path.join(appDir, "0001_engagement.sql"),
+      "CREATE TABLE IF NOT EXISTS engagement (id INTEGER PRIMARY KEY);",
+      "utf8",
+    );
+
+    const fromFile = await loadSchemaOwnerSlugMapFromPaprHome(tmpDir, forkAppId);
+    expect([...fromFile.keys()]).toEqual([SLUG]);
+
+    const result = await hydrateAppFolderSchemaMigrationsToRegistry({
+      appId: forkAppId,
+      paprRoot: tmpDir,
+      appsRoot,
+    });
+
+    expect(result.copied).toEqual([
+      `data/databases/${SLUG}/migrations/0001_engagement.sql`,
+    ]);
+  });
 });
 
 describe("persistPulledSchemaMigration", () => {
@@ -146,6 +223,7 @@ describe("persistPulledSchemaMigration", () => {
 
   it("copies missing migration into data/databases/{slug}/migrations/", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-pull-mig-"));
+    await writeSchemaOwnerRegistry(tmpDir, APP_ID, SLUG);
 
     const outcome = await persistPulledSchemaMigration({
       appId: APP_ID,
@@ -177,6 +255,7 @@ describe("persistPulledSchemaMigration", () => {
 
   it("does not overwrite an existing registry migration file", async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-pull-mig-"));
+    await writeSchemaOwnerRegistry(tmpDir, APP_ID, SLUG);
     const targetDir = path.join(tmpDir, "data", "databases", SLUG, "migrations");
     await fs.mkdir(targetDir, { recursive: true });
     await fs.writeFile(

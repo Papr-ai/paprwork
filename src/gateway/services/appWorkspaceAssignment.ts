@@ -18,7 +18,6 @@ import {
   copyAppToNamespace,
   CopyAppError,
   syncAppLinkedResourcesToTarget,
-  finalizeCopiedAppResources,
   type CopyAppToNamespaceInput,
 } from "./copyAppToNamespace.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
@@ -157,27 +156,20 @@ async function copyAppBundleAndLinkedResources(
   sourceHome: string,
   targetHome: string,
   appId: string,
-): Promise<void> {
-  if (path.normalize(sourceHome) !== path.normalize(targetHome)) {
-    const targetAppDir = path.join(targetHome, "apps", appId);
-    if (!(await appDirHasRunnableBundle(targetAppDir))) {
-      await copyAppBundleIntoTarget(sourceHome, targetHome, appId);
-    }
-    const sync = await syncAppLinkedResourcesToTarget({
-      appId,
-      sourcePaprHome: sourceHome,
-      targetPaprHome: targetHome,
-    });
-    await finalizeCopiedAppResources({
-      targetPaprHome: targetHome,
-      appId,
-      copiedJobIds: sync.copiedJobIds,
-      registryDbIds: sync.registryDbIds,
-    });
-    return;
+  scope: AppWorkspaceScope,
+): Promise<string> {
+  if (path.normalize(sourceHome) === path.normalize(targetHome)) {
+    await copyAppBundleIntoTarget(sourceHome, targetHome, appId);
+    return appId;
   }
 
-  await copyAppBundleIntoTarget(sourceHome, targetHome, appId);
+  const result = await copyAppToNamespace({
+    appId,
+    targetOrganizationId: scope.organizationId,
+    targetNamespaceId: scope.namespaceId,
+    sourcePaprHome: sourceHome,
+  });
+  return result.appId;
 }
 
 async function removeAppFromNamespaceHome(
@@ -247,7 +239,12 @@ export async function removeUnassignedDuplicateAppCopies(
     const canonicalHasBundle = await appDirHasRunnableBundle(canonicalAppDir);
 
     if (duplicateHasBundle && !canonicalHasBundle) {
-      await copyAppBundleAndLinkedResources(paprHome, canonicalHome, appId);
+      await copyAppBundleIntoTarget(paprHome, canonicalHome, appId);
+      await syncAppLinkedResourcesToTarget({
+        appId,
+        sourcePaprHome: paprHome,
+        targetPaprHome: canonicalHome,
+      });
       if (await removeAppFromNamespaceHome(paprHome, appId)) {
         removedFrom.push(paprHome);
       }
@@ -397,56 +394,89 @@ export async function assignAppToWorkspace(
   };
 
   try {
-    await copyAppToNamespace(copyInput);
+    const copyResult = await copyAppToNamespace(copyInput);
     const targetIndexPath = path.join(targetHome, "data", "apps.json");
     const targetApps = await readAppsIndex(targetIndexPath);
-    const idx = targetApps.findIndex((entry) => entry.id === input.appId);
+    const idx = targetApps.findIndex((entry) => entry.id === copyResult.appId);
     if (idx >= 0) {
       targetApps[idx] = withWorkspaceScope(targetApps[idx], scope);
       targetApps[idx].updatedAt = new Date().toISOString();
       await writeAppsIndex(targetIndexPath, targetApps);
-      await writeCloudAppMetadataFile(targetHome, input.appId);
+      await writeCloudAppMetadataFile(targetHome, copyResult.appId);
     }
+
+    const targetAppDir = path.join(targetHome, "apps", copyResult.appId);
+    if (await appDirHasRunnableBundle(targetAppDir)) {
+      if (path.normalize(effectiveSourceHome) !== path.normalize(targetHome)) {
+        await removeAppFromNamespaceHome(effectiveSourceHome, input.appId);
+      }
+      if (
+        path.normalize(sourceHome) !== path.normalize(targetHome) &&
+        path.normalize(sourceHome) !== path.normalize(effectiveSourceHome)
+      ) {
+        await removeAppFromNamespaceHome(sourceHome, input.appId);
+      }
+    }
+
+    const removedDuplicateHomes = await removeUnassignedDuplicateAppCopies(
+      copyResult.appId,
+      scope,
+    );
+
+    return {
+      action: "moved",
+      organizationId: scope.organizationId,
+      namespaceId: scope.namespaceId,
+      removedDuplicateHomes,
+    };
   } catch (error) {
     if (error instanceof CopyAppError && error.code === "target_conflict") {
-      await copyAppBundleAndLinkedResources(
+      const forkedAppId = await copyAppBundleAndLinkedResources(
         effectiveSourceHome,
         targetHome,
         input.appId,
+        scope,
       );
       await ensureTargetHasAppBundle({
-        appId: input.appId,
+        appId: forkedAppId,
         targetHome,
         sourceHome: effectiveSourceHome,
       });
-      await updateAssignedAppIndex(targetHome, input, scope);
-    } else {
-      throw error;
+      await updateAssignedAppIndex(
+        targetHome,
+        {
+          ...input,
+          appId: forkedAppId,
+          sourceApp: { ...input.sourceApp, id: forkedAppId },
+        },
+        scope,
+      );
+
+      const targetAppDir = path.join(targetHome, "apps", forkedAppId);
+      if (await appDirHasRunnableBundle(targetAppDir)) {
+        if (path.normalize(effectiveSourceHome) !== path.normalize(targetHome)) {
+          await removeAppFromNamespaceHome(effectiveSourceHome, input.appId);
+        }
+        if (
+          path.normalize(sourceHome) !== path.normalize(targetHome) &&
+          path.normalize(sourceHome) !== path.normalize(effectiveSourceHome)
+        ) {
+          await removeAppFromNamespaceHome(sourceHome, input.appId);
+        }
+      }
+
+      const removedDuplicateHomes = await removeUnassignedDuplicateAppCopies(
+        forkedAppId,
+        scope,
+      );
+
+      return {
+        action: "moved",
+        organizationId: scope.organizationId,
+        namespaceId: scope.namespaceId,
+        removedDuplicateHomes,
+      };
     }
+    throw error;
   }
-
-  const targetAppDir = path.join(targetHome, "apps", input.appId);
-  if (await appDirHasRunnableBundle(targetAppDir)) {
-    if (path.normalize(effectiveSourceHome) !== path.normalize(targetHome)) {
-      await removeAppFromNamespaceHome(effectiveSourceHome, input.appId);
-    }
-    if (
-      path.normalize(sourceHome) !== path.normalize(targetHome) &&
-      path.normalize(sourceHome) !== path.normalize(effectiveSourceHome)
-    ) {
-      await removeAppFromNamespaceHome(sourceHome, input.appId);
-    }
-  }
-
-  const removedDuplicateHomes = await removeUnassignedDuplicateAppCopies(
-    input.appId,
-    scope,
-  );
-
-  return {
-    action: "moved",
-    organizationId: scope.organizationId,
-    namespaceId: scope.namespaceId,
-    removedDuplicateHomes,
-  };
 }

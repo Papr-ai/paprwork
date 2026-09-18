@@ -17,6 +17,8 @@ describe("platformInjectedEnvKeys", () => {
     expect(isPlatformInjectedEnvKey("PAPR_CALLER_USER_ID")).toBe(true);
     expect(isPlatformInjectedEnvKey("PAPR_CALLER_EMAIL")).toBe(true);
     expect(isPlatformInjectedEnvKey("PAPR_CALLER_FOO")).toBe(true);
+    expect(isPlatformInjectedEnvKey("PAPR_GATEWAY_URL")).toBe(true);
+    expect(isPlatformInjectedEnvKey("PAPR_DB_PROXY_URL")).toBe(true);
     expect(isPlatformInjectedEnvKey("PAPR_API_KEY")).toBe(false);
     expect(isPlatformInjectedEnvKey("NEON_DB_URL")).toBe(false);
   });
@@ -26,6 +28,7 @@ describe("platformInjectedEnvKeys", () => {
       filterVaultKeyNames([
         "PAPR_CALLER_USER_ID",
         "PAPR_CALLER_EMAIL",
+        "PAPR_GATEWAY_URL",
         "PAPR_API_KEY",
       ]),
     ).toEqual(["PAPR_API_KEY"]);
@@ -37,6 +40,7 @@ describe("cloudAppRequirements PAPR_CALLER guard", () => {
     const merged = mergeBackendKeysIntoRequirements([], [
       "PAPR_CALLER_USER_ID",
       "PAPR_CALLER_EMAIL",
+      "PAPR_GATEWAY_URL",
       "NEON_DB_URL",
     ]);
     expect(merged).toHaveLength(1);
@@ -69,6 +73,34 @@ describe("cloudAppRequirements PAPR_CALLER guard", () => {
       }),
     );
     expect(parsed.map((spec) => spec.name)).toEqual(["PAPR_API_KEY"]);
+  });
+
+  it("strips PAPR_GATEWAY_URL from parsed requirements.json content", () => {
+    const parsed = parseRequirementsFileContent(
+      JSON.stringify({
+        schemaVersion: "1.0.0",
+        requirements: [
+          {
+            name: "PAPR_GATEWAY_URL",
+            service: "Gateway",
+            category: "other",
+            description: "should drop",
+            required: true,
+            credentialScope: "owner",
+          },
+          {
+            name: "STRIPE_SECRET_KEY",
+            service: "Stripe",
+            category: "payments",
+            description: "keep",
+            required: true,
+            credentialScope: "owner",
+          },
+        ],
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+    expect(parsed.map((spec) => spec.name)).toEqual(["STRIPE_SECRET_KEY"]);
   });
 
   it("collectBackendManifestKeyNames excludes PAPR_CALLER keys", () => {

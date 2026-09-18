@@ -1,18 +1,18 @@
+import { installPlaywrightChromium } from "../../../core/utils/installPlaywrightChromium.js";
 /**
  * Platform Session Service
  *
  * Manages browser profiles, cookie extraction, and session storage for social platforms.
  *
  * Connection flow (desktop with Google Chrome installed):
- * 1. Import cookies from Chrome if the user is already logged in there
- * 2. Launch Papr-managed real Chrome window for login (passkeys/OAuth work)
- * 3. Poll for login completion and persist cookies to keychain
+ * 1. Launch Papr-managed real Chrome for sign-in (passkeys/OAuth work)
+ * 2. Poll Papr-managed Chrome only until login completes (no personal Chrome reads)
+ * 3. Optional: user-initiated import from personal Google Chrome (Settings)
  * 4. Fall back to embedded Papr tab or Playwright when Chrome is unavailable
  */
 
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { execSync } from "node:child_process";
 import { isGoogleChromeInstalled } from "./platformChromeEnv.js";
 import {
   applyRealChromeStealthScripts,
@@ -55,7 +55,6 @@ const CHROME_COOKIE_POLL_MS = 10_000; // 10s — each read can trigger a macOS k
 const CHROME_COOKIE_CACHE_MS = 20_000;
 
 // Track if we've already tried installing Playwright
-let playwrightInstallAttempted = false;
 
 /**
  * Check if an error indicates Playwright package or browser is missing
@@ -89,17 +88,13 @@ async function loadPlaywright(): Promise<typeof import("playwright")> {
     const errorMessage = error instanceof Error ? error.message : String(error);
     
     // Check if it's a Playwright-related error we can auto-fix
-    if (!playwrightInstallAttempted && isPlaywrightMissingError(errorMessage)) {
+    if (isPlaywrightMissingError(errorMessage)) {
       console.log("[PlatformSessionService] Playwright not found, installing Chromium...");
       console.log("[PlatformSessionService] Error was:", errorMessage);
-      playwrightInstallAttempted = true;
 
       try {
         // Install Chromium browser (this also installs playwright-core if needed)
-        execSync("npx playwright install chromium", {
-          stdio: "inherit",
-          timeout: 5 * 60 * 1000, // 5 minute timeout for download
-        });
+        await installPlaywrightChromium();
         console.log("[PlatformSessionService] Chromium installed successfully");
 
         // Retry import
@@ -533,22 +528,6 @@ export class PlatformSessionService {
           }
         }
 
-        const extracted = allowsPersonalChromeCookieImport(platformId)
-          ? await this.tryExtractRequiredCookiesFromChrome(config)
-          : { success: false as const, cookies: {}, missing: config.requiredCookies };
-        if (extracted.success) {
-          await this.persistChromeSession(
-            platformId,
-            config,
-            extracted.cookies,
-            await this.extractPlaywrightCookiesFromChrome(config),
-          );
-          this.stopChromeCookiePolling(platformId);
-          const state = await this.markConnected(platformId, config);
-          console.log(`[PlatformSessionService] Successfully connected ${platformId} via manual check`);
-          return state;
-        }
-
         throw new Error(
           platformId === "linkedin"
             ? "Finish signing in to LinkedIn in the Papr-managed Chrome window that opened, then try again."
@@ -557,15 +536,6 @@ export class PlatformSessionService {
       }
 
       if (isPlatformBrowserBridgeAvailable()) {
-        const embeddedState = await this.tryConnectViaImportedChromeCookiesInEmbeddedTab(
-          platformId,
-          config,
-        );
-        if (embeddedState) {
-          this.connectingPlatform = null;
-          return embeddedState;
-        }
-
         const stateResponse = await requestPlatformBrowser({
           action: "get_state",
           payload: { platformId },
@@ -622,22 +592,11 @@ export class PlatformSessionService {
       return null;
     }
 
-    if (cookiesComplete) {
-      await this.persistChromeSession(platformId, config, values, cookies);
-    } else if (allowsPersonalChromeCookieImport(platformId)) {
-      const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
-      if (!extracted.success) {
-        return null;
-      }
-      await this.persistChromeSession(
-        platformId,
-        config,
-        extracted.cookies,
-        await this.extractPlaywrightCookiesFromChrome(config),
-      );
-    } else {
+    if (!cookiesComplete) {
       return null;
     }
+
+    await this.persistChromeSession(platformId, config, values, cookies);
 
     this.stopChromeCookiePolling(platformId);
     const state = await this.markConnected(platformId, config);
@@ -657,36 +616,7 @@ export class PlatformSessionService {
   > {
     const { openRealChromePlatformWindow } = await import("./platformAgentBrowser.js");
 
-    if (allowsPersonalChromeCookieImport(platformId)) {
-      const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
-      const playwrightCookies = extracted.success
-        ? await this.extractPlaywrightCookiesFromChrome(config)
-        : [];
-
-      if (extracted.success) {
-        await this.persistChromeSession(
-          platformId,
-          config,
-          extracted.cookies,
-          playwrightCookies,
-        );
-        await openRealChromePlatformWindow(
-          platformId,
-          config.homeUrl,
-          playwrightCookies.length > 0 ? playwrightCookies : undefined,
-        );
-        this.connectingPlatform = null;
-        const state = await this.markConnected(platformId, config);
-        console.log(
-          `[PlatformSessionService] Connected ${platformId} — opened Papr Chrome with session imported from your Chrome`,
-        );
-        return {
-          ...state,
-          externalChrome: true,
-          chromeWindowOpened: true,
-        };
-      }
-    } else {
+    if (!allowsPersonalChromeCookieImport(platformId)) {
       console.log(
         `[PlatformSessionService] ${config.name} requires sign-in in Papr-managed Chrome (personal Chrome import disabled)`,
       );
@@ -800,24 +730,6 @@ export class PlatformSessionService {
           }
         }
 
-        if (allowsPersonalChromeCookieImport(platformId)) {
-          const extracted = await this.tryExtractRequiredCookiesFromChrome(config, {
-            useCache: true,
-          });
-          if (!extracted.success) return;
-
-          await this.persistChromeSession(
-            platformId,
-            config,
-            extracted.cookies,
-            await this.extractPlaywrightCookiesFromChrome(config),
-          );
-          this.stopChromeCookiePolling(platformId);
-          this.connectingPlatform = null;
-          const state = await this.markConnected(platformId, config);
-          await this.broadcastStatusChange(state);
-          console.log(`[PlatformSessionService] Auto-detected Chrome login for ${platformId}`);
-        }
       } catch (error) {
         console.warn(`[PlatformSessionService] Chrome cookie poll failed for ${platformId}:`, error);
       }
@@ -981,78 +893,6 @@ export class PlatformSessionService {
     }
   }
 
-  private async tryConnectViaImportedChromeCookiesInEmbeddedTab(
-    platformId: PlatformId,
-    config: PlatformConfig,
-  ): Promise<PlatformSessionState | null> {
-    if (!isGoogleChromeInstalled()) {
-      return null;
-    }
-
-    if (!allowsPersonalChromeCookieImport(platformId)) {
-      return null;
-    }
-
-    const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
-    if (!extracted.success) {
-      return null;
-    }
-
-    const playwrightCookies = await this.extractPlaywrightCookiesFromChrome(config);
-    if (playwrightCookies.length === 0) {
-      return null;
-    }
-
-    const injectResponse = await requestPlatformBrowser({
-      action: "inject_cookies",
-      payload: { platformId, cookies: playwrightCookies },
-    });
-    if (!injectResponse.success) {
-      console.warn(
-        `[PlatformSessionService] Failed to inject Chrome cookies for ${platformId}:`,
-        injectResponse.error,
-      );
-      return null;
-    }
-
-    const ensureResponse = await requestPlatformBrowser({
-      action: "ensure",
-      payload: { platformId, url: config.homeUrl },
-    });
-    if (!ensureResponse.success) {
-      return null;
-    }
-
-    const stateResponse = await requestPlatformBrowser({
-      action: "get_state",
-      payload: { platformId },
-    });
-    const currentUrl =
-      stateResponse.success && stateResponse.data
-        ? String((stateResponse.data as { url?: string }).url ?? "")
-        : "";
-
-    if (platformId === "linkedin") {
-      if (!isAuthenticatedPlatformUrl(currentUrl, config)) {
-        console.log(
-          `[PlatformSessionService] Chrome cookies for ${platformId} not authenticated in Papr tab:`,
-          currentUrl,
-        );
-        return null;
-      }
-    } else if (!isAuthenticatedPlatformUrl(currentUrl, config)) {
-      return null;
-    }
-
-    await this.persistChromeSession(platformId, config, extracted.cookies, playwrightCookies);
-    await syncEmbeddedCookiesToKeychain(platformId);
-    const state = await this.markConnected(platformId, config);
-    console.log(
-      `[PlatformSessionService] Connected ${platformId} using Chrome cookies imported into Papr tab`,
-    );
-    return state;
-  }
-
   private async connectViaEmbeddedTab(
     platformId: PlatformId,
     config: PlatformConfig,
@@ -1072,15 +912,6 @@ export class PlatformSessionService {
       const state = await this.markConnected(platformId, config);
       console.log(`[PlatformSessionService] Connected ${platformId} using existing Papr tab session`);
       return state;
-    }
-
-    const importedState =
-      allowsPersonalChromeCookieImport(platformId)
-        ? await this.tryConnectViaImportedChromeCookiesInEmbeddedTab(platformId, config)
-        : null;
-    if (importedState) {
-      this.connectingPlatform = null;
-      return importedState;
     }
 
     await requestPlatformBrowser({
@@ -1485,30 +1316,6 @@ export class PlatformSessionService {
         }
       }
 
-      if (isGoogleChromeInstalled() && allowsPersonalChromeCookieImport(platformId)) {
-        const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
-          if (extracted.success) {
-          const playwrightCookies = await this.extractPlaywrightCookiesFromChrome(config);
-          await this.persistChromeSession(
-            platformId,
-            config,
-            extracted.cookies,
-            playwrightCookies,
-          );
-
-          const now = new Date();
-          this.store.sessions[platformId] = {
-            ...this.store.sessions[platformId],
-            lastRefreshedAt: now.toISOString(),
-            status: "connected",
-            error: undefined,
-          };
-          await this.saveStore();
-          console.log(`[PlatformSessionService] Refreshed ${platformId} from Chrome cookies`);
-          return this.store.sessions[platformId];
-        }
-      }
-
       const existingCookies = await this.loadCookiesForPlaywright(platformId, config);
       if (existingCookies.length === 0) {
         throw new Error("No stored cookies found. Please reconnect.");
@@ -1615,34 +1422,103 @@ export class PlatformSessionService {
   }
 
   /**
-   * Import full Playwright cookie set from the user's Google Chrome login.
+   * User-initiated import from the personal Google Chrome profile (macOS Keychain).
+   * Does not run during Connect — avoids repeated "Chrome Safe Storage" prompts.
    */
-  async importPlaywrightCookiesFromChrome(platformId: PlatformId): Promise<Cookie[]> {
+  async importSessionFromPersonalChrome(
+    platformId: PlatformId,
+  ): Promise<PlatformSessionState> {
     if (!this.initialized) {
       await this.initialize();
     }
+
     const config = getPlatformConfig(platformId);
-    if (!config || !isGoogleChromeInstalled()) {
-      return [];
+    if (!config) {
+      return {
+        platformId,
+        status: "disconnected",
+        error: `Unknown platform: ${platformId}`,
+      };
     }
 
     if (!allowsPersonalChromeCookieImport(platformId)) {
-      return [];
+      return {
+        platformId,
+        status: "disconnected",
+        error: `${config.name} must be signed in through Papr’s Chrome window — personal Chrome import is not supported.`,
+      };
     }
 
-    const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
-    if (!extracted.success) {
-      return [];
+    if (!isGoogleChromeInstalled()) {
+      return {
+        platformId,
+        status: "disconnected",
+        error: "Google Chrome is required to import sessions from your browser.",
+      };
     }
 
-    const playwrightCookies = await this.extractPlaywrightCookiesFromChrome(config);
-    await this.persistChromeSession(
-      platformId,
-      config,
-      extracted.cookies,
-      playwrightCookies,
-    );
-    return playwrightCookies;
+    try {
+      const extracted = await this.tryExtractRequiredCookiesFromChrome(config);
+      if (!extracted.success) {
+        const missingList = extracted.missing.join(", ");
+        return {
+          platformId,
+          status: "disconnected",
+          error:
+            missingList.length > 0
+              ? `No ${config.name} login found in Google Chrome (missing session cookies: ${missingList}). Sign in to ${config.name} in Chrome, then try again.`
+              : `No ${config.name} login found in Google Chrome. Sign in there first, then try again.`,
+        };
+      }
+
+      const playwrightCookies = await this.extractPlaywrightCookiesFromChrome(config);
+      await this.persistChromeSession(
+        platformId,
+        config,
+        extracted.cookies,
+        playwrightCookies,
+      );
+      this.connectingPlatform = null;
+      const state = await this.markConnected(platformId, config);
+      await this.broadcastStatusChange(state);
+      console.log(
+        `[PlatformSessionService] Imported ${platformId} session from personal Google Chrome`,
+      );
+      return state;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        platformId,
+        status: "disconnected",
+        error:
+          `Import from Chrome failed: ${errorMessage}. On macOS, enter your Mac login password when Keychain asks for “Chrome Safe Storage”, or choose Always Allow.`,
+      };
+    }
+  }
+
+  async importSessionsFromPersonalChrome(
+    platformIds: PlatformId[],
+  ): Promise<PlatformSessionState[]> {
+    const results: PlatformSessionState[] = [];
+    for (const platformId of platformIds) {
+      results.push(await this.importSessionFromPersonalChrome(platformId));
+    }
+    return results;
+  }
+
+  /**
+   * Import full Playwright cookie set from the user's Google Chrome login.
+   */
+  async importPlaywrightCookiesFromChrome(platformId: PlatformId): Promise<Cookie[]> {
+    const state = await this.importSessionFromPersonalChrome(platformId);
+    if (state.status !== "connected") {
+      return [];
+    }
+    const config = getPlatformConfig(platformId);
+    if (!config) {
+      return [];
+    }
+    return this.loadCookiesForPlaywright(platformId, config);
   }
 
   /**

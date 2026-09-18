@@ -2,6 +2,8 @@
  * Phase 3 genesis cutover — snapshot local SQLite, write genesis entry to workspace log.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import { createHash } from "node:crypto";
 import Database from "better-sqlite3";
 
@@ -22,7 +24,7 @@ export function computeDbSnapshotHash(dbPath: string): {
 } | null {
   let db: Database.Database | undefined;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = openDiagnosticDatabase(Database, "services/syncV3/workspaceLogGenesisCutover", dbPath, { readonly: true, fileMustExist: true });
     const fingerprints = computeSyncableTableFingerprints(db);
     const tableNames = filterSyncableTables(listUserTables(db)).sort();
     const hash = createHash("sha256");

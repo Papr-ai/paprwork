@@ -66,6 +66,12 @@ export {
 } from "./writerConflict.js";
 export { isAppWriterSyncReady } from "./writerSyncStatus.js";
 export {
+  clearWriterLocalStateForApp,
+  ensureWriterBaselineBeforePush,
+  oidCacheNeedsRealignWithHead,
+  reconcileOidCacheWithRemoteHead,
+} from "./writerBaselineReconcile.js";
+export {
   buildAppSyncV3Report,
   type AppSyncV3Report,
   type AppSyncV3ItemStatus,

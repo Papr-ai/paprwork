@@ -2,6 +2,8 @@
  * Per-source Turso sync status for Settings UI.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import { createClient } from "@libsql/client";
 import Database from "better-sqlite3";
@@ -57,6 +59,7 @@ export interface TursoSourceSyncItem {
   schemaDrift?: boolean;
   /** Local-only legacy CDC tables excluded from drift (diagnostic). */
   legacyArtifactTables?: string[];
+  legacyArtifactCheck?: "not-applicable" | "checked" | "unavailable";
   /** Other mini-apps linking the same on-disk SQLite file (shared registry DB). */
   linkingAppIds?: string[];
   /** Turso token/query failed — remoteTableCount may be misleading. */
@@ -103,7 +106,7 @@ function countLocalSyncableTables(dbPath: string): number {
     }
     // Short busy timeout: better-sqlite3 sleeps synchronously on the main thread
     // (default 5000ms) when another engine holds the file.
-    const db = new Database(dbPath, { readonly: true, timeout: 100 });
+    const db = openDiagnosticDatabase(Database, "services/tursoSyncStatus", dbPath, { readonly: true, timeout: 100 });
     try {
       return filterSyncableTables(listUserTables(db)).length;
     } finally {
@@ -458,6 +461,16 @@ async function snapshotDbRemoteCheck(
   return { remoteTableCount, schemaDrift, remoteCheckFailed };
 }
 
+/** Status reporting must never open a live replica through a second database engine. */
+export function inspectLegacyArtifactsForStatus(
+  dbPath: string, replicaManaged: boolean,
+  inspect = listLegacyCdcArtifactTablesForPath,
+): { tables: string[]; status: "not-applicable" | "checked" | "unavailable" } {
+  if (replicaManaged) return { tables: [], status: "not-applicable" };
+  try { return { tables: inspect(dbPath), status: "checked" }; }
+  catch { return { tables: [], status: "unavailable" }; }
+}
+
 export async function buildTursoSyncItemsReport(
   appsRootDir: string,
   filterAppId?: string,
@@ -540,10 +553,15 @@ export async function buildTursoSyncItemsReport(
       }
       remoteByDbPath.set(dbPathKey, remoteSnapshot);
     }
+    let legacyArtifactCheck: "not-applicable" | "checked" | "unavailable" = replicaManaged ? "not-applicable" : "checked";
     let legacyArtifactTables = artifactsByDbPath.get(dbPathKey);
     if (!legacyArtifactTables) {
-      legacyArtifactTables = listLegacyCdcArtifactTablesForPath(source.dbPath);
-      artifactsByDbPath.set(dbPathKey, legacyArtifactTables);
+      // Replica engine tables are current bookkeeping, not legacy contamination.
+      // Never open an engine-owned file through better-sqlite3 just to render status.
+      const inspected = inspectLegacyArtifactsForStatus(source.dbPath, replicaManaged);
+      legacyArtifactTables = inspected.tables;
+      legacyArtifactCheck = inspected.status;
+      if (legacyArtifactCheck !== "unavailable") artifactsByDbPath.set(dbPathKey, legacyArtifactTables);
     }
     const linkingAppIds = listAppsLinkingDbPath(allSources, source.dbPath);
     let replicaStatus: TursoReplicaSyncStatus | undefined;
@@ -566,7 +584,7 @@ export async function buildTursoSyncItemsReport(
       }
     }
     items.push(
-      sourceItem(
+      { ...sourceItem(
         source,
         localTableCount,
         remoteSnapshot.remoteTableCount,
@@ -577,7 +595,7 @@ export async function buildTursoSyncItemsReport(
         linkingAppIds,
         replicaStatus,
         legacyArtifactTables,
-      ),
+      ), legacyArtifactCheck },
     );
   }
 

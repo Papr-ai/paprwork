@@ -29,6 +29,27 @@ describe("papr-api-error-fetch", () => {
     expect(json.error).toBe("Request failed (500): no such table: items");
   });
 
+  it("does not notify parent — app handles JSON error inline", async () => {
+    Object.defineProperty(window, "location", {
+      value: { pathname: "/apps/app-123/index.html", href: "http://localhost:18789/apps/app-123/index.html" },
+      writable: true,
+    });
+    const postMessage = vi.fn();
+    vi.stubGlobal("parent", { postMessage });
+
+    const nativeFetch = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: "no such table: engagement" }), {
+        status: 500,
+      }),
+    );
+    vi.stubGlobal("fetch", nativeFetch);
+
+    await import("../src/resources/mini-app-sdk/papr-api-error-fetch.js");
+    await window.fetch("/api/db/query", { method: "POST" });
+
+    expect(postMessage).not.toHaveBeenCalled();
+  });
+
   it("passes through successful responses unchanged", async () => {
     const nativeFetch = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ rows: [{ id: 1 }] }), { status: 200 }),

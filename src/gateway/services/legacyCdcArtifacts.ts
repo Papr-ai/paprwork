@@ -3,6 +3,8 @@
  * Stripped at replica cutover and on startup repair so Plan A uses Turso Sync only.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import Database from "better-sqlite3";
 import {
@@ -133,13 +135,14 @@ function listLegacyTablesForPath(
     if (stats.size === 0) {
       return [];
     }
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDiagnosticDatabase(Database, "services/legacyCdcArtifacts", dbPath, { readonly: true, fileMustExist: true, timeout: 0 });
     try {
       return listSqliteUserTables(db).filter(predicate);
     } finally {
       db.close();
     }
-  } catch {
+  } catch (error) {
+    if (["SQLITE_BUSY", "SQLITE_LOCKED"].includes(String((error as { code?: string }).code))) throw error;
     return [];
   }
 }
@@ -170,7 +173,7 @@ export function stripLegacySyncPathArtifacts(
   if (!fs.existsSync(dbPath)) {
     return [];
   }
-  const db = new Database(dbPath);
+  const db = openDiagnosticDatabase(Database, "services/legacyCdcArtifacts", dbPath);
   try {
     const dropped: string[] = [];
     for (const tableName of listSqliteUserTables(db).filter((name) =>

@@ -10,6 +10,8 @@
  *    records, column highlights. Searchable by the sleep agent for entity enrichment.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
 import path from "path";
@@ -197,7 +199,7 @@ export function extractJobDatabaseSnapshots(
 ): TableSnapshot[] | null {
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = openDiagnosticDatabase(Database, "services/JobDatabaseMemorySync", dbPath, { readonly: true });
     const tables = listUserTables(db).slice(0, MAX_TABLES);
     const snapshots: TableSnapshot[] = [];
     for (const table of tables) {

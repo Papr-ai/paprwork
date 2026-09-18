@@ -3,6 +3,8 @@
  * and repair ledger/schema mismatches after attach.
  */
 
+import { openDiagnosticDatabase } from "../../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import Database from "better-sqlite3";
 import { createClient } from "@libsql/client";
@@ -38,7 +40,7 @@ function readMigrationIdsFromSqlite(dbPath: string): string[] {
     return [];
   }
   try {
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDiagnosticDatabase(Database, "services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority", dbPath, { readonly: true });
     try {
       const table = db
         .prepare(
@@ -77,7 +79,7 @@ export function restoreMigrationLedgerFromBackup(
     return [];
   }
 
-  const db = new Database(dbPath);
+  const db = openDiagnosticDatabase(Database, "services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority", dbPath);
   const restored: string[] = [];
   try {
     ensureSchemaMigrationsTable(db);
@@ -150,6 +152,7 @@ export async function pushLocalSchemaToTursoBeforeCutover(
       remote,
       record.localPath,
       migrationRoot,
+      { force: true },
     );
     return { applied };
   } catch (error) {

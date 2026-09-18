@@ -18,6 +18,8 @@
  * so SQLite creates no separate index and "no index" is its healthy resting state.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import Database from "better-sqlite3";
 
@@ -89,7 +91,7 @@ export function inspectReplicaEngineTables(
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, {
+    db = openDiagnosticDatabase(Database, "services/tursoReplica/replicaEngineTableGuard", dbPath, {
       readonly: true,
       fileMustExist: true,
       timeout: REPLICA_ENGINE_INSPECT_BUSY_TIMEOUT_MS,
@@ -146,7 +148,7 @@ export function repairReplicaEngineTables(dbPath: string): string[] {
 
   let db: Database.Database;
   try {
-    db = new Database(dbPath, {
+    db = openDiagnosticDatabase(Database, "services/tursoReplica/replicaEngineTableGuard", dbPath, {
       timeout: REPLICA_ENGINE_INSPECT_BUSY_TIMEOUT_MS,
     });
   } catch {

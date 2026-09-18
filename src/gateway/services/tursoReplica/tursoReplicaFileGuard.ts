@@ -2,6 +2,8 @@
  * Plan A — keep legacy better-sqlite3 CDC off Turso Sync replica files.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import * as path from "path";
 import Database from "better-sqlite3";
@@ -93,7 +95,7 @@ export function safeCleanupSqliteSidecars(dbPath: string): void {
     let db: Database.Database | null = null;
     let checkpointOk = false;
     try {
-      db = new Database(dbPath);
+      db = openDiagnosticDatabase(Database, "services/tursoReplica/tursoReplicaFileGuard", dbPath);
       db.pragma("wal_checkpoint(TRUNCATE)");
       checkpointOk = true;
     } catch {

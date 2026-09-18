@@ -16,6 +16,8 @@
  * it was bootstrapped.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import Database from "better-sqlite3";
 
@@ -92,7 +94,7 @@ export function countUserRows(dbPath: string): number {
   }
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = openDiagnosticDatabase(Database, "services/tursoReplica/tursoReplicaBootstrapMarker", dbPath, { readonly: true });
     let total = 0;
     for (const table of listUserTables(db)) {
       const row = db
@@ -124,7 +126,7 @@ function snapshotLocalRows(dbPath: string): string | null {
   let db: Database.Database | null = null;
   try {
     fs.rmSync(target, { force: true });
-    db = new Database(dbPath, { readonly: true });
+    db = openDiagnosticDatabase(Database, "services/tursoReplica/tursoReplicaBootstrapMarker", dbPath, { readonly: true });
     db.prepare("VACUUM INTO ?").run(target);
     return fs.existsSync(target) ? target : null;
   } catch (error) {

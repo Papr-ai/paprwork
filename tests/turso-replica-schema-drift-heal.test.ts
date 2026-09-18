@@ -41,6 +41,11 @@ describe("tursoReplicaSchemaDriftHeal", () => {
       ),
     ).toBe(true);
     expect(isReplicaMissingTableError("no such table: goals")).toBe(true);
+    expect(
+      isReplicaMissingTableError(
+        "SQLITE_UNKNOWN: SQLite error: no such table: engagement",
+      ),
+    ).toBe(true);
     expect(isReplicaMissingTableError("timed out after 2500ms")).toBe(false);
   });
 });

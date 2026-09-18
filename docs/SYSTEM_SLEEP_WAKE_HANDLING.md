@@ -125,7 +125,8 @@ private attemptReconnect(): void {
 **System Resume Integration:**
 - Listens for `system:resume` DOM event
 - Resets backoff counter (connect immediately, not after 30s)
-- Ensures quick reconnection after wake
+- **Forces a new WebSocket** even when `readyState === OPEN` (post-sleep "zombie" connections)
+- Triggers `recoverAfterReconnect()` via connection-status handlers after the new socket opens
 
 ### 4. Connection State Indicator
 

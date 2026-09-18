@@ -5,6 +5,8 @@
  * Cloud: pending migrations replayed during Turso push (Upload now / debounced sync).
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import type { Client } from "@libsql/client";
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
@@ -202,6 +204,7 @@ export async function applyPendingDatabaseMigrationsToTurso(
   remote: Client,
   localDbPath: string,
   migrationRoot: string,
+  options?: { force?: boolean },
 ): Promise<string[]> {
   const { isReplicaManagedDbPath } = await import(
     "../tursoReplica/tursoReplicaFileGuard.js"
@@ -217,10 +220,10 @@ export async function applyPendingDatabaseMigrationsToTurso(
     return [];
   }
 
-  await alignMigrationLedgers(remote, localDbPath, migrationRoot);
+  await alignMigrationLedgers(remote, localDbPath, migrationRoot, options);
   await applyDatabaseMigrations(migrationRoot, localDbPath);
 
-  const localDb = new Database(localDbPath, { readonly: true });
+  const localDb = openDiagnosticDatabase(Database, "services/jobs/jobMigrationTursoSync", localDbPath, { readonly: true });
   let localApplied: string[];
   try {
     localApplied = listAppliedMigrationIdsReadOnly(localDb);

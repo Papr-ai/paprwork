@@ -3,7 +3,7 @@
  *
  * Paprwork keeps LRU-mounted iframes alive for fast tab switch; this gate
  * stops hidden previews from hammering the gateway with DB/job queries.
- * Stale queued requests are dropped (not flushed) when the tab becomes visible.
+ * While hidden, same-origin /api fetches fail fast (no queue buildup from pollers).
  */
 
 type PreviewPhase = "hidden" | "visible" | "evicting";
@@ -53,25 +53,6 @@ export function installPreviewFetchGate(): void {
   // papr:preview-hidden only after backgrounding; until then fetches must run
   // during iframe bootstrap or the app stays on "Loading…" forever.
   let phase: PreviewPhase = "visible";
-  const queue: Array<{
-    run: () => void;
-    reject: (reason: unknown) => void;
-  }> = [];
-
-  function rejectQueuedFetches(reason: string): void {
-    const pending = queue.splice(0);
-    const error = new DOMException(reason, "AbortError");
-    for (const item of pending) {
-      item.reject(error);
-    }
-  }
-
-  function flushQueuedFetches(): void {
-    const pending = queue.splice(0);
-    for (const item of pending) {
-      item.run();
-    }
-  }
 
   window.addEventListener("message", (event: MessageEvent) => {
     const type = event.data?.type;
@@ -81,14 +62,10 @@ export function installPreviewFetchGate(): void {
     }
     if (type === "papr:preview-visible") {
       phase = "visible";
-      // Resume every fetch queued while hidden. Pausing while backgrounded already
-      // prevented gateway load; callers expect these promises to settle on return.
-      flushQueuedFetches();
       return;
     }
     if (type === "papr:preview-evicting") {
       phase = "evicting";
-      rejectQueuedFetches("Preview evicted");
     }
   });
 
@@ -100,14 +77,9 @@ export function installPreviewFetchGate(): void {
     if (phase === "visible" || !isSameOriginApiRequest(input)) {
       return nativeFetch(input, init);
     }
-    return new Promise((resolve, reject) => {
-      queue.push({
-        run: () => {
-          nativeFetch(input, init).then(resolve, reject);
-        },
-        reject,
-      });
-    });
+    return Promise.reject(
+      new DOMException("Preview backgrounded", "AbortError"),
+    );
   };
 }
 

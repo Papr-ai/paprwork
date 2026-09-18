@@ -5,16 +5,20 @@
  * Shows platform info and a "Connect" button that opens the browser login flow.
  */
 
-import React, { useState, useEffect, useCallback } from "react";
-import type { PlatformId } from "./platformConnectStore";
+import React, { useState, useEffect, useCallback, Component, type ReactNode } from "react";
 import { usePlatformConnectStore } from "./platformConnectStore";
 import { gateway } from "../../src/lib/gateway";
+import {
+  isBuiltinPlatformId,
+  resolvePlatformConnectDisplay,
+  type BuiltinPlatformId,
+} from "../../utils/platformConnectDisplay";
 import "./PlatformConnectModal.css";
 
 type ConnectPhase = "idle" | "opening" | "waiting" | "connected";
 
 // SVG icons for each platform
-const PLATFORM_ICONS: Record<PlatformId, React.ReactNode> = {
+const PLATFORM_ICONS: Record<BuiltinPlatformId, React.ReactNode> = {
   linkedin: (
     <svg viewBox="0 0 24 24" fill="currentColor" width="32" height="32">
       <path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433c-1.144 0-2.063-.926-2.063-2.065 0-1.138.92-2.063 2.063-2.063 1.14 0 2.064.925 2.064 2.063 0 1.139-.925 2.065-2.064 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/>
@@ -52,54 +56,33 @@ const PLATFORM_ICONS: Record<PlatformId, React.ReactNode> = {
   ),
 };
 
-const PLATFORM_INFO: Record<
-  PlatformId,
-  { name: string; color: string; description: string }
-> = {
-  linkedin: {
-    name: "LinkedIn",
-    color: "#0A66C2",
-    description: "Connect to access your messages, connections, and profile",
-  },
-  instagram: {
-    name: "Instagram",
-    color: "#E4405F",
-    description: "Connect to access your DMs, posts, and followers",
-  },
-  reddit: {
-    name: "Reddit",
-    color: "#FF4500",
-    description: "Connect to access your subreddits, messages, and posts",
-  },
-  facebook: {
-    name: "Facebook",
-    color: "#1877F2",
-    description: "Connect to access your messages, pages, and profile",
-  },
-  tiktok: {
-    name: "TikTok",
-    color: "#000000",
-    description: "Connect to access your videos, messages, and followers",
-  },
-  twitter: {
-    name: "X / Twitter",
-    color: "#000000",
-    description: "Connect to access your tweets, DMs, and followers",
-  },
-  telegram: {
-    name: "Telegram",
-    color: "#0088CC",
-    description: "Connect to access your chats, channels, and groups",
-  },
-};
+function CustomSitePlatformIcon(): React.ReactElement {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" width="32" height="32" aria-hidden>
+      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeWidth="1.5" />
+      <path
+        d="M3 12h18M12 3c2.5 2.8 2.5 15.2 0 18M12 3c-2.5 2.8-2.5 15.2 0 18"
+        stroke="currentColor"
+        strokeWidth="1.5"
+      />
+    </svg>
+  );
+}
 
-export function PlatformConnectModal() {
+function PlatformConnectIcon({ platformId }: { platformId: string }): React.ReactElement {
+  if (isBuiltinPlatformId(platformId)) {
+    return <>{PLATFORM_ICONS[platformId]}</>;
+  }
+  return <CustomSitePlatformIcon />;
+}
+
+function PlatformConnectModalInner() {
   const { activeRequest, clearRequest } = usePlatformConnectStore();
   const [phase, setPhase] = useState<ConnectPhase>("idle");
   const [error, setError] = useState<string | null>(null);
 
   const dismissIfConnected = useCallback(
-    (platformId: PlatformId, status: string) => {
+    (platformId: string, status: string) => {
       if (activeRequest?.platform === platformId && status === "connected") {
         setPhase("connected");
         setTimeout(() => clearRequest(), 800);
@@ -137,7 +120,7 @@ export function PlatformConnectModal() {
       const detail = (event as CustomEvent).detail;
       if (detail.type !== "platform:status-changed" || !detail.data) return;
       const { platformId, status } = detail.data as {
-        platformId: PlatformId;
+        platformId: string;
         status: string;
       };
       dismissIfConnected(platformId, status);
@@ -149,7 +132,7 @@ export function PlatformConnectModal() {
 
   if (!activeRequest) return null;
 
-  const platformInfo = PLATFORM_INFO[activeRequest.platform];
+  const platformInfo = resolvePlatformConnectDisplay(activeRequest.platform);
   const isBusy = phase === "opening" || phase === "waiting";
 
   const handleConnect = async () => {
@@ -228,7 +211,7 @@ export function PlatformConnectModal() {
             className="platform-icon"
             style={{ backgroundColor: platformInfo.color }}
           >
-            {PLATFORM_ICONS[activeRequest.platform]}
+            <PlatformConnectIcon platformId={activeRequest.platform} />
           </div>
 
           <h2 className="platform-title">Connect to {platformInfo.name}</h2>
@@ -306,5 +289,66 @@ export function PlatformConnectModal() {
         </p>
       </div>
     </div>
+  );
+}
+
+interface PlatformConnectErrorBoundaryState {
+  error: Error | null;
+}
+
+/**
+ * Root-level overlay — a throw here must not unmount the whole app.
+ */
+class PlatformConnectErrorBoundary extends Component<
+  { children: ReactNode },
+  PlatformConnectErrorBoundaryState
+> {
+  state: PlatformConnectErrorBoundaryState = { error: null };
+
+  static getDerivedStateFromError(error: Error): PlatformConnectErrorBoundaryState {
+    return { error };
+  }
+
+  componentDidCatch(error: Error): void {
+    console.error("[PlatformConnectModal] Render error:", error);
+  }
+
+  render(): ReactNode {
+    if (this.state.error) {
+      return (
+        <div className="platform-connect-overlay">
+          <div className="platform-connect-modal">
+            <div className="platform-connect-content">
+              <h2 className="platform-title">Connection prompt unavailable</h2>
+              <p className="platform-description">
+                Something went wrong showing the sign-in dialog. You can connect
+                this site from Settings → Platform Connections.
+              </p>
+            </div>
+            <div className="platform-connect-actions">
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={() => {
+                  usePlatformConnectStore.getState().clearRequest();
+                  this.setState({ error: null });
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+export function PlatformConnectModal() {
+  return (
+    <PlatformConnectErrorBoundary>
+      <PlatformConnectModalInner />
+    </PlatformConnectErrorBoundary>
   );
 }

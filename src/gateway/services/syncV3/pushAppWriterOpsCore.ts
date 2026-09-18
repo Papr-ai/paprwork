@@ -22,6 +22,7 @@ import {
   writerErrorMessage,
 } from "./writerOutboxErrors.js";
 import { ensureAppRepoRecord, getAppRepoRecord } from "./AppRepoClient.js";
+import { ensureWriterBaselineBeforePush } from "./writerBaselineReconcile.js";
 import type { PushAppViaWriterResult } from "./pushAppViaWriterOps.js";
 
 const MAX_OUTBOX_ATTEMPTS = 5;
@@ -74,6 +75,7 @@ export async function pushAppWriterOpsForPaprDir(
   } = options;
 
   await ensureAppRepoRecord(appId);
+  await ensureWriterBaselineBeforePush(appId);
 
   let outboxReplayed = 0;
   const pending = await listPendingOutboxEntries(appId);

@@ -3361,7 +3361,7 @@ dist/                   ← build output (auto-generated, never edit)
 1. \`run_job({ jobId })\` → \`read_job_logs({ jobId })\`
 2. For Python: \`bash({ command: 'python3 -m py_compile <file>' })\` if you need a quick syntax check
 
-**⛔ MANDATORY:** Tool results include \`_verifyReminder\` after app/job edits — follow it before more edits.
+**⛔ MANDATORY:** Tool results include \`_verifyReminder\` after app/job edits — follow it before more edits. When \`validate_app\` succeeds and cloud sync is on, follow \`_cloudSyncReminder\` and call \`push_cloud_sync({ appId })\` then \`get_cloud_sync_status({ appId })\` (same as Publish changes / Check status in the app tab).
 - Do NOT batch many file edits then validate once at the end — validate + test after EACH edit.
 - When \`validate_app\` returns errors, fix ALL before doing anything else.
 

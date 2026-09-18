@@ -4,6 +4,8 @@
  * Uses Turso HTTP API (no embedded replica sync — deprecated on Turso cloud).
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { createClient, type Client } from "@libsql/client";
 import Database from "better-sqlite3";
 import * as fs from "fs";
@@ -680,7 +682,7 @@ function cleanupSqliteSidecars(dbPath: string): void {
   if (walSize > 0) {
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath);
+      db = openDiagnosticDatabase(Database, "services/tursoSyncBridgeCore", dbPath);
       db.pragma("wal_checkpoint(TRUNCATE)");
     } catch {
       // DB locked or unreadable — keep sidecars intact; deleting them here is
@@ -894,7 +896,7 @@ export function resetChangeLogReadyCacheForTests(): void {
 export function openWritableLocalJobDb(localDbPath: string): Database.Database {
   const normalized = path.normalize(localDbPath);
   assertNotReplicaManagedWritablePath(normalized, "openWritableLocalJobDb");
-  const db = new Database(normalized);
+  const db = openDiagnosticDatabase(Database, "services/tursoSyncBridgeCore", normalized);
   db.pragma("journal_mode = WAL");
   db.pragma(`busy_timeout = ${LOCAL_DB_BUSY_TIMEOUT_MS}`);
   return db;
@@ -953,7 +955,7 @@ export function localDbHasSyncableUserTables(localDbPath: string): boolean {
   }
   const openReadonly = isReplicaManagedDbPathSync(normalized);
   const localDb = openReadonly
-    ? new Database(normalized, { readonly: true, fileMustExist: true, timeout: 100 })
+    ? openDiagnosticDatabase(Database, "services/tursoSyncBridgeCore", normalized, { readonly: true, fileMustExist: true, timeout: 100 })
     : openWritableLocalJobDb(normalized);
   try {
     return filterSyncableTables(listUserTables(localDb)).length > 0;

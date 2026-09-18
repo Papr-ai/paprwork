@@ -38,7 +38,10 @@ import "./InputBar.css";
 
 interface InputBarProps {
   chatId: string; // Chat ID for persisting draft messages
-  onSend: (message: string, context?: Artifact[]) => void;
+  onSend: (
+    message: string,
+    context?: Artifact[],
+  ) => void | Promise<void>;
   /** Stop the in-flight turn, then send immediately (double-enter shortcut). */
   onInterruptAndSend?: (
     message: string,
@@ -121,7 +124,9 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
     const clearDraftMessage = useChatStore((state) => state.clearDraftMessage);
 
     // Ollama status for showing install indicator
-    const { hasModel, hostTotalRamGb } = useOllama();
+    const { hasModel, hostTotalRamGb } = useOllama({
+      subscribeDownloadProgress: false,
+    });
 
     // Seeded through the store's getter, which falls back to the durable copy:
     // after a reload or a crash the in-memory map is empty, and reading it
@@ -316,6 +321,19 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       [onSlashCommand],
     );
 
+    const restoreComposerAfterFailedSend = (
+      text: string,
+      artifacts: Artifact[],
+    ) => {
+      setMessage(text);
+      setDraftMessage(chatId, text);
+      setSelectedArtifacts(artifacts);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = "auto";
+        scheduleTextareaResize();
+      }
+    };
+
     const handleSend = () => {
       const trimmedMessage = message.trim();
       const hasAttachments = selectedArtifacts.length > 0;
@@ -324,6 +342,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
       const messageToSend =
         trimmedMessage ||
         (hasAttachments ? "Please review the attached file(s)." : "");
+      const artifactsToSend =
+        selectedArtifacts.length > 0 ? [...selectedArtifacts] : undefined;
       const now = Date.now();
       const timeSinceLastAttempt = now - lastSendAttemptRef.current;
 
@@ -333,10 +353,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         // Double-enter / double-click within 1s: stop the current turn and send now.
         if (timeSinceLastAttempt < 1000) {
           const sendNow = onInterruptAndSend ?? onSend;
-          void sendNow(
-            messageToSend,
-            selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-          );
+          void sendNow(messageToSend, artifactsToSend);
           setMessage("");
           clearDraftMessage(chatId);
           setSelectedArtifacts([]);
@@ -348,10 +365,7 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
         } else {
           // First attempt while agent is working - queue the message
           if (onQueue) {
-            onQueue(
-              messageToSend,
-              selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-            );
+            onQueue(messageToSend, artifactsToSend);
           }
           setMessage("");
           clearDraftMessage(chatId);
@@ -363,11 +377,8 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           lastSendAttemptRef.current = now;
         }
       } else {
-        // Agent not working - send normally
-        onSend(
-          messageToSend,
-          selectedArtifacts.length > 0 ? selectedArtifacts : undefined,
-        );
+        // Agent not working - send normally; restore the composer if send fails
+        // before the user message is committed (e.g. stuck prior send lock).
         setMessage("");
         clearDraftMessage(chatId);
         setSelectedArtifacts([]);
@@ -376,6 +387,18 @@ export const InputBar = forwardRef<InputBarRef, InputBarProps>(
           textareaRef.current.style.height = "auto";
         }
         lastSendAttemptRef.current = 0;
+
+        void (async () => {
+          try {
+            await onSend(messageToSend, artifactsToSend);
+          } catch (error) {
+            console.warn("[InputBar] Send failed, restoring composer:", error);
+            restoreComposerAfterFailedSend(
+              messageToSend,
+              artifactsToSend ?? [],
+            );
+          }
+        })();
       }
     };
 

@@ -8,6 +8,8 @@
  * - Plan history is maintained
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { promises as fs } from "fs";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import path from "path";
@@ -65,7 +67,7 @@ export class PlanService {
     await fs.mkdir(path.dirname(this.dbPath), { recursive: true });
 
     // Open database with performance optimizations
-    this.db = new Database(this.dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/PlanService", this.dbPath);
     
     // Performance optimizations
     this.db.pragma('journal_mode = WAL');

@@ -3,6 +3,8 @@
  * State file: ~/Papr/data/.turso-sync-state.json
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
 import * as path from "path";
@@ -448,7 +450,7 @@ export function isLinkedSourceDirtyFastIgnoringFlag(
 
   let db: Database.Database | undefined;
   try {
-    db = new Database(normalizedPath, {
+    db = openDiagnosticDatabase(Database, "services/tursoSyncState", normalizedPath, {
       readonly: true,
       fileMustExist: true,
       timeout: LEGACY_PROBE_BUSY_TIMEOUT_MS,

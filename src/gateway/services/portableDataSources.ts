@@ -225,6 +225,10 @@ export async function resolveLinkedSourceDbPath(input: {
   jobsRoot: string;
   /** Registry or linked-databases label when dbPath was scrubbed for portable sync. */
   registryLabel?: string;
+  /** When set, resolve registry paths under this workspace instead of the active one. */
+  dataDir?: string;
+  /** In-memory registry row (cross-namespace copy before DatabaseRegistry reload). */
+  registryRecord?: { localPath?: string; label?: string };
 }): Promise<string | null> {
   const stored = input.dbPath?.trim() ?? "";
   if (stored && existsSync(stored)) {
@@ -244,12 +248,16 @@ export async function resolveLinkedSourceDbPath(input: {
     return canonical;
   }
 
-  const dataDir = getPaprDataDir();
-  const { getDatabaseRegistryService } = await import(
-    "./DatabaseRegistryService.js"
-  );
-  const registry = getDatabaseRegistryService();
-  const record = input.dbId ? registry.getById(input.dbId) : undefined;
+  const dataDir = input.dataDir ?? getPaprDataDir();
+  let record: { localPath?: string; label?: string } | undefined =
+    input.registryRecord;
+  if (!record && input.dbId && input.dataDir === undefined) {
+    const { getDatabaseRegistryService } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const registry = getDatabaseRegistryService();
+    record = registry.getById(input.dbId);
+  }
 
   const readable = resolveReadableRegistryDbPath({
     dbPath: stored,

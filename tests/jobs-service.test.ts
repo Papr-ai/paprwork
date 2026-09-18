@@ -263,3 +263,28 @@ describe("JobsService lifecycle helpers", () => {
     readdirSpy.mockRestore();
   });
 });
+
+test("queued job stays live during reconciliation and can be stopped before launch", async () => {
+  const { gatewayBackgroundBudget } = await import("../src/gateway/services/gatewayBackgroundBudget.js");
+  const previous = process.env.GATEWAY_BG_MAX_CONCURRENCY;
+  process.env.GATEWAY_BG_MAX_CONCURRENCY = "1";
+  let release!: () => void;
+  const hold = new Promise<void>(resolve => { release = resolve; });
+  const occupied = gatewayBackgroundBudget.run("test:occupied", () => hold);
+  try {
+    const service = await setupService();
+    const job = await service.createJob({ name: "Queued stop", appIds: [STANDALONE_APP_ID], type: "shell", command: "echo SHOULD_NOT_RUN" });
+    const execution = service.runJob(job.id);
+    await vi.waitFor(() => expect(gatewayBackgroundBudget.stats().queued.some(w => w.label === `job:${job.id}`)).toBe(true));
+    await service.reconcileStaleRunningJobs(0);
+    expect((await service.getJob(job.id))?.status).toBe("running");
+    await service.stopJob(job.id);
+    expect((await execution).status).toBe("cancelled");
+    release(); await occupied;
+    expect(await service.getLogs(job.id)).not.toContain("SHOULD_NOT_RUN");
+  } finally {
+    release(); await occupied;
+    if (previous === undefined) delete process.env.GATEWAY_BG_MAX_CONCURRENCY;
+    else process.env.GATEWAY_BG_MAX_CONCURRENCY = previous;
+  }
+});

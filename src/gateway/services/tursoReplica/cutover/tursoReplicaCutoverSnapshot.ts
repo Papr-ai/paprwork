@@ -2,6 +2,8 @@
  * Remote/local inspection for legacy → replica cutover classification.
  */
 
+import { openDiagnosticDatabase } from "../../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import { createClient } from "@libsql/client";
 import Database from "better-sqlite3";
@@ -35,7 +37,7 @@ function countLocalSyncableTables(dbPath: string): number {
     if (stats.size === 0) {
       return 0;
     }
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDiagnosticDatabase(Database, "services/tursoReplica/cutover/tursoReplicaCutoverSnapshot", dbPath, { readonly: true });
     try {
       return filterSyncableTables(listUserTables(db)).length;
     } finally {
@@ -51,7 +53,7 @@ function readLocalLegacyMigrationIds(dbPath: string): string[] {
     return [];
   }
   try {
-    const db = new Database(dbPath, { readonly: true });
+    const db = openDiagnosticDatabase(Database, "services/tursoReplica/cutover/tursoReplicaCutoverSnapshot", dbPath, { readonly: true });
     try {
       const tables = listUserTables(db);
       if (!tables.includes("schema_migrations")) {

@@ -3,6 +3,8 @@
  * Reference: Paprwork v1 appManager.js
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { existsSync, promises as fs } from "fs";
 import { TreeWatcher } from "./TreeWatcher.js";
 import path from "path";
@@ -1054,7 +1056,7 @@ export class AppService {
       // is the real guard, and it matters: the legacy DB may be
       // replica-managed, where a read-write handle truncates the WAL on close
       // and wedges sync in both directions.
-      const legacy = new Database(legacyJobDbPath, { readonly: true });
+      const legacy = openDiagnosticDatabase(Database, "services/AppService", legacyJobDbPath, { readonly: true });
       try {
         const hasTable = legacy
           .prepare(
@@ -1111,7 +1113,7 @@ export class AppService {
       } else {
         // Legacy sync: plain local write is safe and much faster.
         const { default: Database } = await import("better-sqlite3");
-        const target = new Database(registryDbPath);
+        const target = openDiagnosticDatabase(Database, "services/AppService", registryDbPath);
         try {
           const stmt = target.prepare(sql);
           const insertAll = target.transaction(

@@ -5,6 +5,8 @@
  * Provides hash-based change detection to skip unchanged files.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from 'better-sqlite3';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
@@ -68,7 +70,7 @@ export class CodeIndexTracker {
     }
     
     this.dbPath = path.join(baseDir, 'code-index.db');
-    this.db = new Database(this.dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/storage/CodeIndexTracker", this.dbPath);
     
     // Performance optimizations
     this.db.pragma('journal_mode = WAL');

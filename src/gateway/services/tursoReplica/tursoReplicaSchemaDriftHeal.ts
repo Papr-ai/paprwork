@@ -12,6 +12,7 @@ export function isReplicaMissingTableError(message: string): boolean {
   const lower = message.toLowerCase();
   return (
     lower.includes("no such table:") ||
+    lower.includes("no such table ") ||
     (lower.includes("parse error:") && lower.includes("no such table"))
   );
 }

@@ -52,8 +52,14 @@ describe("TursoReplicaSyncWorkerClient", () => {
     const client = new TursoReplicaSyncWorkerClient(
       fakeWorker(`reply({ id: req.id, ok: true, result: { pulled: true } });`),
     );
+    expect(client.ownsPath(localPath)).toBe(false);
     await expect(client.sync(spec(), "pull")).resolves.toBe(true);
+    expect(client.ownsPath(localPath)).toBe(true);
+    await client.close(localPath);
+    expect(client.ownsPath(localPath)).toBe(false);
+    await client.sync(spec(), "pull");
     await client.shutdown();
+    expect(client.ownsPath(localPath)).toBe(false);
   });
 
   it("returns query rows and write metrics through the typed helpers", async () => {

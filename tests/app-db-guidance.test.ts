@@ -3,6 +3,7 @@ import {
   buildAppDbBashGuidance,
   buildAppDbJobReminder,
   buildAppDbRunJobFailureReminder,
+  buildHardcodedRegistryDbIdReminder,
 } from "../src/core/utils/appDbGuidance.js";
 
 describe("appDbGuidance", () => {
@@ -34,6 +35,15 @@ describe("appDbGuidance", () => {
     expect(
       buildAppDbRunJobFailureReminder("no such table: meetings", []),
     ).toBeUndefined();
+  });
+
+  test("warns on hardcoded db ids in agent job command", () => {
+    const reminder = buildHardcodedRegistryDbIdReminder(
+      "Write to db-9354d2e8 using papr_db_exec",
+      [],
+    );
+    expect(reminder).toContain("HARDCODED DB ID");
+    expect(reminder).toContain("db-9354d2e8");
   });
 
   test("agent job with persist intent and no writeDbIds warns", () => {

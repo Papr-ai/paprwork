@@ -82,7 +82,9 @@ export type SettingsTab =
   | "permissions"
   | "privacy"
   | "migration"
-  | "about";
+  | "about"
+  /** Dev-only harness; the nav entry and panel exist only when import.meta.env.DEV. */
+  | "dev";
 
 export interface CodeIndexingStatus {
   enabled: boolean;

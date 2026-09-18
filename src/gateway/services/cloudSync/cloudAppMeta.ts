@@ -2,6 +2,8 @@
  * Per-app cloud metadata — dist revision + required Turso schema version.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import * as path from "path";
 import Database from "better-sqlite3";
@@ -33,7 +35,7 @@ function listAppliedMigrationIds(dbPath: string): string[] {
   if (!fs.existsSync(dbPath)) {
     return [];
   }
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDiagnosticDatabase(Database, "services/cloudSync/cloudAppMeta", dbPath, { readonly: true });
   try {
     return listAppliedMigrationIdsReadOnly(db);
   } finally {

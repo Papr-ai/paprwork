@@ -18,6 +18,7 @@ import { fileContentHash } from "../../utils/fileContentHash.js";
 import {
   getDatabaseRegistryService,
   registrySlugFromLocalPath,
+  type DatabasesRegistryFile,
 } from "../DatabaseRegistryService.js";
 import { applyRegistryDatabaseMigrations } from "../jobs/databaseMigrations.js";
 import { computeBlobOidForContent } from "./computeParentHash.js";
@@ -76,6 +77,49 @@ export function schemaOwnerSlugMapForApp(appId: string): Map<string, string> {
   return map;
 }
 
+/**
+ * Schema owners from on-disk registry (cross-namespace copy / install into a
+ * workspace that is not the active in-memory registry).
+ */
+export async function loadSchemaOwnerSlugMapFromPaprHome(
+  paprRoot: string,
+  appId: string,
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const trimmed = appId.trim();
+  if (!trimmed) {
+    return map;
+  }
+  const registryPath = path.join(paprRoot, "data", "databases.json");
+  let registry: DatabasesRegistryFile;
+  try {
+    const raw = await fs.readFile(registryPath, "utf8");
+    registry = JSON.parse(raw) as DatabasesRegistryFile;
+  } catch {
+    return map;
+  }
+  for (const record of Object.values(registry.databases ?? {})) {
+    if (record.status !== "active" || record.schemaOwnerAppId !== trimmed) {
+      continue;
+    }
+    const slug = registrySlugFromLocalPath(record.localPath ?? "");
+    if (slug) {
+      map.set(slug, record.localPath);
+    }
+  }
+  return map;
+}
+
+async function resolveSchemaOwnerSlugMap(
+  appId: string,
+  paprRoot?: string,
+): Promise<Map<string, string>> {
+  if (paprRoot?.trim()) {
+    return loadSchemaOwnerSlugMapFromPaprHome(paprRoot, appId);
+  }
+  return schemaOwnerSlugMapForApp(appId);
+}
+
 export interface PersistPulledSchemaMigrationInput {
   appId: string;
   repoPath: string;
@@ -115,15 +159,19 @@ export async function mirrorSchemaMigrationToRegistry(
     return { kind: "not_migration" };
   }
 
-  const owned = schemaOwnerSlugMapForApp(input.appId);
-  if (!owned.has(parsed.slug)) {
+  const owned = await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot);
+  const registrySlug =
+    owned.has(parsed.slug) || owned.size !== 1
+      ? parsed.slug
+      : ([...owned.keys()][0] ?? parsed.slug);
+  if (!owned.has(registrySlug)) {
     return { kind: "skipped", reason: "not schema owner for slug" };
   }
 
   const paprRoot = input.paprRoot ?? getPaprRoot();
   const registryFullPath = registryMigrationFilePath(
     paprRoot,
-    parsed.slug,
+    registrySlug,
     parsed.fileName,
   );
 
@@ -240,10 +288,15 @@ export async function hydrateAppFolderSchemaMigrationsToRegistry(input: {
       continue;
     }
     const slug = slugEntry.name;
+    const owned = await resolveSchemaOwnerSlugMap(input.appId, input.paprRoot);
+    const registrySlug =
+      owned.has(slug) || owned.size !== 1
+        ? slug
+        : ([...owned.keys()][0] ?? slug);
     const migrationsDir = path.join(databasesDir, slug, "migrations");
     const sqlFiles = await listSqlFilesInDir(migrationsDir);
     for (const fileName of sqlFiles) {
-      const repoPath = `databases/${slug}/migrations/${fileName}`;
+      const repoPath = `databases/${registrySlug}/migrations/${fileName}`;
       let content: string;
       try {
         content = await fs.readFile(path.join(migrationsDir, fileName), "utf8");

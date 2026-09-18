@@ -17,6 +17,12 @@ import "./AuthWall.css";
 interface AuthWallProps {
   /** Fired once Papr login is confirmed, by any detection path. */
   onSignedIn: () => void;
+  /**
+   * Dev preview only. When you're already signed in, every detection path
+   * fires immediately and this screen is invisible — this holds it open so
+   * the screen can actually be looked at. Never set in production.
+   */
+  skipAutoDetect?: boolean;
 }
 
 function trackAuthWallStep(
@@ -26,8 +32,8 @@ function trackAuthWallStep(
   trackPaprLoginStep(step, { source: "auth_wall", ...properties });
 }
 
-export function AuthWall({ onSignedIn }: AuthWallProps) {
-  const [isLoading, setIsLoading] = useState(true);
+export function AuthWall({ onSignedIn, skipAutoDetect }: AuthWallProps) {
+  const [isLoading, setIsLoading] = useState(!skipAutoDetect);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefresh, setShowRefresh] = useState(false);
@@ -41,10 +47,10 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
   // Four paths can detect login (DOM event, IPC, 2s poll, manual code) and
   // several fire together. Report upward exactly once.
   const handleAuthenticated = useCallback(async () => {
-    if (signedInReported.current) return;
+    if (skipAutoDetect || signedInReported.current) return;
     signedInReported.current = true;
     onSignedIn();
-  }, [onSignedIn]);
+  }, [onSignedIn, skipAutoDetect]);
 
   const checkAuthentication = useCallback(
     async (options?: { fromPoll?: boolean }) => {
@@ -104,6 +110,7 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
 
   // Check if user is already authenticated
   useEffect(() => {
+    if (skipAutoDetect) return;
     void checkAuthentication();
 
     const handleAuthSuccess = () => {
@@ -131,7 +138,7 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
       if (pollInterval) clearInterval(pollInterval);
       if (refreshTimer) clearTimeout(refreshTimer);
     };
-  }, [checkAuthentication, handleAuthenticated, isAuthenticating]);
+  }, [checkAuthentication, handleAuthenticated, isAuthenticating, skipAutoDetect]);
 
   // IPC listeners for login success/error (belt-and-suspenders with DOM events)
   useEffect(() => {

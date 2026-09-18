@@ -217,13 +217,29 @@ export function isFailedToolResult(result: unknown): boolean {
   return resolveToolCallStatus({ result }) === "error";
 }
 
+function hasPersistedToolResult(result: unknown): boolean {
+  if (result === undefined || result === null) {
+    return false;
+  }
+  if (typeof result === "string") {
+    return result.trim().length > 0;
+  }
+  return true;
+}
+
 export function resolveToolCallStatus(args: {
   explicitStatus?: string;
   hasError?: boolean;
   result?: unknown;
 }): ToolCallStatus {
   if (args.explicitStatus === "calling") {
-    return "calling";
+    if (
+      !hasPersistedToolResult(args.result) ||
+      isInterruptedToolResult(args.result)
+    ) {
+      return "calling";
+    }
+    // Sequence can still say "calling" after the turn ends; trust the result.
   }
   if (args.hasError || args.explicitStatus === "error") {
     return "error";

@@ -7,6 +7,8 @@
  * process, while production still never loads the engine in the gateway.
  */
 
+import { DatabaseConnectionTrace, databaseTracingEnabled } from "../databaseDiagnostics/trace.js";
+
 import { connectTursoReplica } from "./tursoReplicaConnect.js";
 import type {
   TursoSyncWorkerRequest,
@@ -21,6 +23,7 @@ const IDLE_CLOSE_MS = 5 * 60_000;
 
 interface Handle {
   db: Db;
+  trace?: DatabaseConnectionTrace;
   idleTimer: NodeJS.Timeout | null;
 }
 
@@ -105,52 +108,61 @@ export class TursoSyncWorkerCore {
       return {};
     }
     const db = await this.getOrOpen(request);
-    switch (request.op) {
-      case "connect":
-        return {};
-      case "query": {
-        const stmt = await db.prepare(request.sql ?? "");
-        const rows = await stmt.all(...(request.params ?? []));
-        return { rows: Array.isArray(rows) ? rows : [] };
-      }
-      case "queryBatch": {
-        const results: { rows: unknown[] }[] = [];
-        for (const statement of request.statements ?? []) {
-          const stmt = await db.prepare(statement.sql);
-          const rows = await stmt.all(...(statement.params ?? []));
-          results.push({ rows: Array.isArray(rows) ? rows : [] });
+    const end = this.handles.get(request.localPath)?.trace?.begin(request.op);
+    try {
+      switch (request.op) {
+        case "connect":
+          return {};
+        case "query": {
+          const stmt = await db.prepare(request.sql ?? "");
+          const rows = await stmt.all(...(request.params ?? []));
+          return { rows: Array.isArray(rows) ? rows : [] };
         }
-        return { results };
-      }
-      case "write": {
-        let last = { changes: 0, lastInsertRowid: 0 };
-        for (const statement of request.statements ?? []) {
-          const stmt = await db.prepare(statement.sql);
-          last = extractWriteMetrics(await stmt.run(...(statement.params ?? [])));
+        case "queryBatch": {
+          const results: { rows: unknown[] }[] = [];
+          for (const statement of request.statements ?? []) {
+            const stmt = await db.prepare(statement.sql);
+            const rows = await stmt.all(...(statement.params ?? []));
+            results.push({ rows: Array.isArray(rows) ? rows : [] });
+          }
+          return { results };
         }
-        return last;
+        case "write": {
+          let last = { changes: 0, lastInsertRowid: 0 };
+          for (const statement of request.statements ?? []) {
+            const stmt = await db.prepare(statement.sql);
+            last = extractWriteMetrics(await stmt.run(...(statement.params ?? [])));
+          }
+          return last;
+        }
+        case "exec":
+          await db.exec(request.sql ?? "");
+          return {};
+        case "pull":
+          return { pulled: Boolean(await db.pull()) };
+        case "push":
+          await db.push();
+          return { pulled: false };
+        case "pullPush": {
+          const pulled = Boolean(await db.pull());
+          await db.push();
+          return { pulled };
+        }
+        case "stats": {
+          const stats = await db.stats();
+          const cdcOperations =
+            stats && typeof stats === "object" && "cdcOperations" in stats
+              ? Number((stats as { cdcOperations: unknown }).cdcOperations)
+              : 0;
+          return { cdcOperations };
+        }
+        default: throw new Error("Unsupported sync worker operation");
       }
-      case "exec":
-        await db.exec(request.sql ?? "");
-        return {};
-      case "pull":
-        return { pulled: Boolean(await db.pull()) };
-      case "push":
-        await db.push();
-        return { pulled: false };
-      case "pullPush": {
-        const pulled = Boolean(await db.pull());
-        await db.push();
-        return { pulled };
-      }
-      case "stats": {
-        const stats = await db.stats();
-        const cdcOperations =
-          stats && typeof stats === "object" && "cdcOperations" in stats
-            ? Number((stats as { cdcOperations: unknown }).cdcOperations)
-            : 0;
-        return { cdcOperations };
-      }
+    } catch (error) {
+      end?.(error);
+      throw error;
+    } finally {
+      end?.();
     }
   }
 
@@ -163,6 +175,8 @@ export class TursoSyncWorkerCore {
     if (pending) {
       return pending;
     }
+    const trace = databaseTracingEnabled() ? new DatabaseConnectionTrace(request.localPath, "turso-sync-worker", "turso") : undefined;
+    const endOpen = trace?.begin("connect");
     const openPromise = connectTursoReplica({
       localPath: request.localPath,
       tursoUrl: request.tursoUrl,
@@ -170,9 +184,10 @@ export class TursoSyncWorkerCore {
       bootstrapIfEmpty: request.bootstrapIfEmpty,
       clientName: request.clientName,
     }).then((db) => {
-      this.handles.set(request.localPath, { db, idleTimer: null });
+      this.handles.set(request.localPath, { db, trace, idleTimer: null });
+      endOpen?.();
       return db;
-    });
+    }).catch(error => { endOpen?.(error); trace?.close(); throw error; });
     this.opening.set(request.localPath, openPromise);
     try {
       return await openPromise;
@@ -204,11 +219,13 @@ export class TursoSyncWorkerCore {
     if (handle.idleTimer) {
       clearTimeout(handle.idleTimer);
     }
+    const endClose = handle.trace?.begin("close");
     try {
       await handle.db.close();
     } catch (error) {
+      endClose?.(error);
       this.log(`close failed for ${localPath}: ${String(error)}`);
-    }
+    } finally { endClose?.(); handle.trace?.close(); }
   }
 }
 

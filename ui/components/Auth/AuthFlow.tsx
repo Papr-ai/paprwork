@@ -23,6 +23,15 @@ export type AuthFlowStage = "signin" | "org" | "connect";
 interface AuthFlowProps {
   /** Called once the user has cleared every pre-app stage. */
   onComplete: () => void;
+  /**
+   * Dev preview only (Settings → Dev). Starts the flow on a given stage and
+   * stops AuthWall auto-advancing past sign-in when you're already logged in.
+   * Never set in the packaged app — the whole tab is compiled out.
+   */
+  devPreview?: {
+    initialStage: AuthFlowStage;
+    orgRequest: OrgNamespaceSetupRequest;
+  };
 }
 
 async function identifyTelemetryAfterLogin(): Promise<void> {
@@ -37,10 +46,12 @@ async function identifyTelemetryAfterLogin(): Promise<void> {
   }
 }
 
-export function AuthFlow({ onComplete }: AuthFlowProps) {
-  const [stage, setStage] = useState<AuthFlowStage>("signin");
+export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
+  const [stage, setStage] = useState<AuthFlowStage>(
+    devPreview?.initialStage ?? "signin",
+  );
   const [setupRequest, setSetupRequest] =
-    useState<OrgNamespaceSetupRequest | null>(null);
+    useState<OrgNamespaceSetupRequest | null>(devPreview?.orgRequest ?? null);
 
   // Runs exactly once, when Papr auth is confirmed — regardless of which
   // detection path (DOM event, IPC, poll, manual code) got us here.
@@ -89,5 +100,10 @@ export function AuthFlow({ onComplete }: AuthFlowProps) {
     return <ConnectAIStep onDone={onComplete} />;
   }
 
-  return <AuthWall onSignedIn={handleSignedIn} />;
+  return (
+    <AuthWall
+      onSignedIn={handleSignedIn}
+      skipAutoDetect={Boolean(devPreview)}
+    />
+  );
 }

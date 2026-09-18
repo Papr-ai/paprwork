@@ -1,3 +1,6 @@
+import { markChatDiagnosticsCancelled } from "../../core/utils/performanceDiagnostics.js";
+import { measureChatStream } from "./agent/chatPerformanceDiagnostics.js";
+import { measureLanguageModel, measureTools } from "./agent/requestPerformanceDiagnostics.js";
 /**
  * Agent Service - Main process service for managing AI agents
  *
@@ -512,7 +515,14 @@ export class AgentService {
    *
    * @param config - Must include apiKey (fetched via IPC in WebSocket handler)
    */
-  async *streamAgent(
+  async *streamAgent(...args: Parameters<AgentService["streamAgentInternal"]>): AsyncGenerator<StreamChunk & { chatId: string }> {
+    const [chatId, , config] = args;
+    yield* measureChatStream(this.streamAgentInternal(...args), {
+      chatId, provider: config.provider, model: config.model,
+    });
+  }
+
+  private async *streamAgentInternal(
     chatId: string,
     userMessage: string,
     config: AgentConfigInternal,
@@ -1322,7 +1332,7 @@ export class AgentService {
       const sessionWithModel = session.agent as unknown as {
         model: LanguageModel;
       };
-      const model = sessionWithModel.model;
+      const model = measureLanguageModel(sessionWithModel.model, { chatId, provider: config.provider, model: config.model });
 
       // Prepare provider options for reasoning models
       const providerOptions: {
@@ -1506,9 +1516,9 @@ export class AgentService {
       // turn end. Reset here so a previous turn's searches can never be
       // attributed to this turn's answer.
       resetSearchOutcomes();
-      const tools = wrapToolsWithMemorySearchFirstGate(
+      const tools = measureTools(wrapToolsWithMemorySearchFirstGate(
         this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
-      );
+      ), { chatId, provider: config.provider, model: config.model });
       timings.getTools = performance.now() - t;
 
       // Log context size breakdown
@@ -2592,7 +2602,7 @@ export class AgentService {
           timestamp: new Date().toISOString(),
         } as StreamChunk & { chatId: string };
 
-        for await (const chunk of this.streamAgent(
+        for await (const chunk of this.streamAgentInternal(
           chatId,
           userMessage,
           config,
@@ -2927,7 +2937,7 @@ export class AgentService {
         // Don't save the empty assistant message. Don't yield 'done'. Just
         // re-invoke ourselves with the same userMessage but flagged as a
         // silent retry so we don't loop, and skip re-saving the user msg.
-        for await (const chunk of this.streamAgent(
+        for await (const chunk of this.streamAgentInternal(
           chatId,
           userMessage,
           config,
@@ -3150,6 +3160,7 @@ export class AgentService {
    * Also releases the concurrency lease immediately so a new stream can start.
    */
   async stopStreaming(chatId: string): Promise<void> {
+    markChatDiagnosticsCancelled(chatId);
     await this.sessionManager.abortSession(chatId);
     // Release concurrency lease immediately so replacement streams don't queue.
     // The generator's finally block will also call release(), but that's a no-op

@@ -1,3 +1,6 @@
+import { DiagnosticOperation } from "../../../core/utils/performanceDiagnostics.js";
+import { scanCodeFiles } from "./scanCodeFiles.js";
+import { gatewayBackgroundBudget } from "../gatewayBackgroundBudget.js";
 /**
  * Smart Code Index Manager
  * 
@@ -40,6 +43,7 @@ export interface IndexManagerConfig {
 }
 
 export class SmartCodeIndexManager {
+  private initialScanAbort = new AbortController();
   private config: Required<IndexManagerConfig>;
   private tracker: CodeIndexTracker;
   private indexer: CodeIndexerService;
@@ -95,7 +99,16 @@ export class SmartCodeIndexManager {
     console.log('🚀 Starting Smart Code Index Manager...');
     
     // Initial indexing on startup
-    await this.initialIndex();
+    const scanTrace = new DiagnosticOperation("indexing", "initial-scan");
+    try {
+      await this.initialIndex();
+      scanTrace.finish(this.stopped ? "cancelled" : "completed");
+    } catch (error) {
+      scanTrace.error(error);
+      scanTrace.finish("error");
+      throw error;
+    }
+    if (this.stopped) return;
     
     // Start file watcher
     this.startFileWatcher();
@@ -120,6 +133,7 @@ export class SmartCodeIndexManager {
 
     console.log('🛑 Stopping Smart Code Index Manager...');
     this.stopped = true;
+    this.initialScanAbort.abort();
     
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
@@ -165,27 +179,34 @@ export class SmartCodeIndexManager {
     
     this.purgeInvalidQueuedFiles();
 
-    // Scan filesystem for all code files
-    const allFiles = this.scanAllFiles();
-    console.log(`   Found: ${allFiles.length} total code files`);
-    
-    // Queue files that need indexing
     let newFiles = 0;
     let changedFiles = 0;
-    
-    for (const filePath of allFiles) {
-      try {
-        if (this.tracker.needsIndexing(filePath)) {
-          const isNew = !fs.existsSync(filePath); // Simplified check
-          this.tracker.queueFile(filePath, isNew ? 1 : 0);
-          if (isNew) newFiles++;
-          else changedFiles++;
+    let scannedFiles = 0;
+    try {
+      for await (const filePath of scanCodeFiles(this.config.paprDir, this.initialScanAbort.signal)) {
+        if (this.stopped) return;
+        scannedFiles++;
+        try {
+          // Per-file admission lets a newly started chat pause further indexing.
+          await gatewayBackgroundBudget.run("code-index:initial-file", async () => {
+            const fileIo = await readCodeFileForIndex(filePath);
+            if (this.stopped) return;
+            if (this.tracker.needsIndexingWithHash(filePath, fileIo.hash)) {
+              this.tracker.queueFile(filePath, 0);
+              changedFiles++;
+            }
+          }, this.initialScanAbort.signal);
+        } catch (error) {
+          if (this.stopped) return;
+          console.warn(`   ⚠️ Error checking ${filePath}:`, (error as Error).message);
         }
-      } catch (error) {
-        console.error(`   ⚠️  Error checking ${filePath}:`, (error as Error).message);
       }
+    } catch (error) {
+      if (this.stopped) return;
+      throw error;
     }
-    
+    console.log(`   Found: ${scannedFiles} total code files`);
+
     const queueSize = this.tracker.getQueueSize();
     console.log(`   Queued: ${queueSize} files (${newFiles} new, ${changedFiles} changed)`);
     
@@ -196,58 +217,6 @@ export class SmartCodeIndexManager {
     }
   }
   
-  /**
-   * Scan filesystem for all code files inside project directories only.
-   */
-  private scanAllFiles(): string[] {
-    const files: string[] = [];
-    const codeExtensions = ['.ts', '.tsx', '.js', '.jsx', '.py'];
-    const excludeDirs = [
-      'node_modules', '.venv', 'venv', '.git', 'dist', 'build', 'data',
-      '__pycache__', '.next', '.nuxt', 'papr_repo'
-    ];
-
-    const scanProjectTree = (dir: string): void => {
-      if (!fs.existsSync(dir)) return;
-
-      for (const entry of fs.readdirSync(dir)) {
-        if (excludeDirs.includes(entry) || entry.includes('_repo')) {
-          continue;
-        }
-
-        const fullPath = path.join(dir, entry);
-        const stat = fs.statSync(fullPath);
-
-        if (stat.isDirectory()) {
-          scanProjectTree(fullPath);
-        } else if (stat.isFile()) {
-          const ext = path.extname(entry);
-          if (codeExtensions.includes(ext)) {
-            files.push(fullPath);
-          }
-        }
-      }
-    };
-
-    for (const container of ['apps', 'Jobs'] as const) {
-      const containerPath = path.join(this.config.paprDir, container);
-      if (!fs.existsSync(containerPath)) continue;
-
-      for (const entry of fs.readdirSync(containerPath)) {
-        const projectPath = path.join(containerPath, entry);
-        try {
-          if (fs.statSync(projectPath).isDirectory()) {
-            scanProjectTree(projectPath);
-          }
-        } catch {
-          // Skip unreadable entries
-        }
-      }
-    }
-
-    return files;
-  }
-
   /**
    * Remove queued files that cannot be indexed (e.g. loose files in Jobs/ root).
    */
@@ -362,7 +331,7 @@ export class SmartCodeIndexManager {
     this.isIndexing = true;
 
     try {
-      await this.processBatch();
+      await gatewayBackgroundBudget.run("code-index:batch", () => this.processBatch(), this.initialScanAbort.signal);
     } catch (error) {
       console.error('❌ Batch processing error:', error);
     } finally {

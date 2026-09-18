@@ -735,7 +735,10 @@ export class TursoReplicaService {
     // `init_cdc_version`, which panics the B-tree cursor. Unlike shape 1 this lives
     // inside data.db, so resetting sidecars cannot cure it — the crash policy's retry
     // would panic a second time. Repair drops the table for the engine to rebuild.
-    const engineTableDefects = inspectReplicaEngineTables(localPath);
+    // Inspect before first use / after explicit close only. Repeated status/read
+    // calls must not contend with the worker that already owns this replica.
+    const engineTableDefects = getTursoReplicaSyncWorkerClient().ownsPath(localPath)
+      ? [] : inspectReplicaEngineTables(localPath);
     if (engineTableDefects.length > 0) {
       await getTursoReplicaSyncWorkerClient().close(localPath);
       this.touchedPaths.delete(key);

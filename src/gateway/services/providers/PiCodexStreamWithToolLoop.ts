@@ -1,3 +1,4 @@
+import { DiagnosticOperation } from "../../../core/utils/performanceDiagnostics.js";
 /**
  * Pi Codex Stream with Tool Loop - Multi-turn tool execution for pi-ai openai-codex
  *
@@ -686,11 +687,17 @@ export async function* createPiCodexStreamWithToolLoop(
       let capacityError: unknown | null = null;
       let shouldRetryCapacity = false;
 
+      const requestTrace = new DiagnosticOperation("model", "provider-request", {
+        chatId: toolContext?.chatId, provider: credential?.provider,
+      });
+      let requestCompleted = false;
+      let requestFailed = false;
       try {
         let piStream: AsyncIterable<AssistantMessageEvent>;
         try {
           piStream = streamSimple(piModel, context, streamOptions);
         } catch (err) {
+          requestFailed = true; requestTrace.error(err);
           const quotaChunk = quotaExhaustedChunk(err, activeCredential);
           if (quotaChunk) {
             yield quotaChunk;
@@ -737,6 +744,9 @@ export async function* createPiCodexStreamWithToolLoop(
 
         if (!shouldRetryCapacity) {
           for await (const event of piStream!) {
+            if (event.type === "done") requestCompleted = true;
+            if (["text_delta", "thinking_delta", "toolcall_delta"].includes(event.type)) requestTrace.event(event.type === "text_delta");
+            if (event.type === "error") { requestFailed = true; requestTrace.error(event.error); }
             if (event.type === "error") {
               const apiError =
                 (event as { error?: unknown }).error ?? event;
@@ -874,6 +884,7 @@ export async function* createPiCodexStreamWithToolLoop(
           }
         }
       } catch (err) {
+        requestFailed = true; requestTrace.error(err);
         const quotaChunk = quotaExhaustedChunk(err, activeCredential);
         if (quotaChunk) {
           yield quotaChunk;
@@ -892,6 +903,8 @@ export async function* createPiCodexStreamWithToolLoop(
         } else {
           throw err;
         }
+      } finally {
+        requestTrace.finish(requestFailed ? "error" : requestCompleted ? "completed" : "cancelled");
       }
 
       if (shouldRetryCapacity && capacityError) {

@@ -35,7 +35,10 @@ import {
   isReplicaMissingColumnError,
   isReplicaSchemaDriftError,
 } from "../tursoReplica/tursoReplicaSchemaDriftHeal.js";
-import { scheduleReplicaSchemaDriftHeal } from "../tursoReplica/tursoReplicaSchemaDriftScheduler.js";
+import {
+  awaitReplicaSchemaDriftHeal,
+  scheduleReplicaSchemaDriftHeal,
+} from "../tursoReplica/tursoReplicaSchemaDriftScheduler.js";
 import { getTursoReplicaService } from "../tursoReplica/TursoReplicaService.js";
 import {
   clearReplicaReadPathDegraded,
@@ -451,9 +454,25 @@ export class DbRouter {
 
       if (isReplicaSchemaDriftError(message)) {
         console.warn(
-          `[DbRouter] Schema drift on replica for ${source.alias ?? source.dbId} — scheduling background heal`,
+          `[DbRouter] Schema drift on replica for ${source.alias ?? source.dbId} — applying migrations on handle`,
         );
-        scheduleReplicaSchemaDriftHeal(source);
+        try {
+          await awaitReplicaSchemaDriftHeal(source);
+          const healed = await queryLinkedDbViaTursoReplica(source, sql, params, {
+            pullBeforeRead: false,
+          });
+          clearReplicaReadPathDegraded(source.dbPath);
+          console.log(
+            `[DbRouter] Turso replica query (post-heal) app=${appId} source=${source.alias} rows=${healed.count}`,
+          );
+          return { ...healed, backend: "turso-replica" };
+        } catch (healError) {
+          console.warn(
+            `[DbRouter] Schema heal/retry failed for ${source.alias ?? source.dbId}: ` +
+              `${(healError as Error).message.slice(0, 160)}`,
+          );
+          scheduleReplicaSchemaDriftHeal(source);
+        }
         if (isTursoReplicaOnline()) {
           const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
           if (remote) {
@@ -617,27 +636,35 @@ export class DbRouter {
       return null;
     }
 
-    const result = await client.execute({
-      sql,
-      args: (params ?? []) as (string | number | bigint | boolean | null)[],
-    });
+    try {
+      const result = await client.execute({
+        sql,
+        args: (params ?? []) as (string | number | bigint | boolean | null)[],
+      });
 
-    const rows = result.rows.map((row) => ({ ...row })) as Record<
-      string,
-      unknown
-    >[];
-    const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
+      const rows = result.rows.map((row) => ({ ...row })) as Record<
+        string,
+        unknown
+      >[];
+      const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
 
-    console.log(
-      `[DbRouter] Turso primary query app=${appId} source=${source.alias ?? source.jobId} rows=${rows.length}`,
-    );
+      console.log(
+        `[DbRouter] Turso primary query app=${appId} source=${source.alias ?? source.jobId} rows=${rows.length}`,
+      );
 
-    return {
-      rows,
-      columns,
-      count: rows.length,
-      backend: "turso",
-    };
+      return {
+        rows,
+        columns,
+        count: rows.length,
+        backend: "turso",
+      };
+    } catch (error) {
+      console.warn(
+        `[DbRouter] Turso primary query failed for ${source.alias ?? source.dbId}: ` +
+          `${(error as Error).message.slice(0, 160)}`,
+      );
+      return null;
+    }
   }
 
   async schema(

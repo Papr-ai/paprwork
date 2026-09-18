@@ -22,6 +22,7 @@ import {
 import {
   buildAppDbJobReminder,
   buildAppDbRunJobFailureReminder,
+  buildHardcodedRegistryDbIdReminder,
 } from "../utils/appDbGuidance.js";
 import { getPaprWorkspacePathsForAgent } from "../utils/paprAgentPaths.js";
 import { validateMiniAppIcon } from "../utils/miniAppIconValidation.js";
@@ -157,7 +158,26 @@ const APP_VERIFY_AFTER_EDIT_REMINDER =
   "REQUIRED after every app file edit (before more edits): " +
   "validate_app({ appId }) — includes esbuild + auto runtime preview + iframe console errors. " +
   "If validate_app passes, optionally webview_snapshot for visual checks. " +
+  "When cloud sync is enabled, follow _cloudSyncReminder in the validate_app result (push_cloud_sync). " +
   "Do not edit other files until validate_app passes.";
+
+async function buildCloudSyncAfterValidationReminder(
+  appId: string,
+): Promise<string | undefined> {
+  const { isCloudSyncEnabled } = await import(
+    "../../gateway/utils/cloudSyncEnabled.js"
+  );
+  if (!isCloudSyncEnabled()) {
+    return undefined;
+  }
+  return (
+    "Cloud sync is ON — validation passed: call push_cloud_sync({ appId: \"" +
+    appId +
+    "\" }) to back up app code + linked DBs to the web (same as Publish changes in the app tab). " +
+    "Then get_cloud_sync_status({ appId }) to confirm sync state (user can also tap Check status). " +
+    "Skip if the user asked for local-only work or you already pushed this app in this turn."
+  );
+}
 
 const APP_SOURCE_EDIT_REMINDER =
   "Edit mini-app source via read_app_file + write_file (create/overwrite) or edit_file / edit_app_file_lines (patches). " +
@@ -1125,6 +1145,10 @@ export const createJobTool = createTool({
       linkedAppIds,
       writeDbIds,
     );
+    const hardcodedDbIdReminder = buildHardcodedRegistryDbIdReminder(
+      args.command,
+      writeDbIds,
+    );
     const bashFirstReminder = shouldSuggestBashInstead(args)
       ? BASH_FIRST_REMINDER
       : undefined;
@@ -1157,6 +1181,9 @@ export const createJobTool = createTool({
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
+      ...(hardcodedDbIdReminder
+        ? { _hardcodedDbIdReminder: hardcodedDbIdReminder }
+        : {}),
       ...(bashFirstReminder ? { _bashFirstReminder: bashFirstReminder } : {}),
       ...(platformCdpReminder ? { _platformCdpReminder: platformCdpReminder } : {}),
       ...(scheduleRiskWarning ? { _scheduleRiskWarning: scheduleRiskWarning } : {}),
@@ -2757,12 +2784,19 @@ Common use cases:
       ? await assessJobScriptPath(job.type, job.command, jobDir)
       : [];
     const scriptPathReminder = buildJobScriptPathReminder(scriptPathIssues);
+    const hardcodedDbIdReminder = buildHardcodedRegistryDbIdReminder(
+      job.command,
+      job.writeDbIds ?? [],
+    );
 
     return {
       success: true,
       data: job,
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(scriptPathReminder ? { _scriptPathReminder: scriptPathReminder } : {}),
+      ...(hardcodedDbIdReminder
+        ? { _hardcodedDbIdReminder: hardcodedDbIdReminder }
+        : {}),
     };
   },
 });
@@ -4259,12 +4293,17 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
       ? ` Preview network: ${runtimeCheck.preview.networkProfile.dbQueryCount} query, ${runtimeCheck.preview.networkProfile.dbBatchCount} batch.`
       : "";
 
+    const cloudSyncReminder = await buildCloudSyncAfterValidationReminder(
+      args.appId,
+    );
+
     return {
       success: true,
       data: {
         valid: true,
         hasWarnings: warningCount > 0,
         filesChecked: result.filesChecked,
+        appId: args.appId,
         message:
           warningCount > 0
             ? `✓ Validation + runtime preview passed with ${warningCount} load/efficiency warning(s).${loadSummary}`
@@ -4289,11 +4328,14 @@ IMPORTANT: Run this after creating/editing app files to catch issues early!`,
         ...(runtimeCheck.preview.previewScreenshot
           ? { previewScreenshot: runtimeCheck.preview.previewScreenshot }
           : {}),
-        nextStep:
-          "Optional: webview_snapshot for visual layout. API/DB: bash+curl localhost:18789.",
+        nextStep: cloudSyncReminder
+          ? "push_cloud_sync({ appId }) when cloud sync is on, then get_cloud_sync_status. Optional: webview_snapshot for layout."
+          : "Optional: webview_snapshot for visual layout. API/DB: bash+curl localhost:18789.",
         _testingGuide:
           "Runtime console is checked automatically. API/DB/job verification: bash+curl — NOT webview_execute.",
+        ...(cloudSyncReminder ? { _cloudSyncReminder: cloudSyncReminder } : {}),
       },
+      ...(cloudSyncReminder ? { _cloudSyncReminder: cloudSyncReminder } : {}),
     };
   },
 });

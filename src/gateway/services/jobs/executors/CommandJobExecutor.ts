@@ -1,4 +1,5 @@
-import { spawn, execSync } from "child_process";
+import { runSetupCommand } from "../../../../core/utils/runSetupCommand.js";
+import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 import type { JobType } from "../types.js";
@@ -47,6 +48,8 @@ export class CommandJobExecutor implements IJobExecutor {
       await this.ensureNodeModules(params);
     }
     // ─────────────────────────────────────────────────────────────────────────
+
+    params.signal?.throwIfAborted();
 
     // Wrap command with venv activation for Python jobs
     let finalCommand =
@@ -136,6 +139,7 @@ export class CommandJobExecutor implements IJobExecutor {
     // lease ourselves — the "error" listener below is never attached.
     let proc: ReturnType<typeof spawn>;
     try {
+      params.signal?.throwIfAborted();
       proc = spawn(shellPath, shellArgs, {
         cwd: params.jobDir,
         env,
@@ -306,19 +310,23 @@ export class CommandJobExecutor implements IJobExecutor {
     if (!existsSync(venvDir)) {
       await params.appendLog("Creating Python virtual environment...");
       try {
-        const pythonCmd = await this.getPythonCommand();
+        const pythonCmd = await this.getPythonCommand(params.signal);
         
         // Check if Python is actually available
-        const testResult = execSync(`${pythonCmd} --version 2>&1`, {
+        const testResult = (await runSetupCommand(`${pythonCmd} --version 2>&1`, {
+          diagnosticName: "python-check",
+          signal: params.signal,
           timeout: 5000,
           encoding: 'utf8',
           env: this.getNvmEnv(),
-        }).trim();
+        })).trim();
         
         await params.appendLog(`Using Python: ${testResult}`);
         
-        execSync(`${pythonCmd} -m venv .venv`, {
+        await runSetupCommand(`${pythonCmd} -m venv .venv`, {
+            diagnosticName: "python-venv",
           cwd: params.jobDir,
+          signal: params.signal,
           timeout: 30_000,
           env: this.getNvmEnv(),
         });
@@ -353,10 +361,12 @@ export class CommandJobExecutor implements IJobExecutor {
         await params.appendLog("Installing Python requirements...");
         try {
           const { pip } = getVenvPaths(venvDir);
-          const pipOutput = execSync(
-            `${pip} install -r requirements.txt 2>&1`,
+          const pipOutput = await runSetupCommand(
+            `"${pip}" install -r requirements.txt 2>&1`,
             {
+              diagnosticName: "pip-install",
               cwd: params.jobDir,
+              signal: params.signal,
               timeout: 120_000, // 2 min timeout for pip
               encoding: "utf8",
               env: this.getNvmEnv(),
@@ -412,8 +422,10 @@ export class CommandJobExecutor implements IJobExecutor {
     if (existsSync(packageJson) && !existsSync(nodeModules)) {
       await params.appendLog("Installing Node dependencies...");
       try {
-        execSync("npm install --production 2>&1", {
+        await runSetupCommand("npm install --production 2>&1", {
+            diagnosticName: "npm-install",
           cwd: params.jobDir,
+          signal: params.signal,
           timeout: 120_000,
           encoding: "utf8",
           env: this.getNvmEnv(),
@@ -446,19 +458,18 @@ export class CommandJobExecutor implements IJobExecutor {
    * - Windows: 'python' (modern installations alias python3 as python)
    * - Unix: 'python3' (explicit version to avoid Python 2)
    */
-  private async getPythonCommand(): Promise<string> {
+  private async getPythonCommand(signal?: AbortSignal): Promise<string> {
     if (process.platform === "win32") {
       // On Windows, check if Python exists, auto-install if missing
       try {
-        const { execSync } = await import('child_process');
         // Try 'python' first (most common)
         try {
-          execSync('python --version', { timeout: 5000, stdio: 'pipe' });
+          await runSetupCommand('python --version', { timeout: 5000, stdio: 'pipe', signal });
           return "python";
         } catch {
           // Try 'py' launcher
           try {
-            execSync('py --version', { timeout: 5000, stdio: 'pipe' });
+            await runSetupCommand('py --version', { timeout: 5000, stdio: 'pipe', signal });
             return "py -3";
           } catch {
             // Python not found - return 'python' and let the error handling deal with it

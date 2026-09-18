@@ -6,6 +6,8 @@
  * Route those reads through TursoReplicaService (same path as DbRouter).
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import { existsSync } from "fs";
 import Database from "better-sqlite3";
 import type { AppDataSource } from "../appDataSources.js";
@@ -73,7 +75,7 @@ function toAppDataSource(input: RegistryDbSchemaReadInput): AppDataSource {
 function readLocalRegistrySchema(dbPath: string): RegistryDbSchemaReadResult {
   let db: Database.Database;
   try {
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = openDiagnosticDatabase(Database, "services/jobs/registryDbSchemaReader", dbPath, { readonly: true, fileMustExist: true });
   } catch (error) {
     if (isSqliteBusyError(error)) {
       return {
@@ -220,7 +222,7 @@ export async function countRowsInRegistryTable(
 
   let db: Database.Database | null = null;
   try {
-    db = new Database(input.dbPath, { readonly: true });
+    db = openDiagnosticDatabase(Database, "services/jobs/registryDbSchemaReader", input.dbPath, { readonly: true });
     const row = db.prepare(sql).get() as { c: number } | undefined;
     return row?.c ?? null;
   } catch {
@@ -270,7 +272,7 @@ export async function queryRegistryDatabase(
 
   let db: Database.Database | null = null;
   try {
-    db = new Database(input.dbPath, { readonly: true });
+    db = openDiagnosticDatabase(Database, "services/jobs/registryDbSchemaReader", input.dbPath, { readonly: true });
     const stmt = db.prepare(sql);
     const rows = (
       params.length > 0 ? stmt.all(...params) : stmt.all()

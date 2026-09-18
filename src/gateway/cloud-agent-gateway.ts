@@ -13,11 +13,9 @@
 import dotenv from "dotenv";
 import { resolve } from "path";
 import express, { type NextFunction, type Request, type Response } from "express";
-import {
-  getCloudAgentGatewayService,
-  newCloudAgentRunId,
-} from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
+import { getCloudAgentGatewayService } from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
 import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
+import { resolveCloudAgentRunId } from "./services/cloudAgentGateway/cloudAgentRunId.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
 import {
   parseAppRepoCommittedPayload,
@@ -71,13 +69,20 @@ function parseCloudAgentRunRequest(
     return { error: "llmAuth must include provider, authType, token" };
   }
 
-  const runId = body.runId ?? newCloudAgentRunId();
+  const jobId = body.jobId as string;
+  const scheduledDueAt = body.scheduledDueAt?.trim() || undefined;
+  const runId = resolveCloudAgentRunId({
+    jobId,
+    runId: body.runId,
+    scheduledDueAt,
+  });
   return {
     orgId: body.orgId as string,
     namespaceId: body.namespaceId,
     userId: body.userId as string,
-    jobId: body.jobId as string,
+    jobId,
     runId,
+    scheduledDueAt,
     provider: body.llmAuth.provider,
     model: body.model,
     runtimeParams: body.runtimeParams,

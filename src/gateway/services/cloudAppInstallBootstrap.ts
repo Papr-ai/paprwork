@@ -3,7 +3,10 @@
  * resolve linked DB paths, apply git migrations locally, optional Turso row pull.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { existsSync, statSync } from "fs";
+import fs from "fs/promises";
 import Database from "better-sqlite3";
 import path from "path";
 import { getPaprAppsRoot, getPaprJobsRoot } from "../../core/utils/paprRoot.js";
@@ -19,6 +22,7 @@ import {
 import type { PullResult } from "./tursoSyncBridgeCore.js";
 import type { SyncSummary } from "./TursoSyncBridge.js";
 import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
+import type { DatabasesRegistryFile } from "./DatabaseRegistryService.js";
 
 function isLocalDbReadable(dbPath: string): boolean {
   try {
@@ -65,7 +69,7 @@ function countUserTables(dbPath: string): number {
   }
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath, { readonly: true });
+    db = openDiagnosticDatabase(Database, "services/cloudAppInstallBootstrap", dbPath, { readonly: true });
     const rows = db
       .prepare(
         `SELECT name FROM sqlite_master
@@ -143,16 +147,35 @@ async function bootstrapLinkedSource(
   source: AppDataSource,
   tursoSummary: SyncSummary | null,
   pullResults: Map<string, PullResult | undefined>,
-  options?: { tursoPullOnly?: boolean; localOnly?: boolean },
+  options?: {
+    tursoPullOnly?: boolean;
+    localOnly?: boolean;
+    paprHome?: string;
+    registry?: DatabasesRegistryFile;
+  },
 ): Promise<LinkedDbBootstrapResult> {
   const warnings: string[] = [];
   const errors: string[] = [];
+
+  const jobsRoot = options?.paprHome
+    ? path.join(options.paprHome, "Jobs")
+    : getPaprJobsRoot();
+  const dataDir = options?.paprHome
+    ? path.join(options.paprHome, "data")
+    : undefined;
+  const registryRecord =
+    source.dbId && options?.registry
+      ? options.registry.databases[source.dbId]
+      : undefined;
 
   const localPath = await resolveLinkedSourceDbPath({
     dbPath: source.dbPath,
     dbId: source.dbId,
     jobId: source.jobId,
-    jobsRoot: getPaprJobsRoot(),
+    jobsRoot,
+    registryLabel: registryRecord?.label ?? source.alias,
+    dataDir,
+    registryRecord,
   });
 
   if (!localPath?.trim()) {
@@ -242,11 +265,35 @@ async function bootstrapLinkedSource(
   };
 }
 
-async function readAppDataSources(appId: string): Promise<AppDataSource[]> {
-  const configPath = path.join(getPaprAppsRoot(), appId, "data-sources.json");
-  const { readFile } = await import("fs/promises");
-  const raw = await readFile(configPath, "utf8");
-  return parseDataSourcesFile(raw).sources;
+async function readAppDataSources(
+  appId: string,
+  paprHome?: string,
+): Promise<AppDataSource[]> {
+  const appsRoot = paprHome
+    ? path.join(paprHome, "apps")
+    : getPaprAppsRoot();
+  const configPath = path.join(appsRoot, appId, "data-sources.json");
+  try {
+    const raw = await fs.readFile(configPath, "utf8");
+    return parseDataSourcesFile(raw).sources;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function readRegistryFromPaprHome(
+  paprHome: string,
+): Promise<DatabasesRegistryFile> {
+  const registryPath = path.join(paprHome, "data", "databases.json");
+  try {
+    const raw = await fs.readFile(registryPath, "utf8");
+    return JSON.parse(raw) as DatabasesRegistryFile;
+  } catch {
+    return { version: 1, databases: {} };
+  }
 }
 
 /** Re-pull publisher Turso for track-mode apps with shared database policy. */
@@ -260,6 +307,11 @@ export interface BootstrapInstalledAppOptions {
   tursoPullOnly?: boolean;
   /** Community fork: apply local migrations only; defer Turso until publish/sync. */
   installDbPolicy?: InstallDbPolicy;
+  /**
+   * Apply pending migrations under this workspace (cross-namespace copy).
+   * Skips Turso sync — target namespace credentials are not active during copy.
+   */
+  paprHome?: string;
 }
 
 function isForkLocalOnlyBootstrap(
@@ -270,16 +322,29 @@ function isForkLocalOnlyBootstrap(
   );
 }
 
+function shouldSkipTursoDuringBootstrap(
+  options?: BootstrapInstalledAppOptions,
+): boolean {
+  return isForkLocalOnlyBootstrap(options) || Boolean(options?.paprHome?.trim());
+}
+
 /** Apply migrations + optional Turso pull for one installed app. */
 export async function bootstrapInstalledAppDatabases(
   appId: string,
   options?: BootstrapInstalledAppOptions,
 ): Promise<InstallBootstrapResult> {
-  const sources = await readAppDataSources(appId);
+  const paprHome = options?.paprHome?.trim();
+  const sources = await readAppDataSources(appId, paprHome);
   const linkedDbs: LinkedDbBootstrapResult[] = [];
   const errors: string[] = [];
   const warnings: string[] = [];
-  const localOnly = isForkLocalOnlyBootstrap(options);
+  const localOnly = shouldSkipTursoDuringBootstrap(options);
+  const registry = paprHome
+    ? await readRegistryFromPaprHome(paprHome)
+    : undefined;
+  const workspaceOpts = paprHome
+    ? { paprHome, registry }
+    : undefined;
 
   if (sources.length === 0) {
     return {
@@ -331,7 +396,7 @@ export async function bootstrapInstalledAppDatabases(
       source,
       tursoSummary,
       pullResults,
-      { ...options, localOnly },
+      { ...options, localOnly, ...workspaceOpts },
     );
     linkedDbs.push(result);
     errors.push(...result.errors);
@@ -345,7 +410,21 @@ export async function bootstrapInstalledAppDatabases(
     ready && linkedDbs.some((db) => db.userTableCount === 0);
 
   if (localOnly) {
-    /* Fork install stays local-first — Turso pairing runs on publish/sync. */
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.attempted > 0) {
+        console.log(
+          `[CloudInstall] Fork portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Fork portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
   } else if (!options?.tursoPullOnly) {
     try {
       const { rebootstrapPendingPortableReplicas } = await import(
@@ -388,6 +467,17 @@ export async function bootstrapInstalledAppDatabases(
     errors,
     warnings,
   };
+}
+
+/** After cross-namespace copy: apply pending migrations in the target workspace. */
+export async function bootstrapCopiedAppDatabasesInWorkspace(
+  appId: string,
+  paprHome: string,
+): Promise<InstallBootstrapResult> {
+  return bootstrapInstalledAppDatabases(appId, {
+    installDbPolicy: "fork_empty",
+    paprHome: path.resolve(paprHome),
+  });
 }
 
 /** Agent prompt when install bootstrap is incomplete or needs manual follow-up. */

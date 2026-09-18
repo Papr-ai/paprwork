@@ -30,12 +30,16 @@ describe("VaultSyncService", () => {
   });
 
   it("has pushAllKeys method that calls /api/cloud/vault/sync", () => {
-    const content = fs.readFileSync(
+    const pushContent = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/vaultSyncBackgroundPush.ts"),
+      "utf-8",
+    );
+    const vaultContent = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async pushAllKeys()");
-    expect(content).toContain("/api/cloud/vault/sync");
+    expect(vaultContent).toContain("async pushAllKeys()");
+    expect(pushContent).toContain("/api/cloud/vault/sync");
   });
 
   it("has pullKeys method that calls /api/cloud/vault/keys", () => {
@@ -131,6 +135,16 @@ describe("VaultSyncService", () => {
     );
     expect(content).toContain('"disabled"');
     expect(content).toContain("No PAPR_API_KEY");
+  });
+
+  it("skips unchanged keys via local fingerprint before HTTP sync", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("filterVaultEntriesNeedingPush");
+    expect(content).toContain("markVaultPushFingerprints");
+    expect(content).toContain("All keys match last push");
   });
 
   it("pulls user-scoped vault keys only (not org/namespace catalogs)", () => {

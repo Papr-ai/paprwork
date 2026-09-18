@@ -1,3 +1,5 @@
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+import { gatewayBackgroundBudget } from "./gatewayBackgroundBudget.js";
 import { promises as fs } from "fs";
 import path from "path";
 import os from "os";
@@ -146,6 +148,7 @@ function logJobsStartupStep(phase: "Init" | "Maintenance", label: string): void 
 export class JobsService {
   private legacyJobsRootDir: string;
   private legacyJobsIndexPath: string;
+  private attemptControllers = new Map<string, AbortController>();
   private jobs: Map<string, JobRecord>;
   private running: Map<string, ChildProcess>;
   /** In-flight agent/subagent runs (not backed by ChildProcess). */
@@ -994,7 +997,7 @@ export class JobsService {
     let clearedPhantom = 0;
     for (const [jobId, job] of this.jobs.entries()) {
       if (job.status !== "running") continue;
-      if (this.running.has(jobId) || this.agentRuns.has(jobId)) continue;
+      if (this.running.has(jobId) || this.agentRuns.has(jobId) || this.attemptControllers.has(jobId)) continue;
       if (await this.clearStaleRunningState(jobId)) clearedPhantom += 1;
     }
     if (clearedPhantom > 0) {
@@ -2001,7 +2004,7 @@ export class JobsService {
     if (extraSql && extraSql.length > 0) {
       let db: Database.Database | null = null;
       try {
-        db = new Database(dbPath);
+        db = openDiagnosticDatabase(Database, "services/JobsService", dbPath);
         for (const sql of extraSql) {
           db.exec(sql);
         }
@@ -2531,6 +2534,7 @@ export class JobsService {
     job: JobRecord,
     runId: string,
     runtimeParams?: Record<string, string>,
+    signal?: AbortSignal,
   ): Promise<{ exitCode: number; errorMessage?: string; lastOutput?: string }> {
     const defaultCommandByType: Record<
       Exclude<JobType, "agent" | "subagent">,
@@ -2594,7 +2598,9 @@ export class JobsService {
 
     const { requestKeyPermission: requestKeyPermissionFromMain } =
       await import("../permissions/PermissionRequester.js");
+    signal?.throwIfAborted();
     const launch = await executor.launch({
+      signal,
       runId,
       job,
       jobDir,
@@ -2753,7 +2759,7 @@ export class JobsService {
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
     }
-    if (this.running.has(jobId)) {
+    if (this.running.has(jobId) || this.attemptControllers.has(jobId)) {
       throw new Error("Job is already running");
     }
     if (stack.has(jobId)) {
@@ -2858,8 +2864,16 @@ export class JobsService {
           lastOutput?: string;
         };
         try {
-          result = await this.runSingleAttempt(job, runId, runtimeParams);
+          const controller = new AbortController();
+          this.attemptControllers.set(job.id, controller);
+          try {
+            result = await gatewayBackgroundBudget.run(`job:${job.id}`, () =>
+              this.runSingleAttempt(job, runId, runtimeParams, controller.signal), controller.signal);
+          } finally {
+            this.attemptControllers.delete(job.id);
+          }
         } catch (err: unknown) {
+          if (this.jobs.get(job.id)?.status === "cancelled") return this.jobs.get(job.id)!;
           const message = err instanceof Error ? err.message : String(err);
           await this.appendLog(job.id, `Execution error: ${message}`);
           this.running.delete(job.id);
@@ -2872,6 +2886,7 @@ export class JobsService {
           this.launchFailures.set(job.id, { runId, error: message });
           result = { exitCode: 1, errorMessage: message };
         }
+        if (this.jobs.get(job.id)?.status === "cancelled") return this.jobs.get(job.id)!;
         const status: JobStatus =
           result.exitCode === 0 ? "completed" : "failed";
 
@@ -3131,7 +3146,7 @@ export class JobsService {
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
     }
-    if (this.running.has(jobId) || this.agentRuns.has(jobId)) {
+    if (this.running.has(jobId) || this.agentRuns.has(jobId) || this.attemptControllers.has(jobId)) {
       throw new Error("Job is already running");
     }
     const architectureIssues = await this.validateJobCandidate(job, jobId);
@@ -3250,7 +3265,7 @@ export class JobsService {
     if (!job || job.status !== "running") {
       return false;
     }
-    if (this.running.has(jobId) || this.agentRuns.has(jobId)) {
+    if (this.running.has(jobId) || this.agentRuns.has(jobId) || this.attemptControllers.has(jobId)) {
       return false;
     }
     await this.appendLog(
@@ -3570,6 +3585,11 @@ export class JobsService {
   }
 
   async stopJob(jobId: string): Promise<JobRecord> {
+    const pending = this.attemptControllers.get(jobId);
+    if (pending) {
+      await this.setJobStatus(jobId, "cancelled", { exitCode: -1 });
+      pending.abort();
+    }
     const proc = this.running.get(jobId);
     if (!proc) {
       const existing = this.jobs.get(jobId);
@@ -3650,6 +3670,7 @@ export class JobsService {
     ];
     const nowMs = Date.now();
     for (const [jobId, job] of this.jobs.entries()) {
+      if (this.attemptControllers.has(jobId) && !this.running.has(jobId)) continue;
       if (job.status !== "running") {
         continue;
       }
@@ -3781,6 +3802,7 @@ export class JobsService {
           currentExecutionId: undefined,
           waitingPermissionKeys: undefined,
         });
+        this.attemptControllers.get(job.id)?.abort();
         stoppedCount += 1;
       } catch (error) {
         console.error(`[JobsService] Failed to stop job ${job.id}:`, error);

@@ -11,7 +11,12 @@ import type {
   CloudAgentRunResponse,
   CloudAgentSessionBeginResponse,
 } from "./types.js";
-import { randomUUID } from "crypto";
+import {
+  beginCloudAgentOneShotStreamDedup,
+  CloudAgentRunDuplicateInFlightError,
+  getCachedCloudAgentRunResult,
+  runWithCloudAgentRunDedup,
+} from "./cloudAgentRunDedup.js";
 
 export class CloudAgentGatewayService {
   async beginAgentSession(
@@ -25,6 +30,12 @@ export class CloudAgentGatewayService {
   }
 
   async runAgentJob(request: CloudAgentRunRequest): Promise<CloudAgentRunResponse> {
+    return runWithCloudAgentRunDedup(request, () => this.executeRunAgentJob(request));
+  }
+
+  private async executeRunAgentJob(
+    request: CloudAgentRunRequest,
+  ): Promise<CloudAgentRunResponse> {
     const chatId = resolveCloudAgentChatId(request);
     try {
       const result = await withCloudAgentRunContext(request, async () => {
@@ -69,7 +80,42 @@ export class CloudAgentGatewayService {
   private async *streamOneShotRun(
     request: CloudAgentRunRequest,
   ): AsyncGenerator<Record<string, unknown>> {
+    const cached = getCachedCloudAgentRunResult(request);
+    if (cached) {
+      console.warn(
+        `[CloudAgentGateway] Duplicate one-shot stream (cached) job=${request.jobId} chatId=${cached.chatId}`,
+      );
+      yield {
+        type: "session-meta",
+        chatId: cached.chatId,
+        provider: request.llmAuth.provider,
+        runtime: "cloud-agent-gateway",
+      };
+      yield { type: "done", exitCode: cached.exitCode, chatId: cached.chatId, deduplicated: true };
+      return;
+    }
+
     const chatId = resolveCloudAgentChatId(request);
+
+    let streamDedup: ReturnType<typeof beginCloudAgentOneShotStreamDedup> | undefined;
+    try {
+      streamDedup = beginCloudAgentOneShotStreamDedup(request);
+    } catch (error) {
+      if (error instanceof CloudAgentRunDuplicateInFlightError) {
+        console.warn(
+          `[CloudAgentGateway] Duplicate one-shot stream job=${request.jobId} runId=${request.runId}`,
+        );
+        yield {
+          type: "error",
+          code: error.code,
+          message: error.message,
+          chatId,
+        };
+        yield { type: "done", exitCode: 0, chatId, deduplicated: true };
+        return;
+      }
+      throw error;
+    }
 
     yield {
       type: "session-meta",
@@ -97,6 +143,12 @@ export class CloudAgentGatewayService {
           syncError = (error as Error).message;
         }
       }
+      streamDedup?.release({
+        exitCode,
+        output: "",
+        chatId,
+        ...(syncError ? { error: syncError } : {}),
+      });
     }
 
     if (syncError) {
@@ -199,6 +251,4 @@ export function getCloudAgentGatewayService(): CloudAgentGatewayService {
   return sharedService;
 }
 
-export function newCloudAgentRunId(): string {
-  return randomUUID().replace(/-/g, "").slice(0, 12);
-}
+export { newCloudAgentRunId } from "./cloudAgentRunId.js";

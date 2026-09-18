@@ -203,7 +203,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const setError = useChatStore((state) => state.setError);
-  const { ensureModel, progress, installing } = useOllama();
+  const { ensureModel, progress, installing } = useOllama({
+    subscribeDownloadProgress: true,
+  });
   const { pickerModels } = useModelPickerSettings();
   const fallbackModel =
     CHAT_MODELS.find((m) => m.id === "gemini-3.8-flash") || CHAT_MODELS[0];
@@ -330,7 +332,9 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     const wasSending = prevIsSendingRef.current;
     prevIsSendingRef.current = isSending;
     if (wasSending && !isSending) {
-      syncHistoryFromServer();
+      queueMicrotask(() => {
+        syncHistoryFromServer();
+      });
     }
   }, [isSending, syncHistoryFromServer]);
 

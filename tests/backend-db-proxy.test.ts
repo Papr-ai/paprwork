@@ -1,6 +1,7 @@
 import express from "express";
 import { describe, expect, it } from "vitest";
 import {
+  createCloudBackendDbProxyRouter,
   createDesktopBackendDbProxyRouter,
   mintBackendDbProxyEnv,
   revokeBackendDbProxyToken,
@@ -134,6 +135,63 @@ describe("backendDbProxy", () => {
       });
       expect(res.status).toBe(401);
     } finally {
+      close();
+    }
+  });
+
+  it("cloud proxy forwards per-request sourceId from body", async () => {
+    const app = express();
+    app.use(express.json());
+    let seenSourceId: string | undefined;
+    app.use(
+      "/internal/backend-db",
+      createCloudBackendDbProxyRouter({
+        query: async (_session, sql, params, sourceId) => {
+          seenSourceId = sourceId;
+          return { rows: [{ sql, params: params ?? [], sourceId }], count: 1 };
+        },
+        write: async () => ({ changes: 0, lastInsertRowid: 0 }),
+      }),
+    );
+    const { baseUrl, close } = await listen(app);
+    const env = mintBackendDbProxyEnv({
+      appId: "app-1",
+      proxyBaseUrl: baseUrl.replace(/\/internal\/backend-db$/, ""),
+      cloud: {
+        runtimeAuth: {
+          orgId: "org",
+          namespaceId: "ns",
+          slug: "slug",
+          appId: "app-1",
+          mode: "owner",
+          canRead: true,
+          canWrite: true,
+        },
+        orgId: "org",
+        namespaceId: "ns",
+        userId: "user",
+        canRead: true,
+        canWrite: true,
+      },
+    });
+
+    try {
+      const res = await fetch(`${baseUrl}/query`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${env.PAPR_DB_PROXY_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sql: "SELECT 1",
+          params: [],
+          sourceId: "sqa",
+        }),
+      });
+      expect(res.status).toBe(200);
+      expect(seenSourceId).toBe("sqa");
+    } finally {
+      revokeBackendDbProxyToken(env.PAPR_DB_PROXY_TOKEN);
       close();
     }
   });

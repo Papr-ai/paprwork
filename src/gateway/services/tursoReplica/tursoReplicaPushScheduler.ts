@@ -349,6 +349,12 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
       }
       clearDirtyTracking(syncKey);
       console.log(`[TursoReplicaPushScheduler] Pushed ${syncKey} (replica)`);
+      if (source.appId) {
+        const { notifyCloudSyncItemsStale } = await import(
+          "../cloudSync/cloudSyncBroadcast.js"
+        );
+        notifyCloudSyncItemsStale(source.appId);
+      }
       return;
     }
 
