@@ -97,7 +97,12 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
   }
 
   if (stage === "connect") {
-    return <ConnectAIStep onDone={onComplete} />;
+    return (
+      <ConnectAIStep
+        onDone={onComplete}
+        previewMode={Boolean(devPreview)}
+      />
+    );
   }
 
   return (

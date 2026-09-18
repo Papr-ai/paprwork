@@ -68,17 +68,34 @@ export interface TokenGenerationResult {
   requiresInstall?: boolean;
 }
 
+export interface ClaudeCliCheckResult {
+  installed: boolean;
+  version?: string;
+}
+
 export class ClaudeSetupTokenService {
   /**
    * Check if Claude Code CLI is installed
    */
   async isClaudeCLIInstalled(): Promise<boolean> {
+    const check = await this.getClaudeCliCheck();
+    return check.installed;
+  }
+
+  /** Resolve `claude` on PATH and read its reported version when available. */
+  async getClaudeCliCheck(): Promise<ClaudeCliCheckResult> {
     try {
       const whichCmd = process.platform === "win32" ? "where claude" : "which claude";
       await execAsync(whichCmd, { env: getShellEnv() });
-      return true;
+      try {
+        const { stdout } = await execAsync("claude --version", { env: getShellEnv() });
+        const version = stdout.trim().split(/\r?\n/)[0]?.trim();
+        return version ? { installed: true, version } : { installed: true };
+      } catch {
+        return { installed: true };
+      }
     } catch {
-      return false;
+      return { installed: false };
     }
   }
 

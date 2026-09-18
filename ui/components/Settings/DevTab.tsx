@@ -12,6 +12,7 @@
 
 import { useState } from "react";
 import { AuthFlow, type AuthFlowStage } from "../Auth/AuthFlow";
+import { ConnectAIStep } from "../Auth/ConnectAIStep";
 import type { OrgNamespaceSetupRequest } from "../Auth/OrgNamespaceSetup";
 import {
   getOnboardingState,
@@ -70,7 +71,7 @@ const DEV_STYLES = `
 .dev-tab__chip--on { background: #0080ff; border-color: #0080ff; color: #fff; }
 .dev-tab__chip--danger { border-color: rgba(255,69,58,0.5); color: #ff453a; }
 .dev-preview { position: fixed; inset: 0; z-index: 9000; display: flex;
-  flex-direction: column; background: #1a1a2e; }
+  flex-direction: column; background: #fbfcfe; }
 .dev-preview__bar { display: flex; align-items: center; gap: 12px; flex-shrink: 0;
   padding: 8px 14px; background: #ffb020; color: #1a1a1a; }
 .dev-preview__badge { padding: 2px 7px; border-radius: 4px; background: rgba(0,0,0,0.75);
@@ -91,6 +92,10 @@ const FAKE_ORG_REQUEST: OrgNamespaceSetupRequest = {
   needsNamespace: true,
 };
 
+type DevAuthPreview =
+  | { kind: "flow"; stage: AuthFlowStage }
+  | { kind: "claude-setup" };
+
 const STAGES: Array<{ id: AuthFlowStage; label: string; note: string }> = [
   {
     id: "signin",
@@ -109,6 +114,8 @@ const STAGES: Array<{ id: AuthFlowStage; label: string; note: string }> = [
   },
 ];
 
+const CLAUDE_SETUP_PREVIEW: DevAuthPreview = { kind: "claude-setup" };
+
 const PHASES: OnboardingPhase[] = [
   "welcome",
   "connect_model",
@@ -119,7 +126,7 @@ const PHASES: OnboardingPhase[] = [
 ];
 
 export function DevTab() {
-  const [preview, setPreview] = useState<AuthFlowStage | null>(null);
+  const [preview, setPreview] = useState<DevAuthPreview | null>(null);
   const [phase, setPhase] = useState(() => getOnboardingState().phase);
 
   const applyPhase = (next: OnboardingPhase) => {
@@ -129,14 +136,17 @@ export function DevTab() {
   };
 
   if (preview) {
+    const previewLabel =
+      preview.kind === "claude-setup"
+        ? "Claude guided setup (recover / stepper)"
+        : `AuthFlow — starting at "${preview.stage}"`;
+
     return (
       <div className="dev-preview">
         <style>{DEV_STYLES}</style>
         <div className="dev-preview__bar">
           <span className="dev-preview__badge">DEV PREVIEW</span>
-          <span className="dev-preview__label">
-            AuthFlow — starting at &ldquo;{preview}&rdquo;
-          </span>
+          <span className="dev-preview__label">{previewLabel}</span>
           <button
             type="button"
             className="dev-preview__exit"
@@ -146,10 +156,21 @@ export function DevTab() {
           </button>
         </div>
         <div className="dev-preview__stage">
-          <AuthFlow
-            onComplete={() => setPreview(null)}
-            devPreview={{ initialStage: preview, orgRequest: FAKE_ORG_REQUEST }}
-          />
+          {preview.kind === "claude-setup" ? (
+            <ConnectAIStep
+              onDone={() => setPreview(null)}
+              previewMode
+              devForceClaudeRecover
+            />
+          ) : (
+            <AuthFlow
+              onComplete={() => setPreview(null)}
+              devPreview={{
+                initialStage: preview.stage,
+                orgRequest: FAKE_ORG_REQUEST,
+              }}
+            />
+          )}
         </div>
       </div>
     );
@@ -224,12 +245,29 @@ export function DevTab() {
             <button
               type="button"
               className="dev-tab__btn"
-              onClick={() => setPreview(stage.id)}
+              onClick={() => setPreview({ kind: "flow", stage: stage.id })}
             >
               Launch
             </button>
           </div>
         ))}
+        <div className="dev-tab__row">
+          <div className="dev-tab__row-text">
+            <span className="dev-tab__row-label">4 — Claude guided setup</span>
+            <span className="dev-tab__row-note">
+              Opens the step-by-step &ldquo;Let&apos;s set up Claude together&rdquo;
+              flow directly. Stays on screen when Claude is already connected; Run
+              check / Install for me use real IPC.
+            </span>
+          </div>
+          <button
+            type="button"
+            className="dev-tab__btn"
+            onClick={() => setPreview(CLAUDE_SETUP_PREVIEW)}
+          >
+            Launch
+          </button>
+        </div>
       </div>
 
       <h3 className="dev-tab__heading">Onboarding phase</h3>
