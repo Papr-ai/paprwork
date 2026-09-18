@@ -4,7 +4,8 @@ After rebuilding and restarting the gateway, inspect
 `GET /api/debug/gateway-performance` on its existing local HTTP address.
 
 **Timeline UI (Temporal-style):** open
-`http://127.0.0.1:18789/api/debug/gateway-performance/view` in a browser while
+In **dev**, open **Settings → Dev → Gateway performance → Open in browser** (or
+paste the URL below). In a browser while
 the gateway is running. It polls the JSON API every 3s, plots operation lanes
 (queue vs run, parallel stacks), and lists slow event-loop sample windows with
 **active at sample** vs **overlapping** operations.

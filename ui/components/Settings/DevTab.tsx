@@ -19,6 +19,22 @@ import {
   transitionTo,
   type OnboardingPhase,
 } from "../../utils/onboardingState";
+import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
+
+const GATEWAY_PERF_VIEW_PATH = "/api/debug/gateway-performance/view";
+const GATEWAY_PERF_JSON_PATH = "/api/debug/gateway-performance";
+
+function gatewayPerfViewUrl(): string {
+  return `${getGatewayHttpBase()}${GATEWAY_PERF_VIEW_PATH}`;
+}
+
+async function openInSystemBrowser(url: string): Promise<void> {
+  if (window.electronAPI?.system?.invoke) {
+    await window.electronAPI.system.invoke("shell.openExternal", url);
+    return;
+  }
+  window.open(url, "_blank", "noopener,noreferrer");
+}
 
 /**
  * Styles are inlined rather than kept in DevTab.css on purpose. A side-effect
@@ -89,7 +105,7 @@ const STAGES: Array<{ id: AuthFlowStage; label: string; note: string }> = [
   {
     id: "connect",
     label: "3 — Connect AI",
-    note: "Real OAuth. Clicking a provider genuinely connects it to this machine.",
+    note: "Real OAuth if you click a provider. Preview stays open even when you're already connected.",
   },
 ];
 
@@ -146,6 +162,52 @@ export function DevTab() {
       <p className="settings-section__description">
         Local-only tools. This tab is compiled out of packaged builds.
       </p>
+
+      <h3 className="dev-tab__heading">Gateway performance</h3>
+      <p className="dev-tab__hint">
+        Live timeline of event-loop lag, agent concurrency, background tasks, and
+        recent operations. Served by the local gateway (same process as sync and
+        chat).
+      </p>
+      <div className="dev-tab__rows">
+        <div className="dev-tab__row">
+          <div className="dev-tab__row-text">
+            <span className="dev-tab__row-label">Performance timeline</span>
+            <span className="dev-tab__row-note">
+              <code>{gatewayPerfViewUrl()}</code>
+            </span>
+          </div>
+          <button
+            type="button"
+            className="dev-tab__btn"
+            onClick={() => void openInSystemBrowser(gatewayPerfViewUrl())}
+          >
+            Open in browser
+          </button>
+        </div>
+        <div className="dev-tab__row">
+          <div className="dev-tab__row-text">
+            <span className="dev-tab__row-label">Raw JSON snapshot</span>
+            <span className="dev-tab__row-note">
+              <code>
+                {getGatewayHttpBase()}
+                {GATEWAY_PERF_JSON_PATH}
+              </code>
+            </span>
+          </div>
+          <button
+            type="button"
+            className="dev-tab__btn"
+            onClick={() =>
+              void openInSystemBrowser(
+                `${getGatewayHttpBase()}${GATEWAY_PERF_JSON_PATH}`,
+              )
+            }
+          >
+            Open JSON
+          </button>
+        </div>
+      </div>
 
       <h3 className="dev-tab__heading">Pre-auth flow</h3>
       <p className="dev-tab__hint">
