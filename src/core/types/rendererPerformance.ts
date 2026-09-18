@@ -19,10 +19,20 @@ export interface RendererAppSample {
   gate: PreviewGateReport | null;
 }
 
+/** Bounded Task Attribution Timing fields (Chromium long-task API). No script bodies. */
+export interface RendererLongTaskAttribution {
+  name?: string;
+  containerType?: string;
+  containerSrc?: string;
+  containerId?: string;
+}
+
 export interface RendererIncident {
   kind: "long-task" | "input-delay" | "timer-delay";
   startedAt: string;
   durationMs: number;
+  /** Present when the browser exposes PerformanceLongTaskTiming.attribution. */
+  attribution?: RendererLongTaskAttribution[];
 }
 
 export interface RendererPerformanceSample {

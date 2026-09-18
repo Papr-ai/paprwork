@@ -2,6 +2,7 @@ import type {
   RendererPerformanceSample,
   RendererAppSample,
   RendererIncident,
+  RendererLongTaskAttribution,
 } from "../../core/types/rendererPerformance.js";
 
 const MAX_SAMPLES = 120;
@@ -16,6 +17,31 @@ const id = (v: unknown): v is string =>
   typeof v === "string" && /^[\w-]{1,100}$/.test(v);
 const date = (v: unknown): v is string =>
   typeof v === "string" && v.length < 40 && Number.isFinite(Date.parse(v));
+const short = (v: unknown, max: number): v is string =>
+  typeof v === "string" && v.length <= max;
+
+function parseAttribution(value: unknown): RendererLongTaskAttribution[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 5) return undefined;
+  const out: RendererLongTaskAttribution[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") return undefined;
+    const a = item as RendererLongTaskAttribution;
+    if (
+      (a.name !== undefined && !short(a.name, 120)) ||
+      (a.containerType !== undefined && !short(a.containerType, 40)) ||
+      (a.containerSrc !== undefined && !short(a.containerSrc, 200)) ||
+      (a.containerId !== undefined && !short(a.containerId, 80))
+    )
+      return undefined;
+    const parsed: RendererLongTaskAttribution = {};
+    if (a.name !== undefined) parsed.name = a.name;
+    if (a.containerType !== undefined) parsed.containerType = a.containerType;
+    if (a.containerSrc !== undefined) parsed.containerSrc = a.containerSrc;
+    if (a.containerId !== undefined) parsed.containerId = a.containerId;
+    if (Object.keys(parsed).length) out.push(parsed);
+  }
+  return out.length ? out : undefined;
+}
 
 /** Whitelist fields; never retain URLs, text, arbitrary objects or script names. */
 export function parseRendererSample(
@@ -94,10 +120,15 @@ export function parseRendererSample(
       !num(i.durationMs)
     )
       return null;
+    const attribution =
+      i.kind === "long-task" ? parseAttribution(i.attribution) : undefined;
+    if (i.attribution !== undefined && i.kind === "long-task" && !attribution)
+      return null;
     incidents.push({
       kind: i.kind,
       startedAt: i.startedAt,
       durationMs: i.durationMs,
+      ...(attribution ? { attribution } : {}),
     });
   }
   return {

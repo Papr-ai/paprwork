@@ -381,13 +381,19 @@ export class ClaudeSetupTokenService {
    * token the copy cannot be renewed, and without the real expiry nothing
    * knows when to try.
    */
-  async readCredentialsFromCLIStorage(): Promise<ClaudeCliCredentials | null> {
+  async readCredentialsFromCLIStorage(options?: {
+    /** Log Keychain/file probe attempts (connect & repair flows). Off by default. */
+    logProbe?: boolean;
+  }): Promise<ClaudeCliCredentials | null> {
+    const logProbe = options?.logProbe === true;
     try {
       // Try platform-specific credential storage first
       if (process.platform === "darwin") {
         // macOS: Try Keychain
         try {
-          console.log("[ClaudeSetupToken] Trying to read from macOS Keychain...");
+          if (logProbe) {
+            console.log("[ClaudeSetupToken] Trying to read from macOS Keychain...");
+          }
           const { exec: execCallback } = await import("child_process");
           const { promisify } = await import("util");
           const exec = promisify(execCallback);
@@ -412,9 +418,14 @@ export class ClaudeSetupTokenService {
             return credentials;
           }
         } catch (keychainError) {
-          console.log("[ClaudeSetupToken] Could not read from Keychain:", (keychainError as Error).message);
+          if (logProbe) {
+            console.log(
+              "[ClaudeSetupToken] Could not read from Keychain:",
+              (keychainError as Error).message,
+            );
+          }
         }
-      } else if (process.platform === "win32") {
+      } else if (process.platform === "win32" && logProbe) {
         // Windows: Skip Credential Manager for now (complex), go straight to file
         console.log("[ClaudeSetupToken] Windows: Checking file-based storage...");
       }
@@ -436,7 +447,12 @@ export class ClaudeSetupTokenService {
           return credentials;
         }
       } catch (fileError) {
-        console.log("[ClaudeSetupToken] Could not read from ~/.claude/.credentials.json:", (fileError as Error).message);
+        if (logProbe) {
+          console.log(
+            "[ClaudeSetupToken] Could not read from ~/.claude/.credentials.json:",
+            (fileError as Error).message,
+          );
+        }
       }
 
       // Try ~/.claude.json as last resort
@@ -450,7 +466,12 @@ export class ClaudeSetupTokenService {
           return credentials;
         }
       } catch (jsonError) {
-        console.log("[ClaudeSetupToken] Could not read from ~/.claude.json:", (jsonError as Error).message);
+        if (logProbe) {
+          console.log(
+            "[ClaudeSetupToken] Could not read from ~/.claude.json:",
+            (jsonError as Error).message,
+          );
+        }
       }
 
       return null;

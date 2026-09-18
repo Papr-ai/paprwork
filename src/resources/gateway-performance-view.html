@@ -61,7 +61,13 @@ function data(payload){
  for(const c of db?.connections||[])for(const o of c.operations)addDb(c,o);
  for(const session of payload.renderer?.sessions||[])for(const sample of session.samples||[])for(const [index,incident] of (sample.incidents||[]).entries()){
   const id="renderer:"+session.sessionId+":"+sample.sequence+":"+index;
-  ops.set(id,{id,kind:"renderer",name:incident.kind,queuedAt:incident.startedAt,startedAt:incident.startedAt,finishedAt:new Date(ms(incident.startedAt)+incident.durationMs).toISOString(),durationMs:incident.durationMs,status:"completed"});
+  ops.set(id,{id,kind:"renderer",name:incident.kind,queuedAt:incident.startedAt,startedAt:incident.startedAt,finishedAt:new Date(ms(incident.startedAt)+incident.durationMs).toISOString(),durationMs:incident.durationMs,status:"completed",attribution:incident.attribution});
+ }
+ const bb=payload.backgroundBudget;
+ if(bb?.queued?.length)for(const [index,q] of bb.queued.entries()){
+  const id="bg-queue:"+index+":"+q.label;
+  const queuedAt=new Date(ms(payload.capturedAt)-q.waitingMs).toISOString();
+  ops.set(id,{id,kind:"background",name:"budget queue · "+q.label,queuedAt,startedAt:null,finishedAt:null,status:"queued",queueMs:q.waitingMs,blockReason:q.blockReason,blockingActive:q.blockingActive,budgetQueue:true});
  }
  const markers=(payload.timeline?.healthEvents||[]).map(e=>({...e,type:"health",color:e.status==="failed"?"#ff647c":"#59dcad",name:e.status==="failed"?"Health check failed":"Health check recovered"}));
  for(const stall of snapshot?.stalls||[])markers.push({id:"stall:"+stall.detectedAt,timestamp:stall.detectedAt,type:"stall",name:"Watchdog heartbeat missing",color:"#ffbc66",reason:"Independent watchdog detected a missing heartbeat; this is separate from an HTTP health-check failure.",...stall});
@@ -76,7 +82,18 @@ function detail(){
  if(selected.type==="operation"){
  pair("Type / status",(types[o.kind]?.[0]||o.kind)+" · "+o.status);pair("Queued / created",clock(o.queuedAt));pair("Started",o.startedAt?clock(o.startedAt):"Not yet started");pair("Finished",o.finishedAt?clock(o.finishedAt):"Still in progress at capture");pair("Elapsed",fmtMs(ms(o.finishedAt||lastPayload.capturedAt)-ms(o.queuedAt)));pair("Time waiting",fmtMs(o.queueMs));pair("First response",fmtMs(o.firstResponseMs));pair("Longest stream gap",fmtMs(o.longestStreamGapMs));pair("Chat",o.chatId);pair("Provider / model",[o.provider,o.model].filter(Boolean).join(" / ")||null);pair("Database",o.databasePath);pair("Connection",o.connectionId);pair("Process / thread",o.pid!=null?o.pid+" / "+o.threadId:null);pair("Transaction",o.transaction);pair("Error category",o.errorType);
  const parent=data(lastPayload).ops.find(p=>p.id===(o.parentId||o.turnId));pair("Recorded parent",parent?.name||o.parentId||o.turnId||"No parent recorded");if(parent){const b=el("button","Inspect parent →");b.onclick=()=>select(parent);dl.append(b);}
- pair("Waiting on",o.waits?.length||o.queueMs>1?"Recorded scheduling wait (see operation name). The specific blocking operation was not recorded.":"No explicit queue wait recorded. Running spans can include I/O waits.");pair("Operation ID",o.id);
+ if(o.kind==="renderer"&&o.attribution?.length){dl.append(el("dt","Long-task attribution"));for(const [i,a] of o.attribution.entries()){const parts=[a.containerType,a.name,a.containerId].filter(Boolean).join(" · ")||"attribution "+(i+1);dl.append(el("dd",parts+(a.containerSrc?" · "+a.containerSrc:"")));}}
+ const bb=lastPayload?.backgroundBudget;
+ if(o.budgetQueue||((o.kind==="background"||o.kind==="indexing")&&o.queueMs>1)){
+  const qMatch=bb?.queued?.find(q=>o.name?.includes(q.label));
+  pair("Budget admission",qMatch?.blockReason||o.blockReason||"queued");
+  const blockers=(qMatch?.blockingActive||o.blockingActive||[]).join(", ")||null;
+  pair("Blocked by active work",blockers);
+  if(bb)pair("Budget snapshot","max "+bb.maxConcurrent+" concurrent · interactive busy: "+(bb.interactiveBusy?"yes":"no")+(bb.graceMs!=null?" · grace "+fmtMs(bb.graceMs):""));
+ }else{
+  pair("Waiting on",o.waits?.length||o.queueMs>1?"Recorded scheduling wait (see operation name). The specific blocking operation was not recorded.":"No explicit queue wait recorded. Running spans can include I/O waits.");
+ }
+ pair("Operation ID",o.id);
  }else if(selected.type==="sample") {pair("Window",clock(o.startedAt)+" – "+clock(o.finishedAt));pair("Maximum event-loop lag",fmtMs(o.eventLoop?.maxMs));pair("CPU (one core)",o.cpuPercentOfOneCore?.toFixed(1)+"%");pair("Interpretation","This bar covers the measurement window, not the precise instant the lag occurred.");}
  else {pair("Observed",clock(o.timestamp));pair("Source",o.type==="health"?"Electron supervisor":"Independent watchdog");pair("Details",o.reason);const overlaps=data(lastPayload).ops.filter(p=>ms(p.queuedAt)<=ms(o.timestamp)&&ms(p.finishedAt||lastPayload.capturedAt)>=ms(o.timestamp));pair("In flight at this moment",overlaps.length+" recorded operations");for(const p of overlaps){const b=el("button",p.name);b.style.cssText="display:block;margin:8px 0;width:100%;text-align:left";b.onclick=()=>select(p);dl.append(b);}pair("Interpretation","Temporal overlap does not prove which operation caused a stall.");}
  panel.append(dl);
@@ -92,6 +109,15 @@ function renderTimeline(){
  function segment(track,a,b,color,title,click,extra=""){const button=el("button",null,"bar "+extra);const left=pct(a);button.style.left=left+"%";button.style.width=Math.max(0,pct(b)-left)+"%";if(color)button.style.backgroundColor=color;button.title=title;button.setAttribute("aria-label",title);button.onclick=click;track.append(button);return button;}
  const health=row("Health & watchdog");for(const m of d.markers)segment(health.track,m.timestamp,m.timestamp,m.color,m.name+" · "+clock(m.timestamp),()=>select(m,"marker"));
  const lag=row("Event-loop lag · sample window");for(const s of d.samples){const b=segment(lag.track,s.startedAt,s.finishedAt,"#f0788b","Event-loop max "+fmtMs(s.eventLoop?.maxMs),()=>select(s,"sample"));b.style.height=Math.max(3,Math.min(23,(s.eventLoop?.maxMs||0)/1000*5))+"px";b.style.top="auto";b.style.bottom="4px";b.style.opacity=s.eventLoop?.maxMs>=500?".85":".25";}
+ const bbSnap=lastPayload.backgroundBudget;
+ if(bbSnap?.queued?.length){
+  const bq=row("Background budget queue","Tasks waiting for gatewayBackgroundBudget admission");
+  for(const q of bbSnap.queued){
+   const op=d.ops.find(o=>o.budgetQueue&&o.name?.includes(q.label));
+   const queuedAt=new Date(ms(lastPayload.capturedAt)-q.waitingMs).toISOString();
+   segment(bq.track,queuedAt,lastPayload.capturedAt,"#8490a5",q.label+" · "+q.blockReason+" · "+fmtMs(q.waitingMs),()=>op&&select(op));
+  }
+ }
  const focus=selected?.type==="operation"?selected.item:null;
  for(const o of ops){const {r,n,track}=row();n.replaceChildren();const dot=el("i",null,"swatch");dot.style.background=types[o.kind]?.[1]||"#aaa";const name=el("span",o.name),status=el("small",o.status);n.append(dot,name,status);n.title=o.name;n.setAttribute("role","button");n.tabIndex=0;n.onclick=()=>select(o);n.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();select(o);}};
  r.dataset.operationId=o.id;if(focus?.id===o.id)r.classList.add("selected");else if(focus&&((o.parentId||o.turnId)===focus.id||(focus.parentId||focus.turnId)===o.id||((focus.parentId||focus.turnId)&&(o.parentId||o.turnId)===(focus.parentId||focus.turnId))))r.classList.add("related");
@@ -103,7 +129,7 @@ function renderTimeline(){
  }
  if(!ops.length)root.append(el("div","No matching operations in this retained snapshot.","empty"));
  const overlay=el("div",null,"markers");for(const m of d.markers){const line=el("div",null,"marker");line.style.left=pct(m.timestamp)+"%";line.style.setProperty("--marker",m.color);const b=el("button");b.title=m.name+" · "+clock(m.timestamp);b.setAttribute("aria-label",b.title);b.onclick=()=>select(m,"marker");line.append(b);overlay.append(line);}root.append(overlay);
- const stats=$("stats");stats.replaceChildren();for(const [value,label] of [[ops.length+" / "+d.ops.length,"Visible operations"],[d.ops.filter(o=>!o.finishedAt).length,"In flight"],[d.markers.filter(m=>m.type==="health"&&m.status==="failed").length,"Health failures"],[fmtMs(Math.max(0,...d.samples.map(s=>s.eventLoop?.maxMs||0))),"Peak loop lag"]]){const stat=el("div",value,"stat");stat.append(el("small",label));stats.append(stat);}
+ const stats=$("stats");stats.replaceChildren();const bbCount=lastPayload.backgroundBudget?.queued?.length||0;for(const [value,label] of [[ops.length+" / "+d.ops.length,"Visible operations"],[d.ops.filter(o=>!o.finishedAt).length,"In flight"],[bbCount,"Budget queue"],[d.markers.filter(m=>m.type==="health"&&m.status==="failed").length,"Health failures"],[fmtMs(Math.max(0,...d.samples.map(s=>s.eventLoop?.maxMs||0))),"Peak loop lag"]]){const stat=el("div",value,"stat");stat.append(el("small",label));stats.append(stat);}
  $("coverage").textContent=clock(new Date(start).toISOString())+" – "+clock(lastPayload.capturedAt)+" · Retained, instrumented work only; short or uninstrumented work may be absent. Queue hatching shows recorded admission waits. Parent links do not establish a blocking dependency. Health events require the updated desktop supervisor; none recorded does not prove no failures.";
  if(lastPayload.cloudPause) $("coverage").textContent += " Cloud access: " + (lastPayload.cloudPause.paused ? "paused" : "not paused") + (lastPayload.cloudPause.changedAt ? " (changed " + clock(lastPayload.cloudPause.changedAt) + ")" : "");
  detail();

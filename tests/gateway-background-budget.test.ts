@@ -54,3 +54,26 @@ test("diagnostics distinguish queue wait from work and retain failure outcome", 
   expect(JSON.stringify(record)).not.toContain("SECRET");
   resetPerformanceDiagnosticsForTests();
 });
+
+test("stats name blockers and grace vs capacity", async () => {
+  vi.useFakeTimers();
+  let busy = false;
+  const budget = new BackgroundBudget(() => 1, () => busy, () => 1000);
+  const hold = deferred();
+  void budget.run("active-job", () => hold.promise);
+  await Promise.resolve();
+  busy = true;
+  void budget.run("waiting-task", async () => {});
+  await Promise.resolve();
+  let stats = budget.stats();
+  expect(stats.queued).toHaveLength(1);
+  expect(stats.queued[0]?.label).toBe("waiting-task");
+  expect(stats.queued[0]?.blockReason).toBe("grace_period");
+  expect(stats.queued[0]?.blockingActive).toContain("active-job");
+  await vi.advanceTimersByTimeAsync(1000);
+  stats = budget.stats();
+  expect(stats.queued[0]?.blockReason).toBe("interactive_busy");
+  busy = false;
+  hold.resolve();
+  await vi.runAllTimersAsync();
+});

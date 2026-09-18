@@ -1,0 +1,232 @@
+.plan-usage-compact {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.04));
+}
+
+.plan-usage-compact__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.plan-usage-compact__title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.plan-usage-compact__actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.plan-usage-compact__refresh {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+}
+
+.plan-usage-compact__refresh:hover:not(:disabled) {
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.06));
+}
+
+.plan-usage-compact__summary {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-usage-compact__headline {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.plan-usage-compact__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(72px, 1fr));
+  gap: 8px 10px;
+}
+
+.plan-usage-compact__metric {
+  min-width: 0;
+}
+
+.plan-usage-compact__metric--active .plan-usage-compact__metric-label {
+  color: var(--color-text-primary, inherit);
+}
+
+.plan-usage-compact__metric-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+}
+
+.plan-usage-compact__metric-pct {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+
+.plan-usage-bar {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--border-subtle, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+}
+
+.plan-usage-bar--compact {
+  height: 3px;
+}
+
+.plan-usage-bar__fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent, #3b82f6);
+  transition: width 0.2s ease;
+}
+
+.plan-usage-bar__fill--warning {
+  background: #f59e0b;
+}
+
+.plan-usage-bar__fill--critical {
+  background: #ef4444;
+}
+
+.plan-usage-compact__details-btn {
+  margin-top: 10px;
+  padding: 0;
+  border: none;
+  background: none;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--accent, #3b82f6);
+  cursor: pointer;
+  text-align: left;
+}
+
+.plan-usage-compact__details-btn:hover {
+  text-decoration: underline;
+}
+
+.plan-usage-compact__muted {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin: 0;
+}
+
+.plan-usage-compact__error p {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.plan-usage-compact__retry {
+  font-size: 12px;
+}
+
+.plan-usage-modal {
+  width: 440px;
+}
+
+.plan-usage-modal__body {
+  padding: 0 24px 20px;
+}
+
+.plan-usage-modal__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.plan-usage-modal__refresh {
+  font-size: 12px;
+  padding: 6px 12px;
+}
+
+.plan-usage-modal__section {
+  margin-bottom: 16px;
+}
+
+.plan-usage-modal__section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+
+.plan-usage-row {
+  margin-bottom: 14px;
+}
+
+.plan-usage-row__meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.plan-usage-row__label {
+  font-weight: 500;
+}
+
+.plan-usage-row__pct {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.plan-usage-row__reset {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.plan-usage-modal__footnote {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.plan-usage-modal__help {
+  margin-top: 16px;
+  line-height: 1.45;
+}
+
+.plan-usage-modal__help code {
+  font-size: 11px;
+}
+
+.plan-usage-modal__error {
+  font-size: 13px;
+  color: #ef4444;
+  margin: 0 0 12px;
+}
+
+.plan-usage-compact__error .plan-usage-compact__details-btn {
+  margin-top: 4px;
+  margin-bottom: 8px;
+}
