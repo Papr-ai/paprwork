@@ -12,6 +12,7 @@ import type {
   StreamingState,
   SequenceItem,
   StreamRecoveryReason,
+  LastTurnOutcome,
   MessageAttachment,
 } from "../types/chat";
 import type { MemoryAudience } from "../constants/memoryScope";
@@ -82,6 +83,10 @@ interface ChatStore {
     needs: boolean,
     reason?: StreamRecoveryReason,
     detail?: string,
+  ) => void;
+  setLastTurnOutcome: (
+    chatId: string,
+    outcome: LastTurnOutcome | undefined,
   ) => void;
   setError: (error: string | null) => void;
 
@@ -157,6 +162,29 @@ export const defaultChatState: ChatState = {
   hasMoreMessages: true, // Assume there might be more until we know otherwise
   isLoadingMore: false,
 };
+
+/**
+ * Names the call site that drops a provider-refusal banner.
+ *
+ * That banner is the only per-chat record of a refused turn, and two actions
+ * clear it as a side effect rather than as their stated purpose — so when it
+ * disappears there is nothing in the log saying which one did it, and the
+ * clearing call has to be guessed at from the surrounding chunk order. Logged
+ * only for a refusal, which happens at most once a turn, so the ordinary
+ * connection banner costs nothing.
+ */
+function warnIfRefusalBannerCleared(
+  chatId: string,
+  previous: ChatState,
+  clearedBy: string,
+): void {
+  if (!previous.needsStreamRecovery) return;
+  if (previous.streamRecoveryReason !== "rateLimit") return;
+  console.warn(
+    `[chatStore] Refusal banner cleared for ${chatId} by ${clearedBy}`,
+    new Error("refusal banner cleared").stack,
+  );
+}
 
 export const useChatStore = create<ChatStore>((set, get) => ({
   // Initial state
@@ -519,10 +547,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       return { chatStates: newChatStates };
     }),
 
+  // NOTE: unpausing clears `needsStreamRecovery` (and with it the reason and
+  // the provider's message, via setNeedsStreamRecovery's own reset). A caller
+  // that needs to decide whether a banner survives must therefore read the
+  // state BEFORE calling this, not after — reading after always sees false.
   setConnectionPaused: (chatId, paused) =>
     set((state) => {
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
+
+      if (!paused) {
+        warnIfRefusalBannerCleared(chatId, chatState, "setConnectionPaused");
+      }
 
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {
@@ -553,6 +589,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const chatState = state.chatStates.get(chatId);
       if (!chatState) return state;
 
+      if (!needs) {
+        warnIfRefusalBannerCleared(chatId, chatState, "setNeedsStreamRecovery");
+      }
+
       const newChatStates = new Map(state.chatStates);
       newChatStates.set(chatId, {
         ...chatState,
@@ -568,6 +608,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
               streamRecoveryDetail: undefined,
             }),
       });
+
+      return { chatStates: newChatStates };
+    }),
+
+  setLastTurnOutcome: (chatId, outcome) =>
+    set((state) => {
+      const chatState = state.chatStates.get(chatId);
+      if (!chatState) return state;
+      if (chatState.lastTurnOutcome === outcome) return state;
+
+      const newChatStates = new Map(state.chatStates);
+      newChatStates.set(chatId, { ...chatState, lastTurnOutcome: outcome });
 
       return { chatStates: newChatStates };
     }),

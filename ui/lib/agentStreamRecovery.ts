@@ -7,10 +7,17 @@ import type { MutableRefObject } from "react";
 import { useChatStore } from "../stores/chatStore";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import type { StreamChunk } from "../types/core";
-import type { ChatMessage, SequenceItem } from "../types/chat";
+import type {
+  ChatMessage,
+  LastTurnOutcome,
+  SequenceItem,
+  StreamRecoveryReason,
+} from "../types/chat";
 import type { ToolCall } from "../types/core";
 import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
+import { recoveryBannerSurvivesStreamEnd } from "./streamRecoveryPersistence";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -622,6 +629,10 @@ export function untrackActiveStream(chatId: string): void {
   appliedChunkCounts.delete(chatId);
   clearResumeRetry(chatId);
   cancelSubscribeHandler(chatId);
+  // Single disarm point for every path that retires a stream (done, error,
+  // user stop, supersede). Disarming at each of the dozen call sites would
+  // leave a timer armed the first time a new one is added.
+  disarmFirstChunkWatchdog(chatId);
 }
 
 export function clearResumeRetry(chatId: string): void {
@@ -700,8 +711,23 @@ async function clearStaleConnectionPaused(): Promise<void> {
       }
     }
 
-    // Clear needsStreamRecovery if nothing to recover
-    if (state.needsStreamRecovery && isStale) {
+    // Clear needsStreamRecovery if nothing to recover.
+    //
+    // `isStale` means "no stream is in flight on the client", which is not the
+    // same as "nothing to recover": a provider refusal retires its stream and
+    // then raises this banner, so the banner's whole existence presupposes a
+    // stale chat. A reconnect also says nothing about whether the account's
+    // quota cleared, and `shouldAutoRetryStreamRecoveryAfterReconnect` already
+    // declines to retry a rate-limit banner — so sweeping it here would leave
+    // the user with neither an explanation nor an automatic retry.
+    if (
+      state.needsStreamRecovery &&
+      isStale &&
+      !recoveryBannerSurvivesStreamEnd({
+        needsStreamRecovery: state.needsStreamRecovery,
+        reason: state.streamRecoveryReason,
+      })
+    ) {
       store.setNeedsStreamRecovery(chatId, false);
     }
   }
@@ -939,6 +965,7 @@ export type AutoContinueBlockReason =
   | "gatewayNotReady"
   | "resumingStream"
   | "turnComplete"
+  | "providerRefused"
   | "userStopped"
   | "awaitingStreamResubscribe"
   | "maxAttempts";
@@ -950,11 +977,26 @@ export function getAutoContinueBlockReason(args: {
   isSending: boolean;
   connectionPaused: boolean;
   needsStreamRecovery: boolean;
+  streamRecoveryReason?: StreamRecoveryReason;
+  lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
 }): AutoContinueBlockReason | null {
   if (args.isSending) return "isSending";
-  if (!args.gatewayReady) return "gatewayNotReady";
   if (isResumingStream(args.chatId)) return "resumingStream";
+
+  // Above the turn-state tests, because a refusal produces no assistant message
+  // at all: `assistantMessageWasStopped` below has nothing to inspect, and the
+  // turn reads as merely interrupted. Retrying it sends another full context at
+  // an account the provider has already told us is at its ceiling.
+  if (args.lastTurnOutcome === "providerRefused") return "providerRefused";
+  if (args.lastTurnOutcome === "userStopped") return "userStopped";
+
+  // The rule `shouldAutoRetryStreamRecoveryAfterReconnect` has always applied,
+  // kept here as well because a live rate-limit banner is sufficient evidence
+  // on its own — `lastTurnOutcome` is set at the raise sites and this is not.
+  if (args.needsStreamRecovery && args.streamRecoveryReason === "rateLimit") {
+    return "providerRefused";
+  }
 
   const lastAssistant = [...args.messages]
     .reverse()
@@ -971,6 +1013,12 @@ export function getAutoContinueBlockReason(args: {
   } else if (assistantMessageWasStopped(lastAssistant)) {
     return "userStopped";
   }
+
+  // Deliberately below the turn-state checks. Whether auto-continue runs is
+  // unaffected by the order — only which reason is reported when several apply
+  // — and a finished turn is finished whether or not the gateway is ready.
+  // Reporting readiness for it sent people looking at a healthy gateway.
+  if (!args.gatewayReady) return "gatewayNotReady";
 
   if (args.connectionPaused && activeStreamRequests.has(args.chatId)) {
     return "awaitingStreamResubscribe";
@@ -993,6 +1041,8 @@ export function shouldAutoContinueInterruptedTurn(args: {
   isSending: boolean;
   connectionPaused: boolean;
   needsStreamRecovery: boolean;
+  streamRecoveryReason?: StreamRecoveryReason;
+  lastTurnOutcome?: LastTurnOutcome;
   gatewayReady: boolean;
 }): boolean {
   return getAutoContinueBlockReason(args) === null;

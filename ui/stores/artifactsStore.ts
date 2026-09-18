@@ -39,6 +39,13 @@ export interface Artifact {
   favorite?: boolean;
   /** Lifecycle status (apps only). Undefined = "active". */
   status?: "draft" | "active" | "archived";
+  /**
+   * Archived flag (documents only). Kept separate from `status` on purpose:
+   * an app has a three-state lifecycle (draft/active/archived), a document
+   * has a binary one. Folding documents into `status` would invent
+   * "draft"/"active" document states that nothing can produce.
+   */
+  archived?: boolean;
   /** ISO timestamp of the last time the user opened this app. */
   lastOpenedAt?: string;
   /** Total number of times the user has opened this app. */

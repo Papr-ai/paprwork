@@ -2,7 +2,13 @@
  * DocumentCard - Document card with Liquid Glass orb icon (mirrors AppCard)
  */
 
-import React, { useState, useRef, useCallback, useMemo } from "react";
+import React, {
+  useState,
+  useRef,
+  useCallback,
+  useMemo,
+  useEffect,
+} from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import { markdownPreviewText } from "../../../src/core/utils/markdownPreview";
 import "./DocumentCard.css";
@@ -14,6 +20,8 @@ interface DocumentCardProps {
   onToggleFavorite: () => void;
   onOpen: () => void;
   onRename?: (newTitle: string) => void;
+  /** Omit to hide the archive action (e.g. surfaces that cannot restore). */
+  onArchive?: (archived: boolean) => void;
 }
 
 export function DocumentCard({
@@ -23,11 +31,25 @@ export function DocumentCard({
   onToggleFavorite,
   onOpen,
   onRename,
+  onArchive,
 }: DocumentCardProps) {
   const [isHovered, setIsHovered] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(artifact.title);
+  const [menuOpen, setMenuOpen] = useState(false);
   const titleInputRef = useRef<HTMLInputElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const isArchived = artifact.archived === true;
+
+  // Same dismissal contract as AppCard: any mousedown outside closes the menu.
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeMenu = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    };
+    document.addEventListener("mousedown", closeMenu);
+    return () => document.removeEventListener("mousedown", closeMenu);
+  }, [menuOpen]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
@@ -141,7 +163,7 @@ export function DocumentCard({
 
   return (
     <div
-      className={`document-card ${featured ? "document-card--featured" : ""}`}
+      className={`document-card ${featured ? "document-card--featured" : ""} ${isArchived ? "document-card--archived" : ""}`}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       onClick={onOpen}
@@ -182,6 +204,12 @@ export function DocumentCard({
           <p className="document-card__preview-text">{previewText}</p>
         )}
         <div className="document-card__meta">
+          {isArchived && (
+            <>
+              <span className="document-card__badge">Archived</span>
+              <span className="document-card__meta-divider">•</span>
+            </>
+          )}
           <span className="document-card__date">{formatDate(artifact.updatedAt)}</span>
           {artifact.wordCount !== undefined && artifact.wordCount > 0 && (
             <>
@@ -196,7 +224,7 @@ export function DocumentCard({
 
       {/* Actions */}
       <div
-        className={`document-card__actions ${isHovered ? "document-card__actions--visible" : ""}`}
+        className={`document-card__actions ${isHovered || menuOpen ? "document-card__actions--visible" : ""}`}
       >
         <button
           className={`document-card__action ${artifact.favorite ? "document-card__action--favorited" : ""}`}
@@ -221,24 +249,67 @@ export function DocumentCard({
             />
           </svg>
         </button>
-        <button
-          className="document-card__action document-card__action--delete"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          aria-label="Delete"
-        >
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-            <path
-              d="M3 6h18M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2m3 0v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6h14z"
-              stroke="currentColor"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </button>
+        {/*
+          Delete used to sit here as a bare one-click trash icon, directly
+          beside the favourite star — an irreversible action one stray click
+          away from a reversible one.
+
+          It now lives behind the overflow menu together with Archive, which
+          gives the destructive action a deliberate second step and puts the
+          safe alternative next to it at the moment of choosing.
+
+          Archived documents get exactly one status action, named after what
+          the user is undoing ("Unarchive"), for the same reason AppCard does:
+          "Mark as active" is technically correct and nobody reads it as the
+          way back.
+        */}
+        <div className="document-card__menu-wrap" ref={menuRef}>
+          <button
+            className="document-card__action"
+            aria-label={`More actions for ${artifact.title}`}
+            aria-expanded={menuOpen}
+            aria-haspopup="menu"
+            onClick={(e) => {
+              e.stopPropagation();
+              setMenuOpen((open) => !open);
+            }}
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.6" />
+              <circle cx="12" cy="12" r="1.6" />
+              <circle cx="19" cy="12" r="1.6" />
+            </svg>
+          </button>
+          {menuOpen && (
+            <div
+              className="document-card__menu"
+              role="menu"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {onArchive && (
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onArchive(!isArchived);
+                  }}
+                >
+                  {isArchived ? "Unarchive" : "Archive"}
+                </button>
+              )}
+              <button
+                role="menuitem"
+                className="document-card__menu-item--danger"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onDelete();
+                }}
+              >
+                Delete
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

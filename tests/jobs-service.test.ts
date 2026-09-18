@@ -288,3 +288,105 @@ test("queued job stays live during reconciliation and can be stopped before laun
     else process.env.GATEWAY_BG_MAX_CONCURRENCY = previous;
   }
 });
+
+/**
+ * Regression guards for the `deleteJobFromMemory` infinite recursion.
+ *
+ * A refactor replaced every `this.jobs.delete(id)` call site with a new
+ * `deleteJobFromMemory` helper — including the helper's OWN body, so it called
+ * itself forever. Typecheck passes (the signature is valid); only actually
+ * deleting a job reveals it.
+ *
+ * Symptom: "Maximum call stack size exceeded" from delete_job, reload_jobs
+ * (via pruneStaleJobEntries) and tombstone filtering, leaving the registry
+ * holding entries whose folders were already gone.
+ *
+ * There was NO deleteJob coverage before, which is how this shipped.
+ */
+describe("JobsService deletion", () => {
+  test("deleteJob removes the job instead of blowing the stack", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Doomed job",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo bye",
+    });
+
+    // THE REGRESSION: this threw RangeError before the fix.
+    const result = await service.deleteJob(job.id);
+    expect(result.id).toBe(job.id);
+
+    expect(await service.getJob(job.id)).toBeNull();
+    expect(userVisibleJobs(await service.listJobs())).toHaveLength(0);
+  });
+
+  test("deleteJob with deleteFiles removes the job directory too", async () => {
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Doomed with files",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo bye",
+    });
+    const jobDir = path.join(process.env.PAPR_HOME!, "Jobs", job.id);
+    await expect(fs.access(jobDir)).resolves.toBeUndefined();
+
+    await service.deleteJob(job.id, true);
+
+    await expect(fs.access(jobDir)).rejects.toThrow();
+    expect(await service.getJob(job.id)).toBeNull();
+  });
+
+  test("deleting one job leaves the others intact", async () => {
+    const service = await setupService();
+    const keep = await service.createJob({
+      name: "Keeper",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo keep",
+    });
+    const drop = await service.createJob({
+      name: "Dropper",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo drop",
+    });
+
+    await service.deleteJob(drop.id);
+
+    const remaining = userVisibleJobs(await service.listJobs());
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].id).toBe(keep.id);
+  });
+
+  test("deleting an unknown job is a clear error, not a stack overflow", async () => {
+    const service = await setupService();
+    await expect(service.deleteJob("does-not-exist")).rejects.toThrow(
+      /Job not found/,
+    );
+  });
+
+  test("reloadJobs prunes an entry whose folder was removed", async () => {
+    // The second half of the same bug: pruneStaleJobEntries calls
+    // deleteJobFromMemory, so a job folder deleted outside the app wedged
+    // EVERY reload with the same RangeError — the registry could never
+    // self-heal.
+    const service = await setupService();
+    const job = await service.createJob({
+      name: "Vanishing job",
+      appIds: [STANDALONE_APP_ID],
+      type: "shell",
+      command: "echo gone",
+    });
+
+    await fs.rm(path.join(process.env.PAPR_HOME!, "Jobs", job.id), {
+      recursive: true,
+      force: true,
+    });
+
+    await service.reloadJobs();
+
+    expect(await service.getJob(job.id)).toBeNull();
+  });
+});

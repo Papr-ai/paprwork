@@ -1,26 +1,35 @@
 import { describe, expect, it } from "vitest";
 import {
   getCloudCatalogInstallModeOptions,
+  getCloudCatalogInstallModeOptions,
   requiresInstallModeChoice,
   resolveAutomaticInstallMode,
 } from "../src/core/utils/cloudCatalogInstallPolicy.js";
 
 describe("cloudCatalogInstallPolicy", () => {
-  it("auto-forks community apps", () => {
+  it("asks copy vs collaborate for forkable community apps", () => {
     expect(
       requiresInstallModeChoice({
         catalogScope: "global",
         visibility: "public_read",
         codeInstallable: true,
       }),
-    ).toBe(false);
+    ).toBe(true);
+    // No silent default any more: the installer must state intent.
     expect(
       resolveAutomaticInstallMode({
         catalogScope: "global",
         visibility: "public_read",
         codeInstallable: true,
       }),
-    ).toBe("fork");
+    ).toBeNull();
+    expect(
+      getCloudCatalogInstallModeOptions({
+        catalogScope: "global",
+        visibility: "public_read",
+        codeInstallable: true,
+      }).map((option) => option.mode),
+    ).toEqual(["fork", "track"]);
   });
 
   it("prompts fork vs collaborate for team-shared namespace apps", () => {

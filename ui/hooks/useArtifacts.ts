@@ -372,6 +372,36 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     [updateArtifact, toggleFavoriteLocal, setError, artifacts],
   );
 
+  // Archive / restore a document.
+  //
+  // Optimistic on purpose: the gateway write is local-first (meta.json) and the
+  // Post flip is explicitly best-effort, so showing the new state immediately
+  // matches what actually happened rather than waiting on a network round-trip
+  // that is not the source of truth. On failure the flag is put back, because a
+  // card must never claim a state the disk disagrees with.
+  //
+  // Favourites are deliberately left alone: archiving is not unfavouriting, and
+  // silently doing both would make the undo incomplete.
+  const archiveArtifact = useCallback(
+    async (id: string, archived: boolean) => {
+      setError(null);
+      updateArtifact(id, { archived });
+
+      try {
+        await gateway.send("document:archive", { documentId: id, archived });
+      } catch (err) {
+        updateArtifact(id, { archived: !archived });
+        const message =
+          err instanceof Error
+            ? err.message
+            : `Failed to ${archived ? "archive" : "restore"} document`;
+        setError(message);
+        console.error("[useArtifacts] Archive error:", err);
+      }
+    },
+    [updateArtifact, setError],
+  );
+
   // Load artifacts on mount
   useEffect(() => {
     loadArtifacts();
@@ -423,6 +453,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     createDocument,
     createApp,
     deleteArtifact,
+    archiveArtifact,
     toggleFavorite,
     setFilter,
     setSearchQuery,

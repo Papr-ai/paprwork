@@ -13,10 +13,14 @@ import { recordGatewayHealthEvent } from "./services/gatewayHealthEvents.js";
  * - No .env files in production (packaged app)
  */
 
-// Load environment variables from .env.local (for development)
+// Load environment for development. `.env.local` is read before `.env`
+// because dotenv never overwrites an already-set variable, so the first file
+// to define a key wins. Both are gitignored and absent in packaged/cloud
+// builds, where dotenv no-ops and the platform supplies the environment.
 import dotenv from "dotenv";
 import { resolve } from "path";
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 import { logTursoReplicaStartupGuard } from "./utils/tursoReplicaEnabled.js";
 logTursoReplicaStartupGuard();

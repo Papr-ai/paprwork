@@ -29,8 +29,10 @@ import type { MidTurnTrimOpts } from "../agent/midTurnContextTrim.js";
 import {
   recordLoopSteps,
   recordObservedContext,
+  recordWidthNudge,
   type TurnMetrics,
 } from "../agent/turnMetrics.js";
+import { resolveParallelWidthNudge } from "../agent/parallelWidthNudge.js";
 import {
   estimateMessagesTokens,
   stripAllAssistantReasoning,
@@ -511,6 +513,8 @@ export async function* createPiCodexStreamWithToolLoop(
   /** Text streamed during the current step — i.e. after the previous step's tools. */
   let stepText = "";
   let planContinuationsUsed = 0;
+  /** Bounded by MAX_WIDTH_NUDGES_PER_TURN — see parallelWidthNudge.ts. */
+  let widthNudgesIssued = 0;
 
   const emitTurnEnd = (
     reason: PiTurnEndReason,
@@ -1241,11 +1245,28 @@ export async function* createPiCodexStreamWithToolLoop(
         // For the threshold check on the NEXT iteration we estimate post-compaction
         // size by simulating compaction on a clone (cheap — just walks the array).
 
+        // A step is the billed unit — it re-sends the whole prefix — so a turn
+        // calling one tool per step pays N times for work that could have gone
+        // out in one request. Appended as a context step so it rides with the
+        // next request rather than being re-sent from history.
+        const widthNudge = resolveParallelWidthNudge({
+          stepNumber: step,
+          lastStepToolCalls: toolCallsThisTurn.length,
+          nudgesUsed: widthNudgesIssued,
+          maxSteps,
+        });
+        if (widthNudge) {
+          widthNudgesIssued += 1;
+          recordWidthNudge(toolContext?.turnMetrics);
+          applyPlanContinuationStep(context, widthNudge.text);
+        }
+
         step++;
         console.log(
           `[PiCodexToolLoop] Step ${step}: executed ${toolCallsThisTurn.length} tools, ` +
             `cumulative context: ~${Math.round(cumulativeTokens / 1000)}K tokens, ` +
-            `total tool calls: ${totalToolCalls}`,
+            `total tool calls: ${totalToolCalls}` +
+            (widthNudge ? `, width nudge -> ${widthNudge.target}` : ""),
         );
       } else {
         // Orphan drain — tools ran after stop/length; continue so the model sees results.

@@ -21,10 +21,8 @@ import {
   initializeMemorySearchGate,
   wrapToolsWithMemorySearchFirstGate,
 } from "../../core/utils/memorySearchFirstGate.js";
-import {
-  flushSearchOutcomeFeedback,
-  resetSearchOutcomes,
-} from "../../core/utils/searchOutcomeFeedback.js";
+import { resetSearchOutcomes } from "../../core/utils/searchOutcomeFeedback.js";
+import { gradeRunSearchOutcomes } from "./agent/gradeSearchOutcomes.js";
 import {
   allTools,
   getApiKeysForSanitization,
@@ -65,7 +63,7 @@ import {
 } from "./agent/compactToolResults.js";
 import { anthropicModelUsesAdaptiveThinking } from "../utils/anthropicAdaptiveThinking.js";
 import {
-  computeHistoryTokenBudget,
+  resolveHistoryTokenBudget,
   isContextLengthError,
   DEFAULT_SESSION_CONTEXT_LIMIT,
   resolveEffectiveContextWindow,
@@ -74,6 +72,17 @@ import {
   resolveSummarizeHistoryTokenThreshold,
   shouldForceGeminiResummarize,
 } from "./agent/contextBudget.js";
+import {
+  estimateToolBlockTokens,
+  estimateToolTokens,
+  toolWirePayload,
+} from "./agent/toolSchemaTokens.js";
+import { selectTurnToolIds } from "./agent/toolDeferral.js";
+import {
+  createFindToolsTool,
+  createRunDeferredTool,
+} from "./agent/deferredToolAccess.js";
+import { resolveParallelWidthNudge } from "./agent/parallelWidthNudge.js";
 import {
   buildModelMessages,
   extractToolResultText,
@@ -117,6 +126,8 @@ import {
   recordCompactionSkipped,
   recordObservedContext,
   recordStep,
+  recordToolDeferral,
+  recordWidthNudge,
   setToolCallCount,
   summarizeTurnMetrics,
 } from "./agent/turnMetrics.js";
@@ -966,6 +977,9 @@ export class AgentService {
             steps: summary.steps,
             tool_calls: summary.toolCalls,
             tool_calls_per_step: summary.toolCallsPerStep,
+            width_nudges_issued: summary.widthNudgesIssued,
+            deferred_tool_count: summary.deferredToolCount,
+            deferred_tool_tokens: summary.deferredToolTokens,
             duration_ms: durationMs,
             prompt_tokens: tokenUsage?.promptTokens ?? 0,
             completion_tokens: tokenUsage?.completionTokens ?? 0,
@@ -1515,17 +1529,70 @@ export class AgentService {
       // Searches recorded this turn are graded against the final answer at
       // turn end. Reset here so a previous turn's searches can never be
       // attributed to this turn's answer.
-      resetSearchOutcomes();
-      const tools = measureTools(wrapToolsWithMemorySearchFirstGate(
+      resetSearchOutcomes(chatId);
+      const registryTools = wrapToolsWithMemorySearchFirstGate(
         this.toolRegistry.getToolsForMastra(options?.allowedToolIds),
-      ), { chatId, provider: config.provider, model: config.model });
+      );
+
+      // Which schemas ride in the request. Decided once, here, and never
+      // revised mid-turn: the tool block sits in the cached prefix, so one
+      // change costs more in cache writes than the whole turn's deferral
+      // saves. A tool left out is reached through run_deferred_tool instead.
+      // Both routes below (AI SDK and pi-ai) consume `tools`, so this single
+      // selection covers API-key and OAuth alike — pi-ai has no native tool
+      // search, which is why the selection is ours rather than the provider's.
+      const deferral = selectTurnToolIds({
+        tools: Object.entries(registryTools).map(([id, tool]) => ({
+          id,
+          description: String((tool as any)?.description ?? ""),
+          tokens: estimateToolTokens(id, tool),
+        })),
+        // This turn's message only. Feeding whole history in would make almost
+        // everything match and defer nothing.
+        requestText: userMessage,
+        coreToolIds: options?.allowedToolIds
+          ? // A sub-agent profile has already narrowed the registry to what it
+            // needs, so deferring inside that set would withhold tools the
+            // profile deliberately granted.
+            options.allowedToolIds
+          : undefined,
+      });
+
+      recordToolDeferral(turnMetrics, {
+        deferredCount: deferral.deferredToolIds.length,
+        savedTokens: deferral.savedTokens,
+      });
+
+      const deferredTools: Record<string, any> = {};
+      for (const id of deferral.activeToolIds) deferredTools[id] = registryTools[id];
+      if (deferral.enabled) {
+        const access = {
+          listDeferredToolIds: () => deferral.deferredToolIds,
+          getTool: (id: string) =>
+            registryTools[id] ?? this.toolRegistry.getTool(id),
+        };
+        for (const tool of [
+          createFindToolsTool(access),
+          createRunDeferredTool(access),
+        ]) {
+          deferredTools[(tool as any).id] = tool;
+        }
+      }
+      const tools = measureTools(deferredTools, {
+        chatId,
+        provider: config.provider,
+        model: config.model,
+      });
       timings.getTools = performance.now() - t;
 
       // Log context size breakdown
       const messagesJson = JSON.stringify(messages);
-      const toolsJson = JSON.stringify(tools);
       const estimatedMessageTokens = Math.ceil(messagesJson.length / 4);
-      const toolTokens = Math.ceil(toolsJson.length / 4);
+      // The wire payload, not `JSON.stringify(tools)` — that walks Zod's
+      // internal `_def` tree the provider never sees and over-stated the block
+      // by 2.31x. It is subtracted from the history budget below, so the error
+      // was withholding history. See toolSchemaTokens.ts.
+      const toolTokens = estimateToolBlockTokens(tools);
       const totalEstimatedTokens = estimatedMessageTokens + toolTokens;
 
       console.log(`[AgentService] 📊 Context Analysis for ${chatId}:`);
@@ -1536,7 +1603,10 @@ export class AgentService {
         `  Messages (with system): ${messages.length} messages, ~${estimatedMessageTokens} tokens`,
       );
       console.log(
-        `  Tools: ${Object.keys(tools).length} tools, ~${toolTokens} tokens`,
+        `  Tools: ${Object.keys(tools).length} tools, ~${toolTokens} tokens` +
+          (deferral.enabled
+            ? ` (deferred ${deferral.deferredToolIds.length} tools, ~${deferral.savedTokens} tokens withheld)`
+            : ""),
       );
       console.log(`  Total context: ~${totalEstimatedTokens} tokens`);
       const modelContextWindow = resolveModelContextWindow(
@@ -1544,7 +1614,11 @@ export class AgentService {
         config.model,
       );
       const effectiveMaxTokens = config.maxTokens ?? 16000;
-      const historyTokenBudget = computeHistoryTokenBudget({
+      // The capped resolver, not the raw arithmetic: correcting the tool-block
+      // measurement widens this budget (123,523 -> 173,474 at a 400K cap), and
+      // handing a live turn more history than has been validated is a
+      // cost-and-quality change that belongs in its own evaluation.
+      const historyTokenBudget = resolveHistoryTokenBudget({
         provider: config.provider,
         modelId: config.model,
         toolTokenEstimate: toolTokens,
@@ -1606,6 +1680,8 @@ export class AgentService {
       console.log(`[AgentService] Setting maxTokens: ${effectiveMaxTokens}`);
 
       let cumulativeSteps = 0;
+      /** Bounded by MAX_WIDTH_NUDGES_PER_TURN; recorded so the effect is measurable. */
+      let widthNudgesIssued = 0;
       cumulativePromptTokens = 0; // Track actual token usage for adaptive truncation
 
       // Native provider search tools (OpenAI web_search, Gemini google_search) target
@@ -1682,6 +1758,7 @@ export class AgentService {
           stepNumber: number;
           steps: Array<{
             usage?: { promptTokens?: number; completionTokens?: number };
+            toolCalls?: unknown[];
           }>;
         }) => {
           const stepMessageTokens = estimateMessagesTokens(
@@ -1728,6 +1805,25 @@ export class AgentService {
             ...historyTrimBounds,
             maxTokens: historyTokenBudget,
           });
+
+          // A step is the billed unit — it re-sends the whole prefix — so a
+          // turn that calls one tool per step pays N times for work that could
+          // have gone out in one request. Appended after trimming so it cannot
+          // be trimmed away, and before cache control so the breakpoint lands
+          // on the real final message.
+          const widthNudge = resolveParallelWidthNudge({
+            stepNumber: stepOptions.stepNumber ?? 0,
+            lastStepToolCalls:
+              stepOptions.steps?.[stepOptions.steps.length - 1]?.toolCalls
+                ?.length ?? 0,
+            nudgesUsed: widthNudgesIssued,
+            maxSteps,
+          });
+          if (widthNudge) {
+            widthNudgesIssued += 1;
+            recordWidthNudge(turnMetrics);
+            msgs.push({ role: "user", content: widthNudge.text });
+          }
 
           if (useAnthropicPromptCache) {
             const { applyAnthropicPromptCacheControl } =
@@ -2977,36 +3073,15 @@ export class AgentService {
       // retrieved memory as unused and mint false negatives at scale.
       //
       // Fire-and-forget — retrieval telemetry must never delay or fail a turn.
-      if (hasPaprApiKey && assistantText.trim().length > 0) {
-        void (async () => {
-          try {
-            const [{ getPaprClient }, { paprUserScope }] = await Promise.all([
-              import("../../core/tools/paprClient.js"),
-              import("../utils/paprUserId.js"),
-            ]);
-            const client = await getPaprClient();
-            const result = await flushSearchOutcomeFeedback(
-              client as unknown as Parameters<
-                typeof flushSearchOutcomeFeedback
-              >[0],
-              assistantText,
-              paprUserScope(),
-            );
-            if (result.submitted > 0) {
-              console.log(
-                `[AgentService] search-outcome feedback: submitted=${result.submitted} ` +
-                  `skipped=${result.skipped} verdicts=${result.grades
-                    .map((g) => g.verdict)
-                    .join(",")}`,
-              );
-            }
-          } catch (error) {
-            console.warn(
-              "[AgentService] search-outcome feedback flush failed:",
-              error instanceof Error ? error.message : error,
-            );
-          }
-        })();
+      if (assistantText.trim().length > 0) {
+        // Chat turns stay fire-and-forget: the process outlives the turn, so a
+        // detached submit completes. Job runs must AWAIT the same helper (see
+        // runIsolatedJobSession) because their process can exit first.
+        void gradeRunSearchOutcomes({
+          runKey: chatId,
+          answerText: assistantText,
+          surface: "chat",
+        });
       }
 
       // 4. Save assistant message with thinking and tool calls
@@ -3793,15 +3868,19 @@ ${last15.substring(0, 8_000)}`;
 
     // Get all available tools
     const allTools = this.toolRegistry.getTools();
+    // The payload the provider receives, not `JSON.stringify(tool.inputSchema)`
+    // — that serializes Zod's internal `_def` tree, which both mis-sizes the
+    // block (2.31x over) and shows the reader a schema no provider ever sees.
     const toolSchemas = Object.entries(allTools).map(
-      ([id, tool]: [string, any]) => ({
-        id,
-        description: tool.description,
-        // Simplified schema for display
-        parameters: tool.inputSchema
-          ? JSON.parse(JSON.stringify(tool.inputSchema))
-          : null,
-      }),
+      ([id, tool]: [string, any]) => {
+        const wire = toolWirePayload(id, tool);
+        return {
+          id,
+          description: wire.description,
+          parameters: wire.input_schema,
+          tokens: estimateToolTokens(id, tool),
+        };
+      },
     );
 
     // Load workspace context separately for display
@@ -4046,8 +4125,7 @@ ${last15.substring(0, 8_000)}`;
       });
     }
 
-    const toolSchemaText = JSON.stringify(toolSchemas);
-    const toolTokens = estimateTokens(toolSchemaText);
+    const toolTokens = estimateToolBlockTokens(allTools);
 
     // Workspace files are ALREADY counted in systemPromptTokens
     // We don't add them separately to total
@@ -4786,6 +4864,16 @@ ${last15.substring(0, 8_000)}`;
             (lastStreamError ? ` lastError=${lastStreamError}` : ""),
         );
       }
+      // Grade this run's memory searches against the answer it produced.
+      // Awaited, not fire-and-forget: a job process can exit immediately after
+      // this returns, and a detached promise would be killed before the HTTP
+      // submit lands. That is why job labels were missing even where the chat
+      // path worked.
+      await gradeRunSearchOutcomes({
+        runKey: chatId,
+        answerText: trimmed,
+        surface: "job:agent",
+      });
       return { chatId, text: trimmed, diagnostics };
     } finally {
       await this.sessionManager.clearSession(chatId);
@@ -5182,6 +5270,14 @@ ${last15.substring(0, 8_000)}`;
       } else {
         // No retry needed, parse and return
         const parsed = this.parseJsonFromResponse(text);
+        // Structured jobs still search memory, so they still owe labels. The
+        // "answer" is the JSON it produced — citation derivation is plain term
+        // containment, so a serialised object works the same as prose.
+        await gradeRunSearchOutcomes({
+          runKey: chatId,
+          answerText: JSON.stringify(parsed),
+          surface: "job:structured",
+        });
         return { chatId, object: parsed };
       }
     }
@@ -5199,6 +5295,11 @@ ${last15.substring(0, 8_000)}`;
       system: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return data matching the requested schema exactly.`,
     });
 
+    await gradeRunSearchOutcomes({
+      runKey: chatId,
+      answerText: JSON.stringify(result.object),
+      surface: "job:structured",
+    });
     return { chatId, object: result.object };
   }
 

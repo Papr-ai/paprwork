@@ -3,6 +3,7 @@
  * Brings together MessageList and InputBar with agent integration
  */
 
+import type { PlanProvider } from "../../utils/subscriptionPlanUsage";
 import React, { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { MessageList } from "./MessageList";
@@ -39,9 +40,14 @@ import {
   findHistoryModelId,
   resolveChatModelId,
 } from "../../utils/resolveChatModel";
-import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import { readIncomingFiles } from "../../utils/chatAttachmentFiles";
 import { shouldRehydrateAfterStoreWipe } from "../../utils/chatStateRecovery";
 import { getUnavailableModelMessage } from "../../utils/modelAvailabilityMessage";
+import {
+  connectionRecoveryNotice,
+  describeProviderNotice,
+  type ProviderNotice,
+} from "../../utils/providerErrorPresentation";
 import {
   adoptEffortFromVariant,
   readChatSettings,
@@ -55,6 +61,7 @@ import {
   buildAgentConfig,
   resolveModelSettings,
 } from "../../utils/buildAgentConfig";
+import { resolveEffectiveAuthForModel } from "../../utils/effectiveProviderAuth";
 import "./ChatContainer.css";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -179,6 +186,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     needsStreamRecovery,
     streamRecoveryReason,
     streamRecoveryDetail,
+    lastTurnOutcome,
   } = useChatStore(
     useShallow((state) => {
       const cs = state.chatStates.get(chatId);
@@ -192,17 +200,22 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         needsStreamRecovery: cs?.needsStreamRecovery ?? false,
         streamRecoveryReason: cs?.streamRecoveryReason ?? "connection",
         streamRecoveryDetail: cs?.streamRecoveryDetail,
+        lastTurnOutcome: cs?.lastTurnOutcome,
       };
     }),
   );
 
   const error = useChatStore((state) => state.error);
+  const setLastTurnOutcome = useChatStore((state) => state.setLastTurnOutcome);
 
   const { sendMessage, interruptActiveStream, retryStreamRecovery, autoContinueInterruptedTurn } = useAgent();
   const { loadMessages, loadOlderMessages } = useChat();
   const inputBarRef = useRef<InputBarRef>(null);
   const { isModelAvailable, status: authStatus } = useAuthStatus();
   const setError = useChatStore((state) => state.setError);
+  const setNeedsStreamRecovery = useChatStore(
+    (state) => state.setNeedsStreamRecovery,
+  );
   const { ensureModel, progress, installing } = useOllama({
     subscribeDownloadProgress: true,
   });
@@ -227,31 +240,58 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   );
 
   /**
-   * Which credential this turn will actually run on. Only Anthropic needs it —
-   * Fast mode is an API-key-only parameter, and OAuth turns go through pi-ai,
-   * which has no `speed` field to carry it. The gateway prefers OAuth when both
-   * exist, so this mirrors that order rather than guessing.
+   * Which credential this turn will actually run on.
+   *
+   * Every billing question below is downstream of this one, so it is resolved
+   * once. Asking `authStatus.anthropic.oauth` instead — "is a token stored" —
+   * was the defect: with a subscription connected and API key selected, main
+   * withholds the token and the turn bills to the key, while the panel went on
+   * reporting a plan it was not using.
+   */
+  const effectiveAuth = useMemo<"oauth" | "apiKey" | null>(() => {
+    const provider = selectedModel.provider;
+    if (provider === "anthropic") {
+      return resolveEffectiveAuthForModel(authStatus.anthropic, selectedModel);
+    }
+    if (provider === "openai" || provider === "openai-codex") {
+      return resolveEffectiveAuthForModel(authStatus.openai, selectedModel);
+    }
+    return null;
+  }, [selectedModel, authStatus]);
+
+  /**
+   * Only Anthropic needs it — Fast mode is an API-key-only parameter, and
+   * OAuth turns go through pi-ai, which has no `speed` field to carry it.
    */
   const authType = useMemo<"oauth" | "apiKey" | undefined>(() => {
     if (selectedModel.provider !== "anthropic") return undefined;
-    if (authStatus.anthropic.oauth) return "oauth";
-    if (authStatus.anthropic.apiKey) return "apiKey";
-    return undefined;
-  }, [selectedModel.provider, authStatus]);
+    return effectiveAuth ?? undefined;
+  }, [selectedModel.provider, effectiveAuth]);
 
-  const billingMode = useMemo<"metered" | "subscription">(() => {
-    const provider = selectedModel.provider;
-    if (provider === "anthropic" && authStatus.anthropic.oauth) {
-      return "subscription";
-    }
-    if (provider === "openai" && authStatus.openai.oauth) {
-      return "subscription";
-    }
-    return "metered";
-  }, [selectedModel.provider, authStatus]);
+  /** A subscription bills the plan; anything else bills per token. */
+  const billingMode = useMemo<"metered" | "subscription">(
+    () => (effectiveAuth === "oauth" ? "subscription" : "metered"),
+    [effectiveAuth],
+  );
 
-  const fetchClaudePlanUsage =
-    selectedModel.provider === "anthropic" && authStatus.anthropic.oauth;
+  /**
+   * Both ChatGPT and Claude subscriptions report utilization, and the cost
+   * panel needs whichever one is paying for this chat. Reading only Claude's
+   * left the ChatGPT route with no signal at all, so it fell back to claiming
+   * every turn was included — wrong for anyone past their windows, which is
+   * precisely who the figure is for.
+   */
+  const planProvider = useMemo<PlanProvider | null>(() => {
+    if (effectiveAuth !== "oauth") return null;
+    if (selectedModel.provider === "anthropic") return "anthropic";
+    if (
+      selectedModel.provider === "openai" ||
+      selectedModel.provider === "openai-codex"
+    ) {
+      return "openai";
+    }
+    return null;
+  }, [selectedModel.provider, effectiveAuth]);
 
   const handleChangeModelSettings = useCallback(
     (patch: ChatModelSettings) => {
@@ -284,6 +324,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
   const prevIsSendingRef = useRef(isSending);
   const autoContinueInFlightRef = useRef(false);
+  const lastLoggedAutoContinueBlockRef = useRef<string | null>(null);
   const [isResumingStream, setIsResumingStream] = useState(false);
   const [isFileDragOver, setIsFileDragOver] = useState(false);
   const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
@@ -347,6 +388,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       isSending: isSending || isWaitingForAgentSlot,
       connectionPaused,
       needsStreamRecovery,
+      streamRecoveryReason,
+      lastTurnOutcome,
       gatewayReady: gatewaySupervisorReady,
     };
     const autoContinueBlock = getAutoContinueBlockReason(autoContinueArgs);
@@ -354,13 +397,25 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       const lastAssistant = [...messages]
         .reverse()
         .find((m) => m.role === "assistant");
-      if (lastAssistant?.interrupted || autoContinueBlock === "gatewayNotReady") {
+      // Once per (chat, reason), not once per render: this effect depends on
+      // `messages`, which gets a fresh array identity on every store write, so
+      // logging unconditionally floods the console at render frequency — and
+      // with DevTools attached every line crosses the CDP channel.
+      if (
+        (lastAssistant?.interrupted ||
+          autoContinueBlock === "gatewayNotReady") &&
+        lastLoggedAutoContinueBlockRef.current !== autoContinueBlock
+      ) {
+        lastLoggedAutoContinueBlockRef.current = autoContinueBlock;
         console.log(
           `[AutoContinue] blocked for ${chatId}: ${autoContinueBlock}`,
         );
       }
       return;
     }
+
+    // Unblocked — a later block is new information and should be logged again.
+    lastLoggedAutoContinueBlockRef.current = null;
 
     const mergedArtifact = findMergedArtifact(chatId);
     const idKey =
@@ -388,6 +443,8 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isWaitingForAgentSlot,
     messages,
     needsStreamRecovery,
+    streamRecoveryReason,
+    lastTurnOutcome,
     makeAgentConfig,
   ]);
 
@@ -835,8 +892,13 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
 
   const stopAgentAndClearQueue = useCallback(async () => {
     setMessageQueue((prev) => clearQueuedMessagesForChat(prev, chatId));
+    // Recorded before the teardown, not after: `interruptActiveStream` awaits
+    // the gateway, and the auto-continue effect can run during that wait. It
+    // also clears the recovery banner, so on a refused turn this is the only
+    // surviving record that the user asked us to stop.
+    setLastTurnOutcome(chatId, "userStopped");
     await interruptActiveStream(chatId);
-  }, [chatId, interruptActiveStream]);
+  }, [chatId, interruptActiveStream, setLastTurnOutcome]);
 
   const handleStopAgent = useCallback(async () => {
     // Block auto-drain — Stop means halt, not "stop then send whatever was queued".
@@ -1024,12 +1086,74 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     }
   }, [chatId, isResumingStream, retryStreamRecovery, makeAgentConfig]);
 
+  /**
+   * The single provider notice for this chat, or nothing.
+   *
+   * Two sources used to draw two different banners at once — a red one from
+   * `error` and an amber one from the recovery state — which is how a single
+   * rate limit could appear twice in two voices. They are collapsed here, and
+   * the provider's own words win whenever there are any: only they name the
+   * credential that was refused, which is the difference a user needs to see
+   * after switching between an API key and a subscription login.
+   */
+  const providerNotice = useMemo<ProviderNotice | null>(() => {
+    const provider = selectedModel?.provider;
+    const modelName = selectedModel?.name;
+    const detail = streamRecoveryDetail?.trim();
+
+    if (error) {
+      return describeProviderNotice({
+        message: error,
+        canResume: needsStreamRecovery,
+        provider,
+        modelName,
+      });
+    }
+
+    if (!needsStreamRecovery) return null;
+
+    if (detail) {
+      return describeProviderNotice({
+        message: detail,
+        canResume: true,
+        provider,
+        modelName,
+      });
+    }
+
+    if (streamRecoveryReason === "rateLimit") {
+      // Phrased from the same branch the real message takes, then stripped of
+      // its detail: there is no provider text here, and a disclosure holding
+      // our own synthetic string would only pretend to be evidence.
+      const notice = describeProviderNotice({
+        message: "rate limit exceeded",
+        canResume: true,
+        provider,
+        modelName,
+      });
+      return { ...notice, detail: "" };
+    }
+
+    return connectionRecoveryNotice();
+  }, [
+    error,
+    needsStreamRecovery,
+    streamRecoveryDetail,
+    streamRecoveryReason,
+    selectedModel,
+  ]);
+
+  const handleDismissProviderNotice = useCallback(() => {
+    setError(null);
+    setNeedsStreamRecovery(chatId, false);
+  }, [chatId, setError, setNeedsStreamRecovery]);
+
   const handleChatDrop = useCallback(
     (e: React.DragEvent<HTMLDivElement>) => {
       e.preventDefault();
       e.stopPropagation();
       setIsFileDragOver(false);
-      const files = extractFilesFromDataTransfer(e.dataTransfer);
+      const files = readIncomingFiles(e.dataTransfer);
       if (files.length === 0) return;
       handleFilesDroppedToChat(files);
     },
@@ -1045,13 +1169,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
       onDragOver={handleChatDragOver}
       onDrop={handleChatDrop}
     >
-      {error && (
-        <div className="error-banner">
-          <span className="error-icon">⚠️</span>
-          <span className="error-message">{error}</span>
-        </div>
-      )}
-
       {gatewayBanner && (
         <div className="reconnecting-banner">
           <span className="reconnecting-icon">↻</span>
@@ -1122,31 +1239,6 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onRemove={handleRemoveQueued}
       />
 
-      {needsStreamRecovery && (
-        <div className="stream-recovery-banner">
-          <span className="stream-recovery-banner__message">
-            {/*
-              The provider's own explanation wins when there is one: it names
-              the credential that was refused, which a fixed sentence cannot,
-              and so is the only version that reads differently after the user
-              switches between API key and subscription login.
-            */}
-            {streamRecoveryDetail ||
-              (streamRecoveryReason === "rateLimit"
-                ? `${selectedModel.name} hit the provider's rate limit, so the reply never started. Wait a moment and tap Resume, or switch to another model.`
-                : "Connection restored, but the agent response may be incomplete.")}
-          </span>
-          <button
-            type="button"
-            className="stream-recovery-banner__btn"
-            disabled={isResumingStream}
-            onClick={() => void handleResumeStream()}
-          >
-            {isResumingStream ? "Resuming…" : "Resume"}
-          </button>
-        </div>
-      )}
-
       <InputBar
         ref={inputBarRef}
         chatId={chatId}
@@ -1181,7 +1273,11 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
         onChangeModelSettings={handleChangeModelSettings}
         authType={authType}
         billingMode={billingMode}
-        fetchClaudePlanUsage={fetchClaudePlanUsage}
+        planProvider={planProvider}
+        providerNotice={providerNotice}
+        isResumingStream={isResumingStream}
+        onResumeStream={() => void handleResumeStream()}
+        onDismissProviderNotice={handleDismissProviderNotice}
       />
 
       {contextInfo !== null ? (

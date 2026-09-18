@@ -21,7 +21,11 @@ import {
   parseAppRepoCommittedPayload,
 } from "./services/syncV3/appRepoCommittedInbound.js";
 
+// `.env.local` before `.env`: dotenv never overwrites an already-set
+// variable, so the first file to define a key wins. Both are gitignored, so
+// in Cloud Run neither exists and these calls no-op.
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 process.env.GATEWAY_MODE = process.env.GATEWAY_MODE ?? "cloud_agent";
 process.env.CLOUD_SYNC_ENABLED = process.env.CLOUD_SYNC_ENABLED ?? "false";

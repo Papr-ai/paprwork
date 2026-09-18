@@ -352,18 +352,17 @@ export function AppCard({
             >
               {artifact.favorite ? "Remove from favorites" : "Add to favorites"}
             </button>
-            {onSetStatus && status !== "draft" && !isPublished && (
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onSetStatus("draft");
-                }}
-              >
-                Mark as draft
-              </button>
-            )}
-            {onSetStatus && status !== "active" && (
+            {/*
+              Archiving was a one-way door in the UI. Restoring an archived app
+              meant picking "Mark as active" — technically correct, but nobody
+              reads "active" as the undo for "archived", so the menu looked like
+              it had no way back and the app felt permanently lost.
+
+              An archived app therefore gets exactly one status action, named
+              after the thing the user is trying to undo. Draft/active/archive
+              stay as they were for every other app.
+            */}
+            {onSetStatus && status === "archived" && (
               <button
                 role="menuitem"
                 onClick={() => {
@@ -371,19 +370,43 @@ export function AppCard({
                   onSetStatus("active");
                 }}
               >
-                Mark as active
+                Unarchive
               </button>
             )}
             {onSetStatus && status !== "archived" && (
-              <button
-                role="menuitem"
-                onClick={() => {
-                  setMenuOpen(false);
-                  onSetStatus("archived");
-                }}
-              >
-                Archive
-              </button>
+              <>
+                {status !== "draft" && !isPublished && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onSetStatus("draft");
+                    }}
+                  >
+                    Mark as draft
+                  </button>
+                )}
+                {status !== "active" && (
+                  <button
+                    role="menuitem"
+                    onClick={() => {
+                      setMenuOpen(false);
+                      onSetStatus("active");
+                    }}
+                  >
+                    Mark as active
+                  </button>
+                )}
+                <button
+                  role="menuitem"
+                  onClick={() => {
+                    setMenuOpen(false);
+                    onSetStatus("archived");
+                  }}
+                >
+                  Archive
+                </button>
+              </>
             )}
             {showCopyAction && onCopy && (
               <button

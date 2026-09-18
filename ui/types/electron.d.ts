@@ -104,6 +104,13 @@ export interface ElectronAPI {
         error?: string;
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
+      getUsageLimits: () => Promise<
+        | {
+            success: true;
+            data: import("../../src/core/services/codexOAuthUsage").CodexUsageLimitsSnapshot;
+          }
+        | { success: false; error: string; httpStatus?: number }
+      >;
     };
     claude: {
       startOAuth: (options?: { source?: "settings" | "onboarding" | "unknown" }) => Promise<{
@@ -557,6 +564,15 @@ export interface ElectronAPI {
       fileUrl?: string;
       error?: string;
     }>;
+  };
+
+  /**
+   * Electron 32 removed File.path; webUtils is the documented replacement.
+   * Returns "" for a File with no disk backing (a pasted blob) rather than
+   * throwing, so callers can treat "" as "copy it instead".
+   */
+  files: {
+    getPathForFile: (file: File) => string;
   };
 
   agentPreview: {

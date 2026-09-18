@@ -10,6 +10,7 @@ import { ensureDefaultChatTab } from "./ensureDefaultChatTab";
 import { ensureWorkspaceLandingTab } from "./ensureWorkspaceLandingTab";
 import { ensureSettingsTab } from "./ensureSettingsTab";
 import { serializeTabForGatewayPersistence } from "./tabPersistenceMetadata";
+import { isTabPersistenceBlocked } from "./tabPersistenceGuard";
 
 interface TabRow {
   id: string;
@@ -25,6 +26,16 @@ interface TabRow {
 
 /** Save open tabs + navigation state to the current workspace before switching away. */
 export async function flushWorkspaceStateToGateway(): Promise<void> {
+  // The outgoing workspace's saved tab bar was never read, so the store holds
+  // scaffolding rather than that workspace's tabs. Flushing it here would make
+  // the loss permanent at exactly the moment the user leaves.
+  if (isTabPersistenceBlocked()) {
+    console.warn(
+      "[Persistence] Skipping workspace flush — saved tab bar was never read back",
+    );
+    return;
+  }
+
   const {
     tabs: rawTabs,
     activeTabId,
@@ -77,6 +88,14 @@ export interface PersistedAppStateSnapshot {
   splitRatios: Record<string, number>;
   history: string[];
   historyIndex: number;
+  /**
+   * Whether the saved tab bar was actually read.
+   *
+   * `false` with `tabs: []` means the gateway declined the read; `true` with
+   * `tabs: []` means the workspace genuinely has none. The two produce an
+   * identical store, and only the first must not be written back over SQLite.
+   */
+  tabsReadOk: boolean;
 }
 
 /** Fetch tab metadata + navigation state from workspace SQLite (no store writes). */
@@ -87,6 +106,7 @@ export async function fetchPersistedAppStateFromGateway(): Promise<PersistedAppS
   };
 
   let restoredTabs: ReturnType<typeof mapTabRow>[] = [];
+  const tabsReadOk = tabsResponse.success === true && Array.isArray(tabsResponse.data);
 
   if (
     tabsResponse.success &&
@@ -176,6 +196,7 @@ export async function fetchPersistedAppStateFromGateway(): Promise<PersistedAppS
     splitRatios,
     history,
     historyIndex,
+    tabsReadOk,
   };
 }
 
@@ -329,6 +350,8 @@ export function reconcileEntityTabsInStore(valid: WorkspaceEntityIdSets): void {
     splitRatios,
     history,
     historyIndex,
+    // Built from the live store, not a read, so there is no read to have failed.
+    tabsReadOk: true,
   };
   applyPersistedAppStateToTabStore(snapshot, {
     ...valid,
@@ -350,7 +373,7 @@ export async function loadPersistedAppStateFromGateway(
   options?: WorkspaceEntityIdSets,
 ): Promise<void> {
   const snapshot = await fetchPersistedAppStateFromGateway();
-  if (!snapshot) {
+  if (!snapshot || !snapshot.tabsReadOk) {
     return;
   }
   applyPersistedAppStateToTabStore(snapshot, options);

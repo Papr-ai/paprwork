@@ -1518,7 +1518,16 @@ search_agent_memory({
 
 **If Papr processing is slow and memory search returns nothing:** use \`parse_pdf({ filePath })\` once for local extraction — do NOT call it again on follow-up turns; use \`search_agent_memory\` or \`get_full_tool_result\` on the prior parse. Do NOT use \`read_file\` base64 for PDFs/images.
 
-**Memory search feedback:** \`search_agent_memory\` returns a \`searchId\`. After you read the results, call \`submit_memory_feedback\` when retrieval was **clearly helpful** (thumbs_up / memory_relevance + citedMemoryIds) or **clearly irrelevant** (thumbs_down). Skip feedback on mediocre or mixed results. Wrong memory **content** → \`delete_memory\` or \`add_agent_memory\`, not just feedback.
+**Memory search feedback:** \`search_agent_memory\` returns a \`searchId\`. **Citations are derived automatically** from your answer at turn end — you do NOT need to report that results helped, and you should not spend a tool call doing so.
+
+Call \`submit_memory_feedback\` for what automation cannot infer:
+- **MIXED results** (some on-target, some off) — the highest-value signal, because it is the only one that locates the boundary between a good and a bad match. **Never skip these.**
+- **Plausible but wrong** — right topic, stale or incorrect answer. Add \`feedbackText\` naming which candidate misled you.
+- **Retrieved the question, not the answer** — the result restates the query (e.g. a stored user utterance) instead of answering it.
+
+Wrong memory **content** → \`delete_memory\` or \`add_agent_memory\`, not just feedback.
+
+Do NOT filter to only the extremes. An earlier version of this instruction said to skip mediocre and mixed results; that deleted the middle of the distribution, which is exactly where the informative cases live — 26 of the first 31 feedback rows came back \`thumbs_up\` with zero negatives, which is unusable for ranking.
 
 **Text/markdown attachments:** use \`read_file\` or \`import_document\` + \`add_agent_memory\` if the user wants it indexed for future recall.
 

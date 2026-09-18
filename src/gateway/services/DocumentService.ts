@@ -19,6 +19,14 @@ import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
 import path from "path";
 import os from "os";
+import {
+  cancelDocumentPostSync,
+  scheduleDocumentPostSync,
+} from "./documentPostScheduler.js";
+import {
+  deleteDocumentPost,
+  setDocumentPostArchived,
+} from "./documentPostSync.js";
 // uuid no longer needed — document IDs are title-based slugs
 
 // ---------- Public Types ----------
@@ -31,6 +39,12 @@ export interface DocumentMeta {
   updatedAt: string;
   tags: string[];
   favorite: boolean;
+  /**
+   * Archived documents stay on disk and keep their memories, but stop feeding
+   * new ones (the backing Post gets `archive = true`, which parseServer's
+   * batchSavePostToMemory filters out). Undefined means not archived.
+   */
+  archived?: boolean;
   preview: string;
   wordCount: number;
   createdByAgentId?: string;
@@ -181,6 +195,11 @@ export class DocumentService {
     await fs.writeFile(this.contentPath(id), content, "utf-8");
     await this.writeMeta(id, meta);
 
+    // Mirror to a Parse Post so the document reaches Papr Memory. The Parse
+    // beforeSave/afterSave hooks handle similarity gating, memory writes and
+    // PageVersion snapshots — see documentPostSync.ts.
+    scheduleDocumentPostSync({ documentId: id, title, content });
+
     console.log(`[DocumentService] Created document: ${id} - ${title}`);
     return { ...meta, content, filePath: this.contentPath(id) };
   }
@@ -258,6 +277,16 @@ export class DocumentService {
     };
 
     await this.writeMeta(id, updatedMeta);
+
+    // Debounced: an editor fires this on nearly every keystroke. The 30s idle
+    // window collapses a typing burst into one request; the server's
+    // similarity gate then decides whether it is worth a memory write.
+    scheduleDocumentPostSync({
+      documentId: id,
+      title: updatedMeta.title,
+      content,
+    });
+
     console.log(`[DocumentService] Updated document: ${id}`);
     return { ...updatedMeta, content, filePath: this.contentPath(id) };
   }
@@ -265,6 +294,28 @@ export class DocumentService {
   async deleteDocument(id: string): Promise<boolean> {
     const docDir = this.docDir(id);
     try {
+      // Drop any queued sync first — pushing content for a document the user
+      // just deleted would be surprising, and the Post row would outlive it.
+      cancelDocumentPostSync(id);
+
+      // Delete means delete. The Post goes too, and parseServer cascades from
+      // there to its PostSocial rows and memories.
+      //
+      // This used to leave the Post in place because delete was the only
+      // action available, so destroying remote history on a local delete was
+      // too sharp an edge. Archive now covers "stop this feeding memory but
+      // keep it", which frees delete to mean what it says.
+      //
+      // Failure is logged, not fatal: if the user asked to delete a document,
+      // refusing to remove it locally because the network was down is worse
+      // than leaving one orphaned Post behind.
+      const postResult = await deleteDocumentPost(id);
+      if (!postResult.ok) {
+        console.warn(
+          `[DocumentService] Post delete failed for ${id} (${postResult.reason}); removing local document anyway`,
+        );
+      }
+
       await fs.rm(docDir, { recursive: true, force: true });
       this.unwatchDocument(id);
       console.log(`[DocumentService] Deleted document: ${id}`);
@@ -321,6 +372,48 @@ export class DocumentService {
     meta.favorite = !meta.favorite;
     meta.updatedAt = new Date().toISOString();
     await this.writeMeta(id, meta);
+
+    let content = "";
+    try {
+      content = await fs.readFile(this.contentPath(id), "utf-8");
+    } catch {
+      /* noop */
+    }
+
+    return { ...meta, content, filePath: this.contentPath(id) };
+  }
+
+  /**
+   * Archive or restore a document.
+   *
+   * Archiving flips `archive` on the backing Post, which is what actually
+   * stops memory writes: parseServer's batchSavePostToMemory only drains
+   * posts with `archive == false`. Memories already written are left alone —
+   * that is the whole point. Archive is the reversible action; delete is the
+   * destructive one.
+   *
+   * `updatedAt` is deliberately NOT bumped. Archiving is a lifecycle change,
+   * not an edit, and bumping it would make a restored document claim it was
+   * edited today and jump to the top of "recent".
+   */
+  async archiveDocument(
+    id: string,
+    archived: boolean = true,
+  ): Promise<Document | null> {
+    const meta = await this.readMeta(id);
+    if (!meta) return null;
+
+    // Drop any debounced sync first — pushing content for a document the user
+    // just archived is exactly the write they asked us to stop.
+    if (archived) cancelDocumentPostSync(id);
+
+    meta.archived = archived;
+    await this.writeMeta(id, meta);
+
+    // Best-effort: the local flag is what the UI reads, and
+    // setDocumentPostArchived never throws. A failed remote flip is logged
+    // there and self-heals on the next archive toggle.
+    await setDocumentPostArchived(id, archived);
 
     let content = "";
     try {

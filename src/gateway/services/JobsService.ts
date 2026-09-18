@@ -221,8 +221,20 @@ export class JobsService {
     this.scheduleIndex.syncJob(job);
   }
 
+  /**
+   * Remove a job from the in-memory Map AND the schedule index together.
+   *
+   * Must call `this.jobs.delete` — NOT itself. A refactor that replaced every
+   * `this.jobs.delete(id)` call site with this helper also rewrote the helper's
+   * own body, so it recursed until the stack blew. That made delete_job,
+   * reload_jobs (via pruneStaleJobEntries) and tombstone filtering all fail
+   * with "Maximum call stack size exceeded", and left the registry holding
+   * entries whose folders were already gone.
+   *
+   * Mirrors `setJobInMemory` above: Map first, then schedule index.
+   */
   private deleteJobFromMemory(jobId: string): void {
-    this.deleteJobFromMemory(jobId);
+    this.jobs.delete(jobId);
     this.scheduleIndex.remove(jobId);
   }
 

@@ -4,10 +4,17 @@
  * Job logs and agent prose are poor memory candidates. Structured rows in
  * ~/Papr/jobs/{id}/data/data.db are the durable output worth indexing.
  *
- * Produces TWO memory items per sync:
- * 1. Raw snapshot (content_type: "job_database_snapshot") — sample rows as JSON
+ * Produces up to TWO memory items per sync:
+ * 1. Raw snapshot (content_type: "job_database_snapshot") — sample rows as JSON.
+ *    DISABLED BY DEFAULT — see jobMemoryPolicy.ts.
  * 2. Human summary (content_type: "job_database_summary") — row counts, key
- *    records, column highlights. Searchable by the sleep agent for entity enrichment.
+ *    records, column highlights.
+ *
+ * NOTE: an earlier version of this comment claimed the summary was "searchable
+ * by the sleep agent for entity enrichment". That was never true —
+ * SleepCycleService contains no memory search at all, and no search call site
+ * filters for these content types. The supported discovery path is the
+ * capability card (jobCapabilityCard.ts), which create_job reads directly.
  */
 
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
@@ -20,6 +27,8 @@ import { getApiKey } from "../utils/keyResolver.js";
 import { paprMemoryScopeSpread } from "../utils/memoryScopeResolver.js";
 import type { JobRecord } from "./jobs/types.js";
 import { isSleepCycleJobName } from "./SleepCycleService.js";
+import { isRawJobDatabaseMemorySyncEnabled } from "./jobMemoryPolicy.js";
+import { syncJobCapabilityCard } from "./jobCapabilityStore.js";
 
 const SYSTEM_TABLES = new Set([
   "schema_migrations",
@@ -27,6 +36,23 @@ const SYSTEM_TABLES = new Set([
   "job_events",
   "sqlite_sequence",
 ]);
+
+/**
+ * Replication/CDC plumbing that is never job output.
+ *
+ * These were NOT excluded before, and because `_` and `__` sort ahead of
+ * letters, `ORDER BY name` + MAX_TABLES=8 gave them the whole budget. The
+ * "Calendar Reader" job stored `_papr_sync_log` (1.7M rows of change events)
+ * and never stored `calendar_events` at all.
+ */
+const SYSTEM_TABLE_PREFIXES = ["_papr_", "__turso_", "_turso_", "_litestream"];
+
+function isSystemTable(name: string): boolean {
+  if (SYSTEM_TABLES.has(name)) {
+    return true;
+  }
+  return SYSTEM_TABLE_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
 
 const MAX_TABLES = 8;
 const MAX_ROWS_PER_TABLE = 15;
@@ -71,7 +97,7 @@ function listUserTables(db: Database.Database): string[] {
 
   return rows
     .map((row) => row.name)
-    .filter((name) => !SYSTEM_TABLES.has(name));
+    .filter((name) => !isSystemTable(name));
 }
 
 function snapshotTable(
@@ -287,8 +313,18 @@ export async function syncJobDatabaseToMemory(
   // A skip counts as SYNCED, not failed: the content is already in memory, so
   // reporting failure here would mark the run sync_failed and invite a retry
   // that writes nothing.
-  const snapshotReservation = reserveMemoryWrite(content, "job_database_snapshot");
-  if (!snapshotReservation.proceed) {
+  //
+  // DISABLED BY DEFAULT (see jobMemoryPolicy.ts). This payload embeds the run
+  // id, so its hash changes every run and the guard above can never suppress
+  // it -- 3,077 rows / ~24M chars in one namespace, with no reader that
+  // targets it. Set PAPR_JOB_RAW_DB_MEMORY_SYNC=1 to restore.
+  const snapshotReservation = !isRawJobDatabaseMemorySyncEnabled()
+    ? null
+    : reserveMemoryWrite(content, "job_database_snapshot");
+  if (!snapshotReservation) {
+    // Not an error: the capability card below is the supported replacement.
+    snapshotSynced = false;
+  } else if (!snapshotReservation.proceed) {
     snapshotSynced = true;
   } else {
     try {
@@ -322,41 +358,21 @@ export async function syncJobDatabaseToMemory(
     }
   }
 
-  // 2. Store human-readable table summary (new — searchable by sleep agent)
-  const summary = buildTableSummary(input.job, snapshots);
-  const summaryReservation = reserveMemoryWrite(summary, "job_database_summary");
-  if (!summaryReservation.proceed) {
-    summarySynced = true;
-  } else {
-    try {
-      await client.memory.add({
-        content: summary,
-        ...memoryScope,
-        metadata: {
-          role: "assistant",
-          category: "fact",
-          customMetadata: {
-            source: "job_database_summary",
-            content_type: "job_database_summary",
-            sync_date: syncDate,
-            jobId: input.job.id,
-            jobName: input.job.name,
-            jobType: input.job.type,
-            tables: tableNames,
-            tableCount: String(snapshots.length),
-          },
-        },
-      });
-      summaryReservation.commit();
-      summarySynced = true;
-    } catch (error) {
-      summaryReservation.release();
-      console.warn(
-        `[JobDatabaseMemorySync] Failed to sync summary for job ${input.job.id}:`,
-        error,
-      );
-    }
-  }
+  // 2. Capability card — one stable memory per job, updated in place.
+  //
+  // Replaces the old job_database_summary, which embedded the sync date in
+  // its content and therefore re-wrote every day even when the database was
+  // unchanged. The card contains no date and no run id, so an unchanged job
+  // produces a byte-identical body and writes nothing.
+  //
+  // This is also the ONLY job memory with a reader: create_job searches these
+  // before creating a job, to surface an existing job that already does the
+  // work (see findSimilarJobCapabilities).
+  const cardResult = await syncJobCapabilityCard({
+    job: input.job,
+    jobDir: input.jobDir,
+  });
+  summarySynced = cardResult.written || cardResult.reason === "unchanged";
 
   if (!snapshotSynced && !summarySynced) {
     return {

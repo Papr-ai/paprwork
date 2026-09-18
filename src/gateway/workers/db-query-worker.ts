@@ -11,9 +11,10 @@ import { openDiagnosticDatabase } from "../services/databaseDiagnostics/sqlite.j
 
 import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
-
-/** Wait for sync-engine write lock to clear before failing local reads. */
-const LOCAL_READ_BUSY_TIMEOUT_MS = 3_000;
+import {
+  resolveWorkerBusyTimeoutMs,
+  type DbWorkerRequestType,
+} from "../services/appRuntime/dbBusyRetry.js";
 
 // ── Message protocol ──────────────────────────────────────────────────────
 
@@ -24,7 +25,8 @@ export interface DbWorkerWriteBatchStatement {
 
 export interface DbWorkerRequest {
   id: number;
-  type: "query" | "write" | "write-batch" | "schema" | "exec" | "table-exists";
+  /** Shared with the retry policy so the two cannot list different types. */
+  type: DbWorkerRequestType;
   dbPath: string;
   sql?: string;
   params?: unknown[];
@@ -38,6 +40,12 @@ export interface DbWorkerResponse {
   success: boolean;
   data?: unknown;
   error?: string;
+  /**
+   * SQLite's own code, kept alongside the message. Only the message survives a
+   * postMessage of an Error, and the pool classifies lock contention on this —
+   * better-sqlite3 raises `SQLITE_BUSY`, which is the authoritative signal.
+   */
+  errorCode?: string;
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────
@@ -54,17 +62,19 @@ export interface DbWorkerResponse {
  * Fix: retry read-write once so SQLite can recreate -shm, then continue. We never
  * silently swallow real corruption — SQLITE_CORRUPT still propagates.
  */
-function openDb(dbPath: string, readonly: boolean): Database.Database {
+function openDb(
+  dbPath: string,
+  readonly: boolean,
+  busyTimeoutMs: number,
+): Database.Database {
   const openOptions: Database.Options = {
     readonly,
     fileMustExist: true,
-    ...(readonly ? { timeout: LOCAL_READ_BUSY_TIMEOUT_MS } : {}),
+    timeout: busyTimeoutMs,
   };
   try {
     const db = openDiagnosticDatabase(Database, "workers/db-query-worker", dbPath, openOptions);
-    if (readonly) {
-      db.pragma(`busy_timeout = ${LOCAL_READ_BUSY_TIMEOUT_MS}`);
-    }
+    db.pragma(`busy_timeout = ${busyTimeoutMs}`);
     return db;
   } catch (err) {
     const code = (err as { code?: string }).code ?? "";
@@ -72,8 +82,12 @@ function openDb(dbPath: string, readonly: boolean): Database.Database {
       readonly && (code === "SQLITE_IOERR" || code === "SQLITE_CANTOPEN" || code === "SQLITE_READONLY");
     if (!recoverable) throw err;
     // Read-write open lets SQLite rebuild the -shm sidecar from the -wal.
-    const db = openDiagnosticDatabase(Database, "workers/db-query-worker", dbPath, { readonly: false, fileMustExist: true });
-    db.pragma(`busy_timeout = ${LOCAL_READ_BUSY_TIMEOUT_MS}`);
+    const db = openDiagnosticDatabase(Database, "workers/db-query-worker", dbPath, {
+      readonly: false,
+      fileMustExist: true,
+      timeout: busyTimeoutMs,
+    });
+    db.pragma(`busy_timeout = ${busyTimeoutMs}`);
     return db;
   }
 }
@@ -88,7 +102,11 @@ function isReadonlyRequest(req: DbWorkerRequest): boolean {
 }
 
 function handle(req: DbWorkerRequest): DbWorkerResponse {
-  const db = openDb(req.dbPath, isReadonlyRequest(req));
+  const db = openDb(
+    req.dbPath,
+    isReadonlyRequest(req),
+    resolveWorkerBusyTimeoutMs(req.type),
+  );
 
   try {
     switch (req.type) {
@@ -202,6 +220,7 @@ if (parentPort) {
         id: req.id,
         success: false,
         error: (err as Error).message,
+        errorCode: (err as { code?: string }).code,
       } satisfies DbWorkerResponse);
     }
   });

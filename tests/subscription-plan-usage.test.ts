@@ -80,9 +80,18 @@ describe("formatClaudeSubscriptionSubline", () => {
     ).toBe("Extra usage · billed on top of your plan");
   });
 
-  it("shows hard stop when at limit and extra usage is off", () => {
+  /**
+   * Changed deliberately from "extra usage is off".
+   *
+   * That phrase names Anthropic's mechanism, and this line now also renders
+   * for ChatGPT, which stops by running out of credits rather than by having
+   * a setting switched off. The two mechanisms differ; what the user needs to
+   * know does not, so the copy states the consequence instead. The assertion
+   * this replaces pinned the phrasing, not a requirement.
+   */
+  it("says nothing more is being spent when refused at the limit", () => {
     expect(formatClaudeSubscriptionSubline(basePlan)).toBe(
-      "At included limit · extra usage is off",
+      "At included limit · no additional cost",
     );
   });
 
@@ -161,9 +170,17 @@ describe("chatModelIsFable", () => {
 });
 
 describe("formatChatTotalsLine", () => {
-  it("omits dollars for subscription", () => {
+  /**
+   * This assertion previously pinned `"5 turns · included usage"` — the dollar
+   * figure suppressed for every subscription chat. Corrected deliberately: a
+   * subscription login is only "included" up to its allowance, after which the
+   * provider bills per token on top of the plan. Suppressing the number hid
+   * real spend from exactly the users past that point, so the figure is now
+   * always shown and the wording carries whether it is a charge or an estimate.
+   */
+  it("shows the figure as list price while inside the plan", () => {
     expect(formatChatTotalsLine("subscription", 5, 12.34)).toBe(
-      "5 turns · included usage",
+      "5 turns · ≈$12.34 at list",
     );
   });
 });

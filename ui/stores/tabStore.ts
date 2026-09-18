@@ -10,9 +10,22 @@
 import { create } from "zustand";
 import type { Tab, TabType, DisplayMode } from "../types/tabs";
 import { gateway } from "../src/lib/gateway";
+import {
+  findReusableChatTab,
+  type ChatStoreProbe,
+} from "../lib/reusableChatTab";
 
 // Re-export for backward compatibility
 export type { Tab, TabType, DisplayMode };
+
+export interface CreateTabOptions {
+  /**
+   * Set by explicit user actions (New Chat button, tab-bar +, Cmd/Ctrl+T).
+   * Those clicks must always produce a visible new tab, even when a blank
+   * chat already exists somewhere in the bar.
+   */
+  forceNew?: boolean;
+}
 
 interface TabState {
   tabs: Tab[];
@@ -30,6 +43,7 @@ interface TabState {
     entityId: string,
     title: string,
     metadata?: Record<string, unknown>,
+    options?: CreateTabOptions,
   ) => string;
   switchToTab: (tabId: string, skipHistory?: boolean) => void;
   closeTab: (tabId: string) => void;
@@ -98,41 +112,36 @@ export const useTabStore = create<TabState>()((set, get) => ({
       activeLeftTab: null,
       activeRightTab: null,
 
-      createTab: (type, entityId, title, metadata = {}) => {
+      createTab: (type, entityId, title, metadata = {}, options = {}) => {
         const tabId = `${type}-${entityId}`;
 
-        // Special handling for chat tabs with temporary IDs
-        // If creating a chat with temp ID, check for existing empty chats first
+        // Special handling for chat tabs with temporary IDs.
+        // Background flows fold into an existing blank chat instead of stacking
+        // duplicates; explicit user actions (forceNew) always get a fresh tab,
+        // and a blank chat that is merged with an app, holds a draft, or is
+        // streaming is never treated as interchangeable — see reusableChatTab.
         if (
           type === "chat" &&
           entityId.startsWith("temp-") &&
           typeof window !== "undefined"
         ) {
-          const state = get();
+          const reusable = findReusableChatTab({
+            tabs: get().tabs,
+            chatStore: (window as unknown as {
+              __chatStore__?: ChatStoreProbe;
+            }).__chatStore__,
+            forceNew: options.forceNew,
+          });
 
-          // Check if any existing TEMP chat tab has no messages
-          for (const tab of state.tabs) {
-            if (tab.type === "chat" && tab.entityId.startsWith("temp-")) {
-              // Get chat store from global window object (set by chatStore)
-              const chatStore = (window as any).__chatStore__;
-              if (chatStore && typeof chatStore.getChatState === "function") {
-                const chatState = chatStore.getChatState(tab.entityId);
-                if (
-                  chatState &&
-                  chatState.messages &&
-                  chatState.messages.length === 0
-                ) {
-                  console.log(
-                    `[TabStore] Found empty temp chat tab: ${tab.id}, reusing it`,
-                  );
-                  get().switchToTab(tab.id);
-                  return tab.id;
-                }
-              }
-            }
+          if (reusable) {
+            console.log(
+              `[TabStore] Found empty temp chat tab: ${reusable.id}, reusing it`,
+            );
+            get().switchToTab(reusable.id);
+            return reusable.id;
           }
           console.log(
-            "[TabStore] No empty temp chat found, creating new chat tab",
+            "[TabStore] No reusable empty temp chat found, creating new chat tab",
           );
         }
 

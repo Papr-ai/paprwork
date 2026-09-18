@@ -210,7 +210,13 @@ export class CloudAppInstallService {
       repoPaprHome: cloned.repoDir,
       repoAppDir: cloned.sourceDir,
     });
-    const installDbPolicy = resolveInstallDbPolicy(mode, linkedIsolations);
+    // catalogScope matters: community collaborate tracks code but must never
+    // attach the publisher's database.
+    const installDbPolicy = resolveInstallDbPolicy(
+      mode,
+      linkedIsolations,
+      input.catalogScope,
+    );
     const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
 
     let createdAppId: string | null = null;

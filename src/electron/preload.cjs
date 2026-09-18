@@ -6,7 +6,7 @@
  * This is the recommended pattern for preload scripts
  */
 
-const { contextBridge, ipcRenderer } = require("electron");
+const { contextBridge, ipcRenderer, webUtils } = require("electron");
 
 console.log("[Preload] Script loaded");
 
@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
       startOAuth: (options) => ipcRenderer.invoke("auth:openai:start-oauth", options),
       getStatus: () => ipcRenderer.invoke("auth:openai:get-status"),
       disconnect: () => ipcRenderer.invoke("auth:openai:disconnect"),
+      getUsageLimits: () => ipcRenderer.invoke("auth:openai:get-usage-limits"),
     },
     claude: {
       startOAuth: (options) => ipcRenderer.invoke("auth:claude:start-oauth", options),
@@ -319,6 +320,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
     removeStatusListener: () => {
       ipcRenderer.removeAllListeners("gateway:status");
     },
+    // For a renderer that loaded after the one-shot push (reload, HMR, crash
+    // recovery) and would otherwise sit at "unknown" forever.
+    getStatus: () => ipcRenderer.invoke("gateway:get-status"),
   },
 
   // Auto-updater API
@@ -370,6 +374,21 @@ contextBridge.exposeInMainWorld("electronAPI", {
     save: (input) => ipcRenderer.invoke("chat:save-attachment", input),
     readPreview: (input) =>
       ipcRenderer.invoke("chat:read-attachment-preview", input),
+  },
+
+  // Electron 32 removed File.path, so a dropped file's real location is only
+  // reachable through webUtils. Without this every drop has to be base64'd in
+  // the renderer and copied through IPC, which is slow and fails outright on
+  // large files. Throws for a File not backed by disk (a pasted blob), so the
+  // caller treats any failure as "no path" and falls back to copying.
+  files: {
+    getPathForFile: (file) => {
+      try {
+        return webUtils.getPathForFile(file) || "";
+      } catch {
+        return "";
+      }
+    },
   },
 
   agentPreview: {
