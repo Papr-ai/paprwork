@@ -5,6 +5,7 @@ import {
   type PaprCloudAccessContext,
   type PaprCloudFeatureAccessResult,
 } from "../../src/core/utils/paprCloudFeatureAccess";
+import { sameCloudAccessContext } from "../utils/storeWriteGuards";
 
 interface PaprCloudFeatureStore {
   context: PaprCloudAccessContext | null;
@@ -17,7 +18,12 @@ interface PaprCloudFeatureStore {
 export const usePaprCloudFeatureStore = create<PaprCloudFeatureStore>((set) => ({
   context: null,
   lockModal: null,
-  setContext: (context) => set({ context }),
+  // Rebuilt from unchanged inputs on every refresh, so compare the content:
+  // a fresh object with identical fields is not a change worth re-rendering for.
+  setContext: (context) =>
+    set((prev) =>
+      sameCloudAccessContext(prev.context, context) ? prev : { context },
+    ),
   showLockModal: (lockModal) => set({ lockModal }),
   clearLockModal: () => set({ lockModal: null }),
 }));

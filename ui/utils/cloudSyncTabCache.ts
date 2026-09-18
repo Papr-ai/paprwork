@@ -8,9 +8,43 @@ import {
   deriveAppCloudSyncStatus,
   type AppCloudSyncStatus,
 } from "./appCloudSyncStatus";
+import { boundByRecency, touchNewest } from "./boundedRecencyMap";
 
 const STORAGE_KEY = "paprwork.cloudSyncSnapshot.v2";
 const LEGACY_SESSION_KEY = "paprwork.cloudSyncTab.v1";
+
+/**
+ * How many per-app sync payloads to keep.
+ *
+ * This cache exists so the publish bar can show a last-known status before the
+ * live fetch lands, which only matters for apps the user is about to open — at
+ * most the mounted warm set (7) plus the one being opened. It was previously
+ * unbounded, and each payload runs to ~160KB, so a workspace with 27 apps grew
+ * it to 4.3MB. Keys from builds that derived them differently were still in
+ * there too, since nothing ever removed anything.
+ */
+const MAX_CACHED_APPS = 12;
+
+/**
+ * Parsed snapshot, held so repeated reads do not re-parse the payload.
+ *
+ * Callers read this on render paths, and `JSON.parse` of the stored blob was
+ * measured at 233 MB/s of synchronous main-thread work. How often a caller
+ * reads is the caller's business; making a read cheap is this module's.
+ */
+let memo: CloudSyncTabSnapshot | null = null;
+let memoLoaded = false;
+
+if (typeof window !== "undefined") {
+  // Another window on this origin wrote: our copy is stale. Mini-apps are on
+  // their own origins now, so this only ever fires for a second Paprwork window.
+  window.addEventListener("storage", (event) => {
+    if (event.key === null || event.key === STORAGE_KEY) {
+      memo = null;
+      memoLoaded = false;
+    }
+  });
+}
 
 export interface CloudSyncTabSnapshot {
   gitStatus: Record<string, unknown> | null;
@@ -34,20 +68,29 @@ function readLegacySessionSnapshot(): CloudSyncTabSnapshot | null {
 }
 
 export function readCloudSyncTabSnapshot(): CloudSyncTabSnapshot | null {
+  if (memoLoaded) {
+    return memo;
+  }
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw) as CloudSyncTabSnapshot;
+      memo = JSON.parse(raw) as CloudSyncTabSnapshot;
+      memoLoaded = true;
+      return memo;
     }
     const legacy = readLegacySessionSnapshot();
     if (legacy) {
+      // Sets the memo as a side effect, so return that rather than `legacy` —
+      // the written copy carries `savedAt` and the merged per-app map.
       writeCloudSyncTabSnapshot({
         gitStatus: legacy.gitStatus,
         vaultStatus: legacy.vaultStatus,
         syncItems: legacy.syncItems,
       });
-      return legacy;
+      return memo;
     }
+    memo = null;
+    memoLoaded = true;
     return null;
   } catch {
     return null;
@@ -57,20 +100,20 @@ export function readCloudSyncTabSnapshot(): CloudSyncTabSnapshot | null {
 export function writeCloudSyncTabSnapshot(
   snapshot: Omit<CloudSyncTabSnapshot, "savedAt">,
 ): void {
+  const existing = readCloudSyncTabSnapshot();
+  const next: CloudSyncTabSnapshot = {
+    ...snapshot,
+    syncItemsByAppId: snapshot.syncItemsByAppId ?? existing?.syncItemsByAppId,
+    syncItemsFetchedAtByAppId:
+      snapshot.syncItemsFetchedAtByAppId ?? existing?.syncItemsFetchedAtByAppId,
+    savedAt: Date.now(),
+  };
+  // Update the memo even if the write below fails: it reflects what this tab
+  // believes, and a quota failure does not make the previous value current.
+  memo = next;
+  memoLoaded = true;
   try {
-    const existing = readCloudSyncTabSnapshot();
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({
-        ...snapshot,
-        syncItemsByAppId:
-          snapshot.syncItemsByAppId ?? existing?.syncItemsByAppId,
-        syncItemsFetchedAtByAppId:
-          snapshot.syncItemsFetchedAtByAppId ??
-          existing?.syncItemsFetchedAtByAppId,
-        savedAt: Date.now(),
-      } satisfies CloudSyncTabSnapshot),
-    );
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
   } catch {
     /* quota / private mode */
   }
@@ -139,18 +182,27 @@ export function writeCachedSyncItemsForApp(
 ): void {
   const existing = readCloudSyncTabSnapshot();
   const fetchedAt = Date.now();
+  const nextByApp = boundByRecency(
+    touchNewest(existing?.syncItemsByAppId ?? {}, appId, items),
+    MAX_CACHED_APPS,
+  );
+  const nextFetchedAt = touchNewest(
+    existing?.syncItemsFetchedAtByAppId ?? {},
+    appId,
+    fetchedAt,
+  );
   writeCloudSyncTabSnapshot({
     gitStatus: existing?.gitStatus ?? null,
     vaultStatus: existing?.vaultStatus ?? null,
     syncItems: items,
-    syncItemsByAppId: {
-      ...(existing?.syncItemsByAppId ?? {}),
-      [appId]: items,
-    },
-    syncItemsFetchedAtByAppId: {
-      ...(existing?.syncItemsFetchedAtByAppId ?? {}),
-      [appId]: fetchedAt,
-    },
+    syncItemsByAppId: nextByApp,
+    // Held to the same key set as the payloads, not merely the same bound. A
+    // timestamp whose payload has been evicted would make
+    // `readCachedSyncItemsFetchedAt` answer for a cache miss, and the map
+    // would otherwise be the one thing here still growing without limit.
+    syncItemsFetchedAtByAppId: Object.fromEntries(
+      Object.entries(nextFetchedAt).filter(([id]) => id in nextByApp),
+    ),
   });
 }
 
