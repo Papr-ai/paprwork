@@ -17,6 +17,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { z } from "zod";
+import { createTool } from "@mastra/core/tools";
 import {
   DEFERRAL_ESCAPE_TOOL_IDS,
   MEASURED_CORE_TOOL_IDS,
@@ -434,22 +435,27 @@ describe("width nudge", () => {
 });
 
 describe("deferred tool access", () => {
+  // Built with the real `createTool`, not a hand-rolled stub. A stub's
+  // `execute` runs whatever it is handed, so it accepts `{ context: args }`
+  // and reports success while every real tool rejects that same call during
+  // Mastra's input validation. That gap is what let the dispatcher ship
+  // wrapping its payload, leaving 87 of 112 deferred tools unreachable.
   const registry: Record<string, unknown> = {
-    register_schema: {
+    register_schema: createTool({
       id: "register_schema",
       description: "Register a memory graph schema",
       inputSchema: z.object({ name: z.string() }),
-      execute: async ({ context }: { context: { name: string } }) => ({
+      execute: async (input: any) => ({
         success: true,
-        registered: context.name,
+        registered: (input?.context ?? input).name,
       }),
-    },
-    delete_schema: {
+    }),
+    delete_schema: createTool({
       id: "delete_schema",
       description: "Archive a schema",
       inputSchema: z.object({ schemaId: z.string() }),
       execute: async () => ({ success: true }),
-    },
+    }),
   };
 
   const deps = (deferred: string[]) => ({
@@ -515,6 +521,49 @@ describe("deferred tool access", () => {
     });
     expect(res.success).toBe(true);
     expect(res.registered).toBe("books");
+  });
+
+  // The failure this guards against is not a thrown error but a misleading
+  // one: every required field reads as missing while the values sit one level
+  // down under `context`, so it looks like the dispatcher mangled the call.
+  it("dispatches arguments flat, so a real tool's validation accepts them", async () => {
+    const dispatch = createRunDeferredTool(deps(["register_schema"]));
+    const res: any = await run(dispatch, {
+      tool_name: "register_schema",
+      arguments: { name: "books" },
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.registered).toBe("books");
+  });
+
+  it("reaches a required-argument tool the way create_job is reached", async () => {
+    // create_job is deferred and every one of its required fields would read
+    // as undefined under a wrapped dispatch — the report that found this.
+    const required = createTool({
+      id: "create_job",
+      description: "Create a job",
+      inputSchema: z.object({
+        name: z.string(),
+        type: z.enum(["python", "agent"]),
+        appIds: z.array(z.string()).min(1),
+      }),
+      execute: async (input: any) => {
+        const a = input?.context ?? input;
+        return { success: true, created: a.name, type: a.type };
+      },
+    });
+    const dispatch = createRunDeferredTool({
+      listDeferredToolIds: () => ["create_job"],
+      getTool: () => required,
+    });
+
+    const res: any = await run(dispatch, {
+      tool_name: "create_job",
+      arguments: { name: "nightly", type: "python", appIds: ["app-1"] },
+    });
+    expect(res.error).toBeUndefined();
+    expect(res.created).toBe("nightly");
+    expect(res.type).toBe("python");
   });
 
   it("returns the schema with the error when arguments do not match", async () => {
