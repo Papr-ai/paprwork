@@ -294,7 +294,7 @@ export class TursoReplicaService {
       try {
         const synced = await this.syncWithRecovery(spec, "pull");
         if (marker) {
-          const settled = this.settleBootstrapMarker(localPath, marker);
+          const settled = await this.settleBootstrapMarker(localPath, marker);
           if (!settled) {
             return false;
           }
@@ -317,12 +317,25 @@ export class TursoReplicaService {
    * arrived, which is precisely how an empty replica previously passed as healthy. We clear
    * the marker only once the file actually holds user rows, or once we can prove there were
    * never any to lose (rowsAtRepair === 0 and the cloud is genuinely empty).
+   *
+   * The replay writes with better-sqlite3, so the worker handle must be closed first. We are
+   * called immediately after a successful pull, which means the worker *definitely* owns this
+   * path — a bulk write beneath its cached root pages reallocates pages under pointers it
+   * still believes in, and the engine then aborts the process from
+   * `btree.rs` (`Invalid page type: 0` / `unreachable!()` on a rowid index). That abort resets
+   * the sidecars, which re-bootstraps, which replays again: the corruption is self-renewing.
+   * `ownsPath`'s own contract states the rule — "never a second SQLite engine" — and this is
+   * the one write path that was not honouring it.
    */
-  private settleBootstrapMarker(
+  private async settleBootstrapMarker(
     localPath: string,
     marker: BootstrapPendingMarker,
-  ): boolean {
+  ): Promise<boolean> {
     if (marker.snapshotPath && fs.existsSync(marker.snapshotPath)) {
+      // close() is the documented path for "callers that need the files": it releases the
+      // worker handle and drops touchedPaths under the same normalizeDbPath key the open
+      // side uses, so the next openSpec re-establishes rather than assuming a live handle.
+      await this.close(localPath);
       const replay = replayBootstrapSnapshot(localPath, marker.snapshotPath);
       if (replay.rowsReplayed > 0 || replay.tablesReplayed > 0) {
         console.log(
