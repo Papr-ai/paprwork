@@ -41,7 +41,6 @@ import {
 } from "../ui/utils/miniAppShellProbe.js";
 import {
   MAX_MOUNTED_APP_PREVIEWS,
-  MAX_MOUNTED_APP_PREVIEWS_SHARED_ORIGIN,
   effectiveMaxMountedAppPreviews,
   selectMountedAppTabIds,
 } from "../ui/utils/appPreviewMemoryPolicy.js";
@@ -144,67 +143,95 @@ describe("preview origin selection", () => {
   });
 });
 
+/**
+ * These were written against a key of method + URL + headers that returned
+ * null for any POST and for any request carrying a body. Measured against the
+ * 57 installed apps, that made folding dead code: every read goes out as
+ * `POST /api/db/query` with its SQL in the body, so the old rule folded
+ * nothing and a poller filled the queue one entry per tick. The key now spans
+ * the body, and refusal is decided by the *path* — only endpoints the gateway
+ * itself restricts to SELECT are deferrable at all.
+ */
 describe("fetch gate coalescing", () => {
-  it("coalesces repeat GETs of the same URL", () => {
-    const a = coalesceKeyForRequest("/api/db/query?x=1");
-    const b = coalesceKeyForRequest("/api/db/query?x=1");
+  const url = (path: string) => new URL(path, "http://localhost:18789");
+  const read = (sql: string): RequestInit => ({
+    method: "POST",
+    body: JSON.stringify({ sql }),
+  });
+  const keyFor = (path: string, init?: RequestInit) =>
+    coalesceKeyForRequest(url(path), path, init);
+
+  it("folds two identical reads and keeps two different ones apart", () => {
+    const a = keyFor("/api/db/query", read("SELECT 1"));
     expect(a).not.toBeNull();
-    expect(a).toBe(b);
+    expect(a).toBe(keyFor("/api/db/query", read("SELECT 1")));
+    expect(a).not.toBe(keyFor("/api/db/query", read("SELECT 2")));
   });
 
-  it("keeps different URLs apart", () => {
-    expect(coalesceKeyForRequest("/api/a")).not.toBe(coalesceKeyForRequest("/api/b"));
+  it("keeps different paths apart even with an identical body", () => {
+    expect(keyFor("/api/db/query", read("SELECT 1"))).not.toBe(
+      keyFor("/api/db/batch", read("SELECT 1")),
+    );
   });
 
-  it("never coalesces a mutation", () => {
-    // Two queued POSTs are not interchangeable: answering both from one
-    // response would silently drop a write.
-    expect(coalesceKeyForRequest("/api/db/query", { method: "POST" })).toBeNull();
-    expect(coalesceKeyForRequest("/api/x", { method: "post" })).toBeNull();
-  });
-
-  it("never coalesces a GET carrying a body", () => {
-    expect(coalesceKeyForRequest("/api/x", { body: "{}" })).toBeNull();
-  });
-
-  it("never coalesces a request carrying an abort signal", () => {
+  it("never folds a request carrying an abort signal", () => {
     // One waiter aborting must not cancel the others.
     const controller = new AbortController();
     expect(
-      coalesceKeyForRequest("/api/x", { signal: controller.signal }),
+      keyFor("/api/db/query", { ...read("SELECT 1"), signal: controller.signal }),
     ).toBeNull();
   });
 
-  it("treats differing headers as different requests", () => {
-    // Same URL, different auth, legitimately different responses.
-    const a = coalesceKeyForRequest("/api/x", { headers: { "x-key": "a" } });
-    const b = coalesceKeyForRequest("/api/x", { headers: { "x-key": "b" } });
-    expect(a).not.toBe(b);
+  it("never folds a body it cannot compare", () => {
+    // A stream or FormData cannot be read synchronously, and reading it here
+    // would consume it before the replay.
+    expect(
+      keyFor("/api/db/query", { method: "POST", body: new FormData() }),
+    ).toBeNull();
   });
 
-  it("ignores header order", () => {
-    const a = coalesceKeyForRequest("/api/x", { headers: { a: "1", b: "2" } });
-    const b = coalesceKeyForRequest("/api/x", { headers: { b: "2", a: "1" } });
-    expect(a).toBe(b);
+  it("never folds a Request object", () => {
+    const request = new Request("http://localhost:18789/api/db/query", {
+      method: "POST",
+      body: "{}",
+    });
+    expect(
+      coalesceKeyForRequest(url("/api/db/query"), request, undefined),
+    ).toBeNull();
+  });
+
+  it("treats differing headers as different requests, ignoring their order", () => {
+    // Same query, different auth, legitimately different responses.
+    const a = keyFor("/api/db/query", {
+      ...read("SELECT 1"),
+      headers: { "x-key": "a", b: "2" },
+    });
+    expect(a).not.toBe(
+      keyFor("/api/db/query", {
+        ...read("SELECT 1"),
+        headers: { "x-key": "b", b: "2" },
+      }),
+    );
+    expect(a).toBe(
+      keyFor("/api/db/query", {
+        ...read("SELECT 1"),
+        headers: { b: "2", "x-key": "a" },
+      }),
+    );
   });
 
   it("gives a poller's every call the same identity", () => {
-    // The whole point: 600 polls of one URL share a key, so they fold into one
-    // queue entry at enqueue and cannot exhaust the cap between them. That
+    // The whole point: 600 polls of one query share a key, so they fold into
+    // one queue entry at enqueue and cannot exhaust the cap between them. That
     // folding is asserted behaviourally in tests/papr-preview-fetch-gate.test.ts
     // ("does not spend the queue cap on a poller's own duplicates"); here we
     // only pin that the key is stable, which is what makes it possible.
     const keys = new Set(
       Array.from({ length: 600 }, () =>
-        coalesceKeyForRequest("/api/db/query?x=1"),
+        keyFor("/api/db/query", read("SELECT 1")),
       ),
     );
     expect(keys.size).toBe(1);
-  });
-
-  it("gives every uncoalescable request a null identity", () => {
-    // Null means "replay me alone" — never folded, never deduped.
-    expect(coalesceKeyForRequest("/api/x", { method: "POST" })).toBeNull();
   });
 });
 
@@ -478,31 +505,36 @@ describe("how many previews stay warm, and what warm costs", () => {
   const appTab = (id: string): Tab =>
     ({ id, type: "app", entityId: id, title: id }) as unknown as Tab;
 
-  it("keeps one warm hidden preview on the shared origin", () => {
-    // A hidden same-origin iframe is display:none, which stops rAF but not
-    // timers, promise continuations or fetch callbacks — and all of those run
-    // on the chat UI's thread. Seven of them is the measured pathology.
-    expect(effectiveMaxMountedAppPreviews(1, false)).toBe(
-      MAX_MOUNTED_APP_PREVIEWS_SHARED_ORIGIN,
-    );
-    expect(MAX_MOUNTED_APP_PREVIEWS_SHARED_ORIGIN).toBeLessThan(
-      MAX_MOUNTED_APP_PREVIEWS,
+  /**
+   * These three assertions replace a pair that pinned a *second*, smaller
+   * shared-origin cap. That cap was the workaround: a warm hidden preview is
+   * only cheap if it is quiet, and quiet used to depend on a postMessage that
+   * raced the app's own module-scope fetch, so we bought safety by keeping
+   * fewer apps warm. iframe.name closes that race at boot, which makes the
+   * cap a recurring cold reload bought for nothing. Requirement, not
+   * mechanism: one cap, and it does not vary by hosting mode.
+   */
+  it("keeps the same warm set whichever origin previews load from", () => {
+    expect(effectiveMaxMountedAppPreviews(1)).toBe(MAX_MOUNTED_APP_PREVIEWS);
+    expect(MAX_MOUNTED_APP_PREVIEWS).toBe(7);
+  });
+
+  it("takes no hosting-mode argument, so the two cannot drift apart", () => {
+    // A second parameter is how the two caps came back last time.
+    expect(effectiveMaxMountedAppPreviews.length).toBe(1);
+    expect(readSource("ui/utils/appPreviewMemoryPolicy.ts")).not.toContain(
+      "SHARED_ORIGIN",
     );
   });
 
-  it("keeps the full warm set once previews have their own process", () => {
-    expect(effectiveMaxMountedAppPreviews(1, true)).toBe(MAX_MOUNTED_APP_PREVIEWS);
-  });
-
-  it("never evicts a visible pane to honour either cap", () => {
-    // Split view with more visible apps than the shared cap must still mount
-    // every visible one — a blank pane is worse than a busy thread.
+  it("never evicts a visible pane to honour the cap", () => {
+    // Split view with more visible apps than the cap must still mount every
+    // visible one — a blank pane is worse than a busy thread.
     const visible = new Set(["a", "b", "c"]);
     const mounted = selectMountedAppTabIds(
       ["a", "b", "c", "d"].map(appTab),
       visible,
       new Map(),
-      { isolatedOrigins: false },
     );
     for (const id of visible) {
       expect(mounted.has(id)).toBe(true);
@@ -514,14 +546,14 @@ describe("how many previews stay warm, and what warm costs", () => {
     // what is already on screen. Returning the bare constant would mean that
     // in split view nothing stays warm at all and every switch-back reloads —
     // which is the regression the `+ 1` exists to prevent.
-    expect(effectiveMaxMountedAppPreviews(3, false)).toBe(4);
-    expect(effectiveMaxMountedAppPreviews(9, true)).toBe(10);
+    expect(effectiveMaxMountedAppPreviews(9)).toBe(10);
 
     const mounted = selectMountedAppTabIds(
-      ["a", "b", "c", "warm"].map(appTab),
-      new Set(["a", "b", "c"]),
+      Array.from({ length: 8 }, (_unused, i) => appTab(`pane-${i}`)).concat(
+        appTab("warm"),
+      ),
+      new Set(Array.from({ length: 8 }, (_unused, i) => `pane-${i}`)),
       new Map([["warm", 1_000]]),
-      { isolatedOrigins: false },
     );
     expect(mounted.has("warm")).toBe(true);
   });
@@ -534,15 +566,15 @@ describe("how many previews stay warm, and what warm costs", () => {
         ["recent", 2_000],
         ["stale", 1_000],
       ]),
-      { isolatedOrigins: false },
+      { maxMounted: 2 },
     );
     expect(mounted.has("recent")).toBe(true);
     expect(mounted.has("stale")).toBe(false);
   });
 
-  it("sizes the warm set from the deployment, not from one app id", () => {
+  it("decides isolation from the deployment, not from one app id", () => {
     // Asking resolveMiniAppPreviewOrigin with a placeholder id would let a
-    // single un-isolatable id decide the cap for every app.
+    // single un-isolatable id answer for every app.
     expect(
       miniAppPreviewIsolationEnabled({ host: "localhost", isolationFlag: "1" }),
     ).toBe(true);
@@ -550,12 +582,11 @@ describe("how many previews stay warm, and what warm costs", () => {
       miniAppPreviewIsolationEnabled({ host: "127.0.0.1", isolationFlag: "1" }),
     ).toBe(false);
     expect(
-      miniAppPreviewIsolationEnabled({ host: "localhost", isolationFlag: undefined }),
+      miniAppPreviewIsolationEnabled({
+        host: "localhost",
+        isolationFlag: undefined,
+      }),
     ).toBe(false);
-
-    const contentArea = readSource("ui/components/Layout/ContentArea.tsx");
-    expect(contentArea).toContain("miniAppPreviewIsolationEnabled");
-    expect(contentArea).toContain("isolatedOrigins");
   });
 });
 

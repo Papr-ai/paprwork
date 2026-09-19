@@ -13,8 +13,52 @@ import { getTursoSyncBridge } from "./TursoSyncBridge.js";
 import { ensureLocalDbChangeLogReady } from "./tursoSyncBridgeCore.js";
 import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
 import { linkedSourceAsAppDataSource } from "./tursoLinkedSources.js";
+import type { TursoLinkedSource } from "./tursoLinkedSources.js";
 import { shouldUseTursoReplicaForSource } from "./tursoReplica/tursoReplicaRouting.js";
 import { releaseReplicaHandleForJob } from "./tursoReplica/replicaDbJobQuiesce.js";
+import { isReplicaCheckpointWalError } from "./tursoReplica/tursoReplicaCheckpointRecovery.js";
+import { resolveTursoDatabaseNameForSource } from "./DatabaseRegistryService.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
+
+async function pullJobReplicaWithCheckpointRecovery(
+  syncKey: string,
+  linked: TursoLinkedSource,
+  bridge: NonNullable<ReturnType<typeof getTursoSyncBridge>>,
+  appendLog?: (line: string) => Promise<void>,
+): Promise<Awaited<ReturnType<typeof bridge.pullJob>>> {
+  let result = await bridge.pullJob(syncKey, undefined, {});
+  if (
+    result.status !== "failed" ||
+    !result.error ||
+    !isReplicaCheckpointWalError(result.error)
+  ) {
+    return result;
+  }
+
+  const appSource = linkedSourceAsAppDataSource(linked);
+  const { recoverReplicaAfterCheckpointError } = await import(
+    "./tursoReplica/tursoReplicaRouting.js"
+  );
+  const tursoDatabase = resolveTursoDatabaseNameForSource(
+    appSource,
+    getPaprUserId(),
+  );
+  if (!tursoDatabase) {
+    return result;
+  }
+  await appendLog?.(
+    `[Turso] WAL/checkpoint error on pre-run pull for ${syncKey} — repairing sidecars and retrying once`,
+  );
+  const recovered = await recoverReplicaAfterCheckpointError(
+    appSource,
+    tursoDatabase,
+  );
+  if (!recovered) {
+    return result;
+  }
+  result = await bridge.pullJob(syncKey, undefined, { forceReconnect: true });
+  return result;
+}
 
 export function resolveJobTursoSyncKeys(
   job: Pick<JobRecord, "id" | "writeDbIds">,
@@ -119,7 +163,12 @@ export async function pullJobTursoBeforeRun(
           `[Turso] Replica handle retained — jobs write via gateway (${syncKey})`,
         );
       }
-      const result = await bridge.pullJob(syncKey, undefined, {});
+      const result = await pullJobReplicaWithCheckpointRecovery(
+        syncKey,
+        linked,
+        bridge,
+        appendLog,
+      );
 
       if (result.status === "pulled") {
         if (!isReplica) {

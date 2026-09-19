@@ -56,12 +56,14 @@ export interface CloudBackendDbProxyDeps {
   query: (
     session: BackendDbProxySession,
     sql: string,
-    params?: unknown[],
+    params: unknown[] | undefined,
+    sourceId: string | undefined,
   ) => Promise<{ rows: Record<string, unknown>[]; count: number }>;
   write: (
     session: BackendDbProxySession,
     sql: string,
-    params?: unknown[],
+    params: unknown[] | undefined,
+    sourceId: string | undefined,
   ) => Promise<{ changes: number; lastInsertRowid: number }>;
 }
 
@@ -243,14 +245,19 @@ export function createCloudBackendDbProxyRouter(
         return;
       }
 
-      const { sql, params } = req.body as { sql?: string; params?: unknown[] };
+      const { sql, params, sourceId } = req.body as {
+        sql?: string;
+        params?: unknown[];
+        sourceId?: string;
+      };
       if (!sql?.trim()) {
         res.status(400).json({ error: "sql is required" });
         return;
       }
 
       assertReadOnlySql(sql);
-      const result = await deps.query(session, sql, params);
+      const resolvedSourceId = sourceId?.trim() || session.sourceId;
+      const result = await deps.query(session, sql, params, resolvedSourceId);
       res.json({ rows: result.rows, count: result.count });
     } catch (err) {
       const e = err as Error & { status?: number };
@@ -266,14 +273,19 @@ export function createCloudBackendDbProxyRouter(
         return;
       }
 
-      const { sql, params } = req.body as { sql?: string; params?: unknown[] };
+      const { sql, params, sourceId } = req.body as {
+        sql?: string;
+        params?: unknown[];
+        sourceId?: string;
+      };
       if (!sql?.trim()) {
         res.status(400).json({ error: "sql is required" });
         return;
       }
 
       assertWriteSql(sql);
-      const result = await deps.write(session, sql, params);
+      const resolvedSourceId = sourceId?.trim() || session.sourceId;
+      const result = await deps.write(session, sql, params, resolvedSourceId);
       res.json({
         changes: result.changes,
         lastInsertRowid: result.lastInsertRowid,

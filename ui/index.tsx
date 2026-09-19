@@ -24,6 +24,11 @@ window.addEventListener("unhandledrejection", (event) => {
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { startRendererPerformanceReporting } from "./utils/rendererPerformance";
+const stopRendererPerformance = startRendererPerformanceReporting(
+  `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}/api/debug/renderer-performance`,
+);
+if (import.meta.hot) import.meta.hot.dispose(stopRendererPerformance);
 
 console.log('[React] Entry point reached - starting React initialization');
 const reactStartTime = performance.now();

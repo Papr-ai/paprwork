@@ -18,10 +18,15 @@ import {
 import {
   getPlatformConfig,
   getAllPlatformIds,
+  type PlatformId,
 } from "../services/platforms/platformRegistry.js";
 
 interface PlatformConnectPayload {
   platformId: string;
+}
+
+interface PlatformImportFromChromePayload {
+  platformIds: string[];
 }
 
 interface PlatformStatusPayload {
@@ -145,10 +150,43 @@ export async function setupPlatformHandlers(
                 : result.waitingForConfirmation
                   ? result.externalChrome
                     ? `A Chrome window opened for ${config.name}. Log in there (passkeys work), then click Check now.`
-                    : `Checking Chrome for ${config.name}. If needed, log in there — we'll detect it automatically.`
+                    : `Sign in to ${config.name} in the Papr browser tab — we'll detect it automatically.`
                   : result.error || `Connecting to ${config.name}`,
           },
         });
+        break;
+      }
+
+      case "platform:import-from-chrome": {
+        const payload = message.payload as PlatformImportFromChromePayload;
+        const ids = payload.platformIds?.filter((id) => id.trim().length > 0) ?? [];
+        if (ids.length === 0) {
+          sendError(ws, message.id, "platformIds is required");
+          return;
+        }
+
+        const sessionService = getPlatformSessionService();
+        await sessionService.initialize();
+
+        const results = await sessionService.importSessionsFromPersonalChrome(
+          ids as PlatformId[],
+        );
+
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: { results },
+        });
+
+        const { broadcast } = await import("./index.js");
+        for (const state of results) {
+          if (state.status === "connected") {
+            broadcast({
+              type: "platform:status-changed",
+              data: state,
+            });
+          }
+        }
         break;
       }
 

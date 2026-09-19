@@ -1,0 +1,222 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Gateway · Performance</title><style>
+:root{color-scheme:dark;--bg:#0b0e14;--panel:#111720;--text:#e4eaf2;--muted:#8796aa;--border:#263141;--lag:#ff647c}
+*{box-sizing:border-box}body{margin:0;font:13px/1.5 system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text)}
+header{padding:20px 28px;display:flex;align-items:center;gap:18px;border-bottom:1px solid var(--border)}h1{font-size:18px;margin:0;letter-spacing:-.4px}.meta,.hint{color:var(--muted);font-size:12px}.meta{flex:1}main{padding:24px;display:grid;gap:20px}section{background:var(--panel);border:1px solid var(--border);border-radius:12px;padding:20px;min-width:0}h2{font-size:15px;margin:0 0 8px}.hint{margin:6px 0 12px}button,input,select{font:inherit;color:inherit;background:#192230;border:1px solid #344257;border-radius:6px;padding:7px 10px}button{cursor:pointer}button:hover{background:#25334a}button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #a5caff;outline-offset:2px}label{cursor:pointer}.toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:16px 0}.toolbar input{flex:1;min-width:160px}.stats{display:flex;gap:24px;flex-wrap:wrap;margin:18px 0}.stat{font-size:22px;font-weight:600;letter-spacing:-.5px}.stat small{display:block;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:var(--muted);font-weight:500}.legend{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:#b0bed0;margin:12px 0}.swatch{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:5px}.wait-swatch{background:repeating-linear-gradient(135deg,#8490a5 0 2px,#384357 2px 5px)}.timeline-layout{display:flex;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:#0c1119}.timeline-viewport{overflow:auto;max-height:600px;min-height:260px;flex:1}.waterfall{position:relative;min-width:800px}.axis,.row{display:flex;height:34px;position:relative}.axis{position:sticky;top:0;height:40px;background:#151e2b;z-index:6;border-bottom:1px solid var(--border)}.row{border-bottom:1px solid #1c2634}.row:hover{background:#141e2c}.name{position:sticky;left:0;flex:0 0 260px;width:260px;background:#101722;z-index:3;display:flex;align-items:center;gap:7px;padding:0 12px;border-right:1px solid var(--border);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:11px;border-radius:0;text-align:left}.name span{overflow:hidden;text-overflow:ellipsis}.name small{color:var(--muted);margin-left:auto}.axis .name{background:#151e2b}.track{position:relative;flex:1;min-width:0;background-image:linear-gradient(to right,#24304488 1px,transparent 1px);background-size:10% 100%}.tick{position:absolute;top:10px;color:var(--muted);font:10px ui-monospace,monospace;transform:translateX(-50%)}.tick:first-child{transform:none}.tick:last-child{transform:translateX(-100%)}.bar{position:absolute;top:9px;height:16px;min-width:5px;padding:0;border:1px solid #ffffff30;border-radius:3px;box-shadow:0 1px 6px #0004}.bar:hover{filter:brightness(1.25);z-index:2}.bar.wait{background:repeating-linear-gradient(135deg,#8490a5 0 2px,#384357 2px 5px)}.bar.error{border:2px solid #ff647c}.row.selected{background:#22314a}.row.selected .name{background:#22314a}.row.related .name{box-shadow:inset 3px 0 #aac9ff}.row.selected .bar{outline:1px solid white;outline-offset:2px}.markers{position:absolute;left:260px;right:0;top:40px;bottom:0;pointer-events:none;z-index:4}.marker{position:absolute;top:0;bottom:0;border-left:1px dashed var(--marker);opacity:.9}.marker button{position:absolute;top:0;left:-6px;width:12px;height:18px;padding:0;border:0;background:var(--marker);clip-path:polygon(0 0,100% 0,100% 65%,50% 100%,0 65%);pointer-events:auto;border-radius:0}.inspector{width:310px;flex:0 0 310px;border-left:1px solid var(--border);padding:18px;max-height:600px;overflow:auto;background:#131c29}.inspector h3{font-size:15px;overflow-wrap:anywhere;margin:10px 0}.inspector p{color:#9dacbf;font-size:12px}.inspector dl{margin:12px 0}.inspector dt{color:var(--muted);font-size:11px;margin-top:12px}.inspector dd{margin:2px 0;overflow-wrap:anywhere;font-size:12px}.badge{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#96adce}.empty{padding:35px;color:var(--muted)}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:8px;text-align:left;border-bottom:1px solid var(--border);vertical-align:top}th{color:var(--muted);font-weight:500}details{margin:10px 0}summary{cursor:pointer}.err{color:var(--lag)}@media(max-width:1050px){.timeline-layout{flex-direction:column}.inspector{width:100%;max-height:320px;border-left:0;border-top:1px solid var(--border);flex-basis:auto}header{flex-wrap:wrap}.name{width:200px;flex-basis:200px}.markers{left:200px}}
+</style></head><body>
+<header><h1>Gateway <span style="color:#6f8199;font-weight:400">/ Performance</span></h1><span id="meta" class="meta" role="status">Loading…</span><button id="refresh">Refresh</button><label><input type="checkbox" id="auto" checked> Live · 3s</label></header>
+<main><section id="timelineSection"><span class="badge">Execution overview</span><h2 style="font-size:22px;margin-top:4px">Event timeline</h2><p class="hint">One row per operation, one shared clock. Select any bar or incident to inspect what was happening.</p><div id="stats" class="stats"></div>
+<div class="toolbar"><input id="search" type="search" aria-label="Search operations" placeholder="Search operations, chats, database owners…"><select id="kind" aria-label="Operation type"><option value="all">All activity</option></select><select id="order" aria-label="Sort operations"><option value="start">Start time ↑</option><option value="duration">Longest first</option></select><button id="zoomOut" aria-label="Zoom out">−</button><button id="zoomIn" aria-label="Zoom in">+</button><button id="fit">Fit</button><button id="download">Download JSON</button></div>
+<div id="legend" class="legend"></div><div class="timeline-layout"><div class="timeline-viewport" id="timelineWrap"><div class="waterfall" id="timeline"></div></div><aside id="inspector" class="inspector" aria-live="polite"></aside></div><p id="coverage" class="hint" style="margin-top:12px"></p></section>
+    <section><h2>Renderer and mini-app activity</h2>
+      <p class="hint">Pause acknowledgement confirms the fetch gate received the state, not that all app code stopped. Request counts are cumulative since each frame loaded and exclude XHR, SSE and bypassed fetches. Long tasks identify UI contention, not the app responsible.</p>
+      <div id="rendererActivity">Waiting for renderer measurements…</div>
+    </section>
+    <section>
+      <h2>Memory pressure and process usage</h2>
+      <p class="hint" id="watchdogStatus">Waiting for independent observer…</p>
+      <p class="hint">Pressure, swap activity, and compressed memory are more useful than free memory alone. Process CPU is the OS-reported average; RSS includes shared pages.</p>
+      <table id="hostTable"><thead><tr><th>Measured</th><th>Pressure</th><th>Swap used</th><th>Swap in / out (pages/s)</th><th>Compressed RAM</th><th>Load / logical CPUs</th></tr></thead><tbody></tbody></table>
+      <h2 style="margin-top:16px">Latest process measurements</h2>
+      <div id="processMetrics"></div>
+    </section>
+    <section>
+      <h2>Stall stack captures</h2>
+      <p class="hint">A separate process watches gateway heartbeats. After a 2.5s stall, macOS attempts a one-second native stack sample (at most once/minute). Native stacks may identify waits without JavaScript source lines. Last-known operations can include queued work.</p>
+      <div id="databaseActivity"></div>
+      <div id="stackCaptures"></div>
+    </section>
+    <section>
+      <h2>Slow event-loop windows</h2>
+      <p class="hint">Each row is a ~5s sample window. <strong>Active at sample</strong> is what the gateway recorded at the tick; <strong>Overlapping</strong> is everything in flight during that window. Overlap is evidence, not proof of causation.</p>
+      <table id="slowTable">
+        <thead>
+          <tr>
+            <th>Finished</th>
+            <th>Loop max</th>
+            <th>CPU</th>
+            <th>GC</th>
+            <th>Active at sample</th>
+            <th>Overlapping</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+</main><script>
+const API="/api/debug/gateway-performance";
+const types={renderer:["Renderer delay","#f2a6dc"],chat:["Chat turn","#6c9fff"],model:["Model request","#27d8ab"],tool:["Tool","#c19bff"],background:["Background","#ffb760"],indexing:["Indexing","#61cbe7"],setup:["Setup","#e895ce"],"heap-snapshot":["Heap snapshot","#c5ce79"],database:["Database","#7dd3b3"]};
+let lastPayload=null,selected=null,zoom=1,inflight=false;
+const $=id=>document.getElementById(id);
+const ms=iso=>Date.parse(iso);
+const fmtMs=n=>n==null?"—":n>=1000?(n/1000).toFixed(2)+"s":Math.round(n)+"ms";
+const clock=iso=>new Date(iso).toLocaleTimeString([], {hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'})+"."+String(new Date(iso).getMilliseconds()).padStart(3,"0");
+function el(tag,text,className){const e=document.createElement(tag);if(text!=null)e.textContent=text;if(className)e.className=className;return e;}
+function fmtOps(list){return (list||[]).map(o=>o.kind+"/"+o.name).join(", ")||"—";}
+function data(payload){
+ const snapshot=payload.resources?.watchdog?.snapshot;
+ const ops=new Map((payload.timeline?.operations||[]).map(op=>[op.id,op]));
+ const db=snapshot?.databases;
+ function addDb(c,o,end,outcome){const id="db:"+c.connectionId+":"+o.id;ops.set(id,{id,kind:"database",name:c.owner+" · "+o.kind,queuedAt:o.startedAt,startedAt:o.startedAt,finishedAt:end,status:end?(outcome==="error"?"error":"completed"):"running",databasePath:c.databasePath,connectionId:c.connectionId,pid:c.pid,threadId:c.threadId,transaction:c.transaction.state});}
+ for(const completion of db?.recent||[])addDb(completion.connection,completion.operation,completion.finishedAt,completion.outcome);
+ for(const c of db?.connections||[])for(const o of c.operations)addDb(c,o);
+ for(const session of payload.renderer?.sessions||[])for(const sample of session.samples||[])for(const [index,incident] of (sample.incidents||[]).entries()){
+  const id="renderer:"+session.sessionId+":"+sample.sequence+":"+index;
+  ops.set(id,{id,kind:"renderer",name:incident.kind,queuedAt:incident.startedAt,startedAt:incident.startedAt,finishedAt:new Date(ms(incident.startedAt)+incident.durationMs).toISOString(),durationMs:incident.durationMs,status:"completed",attribution:incident.attribution});
+ }
+ const bb=payload.backgroundBudget;
+ if(bb?.queued?.length)for(const [index,q] of bb.queued.entries()){
+  const id="bg-queue:"+index+":"+q.label;
+  const queuedAt=new Date(ms(payload.capturedAt)-q.waitingMs).toISOString();
+  ops.set(id,{id,kind:"background",name:"budget queue · "+q.label,queuedAt,startedAt:null,finishedAt:null,status:"queued",queueMs:q.waitingMs,blockReason:q.blockReason,blockingActive:q.blockingActive,budgetQueue:true});
+ }
+ const markers=(payload.timeline?.healthEvents||[]).map(e=>({...e,type:"health",color:e.status==="failed"?"#ff647c":"#59dcad",name:e.status==="failed"?"Health check failed":"Health check recovered"}));
+ for(const stall of snapshot?.stalls||[])markers.push({id:"stall:"+stall.detectedAt,timestamp:stall.detectedAt,type:"stall",name:"Watchdog heartbeat missing",color:"#ffbc66",reason:"Independent watchdog detected a missing heartbeat; this is separate from an HTTP health-check failure.",...stall});
+ return {ops:[...ops.values()],markers,samples:payload.resources?.samples||[]};
+}
+function select(item,type="operation"){selected={item,type};renderTimeline();}
+function detail(){
+ const panel=$("inspector");panel.replaceChildren();panel.append(el("span","Selected event","badge"));
+ if(!selected){panel.append(el("h3","Follow the work"),el("p","Click an operation to see its timing, queue intervals and recorded parent. Matching parent and child rows are highlighted."),el("p","Red lines mark failed health checks. Amber lines mark missing watchdog heartbeats. Select a marker to see operations overlapping that moment."));return;}
+ const o=selected.item;panel.append(el("h3",o.name||"Event-loop sample"));const dl=el("dl");
+ const pair=(k,v)=>{if(v==null)return;dl.append(el("dt",k),el("dd",String(v)));};
+ if(selected.type==="operation"){
+ pair("Type / status",(types[o.kind]?.[0]||o.kind)+" · "+o.status);pair("Queued / created",clock(o.queuedAt));pair("Started",o.startedAt?clock(o.startedAt):"Not yet started");pair("Finished",o.finishedAt?clock(o.finishedAt):"Still in progress at capture");pair("Elapsed",fmtMs(ms(o.finishedAt||lastPayload.capturedAt)-ms(o.queuedAt)));pair("Time waiting",fmtMs(o.queueMs));pair("First response",fmtMs(o.firstResponseMs));pair("Longest stream gap",fmtMs(o.longestStreamGapMs));pair("Chat",o.chatId);pair("Provider / model",[o.provider,o.model].filter(Boolean).join(" / ")||null);pair("Database",o.databasePath);pair("Connection",o.connectionId);pair("Process / thread",o.pid!=null?o.pid+" / "+o.threadId:null);pair("Transaction",o.transaction);pair("Error category",o.errorType);
+ const parent=data(lastPayload).ops.find(p=>p.id===(o.parentId||o.turnId));pair("Recorded parent",parent?.name||o.parentId||o.turnId||"No parent recorded");if(parent){const b=el("button","Inspect parent →");b.onclick=()=>select(parent);dl.append(b);}
+ if(o.kind==="renderer"&&o.attribution?.length){dl.append(el("dt","Long-task attribution"));for(const [i,a] of o.attribution.entries()){const parts=[a.containerType,a.name,a.containerId].filter(Boolean).join(" · ")||"attribution "+(i+1);dl.append(el("dd",parts+(a.containerSrc?" · "+a.containerSrc:"")));}}
+ const bb=lastPayload?.backgroundBudget;
+ if(o.budgetQueue||((o.kind==="background"||o.kind==="indexing")&&o.queueMs>1)){
+  const qMatch=bb?.queued?.find(q=>o.name?.includes(q.label));
+  pair("Budget admission",qMatch?.blockReason||o.blockReason||"queued");
+  const blockers=(qMatch?.blockingActive||o.blockingActive||[]).join(", ")||null;
+  pair("Blocked by active work",blockers);
+  if(bb)pair("Budget snapshot","max "+bb.maxConcurrent+" concurrent · interactive busy: "+(bb.interactiveBusy?"yes":"no")+(bb.graceMs!=null?" · grace "+fmtMs(bb.graceMs):""));
+ }else{
+  pair("Waiting on",o.waits?.length||o.queueMs>1?"Recorded scheduling wait (see operation name). The specific blocking operation was not recorded.":"No explicit queue wait recorded. Running spans can include I/O waits.");
+ }
+ pair("Operation ID",o.id);
+ }else if(selected.type==="sample") {pair("Window",clock(o.startedAt)+" – "+clock(o.finishedAt));pair("Maximum event-loop lag",fmtMs(o.eventLoop?.maxMs));pair("CPU (one core)",o.cpuPercentOfOneCore?.toFixed(1)+"%");pair("Interpretation","This bar covers the measurement window, not the precise instant the lag occurred.");}
+ else {pair("Observed",clock(o.timestamp));pair("Source",o.type==="health"?"Electron supervisor":"Independent watchdog");pair("Details",o.reason);const overlaps=data(lastPayload).ops.filter(p=>ms(p.queuedAt)<=ms(o.timestamp)&&ms(p.finishedAt||lastPayload.capturedAt)>=ms(o.timestamp));pair("In flight at this moment",overlaps.length+" recorded operations");for(const p of overlaps){const b=el("button",p.name);b.style.cssText="display:block;margin:8px 0;width:100%;text-align:left";b.onclick=()=>select(p);dl.append(b);}pair("Interpretation","Temporal overlap does not prove which operation caused a stall.");}
+ panel.append(dl);
+}
+function renderTimeline(){
+ if(!lastPayload)return;const d=data(lastPayload),root=$("timeline");root.replaceChildren();
+ const end=ms(lastPayload.capturedAt);const starts=[lastPayload.timeline?.rangeStart,...d.ops.map(o=>o.queuedAt),...d.samples.map(s=>s.startedAt),...d.markers.map(m=>m.timestamp)].map(ms).filter(Number.isFinite);const start=Math.min(end,...starts),span=Math.max(1000,end-start);const pct=t=>Math.max(0,Math.min(100,(ms(t)-start)/span*100));
+ const query=$("search").value.toLowerCase(),kind=$("kind").value;
+ const ops=d.ops.filter(o=>(kind==="all"||o.kind===kind)&&[o.name,o.chatId,o.databasePath,o.id].filter(Boolean).join(" ").toLowerCase().includes(query)).sort((a,b)=>$("order").value==="duration"?(ms(b.finishedAt||lastPayload.capturedAt)-ms(b.queuedAt))-(ms(a.finishedAt||lastPayload.capturedAt)-ms(a.queuedAt)):ms(a.queuedAt)-ms(b.queuedAt));
+ root.style.width=zoom===1?"100%":Math.max(800,$("timelineWrap").clientWidth)*zoom+"px";
+ const axis=el("div",null,"axis");axis.append(el("div","Operation / status","name"));const ruler=el("div",null,"track");for(let i=0;i<=10;i++){const tick=el("span",fmtMs(span*i/10),"tick");tick.style.left=i*10+"%";ruler.append(tick);}axis.append(ruler);root.append(axis);
+ function row(name,label){const r=el("div",null,"row"),n=el("div",name,"name"),track=el("div",null,"track");if(label)n.title=label;r.append(n,track);root.append(r);return{r,n,track};}
+ function segment(track,a,b,color,title,click,extra=""){const button=el("button",null,"bar "+extra);const left=pct(a);button.style.left=left+"%";button.style.width=Math.max(0,pct(b)-left)+"%";if(color)button.style.backgroundColor=color;button.title=title;button.setAttribute("aria-label",title);button.onclick=click;track.append(button);return button;}
+ const health=row("Health & watchdog");for(const m of d.markers)segment(health.track,m.timestamp,m.timestamp,m.color,m.name+" · "+clock(m.timestamp),()=>select(m,"marker"));
+ const lag=row("Event-loop lag · sample window");for(const s of d.samples){const b=segment(lag.track,s.startedAt,s.finishedAt,"#f0788b","Event-loop max "+fmtMs(s.eventLoop?.maxMs),()=>select(s,"sample"));b.style.height=Math.max(3,Math.min(23,(s.eventLoop?.maxMs||0)/1000*5))+"px";b.style.top="auto";b.style.bottom="4px";b.style.opacity=s.eventLoop?.maxMs>=500?".85":".25";}
+ const bbSnap=lastPayload.backgroundBudget;
+ if(bbSnap?.queued?.length){
+  const bq=row("Background budget queue","Tasks waiting for gatewayBackgroundBudget admission");
+  for(const q of bbSnap.queued){
+   const op=d.ops.find(o=>o.budgetQueue&&o.name?.includes(q.label));
+   const queuedAt=new Date(ms(lastPayload.capturedAt)-q.waitingMs).toISOString();
+   segment(bq.track,queuedAt,lastPayload.capturedAt,"#8490a5",q.label+" · "+q.blockReason+" · "+fmtMs(q.waitingMs),()=>op&&select(op));
+  }
+ }
+ const focus=selected?.type==="operation"?selected.item:null;
+ for(const o of ops){const {r,n,track}=row();n.replaceChildren();const dot=el("i",null,"swatch");dot.style.background=types[o.kind]?.[1]||"#aaa";const name=el("span",o.name),status=el("small",o.status);n.append(dot,name,status);n.title=o.name;n.setAttribute("role","button");n.tabIndex=0;n.onclick=()=>select(o);n.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();select(o);}};
+ r.dataset.operationId=o.id;if(focus?.id===o.id)r.classList.add("selected");else if(focus&&((o.parentId||o.turnId)===focus.id||(focus.parentId||focus.turnId)===o.id||((focus.parentId||focus.turnId)&&(o.parentId||o.turnId)===(focus.parentId||focus.turnId))))r.classList.add("related");
+ const finish=o.finishedAt||lastPayload.capturedAt;const color=types[o.kind]?.[1]||"#aaa";const title=o.name+" · "+o.status+" · "+fmtMs(ms(finish)-ms(o.queuedAt));
+ // Render only recorded waits; old reports without intervals keep unknown placement explicit in details.
+ const waits=o.waits?.length?o.waits:!o.startedAt?[{startedAt:o.queuedAt,finishedAt:finish}]:ms(o.startedAt)>ms(o.queuedAt)?[{startedAt:o.queuedAt,finishedAt:o.startedAt}]:[];
+ if(o.startedAt)segment(track,o.startedAt,finish,color,title,()=>select(o),o.status==="error"?"error":"");
+ for(const w of waits)segment(track,w.startedAt,w.finishedAt||finish,null,o.name+" · waiting for admission",()=>select(o),"wait");
+ }
+ if(!ops.length)root.append(el("div","No matching operations in this retained snapshot.","empty"));
+ const overlay=el("div",null,"markers");for(const m of d.markers){const line=el("div",null,"marker");line.style.left=pct(m.timestamp)+"%";line.style.setProperty("--marker",m.color);const b=el("button");b.title=m.name+" · "+clock(m.timestamp);b.setAttribute("aria-label",b.title);b.onclick=()=>select(m,"marker");line.append(b);overlay.append(line);}root.append(overlay);
+ const stats=$("stats");stats.replaceChildren();const bbCount=lastPayload.backgroundBudget?.queued?.length||0;for(const [value,label] of [[ops.length+" / "+d.ops.length,"Visible operations"],[d.ops.filter(o=>!o.finishedAt).length,"In flight"],[bbCount,"Budget queue"],[d.markers.filter(m=>m.type==="health"&&m.status==="failed").length,"Health failures"],[fmtMs(Math.max(0,...d.samples.map(s=>s.eventLoop?.maxMs||0))),"Peak loop lag"]]){const stat=el("div",value,"stat");stat.append(el("small",label));stats.append(stat);}
+ $("coverage").textContent=clock(new Date(start).toISOString())+" – "+clock(lastPayload.capturedAt)+" · Retained, instrumented work only; short or uninstrumented work may be absent. Queue hatching shows recorded admission waits. Parent links do not establish a blocking dependency. Health events require the updated desktop supervisor; none recorded does not prove no failures.";
+ if(lastPayload.cloudPause) $("coverage").textContent += " Cloud access: " + (lastPayload.cloudPause.paused ? "paused" : "not paused") + (lastPayload.cloudPause.changedAt ? " (changed " + clock(lastPayload.cloudPause.changedAt) + ")" : "");
+ detail();
+}
+function renderSlowTable(timeline){const tbody=document.querySelector("#slowTable tbody");tbody.replaceChildren();for(const w of timeline?.slowEventLoopWindows||[]){const tr=el("tr");for(const value of [clock(w.sampleFinishedAt),fmtMs(w.eventLoop.maxMs),w.cpuPercentOfOneCore?.toFixed(0)+"%",fmtMs(w.gcInWindow?.maxMs),fmtOps(w.activeAtSample),fmtOps(w.overlapping)])tr.append(el("td",value));tbody.append(tr);}}
+    function renderWatchdog(payload) {
+      const watchdog = payload.resources?.watchdog;
+      const snapshot = watchdog?.snapshot;
+      const status = document.getElementById("watchdogStatus");
+      status.textContent = watchdog ? `Observer: ${watchdog.status} · report age: ${fmtMs(watchdog.snapshotAgeMs)} · observer scheduling gaps: ${snapshot?.observerGaps?.length || 0}` : "Independent measurements are not available in this report.";
+      const tbody = document.querySelector("#hostTable tbody");
+      tbody.replaceChildren();
+      const measured = m => m?.status === "available" ? m.value : null;
+      const gib = n => n == null ? "—" : (n / 1024 ** 3).toFixed(2) + " GiB";
+      function addRow(parent, values) {
+        const row = document.createElement("tr");
+        for (const value of values) { const cell = document.createElement("td"); cell.textContent = String(value); row.append(cell); }
+        parent.append(row);
+      }
+      for (const sample of (snapshot?.samples || []).slice(-20).reverse()) {
+        const rates = sample.vmCounterRatesPerSecond;
+        addRow(tbody, [new Date(sample.finishedAt).toLocaleTimeString(), measured(sample.memoryPressure)?.level || sample.memoryPressure?.reason || "unavailable",
+          gib(measured(sample.swap)?.usedBytes), rates ? `${rates.swapins?.toFixed(1) ?? "—"} / ${rates.swapouts?.toFixed(1) ?? "—"}` : "—",
+          gib(measured(sample.virtualMemory)?.compressorBytes), `${sample.loadAverage[0].toFixed(1)} / ${sample.logicalCpuCount}`]);
+      }
+      const processes = document.getElementById("processMetrics"); processes.replaceChildren();
+      const latest = snapshot?.samples?.at(-1);
+      const processValues = measured(latest?.processes);
+      if (!processValues) processes.textContent = latest?.processes?.reason || "Waiting for a process sample…";
+      else {
+        for (const [title, rows] of [["Gateway and children", processValues.gatewayAndDescendants], ["Host: highest CPU", processValues.topHostCpu], ["Host: highest memory", processValues.topHostMemory]]) {
+          const label = document.createElement("p"); label.textContent = title; processes.append(label);
+          const table = document.createElement("table"); addRow(table, ["PID", "Executable", "CPU", "RSS"]);
+          for (const row of rows) addRow(table, [row.pid, row.executable, row.cpuPercent.toFixed(1) + "%", gib(row.rssBytes)]);
+          processes.append(table);
+        }
+      }
+      const databaseActivity = document.getElementById("databaseActivity"); databaseActivity.replaceChildren();
+      const databaseSnapshot = snapshot?.databases;
+      const databaseNote = document.createElement("p"); databaseNote.className = "hint";
+      databaseNote.textContent = databaseSnapshot ? `Database observer: ${databaseSnapshot.status} · ${databaseSnapshot.connections.length} connections · ${databaseSnapshot.droppedRecords} omitted records · ${databaseSnapshot.sources?.reduce((sum, source) => sum + source.droppedUpdates, 0) || 0} lost updates / capacity omissions · ${databaseSnapshot.sources?.reduce((sum, source) => sum + (source.coalescedUpdates || 0), 0) || 0} state updates coalesced · ${databaseSnapshot.sources?.reduce((sum, source) => sum + (source.droppedHistory || 0), 0) || 0} historical events lost. Competing activity is a candidate, not proof of lock ownership.` : "Database connection tracing is not available in this snapshot.";
+      databaseActivity.append(databaseNote);
+      if (databaseSnapshot) {
+        const table = document.createElement("table");
+        addRow(table, ["Database", "Owner / connection", "Process / thread", "Transaction", "Active work"]);
+        for (const connection of databaseSnapshot.connections.filter(c => c.operations.length || c.transaction.state === "active").slice(0, 30)) {
+          addRow(table, [connection.databasePath, `${connection.owner} / ${connection.connectionId.slice(0,8)}`, `${connection.pid} / ${connection.threadId}`,
+            connection.transaction.state, connection.operations.map(op => op.kind).join(", ") || "idle within transaction"]);
+        }
+        databaseActivity.append(table);
+      }
+      const stacks = document.getElementById("stackCaptures"); stacks.replaceChildren();
+      if (!snapshot?.stalls?.length) stacks.textContent = "No stack capture attempts recorded.";
+      for (const stall of [...(snapshot?.stalls || [])].reverse()) {
+        const details = document.createElement("details"); const summary = document.createElement("summary");
+        summary.textContent = `${new Date(stall.detectedAt).toLocaleTimeString()} · heartbeat missing ${fmtMs(stall.heartbeatAgeMs)} · ${stall.stack.status}`;
+        const text = document.createElement("pre"); text.style.cssText = "overflow:auto;max-height:420px;white-space:pre-wrap";
+        text.textContent = stall.stack.status === "available" ? stall.stack.value.text + (stall.stack.value.truncated ? "\n[truncated]" : "") : stall.stack.reason || "Collecting…";
+        details.append(summary);
+        const evidence = document.createElement("p");
+        const candidates = stall.databaseEvidence?.waitingCandidates || [];
+        evidence.textContent = candidates.length ? candidates.map(candidate => {
+          const waiting = candidate.waiting;
+          const competitors = candidate.suspectedCompetingConnections.map(c => `${c.owner} (PID ${c.pid}, thread ${c.threadId}, connection ${c.connectionId.slice(0,8)}, transaction ${c.transaction.state}, ${c.operations.map(op => op.kind).join(", ") || "no active call"})`).join("; ");
+          return `${waiting.databasePath}: ${waiting.owner} (PID ${waiting.pid}, connection ${waiting.connectionId.slice(0,8)}) executing ${waiting.operations.map(op => op.kind).join(", ")}. Native SQLite lock wait: ${stall.nativeDatabaseLockWait === true ? "observed" : "not confirmed"}. Suspected competitors: ${competitors || "unknown / none observed"}. Other open connections (not proof of ownership): ${(candidate.otherOpenConnections || []).map(c => `${c.owner} PID ${c.pid}, transaction ${c.transaction.state}`).join("; ") || "none observed"}.`;
+        }).join("\n") : "No matching database call was observed. Database or lock owner remains unknown.";
+        details.append(evidence, text); stacks.append(details);
+      }
+    }
+
+
+function renderRenderer(payload){
+ const root=$("rendererActivity");root.replaceChildren();
+ const sessions=payload.renderer?.sessions||[];
+ if(!sessions.length){root.append(el("p","No renderer reports received. Rebuild/restart the desktop UI; this does not mean it is idle.","hint"));return;}
+ for(const session of sessions){
+  const sample=session.samples?.at(-1);if(!sample)continue;
+  root.append(el("p",(session.stale?"STALE · ":"Live · ")+"Report age "+fmtMs(session.ageMs)+" · "+(sample.documentVisible?"window visible":"window hidden")+" · Long tasks: "+(sample.longTasksSupported?sample.longTaskCount+" / "+fmtMs(sample.longTaskTotalMs):"unsupported")+" · Max input wait: "+(sample.inputTimingSupported?fmtMs(sample.maxInputDelayMs):"unsupported")+" · Max timer delay: "+fmtMs(sample.maxTimerDelayMs)+" · Failed reports: "+sample.failedReports+" · Omitted incidents this interval: "+sample.droppedIncidents,"hint"));
+  const table=el("table"),head=el("tr");for(const title of ["App","Frame","Requested","Gate acknowledged","Ack age","API allowed / deferred / ran while hidden","Other fetches"] )head.append(el("th",title));table.append(head);
+  for(const app of sample.apps||[]){const row=el("tr");for(const value of [app.appId,app.loaded?"loaded":"not mounted",app.expectedPhase,app.acknowledgedPhase||"unknown",fmtMs(app.acknowledgementAgeMs),app.gate?app.gate.allowedApi+" / "+app.gate.deferredApi+" / "+app.gate.passedThroughApi:"unknown",app.gate?.allowedOther??"unknown"])row.append(el("td",value));table.append(row);}
+  root.append(table);
+ }
+ root.append(el("p",payload.renderer?.note||"","hint"));
+}
+async function load(){if(inflight)return;inflight=true;try{const res=await fetch(API);if(!res.ok)throw new Error(res.status+" "+res.statusText);lastPayload=await res.json();$("meta").textContent="Captured "+clock(lastPayload.capturedAt)+" · current lag "+fmtMs(lastPayload.eventLoopLagMs);renderTimeline();renderRenderer(lastPayload);renderWatchdog(lastPayload);renderSlowTable(lastPayload.timeline);}catch(e){$("meta").textContent="Could not refresh: "+e.message+". Showing the last received snapshot.";}finally{inflight=false;}}
+for(const [kind,[label,color]] of Object.entries(types)){const option=el("option",label);option.value=kind;$("kind").append(option);const item=el("span",label),swatch=el("i",null,"swatch");swatch.style.background=color;item.prepend(swatch);$("legend").append(item);}
+for(const [label,color,cls] of [["Queued / waiting",null,"wait-swatch"],["Health failure","#ff647c"],["Recovery","#59dcad"],["Watchdog stall","#ffbc66"]]){const item=el("span",label),swatch=el("i",null,"swatch "+(cls||""));if(color)swatch.style.background=color;item.prepend(swatch);$("legend").append(item);}
+$("search").oninput=renderTimeline;$("kind").onchange=renderTimeline;$("order").onchange=renderTimeline;$("zoomIn").onclick=()=>{zoom=Math.min(16,zoom*2);renderTimeline();};$("zoomOut").onclick=()=>{zoom=Math.max(1,zoom/2);renderTimeline();};$("fit").onclick=()=>{zoom=1;renderTimeline();};$("refresh").onclick=load;$("download").onclick=()=>{if(!lastPayload)return;const url=URL.createObjectURL(new Blob([JSON.stringify(lastPayload,null,2)],{type:"application/json"}));const a=el("a");a.href=url;a.download="gateway-performance-"+lastPayload.capturedAt.replace(/[:.]/g,"-")+".json";a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);};
+setInterval(()=>{if($("auto").checked)load();},3000);load();
+</script></body></html>

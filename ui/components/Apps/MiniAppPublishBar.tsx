@@ -330,6 +330,9 @@ export function MiniAppPublishBar({
     bumpQueue: webSyncBumpQueue,
     pullUpdates: webSyncPullUpdates,
     applyRemoteUpdates: webSyncApplyRemoteUpdates,
+    checkStatus: webSyncCheckStatus,
+    needsStatusCheck: webSyncNeedsStatusCheck,
+    lastCheckedAt: webSyncLastCheckedAt,
   } = useAppCloudSyncStatus(appId, {
     enabled: workspaceMode === "preview",
     previewTabVisible,
@@ -1017,10 +1020,31 @@ export function MiniAppPublishBar({
               >
                 Web
               </button>
+              <button
+                type="button"
+                className="mini-app-publish-bar__check-status-btn"
+                disabled={webSyncRefreshing || webSyncPushing}
+                title={
+                  webSyncNeedsStatusCheck
+                    ? "Compare local app with the web (code, databases, publish)"
+                    : "Refresh web sync status"
+                }
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setWebSyncPopoverOpen(true);
+                  void webSyncCheckStatus();
+                }}
+              >
+                {webSyncRefreshing ? "Checking…" : "Check status"}
+              </button>
               <WebSyncStatusDot
                 state={publishBarStatus.state}
                 spinning={publishBarStatus.spinning}
-                tooltip={publishBarStatus.tooltip}
+                tooltip={
+                  webSyncNeedsStatusCheck
+                    ? "Status not checked this session — click Check status"
+                    : publishBarStatus.tooltip
+                }
                 popoverOpen={webSyncPopoverOpen}
                 interactive={publishBarStatus.interactive}
                 onClick={handleWebSyncDotClick}
@@ -1052,6 +1076,9 @@ export function MiniAppPublishBar({
                     onBumpQueue={() => void webSyncBumpQueue()}
                     onPullUpdates={() => void webSyncPullUpdates()}
                     onApplyRemoteUpdates={() => void webSyncApplyRemoteUpdates()}
+                    needsStatusCheck={webSyncNeedsStatusCheck}
+                    lastCheckedAt={webSyncLastCheckedAt}
+                    onCheckStatus={() => void webSyncCheckStatus()}
                   />,
                   document.body,
                 )

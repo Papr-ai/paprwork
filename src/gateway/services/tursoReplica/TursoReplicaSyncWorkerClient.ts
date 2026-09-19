@@ -101,6 +101,13 @@ function defaultWorkerCommand(): TursoSyncWorkerCommand {
 
 export class TursoReplicaSyncWorkerClient {
   private child: ChildProcess | null = null;
+  private readonly ownedPaths = new Set<string>();
+  /** A live handle or in-flight open belongs to the worker, never a second SQLite engine. */
+  ownsPath(localPath: string): boolean {
+    const key = path.resolve(localPath);
+    return this.child !== null && (this.ownedPaths.has(key) ||
+      [...this.pending.values()].some(request => path.resolve(request.localPath) === key));
+  }
   private booted: Promise<void> | null = null;
   private stdoutBuffer = "";
   private stderrRing = "";
@@ -338,6 +345,7 @@ export class TursoReplicaSyncWorkerClient {
     this.rejectAllPending(new Error("Turso sync worker shutting down"));
     this.killChild("SIGTERM");
     this.child = null;
+    this.ownedPaths.clear();
     this.booted = null;
     this.shuttingDown = false;
   }
@@ -447,6 +455,7 @@ export class TursoReplicaSyncWorkerClient {
       });
     }).catch((error: unknown) => {
       this.child = null;
+    this.ownedPaths.clear();
       this.booted = null;
       throw error;
     });
@@ -512,6 +521,8 @@ export class TursoReplicaSyncWorkerClient {
         markReplicaReadPhase("workerExecMs", opTiming.execMs);
         setReplicaReadMeta({ workerOpened: opTiming.opened });
       }
+      if (pending.op === "close") this.ownedPaths.delete(path.resolve(pending.localPath));
+      else this.ownedPaths.add(path.resolve(pending.localPath));
       pending.resolve(parsed.result ?? {});
     } else {
       pending.reject(new Error(parsed.error || "Turso sync worker error"));
@@ -527,6 +538,7 @@ export class TursoReplicaSyncWorkerClient {
     signal: NodeJS.Signals | null,
   ): void {
     this.child = null;
+    this.ownedPaths.clear();
     this.booted = null;
     this.stdoutBuffer = "";
 

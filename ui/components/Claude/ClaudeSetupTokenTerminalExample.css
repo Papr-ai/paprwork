@@ -1,0 +1,39 @@
+.claude-token-terminal-example {
+  border: 1px solid var(--color-border, #d0d5dd);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #1e1e1e;
+  color: #d4d4d4;
+  font-size: 12px;
+  margin: 12px 0 14px;
+}
+
+.claude-token-terminal-example__bar {
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  background: #2d2d2d;
+  color: #aaa;
+  border-bottom: 1px solid #333;
+}
+
+.claude-token-terminal-example__body {
+  margin: 0;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.claude-token-terminal-example__highlight {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: rgba(255, 200, 50, 0.2);
+  border: 1px solid rgba(255, 200, 50, 0.5);
+  color: #ffd866;
+  font-weight: 600;
+}

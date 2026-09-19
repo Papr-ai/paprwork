@@ -91,7 +91,9 @@ export async function pullLinkedSourceFromCloud(
     };
     const ledgerRemote = createRemoteClient(creds);
     try {
-      await alignMigrationLedgers(ledgerRemote, input.dbPath, migrationRoot);
+      await alignMigrationLedgers(ledgerRemote, input.dbPath, migrationRoot, {
+        force: true,
+      });
     } finally {
       ledgerRemote.close();
     }

@@ -4,7 +4,10 @@
 import { describe, expect, it, beforeEach } from "vitest";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 import {
+  invalidateCachedSyncItemsForApp,
   readCachedAppCloudSyncStatus,
+  readCachedSyncItemsForApp,
+  writeCachedSyncItemsForApp,
   writeCloudSyncTabSnapshot,
 } from "../ui/utils/cloudSyncTabCache";
 
@@ -63,5 +66,12 @@ describe("cloudSyncTabCache", () => {
 
   it("returns null when no snapshot exists", () => {
     expect(readCachedAppCloudSyncStatus("missing")).toBeNull();
+  });
+
+  it("invalidateCachedSyncItemsForApp drops per-app cache entry", () => {
+    writeCachedSyncItemsForApp("app-abc", sampleItems("app-abc"));
+    expect(readCachedSyncItemsForApp("app-abc")).not.toBeNull();
+    invalidateCachedSyncItemsForApp("app-abc");
+    expect(readCachedSyncItemsForApp("app-abc")).toBeNull();
   });
 });

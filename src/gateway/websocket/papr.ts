@@ -14,11 +14,11 @@ export async function setupPaprHandlers(
   try {
     switch (message.type) {
       case "papr:resume-cloud": {
-        schedulePaprCloudResumeAfterBillingRestore();
+        const result = schedulePaprCloudResumeAfterBillingRestore();
         sendResponse(ws, {
           id: message.id,
           success: true,
-          data: { resumed: true, scheduled: true },
+          data: result,
         });
         break;
       }

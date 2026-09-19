@@ -7,6 +7,8 @@
  * frames and other I/O always get serviced promptly.
  */
 
+import { openDiagnosticDatabase } from "../services/databaseDiagnostics/sqlite.js";
+
 import { parentPort } from "node:worker_threads";
 import Database from "better-sqlite3";
 import {
@@ -71,7 +73,7 @@ function openDb(
     timeout: busyTimeoutMs,
   };
   try {
-    const db = new Database(dbPath, openOptions);
+    const db = openDiagnosticDatabase(Database, "workers/db-query-worker", dbPath, openOptions);
     db.pragma(`busy_timeout = ${busyTimeoutMs}`);
     return db;
   } catch (err) {
@@ -80,7 +82,11 @@ function openDb(
       readonly && (code === "SQLITE_IOERR" || code === "SQLITE_CANTOPEN" || code === "SQLITE_READONLY");
     if (!recoverable) throw err;
     // Read-write open lets SQLite rebuild the -shm sidecar from the -wal.
-    const db = new Database(dbPath, { readonly: false, fileMustExist: true, timeout: busyTimeoutMs });
+    const db = openDiagnosticDatabase(Database, "workers/db-query-worker", dbPath, {
+      readonly: false,
+      fileMustExist: true,
+      timeout: busyTimeoutMs,
+    });
     db.pragma(`busy_timeout = ${busyTimeoutMs}`);
     return db;
   }

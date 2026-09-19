@@ -3,48 +3,37 @@ import type { Tab } from "../types/tabs";
 /**
  * Max app preview iframes kept in memory when only one pane is visible.
  *
- * Two numbers, because a warm hidden preview does not cost the same thing in
- * both hosting modes:
+ * One number, in both hosting modes. A second, smaller shared-origin cap lived
+ * here and was removed: it capped around a mechanism rather than repairing it.
+ * A warm hidden preview is only cheap if it is genuinely quiet, and quiet
+ * depended on the suspend signal arriving — which the gate could not know at
+ * boot, so it defaulted to `visible` and waited for a `postMessage` that raced
+ * the app's own module-scope fetch. `iframe.name` is readable synchronously
+ * and cross-origin before any app script runs, so the phase is now known at
+ * boot with no message and no race.
  *
- * - **Isolated** (per-app origin, own renderer process): a warm tab costs
- *   memory and a process. It cannot touch the chat UI's main thread, so 7 is
- *   affordable and buys instant tab switches.
- * - **Shared** (one origin, one process): a warm tab costs *the chat UI's main
- *   thread*. `display: none` stops rAF but not timers, promise continuations
- *   or fetch callbacks — a hidden preview polling on an interval runs at full
- *   rate, on our thread. Seven of those is the measured pathology (renderer
- *   pegged at ~120% CPU with the UI unresponsive), so the shared path keeps
- *   one warm tab and reloads the rest.
+ * What the gate still does not cover is compute and the non-fetch transports,
+ * which on a shared origin run on the chat UI's own thread. Measured across
+ * the 57 installed apps that residual is small — 6 use `setInterval`, 2
+ * `EventSource`, 1 `WebSocket`, and `requestAnimationFrame` is already paused
+ * by the browser when hidden — so 7 is affordable, and the alternative costs a
+ * full reload (queries, Turso pulls) on every tab switch, forever.
  *
  * See docs/MINI_APP_PROCESS_ISOLATION.md.
  */
 export const MAX_MOUNTED_APP_PREVIEWS = 7;
 
-/** Shared-origin cap: every extra warm preview is contention on our own thread. */
-export const MAX_MOUNTED_APP_PREVIEWS_SHARED_ORIGIN = 2;
-
 /** Never cap below visible panes + one warm hidden tab (standalone full-pane view). */
 export function effectiveMaxMountedAppPreviews(
   visibleAppTabCount: number,
-  isolated = true,
 ): number {
-  const base = isolated
-    ? MAX_MOUNTED_APP_PREVIEWS
-    : MAX_MOUNTED_APP_PREVIEWS_SHARED_ORIGIN;
-  return Math.max(base, visibleAppTabCount + 1);
+  return Math.max(MAX_MOUNTED_APP_PREVIEWS, visibleAppTabCount + 1);
 }
 
 export interface SelectMountedAppTabOptions {
   maxMounted?: number;
   /** Split/merged view: mount only apps in visible panes (no LRU warm hidden). */
   visibleOnly?: boolean;
-  /**
-   * Are previews served from per-app origins?
-   *
-   * Defaults true so an explicit `maxMounted` still means what it says; the
-   * caller passes the real answer.
-   */
-  isolatedOrigins?: boolean;
 }
 
 function resolveMountOptions(
@@ -76,11 +65,7 @@ export function selectMountedAppTabIds(
   }
 
   const cap =
-    options.maxMounted ??
-    effectiveMaxMountedAppPreviews(
-      visibleAppIds.length,
-      options.isolatedOrigins ?? true,
-    );
+    options.maxMounted ?? effectiveMaxMountedAppPreviews(visibleAppIds.length);
   const slotsForHidden = Math.max(0, cap - visibleAppIds.length);
 
   const hiddenKeepIds = appTabs

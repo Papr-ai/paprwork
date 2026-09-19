@@ -1,7 +1,7 @@
+import { runSetupCommand } from "../../core/utils/runSetupCommand.js";
 import { promises as fs } from "fs";
 import { getPaprBundlesDir } from "../../core/utils/paprRoot.js";
 import { existsSync, readFileSync, writeFileSync } from "fs";
-import { execSync } from "child_process";
 import path from "path";
 import os from "os";
 import type {
@@ -1135,7 +1135,8 @@ export class BundleService {
         try {
           const pythonCmd =
             process.platform === "win32" ? "python" : "python3";
-          execSync(`${pythonCmd} -m venv .venv`, {
+          await runSetupCommand(`${pythonCmd} -m venv .venv`, {
+            diagnosticName: "python-venv",
             cwd: jobDir,
             timeout: 30_000,
           });
@@ -1154,7 +1155,8 @@ export class BundleService {
           const pip = isWin
             ? path.join(venvDir, "Scripts", "pip.exe")
             : path.join(venvDir, "bin", "pip");
-          execSync(`${pip} install -r requirements.txt 2>&1`, {
+          await runSetupCommand(`"${pip}" install -r requirements.txt 2>&1`, {
+            diagnosticName: "pip-install",
             cwd: jobDir,
             timeout: 120_000,
             encoding: "utf8",
@@ -1187,7 +1189,8 @@ export class BundleService {
 
       if (existsSync(packageJson) && !existsSync(nodeModules)) {
         try {
-          execSync("npm install --production 2>&1", {
+          await runSetupCommand("npm install --production 2>&1", {
+            diagnosticName: "npm-install",
             cwd: jobDir,
             timeout: 120_000,
             encoding: "utf8",

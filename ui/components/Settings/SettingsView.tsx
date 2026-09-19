@@ -19,6 +19,7 @@ import {
   fetchGatewayDiagnosticsBundle,
 } from "../../utils/gatewayDiagnostics";
 import type { SettingsTab } from "../../types/settings";
+import { DevTab } from "./DevTab";
 import { AIModelsTab } from "./AIModelsTab";
 import { IntegrationKeysTab } from "./IntegrationKeysTab";
 import { CloudSyncTab } from "./CloudSyncTab";
@@ -152,6 +153,22 @@ const SETTINGS_NAV: SettingsNavItem[] = [
       </svg>
     ),
   },
+  // Dev-only. import.meta.env.DEV is a literal false in any build, so this
+  // entry and the DevTab import are removed by dead-code elimination.
+  ...(import.meta.env.DEV
+    ? [
+        {
+          id: "dev" as const,
+          label: "Dev",
+          icon: (
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <polyline points="16 18 22 12 16 6" />
+              <polyline points="8 6 2 12 8 18" />
+            </svg>
+          ),
+        },
+      ]
+    : []),
 ];
 
 export function SettingsView() {
@@ -273,6 +290,7 @@ export function SettingsView() {
           {activeTab === "permissions" && <PermissionsTab />}
           {activeTab === "privacy" && <PrivacyTab />}
           {activeTab === "about" && <AboutTab />}
+          {import.meta.env.DEV && activeTab === "dev" && <DevTab />}
         </div>
       </div>
     </div>

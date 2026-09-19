@@ -26,6 +26,7 @@ export interface VaultSyncPushResult {
   synced: number;
   created: string[];
   updated: string[];
+  unchanged?: string[];
   deleted: string[];
   conflicts?: Array<{
     name: string;
@@ -72,7 +73,7 @@ export async function pushVaultEntriesViaGatewayHttp(
           new Error(`Vault sync failed (${resp.status}): ${text}`),
           "vault-sync",
         );
-        return null;
+        throw Object.assign(new Error("No active subscription for vault sync"), { status: resp.status });
       }
       const { recordVaultSyncPlatformFailure } = await import(
         "./vaultSyncPlatformBackoff.js"
@@ -90,7 +91,7 @@ export async function pushVaultEntriesViaGatewayHttp(
     const msg = err instanceof Error ? err.message : String(err);
     if (isPaprSubscriptionBlockedMessage(msg)) {
       reportPaprQuotaError(err, "vault-sync");
-      return null;
+      throw err;
     }
     throw err;
   } finally {

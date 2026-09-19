@@ -144,6 +144,22 @@ export interface ElectronAPI {
         reason?: "not_found" | "error";
         error?: string;
       }>;
+      onboardingRunCheck: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<
+        | { connected: true }
+        | { connected: false; okMessage: string; skipInstallStep: boolean }
+        | { connected: false; error: string }
+      >;
+      onboardingInstallCli: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<
+        | { success: true; okMessage: string }
+        | { success: false; error: string }
+      >;
+      openSetupTokenTerminal: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<{ success: true } | { success: false; error: string }>;
     };
     pasteToken: (
       provider: string,

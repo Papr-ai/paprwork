@@ -31,6 +31,10 @@ let quotaExceededListener: QuotaListener | null = null;
 
 /** Set when Papr Memory returns a subscription block — stops cloud sync retries. */
 let paprCloudPaused = false;
+let cloudPauseChangedAt: string | null = null;
+export function getPaprCloudPauseDiagnostics() {
+  return { paused: paprCloudPaused, changedAt: cloudPauseChangedAt };
+}
 
 /** Gateway registers this at startup to broadcast quota events to the UI. */
 export function setPaprQuotaExceededListener(listener: QuotaListener | null): void {
@@ -46,6 +50,7 @@ export function isPaprCloudPaused(): boolean {
 }
 
 export function setPaprCloudPaused(paused: boolean): void {
+  if (paprCloudPaused !== paused) cloudPauseChangedAt = new Date().toISOString();
   paprCloudPaused = paused;
 }
 
@@ -321,7 +326,7 @@ export function reportPaprQuotaError(
   const status = parsePaprQuotaError(error, source);
   if (!status) return null;
   if (status.kind === "subscription") {
-    paprCloudPaused = true;
+    setPaprCloudPaused(true);
   }
   notifyPaprQuotaStatus(status);
   return status;

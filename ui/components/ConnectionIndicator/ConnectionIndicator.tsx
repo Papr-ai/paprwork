@@ -15,23 +15,8 @@ export function ConnectionIndicator() {
     message: gatewaySupervisorMessage,
   } = useGatewaySupervisorStatus();
 
-  if (connectionState === "connected") {
+  if (connectionState === "connected" || connectionState === "degraded") {
     return null;
-  }
-
-  if (connectionState === "degraded") {
-    return (
-      <div
-        className="connection-indicator connection-indicator--degraded"
-        role="status"
-        aria-live="polite"
-      >
-        <div className="connection-indicator__dot" />
-        <span className="connection-indicator__text">
-          Gateway busy — still working
-        </span>
-      </div>
-    );
   }
 
   const showSupervisorMessage =

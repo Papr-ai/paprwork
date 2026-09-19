@@ -273,6 +273,10 @@ export class SyncCoordinator {
             webReadyReason: ready.reason,
             published: false,
           });
+          const { notifyCloudSyncItemsStale } = await import(
+            "./cloudSyncBroadcast.js"
+          );
+          notifyCloudSyncItemsStale(item.appId);
           this.releaseActiveFlush(item.appId);
           await yieldEventLoop();
           continue;
@@ -290,6 +294,10 @@ export class SyncCoordinator {
         const result = await this.executeFlush(item.appId);
         this.clearAutoFlushFailure(item.appId);
         item.resolve(result);
+        const { notifyCloudSyncItemsStale } = await import(
+          "./cloudSyncBroadcast.js"
+        );
+        notifyCloudSyncItemsStale(item.appId);
       } catch (err) {
         const error = err as Error;
         if (item.trigger === "auto") {
@@ -302,6 +310,10 @@ export class SyncCoordinator {
             published: false,
             webReadyReason: error.message.slice(0, 160),
           });
+          const { notifyCloudSyncItemsStale } = await import(
+            "./cloudSyncBroadcast.js"
+          );
+          notifyCloudSyncItemsStale(item.appId);
         } else {
           if (error instanceof AppOpsConflictError) {
             const conflictPaths = error.artifacts.map((artifact) => artifact.path);

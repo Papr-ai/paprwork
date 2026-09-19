@@ -76,6 +76,8 @@ export function installMiniAppApiErrorFetch(): void {
       bodyText,
       path,
     );
+    // Do not postMessage to the host shell — the app receives `{ error }` and can
+    // handle it inline; the platform banner is for uncaught runtime failures.
     return new Response(JSON.stringify({ error: message }), {
       status: response.status,
       statusText: response.statusText,

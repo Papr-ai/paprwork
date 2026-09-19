@@ -1,35 +1,52 @@
 /**
- * Pause same-origin /api/* fetch while the preview tab is backgrounded.
+ * Pause same-origin /api/* reads while the preview tab is backgrounded.
  *
- * Paprwork keeps LRU-mounted iframes alive for fast tab switch; this gate
- * stops hidden previews from hammering the gateway with DB/job queries.
+ * Paprwork keeps LRU-mounted iframes alive for fast tab switch; this gate stops
+ * hidden previews from hammering the gateway with DB queries.
  *
- * On return to visible, queued GETs are COALESCED by request identity rather
- * than replayed one-for-one: a poller that queued the same URL 600 times issues
- * one network call, and every waiter is settled from a clone of that response.
- * Replaying all of them fired the whole backlog at the exact moment the user
- * was waiting for the tab to paint. Coalescing settles every promise at the
- * cost of one request. Non-GET requests are never coalesced — two queued
- * mutations are not interchangeable.
+ * WHICH CALLS PAUSE — by path, not by method. Measured against the installed
+ * apps, nearly every read is a POST carrying a JSON body, so a method rule
+ * defers nothing and folds nothing: it is dead code against real traffic. The
+ * gateway already draws the line we need, rejecting anything but SELECT on
+ * these endpoints, so the path is the part that carries the meaning.
  *
- * Identical requests are folded together AT ENQUEUE, not at flush. Folding only
- * at flush leaves the queue holding one entry per call, so a poller still grows
- * it without bound and a cap would be spent evicting a request's own duplicates.
+ * Everything else runs unpaused — writes, jobs, bash, any path not on the list.
+ * A write issued while hidden is work someone asked for; holding it until the
+ * tab is looked at again would be worse than letting it through, and failing it
+ * would lose it.
  *
- * The queue is bounded by DISTINCT requests. Past the cap a request is passed
- * straight through instead of being queued: the gate stops pausing, which is
- * the behaviour before it existed. It is never rejected. v2.6.0 rejected a
- * queue it judged stale and v2.6.1 removed that a day later — "callers expect
- * these promises to settle on return" — because a mini-app awaiting fetch has
- * no reason to expect an AbortError and hangs or crashes on one. Degrading to
- * unpaused is recoverable; a rejection is not.
+ * FOLDING happens AT ENQUEUE, keyed on path + body. Folding only at flush
+ * leaves one entry per call, so a poller still grows the queue without bound
+ * and the cap is spent evicting a request's own duplicates. A poller that
+ * queued the same query 600 times issues one network call and every waiter is
+ * settled from a clone of that response.
+ *
+ * THE CAP bounds distinct requests. Past it a request is passed straight
+ * through rather than queued: the gate stops pausing, which is the behaviour
+ * before it existed. It is never rejected. v2.6.0 rejected a queue it judged
+ * stale and v2.6.1 removed that a day later — "callers expect these promises to
+ * settle on return" — because a mini-app awaiting fetch has no reason to expect
+ * an AbortError and hangs or crashes on one. Degrading to unpaused is
+ * recoverable; a rejection is not. The one exception is eviction, where the
+ * frame is going away and an unsettled promise leaks the caller's continuation.
  *
  * This script must run before any app script or the app captures the native
  * fetch and never sees the gate — see injectMiniAppPreviewFetchGate, which
- * injects it as a blocking classic script in <head> for that reason.
+ * inlines it into <head> for that reason.
  */
+import type { PreviewPhase } from "../../core/types/rendererPerformance.js";
 
-type PreviewPhase = "hidden" | "visible" | "evicting";
+/**
+ * Endpoints the gateway itself guarantees are read-only (SELECT/WITH only, or
+ * GET). Adding a path here without that guarantee would defer a mutation.
+ */
+const DEFERRABLE_READ_PATHS = new Set([
+  "/api/db/query",
+  "/api/db/batch",
+  "/api/db/query-batch",
+  "/api/db/read-batch",
+  "/api/db/schema",
+]);
 
 /**
  * Distinct queued requests held while hidden. Past this, requests run unpaused.
@@ -43,6 +60,7 @@ const MAX_QUEUED_FETCHES = 64;
 declare global {
   interface Window {
     __paprPreviewFetchGateInstalled?: boolean;
+    __paprPreviewPhase?: PreviewPhase;
   }
 }
 
@@ -52,7 +70,7 @@ interface FetchWaiter {
 }
 
 interface QueuedFetch {
-  /** Coalescing identity, or null when the request must not be coalesced. */
+  /** Folding identity, or null when the request must be replayed on its own. */
   key: string | null;
   input: RequestInfo | URL;
   init?: RequestInit;
@@ -61,28 +79,18 @@ interface QueuedFetch {
 }
 
 function resolveRequestUrl(input: RequestInfo | URL): string {
-  if (typeof input === "string") {
-    return input;
-  }
-  if (input instanceof URL) {
-    return input.href;
-  }
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
   return input.url;
 }
 
-function isSameOriginApiRequest(input: RequestInfo | URL): boolean {
+function parseSameOriginApiUrl(input: RequestInfo | URL): URL | null {
   try {
-    const raw = resolveRequestUrl(input);
-    if (raw.startsWith("/api/")) {
-      return true;
-    }
-    const parsed = new URL(raw, window.location.href);
-    return (
-      parsed.origin === window.location.origin &&
-      parsed.pathname.startsWith("/api/")
-    );
+    const parsed = new URL(resolveRequestUrl(input), window.location.href);
+    if (parsed.origin !== window.location.origin) return null;
+    return parsed.pathname.startsWith("/api/") ? parsed : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -90,12 +98,9 @@ function resolveRequestMethod(
   input: RequestInfo | URL,
   init?: RequestInit,
 ): string {
-  if (init?.method) {
-    return init.method.toUpperCase();
-  }
-  if (typeof input === "object" && input !== null && "method" in input) {
+  if (init?.method) return init.method.toUpperCase();
+  if (typeof input === "object" && input !== null && "method" in input)
     return String((input as Request).method).toUpperCase();
-  }
   return "GET";
 }
 
@@ -108,9 +113,7 @@ function fingerprintHeaders(
     (typeof input === "object" && input !== null && "headers" in input
       ? (input as Request).headers
       : undefined);
-  if (!source) {
-    return "";
-  }
+  if (!source) return "";
   try {
     const entries: Array<[string, string]> = [];
     new Headers(source as HeadersInit).forEach((value, name) => {
@@ -128,62 +131,73 @@ function fingerprintHeaders(
  * Identity two queued requests must share to be answered by one network call,
  * or null when the request must be replayed on its own.
  *
- * Only safe, bodyless, signal-free GETs coalesce. A request carrying a signal
- * is excluded because one waiter aborting must not cancel the others, and
- * headers are part of the key because two GETs of the same URL with different
- * headers can legitimately return different responses.
+ * The body is part of the key because these reads carry their query in it —
+ * two POSTs to /api/db/query are the same request only if they ask the same
+ * thing. A body we cannot read as a string (FormData, a stream, a Request
+ * object) is not assumed equal to anything, and a request carrying a signal
+ * never folds: one waiter aborting must not cancel the others.
  */
 export function coalesceKeyForRequest(
+  url: URL,
   input: RequestInfo | URL,
   init?: RequestInit,
 ): string | null {
+  if (typeof input !== "string" && !(input instanceof URL)) return null;
+  if (init?.signal) return null;
+  const body = init?.body;
+  if (body != null && typeof body !== "string") return null;
   const method = resolveRequestMethod(input, init);
-  if (method !== "GET" && method !== "HEAD") {
-    return null;
-  }
-  if (init?.body != null) {
-    return null;
-  }
-  if (init?.signal) {
-    return null;
-  }
-  if (typeof input === "object" && input !== null && "signal" in input) {
-    if ((input as Request).signal) {
-      return null;
-    }
-  }
-  return `${method} ${resolveRequestUrl(input)} ${fingerprintHeaders(input, init)}`;
+  return `${method} ${url.pathname}${url.search} ${body ?? ""} ${fingerprintHeaders(input, init)}`;
 }
 
-export function installPreviewFetchGate(): void {
-  if (typeof window === "undefined" || typeof window.fetch !== "function") {
+export function installPreviewFetchGate(): (() => void) | undefined {
+  if (
+    typeof window === "undefined" ||
+    typeof window.fetch !== "function" ||
+    window.__paprPreviewFetchGateInstalled
+  )
     return;
-  }
-  if (window.__paprPreviewFetchGateInstalled) {
-    return;
-  }
   window.__paprPreviewFetchGateInstalled = true;
 
-  // Default visible — same as papr-preview-lifecycle.ts. The parent sends
-  // papr:preview-hidden only after backgrounding; until then fetches must run
-  // during iframe bootstrap or the app stays on "Loading…" forever.
-  let phase: PreviewPhase = "visible";
+  // iframe.name is readable before app scripts even across origins, so the
+  // phase is known at boot. The host supplies it without changing src (which
+  // would reload on every tab switch). Waiting for papr:preview-hidden instead
+  // would race the app's own first fetch, and the hidden app would win.
+  let phase: PreviewPhase =
+    window.name === "papr-preview:hidden" ? "hidden" : "visible";
+  window.__paprPreviewPhase = phase;
+
+  const documentId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  let allowedApi = 0,
+    deferredApi = 0,
+    passedThroughApi = 0,
+    allowedOther = 0;
+  const report = (sequence?: number) => {
+    if (window.parent === window) return;
+    window.parent.postMessage(
+      {
+        type: "papr:preview-gate-report",
+        sequence,
+        gate: {
+          documentId,
+          phase,
+          allowedApi,
+          deferredApi,
+          passedThroughApi,
+          allowedOther,
+        },
+      },
+      "*",
+    );
+  };
+
   const queue: QueuedFetch[] = [];
-  /** Coalescing index over `queue`, kept in step with it on every mutation. */
+  /** Folding index over `queue`, kept in step with it on every mutation. */
   const queuedByKey = new Map<string, QueuedFetch>();
 
   function clearQueue(): QueuedFetch[] {
     queuedByKey.clear();
     return queue.splice(0);
-  }
-
-  function rejectQueuedFetches(reason: string): void {
-    const error = new DOMException(reason, "AbortError");
-    for (const item of clearQueue()) {
-      for (const waiter of item.waiters) {
-        waiter.reject(error);
-      }
-    }
   }
 
   function settleQueued(item: QueuedFetch): void {
@@ -198,46 +212,55 @@ export function installPreviewFetchGate(): void {
         }
       },
       (error) => {
-        for (const waiter of item.waiters) {
-          waiter.reject(error);
-        }
+        for (const waiter of item.waiters) waiter.reject(error);
       },
     );
   }
 
   function flushQueuedFetches(): void {
-    for (const item of clearQueue()) {
-      settleQueued(item);
-    }
+    for (const item of clearQueue()) settleQueued(item);
   }
 
-  window.addEventListener("message", (event: MessageEvent) => {
+  function rejectQueuedFetches(reason: string): void {
+    const error = new DOMException(reason, "AbortError");
+    for (const item of clearQueue())
+      for (const waiter of item.waiters) waiter.reject(error);
+  }
+
+  const onMessage = (event: MessageEvent) => {
+    if (event.source !== window.parent) return;
     const type = event.data?.type;
-    if (type === "papr:preview-hidden") {
-      phase = "hidden";
-      return;
-    }
-    if (type === "papr:preview-visible") {
+    if (type === "papr:preview-hidden") phase = "hidden";
+    else if (type === "papr:preview-visible") {
       phase = "visible";
       flushQueuedFetches();
-      return;
-    }
-    if (type === "papr:preview-evicting") {
+    } else if (type === "papr:preview-evicting") {
       phase = "evicting";
       rejectQueuedFetches("Preview evicted");
-    }
-  });
+    } else return;
+    window.__paprPreviewPhase = phase;
+    report(event.data?.sequence);
+  };
+  window.addEventListener("message", onMessage);
 
-  const nativeFetch = window.fetch.bind(window);
-  window.fetch = (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    if (phase === "visible" || !isSameOriginApiRequest(input)) {
+  const originalFetch = window.fetch;
+  const nativeFetch = originalFetch.bind(window);
+  const wrapped: typeof fetch = (input, init) => {
+    const url = parseSameOriginApiUrl(input);
+    if (url === null) {
+      allowedOther += 1;
+      return nativeFetch(input, init);
+    }
+    if (phase === "visible") {
+      allowedApi += 1;
+      return nativeFetch(input, init);
+    }
+    if (!DEFERRABLE_READ_PATHS.has(url.pathname)) {
+      passedThroughApi += 1;
       return nativeFetch(input, init);
     }
 
-    const key = coalesceKeyForRequest(input, init);
+    const key = coalesceKeyForRequest(url, input, init);
 
     // Fold into an identical request already waiting. This is what bounds the
     // queue against a poller: 600 identical polls are one entry, so the cap
@@ -245,6 +268,7 @@ export function installPreviewFetchGate(): void {
     if (key !== null) {
       const existing = queuedByKey.get(key);
       if (existing) {
+        deferredApi += 1;
         return new Promise((resolve, reject) => {
           existing.waiters.push({ resolve, reject });
         });
@@ -255,9 +279,11 @@ export function installPreviewFetchGate(): void {
     // an unpaused fetch is the pre-gate behaviour and the app copes, whereas
     // an AbortError it never asked for is unrecoverable (see header).
     if (queue.length >= MAX_QUEUED_FETCHES) {
+      passedThroughApi += 1;
       return nativeFetch(input, init);
     }
 
+    deferredApi += 1;
     return new Promise((resolve, reject) => {
       const item: QueuedFetch = {
         key,
@@ -266,11 +292,21 @@ export function installPreviewFetchGate(): void {
         waiters: [{ resolve, reject }],
       };
       queue.push(item);
-      if (key !== null) {
-        queuedByKey.set(key, item);
-      }
+      if (key !== null) queuedByKey.set(key, item);
     });
+  };
+  window.fetch = wrapped;
+  report(); // Host replies with current state; does not depend on iframe load.
+
+  return () => {
+    window.removeEventListener("message", onMessage);
+    if (window.fetch === wrapped) window.fetch = originalFetch;
+    // The pause is over, so anything still held must run — leaving a waiter
+    // unsettled would hang whichever app call is awaiting it.
+    flushQueuedFetches();
+    delete window.__paprPreviewFetchGateInstalled;
+    delete window.__paprPreviewPhase;
   };
 }
 
-installPreviewFetchGate();
+export const disposePreviewFetchGate = installPreviewFetchGate();

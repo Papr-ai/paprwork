@@ -40,7 +40,8 @@ from typing import Any, Union
 # this number are left alone, so hand-edited helpers are never clobbered.
 #   1 = pre-proxy (writes directly to the SQLite file — wedges replica sync)
 #   2 = proxy support (PAPR_DB_MODE=proxy), query()/write(), _ProxyConnection
-PAPR_DB_HELPER_VERSION = 2
+#   3 = proxy passes sourceId (required when app has 2+ linked databases)
+PAPR_DB_HELPER_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -244,19 +245,38 @@ def _connect_turso(url: str, token: str) -> "_TursoConnection":
     return _TursoConnection(url, token)
 
 
-def _connect_proxy() -> "_ProxyConnection":
+def _default_source_id() -> str | None:
+    """Alias to use when a handler calls connect() with no argument.
+
+    Only meaningful when exactly one database is linked — with several, the
+    gateway requires an explicit alias and guessing would silently read the
+    wrong database."""
+    active = (os.environ.get("PAPR_ACTIVE_SOURCE_ID", "") or "").strip()
+    if active:
+        return active
+    aliases = [
+        a.strip()
+        for a in (os.environ.get("PAPR_LINKED_DB_ALIASES", "") or "").split(",")
+        if a.strip()
+    ]
+    return aliases[0] if len(aliases) == 1 else None
+
+
+def _connect_proxy(source_id: str | None = None) -> "_ProxyConnection":
     url = os.environ.get("PAPR_DB_PROXY_URL", "").strip()
     token = os.environ.get("PAPR_DB_PROXY_TOKEN", "").strip()
     if not url or not token:
         raise RuntimeError("PAPR_DB_PROXY_URL / PAPR_DB_PROXY_TOKEN not set")
-    return _ProxyConnection(url, token)
+    return _ProxyConnection(url, token, source_id or _default_source_id())
 
 
 def connect(
     source_id: str | None = None,
 ) -> sqlite3.Connection | "_TursoConnection" | "_ProxyConnection":
+    # Pass the alias through — the gateway needs it to pick a database when
+    # the app has more than one linked source.
     if db_mode() == "proxy":
-        return _connect_proxy()
+        return _connect_proxy(source_id)
 
     if source_id:
         prefix = _env_prefix_for_alias(source_id)
@@ -383,13 +403,21 @@ def executemany(
 class _ProxyConnection:
     """Loopback client for gateway /internal/backend-db (same rules as /api/db/*)."""
 
-    def __init__(self, base_url: str, token: str) -> None:
+    def __init__(self, base_url: str, token: str, source_id: str | None = None) -> None:
         self._base_url = base_url.rstrip("/")
         self._token = token
+        # Which linked database this connection targets. The gateway rejects
+        # /internal/backend-db with HTTP 400 when an app has more than one
+        # linked database and no sourceId is supplied — connect("sync") must
+        # forward the alias as sourceId on every query/write.
+        self._source_id = source_id
         self.lastrowid: int | None = None
 
     def _post(self, route: str, sql: str, params: list[Any]) -> dict[str, Any]:
-        body = json.dumps({"sql": sql, "params": params}).encode("utf-8")
+        payload_body: dict[str, Any] = {"sql": sql, "params": params}
+        if self._source_id:
+            payload_body["sourceId"] = self._source_id
+        body = json.dumps(payload_body).encode("utf-8")
         req = urllib.request.Request(
             f"{self._base_url}/{route}",
             data=body,

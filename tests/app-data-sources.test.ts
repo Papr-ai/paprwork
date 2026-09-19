@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  coalesceBatchSourceId,
   getLegacyDefaultSource,
   getSingleLinkedSource,
   isUnlinkedDataSource,
@@ -128,6 +129,22 @@ describe("appDataSources", () => {
       { sourceId: "metrics", operation: "write" },
     );
     expect(resolved.alias).toBe("metrics");
+  });
+
+  test("coalesceBatchSourceId prefers per-statement over request default", () => {
+    expect(coalesceBatchSourceId("metrics", "audit")).toBe("metrics");
+    expect(coalesceBatchSourceId(undefined, "audit")).toBe("audit");
+    expect(coalesceBatchSourceId("", "audit")).toBe("audit");
+    expect(coalesceBatchSourceId(undefined, undefined)).toBeUndefined();
+  });
+
+  test("multi-db batch resolves when request-level sourceId is set", async () => {
+    const batchDefault = coalesceBatchSourceId(undefined, "audit");
+    const resolved = await resolveAppDataSource(
+      { sources: [auditSource, metricsSource] },
+      { sourceId: batchDefault, operation: "read" },
+    );
+    expect(resolved.alias).toBe("audit");
   });
 
   test("writes are allowed on any linked source", async () => {

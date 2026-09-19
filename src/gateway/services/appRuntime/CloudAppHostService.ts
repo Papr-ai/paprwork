@@ -30,7 +30,7 @@ import {
   assertReadOnlySql,
   assertWriteSql,
 } from "./sqlValidation.js";
-import { type AppDataSourcesFile } from "../appDataSources.js";
+import { coalesceBatchSourceId, type AppDataSourcesFile } from "../appDataSources.js";
 import { resolveDbEventTarget } from "../../utils/resolveDbEventTarget.js";
 import { getMemoryServerBaseUrl } from "../../utils/cloudApiClient.js";
 import {
@@ -333,10 +333,10 @@ export class CloudAppHostService {
     app.use(
       "/internal/backend-db",
       createCloudBackendDbProxyRouter({
-        query: async (session, sql, params) =>
-          this.runBackendDbProxyQuery(session, sql, params),
-        write: async (session, sql, params) =>
-          this.runBackendDbProxyWrite(session, sql, params),
+        query: async (session, sql, params, sourceId) =>
+          this.runBackendDbProxyQuery(session, sql, params, sourceId),
+        write: async (session, sql, params, sourceId) =>
+          this.runBackendDbProxyWrite(session, sql, params, sourceId),
       }),
     );
 
@@ -481,7 +481,8 @@ export class CloudAppHostService {
   private async runBackendDbProxyQuery(
     session: BackendDbProxySession,
     sql: string,
-    params?: unknown[],
+    params: unknown[] | undefined,
+    sourceId: string | undefined,
   ): Promise<{ rows: Record<string, unknown>[]; count: number }> {
     const cloud = session.cloud;
     if (!cloud) {
@@ -500,7 +501,7 @@ export class CloudAppHostService {
       ...this.tursoDbRequest(access, cloud.runtimeAuth),
       runtimeAuth: cloud.runtimeAuth,
       config,
-      sourceId: session.sourceId,
+      sourceId,
       sql,
       params,
     });
@@ -509,7 +510,8 @@ export class CloudAppHostService {
   private async runBackendDbProxyWrite(
     session: BackendDbProxySession,
     sql: string,
-    params?: unknown[],
+    params: unknown[] | undefined,
+    sourceId: string | undefined,
   ): Promise<{ changes: number; lastInsertRowid: number }> {
     const cloud = session.cloud;
     if (!cloud) {
@@ -529,12 +531,12 @@ export class CloudAppHostService {
       runtimeAuth: cloud.runtimeAuth,
       config,
       appId: session.appId,
-      sourceId: session.sourceId,
+      sourceId,
       sql,
       params,
     });
     invalidateDbCacheForApp(cloud.runtimeAuth.namespaceId, cloud.runtimeAuth.slug);
-    this.publishDbChangedForSource(config, session.sourceId, session.appId, cloud.runtimeAuth);
+    this.publishDbChangedForSource(config, sourceId, session.appId, cloud.runtimeAuth);
     return result;
   }
 
@@ -1461,8 +1463,9 @@ export class CloudAppHostService {
     let tursoQueryMs = 0;
 
     try {
-      const { appId: requestedAppId, statements } = req.body as {
+      const { appId: requestedAppId, sourceId: batchSourceId, statements } = req.body as {
         appId?: string;
+        sourceId?: string;
         statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
       };
       if (!Array.isArray(statements) || statements.length === 0) {
@@ -1500,7 +1503,11 @@ export class CloudAppHostService {
 
       // Version gate (see handleQuery): one memoized check per distinct
       // source in the batch; any change busts the app's cache up front.
-      const distinctSourceIds = [...new Set(statements.map((s) => s.sourceId))];
+      const distinctSourceIds = [
+        ...new Set(
+          statements.map((s) => coalesceBatchSourceId(s.sourceId, batchSourceId)),
+        ),
+      ];
       const versionStarted = performance.now();
       for (const gateSourceId of distinctSourceIds) {
         const changed = await this.turso.hasRemoteChanged({
@@ -1522,11 +1529,12 @@ export class CloudAppHostService {
       const results: Array<Record<string, unknown>> = [];
       for (const stmt of statements) {
         try {
+          const effectiveSourceId = coalesceBatchSourceId(stmt.sourceId, batchSourceId);
           const cacheKey = buildDbCacheKey({
             namespaceId: runtimeAuth.namespaceId,
             slug: runtimeAuth.slug,
             appId,
-            sourceId: stmt.sourceId,
+            sourceId: effectiveSourceId,
             sql: stmt.sql as string,
             params: stmt.params,
           });
@@ -1542,7 +1550,7 @@ export class CloudAppHostService {
             ...this.tursoDbRequest(access, runtimeAuth),
             runtimeAuth,
             config,
-            sourceId: stmt.sourceId,
+            sourceId: effectiveSourceId,
             sql: stmt.sql as string,
             params: stmt.params,
           });
@@ -1659,11 +1667,13 @@ export class CloudAppHostService {
     let tursoWriteMs = 0;
 
     try {
-      const { appId: requestedAppId, statements, atomic } = req.body as {
-        appId?: string;
-        statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
-        atomic?: boolean;
-      };
+      const { appId: requestedAppId, sourceId: batchSourceId, statements, atomic } =
+        req.body as {
+          appId?: string;
+          sourceId?: string;
+          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+          atomic?: boolean;
+        };
       if (!Array.isArray(statements) || statements.length === 0) {
         res.status(400).json({ error: "non-empty statements[] is required" });
         return;
@@ -1713,7 +1723,7 @@ export class CloudAppHostService {
         appId,
         atomic: atomic === true,
         statements: statements.map((stmt) => ({
-          sourceId: stmt.sourceId,
+          sourceId: coalesceBatchSourceId(stmt.sourceId, batchSourceId),
           sql: stmt.sql as string,
           params: stmt.params,
         })),

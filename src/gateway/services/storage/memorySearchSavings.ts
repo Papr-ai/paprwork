@@ -1,3 +1,4 @@
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
@@ -225,7 +226,7 @@ function savingsFromHits(hits: MemorySearchHit[]): number {
 function openCodeIndexDb(): Database.Database | null {
   const dbPath = path.join(resolvePaprUserDataPath(), "code-index.db");
   if (!fs.existsSync(dbPath)) return null;
-  return new Database(dbPath, { readonly: true });
+  return openDiagnosticDatabase(Database, "services/storage/memorySearchSavings", dbPath, { readonly: true });
 }
 
 export function computeMemorySearchSavings(

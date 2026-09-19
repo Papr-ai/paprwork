@@ -4,6 +4,8 @@
  * - Job scratch: Jobs/{id}/data/data.db + migrations/ (infra only; app data uses registry)
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from "better-sqlite3";
 import {
   promises as fs,
@@ -181,7 +183,7 @@ export async function ensureRegistryDatabase(
   if (!options?.deferSqliteFile && !isReplicaManagedDbPath(layout.dbPath)) {
     let db: Database.Database | null = null;
     try {
-      db = new Database(layout.dbPath);
+      db = openDiagnosticDatabase(Database, "services/jobs/databaseMigrations", layout.dbPath);
       applySqlitePerformancePragmas(db);
       ensureSchemaMigrationsTable(db);
     } catch {
@@ -250,7 +252,7 @@ export async function applyDatabaseMigrations(
 
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath);
+    db = openDiagnosticDatabase(Database, "services/jobs/databaseMigrations", dbPath);
     applySqlitePerformancePragmas(db);
     ensureSchemaMigrationsTable(db);
 

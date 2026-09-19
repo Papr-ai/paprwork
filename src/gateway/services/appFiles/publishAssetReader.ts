@@ -7,6 +7,8 @@
  * is the normal case for an app that has never uploaded a file, not an error.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from "better-sqlite3";
 import { existsSync } from "fs";
 import * as path from "path";
@@ -52,7 +54,7 @@ export function readAppFileRows(
   for (const dbPath of linkedDbPathsForApp(paprDir, appId)) {
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath, { readonly: true, fileMustExist: true });
+      db = openDiagnosticDatabase(Database, "services/appFiles/publishAssetReader", dbPath, { readonly: true, fileMustExist: true });
       const hasTable = db
         .prepare(
           `SELECT name FROM sqlite_master WHERE type='table' AND name='app_files'`,

@@ -97,6 +97,9 @@ export interface WebSyncPopoverProps {
   popoverRef?: React.RefObject<HTMLDivElement | null>;
   className?: string;
   style?: React.CSSProperties;
+  needsStatusCheck?: boolean;
+  lastCheckedAt?: number | null;
+  onCheckStatus?: () => void;
 }
 
 function rowIcon(phase: AppCloudItemPhase, status?: string): string {
@@ -222,6 +225,9 @@ export function WebSyncPopover({
   popoverRef,
   className,
   style,
+  needsStatusCheck = false,
+  lastCheckedAt = null,
+  onCheckStatus,
 }: WebSyncPopoverProps) {
   const pushIfAllowed = (): void => {
     if (!requestPaprCloudFeature("publish_share")) {
@@ -282,7 +288,21 @@ export function WebSyncPopover({
       >
         <p className="mini-app-publish-bar__sync-popover-title">Web sync</p>
         <PaprCloudRequirementsPanel featureId="publish_share" compact />
-        <p className="mini-app-publish-bar__sync-popover-summary">Checking…</p>
+        <p className="mini-app-publish-bar__sync-popover-summary">
+          {loading || refreshing ? "Checking…" : "Click Check status to compare local vs web."}
+        </p>
+        {onCheckStatus ? (
+          <div className="mini-app-publish-bar__sync-popover-actions">
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => onCheckStatus()}
+            >
+              {refreshing ? "Checking…" : "Check status"}
+            </button>
+          </div>
+        ) : null}
         {uploadFailureMessage ? (
           <p className="mini-app-publish-bar__sync-popover-error">{uploadFailureMessage}</p>
         ) : null}
@@ -488,6 +508,16 @@ export function WebSyncPopover({
         <p className="mini-app-publish-bar__sync-popover-summary">{headlineText}</p>
       ) : null}
 
+      {needsStatusCheck ? (
+        <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
+          Status may be from an earlier session — click Check status for a fresh comparison.
+        </p>
+      ) : lastCheckedAt ? (
+        <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
+          Last checked {formatLastUploadedAt(lastCheckedAt) ?? "recently"}.
+        </p>
+      ) : null}
+
       <div className="mini-app-publish-bar__sync-popover-scroll">
         {status.codeLastError && status.codeLastError !== uploadFailureMessage ? (
           <p className="mini-app-publish-bar__sync-popover-error">{status.codeLastError}</p>
@@ -553,6 +583,16 @@ export function WebSyncPopover({
       </div>
 
       <div className="mini-app-publish-bar__sync-popover-actions">
+        {onCheckStatus ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+            disabled={busy}
+            onClick={() => onCheckStatus()}
+          >
+            {refreshing ? "Checking…" : "Check status"}
+          </button>
+        ) : null}
         {showWriterConflict ? (
           <>
             <button

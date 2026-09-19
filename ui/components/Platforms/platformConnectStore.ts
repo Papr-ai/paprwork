@@ -9,8 +9,8 @@
 import { create } from "zustand";
 import { gateway } from "../../src/lib/gateway";
 
+/** Built-in social platform id (custom sites use `site-*` strings). */
 export type PlatformId =
-  // Social
   | "linkedin"
   | "instagram"
   | "reddit"
@@ -20,7 +20,8 @@ export type PlatformId =
   | "telegram";
 
 export interface PlatformConnectRequest {
-  platform: PlatformId;
+  /** Built-in id or registered custom site id (e.g. site-mail-google-com). */
+  platform: string;
   reason?: string; // Why the agent needs this connection
   requestId: string;
 }
@@ -39,7 +40,7 @@ export const usePlatformConnectStore = create<PlatformConnectState>((set) => ({
   clearRequest: () => set({ activeRequest: null }),
 }));
 
-async function isPlatformAlreadyConnected(platformId: PlatformId): Promise<boolean> {
+async function isPlatformAlreadyConnected(platformId: string): Promise<boolean> {
   try {
     const response = await gateway.send("platform:get-status", { platformId });
     const data = response.data as { status?: string } | undefined;
@@ -59,7 +60,15 @@ export function initPlatformConnectListener(): void {
     const message = customEvent.detail;
 
     if (message.type === "platform:connect-request") {
-      const platformId = message.data.platformId as PlatformId;
+      const rawId = message.data?.platformId;
+      const platformId =
+        typeof rawId === "string" ? rawId.trim() : "";
+      if (!platformId) {
+        console.warn(
+          "[PlatformConnectStore] Ignoring connect request with no platformId",
+        );
+        return;
+      }
       console.log("[PlatformConnectStore] Connection request:", message.data);
 
       void (async () => {
@@ -80,7 +89,7 @@ export function initPlatformConnectListener(): void {
 
     if (message.type === "platform:status-changed") {
       const { platformId, status } = message.data as {
-        platformId: PlatformId;
+        platformId: string;
         status: string;
       };
       const activeRequest = usePlatformConnectStore.getState().activeRequest;

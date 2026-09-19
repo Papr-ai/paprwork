@@ -33,6 +33,7 @@ import {
   type OAuthProviderStep,
 } from "../../core/telemetry/oauthProviderSteps.js";
 import { fetchClaudeSubscriptionUsageFromCandidates } from "../../core/services/claudeOAuthUsage.js";
+import { buildClaudeUsageTokenCandidates } from "../../core/services/claudeUsageLimitCandidates.js";
 import { fetchCodexSubscriptionUsage } from "../../core/services/codexOAuthUsage.js";
 import {
   dedupeAccessTokens,
@@ -357,7 +358,9 @@ async function adoptClaudeCredentialsFromCLIStorage(
   if (!oauthTokenStorage || !claudeSetupTokenService) return false;
 
   const credentials =
-    await claudeSetupTokenService.readCredentialsFromCLIStorage();
+    await claudeSetupTokenService.readCredentialsFromCLIStorage({
+      logProbe: true,
+    });
   if (!credentials) {
     console.warn(
       "[OAuth IPC] Claude token cannot be refreshed and Claude Code has no credentials to adopt — reconnect required",
@@ -831,6 +834,145 @@ export async function initializeOAuthIPC(
   // Flow: (1) check existing credentials, (2) ensure CLI installed, (3) open
   // a real terminal window with the command, (4) UI shows paste field for
   // user to copy token from terminal and paste it.
+
+  async function openClaudeSetupTokenTerminal(): Promise<boolean> {
+    const { exec: execCb } = await import("child_process");
+    try {
+      if (process.platform === "darwin") {
+        execCb(
+          `osascript -e 'tell application "Terminal" to do script "claude setup-token"' -e 'tell application "Terminal" to activate'`,
+        );
+        return true;
+      }
+      if (process.platform === "win32") {
+        execCb(`start cmd.exe /k "claude setup-token"`);
+        return true;
+      }
+      execCb(
+        `x-terminal-emulator -e "claude setup-token" 2>/dev/null || gnome-terminal -- bash -c "claude setup-token; exec bash" 2>/dev/null || xterm -e "claude setup-token" 2>/dev/null`,
+      );
+      return true;
+    } catch (termErr) {
+      console.error("[OAuth IPC] Failed to open terminal:", termErr);
+      return false;
+    }
+  }
+
+  ipcMain.handle(
+    "auth:claude:onboarding-run-check",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+        const existingCredentials =
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+            logProbe: true,
+          });
+        const adoptableCredentials = existingCredentials
+          ? await resolveAdoptableClaudeCredentials(existingCredentials)
+          : null;
+
+        if (adoptableCredentials) {
+          trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
+          const tokenInput = {
+            provider: "anthropic" as const,
+            ...claudeCredentialsToTokenLifetime(adoptableCredentials, {
+              fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+            }),
+          };
+          await persistOAuthConnection("anthropic", tokenInput, {
+            flow_source: "keychain",
+            source: telemetrySource,
+          });
+          return { connected: true as const };
+        }
+
+        const staleCredentials = Boolean(existingCredentials);
+
+        const cli = await claudeSetupTokenService!.getClaudeCliCheck();
+
+        let okMessage: string;
+        if (cli.installed && cli.version) {
+          okMessage = staleCredentials
+            ? `Found Claude Code ${cli.version}. We will sign in fresh in the next step.`
+            : `Found Claude Code ${cli.version}. Nothing stale to clean up.`;
+        } else if (staleCredentials) {
+          okMessage =
+            "No install found. We will install Claude Code, then sign in again.";
+        } else {
+          okMessage = "No install found. Nothing stale to clean up.";
+        }
+
+        return {
+          connected: false as const,
+          okMessage,
+          skipInstallStep: cli.installed,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Check failed";
+        return { connected: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "auth:claude:onboarding-install-cli",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+        trackOAuthStep("anthropic", "cli_install_started", { source: telemetrySource });
+        const installResult = await claudeSetupTokenService!.installClaudeCLI();
+        if (!installResult.success) {
+          trackOAuthStep("anthropic", "cli_install_failed", {
+            source: telemetrySource,
+            error: installResult.error,
+          });
+          return { success: false as const, error: installResult.error ?? "Install failed" };
+        }
+        const cli = await claudeSetupTokenService!.getClaudeCliCheck();
+        const okMessage = cli.version
+          ? `Installed Claude Code ${cli.version}`
+          : "Installed Claude Code";
+        return { success: true as const, okMessage };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Install failed";
+        return { success: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "auth:claude:open-setup-token-terminal",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+        const terminalOpened = await openClaudeSetupTokenTerminal();
+        trackOAuthStep("anthropic", "terminal_opened", {
+          source: telemetrySource,
+          terminal_opened: terminalOpened,
+        });
+        if (!terminalOpened) {
+          return {
+            success: false as const,
+            error: "Could not open Terminal. Run claude setup-token yourself.",
+          };
+        }
+        return { success: true as const };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Terminal failed";
+        return { success: false as const, error: message };
+      }
+    },
+  );
+
   ipcMain.handle(
     "auth:claude:start-oauth",
     async (_event, options?: OAuthStartTelemetryOptions) => {
@@ -845,7 +987,9 @@ export async function initializeOAuthIPC(
       // adopted once they demonstrably authenticate — live, or successfully
       // renewed. Anything else falls through to the real sign-in below.
       const existingCredentials =
-        await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+        await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+          logProbe: true,
+        });
       const adoptableCredentials = existingCredentials
         ? await resolveAdoptableClaudeCredentials(existingCredentials)
         : null;
@@ -897,26 +1041,8 @@ export async function initializeOAuthIPC(
         console.log("[OAuth IPC] Claude CLI installed");
       }
 
-      // Step 2: Open a real terminal window with `claude setup-token`
       console.log("[OAuth IPC] Opening terminal with claude setup-token...");
-      const { exec: execCb } = await import("child_process");
-
-      let terminalOpened = false;
-      try {
-        if (process.platform === "darwin") {
-          execCb(`osascript -e 'tell application "Terminal" to do script "claude setup-token"' -e 'tell application "Terminal" to activate'`);
-          terminalOpened = true;
-        } else if (process.platform === "win32") {
-          execCb(`start cmd.exe /k "claude setup-token"`);
-          terminalOpened = true;
-        } else {
-          execCb(`x-terminal-emulator -e "claude setup-token" 2>/dev/null || gnome-terminal -- bash -c "claude setup-token; exec bash" 2>/dev/null || xterm -e "claude setup-token" 2>/dev/null`);
-          terminalOpened = true;
-        }
-      } catch (termErr) {
-        console.error("[OAuth IPC] Failed to open terminal:", termErr);
-      }
-
+      const terminalOpened = await openClaudeSetupTokenTerminal();
       trackOAuthStep("anthropic", "terminal_opened", {
         source: telemetrySource,
         terminal_opened: terminalOpened,
@@ -979,45 +1105,39 @@ export async function initializeOAuthIPC(
 
   ipcMain.handle("auth:claude:get-usage-limits", async () => {
     try {
-      const authStatus = await readClaudeAuthStatusFromCli();
-      const candidates: {
-        accessToken: string;
-        source: "claude_code_keychain" | "papr_stored";
-      }[] = [];
+      await refreshTokenIfNeeded("anthropic");
+      const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
+      const paprAccessToken = paprToken?.accessToken;
 
-      if (claudeSetupTokenService) {
+      let cliAccessToken: string | undefined;
+      if (!paprAccessToken && claudeSetupTokenService) {
         const raw =
           await claudeSetupTokenService.readCredentialsFromCLIStorage();
         if (raw) {
           const usable =
             (await resolveAdoptableClaudeCredentials(raw)) ??
             (claudeAccessTokenIsLive(raw) ? raw : null);
-          if (usable?.accessToken) {
-            candidates.push({
-              accessToken: usable.accessToken,
-              source: "claude_code_keychain",
-            });
-          }
+          cliAccessToken = usable?.accessToken;
         }
       }
 
-      await refreshTokenIfNeeded("anthropic");
-      const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
-      if (paprToken?.accessToken) {
-        candidates.push({
-          accessToken: paprToken.accessToken,
-          source: "papr_stored",
-        });
-      }
+      const unique = dedupeAccessTokens(
+        buildClaudeUsageTokenCandidates(paprAccessToken, cliAccessToken),
+      );
 
-      const unique = dedupeAccessTokens(candidates);
       if (unique.length === 0) {
+        const authStatus = await readClaudeAuthStatusFromCli();
         const hint =
           authStatus?.loggedIn === true
             ? "Claude CLI is signed in but no usable token was found — run claude auth login again."
             : "Connect Claude subscription first, or sign in with claude auth login in Terminal.";
         return { success: false, error: hint, authStatus };
       }
+
+      const authStatus =
+        paprAccessToken === undefined
+          ? await readClaudeAuthStatusFromCli()
+          : null;
 
       return await fetchClaudeSubscriptionUsageFromCandidates(unique, {
         orgUuidHint: authStatus?.orgId ?? undefined,
@@ -1068,7 +1188,9 @@ export async function initializeOAuthIPC(
       const telemetrySource = resolveOAuthTelemetrySource(options?.source);
       try {
         const credentials =
-          await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+            logProbe: true,
+          });
         if (!credentials) {
           return { success: false, reason: "not_found" as const };
         }

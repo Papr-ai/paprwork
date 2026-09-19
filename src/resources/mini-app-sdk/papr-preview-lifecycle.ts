@@ -18,7 +18,13 @@ export interface PausablePreviewResource {
 const pausables = new Set<PausablePreviewResource>();
 const lifecycleListeners = new Set<(phase: PreviewLifecyclePhase) => void>();
 
-let currentPhase: PreviewLifecyclePhase = "visible";
+// A late SDK import must inherit the state already received by the gate.
+let currentPhase: PreviewLifecyclePhase =
+  typeof window === "undefined"
+    ? "visible"
+    : ((window as Window & { __paprPreviewPhase?: PreviewLifecyclePhase })
+        .__paprPreviewPhase ??
+      (window.name === "papr-preview:hidden" ? "hidden" : "visible"));
 let bridgeInstalled = false;
 
 function setPhase(phase: PreviewLifecyclePhase): void {
@@ -77,6 +83,7 @@ export function installPreviewLifecycleBridge(): void {
   bridgeInstalled = true;
 
   window.addEventListener("message", (event: MessageEvent) => {
+    if (event.source !== window.parent) return;
     const type = event.data?.type;
     if (type === "papr:preview-hidden") {
       setPhase("hidden");

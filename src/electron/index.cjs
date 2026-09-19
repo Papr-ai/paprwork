@@ -1194,6 +1194,7 @@ const {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
@@ -1904,26 +1905,30 @@ class GatewayProcessSupervisor {
     this.healthFailures = 0;
     this._stopHealthCheck();
     this.healthCheckTimer = setInterval(() => {
+      const observedProcess = this.process;
+      let settled = false;
+      const report = (health, requestOutcome = "response") => {
+        if (settled || this.process !== observedProcess) return;
+        settled = true;
+        this._onHealthCheckResult(health, requestOutcome);
+      };
       const req = http.get(`http://localhost:${this.port}/health`, (res) => {
         let body = "";
         res.on("data", (d) => (body += d));
         res.on("end", () => {
           const health = parseHealthResponse(body);
-          this._onHealthCheckResult(health);
+          report(health);
         });
       });
       req.on("error", () => {
         const busyGrace = this._readSyncBusyGraceHealth();
-        this._onHealthCheckResult(
-          busyGrace ?? { alive: false, ready: false },
-        );
+        report(busyGrace ?? { alive: false, ready: false }, "error");
       });
       req.setTimeout(this.HEALTH_REQUEST_TIMEOUT_MS, () => {
-        req.destroy();
         const busyGrace = this._readSyncBusyGraceHealth();
-        this._onHealthCheckResult(
-          busyGrace ?? { alive: false, ready: false },
-        );
+        // Record the timeout before destroy emits a secondary socket error.
+        report(busyGrace ?? { alive: false, ready: false }, "timeout");
+        req.destroy();
       });
     }, this.HEALTH_INTERVAL_MS);
   }
@@ -1935,7 +1940,17 @@ class GatewayProcessSupervisor {
     }
   }
 
-  _onHealthCheckResult(health) {
+  _onHealthCheckResult(health, requestOutcome = "response") {
+    const observation = getHealthObservation(health, requestOutcome, this.lastDiagnosticHealthFailed);
+    if (observation) {
+      const event = {
+        id: `${this.process?.pid}:${Date.now()}:${++this.healthObservationSequence || (this.healthObservationSequence = 1)}`,
+        timestamp: new Date().toISOString(), ...observation,
+        gatewayPid: this.process?.pid,
+      };
+      if (this.process?.connected) this.process.send({ type: "HEALTH_OBSERVATION", event }, () => {});
+    }
+    this.lastDiagnosticHealthFailed = observation?.status === "failed";
     if (health.ready) {
       this.hasEverBeenHealthy = true;
       if (!this.gatewayReadyNotified) {
@@ -1959,9 +1974,9 @@ class GatewayProcessSupervisor {
         this.process.kill("SIGKILL");
         // _onProcessExit will handle restart scheduling
       }
-    } else if (health.syncBusy) {
+    } else if (health.syncBusy && requestOutcome !== "response") {
       console.log(
-        "[Supervisor] Gateway busy uploading (health slow/unreachable — grace active)",
+        `[Supervisor] Health request ${requestOutcome === "timeout" ? "timed out" : "failed"} during sync — restart grace active`,
       );
     } else if (!health.alive && this.hasEverBeenHealthy) {
       const lagSuffix =
@@ -2048,7 +2063,14 @@ class GatewayProcessSupervisor {
           return;
         }
         attempts++;
-        const req = http.get(`http://localhost:${this.port}/health`, (res) => {
+        const observedProcess = this.process;
+      let settled = false;
+      const report = (health) => {
+        if (settled || this.process !== observedProcess) return;
+        settled = true;
+        this._onHealthCheckResult(health);
+      };
+      const req = http.get(`http://localhost:${this.port}/health`, (res) => {
           let body = "";
           res.on("data", (d) => (body += d));
           res.on("end", () => {

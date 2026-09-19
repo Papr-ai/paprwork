@@ -287,7 +287,6 @@ export async function installCloudAppLinkedResources(input: {
 
   if (
     !input.skipReplicaPrep &&
-    input.installDbPolicy !== "fork_empty" &&
     (sync.registryDbIds.length > 0 || sync.copiedJobIds.length > 0)
   ) {
     const {

@@ -18,6 +18,8 @@ export interface CloudSyncTabSnapshot {
   syncItems: SyncItemsResponse | null;
   /** Last fetched /api/sync/items payload per mini-app (publish bar). */
   syncItemsByAppId?: Record<string, SyncItemsResponse>;
+  /** When each app's syncItems payload was last written (ms since epoch). */
+  syncItemsFetchedAtByAppId?: Record<string, number>;
   savedAt: number;
 }
 
@@ -63,6 +65,9 @@ export function writeCloudSyncTabSnapshot(
         ...snapshot,
         syncItemsByAppId:
           snapshot.syncItemsByAppId ?? existing?.syncItemsByAppId,
+        syncItemsFetchedAtByAppId:
+          snapshot.syncItemsFetchedAtByAppId ??
+          existing?.syncItemsFetchedAtByAppId,
         savedAt: Date.now(),
       } satisfies CloudSyncTabSnapshot),
     );
@@ -90,11 +95,50 @@ export function readCachedSyncItemsForApp(
   return hasAppRow ? legacy : null;
 }
 
+export function readCachedSyncItemsFetchedAt(appId: string): number | null {
+  const snapshot = readCloudSyncTabSnapshot();
+  const at = snapshot?.syncItemsFetchedAtByAppId?.[appId];
+  if (typeof at === "number" && Number.isFinite(at)) {
+    return at;
+  }
+  if (readCachedSyncItemsForApp(appId) && typeof snapshot?.savedAt === "number") {
+    return snapshot.savedAt;
+  }
+  return null;
+}
+
+/** Drop cached /api/sync/items payload so UI refetches after a background upload. */
+export function invalidateCachedSyncItemsForApp(appId: string): void {
+  const existing = readCloudSyncTabSnapshot();
+  if (!existing) {
+    return;
+  }
+  const hadPerApp = Boolean(existing.syncItemsByAppId?.[appId]);
+  const legacyMatches =
+    existing.syncItems?.appContext?.appId === appId ||
+    existing.syncItems?.github?.apps?.some((app) => app.id === appId);
+  if (!hadPerApp && !legacyMatches) {
+    return;
+  }
+  const nextByApp = { ...(existing.syncItemsByAppId ?? {}) };
+  delete nextByApp[appId];
+  const nextFetchedAt = { ...(existing.syncItemsFetchedAtByAppId ?? {}) };
+  delete nextFetchedAt[appId];
+  writeCloudSyncTabSnapshot({
+    gitStatus: existing.gitStatus,
+    vaultStatus: existing.vaultStatus,
+    syncItems: legacyMatches ? null : existing.syncItems,
+    syncItemsByAppId: nextByApp,
+    syncItemsFetchedAtByAppId: nextFetchedAt,
+  });
+}
+
 export function writeCachedSyncItemsForApp(
   appId: string,
   items: SyncItemsResponse,
 ): void {
   const existing = readCloudSyncTabSnapshot();
+  const fetchedAt = Date.now();
   writeCloudSyncTabSnapshot({
     gitStatus: existing?.gitStatus ?? null,
     vaultStatus: existing?.vaultStatus ?? null,
@@ -102,6 +146,10 @@ export function writeCachedSyncItemsForApp(
     syncItemsByAppId: {
       ...(existing?.syncItemsByAppId ?? {}),
       [appId]: items,
+    },
+    syncItemsFetchedAtByAppId: {
+      ...(existing?.syncItemsFetchedAtByAppId ?? {}),
+      [appId]: fetchedAt,
     },
   });
 }

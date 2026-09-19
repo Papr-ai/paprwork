@@ -15,6 +15,40 @@ function normalizeKey(dbPath: string): string {
 const healInFlight = new Map<string, Promise<void>>();
 const lastHealScheduledMs = new Map<string, number>();
 
+function startSchemaHealJob(
+  source: AppDataSource,
+  label: string,
+): Promise<void> {
+  const dbPath = source.dbPath?.trim();
+  if (!dbPath) {
+    return Promise.resolve();
+  }
+  const key = normalizeKey(dbPath);
+  const existing = healInFlight.get(key);
+  if (existing) {
+    return existing;
+  }
+  const job = runBackgroundSchemaHeal(source, label).finally(() => {
+    healInFlight.delete(key);
+  });
+  healInFlight.set(key, job);
+  return job;
+}
+
+/** Interactive reads await this; background paths use scheduleReplicaSchemaDriftHeal. */
+export async function awaitReplicaSchemaDriftHeal(
+  source: AppDataSource,
+): Promise<void> {
+  const dbPath = source.dbPath?.trim();
+  if (!dbPath) {
+    return;
+  }
+  const key = normalizeKey(dbPath);
+  lastHealScheduledMs.set(key, Date.now());
+  const label = source.alias ?? source.dbId ?? dbPath;
+  await startSchemaHealJob(source, label);
+}
+
 export function scheduleReplicaSchemaDriftHeal(source: AppDataSource): void {
   const dbPath = source.dbPath?.trim();
   if (!dbPath) {
@@ -31,11 +65,7 @@ export function scheduleReplicaSchemaDriftHeal(source: AppDataSource): void {
   lastHealScheduledMs.set(key, Date.now());
 
   const label = source.alias ?? source.dbId ?? dbPath;
-  const job = runBackgroundSchemaHeal(source, label).finally(() => {
-    healInFlight.delete(key);
-  });
-  healInFlight.set(key, job);
-  void job;
+  void startSchemaHealJob(source, label);
 }
 
 async function runBackgroundSchemaHeal(

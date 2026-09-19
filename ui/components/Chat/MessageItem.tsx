@@ -547,7 +547,12 @@ function renderSequence(
       if (item.type === "tool") {
         const toolData = item.data as any;
         const toolName = toolData.name || "tool";
-        const isRunning = toolData.status === "calling";
+        const resolvedStatus = resolveToolCallStatus({
+          explicitStatus:
+            typeof toolData.status === "string" ? toolData.status : undefined,
+          result: toolData.output,
+        });
+        const isRunning = resolvedStatus === "calling";
         
         // Special handling for run_job to show job name
         if (toolName === "run_job") {
@@ -559,7 +564,7 @@ function renderSequence(
           lastActivity = getToolDisplayLabel({
             toolName,
             args: toolData.input || {},
-            status: toolData.status || "success",
+            status: resolvedStatus,
           });
         }
         break;
@@ -591,11 +596,15 @@ function renderSequence(
           status?: string;
           output?: unknown;
           result?: unknown;
+          input?: Record<string, unknown>;
+          name?: string;
         };
-        if (data.status !== "calling") return false;
-        if (data.output !== undefined && data.output !== null) return false;
-        if (data.result !== undefined && data.result !== null) return false;
-        return true;
+        const status = resolveToolCallStatus({
+          explicitStatus:
+            typeof data.status === "string" ? data.status : undefined,
+          result: data.output ?? data.result,
+        });
+        return status === "calling";
       });
       const isExploring =
         message.isStreaming || hasCallingTool || hasActiveDelegation;

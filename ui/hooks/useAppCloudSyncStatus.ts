@@ -1,5 +1,5 @@
 /**
- * Poll gateway sync status for a single mini-app (publish bar chip).
+ * Cloud sync status for a single mini-app publish bar (manual check + active-upload polling).
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -14,10 +14,16 @@ import {
 } from "../utils/appCloudSyncStatus";
 import {
   readCachedAppCloudSyncStatus,
+  readCachedSyncItemsFetchedAt,
+  invalidateCachedSyncItemsForApp,
   readCachedSyncItemsForApp,
   readCloudSyncTabSnapshot,
   writeCachedSyncItemsForApp,
 } from "../utils/cloudSyncTabCache";
+import {
+  APP_CLOUD_SYNC_FOCUS_DEBOUNCE_MS,
+  isAppCloudSyncCacheFresh,
+} from "../utils/appCloudSyncFocusRefresh";
 
 const GATEWAY =
   typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
@@ -204,6 +210,10 @@ export function useAppCloudSyncStatus(
   pulling: boolean;
   applyingUpdates: boolean;
   error: string | null;
+  lastCheckedAt: number | null;
+  /** True until the user runs "Check status" this session (cached snapshot may still show). */
+  needsStatusCheck: boolean;
+  checkStatus: () => Promise<void>;
   refresh: (force?: boolean) => Promise<void>;
   pushNow: () => Promise<void>;
   bumpQueue: () => Promise<void>;
@@ -257,6 +267,10 @@ export function useAppCloudSyncStatus(
   const [liveSyncPending, setLiveSyncPending] = useState(true);
   const hasLoadedOnceRef = useRef(initialStatus !== null);
   const refreshInFlightRef = useRef(false);
+  const [lastCheckedAt, setLastCheckedAt] = useState<number | null>(() =>
+    readCachedSyncItemsFetchedAt(appId),
+  );
+  const [checkedThisSession, setCheckedThisSession] = useState(false);
 
   const status = useMemo((): AppCloudSyncStatus | null => {
     if (syncItems) {
@@ -320,13 +334,11 @@ export function useAppCloudSyncStatus(
     async (force = false) => {
       if (!active || refreshInFlightRef.current) return;
       refreshInFlightRef.current = true;
-      const isBackgroundRefresh = hasLoadedOnceRef.current && !force;
       try {
         setError(null);
         if (!hasLoadedOnceRef.current) {
           setLoading(true);
-        } else if (!isBackgroundRefresh) {
-          // Explicit refresh (e.g. after merge) — brief indicator without hiding status.
+        } else {
           setRefreshing(true);
         }
 
@@ -362,6 +374,8 @@ export function useAppCloudSyncStatus(
         if (shouldPersistSyncSnapshot(items, git)) {
           writeCachedSyncItemsForApp(appId, items);
         }
+        setLastCheckedAt(Date.now());
+        setCheckedThisSession(true);
       } catch (err) {
         setError((err as Error).message.slice(0, 120));
       } finally {
@@ -377,6 +391,10 @@ export function useAppCloudSyncStatus(
     },
     [active, appId, fetchRemoteCodeStatus],
   );
+
+  const checkStatus = useCallback(async () => {
+    await refresh(true);
+  }, [refresh]);
 
   const pushNow = useCallback(async () => {
     if (status?.gitRemoteRequiresReview) {
@@ -483,32 +501,50 @@ export function useAppCloudSyncStatus(
     setPulling(false);
     setApplyingUpdates(false);
     setError(null);
-    setLiveSyncPending(true);
-    setRemoteCodeCheck(null);
 
     const cached = readCachedSyncItemsForApp(appId);
+    const fetchedAt = readCachedSyncItemsFetchedAt(appId);
+    const cacheFresh = isAppCloudSyncCacheFresh(fetchedAt);
+
     setSyncItems(cached);
     hasLoadedOnceRef.current = cached !== null;
     setLoading(cached === null);
 
-    void refresh(false);
-  }, [active, appId, previewTabVisible, previewShellLoaded, refresh]);
+    if (cacheFresh) {
+      setLiveSyncPending(false);
+    } else {
+      setLiveSyncPending(true);
+      setRemoteCodeCheck(null);
+    }
+
+    const timer = setTimeout(() => {
+      setLoading(false);
+    }, APP_CLOUD_SYNC_FOCUS_DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [active, appId, previewTabVisible, previewShellLoaded]);
+
+  useEffect(() => {
+    setCheckedThisSession(false);
+    setLastCheckedAt(readCachedSyncItemsFetchedAt(appId));
+  }, [appId]);
 
   useEffect(() => {
     if (!active || !previewTabVisible || !previewShellLoaded || anyChatBusy) return;
-    const intervalMs =
+    const uploadInProgress =
       pushing ||
       pulling ||
       applyingUpdates ||
       status?.overall === "uploading" ||
       status?.uploadQueued === true ||
       status?.publishStatus === "republishing" ||
-      status?.globallySyncing
-        ? 3_000
-        : 25_000;
+      status?.globallySyncing;
+    if (!uploadInProgress) {
+      return;
+    }
     const timer = setInterval(() => {
-      void refresh();
-    }, intervalMs);
+      void refresh(false);
+    }, 3_000);
     return () => clearInterval(timer);
   }, [
     active,
@@ -534,14 +570,32 @@ export function useAppCloudSyncStatus(
   }, [pushing, fetchRemoteCodeStatus]);
 
   useEffect(() => {
-    if (!active || !previewTabVisible || !previewShellLoaded || anyChatBusy) {
-      return;
-    }
-    const timer = setInterval(() => {
-      void fetchRemoteCodeStatus();
-    }, 60_000);
-    return () => clearInterval(timer);
-  }, [active, previewTabVisible, previewShellLoaded, anyChatBusy, fetchRemoteCodeStatus]);
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent).detail as
+        | { type?: string; data?: { appId?: string } }
+        | undefined;
+      if (detail?.type !== "cloud-sync:items-stale") {
+        return;
+      }
+      const staleAppId = detail.data?.appId;
+      if (staleAppId && staleAppId !== appId) {
+        return;
+      }
+      if (staleAppId) {
+        invalidateCachedSyncItemsForApp(staleAppId);
+      }
+      void refresh(true);
+    };
+    window.addEventListener("gateway-broadcast", handler);
+    return () => window.removeEventListener("gateway-broadcast", handler);
+  }, [appId, refresh]);
+
+  const needsStatusCheck =
+    !checkedThisSession &&
+    !refreshing &&
+    !pushing &&
+    !pulling &&
+    !applyingUpdates;
 
   return {
     status,
@@ -553,6 +607,9 @@ export function useAppCloudSyncStatus(
     pulling,
     applyingUpdates,
     error,
+    lastCheckedAt,
+    needsStatusCheck,
+    checkStatus,
     refresh,
     pushNow,
     bumpQueue,

@@ -8,8 +8,12 @@
  * - Remote ledger is backfilled when schema already matches (legacy / drift-fixed DBs)
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import type { Client } from "@libsql/client";
 import Database from "better-sqlite3";
+import * as path from "node:path";
+import { retryWhileReplicaBusy } from "../tursoReplica/replicaBusyRetry.js";
 import type { JobMigrationSchemaOp } from "../../../core/types/jobMigrations.js";
 import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import {
@@ -38,6 +42,29 @@ import {
 } from "../tursoPlatformSchema.js";
 
 export { ensureRemoteSchemaMigrationsTable, REMOTE_SCHEMA_MIGRATIONS_TABLE };
+
+function ledgerAlignKey(localDbPath: string, migrationRoot: string): string {
+  return `${path.normalize(localDbPath)}\0${migrationRoot}`;
+}
+
+const ledgerAlignInflight = new Map<
+  string,
+  Promise<MigrationLedgerSyncResult>
+>();
+
+export function resetMigrationLedgerAlignInflightForTests(): void {
+  ledgerAlignInflight.clear();
+}
+
+async function waitForReplicaPublishQuiesce(localDbPath: string): Promise<void> {
+  const { isReplicaPathPublishQuiesced } = await import(
+    "../tursoReplica/tursoReplicaPublishQuiesce.js"
+  );
+  const deadline = Date.now() + 30_000;
+  while (isReplicaPathPublishQuiesced(localDbPath) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
 
 /**
  * Outcome of checking one schema op.
@@ -542,7 +569,7 @@ export async function hydrateLocalSchemaMigrationsFromRemote(
     return [];
   }
 
-  const localDb = new Database(localDbPath);
+  const localDb = openDiagnosticDatabase(Database, "services/jobs/jobMigrationLedgerSync", localDbPath);
   const hydrated: string[] = [];
   try {
     ensureSchemaMigrationsTable(localDb);
@@ -612,49 +639,50 @@ export async function reconcileLocalMigrationLedgerFromSchema(
     return [];
   }
 
-  const localDb = new Database(localDbPath);
-  const backfilled: string[] = [];
-  try {
-    ensureSchemaMigrationsTable(localDb);
-    const applied = new Set(listLocalAppliedMigrationIds(localDb));
-    const insert = localDb.prepare(
-      "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+  return await retryWhileReplicaBusy(async () => {
+    const localDb = openDiagnosticDatabase(
+      Database,
+      "services/jobs/jobMigrationLedgerSync",
+      localDbPath,
     );
+    const backfilled: string[] = [];
+    try {
+      ensureSchemaMigrationsTable(localDb);
+      const applied = new Set(listLocalAppliedMigrationIds(localDb));
+      const insert = localDb.prepare(
+        "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+      );
 
-    for (const migrationId of migrationIds) {
-      if (shouldSkipMigrationForRemoteLedger(migrationId)) {
-        continue;
+      for (const migrationId of migrationIds) {
+        if (shouldSkipMigrationForRemoteLedger(migrationId)) {
+          continue;
+        }
+        if (applied.has(migrationId)) {
+          continue;
+        }
+        if (await migrationSatisfiedOnLocal(localDb, migrationRoot, migrationId)) {
+          insert.run(migrationId, new Date().toISOString());
+          backfilled.push(migrationId);
+        }
       }
-      if (applied.has(migrationId)) {
-        continue;
-      }
-      if (await migrationSatisfiedOnLocal(localDb, migrationRoot, migrationId)) {
-        insert.run(migrationId, new Date().toISOString());
-        backfilled.push(migrationId);
-      }
+    } finally {
+      localDb.close();
     }
-  } finally {
-    localDb.close();
-  }
 
-  return backfilled;
+    return backfilled;
+  }, `reconcileLocalMigrationLedgerFromSchema(${path.basename(localDbPath)})`);
 }
 
 /**
  * Align migration ledgers after pull or before push.
  * Order: remote schema → remote ledger → local ledger (remote) → local ledger (schema).
  */
-export async function alignMigrationLedgers(
+async function runMigrationLedgerAlign(
   remote: Client,
   localDbPath: string,
   migrationRoot: string,
 ): Promise<MigrationLedgerSyncResult> {
-  const { isReplicaManagedDbPath } = await import(
-    "../tursoReplica/tursoReplicaFileGuard.js"
-  );
-  if (isReplicaManagedDbPath(localDbPath)) {
-    return { remoteBackfilled: [], localHydrated: [], localInferred: [] };
-  }
+  await waitForReplicaPublishQuiesce(localDbPath);
 
   const remoteBackfilled = await reconcileRemoteMigrationLedger(
     remote,
@@ -683,4 +711,38 @@ export async function alignMigrationLedgers(
   }
 
   return { remoteBackfilled, localHydrated, localInferred };
+}
+
+export async function alignMigrationLedgers(
+  remote: Client,
+  localDbPath: string,
+  migrationRoot: string,
+  options?: { force?: boolean },
+): Promise<MigrationLedgerSyncResult> {
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(localDbPath)) {
+    return { remoteBackfilled: [], localHydrated: [], localInferred: [] };
+  }
+
+  const alignKey = ledgerAlignKey(localDbPath, migrationRoot);
+  const inflight = ledgerAlignInflight.get(alignKey);
+  if (inflight) {
+    if (options?.force) {
+      await inflight.catch(() => undefined);
+    } else {
+      return inflight;
+    }
+  }
+
+  const promise = runMigrationLedgerAlign(remote, localDbPath, migrationRoot);
+  ledgerAlignInflight.set(alignKey, promise);
+  try {
+    return await promise;
+  } finally {
+    if (ledgerAlignInflight.get(alignKey) === promise) {
+      ledgerAlignInflight.delete(alignKey);
+    }
+  }
 }

@@ -9,7 +9,10 @@
 import { createHash } from "node:crypto";
 import type { AppBackendRunResult } from "../../../core/types/appBackend.js";
 import { sanitizeError } from "../../../core/tools/security.js";
-import { filterVaultKeyNames } from "../../../core/utils/platformInjectedEnvKeys.js";
+import {
+  filterVaultKeyNames,
+  PAPR_GATEWAY_URL_ENV,
+} from "../../../core/utils/platformInjectedEnvKeys.js";
 import {
   loadBackendHandlerContent,
   loadBackendRevisionArtifacts,
@@ -160,6 +163,8 @@ export class CloudAppBackendService {
       callerIdentity: input.callerIdentity,
       loggedIn: input.loggedIn,
     });
+    runEnv[PAPR_GATEWAY_URL_ENV] =
+      `http://127.0.0.1:${CLOUD_APP_HOST_PORT}`;
 
     try {
       const result = await runBackendHandler({

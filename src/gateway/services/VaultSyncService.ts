@@ -1,9 +1,10 @@
+import { traceDiagnosticPhase } from "../../core/utils/performanceDiagnostics.js";
 /**
  * Vault Sync Service — syncs local custom keys (macOS Keychain) to cloud vault
  * (GCP Secret Manager) via the memory server.
  *
  * Flow:
- *   1. On init: push all local keys → cloud vault (idempotent, per-key shareScope)
+ *   1. On init: push local keys that changed since last successful sync
  *   2. On init: pull user-scoped vault key names for cross-device awareness (names only)
  *   3. On key change: push updated keys → cloud vault
  *
@@ -35,6 +36,13 @@ import {
 } from "../../core/utils/paprQuota.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 import { waitForGatewayRoutesReady } from "./gatewayReadiness.js";
+import { mapWithConcurrency } from "../utils/mapWithConcurrency.js";
+import { VAULT_KEY_READ_CONCURRENCY } from "./vaultKeyReadConcurrency.js";
+
+interface VaultSyncRouteOpts {
+  /** Caller already waited on gateway routes (full sync). */
+  skipRoutesReady?: boolean;
+}
 
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT ?? "18789", 10);
 const GATEWAY_ROUTES_WAIT_MS = 120_000;
@@ -58,6 +66,7 @@ interface VaultSyncResponse {
   synced: number;
   created: string[];
   updated: string[];
+  unchanged?: string[];
   deleted: string[];
   conflicts?: VaultShareConflict[];
 }
@@ -207,7 +216,7 @@ export class VaultSyncService {
       return this.fullSyncInFlight;
     }
 
-    this.fullSyncInFlight = this.runFullSyncOnce();
+    this.fullSyncInFlight = traceDiagnosticPhase("vault:full-sync", () => this.runFullSyncOnce());
     try {
       return await this.fullSyncInFlight;
     } finally {
@@ -224,19 +233,27 @@ export class VaultSyncService {
       "./gatewayBackgroundWork.js"
     );
     await yieldToInteractiveHotPath("VaultSync.runFullSync");
-    const pushed = await this.enqueuePush();
-    await this.pullKeys();
-    await this.pullSharedKeys();
+    await this.ensureGatewayRoutesReady();
+    const routeOpts: VaultSyncRouteOpts = { skipRoutesReady: true };
+    const pushed = await traceDiagnosticPhase("vault:push", () =>
+      this.enqueuePush(routeOpts),
+    );
+    await Promise.all([
+      traceDiagnosticPhase("vault:pull-key-names", () =>
+        this.pullKeys(routeOpts),
+      ),
+      traceDiagnosticPhase("vault:pull-shared-keys", () =>
+        this.pullSharedKeys(routeOpts),
+      ),
+    ]);
     return pushed;
   }
 
   private async ensureGatewayRoutesReady(): Promise<void> {
-    const ready = await waitForGatewayRoutesReady(GATEWAY_ROUTES_WAIT_MS);
-    if (!ready) {
-      throw new Error(
-        "Gateway routes not ready — timed out waiting for startup to finish",
-      );
-    }
+    await traceDiagnosticPhase("vault:wait-for-routes", async () => {
+      const ready = await waitForGatewayRoutesReady(GATEWAY_ROUTES_WAIT_MS);
+      if (!ready) throw Object.assign(new Error("Gateway routes not ready"), { name: "TimeoutError" });
+    }, true);
   }
 
   /**
@@ -246,13 +263,15 @@ export class VaultSyncService {
     return this.enqueuePush();
   }
 
-  private async enqueuePush(): Promise<VaultSyncResponse | null> {
+  private async enqueuePush(
+    opts?: VaultSyncRouteOpts,
+  ): Promise<VaultSyncResponse | null> {
     if (this.pushInFlight) {
       this.pushPendingAfterInflight = true;
       return this.pushInFlight;
     }
 
-    this.pushInFlight = this.pushAllKeysUncoalesced();
+    this.pushInFlight = this.pushAllKeysUncoalesced(opts);
     try {
       return await this.pushInFlight;
     } finally {
@@ -285,57 +304,61 @@ export class VaultSyncService {
       return [];
     }
 
-    const vaultEntries: CloudVaultKeyEntry[] = [];
+    const eligible = keyList.filter(
+      (meta) => meta.scope !== "global" && shouldPushKeyToCloud(meta),
+    );
 
-    for (const meta of keyList) {
-      if (meta.scope === "global") {
-        continue;
+    const mapped = await mapWithConcurrency(
+      eligible,
+      VAULT_KEY_READ_CONCURRENCY,
+      async (meta) => this.readVaultPushEntry(customKeys, meta),
+    );
+
+    return mapped.filter((entry): entry is CloudVaultKeyEntry => entry !== null);
+  }
+
+  private async readVaultPushEntry(
+    customKeys: ReturnType<typeof getCustomKeysService>,
+    meta: Awaited<ReturnType<typeof customKeys.listKeys>>[number],
+  ): Promise<CloudVaultKeyEntry | null> {
+    try {
+      const value = await customKeys.getKeyByName(meta.name);
+      if (!value) {
+        return null;
       }
-      if (!shouldPushKeyToCloud(meta)) {
-        continue;
-      }
-      try {
-        const value = await customKeys.getKeyByName(meta.name);
-        if (!value) {
-          continue;
-        }
-        vaultEntries.push(
-          mapCustomKeyMetadataToVaultEntry({
-            meta: {
-              name: meta.name,
-              permission: meta.permission,
-              clientAccess: meta.clientAccess,
-              vaultAudience: meta.vaultAudience,
-              vaultAudienceMemberIds: meta.vaultAudienceMemberIds,
-              orgScope: meta.orgScope,
-              organizationId: meta.organizationId,
-              source: meta.source,
-              managedBy: meta.managedBy,
-              oauthProvider: meta.oauthProvider,
-              description: meta.description,
-            },
-            value,
-            source: resolveVaultKeySource(
-              {
-                name: meta.name,
-                source: meta.source,
-                managedBy: meta.managedBy,
-                oauthProvider: meta.oauthProvider,
-                description: meta.description,
-              },
-              value,
-            ),
-          }),
-        );
-      } catch (err) {
-        console.warn(
-          `[VaultSync] Could not read key "${meta.name}":`,
-          (err as Error).message,
-        );
-      }
+      return mapCustomKeyMetadataToVaultEntry({
+        meta: {
+          name: meta.name,
+          permission: meta.permission,
+          clientAccess: meta.clientAccess,
+          vaultAudience: meta.vaultAudience,
+          vaultAudienceMemberIds: meta.vaultAudienceMemberIds,
+          orgScope: meta.orgScope,
+          organizationId: meta.organizationId,
+          source: meta.source,
+          managedBy: meta.managedBy,
+          oauthProvider: meta.oauthProvider,
+          description: meta.description,
+        },
+        value,
+        source: resolveVaultKeySource(
+          {
+            name: meta.name,
+            source: meta.source,
+            managedBy: meta.managedBy,
+            oauthProvider: meta.oauthProvider,
+            description: meta.description,
+          },
+          value,
+        ),
+      });
+    } catch (err) {
+      console.warn(
+        `[VaultSync] Could not read key "${meta.name}":`,
+        (err as Error).message,
+      );
+      return null;
     }
-
-    return vaultEntries;
   }
 
   async applyVaultPushResultFromBackground(
@@ -359,11 +382,13 @@ export class VaultSyncService {
     }
 
     console.log(
-      `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated)`,
+      `[VaultSync] Pushed ${result.synced} keys (${result.created.length} created, ${result.updated.length} updated${result.unchanged?.length ? `, ${result.unchanged.length} unchanged on server` : ""})`,
     );
   }
 
-  private async pushAllKeysUncoalesced(): Promise<VaultSyncResponse | null> {
+  private async pushAllKeysUncoalesced(
+    opts?: VaultSyncRouteOpts,
+  ): Promise<VaultSyncResponse | null> {
     const { yieldToInteractiveHotPath } = await import(
       "./gatewayBackgroundWork.js"
     );
@@ -375,32 +400,58 @@ export class VaultSyncService {
       return null;
     }
 
-    const vaultEntries = await this.buildVaultPushEntriesForBackground();
+    const vaultEntries = await traceDiagnosticPhase("vault:prepare-keys", () => this.buildVaultPushEntriesForBackground());
     if (vaultEntries.length === 0) {
       console.log("[VaultSync] No readable key values to push");
       return null;
     }
 
+    const { filterVaultEntriesNeedingPush, markVaultPushFingerprints } =
+      await import("../utils/vaultPushStateStore.js");
+    const { toPush, skippedNames } = filterVaultEntriesNeedingPush(vaultEntries);
+    if (skippedNames.length > 0) {
+      console.log(
+        `[VaultSync] Skipping ${skippedNames.length} unchanged key(s) locally (fingerprint match)`,
+      );
+    }
+    if (toPush.length === 0) {
+      console.log("[VaultSync] All keys match last push — skipping cloud sync");
+      this.state.status = "idle";
+      this.state.lastSyncAt = new Date().toISOString();
+      this.state.keyCount = vaultEntries.length;
+      return {
+        synced: 0,
+        created: [],
+        updated: [],
+        unchanged: skippedNames,
+        deleted: [],
+        conflicts: [],
+      };
+    }
+
     this.state.status = "syncing";
     this.state.keyCount = vaultEntries.length;
     console.log(
-      `[VaultSync] Pushing ${vaultEntries.length} keys to vault (per-key shareScope)...`,
+      `[VaultSync] Pushing ${toPush.length}/${vaultEntries.length} keys to vault (per-key shareScope)...`,
     );
 
     try {
-      await this.ensureGatewayRoutesReady();
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
       const { pushVaultEntriesViaGatewayHttp } = await import(
         "./vaultSyncBackgroundPush.js"
       );
-      const result = await pushVaultEntriesViaGatewayHttp(
+      const result = await traceDiagnosticPhase("vault:push-http", () => pushVaultEntriesViaGatewayHttp(
         this.gatewayPort,
-        vaultEntries,
-      );
+        toPush,
+      ));
       if (!result) {
         this.state.status = "idle";
         return null;
       }
-      await this.applyVaultPushResultFromBackground(result);
+      markVaultPushFingerprints(toPush);
+      await traceDiagnosticPhase("vault:apply-push-result", () => this.applyVaultPushResultFromBackground(result));
       return result;
     } catch (err) {
       const msg = (err as Error).message;
@@ -429,20 +480,12 @@ export class VaultSyncService {
       params.set("namespace_id", namespaceId);
     }
 
-    const resp = await fetch(
-      `http://localhost:${this.gatewayPort}/api/cloud/vault/keys?${params}`,
-      { signal },
-    );
+    const data = await traceDiagnosticPhase("vault:pull-names-http", async () => {
+      const resp = await fetch(`http://localhost:${this.gatewayPort}/api/cloud/vault/keys?${params}`, { signal });
+      if (!resp.ok) throw Object.assign(new Error(`Vault names request failed (${resp.status})`), { status: resp.status });
+      return await resp.json() as VaultListKeysResponse;
+    });
 
-    if (!resp.ok) {
-      const text = await resp.text();
-      console.warn(
-        `[VaultSync] Pull failed for scope ${resolvedScope} (${resp.status}): ${text.slice(0, 120)}`,
-      );
-      return [];
-    }
-
-    const data = (await resp.json()) as VaultListKeysResponse;
     return data.keys.map((k) => k.name);
   }
 
@@ -451,23 +494,22 @@ export class VaultSyncService {
    * Values are NOT pulled (list endpoint has no values). Names are never
    * written to the local keychain from this path.
    */
-  async pullKeys(): Promise<string[]> {
+  async pullKeys(opts?: VaultSyncRouteOpts): Promise<string[]> {
     if (isPaprCloudPaused()) {
       return [];
     }
 
     try {
-      await this.ensureGatewayRoutesReady();
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
 
       const userScopedNames = await this.fetchVaultKeyNamesForScope(
-        "user",
-        controller.signal,
-      );
-
-      clearTimeout(timer);
+        "user", controller.signal,
+      ).finally(() => clearTimeout(timer));
 
       const customKeys = getCustomKeysService();
       const localKeys = await customKeys.listKeys();
@@ -492,7 +534,7 @@ export class VaultSyncService {
   /**
    * Pull team/org shared keys into the local keychain (read-only mirrors).
    */
-  async pullSharedKeys(): Promise<number> {
+  async pullSharedKeys(opts?: VaultSyncRouteOpts): Promise<number> {
     if (isPaprCloudPaused()) {
       return 0;
     }
@@ -504,7 +546,9 @@ export class VaultSyncService {
     }
 
     try {
-      await this.ensureGatewayRoutesReady();
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_SHARED_TIMEOUT_MS);
@@ -513,29 +557,22 @@ export class VaultSyncService {
         "../utils/cloudActingUser.js"
       );
 
-      const resp = await fetch(
-        `http://localhost:${this.gatewayPort}/api/cloud/vault/pull-shared`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(
-            mergeCloudActingUserBody({ namespaceId }),
-          ),
-          signal: controller.signal,
-        },
-      );
+      const data = await traceDiagnosticPhase("vault:pull-shared-http", async () => {
+        try {
+          const resp = await fetch(
+            `http://localhost:${this.gatewayPort}/api/cloud/vault/pull-shared`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(mergeCloudActingUserBody({ namespaceId })),
+              signal: controller.signal,
+            },
+          );
+          if (!resp.ok) throw Object.assign(new Error(`Vault shared request failed (${resp.status})`), { status: resp.status });
+          return await resp.json() as VaultPullSharedResponse;
+        } finally { clearTimeout(timer); }
+      });
 
-      clearTimeout(timer);
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.warn(
-          `[VaultSync] Shared pull failed (${resp.status}): ${text.slice(0, 200)}`,
-        );
-        return 0;
-      }
-
-      const data = (await resp.json()) as VaultPullSharedResponse;
       const mirrors: SharedVaultKeyInput[] = (data.keys ?? []).map((key) => ({
         name: key.name,
         value: key.value,
@@ -548,7 +585,7 @@ export class VaultSyncService {
       }));
 
       const customKeys = getCustomKeysService();
-      const result = await customKeys.syncSharedMirrors(mirrors);
+      const result = await traceDiagnosticPhase("vault:apply-shared-mirrors", () => customKeys.syncSharedMirrors(mirrors));
       if (result.upserted > 0 || result.pruned > 0) {
         console.log(
           `[VaultSync] Shared mirrors updated (upserted=${result.upserted}, pruned=${result.pruned})`,
@@ -613,6 +650,10 @@ export class VaultSyncService {
 
       const result = (await resp.json()) as VaultDeleteResponse;
       if (result.deleted.length > 0) {
+        const { forgetVaultPushFingerprint } = await import(
+          "../utils/vaultPushStateStore.js"
+        );
+        forgetVaultPushFingerprint(trimmedName);
         console.log(
           `[VaultSync] Deleted cloud vault key "${trimmedName}" (canonical + legacy cleanup)`,
         );

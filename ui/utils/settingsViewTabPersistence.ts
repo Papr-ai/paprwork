@@ -19,6 +19,9 @@ const VALID_TABS: ReadonlySet<SettingsTab> = new Set([
   "privacy",
   "migration",
   "about",
+  // Dev-only: absent from the whitelist in packaged builds, so a stale "dev"
+  // value is rejected and falls back to Profile rather than a blank panel.
+  ...(import.meta.env.DEV ? (["dev"] as const) : []),
 ]);
 
 export function readSettingsViewTab(): SettingsTab | null {

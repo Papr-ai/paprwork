@@ -80,10 +80,10 @@ class GatewayClient {
     this.url = `ws://${host}:${port}`;
 
     this.connect();
-    
+
     // Listen for system resume events from Electron
-    if (typeof window !== 'undefined') {
-      window.addEventListener('system:resume', () => {
+    if (typeof window !== "undefined") {
+      window.addEventListener("system:resume", () => {
         this.lastResumeAtMs = Date.now();
         // Reset backoff: a long sleep should not leave us waiting out a 30s
         // delay. The connection state no longer reads "am I reconnecting" off
@@ -91,25 +91,58 @@ class GatewayClient {
         this.reconnectAttempts = 0;
 
         if (this.ws?.readyState === WebSocket.OPEN) {
-          // `isConnected()` cannot detect the one condition a resume
-          // guarantees: a socket whose peer vanished while both ends were
-          // frozen still reports OPEN — that is what half-open means. So the
-          // old `if (!this.isConnected())` did nothing here, and detection fell
-          // to the heartbeat, which while a stream is active tolerates 12
-          // missed beats at 20s each (240s).
-          //
-          // Probe instead. No pong closes the socket, which runs the existing
-          // onclose path (reject in-flight handlers → reconnect → resume
-          // tracked streams) rather than adding a second recovery mechanism.
-          console.log('[Gateway] System resumed — probing socket liveness');
-          void this.probeConnection();
+          // After sleep the socket often still reports OPEN while TCP/streams are
+          // dead. Ping can succeed on a half-open link while agent state is broken,
+          // so always tear down and reconnect on wake (see reconnectAfterSystemWake).
+          this.reconnectAfterSystemWake("resume");
           return;
         }
 
-        console.log('[Gateway] System resumed - reconnecting immediately');
+        console.log("[Gateway] System resumed - reconnecting immediately");
         this.connect();
       });
     }
+  }
+
+  /**
+   * After OS sleep the WebSocket often stays OPEN while the TCP session is dead
+   * ("zombie"). Heartbeats can take 45s+ to notice; force a fresh socket on wake.
+   */
+  private reconnectAfterSystemWake(source: "resume"): void {
+    console.log(
+      `[Gateway] System ${source} — forcing WebSocket reconnect (stale OPEN sockets are common after sleep)`,
+    );
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopHeartbeat();
+    this.teardownWebSocketForWake();
+    this.rejectActiveStreamHandlers();
+    this.notifyConnectionStatus(false);
+    this.connect();
+  }
+
+  /** Close the current socket without triggering exponential backoff reconnect. */
+  private teardownWebSocketForWake(): void {
+    const sock = this.ws;
+    if (!sock) {
+      return;
+    }
+    sock.onclose = () => {};
+    sock.onerror = () => {};
+    try {
+      if (
+        sock.readyState === WebSocket.OPEN ||
+        sock.readyState === WebSocket.CONNECTING
+      ) {
+        sock.close(4000, "system wake");
+      }
+    } catch {
+      // ignore
+    }
+    this.ws = null;
   }
 
   /**

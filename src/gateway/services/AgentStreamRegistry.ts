@@ -409,6 +409,7 @@ export class AgentStreamRegistry {
           }
           this.bufferChunk(entry, chunk);
           this.broadcastChunk(entry, chunk);
+          this.tryCompleteFromDoneChunk(entry, chunk);
         }
         }),
       );
@@ -438,17 +439,19 @@ export class AgentStreamRegistry {
         return;
       }
 
-      const messages = await agentService.getChatHistory(chatId);
-      const finalMessage = messages[messages.length - 1];
+      if (entry.status !== "complete") {
+        const messages = await agentService.getChatHistory(chatId);
+        const finalMessage = messages[messages.length - 1];
 
-      entry.status = "complete";
-      entry.completeData = {
-        chatId,
-        done: true,
-        finalMessage,
-      };
+        entry.status = "complete";
+        entry.completeData = {
+          chatId,
+          done: true,
+          finalMessage,
+        };
 
-      this.broadcastComplete(entry);
+        this.broadcastComplete(entry);
+      }
       console.log(
         `[AgentStreamRegistry] Stream complete for chat ${chatId} (${entry.chunks.length} chunks buffered)`,
       );
@@ -584,6 +587,36 @@ export class AgentStreamRegistry {
         tracked,
       );
     }
+  }
+
+  /**
+   * The UI treats `done` as turn-complete, but streamAgent keeps running
+   * (export, summarization scheduling) before the for-await loop ends.
+   * Without an early complete, the renderer waits on agent:complete while
+   * isSending is already false — the next send blocks on the prior lock.
+   */
+  private tryCompleteFromDoneChunk(
+    entry: ActiveStream,
+    chunk: StreamChunk & { chatId: string },
+  ): void {
+    if (entry.status === "complete" || chunk.type !== "done") {
+      return;
+    }
+    const payload = (chunk as { payload?: unknown }).payload;
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const finalMessage = (payload as { finalMessage?: unknown }).finalMessage;
+    if (!finalMessage || typeof finalMessage !== "object") {
+      return;
+    }
+    entry.status = "complete";
+    entry.completeData = {
+      chatId: entry.chatId,
+      done: true,
+      finalMessage,
+    };
+    this.broadcastComplete(entry);
   }
 
   private broadcastError(entry: ActiveStream): void {

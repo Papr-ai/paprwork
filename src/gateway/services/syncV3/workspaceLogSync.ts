@@ -5,6 +5,8 @@
  * Other devices → GET workspace/log/since → materialize to local SQLite
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from "better-sqlite3";
 import {
   canPerformWorkspaceDbWrite,
@@ -156,7 +158,7 @@ export async function shipLinkedSourceToWorkspaceLog(
   let db: Database.Database | undefined;
   try {
     ensureLocalDbChangeLogReady(dbPath);
-    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+    db = openDiagnosticDatabase(Database, "services/syncV3/workspaceLogSync", dbPath, { readonly: true, fileMustExist: true });
 
     let cursor = afterId;
     let shipped = 0;

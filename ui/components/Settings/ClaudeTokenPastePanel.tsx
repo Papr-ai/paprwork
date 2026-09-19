@@ -10,6 +10,7 @@ import {
   isValidClaudeOAuthToken,
   previewClaudeOAuthToken,
 } from "../../utils/claudeOAuthToken";
+import { ClaudeSetupTokenTerminalExample } from "../Claude/ClaudeSetupTokenTerminalExample";
 import "./ClaudeTokenPastePanel.css";
 
 type PasteMode = "terminal" | "manual";
@@ -192,17 +193,7 @@ export function ClaudeTokenPastePanel({
         </div>
       )}
 
-      <div className="claude-token-paste__terminal-mock" aria-hidden="true">
-        <div className="claude-token-paste__terminal-bar">Terminal</div>
-        <pre className="claude-token-paste__terminal-body">
-{`Sign in complete!
-
-Your token (copy this whole line):
-
-`}
-          <span className="claude-token-paste__token-highlight">sk-ant-oat01-••••••••••••••••</span>
-        </pre>
-      </div>
+      <ClaudeSetupTokenTerminalExample />
 
       <div className="claude-token-paste__auto-row">
         <button

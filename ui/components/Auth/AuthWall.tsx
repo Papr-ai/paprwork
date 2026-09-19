@@ -12,11 +12,20 @@ import {
   type PaprLoginMode,
   type PaprLoginStep,
 } from "../../../src/core/telemetry/paprLoginSteps";
+import { AuthBrandPanel, AuthFormFold } from "./AuthBrandPanel";
+import { AuthProgressDots } from "./AuthProgressDots";
+import "./onboardingTheme.css";
 import "./AuthWall.css";
 
 interface AuthWallProps {
   /** Fired once Papr login is confirmed, by any detection path. */
   onSignedIn: () => void;
+  /**
+   * Dev preview only. When you're already signed in, every detection path
+   * fires immediately and this screen is invisible — this holds it open so
+   * the screen can actually be looked at. Never set in production.
+   */
+  skipAutoDetect?: boolean;
 }
 
 function trackAuthWallStep(
@@ -26,8 +35,8 @@ function trackAuthWallStep(
   trackPaprLoginStep(step, { source: "auth_wall", ...properties });
 }
 
-export function AuthWall({ onSignedIn }: AuthWallProps) {
-  const [isLoading, setIsLoading] = useState(true);
+export function AuthWall({ onSignedIn, skipAutoDetect }: AuthWallProps) {
+  const [isLoading, setIsLoading] = useState(!skipAutoDetect);
   const [isAuthenticating, setIsAuthenticating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showRefresh, setShowRefresh] = useState(false);
@@ -41,10 +50,10 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
   // Four paths can detect login (DOM event, IPC, 2s poll, manual code) and
   // several fire together. Report upward exactly once.
   const handleAuthenticated = useCallback(async () => {
-    if (signedInReported.current) return;
+    if (skipAutoDetect || signedInReported.current) return;
     signedInReported.current = true;
     onSignedIn();
-  }, [onSignedIn]);
+  }, [onSignedIn, skipAutoDetect]);
 
   const checkAuthentication = useCallback(
     async (options?: { fromPoll?: boolean }) => {
@@ -104,6 +113,7 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
 
   // Check if user is already authenticated
   useEffect(() => {
+    if (skipAutoDetect) return;
     void checkAuthentication();
 
     const handleAuthSuccess = () => {
@@ -131,7 +141,7 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
       if (pollInterval) clearInterval(pollInterval);
       if (refreshTimer) clearTimeout(refreshTimer);
     };
-  }, [checkAuthentication, handleAuthenticated, isAuthenticating]);
+  }, [checkAuthentication, handleAuthenticated, isAuthenticating, skipAutoDetect]);
 
   // IPC listeners for login success/error (belt-and-suspenders with DOM events)
   useEffect(() => {
@@ -275,22 +285,23 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
 
   if (isLoading) {
     return (
-      <div className="auth-wall auth-wall--loading">
-        <div className="auth-wall-spinner" />
-        <p className="auth-wall-loading-text">Loading...</p>
+      <div className="onboarding-flow onboarding-loading-center">
+        <div className="onboarding-spinner" />
+        <p className="onboarding-muted">Loading...</p>
       </div>
     );
   }
 
   return (
-    <div className="auth-wall auth-wall--split">
-      <div className="auth-wall-left">
-        <div className="auth-wall-form">
-          <h1 className="auth-wall-title">Welcome!</h1>
-          <p className="auth-wall-subtitle">Sign in to Papr Work to get started</p>
+    <div className="onboarding-flow onboarding-split">
+      <AuthBrandPanel />
+      <section className="onboarding-split-r">
+        <div className="onboarding-split-form">
+          <AuthProgressDots activeIndex={0} />
+          <AuthFormFold />
 
           {error && (
-            <div className="auth-wall-error" role="alert">
+            <div className="onboarding-alert" role="alert">
               <strong>Sign-in issue</strong>
               <p>{error}</p>
             </div>
@@ -298,14 +309,17 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
 
           {isAuthenticating ? (
             <div className="auth-wall-waiting">
-              <div className="auth-wall-spinner" />
-              <p className="auth-wall-status">
-                Finish signing in in your browser — Google, passkeys, and email login work there
+              <div className="onboarding-spinner" />
+              <h1 className="onboarding-h1 onboarding-h1--small">
+                Finishing sign-in in your browser
+              </h1>
+              <p className="onboarding-lede">
+                We opened a Papr sign-in tab. Come back here when it is done — this window
+                updates on its own.
               </p>
               <p className="auth-wall-hint">
-                Your default browser should have opened automatically. When you&apos;re done,
-                return here — Papr Work will detect the sign-in. You can also use the verification
-                code if needed.
+                Google, passkeys, and email login work in the browser. You can also use the
+                verification code below if needed.
               </p>
 
               {showRefresh && (
@@ -358,72 +372,34 @@ export function AuthWall({ onSignedIn }: AuthWallProps) {
             </div>
           ) : (
             <>
-              <div className="auth-wall-actions">
+              <h1 className="onboarding-h1 onboarding-h1--small">Create your account</h1>
+              <p className="onboarding-lede">
+                Takes about a minute. Your first working app comes out the other side — not an
+                empty workspace.
+              </p>
+              <div className="onboarding-auth-btns">
                 <button
                   type="button"
-                  className="auth-wall-action-button auth-wall-action-button--primary"
+                  className="onboarding-cta onboarding-cta--wide"
+                  onClick={() => void handleAuth("signup")}
+                >
+                  Create account
+                </button>
+                <button
+                  type="button"
+                  className="onboarding-cta onboarding-cta--wide onboarding-cta--ghost"
                   onClick={() => void handleAuth("login")}
                 >
                   Sign in
                 </button>
-                <button
-                  type="button"
-                  className="auth-wall-action-button auth-wall-action-button--primary"
-                  onClick={() => void handleAuth("signup")}
-                >
-                  Create Account
-                </button>
               </div>
-
-              <p className="auth-wall-terms">
-                By continuing you agree to the terms of use
+              <p className="onboarding-auth-alt">
+                Google, email or SSO — pick how you sign in on the next screen.
               </p>
             </>
           )}
         </div>
-      </div>
-
-      <div className="auth-wall-right">
-        <div className="auth-wall-branding">
-          <div className="auth-wall-papr-logo">
-            <img
-              src="/images/papr-logo.svg"
-              alt="Papr Logo"
-              className="auth-wall-logo-icon"
-            />
-            <img
-              src="/images/papr typefont.svg"
-              alt="Papr"
-              className="auth-wall-logo-text"
-            />
-          </div>
-
-          <div className="auth-wall-fold">
-            <svg viewBox="0 0 300 270" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M300 262C300 266.418 296.418 270 292 270L54.5454 270L300 0L300 262Z"
-                fill="#0080FF"
-              />
-              <path
-                opacity="0.04"
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M54.5454 40.5L54.5454 67.5L300 3.05176e-05L54.5454 40.5Z"
-                fill="#212721"
-              />
-              <path
-                opacity="0.48"
-                fillRule="evenodd"
-                clipRule="evenodd"
-                d="M54.5455 270L0 81L300 0L54.5455 270Z"
-                fill="#0080FF"
-              />
-            </svg>
-          </div>
-        </div>
-      </div>
+      </section>
     </div>
   );
 }

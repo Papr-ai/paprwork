@@ -2,6 +2,8 @@
  * Drift-heal: ship unsatisfied migrations and column-diff ops via workspace log.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import { createClient, type Client } from "@libsql/client";
 import Database from "better-sqlite3";
 import {
@@ -315,7 +317,7 @@ async function listUnsatisfiedMigrationIds(
       }
     }
   } else {
-    const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+    const localDb = openDiagnosticDatabase(Database, "services/syncV3/schemaDriftHeal", dbPath, { readonly: true, fileMustExist: true });
     try {
       localApplied = normalizeMigrationIdList(
         listAppliedMigrationIdsReadOnly(localDb),
@@ -378,7 +380,7 @@ async function buildDriftHealOpsIfNeeded(
   if (isReplicaManagedDbPath(dbPath)) {
     return [];
   }
-  const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+  const localDb = openDiagnosticDatabase(Database, "services/syncV3/schemaDriftHeal", dbPath, { readonly: true, fileMustExist: true });
   try {
     const tableNames = filterSyncableTables(listUserTables(localDb));
     const driftedTables = await localRemoteUserSchemaDriftTables(
@@ -438,7 +440,7 @@ async function listDriftedTableNames(
   if (!remoteHandle) {
     return [];
   }
-  const localDb = new Database(dbPath, { readonly: true, fileMustExist: true });
+  const localDb = openDiagnosticDatabase(Database, "services/syncV3/schemaDriftHeal", dbPath, { readonly: true, fileMustExist: true });
   try {
     const tableNames = filterSyncableTables(listUserTables(localDb));
     // MUST await before the finally closes the client.

@@ -16,6 +16,8 @@
  * Over-preserving is safe; under-preserving loses user data. This errs to the safe side.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import * as fs from "fs";
 import Database from "better-sqlite3";
 import { listUserTables } from "./tursoReplicaBootstrapMarker.js";
@@ -48,7 +50,7 @@ export function replayBootstrapSnapshot(
 
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath);
+    db = openDiagnosticDatabase(Database, "services/tursoReplica/tursoReplicaBootstrapReplay", dbPath);
     db.prepare("ATTACH DATABASE ? AS papr_snapshot").run(snapshotPath);
 
     const liveTables = new Set(listUserTables(db));

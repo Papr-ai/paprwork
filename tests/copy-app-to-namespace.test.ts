@@ -17,10 +17,7 @@ import {
   serializeDataSourcesFile,
 } from "../src/gateway/services/appDataSources.js";
 import { parseCloudAppMetadataFile } from "../src/core/utils/cloudAppMetadata.js";
-import {
-  bootstrapMarkerPath,
-  readBootstrapPendingMarker,
-} from "../src/gateway/services/tursoReplica/tursoReplicaBootstrapMarker.js";
+import { bootstrapMarkerPath } from "../src/gateway/services/tursoReplica/tursoReplicaBootstrapMarker.js";
 
 describe("copyAppToNamespace", () => {
   let originalHome: string | undefined;
@@ -168,6 +165,8 @@ describe("copyAppToNamespace", () => {
     });
 
     expect(result.copiedJobIds).toEqual([jobId]);
+    expect(result.sourceAppId).toBe(appId);
+    expect(result.appId).not.toBe(appId);
 
     const sourceApps = JSON.parse(
       await fs.readFile(path.join(sourceHome, "data", "apps.json"), "utf8"),
@@ -187,13 +186,14 @@ describe("copyAppToNamespace", () => {
       await fs.readFile(path.join(targetHome, "data", "apps.json"), "utf8"),
     ) as MiniApp[];
     expect(targetApps).toHaveLength(1);
+    expect(targetApps[0]?.id).toBe(result.appId);
     expect(targetApps[0]?.title).toBe("Sales Dashboard");
     expect(targetApps[0]?.organizationId).toBe("org-a");
     expect(targetApps[0]?.namespaceId).toBe("ns-target");
 
     const targetMetadata = parseCloudAppMetadataFile(
       await fs.readFile(
-        path.join(targetHome, "apps", appId, "metadata.json"),
+        path.join(targetHome, "apps", result.appId, "metadata.json"),
         "utf8",
       ),
     );
@@ -205,13 +205,13 @@ describe("copyAppToNamespace", () => {
     ) as JobRecord[];
     expect(targetJobs).toHaveLength(1);
     expect(targetJobs[0]?.id).toBe(jobId);
-    expect(targetJobs[0]?.appIds).toEqual([appId]);
+    expect(targetJobs[0]?.appIds).toEqual([result.appId]);
     expect(targetJobs[0]?.status).toBe("pending");
 
     await fs.access(path.join(targetHome, "Jobs", jobId, "data", "data.db"));
 
     const dataSourcesRaw = await fs.readFile(
-      path.join(targetHome, "apps", appId, "data-sources.json"),
+      path.join(targetHome, "apps", result.appId, "data-sources.json"),
       "utf8",
     );
     const dataSources = parseDataSourcesFile(dataSourcesRaw);
@@ -253,7 +253,12 @@ describe("copyAppToNamespace", () => {
     });
 
     const sourceDbDir = path.join(sourceHome, "data", "databases", slug);
-    await fs.mkdir(sourceDbDir, { recursive: true });
+    await fs.mkdir(path.join(sourceDbDir, "migrations"), { recursive: true });
+    await fs.writeFile(
+      path.join(sourceDbDir, "migrations", "0001_init.sql"),
+      "CREATE TABLE items (id INTEGER PRIMARY KEY);",
+      "utf8",
+    );
     await fs.writeFile(path.join(sourceDbDir, "data.db"), "sqlite-registry", "utf8");
     await fs.writeFile(
       path.join(sourceHome, "data", "databases.json"),
@@ -294,6 +299,7 @@ describe("copyAppToNamespace", () => {
     });
 
     expect(result.copiedRegistryDbSlugs).toEqual([slug]);
+    expect(result.appId).not.toBe(appId);
 
     const targetHome = path.join(
       testHomeDir,
@@ -303,13 +309,27 @@ describe("copyAppToNamespace", () => {
       "namespaces",
       "ns-reg-target",
     );
-    await fs.access(path.join(targetHome, "data", "databases", slug, "data.db"));
+    await fs.access(path.join(targetHome, "data", "databases", slug, "migrations"));
+    expect(
+      await fs.readFile(
+        path.join(targetHome, "data", "databases", slug, "data.db"),
+        "utf8",
+      ),
+    ).not.toBe("sqlite-registry");
+
+    const targetRegistry = JSON.parse(
+      await fs.readFile(path.join(targetHome, "data", "databases.json"), "utf8"),
+    ) as { databases: Record<string, { dbId: string; localPath: string }> };
+    const targetDbIds = Object.keys(targetRegistry.databases);
+    expect(targetDbIds).toHaveLength(1);
+    expect(targetDbIds[0]).not.toBe(dbId);
 
     const dataSourcesRaw = await fs.readFile(
-      path.join(targetHome, "apps", appId, "data-sources.json"),
+      path.join(targetHome, "apps", result.appId, "data-sources.json"),
       "utf8",
     );
     const dataSources = parseDataSourcesFile(dataSourcesRaw);
+    expect(dataSources.sources[0]?.dbId).toBe(targetDbIds[0]);
     expect(dataSources.sources[0]?.dbPath).toBe(
       path.join(targetHome, "data", "databases", slug, "data.db"),
     );
@@ -383,32 +403,41 @@ describe("copyAppToNamespace", () => {
     });
     await writeActiveWorkspacePointer(activePointer);
 
-    await copyAppToNamespace({
+    const copyResult = await copyAppToNamespace({
       appId,
       targetOrganizationId: "org-replica",
       targetNamespaceId: "ns-replica-tgt",
       sourcePaprHome: sourceHome,
     });
 
-    const targetDbPath = path.join(
+    expect(copyResult.appId).not.toBe(appId);
+
+    const targetHome = path.join(
       testHomeDir,
       "Papr",
       "orgs",
       "org-replica",
       "namespaces",
       "ns-replica-tgt",
-      "data",
-      "databases",
-      slug,
-      "data.db",
     );
+    const dataSourcesRaw = await fs.readFile(
+      path.join(targetHome, "apps", copyResult.appId, "data-sources.json"),
+      "utf8",
+    );
+    const dataSources = parseDataSourcesFile(dataSourcesRaw);
+    const targetDbPath = dataSources.sources[0]?.dbPath ?? "";
+    expect(targetDbPath.length).toBeGreaterThan(0);
 
-    expect(await fs.readFile(targetDbPath, "utf8")).toBe("sqlite-replica");
+    const targetDbBytes = await fs.readFile(targetDbPath);
+    expect(targetDbBytes.toString("utf8")).not.toBe("sqlite-replica");
     expect(await fs.stat(`${targetDbPath}-info`).catch(() => null)).toBeNull();
-    expect(await fs.stat(bootstrapMarkerPath(targetDbPath)).catch(() => null)).not.toBeNull();
 
-    const marker = readBootstrapPendingMarker(targetDbPath);
-    expect(marker?.reason).toBe("cross_namespace_copy");
+    const targetRegistry = JSON.parse(
+      await fs.readFile(path.join(targetHome, "data", "databases.json"), "utf8"),
+    ) as { databases: Record<string, { syncMode?: string }> };
+    const forkedRecord = Object.values(targetRegistry.databases)[0];
+    expect(forkedRecord?.syncMode).toBeUndefined();
+    expect(await fs.stat(bootstrapMarkerPath(targetDbPath)).catch(() => null)).toBeNull();
   });
 
   test("repairs hardcoded Papr paths in copied job commands", async () => {

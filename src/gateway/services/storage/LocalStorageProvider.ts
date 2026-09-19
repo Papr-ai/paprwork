@@ -5,6 +5,8 @@
  * This is the foundation for all storage modes.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from "better-sqlite3";
 import * as path from "path";
 import * as fs from "fs-extra";
@@ -97,7 +99,7 @@ export class LocalStorageProvider implements IStorageProvider {
 
   async initialize(): Promise<void> {
     await fs.ensureDir(path.dirname(this.dbPath));
-    this.db = new Database(this.dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/storage/LocalStorageProvider", this.dbPath);
 
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("synchronous = NORMAL");

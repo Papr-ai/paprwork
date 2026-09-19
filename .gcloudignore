@@ -14,6 +14,7 @@ ui/
 tests/
 test/
 scripts/*
+!scripts/generate-papr-api-catalog.mjs
 !scripts/build-mini-app-sdk-browser-bundles.mjs
 !scripts/verify-mini-app-sdk-bundles.mjs
 docs/

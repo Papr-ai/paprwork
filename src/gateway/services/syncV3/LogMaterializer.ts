@@ -5,6 +5,8 @@
  * entries onto local data.db files.
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import type { AppDataSource } from "../appDataSources.js";
 import type { DbQueryPool, WriteResult } from "../DbQueryPool.js";
 
@@ -95,7 +97,7 @@ function localUserTableExists(dbPath: string, tableName: string): boolean {
     return true;
   }
 
-  const db = new Database(dbPath, { readonly: true });
+  const db = openDiagnosticDatabase(Database, "services/syncV3/LogMaterializer", dbPath, { readonly: true });
   try {
     const row = db
       .prepare(
@@ -282,7 +284,7 @@ async function applyLogEntry(
   if (entry.kind === "schema" && isSchemaPayload(entry.payload)) {
     const schemaPayload = entry.payload;
     const schemaApp = schemaPayload.appId ?? entry.dbSourceId ?? "schema";
-    const db = new Database(source.dbPath);
+    const db = openDiagnosticDatabase(Database, "services/syncV3/LogMaterializer", source.dbPath);
     db.pragma("foreign_keys = OFF");
     try {
       if (schemaPayload.migrationId?.trim()) {

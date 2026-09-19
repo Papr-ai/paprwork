@@ -26,6 +26,11 @@ import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { resolveAgentFocusContext } from "../utils/agentFocusContext";
+import {
+  AGENT_INTERRUPT_TIMEOUT_MS,
+  isSendGenerationCurrent,
+  nextSendGeneration,
+} from "../utils/agentSendLifecycle";
 import { isAppTabMergedWithChat, isPlatformTabMergedWithChat } from "../utils/appTabMerge";
 import { openPlatformBrowserTab } from "../lib/openPlatformBrowserTab";
 import { recoveryBannerSurvivesStreamEnd } from "../lib/streamRecoveryPersistence";
@@ -147,6 +152,8 @@ export function useAgent() {
   const rejectedRequestIdsRef = useRef<Set<string>>(new Set());
   /** Serialize sendMessage per chat so interrupt + new stream don't overlap */
   const sendMessageLockRef = useRef<Map<string, Promise<void>>>(new Map());
+  /** Invalidates cleanup from preempted / superseded sendMessage runs */
+  const sendGenerationRef = useRef<Map<string, number>>(new Map());
 
   // Listen for Gateway connection changes — populated after handleStreamChunk
   const handleStreamChunkRef = useRef<
@@ -1707,9 +1714,11 @@ export function useAgent() {
         untrackActiveStream(chatId);
       }
 
-      await gateway.send("agent:stop", { chatId }).catch((stopError) => {
-        console.warn("[useAgent] Failed to stop existing stream:", stopError);
-      });
+      await gateway
+        .send("agent:stop", { chatId }, { timeoutMs: AGENT_INTERRUPT_TIMEOUT_MS })
+        .catch((stopError) => {
+          console.warn("[useAgent] Failed to stop existing stream:", stopError);
+        });
 
       const existingStreamingMessageId =
         streamingMessageIdRef.current.get(chatId);
@@ -2319,31 +2328,56 @@ export function useAgent() {
       const isFirstMessage = chatId.startsWith("temp-");
       let finalChatId = chatId; // Will be updated if temp
       const tabId = `chat-${chatId}`;
+      const hiddenContinue = isHiddenContinueUserMessage(message);
+      const userMessageId = `msg-user-${Date.now()}`;
 
-      // Stop any in-flight stream BEFORE waiting on the prior send lock.
-      // Otherwise "Send now" on a queued message blocks until the current
-      // gateway.stream Promise finishes instead of interrupting immediately.
       const interruptIfActive = async (targetChatId: string): Promise<void> => {
-        if (hasActiveStreamWork(targetChatId)) {
-          console.log(
-            `[useAgent] Interrupting active stream for ${targetChatId}`,
-          );
-          await interruptActiveStream(targetChatId);
+        if (!hasActiveStreamWork(targetChatId)) {
+          return;
         }
+        console.log(
+          `[useAgent] Interrupting active stream for ${targetChatId}`,
+        );
+        await Promise.race([
+          interruptActiveStream(targetChatId),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, AGENT_INTERRUPT_TIMEOUT_MS);
+          }),
+        ]);
       };
-
-      await interruptIfActive(chatId);
 
       const priorSend = sendMessageLockRef.current.get(chatId);
       if (priorSend) {
-        await priorSend.catch(() => {});
+        if (hiddenContinue) {
+          await priorSend.catch(() => {});
+        } else {
+          console.warn(
+            `[useAgent] Preempting hung prior send for ${chatId} — user message takes priority`,
+          );
+          sendMessageLockRef.current.delete(chatId);
+          await interruptIfActive(chatId);
+        }
+      } else if (!hiddenContinue) {
+        await interruptIfActive(chatId);
       }
+
+      const myGeneration = nextSendGeneration(
+        sendGenerationRef.current,
+        chatId,
+      );
 
       let releaseSendLock: (() => void) | undefined;
       const sendLock = new Promise<void>((resolve) => {
         releaseSendLock = resolve;
       });
       sendMessageLockRef.current.set(chatId, sendLock);
+
+      const isSendCurrent = (targetChatId: string): boolean =>
+        isSendGenerationCurrent(
+          sendGenerationRef.current,
+          targetChatId,
+          myGeneration,
+        );
 
       console.log(
         "[useAgent.sendMessage]   - Is first message:",
@@ -2352,7 +2386,7 @@ export function useAgent() {
       console.log("=".repeat(80));
 
       try {
-        if (!isHiddenContinueUserMessage(message)) {
+        if (!hiddenContinue) {
           resetAutoContinueAttempts(chatId);
           setLastTurnOutcome(chatId, undefined);
           // Retired alongside the outcome: a refusal banner now outlives the
@@ -2362,6 +2396,19 @@ export function useAgent() {
           // cannot clear the banner that is meant to be blocking it.
           setNeedsStreamRecovery(chatId, false);
         }
+
+        setTabStreaming(tabId, true);
+        setSending(chatId, true);
+        addMessage(
+          {
+            id: userMessageId,
+            role: "user",
+            content: message,
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
+          },
+          chatId,
+        );
+        console.log("[useAgent] User message added to store (optimistic)");
 
         // V1 APPROACH: Create permanent chat BEFORE streaming if temp
         if (isFirstMessage) {
@@ -2399,36 +2446,23 @@ export function useAgent() {
           console.log(`[useAgent] Updated tab: ${tabId} → chat-${newChatId}`);
 
           finalChatId = newChatId; // Use permanent ID for streaming
+          sendGenerationRef.current.set(finalChatId, myGeneration);
 
           const tempLock = sendMessageLockRef.current.get(chatId);
           if (tempLock) {
             sendMessageLockRef.current.delete(chatId);
             sendMessageLockRef.current.set(finalChatId, tempLock);
           }
+
+          setSending(chatId, false);
+          setSending(finalChatId, true);
+          setTabStreaming(tabId, false);
+          setTabStreaming(`chat-${finalChatId}`, true);
         }
 
         if (finalChatId !== chatId) {
           await interruptIfActive(finalChatId);
         }
-
-        // Set tab streaming status (blue dot) for THIS chat's tab
-        setTabStreaming(`chat-${finalChatId}`, true);
-
-        // Mark sending before adding the user message so loadMessages cannot
-        // wipe optimistic UI when the tab entityId switches temp → permanent.
-        setSending(finalChatId, true);
-
-        // Add user message immediately to THIS chat
-        addMessage(
-          {
-            id: `msg-user-${Date.now()}`,
-            role: "user",
-            content: message,
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          },
-          finalChatId,
-        );
-        console.log("[useAgent] User message added to store");
 
         // Reset streaming state for this chatId
         resetAgentStreamingRefsForChat(finalChatId);
@@ -2494,6 +2528,13 @@ export function useAgent() {
           error instanceof Error ? error.message : String(error);
         const isDisconnectError = errorMessage === GATEWAY_DISCONNECTED_ERROR;
 
+        if (!isSendCurrent(finalChatId)) {
+          console.log(
+            `[useAgent] Ignoring error from superseded send for ${finalChatId}`,
+          );
+          return;
+        }
+
         if (isDisconnectError) {
           console.log(
             `[useAgent] Gateway disconnected mid-stream for ${finalChatId} — will resume on reconnect`,
@@ -2523,13 +2564,20 @@ export function useAgent() {
         }
         setError(errorMessage);
         setSending(finalChatId, false);
-
-        // Clear streaming status on error for THIS chat's tab
         setTabStreaming(`chat-${finalChatId}`, false);
       } finally {
-        finishUiStreamProfiler(finalChatId);
+        if (isSendCurrent(finalChatId)) {
+          finishUiStreamProfiler(finalChatId);
+        }
         releaseSendLock?.();
-        if (sendMessageLockRef.current.get(chatId) === sendLock) {
+        const lockChatId = finalChatId !== chatId ? finalChatId : chatId;
+        if (sendMessageLockRef.current.get(lockChatId) === sendLock) {
+          sendMessageLockRef.current.delete(lockChatId);
+        }
+        if (
+          finalChatId !== chatId &&
+          sendMessageLockRef.current.get(chatId) === sendLock
+        ) {
           sendMessageLockRef.current.delete(chatId);
         }
       }

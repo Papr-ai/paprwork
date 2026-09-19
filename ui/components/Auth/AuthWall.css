@@ -150,6 +150,29 @@
   padding: 32px 0;
 }
 
+.onboarding-split-form .auth-wall-waiting {
+  align-items: flex-start;
+  padding: 0;
+}
+
+.onboarding-split-form .auth-wall-hint {
+  text-align: left;
+  max-width: none;
+}
+
+.onboarding-split-form .auth-wall-refresh-section {
+  align-items: flex-start;
+}
+
+.onboarding-split-form .auth-wall-refresh-button {
+  background: linear-gradient(120deg, #0060e0, #00acfa 60%, #0bcdff);
+}
+
+.onboarding-split-form .auth-wall-manual-code {
+  text-align: left;
+  width: 100%;
+}
+
 .auth-wall-status {
   margin: 0;
   color: var(--text-color);

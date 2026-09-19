@@ -1,3 +1,4 @@
+import { traceDiagnosticPhase } from "../../core/utils/performanceDiagnostics.js";
 /**
  * Defers heavy gateway background work (vault sync, billing resume, code index batches)
  * until the interactive hot path is quiet and event-loop lag is acceptable.
@@ -12,8 +13,9 @@ import { sampleEventLoopLagMs } from "./gatewayEventLoopMonitor.js";
 import {
   GATEWAY_BACKGROUND_CHILD_TASKS,
   isGatewayBackgroundProcessEnabled,
-  resolveGatewayBackgroundMaxConcurrency,
 } from "./gatewayBackgroundConcurrency.js";
+
+import { gatewayBackgroundBudget } from "./gatewayBackgroundBudget.js";
 
 interface CoalescedTaskState {
   inFlight: boolean;
@@ -69,27 +71,6 @@ function maybeReportSlowBackgroundTaskTelemetry(
   });
 }
 
-let backgroundSlotsInUse = 0;
-const backgroundSlotWaiters: Array<() => void> = [];
-
-async function acquireBackgroundSlot(): Promise<void> {
-  const max = resolveGatewayBackgroundMaxConcurrency();
-  while (backgroundSlotsInUse >= max) {
-    await new Promise<void>((resolve) => {
-      backgroundSlotWaiters.push(resolve);
-    });
-  }
-  backgroundSlotsInUse += 1;
-}
-
-function releaseBackgroundSlot(): void {
-  backgroundSlotsInUse = Math.max(0, backgroundSlotsInUse - 1);
-  const next = backgroundSlotWaiters.shift();
-  if (next) {
-    next();
-  }
-}
-
 function readEnvMs(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
   if (!raw) {
@@ -113,12 +94,12 @@ export async function yieldToInteractiveHotPath(
   label: string,
   quietOptions?: WaitForInteractiveQuietOptions,
 ): Promise<void> {
-  await waitForInteractiveQuietBeforeBackgroundWork(label, {
+  await traceDiagnosticPhase(`${label}:wait-for-interactive-quiet`, () => waitForInteractiveQuietBeforeBackgroundWork(label, {
     minQuietMs: readEnvMs("GATEWAY_BG_QUIET_MS", 1500),
     maxWaitMs: readEnvMs("GATEWAY_BG_MAX_WAIT_MS", 120_000),
     pollMs: 250,
     ...quietOptions,
-  });
+  }), true);
 }
 
 /**
@@ -208,11 +189,10 @@ async function executeCoalescedTask(
   try {
     do {
       state.rerunPending = false;
-      await acquireBackgroundSlot();
+
       const runStartedAt = Date.now();
       try {
-        await yieldToInteractiveHotPath(taskKey);
-        await runCoalescedTaskBody(taskKey, state);
+        await gatewayBackgroundBudget.run(taskKey, () => runCoalescedTaskBody(taskKey, state));
         recordBackgroundTaskTiming(taskKey, runStartedAt, true);
         console.log(
           `[GatewayBackground] ${taskKey} finished in ${Date.now() - runStartedAt}ms`,
@@ -222,8 +202,6 @@ async function executeCoalescedTask(
           runErr instanceof Error ? runErr.message : String(runErr);
         recordBackgroundTaskTiming(taskKey, runStartedAt, false, message);
         throw runErr;
-      } finally {
-        releaseBackgroundSlot();
       }
     } while (state.rerunPending);
   } catch (err) {
@@ -245,6 +223,4 @@ async function executeCoalescedTask(
 /** Test helper — reset coalesced task state. */
 export function resetCoalescedBackgroundWorkForTests(): void {
   coalescedTasks.clear();
-  backgroundSlotsInUse = 0;
-  backgroundSlotWaiters.length = 0;
 }

@@ -2,7 +2,7 @@
  * OAuthSection - OAuth authentication UI for OpenAI and Claude
  */
 
-import React, { useState, useMemo, useEffect } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useOAuth } from "../../hooks/useOAuth";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
 import { PROVIDER_AUTH_CHANGED_EVENT } from "../../hooks/useAuthStatus";
@@ -12,17 +12,13 @@ import { getOnboardingState } from "../../utils/onboardingState";
 import { cleanClaudeOAuthToken } from "../../utils/claudeOAuthToken";
 import { useProviderAuthStore } from "../../stores/providerAuthStore";
 import { deriveProviderConnectionState } from "../../utils/providerConnectionState";
-import { ClaudeTokenPastePanel } from "./ClaudeTokenPastePanel";
-import { ClaudeManualSetupPanel } from "./ClaudeManualSetupPanel";
-import { ClaudeUsageLimitsPanel } from "./ClaudeUsageLimitsPanel";
+import { ClaudeGuidedSetupModal } from "./ClaudeGuidedSetupModal";
+import { SubscriptionPlanUsagePanel } from "./SubscriptionPlanUsagePanel";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import { startClaudeManualAgentChat } from "../../utils/startClaudeManualAgentChat";
 import "./SettingsView.css";
 import "./ClaudeManualConnectionPanel.css";
-
-type PasteMode = "idle" | "terminal" | "manual";
-type ClaudeHelpFlow = "none" | "agent" | "manual";
 
 function resolveOAuthSource(): OAuthProviderSource {
   const { phase } = getOnboardingState();
@@ -68,13 +64,12 @@ export function OAuthSection({
   // sees, so this is the mode the agent actually runs on, not just which form shows.
   const [useApiKey, setUseApiKey] = useState(false);
   const [authPrefLoaded, setAuthPrefLoaded] = useState(false);
-  const [showPasteToken, setShowPasteToken] = useState(false);
-  const [claudeHelpFlow, setClaudeHelpFlow] = useState<ClaudeHelpFlow>("none");
+  const [guidedSetupOpen, setGuidedSetupOpen] = useState(false);
+  const [guidedSetupKey, setGuidedSetupKey] = useState(0);
+  const guidedAutoOpenKeyRef = useRef<string | null>(null);
   const [launchingAgent, setLaunchingAgent] = useState(false);
-  const [pasteMode, setPasteMode] = useState<PasteMode>("idle");
   const { createChat } = useChat();
   const { createTab, switchToTab } = useTabs();
-  const [prevTimedOut, setPrevTimedOut] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
   const [loadingToken, setLoadingToken] = useState(false);
@@ -111,19 +106,27 @@ export function OAuthSection({
     window.location.reload();
   };
 
-  const handleCancelAlternateFlow = () => {
-    setShowPasteToken(false);
-    setClaudeHelpFlow("none");
-    setPasteMode("idle");
+  const openGuidedSetup = useCallback(() => {
+    setGuidedSetupKey((current) => current + 1);
+    setGuidedSetupOpen(true);
+  }, []);
+
+  const handleStartOAuthLogin = async () => {
+    if (provider === "anthropic") {
+      guidedAutoOpenKeyRef.current = null;
+    }
+    await startOAuthLogin();
+  };
+
+  const closeGuidedSetup = () => {
+    setGuidedSetupOpen(false);
   };
 
   const handleOpenManualSetup = () => {
-    setClaudeHelpFlow("manual");
-    setShowPasteToken(false);
-    setPasteMode("idle");
     trackOAuthProviderStep(provider, "manual_steps_clicked", {
       source: oauthSource,
     });
+    openGuidedSetup();
   };
 
   const handleAskAgent = async () => {
@@ -141,9 +144,7 @@ export function OAuthSection({
         switchToTab,
       );
       if (started) {
-        setClaudeHelpFlow("agent");
-        setShowPasteToken(false);
-        setPasteMode("idle");
+        setGuidedSetupOpen(false);
       }
     } finally {
       setLaunchingAgent(false);
@@ -201,28 +202,37 @@ export function OAuthSection({
     }
   };
 
-  // Auto-show paste field when terminal was opened or sign-in fails/times out
-  React.useEffect(() => {
-    if (provider !== "anthropic") return;
-    // Terminal was opened -- show inline paste field
-    if (status.showPasteField && pasteMode === "idle") {
-      setShowPasteToken(true);
-      setPasteMode("terminal");
+  // Open the same guided stepper modal when Connect opens Terminal or does not finish.
+  useEffect(() => {
+    if (provider !== "anthropic") {
+      return;
     }
-    // Error/timeout fallback (not CLI install failure — that keeps the 3-button menu)
-    const shouldShow =
-      status.timedOut ||
-      (status.error && !status.connected && !status.cliInstallFailed);
-    if (shouldShow && !prevTimedOut) {
-      setShowPasteToken(true);
-      if (pasteMode === "idle") setPasteMode("terminal");
-      setPrevTimedOut(true);
+    if (status.connected) {
+      guidedAutoOpenKeyRef.current = null;
+      setGuidedSetupOpen(false);
+      return;
     }
-    if (!status.timedOut && !status.error && prevTimedOut) {
-      setPrevTimedOut(false);
+    const autoKey =
+      status.showPasteField === true
+        ? "terminal-opened"
+        : status.timedOut
+          ? "timed-out"
+          : status.error && !status.connected
+            ? `error:${status.error}`
+            : null;
+    if (!autoKey || guidedAutoOpenKeyRef.current === autoKey) {
+      return;
     }
-  }, [status.timedOut, status.error, status.connected, status.showPasteField, provider]);
-
+    guidedAutoOpenKeyRef.current = autoKey;
+    openGuidedSetup();
+  }, [
+    provider,
+    status.connected,
+    status.showPasteField,
+    status.timedOut,
+    status.error,
+    openGuidedSetup,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -314,7 +324,7 @@ export function OAuthSection({
   // 401 we saw no longer describes the credential now stored.
   const handleReconnect = async () => {
     clearAuthRejection(provider);
-    await startOAuthLogin();
+    await handleStartOAuthLogin();
   };
 
   const handleDisconnect = async () => {
@@ -360,10 +370,9 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
-              {provider === "anthropic" &&
-                connectionState.kind === "connected" && (
-                  <ClaudeUsageLimitsPanel />
-                )}
+              {connectionState.kind === "connected" && (
+                <SubscriptionPlanUsagePanel provider={provider} />
+              )}
               {/* No expiry countdown while healthy. It is not actionable, and
                   as the only marker of a dead token it was missed — the badge
                   beside it said Connected, in green, and won. */}
@@ -501,9 +510,7 @@ export function OAuthSection({
                 Use your {subscriptionName} subscription
               </p>
               
-              {provider === "anthropic" &&
-                claudeHelpFlow === "none" &&
-                !showPasteToken && (
+              {provider === "anthropic" && !guidedSetupOpen && (
                   <div style={{ marginBottom: "12px" }}>
                     <p
                       style={{
@@ -514,17 +521,16 @@ export function OAuthSection({
                       }}
                     >
                       <strong>Connect</strong> works automatically if Claude Code is
-                      already installed — otherwise we install it and open a terminal
-                      for sign-in. Use <strong>Ask an agent</strong> or{" "}
-                      <strong>Manual setup</strong> if automatic install fails.
+                      already installed — otherwise we open a step-by-step guide to
+                      install, sign in, and paste your token. Use{" "}
+                      <strong>Ask an agent</strong> if you want help in chat.
                     </p>
                   </div>
                 )}
 
               {status.error &&
                 !status.connected &&
-                !showPasteToken &&
-                claudeHelpFlow === "none" && (
+                !guidedSetupOpen && (
                   <div
                     style={{
                       padding: "8px 12px",
@@ -539,11 +545,11 @@ export function OAuthSection({
                   </div>
                 )}
 
-              {claudeHelpFlow === "none" && !showPasteToken && (
+              {!guidedSetupOpen && (
                 <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
                   <button
                     className="settings-btn settings-btn--primary"
-                    onClick={startOAuthLogin}
+                    onClick={() => void handleStartOAuthLogin()}
                     disabled={loading || launchingAgent}
                     style={{ width: "100%" }}
                   >
@@ -570,49 +576,26 @@ export function OAuthSection({
                         disabled={loading || launchingAgent}
                         style={{ width: "100%" }}
                       >
-                        Manual setup
+                        Step-by-step setup
                       </button>
                     </>
                   )}
                 </div>
               )}
 
-              {claudeHelpFlow === "manual" && provider === "anthropic" && (
-                <ClaudeManualSetupPanel
-                  oauthSource={oauthSource}
-                  onCancel={handleCancelAlternateFlow}
-                  onConnected={handleClaudeConnected}
-                />
+              {guidedSetupOpen && provider === "anthropic" && (
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--color-text-secondary, #666)",
+                    margin: 0,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  The guided setup is open — close it to use Connect again, or finish
+                  the steps in the modal.
+                </p>
               )}
-
-              {claudeHelpFlow === "agent" && provider === "anthropic" && (
-                <div className="claude-manual-connection">
-                  <p className="claude-manual-connection__agent-note">
-                    We opened a chat with Gemini 3.8 Flash. Ask it to install Claude
-                    Code, run <code>claude setup-token</code>, then return here to
-                    paste your token.
-                  </p>
-                  <ClaudeTokenPastePanel
-                    pasteMode="manual"
-                    oauthSource={oauthSource}
-                    onCancel={handleCancelAlternateFlow}
-                    onConnected={handleClaudeConnected}
-                    hideIntro
-                  />
-                </div>
-              )}
-
-              {showPasteToken &&
-                provider === "anthropic" &&
-                pasteMode !== "idle" &&
-                claudeHelpFlow === "none" && (
-                  <ClaudeTokenPastePanel
-                    pasteMode={pasteMode}
-                    oauthSource={oauthSource}
-                    onCancel={handleCancelAlternateFlow}
-                    onConnected={handleClaudeConnected}
-                  />
-                )}
             </>
           )}
 
@@ -702,8 +685,22 @@ export function OAuthSection({
         </span>
       </div>
 
-      {status.error && claudeHelpFlow === "none" && !showPasteToken && (
+      {status.error && !guidedSetupOpen && (
         <div className="oauth-error">Error: {status.error}</div>
+      )}
+
+      {provider === "anthropic" && (
+        <ClaudeGuidedSetupModal
+          open={guidedSetupOpen}
+          sessionKey={guidedSetupKey}
+          oauthSource={oauthSource}
+          onClose={closeGuidedSetup}
+          onConnected={handleClaudeConnected}
+          onAskAgent={() => {
+            closeGuidedSetup();
+            void handleAskAgent();
+          }}
+        />
       )}
     </div>
   );

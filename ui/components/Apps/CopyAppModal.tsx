@@ -197,13 +197,13 @@ export function CopyAppModal({
     const warnings: string[] = [
       `Copy "${app.title}" to ${targetOrgName} → ${targetNsName}?`,
       "",
-      "This copies the app, linked jobs, and databases into that workspace.",
-      "Nothing is removed here — delete the app from this namespace afterward if you no longer want it.",
+      "This creates an independent copy (new app id and forked databases), like installing a fork from the catalog.",
+      "Linked jobs are copied into that workspace. Nothing is removed here — delete the original afterward if you do not want it.",
     ];
     if (isPublished) {
       warnings.push(
         "",
-        "This app is live on the web in the current namespace. Publish again from the copy if you want it live in the new namespace.",
+        "The original may already be published under its app id. The copy is a separate app — publish it from the target workspace when you want it live there.",
       );
     }
 
@@ -216,6 +216,7 @@ export function CopyAppModal({
     try {
       const response = await gateway.send<{
         appId: string;
+        sourceAppId: string;
         title: string;
         titleRenamed: boolean;
         copiedJobIds: string[];

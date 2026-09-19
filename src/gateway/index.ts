@@ -1,3 +1,4 @@
+import { recordGatewayHealthEvent } from "./services/gatewayHealthEvents.js";
 /**
  * Gateway Process Entry Point
  *
@@ -51,6 +52,7 @@ import {
 import {
   sampleEventLoopLagMs,
   startGatewayEventLoopMonitor,
+  stopGatewayEventLoopMonitor,
 } from "./services/gatewayEventLoopMonitor.js";
 import { scheduleCoalescedBackgroundWork } from "./services/gatewayBackgroundWork.js";
 import {
@@ -921,17 +923,65 @@ async function startGateway(): Promise<void> {
       res.json({ traces: getRecentReplicaReadPhaseTraces() });
     });
 
-    app.get("/api/debug/gateway-background", async (_req, res) => {
+    // Small, bounded diagnostic snapshots; no request contents or URLs retained.
+    app.post("/api/debug/renderer-performance", async (req, res) => {
+      const { rendererPerformanceDiagnostics } = await import("./services/rendererPerformanceDiagnostics.js");
+      if (!rendererPerformanceDiagnostics.record(req.body)) {
+        res.status(400).json({ error: "Invalid or out-of-order renderer sample" });
+        return;
+      }
+      res.status(204).end();
+    });
+
+    app.get(["/api/debug/gateway-background", "/api/debug/gateway-performance"], async (_req, res) => {
       const { getRecentBackgroundTaskTimings } = await import(
         "./services/gatewayBackgroundWork.js"
       );
-      const { sampleEventLoopLagMs } = await import(
+      const { sampleEventLoopLagMs, getGatewayResourceDiagnostics } = await import(
         "./services/gatewayEventLoopMonitor.js"
       );
+      const { getPerformanceDiagnostics } = await import(
+        "../core/utils/performanceDiagnostics.js"
+      );
+      const { buildGatewayPerformanceTimeline } = await import(
+        "./services/gatewayPerformanceTimeline.js"
+      );
+      const capturedAt = new Date().toISOString();
+      const resources = getGatewayResourceDiagnostics();
+      const operations = getPerformanceDiagnostics();
+      const timeline = buildGatewayPerformanceTimeline({
+        capturedAt,
+        samples: resources.samples,
+        active: operations.active,
+        recent: operations.recent,
+      });
       res.json({
+        schemaVersion: 7,
+        renderer: (await import("./services/rendererPerformanceDiagnostics.js")).rendererPerformanceDiagnostics.snapshot(),
+        cloudPause: (await import("../core/utils/paprQuota.js")).getPaprCloudPauseDiagnostics(),
+        capturedAt,
+        process: { pid: process.pid, uptimeSeconds: process.uptime() },
+        resources,
+        operations,
+        timeline,
+        agentConcurrency: (await import("./services/agent/agentStreamConcurrency.js")).getAgentStreamConcurrencyGate().getStats(),
+        backgroundBudget: (await import("./services/gatewayBackgroundBudget.js")).gatewayBackgroundBudget.stats(),
         recentTasks: getRecentBackgroundTaskTimings(),
         eventLoopLagMs: sampleEventLoopLagMs(false),
       });
+    });
+
+    app.get("/api/debug/gateway-performance/view", async (_req, res) => {
+      const { readFile } = await import("node:fs/promises");
+      const viewPath = path.join(
+        path.dirname(fileURLToPath(import.meta.url)),
+        "..",
+        "resources",
+        "gateway-performance-view.html",
+      );
+      const html = await readFile(viewPath, "utf8");
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(html);
     });
 
     app.get("/api/dev/papr-api-catalog", async (req, res) => {
@@ -1142,6 +1192,7 @@ async function startGateway(): Promise<void> {
           }
         }
         console.error("[Gateway] /api/db/query error:", err);
+        const lowerMessage = message.toLowerCase();
         const status =
           message.includes("Turso fallback is unavailable") ||
           message.includes("Local database not found") ||
@@ -1149,7 +1200,9 @@ async function startGateway(): Promise<void> {
           message.includes("Replica read timed out") ||
           message.includes("Gateway was busy") ||
           message.includes("Database sync in progress") ||
-          message.includes("Schema update pending")
+          message.includes("Schema update pending") ||
+          lowerMessage.includes("no such table") ||
+          lowerMessage.includes("sync engine operation failed")
             ? 503
             : 500;
         res.status(status).json({ error: message });
@@ -1168,8 +1221,9 @@ async function startGateway(): Promise<void> {
       res: import("express").Response,
     ): Promise<void> => {
       try {
-        const { appId: bodyAppId, statements } = req.body as {
+        const { appId: bodyAppId, sourceId: batchSourceId, statements } = req.body as {
           appId?: string;
+          sourceId?: string;
           statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
         };
         if (!Array.isArray(statements) || statements.length === 0) {
@@ -1199,6 +1253,7 @@ async function startGateway(): Promise<void> {
         const { executeMiniAppReadBatch } = await import(
           "./services/appRuntime/miniAppDbReadBatch.js"
         );
+        const { coalesceBatchSourceId } = await import("./services/appDataSources.js");
         type Prepared = import("./services/appRuntime/miniAppDbReadBatch.js").PreparedMiniAppReadStatement;
         const payload = await withInteractiveHotPath("mini-app:db-query-batch", () =>
           coalesceInFlightLocalDbRead(batchCoalesceKey, async () => {
@@ -1224,7 +1279,7 @@ async function startGateway(): Promise<void> {
               try {
                 const source = await resolveLinkedSource(
                   appId,
-                  stmt.sourceId,
+                  coalesceBatchSourceId(stmt.sourceId, batchSourceId),
                   sql,
                   "read",
                 );
@@ -1382,11 +1437,13 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/db/write-batch", async (req, res) => {
       try {
-        const { appId: bodyAppId, statements, atomic } = req.body as {
-          appId?: string;
-          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
-          atomic?: boolean;
-        };
+        const { appId: bodyAppId, sourceId: batchSourceId, statements, atomic } =
+          req.body as {
+            appId?: string;
+            sourceId?: string;
+            statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+            atomic?: boolean;
+          };
 
         if (!Array.isArray(statements) || statements.length === 0) {
           res.status(400).json({ error: "non-empty statements[] is required" });
@@ -1407,10 +1464,14 @@ async function startGateway(): Promise<void> {
         const { executeMiniAppWriteBatch } = await import(
           "./services/miniAppWriteBatch.js"
         );
+        const { coalesceBatchSourceId } = await import("./services/appDataSources.js");
 
         const payload = await executeMiniAppWriteBatch({
           appId,
-          statements,
+          statements: statements.map((stmt) => ({
+            ...stmt,
+            sourceId: coalesceBatchSourceId(stmt.sourceId, batchSourceId),
+          })),
           atomic: atomic === true,
           pool: dbPool,
           dbRouter,
@@ -2856,6 +2917,14 @@ async function startGateway(): Promise<void> {
       }
 
       try {
+        const { yieldToInteractiveHotPath } = await import(
+          "./services/gatewayBackgroundWork.js"
+        );
+        await yieldToInteractiveHotPath("api:sync/items", {
+          minQuietMs: 300,
+          maxWaitMs: 45_000,
+        });
+
         let appContext:
           | {
               appId: string;
@@ -4051,6 +4120,16 @@ async function startGateway(): Promise<void> {
           "./services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js"
         )
           .then(({ repairAllReplicaMigrationAuthorityOnStartup }) => {
+            const repairEnabled =
+              process.env.TURSO_MIGRATION_REPAIR_ON_STARTUP === "1" ||
+              process.env.TURSO_MIGRATION_REPAIR_ON_STARTUP === "true";
+            if (!repairEnabled) {
+              console.log(
+                "[Gateway] Skipping workspace-wide replica migration repair on startup " +
+                  "(per-DB repair still runs on publish/pull/drift; set TURSO_MIGRATION_REPAIR_ON_STARTUP=1 for full scan)",
+              );
+              return;
+            }
             const delayMs = Number(
               process.env.TURSO_MIGRATION_REPAIR_STARTUP_DELAY_MS ?? 120_000,
             );
@@ -4127,6 +4206,7 @@ async function startGateway(): Promise<void> {
     // Handle shutdown
     const shutdown = async () => {
       console.log("[Gateway] Shutting down gracefully...");
+      stopGatewayEventLoopMonitor();
 
       try {
         const { shutdownGatewayBackgroundWorker } = await import(
@@ -4243,7 +4323,8 @@ async function startGateway(): Promise<void> {
     process.on("message", async (message: unknown) => {
       if (typeof message !== "object" || message === null) return;
       
-      const msg = message as { type?: string; timestamp?: number };
+      const msg = message as { type?: string; timestamp?: number; event?: unknown };
+      if (msg.type === "HEALTH_OBSERVATION") { recordGatewayHealthEvent(msg.event); return; }
       
       if (msg.type === "SYSTEM_SUSPEND") {
         console.log("[Gateway] System suspending - pausing operations");

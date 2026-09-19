@@ -30,12 +30,16 @@ describe("VaultSyncService", () => {
   });
 
   it("has pushAllKeys method that calls /api/cloud/vault/sync", () => {
-    const content = fs.readFileSync(
+    const pushContent = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/vaultSyncBackgroundPush.ts"),
+      "utf-8",
+    );
+    const vaultContent = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async pushAllKeys()");
-    expect(content).toContain("/api/cloud/vault/sync");
+    expect(vaultContent).toContain("async pushAllKeys()");
+    expect(pushContent).toContain("/api/cloud/vault/sync");
   });
 
   it("has pullKeys method that calls /api/cloud/vault/keys", () => {
@@ -43,7 +47,7 @@ describe("VaultSyncService", () => {
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async pullKeys()");
+    expect(content).toMatch(/async pullKeys\(/);
     expect(content).toContain("/api/cloud/vault/keys");
   });
 
@@ -91,12 +95,39 @@ describe("VaultSyncService", () => {
     expect(content).toContain("scheduleDebouncedPushAll");
   });
 
+  it("full sync waits routes once, pushes, then pulls in parallel", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    const block = content.slice(
+      content.indexOf("private async runFullSyncOnce"),
+      content.indexOf("private async ensureGatewayRoutesReady"),
+    );
+    const pushIdx = block.indexOf("vault:push");
+    const parallelIdx = block.indexOf("Promise.all");
+    expect(pushIdx).toBeGreaterThan(-1);
+    expect(parallelIdx).toBeGreaterThan(pushIdx);
+    expect(block).toContain("vault:pull-key-names");
+    expect(block).toContain("vault:pull-shared-keys");
+    expect(block).toContain("skipRoutesReady: true");
+  });
+
+  it("builds push payload with bounded parallel key reads", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("mapWithConcurrency");
+    expect(content).toContain("VAULT_KEY_READ_CONCURRENCY");
+  });
+
   it("has pullSharedKeys method that calls /api/cloud/vault/pull-shared", () => {
     const content = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async pullSharedKeys()");
+    expect(content).toMatch(/async pullSharedKeys\(/);
     expect(content).toContain("/api/cloud/vault/pull-shared");
   });
 
@@ -131,6 +162,16 @@ describe("VaultSyncService", () => {
     );
     expect(content).toContain('"disabled"');
     expect(content).toContain("No PAPR_API_KEY");
+  });
+
+  it("skips unchanged keys via local fingerprint before HTTP sync", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("filterVaultEntriesNeedingPush");
+    expect(content).toContain("markVaultPushFingerprints");
+    expect(content).toContain("All keys match last push");
   });
 
   it("pulls user-scoped vault keys only (not org/namespace catalogs)", () => {

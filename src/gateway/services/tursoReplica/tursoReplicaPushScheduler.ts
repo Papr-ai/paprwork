@@ -12,6 +12,7 @@ import {
   findLinkedSourceForJob,
   linkedSourceAsAppDataSource,
   linkedSourceSyncKey,
+  listAppsLinkingDbPath,
   type TursoLinkedSource,
 } from "../tursoLinkedSources.js";
 import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
@@ -257,7 +258,7 @@ function registryRecordAsSource(record: {
 
 async function resolveReplicaSourceForSyncKey(
   syncKey: string,
-): Promise<AppDataSource | null> {
+): Promise<{ source: AppDataSource; appIds: string[] } | null> {
   const bridge = ensureTursoSyncBridge();
   if (!bridge.enabled) {
     return null;
@@ -267,7 +268,13 @@ async function resolveReplicaSourceForSyncKey(
   const linked = findLinkedSourceForJob(sources, syncKey);
   if (linked) {
     const source = linkedSourceAsAppDataSource(linked);
-    return shouldUseTursoReplicaForSource(source) ? source : null;
+    if (!shouldUseTursoReplicaForSource(source)) {
+      return null;
+    }
+    return {
+      source,
+      appIds: listAppsLinkingDbPath(sources, linked.dbPath),
+    };
   }
 
   await initializeDatabaseRegistry();
@@ -277,7 +284,11 @@ async function resolveReplicaSourceForSyncKey(
   if (!record || record.syncMode !== "replica") {
     return null;
   }
-  return registryRecordAsSource(record);
+  const source = registryRecordAsSource(record);
+  return {
+    source,
+    appIds: listAppsLinkingDbPath(sources, record.localPath),
+  };
 }
 
 async function replicaSourceNeedsPush(source: AppDataSource): Promise<boolean> {
@@ -307,7 +318,6 @@ function shouldScheduleReplicaPush(
     return true;
   }
   if (!shouldAutoUploadReplicaSyncKey(syncKey, replicaPaprDir())) {
-    logReplicaSchedule(syncKey, trigger, "skipped (manual upload mode)");
     return false;
   }
   return true;
@@ -324,11 +334,12 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
     return;
   }
 
-  const source = await resolveReplicaSourceForSyncKey(syncKey);
-  if (!source) {
+  const resolved = await resolveReplicaSourceForSyncKey(syncKey);
+  if (!resolved) {
     clearDirtyTracking(syncKey);
     return;
   }
+  const { source, appIds } = resolved;
 
   if (!isTursoReplicaOnline()) {
     notePushFailureBackoff(syncKey);
@@ -349,6 +360,14 @@ async function executeReplicaPushForSyncKey(syncKey: string): Promise<void> {
       }
       clearDirtyTracking(syncKey);
       console.log(`[TursoReplicaPushScheduler] Pushed ${syncKey} (replica)`);
+      if (appIds.length > 0) {
+        const { notifyCloudSyncItemsStale } = await import(
+          "../cloudSync/cloudSyncBroadcast.js"
+        );
+        for (const appId of appIds) {
+          notifyCloudSyncItemsStale(appId);
+        }
+      }
       return;
     }
 

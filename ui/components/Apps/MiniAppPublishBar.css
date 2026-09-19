@@ -12,6 +12,8 @@
   min-height: 0;
   border: 0;
   background: var(--panel-bg-active, #fff);
+  position: relative;
+  z-index: 0;
 }
 
 .mini-app-publish-bar {
@@ -40,6 +42,7 @@
 .mini-app-view__overlay {
   position: absolute;
   inset: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -85,6 +88,106 @@
   opacity: 0.92;
 }
 
+/** Non-blocking runtime errors from iframe (API / console / unhandled rejection). */
+.mini-app-view__runtime-banner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid rgba(255, 59, 48, 0.35);
+  background: color-mix(in srgb, var(--panel-bg-active, #fff) 92%, #ff3b30 8%);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  pointer-events: auto;
+}
+
+.mini-app-view__runtime-banner-body {
+  flex: 1;
+  min-width: 0;
+  text-align: left;
+}
+
+.mini-app-view__runtime-banner-title {
+  margin: 0 0 4px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.mini-app-view__runtime-banner-message {
+  margin: 0;
+  max-height: 72px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-secondary, rgba(255, 255, 255, 0.75));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.mini-app-view__runtime-banner-hint {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.mini-app-view__runtime-banner-actions {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mini-app-view__runtime-banner-btn {
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+
+.mini-app-view__runtime-banner-btn:hover {
+  filter: brightness(1.05);
+}
+
+.mini-app-view__runtime-banner-btn--ghost {
+  background: transparent;
+}
+
+/** Transient load/retry status — does not block the iframe. */
+.mini-app-view__status-banner {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+  border-top: 1px solid var(--border-color);
+  background: color-mix(in srgb, var(--glass-bg) 90%, transparent);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+
+.mini-app-view__status-banner p {
+  margin: 0;
+}
+
 .mini-app-publish-bar__segment {
   display: inline-flex;
   padding: 2px;
@@ -126,9 +229,38 @@
 .mini-app-publish-bar__web-option {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding-right: 2px;
+  gap: 4px;
+  padding-right: 4px;
   border-radius: 999px;
+}
+
+.mini-app-publish-bar__check-status-btn {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  padding: 4px 8px;
+  border: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.35));
+  border-radius: 999px;
+  background: var(--surface-elevated, rgba(128, 128, 128, 0.08));
+  color: var(--text-secondary, inherit);
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.mini-app-publish-bar__check-status-btn:hover:not(:disabled) {
+  background: var(--surface-hover, rgba(128, 128, 128, 0.14));
+}
+
+.mini-app-publish-bar__check-status-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.mini-app-publish-bar__web-option--active .mini-app-publish-bar__check-status-btn {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
 }
 
 .mini-app-publish-bar__web-option--active .mini-app-publish-bar__segment-btn {

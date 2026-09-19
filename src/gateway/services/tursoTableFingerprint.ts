@@ -2,6 +2,8 @@
  * Content fingerprints for Turso sync — skip unchanged tables and detect real edits.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { createHash } from "crypto";
 import Database from "better-sqlite3";
 import { isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
@@ -92,7 +94,7 @@ export function computeSyncableTableFingerprintsForPath(
   let db: Database.Database | null = null;
   try {
     // Short busy timeout — a contended file must not block the event loop for 5s.
-    db = new Database(dbPath, { readonly: true, timeout: 100 });
+    db = openDiagnosticDatabase(Database, "services/tursoTableFingerprint", dbPath, { readonly: true, timeout: 100 });
     return computeSyncableTableFingerprints(db);
   } catch {
     return null;

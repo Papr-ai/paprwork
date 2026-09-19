@@ -56,6 +56,22 @@ function parseHealthResponse(body) {
   }
 }
 
+/** Sync grace controls restart suppression, not whether the HTTP request succeeded. */
+function getHealthObservation(health, requestOutcome = "response", previouslyFailed = false) {
+  const failed = requestOutcome !== "response" || !health.alive;
+  if (!failed && !previouslyFailed) return null;
+  let reason = "Health request responded again";
+  if (failed) {
+    reason = requestOutcome === "timeout"
+      ? "Health request timed out"
+      : requestOutcome === "error"
+        ? "Health request failed"
+        : "Health response was invalid or unhealthy";
+    if (health.syncBusy) reason += " during sync grace";
+  }
+  return { status: failed ? "failed" : "recovered", reason };
+}
+
 /**
  * During cold start the gateway may respond with status "starting" for 60s+
  * while loading a large chats.db. Never SIGKILL until we've seen status "ok".
@@ -163,6 +179,7 @@ module.exports = {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,

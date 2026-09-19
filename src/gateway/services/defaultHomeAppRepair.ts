@@ -3,6 +3,8 @@
  * Prunes broken data-source links and upgrades legacy schema_migrations layouts.
  */
 
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
 import { existsSync } from "fs";
 import { promises as fs } from "fs";
 import Database from "better-sqlite3";
@@ -283,7 +285,7 @@ function upgradeSchemaMigrationsIfReadable(dbPath: string): boolean {
   }
   let db: Database.Database | null = null;
   try {
-    db = new Database(dbPath);
+    db = openDiagnosticDatabase(Database, "services/defaultHomeAppRepair", dbPath);
     ensureSchemaMigrationsTable(db);
     return true;
   } catch {

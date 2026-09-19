@@ -8,7 +8,7 @@
 #   PAPR_CLOUD_APP_PUBLIC_URL — https://apps.papr.ai
 #   AUTH0_DOMAIN / AUTH0_CLIENT_ID — Papr Auth0 tenant
 
-FROM node:24-alpine AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Remove macOS-only esbuild + Electron postinstall (not needed on Cloud Run)
@@ -24,11 +24,15 @@ RUN node -e "\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=optional --no-audit --no-fund
 COPY tsconfig.gateway.json tsconfig.mini-app-sdk-node.json tsconfig.json ./
+COPY scripts/generate-papr-api-catalog.mjs scripts/generate-papr-api-catalog.mjs
 COPY scripts/build-mini-app-sdk-browser-bundles.mjs scripts/build-mini-app-sdk-browser-bundles.mjs
 COPY scripts/verify-mini-app-sdk-bundles.mjs scripts/verify-mini-app-sdk-bundles.mjs
 COPY src ./src
-RUN npm run build:gateway \
-  && node scripts/verify-mini-app-sdk-bundles.mjs
+# Skip generate-papr-api-catalog (tsx loads full tool graph + libsql); catalog is committed under src/resources.
+RUN npx shx rm -rf dist/resources && npx shx mkdir -p dist && npx shx cp -r src/resources dist/ && \
+  npx tsc -p tsconfig.gateway.json && npx tsc -p tsconfig.mini-app-sdk-node.json && \
+  node scripts/build-mini-app-sdk-browser-bundles.mjs && node scripts/verify-mini-app-sdk-bundles.mjs && \
+  npx shx cp src/gateway/services/appRuntime/backendDbHelper.py dist/gateway/services/appRuntime/backendDbHelper.py
 
 FROM node:24-bookworm-slim
 WORKDIR /app

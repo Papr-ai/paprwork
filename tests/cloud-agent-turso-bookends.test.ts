@@ -114,6 +114,12 @@ describe("cloud agent Turso bookends", () => {
     await pullLinkedSourceFromCloud(target);
 
     expect(alignMigrationLedgers).toHaveBeenCalledOnce();
+    expect(alignMigrationLedgers).toHaveBeenCalledWith(
+      expect.anything(),
+      target.dbPath,
+      expect.any(String),
+      { force: true },
+    );
   });
 
   it("skips workspace log pull when appId is missing", async () => {

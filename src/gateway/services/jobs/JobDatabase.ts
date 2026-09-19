@@ -1,3 +1,4 @@
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
 import path from "path";
@@ -24,7 +25,7 @@ export class JobDatabase {
     assertNotReplicaManagedSqliteAccess(dbPath, "JobDatabase.ensureDatabase");
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath);
+      db = openDiagnosticDatabase(Database, "services/jobs/JobDatabase", dbPath);
       return action(db);
     } catch {
       return null;
@@ -53,7 +54,7 @@ export class JobDatabase {
 
     let db: Database.Database | null = null;
     try {
-      db = new Database(dbPath);
+      db = openDiagnosticDatabase(Database, "services/jobs/JobDatabase", dbPath);
       applySqlitePerformancePragmas(db, 5000);
       
       db.exec(`

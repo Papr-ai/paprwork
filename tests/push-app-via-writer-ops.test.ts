@@ -39,7 +39,15 @@ vi.mock("../src/gateway/services/cloudSync/prepareAppsForCloud.js", () => ({
     mockPrepareAppForCloudGitSync(...args),
 }));
 
+vi.mock("../src/gateway/services/syncV3/writerBaselineReconcile.js", () => ({
+  ensureWriterBaselineBeforePush: vi.fn(async () => ({
+    realigned: false,
+    pathsUpdated: 0,
+  })),
+}));
+
 import { pushAppViaWriterOps } from "../src/gateway/services/syncV3/pushAppViaWriterOps.js";
+import { ensureWriterBaselineBeforePush } from "../src/gateway/services/syncV3/writerBaselineReconcile.js";
 
 describe("pushAppViaWriterOps lazy ensure", () => {
   const sync = {
@@ -89,6 +97,7 @@ describe("pushAppViaWriterOps lazy ensure", () => {
     await pushAppViaWriterOps(sync, "app-1");
 
     expect(mockEnsureAppRepoRecord).toHaveBeenCalledWith("app-1");
+    expect(ensureWriterBaselineBeforePush).toHaveBeenCalledWith("app-1");
     expect(mockPostAppOps).toHaveBeenCalledTimes(1);
     expect(callOrder).toEqual(["ensure", "post"]);
   });

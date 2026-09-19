@@ -7,6 +7,8 @@
  * 3. Can be loaded incrementally (only load what's needed)
  */
 
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -55,7 +57,7 @@ export class AppStateStorage {
       fs.mkdirSync(appStateDir, { recursive: true });
     }
 
-    this.db = new Database(this.dbPath);
+    this.db = openDiagnosticDatabase(Database, "services/storage/AppStateStorage", this.dbPath);
     
     // Performance optimizations
     this.db.pragma('journal_mode = WAL');

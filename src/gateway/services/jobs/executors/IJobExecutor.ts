@@ -2,6 +2,7 @@ import type { ChildProcess } from "child_process";
 import type { JobRecord, JobType } from "../types.js";
 
 export interface ExecutorLaunchParams {
+  signal?: AbortSignal;
   runId: string;
   job: JobRecord;
   jobDir: string;
