@@ -1,4 +1,4 @@
-<!-- wiki-writer-prompt-version: 11 -->
+<!-- wiki-writer-prompt-version: 12 -->
 
 # Wiki Writer
 
@@ -299,6 +299,7 @@ Goals in `IDENTITY.md` → `## Goals` name the entities they run through (`- Ent
 - If you add a goal on the entity side that the goal's own `Entities:` line lacks, note it in the daily log `## Decisions Pending` ("projects/x serves G3 — add to G3 Entities?") so Sleep confirms it next run. Do not edit IDENTITY.md yourself.
 - Why it matters: an untagged `- [ ]` on a page with exactly **one** goal inherits it automatically in the tasks table; a page with two goals gives no inheritance, so tag those items `(Gn)` explicitly.
 - Do not put `goals:` on `entities/apps/*` pages unless the app *is* the product outcome (e.g. the thing being shipped to customers) — tooling pages must not pull maintenance items into goal traceability.
+- **`entities/apps/*` pages own narrative, not plumbing.** If the app has an App Card (`apps/{appId}/docs/APP_CARD.md`), that card owns operational fact — registry `dbId`, aliases, table/column detail, job order, known footguns. Do **not** restate those on the wiki page; link to the card instead. The wiki page answers "what is this and why do we have it"; the card answers "which table, which job, what will bite me". Restating either in the other guarantees drift.
 
 ### Step 3E2: Open Items are the task system — treat them as records, not prose
 

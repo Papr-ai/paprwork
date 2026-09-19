@@ -782,7 +782,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Apps + Jobs",
         enabled: has("create_app") || has("create_job"),
         details:
-          "mini-app and job creation; **every create_app → product-architect delegation first** (tool-enforced). Use list_jobs before creating. File version history automatic.",
+          "mini-app and job creation; **every create_app → product-architect delegation first** (tool-enforced). Use list_jobs before creating. File version history automatic. **Finish every app build or modification by writing/updating `apps/{appId}/docs/APP_CARD.md` and indexing its sections** (see `APP_CARD_GUIDE.md`) — it complements the wiki entity page, and `## Gotchas` must be updated whenever you debug something non-obvious.",
       },
       {
         area: "Sub-agents",

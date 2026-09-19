@@ -9,6 +9,11 @@ Use this as the first context file when building apps, jobs, and automations in 
 ### User wants a dashboard/app/automation outcome
 Read in order:
 1. `APP_AND_JOBS_GUIDE.md` — Complete pipeline: UI-first → validate data → contracts → jobs → wire app
+2. `APP_CARD_GUIDE.md` — **Required final step of every app build or modification.** Write/update `apps/{appId}/docs/APP_CARD.md` and index it. Complements the wiki entity page; never duplicates it.
+
+### User changed an app's storage, schema, jobs — or you just debugged one
+Read:
+1. `APP_CARD_GUIDE.md` — update the affected section. **Debugged something non-obvious? Add a line to `## Gotchas`.** That section cannot be regenerated from source; it only exists if you write it down.
 
 ### User wants external API integration (Amplitude, Stripe, CRM, ads, analytics)
 Read:
