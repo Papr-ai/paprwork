@@ -167,8 +167,14 @@ export async function runInitialSyncPipeline(host: CloudSyncLifecycleHost): Prom
   });
 }
 
-/** Phase 3 — idempotent genesis for every linked Turso replica. */
+/** Plan B only — skipped when Plan A replica rollout is active. */
 async function runWorkspaceLogGenesisCutover(): Promise<void> {
+  const { shouldRunWorkspaceLogGenesisBatch } = await import(
+    "../../utils/tursoReplicaEnabled.js"
+  );
+  if (!shouldRunWorkspaceLogGenesisBatch()) {
+    return;
+  }
   const { runWorkspaceLogGenesisCutoverForAllLinkedSources } = await import(
     "../syncV3/workspaceLogGenesisCutover.js"
   );

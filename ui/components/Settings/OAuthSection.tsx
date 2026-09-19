@@ -13,7 +13,7 @@ import { cleanClaudeOAuthToken } from "../../utils/claudeOAuthToken";
 import { useProviderAuthStore } from "../../stores/providerAuthStore";
 import { deriveProviderConnectionState } from "../../utils/providerConnectionState";
 import { ClaudeGuidedSetupModal } from "./ClaudeGuidedSetupModal";
-import { ClaudeUsageLimitsPanel } from "./ClaudeUsageLimitsPanel";
+import { SubscriptionPlanUsagePanel } from "./SubscriptionPlanUsagePanel";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import { startClaudeManualAgentChat } from "../../utils/startClaudeManualAgentChat";
@@ -370,10 +370,9 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
-              {provider === "anthropic" &&
-                connectionState.kind === "connected" && (
-                  <ClaudeUsageLimitsPanel />
-                )}
+              {connectionState.kind === "connected" && (
+                <SubscriptionPlanUsagePanel provider={provider} />
+              )}
               {/* No expiry countdown while healthy. It is not actionable, and
                   as the only marker of a dead token it was missed — the badge
                   beside it said Connected, in green, and won. */}

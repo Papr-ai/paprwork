@@ -33,6 +33,7 @@ import {
   type OAuthProviderStep,
 } from "../../core/telemetry/oauthProviderSteps.js";
 import { fetchClaudeSubscriptionUsageFromCandidates } from "../../core/services/claudeOAuthUsage.js";
+import { buildClaudeUsageTokenCandidates } from "../../core/services/claudeUsageLimitCandidates.js";
 import { fetchCodexSubscriptionUsage } from "../../core/services/codexOAuthUsage.js";
 import {
   dedupeAccessTokens,
@@ -357,7 +358,9 @@ async function adoptClaudeCredentialsFromCLIStorage(
   if (!oauthTokenStorage || !claudeSetupTokenService) return false;
 
   const credentials =
-    await claudeSetupTokenService.readCredentialsFromCLIStorage();
+    await claudeSetupTokenService.readCredentialsFromCLIStorage({
+      logProbe: true,
+    });
   if (!credentials) {
     console.warn(
       "[OAuth IPC] Claude token cannot be refreshed and Claude Code has no credentials to adopt — reconnect required",
@@ -864,7 +867,9 @@ export async function initializeOAuthIPC(
           oauthFlowStartedAt.set("anthropic", Date.now());
         }
         const existingCredentials =
-          await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+            logProbe: true,
+          });
         const adoptableCredentials = existingCredentials
           ? await resolveAdoptableClaudeCredentials(existingCredentials)
           : null;
@@ -982,7 +987,9 @@ export async function initializeOAuthIPC(
       // adopted once they demonstrably authenticate — live, or successfully
       // renewed. Anything else falls through to the real sign-in below.
       const existingCredentials =
-        await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+        await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+          logProbe: true,
+        });
       const adoptableCredentials = existingCredentials
         ? await resolveAdoptableClaudeCredentials(existingCredentials)
         : null;
@@ -1098,45 +1105,39 @@ export async function initializeOAuthIPC(
 
   ipcMain.handle("auth:claude:get-usage-limits", async () => {
     try {
-      const authStatus = await readClaudeAuthStatusFromCli();
-      const candidates: {
-        accessToken: string;
-        source: "claude_code_keychain" | "papr_stored";
-      }[] = [];
+      await refreshTokenIfNeeded("anthropic");
+      const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
+      const paprAccessToken = paprToken?.accessToken;
 
-      if (claudeSetupTokenService) {
+      let cliAccessToken: string | undefined;
+      if (!paprAccessToken && claudeSetupTokenService) {
         const raw =
           await claudeSetupTokenService.readCredentialsFromCLIStorage();
         if (raw) {
           const usable =
             (await resolveAdoptableClaudeCredentials(raw)) ??
             (claudeAccessTokenIsLive(raw) ? raw : null);
-          if (usable?.accessToken) {
-            candidates.push({
-              accessToken: usable.accessToken,
-              source: "claude_code_keychain",
-            });
-          }
+          cliAccessToken = usable?.accessToken;
         }
       }
 
-      await refreshTokenIfNeeded("anthropic");
-      const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
-      if (paprToken?.accessToken) {
-        candidates.push({
-          accessToken: paprToken.accessToken,
-          source: "papr_stored",
-        });
-      }
+      const unique = dedupeAccessTokens(
+        buildClaudeUsageTokenCandidates(paprAccessToken, cliAccessToken),
+      );
 
-      const unique = dedupeAccessTokens(candidates);
       if (unique.length === 0) {
+        const authStatus = await readClaudeAuthStatusFromCli();
         const hint =
           authStatus?.loggedIn === true
             ? "Claude CLI is signed in but no usable token was found — run claude auth login again."
             : "Connect Claude subscription first, or sign in with claude auth login in Terminal.";
         return { success: false, error: hint, authStatus };
       }
+
+      const authStatus =
+        paprAccessToken === undefined
+          ? await readClaudeAuthStatusFromCli()
+          : null;
 
       return await fetchClaudeSubscriptionUsageFromCandidates(unique, {
         orgUuidHint: authStatus?.orgId ?? undefined,
@@ -1187,7 +1188,9 @@ export async function initializeOAuthIPC(
       const telemetrySource = resolveOAuthTelemetrySource(options?.source);
       try {
         const credentials =
-          await claudeSetupTokenService!.readCredentialsFromCLIStorage();
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+            logProbe: true,
+          });
         if (!credentials) {
           return { success: false, reason: "not_found" as const };
         }

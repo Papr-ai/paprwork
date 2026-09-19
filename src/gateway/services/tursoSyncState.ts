@@ -11,7 +11,7 @@ import * as path from "path";
 import {
   computeSyncableTableFingerprintsForPath,
 } from "./tursoTableFingerprint.js";
-import { maxSyncLogId } from "./tursoSyncLog.js";
+import { maxSyncLogIdIfPresent } from "./tursoSyncLog.js";
 import Database from "better-sqlite3";
 import { isReplicaManagedDbPath } from "./tursoReplica/tursoReplicaFileGuard.js";
 
@@ -455,13 +455,14 @@ export function isLinkedSourceDirtyFastIgnoringFlag(
       fileMustExist: true,
       timeout: LEGACY_PROBE_BUSY_TIMEOUT_MS,
     });
-    const maxId = maxSyncLogId(db);
+    const maxId = maxSyncLogIdIfPresent(db);
+    if (maxId === null) {
+      return null;
+    }
     if (maxId > lastPushed) {
       return true;
     }
-    if (maxId <= lastPushed) {
-      return false;
-    }
+    return false;
   } catch {
     return null;
   } finally {

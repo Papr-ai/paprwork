@@ -12,6 +12,15 @@ import {
   listUserTables,
 } from "../tursoSyncBridgeCore.js";
 import { computeSyncableTableFingerprints } from "../tursoTableFingerprint.js";
+import {
+  linkedSourceAsAppDataSource,
+  type TursoLinkedSource,
+} from "../tursoLinkedSources.js";
+import {
+  shouldSuppressLegacyTursoPush,
+  shouldSuppressLegacyTursoPushForLinkedSource,
+} from "../tursoReplica/tursoReplicaRouting.js";
+import { shouldRunWorkspaceLogGenesisBatch } from "../../utils/tursoReplicaEnabled.js";
 import { writeWorkspaceLogGenesis } from "./WorkspaceLogClient.js";
 import {
   getWorkspaceLogCutoverRecord,
@@ -43,6 +52,15 @@ export function computeDbSnapshotHash(dbPath: string): {
   }
 }
 
+/** True when Plan A owns this file — workspace log genesis must not run. */
+export function shouldSkipWorkspaceLogGenesisForLinkedSource(
+  linked: Pick<TursoLinkedSource, "appId" | "jobId" | "dbPath" | "alias">,
+): boolean {
+  return shouldSuppressLegacyTursoPushForLinkedSource(
+    linkedSourceAsAppDataSource(linked),
+  );
+}
+
 /** Idempotent — skips when cutover record already exists for replica. */
 export async function ensureWorkspaceLogGenesisForDb(
   replicaId: string,
@@ -51,6 +69,10 @@ export async function ensureWorkspaceLogGenesisForDb(
 ): Promise<boolean> {
   const existing = await getWorkspaceLogCutoverRecord(replicaId);
   if (existing) {
+    return true;
+  }
+
+  if (shouldSuppressLegacyTursoPush({ syncKey: replicaId, dbPath })) {
     return true;
   }
 
@@ -99,11 +121,6 @@ export interface WorkspaceLogGenesisCutoverSummary {
 
 /** Run idempotent genesis for every Turso-linked replica in the active workspace. */
 export async function runWorkspaceLogGenesisCutoverForAllLinkedSources(): Promise<WorkspaceLogGenesisCutoverSummary> {
-  const { getPaprAppsRoot } = await import("../../../core/utils/paprRoot.js");
-  const { discoverTursoLinkedSources } = await import("../tursoLinkedSources.js");
-  const { resolveReplicaIdForLinkedSource } = await import("./workspaceLogSync.js");
-
-  const sources = await discoverTursoLinkedSources(getPaprAppsRoot());
   const summary: WorkspaceLogGenesisCutoverSummary = {
     attempted: 0,
     completed: 0,
@@ -112,9 +129,29 @@ export async function runWorkspaceLogGenesisCutoverForAllLinkedSources(): Promis
     details: [],
   };
 
+  if (!shouldRunWorkspaceLogGenesisBatch()) {
+    return summary;
+  }
+
+  const { getPaprAppsRoot } = await import("../../../core/utils/paprRoot.js");
+  const { discoverTursoLinkedSources } = await import("../tursoLinkedSources.js");
+  const { resolveReplicaIdForLinkedSource } = await import("./workspaceLogSync.js");
+
+  const sources = await discoverTursoLinkedSources(getPaprAppsRoot());
+
   for (const source of sources) {
     const replicaId = resolveReplicaIdForLinkedSource(source);
     if (!replicaId) {
+      continue;
+    }
+
+    if (shouldSkipWorkspaceLogGenesisForLinkedSource(source)) {
+      summary.skipped += 1;
+      summary.details.push({
+        replicaId,
+        dbPath: source.dbPath,
+        status: "skipped",
+      });
       continue;
     }
 

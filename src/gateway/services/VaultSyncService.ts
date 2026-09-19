@@ -36,6 +36,13 @@ import {
 } from "../../core/utils/paprQuota.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
 import { waitForGatewayRoutesReady } from "./gatewayReadiness.js";
+import { mapWithConcurrency } from "../utils/mapWithConcurrency.js";
+import { VAULT_KEY_READ_CONCURRENCY } from "./vaultKeyReadConcurrency.js";
+
+interface VaultSyncRouteOpts {
+  /** Caller already waited on gateway routes (full sync). */
+  skipRoutesReady?: boolean;
+}
 
 const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT ?? "18789", 10);
 const GATEWAY_ROUTES_WAIT_MS = 120_000;
@@ -226,9 +233,19 @@ export class VaultSyncService {
       "./gatewayBackgroundWork.js"
     );
     await yieldToInteractiveHotPath("VaultSync.runFullSync");
-    const pushed = await traceDiagnosticPhase("vault:push", () => this.enqueuePush());
-    await traceDiagnosticPhase("vault:pull-key-names", () => this.pullKeys());
-    await traceDiagnosticPhase("vault:pull-shared-keys", () => this.pullSharedKeys());
+    await this.ensureGatewayRoutesReady();
+    const routeOpts: VaultSyncRouteOpts = { skipRoutesReady: true };
+    const pushed = await traceDiagnosticPhase("vault:push", () =>
+      this.enqueuePush(routeOpts),
+    );
+    await Promise.all([
+      traceDiagnosticPhase("vault:pull-key-names", () =>
+        this.pullKeys(routeOpts),
+      ),
+      traceDiagnosticPhase("vault:pull-shared-keys", () =>
+        this.pullSharedKeys(routeOpts),
+      ),
+    ]);
     return pushed;
   }
 
@@ -246,13 +263,15 @@ export class VaultSyncService {
     return this.enqueuePush();
   }
 
-  private async enqueuePush(): Promise<VaultSyncResponse | null> {
+  private async enqueuePush(
+    opts?: VaultSyncRouteOpts,
+  ): Promise<VaultSyncResponse | null> {
     if (this.pushInFlight) {
       this.pushPendingAfterInflight = true;
       return this.pushInFlight;
     }
 
-    this.pushInFlight = this.pushAllKeysUncoalesced();
+    this.pushInFlight = this.pushAllKeysUncoalesced(opts);
     try {
       return await this.pushInFlight;
     } finally {
@@ -285,57 +304,61 @@ export class VaultSyncService {
       return [];
     }
 
-    const vaultEntries: CloudVaultKeyEntry[] = [];
+    const eligible = keyList.filter(
+      (meta) => meta.scope !== "global" && shouldPushKeyToCloud(meta),
+    );
 
-    for (const meta of keyList) {
-      if (meta.scope === "global") {
-        continue;
+    const mapped = await mapWithConcurrency(
+      eligible,
+      VAULT_KEY_READ_CONCURRENCY,
+      async (meta) => this.readVaultPushEntry(customKeys, meta),
+    );
+
+    return mapped.filter((entry): entry is CloudVaultKeyEntry => entry !== null);
+  }
+
+  private async readVaultPushEntry(
+    customKeys: ReturnType<typeof getCustomKeysService>,
+    meta: Awaited<ReturnType<typeof customKeys.listKeys>>[number],
+  ): Promise<CloudVaultKeyEntry | null> {
+    try {
+      const value = await customKeys.getKeyByName(meta.name);
+      if (!value) {
+        return null;
       }
-      if (!shouldPushKeyToCloud(meta)) {
-        continue;
-      }
-      try {
-        const value = await customKeys.getKeyByName(meta.name);
-        if (!value) {
-          continue;
-        }
-        vaultEntries.push(
-          mapCustomKeyMetadataToVaultEntry({
-            meta: {
-              name: meta.name,
-              permission: meta.permission,
-              clientAccess: meta.clientAccess,
-              vaultAudience: meta.vaultAudience,
-              vaultAudienceMemberIds: meta.vaultAudienceMemberIds,
-              orgScope: meta.orgScope,
-              organizationId: meta.organizationId,
-              source: meta.source,
-              managedBy: meta.managedBy,
-              oauthProvider: meta.oauthProvider,
-              description: meta.description,
-            },
-            value,
-            source: resolveVaultKeySource(
-              {
-                name: meta.name,
-                source: meta.source,
-                managedBy: meta.managedBy,
-                oauthProvider: meta.oauthProvider,
-                description: meta.description,
-              },
-              value,
-            ),
-          }),
-        );
-      } catch (err) {
-        console.warn(
-          `[VaultSync] Could not read key "${meta.name}":`,
-          (err as Error).message,
-        );
-      }
+      return mapCustomKeyMetadataToVaultEntry({
+        meta: {
+          name: meta.name,
+          permission: meta.permission,
+          clientAccess: meta.clientAccess,
+          vaultAudience: meta.vaultAudience,
+          vaultAudienceMemberIds: meta.vaultAudienceMemberIds,
+          orgScope: meta.orgScope,
+          organizationId: meta.organizationId,
+          source: meta.source,
+          managedBy: meta.managedBy,
+          oauthProvider: meta.oauthProvider,
+          description: meta.description,
+        },
+        value,
+        source: resolveVaultKeySource(
+          {
+            name: meta.name,
+            source: meta.source,
+            managedBy: meta.managedBy,
+            oauthProvider: meta.oauthProvider,
+            description: meta.description,
+          },
+          value,
+        ),
+      });
+    } catch (err) {
+      console.warn(
+        `[VaultSync] Could not read key "${meta.name}":`,
+        (err as Error).message,
+      );
+      return null;
     }
-
-    return vaultEntries;
   }
 
   async applyVaultPushResultFromBackground(
@@ -363,7 +386,9 @@ export class VaultSyncService {
     );
   }
 
-  private async pushAllKeysUncoalesced(): Promise<VaultSyncResponse | null> {
+  private async pushAllKeysUncoalesced(
+    opts?: VaultSyncRouteOpts,
+  ): Promise<VaultSyncResponse | null> {
     const { yieldToInteractiveHotPath } = await import(
       "./gatewayBackgroundWork.js"
     );
@@ -411,7 +436,9 @@ export class VaultSyncService {
     );
 
     try {
-      await this.ensureGatewayRoutesReady();
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
       const { pushVaultEntriesViaGatewayHttp } = await import(
         "./vaultSyncBackgroundPush.js"
       );
@@ -467,13 +494,15 @@ export class VaultSyncService {
    * Values are NOT pulled (list endpoint has no values). Names are never
    * written to the local keychain from this path.
    */
-  async pullKeys(): Promise<string[]> {
+  async pullKeys(opts?: VaultSyncRouteOpts): Promise<string[]> {
     if (isPaprCloudPaused()) {
       return [];
     }
 
     try {
-      await this.ensureGatewayRoutesReady();
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
@@ -505,7 +534,7 @@ export class VaultSyncService {
   /**
    * Pull team/org shared keys into the local keychain (read-only mirrors).
    */
-  async pullSharedKeys(): Promise<number> {
+  async pullSharedKeys(opts?: VaultSyncRouteOpts): Promise<number> {
     if (isPaprCloudPaused()) {
       return 0;
     }
@@ -517,7 +546,9 @@ export class VaultSyncService {
     }
 
     try {
-      await this.ensureGatewayRoutesReady();
+      if (!opts?.skipRoutesReady) {
+        await this.ensureGatewayRoutesReady();
+      }
 
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_SHARED_TIMEOUT_MS);
