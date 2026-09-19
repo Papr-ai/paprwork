@@ -9,6 +9,11 @@
  * that pulls in the native module so the parent can import it safely.
  */
 
+import {
+  classifyReplicaPanicSubsystem,
+  type ReplicaPanicSubsystem,
+} from "./replicaPanicSubsystem.js";
+
 export type TursoSyncWorkerOp =
   | "connect" // open (or reuse) the handle; no sync
   | "close" // close the handle if open
@@ -158,6 +163,15 @@ export class TursoSyncWorkerCrashError extends Error {
   readonly signal: NodeJS.Signals | null;
   readonly engineWasRunning: boolean;
   readonly stderrTail: string;
+  /**
+   * Computed from the *whole* captured stderr, not from `stderrTail`.
+   *
+   * `RUST_BACKTRACE` is inherited rather than set, so a developer with it enabled gets a
+   * backtrace long enough to push the `panicked at` line out of a 400-character tail.
+   * Classifying here, where the full text is still in hand, keeps the remedy the same
+   * whether or not that variable happens to be set in the shell that launched us.
+   */
+  readonly panicSubsystem: ReplicaPanicSubsystem | null;
 
   constructor(options: {
     op: TursoSyncWorkerOp;
@@ -183,6 +197,7 @@ export class TursoSyncWorkerCrashError extends Error {
     this.signal = options.signal;
     this.engineWasRunning = options.engineWasRunning;
     this.stderrTail = tail;
+    this.panicSubsystem = classifyReplicaPanicSubsystem(options.stderr);
   }
 }
 
