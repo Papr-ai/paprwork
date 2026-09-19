@@ -42,6 +42,32 @@ if (process.env.PAPR_PLATFORM_EMBEDDED_CDP === "1") {
   );
 }
 
+// Mini-app process isolation (docs/MINI_APP_PROCESS_ISOLATION.md).
+//
+// A website can only *ask* for an origin-keyed process via the
+// Origin-Agent-Cluster header — Chromium is free to decline. We ship the
+// browser, so we can turn the hint into a guarantee. Without this an app's
+// JavaScript runs on the chat UI's main thread and one busy app freezes the
+// whole window.
+//
+// host-resolver-rules is not optional cosmetics: Chromium resolves
+// *.localhost to loopback itself, but Windows' OS resolver historically does
+// not, so mapping it here keeps behaviour identical across platforms instead
+// of depending on whichever resolver answers first.
+if (process.env.PAPR_MINI_APP_ISOLATION === "1") {
+  app.commandLine.appendSwitch(
+    "enable-features",
+    "OriginKeyedProcessesByDefault",
+  );
+  app.commandLine.appendSwitch(
+    "host-resolver-rules",
+    "MAP *.localhost 127.0.0.1",
+  );
+  console.log(
+    "[Electron] Mini-app process isolation enabled (per-app *.localhost origins)",
+  );
+}
+
 // Import ESM modules dynamically
 let CustomKeysStorage;
 let KeyPermissionsStorage;
@@ -1168,6 +1194,7 @@ const {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
@@ -1880,10 +1907,10 @@ class GatewayProcessSupervisor {
     this.healthCheckTimer = setInterval(() => {
       const observedProcess = this.process;
       let settled = false;
-      const report = (health) => {
+      const report = (health, requestOutcome = "response") => {
         if (settled || this.process !== observedProcess) return;
         settled = true;
-        this._onHealthCheckResult(health);
+        this._onHealthCheckResult(health, requestOutcome);
       };
       const req = http.get(`http://localhost:${this.port}/health`, (res) => {
         let body = "";
@@ -1895,16 +1922,13 @@ class GatewayProcessSupervisor {
       });
       req.on("error", () => {
         const busyGrace = this._readSyncBusyGraceHealth();
-        report(
-          busyGrace ?? { alive: false, ready: false },
-        );
+        report(busyGrace ?? { alive: false, ready: false }, "error");
       });
       req.setTimeout(this.HEALTH_REQUEST_TIMEOUT_MS, () => {
-        req.destroy();
         const busyGrace = this._readSyncBusyGraceHealth();
-        report(
-          busyGrace ?? { alive: false, ready: false },
-        );
+        // Record the timeout before destroy emits a secondary socket error.
+        report(busyGrace ?? { alive: false, ready: false }, "timeout");
+        req.destroy();
       });
     }, this.HEALTH_INTERVAL_MS);
   }
@@ -1916,18 +1940,17 @@ class GatewayProcessSupervisor {
     }
   }
 
-  _onHealthCheckResult(health) {
-    const failed = !health.alive || health.syncBusy === true;
-    if (failed || this.lastDiagnosticHealthFailed) {
+  _onHealthCheckResult(health, requestOutcome = "response") {
+    const observation = getHealthObservation(health, requestOutcome, this.lastDiagnosticHealthFailed);
+    if (observation) {
       const event = {
         id: `${this.process?.pid}:${Date.now()}:${++this.healthObservationSequence || (this.healthObservationSequence = 1)}`,
-        timestamp: new Date().toISOString(), status: failed ? "failed" : "recovered",
-        reason: health.syncBusy ? "Health request failed during sync grace" : failed ? "Health request failed or timed out" : "Health request responded again",
+        timestamp: new Date().toISOString(), ...observation,
         gatewayPid: this.process?.pid,
       };
       if (this.process?.connected) this.process.send({ type: "HEALTH_OBSERVATION", event }, () => {});
     }
-    this.lastDiagnosticHealthFailed = failed;
+    this.lastDiagnosticHealthFailed = observation?.status === "failed";
     if (health.ready) {
       this.hasEverBeenHealthy = true;
       if (!this.gatewayReadyNotified) {
@@ -1951,9 +1974,9 @@ class GatewayProcessSupervisor {
         this.process.kill("SIGKILL");
         // _onProcessExit will handle restart scheduling
       }
-    } else if (health.syncBusy) {
+    } else if (health.syncBusy && requestOutcome !== "response") {
       console.log(
-        "[Supervisor] Gateway busy uploading (health slow/unreachable — grace active)",
+        `[Supervisor] Health request ${requestOutcome === "timeout" ? "timed out" : "failed"} during sync — restart grace active`,
       );
     } else if (!health.alive && this.hasEverBeenHealthy) {
       const lagSuffix =

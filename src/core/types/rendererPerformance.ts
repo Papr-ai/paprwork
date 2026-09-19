@@ -5,7 +5,10 @@ export interface PreviewGateReport {
   documentId: string;
   phase: PreviewPhase;
   allowedApi: number;
-  blockedApi: number;
+  /** Held while hidden and settled on return. Not failures. */
+  deferredApi: number;
+  /** Ran while hidden — a write, or a path the gate cannot defer. The leak. */
+  passedThroughApi: number;
   allowedOther: number;
 }
 
@@ -19,10 +22,20 @@ export interface RendererAppSample {
   gate: PreviewGateReport | null;
 }
 
+/** Bounded Task Attribution Timing fields (Chromium long-task API). No script bodies. */
+export interface RendererLongTaskAttribution {
+  name?: string;
+  containerType?: string;
+  containerSrc?: string;
+  containerId?: string;
+}
+
 export interface RendererIncident {
   kind: "long-task" | "input-delay" | "timer-delay";
   startedAt: string;
   durationMs: number;
+  /** Present when the browser exposes PerformanceLongTaskTiming.attribution. */
+  attribution?: RendererLongTaskAttribution[];
 }
 
 export interface RendererPerformanceSample {

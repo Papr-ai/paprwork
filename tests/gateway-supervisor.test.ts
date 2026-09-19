@@ -19,6 +19,7 @@ const {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
   parseGatewaySyncBusyState,
   isGatewaySyncBusyGraceActive,
@@ -468,5 +469,34 @@ describe("getNotificationType", () => {
     expect(getNotificationType(1, 1, 3)).toBe("silent");
     expect(getNotificationType(2, 1, 3)).toBe("banner");
     expect(getNotificationType(4, 1, 3)).toBe("dialog");
+  });
+});
+
+
+describe("health diagnostic observations", () => {
+  test.each(["ok", "starting", "switching"])("successful %s response during sync is not a failure", (status) => {
+    const health = parseHealthResponse(JSON.stringify({ status, syncBusy: true }));
+    expect(getHealthObservation(health, "response", false)).toBeNull();
+    expect(shouldKillUnhealthyGateway(2, health, true)).toEqual({ newCount: 0, shouldKill: false });
+  });
+
+  test.each(["error", "timeout"])("real %s remains visible during sync grace without triggering a restart", (outcome) => {
+    const graceHealth = { alive: true, ready: false, syncBusy: true };
+    expect(getHealthObservation(graceHealth, outcome, false)).toEqual({
+      status: "failed",
+      reason: `Health request ${outcome === "timeout" ? "timed out" : "failed"} during sync grace`,
+    });
+    expect(shouldKillUnhealthyGateway(2, graceHealth, true)).toEqual({ newCount: 0, shouldKill: false });
+  });
+
+  test("successful response recovers even while sync is still busy", () => {
+    const health = parseHealthResponse('{"status":"ok","syncBusy":true}');
+    expect(getHealthObservation(health, "response", true)).toEqual({ status: "recovered", reason: "Health request responded again" });
+    expect(getHealthObservation(health, "response", false)).toBeNull();
+  });
+
+  test("invalid responses and failures outside grace remain failures", () => {
+    expect(getHealthObservation(parseHealthResponse("not-json"))).toEqual({ status: "failed", reason: "Health response was invalid or unhealthy" });
+    expect(getHealthObservation({ alive: false, ready: false }, "timeout")).toEqual({ status: "failed", reason: "Health request timed out" });
   });
 });

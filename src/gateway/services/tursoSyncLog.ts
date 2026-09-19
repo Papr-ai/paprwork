@@ -690,6 +690,21 @@ export async function remoteSyncLogExists(remote: Client): Promise<boolean> {
   }
 }
 
+/** Read-only probe: never creates triggers/tables (safe on diagnostic readonly opens). */
+export function maxSyncLogIdIfPresent(db: Database.Database): number | null {
+  try {
+    const row = db
+      .prepare(
+        `SELECT COALESCE(MAX(id), 0) AS max_id FROM ${quoteIdent(SYNC_LOG_TABLE)}`,
+      )
+      .get() as { max_id: number } | undefined;
+    if (!row) return null;
+    return row.max_id ?? 0;
+  } catch {
+    return null;
+  }
+}
+
 export function maxSyncLogId(db: Database.Database): number {
   ensureLocalSyncInfrastructure(db);
   const row = db

@@ -10,6 +10,8 @@ import type { DbQueryPool, WriteResult } from "../DbQueryPool.js";
 import type { DbRouter } from "../appRuntime/DbRouter.js";
 import { ensureLocalDbChangeLogReady } from "../tursoSyncBridgeCore.js";
 import { isCloudSyncEnabled } from "../../utils/cloudSyncEnabled.js";
+import { shouldAutoUploadReplicaSyncKey } from "../cloudUploadMode.js";
+import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
 import { assertReplaySafeRowSql } from "./replaySafeSql.js";
 import { assertNoEngineOwnedTableWrite } from "../appRuntime/engineOwnedTables.js";
 import { shouldUseTursoReplicaForSource, writeLinkedDbViaTursoReplica, writeLinkedDbBatchViaTursoReplica, execLinkedDbViaTursoReplica } from "../tursoReplica/tursoReplicaRouting.js";
@@ -27,6 +29,10 @@ function syncKeyForSource(source: AppDataSource): string {
 }
 
 function scheduleWorkspaceLogShip(syncKey: string): void {
+  const paprDir = path.dirname(getPaprAppsRoot());
+  if (!shouldAutoUploadReplicaSyncKey(syncKey, paprDir)) {
+    return;
+  }
   void import("../tursoPushScheduler.js").then(({ scheduleTursoPushForJob }) => {
     scheduleTursoPushForJob(syncKey, "completion", "api_write");
   });
@@ -61,14 +67,21 @@ export async function writeLinkedDbRowLocalFirst(
   if (isCloudSyncEnabled()) {
     ensureLocalDbChangeLogReady(source.dbPath);
     result = await dbRouter.write(appId, source, sql, params);
-    scheduleWorkspaceLogShip(syncKeyForSource(source));
+    const syncKey = syncKeyForSource(source);
+    const willSchedule = shouldAutoUploadReplicaSyncKey(
+      syncKey,
+      path.dirname(getPaprAppsRoot()),
+    );
+    if (willSchedule) {
+      scheduleWorkspaceLogShip(syncKey);
+    }
     const localMs = Math.round(performance.now() - localStarted);
     if (localMs > 50) {
       console.log(
-        `[LocalFirstDbWrite] app=${appId} source=${source.alias ?? source.jobId} local=${localMs}ms cloudSyncScheduled=true`,
+        `[LocalFirstDbWrite] app=${appId} source=${source.alias ?? source.jobId} local=${localMs}ms cloudSyncScheduled=${willSchedule}`,
       );
     }
-    return { ...result, cloudSyncScheduled: true };
+    return { ...result, cloudSyncScheduled: willSchedule };
   }
 
   result = await pool.write(appId, source.dbPath, sql, params);

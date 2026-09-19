@@ -4,6 +4,12 @@ import { getAgentStreamConcurrencyGate } from "./agent/agentStreamConcurrency.js
 import { getInteractiveHotPathDepth } from "./gatewayInteractivePriority.js";
 import { resolveGatewayBackgroundMaxConcurrency } from "./gatewayBackgroundConcurrency.js";
 
+export type BackgroundBudgetBlockReason =
+  | "grace_period"
+  | "interactive_busy"
+  | "at_capacity"
+  | "awaiting_drain";
+
 interface Waiting {
   label: string; queuedAt: number; signal?: AbortSignal;
   resolve: (release: () => void) => void; reject: (error: Error) => void;
@@ -27,10 +33,35 @@ export class BackgroundBudget {
       return Number.isFinite(value) && value >= 0 ? value : 120_000;
     },
   ) {}
+  private blockReasonFor(
+    waiter: Waiting,
+    busy: boolean,
+    limit: number,
+  ): BackgroundBudgetBlockReason {
+    const waitedMs = Date.now() - waiter.queuedAt;
+    if (busy && waitedMs < this.graceMs()) return "grace_period";
+    if (this.active.size >= limit) {
+      return busy && limit <= 1 ? "interactive_busy" : "at_capacity";
+    }
+    return "awaiting_drain";
+  }
   stats() {
-    return { active: [...this.active.values()], queued: this.waiting.map(w => ({
-      label: w.label, waitingMs: Date.now() - w.queuedAt,
-    })), maxConcurrent: this.capacity() };
+    const busy = this.busy();
+    const limit = busy ? 1 : this.capacity();
+    const blockingActive = [...this.active.values()];
+    return {
+      active: blockingActive,
+      maxConcurrent: limit,
+      interactiveBusy: busy,
+      graceMs: this.graceMs(),
+      capacityWhenIdle: this.capacity(),
+      queued: this.waiting.map((w) => ({
+        label: w.label,
+        waitingMs: Date.now() - w.queuedAt,
+        blockReason: this.blockReasonFor(w, busy, limit),
+        blockingActive,
+      })),
+    };
   }
   async run<T>(label: string, work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     signal?.throwIfAborted();

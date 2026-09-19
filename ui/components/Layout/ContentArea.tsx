@@ -291,10 +291,13 @@ export function ContentArea() {
     [tabs],
   );
 
-  // Always keep the LRU warm set (cap = max(7, visible + 1)) — including in
-  // split view. Passing { visibleOnly: true } here evicted every hidden app
-  // iframe whenever a parent chat with child tabs became active, so returning
-  // to a standalone app tab paid a full cold reload (queries, Turso pulls).
+  // Always keep the LRU warm set — including in split view. Passing
+  // { visibleOnly: true } here evicted every hidden app iframe whenever a
+  // parent chat with child tabs became active, so returning to a standalone
+  // app tab paid a full cold reload (queries, Turso pulls).
+  //
+  // One cap in both hosting modes: a hidden preview is held at its boot phase
+  // by iframe.name, so it is quiet whether or not it has its own process.
   const mountedAppTabIds = useMemo(
     () =>
       selectMountedAppTabIds(

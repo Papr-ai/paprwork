@@ -40,6 +40,14 @@ import {
   classifyAppGetFailure,
 } from "../../utils/appGetErrorMessage";
 import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
+import { resolveMiniAppPreviewOrigin } from "../../utils/miniAppPreviewOrigin";
+import {
+  MINI_APP_SHELL_ANNOUNCE_GRACE_MS,
+  describeIsolationOutcome,
+  isShellAnnouncementFor,
+  miniAppShellLooksLikeError,
+  readSameOriginDocument,
+} from "../../utils/miniAppShellProbe";
 import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
@@ -81,6 +89,7 @@ export function MiniAppView({
   const [runtimeBannerDismissed, setRuntimeBannerDismissed] = useState(false);
   const [appMissingInWorkspace, setAppMissingInWorkspace] = useState(false);
   const iframeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shellAnnounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cloud = useCloudPublish(appId, appTitle);
   const { createTab, switchToTab } = useTabs();
   const { isReady: gatewaySupervisorReady, isStarting: gatewaySupervisorStarting } =
@@ -97,11 +106,18 @@ export function MiniAppView({
     setWorkspacePanel("code");
   }, [appId]);
 
-  const localSrc = useMemo(() => {
-    const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
-    const port = import.meta.env.VITE_GATEWAY_PORT || "18789";
-    return `http://${host}:${port}/apps/${appId}/index.html`;
-  }, [appId]);
+  const localPreviewOrigin = useMemo(
+    () =>
+      resolveMiniAppPreviewOrigin({
+        appId,
+        host: import.meta.env.VITE_GATEWAY_HOST || "localhost",
+        port: import.meta.env.VITE_GATEWAY_PORT || "18789",
+        isolationFlag: import.meta.env.VITE_PAPR_MINI_APP_ISOLATION,
+      }),
+    [appId],
+  );
+  const previewOriginIsolated = localPreviewOrigin.isolated;
+  const localSrc = `${localPreviewOrigin.origin}/apps/${appId}/index.html`;
 
   const gatewayBaseUrl = useMemo(() => {
     const host = import.meta.env.VITE_GATEWAY_HOST || "localhost";
@@ -234,8 +250,72 @@ export function MiniAppView({
       if (iframeRetryTimerRef.current) {
         clearTimeout(iframeRetryTimerRef.current);
       }
+      if (shellAnnounceTimerRef.current) {
+        clearTimeout(shellAnnounceTimerRef.current);
+      }
     };
   }, []);
+
+  const markShellHealthy = useCallback(() => {
+    if (shellAnnounceTimerRef.current) {
+      clearTimeout(shellAnnounceTimerRef.current);
+      shellAnnounceTimerRef.current = null;
+    }
+    setIframeLoadError(null);
+    setRuntimeError(null);
+    setPreviewShellLoaded(true);
+  }, []);
+
+  /**
+   * Under a per-app origin we cannot read the document, so a healthy load is
+   * proved by papr-app-bridge announcing rather than by inspecting the DOM.
+   * Bounded, and expiry retries rather than erroring: an unregistered route is
+   * "ask again" (Issue 98), not "this app is gone".
+   */
+  const awaitShellAnnouncement = useCallback(() => {
+    if (shellAnnounceTimerRef.current) {
+      clearTimeout(shellAnnounceTimerRef.current);
+    }
+    shellAnnounceTimerRef.current = setTimeout(() => {
+      shellAnnounceTimerRef.current = null;
+      scheduleIframeRetry("App routes not ready yet — retrying…");
+    }, MINI_APP_SHELL_ANNOUNCE_GRACE_MS);
+  }, [scheduleIframeRetry]);
+
+  useEffect(() => {
+    if (isPublishedPreview) return;
+
+    const handleAnnouncement = (event: MessageEvent) => {
+      if (!isShellAnnouncementFor(appId, event.data)) return;
+      if (miniAppShellLooksLikeError(event.data)) {
+        scheduleIframeRetry("App routes not ready yet — retrying…");
+        return;
+      }
+      // The header is a request the browser may refuse without erroring, so
+      // this is the only place the outcome is observable. Warn rather than
+      // fail: a refused frame still works, it just shares our thread again.
+      if (
+        describeIsolationOutcome(
+          previewOriginIsolated,
+          event.data.originAgentCluster,
+        ) === "refused"
+      ) {
+        console.warn(
+          `[MiniAppView] App ${appId} asked for an isolated origin and the browser refused — this preview shares the chat UI's main thread.`,
+        );
+      }
+      markShellHealthy();
+    };
+
+    window.addEventListener("message", handleAnnouncement);
+    return () => window.removeEventListener("message", handleAnnouncement);
+  }, [
+    appId,
+    isPublishedPreview,
+    markShellHealthy,
+    previewOriginIsolated,
+    scheduleIframeRetry,
+  ]);
 
   const localPreviewGatewayGate = useMemo(
     () => ({
@@ -508,9 +588,16 @@ export function MiniAppView({
     if (!iframe) return;
 
     const handleLoad = () => {
+      // Fallback only. papr-app-bridge is injected server-side as a blocking
+      // <script> in <head>, so on any HTML the gateway served this has already
+      // run — earlier than here, which fires after every app script. Under a
+      // per-app origin contentDocument is null and this no-ops entirely; the
+      // bridge is the only path. Kept for HTML that reached the iframe without
+      // passing through injectMiniAppPreviewFetchGate.
       const iframeDocument = iframe.contentDocument;
       const iframeWindow = iframe.contentWindow;
       if (!iframeDocument || !iframeWindow) return;
+      if ((iframeWindow as { paprAPI?: unknown }).paprAPI) return;
 
       const runtimeLogScript = iframeDocument.createElement("script");
       runtimeLogScript.textContent = `
@@ -723,6 +810,12 @@ export function MiniAppView({
   }, [appId, isPublishedPreview]);
 
   // Auth0 login cannot run inside an iframe — open apps.papr.ai sign-in externally.
+  //
+  // Note this has never actually fired: it is gated on isPublishedPreview, whose
+  // iframe is apps.papr.ai and therefore already cross-origin, so
+  // contentDocument is null and the querySelectorAll below is unreachable. Left
+  // as-is rather than removed — mini-app isolation does not touch this path, and
+  // the real fix is for the published host to intercept its own links.
   useEffect(() => {
     if (!isPublishedPreview) return;
 
@@ -816,18 +909,25 @@ export function MiniAppView({
                   type: previewTabVisible ? "papr:preview-visible" : "papr:preview-hidden",
                 }, iframeSrc ? new URL(iframeSrc).origin : "*");
                 if (isPublishedPreview) return;
-                const doc = iframeRef.current?.contentDocument;
-                const title = doc?.title?.toLowerCase() ?? "";
-                const bodyText = doc?.body?.innerText?.slice(0, 200).toLowerCase() ?? "";
-                if (
-                  title.includes("error") ||
-                  bodyText.includes("cannot get /apps/")
-                ) {
-                  scheduleIframeRetry("App routes not ready yet — retrying…");
+                const doc = readSameOriginDocument(iframeRef.current);
+                if (doc) {
+                  if (
+                    miniAppShellLooksLikeError({
+                      title: doc.title,
+                      bodyText: doc.body?.innerText?.slice(0, 200),
+                    })
+                  ) {
+                    scheduleIframeRetry("App routes not ready yet — retrying…");
+                    return;
+                  }
+                  markShellHealthy();
                   return;
                 }
-                setIframeLoadError(null);
-                setPreviewShellLoaded(true);
+                // Document unreadable (an isolated origin), so wait for the
+                // bridge to announce instead of assuming health. Silence past
+                // the grace window means the response was not ours (an
+                // unregistered route) — retry, which is what that case needs.
+                awaitShellAnnouncement();
               }}
               onError={() => {
                 if (!isPublishedPreview) {

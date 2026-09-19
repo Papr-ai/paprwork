@@ -275,28 +275,29 @@ function strippedSource(relativePath: string): string {
     .replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
-describe("the system:resume handler probes a socket that still reports OPEN", () => {
+describe("the system:resume handler forces reconnect when the socket still reports OPEN", () => {
   const source = strippedSource("ui/src/lib/gateway.ts");
 
   it("still registers a system:resume listener", () => {
     // Guard the guard: a rename would otherwise make the assertions below pass
     // against a handler that no longer exists.
-    expect(source).toContain("addEventListener('system:resume'");
+    expect(source).toContain('addEventListener("system:resume"');
   });
 
-  it("calls probeConnection rather than relying on isConnected()", () => {
-    const start = source.indexOf("addEventListener('system:resume'");
+  it("calls reconnectAfterSystemWake rather than probe or isConnected()", () => {
+    const start = source.indexOf('addEventListener("system:resume"');
     const body = source.slice(start, start + 900);
 
     // `isConnected()` is readyState === OPEN, which is precisely what a
-    // half-open socket reports after a suspend — so the old guard did nothing
-    // and detection fell to the heartbeat's 240s budget.
-    expect(body).toContain("probeConnection");
+    // half-open socket reports after a suspend. probeConnection can keep a
+    // zombie that still answers ping; wake always resets the socket.
+    expect(body).toContain("reconnectAfterSystemWake");
+    expect(body).not.toContain("probeConnection");
     expect(body).not.toContain("!this.isConnected()");
   });
 
   it("records the resume timestamp for suspend-aware deadlines", () => {
-    const start = source.indexOf("addEventListener('system:resume'");
+    const start = source.indexOf('addEventListener("system:resume"');
     const body = source.slice(start, start + 900);
     expect(body).toContain("this.lastResumeAtMs = Date.now()");
   });

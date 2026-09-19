@@ -47,7 +47,18 @@ it("reports buffered counts with bounded incidents and cleans up observers and t
   const stop = startRendererPerformanceReporting("http://localhost/report");
   callbacks.longtask({
     getEntries: () =>
-      Array.from({ length: 25 }, () => ({ startTime: 1, duration: 60 })),
+      Array.from({ length: 25 }, () => ({
+        startTime: 1,
+        duration: 60,
+        attribution: [
+          {
+            name: "script",
+            containerType: "iframe",
+            containerSrc: "https://example.com/app",
+            containerId: "frame-1",
+          },
+        ],
+      })),
   });
   callbacks.event({
     getEntries: () => [{ startTime: 1, processingStart: 101 }],
@@ -58,6 +69,7 @@ it("reports buffered counts with bounded incidents and cleans up observers and t
   expect(report.longTaskTotalMs).toBe(1500);
   expect(report.maxInputDelayMs).toBe(100);
   expect(report.incidents).toHaveLength(20);
+  expect(report.incidents[0]?.attribution?.[0]?.containerType).toBe("iframe");
   expect(report.droppedIncidents).toBe(6);
   expect(report.apps[0].acknowledgedPhase).toBeNull();
   expect(poll).toHaveBeenCalledOnce();
