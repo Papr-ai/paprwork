@@ -8,6 +8,7 @@
  */
 
 import { getPaprAppsRoot } from "../../core/utils/paprRoot.js";
+import { shouldAutoUploadReplicaSyncKey } from "./cloudUploadMode.js";
 import * as path from "path";
 import { TreeWatcher } from "./TreeWatcher.js";
 import { discoverTursoLinkedSources, linkedSourceSyncKey } from "./tursoLinkedSources.js";
@@ -175,9 +176,19 @@ function scheduleReplicaPushFromWatcher(
   );
 }
 
+function watcherPaprDir(): string {
+  const bridge = getTursoSyncBridge();
+  const appsRoot = bridge?.getAppsRootDir() ?? getPaprAppsRoot();
+  return path.dirname(appsRoot);
+}
+
 function evaluateDbChangeReplica(watched: WatchedDbDir): void {
   const syncState = loadTursoSyncState();
   if (isJobDbQuarantined(watched.syncKey, syncState)) {
+    return;
+  }
+
+  if (!shouldAutoUploadReplicaSyncKey(watched.syncKey, watcherPaprDir())) {
     return;
   }
 
@@ -207,6 +218,10 @@ function evaluateDbChangeReplica(watched: WatchedDbDir): void {
 function evaluateDbChangeLegacy(watched: WatchedDbDir): void {
   const syncState = loadTursoSyncState();
   if (isJobDbQuarantined(watched.syncKey, syncState)) {
+    return;
+  }
+
+  if (!shouldAutoUploadReplicaSyncKey(watched.syncKey, watcherPaprDir())) {
     return;
   }
 

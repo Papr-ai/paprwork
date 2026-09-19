@@ -88,6 +88,18 @@ export function isLegacyWorkspaceRowSyncEnabled(): boolean {
   return isCloudSyncEnabled();
 }
 
+/**
+ * Plan B batch genesis (`runWorkspaceLogGenesisCutoverForAllLinkedSources`).
+ * Retired when Plan A rollout is on — row authority is Turso primary; uncutover
+ * legacy DBs cut over on Publish / app use, not via workspace-log snapshot.
+ */
+export function shouldRunWorkspaceLogGenesisBatch(): boolean {
+  if (!isCloudSyncEnabled()) {
+    return false;
+  }
+  return !isTursoReplicaSyncFeatureEnabled();
+}
+
 /** Phase 3: auto-cutover legacy registry DBs when Plan A rollout is active. */
 export function shouldRunReplicaCutover(): boolean {
   if (!isCloudSyncEnabled() || !isTursoReplicaSyncFeatureEnabled()) {

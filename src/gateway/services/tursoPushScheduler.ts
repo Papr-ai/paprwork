@@ -665,7 +665,6 @@ function scheduleTursoPushForJobLegacy(
   }
 
   if (trigger !== "manual" && !shouldAutoUploadJobFolder(jobId)) {
-    logTursoSchedule(jobId, trigger, "skipped (manual upload mode)");
     return;
   }
 

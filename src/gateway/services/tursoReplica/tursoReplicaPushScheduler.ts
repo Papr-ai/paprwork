@@ -318,7 +318,6 @@ function shouldScheduleReplicaPush(
     return true;
   }
   if (!shouldAutoUploadReplicaSyncKey(syncKey, replicaPaprDir())) {
-    logReplicaSchedule(syncKey, trigger, "skipped (manual upload mode)");
     return false;
   }
   return true;

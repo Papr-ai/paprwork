@@ -2,6 +2,7 @@ import type {
   PreviewGateReport,
   RendererAppSample,
   RendererIncident,
+  RendererLongTaskAttribution,
   RendererPerformanceSample,
 } from "../../src/core/types/rendererPerformance";
 
@@ -21,16 +22,20 @@ export function readGateReport(value: unknown): PreviewGateReport | null {
     typeof v.documentId !== "string" ||
     v.documentId.length > 100 ||
     !["hidden", "visible", "evicting"].includes(v.phase) ||
-    ![v.allowedApi, v.blockedApi, v.allowedOther].every(
-      (n) => Number.isSafeInteger(n) && n >= 0,
-    )
+    ![
+      v.allowedApi,
+      v.deferredApi,
+      v.passedThroughApi,
+      v.allowedOther,
+    ].every((n) => Number.isSafeInteger(n) && n >= 0)
   )
     return null;
   return {
     documentId: v.documentId,
     phase: v.phase,
     allowedApi: v.allowedApi,
-    blockedApi: v.blockedApi,
+    deferredApi: v.deferredApi,
+    passedThroughApi: v.passedThroughApi,
     allowedOther: v.allowedOther,
   };
 }
@@ -56,10 +61,46 @@ export function startRendererPerformanceReporting(
       ? []
       : (PerformanceObserver.supportedEntryTypes ?? []);
   const observers: PerformanceObserver[] = [];
+  const readLongTaskAttribution = (
+    entry: PerformanceEntry,
+  ): RendererLongTaskAttribution[] | undefined => {
+    const attribution = (
+      entry as PerformanceEntry & {
+        attribution?: Array<{
+          name?: string;
+          containerType?: string;
+          containerSrc?: string;
+          containerId?: string;
+        }>;
+      }
+    ).attribution;
+    if (!attribution?.length) return undefined;
+    const mapped = attribution.slice(0, 5).map((a) => ({
+      name:
+        typeof a.name === "string" ? a.name.slice(0, 120) : undefined,
+      containerType:
+        typeof a.containerType === "string"
+          ? a.containerType.slice(0, 40)
+          : undefined,
+      containerSrc:
+        typeof a.containerSrc === "string"
+          ? a.containerSrc.slice(0, 200)
+          : undefined,
+      containerId:
+        typeof a.containerId === "string"
+          ? a.containerId.slice(0, 80)
+          : undefined,
+    }));
+    const filtered = mapped.filter(
+      (a) => a.name || a.containerType || a.containerSrc || a.containerId,
+    );
+    return filtered.length ? filtered : undefined;
+  };
   const record = (
     kind: RendererIncident["kind"],
     start: number,
     durationMs: number,
+    attribution?: RendererLongTaskAttribution[],
   ) => {
     if (!Number.isFinite(durationMs) || durationMs < 0) return;
     if (incidents.length === 20) {
@@ -70,6 +111,7 @@ export function startRendererPerformanceReporting(
       kind,
       startedAt: new Date(performance.timeOrigin + start).toISOString(),
       durationMs,
+      ...(attribution?.length ? { attribution } : {}),
     });
   };
   let longTasksSupported = false,
@@ -98,7 +140,12 @@ export function startRendererPerformanceReporting(
     for (const entry of entries) {
       longTaskCount++;
       longTaskTotalMs += entry.duration;
-      record("long-task", entry.startTime, entry.duration);
+      record(
+        "long-task",
+        entry.startTime,
+        entry.duration,
+        readLongTaskAttribution(entry),
+      );
     }
   });
   inputTimingSupported = observe("event", (entries) => {

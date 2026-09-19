@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-18T05:41:10.386Z",
-  "entryCount": 190,
+  "generatedAt": "2026-09-19T01:13:38.169Z",
+  "entryCount": 191,
   "entries": [
     {
       "id": "access-members",
@@ -3773,6 +3773,35 @@
         "(see",
         "source",
         "file)",
+        "sdk",
+        "papr",
+        "__papr__"
+      ],
+      "limits": [
+        "Platform-injected — do not import in app code"
+      ],
+      "playbookRef": "preloaded-miniapp-contracts"
+    },
+    {
+      "id": "sdk-papr-app-bridge",
+      "title": "papr-app-bridge.ts",
+      "summary": "Auto-injected paprAPI + runtime log bridge (works cross-origin)",
+      "surfaces": [
+        "mini-app-sdk"
+      ],
+      "runtimes": [
+        "desktop",
+        "cloud"
+      ],
+      "sdkRoute": "/__papr__/papr-app-bridge.js",
+      "keywords": [
+        "papr-app-bridge.ts",
+        "/__papr__/papr-app-bridge.js",
+        "(platform",
+        "—",
+        "do",
+        "not",
+        "import)",
         "sdk",
         "papr",
         "__papr__"
