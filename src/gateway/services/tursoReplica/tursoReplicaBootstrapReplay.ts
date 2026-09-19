@@ -21,11 +21,36 @@ import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import * as fs from "fs";
 import Database from "better-sqlite3";
 import { listUserTables } from "./tursoReplicaBootstrapMarker.js";
+import { getTursoReplicaSyncWorkerClient } from "./TursoReplicaSyncWorkerClient.js";
 
 export interface BootstrapReplayResult {
   tablesReplayed: number;
   rowsReplayed: number;
   skipped: string[];
+}
+
+/**
+ * Refuses a replay the sync engine would not survive.
+ *
+ * A bulk write beneath the worker's cached root pages reallocates pages under pointers it
+ * still believes in; the engine then aborts the *process* from `btree.rs`, that abort resets
+ * the sidecars, the reset re-bootstraps, and the bootstrap replays again — the corruption
+ * renews itself. A native abort cannot be caught, so the only defence is a precondition.
+ *
+ * Throwing rather than returning empty is deliberate. The caller treats a throw as a failed
+ * bootstrap attempt and leaves the marker and the snapshot in place, so the rows are replayed
+ * on the next attempt; returning quietly would let the marker clear with local-only rows still
+ * unreplayed, which is the under-preserving this module exists to avoid.
+ */
+export class ReplicaWorkerOwnsPathError extends Error {
+  constructor(dbPath: string) {
+    super(
+      `Refusing to replay into ${dbPath}: the Turso sync worker still holds it. ` +
+        "Close the worker handle first (TursoReplicaService.close) — a second SQLite " +
+        "engine writing beneath its cached pages aborts the process.",
+    );
+    this.name = "ReplicaWorkerOwnsPathError";
+  }
 }
 
 /**
@@ -38,12 +63,19 @@ export interface BootstrapReplayResult {
 export function replayBootstrapSnapshot(
   dbPath: string,
   snapshotPath: string,
+  ownsPath: (path: string) => boolean = (path) =>
+    getTursoReplicaSyncWorkerClient().ownsPath(path),
 ): BootstrapReplayResult {
   const result: BootstrapReplayResult = {
     tablesReplayed: 0,
     rowsReplayed: 0,
     skipped: [],
   };
+  // Checked before the existence tests: ownership is the fatal condition, and an early
+  // return on a missing file would skip it.
+  if (ownsPath(dbPath)) {
+    throw new ReplicaWorkerOwnsPathError(dbPath);
+  }
   if (!fs.existsSync(snapshotPath) || !fs.existsSync(dbPath)) {
     return result;
   }
