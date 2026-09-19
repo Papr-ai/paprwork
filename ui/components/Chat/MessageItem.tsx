@@ -712,14 +712,18 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
     ? message.streamingReasoning || message.reasoning
     : message.reasoning;
 
-  // Load user profile from settings
-  const {
-    name: userName,
-    email: userEmail,
-    imageUrl: userImageUrl,
-    loadProfile,
-    loaded: profileLoaded,
-  } = useProfileStore();
+  // Load user profile from settings.
+  //
+  // Selected field by field rather than `useProfileStore()` whole: this
+  // component is rendered once per message, so subscribing to the entire store
+  // meant a write to any field — `plan`, say, which the billing refresh
+  // re-asserts on every poll — re-rendered every message in the transcript.
+  // Per-field selectors let zustand compare the primitive and bail out.
+  const userName = useProfileStore((s) => s.name);
+  const userEmail = useProfileStore((s) => s.email);
+  const userImageUrl = useProfileStore((s) => s.imageUrl);
+  const loadProfile = useProfileStore((s) => s.loadProfile);
+  const profileLoaded = useProfileStore((s) => s.loaded);
   useEffect(() => {
     if (!profileLoaded) {
       void loadProfile();

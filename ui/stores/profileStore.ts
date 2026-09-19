@@ -15,6 +15,7 @@ import {
   resolveDisplayProfileImage,
 } from "../utils/profileImageSyncCore.js";
 import { retryPendingProfileImageSync } from "../utils/profileImageSync.js";
+import { sameProfileFields } from "../utils/storeWriteGuards";
 
 interface ProfileState {
   name: string;
@@ -313,15 +314,23 @@ export const useProfileStore = create<ProfileState>((set, get) => ({
   },
 
   setProfile: (profile) => {
+    const current = get();
     const next = {
-      name: profile.name ?? get().name,
-      email: profile.email ?? get().email,
-      imageUrl: profile.imageUrl ?? get().imageUrl,
-      plan: profile.plan ?? get().plan,
-      organizationName: profile.organizationName ?? get().organizationName,
-      namespaceName: profile.namespaceName ?? get().namespaceName,
-      workspaceName: profile.workspaceName ?? get().workspaceName,
+      name: profile.name ?? current.name,
+      email: profile.email ?? current.email,
+      imageUrl: profile.imageUrl ?? current.imageUrl,
+      plan: profile.plan ?? current.plan,
+      organizationName: profile.organizationName ?? current.organizationName,
+      namespaceName: profile.namespaceName ?? current.namespaceName,
+      workspaceName: profile.workspaceName ?? current.workspaceName,
     };
+    // Callers re-assert the same values routinely — the billing refresh writes
+    // `plan` on every poll. Zustand replaces the state object regardless, which
+    // re-rendered every component reading this store whole, and the localStorage
+    // write below is synchronous, so a no-op call was not a cheap one.
+    if (sameProfileFields(current, next)) {
+      return;
+    }
     set(next);
     persistProfileSnapshot(next);
   },
