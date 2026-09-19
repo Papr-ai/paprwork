@@ -90,7 +90,12 @@ export function parseRendererSample(
       (!g ||
         !id(g.documentId) ||
         !phases.includes(g.phase) ||
-        ![g.allowedApi, g.blockedApi, g.allowedOther].every(num))
+        ![
+          g.allowedApi,
+          g.deferredApi,
+          g.passedThroughApi,
+          g.allowedOther,
+        ].every(num))
     )
       return null;
     apps.push({
@@ -105,7 +110,8 @@ export function parseRendererSample(
             documentId: g.documentId,
             phase: g.phase,
             allowedApi: g.allowedApi,
-            blockedApi: g.blockedApi,
+            deferredApi: g.deferredApi,
+            passedThroughApi: g.passedThroughApi,
             allowedOther: g.allowedOther,
           }
         : null,

@@ -208,8 +208,8 @@ function renderRenderer(payload){
  for(const session of sessions){
   const sample=session.samples?.at(-1);if(!sample)continue;
   root.append(el("p",(session.stale?"STALE · ":"Live · ")+"Report age "+fmtMs(session.ageMs)+" · "+(sample.documentVisible?"window visible":"window hidden")+" · Long tasks: "+(sample.longTasksSupported?sample.longTaskCount+" / "+fmtMs(sample.longTaskTotalMs):"unsupported")+" · Max input wait: "+(sample.inputTimingSupported?fmtMs(sample.maxInputDelayMs):"unsupported")+" · Max timer delay: "+fmtMs(sample.maxTimerDelayMs)+" · Failed reports: "+sample.failedReports+" · Omitted incidents this interval: "+sample.droppedIncidents,"hint"));
-  const table=el("table"),head=el("tr");for(const title of ["App","Frame","Requested","Gate acknowledged","Ack age","API allowed / blocked","Other fetches"] )head.append(el("th",title));table.append(head);
-  for(const app of sample.apps||[]){const row=el("tr");for(const value of [app.appId,app.loaded?"loaded":"not mounted",app.expectedPhase,app.acknowledgedPhase||"unknown",fmtMs(app.acknowledgementAgeMs),app.gate?app.gate.allowedApi+" / "+app.gate.blockedApi:"unknown",app.gate?.allowedOther??"unknown"])row.append(el("td",value));table.append(row);}
+  const table=el("table"),head=el("tr");for(const title of ["App","Frame","Requested","Gate acknowledged","Ack age","API allowed / deferred / ran while hidden","Other fetches"] )head.append(el("th",title));table.append(head);
+  for(const app of sample.apps||[]){const row=el("tr");for(const value of [app.appId,app.loaded?"loaded":"not mounted",app.expectedPhase,app.acknowledgedPhase||"unknown",fmtMs(app.acknowledgementAgeMs),app.gate?app.gate.allowedApi+" / "+app.gate.deferredApi+" / "+app.gate.passedThroughApi:"unknown",app.gate?.allowedOther??"unknown"])row.append(el("td",value));table.append(row);}
   root.append(table);
  }
  root.append(el("p",payload.renderer?.note||"","hint"));

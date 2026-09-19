@@ -35,6 +35,7 @@ const PLATFORM_OR_INTERNAL = new Set([
   "papr-native-dialog-shim.ts",
   "papr-api-error-fetch.ts",
   "papr-preview-fetch-gate.ts",
+  "papr-app-bridge.ts",
   "papr-auth-guard.ts",
   "papr-auth-ui.ts",
   "papr-version-check.ts",
@@ -83,6 +84,10 @@ const AGENT_HINTS: Record<string, Pick<MiniAppSdkModule, "summary" | "exports">>
     },
     "papr-preview-fetch-gate.ts": {
       summary: "Auto-injected fetch gate — pauses /api/* while preview hidden",
+      exports: "(platform — do not import)",
+    },
+    "papr-app-bridge.ts": {
+      summary: "Auto-injected paprAPI + runtime log bridge (works cross-origin)",
       exports: "(platform — do not import)",
     },
     "papr-auth-guard.ts": {
