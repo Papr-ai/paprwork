@@ -20,6 +20,12 @@
  * fault, so absence keeps the default. Calling a sidecar wedge a data defect would
  * delete a recovery that works, while the reverse only wastes the attempts we already
  * spend today.
+ *
+ * One panic is asked about directly, because for it the file cannot be the answer.
+ * `PageCache` keeps no on-disk state, so an abort raised inside it says the engine's own
+ * in-memory accounting disagrees with itself and nothing about `data.db` or the sidecars
+ * — and a fresh process, which the retry already spawns, starts with a fresh cache. See
+ * {@link classifyReplicaPanicSubsystem} for why the location is read and not the message.
  */
 
 import {
@@ -27,10 +33,16 @@ import {
   describeReplicaEngineTableDefects,
   type ReplicaEngineTableDefect,
 } from "./replicaEngineTableGuard.js";
+import type { ReplicaPanicSubsystem } from "./replicaPanicSubsystem.js";
 
 export type ReplicaCrashRemedy =
   /** Cause may be in the sidecars: reset them (data.db is preserved) and retry. */
   | { kind: "reset_sidecars" }
+  /**
+   * The fault was process-local: drop the handle and let the next operation spawn a
+   * fresh worker. Deliberately touches no file — the state that broke was in memory.
+   */
+  | { kind: "restart_worker"; subsystem: ReplicaPanicSubsystem }
   /** An engine table is malformed in data.db: drop it so the engine rebuilds it. */
   | { kind: "repair_engine_tables"; defects: string }
   /**
@@ -47,6 +59,12 @@ export interface ChooseReplicaCrashRemedyInput {
    * local state (curable) from a remote that keeps sending the malformed shape (not).
    */
   repairAlreadyAttempted: boolean;
+  /**
+   * The module the panic was raised in, when it is one whose state is process-local.
+   * Null covers both "somewhere else" and "no location captured", which is why absence
+   * falls through to asking the file rather than being read as a clean result.
+   */
+  panicSubsystem?: ReplicaPanicSubsystem | null;
   /** Seam for tests; production reads the real file. */
   inspect?: (dbPath: string) => readonly ReplicaEngineTableDefect[];
 }
@@ -54,6 +72,14 @@ export interface ChooseReplicaCrashRemedyInput {
 export function chooseReplicaCrashRemedy(
   input: ChooseReplicaCrashRemedyInput,
 ): ReplicaCrashRemedy {
+  // Before the file is opened, and deliberately so: this panic is not evidence about the
+  // file, and `repair_engine_tables` spends a one-shot budget — it sets
+  // `repairAlreadyAttempted`, so the *next* abort parks. Repairing on an unrelated panic
+  // would therefore park the first genuine table defect on sight.
+  if (input.panicSubsystem) {
+    return { kind: "restart_worker", subsystem: input.panicSubsystem };
+  }
+
   const inspect = input.inspect ?? inspectReplicaEngineTables;
 
   let defects: readonly ReplicaEngineTableDefect[];

@@ -279,6 +279,7 @@ export class TursoReplicaSyncWorkerClient {
     const remedy = chooseReplicaCrashRemedy({
       localPath: error.localPath,
       repairAlreadyAttempted: this.engineTableRepairs.has(error.localPath),
+      panicSubsystem: error.panicSubsystem,
     });
     const where = `${error.op} on ${error.localPath}`;
     const tail = error.stderrTail.slice(-200);
@@ -310,6 +311,20 @@ export class TursoReplicaSyncWorkerClient {
             `sidecars. ${tail}`,
         );
         resetReplicaSidecars(error.localPath);
+        return;
+      case "restart_worker":
+        // Deliberately nothing but the count. The restart is already guaranteed: the
+        // process is gone and `handleChildGone` cleared `child`, `booted` and
+        // `ownedPaths`, so the next operation calls `ensureBooted()` and spawns a child
+        // with a fresh address space — which, for an in-memory accounting fault, is the
+        // whole repair. Touching a file here could only subtract. The abort is still
+        // counted, so a fault that survives a clean process parks like any other.
+        this.noteEngineCrash(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} inside ${remedy.subsystem}, ` +
+            "whose state is process-local — restarting the worker and leaving data.db " +
+            `and the sidecars untouched. ${tail}`,
+        );
         return;
       case "repair_engine_tables": {
         // Deliberately no sidecar reset: the cause is a table shape inside data.db,

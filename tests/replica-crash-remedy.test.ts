@@ -21,6 +21,7 @@ import {
   type ReplicaCrashRemedy,
 } from "../src/gateway/services/tursoReplica/replicaCrashRemedy.js";
 import type { ReplicaEngineTableDefect } from "../src/gateway/services/tursoReplica/replicaEngineTableGuard.js";
+import { classifyReplicaPanicSubsystem } from "../src/gateway/services/tursoReplica/replicaPanicSubsystem.js";
 
 const MALFORMED: readonly ReplicaEngineTableDefect[] = [
   { table: "turso_cdc_version", reason: "missing_unique_index" },
@@ -111,6 +112,133 @@ describe("chooseReplicaCrashRemedy", () => {
   });
 });
 
+/**
+ * Verbatim from the 2026-09-18 report: the abort that produced it was raised in
+ * `PageCache::_insert`, reached through `Pager::allocate_page` from `BTreeCursor::balance`.
+ * The stack walks through the btree on its way there, which is exactly the shape that
+ * makes a whole-text search for a file name the wrong instrument.
+ */
+const PAGE_CACHE_PANIC = [
+  "thread 'main' panicked at core/storage/page_cache.rs:655:17:",
+  "mismatched evictable count state",
+  "note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace",
+].join("\n");
+
+/** Issue 117's abort: a real on-disk defect, and the case that must still be repaired. */
+const BTREE_PANIC = [
+  "thread '<unnamed>' panicked at core/storage/btree.rs:951:18:",
+  "internal error: entered unreachable code: index where has_rowid() is true " +
+    "should have an integer rowid as the last value",
+].join("\n");
+
+describe("classifyReplicaPanicSubsystem", () => {
+  it("names the subsystem from the panic's own location line", () => {
+    expect(classifyReplicaPanicSubsystem(PAGE_CACHE_PANIC)).toBe("page_cache");
+  });
+
+  it("returns null for a panic raised anywhere else", () => {
+    // btree is the on-disk case. Claiming it as process-local would skip the repair and
+    // abort until the streak parked the database — the Issue 117 loop, by another route.
+    expect(classifyReplicaPanicSubsystem(BTREE_PANIC)).toBeNull();
+  });
+
+  it("ignores the file appearing in a backtrace rather than in the location", () => {
+    // The whole reason the match is anchored, and the fixture carries `at <file>:<line>`
+    // because that is what makes the naive version wrong: under RUST_BACKTRACE=full every
+    // frame names its own source file, so a substring search over stderr reads a genuine
+    // on-disk defect as process-local — skipping the repair Issue 117 needs.
+    const withBacktrace = [
+      BTREE_PANIC,
+      "stack backtrace:",
+      "   4: turso_core::storage::page_cache::PageCache::force_insert_page",
+      "             at ./core/storage/page_cache.rs:412:9",
+      "   5: turso_core::storage::pager::Pager::allocate_page",
+      "             at ./core/storage/pager.rs:1884:22",
+    ].join("\n");
+    expect(withBacktrace).toContain("page_cache.rs");
+    expect(classifyReplicaPanicSubsystem(withBacktrace)).toBeNull();
+  });
+
+  it("reads the last location when a panic is raised while handling one", () => {
+    // With `panic = abort` the second location is the one that ended the process.
+    const nested = [BTREE_PANIC, PAGE_CACHE_PANIC].join("\n");
+    expect(classifyReplicaPanicSubsystem(nested)).toBe("page_cache");
+  });
+
+  it("returns null when no location was captured", () => {
+    // Absence is not evidence. A truncated ring must fall through to asking the file,
+    // not be read as a clean bill of health.
+    expect(classifyReplicaPanicSubsystem("")).toBeNull();
+    expect(classifyReplicaPanicSubsystem(undefined)).toBeNull();
+    expect(classifyReplicaPanicSubsystem("abort() called")).toBeNull();
+  });
+});
+
+describe("chooseReplicaCrashRemedy with a process-local panic", () => {
+  function chooseWithPanic(
+    stderr: string,
+    defects: readonly ReplicaEngineTableDefect[] = [],
+    repairAlreadyAttempted = false,
+  ): ReplicaCrashRemedy {
+    return chooseReplicaCrashRemedy({
+      localPath: "/tmp/data.db",
+      repairAlreadyAttempted,
+      panicSubsystem: classifyReplicaPanicSubsystem(stderr),
+      inspect: () => defects,
+    });
+  }
+
+  it("restarts the worker instead of resetting the sidecars", () => {
+    // The sidecar reset is destructive by consequence: it re-bootstraps, the bootstrap
+    // replays, and the replay is Issue 117. Spending that on a counter that disagreed
+    // with itself inside one process is the whole defect being fixed here.
+    expect(chooseWithPanic(PAGE_CACHE_PANIC)).toEqual({
+      kind: "restart_worker",
+      subsystem: "page_cache",
+    });
+  });
+
+  it("does not open the file at all", () => {
+    // The panic is not evidence about the file, so reading it is a contended open for
+    // an answer that cannot change the remedy.
+    let inspected = false;
+    chooseReplicaCrashRemedy({
+      localPath: "/tmp/data.db",
+      repairAlreadyAttempted: false,
+      panicSubsystem: "page_cache",
+      inspect: () => {
+        inspected = true;
+        return [];
+      },
+    });
+    expect(inspected).toBe(false);
+  });
+
+  it("leaves an on-disk defect to be repaired on the abort that names it", () => {
+    // Checked before inspection deliberately: `repair_engine_tables` is one-shot, so
+    // repairing on an unrelated panic would park the first genuine defect on sight.
+    // Nothing is lost — a malformed index aborts in the btree, and that abort repairs.
+    expect(chooseWithPanic(PAGE_CACHE_PANIC, MALFORMED).kind).toBe(
+      "restart_worker",
+    );
+    expect(chooseWithPanic(BTREE_PANIC, MALFORMED).kind).toBe(
+      "repair_engine_tables",
+    );
+  });
+
+  it("still parks a defect that survived a repair", () => {
+    // The escalation ladder has to stay reachable: a page_cache panic arriving while a
+    // repaired table is back must not reset the second-sighting evidence.
+    expect(chooseWithPanic(BTREE_PANIC, MALFORMED, true).kind).toBe("park");
+  });
+
+  it("keeps the old behaviour for every other panic", () => {
+    // The blast radius is one named module. Anything else takes the path it took before.
+    expect(chooseWithPanic(BTREE_PANIC)).toEqual({ kind: "reset_sidecars" });
+    expect(chooseWithPanic("")).toEqual({ kind: "reset_sidecars" });
+  });
+});
+
 /** Source with comments removed, so a rationale mentioning a symbol is not a match. */
 function readStripped(relative: string): string {
   const source = fs.readFileSync(
@@ -189,6 +317,70 @@ describe("TursoReplicaSyncWorkerClient wiring", () => {
     expect(repairAt).toBeGreaterThan(-1);
     expect(noteAt).toBeLessThan(repairAt);
     expect(markAt).toBeLessThan(repairAt);
+  });
+
+  it("classifies the panic from the whole stderr, not the truncated tail", () => {
+    // `RUST_BACKTRACE` is inherited rather than set, so a developer with it enabled gets
+    // a backtrace long enough to push the location line out of a 400-character tail.
+    // Classifying where the full ring is still in hand keeps the remedy the same either
+    // way; reading `stderrTail` would make it depend on the launching shell.
+    const protocol = readStripped(
+      "src/gateway/services/tursoReplica/tursoReplicaSyncWorkerProtocol.ts",
+    );
+    const classifyAt = protocol.indexOf("classifyReplicaPanicSubsystem(");
+    expect(classifyAt).toBeGreaterThan(-1);
+    const call = protocol.slice(classifyAt, protocol.indexOf(")", classifyAt));
+    expect(call).toContain("options.stderr");
+    expect(call).not.toContain("tail");
+  });
+
+  it("passes the panic subsystem to the chooser", () => {
+    // Computed and then dropped is the failure mode that looks correct in review: the
+    // classifier has its own tests, the field is populated, and nothing reads it.
+    const chooseAt = client.indexOf("chooseReplicaCrashRemedy({");
+    expect(chooseAt).toBeGreaterThan(-1);
+    const call = client.slice(chooseAt, client.indexOf("});", chooseAt));
+    expect(call).toContain("panicSubsystem");
+  });
+
+  it("touches no file on the restart branch", () => {
+    // The state that broke was in memory. Resetting sidecars or dropping tables here
+    // would be the destructive remedy this branch exists to avoid, applied under a
+    // different name.
+    const branchAt = client.indexOf('case "restart_worker"');
+    expect(branchAt).toBeGreaterThan(-1);
+    const branch = client.slice(
+      branchAt,
+      client.indexOf('case "repair_engine_tables"', branchAt),
+    );
+    expect(branch).not.toContain("resetReplicaSidecars(");
+    expect(branch).not.toContain("repairReplicaEngineTables(");
+    expect(branch).not.toContain("engineTableRepairs.add(");
+  });
+
+  it("clears the boot state when the child dies, which is what makes the restart real", () => {
+    // `restart_worker` does nothing but count, and that is only correct because the
+    // respawn is already guaranteed here. If this stopped clearing `booted`, the next
+    // operation would reuse a dead handle and the remedy would be silently inert — a
+    // no-op branch that still looks like a deliberate decision in review.
+    const goneAt = client.indexOf("private handleChildGone(");
+    expect(goneAt).toBeGreaterThan(-1);
+    const body = client.slice(goneAt, client.indexOf("\n  }", goneAt));
+    expect(body).toContain("this.child = null");
+    expect(body).toContain("this.booted = null");
+    expect(body).toContain("ownedPaths.clear()");
+  });
+
+  it("counts the abort on the restart branch", () => {
+    // A fault that survives a fresh process is not transient. Without the count it
+    // would respawn forever, which is a crash report per attempt and no convergence.
+    const branchAt = client.indexOf('case "restart_worker"');
+    expect(branchAt).toBeGreaterThan(-1);
+    const branch = client.slice(
+      branchAt,
+      client.indexOf('case "repair_engine_tables"', branchAt),
+    );
+    expect(branch).toContain("noteEngineCrash(");
   });
 
   it("parks from the streak as well as from the chooser", () => {
