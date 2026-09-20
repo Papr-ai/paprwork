@@ -804,7 +804,7 @@ export const addAgentMemoryTool = createTool({
       const customMetadata: Record<
         string,
         string | number | boolean | string[]
-      > = { ...(args.customMetadata ?? {}) };
+      > = { ...args.customMetadata };
       if (args.sourceAgentId) customMetadata.sourceAgentId = args.sourceAgentId;
       if (args.sourceAgentName)
         customMetadata.sourceAgentName = args.sourceAgentName;
@@ -1430,6 +1430,19 @@ const addMemoryBatchSchema = z.object({
           .optional()
           .describe("REQUIRED when category is set — the server 422s on category without role."),
         topics: z.array(z.string()).optional().describe("Topic tags for this item"),
+        customMetadata: z
+          .record(
+            z.string(),
+            z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]),
+          )
+          .optional()
+          .describe(
+            "Exact-match filterable fields for THIS item — the write side of search_agent_memory's " +
+              "customMetadataFilters, same as add_agent_memory's customMetadata. " +
+              "Flat values only (string | number | boolean | string[]); the API rejects nested objects. " +
+              "Example: { content_type: 'app_card', app_id: '…', section: 'Storage' }. " +
+              "chatId is set by the tool and overrides caller values.",
+          ),
       }),
     )
     .min(1)
@@ -1696,6 +1709,8 @@ export const addAgentMemoryBatchTool = createTool({
     "Write multiple memory items in ONE request. Use whenever you are storing 3+ related items " +
     "(entity backfills, a set of tasks, imported records) — far cheaper than looping add_agent_memory. " +
     "Applies the same WorkspaceContext graph schema and ACL scope as add_agent_memory. " +
+    "Each item takes its own customMetadata, so multi-section conventions like App Cards " +
+    "stay filterable by content_type/app_id when written in one call. " +
     "Returns a batch_id; poll get_memory_batch_status to confirm all writes landed.",
   inputSchema: addMemoryBatchSchema,
   execute: async (args) => {
@@ -1718,15 +1733,26 @@ export const addAgentMemoryBatchTool = createTool({
       });
 
       const response = await client.memory.addBatch({
-        memories: args.memories.map((m) => ({
-          content: m.content,
-          metadata: {
-            ...(m.role ? { role: m.role } : {}),
-            ...(m.category ? { category: m.category } : {}),
-            ...(m.topics ? { topics: m.topics } : {}),
-            ...(resolvedChatId ? { customMetadata: { chatId: resolvedChatId } } : {}),
-          },
-        })) as Parameters<typeof client.memory.addBatch>[0]["memories"],
+        memories: args.memories.map((m) => {
+          // Caller keys land first so tool attribution always wins — same
+          // precedence as add_agent_memory's single-write path. Without this
+          // merge, batched App Card sections reach memory but lose the keys
+          // customMetadataFilters matches on, with no error anywhere.
+          const customMetadata: Record<
+            string,
+            string | number | boolean | string[]
+          > = { ...m.customMetadata };
+          if (resolvedChatId) customMetadata.chatId = resolvedChatId;
+          return {
+            content: m.content,
+            metadata: {
+              ...(m.role ? { role: m.role } : {}),
+              ...(m.category ? { category: m.category } : {}),
+              ...(m.topics ? { topics: m.topics } : {}),
+              ...(Object.keys(customMetadata).length ? { customMetadata } : {}),
+            },
+          };
+        }) as Parameters<typeof client.memory.addBatch>[0]["memories"],
         ...(args.skipBackgroundProcessing !== undefined
           ? { skip_background_processing: args.skipBackgroundProcessing }
           : {}),
