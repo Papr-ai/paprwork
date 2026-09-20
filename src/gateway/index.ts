@@ -3670,6 +3670,23 @@ async function startGateway(): Promise<void> {
           return;
         }
 
+        // Per-app origin: ask for an origin-keyed agent cluster so this app
+        // cannot share a main thread with the chat UI, and refuse to serve one
+        // app's files from another app's origin — that would pull B's code into
+        // A's process and undo the isolation we just asked for.
+        const { appIdFromHost } = await import(
+          "../core/miniApps/miniAppOrigin.js"
+        );
+        const hostAppId = appIdFromHost(req.headers.host);
+        if (hostAppId) {
+          if (hostAppId.toLowerCase() !== appId.toLowerCase()) {
+            staticStatusCode = 403;
+            res.status(403).send("App origin does not match requested app");
+            return;
+          }
+          res.setHeader("Origin-Agent-Cluster", "?1");
+        }
+
         const ext = path.extname(requestedPath).toLowerCase();
 
         const {

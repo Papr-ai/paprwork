@@ -5,7 +5,10 @@ export interface PreviewGateReport {
   documentId: string;
   phase: PreviewPhase;
   allowedApi: number;
-  blockedApi: number;
+  /** Held while hidden and settled on return. Not failures. */
+  deferredApi: number;
+  /** Ran while hidden — a write, or a path the gate cannot defer. The leak. */
+  passedThroughApi: number;
   allowedOther: number;
 }
 

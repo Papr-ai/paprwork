@@ -290,6 +290,97 @@ console.log("\n== legacy vs live classification of the engine's tables ==");
   check("keeps app tables", tableNames(mixed).includes("books"));
 }
 
+console.log("\n== crash remedy, against real files ==");
+{
+  // The unit tests drive the decision through its `inspect` seam. These run it against
+  // the real reader, so they are what prove a genuinely malformed table produces the
+  // repair — and, more importantly, that the sequence converges instead of looping.
+  const { chooseReplicaCrashRemedy } = await import(
+    "../dist/gateway/services/tursoReplica/replicaCrashRemedy.js"
+  );
+
+  const crashingShape = makeDb((db) => {
+    db.exec(
+      'CREATE TABLE "turso_sync_last_change_id" ' +
+        '("client_id" TEXT, "pull_gen" TEXT, "change_id" TEXT)',
+    );
+    db.exec("CREATE TABLE books (id TEXT PRIMARY KEY, title TEXT)");
+    db.exec("INSERT INTO books VALUES ('b1', 'Dune')");
+  });
+
+  const first = chooseReplicaCrashRemedy({
+    localPath: crashingShape,
+    repairAlreadyAttempted: false,
+  });
+  check("real malformed file selects repair", first.kind === "repair_engine_tables", first.kind);
+  check(
+    "repair names the table for the log",
+    first.defects?.includes("turso_sync_last_change_id"),
+  );
+
+  // Apply the remedy it asked for, then ask again. A second repair would mean the
+  // policy never terminates, which is the failure mode the park exists to catch.
+  repairReplicaEngineTables(crashingShape);
+  const second = chooseReplicaCrashRemedy({
+    localPath: crashingShape,
+    repairAlreadyAttempted: true,
+  });
+  check(
+    "after the repair clears it, the policy falls back to the sidecars",
+    second.kind === "reset_sidecars",
+    second.kind,
+  );
+  check("app rows survived the remedy", tableNames(crashingShape).includes("books"));
+
+  // The escalation: the table is still malformed *after* a repair, so local state
+  // cannot be the cause and every further attempt aborts the worker again.
+  const stillMalformed = makeDb((db) => {
+    db.exec('CREATE TABLE "turso_cdc_version" ("version" TEXT)');
+  });
+  const parked = chooseReplicaCrashRemedy({
+    localPath: stillMalformed,
+    repairAlreadyAttempted: true,
+  });
+  check("a defect surviving a repair parks", parked.kind === "park", parked.kind);
+  check("park says the remote is feeding it", /remote/i.test(parked.reason ?? ""));
+
+  const healthy = makeDb((db) => {
+    db.exec(
+      "CREATE TABLE turso_sync_last_change_id " +
+        "(client_id TEXT PRIMARY KEY, pull_gen INTEGER, change_id INTEGER)",
+    );
+    db.exec("CREATE TABLE turso_cdc (change_id INTEGER PRIMARY KEY AUTOINCREMENT)");
+    db.exec("CREATE TABLE turso_cdc_version (version TEXT PRIMARY KEY)");
+  });
+  check(
+    "a healthy replica keeps the standing sidecar reset",
+    chooseReplicaCrashRemedy({ localPath: healthy, repairAlreadyAttempted: false })
+      .kind === "reset_sidecars",
+  );
+  check(
+    "…and does not escalate just because a repair was tried before",
+    chooseReplicaCrashRemedy({ localPath: healthy, repairAlreadyAttempted: true })
+      .kind === "reset_sidecars",
+  );
+
+  // A real unreadable file, not a stubbed throw: absence of evidence must not become
+  // evidence of a defect, or we would drop engine tables on a contended database.
+  const garbage = path.join(tmpRoot, "remedy-garbage.db");
+  fs.writeFileSync(garbage, "this is not a database");
+  check(
+    "an unreadable file keeps the default",
+    chooseReplicaCrashRemedy({ localPath: garbage, repairAlreadyAttempted: true })
+      .kind === "reset_sidecars",
+  );
+  check(
+    "a missing file keeps the default",
+    chooseReplicaCrashRemedy({
+      localPath: path.join(tmpRoot, "remedy-absent.db"),
+      repairAlreadyAttempted: true,
+    }).kind === "reset_sidecars",
+  );
+}
+
 fs.rmSync(tmpRoot, { recursive: true, force: true });
 
 console.log(`\n${passed} passed, ${failed} failed\n`);

@@ -22,7 +22,6 @@ async function loadCloudSyncEnabled(): Promise<boolean> {
  */
 export function usePaprCloudFeatureContext(): void {
   const setContext = usePaprCloudFeatureStore((state) => state.setContext);
-  const cloudStatus = useCloudMemoryStatusStore((state) => state.status);
 
   const refresh = useCallback(async () => {
     try {
@@ -43,6 +42,13 @@ export function usePaprCloudFeatureContext(): void {
 
       const plan = await refreshPaprBillingStatus();
       const subscriptionStatus = plan?.subscriptionStatus ?? null;
+      // Read at call time, never subscribed. This is the fallback for a failed
+      // plan fetch, so it is needed when the callback runs — not to decide
+      // whether it should run. Subscribing put it in the dependency list below,
+      // and since `refreshPaprBillingStatus` writes this very value, calling
+      // `refresh` gave `refresh` a new identity, which re-ran the effect that
+      // called it. That loop ran ~9 times a second for a whole session.
+      const cloudStatus = useCloudMemoryStatusStore.getState().status;
       const memoryPaused =
         plan !== null ? deriveCloudMemoryStatus(plan) !== null : cloudStatus !== null;
 
@@ -57,7 +63,9 @@ export function usePaprCloudFeatureContext(): void {
     } catch {
       setContext(null);
     }
-  }, [cloudStatus, setContext]);
+    // `setContext` is a zustand action, so this callback is stable for the
+    // lifetime of the hook. Nothing that `refresh` writes may appear here.
+  }, [setContext]);
 
   useEffect(() => {
     void refresh();
@@ -104,16 +112,22 @@ export function usePaprCloudFeatureContext(): void {
       void refreshPaprBillingStatus({ force: true });
     };
 
+    // Named, so the cleanup below can actually remove it. As an inline arrow it
+    // was unremovable even in principle, and with the effect re-running on a
+    // loop it accumulated ~19,000 listeners in one session — every one of which
+    // fired a billing refresh the moment the window was shown again.
+    const visibilityHandler = () => {
+      if (document.visibilityState === "visible") {
+        focusHandler();
+      }
+    };
+
     for (const eventName of refreshEvents) {
       window.addEventListener(eventName, handler);
     }
     window.addEventListener("papr:billing-refreshed", billingHandler);
     window.addEventListener("focus", focusHandler);
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") {
-        focusHandler();
-      }
-    });
+    document.addEventListener("visibilitychange", visibilityHandler);
 
     return () => {
       for (const eventName of refreshEvents) {
@@ -121,6 +135,7 @@ export function usePaprCloudFeatureContext(): void {
       }
       window.removeEventListener("papr:billing-refreshed", billingHandler);
       window.removeEventListener("focus", focusHandler);
+      document.removeEventListener("visibilitychange", visibilityHandler);
     };
   }, [refresh, setContext]);
 }

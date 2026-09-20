@@ -32,6 +32,11 @@ import {
 } from "./tursoReplicaSyncWorkerProtocol.js";
 import { resetReplicaSidecars } from "./tursoReplicaSidecarWedge.js";
 import {
+  chooseReplicaCrashRemedy,
+  type ReplicaCrashRemedy,
+} from "./replicaCrashRemedy.js";
+import { repairReplicaEngineTables } from "./replicaEngineTableGuard.js";
+import {
   markReplicaReadPhase,
   setReplicaReadMeta,
   timeReplicaReadPhase,
@@ -118,6 +123,17 @@ export class TursoReplicaSyncWorkerClient {
   private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
   /** Consecutive engine crashes per replica path, cleared by a successful op. */
   private readonly crashStreaks = new Map<string, number>();
+  /**
+   * Paths whose engine tables we have already dropped since the last healthy op, and so
+   * the evidence that a malformed table reappearing came from the remote rather than
+   * from stale local state. Cleared by a successful op, like the streak above.
+   */
+  private readonly engineTableRepairs = new Set<string>();
+  /**
+   * Parked paths and why. Separate from the streak because a defect the sidecar reset
+   * provably cannot reach is worth parking on sight rather than after three aborts.
+   */
+  private readonly parkedPaths = new Map<string, string>();
 
   constructor(
     private readonly resolveCommand: () => TursoSyncWorkerCommand = defaultWorkerCommand,
@@ -199,9 +215,11 @@ export class TursoReplicaSyncWorkerClient {
   // ---- core ----------------------------------------------------------------------------
 
   /**
-   * Send one request. On a worker crash where the engine was operating on this path:
-   * reset the path's sync sidecars (keeps data.db), then retry once if the op is idempotent.
-   * Anything else surfaces as an error to the caller. The gateway never dies here.
+   * Send one request. On a worker crash where the engine was operating on this path,
+   * apply the remedy the evidence supports — reset the path's sync sidecars (keeps
+   * data.db), or drop a malformed engine table, or park the path — then retry once if
+   * the op is idempotent. Anything else surfaces as an error to the caller. The gateway
+   * never dies here.
    */
   async send(options: SendOptions): Promise<TursoSyncWorkerResult> {
     this.assertNotCrashLooping(options);
@@ -214,17 +232,12 @@ export class TursoReplicaSyncWorkerClient {
         throw error;
       }
       if (error.engineWasRunning) {
-        this.noteEngineCrash(error.localPath);
-        console.warn(
-          `[TursoSyncWorker] Engine crashed during ${error.op} on ${error.localPath} — ` +
-            `resetting sync sidecars. ${error.stderrTail.slice(-200)}`,
-        );
-        void this.close(error.localPath).catch(() => undefined);
-        resetReplicaSidecars(error.localPath);
+        this.applyCrashRemedy(error);
       }
       const retry =
         (options.retryOnCrash ?? "auto") === "auto" &&
-        IDEMPOTENT_WORKER_OPS.has(options.op);
+        IDEMPOTENT_WORKER_OPS.has(options.op) &&
+        !this.parkedPaths.has(options.localPath);
       if (!retry) {
         throw error;
       }
@@ -233,13 +246,110 @@ export class TursoReplicaSyncWorkerClient {
         this.noteHealthy(options);
         return result;
       } catch (retryError) {
-        // The retry can abort too — when it does, that is the signal that resetting
-        // sidecars did not reach the cause, so it has to count against the streak.
+        // The retry can abort too — when it does, that is the signal that the remedy
+        // did not reach the cause, so it has to count against the streak. Re-running the
+        // chooser is what turns "dropped the table, aborted again" into a park: the
+        // defect coming back is the evidence that the remote is sending it.
         if (isTursoSyncWorkerCrash(retryError) && retryError.engineWasRunning) {
-          this.noteEngineCrash(retryError.localPath);
+          this.applyCrashRemedy(retryError);
         }
         throw retryError;
       }
+    }
+  }
+
+  /**
+   * Repair what the evidence says is broken, and count the abort.
+   *
+   * Never throws. Both remedies touch the filesystem — the reset unlinks sidecars, the
+   * repair issues a DROP — so either can fail on a contended file, and an exception here
+   * would propagate out of the caller's `catch` and *replace* the crash error. Callers
+   * classify on {@link isTursoSyncWorkerCrash} to tell "the engine aborted" from "sync
+   * returned an error", so masking it would both skip the retry and send recovery down
+   * the wrong path over a transient lock. A remedy that fails to apply is instead left
+   * to converge: the attempt is already recorded below, so the retry aborts again and
+   * the second pass parks.
+   *
+   * The close is best-effort and fire-and-forget to mirror the pre-existing path: after
+   * an abort `handleChildGone` has already nulled the child, so `close` returns without
+   * respawning and this only clears bookkeeping. A parked path stays closeable on
+   * purpose, so callers can still tear it down.
+   */
+  private applyCrashRemedy(error: TursoSyncWorkerCrashError): void {
+    const remedy = chooseReplicaCrashRemedy({
+      localPath: error.localPath,
+      repairAlreadyAttempted: this.engineTableRepairs.has(error.localPath),
+      panicSubsystem: error.panicSubsystem,
+    });
+    const where = `${error.op} on ${error.localPath}`;
+    const tail = error.stderrTail.slice(-200);
+    void this.close(error.localPath).catch(() => undefined);
+
+    try {
+      this.applyChosenRemedy(error, remedy, where, tail);
+    } catch (remedyError) {
+      console.error(
+        `[TursoSyncWorker] Could not apply the ${remedy.kind} remedy for ` +
+          `${error.localPath} after an abort during ${error.op}: ` +
+          `${remedyError instanceof Error ? remedyError.message : String(remedyError)}. ` +
+          "The abort is still counted, so a further abort parks this database.",
+      );
+    }
+  }
+
+  private applyChosenRemedy(
+    error: TursoSyncWorkerCrashError,
+    remedy: ReplicaCrashRemedy,
+    where: string,
+    tail: string,
+  ): void {
+    switch (remedy.kind) {
+      case "reset_sidecars":
+        this.noteEngineCrash(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} — resetting sync ` +
+            `sidecars. ${tail}`,
+        );
+        resetReplicaSidecars(error.localPath);
+        return;
+      case "restart_worker":
+        // Deliberately nothing but the count. The restart is already guaranteed: the
+        // process is gone and `handleChildGone` cleared `child`, `booted` and
+        // `ownedPaths`, so the next operation calls `ensureBooted()` and spawns a child
+        // with a fresh address space — which, for an in-memory accounting fault, is the
+        // whole repair. Touching a file here could only subtract. The abort is still
+        // counted, so a fault that survives a clean process parks like any other.
+        this.noteEngineCrash(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} inside ${remedy.subsystem}, ` +
+            "whose state is process-local — restarting the worker and leaving data.db " +
+            `and the sidecars untouched. ${tail}`,
+        );
+        return;
+      case "repair_engine_tables": {
+        // Deliberately no sidecar reset: the cause is a table shape inside data.db,
+        // which the reset preserves, so resetting would discard sync state for nothing.
+        this.noteEngineCrash(error.localPath);
+        this.engineTableRepairs.add(error.localPath);
+        const dropped = repairReplicaEngineTables(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} on a malformed engine ` +
+            `table (${remedy.defects}) — dropped ${dropped.join(", ") || "nothing"} ` +
+            `for the engine to rebuild; sidecars left intact. ${tail}`,
+        );
+        return;
+      }
+      case "park":
+        this.parkPath(
+          error.localPath,
+          `${remedy.reason}. Malformed: ${remedy.defects}`,
+        );
+        console.error(
+          `[TursoSyncWorker] Parking ${error.localPath} after an abort during ` +
+            `${error.op}: ${remedy.reason} (${remedy.defects}). Sync is paused for ` +
+            `this database; local reads and writes still work. ${tail}`,
+        );
+        return;
     }
   }
 
@@ -253,26 +363,33 @@ export class TursoReplicaSyncWorkerClient {
     if (options.op === "close") {
       return;
     }
-    const streak = this.crashStreaks.get(options.localPath) ?? 0;
-    if (streak < MAX_CONSECUTIVE_PATH_CRASHES) {
-      return;
+    const parked = this.parkedPaths.get(options.localPath);
+    if (parked) {
+      throw new Error(
+        `Turso replica ${options.localPath} is parked for this session: ${parked}. ` +
+          "Sync is paused for this database; local reads and writes still work. " +
+          "Restart the app to try again.",
+      );
     }
-    throw new Error(
-      `Turso replica ${options.localPath} aborted the sync engine ${streak} times in a row ` +
-        "and is parked for this session. Sync is paused for this database; local reads and " +
-        "writes still work. Restart the app to try again.",
-    );
   }
 
   private noteEngineCrash(localPath: string): void {
     const streak = (this.crashStreaks.get(localPath) ?? 0) + 1;
     this.crashStreaks.set(localPath, streak);
     if (streak >= MAX_CONSECUTIVE_PATH_CRASHES) {
+      this.parkPath(
+        localPath,
+        `it aborted the sync engine ${streak} times in a row and no remedy cleared it`,
+      );
       console.error(
         `[TursoSyncWorker] Parking ${localPath} after ${streak} consecutive engine aborts. ` +
           "A sidecar reset did not clear it, so the cause is inside data.db.",
       );
     }
+  }
+
+  private parkPath(localPath: string, reason: string): void {
+    this.parkedPaths.set(localPath, reason);
   }
 
   private noteHealthy(options: SendOptions): void {
@@ -282,6 +399,7 @@ export class TursoReplicaSyncWorkerClient {
       return;
     }
     this.crashStreaks.delete(options.localPath);
+    this.engineTableRepairs.delete(options.localPath);
   }
 
   private async sendOnce(options: SendOptions): Promise<TursoSyncWorkerResult> {

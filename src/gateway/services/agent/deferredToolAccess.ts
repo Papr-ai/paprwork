@@ -170,6 +170,16 @@ export function createRunDeferredTool(
       // Validated here rather than left to the tool: a deferred tool's schema
       // was never shown to the model in the request, so a shape mistake is
       // likely and a schema-shaped error is what lets it self-correct.
+      //
+      // Dispatched FLAT, never as `{ context: args }`. The Mastra version in
+      // use validates the payload it is handed against the tool's own schema
+      // before the body runs, so a wrapped call fails on every required field
+      // — `path: expected string, received undefined` with the real arguments
+      // sitting one level down under `context`. That reads as the dispatcher
+      // mangling the call rather than as a shape mismatch, and it silently
+      // took out the 87 of 112 deferred tools that have a required argument,
+      // `create_job` among them. Tools here accept both shapes because older
+      // Mastra wrapped, so flat is the shape that works for all of them.
       if (tool.inputSchema && typeof tool.inputSchema.safeParse === "function") {
         const parsed = tool.inputSchema.safeParse(toolArgs);
         if (!parsed.success) {
@@ -180,10 +190,10 @@ export function createRunDeferredTool(
             expected_schema: toolWirePayload(name, tool).input_schema,
           };
         }
-        return await tool.execute({ context: parsed.data });
+        return await tool.execute(parsed.data);
       }
 
-      return await tool.execute({ context: toolArgs });
+      return await tool.execute(toolArgs);
     },
   });
 }

@@ -22,16 +22,20 @@ export function readGateReport(value: unknown): PreviewGateReport | null {
     typeof v.documentId !== "string" ||
     v.documentId.length > 100 ||
     !["hidden", "visible", "evicting"].includes(v.phase) ||
-    ![v.allowedApi, v.blockedApi, v.allowedOther].every(
-      (n) => Number.isSafeInteger(n) && n >= 0,
-    )
+    ![
+      v.allowedApi,
+      v.deferredApi,
+      v.passedThroughApi,
+      v.allowedOther,
+    ].every((n) => Number.isSafeInteger(n) && n >= 0)
   )
     return null;
   return {
     documentId: v.documentId,
     phase: v.phase,
     allowedApi: v.allowedApi,
-    blockedApi: v.blockedApi,
+    deferredApi: v.deferredApi,
+    passedThroughApi: v.passedThroughApi,
     allowedOther: v.allowedOther,
   };
 }
