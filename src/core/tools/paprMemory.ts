@@ -88,6 +88,30 @@ const addMemorySchema = z
     jobId: z.string().optional(),
     chatId: z.string().optional(),
     workspaceId: z.string().optional(),
+    topics: z
+      .array(z.string())
+      .optional()
+      .describe(
+        "Topic tags for this memory, e.g. ['app:Meetings Manager', 'app-card', 'storage'].",
+      ),
+    hierarchicalStructures: z
+      .string()
+      .optional()
+      .describe(
+        "Hierarchical path for this memory, e.g. 'apps/Meetings Manager/Storage'.",
+      ),
+    customMetadata: z
+      .record(
+        z.string(),
+        z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]),
+      )
+      .optional()
+      .describe(
+        "Exact-match filterable fields — the write side of search_agent_memory's customMetadataFilters. " +
+          "Flat values only (string | number | boolean | string[]); the API rejects nested objects. " +
+          "Example: { content_type: 'app_card', app_id: '…', section: 'Storage' }. " +
+          "Attribution keys (sourceAgentId, sourceAgentName, runId, jobId, chatId, workspaceId) are set by the tool and override caller values.",
+      ),
     ...memoryReadAclToolFields,
     signalDomain: z
       .string()
@@ -762,7 +786,8 @@ export const addAgentMemoryTool = createTool({
   description:
     "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). " +
     "For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. " +
-    "Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id.",
+    "Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id. " +
+    "Pass customMetadata to write exact-match filterable fields (the write side of search_agent_memory's customMetadataFilters) — required for indexed conventions like App Cards.",
   inputSchema: addMemorySchema,
   execute: async (args) => {
     try {
@@ -774,8 +799,12 @@ export const addAgentMemoryTool = createTool({
         "../../core/utils/paprMemoryUserIdentity.js"
       );
 
-      // Build customMetadata for fields not in the MemoryMetadata spec
-      const customMetadata: Record<string, string> = {};
+      // Build customMetadata for fields not in the MemoryMetadata spec.
+      // Caller-supplied keys land first so agent attribution always wins.
+      const customMetadata: Record<
+        string,
+        string | number | boolean | string[]
+      > = { ...(args.customMetadata ?? {}) };
       if (args.sourceAgentId) customMetadata.sourceAgentId = args.sourceAgentId;
       if (args.sourceAgentName)
         customMetadata.sourceAgentName = args.sourceAgentName;
@@ -812,6 +841,10 @@ export const addAgentMemoryTool = createTool({
           {
             role: args.role,
             category: args.category,
+            ...(args.topics?.length ? { topics: args.topics } : {}),
+            ...(args.hierarchicalStructures
+              ? { hierarchical_structures: args.hierarchicalStructures }
+              : {}),
             ...(Object.keys(customMetadata).length > 0 ? { customMetadata } : {}),
           },
           memoryScope,

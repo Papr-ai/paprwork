@@ -16,8 +16,9 @@ Complete guide for building mini-apps, jobs, and app+job pipelines in Paprwork V
 3. **Define contracts** — Lock SQLite write model (what jobs produce) and read model (what the app queries). Add indexes for app query paths.
 4. **Implement jobs** — Create with `create_job`, execute with `run_job`, inspect with `read_job_logs`. Adjust schema based on observed outputs.
 5. **Wire app to data** — `create_database` → `attach_database` → mini-app calls `/api/db/query` and `/api/db/write` with `sourceId`. Jobs use `writeDbIds` to populate DBs. Validate end-to-end with realistic records across all UX states.
+6. **Write the App Card** — `apps/{appId}/docs/APP_CARD.md` with the five fixed sections, then index each section into memory. See `APP_CARD_GUIDE.md`. This is what makes the app's storage, schema, and footguns findable later; source code alone does not answer those questions.
 
-If the task is tiny and explicit, merge steps. Always explain tradeoffs when skipping discovery.
+If the task is tiny and explicit, merge steps. Always explain tradeoffs when skipping discovery. **Step 6 is not optional for apps that will be used again** — and it is the step to repeat whenever you modify an existing app.
 
 ---
 
@@ -3559,3 +3560,34 @@ For every app-linked job:
 - See `API_KEY_TESTING_PROTOCOL.md` for external API integration protocol
 - See `DECISION_TREE_AGENT_CAPABILITIES.md` for choosing the right execution pattern
 - See `DELEGATION_STRATEGY.md` for when to use sub-agents vs jobs
+
+---
+
+## Phase 6: Write the App Card (REQUIRED for reusable apps)
+
+The last thing you do on any app build — and the thing you repeat on any app modification.
+
+```
+apps/{appId}/docs/APP_CARD.md
+```
+
+Five fixed `##` sections, each indexed into memory as its own item: `Overview`, `Storage`, `Schema`, `Jobs`, `Gotchas`. Full convention, metadata contract, and template: **`APP_CARD_GUIDE.md`**.
+
+**Why it is a phase and not a nicety.** Mini-app source code is indexed, but code chunks retrieve on syntax, not meaning. "Which database does this app write to" is an inference across `data-sources.json`, a job script, and a migration — an inference nobody stored. The card stores it.
+
+**It complements the wiki entity page, it does not replace it.** `workspace/entities/apps/{slug}.md` owns narrative, timeline, and goal traceability. The App Card owns operational fact: dbId, alias, tables, job order, footguns. Never copy between them — two docs stating the same fact will drift.
+
+**Minimum bar when modifying an existing app:**
+
+| You changed | Update |
+|---|---|
+| Database, alias, isolation | `## Storage` |
+| Migration, new column | `## Schema` |
+| Job added/renamed/rescheduled/chained | `## Jobs`, `## Overview` |
+| Debugged something non-obvious | `## Gotchas` — **always** |
+
+`## Gotchas` is the one section that cannot be generated from source. If you fixed a surprising bug and did not add a line there, the only durable artifact of that debugging session is gone.
+
+**Index it — the file alone is not enough.** Either run the `app-card-indexer` job, or call `add_agent_memory` per changed section with `customMetadata: { content_type: "app_card", app_id, section, section_sha }`. For an existing section whose text changed, use `update_memory` rather than adding a duplicate.
+
+**Skip the card** for one-off, experimental, and demo apps. A stale card is worse than none, because it gets retrieved and believed.
