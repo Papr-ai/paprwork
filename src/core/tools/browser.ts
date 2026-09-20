@@ -170,8 +170,18 @@ async function requestBrowserPermission(action: string): Promise<void> {
   }
 }
 
+function isPlatformBrowserToolSessionActive(): boolean {
+  return (
+    browserSession !== null &&
+    (browserSession.platformId !== undefined ||
+      browserSession.embeddedPlatformId !== undefined)
+  );
+}
+
 async function assertBrowserToolAllowed(toolName: string): Promise<void> {
-  const reason = await getBrowserToolWebviewBlockReason(toolName);
+  const reason = await getBrowserToolWebviewBlockReason(toolName, {
+    platformBrowserActive: isPlatformBrowserToolSessionActive(),
+  });
   if (reason) {
     throw new Error(reason);
   }

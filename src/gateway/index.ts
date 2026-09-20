@@ -2528,6 +2528,54 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.get("/api/cloud/apps/changes/incoming", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res.status(401).json({
+            error: "PAPR_API_KEY not configured. Login with Papr first.",
+          });
+          return;
+        }
+
+        const statusParam =
+          typeof req.query.status === "string" ? req.query.status.trim() : "";
+        const query = statusParam
+          ? `?status=${encodeURIComponent(statusParam)}`
+          : "";
+        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+        const upstream = await cloudApiFetch(
+          `/v1/cloud/apps/changes/incoming${query}`,
+        );
+        const bodyText = await upstream.text();
+        if (!upstream.ok) {
+          let message = bodyText.slice(0, 240);
+          try {
+            const parsed = JSON.parse(bodyText) as {
+              error?: string;
+              detail?: string;
+              message?: string;
+            };
+            message =
+              parsed.error ?? parsed.detail ?? parsed.message ?? message;
+          } catch {
+            /* keep raw slice */
+          }
+          res.status(upstream.status).json({ error: message });
+          return;
+        }
+
+        res.status(200);
+        const contentType = upstream.headers.get("content-type");
+        if (contentType) {
+          res.setHeader("Content-Type", contentType);
+        }
+        res.send(bodyText);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/cloud/apps/changes/:requestId/approve", async (req, res) => {
       try {
         const paprApiKey = await getPaprApiKey();

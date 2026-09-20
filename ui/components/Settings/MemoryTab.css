@@ -62,8 +62,6 @@
   font-weight: 500;
   background: var(--glass-bg, rgba(255, 255, 255, 0.65));
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
-  backdrop-filter: blur(14px) saturate(180%);
-  -webkit-backdrop-filter: blur(14px) saturate(180%);
   color: var(--text-secondary, #6e6e73);
 }
 
@@ -112,8 +110,6 @@
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
   border-radius: 50%;
   background: var(--glass-bg, rgba(255, 255, 255, 0.65));
-  backdrop-filter: blur(14px) saturate(180%);
-  -webkit-backdrop-filter: blur(14px) saturate(180%);
   color: var(--text-secondary, #6e6e73);
   font-size: 18px;
   cursor: pointer;
@@ -146,8 +142,6 @@
   border-radius: var(--r-md, 10px);
   background: var(--glass-bg, rgba(255, 255, 255, 0.55));
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
-  backdrop-filter: blur(12px) saturate(160%);
-  -webkit-backdrop-filter: blur(12px) saturate(160%);
 }
 
 .memory-stat-chip__value {
@@ -205,8 +199,6 @@
   background: var(--glass-bg, rgba(255, 255, 255, 0.65));
   border: 1px solid var(--border-color, rgba(0, 0, 0, 0.08));
   box-shadow: var(--shadow-1, 0 1px 3px rgba(0, 0, 0, 0.06));
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
   overflow: hidden;
 }
 
@@ -417,8 +409,6 @@
   display: flex;
   justify-content: flex-end;
   background: rgba(0, 0, 0, 0.35);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
 }
 
 .memory-detail-sheet {

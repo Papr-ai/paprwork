@@ -3,17 +3,21 @@
   flex-shrink: 0;
 }
 
+/* Matches the publish bar's shared control geometry — this button sits inline
+   with Share and Publish, so it must not be a different height or shape. */
 .app-workspace-menu__toggle-btn {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  font-weight: 600;
-  padding: 4px 12px;
+  gap: 6px;
+  font-size: var(--pb-font, 13px);
+  font-weight: 500;
+  height: var(--pb-control-h, 34px);
+  padding: 0 14px;
   border: 1px solid var(--border-color);
-  border-radius: 999px;
+  border-radius: var(--pb-radius, 9px);
   background: var(--bg-secondary);
   color: var(--text-secondary);
+  box-sizing: border-box;
   cursor: pointer;
 }
 

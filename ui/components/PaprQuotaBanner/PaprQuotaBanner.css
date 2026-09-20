@@ -8,8 +8,6 @@
   gap: 10px;
   padding: 10px 12px;
   background: rgba(255, 255, 255, 0.94);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--papr-blue-border, rgba(0, 96, 224, 0.2));
   border-radius: 10px;
   box-shadow:

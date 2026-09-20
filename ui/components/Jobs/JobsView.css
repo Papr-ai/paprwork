@@ -219,8 +219,6 @@
   max-height: 360px;
   overflow-y: auto;
   background: rgba(255, 255, 255, 0.88);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
   border: 1px solid rgba(15, 23, 42, 0.12);
   border-radius: 14px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12),
@@ -1126,7 +1124,6 @@
   inset: 0;
   z-index: 9999;
   background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;

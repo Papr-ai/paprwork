@@ -1,0 +1,91 @@
+/* Overflow menu for the publish bar — rare actions plus the Files/Preview
+   mode switch, which no longer earns a full-width button in the inline row. */
+
+.pb-overflow {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Square: an icon-only control should not carry a text button's side padding,
+   or it reads as a word that failed to render.
+   
+   The !important is load-order defence, not laziness: this file and
+   MiniAppPublishBar.css both style the element at equal specificity, and the
+   shared `.mini-app-publish-bar__button { padding: 0 14px }` is imported last,
+   so it silently won and squeezed the 15px icon into ~6px of usable width. */
+.pb-overflow__trigger {
+  width: var(--pb-control-h, 34px);
+  padding: 0 !important;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+/* Never let the glyph absorb the squeeze if the box is ever constrained. */
+.pb-overflow__trigger svg {
+  flex-shrink: 0;
+}
+
+.pb-overflow__trigger:hover {
+  color: var(--text-primary);
+  background: var(--hover);
+}
+
+.pb-overflow__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 40;
+  min-width: 232px;
+  padding: 5px;
+  border-radius: 12px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-primary, #fff);
+  box-shadow: 0 12px 32px rgba(10, 16, 32, 0.16);
+}
+
+.pb-overflow__item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pb-overflow__item:hover:not(:disabled) {
+  background: var(--hover);
+}
+
+.pb-overflow__item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* The hint carries the consequence — destructive items should say what they
+   destroy in the menu, not only in a confirmation after the click. */
+.pb-overflow__hint {
+  font-size: 11.5px;
+  color: var(--text-tertiary, var(--text-secondary));
+  line-height: 1.4;
+}
+
+.pb-overflow__item--danger {
+  color: #c8372a;
+}
+
+.pb-overflow__item--danger:hover:not(:disabled) {
+  background: #fdeeec;
+}
+
+.pb-overflow__sep {
+  height: 1px;
+  margin: 5px 4px;
+  background: var(--border-color);
+}

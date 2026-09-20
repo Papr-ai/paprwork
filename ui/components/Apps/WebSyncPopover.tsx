@@ -449,13 +449,6 @@ export function WebSyncPopover({
     });
   }
 
-  const allSynced =
-    statusRows.length === 0 &&
-    status.overall === "synced" &&
-    !showMergeReview &&
-    !showWriterConflict &&
-    !metadataSync;
-
   return (
     <div
       ref={popoverRef}
@@ -508,15 +501,30 @@ export function WebSyncPopover({
         <p className="mini-app-publish-bar__sync-popover-summary">{headlineText}</p>
       ) : null}
 
-      {needsStatusCheck ? (
-        <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
-          Status may be from an earlier session — click Check status for a fresh comparison.
-        </p>
-      ) : lastCheckedAt ? (
-        <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
-          Last checked {formatLastUploadedAt(lastCheckedAt) ?? "recently"}.
-        </p>
-      ) : null}
+      {/* The two halves are different kinds of fact: your copy is watched and
+          always current, the web copy is asked every 5 minutes. Naming the
+          location of each keeps "checked" from reading as generic freshness. */}
+      <dl className="mini-app-publish-bar__sync-sides">
+        <div className="mini-app-publish-bar__sync-side">
+          <dt>Your copy, on this Mac</dt>
+          <dd>
+            {status && status.overall !== "synced" && status.overall !== "disabled"
+              ? "Edited since last publish"
+              : "No unpublished edits"}
+          </dd>
+        </div>
+        <div className="mini-app-publish-bar__sync-side">
+          <dt>Web copy, apps.papr.ai</dt>
+          <dd>
+            {lastCheckedAt
+              ? `Checked ${formatLastUploadedAt(new Date(lastCheckedAt).toISOString()) ?? "recently"}`
+              : "Not checked yet"}
+          </dd>
+        </div>
+      </dl>
+      <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
+        Your copy is watched and never out of date. Only the web copy is asked, every 5 minutes.
+      </p>
 
       <div className="mini-app-publish-bar__sync-popover-scroll">
         {status.codeLastError && status.codeLastError !== uploadFailureMessage ? (
@@ -563,12 +571,6 @@ export function WebSyncPopover({
               </li>
             ))}
           </ul>
-        ) : allSynced ? (
-          <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--ok">
-            {status.lastUploadedAt
-              ? `Last published ${formatLastUploadedAt(status.lastUploadedAt) ?? "recently"}.`
-              : "Everything matches the web."}
-          </p>
         ) : null}
         {status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0 ? (
           <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
@@ -583,7 +585,11 @@ export function WebSyncPopover({
       </div>
 
       <div className="mini-app-publish-bar__sync-popover-actions">
-        {onCheckStatus ? (
+        {/* Only when the number above is actually stale. Once a status is
+            loaded this button re-runs the same call as the refresh icon on
+            the chip, so offering both made a read-only re-ask look like a
+            decision the user had to make on every open. */}
+        {onCheckStatus && needsStatusCheck ? (
           <button
             type="button"
             className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
@@ -825,14 +831,21 @@ export function WebSyncPopover({
                 </button>
               </>
             )}
-            <button
-              type="button"
-              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
-              disabled={busy || metadataSync || pushing}
-              onClick={() => void onPullUpdates()}
-            >
-              {pulling ? "Getting updates…" : "Get updates"}
-            </button>
+            {/* Only when there is something to get. This merges cloud code
+                into the local folder and can raise conflicts — offering it
+                against an unchanged remote asked the user to run a git merge
+                for no reason. The error branches above still show it
+                unconditionally, because there it is part of a recovery. */}
+            {status.gitUpdatesAvailable ? (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy || metadataSync || pushing}
+                onClick={() => void onPullUpdates()}
+              >
+                {pulling ? "Getting updates…" : "Get updates"}
+              </button>
+            ) : null}
             {webSyncShouldOfferAgent(status, { error, pushing, pulling }) ? (
               <button
                 type="button"
@@ -865,6 +878,96 @@ interface WebSyncStatusDotProps {
   popoverOpen?: boolean;
   interactive?: boolean;
   onClick?: () => void;
+  /** Worst-first chip text. When present the dot renders as a labelled pill. */
+  label?: string;
+  /** Semantic colour for the pill — warn is amber, bad is red, ok is green. */
+  tone?: "ok" | "warn" | "bad" | "info" | "idle" | "busy";
+  /** Re-asks the web. Only offered when the chip is showing an age. */
+  onRefresh?: () => void;
+}
+
+/**
+ * Audience as a glyph on the Share button. "Public · Code install" cost about a
+ * third of the bar to state something the user only checks before sending a
+ * link — a lock/people/globe carries the same distinction at a glance, and the
+ * button's tooltip plus the Share sheet still spell it out in full.
+ */
+export function ShareAudienceIcon({
+  loginAccess,
+  codeAccess,
+}: {
+  loginAccess: "private" | "team" | "public" | "none" | null;
+  /** When people can fork the source, the audience glyph carries a code badge. */
+  codeAccess?: "off" | "install" | null;
+}) {
+  const path =
+    loginAccess === "public"
+      ? // Globe
+        "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM1.5 8h13M8 1.5c1.7 1.8 2.6 4.1 2.6 6.5S9.7 12.7 8 14.5c-1.7-1.8-2.6-4.1-2.6-6.5S6.3 3.3 8 1.5Z"
+      : loginAccess === "team"
+        ? // Two people
+          "M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.4M12.2 9.8c1.4.5 2.3 1.7 2.3 3.2"
+        : // Lock
+          "M4.5 7V5.2a3.5 3.5 0 0 1 7 0V7M3.5 7h9v6.5h-9V7Z";
+  const audience =
+    loginAccess === "public"
+      ? "Anyone on the web"
+      : loginAccess === "team"
+        ? "Your team"
+        : "Only you";
+  const canFork = codeAccess === "install";
+  const label = canFork ? `${audience} · can copy the code` : audience;
+  return (
+    <span
+      className={`mini-app-publish-bar__share-audience${
+        canFork ? " mini-app-publish-bar__share-audience--code" : ""
+      }`}
+      title={label}
+    >
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+        <path
+          d={path}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {/* Badged, not a second icon: "public AND forkable" is one fact about who
+          gets what, and the bar has no room for two glyphs side by side. */}
+      {canFork ? (
+        <span className="mini-app-publish-bar__share-code-badge" aria-hidden>
+          <svg viewBox="0 0 16 16" width="10" height="10" focusable="false">
+            <path
+              d="M6 4.5 2.5 8 6 11.5M10 4.5 13.5 8 10 11.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Circular arrow — re-ask the web, shown inside the pill next to the age. */
+function WebSyncRefreshIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden focusable="false">
+      <path
+        d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3h-3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 export function WebSyncStatusDot({
@@ -874,10 +977,67 @@ export function WebSyncStatusDot({
   popoverOpen = false,
   interactive = true,
   onClick,
+  label,
+  tone,
+  onRefresh,
 }: WebSyncStatusDotProps) {
+  const chip = Boolean(label);
   const className = `mini-app-publish-bar__web-sync-dot mini-app-publish-bar__web-sync-dot--${state}${
     spinning ? " mini-app-publish-bar__web-sync-dot--spinning" : ""
+  }${chip ? " mini-app-publish-bar__web-sync-dot--chip" : ""}${
+    chip && tone ? ` mini-app-publish-bar__web-sync-dot--tone-${tone}` : ""
   }`;
+
+  // Labelled pill: one object carrying state, age, and the control that
+  // refreshes that age — so the number and its refresh never drift apart.
+  if (chip) {
+    // No title on the wrapper. It spans the dot, the label, the refresh button
+    // and the padding between them, so a tooltip there fired over dead gray
+    // area where the cursor is an arrow and nothing is clickable. The status
+    // sentence belongs to the status button only.
+    return (
+      <span className={className}>
+        <button
+          type="button"
+          className={`mini-app-publish-bar__web-sync-chip-main${
+            interactive ? "" : " mini-app-publish-bar__web-sync-chip-main--inert"
+          }`}
+          title={tooltip}
+          aria-label={`App status: ${tooltip}`}
+          aria-expanded={popoverOpen}
+          aria-haspopup="dialog"
+          // aria-disabled, not disabled: a truly disabled button fires no
+          // pointer events, so it can never show its own tooltip — which is
+          // what pushed the title onto the wrapper in the first place. The
+          // click is guarded below instead.
+          aria-disabled={!interactive}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!interactive) return;
+            onClick?.();
+          }}
+        >
+          <span className="mini-app-publish-bar__web-sync-chip-dot" aria-hidden />
+          {spinning ? <WebSyncSpinner /> : null}
+          <span className="mini-app-publish-bar__web-sync-chip-text">{label}</span>
+        </button>
+        {onRefresh ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__web-sync-chip-refresh"
+            title="Re-check the web copy now"
+            aria-label="Re-check the web copy now"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRefresh();
+            }}
+          >
+            <WebSyncRefreshIcon />
+          </button>
+        ) : null}
+      </span>
+    );
+  }
   const actionBadge = state === "action_required" ? (
     <span className="mini-app-publish-bar__web-sync-dot-badge" aria-hidden>
       !

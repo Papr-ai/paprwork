@@ -36,6 +36,17 @@ describe("parseAppIdFromEditFilePath", () => {
       parseAppIdFromEditFilePath("~/Documents/GitHub/paprwork-v2/foo.ts"),
     ).toBeUndefined();
   });
+
+  it("does not treat paprwork-v2 ui/components/Apps as a mini-app path", () => {
+    expect(
+      parseAppIdFromEditFilePath(
+        "~/Documents/GitHub/paprwork-v2/ui/components/Apps/MiniAppPublishBar.tsx",
+      ),
+    ).toBeUndefined();
+    expect(
+      parseAppIdFromEditFilePath("ui/components/Apps/WebSyncPopover.tsx"),
+    ).toBeUndefined();
+  });
 });
 
 describe("resolveAppIdForAutoOpen", () => {
@@ -87,6 +98,20 @@ describe("shouldAutoOpenArtifactTab", () => {
         args: { path: "$PAPR_HOME/apps/abc-123/app.ts" },
       }),
     ).toBe(true);
+  });
+
+  it("does not auto-open when editing paprwork source under ui/components/Apps", () => {
+    expect(
+      shouldAutoOpenArtifactTab({
+        toolName: "edit_file",
+        hasError: false,
+        hasResult: true,
+        parsedResult: { success: true },
+        args: {
+          path: "ui/components/Apps/MiniAppPublishBar.tsx",
+        },
+      }),
+    ).toBe(false);
   });
 
   it("does not open when tool errored before execution", () => {

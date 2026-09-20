@@ -41,6 +41,7 @@ import {
   shouldAutoOpenArtifactTab,
 } from "../utils/resolveAppIdForAutoOpen";
 import { buildRecoveryAgentConfigForChat } from "../utils/buildRecoveryAgentConfig";
+import { scheduleChatTitleGeneration } from "../lib/scheduleChatTitle";
 import {
   activeStreamRequests,
   appliedChunkCounts,
@@ -2322,7 +2323,7 @@ export function useAgent() {
       console.log("[useAgent.sendMessage] Message:", message);
       console.log("[useAgent.sendMessage] ChatId:", chatId);
 
-      const { setTabStreaming, setTabUnread, updateTabTitle, updateTabId } =
+      const { setTabStreaming, setTabUnread, updateTabId } =
         useTabStore.getState();
 
       const isFirstMessage = chatId.startsWith("temp-");
@@ -2458,6 +2459,8 @@ export function useAgent() {
           setSending(finalChatId, true);
           setTabStreaming(tabId, false);
           setTabStreaming(`chat-${finalChatId}`, true);
+
+          scheduleChatTitleGeneration(finalChatId, message);
         }
 
         if (finalChatId !== chatId) {
@@ -2498,23 +2501,6 @@ export function useAgent() {
           },
         );
         console.log("[useAgent] gateway.stream completed successfully");
-
-        // Generate title after streaming (auth is guaranteed resolved)
-        if (isFirstMessage) {
-          gateway
-            .send("agent:generate-title", {
-              chatId: finalChatId,
-              message,
-            })
-            .then((titleResponse) => {
-              const title = (titleResponse.data as any)?.title || "New Chat";
-              console.log("[useAgent] Generated title:", title);
-              updateTabTitle(`chat-${finalChatId}`, title);
-            })
-            .catch((titleError) => {
-              console.error("[useAgent] Failed to generate title:", titleError);
-            });
-        }
 
         // Set tab unread status if not active (green dot)
         // The streaming status (blue dot) was already cleared by the "done" chunk

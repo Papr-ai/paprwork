@@ -1241,6 +1241,90 @@ export function webSyncVisualState(
   return "warn";
 }
 
+/**
+ * Chip label for the publish bar, ranked worst-first: whatever needs the user
+ * is what the chip says. The age is appended only in the calm state, because
+ * that is the only state where "when did we last ask the web?" is the question
+ * the user actually has. Local dirty is watched, never stale, so it never
+ * carries an age.
+ */
+export type PublishBarChipTone = "ok" | "warn" | "bad" | "info" | "idle" | "busy";
+
+export function resolvePublishBarChipLabel(input: {
+  state: WebSyncVisualState;
+  live: boolean;
+  syncEnabled: boolean;
+  lastCheckedAt: number | null;
+  /** ISO time of the last successful publish — drives "just published". */
+  lastPublishedAt?: string | null;
+}): { label: string; showRefresh: boolean; tone: PublishBarChipTone } {
+  const { state, live, syncEnabled, lastCheckedAt, lastPublishedAt } = input;
+  if (!live) return { label: "Draft", showRefresh: false, tone: "idle" };
+  if (state === "loading")
+    return { label: "Checking…", showRefresh: false, tone: "busy" };
+  if (state === "syncing")
+    return { label: "Publishing…", showRefresh: false, tone: "busy" };
+  if (state === "error")
+    return { label: "Last publish failed", showRefresh: false, tone: "bad" };
+  if (state === "action_required")
+    return { label: "Needs review", showRefresh: false, tone: "bad" };
+  if (state === "warn")
+    return { label: "Unpublished changes", showRefresh: false, tone: "warn" };
+  if (state === "disabled" || !syncEnabled)
+    return { label: "Live, sync off", showRefresh: false, tone: "idle" };
+
+  // A fresh publish is the write we just made, so confirm THAT — not the age of
+  // the last web check, which can be hours old at the moment we publish.
+  const publishedMsAgo = lastPublishedAt
+    ? Date.now() - new Date(lastPublishedAt).getTime()
+    : Number.POSITIVE_INFINITY;
+  if (publishedMsAgo >= 0 && publishedMsAgo < 120_000) {
+    return { label: "Live, just published", showRefresh: false, tone: "ok" };
+  }
+
+  const age = lastCheckedAt
+    ? formatLastUploadedAt(new Date(lastCheckedAt).toISOString())
+    : null;
+  return {
+    label: age ? `Live, web checked ${age}` : "Live",
+    showRefresh: Boolean(age),
+    tone: "idle",
+  };
+}
+
+/**
+ * The one action the bar should offer right now, ranked worst-first to match
+ * the chip. Persistent — not a dismissible notice — because "you have work that
+ * isn't on the web" is a standing fact, not an alert. Returns null when the app
+ * is calm and there is genuinely nothing to do.
+ */
+export function resolvePublishBarPrimaryAction(input: {
+  state: WebSyncVisualState;
+  live: boolean;
+  syncEnabled: boolean;
+  pushing: boolean;
+  pulling: boolean;
+}): { label: string; kind: "publish" | "updates" | "review" | "retry" } | null {
+  const { state, live, syncEnabled, pushing, pulling } = input;
+  if (!syncEnabled) return null;
+  if (!live) {
+    return { label: pushing ? "Publishing…" : "Publish", kind: "publish" };
+  }
+  if (state === "loading") return null;
+  if (state === "syncing" || pushing) {
+    return { label: "Publishing…", kind: "publish" };
+  }
+  if (state === "action_required") {
+    return { label: "Review changes", kind: "review" };
+  }
+  if (state === "error") return { label: "Retry publish", kind: "retry" };
+  if (state === "warn") {
+    return { label: "Publish changes", kind: "publish" };
+  }
+  if (pulling) return { label: "Getting updates…", kind: "updates" };
+  return null;
+}
+
 export interface PublishBarStatusInput {
   live: boolean;
   loading: boolean;

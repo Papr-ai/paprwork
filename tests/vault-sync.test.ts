@@ -131,6 +131,19 @@ describe("VaultSyncService", () => {
     expect(content).toContain("/api/cloud/vault/pull-shared");
   });
 
+  it("pull-shared POST body uses memory server namespace_id field", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    const pullBlock = content.slice(
+      content.indexOf("async pullSharedKeys("),
+      content.indexOf("async deleteKeyByName("),
+    );
+    expect(pullBlock).toContain("namespace_id: namespaceId");
+    expect(pullBlock).not.toMatch(/mergeCloudActingUserBody\(\{\s*namespaceId\s*\}/);
+  });
+
   it("skips shared mirrors when pushing keys to cloud", () => {
     const vaultContent = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),

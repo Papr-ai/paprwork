@@ -77,3 +77,63 @@ test("stats name blockers and grace vs capacity", async () => {
   hold.resolve();
   await vi.runAllTimersAsync();
 });
+
+
+test("explicit jobs bypass grace behind maintenance but still respect capacity", async () => {
+  vi.useFakeTimers();
+  const budget = new BackgroundBudget(() => 4, () => true, () => 120000);
+  const maintenance = vi.fn(async () => {});
+  const background = budget.run("maintenance", maintenance);
+  const hold = deferred();
+  const firstStarted = vi.fn(() => hold.promise);
+  const secondStarted = vi.fn(async () => {});
+  const first = budget.runInteractive(() => budget.run("requested-job", firstStarted));
+  const second = budget.runInteractive(() => budget.run("second-requested-job", secondStarted));
+  await vi.advanceTimersByTimeAsync(0);
+  expect(firstStarted).toHaveBeenCalledOnce();
+  expect(secondStarted).not.toHaveBeenCalled();
+  expect(maintenance).not.toHaveBeenCalled();
+  expect(budget.stats().queued.find(w => w.label === "second-requested-job")?.blockReason).toBe("interactive_busy");
+  hold.resolve(); await first; await second;
+  expect(secondStarted).toHaveBeenCalledOnce();
+  expect(maintenance).not.toHaveBeenCalled();
+  await vi.advanceTimersByTimeAsync(120000); await background;
+  expect(maintenance).toHaveBeenCalledOnce();
+});
+
+test("interactive admission propagates to awaited dependencies and never leaks to maintenance", async () => {
+  vi.useFakeTimers();
+  const budget = new BackgroundBudget(() => 1, () => true, () => 1000);
+  const started: string[] = [];
+  await budget.runInteractive(async () => {
+    await budget.run("dependency", async () => { started.push("dependency"); });
+    await budget.run("job", async () => {
+      await budget.run("nested", async () => { started.push("nested"); });
+      started.push("job");
+    });
+  });
+  const background = budget.run("maintenance", async () => { started.push("maintenance"); });
+  await vi.advanceTimersByTimeAsync(0);
+  expect(started).toEqual(["dependency", "nested", "job"]);
+  await vi.advanceTimersByTimeAsync(1000); await background;
+  expect(started).toEqual(["dependency", "nested", "job", "maintenance"]);
+});
+
+test("cancelled interactive waiters do not run and aged maintenance is not starved", async () => {
+  vi.useFakeTimers();
+  const budget = new BackgroundBudget(() => 1, () => true, () => 1000);
+  const hold = deferred();
+  const first = budget.runInteractive(() => budget.run("held", () => hold.promise));
+  const order: string[] = [];
+  const maintenance = budget.run("maintenance", async () => { order.push("maintenance"); });
+  const controller = new AbortController();
+  const cancelledWork = vi.fn(async () => {});
+  const cancelled = budget.runInteractive(() => budget.run("cancelled", cancelledWork, controller.signal));
+  const rejected = expect(cancelled).rejects.toThrow("cancelled");
+  controller.abort(); await rejected;
+  await vi.advanceTimersByTimeAsync(1000);
+  const next = budget.runInteractive(() => budget.run("new-request", async () => { order.push("new-request"); }));
+  hold.resolve(); await Promise.all([first, maintenance, next]);
+  expect(order).toEqual(["maintenance", "new-request"]);
+  expect(cancelledWork).not.toHaveBeenCalled();
+});

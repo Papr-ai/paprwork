@@ -71,6 +71,8 @@ interface ChatStore {
   /** Move chat state from a temp id to a permanent id (first message in new chat). */
   migrateChatId: (oldChatId: string, newChatId: string) => void;
   setChats: (chats: ChatMetadata[]) => void;
+  /** Optimistic title after agent:generate-title (before chat:list reload). */
+  patchChatTitle: (chatId: string, title: string) => void;
   setChatMemoryScope: (chatId: string, scope: MemoryAudience) => void;
   getChatMemoryScope: (chatId: string) => MemoryAudience;
   setLoading: (loading: boolean) => void;
@@ -463,6 +465,33 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         streamingState: newStreamingState,
         memoryScopeByChatId,
         chats,
+      };
+    }),
+
+  patchChatTitle: (chatId, title) =>
+    set((state) => {
+      const trimmed = title.trim();
+      if (!trimmed) return state;
+      const existing = state.chats.find((chat) => chat.id === chatId);
+      if (existing) {
+        return {
+          chats: state.chats.map((chat) =>
+            chat.id === chatId ? { ...chat, title: trimmed } : chat,
+          ),
+        };
+      }
+      const now = new Date().toISOString();
+      return {
+        chats: [
+          {
+            id: chatId,
+            title: trimmed,
+            createdAt: now,
+            updatedAt: now,
+            messageCount: 1,
+          },
+          ...state.chats,
+        ],
       };
     }),
 

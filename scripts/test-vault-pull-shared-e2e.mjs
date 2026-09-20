@@ -209,7 +209,7 @@ async function testGatewayProxy(namespaceId, expectedKey) {
   }
 
   const pull = await gatewayCall("POST", "/api/cloud/vault/pull-shared", {
-    namespaceId,
+    namespace_id: namespaceId,
     external_user_id: "e2e-vault-user-b",
   });
   if (pull.status === 404) {

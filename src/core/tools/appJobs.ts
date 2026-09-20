@@ -1,3 +1,4 @@
+import { gatewayBackgroundBudget } from "../../gateway/services/gatewayBackgroundBudget.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { RequirementItemSchema } from "../types/bundles.js";
@@ -1568,7 +1569,7 @@ export const runJobTool = createTool({
     const job =
       args.runtime === "cloud"
         ? await jobsService.runJobInCloud(args.jobId)
-        : await jobsService.runJob(args.jobId);
+        : await gatewayBackgroundBudget.runInteractive(() => jobsService.runJob(args.jobId));
     const apiKeys = getApiKeysForSanitization();
     const logs = sanitizeError(
       await jobsService.getLogs(args.jobId, args.logBytes ?? 12000),

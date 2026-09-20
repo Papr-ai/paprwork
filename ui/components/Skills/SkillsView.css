@@ -42,8 +42,6 @@
   padding: 12px;
   border: 1px solid var(--glass-border-color, var(--border-color));
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border-radius: 12px;
 }
 
@@ -95,8 +93,6 @@
   border-radius: 12px;
   padding: 10px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .skills-view__item--frontend {

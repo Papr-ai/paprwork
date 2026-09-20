@@ -38,8 +38,6 @@
   width: 220px;
   padding: 8px 14px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--glass-border, var(--border));
   border-radius: 10px;
   color: var(--text-primary);
@@ -72,8 +70,6 @@
   max-width: 320px;
   padding: 10px 16px;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
   border: 1px solid var(--glass-border, var(--border));
   border-radius: 12px;
   color: var(--text-primary);
@@ -148,8 +144,6 @@
 .documents-view__sort-btn--active {
   color: var(--text-primary);
   background: var(--glass-bg);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
 }
 
 /* Scrollable content */

@@ -2856,20 +2856,6 @@ export class JobsService {
         const attemptStart = performance.now();
         const runId = `${job.id}-${Date.now()}-a${attempt}`;
 
-        // Track execution state and retry attempts
-        await this.setJobStatus(job.id, "running", {
-          currentExecutionId: runId,
-          currentAttempt: attempt,
-          maxAttempts: maxAttempts,
-          nextRetryAt: undefined, // Clear since we're running now
-          runSessionStartedAt,
-        });
-
-        await this.appendLog(
-          job.id,
-          `[attempt ${attempt}/${maxAttempts}] Starting execution ${runId}`,
-        );
-
         let result: {
           exitCode: number;
           errorMessage?: string;
@@ -2879,8 +2865,21 @@ export class JobsService {
           const controller = new AbortController();
           this.attemptControllers.set(job.id, controller);
           try {
-            result = await gatewayBackgroundBudget.run(`job:${job.id}`, () =>
-              this.runSingleAttempt(job, runId, runtimeParams, controller.signal), controller.signal);
+            await this.setJobStatus(job.id, "pending", {
+              currentExecutionId: runId, currentAttempt: attempt, maxAttempts,
+              nextRetryAt: undefined,
+            });
+            await this.appendLog(job.id, `[attempt ${attempt}/${maxAttempts}] Waiting for execution capacity ${runId}`);
+            result = await gatewayBackgroundBudget.run(`job:${job.id}`, async () => {
+              await this.setJobStatus(job.id, "running", {
+                currentExecutionId: runId, currentAttempt: attempt, maxAttempts,
+                nextRetryAt: undefined,
+                runSessionStartedAt: priorPhantomRunning ? runSessionStartedAt : new Date().toISOString(),
+              });
+              controller.signal.throwIfAborted();
+              await this.appendLog(job.id, `[attempt ${attempt}/${maxAttempts}] Starting execution ${runId}`);
+              return this.runSingleAttempt(job, runId, runtimeParams, controller.signal);
+            }, controller.signal);
           } finally {
             this.attemptControllers.delete(job.id);
           }
@@ -3211,7 +3210,7 @@ export class JobsService {
     await this.preflightJobRun(jobId);
     this.launchFailures.delete(jobId);
 
-    const runPromise = this.runJob(jobId, runtimeParams).catch(
+    const runPromise = gatewayBackgroundBudget.runInteractive(() => this.runJob(jobId, runtimeParams)).catch(
       async (err: unknown) => {
         if (
           !(

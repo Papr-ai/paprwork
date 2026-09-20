@@ -12,6 +12,7 @@ import {
   type PreviewNetworkProfile,
   type WebviewNetworkLogEntry,
 } from "./miniAppPreviewNetworkProfile.js";
+import { syncWebviewPreviewActivityLatch } from "../../core/tools/webviewSessionGuard.js";
 
 export interface PreviewConsoleLog {
   level: number | string;
@@ -146,6 +147,7 @@ export async function runMiniAppRuntimePreview(
     } catch {
       // Non-fatal — preview session may already be closed
     }
+    await syncWebviewPreviewActivityLatch();
 
     const previewErrors = logs
       .filter((log) => normalizePreviewConsoleLevel(log.level) === "error")

@@ -10,8 +10,6 @@
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   animation: modalBackdropIn 150ms ease;
 }
 
@@ -24,8 +22,6 @@
   width: 90%;
   max-width: 440px;
   background: var(--glass-bg, rgba(30, 30, 30, 0.95));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--glass-border, var(--border));
   border-radius: 16px;
   padding: 28px;

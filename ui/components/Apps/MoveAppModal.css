@@ -10,16 +10,12 @@
   align-items: center;
   justify-content: center;
   background: rgba(0, 0, 0, 0.5);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
 }
 
 .move-app-modal {
   width: 90%;
   max-width: 460px;
   background: var(--popover-bg, var(--glass-bg, rgba(30, 30, 30, 0.95)));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--glass-border, var(--border-color, var(--border)));
   border-radius: 16px;
   padding: 28px;

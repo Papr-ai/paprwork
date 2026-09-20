@@ -1,4 +1,19 @@
-import { hasRecentWebviewPreviewActivity } from "./webviewActivity.js";
+import { clearWebviewPreviewActivity } from "./webviewActivity.js";
+
+export interface WebviewBrowserBlockOptions {
+  /** Papr Chrome / embedded platform tab from prepare_browser — not mini-app preview. */
+  platformBrowserActive?: boolean;
+}
+
+export function shouldBlockBrowserToolsForWebviewPreview(
+  activeWebviewSessions: boolean,
+  options?: WebviewBrowserBlockOptions,
+): boolean {
+  if (options?.platformBrowserActive) {
+    return false;
+  }
+  return activeWebviewSessions;
+}
 
 export async function hasActiveWebviewSessions(): Promise<boolean> {
   try {
@@ -15,11 +30,26 @@ export async function hasActiveWebviewSessions(): Promise<boolean> {
   }
 }
 
+/** Drop stale preview latch when Electron reports no headless webview sessions. */
+export async function syncWebviewPreviewActivityLatch(): Promise<void> {
+  const active = await hasActiveWebviewSessions();
+  if (!active) {
+    clearWebviewPreviewActivity();
+  }
+}
+
 export async function getBrowserToolWebviewBlockReason(
   toolName: string,
+  options?: WebviewBrowserBlockOptions,
 ): Promise<string | undefined> {
-  const previewOpen =
-    hasRecentWebviewPreviewActivity() || (await hasActiveWebviewSessions());
+  const activeSessions = await hasActiveWebviewSessions();
+  if (!activeSessions) {
+    clearWebviewPreviewActivity();
+  }
+  const previewOpen = shouldBlockBrowserToolsForWebviewPreview(
+    activeSessions,
+    options,
+  );
   if (!previewOpen) {
     return undefined;
   }
@@ -27,6 +57,6 @@ export async function getBrowserToolWebviewBlockReason(
   return (
     `${toolName} controls a separate Playwright browser, not the mini-app preview session. ` +
     "While webview_launch_app preview is open, use webview_fill_form, webview_click, or webview_execute " +
-    "for DOM changes in the preview. Use bash+curl for API/DB checks."
+    "for DOM changes in the preview, or webview_close when finished. Use bash+curl for API/DB checks."
   );
 }

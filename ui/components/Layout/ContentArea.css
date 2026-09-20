@@ -19,8 +19,6 @@
 /* Split view: skip frosted-glass blur — it repaints both panes on every chat
    input reflow and makes typing feel laggy next to TipTap. */
 .content-area--split .content-pane {
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   background: var(--background-color, rgba(255, 255, 255, 0.98));
   isolation: isolate;
 }
@@ -39,8 +37,6 @@
   flex-direction: column;
   /* Subtle frosted glass — shows app-layout background with soft tint */
   background: rgba(255, 255, 255, 0.10);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
 }
 
 .content-pane--full {
@@ -237,7 +233,6 @@ body.resizing .content-area__resize-line {
   font-size: 16px;
   font-weight: 500;
   background: var(--glass-bg);
-  backdrop-filter: blur(14px);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   margin: var(--space-4);
@@ -261,7 +256,6 @@ body.resizing .content-area__resize-line {
   inset: 0;
   z-index: 20;
   background: color-mix(in srgb, var(--bg-secondary) 88%, transparent);
-  backdrop-filter: blur(6px);
 }
 
 .content-area__workspace-switch-spinner {

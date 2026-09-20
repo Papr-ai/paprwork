@@ -11,8 +11,6 @@
   align-items: center;
   justify-content: center;
   background: color-mix(in srgb, var(--text-primary) 40%, transparent);
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
   animation: deleteModalBackdropIn 150ms ease;
 }
 
@@ -27,8 +25,6 @@
   max-height: 90vh;
   overflow-y: auto;
   background: var(--popover-bg, var(--glass-bg));
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--glass-border, var(--border-color));
   border-radius: 16px;
   padding: 24px;

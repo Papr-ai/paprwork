@@ -59,9 +59,8 @@
       
       /* Hide loading screen once React loads */
       body.react-loaded #loading-screen {
-        opacity: 0;
-        pointer-events: none;
-        transition: opacity 0.3s ease-out;
+        /* Opacity alone leaves the full-window blur and logo animation alive. */
+        display: none;
       }
     </style>
   </head>

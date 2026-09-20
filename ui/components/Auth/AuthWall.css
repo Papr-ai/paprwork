@@ -44,8 +44,6 @@
   align-items: center;
   justify-content: center;
   background: var(--glass-bg);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
   min-height: 100vh;
   position: relative;
 }
@@ -308,8 +306,6 @@
   align-items: center;
   justify-content: center;
   background: var(--panel-bg);
-  backdrop-filter: blur(40px);
-  -webkit-backdrop-filter: blur(40px);
   position: relative;
   overflow: hidden;
   min-height: 100vh;

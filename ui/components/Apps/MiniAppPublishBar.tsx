@@ -9,6 +9,8 @@ import { useAppCloudSyncStatus } from "../../hooks/useAppCloudSyncStatus";
 import {
   formatWebSyncStatusTooltip,
   resolvePublishBarStatus,
+  resolvePublishBarChipLabel,
+  resolvePublishBarPrimaryAction,
   webSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
 import {
@@ -30,15 +32,17 @@ import {
   buildUpstreamCloudPreviewUrl,
   buildUpstreamPublishedWebUrl,
 } from "../../utils/cloudDesktopPreview";
+import { useIncomingCloudChangeRequests } from "../../hooks/useIncomingCloudChangeRequests";
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
 import { CloudUpstreamBar } from "./CloudUpstreamBar";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
-import { AppWorkspaceMenu } from "./AppWorkspaceMenu";
+import { PublishBarOverflowMenu } from "./PublishBarOverflowMenu";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
 import {
   WebSyncPopover,
   WebSyncStatusDot,
+  ShareAudienceIcon,
   buildGenericSyncAgentPrompt,
   webSyncPushButtonLabel,
 } from "./WebSyncPopover";
@@ -129,7 +133,7 @@ const PERMISSION_OPTIONS: {
   {
     value: "edit",
     label: "Can edit code",
-    description: "Install into Paprwork to personalize and send changes back",
+    description: "Install the app, then send changes",
   },
 ];
 
@@ -181,13 +185,130 @@ function requireSignInFromModel(model: ShareAudienceModel): boolean {
   return true;
 }
 
+type ShareStep = "who" | "access" | "keys";
+
+/**
+ * Same glyphs as the Share button's audience icon and the prototype's audIcon.
+ * Audience is the one answer that shows up outside this sheet, so the icon has
+ * to be learned here and recognised on the bar — different art in the two
+ * places would break that.
+ */
+function ShareOptionGlyph({ audience }: { audience: ShareAudience }) {
+  const d =
+    audience === "public"
+      ? "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM1.5 8h13M8 1.5c1.7 1.8 2.6 4.1 2.6 6.5S9.7 12.7 8 14.5c-1.7-1.8-2.6-4.1-2.6-6.5S6.3 3.3 8 1.5Z"
+      : audience === "team"
+        ? "M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.4M12.2 9.8c1.4.5 2.3 1.7 2.3 3.2"
+        : audience === "link"
+          ? "M6.5 9.5a2.8 2.8 0 0 0 4 0l2-2a2.83 2.83 0 0 0-4-4l-1 1M9.5 6.5a2.8 2.8 0 0 0-4 0l-2 2a2.83 2.83 0 0 0 4 4l1-1"
+          : "M4.5 7V5.2a3.5 3.5 0 0 1 7 0V7M3.5 7h9v6.5h-9V7Z";
+  return (
+    <span className="share-sheet__opt-glyph" aria-hidden>
+      <svg viewBox="0 0 16 16" width="15" height="15" focusable="false">
+        <path
+          d={d}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+}
+
+/** Angle brackets, inline in the "can edit code" label — same mark the Share
+ *  button badges, so the glyph means one thing everywhere it appears. */
+function InlineCodeGlyph() {
+  return (
+    <span className="share-sheet__inline-code" aria-hidden>
+      <svg viewBox="0 0 16 16" width="11" height="11" focusable="false">
+        <path
+          d="M6 4.5 2.5 8 6 11.5M10 4.5 13.5 8 10 11.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+}
+
+/** Switch, not a checkbox. Sign-in and per-user data are settings you flip on
+ *  an app, not items you tick in a list — and the radio options they sit beside
+ *  already own the "pick one of these" shape. */
+function ShareSwitch({ on }: { on: boolean }) {
+  return (
+    <span
+      className={`share-sheet__switch${on ? " share-sheet__switch--on" : ""}`}
+      aria-hidden
+    >
+      <i />
+    </span>
+  );
+}
+
+/**
+ * Three ordered questions instead of one long form. Merged down from four:
+ * code access, sign-in and per-user data all answer "what does a visitor get",
+ * so splitting them made the sheet feel longer without making any one choice
+ * easier.
+ *
+ * Tabs rather than a forced funnel — editing an existing app's sharing is
+ * usually a one-field change, so you can jump straight to the field you came
+ * for. Each tab carries its current answer, so the strip doubles as a summary.
+ */
+function ShareStepTabs({
+  step,
+  onStep,
+  answers,
+  dimmed,
+}: {
+  step: ShareStep;
+  onStep: (next: ShareStep) => void;
+  answers: Record<ShareStep, string>;
+  dimmed: Record<ShareStep, boolean>;
+}) {
+  const steps: { id: ShareStep; n: number; title: string }[] = [
+    { id: "who", n: 1, title: "Who" },
+    { id: "access", n: 2, title: "Access" },
+    { id: "keys", n: 3, title: "Keys" },
+  ];
+  return (
+    <div className="share-steps" role="tablist">
+      {steps.map((s) => (
+        <button
+          key={s.id}
+          type="button"
+          role="tab"
+          aria-selected={step === s.id}
+          className={`share-steps__tab${step === s.id ? " share-steps__tab--on" : ""}${
+            dimmed[s.id] ? " share-steps__tab--dim" : ""
+          }`}
+          onClick={() => onStep(s.id)}
+        >
+          <b>
+            {s.n}. {s.title}
+          </b>
+          <span>{answers[s.id]}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 interface ShareSheetProps {
   title: string;
+  /** Sits beside the title — the link is what most visits to this sheet want. */
+  headerAside?: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
 }
 
-function ShareSheet({ title, onClose, children }: ShareSheetProps) {
+function ShareSheet({ title, headerAside, onClose, children }: ShareSheetProps) {
   return createPortal(
     <div className="share-sheet__backdrop" role="presentation" onClick={onClose}>
       <div
@@ -201,6 +322,7 @@ function ShareSheet({ title, onClose, children }: ShareSheetProps) {
           <h3 id="share-sheet-title" className="share-sheet__title">
             {title}
           </h3>
+          {headerAside}
           <button
             type="button"
             className="share-sheet__close"
@@ -284,10 +406,13 @@ export function MiniAppPublishBar({
   onOpenDependencyApp,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
+  const [contributionsOpen, setContributionsOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
   const [permission, setPermission] = useState<SharePermission>("write");
   const [requireSignIn, setRequireSignIn] = useState(true);
   const [perUserIsolation, setPerUserIsolation] = useState(false);
+  /** Share sheet reads as three ordered questions rather than one long form. */
+  const [shareStep, setShareStep] = useState<"who" | "access" | "keys">("who");
   const [lastSyncedAt, setLastSyncedAt] = useState<string | undefined>(
     cloudLineage?.lastSyncedAt,
   );
@@ -761,6 +886,16 @@ export function MiniAppPublishBar({
   const showOwnerChangeRequests =
     cloud.live && isCodePermission(permission) && !isFork;
 
+  const incomingChanges = useIncomingCloudChangeRequests(
+    showOwnerChangeRequests ? appId : null,
+  );
+
+  useEffect(() => {
+    if (incomingChanges.pending.length > 0) {
+      setContributionsOpen(true);
+    }
+  }, [incomingChanges.pending.length]);
+
   const removeFromCommunity = () => {
     const nextPermission = permission === "edit" ? "edit" : "write";
     void applySharing("link", nextPermission, false);
@@ -804,6 +939,44 @@ export function MiniAppPublishBar({
     webSyncSpinning,
     webSyncTooltip,
   });
+  // Re-render on a slow tick so the chip's age ("web checked 4 min ago") keeps
+  // counting up while the tab sits open instead of freezing at its first value.
+  const [, setChipAgeTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => setChipAgeTick((n) => n + 1), 60_000);
+    return () => clearInterval(timer);
+  }, []);
+  const publishBarChip = resolvePublishBarChipLabel({
+    state: publishBarStatus.state,
+    live: cloud.live,
+    syncEnabled: workspaceMode === "preview",
+    lastCheckedAt: webSyncLastCheckedAt,
+    // "Just published" is a fresh-confirmation window: for ~2 minutes after a
+    // publish the chip confirms that write, then falls back to the check age.
+    lastPublishedAt: webSyncStatus?.lastUploadedAt ?? null,
+  });
+  // The chip only appears in preview mode. When it does, it is the single
+  // source of status and the meta line stands down.
+  const chipSpeaks = workspaceMode === "preview";
+  const metaStatusText = (() => {
+    const lineage =
+      isFork && cloudLineage && !showUpstreamBar
+        ? `${cloudLineage.mode === "track" ? "Tracking" : "Fork"} ${cloudLineage.sourceSlug}`
+        : null;
+    if (cloud.loading && !cloud.live) return "Checking…";
+    if (chipSpeaks) return lineage;
+    const base = `${cloud.live ? "Live" : "Draft"} · ${cloud.statusLabel}${
+      cloud.refreshing && cloud.live ? " · updating" : ""
+    }`;
+    return lineage ? `${base} · ${lineage}` : base;
+  })();
+  const publishBarAction = resolvePublishBarPrimaryAction({
+    state: publishBarStatus.state,
+    live: cloud.live,
+    syncEnabled: workspaceMode === "preview",
+    pushing: webSyncPushing || Boolean(shareSyncNotice),
+    pulling: webSyncPulling,
+  });
   const shareSheetBusy =
     cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
   const publishBlockedByIntegrity = readiness?.ok === false;
@@ -822,6 +995,61 @@ export function MiniAppPublishBar({
     requireSignIn,
     perUserIsolation,
   );
+  /**
+   * Later steps are meaningless for a private app. Dim them and say so rather
+   * than hiding them — a step that vanishes reads as a bug, a step that
+   * explains itself teaches the dependency.
+   */
+  const stepDimmed: Record<ShareStep, boolean> = {
+    who: false,
+    access: audience === "private",
+    keys: audience === "private",
+  };
+  const stepAnswers: Record<ShareStep, string> = {
+    who: ACCESS_OPTIONS.find((o) => o.value === audience)?.label ?? audience,
+    access: stepDimmed.access
+      ? "—"
+      : `${permission === "edit" ? "Use + code" : "Use only"} · ${
+          requireSignIn ? "sign in" : "no sign-in"
+        } · ${perUserIsolation && requireSignIn ? "separate DBs" : "one DB"}`,
+    keys: stepDimmed.keys ? "—" : "Per key",
+  };
+
+  // The link lives in the header: it is what most visits to this sheet are for,
+  // and burying it behind a tab to gain consistency would be a bad trade.
+  const shareLinkNode =
+    cloud.live && (copyUrl || webDisplayUrl) ? (
+      <div className="share-sheet__header-link">
+        <input
+          className="share-sheet__url-input"
+          readOnly
+          value={copyUrl ?? webDisplayUrl ?? ""}
+          aria-label="Share link"
+          title={copyUrl ?? webDisplayUrl ?? ""}
+          onFocus={(event) => event.currentTarget.select()}
+          onClick={(event) => event.currentTarget.select()}
+        />
+        <button
+          type="button"
+          className="share-sheet__icon-btn"
+          title="Copy link"
+          aria-label="Copy link"
+          onClick={() => void cloud.copyLink(copyUrl ?? webDisplayUrl)}
+        >
+          <CopyIcon />
+        </button>
+        <button
+          type="button"
+          className="share-sheet__icon-btn"
+          title="Open in browser"
+          aria-label="Open in browser"
+          onClick={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
+        >
+          <OpenExternalIcon />
+        </button>
+      </div>
+    ) : null;
+
   const shareSyncBanner = (() => {
     if (cloud.errorDetail) {
       return {
@@ -854,9 +1082,9 @@ export function MiniAppPublishBar({
           "Sharing is saved, but the live link won't work until upload finishes.",
       };
     }
-    if (shareLinkReady) {
-      return { tone: "success" as const, message: "Your app is live and synced — the link is ready." };
-    }
+    // No success banner. The link sitting in the header already proves the app
+    // is live, and a banner saying so pushes the actual controls down to
+    // announce the absence of a problem. Banners are for exceptions.
     return null;
   })();
 
@@ -940,19 +1168,46 @@ export function MiniAppPublishBar({
         <div className="mini-app-publish-bar__left">
           <div className="mini-app-publish-bar__meta">
             <span className="mini-app-publish-bar__title">{appTitle}</span>
+            {/* Compatibility levels (Hybrid / Desktop only) no longer badge the
+                bar — see CloudCompatibilityBadge. This stays mounted because it
+                is also the only surface for "Papr Cloud paused". */}
             <CloudCompatibilityBadge
               report={compatReport ?? cloud.compatibility}
-              loading={compatLoading && !compatReport && !cloud.compatibility}
+              loading={false}
             />
-            <span className="mini-app-publish-bar__status">
-              {cloud.loading && !cloud.live
-                ? "Checking…"
-                : `${cloud.live ? "Live" : "Draft"} · ${cloud.statusLabel}`}
-              {cloud.refreshing && cloud.live ? " · updating" : null}
-              {isFork && cloudLineage && !showUpstreamBar
-                ? ` · ${cloudLineage.mode === "track" ? "Tracking" : "Fork"} ${cloudLineage.sourceSlug}`
-                : null}
-            </span>
+            {/* When the chip speaks it owns Live/Draft and the busy state, and
+                audience moved to the Share icon — so this line has nothing left
+                to say and is dropped entirely rather than rendered empty. */}
+            {metaStatusText ? (
+              <span className="mini-app-publish-bar__status">
+                {metaStatusText}
+              </span>
+            ) : null}
+            {/* Status belongs to the app, so it sits with the app's name —
+                not inside the Local/Web toggle, which is about which preview
+                you are looking at. */}
+            {workspaceMode === "preview" ? (
+              <span
+                ref={webSyncAnchorRef}
+                className="mini-app-publish-bar__chip-anchor"
+              >
+                <WebSyncStatusDot
+                  state={publishBarStatus.state}
+                  spinning={publishBarStatus.spinning}
+                  tooltip={publishBarStatus.tooltip}
+                  popoverOpen={webSyncPopoverOpen}
+                  interactive={publishBarStatus.interactive}
+                  onClick={handleWebSyncDotClick}
+                  label={publishBarChip.label}
+                  tone={publishBarChip.tone}
+                  onRefresh={
+                    publishBarChip.showRefresh
+                      ? () => void webSyncCheckStatus()
+                      : undefined
+                  }
+                />
+              </span>
+            ) : null}
           </div>
 
           {showUpstreamBar ? (
@@ -979,7 +1234,6 @@ export function MiniAppPublishBar({
 
         {workspaceMode === "preview" ? (
           <div
-            ref={webSyncAnchorRef}
             className="mini-app-publish-bar__segment mini-app-publish-bar__segment--with-sync"
             role="group"
             aria-label="Preview mode"
@@ -1020,35 +1274,6 @@ export function MiniAppPublishBar({
               >
                 Web
               </button>
-              <button
-                type="button"
-                className="mini-app-publish-bar__check-status-btn"
-                disabled={webSyncRefreshing || webSyncPushing}
-                title={
-                  webSyncNeedsStatusCheck
-                    ? "Compare local app with the web (code, databases, publish)"
-                    : "Refresh web sync status"
-                }
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setWebSyncPopoverOpen(true);
-                  void webSyncCheckStatus();
-                }}
-              >
-                {webSyncRefreshing ? "Checking…" : "Check status"}
-              </button>
-              <WebSyncStatusDot
-                state={publishBarStatus.state}
-                spinning={publishBarStatus.spinning}
-                tooltip={
-                  webSyncNeedsStatusCheck
-                    ? "Status not checked this session — click Check status"
-                    : publishBarStatus.tooltip
-                }
-                popoverOpen={webSyncPopoverOpen}
-                interactive={publishBarStatus.interactive}
-                onClick={handleWebSyncDotClick}
-              />
             </div>
             {webSyncPopoverOpen && webSyncPopoverPos
               ? createPortal(
@@ -1119,22 +1344,118 @@ export function MiniAppPublishBar({
             />
           ) : null}
 
-          <AppWorkspaceMenu
+          {/* Files/Preview moved into the overflow: it is a mode switch, not an
+              action, and it was spending a full-width button in a row that runs
+              out of space before the primary action does. */}
+          <PublishBarOverflowMenu
             mode={workspaceMode}
             onModeChange={onWorkspaceModeChange}
-            align="right"
+            live={cloud.live}
+            isFork={isFork}
+            busy={cloud.busy}
+            onUnpublish={takeOffWeb}
           />
 
-          <button
-            type="button"
-            className="mini-app-publish-bar__button mini-app-publish-bar__button--primary"
-            disabled={cloud.busy}
-            onClick={() => setShareOpen(true)}
-          >
-            Share
-          </button>
+          {showOwnerChangeRequests ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__button mini-app-publish-bar__button--icon"
+              disabled={cloud.busy}
+              aria-expanded={contributionsOpen}
+              aria-label={`Contributions${
+                incomingChanges.pending.length > 0
+                  ? `, ${incomingChanges.pending.length} pending`
+                  : ""
+              }`}
+              title={
+                incomingChanges.pending.length > 0
+                  ? `${incomingChanges.pending.length} contributions waiting for review`
+                  : "Contributions"
+              }
+              onClick={() => setContributionsOpen((open) => !open)}
+            >
+              {/* Inbox glyph plus a count, not the word: the number is the only
+                  part that changes and the only part worth reading at a glance,
+                  and "Contributions" cost more width than the bar can spare. */}
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden>
+                <path
+                  d="M4 13h4l1.5 3h5L16 13h4M4 13 6.5 5h11L20 13v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2Z"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              {incomingChanges.pending.length > 0 ? (
+                <span className="mini-app-publish-bar__contributions-badge">
+                  {incomingChanges.pending.length}
+                </span>
+              ) : null}
+            </button>
+          ) : null}
+
+          {/* Draft has nothing to share yet, so Share waits until the app is
+              live and Publish carries the primary weight instead. */}
+          {cloud.live ? (
+            <button
+              type="button"
+              className={`mini-app-publish-bar__button${
+                publishBarAction ? "" : " mini-app-publish-bar__button--primary"
+              }`}
+              disabled={cloud.busy}
+              title={`Shared: ${cloud.statusLabel}`}
+              onClick={() => setShareOpen(true)}
+            >
+              <ShareAudienceIcon
+                loginAccess={cloud.loginAccess}
+                codeAccess={cloud.codeAccess}
+              />
+              Share
+            </button>
+          ) : null}
+
+          {/* Persistent, not a dismissible banner: unpublished work is a
+              standing fact, and the action for it should not disappear. */}
+          {publishBarAction ? (
+            <button
+              type="button"
+              className={`mini-app-publish-bar__button mini-app-publish-bar__button--primary${
+                publishBarAction.kind === "review" || publishBarAction.kind === "retry"
+                  ? " mini-app-publish-bar__button--tone-bad"
+                  : publishBarAction.kind === "updates"
+                    ? " mini-app-publish-bar__button--tone-info"
+                    : ""
+              }`}
+              disabled={webSyncPushing || webSyncPulling || cloud.busy}
+              onClick={() => {
+                if (publishBarAction.kind === "updates") {
+                  void webSyncPullUpdates();
+                } else if (publishBarAction.kind === "review") {
+                  handleWebSyncDotClick();
+                } else {
+                  void handleWebSyncPushOrPublish();
+                }
+              }}
+            >
+              {publishBarAction.label}
+            </button>
+          ) : null}
         </div>
       </div>
+
+      {showOwnerChangeRequests && contributionsOpen ? (
+        <div className="mini-app-publish-bar__contributions-panel">
+          <CloudChangeRequestsPanel
+            busy={cloud.busy}
+            variant="publish-bar"
+            requests={incomingChanges.requests}
+            pending={incomingChanges.pending}
+            loading={incomingChanges.loading}
+            error={incomingChanges.error}
+            onReload={incomingChanges.reload}
+          />
+        </div>
+      ) : null}
 
       {workspaceMode === "preview" && webSyncActionNotice ? (
         <div
@@ -1145,26 +1466,8 @@ export function MiniAppPublishBar({
           <span className="mini-app-publish-bar__action-callout-text">
             {webSyncActionNotice}
           </span>
-          <button
-            type="button"
-            className="mini-app-publish-bar__action-callout-btn"
-            disabled={webSyncPushing || webSyncPulling}
-            onClick={() => {
-              if (webSyncActionKind === "updates") {
-                void webSyncPullUpdates();
-              } else if (webSyncActionKind === "upload" || webSyncActionKind === "failed") {
-                void guardedWebSyncPushNow();
-              } else {
-                handleWebSyncDotClick();
-              }
-            }}
-          >
-            {webSyncActionKind === "updates"
-              ? webSyncPulling ? "Getting updates…" : "Get updates"
-              : webSyncActionKind === "upload" || webSyncActionKind === "failed"
-                ? webSyncPushing ? "Publishing…" : webSyncActionKind === "failed" ? "Try again" : "Publish changes"
-                : "Review"}
-          </button>
+          {/* No action button here: the bar's primary button already offers it
+              persistently. This callout only explains and offers the agent. */}
           {webSyncActionKind !== "updates" && webSyncStatus ? (
             <button
               type="button"
@@ -1190,7 +1493,11 @@ export function MiniAppPublishBar({
       ) : null}
 
       {shareOpen ? (
-        <ShareSheet title={`Share “${appTitle}”`} onClose={() => setShareOpen(false)}>
+        <ShareSheet
+          title="Share"
+          headerAside={shareLinkNode}
+          onClose={() => setShareOpen(false)}
+        >
 
           <div className="share-sheet__panel">
             <PaprCloudRequirementsPanel featureId="publish_share" />
@@ -1232,48 +1539,22 @@ export function MiniAppPublishBar({
               </div>
             ) : null}
 
-            {/* Share link at the top - most prominent */}
-            {cloud.live && (copyUrl || webDisplayUrl) ? (
-              <div className="share-sheet__link-section">
-                {!shareLinkReady ? (
-                  <p className="share-sheet__link-hint">
-                    {cloud.externalLink !== "off" &&
-                    !(copyUrl ?? "").includes("?t=")
-                      ? "Invite link token will appear after upload and publish finish."
-                      : "The link below may show \"not found\" until upload completes."}
-                  </p>
-                ) : null}
-                <div className="share-sheet__url-field">
-                  <input
-                    className="share-sheet__url-input"
-                    readOnly
-                    value={copyUrl ?? webDisplayUrl ?? ""}
-                    aria-label="Share link"
-                    title={copyUrl ?? webDisplayUrl ?? ""}
-                    onFocus={(event) => event.currentTarget.select()}
-                    onClick={(event) => event.currentTarget.select()}
-                  />
-                  <button
-                    type="button"
-                    className="share-sheet__icon-btn"
-                    title="Copy link"
-                    aria-label="Copy link"
-                    onClick={() => void cloud.copyLink(copyUrl ?? webDisplayUrl)}
-                  >
-                    <CopyIcon />
-                  </button>
-                  <button
-                    type="button"
-                    className="share-sheet__icon-btn"
-                    title="Open in browser"
-                    aria-label="Open in browser"
-                    onClick={() => void cloud.openInBrowser(copyUrl ?? webDisplayUrl)}
-                  >
-                    <OpenExternalIcon />
-                  </button>
-                </div>
-              </div>
+            {/* Link not yet usable — kept in the panel, not the header, so a
+                caveat never widens the title row. */}
+            {cloud.live && (copyUrl || webDisplayUrl) && !shareLinkReady ? (
+              <p className="share-sheet__link-hint">
+                {cloud.externalLink !== "off" && !(copyUrl ?? "").includes("?t=")
+                  ? "Invite link token will appear after upload and publish finish."
+                  : "The link above may show \"not found\" until upload completes."}
+              </p>
             ) : null}
+
+            <ShareStepTabs
+              step={shareStep}
+              onStep={setShareStep}
+              answers={stepAnswers}
+              dimmed={stepDimmed}
+            />
 
             {isFork ? (
               <div className="share-sheet__notice share-sheet__notice--info">
@@ -1285,6 +1566,7 @@ export function MiniAppPublishBar({
               </div>
             ) : null}
 
+            {shareStep === "who" ? (
             <fieldset
               className={
                 shareSheetBusy
@@ -1314,6 +1596,7 @@ export function MiniAppPublishBar({
                           pickAudience(option.value);
                         }}
                       />
+                      <ShareOptionGlyph audience={option.value} />
                       <span className="share-sheet__row-text">
                         <span className="share-sheet__row-label">{option.label}</span>
                         <span className="share-sheet__row-desc">{option.description}</span>
@@ -1322,65 +1605,15 @@ export function MiniAppPublishBar({
                   </li>
                 ))}
               </ul>
-              
-              {showSignInToggle ? (
-                <div className="share-sheet__toggle-row">
-                  <label className="share-sheet__toggle-label">
-                    <input
-                      type="checkbox"
-                      checked={requireSignIn}
-                      onChange={(event) => {
-                        if (shareSheetBusy) return;
-                        const checked = event.target.checked;
-                        setRequireSignIn(checked);
-                        if (checked) {
-                          setPerUserIsolation(true);
-                        } else {
-                          setPerUserIsolation(false);
-                        }
-                      }}
-                    />
-                    <span>Require Papr sign-in</span>
-                  </label>
-                  <p className="share-sheet__toggle-hint">
-                    {requireSignIn
-                      ? audience === "public"
-                        ? "Visitors must sign in to Papr before using this Community app"
-                        : "Viewers must sign in with a Papr account"
-                      : audience === "public"
-                        ? "Anyone can discover and open this app without an account"
-                        : "Anyone with the link can open it without an account"}
-                  </p>
-                </div>
-              ) : null}
-
-              {showPerUserIsolationToggle ? (
-                <div className="share-sheet__toggle-row">
-                  <label className="share-sheet__toggle-label">
-                    <input
-                      type="checkbox"
-                      checked={perUserIsolation}
-                      onChange={(event) => {
-                        if (shareSheetBusy) return;
-                        const checked = event.target.checked;
-                        setPerUserIsolation(checked);
-                        if (checked) {
-                          setRequireSignIn(true);
-                        }
-                      }}
-                    />
-                    <span>Per-user isolation &amp; personalization</span>
-                  </label>
-                  <p className="share-sheet__toggle-hint">
-                    {perUserIsolation
-                      ? "Each signed-in user gets their own private database copy on the web"
-                      : "All signed-in users share the same database"}
-                  </p>
-                </div>
-              ) : null}
             </fieldset>
+            ) : null}
 
-            {audience !== "private" ? (
+            {/* Access reads as one question with its follow-ups nested, not
+                four sibling settings. "Can view" is the gate: sign-in and
+                per-user data only exist because someone can view, so they sit
+                inside it. "Can edit code" is genuinely separate, so it sits
+                outside as its own switch. */}
+            {shareStep === "access" && audience !== "private" ? (
               <fieldset
                 className={
                   shareSheetBusy
@@ -1388,42 +1621,151 @@ export function MiniAppPublishBar({
                     : "share-sheet__fieldset"
                 }
               >
-                <legend className="share-sheet__legend">What can they do</legend>
-                <ul className="share-sheet__list">
-                  {PERMISSION_OPTIONS.map((option) => {
-                    const available = isPermissionAvailable(audience, option.value);
-                    const selected = permission === option.value;
-                    return (
-                      <li key={option.value}>
+                <legend className="share-sheet__legend">What they get</legend>
+
+                <div className="share-sheet__toggle-group share-sheet__toggle-group--on">
+                  {/* Turning this off is not decorative — it means nobody can
+                      open the app, which is exactly "Only me". So it writes
+                      back to audience rather than being a switch that is
+                      permanently on and does nothing. */}
+                  <label className="share-sheet__toggle-row share-sheet__toggle-row--on share-sheet__toggle-row--head">
+                    <span className="share-sheet__row-text">
+                      <span className="share-sheet__row-label">
+                        Can view and interact
+                      </span>
+                      <span className="share-sheet__row-desc">
+                        Open the app, read data, and use interactive features
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      className="share-sheet__switch-input"
+                      checked
+                      onChange={() => {
+                        if (shareSheetBusy) return;
+                        pickAudience("private");
+                        setShareStep("who");
+                      }}
+                    />
+                    <ShareSwitch on />
+                  </label>
+
+                  {showSignInToggle || showPerUserIsolationToggle ? (
+                    <div className="share-sheet__toggle-nest">
+                      {showSignInToggle ? (
                         <label
-                          className={
-                            !available
-                              ? "share-sheet__row share-sheet__row--disabled"
-                              : selected
-                                ? "share-sheet__row share-sheet__row--selected"
-                                : "share-sheet__row"
-                          }
+                          className={`share-sheet__toggle-row${
+                            requireSignIn ? " share-sheet__toggle-row--on" : ""
+                          }`}
                         >
-                          <input
-                            type="radio"
-                            name={`permission-${appId}`}
-                            checked={selected}
-                            onChange={() => {
-                              if (shareSheetBusy || !available) return;
-                              pickPermission(option.value);
-                            }}
-                          />
                           <span className="share-sheet__row-text">
-                            <span className="share-sheet__row-label">{option.label}</span>
+                            <span className="share-sheet__row-label">
+                              Require Papr sign-in
+                            </span>
                             <span className="share-sheet__row-desc">
-                              {option.description}
+                              {requireSignIn
+                                ? audience === "public"
+                                  ? "Visitors must sign in to Papr before using the app"
+                                  : "Viewers must sign in with a Papr account"
+                                : audience === "public"
+                                  ? "Anyone can discover and open this app without an account"
+                                  : "Anyone with the link can open it without an account"}
                             </span>
                           </span>
+                          <input
+                            type="checkbox"
+                            className="share-sheet__switch-input"
+                            checked={requireSignIn}
+                            onChange={(event) => {
+                              if (shareSheetBusy) return;
+                              const checked = event.target.checked;
+                              setRequireSignIn(checked);
+                              setPerUserIsolation(checked);
+                            }}
+                          />
+                          <ShareSwitch on={requireSignIn} />
                         </label>
-                      </li>
-                    );
-                  })}
-                </ul>
+                      ) : null}
+
+                      {showPerUserIsolationToggle ? (
+                        <label
+                          className={`share-sheet__toggle-row${
+                            perUserIsolation ? " share-sheet__toggle-row--on" : ""
+                          }${requireSignIn ? "" : " share-sheet__toggle-row--off"}`}
+                        >
+                          <span className="share-sheet__row-text">
+                            <span className="share-sheet__row-label">
+                              Give each person a separate database
+                            </span>
+                            {/* Stating the dependency beats silently disabling:
+                                an anonymous visitor cannot be told apart, so
+                                there is nobody to give a database to. */}
+                            <span className="share-sheet__row-desc">
+                              {!requireSignIn
+                                ? "Needs sign-in — anonymous visitors can't be told apart."
+                                : perUserIsolation
+                                  ? "Each signed-in user gets their own private database copy"
+                                  : "All signed-in users share the same database"}
+                            </span>
+                          </span>
+                          <input
+                            type="checkbox"
+                            className="share-sheet__switch-input"
+                            checked={perUserIsolation}
+                            disabled={!requireSignIn}
+                            onChange={(event) => {
+                              if (shareSheetBusy) return;
+                              const checked = event.target.checked;
+                              setPerUserIsolation(checked);
+                              if (checked) setRequireSignIn(true);
+                            }}
+                          />
+                          <ShareSwitch on={perUserIsolation} />
+                        </label>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* A switch, not a second radio: this is an extra capability
+                    layered on viewing, and radios framed it as an alternative
+                    to viewing — which it never was. */}
+                {(() => {
+                  const codeOption = PERMISSION_OPTIONS.find((o) => o.value === "edit");
+                  const codeOn = permission === "edit";
+                  const codeAvailable = isPermissionAvailable(audience, "edit");
+                  if (!codeOption) return null;
+                  return (
+                    <label
+                      className={`share-sheet__toggle-row${
+                        codeOn ? " share-sheet__toggle-row--on" : ""
+                      }${codeAvailable ? "" : " share-sheet__toggle-row--off"}`}
+                    >
+                      <span className="share-sheet__row-text">
+                        <span className="share-sheet__row-label">
+                          {codeOption.label}
+                          <InlineCodeGlyph />
+                        </span>
+                        <span className="share-sheet__row-desc">
+                          {codeAvailable
+                            ? codeOption.description
+                            : "Available for team and public apps."}
+                        </span>
+                      </span>
+                      <input
+                        type="checkbox"
+                        className="share-sheet__switch-input"
+                        checked={codeOn}
+                        disabled={!codeAvailable}
+                        onChange={(event) => {
+                          if (shareSheetBusy || !codeAvailable) return;
+                          pickPermission(event.target.checked ? "edit" : "write");
+                        }}
+                      />
+                      <ShareSwitch on={codeOn} />
+                    </label>
+                  );
+                })()}
               </fieldset>
             ) : null}
 
@@ -1490,8 +1832,9 @@ export function MiniAppPublishBar({
               />
             ) : null}
 
-            {/* API Credentials - simplified */}
-            {cloud.live && !isFork ? (
+            {/* Scope is per key in this panel, which is why the tab summary
+                says "Per key" rather than one global owner/visitor answer. */}
+            {shareStep === "keys" && audience !== "private" && cloud.live && !isFork ? (
               <CloudAppCredentialsPanel
                 appId={appId}
                 appTitle={appTitle}
@@ -1499,54 +1842,41 @@ export function MiniAppPublishBar({
               />
             ) : null}
 
-            {cloud.live && listsInCommunity ? (
-              <div className="share-sheet__section">
-                <p className="share-sheet__notice share-sheet__notice--success">
-                  Listed in <strong>Community Apps</strong> — others can discover and open
-                  this app
-                </p>
-                <button
-                  type="button"
-                  className="share-sheet__secondary-btn"
-                  disabled={cloud.busy}
-                  onClick={removeFromCommunity}
-                >
-                  Share via link only
-                </button>
-              </div>
+            {/* Dimmed steps still open — saying why beats a blank panel. */}
+            {shareStep !== "who" && audience === "private" ? (
+              <p className="share-sheet__section-desc">
+                Not needed — only you can open this app.
+              </p>
             ) : null}
 
-            {/* Code access - simplified */}
-            {showCodePanel && cloud.live ? (
-              <div className="share-sheet__section">
-                <p className="share-sheet__section-title">Code access</p>
-                <p className="share-sheet__section-desc">
-                  Others can install this app's source into their Paprwork to personalize or contribute changes back.
-                </p>
-
-                {showOwnerChangeRequests ? (
-                  <CloudChangeRequestsPanel sourceAppId={appId} busy={cloud.busy} />
-                ) : null}
-              </div>
+            {/* The green "Listed in Community Apps" notice restated the Public
+                option's own description back at the person who just chose it.
+                The escape hatch is the only part that carried information, so
+                only it survives — as a link, since it just switches audience. */}
+            {cloud.live && listsInCommunity && shareStep === "who" ? (
+              <button
+                type="button"
+                className="share-sheet__text-link"
+                disabled={cloud.busy}
+                onClick={removeFromCommunity}
+              >
+                Unlist from Community — share via link only
+              </button>
             ) : null}
 
-            {/* Unpublish */}
-            {cloud.live && !isFork ? (
-              <div className="share-sheet__section">
-                <p className="share-sheet__section-title">Take off the web</p>
-                <p className="share-sheet__section-desc">
-                  Unpublish completely — removes the live URL and Community listing.
-                </p>
-                <button
-                  type="button"
-                  className="share-sheet__danger-btn"
-                  disabled={cloud.busy}
-                  onClick={takeOffWeb}
-                >
-                  Unpublish
-                </button>
-              </div>
+            {/* The option itself already says "Install into Paprwork to
+                personalize and send changes back" — repeating it here as a
+                paragraph taught nothing. Only the inbox pointer survives,
+                because that is the one thing the option does not say. */}
+            {showCodePanel && cloud.live && showOwnerChangeRequests ? (
+              <p className="share-sheet__section-desc">
+                Review incoming proposals from the inbox icon on the app bar.
+              </p>
             ) : null}
+
+            {/* Unpublish lives in the bar's "..." menu now. Keeping a second
+                copy here meant two routes to a destructive action and a block
+                of text in a sheet that is meant to be three questions. */}
 
             {/* Cloud compatibility info - only show if blocking publish */}
             {needsDesktopAck ? (

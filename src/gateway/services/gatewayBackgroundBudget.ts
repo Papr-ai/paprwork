@@ -11,7 +11,7 @@ export type BackgroundBudgetBlockReason =
   | "awaiting_drain";
 
 interface Waiting {
-  label: string; queuedAt: number; signal?: AbortSignal;
+  label: string; queuedAt: number; interactive: boolean; signal?: AbortSignal;
   resolve: (release: () => void) => void; reject: (error: Error) => void;
   abort: () => void;
 }
@@ -24,6 +24,14 @@ export class BackgroundBudget {
   private waiting: Waiting[] = [];
   private timer?: ReturnType<typeof setTimeout>;
   private context = new AsyncLocalStorage<symbol>();
+  private interactiveContext = new AsyncLocalStorage<boolean>();
+
+  /** Explicitly requested work and its awaited dependencies skip maintenance grace.
+   * They still acquire the same concurrency budget; this never preempts active work.
+   */
+  runInteractive<T>(work: () => Promise<T>): Promise<T> {
+    return this.interactiveContext.run(true, work);
+  }
   constructor(
     private capacity = resolveGatewayBackgroundMaxConcurrency,
     private busy = () => getInteractiveHotPathDepth() > 0 ||
@@ -39,7 +47,7 @@ export class BackgroundBudget {
     limit: number,
   ): BackgroundBudgetBlockReason {
     const waitedMs = Date.now() - waiter.queuedAt;
-    if (busy && waitedMs < this.graceMs()) return "grace_period";
+    if (busy && !waiter.interactive && waitedMs < this.graceMs()) return "grace_period";
     if (this.active.size >= limit) {
       return busy && limit <= 1 ? "interactive_busy" : "at_capacity";
     }
@@ -57,6 +65,7 @@ export class BackgroundBudget {
       capacityWhenIdle: this.capacity(),
       queued: this.waiting.map((w) => ({
         label: w.label,
+        priority: w.interactive ? "interactive" : "background",
         waitingMs: Date.now() - w.queuedAt,
         blockReason: this.blockReasonFor(w, busy, limit),
         blockingActive,
@@ -86,7 +95,7 @@ export class BackgroundBudget {
   }
   private acquire(label: string, token: symbol, signal?: AbortSignal): Promise<() => void> {
     return new Promise((resolve, reject) => {
-      const waiter: Waiting = { label, queuedAt: Date.now(), signal, reject,
+      const waiter: Waiting = { label, queuedAt: Date.now(), interactive: this.interactiveContext.getStore() === true, signal, reject,
         resolve: release => { this.active.set(token, label); resolve(() => {
           this.active.delete(token); release();
         }); },
@@ -105,9 +114,12 @@ export class BackgroundBudget {
     const busy = this.busy();
     const limit = busy ? 1 : this.capacity();
     while (this.waiting.length && this.active.size < limit) {
-      const next = this.waiting[0];
-      if (busy && Date.now() - next.queuedAt < this.graceMs()) break;
-      this.waiting.shift();
+      // Pick the first eligible waiter. A maintenance task still in grace must
+      // not block an explicit job behind it; aged maintenance keeps FIFO priority.
+      const index = this.waiting.findIndex(w =>
+        !busy || w.interactive || Date.now() - w.queuedAt >= this.graceMs());
+      if (index < 0) break;
+      const [next] = this.waiting.splice(index, 1);
       next.signal?.removeEventListener("abort", next.abort);
       next.resolve(() => this.drain());
     }

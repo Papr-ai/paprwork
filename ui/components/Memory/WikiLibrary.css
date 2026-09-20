@@ -345,7 +345,6 @@
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.18);
   border: 1px solid rgba(255, 255, 255, 0.28);
-  backdrop-filter: blur(6px);
 }
 
 .wiki-hero h1 {
@@ -753,7 +752,6 @@
   position: fixed;
   inset: 0;
   background: rgba(20, 20, 15, 0.15);
-  backdrop-filter: blur(4px);
   z-index: 1000;
   display: grid;
   place-items: start center;
@@ -1477,7 +1475,6 @@
   position: fixed;
   inset: 0;
   background: rgba(20, 20, 15, 0.45);
-  backdrop-filter: blur(6px);
   z-index: 1100;
   display: grid;
   place-items: center;
@@ -2033,7 +2030,6 @@
   border-radius: 9px;
   background: rgba(8, 12, 20, 0.76);
   border: 1px solid rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(12px);
 }
 .wiki-card__logo img {
   width: 100%;
@@ -2056,7 +2052,6 @@
   background: rgba(8, 12, 20, 0.74);
   border: 1px solid rgba(255, 255, 255, 0.24);
   box-shadow: 0 18px 40px rgba(0, 0, 0, 0.24);
-  backdrop-filter: blur(18px);
 }
 .wiki-entity__identity img {
   width: 100%;
@@ -2101,7 +2096,6 @@
   color: #fff;
   font: 500 11px/1.2 inherit;
   cursor: pointer;
-  backdrop-filter: blur(12px);
 }
 .wiki-media-btn:hover {
   background: rgba(0, 0, 0, 0.58);

@@ -13,8 +13,6 @@
   background: var(--glass-bg);
   border: 1px solid var(--glass-border, var(--border-color));
   border-radius: 16px;
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
 }
 
 .pane-error__title {

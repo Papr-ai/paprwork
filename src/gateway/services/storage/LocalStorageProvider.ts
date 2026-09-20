@@ -1,3 +1,5 @@
+import { DbQueryPool } from "../DbQueryPool.js";
+import { traceDiagnosticPhase } from "../../../core/utils/performanceDiagnostics.js";
 /**
  * Local Storage Provider
  *
@@ -43,9 +45,7 @@ import {
 import {
   EMPTY_CHAT_USAGE_TOTALS,
   migrateTurnMetricsColumns,
-  readChatUsageTotals,
-  readLastTurnUsage,
-  readRecentTurnUsage,
+  readTurnUsageAsync,
   storeTurnMetrics,
 } from "./turnMetricsStore.js";
 import type {
@@ -79,6 +79,7 @@ import { startToolPayloadMigration } from "./toolPayloadMigration.js";
 export class LocalStorageProvider implements IStorageProvider {
   private db!: Database.Database;
   private dbReady = false;
+  private readPool?: DbQueryPool;
   private dbPath: string;
   private exporter: ChatExporter;
   private contextEfficiencyCache: {
@@ -87,7 +88,10 @@ export class LocalStorageProvider implements IStorageProvider {
   } | null = null;
   private contextEfficiencyComputing = false;
 
-  constructor(userDataPath: string) {
+  constructor(
+    userDataPath: string,
+    private readonly readWorkerUrl = new URL("../../workers/db-query-worker.js", import.meta.url),
+  ) {
     this.dbPath = path.join(userDataPath, "chats.db");
     this.exporter = new ChatExporter();
   }
@@ -126,6 +130,20 @@ export class LocalStorageProvider implements IStorageProvider {
     // opened. Compact them in the background rather than blocking startup.
     startToolPayloadMigration(this.db, this.dbDir);
     this.dbReady = true;
+  }
+
+  /** Disk scans run in a dedicated worker so app queries cannot starve chat reads.
+   * Writes keep their existing connection and ordering. Each read sees committed WAL data.
+   * Labels name the caller without recording SQL parameters or message contents.
+   */
+  private async readRows(operation: string, sql: string, params: unknown[] = []): Promise<any[]> {
+    if (!this.dbReady) throw new Error("Chat storage is not initialized or has been closed");
+    this.readPool ??= new DbQueryPool(this.readWorkerUrl, 1);
+    const pool = this.readPool;
+    return traceDiagnosticPhase(`chat-db:${operation}`, async () => {
+      const result = await pool.query("chat-storage", this.dbPath, sql, params);
+      return result.rows;
+    });
   }
 
   private createSchema(): void {
@@ -691,7 +709,7 @@ export class LocalStorageProvider implements IStorageProvider {
       query += ` OFFSET ${skip}`;
     }
 
-    const rows = this.db.prepare(query).all(chatId) as any[];
+    const rows = (await this.readRows("loadMessages", query, [chatId])) as any[];
 
     // If using pagination (limit specified), reverse to get chronological order
     const orderedRows = limit ? rows.reverse() : rows;
@@ -784,15 +802,13 @@ export class LocalStorageProvider implements IStorageProvider {
 
   async loadMessagesForLLM(chatId: string): Promise<any[]> {
     // Get chat metadata
-    const chat = this.db
-      .prepare(`
+    const chat = (await this.readRows("loadMessagesForLLM", `
       SELECT id, title, message_count, 
              summary_short, summary_medium, summary_long, summary_topics,
              summary_enhanced, summary_base_message_count
       FROM chats 
       WHERE id = ?
-    `)
-      .get(chatId) as any;
+    `, [chatId]))[0] as any;
 
     if (!chat) {
       return [];
@@ -840,8 +856,7 @@ export class LocalStorageProvider implements IStorageProvider {
       `[LocalStorage] 🔎 Summary exists - querying for ${recentMessageLimit} most recent messages (base=${summaryBase})...`,
     );
 
-    let recentMessages = this.db
-      .prepare(`
+    let recentMessages = (await this.readRows("loadMessagesForLLM", `
       SELECT id, role, content, thinking, timestamp, attachments,
              CASE WHEN LENGTH(tool_calls) > ${MAX_INLINE_PAYLOAD_BYTES}
                   THEN NULL ELSE tool_calls END AS tool_calls,
@@ -850,8 +865,7 @@ export class LocalStorageProvider implements IStorageProvider {
       WHERE chat_id = ? 
       ORDER BY timestamp DESC 
       LIMIT ?
-    `)
-      .all(chatId, recentMessageLimit) as any[];
+    `, [chatId, recentMessageLimit])) as any[];
 
     // Reverse to chronological order before checking oldest role
     recentMessages.reverse();
@@ -866,8 +880,7 @@ export class LocalStorageProvider implements IStorageProvider {
         `[LocalStorage] ↗ Expanded recent window ${recentMessageLimit}→${expandedLimit} (avoid mid-turn cut)`,
       );
       recentMessageLimit = expandedLimit;
-      recentMessages = this.db
-        .prepare(`
+      recentMessages = (await this.readRows("loadMessagesForLLM", `
         SELECT id, role, content, thinking, timestamp, attachments,
                CASE WHEN LENGTH(tool_calls) > ${MAX_INLINE_PAYLOAD_BYTES}
                     THEN NULL ELSE tool_calls END AS tool_calls,
@@ -876,8 +889,7 @@ export class LocalStorageProvider implements IStorageProvider {
         WHERE chat_id = ? 
         ORDER BY timestamp DESC 
         LIMIT ?
-      `)
-        .all(chatId, recentMessageLimit) as any[];
+      `, [chatId, recentMessageLimit])) as any[];
       recentMessages.reverse();
     }
     if (process.env.PAPR_DEBUG_AGENT_CONTEXT === "1") {
@@ -967,16 +979,14 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async getSummary(chatId: string): Promise<StoredSummary | null> {
-    const chat = this.db
-      .prepare(`
+    const chat = (await this.readRows("getSummary", `
       SELECT summary_short, summary_medium, summary_long, 
              summary_topics, summary_last_updated,
              summary_fetched_from_papr, summary_last_fetched_at,
              summary_enhanced
       FROM chats 
       WHERE id = ?
-    `)
-      .get(chatId) as any;
+    `, [chatId]))[0] as any;
 
     if (!chat || !chat.summary_long) {
       return null;
@@ -1146,11 +1156,10 @@ export class LocalStorageProvider implements IStorageProvider {
         totals: { ...EMPTY_CHAT_USAGE_TOTALS },
       };
     }
-    return {
-      lastTurn: readLastTurnUsage(this.db, chatId),
-      recentTurns: readRecentTurnUsage(this.db, chatId),
-      totals: readChatUsageTotals(this.db, chatId),
-    };
+    return readTurnUsageAsync(
+      (sql, params) => this.readRows("getTurnUsage", sql, params),
+      chatId,
+    );
   }
 
   async readOffloadedToolResult(
@@ -1158,13 +1167,9 @@ export class LocalStorageProvider implements IStorageProvider {
     messageId: string,
     toolCallId: string,
   ): Promise<string | null> {
-    const row = this.db
-      .prepare(
-        `SELECT tool_calls FROM messages
+    const row = (await this.readRows("readOffloadedToolResult", `SELECT tool_calls FROM messages
          WHERE id = ? AND chat_id = ?
-           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}`,
-      )
-      .get(messageId, chatId) as { tool_calls: string | null } | undefined;
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}`, [messageId, chatId]))[0] as { tool_calls: string | null } | undefined;
 
     if (!row?.tool_calls) return null;
 
@@ -1180,13 +1185,11 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async listChats(): Promise<ChatMetadata[]> {
-    const rows = this.db
-      .prepare(`
+    const rows = (await this.readRows("listChats", `
       SELECT id, title, message_count, created_at as createdAt, updated_at as updatedAt, last_synced_at, memory_scope
       FROM chats 
       ORDER BY updated_at DESC
-    `)
-      .all() as any[];
+    `, [])) as any[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -1203,9 +1206,7 @@ export class LocalStorageProvider implements IStorageProvider {
     limit: number,
     maxAgeDays: number,
   ): Promise<ChatSummarySnapshot[]> {
-    const rows = this.db
-      .prepare(
-        `
+    const rows = (await this.readRows("listRecentChatSummaries", `
       SELECT id, title, message_count, updated_at as updatedAt,
              summary_short, summary_medium, summary_topics
       FROM chats
@@ -1213,9 +1214,7 @@ export class LocalStorageProvider implements IStorageProvider {
         AND updated_at >= datetime('now', ?)
       ORDER BY updated_at DESC
       LIMIT ?
-    `,
-      )
-      .all(`-${maxAgeDays} days`, limit) as Array<{
+    `, [`-${maxAgeDays} days`, limit])) as Array<{
       id: string;
       title: string | null;
       message_count: number;
@@ -1239,13 +1238,11 @@ export class LocalStorageProvider implements IStorageProvider {
   }
 
   async getChat(chatId: string): Promise<ChatMetadata | null> {
-    const row = this.db
-      .prepare(`
+    const row = (await this.readRows("getChat", `
       SELECT id, title, message_count, created_at as createdAt, updated_at as updatedAt, last_synced_at, memory_scope
       FROM chats 
       WHERE id = ?
-    `)
-      .get(chatId) as any;
+    `, [chatId]))[0] as any;
 
     if (!row) {
       return null;
@@ -1334,16 +1331,12 @@ export class LocalStorageProvider implements IStorageProvider {
       timestamp: string;
     }>;
   }> {
-    const rows = this.db
-      .prepare(
-        `
+    const rows = (await this.readRows("getChatSyncStats", `
       SELECT sync_status, COUNT(*) as count
       FROM messages
       WHERE chat_id = ?
       GROUP BY sync_status
-    `,
-      )
-      .all(chatId) as Array<{ sync_status: string; count: number }>;
+    `, [chatId])) as Array<{ sync_status: string; count: number }>;
 
     const stats = {
       total: 0,
@@ -1361,9 +1354,7 @@ export class LocalStorageProvider implements IStorageProvider {
       }
     }
 
-    const failureRows = this.db
-      .prepare(
-        `
+    const failureRows = (await this.readRows("getChatSyncStats", `
       SELECT id, sync_error, timestamp
       FROM messages
       WHERE chat_id = ?
@@ -1371,9 +1362,7 @@ export class LocalStorageProvider implements IStorageProvider {
         AND sync_error IS NOT NULL
       ORDER BY timestamp DESC
       LIMIT 3
-    `,
-      )
-      .all(chatId) as Array<{
+    `, [chatId])) as Array<{
       id: string;
       sync_error: string;
       timestamp: string;
@@ -1392,8 +1381,7 @@ export class LocalStorageProvider implements IStorageProvider {
   async getUnsyncedMessages(chatId: string): Promise<StoredMessage[]> {
     // Named columns, not SELECT *: the payload columns are not part of the
     // result and pulling them in only to drop them can exhaust the heap.
-    const rows = this.db
-      .prepare(`
+    const rows = (await this.readRows("getUnsyncedMessages", `
       SELECT id, chat_id, role, content, timestamp, model,
              prompt_tokens, completion_tokens, total_tokens,
              sync_status, papr_message_id, last_sync_attempt, sync_error
@@ -1401,8 +1389,7 @@ export class LocalStorageProvider implements IStorageProvider {
       WHERE chat_id = ? 
         AND sync_status IN ('sync_pending', 'sync_failed')
       ORDER BY timestamp ASC
-    `)
-      .all(chatId) as any[];
+    `, [chatId])) as any[];
 
     return rows.map((row) => ({
       id: row.id,
@@ -1427,11 +1414,9 @@ export class LocalStorageProvider implements IStorageProvider {
     cost_total: number;
     has_summary: boolean;
   }> {
-    const chat = this.db
-      .prepare(`
+    const chat = (await this.readRows("getChatStats", `
       SELECT message_count, summary_long FROM chats WHERE id = ?
-    `)
-      .get(chatId) as any;
+    `, [chatId]))[0] as any;
 
     if (!chat) {
       return {
@@ -1443,16 +1428,12 @@ export class LocalStorageProvider implements IStorageProvider {
     }
 
     // Get token and cost stats from database
-    const tokenStats = this.db
-      .prepare(
-        `SELECT 
+    const tokenStats = (await this.readRows("getChatStats", `SELECT
           COALESCE(SUM(total_tokens), 0) as token_count,
           COALESCE(SUM(cost), 0) as cost_total,
           COUNT(*) as messages_with_tokens
         FROM messages 
-        WHERE chat_id = ? AND total_tokens > 0`,
-      )
-      .get(chatId) as any;
+        WHERE chat_id = ? AND total_tokens > 0`, [chatId]))[0] as any;
 
     console.log(`[LocalStorage] 📊 getChatStats for ${chatId}:`, {
       message_count: chat.message_count,
@@ -1476,27 +1457,19 @@ export class LocalStorageProvider implements IStorageProvider {
     avgCostPerMessage: number;
   }> {
     // Get total cost and message count
-    const totals = this.db
-      .prepare(
-        `SELECT 
+    const totals = (await this.readRows("getChatCost", `SELECT
           COALESCE(SUM(cost), 0) as total,
           COUNT(*) as count
         FROM messages 
-        WHERE chat_id = ? AND role = 'assistant'`,
-      )
-      .get(chatId) as any;
+        WHERE chat_id = ? AND role = 'assistant'`, [chatId]))[0] as any;
 
     // Get cost by model
-    const byModelRows = this.db
-      .prepare(
-        `SELECT 
+    const byModelRows = (await this.readRows("getChatCost", `SELECT
           model,
           COALESCE(SUM(cost), 0) as cost
         FROM messages 
         WHERE chat_id = ? AND role = 'assistant' AND model IS NOT NULL
-        GROUP BY model`,
-      )
-      .all(chatId) as any[];
+        GROUP BY model`, [chatId])) as any[];
 
     const byModel: Record<string, number> = {};
     for (const row of byModelRows) {
@@ -1546,9 +1519,7 @@ export class LocalStorageProvider implements IStorageProvider {
       1,
     ).toISOString();
 
-    const totalStats = this.db
-      .prepare(
-        `SELECT 
+    const totalStats = (await this.readRows("getGlobalCostStats", `SELECT
           COALESCE(SUM(cost), 0) as cost,
           COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens,
           COUNT(*) as count,
@@ -1559,16 +1530,7 @@ export class LocalStorageProvider implements IStorageProvider {
           COALESCE(SUM(CASE WHEN timestamp >= ? THEN prompt_tokens + completion_tokens ELSE 0 END), 0) as week_tokens,
           COALESCE(SUM(CASE WHEN timestamp >= ? THEN prompt_tokens + completion_tokens ELSE 0 END), 0) as month_tokens
         FROM messages 
-        WHERE role = 'assistant'`,
-      )
-      .get(
-        todayStart,
-        weekStart,
-        monthStart,
-        todayStart,
-        weekStart,
-        monthStart,
-      ) as {
+        WHERE role = 'assistant'`, [todayStart, weekStart, monthStart, todayStart, weekStart, monthStart]))[0] as {
       cost: number;
       total_tokens: number;
       count: number;
@@ -1580,9 +1542,7 @@ export class LocalStorageProvider implements IStorageProvider {
       month_tokens: number;
     };
 
-    const topModelsRows = this.db
-      .prepare(
-        `SELECT 
+    const topModelsRows = (await this.readRows("getGlobalCostStats", `SELECT
           model,
           COALESCE(SUM(cost), 0) as cost,
           COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tokens,
@@ -1591,9 +1551,7 @@ export class LocalStorageProvider implements IStorageProvider {
         WHERE role = 'assistant' AND model IS NOT NULL
         GROUP BY model
         ORDER BY cost DESC
-        LIMIT 20`,
-      )
-      .all() as Array<{
+        LIMIT 20`, [])) as Array<{
       model: string;
       cost: number;
       tokens: number;
@@ -1631,9 +1589,7 @@ export class LocalStorageProvider implements IStorageProvider {
     startDate.setDate(startDate.getDate() - days);
     const startDateStr = startDate.toISOString();
 
-    const dailyStats = this.db
-      .prepare(
-        `SELECT
+    const dailyStats = (await this.readRows("getDailyCostTrends", `SELECT
           DATE(timestamp) as date,
           COALESCE(SUM(cost), 0) as cost,
           COALESCE(SUM(prompt_tokens + completion_tokens), 0) as tokens,
@@ -1641,9 +1597,7 @@ export class LocalStorageProvider implements IStorageProvider {
         FROM messages
         WHERE role = 'assistant' AND timestamp >= ?
         GROUP BY DATE(timestamp)
-        ORDER BY date ASC`,
-      )
-      .all(startDateStr) as Array<{
+        ORDER BY date ASC`, [startDateStr])) as Array<{
       date: string;
       cost: number;
       tokens: number;
@@ -1664,13 +1618,9 @@ export class LocalStorageProvider implements IStorageProvider {
   async getModelDistribution(): Promise<
     Array<{ model: string; percentage: number; cost: number; messages: number }>
   > {
-    const totalStats = this.db
-      .prepare(
-        `SELECT COALESCE(SUM(cost), 0) as total_cost
+    const totalStats = (await this.readRows("getModelDistribution", `SELECT COALESCE(SUM(cost), 0) as total_cost
         FROM messages
-        WHERE role = 'assistant'`,
-      )
-      .get() as any;
+        WHERE role = 'assistant'`, []))[0] as any;
 
     const totalCost = totalStats?.total_cost || 0;
 
@@ -1678,18 +1628,14 @@ export class LocalStorageProvider implements IStorageProvider {
       return [];
     }
 
-    const modelStats = this.db
-      .prepare(
-        `SELECT
+    const modelStats = (await this.readRows("getModelDistribution", `SELECT
           model,
           COALESCE(SUM(cost), 0) as cost,
           COUNT(*) as messages
         FROM messages
         WHERE role = 'assistant' AND model IS NOT NULL
         GROUP BY model
-        ORDER BY cost DESC`,
-      )
-      .all() as any[];
+        ORDER BY cost DESC`, [])) as any[];
 
     return modelStats.map((row) => ({
       model: row.model,
@@ -1713,17 +1659,13 @@ export class LocalStorageProvider implements IStorageProvider {
     mostUsedTools: Array<{ tool: string; count: number }>;
   }> {
     // Get basic stats
-    const stats = this.db
-      .prepare(
-        `SELECT
+    const stats = (await this.readRows("getAgentStats", `SELECT
           COUNT(*) as message_count,
           COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens,
           COALESCE(SUM(cost), 0) as total_cost,
           COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
         FROM messages
-        WHERE COALESCE(source_agent_id, 'main-agent') = ? AND role = 'assistant'`,
-      )
-      .get(agentId) as {
+        WHERE COALESCE(source_agent_id, 'main-agent') = ? AND role = 'assistant'`, [agentId]))[0] as {
       message_count: number;
       total_tokens: number;
       total_cost: number;
@@ -1767,9 +1709,7 @@ export class LocalStorageProvider implements IStorageProvider {
       }
     >
   > {
-    const aggregateRows = this.db
-      .prepare(
-        `SELECT
+    const aggregateRows = (await this.readRows("getAllAgentStats", `SELECT
           source_agent_id as agent_id,
           COUNT(*) as message_count,
           COALESCE(SUM(prompt_tokens + completion_tokens), 0) as total_tokens,
@@ -1777,9 +1717,7 @@ export class LocalStorageProvider implements IStorageProvider {
           COALESCE(SUM(CASE WHEN tool_calls IS NOT NULL AND tool_calls != '' THEN 1 ELSE 0 END), 0) as tool_calls_count
         FROM messages
         WHERE role = 'assistant'
-        GROUP BY source_agent_id`,
-      )
-      .all() as Array<{
+        GROUP BY source_agent_id`, [])) as Array<{
       agent_id: string;
       message_count: number;
       total_tokens: number;
@@ -1885,9 +1823,7 @@ export class LocalStorageProvider implements IStorageProvider {
   // ===== Helper Methods =====
 
   private async ensureChatExists(chatId: string): Promise<void> {
-    const exists = this.db
-      .prepare("SELECT 1 FROM chats WHERE id = ?")
-      .get(chatId);
+    const exists = (await this.readRows("ensureChatExists", "SELECT 1 FROM chats WHERE id = ?", [chatId]))[0];
     if (!exists) {
       await this.createChat(chatId);
     }
@@ -1959,6 +1895,8 @@ export class LocalStorageProvider implements IStorageProvider {
    */
   close(): void {
     this.dbReady = false;
+    this.readPool?.terminate();
+    this.readPool = undefined;
     if (this.db) {
       this.db.close();
     }

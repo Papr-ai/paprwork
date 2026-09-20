@@ -2,13 +2,14 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { runBrowserWait } from "./browser.js";
 import { runWebviewWait } from "./webview.js";
-import { hasActiveWebviewSessions } from "./webviewSessionGuard.js";
-import { hasRecentWebviewPreviewActivity } from "./webviewActivity.js";
+import {
+  hasActiveWebviewSessions,
+  syncWebviewPreviewActivityLatch,
+} from "./webviewSessionGuard.js";
 
 async function shouldRouteToMiniAppPreview(): Promise<boolean> {
-  return (
-    hasRecentWebviewPreviewActivity() || (await hasActiveWebviewSessions())
-  );
+  await syncWebviewPreviewActivityLatch();
+  return await hasActiveWebviewSessions();
 }
 
 const waitParamsSchema = z.object({

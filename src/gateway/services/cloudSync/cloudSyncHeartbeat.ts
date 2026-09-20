@@ -6,6 +6,7 @@ import { cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { buildDesktopHeartbeatBody } from "../syncV3/buildDesktopHeartbeatBody.js";
 import type { CloudSyncService } from "../CloudSyncService.js";
 import { readGatewaySyncBusyState } from "./syncBusyState.js";
+import { notifyCloudSyncItemsStale } from "./cloudSyncBroadcast.js";
 
 export const PULL_INTERVAL_MS = 5 * 60_000;
 export const DESKTOP_HEARTBEAT_INTERVAL_MS = 60_000;
@@ -159,6 +160,10 @@ export function startPeriodicPull(host: CloudSyncPeriodicHost): void {
       }
       await host.tryAutoReconcileRemoteGit();
       await host.pull();
+      // The 5-min tick is the only round trip we make, so anything that needs
+      // asking the web rides along with it — including incoming contributions,
+      // which the renderer refetches when this lands.
+      notifyCloudSyncItemsStale();
     } catch (err) {
       console.warn(
         "[CloudSync] Periodic pull failed:",

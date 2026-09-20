@@ -224,6 +224,14 @@ export function readRecentTurnUsage(
   return rows.map(mapTurnUsageRow);
 }
 
+const CHAT_USAGE_TOTALS_SELECT = `SELECT COUNT(*) AS turns,
+              COALESCE(SUM(cost), 0) AS cost,
+              COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+              COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens
+       FROM messages
+       WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0`;
+
 /** Whole-chat rollup. Turns are billed assistant rows, not messages. */
 export function readChatUsageTotals(
   db: Database.Database | undefined,
@@ -232,16 +240,14 @@ export function readChatUsageTotals(
   if (!db) return { ...EMPTY_CHAT_USAGE_TOTALS };
   const row = db
     .prepare(
-      `SELECT COUNT(*) AS turns,
-              COALESCE(SUM(cost), 0) AS cost,
-              COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
-              COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
-              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens
-       FROM messages
-       WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0`,
+      CHAT_USAGE_TOTALS_SELECT,
     )
     .get(chatId) as Record<string, unknown> | undefined;
 
+  return mapChatUsageTotals(row);
+}
+
+function mapChatUsageTotals(row: Record<string, unknown> | undefined): ChatUsageTotals {
   return {
     turns: Number(row?.turns ?? 0),
     cost: Number(row?.cost ?? 0),
@@ -249,4 +255,16 @@ export function readChatUsageTotals(
     completionTokens: Number(row?.completion_tokens ?? 0),
     cacheReadTokens: Number(row?.cache_read_tokens ?? 0),
   };
+}
+
+
+/** Worker-compatible reader; avoids three main-thread scans on every context refresh. */
+export async function readTurnUsageAsync(
+  query: (sql: string, params: unknown[]) => Promise<Record<string, unknown>[]>,
+  chatId: string,
+): Promise<{ lastTurn: TurnUsageRow | null; recentTurns: TurnUsageRow[]; totals: ChatUsageTotals }> {
+  const rows = await query(`${TURN_USAGE_SELECT_BASE}\n  LIMIT ?`, [chatId, RECENT_TURN_USAGE_LIMIT]);
+  const recentTurns = rows.map(mapTurnUsageRow);
+  const totals = await query(CHAT_USAGE_TOTALS_SELECT, [chatId]);
+  return { lastTurn: recentTurns[0] ?? null, recentTurns, totals: mapChatUsageTotals(totals[0]) };
 }

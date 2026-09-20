@@ -9,12 +9,11 @@
   width: 100vw;
   overflow: hidden;
   /* Apple Liquid Glass: ONE background for entire app */
-  /* Best practice: 98-99% opacity + subtle blur (8-20px recommended) */
+  /* Perf: native window vibrancy (see index.cjs) already blurs the desktop
+     almost entirely hidden behind opaque sidebar/content and was costing
+     ~100% of one GPU-process core on its own — removed. */
   background: var(--background-color);
   background-attachment: fixed; /* Keep gradient fixed */
-  /* Subtle backdrop blur for glass aesthetic without compromising readability */
-  backdrop-filter: blur(20px) saturate(180%) brightness(1.02);
-  -webkit-backdrop-filter: blur(20px) saturate(180%) brightness(1.02);
 }
 
 .app-layout__sidebar {
@@ -25,8 +24,6 @@
   border-right: 1px solid var(--sidebar-border);
   /* Apple Liquid Glass: translucent tint with blur for depth */
   background: rgba(255, 255, 255, 0.55);
-  backdrop-filter: blur(20px) saturate(180%);
-  -webkit-backdrop-filter: blur(20px) saturate(180%);
   /* Depth shadow */
   box-shadow: 2px 0 16px rgba(0, 0, 0, 0.06), inset -1px 0 0 rgba(255, 255, 255, 0.20);
   display: flex;

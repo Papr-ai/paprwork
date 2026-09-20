@@ -2,15 +2,19 @@
  * Copy text to clipboard — Electron main-process clipboard first, then web fallbacks.
  */
 
-export async function copyTextToClipboard(text: string): Promise<boolean> {
-  const trimmed = text.trim();
-  if (!trimmed) {
+export async function copyTextToClipboard(
+  text: string,
+  options?: { trim?: boolean },
+): Promise<boolean> {
+  const trim = options?.trim !== false;
+  const payload = trim ? text.trim() : text;
+  if (!payload) {
     return false;
   }
 
   try {
     if (window.electronAPI?.system?.invoke) {
-      await window.electronAPI.system.invoke("clipboard.writeText", trimmed);
+      await window.electronAPI.system.invoke("clipboard.writeText", payload);
       return true;
     }
   } catch {
@@ -18,7 +22,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
   }
 
   try {
-    await navigator.clipboard.writeText(trimmed);
+    await navigator.clipboard.writeText(payload);
     return true;
   } catch {
     // Fall through to execCommand fallback.
@@ -26,7 +30,7 @@ export async function copyTextToClipboard(text: string): Promise<boolean> {
 
   try {
     const textarea = document.createElement("textarea");
-    textarea.value = trimmed;
+    textarea.value = payload;
     textarea.setAttribute("readonly", "");
     textarea.style.position = "fixed";
     textarea.style.left = "-9999px";

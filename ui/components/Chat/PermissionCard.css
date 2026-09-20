@@ -6,8 +6,6 @@
   background: var(--glass-bg, rgba(255, 255, 255, 0.06));
   border: 1px solid var(--glass-border, rgba(255, 255, 255, 0.12));
   border-radius: 12px;
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
   max-width: 480px;
   animation: permission-card-appear 0.2s ease-out;
 }

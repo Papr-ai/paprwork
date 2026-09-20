@@ -109,8 +109,9 @@ class PooledWorker {
     });
 
     this.worker.on("exit", (code) => {
+      const wasAlive = this.alive;
       this.alive = false;
-      if (code !== 0) {
+      if (wasAlive) {
         console.error(`[DbQueryPool] Worker exited with code ${code}`);
         this.rejectAll(new Error(`DB worker exited unexpectedly (code ${code})`));
       }
@@ -145,6 +146,7 @@ class PooledWorker {
   }
 
   terminate(): void {
+    this.alive = false;
     const err = new Error("Worker terminated");
     for (const [, entry] of this.pending) {
       clearTimeout(entry.timer);

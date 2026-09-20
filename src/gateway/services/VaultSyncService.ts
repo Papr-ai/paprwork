@@ -564,7 +564,9 @@ export class VaultSyncService {
             {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(mergeCloudActingUserBody({ namespaceId })),
+              body: JSON.stringify(
+                mergeCloudActingUserBody({ namespace_id: namespaceId }),
+              ),
               signal: controller.signal,
             },
           );
@@ -628,7 +630,7 @@ export class VaultSyncService {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(
             mergeCloudActingUserBody({
-              ...(namespaceId ? { namespaceId } : {}),
+              ...(namespaceId ? { namespace_id: namespaceId } : {}),
               keys: [
                 {
                   name: trimmedName,

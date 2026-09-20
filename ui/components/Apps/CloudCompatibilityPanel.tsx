@@ -46,16 +46,15 @@ export function CloudCompatibilityBadge({
     );
   }
 
-  if (!report) return null;
-
-  return (
-    <span
-      className={`cloud-compat-badge cloud-compat-badge--${report.level}`}
-      title={report.summary}
-    >
-      {cloudCompatibilityLabel(report.level)}
-    </span>
-  );
+  // Compatibility levels no longer badge the bar. "Hybrid" and "Desktop only"
+  // are publish-time facts, and they are already stated where they matter: the
+  // blocking CloudCompatibilityPanel shown before a desktop-only publish. A
+  // permanent word next to the app name spent real width on a caveat the user
+  // can act on only at publish time.
+  //
+  // Paused is different and stays: it is billing state, not app state, and it
+  // is the only place in the app flow that surfaces it.
+  return null;
 }
 
 interface CloudCompatibilityPanelProps {

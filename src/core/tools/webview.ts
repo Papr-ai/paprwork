@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { WebviewTestRequest } from "../types/gateway-ipc.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { markWebviewPreviewActivity } from "./webviewActivity.js";
+import { syncWebviewPreviewActivityLatch } from "./webviewSessionGuard.js";
 
 const launchSchema = z.object({
   appId: z.string().min(1),
@@ -133,6 +134,9 @@ async function request(
   const response = await requestWebviewTest({ action, payload });
   if (!response.success) {
     throw new Error(response.error || `Webview action failed: ${action}`);
+  }
+  if (action === "close") {
+    await syncWebviewPreviewActivityLatch();
   }
   return sanitizeWebviewResult(response.data);
 }

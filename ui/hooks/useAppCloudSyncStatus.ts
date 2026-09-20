@@ -590,8 +590,16 @@ export function useAppCloudSyncStatus(
     return () => window.removeEventListener("gateway-broadcast", handler);
   }, [appId, refresh]);
 
+  // Local dirty state comes from the file watcher and is knowable without any
+  // round trip, so it must render immediately on tab open. Only the WEB half
+  // ("has someone published elsewhere?") needs asking, so only that is gated.
+  const localStateKnown =
+    status != null &&
+    status.overall !== "disabled" &&
+    status.overall !== "synced";
   const needsStatusCheck =
     !checkedThisSession &&
+    !localStateKnown &&
     !refreshing &&
     !pushing &&
     !pulling &&
