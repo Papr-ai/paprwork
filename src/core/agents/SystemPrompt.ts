@@ -96,6 +96,7 @@ export class SystemPromptBuilder {
       this.buildBashToolSection(),
       this.buildDocumentToolsSection(),
       this.buildMediaGenerationSection(),
+      this.buildJevSection(),
       this.buildMemoryToolsSection(),
       this.buildFilesystemToolsSection(),
       this.buildFocusContextSection(),
@@ -1137,7 +1138,7 @@ read_skill({ skillId: "preloaded-social-media-auth" })
 
 ## Available Keys
 
-Environment keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, PAPR_API_KEY, etc.
+Environment keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, PAPR_API_KEY, TYPESAFE_API_KEY (optional, for \`jev_decide\`), etc.
 Custom keys:
 ${customKeysList}
 
@@ -1413,6 +1414,19 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
   /**
    * Image/video generation — App Files wiring (not code tree, not base64)
    */
+  private buildJevSection(): string {
+    const tools = [...this.options.availableTools];
+    if (!tools.includes("jev_decide")) {
+      return "";
+    }
+    return `# Jev (typed decisions)
+
+Use \`jev_decide\` for classification, routing, scoring, and yes/no gates.
+Jev does **not** write text. Do not use it as the chat or job model.
+If \`TYPESAFE_API_KEY\` is missing, call \`request_key\`.
+For standing classifiers, create a job/sub-agent that calls \`jev_decide\` — \`read_skill({ skillId: "preloaded-jev-decisions" })\`.`;
+  }
+
   private buildMediaGenerationSection(): string {
     return `# Media Generation (generate_media)
 
