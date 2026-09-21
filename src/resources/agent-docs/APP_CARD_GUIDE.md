@@ -144,6 +144,8 @@ Drop `app_id` to ask across all apps ("which app writes to Turso?"); keep it whe
 
 Writing the file is not enough on its own — the card must reach memory. Either run the `app-card-indexer` job, or call `add_agent_memory` per changed section inline. Inline is fine and usually faster for a one-section edit.
 
+Rewriting several sections at once? Use `add_agent_memory_batch` — each item takes its own `customMetadata`, so pass the same `content_type` / `app_id` / `section` keys you would have passed per call. One request, same filterability.
+
 ---
 
 ## Do not card everything

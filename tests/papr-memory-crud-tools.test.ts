@@ -188,6 +188,52 @@ describe("papr memory CRUD + feedback tools", () => {
       expect(payload.batch_size).toBe(10);
     });
 
+    it("carries per-item customMetadata through to the batch payload", async () => {
+      mockAddBatch.mockResolvedValue({ status: "success", batch_id: "b-3" });
+
+      await addAgentMemoryBatchTool.execute({
+        memories: [
+          {
+            content: "Curation Bench writes to db-a1b2c3d4 via $APP_DB.",
+            customMetadata: {
+              content_type: "app_card",
+              app_id: "8d76d9ce",
+              section: "Storage",
+            },
+          },
+          { content: "plain item with no caller keys" },
+        ],
+      });
+
+      const payload = mockAddBatch.mock.calls[0]![0];
+      // An App Card is inherently multi-section, so this is the path agents are
+      // steered to. Dropping these keys writes the card successfully but makes
+      // it unfindable via customMetadataFilters — silent, with no error.
+      expect(payload.memories[0].metadata.customMetadata).toMatchObject({
+        content_type: "app_card",
+        app_id: "8d76d9ce",
+        section: "Storage",
+      });
+      // Caller keys are per-item, never smeared across the whole batch.
+      expect(
+        payload.memories[1].metadata.customMetadata?.content_type,
+      ).toBeUndefined();
+    });
+
+    it("keeps caller customMetadata out of items that did not set it", async () => {
+      mockAddBatch.mockResolvedValue({ status: "success", batch_id: "b-4" });
+
+      await addAgentMemoryBatchTool.execute({
+        memories: [{ content: "no custom keys at all" }],
+      });
+
+      const payload = mockAddBatch.mock.calls[0]![0];
+      const custom = payload.memories[0].metadata.customMetadata;
+      // Either absent (no chat context) or exactly the tool's own attribution —
+      // never a fabricated caller key.
+      expect(custom === undefined || Object.keys(custom).length <= 1).toBe(true);
+    });
+
     it("omits optional flags when not set", async () => {
       mockAddBatch.mockResolvedValue({ status: "success", batch_id: "b-2" });
 
