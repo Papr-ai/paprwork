@@ -364,10 +364,28 @@ async function restartCloudSyncIfEnabled(): Promise<void> {
   if (process.env.CLOUD_SYNC_ENABLED === "false") {
     return;
   }
-  await resetCloudSyncServiceForWorkspaceSwitch();
+  if (getCloudSyncService()) {
+    return;
+  }
   const cloudSync = initializeCloudSyncService();
   cloudSync.deferQueueProcessingUntil(Date.now() + POST_SWITCH_CLOUD_SYNC_DEFER_MS);
+  const { ensureTursoSyncBridge } = await import("./TursoSyncBridge.js");
+  ensureTursoSyncBridge();
   await cloudSync.initialize();
+}
+
+/** Match cold-start deferral (30s + interactive quiet) instead of init during switch UI load. */
+async function scheduleCloudSyncRestartAfterSwitch(generation: number): Promise<void> {
+  const delayMs = Number(process.env.CLOUD_SYNC_STARTUP_DELAY_MS ?? "30000");
+  if (delayMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+  const { waitForInteractiveQuietBeforeBackgroundWork } = await import(
+    "./gatewayInteractivePriority.js"
+  );
+  await waitForInteractiveQuietBeforeBackgroundWork("CloudSync.postSwitch");
+  if (isSwitchGenerationStale(generation)) return;
+  await restartCloudSyncIfEnabled();
 }
 
 /** Stop path-bound writers before PAPR_HOME changes (avoids cross-workspace leaks). */
@@ -574,7 +592,7 @@ async function finishWorkspaceSwitchInBackground(
       `[WorkspaceSwitch] Background switch complete: org=${pointer.organizationId} ns=${pointer.namespaceId}`,
     );
 
-    runDeferredWorkspaceSwitchMaintenance(pointer);
+    runDeferredWorkspaceSwitchMaintenance(pointer, generation);
   } catch (error) {
     if (isSwitchGenerationStale(generation)) {
       return;
@@ -632,6 +650,7 @@ export async function switchActiveWorkspace(
     await stopActiveJobsBeforeWorkspaceSwitch();
     bumpWorkspaceWriteGeneration("workspace switch started");
     discardDeferredTabSave("workspace switch started");
+    await getVaultSyncService()?.beginWorkspaceSwitch();
     await pauseWorkspaceSwitchWriters();
     const pointer = await activateWorkspacePointer(input);
 
@@ -684,11 +703,12 @@ export async function switchActiveWorkspace(
 }
 
 /** Cloud sync, Turso, and vault — not required before UI can use the new workspace. */
-function runDeferredWorkspaceSwitchMaintenance(pointer: ActiveWorkspacePointer): void {
+function runDeferredWorkspaceSwitchMaintenance(pointer: ActiveWorkspacePointer, generation: number): void {
   postSwitchMaintenanceUntil = Date.now() + POST_SWITCH_HEALTH_GRACE_MS;
 
   void (async () => {
     try {
+      if (isSwitchGenerationStale(generation)) return;
       await refreshTursoForWorkspaceSwitch();
 
       const { rebootstrapPendingPortableReplicas } = await import(
@@ -704,7 +724,9 @@ function runDeferredWorkspaceSwitchMaintenance(pointer: ActiveWorkspacePointer):
         );
       }
 
-      await restartCloudSyncIfEnabled();
+      if (isSwitchGenerationStale(generation)) return;
+      await scheduleCloudSyncRestartAfterSwitch(generation);
+      if (isSwitchGenerationStale(generation)) return;
       await refreshVaultForWorkspaceSwitch();
 
       const runningSync = getCloudSyncService();

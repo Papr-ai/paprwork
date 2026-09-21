@@ -16,6 +16,7 @@ import { useTabStore } from "../stores/tabStore";
 import { gateway, type GatewayResponse } from "../src/lib/gateway";
 import type { ChatMetadata } from "../types/chat";
 import { clearCloudPublishCache } from "../utils/cloudPublishCache";
+import { resetCloudSyncTabCacheForWorkspaceSwitch } from "../utils/cloudSyncTabCache";
 import { clearCommunityCatalogCache } from "../utils/communityCatalogCache";
 import {
   applyPersistedAppStateToTabStore,
@@ -736,6 +737,7 @@ async function reloadUiForWorkspaceSwitchInner(
     attachWorkspaceSwitchBroadcastListener();
     clearLegacyGlobalTabCache();
     clearCloudPublishCache();
+    resetCloudSyncTabCacheForWorkspaceSwitch();
     clearCommunityCatalogCache();
     resetDefaultChatTabGuardForTests();
 

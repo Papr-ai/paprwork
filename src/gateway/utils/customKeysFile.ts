@@ -22,7 +22,7 @@ interface StoredCustomKeyRecord {
   updatedAt?: string;
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
   vaultAudience?: "user" | "namespace" | "org";
   vaultOrigin?: "local" | "shared";
   sharedShareScope?: "namespace" | "org";

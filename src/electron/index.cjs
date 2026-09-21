@@ -3260,7 +3260,6 @@ app.on("before-quit", async (event) => {
       console.log("[Electron] Cleaning up OAuth servers...");
       cleanupOAuthServers();
     }
-    
     // Cleanup Papr login callback server
     if (cleanupPaprLogin) {
       console.log("[Electron] Cleaning up Papr login server...");

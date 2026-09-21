@@ -10,14 +10,25 @@ interface PublishBarErrorNoticeProps {
   summary: string;
   detail: string;
   onDismiss?: () => void;
+  /** v2: status chip opens the panel; omit the inline bar trigger. */
+  hideInlineTrigger?: boolean;
+  detailOpen?: boolean;
+  onDetailOpenChange?: (open: boolean) => void;
+  panelTitle?: string;
 }
 
 export function PublishBarErrorNotice({
   summary,
   detail,
   onDismiss,
+  hideInlineTrigger = false,
+  detailOpen: detailOpenProp,
+  onDetailOpenChange,
+  panelTitle = "Failed to publish",
 }: PublishBarErrorNoticeProps) {
-  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailOpenInternal, setDetailOpenInternal] = useState(false);
+  const detailOpen = detailOpenProp ?? detailOpenInternal;
+  const setDetailOpen = onDetailOpenChange ?? setDetailOpenInternal;
   const needsDetail = detail.trim() !== summary.trim();
 
   useEffect(() => {
@@ -37,18 +48,20 @@ export function PublishBarErrorNotice({
 
   return (
     <>
-      <button
-        type="button"
-        className="publish-bar-error-notice"
-        onClick={openDetail}
-        title={detail}
-        aria-label={needsDetail ? `${summary}. View full error.` : summary}
-      >
-        <span className="publish-bar-error-notice__text">{summary}</span>
-        {needsDetail ? (
-          <span className="publish-bar-error-notice__action">Details</span>
-        ) : null}
-      </button>
+      {!hideInlineTrigger ? (
+        <button
+          type="button"
+          className="publish-bar-error-notice"
+          onClick={openDetail}
+          title={detail}
+          aria-label={needsDetail ? `${summary}. View full error.` : summary}
+        >
+          <span className="publish-bar-error-notice__text">{summary}</span>
+          {needsDetail ? (
+            <span className="publish-bar-error-notice__action">Details</span>
+          ) : null}
+        </button>
+      ) : null}
 
       {detailOpen
         ? createPortal(
@@ -69,7 +82,7 @@ export function PublishBarErrorNotice({
                     id="publish-error-detail-title"
                     className="publish-error-detail-panel__title"
                   >
-                    Publish failed
+                    {panelTitle}
                   </h3>
                   <button
                     type="button"

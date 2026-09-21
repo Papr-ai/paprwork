@@ -9,10 +9,12 @@ import { useAppCloudSyncStatus } from "../../hooks/useAppCloudSyncStatus";
 import {
   formatWebSyncStatusTooltip,
   resolvePublishBarStatus,
+  resolvePublishBarChipForForkUpstream,
   resolvePublishBarChipLabel,
   resolvePublishBarPrimaryAction,
   webSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
+import { pullTrackUpstream } from "../../utils/cloudTrackSyncApi";
 import {
   resolveEffectiveAutoUpload,
 } from "../../utils/appUploadMode";
@@ -434,13 +436,15 @@ export function MiniAppPublishBar({
   const [compatLoading, setCompatLoading] = useState(false);
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
+  const [publishErrorDetailOpen, setPublishErrorDetailOpen] = useState(false);
   const [webSyncActionNotice, setWebSyncActionNotice] = useState<string | null>(
     null,
   );
   const [webSyncActionKind, setWebSyncActionKind] = useState<
-    "review" | "updates" | "failed" | "upload"
+    "review" | "failed"
   >("review");
   const prevMergeRequiredRef = useRef(false);
+  const [upstreamPulling, setUpstreamPulling] = useState(false);
 
   const {
     status: webSyncStatus,
@@ -458,6 +462,8 @@ export function MiniAppPublishBar({
     checkStatus: webSyncCheckStatus,
     needsStatusCheck: webSyncNeedsStatusCheck,
     lastCheckedAt: webSyncLastCheckedAt,
+    publisherUpdatesAvailable: webSyncPublisherUpdatesAvailable,
+    refresh: webSyncRefresh,
   } = useAppCloudSyncStatus(appId, {
     enabled: workspaceMode === "preview",
     previewTabVisible,
@@ -476,16 +482,9 @@ export function MiniAppPublishBar({
     globalAutoUploadEnabled,
   );
 
-  // One callout, four triggers — each fires on a false→true edge, never
-  // re-nags while the condition persists, and clears itself when resolved.
-  //   review   — cloud changes need a merge (blocking; auto-opens popover)
-  //   updates  — the web has newer changes the user cannot know about
-  //   failed   — a silent upload failure is the worst outcome
-  //   upload   — MANUAL mode + live app + local changes: users assume changes
-  //              reach the web on their own. Once per app per session.
-  const prevUpdatesRef = useRef(false);
+  // Callout strip: review + failed only. Updates and unpublished local work
+  // are shown on the chip and primary button (v2 bar), not a second banner.
   const prevFailedRef = useRef(false);
-  const uploadReminderShownRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     const mergeRequired = webSyncStatus?.gitRemoteRequiresReview === true;
@@ -509,20 +508,6 @@ export function MiniAppPublishBar({
   ]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    const updates =
-      webSyncStatus?.gitUpdatesAvailable === true &&
-      webSyncStatus?.gitRemoteRequiresReview !== true;
-    if (updates && !prevUpdatesRef.current && !webSyncActionNotice) {
-      setWebSyncActionNotice("The web has newer changes for this app.");
-      setWebSyncActionKind("updates");
-    }
-    if (!updates && webSyncActionKind === "updates") {
-      setWebSyncActionNotice(null);
-    }
-    prevUpdatesRef.current = updates;
-  }, [webSyncStatus?.gitUpdatesAvailable, webSyncStatus?.gitRemoteRequiresReview]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
     const failed =
       webSyncStatus?.codeStatus === "failed" ||
       (webSyncStatus?.uploadStatus === "failed" &&
@@ -540,31 +525,6 @@ export function MiniAppPublishBar({
   }, [webSyncStatus?.codeStatus, webSyncStatus?.uploadStatus, webSyncStatus?.uploadRetryPending, webSyncPushing]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (
-      autoUploadEnabled ||
-      webSyncStatus?.overall !== "needs_sync" ||
-      webSyncStatus?.publishLive !== true ||
-      webSyncStatus?.gitRemoteRequiresReview ||
-      webSyncStatus?.gitUpdatesAvailable ||
-      webSyncActionNotice ||
-      uploadReminderShownRef.current.has(appId)
-    ) {
-      return;
-    }
-    uploadReminderShownRef.current.add(appId);
-    setWebSyncActionNotice(
-      "Your changes stay on this Mac until you publish them — people using this app on the web still see the old version.",
-    );
-    setWebSyncActionKind("upload");
-  }, [autoUploadEnabled, webSyncStatus?.overall, webSyncStatus?.publishLive, webSyncStatus?.gitRemoteRequiresReview, webSyncStatus?.gitUpdatesAvailable, appId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (webSyncActionKind === "upload" && webSyncStatus?.overall === "synced") {
-      setWebSyncActionNotice(null);
-    }
-  }, [webSyncStatus?.overall]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
     setCompatReport(cloud.compatibility);
   }, [cloud.compatibility]);
 
@@ -578,7 +538,6 @@ export function MiniAppPublishBar({
     setWebSyncPopoverOpen(false);
     setWebSyncActionNotice(null);
     prevMergeRequiredRef.current = false;
-    prevUpdatesRef.current = false;
     prevFailedRef.current = false;
     const model = sharingToAudienceModel(
       cloud.loginAccess,
@@ -765,6 +724,15 @@ export function MiniAppPublishBar({
         await guardedWebSyncPushNow();
       }
       return { published: needsCodeUpload };
+    } catch (err) {
+      if (err instanceof CloudPublishBlockedError) {
+        cloud.clearError();
+        setCompatReport(err.compatibility);
+        setNeedsDesktopAck(true);
+        setShareOpen(true);
+        return { published: false };
+      }
+      throw err;
     } finally {
       applyingSharingRef.current = false;
       setShareSyncNotice(null);
@@ -893,8 +861,13 @@ export function MiniAppPublishBar({
   useEffect(() => {
     if (incomingChanges.pending.length > 0) {
       setContributionsOpen(true);
+    } else {
+      setContributionsOpen(false);
     }
   }, [incomingChanges.pending.length]);
+
+  const showContributionsInbox =
+    showOwnerChangeRequests && incomingChanges.pending.length > 0;
 
   const removeFromCommunity = () => {
     const nextPermission = permission === "edit" ? "edit" : "write";
@@ -909,13 +882,13 @@ export function MiniAppPublishBar({
   const canOpenWebPreview = isTrackCollaborator
     ? !!upstreamPreviewUrl
     : cloud.live && !!cloud.publishedPreviewUrl;
+  // Chip stays calm until a user-initiated or in-flight refresh — not hook
+  // `loading` on tab open before the first /api/sync/items round-trip.
   const webSyncTooltip = formatWebSyncStatusTooltip(webSyncStatus, {
-    loading: webSyncLoading,
     error: webSyncError,
     refreshing: webSyncRefreshing,
   });
   const webSyncState = webSyncVisualState(webSyncStatus, {
-    loading: webSyncLoading,
     error: webSyncError,
     pushing: webSyncPushing,
     refreshing: webSyncRefreshing,
@@ -928,8 +901,16 @@ export function MiniAppPublishBar({
     webSyncPushing ||
     webSyncPulling ||
     webSyncApplyingUpdates ||
-    (webSyncLoading && !webSyncStatus) ||
+    webSyncRefreshing ||
     webSyncState === "syncing";
+  const cloudPublishFailed =
+    Boolean(cloud.errorDetail) && !needsDesktopAck;
+  useEffect(() => {
+    if (!cloudPublishFailed) {
+      setPublishErrorDetailOpen(false);
+    }
+  }, [cloudPublishFailed]);
+
   const publishBarStatus = resolvePublishBarStatus({
     live: cloud.live,
     loading: cloud.loading,
@@ -938,6 +919,8 @@ export function MiniAppPublishBar({
     webSyncState,
     webSyncSpinning,
     webSyncTooltip,
+    cloudPublishFailed,
+    cloudPublishErrorDetail: cloud.errorDetail,
   });
   // Re-render on a slow tick so the chip's age ("web checked 4 min ago") keeps
   // counting up while the tab sits open instead of freezing at its first value.
@@ -946,7 +929,13 @@ export function MiniAppPublishBar({
     const timer = setInterval(() => setChipAgeTick((n) => n + 1), 60_000);
     return () => clearInterval(timer);
   }, []);
-  const publishBarChip = resolvePublishBarChipLabel({
+  const forkWebPreview =
+    workspaceMode === "preview" && viewMode === "published" && isFork;
+  const forkUpstreamChip = resolvePublishBarChipForForkUpstream({
+    forkWebPreview,
+    publisherUpdatesAvailable: webSyncPublisherUpdatesAvailable,
+  });
+  const publishBarChipBase = resolvePublishBarChipLabel({
     state: publishBarStatus.state,
     live: cloud.live,
     syncEnabled: workspaceMode === "preview",
@@ -954,17 +943,32 @@ export function MiniAppPublishBar({
     // "Just published" is a fresh-confirmation window: for ~2 minutes after a
     // publish the chip confirms that write, then falls back to the check age.
     lastPublishedAt: webSyncStatus?.lastUploadedAt ?? null,
+    cloudPublishFailed,
   });
-  // The chip only appears in preview mode. When it does, it is the single
-  // source of status and the meta line stands down.
-  const chipSpeaks = workspaceMode === "preview";
+  const forkChipOverrides =
+    forkUpstreamChip != null &&
+    publishBarStatus.state !== "action_required" &&
+    publishBarStatus.state !== "error";
+  const publishBarChip = forkChipOverrides
+    ? {
+        label: forkUpstreamChip.label,
+        showRefresh: false,
+        tone: forkUpstreamChip.tone,
+      }
+    : publishBarChipBase;
+  const publishBarChipState = forkChipOverrides
+    ? forkUpstreamChip.state
+    : publishBarStatus.state;
+  // Preview mode uses the chip for all web-sync states; draft publish failures
+  // show the chip even in Files mode so "Failed to publish" is one click away.
+  const chipSpeaks = workspaceMode === "preview" || cloudPublishFailed;
   const metaStatusText = (() => {
     const lineage =
       isFork && cloudLineage && !showUpstreamBar
         ? `${cloudLineage.mode === "track" ? "Tracking" : "Fork"} ${cloudLineage.sourceSlug}`
         : null;
-    if (cloud.loading && !cloud.live) return "Checking…";
     if (chipSpeaks) return lineage;
+    if (cloud.loading && !cloud.live) return lineage ?? "Draft";
     const base = `${cloud.live ? "Live" : "Draft"} · ${cloud.statusLabel}${
       cloud.refreshing && cloud.live ? " · updating" : ""
     }`;
@@ -976,6 +980,9 @@ export function MiniAppPublishBar({
     syncEnabled: workspaceMode === "preview",
     pushing: webSyncPushing || Boolean(shareSyncNotice),
     pulling: webSyncPulling,
+    pullingUpstream: upstreamPulling,
+    publisherUpdatesAvailable: webSyncPublisherUpdatesAvailable,
+    forkWebPreview,
   });
   const shareSheetBusy =
     cloud.busy || webSyncPushing || Boolean(shareSyncNotice);
@@ -1051,10 +1058,10 @@ export function MiniAppPublishBar({
     ) : null;
 
   const shareSyncBanner = (() => {
-    if (cloud.errorDetail) {
+    if (cloud.errorDetail && !needsDesktopAck) {
       return {
         tone: "error" as const,
-        message: cloud.error ?? cloud.errorDetail,
+        message: "Failed to publish",
         detail: cloud.errorDetail,
       };
     }
@@ -1099,6 +1106,14 @@ export function MiniAppPublishBar({
     setWebSyncPopoverOpen((open) => !open);
   };
 
+  const handlePublishStatusChipClick = () => {
+    if (cloudPublishFailed) {
+      setPublishErrorDetailOpen(true);
+      return;
+    }
+    handleWebSyncDotClick();
+  };
+
   const handlePublishClick = async () => {
     if (publishBlockedByIntegrity) {
       return;
@@ -1126,8 +1141,10 @@ export function MiniAppPublishBar({
       }
     } catch (err) {
       if (err instanceof CloudPublishBlockedError) {
+        cloud.clearError();
         setCompatReport(err.compatibility);
         setNeedsDesktopAck(true);
+        setShareOpen(true);
       }
     } finally {
       setShareSyncNotice(null);
@@ -1145,6 +1162,7 @@ export function MiniAppPublishBar({
       })
       .catch((err: unknown) => {
         if (err instanceof CloudPublishBlockedError) {
+          cloud.clearError();
           setCompatReport(err.compatibility);
           setNeedsDesktopAck(true);
         }
@@ -1186,18 +1204,18 @@ export function MiniAppPublishBar({
             {/* Status belongs to the app, so it sits with the app's name —
                 not inside the Local/Web toggle, which is about which preview
                 you are looking at. */}
-            {workspaceMode === "preview" ? (
+            {chipSpeaks ? (
               <span
                 ref={webSyncAnchorRef}
                 className="mini-app-publish-bar__chip-anchor"
               >
                 <WebSyncStatusDot
-                  state={publishBarStatus.state}
+                  state={publishBarChipState}
                   spinning={publishBarStatus.spinning}
                   tooltip={publishBarStatus.tooltip}
                   popoverOpen={webSyncPopoverOpen}
                   interactive={publishBarStatus.interactive}
-                  onClick={handleWebSyncDotClick}
+                  onClick={handlePublishStatusChipClick}
                   label={publishBarChip.label}
                   tone={publishBarChip.tone}
                   onRefresh={
@@ -1336,9 +1354,12 @@ export function MiniAppPublishBar({
           {cloud.toast ? (
             <span className="mini-app-publish-bar__toast">{cloud.toast}</span>
           ) : null}
-          {cloud.error && cloud.errorDetail ? (
+          {cloudPublishFailed && cloud.errorDetail ? (
             <PublishBarErrorNotice
-              summary={cloud.error}
+              hideInlineTrigger
+              detailOpen={publishErrorDetailOpen}
+              onDetailOpenChange={setPublishErrorDetailOpen}
+              summary="Failed to publish"
               detail={cloud.errorDetail}
               onDismiss={cloud.clearError}
             />
@@ -1356,7 +1377,7 @@ export function MiniAppPublishBar({
             onUnpublish={takeOffWeb}
           />
 
-          {showOwnerChangeRequests ? (
+          {showContributionsInbox ? (
             <button
               type="button"
               className="mini-app-publish-bar__button mini-app-publish-bar__button--icon"
@@ -1410,7 +1431,7 @@ export function MiniAppPublishBar({
                 loginAccess={cloud.loginAccess}
                 codeAccess={cloud.codeAccess}
               />
-              Share
+              {isFork ? "Share my copy" : "Share"}
             </button>
           ) : null}
 
@@ -1422,14 +1443,30 @@ export function MiniAppPublishBar({
               className={`mini-app-publish-bar__button mini-app-publish-bar__button--primary${
                 publishBarAction.kind === "review" || publishBarAction.kind === "retry"
                   ? " mini-app-publish-bar__button--tone-bad"
-                  : publishBarAction.kind === "updates"
+                  : publishBarAction.kind === "updates" ||
+                      publishBarAction.kind === "upstream"
                     ? " mini-app-publish-bar__button--tone-info"
                     : ""
               }`}
-              disabled={webSyncPushing || webSyncPulling || cloud.busy}
+              disabled={
+                webSyncPushing ||
+                webSyncPulling ||
+                upstreamPulling ||
+                cloud.busy
+              }
               onClick={() => {
                 if (publishBarAction.kind === "updates") {
                   void webSyncPullUpdates();
+                } else if (publishBarAction.kind === "upstream") {
+                  void (async () => {
+                    setUpstreamPulling(true);
+                    try {
+                      await pullTrackUpstream(appId);
+                      await webSyncRefresh(true);
+                    } finally {
+                      setUpstreamPulling(false);
+                    }
+                  })();
                 } else if (publishBarAction.kind === "review") {
                   handleWebSyncDotClick();
                 } else {
@@ -1443,7 +1480,7 @@ export function MiniAppPublishBar({
         </div>
       </div>
 
-      {showOwnerChangeRequests && contributionsOpen ? (
+      {showContributionsInbox && contributionsOpen ? (
         <div className="mini-app-publish-bar__contributions-panel">
           <CloudChangeRequestsPanel
             busy={cloud.busy}
@@ -1457,10 +1494,12 @@ export function MiniAppPublishBar({
         </div>
       ) : null}
 
-      {workspaceMode === "preview" && webSyncActionNotice ? (
+      {workspaceMode === "preview" &&
+      webSyncActionNotice &&
+      (webSyncActionKind === "failed" || webSyncActionKind === "review") ? (
         <div
           className="mini-app-publish-bar__action-callout"
-          role={webSyncActionKind === "failed" || webSyncActionKind === "review" ? "alert" : "status"}
+          role="alert"
           aria-live="polite"
         >
           <span className="mini-app-publish-bar__action-callout-text">
@@ -1468,7 +1507,7 @@ export function MiniAppPublishBar({
           </span>
           {/* No action button here: the bar's primary button already offers it
               persistently. This callout only explains and offers the agent. */}
-          {webSyncActionKind !== "updates" && webSyncStatus ? (
+          {webSyncStatus ? (
             <button
               type="button"
               className="mini-app-publish-bar__action-callout-btn mini-app-publish-bar__action-callout-btn--secondary"

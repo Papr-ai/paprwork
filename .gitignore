@@ -67,6 +67,13 @@ batch.json
 data_snapshot.json
 papr-members-*.csv
 
+# Local-only ops scripts (workspace/org automation — not product code)
+scripts/private/
+scripts/get-hhp-*.cjs
+scripts/probe-gtm-cloud-state.cjs
+scripts/set-gtm-*.cjs
+scripts/set-*-gtm-*.cjs
+
 # Python
 __pycache__/
 *.py[cod]

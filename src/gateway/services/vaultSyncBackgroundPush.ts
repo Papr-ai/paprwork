@@ -39,6 +39,7 @@ export interface VaultSyncPushResult {
 export async function pushVaultEntriesViaGatewayHttp(
   gatewayPort: number,
   entries: CloudVaultKeyEntry[],
+  workspaceSignal?: AbortSignal,
 ): Promise<VaultSyncPushResult | null> {
   if (entries.length === 0) {
     return null;
@@ -51,6 +52,7 @@ export async function pushVaultEntriesViaGatewayHttp(
     throw new Error(reason ?? "Vault sync paused after platform errors");
   }
 
+  workspaceSignal?.throwIfAborted();
   const pushTimeoutMs = resolveVaultPushTimeoutMs();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), pushTimeoutMs);
@@ -62,7 +64,7 @@ export async function pushVaultEntriesViaGatewayHttp(
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildCloudVaultRequestBody(entries, "user")),
-        signal: controller.signal,
+        signal: workspaceSignal ? AbortSignal.any([controller.signal, workspaceSignal]) : controller.signal,
       },
     );
 
@@ -79,7 +81,7 @@ export async function pushVaultEntriesViaGatewayHttp(
         "./vaultSyncPlatformBackoff.js"
       );
       recordVaultSyncPlatformFailure(resp.status, text);
-      throw new Error(`Vault sync failed (${resp.status}): ${text}`);
+      throw Object.assign(new Error(`Vault sync failed (${resp.status}): ${text}`), { status: resp.status });
     }
 
     const { recordVaultSyncPlatformSuccess } = await import(
@@ -88,6 +90,10 @@ export async function pushVaultEntriesViaGatewayHttp(
     recordVaultSyncPlatformSuccess();
     return (await resp.json()) as VaultSyncPushResult;
   } catch (err) {
+    if (!workspaceSignal?.aborted && !(err && typeof err === "object" && "status" in err)) {
+      const { recordVaultSyncPlatformFailure } = await import("./vaultSyncPlatformBackoff.js");
+      recordVaultSyncPlatformFailure(503, controller.signal.aborted ? "Vault upload timed out" : "Vault upload transport failed");
+    }
     const msg = err instanceof Error ? err.message : String(err);
     if (isPaprSubscriptionBlockedMessage(msg)) {
       reportPaprQuotaError(err, "vault-sync");

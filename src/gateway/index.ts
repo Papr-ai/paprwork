@@ -855,8 +855,14 @@ async function startGateway(): Promise<void> {
         const { checkAppRemoteCodeStatus } = await import(
           "./services/syncV3/checkAppRemoteCodeStatus.js"
         );
-        const status = await checkAppRemoteCodeStatus(appId);
-        res.json(status);
+        const { checkPublisherUpstreamRevision } = await import(
+          "./services/syncV3/checkPublisherUpstreamRevision.js"
+        );
+        const [status, publisher] = await Promise.all([
+          checkAppRemoteCodeStatus(appId),
+          checkPublisherUpstreamRevision(appId),
+        ]);
+        res.json({ ...status, ...publisher });
       } catch (err) {
         console.error("[Gateway] /api/apps/remote-code-status error:", err);
         res.status(500).json({ error: (err as Error).message });

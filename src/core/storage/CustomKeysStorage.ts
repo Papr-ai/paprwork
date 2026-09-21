@@ -47,7 +47,7 @@ export interface CustomKey {
   updatedAt: string;
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
   vaultAudience?: IntegrationKeyVaultAudience;
   vaultOrigin?: VaultOrigin;
   sharedShareScope?: Extract<
@@ -85,7 +85,7 @@ export interface CustomKeyInput {
   vaultAudienceMemberIds?: string[];
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
 }
 
 export type CustomKeyStorageScope = "global" | "shared" | "org";
@@ -100,7 +100,7 @@ export interface CustomKeyMetadata {
   updatedAt: string;
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
   scope: CustomKeyStorageScope;
   orgScope: IntegrationKeyOrgScope | "global";
   organizationId?: string;

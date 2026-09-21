@@ -211,6 +211,11 @@ export function costBasisIsCharged(basis: CostBasis): boolean {
   return basis === "metered" || basis === "plan_overage";
 }
 
+/** False while inside the included allowance — no dollar figure in the UI. */
+export function costBasisShowsDollarFigure(basis: CostBasis): boolean {
+  return basis !== "plan_included";
+}
+
 /** Stat label beside the figure — says which of the two things it is. */
 export function costBasisStatLabel(basis: CostBasis): string {
   return costBasisIsCharged(basis) ? "cost" : "list";
@@ -358,9 +363,8 @@ export function getPlanUsageTooltipLines(
 /**
  * Chat footer totals.
  *
- * The figure is always shown. Suppressing it on a subscription hid real spend
- * from anyone past their included allowance, which is exactly when the number
- * matters most; the wording carries whether it is a charge or a list estimate.
+ * Overage and metered chats still show dollars. While inside the included
+ * allowance, the footer names the outcome only — no list-price estimate.
  */
 export function formatChatTotalsLine(
   billingMode: BillingMode,
@@ -379,7 +383,7 @@ export function formatChatTotalsLine(
     case "plan_overage":
       return `${turnLabel} · ${amount} this chat, on top of your plan`;
     case "plan_included":
-      return `${turnLabel} · ≈${amount} at list · no additional cost`;
+      return `${turnLabel} · no additional cost`;
     case "plan_unknown":
       return `${turnLabel} · ≈${amount} at list`;
   }

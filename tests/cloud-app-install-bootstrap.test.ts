@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { existsSync } from "fs";
 import { promises as fs } from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -53,6 +54,14 @@ describe("cloud app install bootstrap", () => {
 
   beforeEach(async () => {
     syncTursoAfterAppInstall.mockClear();
+    syncTursoAfterAppInstall.mockResolvedValue({
+      attempted: 0,
+      pushed: 0,
+      pulled: 0,
+      skipped: 0,
+      failed: 0,
+      results: [],
+    });
     appId = randomUUID();
     dbId = "db-2d6b4294";
     paprHome = await fs.mkdtemp(path.join(os.tmpdir(), "papr-bootstrap-"));
@@ -119,9 +128,13 @@ describe("cloud app install bootstrap", () => {
       ),
     );
 
-    const { initializeDatabaseRegistry } = await import(
+    const {
+      initializeDatabaseRegistry,
+      resetDatabaseRegistryForWorkspaceSwitch,
+    } = await import(
       "../src/gateway/services/DatabaseRegistryService.js"
     );
+    resetDatabaseRegistryForWorkspaceSwitch();
     await initializeDatabaseRegistry();
   });
 
@@ -144,6 +157,7 @@ describe("cloud app install bootstrap", () => {
     async () => {
       const bootstrap = await bootstrapInstalledAppDatabases(appId);
 
+      expect(syncTursoAfterAppInstall).toHaveBeenCalledTimes(1);
       expect(bootstrap.errors).toEqual([]);
       expect(bootstrap.ready).toBe(true);
       expect(bootstrap.linkedDbs).toHaveLength(1);
@@ -154,6 +168,36 @@ describe("cloud app install bootstrap", () => {
       const dbPath = bootstrap.linkedDbs[0]?.localPath ?? "";
       const stat = await fs.stat(dbPath);
       expect(stat.size).toBeGreaterThan(0);
+    },
+  );
+
+  it.skipIf(!canUseBetterSqlite)(
+    "applies git migrations before Turso pull",
+    async () => {
+      const slugDir = path.join(paprHome, "data", "databases", "gtm-foundations");
+      syncTursoAfterAppInstall.mockImplementation(async () => {
+        const dbPath = path.join(slugDir, "data.db");
+        expect(existsSync(dbPath)).toBe(true);
+        const db = new Database(dbPath, { readonly: true });
+        const row = db
+          .prepare(
+            "SELECT 1 AS ok FROM schema_migrations WHERE id = '0001_init.sql' LIMIT 1",
+          )
+          .get() as { ok: number } | undefined;
+        db.close();
+        expect(row?.ok).toBe(1);
+        return {
+          attempted: 0,
+          pushed: 0,
+          pulled: 0,
+          skipped: 0,
+          failed: 0,
+          results: [],
+        };
+      });
+
+      await bootstrapInstalledAppDatabases(appId);
+      expect(syncTursoAfterAppInstall).toHaveBeenCalledTimes(1);
     },
   );
 

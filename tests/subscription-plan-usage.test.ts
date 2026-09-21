@@ -4,6 +4,7 @@ import {
   CLAUDE_PLAN_USAGE_SUBLINE,
   formatChatTotalsLine,
   formatClaudeSubscriptionSubline,
+  type PlanUsageSummary,
   getPlanUsageHeroLines,
   getPlanUsageTooltipLines,
   summarizeClaudePlanUsage,
@@ -178,9 +179,25 @@ describe("formatChatTotalsLine", () => {
    * real spend from exactly the users past that point, so the figure is now
    * always shown and the wording carries whether it is a charge or an estimate.
    */
-  it("shows the figure as list price while inside the plan", () => {
-    expect(formatChatTotalsLine("subscription", 5, 12.34)).toBe(
-      "5 turns · ≈$12.34 at list",
+  it("hides list dollars while inside the plan", () => {
+    const inPlan: PlanUsageSummary = {
+      provider: "anthropic",
+      sessionPercent: 10,
+      weeklyPercent: 10,
+      sessionIsActive: true,
+      weeklyIsActive: false,
+      scopedWeekly: [],
+      activePercent: 10,
+      activeLabel: "Current session",
+      subscriptionType: "max",
+      extraUsageEnabled: null,
+      fetchedAt: new Date().toISOString(),
+    };
+    expect(formatChatTotalsLine("subscription", 5, 12.34, inPlan)).toBe(
+      "5 turns · no additional cost",
+    );
+    expect(formatChatTotalsLine("subscription", 5, 12.34, inPlan)).not.toContain(
+      "$",
     );
   });
 });

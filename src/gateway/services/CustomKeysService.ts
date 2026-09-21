@@ -31,6 +31,8 @@ interface PendingIpcRequest {
 
 interface CustomKeysIpcMessage {
   type?: string;
+  keyName?: string;
+  keysChanged?: boolean;
   requestId?: string;
   error?: string;
   keys?: CustomKeyMetadata[];
@@ -186,6 +188,7 @@ export class CustomKeysService {
         // affects both the value cache AND the list cache (the list metadata
         // includes the key's id, name, permission, timestamps).
         this.invalidateCache();
+        if (msg.keysChanged) this.notifyKeyChanged(msg.keyName);
         return;
       }
 
@@ -275,6 +278,10 @@ export class CustomKeysService {
         /* bash tool may be unavailable in some test contexts */
       });
 
+  }
+
+  /** Only actual local edits should schedule cloud writes. */
+  notifyKeyChanged(keyName?: string): void {
     for (const listener of this.changeListeners) {
       try {
         listener(keyName);
@@ -489,6 +496,7 @@ export class CustomKeysService {
 
     // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(input.name);
+    this.notifyKeyChanged(input.name);
     return response.key;
   }
 
@@ -561,6 +569,7 @@ export class CustomKeysService {
 
     // Invalidate ALL caches (value + list) since the key list changed
     this.invalidateCache(name);
+    this.notifyKeyChanged(name);
   }
 }
 

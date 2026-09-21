@@ -27,6 +27,8 @@ const PACKAGED_GATEWAY_KEYS = [
   "PAPR_TURSO_REPLICA_SYNC_ALLOW_PRODUCTION",
 ];
 
+const ALL_PACKAGED_GATEWAY_KEYS = [...PACKAGED_GATEWAY_KEYS];
+
 const isReleaseBuild =
   process.env.RELEASE_BUILD === "1" ||
   process.env.RELEASE_BUILD === "true" ||
@@ -43,7 +45,7 @@ function loadDefaults() {
   }
   /** @type {Record<string, string>} */
   const out = {};
-  for (const key of PACKAGED_GATEWAY_KEYS) {
+  for (const key of ALL_PACKAGED_GATEWAY_KEYS) {
     const value = parsed[key];
     if (typeof value === "string" && value.trim()) {
       out[key] = value.trim();
@@ -61,7 +63,7 @@ const defaults = loadDefaults();
 /** @type {Record<string, string>} */
 const payload = {};
 
-for (const key of PACKAGED_GATEWAY_KEYS) {
+for (const key of ALL_PACKAGED_GATEWAY_KEYS) {
   const value = readEnv(key) || defaults[key];
   if (value) {
     payload[key] = value;
@@ -84,8 +86,8 @@ if (isReleaseBuild) {
 mkdirSync(resolve(repoRoot, "build"), { recursive: true });
 writeFileSync(outPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 
-const fromEnv = PACKAGED_GATEWAY_KEYS.filter((key) => readEnv(key));
-const fromDefaults = PACKAGED_GATEWAY_KEYS.filter(
+const fromEnv = ALL_PACKAGED_GATEWAY_KEYS.filter((key) => readEnv(key));
+const fromDefaults = ALL_PACKAGED_GATEWAY_KEYS.filter(
   (key) => payload[key] && !readEnv(key),
 );
 console.log(

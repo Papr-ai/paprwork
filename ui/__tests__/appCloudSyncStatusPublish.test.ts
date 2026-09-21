@@ -13,6 +13,11 @@
 import { describe, it, expect } from "vitest";
 import {
   deriveAppCloudSyncStatus,
+  formatWebSyncStatusTooltip,
+  mergeRemoteCodeCheckIntoStatus,
+  resolvePublishBarChipForForkUpstream,
+  resolvePublishBarChipLabel,
+  resolvePublishBarPrimaryAction,
   webSyncVisualState,
 } from "../utils/appCloudSyncStatus";
 
@@ -135,5 +140,129 @@ describe("upload vs publish", () => {
     );
 
     expect(s.overall).toBe("needs_sync");
+  });
+});
+
+describe("v2 calm web sync (no default Checking)", () => {
+  it("treats missing status as synced until the user checks", () => {
+    expect(webSyncVisualState(null, {})).toBe("synced");
+    const chip = resolvePublishBarChipLabel({
+      state: "synced",
+      live: true,
+      syncEnabled: true,
+      lastCheckedAt: null,
+    });
+    expect(chip.label).toBe("Live");
+    expect(chip.label).not.toContain("Checking");
+  });
+
+  it("shows Checking only while a fetch is in flight", () => {
+    expect(webSyncVisualState(null, { refreshing: true })).toBe("loading");
+    expect(formatWebSyncStatusTooltip(null, { refreshing: true })).toContain(
+      "Checking",
+    );
+    expect(formatWebSyncStatusTooltip(null, {})).not.toContain("Checking");
+  });
+
+  it("stays calm when hook loading is true but user has not refreshed yet", () => {
+    expect(webSyncVisualState(null, { loading: true })).toBe("synced");
+    const chip = resolvePublishBarChipLabel({
+      state: webSyncVisualState(null, { loading: true }),
+      live: true,
+      syncEnabled: true,
+      lastCheckedAt: null,
+    });
+    expect(chip.label).toBe("Live");
+    expect(chip.label).not.toContain("Checking");
+  });
+});
+
+describe("publish bar v2 chip labels", () => {
+  it("shows Draft on an unpublished app with no API error", () => {
+    const chip = resolvePublishBarChipLabel({
+      state: "disabled",
+      live: false,
+      syncEnabled: true,
+      lastCheckedAt: null,
+    });
+    expect(chip.label).toBe("Draft");
+    expect(chip.tone).toBe("idle");
+  });
+
+  it("shows Last publish failed on draft when cloud publish API failed", () => {
+    const chip = resolvePublishBarChipLabel({
+      state: "disabled",
+      live: false,
+      syncEnabled: false,
+      lastCheckedAt: null,
+      cloudPublishFailed: true,
+    });
+    expect(chip.label).toBe("Last publish failed");
+    expect(chip.tone).toBe("bad");
+  });
+
+  it("separates web-ahead updates from merge review", () => {
+    const base = deriveAppCloudSyncStatus(
+      APP,
+      items({ publishLive: true, publishedAt: "2026-08-26T02:00:00.000Z" }),
+      "synced",
+    );
+    const ahead = mergeRemoteCodeCheckIntoStatus(base, {
+      upToDate: false,
+      remoteCommitSha: "abc",
+    });
+    expect(webSyncVisualState(ahead, {})).toBe("updates_available");
+    expect(
+      resolvePublishBarChipLabel({
+        state: "updates_available",
+        live: true,
+        syncEnabled: true,
+        lastCheckedAt: Date.now(),
+      }).label,
+    ).toBe("Updates on web");
+    expect(
+      resolvePublishBarPrimaryAction({
+        state: "updates_available",
+        live: true,
+        syncEnabled: true,
+        pushing: false,
+        pulling: false,
+      }),
+    ).toEqual({ label: "Get updates", kind: "updates" });
+
+    const review = {
+      ...base,
+      gitRemoteRequiresReview: true,
+      gitUpdatesAvailable: true,
+    };
+    expect(webSyncVisualState(review, {})).toBe("action_required");
+    expect(
+      resolvePublishBarPrimaryAction({
+        state: "action_required",
+        live: true,
+        syncEnabled: true,
+        pushing: false,
+        pulling: false,
+      }),
+    ).toEqual({ label: "Review changes", kind: "review" });
+  });
+
+  it("offers publisher update on fork web preview when upstream revision is ahead", () => {
+    const forkChip = resolvePublishBarChipForForkUpstream({
+      forkWebPreview: true,
+      publisherUpdatesAvailable: true,
+    });
+    expect(forkChip?.label).toBe("Publisher has updates");
+    expect(
+      resolvePublishBarPrimaryAction({
+        state: "synced",
+        live: true,
+        syncEnabled: true,
+        pushing: false,
+        pulling: false,
+        forkWebPreview: true,
+        publisherUpdatesAvailable: true,
+      }),
+    ).toEqual({ label: "Update", kind: "upstream" });
   });
 });

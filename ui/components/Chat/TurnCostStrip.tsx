@@ -22,6 +22,7 @@ import {
   costBasisRunningNote,
   costBasisStatLabel,
   costBasisIsCharged,
+  costBasisShowsDollarFigure,
   formatCostAmount,
   resolveCostBasis,
   type BillingMode,
@@ -142,19 +143,18 @@ export const TurnCostStrip: React.FC<{
           label="context"
           value={formatTurnPeakFillPercent(peakFillPct)}
         />
-        {/* Always shown. A subscription past its included allowance is
-            spending real money per turn, so hiding the figure there removed
-            it from exactly the users who needed to see it. */}
-        <Stat
-          label={costBasisStatLabel(basis)}
-          value={
-            turn.cost === null
-              ? "—"
-              : costBasisIsCharged(basis)
-                ? formatCostAmount(turn.cost)
-                : `≈${formatCostAmount(turn.cost)}`
-          }
-        />
+        {costBasisShowsDollarFigure(basis) ? (
+          <Stat
+            label={costBasisStatLabel(basis)}
+            value={
+              turn.cost === null
+                ? "—"
+                : costBasisIsCharged(basis)
+                  ? formatCostAmount(turn.cost)
+                  : `≈${formatCostAmount(turn.cost)}`
+            }
+          />
+        ) : null}
       </div>
 
       {open ? (

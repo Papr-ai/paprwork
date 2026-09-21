@@ -132,7 +132,35 @@ export class VaultSyncService {
   private pushInFlight: Promise<VaultSyncResponse | null> | null = null;
   private pushPendingAfterInflight = false;
   private fullSyncInFlight: Promise<VaultSyncResponse | null> | null = null;
-  private fullSyncRerunPending = false;
+  private workspaceController = new AbortController();
+  private workspacePaused = false;
+  private readonly localWrites = new Set<Promise<unknown>>();
+
+  /** Fence outgoing work before workspace paths or credentials change. */
+  async beginWorkspaceSwitch(): Promise<void> {
+    this.workspacePaused = true;
+    this.workspaceController.abort();
+    this.workspaceController = new AbortController();
+    if (this.pushDebounceTimer) clearTimeout(this.pushDebounceTimer);
+    this.pushDebounceTimer = null;
+    this.pushPendingAfterInflight = false;
+    this.pushInFlight = null;
+    this.fullSyncInFlight = null;
+    this.state = { status: "idle", lastSyncAt: null, lastError: null, keyCount: 0 };
+    // Finish already-dispatched keychain writes before the caller changes workspace.
+    await Promise.allSettled([...this.localWrites]);
+  }
+
+  private async applyForWorkspace<T>(signal: AbortSignal, apply: () => Promise<T>): Promise<T> {
+    signal.throwIfAborted();
+    const task = apply();
+    this.localWrites.add(task);
+    try { return await task; } finally { this.localWrites.delete(task); }
+  }
+
+  private isCurrent(signal: AbortSignal): boolean {
+    return !this.workspacePaused && !signal.aborted;
+  }
   private initializeInFlight: Promise<void> | null = null;
 
   private readonly gatewayPort: number;
@@ -172,6 +200,7 @@ export class VaultSyncService {
   }
 
   private async initializeOnce(): Promise<void> {
+    const signal = this.workspaceController.signal;
     console.log("[VaultSync] Initializing...");
 
     const paprKey = await getPaprApiKey();
@@ -183,9 +212,11 @@ export class VaultSyncService {
 
     try {
       const pushed = await this.runFullSync();
+      if (!this.isCurrent(signal)) return;
       if (!pushed) {
         // Gateway may start before Electron IPC is ready; retry once keys are readable.
         setTimeout(() => {
+          if (!this.isCurrent(signal)) return;
           void this.enqueuePush().then((retry) => {
             if (retry) {
               console.log(
@@ -211,33 +242,32 @@ export class VaultSyncService {
    * Use on init and workspace switch so overlapping callers share one run.
    */
   async runFullSync(): Promise<VaultSyncResponse | null> {
-    if (this.fullSyncInFlight) {
-      this.fullSyncRerunPending = true;
-      return this.fullSyncInFlight;
-    }
-
-    this.fullSyncInFlight = traceDiagnosticPhase("vault:full-sync", () => this.runFullSyncOnce());
+    if (this.workspacePaused) return null;
+    if (this.fullSyncInFlight) return this.fullSyncInFlight;
+    const task = traceDiagnosticPhase("vault:full-sync", () => this.runFullSyncOnce());
+    this.fullSyncInFlight = task;
     try {
-      return await this.fullSyncInFlight;
+      return await task;
     } finally {
-      this.fullSyncInFlight = null;
-      if (this.fullSyncRerunPending) {
-        this.fullSyncRerunPending = false;
-        return this.runFullSync();
-      }
+      if (this.fullSyncInFlight === task) this.fullSyncInFlight = null;
     }
   }
 
   private async runFullSyncOnce(): Promise<VaultSyncResponse | null> {
+    const signal = this.workspaceController.signal;
     const { yieldToInteractiveHotPath } = await import(
       "./gatewayBackgroundWork.js"
     );
     await yieldToInteractiveHotPath("VaultSync.runFullSync");
     await this.ensureGatewayRoutesReady();
+    if (!this.isCurrent(signal)) return null;
+    this.state.lastError = null;
+    this.state.status = "syncing";
     const routeOpts: VaultSyncRouteOpts = { skipRoutesReady: true };
     const pushed = await traceDiagnosticPhase("vault:push", () =>
       this.enqueuePush(routeOpts),
     );
+    if (!this.isCurrent(signal)) return null;
     await Promise.all([
       traceDiagnosticPhase("vault:pull-key-names", () =>
         this.pullKeys(routeOpts),
@@ -246,6 +276,10 @@ export class VaultSyncService {
         this.pullSharedKeys(routeOpts),
       ),
     ]);
+    if (this.isCurrent(signal) && this.state.lastError) {
+      throw new Error(`Vault sync incomplete: ${this.state.lastError}`);
+    }
+    if (this.isCurrent(signal)) this.state.status = "idle";
     return pushed;
   }
 
@@ -266,20 +300,19 @@ export class VaultSyncService {
   private async enqueuePush(
     opts?: VaultSyncRouteOpts,
   ): Promise<VaultSyncResponse | null> {
-    if (this.pushInFlight) {
-      this.pushPendingAfterInflight = true;
-      return this.pushInFlight;
-    }
-
-    this.pushInFlight = this.pushAllKeysUncoalesced(opts);
+    if (this.workspacePaused) return null;
+    if (this.pushInFlight) return this.pushInFlight;
+    const signal = this.workspaceController.signal;
+    const task = this.pushAllKeysUncoalesced(opts);
+    this.pushInFlight = task;
     try {
-      return await this.pushInFlight;
+      return await task;
     } finally {
-      const rerun = this.pushPendingAfterInflight;
-      this.pushPendingAfterInflight = false;
-      this.pushInFlight = null;
-      if (rerun) {
-        return this.enqueuePush();
+      if (this.pushInFlight === task) {
+        this.pushInFlight = null;
+        const rerun = this.pushPendingAfterInflight;
+        this.pushPendingAfterInflight = false;
+        if (rerun && this.isCurrent(signal)) this.scheduleDebouncedPushAll();
       }
     }
   }
@@ -389,10 +422,12 @@ export class VaultSyncService {
   private async pushAllKeysUncoalesced(
     opts?: VaultSyncRouteOpts,
   ): Promise<VaultSyncResponse | null> {
+    const signal = this.workspaceController.signal;
     const { yieldToInteractiveHotPath } = await import(
       "./gatewayBackgroundWork.js"
     );
     await yieldToInteractiveHotPath("VaultSync.pushAll");
+    if (!this.isCurrent(signal)) return null;
     if (isPaprCloudPaused()) {
       console.log(
         "[VaultSync] Skipping push — Papr Cloud paused (no active subscription)",
@@ -401,6 +436,7 @@ export class VaultSyncService {
     }
 
     const vaultEntries = await traceDiagnosticPhase("vault:prepare-keys", () => this.buildVaultPushEntriesForBackground());
+    if (!this.isCurrent(signal)) return null;
     if (vaultEntries.length === 0) {
       console.log("[VaultSync] No readable key values to push");
       return null;
@@ -408,6 +444,7 @@ export class VaultSyncService {
 
     const { filterVaultEntriesNeedingPush, markVaultPushFingerprints } =
       await import("../utils/vaultPushStateStore.js");
+    if (!this.isCurrent(signal)) return null;
     const { toPush, skippedNames } = filterVaultEntriesNeedingPush(vaultEntries);
     if (skippedNames.length > 0) {
       console.log(
@@ -442,16 +479,19 @@ export class VaultSyncService {
       const { pushVaultEntriesViaGatewayHttp } = await import(
         "./vaultSyncBackgroundPush.js"
       );
+      if (!this.isCurrent(signal)) return null;
       const result = await traceDiagnosticPhase("vault:push-http", () => pushVaultEntriesViaGatewayHttp(
         this.gatewayPort,
         toPush,
+        signal,
       ));
+      if (!this.isCurrent(signal)) return null;
       if (!result) {
         this.state.status = "idle";
         return null;
       }
       markVaultPushFingerprints(toPush);
-      await traceDiagnosticPhase("vault:apply-push-result", () => this.applyVaultPushResultFromBackground(result));
+      await traceDiagnosticPhase("vault:apply-push-result", () => this.applyForWorkspace(signal, () => this.applyVaultPushResultFromBackground(result)));
       return result;
     } catch (err) {
       const msg = (err as Error).message;
@@ -462,6 +502,7 @@ export class VaultSyncService {
         );
         return null;
       }
+      if (!this.isCurrent(signal)) return null;
       this.state.status = "error";
       this.state.lastError = msg;
       console.error("[VaultSync] Push failed:", msg);
@@ -495,6 +536,8 @@ export class VaultSyncService {
    * written to the local keychain from this path.
    */
   async pullKeys(opts?: VaultSyncRouteOpts): Promise<string[]> {
+    const signal = this.workspaceController.signal;
+    if (!this.isCurrent(signal)) return [];
     if (isPaprCloudPaused()) {
       return [];
     }
@@ -507,10 +550,12 @@ export class VaultSyncService {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), PULL_TIMEOUT_MS);
 
+      if (!this.isCurrent(signal)) { clearTimeout(timer); return []; }
       const userScopedNames = await this.fetchVaultKeyNamesForScope(
-        "user", controller.signal,
+        "user", AbortSignal.any([controller.signal, signal]),
       ).finally(() => clearTimeout(timer));
 
+      if (!this.isCurrent(signal)) return [];
       const customKeys = getCustomKeysService();
       const localKeys = await customKeys.listKeys();
       const localNames = new Set(localKeys.map((k) => k.name));
@@ -526,6 +571,9 @@ export class VaultSyncService {
 
       return userScopedNames;
     } catch (err) {
+      if (!this.isCurrent(signal)) return [];
+      this.state.status = "error";
+      this.state.lastError = (err as Error).message;
       console.warn("[VaultSync] Pull failed:", (err as Error).message);
       return [];
     }
@@ -535,6 +583,8 @@ export class VaultSyncService {
    * Pull team/org shared keys into the local keychain (read-only mirrors).
    */
   async pullSharedKeys(opts?: VaultSyncRouteOpts): Promise<number> {
+    const signal = this.workspaceController.signal;
+    if (!this.isCurrent(signal)) return 0;
     if (isPaprCloudPaused()) {
       return 0;
     }
@@ -557,6 +607,7 @@ export class VaultSyncService {
         "../utils/cloudActingUser.js"
       );
 
+      if (!this.isCurrent(signal)) { clearTimeout(timer); return 0; }
       const data = await traceDiagnosticPhase("vault:pull-shared-http", async () => {
         try {
           const resp = await fetch(
@@ -567,7 +618,7 @@ export class VaultSyncService {
               body: JSON.stringify(
                 mergeCloudActingUserBody({ namespace_id: namespaceId }),
               ),
-              signal: controller.signal,
+              signal: AbortSignal.any([controller.signal, signal]),
             },
           );
           if (!resp.ok) throw Object.assign(new Error(`Vault shared request failed (${resp.status})`), { status: resp.status });
@@ -575,6 +626,7 @@ export class VaultSyncService {
         } finally { clearTimeout(timer); }
       });
 
+      if (!this.isCurrent(signal)) return 0;
       const mirrors: SharedVaultKeyInput[] = (data.keys ?? []).map((key) => ({
         name: key.name,
         value: key.value,
@@ -587,7 +639,7 @@ export class VaultSyncService {
       }));
 
       const customKeys = getCustomKeysService();
-      const result = await traceDiagnosticPhase("vault:apply-shared-mirrors", () => customKeys.syncSharedMirrors(mirrors));
+      const result = await traceDiagnosticPhase("vault:apply-shared-mirrors", () => this.applyForWorkspace(signal, () => customKeys.syncSharedMirrors(mirrors)));
       if (result.upserted > 0 || result.pruned > 0) {
         console.log(
           `[VaultSync] Shared mirrors updated (upserted=${result.upserted}, pruned=${result.pruned})`,
@@ -595,6 +647,9 @@ export class VaultSyncService {
       }
       return result.upserted;
     } catch (err) {
+      if (!this.isCurrent(signal)) return 0;
+      this.state.status = "error";
+      this.state.lastError = (err as Error).message;
       console.warn("[VaultSync] Shared pull failed:", (err as Error).message);
       return 0;
     }
@@ -696,9 +751,13 @@ export class VaultSyncService {
 
   /** Push + pull after org/namespace workspace switch (non-blocking). */
   syncForWorkspaceSwitch(): void {
+    this.workspacePaused = false;
+    const signal = this.workspaceController.signal;
     console.log("[VaultSync] Re-syncing vault for workspace switch (background)...");
     void import("./gatewayBackgroundWork.js").then(({ scheduleCoalescedBackgroundWork }) => {
+      if (!this.isCurrent(signal)) return;
       scheduleCoalescedBackgroundWork("vault:workspace-switch", async () => {
+        if (!this.isCurrent(signal)) return;
         await this.runFullSync();
       });
     });
@@ -709,6 +768,11 @@ export class VaultSyncService {
    * into one vault push after a short debounce window.
    */
   schedulePushAfterKeyChange(keyName: string, kind: "changed" | "deleted"): void {
+    if (this.workspacePaused) return;
+    if (this.pushInFlight) {
+      this.pushPendingAfterInflight = true;
+      return;
+    }
     console.log(
       `[VaultSync] Key ${kind}: ${keyName} — scheduling vault sync (${VAULT_PUSH_DEBOUNCE_MS}ms debounce)`,
     );

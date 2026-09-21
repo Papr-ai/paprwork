@@ -24,6 +24,7 @@ import {
   APP_CLOUD_SYNC_FOCUS_DEBOUNCE_MS,
   isAppCloudSyncCacheFresh,
 } from "../utils/appCloudSyncFocusRefresh";
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
 
 const GATEWAY =
   typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
@@ -315,15 +316,14 @@ export function useAppCloudSyncStatus(
       if (!res.ok) {
         return;
       }
-      const body = (await res.json()) as {
-        upToDate: boolean;
-        remoteCommitSha?: string | null;
-        checkFailed?: boolean;
-      };
+      const body = (await res.json()) as RemoteCodeCheckSnapshot;
       setRemoteCodeCheck({
         upToDate: body.upToDate,
         remoteCommitSha: body.remoteCommitSha ?? null,
         checkFailed: body.checkFailed,
+        publisherUpdatesAvailable: body.publisherUpdatesAvailable,
+        publisherLiveRevision: body.publisherLiveRevision ?? null,
+        storedUpstreamRevision: body.storedUpstreamRevision ?? null,
       });
     } catch {
       // Non-blocking metadata check
@@ -577,6 +577,9 @@ export function useAppCloudSyncStatus(
       if (detail?.type !== "cloud-sync:items-stale") {
         return;
       }
+      if (isWorkspaceSwitchReloading()) {
+        return;
+      }
       const staleAppId = detail.data?.appId;
       if (staleAppId && staleAppId !== appId) {
         return;
@@ -623,5 +626,6 @@ export function useAppCloudSyncStatus(
     bumpQueue,
     pullUpdates,
     applyRemoteUpdates,
+    publisherUpdatesAvailable: remoteCodeCheck?.publisherUpdatesAvailable ?? false,
   };
 }

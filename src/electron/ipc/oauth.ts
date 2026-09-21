@@ -218,7 +218,7 @@ async function syncOAuthTokenToApiKeys(
         value: cleanToken,
         ...oauthKeyFields,
       });
-      invalidateKeyCache(keyName);
+      invalidateKeyCache(keyName, true);
       console.log(`[OAuth IPC] Updated ${keyName} with OAuth token`);
     } else {
       await customKeysStorage.addKey({
@@ -227,7 +227,7 @@ async function syncOAuthTokenToApiKeys(
         orgScope: "all",
         ...oauthKeyFields,
       });
-      invalidateKeyCache(keyName);
+      invalidateKeyCache(keyName, true);
       console.log(`[OAuth IPC] Created ${keyName} with OAuth token`);
     }
   } catch (error) {
@@ -247,7 +247,7 @@ async function removeOAuthManagedApiKey(
 
   if (!customKeysStorage) {
     console.error("[OAuth IPC] CustomKeysStorage not initialized");
-    invalidateKeyCache(keyName);
+    invalidateKeyCache(keyName, true);
     return;
   }
 
@@ -270,10 +270,10 @@ async function removeOAuthManagedApiKey(
     }
     // Token was removed from OAuthTokenStorage even when a user-owned key remains.
     // Gateway must drop oauthTokenCache + bump authEpoch or stale OAuth wins on next turn.
-    invalidateKeyCache(keyName);
+    invalidateKeyCache(keyName, true);
   } catch (error) {
     console.error(`[OAuth IPC] Failed to remove ${keyName}:`, error);
-    invalidateKeyCache(keyName);
+    invalidateKeyCache(keyName, true);
   }
 }
 

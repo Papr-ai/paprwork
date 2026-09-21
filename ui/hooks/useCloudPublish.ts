@@ -22,6 +22,7 @@ import {
   sharingChangeIsAclOnly,
 } from "../utils/cloudPublishRouting";
 import {
+  CloudPublishBlockedError,
   fetchCloudPublishState,
   patchCloudPublishPrefs,
   publishCloudApp,
@@ -382,12 +383,16 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setToast(`${appTitle ?? "App"} sharing updated`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
+        if (err instanceof CloudPublishBlockedError) {
+          clearPublishError();
+          throw err;
+        }
         applyPublishError(err);
       } finally {
         setBusy(false);
       }
     },
-    [appTitle, applyPublishError, applyPublishState, state],
+    [appTitle, applyPublishError, applyPublishState, clearPublishError, state],
   );
 
   const publish = useCallback(
@@ -405,6 +410,10 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         setToast(`${appTitle ?? "App"} published to ${result.shareUrl ?? "cloud"}`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
+        if (err instanceof CloudPublishBlockedError) {
+          clearPublishError();
+          throw err;
+        }
         applyPublishError(err);
         throw err;
       } finally {

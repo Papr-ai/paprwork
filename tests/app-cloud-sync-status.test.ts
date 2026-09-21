@@ -557,9 +557,13 @@ describe("deriveAppCloudSyncStatus", () => {
     );
     expect(formatWebSyncStatusTooltip(pending)).toContain("not published yet");
 
-    expect(formatWebSyncStatusTooltip(null, { loading: true })).toBe(
+    expect(formatWebSyncStatusTooltip(null, { loading: true })).toContain(
+      "not checked yet",
+    );
+    expect(formatWebSyncStatusTooltip(null, { refreshing: true })).toBe(
       "Checking what's on the web…",
     );
+    expect(formatWebSyncStatusTooltip(null, {})).toContain("not checked yet");
     expect(formatWebSyncStatusTooltip(null, { error: "offline" })).toBe(
       "Web sync unavailable — offline",
     );

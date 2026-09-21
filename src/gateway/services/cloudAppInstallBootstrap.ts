@@ -23,6 +23,7 @@ import type { PullResult } from "./tursoSyncBridgeCore.js";
 import type { SyncSummary } from "./TursoSyncBridge.js";
 import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
 import type { DatabasesRegistryFile } from "./DatabaseRegistryService.js";
+import { retryWhileReplicaBusy } from "./tursoReplica/replicaBusyRetry.js";
 
 function isLocalDbReadable(dbPath: string): boolean {
   try {
@@ -130,33 +131,29 @@ async function applyMigrationsForSource(
   localPath: string,
   options?: { localOnly?: boolean },
 ): Promise<string[]> {
-  const migrationOptions = options?.localOnly
-    ? { bypassReplicaEngine: true as const }
-    : undefined;
-  if (source.dbId && !source.jobId) {
+  const label = `cloud-install-migration:${source.alias ?? localPath}`;
+  return retryWhileReplicaBusy(async () => {
+    const migrationOptions = options?.localOnly
+      ? { bypassReplicaEngine: true as const }
+      : undefined;
+    if (source.dbId && !source.jobId) {
+      return applyRegistryDatabaseMigrations(localPath, migrationOptions);
+    }
+    if (source.jobId) {
+      const jobDir = path.join(getPaprJobsRoot(), source.jobId);
+      return applyDatabaseMigrations(jobDir, localPath, migrationOptions);
+    }
     return applyRegistryDatabaseMigrations(localPath, migrationOptions);
-  }
-  if (source.jobId) {
-    const jobDir = path.join(getPaprJobsRoot(), source.jobId);
-    return applyDatabaseMigrations(jobDir, localPath, migrationOptions);
-  }
-  return applyRegistryDatabaseMigrations(localPath, migrationOptions);
+  }, label);
 }
 
-async function bootstrapLinkedSource(
+async function resolveBootstrapLocalPath(
   source: AppDataSource,
-  tursoSummary: SyncSummary | null,
-  pullResults: Map<string, PullResult | undefined>,
   options?: {
-    tursoPullOnly?: boolean;
-    localOnly?: boolean;
     paprHome?: string;
     registry?: DatabasesRegistryFile;
   },
-): Promise<LinkedDbBootstrapResult> {
-  const warnings: string[] = [];
-  const errors: string[] = [];
-
+): Promise<string | null> {
   const jobsRoot = options?.paprHome
     ? path.join(options.paprHome, "Jobs")
     : getPaprJobsRoot();
@@ -167,7 +164,6 @@ async function bootstrapLinkedSource(
     source.dbId && options?.registry
       ? options.registry.databases[source.dbId]
       : undefined;
-
   const localPath = await resolveLinkedSourceDbPath({
     dbPath: source.dbPath,
     dbId: source.dbId,
@@ -177,8 +173,28 @@ async function bootstrapLinkedSource(
     dataDir,
     registryRecord,
   });
+  return localPath?.trim() ? localPath : null;
+}
 
-  if (!localPath?.trim()) {
+async function bootstrapLinkedSource(
+  source: AppDataSource,
+  tursoSummary: SyncSummary | null,
+  pullResults: Map<string, PullResult | undefined>,
+  options?: {
+    tursoPullOnly?: boolean;
+    skipMigrations?: boolean;
+    migrationsApplied?: string[];
+    localOnly?: boolean;
+    paprHome?: string;
+    registry?: DatabasesRegistryFile;
+  },
+): Promise<LinkedDbBootstrapResult> {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  const localPath = await resolveBootstrapLocalPath(source, options);
+
+  if (!localPath) {
     errors.push(
       `Could not resolve local path for alias "${source.alias}"` +
         (source.dbId ? ` (dbId ${source.dbId})` : "") +
@@ -199,8 +215,8 @@ async function bootstrapLinkedSource(
     };
   }
 
-  let migrationsApplied: string[] = [];
-  if (!options?.tursoPullOnly) {
+  let migrationsApplied: string[] = options?.migrationsApplied ?? [];
+  if (!options?.tursoPullOnly && !options?.skipMigrations) {
     try {
       migrationsApplied = await applyMigrationsForSource(source, localPath, {
         localOnly: options?.localOnly,
@@ -359,6 +375,34 @@ export async function bootstrapInstalledAppDatabases(
 
   let tursoSummary: SyncSummary | null = null;
   const pullResults = new Map<string, PullResult | undefined>();
+  const migrationsByAlias = new Map<string, string[]>();
+  const runMigrationsBeforeTurso =
+    !options?.tursoPullOnly && !localOnly;
+
+  if (runMigrationsBeforeTurso) {
+    for (const source of sources) {
+      if (source.type !== "sqlite") {
+        continue;
+      }
+      if (!source.dbId && !source.jobId) {
+        continue;
+      }
+      const localPath = await resolveBootstrapLocalPath(source, workspaceOpts);
+      if (!localPath) {
+        continue;
+      }
+      try {
+        const applied = await applyMigrationsForSource(source, localPath, {
+          localOnly: false,
+        });
+        migrationsByAlias.set(source.alias, applied);
+      } catch (error) {
+        errors.push(
+          `Migration failed for "${source.alias}" at ${localPath}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
 
   if (!localOnly) {
     try {
@@ -396,7 +440,13 @@ export async function bootstrapInstalledAppDatabases(
       source,
       tursoSummary,
       pullResults,
-      { ...options, localOnly, ...workspaceOpts },
+      {
+        ...options,
+        localOnly,
+        ...workspaceOpts,
+        skipMigrations: runMigrationsBeforeTurso,
+        migrationsApplied: migrationsByAlias.get(source.alias),
+      },
     );
     linkedDbs.push(result);
     errors.push(...result.errors);

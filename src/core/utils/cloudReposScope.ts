@@ -59,7 +59,7 @@ export function mapCustomKeyMetadataToVaultEntry(input: {
     organizationId?: string;
     source?: "manual" | "oauth";
     managedBy?: "oauth";
-    oauthProvider?: "openai" | "anthropic";
+    oauthProvider?: "openai" | "anthropic" | "google";
     description?: string;
   };
   value: string;

@@ -2,6 +2,7 @@ import {
   extractErrorMessage,
   parsePaprQuotaError,
 } from "../../src/core/utils/paprQuota";
+import { CloudPublishBlockedError } from "./cloudPublishApi";
 import {
   usePaprQuotaStore,
   type PaprQuotaBannerState,
@@ -15,7 +16,21 @@ export interface CloudPublishErrorHandling {
   quotaBannerShown: boolean;
 }
 
+/** Short chip / bar label for v2 publish bar — details live in the click-through panel. */
+export const PUBLISH_FAILED_CHIP_LABEL = "Failed to publish";
+
 export function handleCloudPublishError(err: unknown): CloudPublishErrorHandling {
+  if (err instanceof CloudPublishBlockedError) {
+    const detailMessage =
+      err.message.trim() ||
+      "This app uses desktop-only features. Confirm in the share sheet to publish.";
+    return {
+      barMessage: null,
+      detailMessage,
+      quotaBannerShown: false,
+    };
+  }
+
   const detailMessage = extractErrorMessage(err).trim() || "Publish failed";
   const quota = parsePaprQuotaError(err, "cloud-publish");
 
@@ -33,14 +48,8 @@ export function handleCloudPublishError(err: unknown): CloudPublishErrorHandling
   }
 
   return {
-    barMessage: summarizePublishError(detailMessage),
+    barMessage: PUBLISH_FAILED_CHIP_LABEL,
     detailMessage,
     quotaBannerShown: false,
   };
-}
-
-function summarizePublishError(message: string, maxLen = 72): string {
-  const normalized = message.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxLen) return normalized;
-  return `${normalized.slice(0, maxLen - 1).trimEnd()}…`;
 }

@@ -162,15 +162,15 @@ describe("the dollar figure is always shown", () => {
     expect(line).toContain("on top of your plan");
   });
 
-  it("marks an in-plan figure as list price", () => {
+  it("hides dollars for an in-plan subscription chat", () => {
     const line = formatChatTotalsLine(
       "subscription",
       3,
       1.5,
       plan({ sessionPercent: 10 }),
     );
-    expect(line).toContain("$1.50");
-    expect(line).toContain("at list");
+    expect(line).toBe("3 turns · no additional cost");
+    expect(line).not.toContain("$");
   });
 
   it("no longer suppresses the amount as 'included usage'", () => {

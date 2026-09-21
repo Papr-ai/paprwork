@@ -20,7 +20,7 @@ export interface CustomKey {
   updatedAt: string;
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
   scope?: "global" | "shared" | "org";
   orgScope?: IntegrationKeyOrgScope | "global";
   organizationId?: string;

@@ -26,7 +26,7 @@ describe("cloudPublishError", () => {
     );
 
     expect(result.quotaBannerShown).toBe(false);
-    expect(result.barMessage).toContain("upstream timeout");
+    expect(result.barMessage).toBe("Failed to publish");
     expect(result.detailMessage).toContain("upstream timeout");
   });
 });

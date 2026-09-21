@@ -1081,6 +1081,9 @@ export interface RemoteCodeCheckSnapshot {
   upToDate: boolean;
   remoteCommitSha?: string | null;
   checkFailed?: boolean;
+  publisherUpdatesAvailable?: boolean;
+  publisherLiveRevision?: string | null;
+  storedUpstreamRevision?: string | null;
 }
 
 /** Hide cached namespace-git "updates available" until live sync checks finish. */
@@ -1164,6 +1167,7 @@ export type WebSyncVisualState =
   | "synced"
   | "syncing"
   | "warn"
+  | "updates_available"
   | "action_required"
   | "disabled"
   | "error";
@@ -1178,8 +1182,11 @@ export function formatWebSyncStatusTooltip(
       ? `Web sync unavailable — ${options.error}`
       : "Web sync unavailable";
   }
-  if (options.loading || !status) {
+  if (options.refreshing) {
     return "Checking what's on the web…";
+  }
+  if (!status) {
+    return "Web sync not checked yet — open web sync and click Check status.";
   }
   if (status.gitUpdatesAvailable && !status.gitRemoteRequiresReview) {
     return (
@@ -1212,17 +1219,27 @@ export function webSyncVisualState(
   } = {},
 ): WebSyncVisualState {
   if (options.error) return "error";
-  if (options.loading || !status) return "loading";
+  // Only an active refresh (or known status + legacy loading) is "busy".
+  // Hook `loading` on tab open before the first items fetch is not — chip stays calm.
+  if (options.refreshing) {
+    return status ? "syncing" : "loading";
+  }
+  if (options.loading && status) {
+    return "syncing";
+  }
+  if (!status) return "synced";
   if (status.overall === "disabled") return "disabled";
   if (status.codeStatus === "failed" && !status.writerConflict) return "error";
+  if (status.writerConflict || status.gitRemoteRequiresReview) {
+    return "action_required";
+  }
   if (
     status.gitUpdatesAvailable &&
     !status.gitRemoteRequiresReview &&
     !status.writerConflict
   ) {
-    return "action_required";
+    return "updates_available";
   }
-  if (status.writerConflict || status.gitRemoteRequiresReview) return "action_required";
   if (options.pushing || status.overall === "uploading") return "syncing";
   if (status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0) {
     return "warn";
@@ -1257,15 +1274,20 @@ export function resolvePublishBarChipLabel(input: {
   lastCheckedAt: number | null;
   /** ISO time of the last successful publish — drives "just published". */
   lastPublishedAt?: string | null;
+  cloudPublishFailed?: boolean;
 }): { label: string; showRefresh: boolean; tone: PublishBarChipTone } {
-  const { state, live, syncEnabled, lastCheckedAt, lastPublishedAt } = input;
+  const { state, live, syncEnabled, lastCheckedAt, lastPublishedAt, cloudPublishFailed } =
+    input;
+  if (cloudPublishFailed || state === "error") {
+    return { label: "Last publish failed", showRefresh: false, tone: "bad" };
+  }
   if (!live) return { label: "Draft", showRefresh: false, tone: "idle" };
   if (state === "loading")
     return { label: "Checking…", showRefresh: false, tone: "busy" };
   if (state === "syncing")
     return { label: "Publishing…", showRefresh: false, tone: "busy" };
-  if (state === "error")
-    return { label: "Last publish failed", showRefresh: false, tone: "bad" };
+  if (state === "updates_available")
+    return { label: "Updates on web", showRefresh: false, tone: "info" };
   if (state === "action_required")
     return { label: "Needs review", showRefresh: false, tone: "bad" };
   if (state === "warn")
@@ -1279,7 +1301,7 @@ export function resolvePublishBarChipLabel(input: {
     ? Date.now() - new Date(lastPublishedAt).getTime()
     : Number.POSITIVE_INFINITY;
   if (publishedMsAgo >= 0 && publishedMsAgo < 120_000) {
-    return { label: "Live, just published", showRefresh: false, tone: "ok" };
+    return { label: "Live, just updated", showRefresh: false, tone: "ok" };
   }
 
   const age = lastCheckedAt
@@ -1304,8 +1326,23 @@ export function resolvePublishBarPrimaryAction(input: {
   syncEnabled: boolean;
   pushing: boolean;
   pulling: boolean;
-}): { label: string; kind: "publish" | "updates" | "review" | "retry" } | null {
-  const { state, live, syncEnabled, pushing, pulling } = input;
+  pullingUpstream?: boolean;
+  publisherUpdatesAvailable?: boolean;
+  forkWebPreview?: boolean;
+}): {
+  label: string;
+  kind: "publish" | "updates" | "review" | "retry" | "upstream";
+} | null {
+  const {
+    state,
+    live,
+    syncEnabled,
+    pushing,
+    pulling,
+    pullingUpstream = false,
+    publisherUpdatesAvailable = false,
+    forkWebPreview = false,
+  } = input;
   if (!syncEnabled) return null;
   if (!live) {
     return { label: pushing ? "Publishing…" : "Publish", kind: "publish" };
@@ -1317,12 +1354,43 @@ export function resolvePublishBarPrimaryAction(input: {
   if (state === "action_required") {
     return { label: "Review changes", kind: "review" };
   }
+  if (
+    forkWebPreview &&
+    publisherUpdatesAvailable &&
+    state !== "action_required"
+  ) {
+    return {
+      label: pullingUpstream ? "Updating…" : "Update",
+      kind: "upstream",
+    };
+  }
+  if (state === "updates_available") {
+    return {
+      label: pulling ? "Getting updates…" : "Get updates",
+      kind: "updates",
+    };
+  }
   if (state === "error") return { label: "Retry publish", kind: "retry" };
   if (state === "warn") {
     return { label: "Publish changes", kind: "publish" };
   }
   if (pulling) return { label: "Getting updates…", kind: "updates" };
   return null;
+}
+
+/** Fork/track on Web preview: publisher revision ahead of stored upstream cursor. */
+export function resolvePublishBarChipForForkUpstream(input: {
+  publisherUpdatesAvailable: boolean;
+  forkWebPreview: boolean;
+}): { label: string; tone: PublishBarChipTone; state: WebSyncVisualState } | null {
+  if (!input.forkWebPreview || !input.publisherUpdatesAvailable) {
+    return null;
+  }
+  return {
+    label: "Publisher has updates",
+    tone: "info",
+    state: "updates_available",
+  };
 }
 
 export interface PublishBarStatusInput {
@@ -1333,6 +1401,9 @@ export interface PublishBarStatusInput {
   webSyncState: WebSyncVisualState;
   webSyncSpinning: boolean;
   webSyncTooltip: string;
+  /** Settings / cloud API publish failed (distinct from web-sync upload failure). */
+  cloudPublishFailed?: boolean;
+  cloudPublishErrorDetail?: string | null;
 }
 
 /** Single publish-bar status: combines live/publish state with web sync when previewing. */
@@ -1350,7 +1421,21 @@ export function resolvePublishBarStatus(input: PublishBarStatusInput): {
     webSyncState,
     webSyncSpinning,
     webSyncTooltip,
+    cloudPublishFailed,
+    cloudPublishErrorDetail,
   } = input;
+
+  if (cloudPublishFailed) {
+    const detail =
+      cloudPublishErrorDetail?.trim() ||
+      "Publishing to the web did not complete. Click for details.";
+    return {
+      state: "error",
+      spinning: false,
+      tooltip: detail,
+      interactive: true,
+    };
+  }
 
   if (!syncEnabled) {
     if (loading && !live) {

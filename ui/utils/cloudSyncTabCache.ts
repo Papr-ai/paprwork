@@ -206,6 +206,18 @@ export function writeCachedSyncItemsForApp(
   });
 }
 
+/** Drop cached sync payloads when leaving a workspace (avoid cross-namespace labels). */
+export function resetCloudSyncTabCacheForWorkspaceSwitch(): void {
+  memo = null;
+  memoLoaded = false;
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(LEGACY_SESSION_KEY);
+  } catch {
+    /* quota / private mode */
+  }
+}
+
 export function readCachedAppCloudSyncStatus(
   appId: string,
 ): AppCloudSyncStatus | null {
