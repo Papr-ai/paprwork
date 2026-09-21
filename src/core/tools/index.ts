@@ -154,6 +154,7 @@ export {
   writeFileTool,
   listDirectoryTool,
   searchFilesTool,
+  searchAppFilesTool,
   filesystemTools,
 } from "./filesystem.js";
 export { editFileTool } from "./editFile.js";
@@ -261,6 +262,16 @@ export {
   JEV_DEFAULT_MODEL,
   JEV_DEFAULT_ENDPOINT,
 } from "./jevClient.js";
+export {
+  evaluateJevWithAuth,
+  resolveJevAuth,
+  JEV_PROXY_PATH,
+} from "./jevAuth.js";
+export {
+  assertJevInputWithinGuardrails,
+  JEV_MAX_STATE_CHARS,
+  JEV_MAX_QUESTIONS,
+} from "./jevGuardrails.js";
 export type {
   JevQuestion,
   JevEvaluateResult,

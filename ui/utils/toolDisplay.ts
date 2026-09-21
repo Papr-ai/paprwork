@@ -311,6 +311,7 @@ export const TOOL_DESCRIPTIONS: Record<
     complete: "Directory listed",
   },
   search_files: { running: "Searching files", complete: "Files searched" },
+  search_app_files: { running: "Searching app files", complete: "App files searched" },
   // Documents
   create_document: {
     running: "Creating document",

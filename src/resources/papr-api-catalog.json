@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-20T07:50:46.418Z",
-  "entryCount": 191,
+  "generatedAt": "2026-09-21T04:39:33.498Z",
+  "entryCount": 193,
   "entries": [
     {
       "id": "access-members",
@@ -29,7 +29,7 @@
     {
       "id": "agent-tool-add_agent_memory",
       "title": "add_agent_memory",
-      "summary": "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id.",
+      "summary": "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id. Pass customMetadata to write exact-match filterable fields (the write side of search_agent_memory's customMetadataFilters) — required for indexed conventions like App Cards.",
       "surfaces": [
         "agent-tool"
       ],
@@ -50,7 +50,7 @@
     {
       "id": "agent-tool-add_agent_memory_batch",
       "title": "add_agent_memory_batch",
-      "summary": "Write multiple memory items in ONE request. Use whenever you are storing 3+ related items (entity backfills, a set of tasks, imported records) — far cheaper than looping add_agent_memory. Applies the same WorkspaceContext graph schema and ACL scope as add_agent_memory. Returns a batch_id; poll get_memory_batch_status to confirm all writes landed.",
+      "summary": "Write multiple memory items in ONE request. Use whenever you are storing 3+ related items (entity backfills, a set of tasks, imported records) — far cheaper than looping add_agent_memory. Applies the same WorkspaceContext graph schema and ACL scope as add_agent_memory. Each item takes its own customMetadata, so multi-section conventions like App Cards stay filterable by content_type/app_id when written in one call. Returns a batch_id; poll get_memory_batch_status to confirm all writes landed.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1352,6 +1352,25 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-jev_decide",
+      "title": "jev_decide",
+      "summary": "Ask TypeSafe Jev for typed decisions about a state. Jev does not write text. Use it for classification, routing, scoring, and yes/no judgments that code can branch on. Returns calibrated probabilities and confidence. Prefer this over asking the chat model to classify. Do not use Jev to generate emails, summaries, or code. No Vercel AI SDK or experimental_evaluate — plain HTTP System One API. Auth: Papr login (routes via memory server proxy) OR TYPESAFE_API_KEY in Settings → Custom API Keys. Before first use in a task, read_skill({ skillId: \"preloaded-jev-decisions\" }). If neither auth is av...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "jev_decide",
+      "keywords": [
+        "jev_decide",
+        "jev",
+        "decide",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-link_app_data_source",
       "title": "link_app_data_source",
       "summary": "Attach a registry database to a mini-app (apps may link multiple DBs). Workflow: create_database → attach_database({ appId, dbId, alias }). Mini-apps pass sourceId (alias) on every /api/db/* call — like naming the DB in backend code.",
@@ -2584,9 +2603,30 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-search_app_files",
+      "title": "search_app_files",
+      "summary": "Search text under one mini-app directory ($PAPR_HOME/apps/{appId}/). Uses ripgrep when available. Prefer search_agent_memory for semantic code search; use this for exact symbol matches.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "search_app_files",
+      "keywords": [
+        "search_app_files",
+        "search",
+        "app",
+        "files",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
       "id": "agent-tool-search_files",
       "title": "search_files",
-      "summary": "Search for text in files (grep-like). Supports regex and file patterns.",
+      "summary": "Slow grep-like search over a directory tree (30s max, skips node_modules/dist/venv). For Papr mini-apps prefer search_app_files or bash rg on $PAPR_HOME/apps/{appId}/. For meaning-based code discovery prefer search_agent_memory({ category: \"code\", projectId, query }). Refuses whole $PAPR_HOME, apps/, or Jobs/ roots.",
       "surfaces": [
         "agent-tool"
       ],

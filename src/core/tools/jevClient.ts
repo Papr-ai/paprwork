@@ -31,12 +31,16 @@ export type JevQuestion = JevNoulQuestion | JevChoiceQuestion | JevScoreQuestion
 
 export type JevState = string | Record<string, unknown> | unknown[];
 
+export type JevAuthHeaderStyle = "bearer" | "x-api-key";
+
 export interface JevEvaluateInput {
   state: JevState;
   questions: Record<string, JevQuestion>;
   model?: string;
   endpoint?: string;
   apiKey: string;
+  /** Papr proxy uses X-API-Key; TypeSafe direct uses Bearer. */
+  authHeader?: JevAuthHeaderStyle;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -50,27 +54,11 @@ export interface JevEvaluateResult {
   };
 }
 
+/** @deprecated Prefer resolveJevAuth() — supports Papr proxy + BYOK. */
 export async function resolveJevApiKey(): Promise<string | null> {
-  const fromEnv = process.env.TYPESAFE_API_KEY?.trim();
-  if (fromEnv) {
-    return fromEnv;
-  }
-
-  try {
-    const { getCustomKeysService } = await import(
-      "../../gateway/services/CustomKeysService.js"
-    );
-    const service = getCustomKeysService();
-    const value = await service.getKeyByName(JEV_KEY_NAME);
-    const trimmed = value?.trim();
-    if (trimmed) {
-      return trimmed;
-    }
-  } catch {
-    // Unit tests and processes without the gateway still work via env.
-  }
-
-  return null;
+  const { resolveJevAuth } = await import("./jevAuth.js");
+  const auth = await resolveJevAuth();
+  return auth?.apiKey ?? null;
 }
 
 function assertQuestions(questions: Record<string, JevQuestion>): void {
@@ -116,22 +104,34 @@ export function normalizeQuestionType(type: string): JevQuestionType {
 export async function evaluateJev(
   input: JevEvaluateInput,
 ): Promise<JevEvaluateResult> {
+  const { assertJevInputWithinGuardrails } = await import("./jevGuardrails.js");
+  assertJevInputWithinGuardrails({
+    state: input.state,
+    questions: input.questions,
+  });
   assertQuestions(input.questions);
 
   const endpoint = input.endpoint ?? JEV_DEFAULT_ENDPOINT;
   const model = input.model ?? JEV_DEFAULT_MODEL;
   const fetchImpl = input.fetchImpl ?? fetch;
   const timeoutMs = input.timeoutMs ?? 20_000;
+  const authHeader = input.authHeader ?? "bearer";
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authHeader === "x-api-key") {
+    headers["X-API-Key"] = input.apiKey;
+  } else {
+    headers.Authorization = `Bearer ${input.apiKey}`;
+  }
 
   try {
     const response = await fetchImpl(endpoint, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${input.apiKey}`,
-        "Content-Type": "application/json",
-      },
+      headers,
       body: JSON.stringify({
         model,
         state: input.state,

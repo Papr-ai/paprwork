@@ -8,12 +8,11 @@ import type { ToolResult } from "../types/index.js";
 import {
   JEV_DEFAULT_MODEL,
   JEV_KEY_NAME,
-  evaluateJev,
   normalizeQuestionType,
-  resolveJevApiKey,
   type JevQuestion,
   type JevState,
 } from "./jevClient.js";
+import { evaluateJevWithAuth } from "./jevAuth.js";
 
 const questionSchema = z
   .object({
@@ -119,8 +118,11 @@ export const jevDecideTool = createTool({
     "Use it for classification, routing, scoring, and yes/no judgments that code can branch on. " +
     "Returns calibrated probabilities and confidence. Prefer this over asking the chat model to classify. " +
     "Do not use Jev to generate emails, summaries, or code. " +
-    `Requires ${JEV_KEY_NAME} in Settings → Custom API Keys or .env.local. ` +
-    "If the key is missing, call request_key. " +
+    "No Vercel AI SDK or experimental_evaluate — plain HTTP System One API. " +
+    "Auth: Papr login (routes via memory server proxy) OR " +
+    `${JEV_KEY_NAME} in Settings → Custom API Keys. ` +
+    "Before first use in a task, read_skill({ skillId: \"preloaded-jev-decisions\" }). " +
+    "If neither auth is available, call request_key or prompt Papr login. " +
     "For recurring classification, create a node/python job that calls evaluateJev / the TypeSafe endpoint; " +
     "do not invent a one-off curl schema. " +
     "Example: jev_decide({ state: 'Charged twice, need refund', questions: { " +
@@ -134,25 +136,28 @@ export const jevDecideTool = createTool({
     const startTime = performance.now();
 
     try {
-      const apiKey = await resolveJevApiKey();
-      if (!apiKey) {
-        return {
-          success: false,
-          error:
-            `${JEV_KEY_NAME} is not configured. Call request_key({ name: "${JEV_KEY_NAME}", ` +
-            `description: "TypeSafe Jev API key for typed decisions", ` +
-            `sourceUrl: "https://console.typesafe.ai", permission: "always" }).`,
-          duration: performance.now() - startTime,
-          timestamp: new Date().toISOString(),
-        };
+      let result;
+      try {
+        result = await evaluateJevWithAuth({
+          state: args.state as JevState,
+          questions: toJevQuestions(args.questions),
+          model: args.model,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message === "JEV_AUTH_MISSING") {
+          return {
+            success: false,
+            error:
+              "Jev is not configured. Sign in with Papr (Settings → AI Models) to use the Papr proxy, " +
+              `or call request_key({ name: "${JEV_KEY_NAME}", ` +
+              `description: "TypeSafe Jev API key for typed decisions", ` +
+              `sourceUrl: "https://console.typesafe.ai", permission: "always" }).`,
+            duration: performance.now() - startTime,
+            timestamp: new Date().toISOString(),
+          };
+        }
+        throw error;
       }
-
-      const result = await evaluateJev({
-        state: args.state as JevState,
-        questions: toJevQuestions(args.questions),
-        model: args.model,
-        apiKey,
-      });
 
       return {
         success: true,
@@ -160,9 +165,10 @@ export const jevDecideTool = createTool({
           model: result.model,
           answers: result.answers,
           usage: result.usage,
+          authMode: result.authMode,
           guidance:
-            "Treat probabilities as probabilities. Auto-act only at high confidence; " +
-            "otherwise ask the user or escalate. Do not quote Jev as an oracle.",
+            "Treat probabilities as probabilities. Auto-act only at high confidence (e.g. noul ≥ 0.85); " +
+            "0.6–0.85 → clarify; below 0.6 → ask the user. Do not quote Jev as an oracle.",
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),

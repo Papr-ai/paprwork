@@ -1180,6 +1180,38 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.15" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.15</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Jev decisions (TypeSafe System One)</strong>
+                <p>
+                  The jev_decide tool uses Papr login when available (memory
+                  server proxy) or your own TypeSafe API key, with guardrails on
+                  state size and question count.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Safer code search</strong>
+                <p>
+                  search_files and search_app_files share bounded limits (depth,
+                  timeout, file size) and skip heavy folders like node_modules and
+                  venvs.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.15"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.14" && (
           <div className="about-card">
             <h3>What's New in v2.6.14</h3>

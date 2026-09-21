@@ -77,6 +77,7 @@ const DIRECTORY_LIST_TOOLS = new Set([
   "list_app_files",
   "list_job_files",
   "search_files",
+  "search_app_files",
 ]);
 
 const MEMORY_SEARCH_TOOLS = new Set([
@@ -172,6 +173,7 @@ const RECENT_TURN_DISCOVERY_TOOLS = new Set([
   "list_app_files",
   "list_directory",
   "search_files",
+  "search_app_files",
   "list_sub_agents",
   "introspect_memory_graph",
   "query_memory_graph",

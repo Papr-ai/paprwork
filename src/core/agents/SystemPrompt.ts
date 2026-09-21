@@ -1423,8 +1423,10 @@ Use \`bash\` to edit the Markdown file directly at \`filePath\`. Document editor
 
 Use \`jev_decide\` for classification, routing, scoring, and yes/no gates.
 Jev does **not** write text. Do not use it as the chat or job model.
-If \`TYPESAFE_API_KEY\` is missing, call \`request_key\`.
-For standing classifiers, create a job/sub-agent that calls \`jev_decide\` — \`read_skill({ skillId: "preloaded-jev-decisions" })\`.`;
+**Before first \`jev_decide\` in a task:** \`read_skill({ skillId: "preloaded-jev-decisions" })\`.
+Auth: **Papr login** (proxy via memory server) **or** \`TYPESAFE_API_KEY\`. No Vercel \`experimental_evaluate\`.
+Keep \`state\` small (summarize — never dump the full chat). High confidence only for auto-actions.
+For standing classifiers, create a job/sub-agent that calls \`jev_decide\` (same tool, not a separate curl schema).`;
   }
 
   private buildMediaGenerationSection(): string {
@@ -1751,14 +1753,15 @@ Summaries update automatically ~5s after file saves (background indexing). If no
 \`\`\`
 Need to find code in a mini-app or job?
 ├─ **Start here (preferred):** search_agent_memory({ category: "code", projectId: "...", query: "2-3 sentences" })
-│  All mini-app and job code is indexed in Papr Memory — this is the best semantic search
+│  LLM summaries sync to Papr Memory (full raw file bodies are off by default — see Code Index policy)
+├─ Exact symbol in one mini-app?
+│  └─ search_app_files({ appId, query }) or bash: rg -n 'pattern' "$PAPR_HOME/apps/{appId}/"
 ├─ Know the app/job ID and need a quick architecture overview?
 │  └─ get_project_code_overview({ projectId: "..." }) then list_file_code_summaries
 ├─ Don't know which app/job?
 │  └─ search_agent_memory({ category: "code", projectType: "mini_app", query: "..." })
-├─ Exact symbol / literal text match only?
-│  └─ bash grep in $PAPR_HOME/apps/ or $PAPR_HOME/Jobs/
-│     (also runs a basic code memory search in parallel — but search_agent_memory with a rich query is better)
+├─ Exact symbol in one job folder?
+│  └─ bash rg/grep under that job's directory only (not all of Jobs/)
 ├─ Prior decisions, uploaded docs, cross-chat facts (not code)?
 │  └─ search_agent_memory({ query: "...", chatId: "current_chat" })
 └─ Exploring relationships ("which jobs feed this app?")?
@@ -1768,8 +1771,9 @@ Need to find code in a mini-app or job?
 | Goal | Best tool |
 |------|-----------|
 | Find code by meaning in a mini-app/job | \`search_agent_memory({ category: "code", projectId, query })\` |
+| Exact symbol in one mini-app | \`search_app_files({ appId, query })\` or bash rg |
 | Recall decisions, docs, cross-chat context | \`search_agent_memory({ query, chatId: "current_chat" })\` |
-| Exact symbol/text match | \`bash\` grep |
+| Exact symbol/text match (scoped path) | \`bash\` grep / rg |
 | Architecture overview | \`get_project_code_overview\` + \`list_file_code_summaries\` |
 
 **CRITICAL: Do NOT do \`list_apps\` → \`list_app_files\` → \`read_app_file\` one by one.**
@@ -2024,7 +2028,8 @@ edit_file({
 ✅ **DO:**
 - Read in chunks: \`read_file({ path: "file.ts", offset: 1, limit: 100 })\`
 - Use bash: \`head -n 50 file.ts\` or \`grep -A 10 "pattern" file.ts\`
-- Search: \`search_files({ path: "/repo", pattern: "function myFunc", filePattern: "*.ts" })\`
+- Search (small non-Papr folder only): \`search_files({ path, query, filePattern?, maxResults?, appId? })\` — refuses all of $PAPR_HOME/apps/
+- Mini-app scoped search: \`search_app_files({ appId, query, filePattern?, maxResults? })\`
 
 ## Available Tools
 
@@ -2033,7 +2038,8 @@ edit_file({
 - \`edit_file({ path, oldString, newString, occurrence? })\` - Patch any file (routes mini-app/job/repo automatically)
 - \`edit_app_file_lines({ appId, filename, startLine, endLine, newContent })\` - Mini-app line-range edits only
 - \`list_directory({ path, recursive?, includeHidden?, pattern? })\` - List directory
-- \`search_files({ path, pattern, filePattern?, maxResults? })\` - grep-like search
+- \`search_files({ path, query, filePattern?, caseSensitive?, maxResults?, appId? })\` - guarded grep (not for whole Papr workspace)
+- \`search_app_files({ appId, query, filePattern?, caseSensitive?, maxResults? })\` - search one mini-app tree
 
 **Note:** For file reading, prefer bash (\`cat\`, \`head\`, \`tail\`, \`grep\`) for quick operations.`;
   }
@@ -3940,6 +3946,7 @@ export function buildSystemPrompt(
       "write_file",
       "list_directory",
       "search_files",
+      "search_app_files",
     ],
     customKeys: options.customKeys || [],
     includeExtendedAppPlaybook: options.includeExtendedAppPlaybook ?? true,

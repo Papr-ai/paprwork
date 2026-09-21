@@ -21,6 +21,13 @@ import {
 } from "../utils/paprAgentPaths.js";
 import { resolveBundledResourceReadPath } from "../utils/resolveBundledResourcePath.js";
 import { resolveEditFileTarget } from "../utils/resolveEditFileTarget.js";
+import { getActiveAppIdForTools } from "./context.js";
+import {
+  runGuardedFileSearch,
+  type FileSearchResult,
+  type SearchMatch,
+} from "./fileSearch.js";
+import { getPaprAppsRoot } from "../utils/paprRoot.js";
 
 /** Resolve ~, Papr workspace paths, and cloud bundled agent-docs (src/resources → dist/resources). */
 function expandPath(filePath: string): string {
@@ -476,119 +483,64 @@ async function listDirectory(
 // ========================================
 
 const SearchFilesSchema = z.object({
-  path: z.string().describe("Directory to search in"),
+  path: z
+    .string()
+    .describe(
+      "Directory to search. Do NOT pass $PAPR_HOME, all of apps/, or all Jobs/ — use search_app_files or bash rg on one app/job.",
+    ),
   query: z.string().describe("Text to search for (regex supported)"),
   filePattern: z
     .string()
-    .describe("File pattern (use empty string for all files)"),
+    .describe("File pattern such as *.ts (use empty string for all files)"),
   caseSensitive: z.boolean().describe("Whether search is case sensitive"),
   maxResults: z.number().describe("Maximum number of results"),
+  appId: z
+    .string()
+    .optional()
+    .describe(
+      "Optional mini-app id — auto-scopes broad Papr paths to $PAPR_HOME/apps/{appId}/",
+    ),
 });
 
 export type SearchFilesInput = z.infer<typeof SearchFilesSchema>;
 
-export interface SearchMatch {
-  file: string;
-  line: number;
-  content: string;
-  match: string;
+export type { SearchMatch };
+
+export interface SearchFilesOutput extends FileSearchResult {}
+
+function fileSearchResultToToolData(result: FileSearchResult): SearchFilesOutput {
+  return result;
 }
 
-export interface SearchFilesOutput {
-  path: string;
-  query: string;
-  matches: SearchMatch[];
-  count: number;
-  truncated: boolean;
-}
-
-async function searchFiles(
-  input: SearchFilesInput,
+async function executeGuardedSearch(
+  searchPath: string,
+  input: Pick<
+    SearchFilesInput,
+    "query" | "filePattern" | "caseSensitive" | "maxResults" | "appId"
+  >,
 ): Promise<ToolResult<SearchFilesOutput>> {
   try {
-    const {
-      path: rawPath,
-      query,
-      filePattern,
-      caseSensitive,
-      maxResults,
-    } = input;
-    const searchPath = expandPath(rawPath);
+    const appId = input.appId?.trim() || getActiveAppIdForTools();
+    const outcome = await runGuardedFileSearch({
+      searchPath,
+      query: input.query,
+      filePattern: input.filePattern,
+      caseSensitive: input.caseSensitive,
+      maxResults: input.maxResults,
+      appId,
+    });
 
-    const regex = new RegExp(query, caseSensitive ? "g" : "gi");
-    const matches: SearchMatch[] = [];
-    let truncated = false;
-
-    async function searchInFile(filePath: string): Promise<void> {
-      if (matches.length >= maxResults) {
-        truncated = true;
-        return;
-      }
-
-      try {
-        const content = await fs.readFile(filePath, "utf8");
-        const lines = content.split("\n");
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const match = line.match(regex);
-
-          if (match) {
-            matches.push({
-              file: filePath,
-              line: i + 1,
-              content: line.trim(),
-              match: match[0],
-            });
-
-            if (matches.length >= maxResults) {
-              truncated = true;
-              return;
-            }
-          }
-        }
-      } catch {
-        // Skip files that can't be read
-      }
+    if ("blocked" in outcome) {
+      return {
+        success: false,
+        error: outcome.error,
+        type: "search_error",
+      };
     }
-
-    async function scanDir(currentPath: string): Promise<void> {
-      if (truncated) return;
-
-      const entries = await fs.readdir(currentPath, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (truncated) return;
-
-        const fullPath = path.join(currentPath, entry.name);
-
-        if (entry.isDirectory()) {
-          await scanDir(fullPath);
-        } else if (entry.isFile()) {
-          // Check file pattern
-          if (filePattern && filePattern.length > 0) {
-            const regex = new RegExp(
-              filePattern.replace(/\*/g, ".*").replace(/\?/g, "."),
-            );
-            if (!regex.test(entry.name)) continue;
-          }
-
-          await searchInFile(fullPath);
-        }
-      }
-    }
-
-    await scanDir(searchPath);
 
     return {
       success: true,
-      data: {
-        path: searchPath,
-        query,
-        matches,
-        count: matches.length,
-        truncated,
-      },
+      data: fileSearchResultToToolData(outcome),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -598,6 +550,32 @@ async function searchFiles(
       type: "search_error",
     };
   }
+}
+
+async function searchFiles(
+  input: SearchFilesInput,
+): Promise<ToolResult<SearchFilesOutput>> {
+  const searchPath = expandPath(input.path);
+  return executeGuardedSearch(searchPath, input);
+}
+
+export const SearchAppFilesSchema = z.object({
+  appId: z.string().describe("Mini-app id (UUID from list_apps or focus context)"),
+  query: z.string().describe("Text to search for (regex supported)"),
+  filePattern: z
+    .string()
+    .describe("File pattern such as *.tsx (empty string = all files)"),
+  caseSensitive: z.boolean().describe("Whether search is case sensitive"),
+  maxResults: z.number().describe("Maximum number of match lines to return"),
+});
+
+export type SearchAppFilesInput = z.infer<typeof SearchAppFilesSchema>;
+
+async function searchAppFiles(
+  input: SearchAppFilesInput,
+): Promise<ToolResult<SearchFilesOutput>> {
+  const appRoot = path.join(getPaprAppsRoot(), input.appId.trim());
+  return executeGuardedSearch(appRoot, input);
 }
 
 // ========================================
@@ -635,9 +613,21 @@ export const listDirectoryTool = createTool({
 export const searchFilesTool = createTool({
   id: "search_files",
   description:
-    "Search for text in files (grep-like). Supports regex and file patterns.",
+    "Slow grep-like search over a directory tree (30s max, skips node_modules/dist/venv). " +
+    "For Papr mini-apps prefer search_app_files or bash rg on $PAPR_HOME/apps/{appId}/. " +
+    "For meaning-based code discovery prefer search_agent_memory({ category: \"code\", projectId, query }). " +
+    "Refuses whole $PAPR_HOME, apps/, or Jobs/ roots.",
   inputSchema: SearchFilesSchema,
   execute: searchFiles,
+});
+
+export const searchAppFilesTool = createTool({
+  id: "search_app_files",
+  description:
+    "Search text under one mini-app directory ($PAPR_HOME/apps/{appId}/). " +
+    "Uses ripgrep when available. Prefer search_agent_memory for semantic code search; use this for exact symbol matches.",
+  inputSchema: SearchAppFilesSchema,
+  execute: searchAppFiles,
 });
 
 // Export all filesystem tools
@@ -646,4 +636,5 @@ export const filesystemTools = [
   writeFileTool,
   listDirectoryTool,
   searchFilesTool,
+  searchAppFilesTool,
 ];

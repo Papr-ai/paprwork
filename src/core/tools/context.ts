@@ -12,6 +12,8 @@ import type { TurnMetrics } from "../../gateway/services/agent/turnMetrics.js";
 
 interface ToolContext {
   chatId: string;
+  /** Open mini-app tab from UI focus context (scoped file search). */
+  activeAppId?: string;
   /** Set when a sub-agent job is executing tools (delegate_task job id). */
   delegationJobId?: string;
   /** Injected for agent jobs — APP_DB, PAPR_DB_*, JOB_DIR, etc. */
@@ -25,6 +27,7 @@ interface ToolContext {
 }
 
 interface ToolContextOptions {
+  activeAppId?: string;
   delegationJobId?: string;
   jobEnv?: Record<string, string>;
   turnMetrics?: TurnMetrics;
@@ -44,6 +47,7 @@ export function runWithToolContext<T>(
   return asyncLocalStorage.run(
     {
       chatId,
+      activeAppId: options?.activeAppId,
       delegationJobId: options?.delegationJobId,
       jobEnv: options?.jobEnv,
       turnMetrics: options?.turnMetrics,
@@ -62,10 +66,16 @@ export function setToolContext(
 ): void {
   asyncLocalStorage.enterWith({
     chatId,
+    activeAppId: options?.activeAppId,
     delegationJobId: options?.delegationJobId,
     jobEnv: options?.jobEnv,
     turnMetrics: options?.turnMetrics,
   });
+}
+
+/** Mini-app id from the open app tab (UI focus), when available. */
+export function getActiveAppIdForTools(): string | undefined {
+  return asyncLocalStorage.getStore()?.activeAppId;
 }
 
 /** Job-scoped env vars (APP_DB, JOB_DIR, …) for agent job bash calls. */

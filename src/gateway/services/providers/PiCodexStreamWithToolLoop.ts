@@ -223,6 +223,7 @@ async function executeToolCall(
   apiKeys: string[],
   toolContext: {
     chatId: string;
+    activeAppId?: string;
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
     turnMetrics?: TurnMetrics;
@@ -242,6 +243,7 @@ async function executeToolCall(
       toolContext.chatId,
       () => tool.execute!(coerceArgTypes(toolCall.args)),
       {
+        activeAppId: toolContext.activeAppId,
         jobEnv: toolContext.jobEnv,
         delegationJobId: toolContext.delegationJobId,
         turnMetrics: toolContext.turnMetrics,
@@ -435,6 +437,7 @@ export async function* createPiCodexStreamWithToolLoop(
   historyTrimBounds?: MidTurnTrimOpts,
   toolContext?: {
     chatId: string;
+    activeAppId?: string;
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
     turnMetrics?: TurnMetrics;

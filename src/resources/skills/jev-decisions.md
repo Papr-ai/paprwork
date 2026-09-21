@@ -20,9 +20,16 @@ Jev (TypeSafe System One) answers typed questions about a state. It does **not**
 - Counting, date math, or anything code can compute
 - Dumping the entire conversation into `state`
 
-## Key
+## Auth
 
-Need `TYPESAFE_API_KEY`. If missing:
+**Either:**
+
+1. **Papr login** — uses memory-server proxy (`PAPR_API_KEY`), no TypeSafe account required when proxy is enabled on Papr cloud.
+2. **`TYPESAFE_API_KEY`** — direct BYOK from [console.typesafe.ai](https://console.typesafe.ai).
+
+Also read **`preloaded-typesafe-system-one`** for limits and confidence policy.
+
+If neither is configured:
 
 ```javascript
 request_key({
@@ -32,6 +39,12 @@ request_key({
   permission: "always"
 })
 ```
+
+## Guardrails
+
+- Summarize into `state` (max ~32k chars) — never the full chat
+- Max 20 questions per call; reuse question packs in jobs
+- Do not use Jev for generation (email, code, summaries)
 
 ## Live chat
 

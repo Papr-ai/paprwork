@@ -1,10 +1,16 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { getToolById } from "../src/core/tools/index.js";
 import { evaluateJev, normalizeQuestionType } from "../src/core/tools/jevClient.js";
+import {
+  assertJevInputWithinGuardrails,
+  JEV_MAX_STATE_CHARS,
+} from "../src/core/tools/jevGuardrails.js";
+import { resolveJevAuth } from "../src/core/tools/jevAuth.js";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   delete process.env.TYPESAFE_API_KEY;
+  delete process.env.PAPR_API_KEY;
 });
 
 describe("jev_decide registration", () => {
@@ -56,6 +62,27 @@ describe("evaluateJev", () => {
     expect(body.questions.urgent.type).toBe("noul");
   });
 
+  it("uses X-API-Key when authHeader is x-api-key", async () => {
+    const fetchImpl = vi.fn(async () => {
+      return new Response(JSON.stringify({ model: "jev-latest", answers: {} }), {
+        status: 200,
+      });
+    }) as unknown as typeof fetch;
+
+    await evaluateJev({
+      apiKey: "papr-key",
+      authHeader: "x-api-key",
+      state: "x",
+      questions: { q: { type: "noul", instructions: "?" } },
+      fetchImpl,
+    });
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const headers = init.headers as Record<string, string>;
+    expect(headers["X-API-Key"]).toBe("papr-key");
+    expect(headers.Authorization).toBeUndefined();
+  });
+
   it("rejects empty questions", async () => {
     await expect(
       evaluateJev({
@@ -64,5 +91,33 @@ describe("evaluateJev", () => {
         questions: {},
       }),
     ).rejects.toThrow(/at least one/);
+  });
+});
+
+describe("jev guardrails", () => {
+  it("rejects oversized state", () => {
+    expect(() =>
+      assertJevInputWithinGuardrails({
+        state: "x".repeat(JEV_MAX_STATE_CHARS + 1),
+        questions: { q: { type: "noul", instructions: "?" } },
+      }),
+    ).toThrow(/max/);
+  });
+});
+
+describe("resolveJevAuth", () => {
+  it("prefers PAPR_API_KEY for proxy", async () => {
+    process.env.PAPR_API_KEY = "sk-test";
+    const auth = await resolveJevAuth();
+    expect(auth?.mode).toBe("papr_proxy");
+    expect(auth?.authHeader).toBe("x-api-key");
+    expect(auth?.endpoint).toContain("/v1/typesafe/systemone");
+  });
+
+  it("falls back to TYPESAFE_API_KEY", async () => {
+    process.env.TYPESAFE_API_KEY = "ts-test";
+    const auth = await resolveJevAuth();
+    expect(auth?.mode).toBe("typesafe_byok");
+    expect(auth?.authHeader).toBe("bearer");
   });
 });

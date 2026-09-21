@@ -75,6 +75,7 @@ export const MEASURED_CORE_TOOL_IDS: readonly string[] = [
   "page_wait_for",
   "get_key",
   "search_files",
+  "search_app_files",
   "add_agent_memory",
   "browser_snapshot",
   "edit_app_file_lines",

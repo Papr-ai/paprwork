@@ -1328,8 +1328,10 @@ export class AgentService {
       // thirty seconds, and that is exactly the window where a frozen meter
       // reads as broken.
       liveTurnToken = beginLiveTurn(chatId, config.model);
+      const focusAppId = options?.focusContext?.activeApp?.appId;
       setToolContext(chatId, {
         turnMetrics,
+        ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
           : {}),
@@ -1337,6 +1339,7 @@ export class AgentService {
       const piToolContext = {
         chatId,
         turnMetrics,
+        ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }
           : {}),
