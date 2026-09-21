@@ -41,6 +41,7 @@ import { paprWorkspaceTools } from "./paprWorkspace.js";
 import { platformFeedbackTools } from "./platformFeedback.js";
 import { paprDbTools } from "./paprDb.js";
 import { paprApiReferenceTools } from "./paprApiReference.js";
+import { jevTools } from "./jevDecide.js";
 
 export const databaseTools = [
   createDatabaseTool,
@@ -80,6 +81,7 @@ export const allTools = [
   ...cloudInstallTools,
   ...cloudObservabilityTools,
   ...mediaGenerationTools,
+  ...jevTools,
   ...appAgentChatTools,
   ...platformFeedbackTools,
   ...paprApiReferenceTools,
@@ -120,6 +122,7 @@ export const toolsByCategory = {
   cloudInstall: cloudInstallTools,
   cloudObservability: cloudObservabilityTools,
   mediaGeneration: mediaGenerationTools,
+  jev: jevTools,
   platformFeedback: platformFeedbackTools,
 } as const;
 
@@ -249,6 +252,20 @@ export {
   generateMediaTool,
   listMediaModelsTool,
 } from "./generateMedia.js";
+
+export { jevDecideTool, jevTools } from "./jevDecide.js";
+export {
+  evaluateJev,
+  resolveJevApiKey,
+  JEV_KEY_NAME,
+  JEV_DEFAULT_MODEL,
+  JEV_DEFAULT_ENDPOINT,
+} from "./jevClient.js";
+export type {
+  JevQuestion,
+  JevEvaluateResult,
+  JevEvaluateInput,
+} from "./jevClient.js";
 
 export { appAgentChatTools, enableAppAgentChatTool } from "./appAgentChat.js";
 
