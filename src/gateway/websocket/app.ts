@@ -226,6 +226,13 @@ export async function setupAppHandlers(
           payload.title,
           payload.description,
           payload.files,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          // Direct UI action — this is the one path that is real human
+          // builder activity.
+          { creationSource: "user" },
         );
         ws.send(
           JSON.stringify({

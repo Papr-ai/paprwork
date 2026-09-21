@@ -44,6 +44,8 @@ export function getGatewayTelemetry(): TelemetryClient {
       getNamespaceId: () => readActiveWorkspacePointer()?.namespaceId ?? "",
       getOrganizationId: () =>
         readActiveWorkspacePointer()?.organizationId ?? "",
+      getOrganizationName: () =>
+        readActiveWorkspacePointer()?.organizationName ?? "",
       getIsPackaged: () => isTelemetryPackagedFromEnv(),
       appVersion: process.env.PAPRWORK_APP_VERSION?.trim() || "unknown",
     });

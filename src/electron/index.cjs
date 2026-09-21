@@ -2817,6 +2817,18 @@ app.whenReady().then(async () => {
       getAnonymousInstallId: () =>
         settingsStorage.getOrCreateTelemetryInstallId(),
       getPaprUserId: () => settingsStorage.getPaprProfile()?.userId ?? "",
+      // Without these, every Electron-side lifecycle event (app_started,
+      // app_quit, system_suspend/resume) lands unattributed, which makes
+      // org-level MAU, retention, and the install→activation funnel
+      // impossible to compute per customer. Read per event, not cached: the
+      // user can switch workspace without restarting the app.
+      getNamespaceId: () => readActiveWorkspacePointer()?.namespaceId ?? "",
+      getOrganizationId: () =>
+        readActiveWorkspacePointer()?.organizationId ??
+        settingsStorage.getPaprProfile()?.organizationId ??
+        "",
+      getOrganizationName: () =>
+        readActiveWorkspacePointer()?.organizationName ?? "",
       getIsPackaged: () => app.isPackaged,
       appVersion: app.getVersion(),
     });
