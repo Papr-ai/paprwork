@@ -46,15 +46,22 @@ export function paprAccountProperty(
 export function workspaceIdentityProperties(options: {
   namespaceId?: string;
   organizationId?: string;
+  organizationName?: string;
 }): Record<string, string> {
   const props: Record<string, string> = {};
   const namespaceId = options.namespaceId?.trim();
   const organizationId = options.organizationId?.trim();
+  const organizationName = options.organizationName?.trim();
   if (namespaceId) {
     props.namespace_id = namespaceId;
   }
   if (organizationId) {
     props.organization_id = organizationId;
+  }
+  // Human-readable label so analytics can name the customer without a manual
+  // id lookup. Workspace name, not a person — no PII.
+  if (organizationName) {
+    props.organization_name = organizationName;
   }
   return props;
 }
@@ -66,6 +73,7 @@ export function mergeTelemetryEnvelope(
     paprAccountId?: string;
     namespaceId?: string;
     organizationId?: string;
+    organizationName?: string;
   },
 ): Record<string, unknown> {
   const isPackaged = options.isPackaged ?? isTelemetryPackagedFromEnv();

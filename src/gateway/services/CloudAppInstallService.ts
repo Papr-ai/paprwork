@@ -243,6 +243,11 @@ export class CloudAppInstallService {
         description,
         files,
         icon,
+        undefined,
+        undefined,
+        undefined,
+        // Forked/tracked from the Cloud catalog — not original builder work.
+        { creationSource: "install" },
       );
       createdAppId = app.id;
 

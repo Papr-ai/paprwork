@@ -284,6 +284,32 @@ describe("TelemetryClient", () => {
     };
     expect(body.events[0].properties).not.toHaveProperty("namespace_id");
     expect(body.events[0].properties).not.toHaveProperty("organization_id");
+    expect(body.events[0].properties).not.toHaveProperty("organization_name");
+  });
+
+  it("sends organization_name so reports can name the customer", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "",
+    });
+    const client = new TelemetryClient({
+      getEffectiveEnabled: () => true,
+      getAnonymousInstallId: () => "install-5",
+      getNamespaceId: () => "85ZIB7mD1V",
+      getOrganizationId: () => "Y8D4H7Yp3Z",
+      getOrganizationName: () => "Papr, Inc.",
+      appVersion: "1.0.0",
+      fetchImpl: fetchMock as typeof fetch,
+    });
+    await client.track("paprwork_app_started");
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body)) as {
+      events: Array<{ properties: Record<string, unknown> }>;
+    };
+    // app_started is emitted from Electron main; without workspace identity
+    // there is no org-level MAU, retention, or activation funnel.
+    expect(body.events[0].properties.organization_id).toBe("Y8D4H7Yp3Z");
+    expect(body.events[0].properties.organization_name).toBe("Papr, Inc.");
   });
 
   it("does not let event properties overwrite workspace identity", () => {

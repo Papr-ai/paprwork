@@ -151,6 +151,18 @@ async function withTimeout<T>(
   }
 }
 
+/**
+ * Who originated an app creation, for analytics.
+ *
+ * "user"     — a person authored it in the UI
+ * "agent"    — a main-agent or sub-agent tool call (bulk-capable)
+ * "install"  — forked/tracked from the Papr Cloud catalog
+ * "template" — scaffolded from a starter template
+ *
+ * Only "user" counts as builder activity; the rest inflate app-count metrics.
+ */
+export type AppCreationSource = "user" | "agent" | "install" | "template";
+
 export interface MiniAppCloudLineage {
   mode: "fork" | "track";
   sourceAppId: string;
@@ -2117,6 +2129,7 @@ export class AppService {
     createdByAgentId?: string,
     createdByAgentName?: string,
     tags?: string[],
+    options?: { creationSource?: AppCreationSource },
   ): Promise<MiniApp> {
     const now = new Date().toISOString();
     const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
@@ -2234,7 +2247,11 @@ export class AppService {
         file_count: files.length,
         // Separates real builder activity from agent/automation output, which
         // can create apps in bulk and otherwise inflates app-count metrics.
-        creation_source: createdByAgentId ? "agent" : "user",
+        // Callers declare their origin explicitly; createdByAgentId only
+        // covers sub-agent runs, so inferring from it alone mislabelled every
+        // main-agent create_app call as "user".
+        creation_source:
+          options?.creationSource ?? (createdByAgentId ? "agent" : "user"),
       });
     }).catch(() => {});
 

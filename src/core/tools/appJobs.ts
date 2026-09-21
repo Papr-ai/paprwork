@@ -916,6 +916,10 @@ export const createAppTool = createTool({
       undefined,
       undefined,
       args.tags,
+      // This is the create_app agent tool. It has no createdByAgentId (that is
+      // only set for sub-agent runs), so without an explicit source every
+      // agent-built app was counted as human builder activity.
+      { creationSource: "agent" },
     );
 
     let wikiEntity: { entityId: string; created: boolean } | undefined;
