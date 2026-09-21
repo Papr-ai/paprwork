@@ -1214,6 +1214,118 @@ async function startGateway(): Promise<void> {
         res.status(status).json({ error: message });
       }
     });
+    // ── Scoped share link read API ──────────────────────────────────────────
+    // POST /api/db/scoped-query
+    //
+    // The read path for recipients of a scoped share link. Deliberately NOT
+    // an extension of /api/db/query: scoped callers never send SQL. They
+    // describe the read ({ table, columns, filters, orderBy, limit }) and the
+    // server builds the statement from its own policy, so there is no grammar
+    // for a caller to outsmart and no way to select rows the policy excludes.
+    //
+    // Additive by construction — no existing mini-app calls this route, so
+    // unscoped apps are bit-for-bit unaffected.
+    app.post("/api/db/scoped-query", async (req, res) => {
+      try {
+        const body = req.body as {
+          appId?: string;
+          sourceId?: string;
+          recipient?: string;
+          passcode?: string;
+          query?: import("../core/utils/shareScope.js").ScopedQueryRequest;
+        };
+
+        const resolved = resolveRequestAppId(req, body.appId);
+        if ("error" in resolved) {
+          res.status(resolved.status).json({ error: resolved.error });
+          return;
+        }
+        const appId = resolved.appId;
+
+        if (!body.query?.table) {
+          res.status(400).json({ error: "query.table is required" });
+          return;
+        }
+
+        // Slug may arrive in the body (first call, with passcode) or in the
+        // cookie set once the passcode has already been verified.
+        const recipientCookieName = "papr_recipient";
+        const cookieHeader = req.headers.cookie ?? "";
+        const cookieSlug = cookieHeader
+          .split(";")
+          .map((part) => part.trim())
+          .find((part) => part.startsWith(`${recipientCookieName}=`))
+          ?.slice(recipientCookieName.length + 1);
+        const slug = (body.recipient ?? (cookieSlug ? decodeURIComponent(cookieSlug) : "")).trim();
+        if (!slug) {
+          res.status(403).json({ error: "Invalid or expired link" });
+          return;
+        }
+
+        const appDir = await getAppService().getAppPath(appId);
+        if (!appDir) {
+          res.status(404).json({ error: "App not found" });
+          return;
+        }
+
+        const { resolveRecipient } = await import(
+          "./services/appRuntime/shareRecipientStore.js"
+        );
+        const { buildScopedQuery } = await import("../core/utils/shareScope.js");
+
+        // Throws ScopeViolationError (403) for unknown slug, revoked link,
+        // wrong passcode, forbidden table/column — all identical to the
+        // caller, so responses cannot be used to enumerate what exists.
+        const { scope, recipient } = resolveRecipient(
+          appId,
+          appDir,
+          slug,
+          body.passcode,
+        );
+
+        if (scope.fullAccess) {
+          res.status(400).json({
+            error: "Full-access recipients should use /api/db/query",
+          });
+          return;
+        }
+
+        const built = buildScopedQuery(body.query, scope);
+
+        let source: import("./services/appDataSources.js").AppDataSource;
+        try {
+          source = await resolveLinkedSource(appId, body.sourceId, built.sql, "read");
+        } catch (err) {
+          const e = err as Error & { status?: number };
+          res.status(e.status ?? 400).json({ error: e.message });
+          return;
+        }
+
+        const { getDbRouter } = await import("./services/appRuntime/DbRouter.js");
+        const result = await getDbRouter().query(
+          appId,
+          source,
+          built.sql,
+          built.params,
+        );
+
+        res.json({
+          rows: result.rows,
+          count: result.count,
+          recipient: { slug: recipient.slug, label: recipient.label },
+          vars: scope.vars,
+        });
+      } catch (err) {
+        const e = err as Error & { status?: number; code?: string };
+        if (e.code === "scope_violation") {
+          res.status(403).json({ error: e.message });
+          return;
+        }
+        console.error("[Gateway] /api/db/scoped-query error:", e);
+        res.status(500).json({ error: e.message });
+      }
+    });
+
     lapRouteRegistrationSection("database-registry");
 
     // ── Mini-app batch read API ─────────────────────────────────────────────
