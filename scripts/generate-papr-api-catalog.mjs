@@ -4,14 +4,15 @@
  */
 import { writeFileSync, mkdirSync } from "fs";
 import path from "path";
-import { fileURLToPath } from "url";
+import { fileURLToPath, pathToFileURL } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 
-const { buildPaprApiCatalog } = await import(
-  path.join(root, "src/core/paprApiCatalog/buildCatalog.ts")
-);
+const catalogModuleUrl = pathToFileURL(
+  path.join(root, "src/core/paprApiCatalog/buildCatalog.ts"),
+).href;
+const { buildPaprApiCatalog } = await import(catalogModuleUrl);
 
 const catalog = buildPaprApiCatalog();
 const outDir = path.join(root, "src/resources");
