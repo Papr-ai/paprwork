@@ -1123,16 +1123,7 @@ function ProfileIdentitySection({
               imageUrl={imageUrl}
               displayName={name}
               email={displayEmail}
-              className="profile-photo-img"
-              initialsClassName="profile-photo-placeholder profile-photo-placeholder--initials"
-              fallback={
-                <div className="profile-photo-placeholder">
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                </div>
-              }
+              size={44}
             />
           </button>
 
@@ -1223,16 +1214,7 @@ function ProfileIdentitySection({
               displayName={name}
               email={displayEmail}
               alt="Profile"
-              className="profile-photo-img"
-              initialsClassName="profile-photo-placeholder profile-photo-placeholder--initials"
-              fallback={
-                <div className="profile-photo-placeholder">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                    <circle cx="12" cy="7" r="4" />
-                  </svg>
-                </div>
-              }
+              size={72}
             />
           </div>
           <div className="profile-photo-actions profile-photo-actions--compact">
@@ -1440,13 +1422,12 @@ function WorkspaceTeamSection({
 
               return (
                 <li key={member.objectId} className="papr-team__member">
-                  <div className="papr-team__avatar">
-                    <UserAvatar
-                      imageUrl={member.user.profileImageUrl}
-                      displayName={member.user.displayName}
-                      email={member.user.email}
-                    />
-                  </div>
+                  <UserAvatar
+                    imageUrl={member.user.profileImageUrl}
+                    displayName={member.user.displayName}
+                    email={member.user.email}
+                    size={32}
+                  />
                   <div className="papr-team__member-info">
                     <span className="papr-team__member-name">{member.user.displayName}</span>
                     <span className="papr-team__member-email">{member.user.email}</span>

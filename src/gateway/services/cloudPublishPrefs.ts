@@ -45,6 +45,13 @@ export interface CloudPublishAppPrefs {
   credentialRequirements?: RequiredKeySpec[];
   /** Public Community apps: require Papr sign-in before opening (default false). */
   requireSignIn?: boolean;
+  /**
+   * Audience "people": Parse _User.objectId values allowed to open the app.
+   * Empty or absent means the app is not user-restricted — with
+   * loginAccess "team" that is plain "anyone in my workspace". Enforced in
+   * appRuntime/cloudAppPeopleAccess.ts, not in the UI.
+   */
+  allowedUserIds?: string[];
   /** When true, linked registry DBs use per-user Turso isolation. */
   perUserIsolation?: boolean;
   lastAutoPublishAttemptAt?: string;

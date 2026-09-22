@@ -89,6 +89,8 @@ import {
   mergeVerifiedCallerJobParams,
 } from "./miniAppAccess.js";
 import { configHasPerUserLinkedSources } from "./cloudAppPerUserAccess.js";
+import { applyPeopleAllowlist } from "./cloudAppPeopleAccess.js";
+import { loadCloudPublishPrefs } from "../cloudPublishPrefs.js";
 import {
   assertMiniAppMembersAccess,
   listMiniAppMembers,
@@ -1109,7 +1111,42 @@ export class CloudAppHostService {
       return null;
     }
 
-    return access;
+    // Audience "people" is published with the *team* ACL, so `access` above has
+    // already said yes to every member of the workspace. Narrowing happens here
+    // — inside the one chokepoint all nine resolveAccess() call sites share —
+    // so /api/access, /api/db/query, /api/db/write, jobs and files are all
+    // covered by a single check instead of nine that can drift apart.
+    const peopleDecision = applyPeopleAllowlist(
+      access,
+      this.loadAllowedUserIds(access.appId),
+      runtimeAuth.externalUserId,
+    );
+    if (peopleDecision.denied) {
+      // null is the established "no access" result for every caller, and it
+      // yields canRead/canWrite false from buildMiniAppAccessResponse. Handing
+      // back a zeroed context instead would let a caller that only inspects
+      // `mode` believe it still had a session.
+      return null;
+    }
+
+    return peopleDecision.access;
+  }
+
+  /**
+   * Allowlist for audience "people", or undefined when the app is not
+   * user-restricted.
+   *
+   * Read from cloud-publish-prefs.json, which lives under the cloud-synced
+   * data/ folder and therefore reaches the cloud host with the app. Read
+   * failures deliberately return undefined (not "deny all") so a missing or
+   * malformed prefs file cannot take a published app offline.
+   */
+  private loadAllowedUserIds(appId: string): string[] | undefined {
+    try {
+      return loadCloudPublishPrefs().apps[appId]?.allowedUserIds;
+    } catch {
+      return undefined;
+    }
   }
 
   /**

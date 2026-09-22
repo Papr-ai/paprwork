@@ -20,6 +20,10 @@ import {
 } from "../../utils/appUploadMode";
 import { audienceModelNeedsInitialCodeUpload } from "../../utils/cloudPublishRouting";
 import {
+  SharePeoplePicker,
+  type SharePeopleMember,
+} from "./SharePeoplePicker";
+import {
   isCodePermission,
   isPermissionAvailable,
   isWebLinkPermission,
@@ -111,6 +115,11 @@ const ACCESS_OPTIONS: {
     description: "People in your Papr workspace — sign in required",
   },
   {
+    value: "people",
+    label: "Specific people",
+    description: "Only the teammates you @mention — sign in required",
+  },
+  {
     value: "link",
     label: "Anyone with the link",
     description: "Unlisted — share via link (optionally require Papr sign-in)",
@@ -170,10 +179,14 @@ function formatShareSelectionSummary(
 function sharePrefsOptions(cloud: CloudPublishControls): {
   requireSignIn?: boolean;
   perUserIsolation?: boolean;
+  allowedUserIds?: string[];
 } {
   return {
     requireSignIn: cloud.sharePrefs?.requireSignIn,
     perUserIsolation: cloud.sharePrefs?.perUserIsolation,
+    // Presence of this list is what makes loginAccess "team" read back as
+    // audience "people" rather than "anyone in my workspace".
+    allowedUserIds: cloud.sharePrefs?.allowedUserIds,
   };
 }
 
@@ -201,7 +214,11 @@ function ShareOptionGlyph({ audience }: { audience: ShareAudience }) {
       ? "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM1.5 8h13M8 1.5c1.7 1.8 2.6 4.1 2.6 6.5S9.7 12.7 8 14.5c-1.7-1.8-2.6-4.1-2.6-6.5S6.3 3.3 8 1.5Z"
       : audience === "team"
         ? "M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.4M12.2 9.8c1.4.5 2.3 1.7 2.3 3.2"
-        : audience === "link"
+        : // "people" is one person plus a check — deliberately a variation on
+          // the team glyph, since it is the narrower form of the same idea.
+          audience === "people"
+          ? "M7 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM2 13.5c0-2.2 2.2-3.9 5-3.9M10.5 12.2l1.4 1.4 2.6-2.8"
+          : audience === "link"
           ? "M6.5 9.5a2.8 2.8 0 0 0 4 0l2-2a2.83 2.83 0 0 0-4-4l-1 1M9.5 6.5a2.8 2.8 0 0 0-4 0l-2 2a2.83 2.83 0 0 0 4 4l1-1"
           : "M4.5 7V5.2a3.5 3.5 0 0 1 7 0V7M3.5 7h9v6.5h-9V7Z";
   return (
@@ -411,6 +428,44 @@ export function MiniAppPublishBar({
   const [contributionsOpen, setContributionsOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
   const [permission, setPermission] = useState<SharePermission>("write");
+  // Audience "people": the picked allowlist plus the roster it is picked from.
+  const [allowedUserIds, setAllowedUserIds] = useState<string[]>([]);
+  const [workspacePeople, setWorkspacePeople] = useState<SharePeopleMember[]>([]);
+  const [workspacePeopleLoading, setWorkspacePeopleLoading] = useState(false);
+  const [workspaceSelfId, setWorkspaceSelfId] = useState<string | null>(null);
+  const workspacePeopleLoadedRef = useRef(false);
+
+  /**
+   * Fetch the roster lazily — only when "Specific people" is actually chosen.
+   * Loading every workspace member just to render four radio buttons would tax
+   * every share sheet for a mode most apps never use.
+   */
+  const ensureWorkspacePeople = async () => {
+    if (workspacePeopleLoadedRef.current || workspacePeopleLoading) return;
+    workspacePeopleLoadedRef.current = true;
+    setWorkspacePeopleLoading(true);
+    try {
+      const result = await window.electronAPI.papr.listWorkspaceMembers();
+      if (result.success) {
+        setWorkspaceSelfId(result.currentUserId ?? null);
+        setWorkspacePeople(
+          (result.members ?? []).map((member) => ({
+            userId: member.user.objectId,
+            displayName: member.user.displayName,
+            email: member.user.email,
+            imageUrl: member.user.profileImageUrl,
+          })),
+        );
+      } else {
+        // Allow a retry — a failed load must not permanently empty the picker.
+        workspacePeopleLoadedRef.current = false;
+      }
+    } catch {
+      workspacePeopleLoadedRef.current = false;
+    } finally {
+      setWorkspacePeopleLoading(false);
+    }
+  };
   const [requireSignIn, setRequireSignIn] = useState(true);
   const [perUserIsolation, setPerUserIsolation] = useState(false);
   /** Share sheet reads as three ordered questions rather than one long form. */
@@ -549,6 +604,12 @@ export function MiniAppPublishBar({
     setPermission(model.permission);
     setRequireSignIn(requireSignInFromModel(model));
     setPerUserIsolation(model.perUserIsolation === true);
+    setAllowedUserIds(model.allowedUserIds ?? []);
+    if (model.audience === "people") {
+      // Names have to resolve before the saved allowlist can be rendered as
+      // chips rather than raw ids.
+      void ensureWorkspacePeople();
+    }
   }, [appId]); // eslint-disable-line react-hooks/exhaustive-deps -- cloud.* read only on app switch
 
   useEffect(() => {
@@ -588,6 +649,12 @@ export function MiniAppPublishBar({
     setPermission(model.permission);
     setRequireSignIn(requireSignInFromModel(model));
     setPerUserIsolation(model.perUserIsolation === true);
+    setAllowedUserIds(model.allowedUserIds ?? []);
+    if (model.audience === "people") {
+      // Names have to resolve before the saved allowlist can be rendered as
+      // chips rather than raw ids.
+      void ensureWorkspacePeople();
+    }
   }, [
     appId,
     shareOpen,
@@ -668,16 +735,23 @@ export function MiniAppPublishBar({
     nextPermission: SharePermission,
     nextRequireSignIn: boolean,
     nextPerUserIsolation: boolean,
+    nextAllowedUserIds: string[] = allowedUserIds,
   ): ShareAudienceModel => {
     const signInApplies = nextAudience === "link" || nextAudience === "public";
     const isolationApplies =
       nextAudience === "team" ||
+      nextAudience === "people" ||
       (signInApplies && nextRequireSignIn);
     return {
       audience: nextAudience,
       permission: nextPermission,
       ...(signInApplies ? { requireSignIn: nextRequireSignIn } : {}),
       ...(isolationApplies ? { perUserIsolation: nextPerUserIsolation } : {}),
+      // Sent only for "people" so switching away clears the allowlist instead
+      // of leaving a stale one to be silently re-applied later.
+      ...(nextAudience === "people"
+        ? { allowedUserIds: nextAllowedUserIds }
+        : {}),
     };
   };
 
@@ -686,6 +760,7 @@ export function MiniAppPublishBar({
     nextPermission: SharePermission,
     nextRequireSignIn = requireSignIn,
     nextPerUserIsolation = perUserIsolation,
+    nextAllowedUserIds = allowedUserIds,
   ): Promise<{ published: boolean }> => {
     setAudience(nextAudience);
     setPermission(nextPermission);
@@ -694,18 +769,26 @@ export function MiniAppPublishBar({
     }
     if (
       nextAudience === "team" ||
+      nextAudience === "people" ||
       ((nextAudience === "link" || nextAudience === "public") && nextRequireSignIn)
     ) {
       setPerUserIsolation(nextPerUserIsolation);
     }
     const model =
       nextAudience === "private"
-        ? buildShareModel("private", "read", nextRequireSignIn, nextPerUserIsolation)
+        ? buildShareModel(
+            "private",
+            "read",
+            nextRequireSignIn,
+            nextPerUserIsolation,
+            nextAllowedUserIds,
+          )
         : buildShareModel(
             nextAudience,
             nextPermission,
             nextRequireSignIn,
             nextPerUserIsolation,
+            nextAllowedUserIds,
           );
     if (
       model.audience !== "private" &&
@@ -747,11 +830,16 @@ export function MiniAppPublishBar({
   );
   const appliedRequireSignIn = requireSignInFromModel(appliedModel);
   const appliedPerUserIsolation = appliedModel.perUserIsolation === true;
+  const appliedAllowedUserIds = appliedModel.allowedUserIds ?? [];
   const hasSharingDraftChanges =
     audience !== appliedModel.audience ||
     permission !== appliedModel.permission ||
     ((audience === "link" || audience === "public") &&
       requireSignIn !== appliedRequireSignIn) ||
+    // Order is meaningful to the reader but not to access, so compare as a set.
+    (audience === "people" &&
+      (allowedUserIds.length !== appliedAllowedUserIds.length ||
+        allowedUserIds.some((id) => !appliedAllowedUserIds.includes(id)))) ||
     perUserIsolation !== appliedPerUserIsolation;
 
   const pickAudience = (nextAudience: ShareAudience) => {
@@ -763,6 +851,9 @@ export function MiniAppPublishBar({
     }
     setAudience(nextAudience);
     setPermission(nextPermission);
+    if (nextAudience === "people") {
+      void ensureWorkspacePeople();
+    }
     if (nextAudience === "link") {
       setRequireSignIn(true);
       setPerUserIsolation(true);
@@ -778,7 +869,13 @@ export function MiniAppPublishBar({
   };
 
   const saveSharingSettings = () => {
-    void applySharing(audience, permission, requireSignIn, perUserIsolation);
+    void applySharing(
+      audience,
+      permission,
+      requireSignIn,
+      perUserIsolation,
+      allowedUserIds,
+    );
   };
 
   const showSignInToggle = audience === "link" || audience === "public";
@@ -1644,6 +1741,22 @@ export function MiniAppPublishBar({
                   </li>
                 ))}
               </ul>
+
+              {/* Nested under the audience it belongs to: the allowlist is not
+                  a separate setting, it is the rest of the sentence started by
+                  "Specific people". */}
+              {audience === "people" ? (
+                <div className="share-sheet__people">
+                  <SharePeoplePicker
+                    members={workspacePeople}
+                    value={allowedUserIds}
+                    onChange={setAllowedUserIds}
+                    loading={workspacePeopleLoading}
+                    disabled={shareSheetBusy}
+                    currentUserId={workspaceSelfId}
+                  />
+                </div>
+              ) : null}
             </fieldset>
             ) : null}
 

@@ -8,6 +8,7 @@
 
 import React, { useState, useRef, useEffect, useLayoutEffect, useMemo } from "react";
 import { Markdown } from "../common/Markdown";
+import { UserAvatar } from "../common/UserAvatar";
 import { gateway } from "../../src/lib/gateway";
 import { ThinkingCard } from "./ThinkingCard";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
@@ -173,19 +174,6 @@ const SUBAGENT_ICONS: Record<string, React.FC<{ className?: string }>> = {
 };
 
 /** User avatar - matches main chat (Vercel avatar or person icon fallback) */
-function UserAvatar() {
-  const avatarUrl = `https://avatar.vercel.sh/user`;
-  return (
-    <img
-      src={avatarUrl}
-      alt="You"
-      className="mini-chat-card__msg-avatar mini-chat-card__msg-avatar--user-img"
-      width={20}
-      height={20}
-    />
-  );
-}
-
 export function MiniChatCard({
   delegationId,
   subAgentName,
@@ -641,7 +629,7 @@ export function MiniChatCard({
                     {msg.author === "sub-agent" ? (
                       <SubAgentAvatar icon={subAgentIcon} />
                     ) : msg.author === "user" ? (
-                      <UserAvatar />
+                      <UserAvatar size={20} />
                     ) : (
                       // main-agent or undefined (default to main-agent in delegation chat)
                       <MainAgentAvatar />
