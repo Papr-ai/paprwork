@@ -2229,6 +2229,10 @@ async function startGateway(): Promise<void> {
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
           requireSignIn?: boolean;
           perUserIsolation?: boolean;
+          // Audience "people". First publish of a restricted app goes through
+          // POST (not PATCH), so omitting it here silently published the app
+          // to the whole workspace.
+          allowedUserIds?: string[];
           slug?: string;
           autoPublish?: boolean;
           acknowledgeDesktopOnly?: boolean;
@@ -2257,7 +2261,8 @@ async function startGateway(): Promise<void> {
           body.externalLink !== undefined ||
           body.codeAccess !== undefined ||
           body.requireSignIn !== undefined ||
-          body.perUserIsolation !== undefined
+          body.perUserIsolation !== undefined ||
+          body.allowedUserIds !== undefined
         ) {
           setAppPublishPrefs(req.params.appId, {
             ...(body.accessMode ? { accessMode: body.accessMode } : {}),
@@ -2275,6 +2280,9 @@ async function startGateway(): Promise<void> {
               : {}),
             ...(body.perUserIsolation !== undefined
               ? { perUserIsolation: body.perUserIsolation }
+              : {}),
+            ...(body.allowedUserIds !== undefined
+              ? { allowedUserIds: body.allowedUserIds }
               : {}),
           });
         }

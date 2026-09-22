@@ -536,11 +536,15 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       {
         requireSignIn: state?.prefs?.requireSignIn,
         perUserIsolation: state?.prefs?.perUserIsolation,
+        allowedUserIds: state?.prefs?.allowedUserIds,
       },
     ),
     sharePrefs: {
       requireSignIn: state?.prefs?.requireSignIn,
       perUserIsolation: state?.prefs?.perUserIsolation,
+      // Without this the saved allowlist never reaches the Share sheet, so a
+      // "specific people" app reads back as plain "anyone in my workspace".
+      allowedUserIds: state?.prefs?.allowedUserIds,
     },
   };
 }

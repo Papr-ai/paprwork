@@ -2506,8 +2506,21 @@ button.cloud-compat-badge--paused:hover {
   color: var(--text-primary);
 }
 
-/* Allowlist for audience "people". Indented to the option text so it reads as
-   a continuation of "Specific people" rather than a new question. */
+/* Allowlist for audience "people". Sits directly beneath its own radio row and
+   is indented to the option's text column, so it reads as the continuation of
+   "Specific people" rather than a new question. */
 .share-sheet__people {
-  margin: 6px 0 2px 30px;
+  margin: 6px 0 2px 0;
+  padding: 10px 12px 10px 14px;
+  border: 1px solid var(--border-color);
+  border-top: 0;
+  border-radius: 0 0 10px 10px;
+  background: var(--glass-bg, rgba(120, 120, 128, 0.05));
+}
+
+/* Square off the selected row's bottom corners so the row and its allowlist
+   read as one attached surface instead of two stacked cards. */
+.share-sheet__row--selected:has(+ .share-sheet__people) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
