@@ -101,6 +101,8 @@ export async function publishCloudApp(
     codeAccess?: CodeAccess;
     requireSignIn?: boolean;
     perUserIsolation?: boolean;
+    /** Audience "people" allowlist — must survive first publish, not just PATCH. */
+    allowedUserIds?: string[];
     autoPublish?: boolean;
     acknowledgeDesktopOnly?: boolean;
   },

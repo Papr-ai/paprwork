@@ -842,6 +842,14 @@ export function MiniAppPublishBar({
         allowedUserIds.some((id) => !appliedAllowedUserIds.includes(id)))) ||
     perUserIsolation !== appliedPerUserIsolation;
 
+  // "Specific people" with an empty list collapses to plain "team" in the
+  // share model — i.e. the entire workspace, the exact opposite of the intent.
+  // The model keeps that mapping on purpose (an absent list must mean
+  // "not restricted" so already-published team apps keep working), so the
+  // sheet is responsible for never submitting that combination.
+  const peopleAllowlistEmpty =
+    audience === "people" && allowedUserIds.length === 0;
+
   const pickAudience = (nextAudience: ShareAudience) => {
     let nextPermission = permission;
     if (nextAudience === "private") {
@@ -1738,25 +1746,26 @@ export function MiniAppPublishBar({
                         <span className="share-sheet__row-desc">{option.description}</span>
                       </span>
                     </label>
+
+                    {/* Attached to its own option rather than appended after
+                        the whole list. Rendered after </ul> it sat below
+                        "Public in Community Apps", so it read as a setting
+                        belonging to that option instead of to this one. */}
+                    {option.value === "people" && audience === "people" ? (
+                      <div className="share-sheet__people">
+                        <SharePeoplePicker
+                          members={workspacePeople}
+                          value={allowedUserIds}
+                          onChange={setAllowedUserIds}
+                          loading={workspacePeopleLoading}
+                          disabled={shareSheetBusy}
+                          currentUserId={workspaceSelfId}
+                        />
+                      </div>
+                    ) : null}
                   </li>
                 ))}
               </ul>
-
-              {/* Nested under the audience it belongs to: the allowlist is not
-                  a separate setting, it is the rest of the sentence started by
-                  "Specific people". */}
-              {audience === "people" ? (
-                <div className="share-sheet__people">
-                  <SharePeoplePicker
-                    members={workspacePeople}
-                    value={allowedUserIds}
-                    onChange={setAllowedUserIds}
-                    loading={workspacePeopleLoading}
-                    disabled={shareSheetBusy}
-                    currentUserId={workspaceSelfId}
-                  />
-                </div>
-              ) : null}
             </fieldset>
             ) : null}
 
@@ -1930,10 +1939,19 @@ export function MiniAppPublishBar({
                 <button
                   type="button"
                   className="share-sheet__primary-btn"
-                  disabled={shareSheetBusy}
+                  disabled={shareSheetBusy || peopleAllowlistEmpty}
                   onClick={saveSharingSettings}
+                  title={
+                    peopleAllowlistEmpty
+                      ? "Add at least one person, or pick a different audience"
+                      : undefined
+                  }
                 >
-                  {shareSheetBusy ? "Saving…" : "Save sharing settings"}
+                  {shareSheetBusy
+                    ? "Saving…"
+                    : peopleAllowlistEmpty
+                      ? "Add someone to save"
+                      : "Save sharing settings"}
                 </button>
               </div>
             ) : null}
