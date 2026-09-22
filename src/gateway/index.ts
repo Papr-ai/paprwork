@@ -2324,6 +2324,11 @@ async function startGateway(): Promise<void> {
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
           requireSignIn?: boolean;
           perUserIsolation?: boolean;
+          // Audience "people". Intentionally not part of
+          // prefsSharingFieldsChanged: the cloud ACL stays "team" either way,
+          // so there is nothing for the memory server to update — the
+          // allowlist is enforced by the gateway on each request.
+          allowedUserIds?: string[];
         };
         const prefs = setAppPublishPrefs(req.params.appId, body);
         invalidateCloudLinkSyncReportCache();

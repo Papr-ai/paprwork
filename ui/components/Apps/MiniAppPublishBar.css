@@ -2505,3 +2505,9 @@ button.cloud-compat-badge--paused:hover {
   font-size: 13px;
   color: var(--text-primary);
 }
+
+/* Allowlist for audience "people". Indented to the option text so it reads as
+   a continuation of "Specific people" rather than a new question. */
+.share-sheet__people {
+  margin: 6px 0 2px 30px;
+}

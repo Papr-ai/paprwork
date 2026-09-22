@@ -1,0 +1,151 @@
+/**
+ * SharePeoplePicker — one field, one menu, no chrome competing with the name.
+ */
+
+.share-people {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.share-people[data-disabled] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* One field that reads as a sentence of people, not a form control grid. */
+.share-people__field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-secondary, rgba(120, 120, 128, 0.08));
+  cursor: text;
+  transition: border-color 0.15s var(--ease, ease);
+}
+
+.share-people__field:focus-within {
+  border-color: var(--accent-color, #0a84ff);
+}
+
+.share-people__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 6px 3px 4px;
+  border-radius: 999px;
+  background: var(--bg-primary, rgba(255, 255, 255, 0.06));
+  border: 1px solid var(--border-color);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-primary);
+  max-width: 100%;
+}
+
+/* The publisher keeps access no matter what, so it must not look removable. */
+.share-people__chip--fixed {
+  opacity: 0.7;
+}
+
+.share-people__chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-people__chip-remove {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-tertiary, #8e8e93);
+  cursor: pointer;
+}
+
+.share-people__chip-remove:hover {
+  background: var(--hover-bg, rgba(120, 120, 128, 0.16));
+  color: var(--text-primary);
+}
+
+.share-people__input {
+  flex: 1;
+  min-width: 120px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  padding: 2px;
+}
+
+.share-people__input::placeholder {
+  color: var(--text-tertiary, #8e8e93);
+}
+
+/* Menu appears only while typing — no idle dropdown taking up the panel. */
+.share-people__menu {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 232px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  backdrop-filter: saturate(180%) blur(20px);
+  -webkit-backdrop-filter: saturate(180%) blur(20px);
+}
+
+.share-people__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.share-people__option.is-active {
+  background: var(--hover-bg, rgba(120, 120, 128, 0.16));
+}
+
+.share-people__option-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.share-people__option-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-people__option-handle {
+  font-size: 11px;
+  color: var(--text-tertiary, #8e8e93);
+}
+
+.share-people__empty {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--text-tertiary, #8e8e93);
+}

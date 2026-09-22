@@ -23,6 +23,8 @@ export interface CloudPublishPrefs {
   codeAccess?: CodeAccess;
   requireSignIn?: boolean;
   perUserIsolation?: boolean;
+  /** Audience "people": Parse _User.objectId values allowed to open the app. */
+  allowedUserIds?: string[];
 }
 
 export interface CloudPublishState {
