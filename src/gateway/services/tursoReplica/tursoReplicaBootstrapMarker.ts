@@ -33,6 +33,13 @@ export const REPLICA_NON_USER_TABLES = new Set([
 export type BootstrapPendingReason =
   | "sidecar_wedge_repair"
   | "pre_sync_sidecar_reset"
+  /**
+   * Distinct from `pre_sync_sidecar_reset` because the two say different things about
+   * `data.db`: a pre-sync reset is sidecar drift with the main file untouched, whereas this
+   * one follows an engine abort that may implicate the file itself. Both previously wrote
+   * `pre_sync_sidecar_reset`, so a marker on disk could not tell you which had happened.
+   */
+  | "engine_panic_sidecar_reset"
   | "checkpoint_error_repair"
   | "legacy_cutover"
   /** Cross-namespace copy — local replica rows came from another namespace's Turso. */

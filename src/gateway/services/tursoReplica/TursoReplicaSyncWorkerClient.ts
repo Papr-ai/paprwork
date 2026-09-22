@@ -280,6 +280,7 @@ export class TursoReplicaSyncWorkerClient {
       localPath: error.localPath,
       repairAlreadyAttempted: this.engineTableRepairs.has(error.localPath),
       panicSubsystem: error.panicSubsystem,
+      panicInDurableStorage: error.panicInDurableStorage,
     });
     const where = `${error.op} on ${error.localPath}`;
     const tail = error.stderrTail.slice(-200);
@@ -310,7 +311,7 @@ export class TursoReplicaSyncWorkerClient {
           `[TursoSyncWorker] Engine crashed during ${where} — resetting sync ` +
             `sidecars. ${tail}`,
         );
-        resetReplicaSidecars(error.localPath);
+        resetReplicaSidecars(error.localPath, "engine_panic");
         return;
       case "restart_worker":
         // Deliberately nothing but the count. The restart is already guaranteed: the
