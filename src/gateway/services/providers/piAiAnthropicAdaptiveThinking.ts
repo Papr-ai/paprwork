@@ -6,7 +6,10 @@
  * We patch the outgoing Messages API payload via pi-ai's onPayload hook.
  */
 
-import { anthropicModelUsesAdaptiveThinking } from "../../utils/anthropicAdaptiveThinking.js";
+import {
+  anthropicModelRequiresAlwaysOnThinking,
+  anthropicModelUsesAdaptiveThinking,
+} from "../../utils/anthropicAdaptiveThinking.js";
 
 export type PiAiReasoningLevel =
   | "minimal"
@@ -99,15 +102,32 @@ export function mapPiAiReasoningToAnthropicEffort(
   }
 }
 
+/**
+ * The off switch as this model can actually express it.
+ *
+ * Fable 5.1 and Opus 5.5 reject `thinking: { type: "disabled" }` outright, so a
+ * `thinking: false` carried in from a chat that was on another model has to be
+ * ignored rather than forwarded — sending it fails the turn instead of
+ * reasoning less. Effort survives as the depth dial, which is why this
+ * resolves to enabled rather than to a minimal budget.
+ */
+function resolveThinkingEnabled(
+  modelId: string,
+  thinkingEnabled: boolean,
+): boolean {
+  return thinkingEnabled || anthropicModelRequiresAlwaysOnThinking(modelId);
+}
+
 export function buildAdaptiveThinkingOnPayload(
   modelId: string,
   reasoningLevel: PiAiReasoningLevel,
   thinkingEnabled = true,
 ): PiAiAnthropicStreamOptions["onPayload"] {
   const effort = mapPiAiReasoningToAnthropicEffort(reasoningLevel, modelId);
+  const enabled = resolveThinkingEnabled(modelId, thinkingEnabled);
 
   return (params) => {
-    if (!thinkingEnabled) {
+    if (!enabled) {
       // The user turned reasoning off. Drop effort as well as the thinking
       // block — an effort on a disabled thinking config is a contradiction the
       // API would have to resolve for us.
@@ -159,14 +179,16 @@ export function augmentPiAiAnthropicStreamOptions(
       }
     : base.headers;
 
+  const enabled = resolveThinkingEnabled(modelId, thinkingEnabled);
+
   // A disabled-thinking request still needs patching even on models that do not
   // otherwise need the adaptive override, or the off switch does nothing here.
-  if (thinkingEnabled && !requiresPiAiAdaptiveThinkingOverride(modelId)) {
+  if (enabled && !requiresPiAiAdaptiveThinkingOverride(modelId)) {
     return headers === base.headers ? base : { ...base, headers };
   }
 
   console.log(
-    thinkingEnabled
+    enabled
       ? `[AgentService] Applying adaptive thinking override for ${modelId} ` +
           `(effort=${mapPiAiReasoningToAnthropicEffort(reasoningLevel, modelId)}, display=summarized)`
       : `[AgentService] Thinking disabled by user for ${modelId}`,
@@ -178,7 +200,7 @@ export function augmentPiAiAnthropicStreamOptions(
     onPayload: buildAdaptiveThinkingOnPayload(
       modelId,
       reasoningLevel,
-      thinkingEnabled,
+      enabled,
     ),
   };
 }

@@ -20,6 +20,19 @@ interface ModelCapabilities {
  */
 const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
   // OpenAI
+  "gpt-6-astra": {
+    reasoningLevel: "advanced",
+    contextWindow: 1050000,
+    speed: "slow",
+    cost: "expensive",
+    specialties: [
+      "reasoning",
+      "computer-use",
+      "complex-tasks",
+      "agentic-coding",
+      "research",
+    ],
+  },
   "gpt-5-6-sol": {
     reasoningLevel: "advanced",
     contextWindow: 1050000,
@@ -105,6 +118,16 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     speed: "medium",
     cost: "medium",
     specialties: ["reasoning", "agentic", "coding", "tool-use"],
+  },
+  "claude-opus-5-5": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "slow",
+    // $4/$20 undercuts Opus 5's $5/$25, but it is still an Opus-class frontier
+    // model and output is well above the Sonnet tier this scale calls "medium".
+    // Rating it cheaper would have fallback reach for it on routine work.
+    cost: "expensive",
+    specialties: ["reasoning", "agentic", "coding", "long-horizon"],
   },
   "claude-fable-5-1": {
     reasoningLevel: "advanced",

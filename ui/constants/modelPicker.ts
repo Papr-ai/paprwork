@@ -77,6 +77,21 @@ export function migratePickerModelId(modelId: string): string {
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-sonnet-5",
   "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "gpt-6-astra",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Opus-5.5/Astra defaults — upgrade saved picker preferences on next load. */
+export const PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5",
+  "claude-opus-5",
   "claude-fable-5-1",
   "gpt-5-6-sol",
   "glm-5.2",
@@ -183,6 +198,10 @@ export function migrateEnabledPickerModelIds(
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
+  if (sameModelIdSet(enabledIds, PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
   if (sameModelIdSet(enabledIds, PRE_FABLE_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
@@ -214,6 +233,14 @@ export function migrateEnabledPickerModelIds(
   }
 
   if (sameModelIdSet(migrated, PRE_FABLE_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
+  // Also checked before the collapse above. Both rounds are needed: a list
+  // holding a variant id such as `glm-5.2-max` does not match any snapshot
+  // until the collapse has run, and one holding only base ids is answered by
+  // the earlier round without paying for the map.
+  if (sameModelIdSet(migrated, PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 

@@ -21,7 +21,11 @@
  */
 
 import type { ReasoningEffort } from "../../src/core/types/agents";
-import { anthropicModelUsesAdaptiveThinking } from "../../src/gateway/utils/anthropicAdaptiveThinking";
+import {
+  anthropicModelRequiresAlwaysOnThinking,
+  anthropicModelUsesAdaptiveThinking,
+} from "../../src/gateway/utils/anthropicAdaptiveThinking";
+import { openAIModelAcceptsMaxEffort } from "../../src/gateway/utils/openAIMaxEffort";
 import type { AIModel } from "./models";
 
 export type EffortLevel = ReasoningEffort;
@@ -97,7 +101,13 @@ const EFFORT_PROVIDERS = new Set([
   "moonshot",
 ]);
 
-/** Non-Anthropic providers that accept `max` rather than topping out at `high`. */
+/**
+ * Providers where `max` is available on every model they offer.
+ *
+ * OpenAI is deliberately absent: GPT-6 Astra accepts `max` and nothing else
+ * in that family does, so the answer is per-model rather than per-provider —
+ * see `openAIModelAcceptsMaxEffort`, which the request builder reads too.
+ */
 const MAX_EFFORT_PROVIDERS = new Set(["zai", "moonshot"]);
 
 /**
@@ -115,9 +125,14 @@ function anthropicAcceptsMaxEffort(modelId: string): boolean {
  *
  * pi-ai has no `speed` parameter, so an OAuth turn silently ignores it —
  * showing the row there would promise something the request cannot carry.
- * It is also the one control that costs *more* ($10/$50 per M against $5/$25).
+ * It is also the one control that costs *more*: 2× the model's base rate
+ * ($10/$50 against $5/$25 on Opus 5, $8/$40 against $4/$20 on Opus 5.5).
  */
-const FAST_MODEL_IDS = new Set(["claude-opus-5", "claude-opus-4-8"]);
+const FAST_MODEL_IDS = new Set([
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-opus-4-8",
+]);
 
 /**
  * Providers whose request has an actual off switch for reasoning.
@@ -134,10 +149,17 @@ export function modelSupportsThinking(model: AIModel): boolean {
 }
 
 export function modelSupportsThinkingToggle(model: AIModel): boolean {
-  return (
-    modelSupportsThinking(model) &&
-    THINKING_TOGGLE_PROVIDERS.has(model.provider)
-  );
+  if (!modelSupportsThinking(model)) return false;
+  // Fable 5.1 and Opus 5.5 reject the disable form, so the toggle there is a
+  // switch wired to an error rather than to nothing. Effort still works, and
+  // that row stays.
+  if (
+    model.provider === "anthropic" &&
+    anthropicModelRequiresAlwaysOnThinking(model.id)
+  ) {
+    return false;
+  }
+  return THINKING_TOGGLE_PROVIDERS.has(model.provider);
 }
 
 export function modelSupportsEffort(model: AIModel): boolean {
@@ -169,7 +191,9 @@ export function effortLevelsForModel(model: AIModel): EffortLevel[] {
   const acceptsMax =
     model.provider === "anthropic"
       ? anthropicAcceptsMaxEffort(model.id)
-      : MAX_EFFORT_PROVIDERS.has(model.provider);
+      : model.provider === "openai" || model.provider === "openai-codex"
+        ? openAIModelAcceptsMaxEffort(model.id)
+        : MAX_EFFORT_PROVIDERS.has(model.provider);
   if (acceptsMax) {
     levels.push("max");
   }
@@ -191,11 +215,13 @@ export const MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "claude-sonnet-5": 1_000_000,
   "claude-opus-4-6": 1_000_000,
   "claude-opus-5": 1_000_000,
+  "claude-opus-5-5": 1_000_000,
   "claude-fable-5-1": 1_000_000,
   "gpt-5.4-mini": 272_000,
   "gpt-5-6-luna": 1_050_000,
   "gpt-5-6-terra": 1_050_000,
   "gpt-5-6-sol": 1_050_000,
+  "gpt-6-astra": 1_050_000,
   "gpt-5.5": 1_000_000,
   "gpt-5.3-codex": 128_000,
   "gemini-3.5-flash-lite": 1_048_576,

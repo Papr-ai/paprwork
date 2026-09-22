@@ -26,3 +26,29 @@ export function anthropicModelUsesAdaptiveThinking(modelId: string): boolean {
     modelId.includes("sonnet-5")
   );
 }
+
+/**
+ * Which Anthropic models reject `thinking: { type: "disabled" }` outright.
+ *
+ * On Fable 5.1 and Opus 5.5 thinking is always on and the disable form is a
+ * hard error, not a no-op — Anthropic's Opus 5.5 migration guide lists
+ * "thinking can't be disabled" as a breaking change against Opus 5 and says it
+ * applies to Fable 5.1 too, with "remove `thinking: {"type": "disabled"}` …
+ * choose an effort level instead". Opus 5 itself still accepts the disable, so
+ * this is deliberately narrower than
+ * {@link anthropicModelUsesAdaptiveThinking}: the off switch is real there and
+ * withdrawing it would take away a control that works.
+ *
+ * Matching `opus-5-5` rather than `opus-5` is what keeps the two apart —
+ * `"claude-opus-5".includes("opus-5-5")` is false, so Opus 5 falls through.
+ * Effort remains the depth dial on all of these either way.
+ */
+export function anthropicModelRequiresAlwaysOnThinking(
+  modelId: string,
+): boolean {
+  return (
+    modelId.includes("fable") ||
+    modelId.includes("opus-5-5") ||
+    modelId.includes("opus-5.5")
+  );
+}

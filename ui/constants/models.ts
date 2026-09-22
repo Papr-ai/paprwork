@@ -102,6 +102,21 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
+    id: "claude-opus-5-5",
+    name: "Claude Opus 5.5",
+    provider: "anthropic",
+    description:
+      "Fable-5.1-level work at Opus pricing — adaptive thinking, 1M context, agentic coding",
+    group: "Anthropic",
+    supportsThinking: true,
+    // Adaptive, and on this model it cannot be switched off — see
+    // `anthropicModelRequiresAlwaysOnThinking`. The 0 is the same "let the
+    // model decide" value Opus 5 and Fable 5.1 carry, not a request for none.
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
     id: "claude-fable-5-1",
     name: "Claude Fable 5.1",
     provider: "anthropic",
@@ -246,6 +261,18 @@ export const CHAT_MODELS: AIModel[] = [
     group: "OpenAI",
     supportsThinking: true,
     reasoning: { effort: "high" },
+    maxTokens: 128000,
+    requiresApiKey: "OPENAI_API_KEY",
+  },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    provider: "openai",
+    description:
+      "Most capable OpenAI model — end-to-end reasoning, coding, computer use, research",
+    group: "OpenAI",
+    supportsThinking: true,
+    reasoning: { effort: "medium" },
     maxTokens: 128000,
     requiresApiKey: "OPENAI_API_KEY",
   },

@@ -443,7 +443,14 @@ describe("picker collapse", () => {
     ];
     const migrated = migrateEnabledPickerModelIds(saved);
     expect(migrated).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
-    expect(migrated).toHaveLength(saved.length);
+
+    // Originally `toHaveLength(saved.length)`, which held only while the
+    // migration was a pure collapse. It now also *adds* rows when new models
+    // ship, so equal length had become a pin on the old implementation rather
+    // than on the requirement — which is that nothing the user had is lost.
+    for (const id of saved) {
+      expect(migrated).toContain(migratePickerModelId(id));
+    }
   });
 
   it("leaves no default pointing at an id the picker hides", () => {
