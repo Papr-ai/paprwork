@@ -19,46 +19,28 @@
   background: var(--hover-bg);
 }
 
-/* Avatar */
+/* Avatar — the circle itself is UserAvatar (.papr-avatar).
+   This button is only the hit target and must not restate shape. The rule it
+   replaces set `overflow: visible` on a 1px-bordered box filled with a
+   periwinkle gradient, so the photo was never clipped to the circle and the
+   gradient read as a blue ring. */
 .profile-footer__avatar {
   position: relative;
   flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 1px solid var(--border-color);
   padding: 0;
-  overflow: visible;
+  border: 0;
+  background: none;
+  border-radius: 50%;
   display: grid;
   place-items: center;
+  line-height: 0;
   cursor: pointer;
-  background: linear-gradient(135deg, #d4e4ff, #c8b6ff);
-  color: #2c2c2e;
   transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
-}
-
-.profile-footer__avatar img,
-.profile-footer__initials,
-.profile-footer__avatar > svg {
-  border-radius: 50%;
 }
 
 .profile-footer__avatar:hover {
   transform: scale(1.05);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-}
-
-.profile-footer__avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  border-radius: 50%;
-}
-
-.profile-footer__initials {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
 }
 
 /* Name + plan */

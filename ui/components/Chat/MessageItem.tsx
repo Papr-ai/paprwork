@@ -768,13 +768,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
             displayName={userName}
             email={userEmail}
             alt={userName || "User"}
-            className="message-avatar-user"
-            initialsClassName="message-avatar-user message-avatar-user--initials"
-            fallback={
-              <div className="message-avatar-user message-avatar-user--initials">
-                U
-              </div>
-            }
+            size={32}
           />
         ) : (
           // Assistant avatar - Papr logo (actual v1 logo)
