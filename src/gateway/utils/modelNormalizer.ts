@@ -13,14 +13,32 @@ import type {
   OpenAIReasoningEffort,
   ReasoningEffort,
 } from "../../core/types/agents.js";
+import { openAIModelAcceptsMaxEffort } from "./openAIMaxEffort.js";
 
 const REASONING_SUFFIXES = new Set(["low", "medium", "high", "xhigh"]);
 
-/** Map picker effort (incl. Z.ai "max") to OpenAI SDK reasoningEffort */
+/**
+ * Map picker effort to the value the OpenAI request carries.
+ *
+ * `max` came from Z.ai and Moonshot, where no OpenAI model had a level above
+ * `xhigh` to map it to — so folding it down was right. GPT-6 Astra does, and
+ * folding it down there sends one level below what the user selected. The
+ * model id therefore decides, through the same predicate the renderer uses to
+ * offer the row at all.
+ *
+ * Omitting the id keeps the old fold, which is what every caller that has no
+ * model in hand should get.
+ */
 export function toOpenAIReasoningEffort(
   effort: ReasoningEffort,
-): OpenAIReasoningEffort {
-  return effort === "max" ? "xhigh" : effort;
+  modelId?: string,
+): ReasoningEffort {
+  if (effort !== "max") {
+    return effort;
+  }
+  return modelId && openAIModelAcceptsMaxEffort(modelId)
+    ? "max"
+    : ("xhigh" satisfies OpenAIReasoningEffort);
 }
 
 function popSegment(id: string): string | undefined {
@@ -50,6 +68,11 @@ function stripSolReasoningSuffix(n: string): string | null {
 /**
  * Normalize OpenAI model ID for API calls.
  * Accepts gpt-5.x-* with dots or dashes (e.g. gpt-5-6-sol, gpt-5-6-terra).
+ *
+ * Every rule here is scoped to the GPT-5 families, so a GPT-6 id such as
+ * `gpt-6-astra` falls through untouched — which is correct, because OpenAI
+ * names it with a dash and no dot-form exists to convert to. Pinned by test so
+ * a later `gpt-6` branch cannot start rewriting it.
  *
  * @returns API model ID (e.g. "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna", "gpt-5.3-codex")
  */
@@ -153,6 +176,10 @@ const OPENAI_CODEX_MODELS = new Set([
   "gpt-5.6-sol",
   "gpt-5.6-terra",
   "gpt-5.6-luna",
+  // Astra ships on ChatGPT Plus/Pro/Business/Enterprise as well as the API, so
+  // leaving it out here would refuse it for anyone signed in with ChatGPT
+  // rather than an OpenAI Platform key.
+  "gpt-6-astra",
 ]);
 
 /**

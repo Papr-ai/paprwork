@@ -18,10 +18,24 @@ export type Provider =
   | "groq"
   | "moonshot";
 
-/** OpenAI AI SDK `providerOptions.openai.reasoningEffort` */
-export type OpenAIReasoningEffort = "low" | "medium" | "high" | "xhigh";
+/**
+ * OpenAI AI SDK `providerOptions.openai.reasoningEffort`.
+ *
+ * `max` is model-dependent rather than universal: GPT-6 Astra accepts it, the
+ * GPT-5 families do not. The type cannot express that, so it admits the whole
+ * set and `openAIModelAcceptsMaxEffort` is the authority — `toOpenAIReasoningEffort`
+ * is where it is enforced, folding `max` to `xhigh` for models that reject it.
+ * Narrowing this type back would force a cast at the one call site that is
+ * correct, which hides the distinction instead of enforcing it.
+ */
+export type OpenAIReasoningEffort =
+  | "low"
+  | "medium"
+  | "high"
+  | "xhigh"
+  | "max";
 
-/** Model picker reasoning levels (OpenAI + provider-specific e.g. Z.ai "max") */
+/** Model picker reasoning levels. */
 export type ReasoningEffort = OpenAIReasoningEffort | "max";
 
 export type ModelReasoning = {

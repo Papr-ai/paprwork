@@ -9,6 +9,15 @@ import { resolveStepContextTokens } from "./agent/stepContextTokens.js";
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
   output: number; // USD per 1M output tokens
+  /**
+   * Cache-read rate as a multiple of `input`, where the model departs from the
+   * usual 0.1×. Opus 5.5 reads at 0.05× — leaving it on the default would bill
+   * cache reads at twice their real rate, and cache read is the single largest
+   * component of Anthropic spend (Issue 90), so the error would not be small.
+   */
+  cacheReadMultiplier?: number;
+  /** Cache-write rate as a multiple of `input`, where it is not the usual 1.25×. */
+  cacheWriteMultiplier?: number;
 }
 
 export interface CostBreakdown {
@@ -38,6 +47,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.6-sol-high": { input: 5.0, output: 30.0 },
   "gpt-5.6-sol-xhigh": { input: 5.0, output: 30.0 },
   "gpt-5.6": { input: 5.0, output: 30.0 },
+  // GPT-6 Astra (released September 2026). Cache read $1 and cache write
+  // $12.50 against $10 input are exactly the 0.1× / 1.25× defaults, so no
+  // override. Known gap: OpenAI charges 2× input and 1.5× output above 272K
+  // input tokens and this table has no tiering, so a turn past that threshold
+  // is under-reported. Anthropic has no such tier (see Issue 94).
+  "gpt-6-astra": { input: 10.0, output: 50.0 },
   // GPT-5.5 Series (deprecated picker IDs — treated as GPT-5.6 Sol tier)
   "gpt-5.5-low": { input: 5.0, output: 30.0 },
   "gpt-5.5": { input: 5.0, output: 30.0 },
@@ -65,6 +80,9 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
   "claude-opus-4-8": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5
   "claude-opus-5": { input: 5.0, output: 25.0 },
+  // Opus 5.5 reads cache at $0.20/M against $4/M input — Anthropic documents it
+  // as "0.05x the base input price", half the rate every other model charges.
+  "claude-opus-5-5": { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 },
   "claude-fable-5-1": { input: 10.0, output: 50.0 },
   "claude-fable-5": { input: 10.0, output: 50.0 }, // deprecated — migrated to fable-5-1
 
@@ -198,10 +216,15 @@ export function calculateCostWithCache(
     cacheWrite,
   );
 
+  const cacheReadMultiplier =
+    pricing.cacheReadMultiplier ?? CACHE_READ_COST_MULTIPLIER;
+  const cacheWriteMultiplier =
+    pricing.cacheWriteMultiplier ?? CACHE_WRITE_COST_MULTIPLIER;
+
   const inputCost =
     (uncachedPromptTokens / 1_000_000) * pricing.input +
-    (cacheRead / 1_000_000) * pricing.input * CACHE_READ_COST_MULTIPLIER +
-    (cacheWrite / 1_000_000) * pricing.input * CACHE_WRITE_COST_MULTIPLIER;
+    (cacheRead / 1_000_000) * pricing.input * cacheReadMultiplier +
+    (cacheWrite / 1_000_000) * pricing.input * cacheWriteMultiplier;
   const outputCost = (completionTokens / 1_000_000) * pricing.output;
 
   return inputCost + outputCost;

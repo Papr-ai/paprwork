@@ -61,7 +61,10 @@ import {
   compactStaleToolResults,
   estimateMessagesTokens,
 } from "./agent/compactToolResults.js";
-import { anthropicModelUsesAdaptiveThinking } from "../utils/anthropicAdaptiveThinking.js";
+import {
+  anthropicModelRequiresAlwaysOnThinking,
+  anthropicModelUsesAdaptiveThinking,
+} from "../utils/anthropicAdaptiveThinking.js";
 import {
   resolveHistoryTokenBudget,
   isContextLengthError,
@@ -1387,7 +1390,10 @@ export class AgentService {
         const { toOpenAIReasoningEffort } =
           await import("../utils/modelNormalizer.js");
         providerOptions.openai = {
-          reasoningEffort: toOpenAIReasoningEffort(config.reasoning.effort),
+          reasoningEffort: toOpenAIReasoningEffort(
+            config.reasoning.effort,
+            config.model,
+          ),
           reasoningSummary: "detailed", // Enable detailed reasoning summaries for streaming
         };
       }
@@ -1460,7 +1466,17 @@ export class AgentService {
         const anthropicOptions: NonNullable<typeof providerOptions.anthropic> =
           {};
 
-        if (config.thinking === false) {
+        // Fable 5.1 and Opus 5.5 reject the disable form outright, so a
+        // `thinking: false` carried in from a chat that was on another model
+        // must not be forwarded — it fails the request rather than reasoning
+        // less. Effort is the depth dial that survives, so it is still sent
+        // below; suppressing it as well would leave those chats with no
+        // reasoning control at all.
+        const thinkingDisabled =
+          config.thinking === false &&
+          !anthropicModelRequiresAlwaysOnThinking(config.model);
+
+        if (thinkingDisabled) {
           // The user turned reasoning off. `thinkingBudget: 0` cannot express
           // this — Opus 5 and Fable 5.1 default to a 0 budget and still think.
           anthropicOptions.thinking = { type: "disabled" };
@@ -1477,7 +1493,7 @@ export class AgentService {
         // request cannot carry.
         if (
           config.reasoning?.effort &&
-          config.thinking !== false &&
+          !thinkingDisabled &&
           anthropicModelUsesAdaptiveThinking(config.model)
         ) {
           anthropicOptions.effort = config.reasoning.effort;

@@ -61,6 +61,14 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
       supportsVision: true,
     },
     {
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+      provider: "anthropic",
+      contextWindow: 1000000,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
       id: "claude-fable-5-1",
       name: "Claude Fable 5.1",
       provider: "anthropic",
@@ -105,6 +113,14 @@ const AVAILABLE_MODELS: Record<Provider, ModelInfo[]> = {
     {
       id: "gpt-5-6-sol",
       name: "GPT-5.6 Sol",
+      provider: "openai",
+      contextWindow: 1050000,
+      supportsThinking: true,
+      supportsVision: true,
+    },
+    {
+      id: "gpt-6-astra",
+      name: "GPT-6 Astra",
       provider: "openai",
       contextWindow: 1050000,
       supportsThinking: true,
