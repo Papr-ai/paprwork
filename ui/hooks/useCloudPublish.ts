@@ -348,6 +348,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             codeAccess,
             requireSignIn,
             perUserIsolation: model.perUserIsolation,
+          allowedUserIds: model.allowedUserIds,
           });
           if (targetAppId !== appIdRef.current) {
             return;
@@ -362,6 +363,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             codeAccess,
             requireSignIn,
             perUserIsolation: model.perUserIsolation,
+          allowedUserIds: model.allowedUserIds,
             acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
           });
           applyPublishState(targetAppId, result);
@@ -371,6 +373,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             codeAccess,
             requireSignIn,
             perUserIsolation: model.perUserIsolation,
+          allowedUserIds: model.allowedUserIds,
           });
           if (targetAppId !== appIdRef.current) {
             return;

@@ -2,7 +2,7 @@
  * Share UI model: audience (who) + permission (what) → cloud ACL + code access prefs.
  */
 
-export type ShareAudience = "private" | "team" | "public" | "link";
+export type ShareAudience = "private" | "team" | "people" | "public" | "link";
 export type CloudLoginAccess = "private" | "team" | "public" | "none";
 export type CloudExternalLink = "off" | "read" | "read_write";
 
@@ -20,16 +20,78 @@ export interface ShareAudienceModel {
   requireSignIn?: boolean;
   /** Separate Turso DB per signed-in user (registry DBs only). */
   perUserIsolation?: boolean;
+  /**
+   * audience "people": Parse _User.objectId values allowed to open the app.
+   * Same identifier as externalUserId and list_namespace_users.externalUserId.
+   *
+   * "people" deliberately reuses the existing team ACL on the memory server
+   * rather than introducing a new principal type, so no server-side ACL
+   * migration is required. The consequence is that the memory server still
+   * authorises *any* workspace member, and this list is what narrows it —
+   * which is why it has to be enforced by the gateway on every request and
+   * cannot be a client-side filter. See applyPeopleAllowlist in
+   * gateway/services/appRuntime/miniAppAccess.ts.
+   */
+  allowedUserIds?: string[];
 }
 
 export interface SharingToAudienceModelOptions {
   requireSignIn?: boolean;
   perUserIsolation?: boolean;
+  allowedUserIds?: string[];
+}
+
+/** Drop blanks and duplicates, preserving the order the user picked. */
+export function normalizeAllowedUserIds(ids: readonly string[] | undefined): string[] {
+  if (!ids) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of ids) {
+    const id = typeof raw === "string" ? raw.trim() : "";
+    if (!id || seen.has(id)) {
+      continue;
+    }
+    seen.add(id);
+    out.push(id);
+  }
+  return out;
+}
+
+/**
+ * Whether a caller may open an app under this share model.
+ *
+ * Only constrains audience "people"; every other audience is already decided
+ * by the cloud ACL. The publisher is always allowed, otherwise removing
+ * yourself from your own allowlist would lock you out of your own app.
+ */
+export function isUserAllowedByAudienceModel(
+  model: Pick<ShareAudienceModel, "audience" | "allowedUserIds">,
+  callerUserId: string | undefined,
+  publisherUserId?: string,
+): boolean {
+  if (model.audience !== "people") {
+    return true;
+  }
+  const caller = callerUserId?.trim();
+  if (!caller) {
+    return false;
+  }
+  const publisher = publisherUserId?.trim();
+  if (publisher && caller === publisher) {
+    return true;
+  }
+  return normalizeAllowedUserIds(model.allowedUserIds).includes(caller);
 }
 
 /** Whether the share model requires Papr sign-in at the platform gate. */
 export function audienceRequiresSignIn(model: ShareAudienceModel): boolean {
-  if (model.audience === "team" || model.audience === "private") {
+  if (
+    model.audience === "team" ||
+    model.audience === "people" ||
+    model.audience === "private"
+  ) {
     return true;
   }
   if (model.audience === "public") {
@@ -74,7 +136,7 @@ export function sharingToAudienceModel(
       };
     }
     if (loginAccess === "team") {
-      return { audience: "team", permission: "edit" };
+      return teamAudienceFor("edit", options);
     }
     return { audience: "private", permission: "read" };
   }
@@ -104,9 +166,24 @@ export function sharingToAudienceModel(
     };
   }
   if (loginAccess === "team") {
-    return { audience: "team", permission: "write" };
+    return teamAudienceFor("write", options);
   }
   return { audience: "private", permission: "read" };
+}
+
+/**
+ * loginAccess "team" covers both "anyone in my workspace" and "specific
+ * people" — the allowlist is what distinguishes them, so it decides here.
+ */
+function teamAudienceFor(
+  permission: SharePermission,
+  options?: SharingToAudienceModelOptions,
+): ShareAudienceModel {
+  const allowedUserIds = normalizeAllowedUserIds(options?.allowedUserIds);
+  if (allowedUserIds.length > 0) {
+    return { audience: "people", permission, allowedUserIds };
+  }
+  return { audience: "team", permission };
 }
 
 /** Live-app ACL only (code access stored separately in publish prefs). */
@@ -133,7 +210,8 @@ export function audienceModelToSharing(model: ShareAudienceModel): {
   if (model.audience === "public") {
     return { loginAccess: "public", externalLink: "off" };
   }
-  if (model.audience === "team") {
+  // "people" shares the team ACL; the gateway allowlist narrows it per user.
+  if (model.audience === "team" || model.audience === "people") {
     return { loginAccess: "team", externalLink: "off" };
   }
   return { loginAccess: "private", externalLink: "off" };
@@ -143,7 +221,12 @@ export function audienceModelToSharing(model: ShareAudienceModel): {
 export function resolveLivePermissionForEdit(
   audience: ShareAudience,
 ): Exclude<SharePermission, "edit"> {
-  if (audience === "team" || audience === "link" || audience === "public") {
+  if (
+    audience === "team" ||
+    audience === "people" ||
+    audience === "link" ||
+    audience === "public"
+  ) {
     return "write";
   }
   return "read";
@@ -179,7 +262,11 @@ export function permissionAffectsCloud(model: ShareAudienceModel): boolean {
   if (model.permission === "edit") {
     return model.audience !== "private";
   }
-  if (model.audience === "private" || model.audience === "team") {
+  if (
+    model.audience === "private" ||
+    model.audience === "team" ||
+    model.audience === "people"
+  ) {
     return model.permission === "read" || model.permission === "write";
   }
   return true;
@@ -189,15 +276,20 @@ export function isPermissionAvailable(
   audience: ShareAudience,
   permission: SharePermission,
 ): boolean {
-  // Simplified UI: private, team, link (unlisted), public (Community catalog)
+  // Simplified UI: private, team, people, link (unlisted), public (Community)
   // Both "write" (view & interact) and "edit" (code) require non-private
   if (audience === "private") {
     // Private apps don't share permissions
     return false;
   }
-  // For team, link, and public, both write and edit are available
+  // For team, people, link, and public, both write and edit are available
   if (permission === "write" || permission === "edit") {
-    return audience === "link" || audience === "team" || audience === "public";
+    return (
+      audience === "link" ||
+      audience === "team" ||
+      audience === "people" ||
+      audience === "public"
+    );
   }
   // "read" is always available (though not in UI anymore)
   return true;

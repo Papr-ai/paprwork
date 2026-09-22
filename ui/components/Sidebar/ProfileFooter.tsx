@@ -111,18 +111,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
             imageUrl={imageUrl}
             displayName={name}
             alt={displayName}
-            initialsClassName="profile-footer__initials"
-            fallback={
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-                <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.6" />
-                <path
-                  d="M4 20c0-3.3 3.6-6 8-6s8 2.7 8 6"
-                  stroke="currentColor"
-                  strokeWidth="1.6"
-                  strokeLinecap="round"
-                />
-              </svg>
-            }
+            size={34}
           />
         </button>
 

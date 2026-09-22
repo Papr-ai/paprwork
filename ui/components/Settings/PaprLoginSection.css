@@ -333,30 +333,15 @@
   gap: 12px;
 }
 
+/* Hit target only — the circle is UserAvatar (.papr-avatar). */
 .profile-merged__display-photo {
   flex-shrink: 0;
-  width: 44px;
-  height: 44px;
   padding: 0;
-  border: 1px solid var(--border-color);
+  border: 0;
+  background: none;
   border-radius: 50%;
-  overflow: hidden;
-  background: var(--bg-secondary);
+  line-height: 0;
   cursor: pointer;
-}
-
-.profile-merged__display-photo .profile-photo-img,
-.profile-merged__display-photo .profile-photo-placeholder {
-  width: 100%;
-  height: 100%;
-  border-radius: 50%;
-}
-
-.profile-merged__display-photo .profile-photo-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-tertiary);
 }
 
 .profile-merged__display-info {
@@ -1105,28 +1090,6 @@
   padding: 8px;
   border: 1px solid var(--border-color);
   border-radius: 8px;
-}
-
-.papr-team__avatar {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
-  overflow: hidden;
-  background: var(--bg-secondary, rgba(0, 0, 0, 0.06));
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-secondary);
-}
-
-.papr-team__avatar img,
-.papr-team__avatar span {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
 }
 
 .profile-photo-placeholder--initials {
