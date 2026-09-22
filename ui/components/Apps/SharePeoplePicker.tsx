@@ -1,10 +1,14 @@
 /**
  * SharePeoplePicker — choose which workspace people can open this app.
  *
- * One job: turn names into an allowlist of Parse _User.objectId values.
- * Type to filter, Enter to add, Backspace on an empty field removes the last
- * person. Handles like @amir-kabbara exist for typing and recognition only —
- * the value committed upstream is always the user id.
+ * Modelled on the Google Docs share dialog, because that is the interaction
+ * people already know: a search field to add someone, then an explicit list of
+ * who currently has access.
+ *
+ * The previous version put chips *inside* the input. That reads as a tag
+ * editor, not a permission list — you could not tell who had access without
+ * parsing the contents of a text field, and it gave no home to the owner.
+ * Access is a list of people, so it is rendered as a list of people.
  */
 
 import React, { useMemo, useRef, useState } from "react";
@@ -28,8 +32,22 @@ interface SharePeoplePickerProps {
   onChange: (userIds: string[]) => void;
   loading?: boolean;
   disabled?: boolean;
-  /** Publisher — always retains access, so shown as a fixed chip. */
+  /** Publisher — always retains access, shown as a non-removable owner row. */
   currentUserId?: string | null;
+}
+
+function SearchGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+      <path
+        d="M7.2 12.4a5.2 5.2 0 1 0 0-10.4 5.2 5.2 0 0 0 0 10.4ZM11 11l3 3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 export function SharePeoplePicker({
@@ -50,151 +68,94 @@ export function SharePeoplePicker({
     [members],
   );
 
-  // The publisher is enforced as always-allowed on the server, so listing them
-  // as selectable would imply they could be removed.
-  const selectable = useMemo(
-    () => members.filter((m) => m.userId !== currentUserId),
-    [members, currentUserId],
-  );
+  const owner = currentUserId ? byId.get(currentUserId) : undefined;
 
-  const selected = useMemo(
+  const granted = useMemo(
     () => value.map((id) => byId.get(id)).filter(Boolean) as SharePeopleMember[],
     [value, byId],
   );
 
   const suggestions = useMemo(() => {
     const chosen = new Set(value);
-    return selectable.filter(
-      (m) =>
-        !chosen.has(m.userId) &&
-        matchesMentionQuery(
-          { userId: m.userId, displayName: m.displayName, email: m.email },
-          handles.get(m.userId) ?? "",
-          query,
-        ),
-    );
-  }, [selectable, value, handles, query]);
+    return members
+      .filter(
+        (m) =>
+          m.userId !== currentUserId &&
+          !chosen.has(m.userId) &&
+          matchesMentionQuery(
+            { userId: m.userId, displayName: m.displayName, email: m.email },
+            handles.get(m.userId) ?? "",
+            query,
+          ),
+      )
+      .slice(0, 5);
+  }, [members, value, currentUserId, handles, query]);
+
+  const menuOpen = query.trim().length > 0;
 
   const add = (userId: string) => {
-    if (!value.includes(userId)) {
-      onChange([...value, userId]);
-    }
+    if (!value.includes(userId)) onChange([...value, userId]);
     setQuery("");
     setActiveIndex(0);
     inputRef.current?.focus();
   };
 
-  const remove = (userId: string) => {
-    onChange(value.filter((id) => id !== userId));
-    inputRef.current?.focus();
-  };
-
   const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Backspace" && query === "" && value.length > 0) {
-      remove(value[value.length - 1]!);
-      return;
-    }
+    if (!menuOpen) return;
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setActiveIndex((i) => Math.min(i + 1, Math.max(suggestions.length - 1, 0)));
-      return;
-    }
-    if (event.key === "ArrowUp") {
+      setActiveIndex((i) => Math.min(i + 1, suggestions.length - 1));
+    } else if (event.key === "ArrowUp") {
       event.preventDefault();
       setActiveIndex((i) => Math.max(i - 1, 0));
-      return;
-    }
-    if (event.key === "Enter") {
+    } else if (event.key === "Enter") {
       const pick = suggestions[activeIndex];
       if (pick) {
         event.preventDefault();
         add(pick.userId);
       }
-      return;
-    }
-    if (event.key === "Escape") {
+    } else if (event.key === "Escape") {
       setQuery("");
     }
   };
 
-  const publisher = currentUserId ? byId.get(currentUserId) : undefined;
-
   return (
-    <div className="share-people" data-disabled={disabled || undefined}>
-      <div className="share-people__field" onClick={() => inputRef.current?.focus()}>
-        {publisher ? (
-          <span className="share-people__chip share-people__chip--fixed">
-            <UserAvatar
-              imageUrl={publisher.imageUrl}
-              displayName={publisher.displayName}
-              email={publisher.email}
-              size={18}
-            />
-            <span className="share-people__chip-name">You</span>
-          </span>
-        ) : null}
-
-        {selected.map((person) => (
-          <span key={person.userId} className="share-people__chip">
-            <UserAvatar
-              imageUrl={person.imageUrl}
-              displayName={person.displayName}
-              email={person.email}
-              size={18}
-            />
-            <span className="share-people__chip-name">
-              @{handles.get(person.userId)}
-            </span>
-            <button
-              type="button"
-              className="share-people__chip-remove"
-              onClick={() => remove(person.userId)}
-              aria-label={`Remove ${person.displayName}`}
-              disabled={disabled}
-            >
-              <svg viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">
-                <path
-                  d="M6 6l12 12M18 6L6 18"
-                  stroke="currentColor"
-                  strokeWidth="2.2"
-                  strokeLinecap="round"
-                />
-              </svg>
-            </button>
-          </span>
-        ))}
-
+    <div className="people-picker" data-disabled={disabled || undefined}>
+      <div className="people-picker__search">
+        <span className="people-picker__search-icon">
+          <SearchGlyph />
+        </span>
         <input
           ref={inputRef}
-          className="share-people__input"
+          className="people-picker__input"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
             setActiveIndex(0);
           }}
           onKeyDown={onKeyDown}
-          placeholder={selected.length === 0 ? "@ mention a teammate" : ""}
+          placeholder="Add people by name or email"
           disabled={disabled}
-          aria-label="Add a person by name or @handle"
+          aria-label="Add people by name or email"
           autoComplete="off"
           spellCheck={false}
         />
       </div>
 
-      {query.trim().length > 0 ? (
-        <ul className="share-people__menu" role="listbox">
+      {menuOpen ? (
+        <ul className="people-picker__menu" role="listbox">
           {loading ? (
-            <li className="share-people__empty">Loading workspace…</li>
+            <li className="people-picker__empty">Loading workspace…</li>
           ) : suggestions.length === 0 ? (
-            <li className="share-people__empty">No matching teammate</li>
+            <li className="people-picker__empty">No matching teammate</li>
           ) : (
-            suggestions.slice(0, 6).map((person, i) => (
+            suggestions.map((person, i) => (
               <li key={person.userId}>
                 <button
                   type="button"
                   role="option"
                   aria-selected={i === activeIndex}
-                  className={`share-people__option${i === activeIndex ? " is-active" : ""}`}
+                  className={`people-picker__option${i === activeIndex ? " is-active" : ""}`}
                   onMouseEnter={() => setActiveIndex(i)}
                   onClick={() => add(person.userId)}
                 >
@@ -202,15 +163,11 @@ export function SharePeoplePicker({
                     imageUrl={person.imageUrl}
                     displayName={person.displayName}
                     email={person.email}
-                    size={26}
+                    size={28}
                   />
-                  <span className="share-people__option-text">
-                    <span className="share-people__option-name">
-                      {person.displayName}
-                    </span>
-                    <span className="share-people__option-handle">
-                      @{handles.get(person.userId)}
-                    </span>
+                  <span className="people-picker__person">
+                    <span className="people-picker__name">{person.displayName}</span>
+                    <span className="people-picker__sub">{person.email}</span>
                   </span>
                 </button>
               </li>
@@ -218,6 +175,57 @@ export function SharePeoplePicker({
           )}
         </ul>
       ) : null}
+
+      <div className="people-picker__access">
+        <div className="people-picker__access-title">People with access</div>
+        <ul className="people-picker__access-list">
+          {owner ? (
+            <li className="people-picker__row">
+              <UserAvatar
+                imageUrl={owner.imageUrl}
+                displayName={owner.displayName}
+                email={owner.email}
+                size={28}
+              />
+              <span className="people-picker__person">
+                <span className="people-picker__name">{owner.displayName} (you)</span>
+                <span className="people-picker__sub">{owner.email}</span>
+              </span>
+              <span className="people-picker__badge">Owner</span>
+            </li>
+          ) : null}
+
+          {granted.map((person) => (
+            <li key={person.userId} className="people-picker__row">
+              <UserAvatar
+                imageUrl={person.imageUrl}
+                displayName={person.displayName}
+                email={person.email}
+                size={28}
+              />
+              <span className="people-picker__person">
+                <span className="people-picker__name">{person.displayName}</span>
+                <span className="people-picker__sub">{person.email}</span>
+              </span>
+              <button
+                type="button"
+                className="people-picker__remove"
+                onClick={() => onChange(value.filter((id) => id !== person.userId))}
+                disabled={disabled}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+
+        {granted.length === 0 ? (
+          <p className="people-picker__hint">
+            No one else yet — add a teammate above, or nobody but you will be
+            able to open this app.
+          </p>
+        ) : null}
+      </div>
     </div>
   );
 }
