@@ -16,7 +16,6 @@ import {
   shouldUseTursoReplicaForDb,
 } from "../../utils/tursoReplicaEnabled.js";
 import { clearBootstrapPendingMarker } from "./tursoReplicaBootstrapMarker.js";
-import { isJobScratchDatabasePath } from "../jobs/jobScratchDatabasePath.js";
 
 const REPLICA_SIDEcar_SUFFIXES = [
   "-changes",
@@ -32,13 +31,18 @@ export function isReplicaManagedDbPath(dbPath: string): boolean {
     return false;
   }
   const normalized = path.normalize(dbPath);
-  // Job scratch is local-only infra — never Plan A, even if mis-registered.
-  if (isJobScratchDatabasePath(normalized)) {
-    return false;
-  }
   const registry = getDatabaseRegistryService();
   const record = registry.getByPath(normalized);
   if (!record) {
+    // Unregistered: local-only job scratch and everything else lands here, so
+    // the path shape still decides for a file the registry has never heard of.
+    // It must not decide for a file that *is* registered. A job database cut
+    // over to the engine carries syncMode "replica" and the engine's own
+    // tables, and reading its path shape as "local-only infra" hands a live
+    // replica to a second SQLite engine. The sibling predicate guarding the
+    // bash sqlite3 CLI (isReplicaManagedDbPathFromRegistry) has always read a
+    // registered job replica as managed; this one disagreed, so the untrusted
+    // path was blocked while our own in-process writers were waved through.
     return false;
   }
   return shouldUseTursoReplicaForDb({ syncMode: record.syncMode });

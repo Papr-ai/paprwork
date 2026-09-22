@@ -5,6 +5,7 @@
 import { promises as fs } from "fs";
 import { isJobScratchDatabasePath } from "./jobScratchDatabasePath.js";
 import { isTursoLocalDatabaseCorruptError } from "../tursoSyncBridgeCore.js";
+import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 
 const SCRATCH_SIDEcar_SUFFIXES = ["-wal", "-shm"] as const;
 
@@ -21,6 +22,14 @@ export async function recoverCorruptJobScratchDatabase(
   dbPath: string,
 ): Promise<boolean> {
   if (!isJobScratchDatabasePath(dbPath)) {
+    return false;
+  }
+  // A replica's local database is not scratch to be thrown away. This removes
+  // data.db, -wal and -shm but leaves the engine's own sidecars (-changes, -info)
+  // behind, so the engine is left pointing at a file that no longer exists and the
+  // scaffold then recreates it with legacy tables — which is how one file ends up
+  // holding both engines' tables. Replica repair belongs to the crash remedy.
+  if (isReplicaManagedDbPath(dbPath)) {
     return false;
   }
 
@@ -44,11 +53,22 @@ export async function recoverCorruptJobScratchDatabase(
   return true;
 }
 
+/**
+ * Whether a migration failure should be answered by rebuilding the file.
+ *
+ * Guarded here as well as in the recovery itself because the caller acts on *this*
+ * answer: a false sends the original error up, while a true makes it rebuild and
+ * re-run migrations regardless of what the recovery returned. So declining only in
+ * the recovery would still leave a replica's corruption swallowed and its migrations
+ * re-applied by the wrong engine.
+ */
 export function shouldRecoverJobScratchAfterMigrationError(
   dbPath: string,
   error: unknown,
 ): boolean {
   return (
-    isJobScratchDatabasePath(dbPath) && isRecoverableJobScratchError(error)
+    isJobScratchDatabasePath(dbPath) &&
+    !isReplicaManagedDbPath(dbPath) &&
+    isRecoverableJobScratchError(error)
   );
 }
