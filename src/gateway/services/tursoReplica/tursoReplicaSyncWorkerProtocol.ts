@@ -11,6 +11,7 @@
 
 import {
   classifyReplicaPanicSubsystem,
+  isReplicaPanicInDurableStorage,
   type ReplicaPanicSubsystem,
 } from "./replicaPanicSubsystem.js";
 
@@ -172,6 +173,12 @@ export class TursoSyncWorkerCrashError extends Error {
    * whether or not that variable happens to be set in the shell that launched us.
    */
   readonly panicSubsystem: ReplicaPanicSubsystem | null;
+  /**
+   * Computed from the whole captured stderr for the same reason as
+   * {@link panicSubsystem}: the `panicked at` line is what both read, and a long
+   * backtrace pushes it out of the 400-character tail.
+   */
+  readonly panicInDurableStorage: boolean;
 
   constructor(options: {
     op: TursoSyncWorkerOp;
@@ -198,6 +205,7 @@ export class TursoSyncWorkerCrashError extends Error {
     this.engineWasRunning = options.engineWasRunning;
     this.stderrTail = tail;
     this.panicSubsystem = classifyReplicaPanicSubsystem(options.stderr);
+    this.panicInDurableStorage = isReplicaPanicInDurableStorage(options.stderr);
   }
 }
 
