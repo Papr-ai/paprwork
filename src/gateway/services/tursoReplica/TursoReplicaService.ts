@@ -344,6 +344,19 @@ export class TursoReplicaService {
         );
       }
     }
+    // Close before counting, for the reason the replay branch above already closes:
+    // `countUserRows` opens a second better-sqlite3 engine, and the worker owns this path
+    // immediately after a pull. A second engine against a held path does not read stale
+    // data, it fails outright — `SQLITE_BUSY`, which `countUserRows` maps to -1.
+    //
+    // That -1 is why this mattered. It is genuinely "unreadable", and the line below is
+    // right that unreadable is not proof of success — but it was being spent as proof of
+    // *failure*, which is the one thing it also is not. A healthy replica holding 27k rows
+    // therefore recorded a failed attempt on every pass, kept its marker forever, and kept
+    // re-triggering the bootstrap; and bootstrap is destructive, so the cure was looping on
+    // a database that never needed it. Closing first makes the count answer the question it
+    // was always meant to answer, and leaves -1 to mean what it says.
+    await this.close(localPath);
     const rowsNow = countUserRows(localPath);
     // rowsNow === -1 means unreadable, which is not proof of a successful bootstrap.
     const bootstrapped = rowsNow > 0 || (rowsNow === 0 && marker.rowsAtRepair === 0);
@@ -737,7 +750,7 @@ export class TursoReplicaService {
     if (report.wedged) {
       await getTursoReplicaSyncWorkerClient().close(localPath);
       this.touchedPaths.delete(key);
-      resetReplicaSidecars(localPath);
+      resetReplicaSidecars(localPath, "sidecar_drift");
       console.warn(
         `[TursoReplicaService] Reset wedged sync sidecars before open: ${localPath} — ` +
           describeReplicaSidecarWedge(report),

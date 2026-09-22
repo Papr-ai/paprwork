@@ -49,6 +49,25 @@ export interface ReplicaEngineTableDefect {
   reason: "missing_unique_index";
 }
 
+/**
+ * The outcome of an inspection, with "found nothing" kept apart from "could not look".
+ *
+ * These two are not the same claim, and collapsing them into an empty array is what let
+ * Issue 117 and Issue 118 each run their course: a file too contended or too damaged to
+ * open reported zero defects, and every caller read that as a clean bill of health. A
+ * readonly open can fail for reasons that have nothing to do with the tables — a `-shm`
+ * needing recovery is one, and recovery is a write — so the failure is both plausible
+ * and invisible.
+ *
+ * Callers still decide for themselves. The pre-open guard proceeds on `unreadable`,
+ * because blocking every open on a contended probe would be worse than the panic it
+ * guards; the crash chooser does not, because after an abort the same silence is the
+ * difference between repairing a curable defect and parking a database for good.
+ */
+export type ReplicaEngineTableInspection =
+  | { status: "inspected"; defects: readonly ReplicaEngineTableDefect[] }
+  | { status: "unreadable"; reason: string };
+
 function quoteIdent(name: string): string {
   return `"${name.replace(/"/g, '""')}"`;
 }
@@ -72,21 +91,24 @@ function hasUniqueIndex(db: Database.Database, table: string): boolean {
 
 /**
  * Engine tables present in `dbPath` that would make the engine panic on connect.
- * An empty array means the file is safe to open as far as this check can tell.
+ *
+ * An absent or empty file reports `inspected` with no defects rather than `unreadable`:
+ * there is genuinely nothing there to be malformed, and the engine creates these tables
+ * itself on connect. Only a file we tried and failed to read reports `unreadable`.
  */
-export function inspectReplicaEngineTables(
+export function inspectReplicaEngineTablesDetailed(
   dbPath: string,
-): ReplicaEngineTableDefect[] {
+): ReplicaEngineTableInspection {
   if (!fs.existsSync(dbPath)) {
-    return [];
+    return { status: "inspected", defects: [] };
   }
   try {
     const stats = fs.statSync(dbPath);
     if (stats.size === 0) {
-      return [];
+      return { status: "inspected", defects: [] };
     }
-  } catch {
-    return [];
+  } catch (error) {
+    return { status: "unreadable", reason: `stat failed: ${(error as Error).message}` };
   }
 
   let db: Database.Database;
@@ -96,9 +118,10 @@ export function inspectReplicaEngineTables(
       fileMustExist: true,
       timeout: REPLICA_ENGINE_INSPECT_BUSY_TIMEOUT_MS,
     });
-  } catch {
-    // Unreadable or contended — do not block the gateway; the worker validates on connect.
-    return [];
+  } catch (error) {
+    // Contended, or damaged past a readonly open. Either way this is not a clean result,
+    // and the caller has to be able to tell the difference — see the type's own note.
+    return { status: "unreadable", reason: `open failed: ${(error as Error).message}` };
   }
 
   try {
@@ -112,12 +135,35 @@ export function inspectReplicaEngineTables(
         defects.push({ table, reason: "missing_unique_index" });
       }
     }
-    return defects;
-  } catch {
-    return [];
+    return { status: "inspected", defects };
+  } catch (error) {
+    return { status: "unreadable", reason: `read failed: ${(error as Error).message}` };
   } finally {
     db.close();
   }
+}
+
+/**
+ * Defects visible in `dbPath`, with an unreadable file reported as none.
+ *
+ * For the pre-open guard, where "could not look" and "nothing to see" genuinely warrant
+ * the same action: proceed, and let the worker's own validation and the crash policy
+ * catch what this could not. Callers that must distinguish the two — anything deciding
+ * whether a database is recoverable — take {@link inspectReplicaEngineTablesDetailed}.
+ */
+export function inspectReplicaEngineTables(
+  dbPath: string,
+): ReplicaEngineTableDefect[] {
+  const inspection = inspectReplicaEngineTablesDetailed(dbPath);
+  if (inspection.status === "unreadable") {
+    // Not fatal here, but never silent: an inspection that cannot run looks exactly like
+    // a healthy database, and that resemblance is what hid this defect through two fixes.
+    console.warn(
+      `[ReplicaEngineTableGuard] Could not inspect ${dbPath} — ${inspection.reason}`,
+    );
+    return [];
+  }
+  return [...inspection.defects];
 }
 
 /** One-line diagnostic for logs — names the tables and why they were dropped. */

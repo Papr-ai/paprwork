@@ -21,7 +21,11 @@
 
 import * as fs from "fs";
 import { removeTursoReplicaSidecarsOnly } from "./tursoReplicaFileGuard.js";
-import { writeBootstrapPendingMarker } from "./tursoReplicaBootstrapMarker.js";
+import {
+  countUserRows,
+  writeBootstrapPendingMarker,
+  type BootstrapPendingReason,
+} from "./tursoReplicaBootstrapMarker.js";
 import { readReplicaWalShape } from "./tursoReplicaWalFrames.js";
 
 interface ReplicaSidecarInfo {
@@ -185,25 +189,94 @@ export function repairReplicaSidecarWedge(dbPath: string): boolean {
 }
 
 /**
+ * What the caller observed, which decides whether the bootstrap marker is warranted.
+ *
+ * The distinction is the point: sidecar drift says nothing about `data.db`, so forcing a
+ * populated replica through a destructive re-bootstrap buys nothing. An engine abort is
+ * evidence about the process and possibly about the file, so it keeps the marker.
+ */
+export type SidecarResetCondition = "sidecar_drift" | "engine_panic";
+
+/**
+ * Reset sidecars, keeping the marker only when the replica cannot be shown to hold rows.
+ *
+ * Shared by the drift-detected paths rather than restated at each: the count must precede the
+ * delete (rows living only in `-wal` are real rows, and counting after would read a populated
+ * file as 0), and the marker must precede it too (a crash between them costs one redundant
+ * pull, whereas the reverse leaves a sidecar-less empty replica nothing will ever seed).
+ *
+ * Empty and unreadable both keep the marker. `countUserRows` returns -1 for unreadable and
+ * documents it as "unknown, never empty" — it is equally not evidence of "populated", so the
+ * conservative branch is correct for it.
+ */
+function resetSidecarsPreservingPopulatedReplica(
+  dbPath: string,
+  reason: BootstrapPendingReason,
+): void {
+  const rows = countUserRows(dbPath);
+  if (rows <= 0) {
+    writeBootstrapPendingMarker(dbPath, reason);
+  }
+  removeTursoReplicaSidecarsOnly(dbPath);
+}
+
+/**
  * Delete Plan A sidecars for a path the caller has already inspected and closed.
  *
  * Split from {@link repairReplicaSidecarWedge} so the pre-sync path can inspect once, close the
  * open handle, then repair — unlinking a `-wal` that the engine still has open corrupts it.
+ *
+ * `condition` is required rather than defaulted because the two callers observed different
+ * things and the safe answer differs: a defaulted parameter lets a new caller fall into the
+ * wrong reading silently, and this function's own history is that both conditions shared one
+ * behaviour and one reason for exactly that reason.
  */
-export function resetReplicaSidecars(dbPath: string): void {
-  writeBootstrapPendingMarker(dbPath, "pre_sync_sidecar_reset");
-  removeTursoReplicaSidecarsOnly(dbPath);
+export function resetReplicaSidecars(
+  dbPath: string,
+  condition: SidecarResetCondition,
+): void {
+  if (condition === "engine_panic") {
+    // The engine aborted, so `data.db` is not above suspicion and the marker stays
+    // unconditional — a redundant re-bootstrap is cheaper than serving a damaged file.
+    writeBootstrapPendingMarker(dbPath, "engine_panic_sidecar_reset");
+    removeTursoReplicaSidecarsOnly(dbPath);
+    return;
+  }
+  resetSidecarsPreservingPopulatedReplica(dbPath, "pre_sync_sidecar_reset");
 }
 
 /**
  * After a sync-engine checkpoint/WAL error, reset Plan A sidecars (keep data.db).
  * Stronger than detect-only repair — the error itself signals metadata/WAL drift.
+ *
+ * The marker is written only when the file cannot be shown to hold rows, because the marker
+ * is not free and the drift this repairs is in the sidecars rather than in data.db. A marker
+ * forces the next `openSpec` onto the bootstrap path, which snapshots the whole file with
+ * `VACUUM INTO`, re-downloads it, replays the snapshot back, and serves
+ * "Replica bootstrap backoff active" to every read until that finishes — minutes of 503s on a
+ * large replica whose rows were never in question.
+ *
+ * Skipping it leaves exactly the state {@link attachTursoReplicaInPlaceForCutover} creates
+ * deliberately: sidecars gone, data.db populated, reconnect with `bootstrapIfEmpty: false`.
+ * Its own contract is "attach to an existing data.db without re-downloading rows", so this is
+ * a supported resting state and not a new one. The caller's immediate retry already runs that
+ * way, since it reuses the spec computed before this call.
+ *
+ * Empty and unreadable both keep the marker. Empty is the silent-empty-replica case the marker
+ * exists for: `openSpec` decides `bootstrapIfEmpty` from the file merely existing, so a
+ * repaired-but-empty replica looks established and is never seeded. Unreadable is not evidence
+ * of "populated" — per `countUserRows`, -1 means unknown and must never be read as empty, so
+ * the conservative branch is the correct one for it too.
+ *
+ * Counting precedes the delete: rows that live only in `-wal` are real rows, and removing the
+ * sidecar first would undercount a populated file to 0 — producing the marker this avoids.
+ * Both callers close the worker handle before calling, so a -1 here means the file genuinely
+ * cannot be read rather than that the engine is holding it.
  */
 export function repairReplicaSidecarsOnCheckpointError(dbPath: string): boolean {
   if (!fs.existsSync(dbPath)) {
     return false;
   }
-  writeBootstrapPendingMarker(dbPath, "checkpoint_error_repair");
-  removeTursoReplicaSidecarsOnly(dbPath);
+  resetSidecarsPreservingPopulatedReplica(dbPath, "checkpoint_error_repair");
   return true;
 }

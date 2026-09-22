@@ -538,7 +538,14 @@ export class DbRouter {
           );
           return { ...retry, backend: "turso-replica" };
         } catch (retryError) {
-          if (allowPrimary && isTursoReplicaOnline()) {
+          // Deliberately not gated on `allowPrimary`. The load window suppresses the
+          // primary so first paint is not raced by a slower remote and so a read that
+          // follows a local write sees it — but both reasons are spent by the time we
+          // are here. Two timeouts have already elapsed, so there is no paint left to
+          // protect, and the alternative on offer is not a fresher local row, it is a
+          // 503 with no row at all. Every other recovery arm in this method already
+          // falls back unconditionally; this one was the outlier.
+          if (isTursoReplicaOnline()) {
             const remoteAfterRetry = await this.queryViaTursoPrimary(
               appId,
               source,

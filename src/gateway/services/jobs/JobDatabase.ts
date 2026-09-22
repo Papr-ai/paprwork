@@ -10,7 +10,7 @@ import {
   recoverCorruptJobScratchDatabase,
   shouldRecoverJobScratchAfterMigrationError,
 } from "./jobScratchRecovery.js";
-import { assertNotReplicaManagedSqliteAccess } from "../tursoReplica/tursoReplicaFileGuard.js";
+import { shouldSkipLegacyJobScratchWrite } from "./legacyJobScratchWriteGuard.js";
 
 export class JobDatabase {
   private getDbPath(jobDir: string): string {
@@ -22,7 +22,13 @@ export class JobDatabase {
     action: (db: Database.Database) => T,
   ): Promise<T | null> {
     const dbPath = this.getDbPath(jobDir);
-    assertNotReplicaManagedSqliteAccess(dbPath, "JobDatabase.ensureDatabase");
+    // Decline rather than throw: `recordRunStart` is awaited unguarded at launch
+    // (JobsService), so a throw here would abort the run before the executor starts.
+    // Null is this method's existing "could not do it" value and every caller
+    // discards the result, so standing down costs telemetry and nothing else.
+    if (shouldSkipLegacyJobScratchWrite(dbPath, "withDatabase")) {
+      return null;
+    }
     let db: Database.Database | null = null;
     try {
       db = openDiagnosticDatabase(Database, "services/jobs/JobDatabase", dbPath);
@@ -51,6 +57,14 @@ export class JobDatabase {
     await fs.mkdir(dataDir, { recursive: true });
     await fs.mkdir(path.join(jobDir, "migrations"), { recursive: true });
     const dbPath = this.getDbPath(jobDir);
+
+    // Before the try, never inside it: the catch below swallows every error and
+    // then writes the file itself, so a guard placed in the try would be caught
+    // and stepped over. The folder scaffold above is still wanted; the tables are
+    // not — a replica already has them, from the engine.
+    if (shouldSkipLegacyJobScratchWrite(dbPath, "ensureDatabase")) {
+      return dbPath;
+    }
 
     let db: Database.Database | null = null;
     try {

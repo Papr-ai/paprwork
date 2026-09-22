@@ -20,21 +20,42 @@ import {
   chooseReplicaCrashRemedy,
   type ReplicaCrashRemedy,
 } from "../src/gateway/services/tursoReplica/replicaCrashRemedy.js";
-import type { ReplicaEngineTableDefect } from "../src/gateway/services/tursoReplica/replicaEngineTableGuard.js";
-import { classifyReplicaPanicSubsystem } from "../src/gateway/services/tursoReplica/replicaPanicSubsystem.js";
+import type {
+  ReplicaEngineTableDefect,
+  ReplicaEngineTableInspection,
+} from "../src/gateway/services/tursoReplica/replicaEngineTableGuard.js";
+import {
+  classifyReplicaPanicSubsystem,
+  isReplicaPanicInDurableStorage,
+} from "../src/gateway/services/tursoReplica/replicaPanicSubsystem.js";
 
 const MALFORMED: readonly ReplicaEngineTableDefect[] = [
   { table: "turso_cdc_version", reason: "missing_unique_index" },
 ];
 
+const UNREADABLE: ReplicaEngineTableInspection = {
+  status: "unreadable",
+  reason: "open failed: SQLITE_BUSY: database is locked",
+};
+
+function inspected(
+  defects: readonly ReplicaEngineTableDefect[],
+): ReplicaEngineTableInspection {
+  return { status: "inspected", defects };
+}
+
 function choose(
-  defects: readonly ReplicaEngineTableDefect[] | (() => never),
+  defects: readonly ReplicaEngineTableDefect[] | ReplicaEngineTableInspection | (() => never),
   repairAlreadyAttempted = false,
 ): ReplicaCrashRemedy {
+  const inspect =
+    typeof defects === "function"
+      ? defects
+      : () => (Array.isArray(defects) ? inspected(defects) : defects);
   return chooseReplicaCrashRemedy({
     localPath: "/tmp/data.db",
     repairAlreadyAttempted,
-    inspect: typeof defects === "function" ? defects : () => defects,
+    inspect: inspect as () => ReplicaEngineTableInspection,
   });
 }
 
@@ -175,16 +196,26 @@ describe("classifyReplicaPanicSubsystem", () => {
 });
 
 describe("chooseReplicaCrashRemedy with a process-local panic", () => {
+  /**
+   * Both panic fields, because production passes both.
+   *
+   * The omission is what let this diverge: with only `panicSubsystem` set, a btree abort
+   * over a malformed table chose `repair_engine_tables` here and `park` in the product,
+   * and the assertion below said so for four days without failing. A helper that builds
+   * a narrower input than the caller does is not a test of the caller.
+   */
   function chooseWithPanic(
     stderr: string,
-    defects: readonly ReplicaEngineTableDefect[] = [],
+    inspection: readonly ReplicaEngineTableDefect[] | ReplicaEngineTableInspection = [],
     repairAlreadyAttempted = false,
   ): ReplicaCrashRemedy {
     return chooseReplicaCrashRemedy({
       localPath: "/tmp/data.db",
       repairAlreadyAttempted,
       panicSubsystem: classifyReplicaPanicSubsystem(stderr),
-      inspect: () => defects,
+      panicInDurableStorage: isReplicaPanicInDurableStorage(stderr),
+      inspect: () =>
+        Array.isArray(inspection) ? inspected(inspection) : (inspection as ReplicaEngineTableInspection),
     });
   }
 
@@ -201,17 +232,17 @@ describe("chooseReplicaCrashRemedy with a process-local panic", () => {
   it("does not open the file at all", () => {
     // The panic is not evidence about the file, so reading it is a contended open for
     // an answer that cannot change the remedy.
-    let inspected = false;
+    let opened = false;
     chooseReplicaCrashRemedy({
       localPath: "/tmp/data.db",
       repairAlreadyAttempted: false,
       panicSubsystem: "page_cache",
       inspect: () => {
-        inspected = true;
-        return [];
+        opened = true;
+        return inspected([]);
       },
     });
-    expect(inspected).toBe(false);
+    expect(opened).toBe(false);
   });
 
   it("leaves an on-disk defect to be repaired on the abort that names it", () => {
@@ -232,10 +263,64 @@ describe("chooseReplicaCrashRemedy with a process-local panic", () => {
     expect(chooseWithPanic(BTREE_PANIC, MALFORMED, true).kind).toBe("park");
   });
 
-  it("keeps the old behaviour for every other panic", () => {
-    // The blast radius is one named module. Anything else takes the path it took before.
-    expect(chooseWithPanic(BTREE_PANIC)).toEqual({ kind: "reset_sidecars" });
+  it("keeps the old behaviour for a panic with no location and no defect", () => {
+    // The blast radius of the subsystem check is one named module. A panic that names
+    // nothing takes the path it always took.
     expect(chooseWithPanic("")).toEqual({ kind: "reset_sidecars" });
+  });
+});
+
+describe("chooseReplicaCrashRemedy with a durable-storage panic", () => {
+  function chooseDurable(
+    inspection: readonly ReplicaEngineTableDefect[] | ReplicaEngineTableInspection = [],
+    repairAlreadyAttempted = false,
+  ): ReplicaCrashRemedy {
+    return chooseReplicaCrashRemedy({
+      localPath: "/tmp/data.db",
+      repairAlreadyAttempted,
+      panicSubsystem: classifyReplicaPanicSubsystem(BTREE_PANIC),
+      panicInDurableStorage: isReplicaPanicInDurableStorage(BTREE_PANIC),
+      inspect: () =>
+        Array.isArray(inspection) ? inspected(inspection) : (inspection as ReplicaEngineTableInspection),
+    });
+  }
+
+  it("repairs a malformed engine table rather than parking on the panic site", () => {
+    // The regression this file exists to stop from recurring. A missing unique index
+    // *is* a btree abort — the engine seeks the index the table does not have — so the
+    // location line cannot separate the curable case from the incurable one, and
+    // parking on it alone strands a database a single DROP would have fixed.
+    expect(chooseDurable(MALFORMED).kind).toBe("repair_engine_tables");
+  });
+
+  it("parks when the inspection ran and found nothing", () => {
+    // Absence is not evidence of health here, only of nothing this check can see: it
+    // does not read user-table pages, which is where the remaining causes live.
+    expect(chooseDurable([]).kind).toBe("park");
+  });
+
+  it("parks when the file could not be read, and says so", () => {
+    // Distinct from the clean park on purpose. An operator reading "page structure" for
+    // a file nobody managed to open is being told a conclusion we did not reach.
+    const parked = chooseDurable(UNREADABLE);
+    expect(parked.kind).toBe("park");
+    if (parked.kind !== "park") return;
+    expect(parked.defects).toContain("could not be inspected");
+    expect(parked.reason).toMatch(/could not be read/i);
+  });
+
+  it("does not let an unreadable file read as a clean inspection", () => {
+    // The two park reasons must differ, or the distinction the inspection now returns is
+    // computed and discarded — which is the shape of every defect in this family.
+    const clean = chooseDurable([]);
+    const unreadable = chooseDurable(UNREADABLE);
+    expect(clean.kind === "park" && clean.reason).not.toBe(
+      unreadable.kind === "park" && unreadable.reason,
+    );
+  });
+
+  it("still escalates a defect that came back after a repair", () => {
+    expect(chooseDurable(MALFORMED, true).kind).toBe("park");
   });
 });
 
