@@ -803,9 +803,11 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
           has("query_cloud_turso") ||
           has("inspect_cloud_repo") ||
           has("push_cloud_sync") ||
-          has("reset_writer_baseline_and_publish"),
+          has("reset_writer_baseline_and_publish") ||
+          has("pull_cloud_app_updates") ||
+          has("pull_publisher_updates"),
         details:
-          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Publish / Publish changes in the app tab) — reset_writer_baseline_and_publish (writer 409 baseline repair); NOT Memory API",
+          "get_cloud_sync_status (GitHub + Turso + jobs + heartbeat) — query_cloud_turso — papr_db_push/pull/sync_status/apply_migration — inspect_cloud_repo — push_cloud_sync (git + Turso ordered flush, like Publish / Publish changes in the app tab) — reset_writer_baseline_and_publish (writer 409 baseline repair) — pull_cloud_app_updates (web copy → local code, chip Get updates) — pull_publisher_updates (publisher → installed copy; check before submit_cloud_app_pr); NOT Memory API",
       },
       {
         area: "Platform feedback",
@@ -3032,14 +3034,17 @@ con.execute("UPDATE meetings SET audio_ref=? WHERE id=?", (file_id, mid))
 - \`get_cloud_app_publish({ appId })\` — read live status, loginAccess, externalLink, **codeAccess**, Community listing, URLs
 - \`publish_cloud_app({ appId, loginAccess?, externalLink?, codeAccess?, requireSignIn?, perUserIsolation?, unpublish? })\` — publish or update sharing
 - \`install_cloud_app({ namespaceId, slug, mode? })\` — fork/track a cloud app into Paprwork (publisher must set codeAccess=install)
-- \`submit_cloud_app_change\` / \`list_cloud_app_changes\` / \`resolve_cloud_app_change\` — contribute-back PR workflow (see below)
+- \`submit_cloud_app_pr\` / \`check_cloud_app_contributions\` / \`list_cloud_app_prs\` / \`resolve_cloud_app_pr\` — contribute-back GitHub PR workflow (see below; not local app editing)
+- \`pull_cloud_app_updates\` / \`pull_publisher_updates\` — pull app code down (web copy → local, publisher → installed copy)
 
 **Contribute-back (fork → owner pull request):**
-- **Contributor** (installed a fork with \`install_cloud_app\`): \`submit_cloud_app_change\` — pushes app source + linked Jobs/migrations to the owner's papr-work repo and opens a GitHub PR. Returns \`prUrl\` when successful.
-- **Owner** (published the upstream app): \`list_cloud_app_changes\` — incoming PRs; \`resolve_cloud_app_change({ requestId, action: "approve"|"reject" })\` — approve merges the PR on GitHub, then sync pulls changes locally. Reject closes the PR.
-- Owner reviewing conflicts: use \`inspect_cloud_repo\` + \`get_cloud_sync_status\` — same as normal git sync review; there is no local folder merge on the owner's machine.
+- **Contributor** (installed a fork with \`install_cloud_app\`): \`submit_cloud_app_pr\` — opens a GitHub PR on the owner's papr-work repo (not direct edits to the upstream app).
+- **Owner** (published the upstream app): start with \`check_cloud_app_contributions({ appId })\` or \`list_cloud_app_prs\`; \`get_cloud_app_pr_review({ requestId })\` for the PR diff (Papr per-app GitHub read token — **not** \`inspect_cloud_repo\` and **not** local \`edit_file\`); \`read_cloud_app_pr_file\` for full files at proposal HEAD; \`resolve_cloud_app_pr({ requestId, action: "approve"|"reject" })\`. If PR tools are deferred, \`find_tools({ query: "cloud app contribution PR review owner" })\` then \`run_deferred_tool\`.
+- Owner post-merge / live upstream: \`inspect_cloud_repo\` + \`get_cloud_sync_status\` — per-app writer repo at default branch; no local contributor folder on the owner's machine.
 - **Writer 409 / app-repo conflict:** When \`get_cloud_sync_status\` shows \`writerConflict\` or push fails with "Writer conflict", and Get updates has nothing to pull, use \`reset_writer_baseline_and_publish({ appId })\` — re-seeds local publish baseline from cloud HEAD then publishes (does not delete local source files). If another device may have edited cloud, run \`inspect_cloud_repo\` first and explain before resetting. Otherwise retry \`push_cloud_sync({ appId })\` once; do not loop blindly.
 - Contributors keep syncing their fork normally while a PR is open.
+- **Before \`submit_cloud_app_pr\`:** call \`pull_publisher_updates({ appId, checkOnly: true })\`. If \`publisherUpdatesAvailable\`, pull first (\`pull_publisher_updates({ appId })\`) so the PR is based on the publisher's current code. If \`conflictFiles\` is non-empty or \`supported: false\`, stop and tell the user — do not submit.
+- **Inbound code:** \`pull_cloud_app_updates({ appId })\` brings the app's own web copy down (chip "Get updates"); \`pull_publisher_updates\` brings the publisher's version into an installed copy (chip "Update from publisher"). Either returning \`conflictFiles\` means stop and report.
 
 **Cloud observability (debug sync, Turso, GitHub, stuck jobs — NOT Memory API):**
 - \`get_cloud_sync_status({ appId?, jobId?, includeJobLogs? })\` — **start here**. \`workspaceApps\` lists apps from local \`apps.json\`. When \`appId\` is set, read \`appWriterRepo\` for per-app GitHub repo + upload status. The \`github\` section omits \`apps/\` rows (misleading) — workspace/Jobs pull signals only.
@@ -3135,7 +3140,9 @@ if (!userId) throw new Error("Sign in required");
 - **Never** list \`PAPR_CALLER_USER_ID\` / \`PAPR_CALLER_EMAIL\` in \`"keys"\` — they are session-injected automatically, not vault keys.
 - **Cloud (two layers — both required):**
   1. \`backend/manifest.json\` \`"keys"\` — per-action allowlist (what this handler may receive)
-  2. \`requirements.json\` — app catalog (what cloud vault knows about). **Synced from backend manifest keys automatically before git push**, then auto-republished when drift is detected after **Sync now**.
+  2. \`apps/{appId}/requirements.json\` — publish **vault catalog** (what cloud vault knows about). Auto-sync merges **backend manifest keys**, linked job **\${KEY_NAME}** in commands, and linked job **job.json requiredKeys** before git push / **Sync now** (then republish when drift is detected).
+- **Not the same file:** \`papr-cloud-dependencies.json\` = cross-app/database install deps for community publish — **never** put API keys there.
+- **Job runtime vs catalog:** \`job.json requiredKeys\` injects secrets when the job runs; **requirements.json** is still required for vault resolve on **apps.papr.ai** unless you add keys manually in the publish credentials panel.
 - Python: \`api_key = os.environ["RR_ATTENTION_API_KEY"]\` · Node/TS: \`process.env.RR_ATTENTION_API_KEY\`
 - **Never** grep keychain, read \`custom-keys.json\`, call \`get_key\`, or invent \`/api/keys/*\` — those are agent-only paths, not backend runtime.
 - If cloud injection fails ("No matching catalog requirements"): ensure key is in Settings + manifest \`keys\`, then run **Sync now** on the app (do not tell users to republish manually unless sync fails).

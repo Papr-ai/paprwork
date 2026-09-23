@@ -50,6 +50,13 @@
     display: none;
   }
 
+  /* Files-mode fallback text ("Live · …"), not lineage — lineage is a glyph
+     now and cheap enough to keep. This line restates what the chip already
+     says whenever the chip is present, so it yields space first. */
+  .mini-app-publish-bar .mini-app-publish-bar__status {
+    display: none;
+  }
+
   /* Double class to match the base rule's specificity — a single-class
      override here loses silently and the pill keeps its text-width padding. */
   .mini-app-publish-bar__web-sync-dot.mini-app-publish-bar__web-sync-dot--chip {
@@ -272,7 +279,7 @@
   gap: 6px;
   padding-right: 4px;
   border-radius: 999px;
-  /* The chip carries variable-length text ("Live, web checked 12m ago"), so the
+  /* The chip carries variable-length text ("Live · checked 12m ago"), so the
      segment must be allowed to size to it rather than overlap its neighbours. */
   flex-shrink: 0;
   min-width: 0;
@@ -320,38 +327,36 @@
   flex-shrink: 0;
 }
 
-/* Two-sided status rows: local vs web, each labelled by location.
-   Matches the popover's 11px body scale — these are supporting rows, not a
-   headline, so they must not outweigh the summary line above them. */
+/* Two-sided status rows: local vs web, each labelled by location. */
 .mini-app-publish-bar__sync-sides {
-  margin: 0 0 8px;
-  padding: 8px 0;
+  margin: 0 0 10px;
+  padding: 10px 0;
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 10px;
   border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.18));
   border-bottom: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.18));
 }
 
 .mini-app-publish-bar__sync-side {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 11px;
-  line-height: 1.35;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .mini-app-publish-bar__sync-side dt {
-  color: var(--text-tertiary, inherit);
-  white-space: nowrap;
+  color: var(--text-secondary, inherit);
+  font-weight: 600;
 }
 
 .mini-app-publish-bar__sync-side dd {
   margin: 0;
-  color: var(--text-secondary, inherit);
+  color: var(--text-primary, inherit);
   font-weight: 500;
-  text-align: right;
+  text-align: left;
 }
 
 /* Labelled pill variant: state + age + refresh as one object. */
@@ -453,24 +458,95 @@
   }
 }
 
-.mini-app-publish-bar__web-sync-chip-refresh {
+/* The chip's trailing control — pull, review, or re-check. A tinted pill with
+   its own edge, not a bare glyph: the point is that this half of the chip is
+   pressable, which a divider alone never said. Colour is inherited from the
+   chip's tone, so the action never disagrees with the state it belongs to, and
+   it stays lighter than the primary button, which still owns publishing. */
+.mini-app-publish-bar__web-sync-chip-act {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 20px;
-  height: 20px;
-  padding: 0;
+  margin: -3px -3px -3px 1px;
+  padding: 4px 6px;
   border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-tertiary, inherit);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(10, 16, 32, 0.07);
+  color: inherit;
+  font-weight: 600;
+  font-size: 11px;
+  line-height: 1;
   cursor: pointer;
   flex-shrink: 0;
+  transition:
+    background 0.13s ease,
+    box-shadow 0.13s ease;
 }
 
-.mini-app-publish-bar__web-sync-chip-refresh:hover {
-  background: var(--surface-hover, rgba(128, 128, 128, 0.16));
-  color: var(--text-primary, inherit);
+.mini-app-publish-bar__web-sync-chip-act:hover {
+  background: var(--surface-raised, #fff);
+  box-shadow:
+    inset 0 0 0 1px rgba(10, 16, 32, 0.14),
+    0 1px 3px rgba(10, 16, 32, 0.1);
+}
+
+/* Present at all times, collapsed to zero width rather than display:none — so
+   it animates open on approach and stays reachable by screen readers. */
+.mini-app-publish-bar__web-sync-chip-act-verb {
+  max-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  opacity: 0;
+  transition:
+    max-width 0.18s ease,
+    opacity 0.13s ease,
+    margin-left 0.18s ease;
+}
+
+.mini-app-publish-bar__web-sync-chip-act:hover
+  .mini-app-publish-bar__web-sync-chip-act-verb,
+.mini-app-publish-bar__web-sync-chip-act:focus-visible
+  .mini-app-publish-bar__web-sync-chip-act-verb {
+  max-width: 140px;
+  opacity: 1;
+  margin-left: 5px;
+}
+
+/* Dark mode: the pill lifts off the chip with light, not with white — a white
+   fill here would outweigh the primary button and read as the loudest thing in
+   a dark bar. */
+@media (prefers-color-scheme: dark) {
+  .mini-app-publish-bar__web-sync-chip-act {
+    background: rgba(255, 255, 255, 0.1);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+  }
+
+  .mini-app-publish-bar__web-sync-chip-act:hover {
+    background: rgba(255, 255, 255, 0.18);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.24);
+  }
+}
+
+/* Honour reduced-motion: the label still appears, it just does not slide. */
+@media (prefers-reduced-motion: reduce) {
+  .mini-app-publish-bar__web-sync-chip-act,
+  .mini-app-publish-bar__web-sync-chip-act-verb {
+    transition: none;
+  }
+}
+
+/* Lineage mark — sits with the title, same muted weight as secondary text so
+   it orients without competing with the app name. */
+.mini-app-publish-bar__lineage-mark {
+  display: inline-flex;
+  align-items: center;
+  color: var(--text-tertiary, var(--text-secondary));
+  flex-shrink: 0;
+  cursor: default;
+}
+
+.mini-app-publish-bar__lineage-mark:hover {
+  color: var(--text-secondary);
 }
 
 .mini-app-publish-bar__web-sync-dot {
@@ -885,27 +961,31 @@
   top: calc(100% + 8px);
   left: 0;
   z-index: 50;
-  width: min(300px, 72vw);
-  padding: 12px 14px;
+  width: min(360px, 92vw);
+  padding: 14px 16px;
   border-radius: 12px;
   border: 1px solid var(--border-color);
   background: var(--popover-bg);
   box-shadow: var(--popover-shadow);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .mini-app-publish-bar__sync-popover--stacked {
   display: flex;
   flex-direction: column;
-  max-height: min(60vh, 360px);
-  padding-bottom: 10px;
+  max-height: min(72vh, 440px);
+  padding-bottom: 12px;
 }
 
 .mini-app-publish-bar__sync-popover-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  margin-bottom: 8px;
-  padding-right: 2px;
+  margin-bottom: 10px;
+  padding-right: 6px;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .mini-app-publish-bar__sync-popover-actions {
@@ -921,16 +1001,16 @@
 }
 
 .mini-app-publish-bar__sync-popover-title {
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 10px;
+  font-size: 15px;
   font-weight: 700;
   color: var(--text-primary);
 }
 
 .mini-app-publish-bar__sync-popover-summary {
-  margin: 0 0 8px;
-  font-size: 11px;
-  line-height: 1.35;
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
   color: var(--text-secondary);
 }
 
@@ -940,10 +1020,10 @@
   list-style: none;
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  font-size: 11px;
+  gap: 8px;
+  font-size: 13px;
   color: var(--text-secondary);
-  line-height: 1.4;
+  line-height: 1.5;
 }
 
 .mini-app-publish-bar__sync-popover-list li {
@@ -959,10 +1039,10 @@
 }
 
 .mini-app-publish-bar__sync-popover-hint {
-  margin: 0 0 8px;
-  font-size: 10px;
-  line-height: 1.35;
-  color: var(--text-tertiary);
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-secondary);
 }
 
 .mini-app-publish-bar__sync-popover-hint--ok {
@@ -970,14 +1050,19 @@
 }
 
 .mini-app-publish-bar__sync-popover-hint--subtle {
-  margin-bottom: 0;
-  font-size: 9px;
-  opacity: 0.85;
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-tertiary);
+}
+
+.mini-app-publish-bar__sync-popover-hint--warn {
+  color: var(--text-secondary);
 }
 
 .mini-app-publish-bar__sync-popover-section-title {
   margin: 0 0 8px;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
   color: var(--text-secondary);
   text-transform: uppercase;
@@ -985,8 +1070,9 @@
 }
 
 .mini-app-publish-bar__sync-popover-error {
-  margin: 0 0 8px;
-  font-size: 10px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.5;
   color: #ff3b30;
 }
 
@@ -1010,16 +1096,16 @@
 
 .mini-app-publish-bar__sync-remote-banner-title {
   margin: 0;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 600;
-  line-height: 1.35;
+  line-height: 1.45;
 }
 
 .mini-app-publish-bar__sync-remote-banner-body {
-  margin: 4px 0 0;
-  font-size: 11px;
-  line-height: 1.35;
-  opacity: 0.9;
+  margin: 6px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  opacity: 0.95;
 }
 
 .mini-app-publish-bar__sync-remote-banner-commits {
@@ -1038,12 +1124,12 @@
 
 .mini-app-publish-bar__sync-popover-btn {
   width: 100%;
-  padding: 8px 10px;
+  padding: 10px 12px;
   border: 0;
   border-radius: 8px;
   background: var(--accent);
   color: #fff;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 600;
   cursor: pointer;
 }
@@ -1136,6 +1222,40 @@
   color: #fff;
   font-weight: 600;
   box-shadow: 0 4px 12px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
+/* Publish split button (shared forks). One child of the right cluster, so the
+   cluster's gap does not open between the halves. */
+.mini-app-publish-bar__split {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.mini-app-publish-bar__split--on .mini-app-publish-bar__split-main {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* A 1px seam, not a gap: the halves read as one control with two targets. */
+.mini-app-publish-bar__split-caret {
+  margin-left: 1px;
+  padding-left: 8px;
+  padding-right: 8px;
+  min-width: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Double class: .pb-overflow__menu positions itself for the ··· trigger and may
+   load later — a single class here would lose the cascade silently. */
+.pb-overflow__menu.mini-app-publish-bar__split-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  left: auto;
+  z-index: 40;
+  min-width: 240px;
 }
 
 /* Prototype primary tones: a failed publish is red, not accent-blue, so the
@@ -1265,189 +1385,12 @@
   color: currentColor;
 }
 
-.mini-app-publish-bar__button--track {
-  background: rgba(37, 99, 235, 0.12);
-  color: #2563eb;
-  border: 1px solid rgba(37, 99, 235, 0.28);
-  white-space: nowrap;
-}
-
-.mini-app-publish-bar__button--track:hover:not(:disabled) {
-  background: rgba(37, 99, 235, 0.18);
-}
-
-.mini-app-publish-bar__track-pull {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 6px 10px;
-  border-radius: 10px;
-  background: rgba(37, 99, 235, 0.08);
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  max-width: 420px;
-}
-
-.mini-app-publish-bar__upstream {
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 6px 3px 8px;
-  border-radius: 8px;
-  background: rgba(37, 99, 235, 0.08);
-  border: 1px solid rgba(37, 99, 235, 0.16);
-  max-width: min(320px, 100%);
-  position: relative;
-  flex-shrink: 1;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.mini-app-publish-bar__upstream-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  margin-left: auto;
-}
-
 .mini-app-publish-bar__send-wrap {
   position: relative;
 }
 
 .mini-app-publish-bar__button--send {
   border-style: dashed;
-}
-
-.mini-app-publish-bar__send-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  z-index: 20;
-  width: min(320px, 80vw);
-  padding: 12px;
-  border-radius: 12px;
-  background: var(--surface-elevated, #fff);
-  border: 1px solid rgba(0, 0, 0, 0.1);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.mini-app-publish-bar__send-popover--portal {
-  z-index: 10000;
-}
-
-.mini-app-publish-bar__send-popover-title {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.mini-app-publish-bar__send-popover-desc {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.4;
-  color: var(--text-secondary, #6b7280);
-}
-
-.mini-app-publish-bar__upstream-feedback {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 60;
-  max-width: min(280px, 70vw);
-  padding: 4px 8px;
-  border-radius: 6px;
-  border: 1px solid var(--border-color);
-  background: var(--popover-bg);
-  box-shadow: var(--popover-shadow);
-}
-
-.mini-app-publish-bar__upstream-toast,
-.mini-app-publish-bar__upstream-error {
-  display: block;
-  font-size: 10px;
-  line-height: 1.35;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.mini-app-publish-bar__upstream-toast {
-  color: var(--success);
-}
-
-.mini-app-publish-bar__upstream-error {
-  color: var(--error);
-}
-
-.mini-app-publish-bar__track-pull-copy {
-  display: contents;
-}
-
-.mini-app-publish-bar__track-pull-label {
-  font-size: 10px;
-  font-weight: 600;
-  color: #2563eb;
-  letter-spacing: 0.01em;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 120px;
-  flex-shrink: 1;
-  min-width: 0;
-}
-
-.mini-app-publish-bar__track-pull-meta {
-  font-size: 10px;
-  color: var(--text-secondary, #6b7280);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  flex-shrink: 1;
-  min-width: 0;
-  max-width: 100px;
-}
-
-.share-sheet__track-pull {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-bottom: 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
-}
-
-.share-sheet__track-pull-desc {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.45;
-  color: var(--text-secondary, #6b7280);
-}
-
-@media (prefers-color-scheme: dark) {
-  .mini-app-publish-bar__track-pull,
-  .mini-app-publish-bar__upstream {
-    background: rgba(96, 165, 250, 0.1);
-    border-color: rgba(96, 165, 250, 0.2);
-  }
-
-  .mini-app-publish-bar__send-popover {
-    background: #1c1c1e;
-    border-color: rgba(255, 255, 255, 0.12);
-  }
-
-  .mini-app-publish-bar__button--track {
-    background: rgba(96, 165, 250, 0.14);
-    color: #93c5fd;
-    border-color: rgba(96, 165, 250, 0.28);
-  }
-
-  .share-sheet__track-pull {
-    border-bottom-color: rgba(255, 255, 255, 0.08);
-  }
 }
 
 .mini-app-publish-bar__toast,
@@ -1500,6 +1443,22 @@
   .share-sheet {
     background: #1c1c1e;
   }
+}
+
+.share-sheet--wide {
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+}
+
+.share-sheet__panel--contributions {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-top: 8px;
+}
+
+.share-sheet__section-desc--lead {
+  margin: 0 0 16px;
 }
 
 .share-sheet__header {
@@ -2192,6 +2151,12 @@
   color: #fff;
 }
 
+.mini-app-publish-bar__contributions-badge--warn {
+  min-width: 18px;
+  padding: 0;
+  background: var(--danger, #ff3b30);
+}
+
 .mini-app-publish-bar__contributions-panel {
   margin: 0 12px 10px;
   padding: 12px 14px;
@@ -2218,6 +2183,95 @@
   font-size: 11px;
   color: var(--text-tertiary);
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+.share-sheet__changes-summary {
+  margin: 8px 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.share-sheet__changes-summary-label {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+
+.share-sheet__changes-paths {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 11px;
+  line-height: 1.5;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-secondary);
+}
+
+.share-sheet__changes-meta--plain {
+  margin-top: 8px;
+}
+
+.share-sheet__footnote--muted {
+  margin-top: 8px;
+  margin-bottom: 0;
+  color: var(--text-tertiary);
+}
+
+.share-sheet__changes-history {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.share-sheet__changes-history-toggle {
+  font-size: 12px;
+}
+
+.share-sheet__changes-history-label {
+  margin-top: 12px;
+  margin-bottom: 8px;
+}
+
+.share-sheet__changes-list--history {
+  gap: 10px;
+}
+
+.share-sheet__changes-item--history {
+  padding: 10px 12px;
+  background: var(--bg-primary);
+}
+
+.share-sheet__changes-status {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  padding: 2px 8px;
+  border-radius: 6px;
+  flex-shrink: 0;
+}
+
+.share-sheet__changes-status--accepted {
+  color: var(--success, #34c759);
+  background: color-mix(in srgb, var(--success, #34c759) 12%, transparent);
+}
+
+.share-sheet__changes-status--declined {
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.share-sheet__changes-desc--history {
+  margin-top: 6px;
+  margin-bottom: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .share-sheet__changes-desc {

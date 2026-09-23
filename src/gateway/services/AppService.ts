@@ -3745,6 +3745,15 @@ export class AppService {
     }
     issues.push(...(await this.checkLinkedDataSources(appId, fileContents)));
 
+    try {
+      const { checkLinkedJobPublishCatalogGapsForApp } = await import(
+        "../utils/miniAppPublishCatalogLint.js"
+      );
+      issues.push(...checkLinkedJobPublishCatalogGapsForApp(appId));
+    } catch (lintError) {
+      console.warn("[AppService] Publish catalog lint failed:", lintError);
+    }
+
     // Startup health: heavy eager import graphs, render-blocking CSS count,
     // selector drift, and stale dist bundles (all warnings; stale-missing
     // bundle is an error since the app cannot boot at all).

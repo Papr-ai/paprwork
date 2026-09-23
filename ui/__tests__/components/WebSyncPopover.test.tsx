@@ -19,6 +19,11 @@ import type { AppCloudSyncStatus } from "../../utils/appCloudSyncStatus";
 
 const baseProps = {
   appId: "0a1ab32b-7c0c-4364-a98a-da637aa0dc70",
+  error: null as string | null,
+  pushing: false,
+  pulling: false,
+  applyingUpdates: false,
+  syncActionNeeded: false,
   onPushNow: vi.fn(),
   onBumpQueue: vi.fn(),
   onPullUpdates: vi.fn(),
@@ -184,6 +189,43 @@ describe("WebSyncPopover", () => {
     expect(openedMessage).toContain("cutover blocked");
 
     window.removeEventListener("papr-chat-open", listener);
+  });
+
+  it("hides Publish when web is ahead and local edits are pending", () => {
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        appLive
+        syncActionNeeded
+        status={minimalSyncStatus({
+          overall: "needs_sync",
+          gitUpdatesAvailable: true,
+          gitUpdatesSummary: "1 commit on web",
+          summaryLine: "Web has newer app code",
+        })}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: /publish changes/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /get updates/i })).toBeTruthy();
+    expect(screen.getByText(/get updates before publishing/i)).toBeTruthy();
+  });
+
+  it("still offers Publish alongside Get updates on writer conflict recovery", () => {
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        appLive
+        syncActionNeeded
+        status={minimalSyncStatus({
+          gitUpdatesAvailable: true,
+          writerConflict: true,
+        })}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /publish changes/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /get updates/i })).toBeTruthy();
   });
 
   it("shows Ask agent when large files are skipped from web sync", () => {

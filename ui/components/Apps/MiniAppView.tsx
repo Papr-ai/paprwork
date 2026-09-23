@@ -22,6 +22,7 @@ import {
 } from "../../utils/cloudDesktopPreview";
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { usePreviewTabLifecycle } from "../../utils/previewIframeLifecycle";
+import { resyncAllPreviewFramePhases } from "../../utils/rendererPerformance";
 import { isBenignPreviewFetchAbortMessage } from "../../utils/previewFetchAbort";
 import { shouldSuppressMiniAppRuntimeBanner } from "../../utils/previewNetworkErrors";
 import {
@@ -52,8 +53,13 @@ import "./MiniAppPublishBar.css";
 
 interface MiniAppViewProps {
   appId: string;
-  /** False when preview tab is backgrounded but still LRU-mounted. */
+  /**
+   * Preview fetch-gate phase: false when the window is backgrounded (sleep) or the
+   * tab is off-screen in LRU — fetches pause, iframe may stay mounted.
+   */
   previewTabVisible?: boolean;
+  /** False when the tab is off-screen in LRU; true when this pane is shown (even if the window is backgrounded). */
+  previewPaneActive?: boolean;
   /** True when this preview is in the LRU warm set — load iframe even while hidden. */
   previewKeepAliveWarm?: boolean;
   /** Hide publish bar — used when embedding the home dashboard in Home → Today. */
@@ -63,10 +69,12 @@ interface MiniAppViewProps {
 export function MiniAppView({
   appId,
   previewTabVisible = true,
+  previewPaneActive,
   previewKeepAliveWarm: _previewKeepAliveWarm = false,
   embedded = false,
 }: MiniAppViewProps) {
   void _previewKeepAliveWarm;
+  const paneActive = previewPaneActive ?? previewTabVisible;
   const { reloadKey, triggerReload } = useApp(appId);
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const [appTitle, setAppTitle] = useState("Mini-app");
@@ -75,8 +83,6 @@ export function MiniAppView({
   const [workspaceMode, setWorkspaceMode] = useState<AppWorkspaceMode>("preview");
   const [workspacePanel, setWorkspacePanel] = useState<AppWorkspacePanel>("code");
   const linkedJobCount = useAppLinkedJobCount(appId);
-  /** Visible tab loads iframe; hidden LRU tabs stay inert until selected again. */
-  const [iframeActivated, setIframeActivated] = useState(() => previewTabVisible);
   const [previewShellLoaded, setPreviewShellLoaded] = useState(false);
   const [iframeLoadKey, setIframeLoadKey] = useState(0);
   const [publishedIframeBaseUrl, setPublishedIframeBaseUrl] = useState<string | null>(
@@ -227,13 +233,18 @@ export function MiniAppView({
   }, [runtimeError]);
 
   useEffect(() => {
-    if (previewTabVisible) {
-      setIframeActivated(true);
+    if (!paneActive) {
+      setPreviewShellLoaded(false);
+    }
+  }, [paneActive]);
+
+  /** Re-open the fetch gate when this pane becomes visible (tab switch / wake). */
+  useEffect(() => {
+    if (!paneActive || !previewTabVisible) {
       return;
     }
-    setIframeActivated(false);
-    setPreviewShellLoaded(false);
-  }, [previewTabVisible]);
+    resyncAllPreviewFramePhases();
+  }, [paneActive, previewTabVisible, appId]);
 
   const scheduleIframeRetry = useCallback((reason: string) => {
     setIframeLoadError(reason);
@@ -320,14 +331,14 @@ export function MiniAppView({
   const localPreviewGatewayGate = useMemo(
     () => ({
       isPublishedPreview,
-      iframeActivated,
+      iframeActivated: paneActive,
       gatewaySupervisorReady,
       gatewaySupervisorStarting,
       gatewayConnected,
     }),
     [
       isPublishedPreview,
-      iframeActivated,
+      paneActive,
       gatewaySupervisorReady,
       gatewaySupervisorStarting,
       gatewayConnected,
@@ -340,7 +351,7 @@ export function MiniAppView({
   );
 
   const runAppGetProbe = useCallback(() => {
-    if (!iframeActivated || !gatewayConnected || isCatalogPreviewEntityId(appId)) {
+    if (!paneActive || !gatewayConnected || isCatalogPreviewEntityId(appId)) {
       return () => {};
     }
 
@@ -401,7 +412,7 @@ export function MiniAppView({
       cancelled = true;
       if (retryTimer) clearTimeout(retryTimer);
     };
-  }, [appId, iframeActivated, gatewayConnected]);
+  }, [appId, paneActive, gatewayConnected]);
 
   useEffect(() => {
     return runAppGetProbe();
@@ -417,7 +428,7 @@ export function MiniAppView({
   };
 
   useEffect(() => {
-    if (!iframeActivated || !gatewayConnected || isCatalogPreviewEntityId(appId)) {
+    if (!paneActive || !gatewayConnected || isCatalogPreviewEntityId(appId)) {
       return;
     }
 
@@ -443,7 +454,7 @@ export function MiniAppView({
       window.removeEventListener("gateway-broadcast", handler);
       if (debounceTimer) clearTimeout(debounceTimer);
     };
-  }, [appId, iframeActivated, gatewayConnected, runAppGetProbe]);
+  }, [appId, paneActive, gatewayConnected, runAppGetProbe]);
 
   const refreshAppMetadata = async () => {
     try {
@@ -464,7 +475,7 @@ export function MiniAppView({
   };
 
   useEffect(() => {
-    if (!iframeActivated || isCatalogPreviewEntityId(appId)) {
+    if (!paneActive || isCatalogPreviewEntityId(appId)) {
       return;
     }
 
@@ -507,7 +518,7 @@ export function MiniAppView({
 
     window.addEventListener("gateway-broadcast", handler);
     return () => window.removeEventListener("gateway-broadcast", handler);
-  }, [appId, iframeActivated]);
+  }, [appId, paneActive]);
 
   useEffect(() => {
     if (
@@ -936,6 +947,35 @@ export function MiniAppView({
               }}
             />
             ) : null
+          ) : null}
+          {!waitingForGateway &&
+          paneActive &&
+          !isPublishedPreview &&
+          !shouldLoadLocalIframe ? (
+            <div className="mini-app-view__overlay mini-app-view__overlay--hint">
+              <p>
+                Local preview is paused while this tab is in the background. Select
+                this app again to reload.
+              </p>
+              <button
+                type="button"
+                className="mini-app-view__runtime-banner-btn"
+                onClick={() => {
+                  setIframeLoadKey((key) => key + 1);
+                  resyncAllPreviewFramePhases();
+                }}
+              >
+                Reload preview
+              </button>
+            </div>
+          ) : null}
+          {appMissingInWorkspace && !waitingForGateway ? (
+            <div className="mini-app-view__overlay mini-app-view__overlay--hint">
+              <p>
+                This app is not available in the current workspace. Close this tab
+                or switch to the workspace where it lives.
+              </p>
+            </div>
           ) : null}
           {publishedPreviewBootstrapping ? (
             <div className="mini-app-view__overlay">

@@ -372,15 +372,35 @@ describe("a refusal is recorded somewhere a per-chat write cannot drop it", () =
     expect(clearError).toBeLessThan(retry.indexOf("if (requestId)"));
   });
 
+  it("Resume after rate limit stops the server stream before starting a new one", () => {
+    const retry = sliceFunction(
+      stripComments(read("ui/hooks/useAgent.ts")),
+      "const retryStreamRecovery",
+    );
+    const freshBranch = retry.indexOf("if (resumeWithFreshStream && config)");
+    const resubscribe = retry.indexOf("if (requestId)");
+    expect(freshBranch).toBeGreaterThan(-1);
+    expect(resubscribe).toBeGreaterThan(freshBranch);
+    const freshPath = retry.slice(freshBranch, resubscribe);
+    expect(freshPath).toContain("releaseServerStream");
+    expect(freshPath).toContain("continueInterruptedTurn");
+    const continuePath = retry.slice(resubscribe);
+    expect(continuePath).toContain("await releaseServerStream()");
+  });
+
   it("a real user message retires the banner but a hidden continue does not", () => {
     // A refusal banner now outlives its stream, so a new message has to retire
     // it or Resume offers to retry a turn the user already replaced. Gated on
     // the hidden-continue check so auto-continue cannot clear the very banner
     // that is meant to be blocking it (Issue 109).
     const source = stripComments(read("ui/hooks/useAgent.ts"));
-    const gate = source.indexOf("if (!isHiddenContinueUserMessage(message)) {");
+    const sendMessage = sliceFunction(
+      stripComments(read("ui/hooks/useAgent.ts")),
+      "const sendMessage = useCallback(",
+    );
+    const gate = sendMessage.indexOf("setNeedsStreamRecovery(chatId, false)");
     expect(gate).toBeGreaterThan(-1);
-    const block = source.slice(gate, source.indexOf("}", gate));
+    const block = sendMessage.slice(gate - 200, gate + 80);
     expect(block).toContain("setLastTurnOutcome(chatId, undefined)");
     expect(block).toContain("setNeedsStreamRecovery(chatId, false)");
   });

@@ -6,7 +6,10 @@ import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetai
 import {
   invalidateCachedSyncItemsForApp,
   readCachedAppCloudSyncStatus,
+  readCachedSyncItemsFetchedAt,
   readCachedSyncItemsForApp,
+  resetCloudSyncTabCacheForWorkspaceSwitch,
+  touchCachedSyncItemsFetchedAt,
   writeCachedSyncItemsForApp,
   writeCloudSyncTabSnapshot,
 } from "../ui/utils/cloudSyncTabCache";
@@ -49,7 +52,7 @@ function sampleItems(appId: string): SyncItemsResponse {
 
 describe("cloudSyncTabCache", () => {
   beforeEach(() => {
-    localStorage.removeItem(STORAGE_KEY);
+    resetCloudSyncTabCacheForWorkspaceSwitch();
   });
 
   it("derives per-app status from persisted snapshot", () => {
@@ -66,6 +69,12 @@ describe("cloudSyncTabCache", () => {
 
   it("returns null when no snapshot exists", () => {
     expect(readCachedAppCloudSyncStatus("missing")).toBeNull();
+  });
+
+  it("touchCachedSyncItemsFetchedAt persists last check without a payload", () => {
+    touchCachedSyncItemsFetchedAt("app-abc", 1_700_000_000_000);
+    expect(readCachedSyncItemsFetchedAt("app-abc")).toBe(1_700_000_000_000);
+    expect(readCachedSyncItemsForApp("app-abc")).toBeNull();
   });
 
   it("invalidateCachedSyncItemsForApp drops per-app cache entry", () => {

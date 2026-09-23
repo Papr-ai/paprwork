@@ -328,29 +328,31 @@ export class CloudAppInstallService {
       const {
         bootstrapInstalledAppDatabases,
         buildCloudInstallAgentSetupMessage,
+        shouldOfferInstallAgentSetup,
       } = await import("./cloudAppInstallBootstrap.js");
       const bootstrap = await bootstrapInstalledAppDatabases(app.id, {
         installDbPolicy,
       });
 
       if (bootstrap.errors.length > 0) {
-        throw new Error(
-          `Database bootstrap failed: ${bootstrap.errors.slice(0, 3).join("; ")}`,
+        console.warn(
+          `[CloudAppInstall] Bootstrap errors for ${app.id} — returning agent follow-up instead of failing install:`,
+          bootstrap.errors.slice(0, 3).join(" | "),
         );
       }
 
-      const agentSetupMessage =
-        installDbPolicy === "fork_empty"
-          ? undefined
-          : !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
-            ? buildCloudInstallAgentSetupMessage({
-                appTitle: app.title,
-                appId: app.id,
-                sourceSlug: prepare.source.slug,
-                bootstrap,
-                linkedJobIds: linked.copiedJobIds,
-              })
-            : undefined;
+      const agentSetupMessage = shouldOfferInstallAgentSetup(
+        bootstrap,
+        installDbPolicy,
+      )
+        ? buildCloudInstallAgentSetupMessage({
+            appTitle: app.title,
+            appId: app.id,
+            sourceSlug: prepare.source.slug,
+            bootstrap,
+            linkedJobIds: linked.copiedJobIds,
+          })
+        : undefined;
 
       if (bootstrap.warnings.length > 0) {
         console.warn(

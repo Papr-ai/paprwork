@@ -205,18 +205,35 @@ export function buildPrReviewAgentPrompt(input: {
   sourceAppId: string;
   title: string;
   description: string;
-  prUrl?: string | null;
+  requestId?: string;
+  branch?: string | null;
+  headSha?: string | null;
+  stagedPaths?: string[];
 }): string {
   const parts = [
     `Help me review an incoming contribute-back proposal for my app (${input.sourceAppId}).`,
     `Title: ${input.title}.`,
-    `Description: ${input.description}.`,
+    `Summary from contributor: ${input.description}.`,
   ];
-  if (input.prUrl) {
-    parts.push(`GitHub PR: ${input.prUrl}.`);
+  if (input.requestId) {
+    parts.push(`Change request id: ${input.requestId}.`);
+  }
+  if (input.branch) {
+    parts.push(`Branch: ${input.branch}.`);
+  }
+  if (input.headSha) {
+    parts.push(`Commit: ${input.headSha.slice(0, 12)}.`);
+  }
+  if (input.stagedPaths && input.stagedPaths.length > 0) {
+    const preview = input.stagedPaths.slice(0, 20).join(", ");
+    const extra =
+      input.stagedPaths.length > 20
+        ? ` (+${input.stagedPaths.length - 20} more paths)`
+        : "";
+    parts.push(`Files in proposal: ${preview}${extra}.`);
   }
   parts.push(
-    "Use list_cloud_app_changes and inspect_cloud_repo. Explain the code diff, risks, and whether I should Accept or Decline. If I accept, guide me through merge + local sync.",
+    "Use check_cloud_app_contributions or list_cloud_app_prs, then get_cloud_app_pr_review({ requestId }) for the PR diff (Papr per-app GitHub token — not my personal GitHub login). Do not use inspect_cloud_repo or local edit_file to review this proposal. Optionally read_cloud_app_pr_file for full files. Summarize risks and recommend Accept or Decline; use resolve_cloud_app_pr to approve/reject.",
   );
   return parts.join(" ");
 }

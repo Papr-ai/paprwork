@@ -28,6 +28,7 @@ import {
   getApiKeysForSanitization,
   legacyToolAliases,
 } from "../../core/tools/index.js";
+import { resolveCloudAppPrToolAlias } from "../../core/tools/cloudAppPrToolIds.js";
 import {
   ACTIVE_PLANS_MESSAGE_PREFIX,
   buildSystemPrompt,
@@ -1587,8 +1588,14 @@ export class AgentService {
       if (deferral.enabled) {
         const access = {
           listDeferredToolIds: () => deferral.deferredToolIds,
-          getTool: (id: string) =>
-            registryTools[id] ?? this.toolRegistry.getTool(id),
+          getTool: (id: string) => {
+            const resolved = resolveCloudAppPrToolAlias(id);
+            return (
+              registryTools[resolved] ??
+              registryTools[id] ??
+              this.toolRegistry.getTool(id)
+            );
+          },
         };
         for (const tool of [
           createFindToolsTool(access),
@@ -2120,15 +2127,22 @@ export class AgentService {
                   outputCost: 50.0,
                   contextWindow: 1000000,
                 }
-              : piModelId.includes("opus-5") || piModelId.includes("opus-4-8")
+              : piModelId.includes("opus-5-5")
                 ? {
-                    name: piModelId.includes("opus-5")
-                      ? "Claude Opus 5"
-                      : "Claude Opus 4.8",
-                    inputCost: 5.0,
-                    outputCost: 25.0,
+                    name: "Claude Opus 5.5",
+                    inputCost: 4.0,
+                    outputCost: 20.0,
                     contextWindow: 1000000,
                   }
+                : piModelId.includes("opus-5") || piModelId.includes("opus-4-8")
+                  ? {
+                      name: piModelId.includes("opus-5")
+                        ? "Claude Opus 5"
+                        : "Claude Opus 4.8",
+                      inputCost: 5.0,
+                      outputCost: 25.0,
+                      contextWindow: 1000000,
+                    }
                 : piModelId.includes("opus-4-7")
                   ? {
                       name: "Claude Opus 4.7",
@@ -2164,6 +2178,10 @@ export class AgentService {
                             contextWindow: 200000,
                           };
 
+            const cacheReadMultiplier = piModelId.includes("opus-5-5")
+              ? 0.05
+              : 0.1;
+
             finalModel = {
               id: piModelId,
               name: modelInfo.name,
@@ -2178,7 +2196,7 @@ export class AgentService {
               cost: {
                 input: modelInfo.inputCost,
                 output: modelInfo.outputCost,
-                cacheRead: modelInfo.inputCost * 0.1, // 10% of input cost
+                cacheRead: modelInfo.inputCost * cacheReadMultiplier,
                 cacheWrite: modelInfo.inputCost * 1.25, // 25% markup for write
               },
               contextWindow: modelInfo.contextWindow,

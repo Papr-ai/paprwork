@@ -405,6 +405,9 @@ export class CloudAppContributeService {
   async propose(input: ProposeContributeInput): Promise<ProposeContributeResult> {
     const lineageId = await readLineageId(input.installedAppId);
 
+    const { getPaprCallerIdentity } = await import("../utils/paprUserId.js");
+    const proposer = getPaprCallerIdentity();
+
     const prepareResp = await cloudApiFetch("/v1/cloud/apps/changes/prepare", {
       method: "POST",
       body: {
@@ -414,6 +417,11 @@ export class CloudAppContributeService {
         installedAppId: input.installedAppId,
         title: input.title.trim(),
         description: input.description.trim(),
+        ...(proposer.userId ? { proposerUserId: proposer.userId } : {}),
+        ...(proposer.displayName
+          ? { proposerDisplayName: proposer.displayName }
+          : {}),
+        ...(proposer.email ? { proposerEmail: proposer.email } : {}),
       },
     });
     if (!prepareResp.ok) {
@@ -441,7 +449,7 @@ export class CloudAppContributeService {
       `/v1/cloud/apps/changes/${encodeURIComponent(prepare.id)}/submit`,
       {
         method: "POST",
-        body: { headSha },
+        body: { headSha, stagedPaths },
       },
     );
     if (!submitResp.ok) {

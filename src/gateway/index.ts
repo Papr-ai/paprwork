@@ -899,6 +899,7 @@ async function startGateway(): Promise<void> {
           token,
           waitForTurso: true,
           allowRecentSkip: false,
+          preferCloudOverLocal: true,
         });
         timer.mark("pullAppFromCloud");
         if (result.code.skipped && result.code.reason) {
@@ -1198,20 +1199,10 @@ async function startGateway(): Promise<void> {
           }
         }
         console.error("[Gateway] /api/db/query error:", err);
-        const lowerMessage = message.toLowerCase();
-        const status =
-          message.includes("Turso fallback is unavailable") ||
-          message.includes("Local database not found") ||
-          message.includes("No data sources linked") ||
-          message.includes("Replica read timed out") ||
-          message.includes("Gateway was busy") ||
-          message.includes("Database sync in progress") ||
-          message.includes("Schema update pending") ||
-          lowerMessage.includes("no such table") ||
-          lowerMessage.includes("sync engine operation failed")
-            ? 503
-            : 500;
-        res.status(status).json({ error: message });
+        const { httpStatusForMiniAppDbQueryError } = await import(
+          "./services/tursoReplica/replicaSchemaQueryErrorMessage.js"
+        );
+        res.status(httpStatusForMiniAppDbQueryError(message)).json({ error: message });
       }
     });
     lapRouteRegistrationSection("database-registry");
@@ -2584,12 +2575,24 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        res.status(200);
-        const contentType = upstream.headers.get("content-type");
-        if (contentType) {
-          res.setHeader("Content-Type", contentType);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(bodyText) as unknown;
+        } catch {
+          res.status(200);
+          const contentType = upstream.headers.get("content-type");
+          if (contentType) {
+            res.setHeader("Content-Type", contentType);
+          }
+          res.send(bodyText);
+          return;
         }
-        res.send(bodyText);
+
+        const { enrichIncomingChangeRequestsBody } = await import(
+          "./services/changeRequestContributorEnrich.js"
+        );
+        const enriched = await enrichIncomingChangeRequestsBody(payload);
+        res.status(200).json(enriched);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -2628,43 +2631,10 @@ async function startGateway(): Promise<void> {
         const parsed = bodyText
           ? (JSON.parse(bodyText) as Record<string, unknown>)
           : {};
-        const sourceAppId =
-          typeof parsed.sourceAppId === "string" ? parsed.sourceAppId : undefined;
-
-        let pullResult: { pulled: boolean; error?: string } = { pulled: false };
-        try {
-          const sync = getCloudSyncService();
-          if (sync) {
-            await sync.pullNow();
-            pullResult = { pulled: true };
-            if (sourceAppId) {
-              const { getSyncCoordinator } = await import(
-                "./services/cloudSync/SyncCoordinator.js"
-              );
-              const coordinator = getSyncCoordinator();
-              if (coordinator) {
-                void coordinator
-                  .flushNow(sourceAppId, { trigger: "contribute" })
-                  .catch((flushErr: Error) => {
-                    console.warn(
-                      `[Gateway] Contribute flush failed for ${sourceAppId}:`,
-                      flushErr.message.slice(0, 120),
-                    );
-                  });
-              } else {
-                void sync.pushAppNow(sourceAppId);
-              }
-            } else {
-              void sync.pushNow();
-            }
-          }
-        } catch (pullErr) {
-          pullResult = { pulled: false, error: (pullErr as Error).message };
-          console.warn(
-            "[Gateway] Pull after contribute approve:",
-            pullResult.error,
-          );
-        }
+        const { readSourceAppIdFromApproveBody, followUpContributeApprove } =
+          await import("./services/contributeApproveFollowUp.js");
+        const sourceAppId = readSourceAppIdFromApproveBody(parsed);
+        const pullResult = await followUpContributeApprove(sourceAppId);
 
         res.json({ ...parsed, pull: pullResult, sourceAppId });
       } catch (err) {

@@ -82,7 +82,12 @@ function hashContent(content: string): string {
 /** Merge remote repo tree into local app dir using OID cache for conflict detection. */
 export async function pullAppCodeFromRepo(
   appId: string,
-  options: { token: string | null; allowRecentSkip?: boolean },
+  options: {
+    token: string | null;
+    allowRecentSkip?: boolean;
+    /** Manual Get updates / post-approve: cloud wins over stale local-upload fingerprints. */
+    preferCloudOverLocal?: boolean;
+  },
 ): Promise<PullAppCodeFromRepoResult> {
   const { PhaseTimer } = await import("../../utils/phaseTiming.js");
   const timer = new PhaseTimer();
@@ -101,7 +106,11 @@ export async function pullAppCodeFromRepo(
   }
 
   const sync = getCloudSyncService();
-  if (sync && (await appNeedsOrderedFlushAsync(sync, trimmed))) {
+  const pendingOrderedFlush =
+    sync !== null && (await appNeedsOrderedFlushAsync(sync, trimmed));
+  // Automatic pulls stop when local looks dirty. Manual Get updates may proceed
+  // only after we verify the writer HEAD is ahead of local ack (see fetchHead).
+  if (pendingOrderedFlush && !options.preferCloudOverLocal) {
     timer.mark("pendingUploadCheck");
     timer.logIfSlow(`PullAppCode skip-pending app=${trimmed}`, 50);
     return {
@@ -162,6 +171,12 @@ export async function pullAppCodeFromRepo(
       skipped: true,
       reason: "already at remote head",
     };
+  }
+
+  if (pendingOrderedFlush && options.preferCloudOverLocal) {
+    console.log(
+      `[PullAppCode] ${trimmed}: remote writer HEAD is ahead of local ack — applying cloud (per-file conflicts preserved)`,
+    );
   }
 
   const remoteOidByPath = new Map(head.files.map((file) => [file.path, file.blobOid]));
@@ -279,8 +294,7 @@ export async function pullAppCodeFromRepo(
 
       const localUnchanged =
         localContent === undefined ||
-        localOid === lastSyncedOid ||
-        lastSyncedOid === null;
+        (lastSyncedOid !== null && localOid === lastSyncedOid);
 
       if (!localUnchanged && remoteOid && localOid !== remoteOid) {
         conflictFiles.push(filePath);

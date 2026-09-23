@@ -21,6 +21,10 @@ interface PublishBarOverflowMenuProps {
   isFork: boolean;
   busy?: boolean;
   onUnpublish: () => void;
+  /** Fork only — opens the contribute-back form in the Share sheet. */
+  onPropose?: () => void;
+  /** Upstream slug, so the menu item names who receives the proposal. */
+  upstreamSlug?: string;
 }
 
 /**
@@ -51,6 +55,8 @@ export function PublishBarOverflowMenu({
   isFork,
   busy = false,
   onUnpublish,
+  onPropose,
+  upstreamSlug,
 }: PublishBarOverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -105,6 +111,33 @@ export function PublishBarOverflowMenu({
               {isPreview ? "Code, DB, jobs" : "Run the live app"}
             </span>
           </button>
+
+          {/* Forks had an empty menu — the only item was gated on !isFork.
+              Propose lives here rather than in the bar because Update and
+              Share my copy already compete for the primary slot, and sending
+              changes upstream is the rarest of the three. */}
+          {isFork && onPropose ? (
+            <>
+              <div className="pb-overflow__sep" />
+              <button
+                type="button"
+                role="menuitem"
+                className="pb-overflow__item"
+                disabled={busy}
+                onClick={() => {
+                  onPropose();
+                  setOpen(false);
+                }}
+              >
+                Propose change
+                <span className="pb-overflow__hint">
+                  {upstreamSlug
+                    ? `Send your edits to ${upstreamSlug}`
+                    : "Send your edits to the app owner"}
+                </span>
+              </button>
+            </>
+          ) : null}
 
           {live && !isFork ? (
             <>

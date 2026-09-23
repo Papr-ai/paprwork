@@ -11,7 +11,11 @@ import {
   type CredentialScope,
 } from "../../core/utils/credentialScope.js";
 import {
+  normalizeRequirements,
   RequiredKeySpecSchema,
+  RequirementItemSchema,
+  SERVICE_CATEGORIES,
+  type RequirementItem,
   type RequiredKeySpec,
   type KeyClientAccessSpec,
   type ServiceCategory,
@@ -43,6 +47,73 @@ function requirementsPath(paprDir: string, appId: string): string {
   return path.join(paprDir, "apps", appId, CLOUD_APP_REQUIREMENTS_FILENAME);
 }
 
+function isServiceCategory(value: string): value is ServiceCategory {
+  return (SERVICE_CATEGORIES as readonly string[]).includes(value);
+}
+
+/** Tolerate agent-written requirements.json (name-only objects, bare strings). */
+export function parseRequirementItemsLoose(raw: unknown[]): RequiredKeySpec[] {
+  const items: RequirementItem[] = [];
+  for (const item of raw) {
+    const direct = RequirementItemSchema.safeParse(item);
+    if (direct.success) {
+      items.push(direct.data);
+      continue;
+    }
+    if (!item || typeof item !== "object" || Array.isArray(item)) {
+      continue;
+    }
+    const record = item as Record<string, unknown>;
+    const name = typeof record.name === "string" ? record.name.trim() : "";
+    if (!name) {
+      continue;
+    }
+    const service =
+      typeof record.service === "string" && record.service.trim()
+        ? record.service.trim()
+        : inferServiceLabelFromKeyName(name);
+    const categoryRaw =
+      typeof record.category === "string"
+        ? record.category
+        : inferCategoryFromKeyName(name);
+    const category: ServiceCategory = isServiceCategory(categoryRaw)
+      ? categoryRaw
+      : inferCategoryFromKeyName(name);
+    const coerced = {
+      name,
+      service,
+      category,
+      description: typeof record.description === "string" ? record.description : "",
+      required: record.required !== false,
+      credentialScope: record.credentialScope === "owner" ? ("owner" as const) : ("user" as const),
+      clientAccess: record.clientAccess === "client" ? ("client" as const) : ("server" as const),
+      ...(typeof record.signupUrl === "string" ? { signupUrl: record.signupUrl } : {}),
+      ...(typeof record.docsUrl === "string" ? { docsUrl: record.docsUrl } : {}),
+    };
+    const specTry = RequiredKeySpecSchema.safeParse(coerced);
+    items.push(specTry.success ? specTry.data : name);
+  }
+  return normalizeCredentialRequirements(normalizeRequirements(items));
+}
+
+function requirementsFromFileJson(raw: string, appId: string): RequiredKeySpec[] {
+  try {
+    const parsed = JSON.parse(raw) as CloudAppRequirementsFile;
+    if (!Array.isArray(parsed.requirements)) {
+      return [];
+    }
+    return stripPlatformInjectedRequirements(
+      parseRequirementItemsLoose(parsed.requirements),
+    );
+  } catch (error) {
+    console.warn(
+      `[CloudRequirements] Failed to read ${CLOUD_APP_REQUIREMENTS_FILENAME} for ${appId}:`,
+      (error as Error).message,
+    );
+    return [];
+  }
+}
+
 export function readAppRequirements(
   paprDir: string,
   appId: string,
@@ -50,15 +121,7 @@ export function readAppRequirements(
   const filePath = requirementsPath(paprDir, appId);
   try {
     const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as CloudAppRequirementsFile;
-    if (!Array.isArray(parsed.requirements)) {
-      return [];
-    }
-    return stripPlatformInjectedRequirements(
-      normalizeCredentialRequirements(
-        parsed.requirements.map((item) => RequiredKeySpecSchema.parse(item)),
-      ),
-    );
+    return requirementsFromFileJson(raw, appId);
   } catch {
     return [];
   }
@@ -94,19 +157,7 @@ export function writeAppRequirements(
 export function parseRequirementsFileContent(
   content: string,
 ): RequiredKeySpec[] {
-  try {
-    const parsed = JSON.parse(content) as CloudAppRequirementsFile;
-    if (!Array.isArray(parsed.requirements)) {
-      return [];
-    }
-    return stripPlatformInjectedRequirements(
-      normalizeCredentialRequirements(
-        parsed.requirements.map((item) => RequiredKeySpecSchema.parse(item)),
-      ),
-    );
-  } catch {
-    return [];
-  }
+  return requirementsFromFileJson(content, "(inline)");
 }
 
 export function catalogRequirementsForPublish(
@@ -178,7 +229,7 @@ export function mergeBackendKeysIntoRequirements(
       service: inferServiceLabelFromKeyName(trimmed),
       category: inferCategoryFromKeyName(trimmed),
       description:
-        "Server-side key for app backend handlers (synced from backend/manifest.json)",
+        "Server-side key for published app (synced from backend manifest, linked jobs, or app chat)",
       required: true,
       credentialScope: "owner",
       clientAccess: "server",
@@ -209,15 +260,27 @@ export async function readBackendManifestKeyNames(
   }
 }
 
-function readJobCommand(paprDir: string, jobId: string): string | null {
+function readJobJsonFields(
+  paprDir: string,
+  jobId: string,
+): { command: string | null; requiredKeys: string[] } {
   const jobJsonPath = path.join(paprDir, "Jobs", jobId, "job.json");
   try {
     const parsed = JSON.parse(fs.readFileSync(jobJsonPath, "utf8")) as {
       command?: string;
+      requiredKeys?: unknown;
     };
-    return typeof parsed.command === "string" ? parsed.command : null;
+    const command =
+      typeof parsed.command === "string" ? parsed.command : null;
+    const requiredKeys = Array.isArray(parsed.requiredKeys)
+      ? parsed.requiredKeys
+          .filter((key): key is string => typeof key === "string")
+          .map((key) => key.trim())
+          .filter((key) => key.length > 0)
+      : [];
+    return { command, requiredKeys };
   } catch {
-    return null;
+    return { command: null, requiredKeys: [] };
   }
 }
 
@@ -293,24 +356,81 @@ export function readAgentChatLlmKeyNames(paprDir: string, appId: string): string
   return collectLlmEnvKeysForProviders(providers);
 }
 
-/** ${KEY_NAME} placeholders from jobs linked to this app (data-sources, appIds, deps). */
+export type LinkedJobKeySource = "requiredKeys" | "command";
+
+export interface LinkedJobCatalogKeyRef {
+  jobId: string;
+  keyName: string;
+  source: LinkedJobKeySource;
+}
+
+/** Keys linked jobs need for cloud publish catalog (command ${KEY} + job.json requiredKeys). */
+export function readLinkedJobCatalogKeyRefs(
+  paprDir: string,
+  appId: string,
+): LinkedJobCatalogKeyRef[] {
+  const refs: LinkedJobCatalogKeyRef[] = [];
+  const seen = new Set<string>();
+
+  for (const jobId of resolveAppDependentJobIds(paprDir, appId)) {
+    const { command, requiredKeys } = readJobJsonFields(paprDir, jobId);
+    for (const keyName of requiredKeys) {
+      if (isPlatformInjectedEnvKey(keyName)) {
+        continue;
+      }
+      const dedupe = `${jobId}\0${keyName}\0requiredKeys`;
+      if (seen.has(dedupe)) {
+        continue;
+      }
+      seen.add(dedupe);
+      refs.push({ jobId, keyName, source: "requiredKeys" });
+    }
+    if (command) {
+      for (const keyName of extractCustomKeyNames(command)) {
+        if (isPlatformInjectedEnvKey(keyName)) {
+          continue;
+        }
+        const dedupe = `${jobId}\0${keyName}\0command`;
+        if (seen.has(dedupe)) {
+          continue;
+        }
+        seen.add(dedupe);
+        refs.push({ jobId, keyName, source: "command" });
+      }
+    }
+  }
+
+  refs.sort((a, b) =>
+    a.keyName === b.keyName
+      ? a.jobId.localeCompare(b.jobId)
+      : a.keyName.localeCompare(b.keyName),
+  );
+  return refs;
+}
+
+/** Distinct key names from {@link readLinkedJobCatalogKeyRefs}. */
 export function readLinkedJobKeyNames(
   paprDir: string,
   appId: string,
 ): string[] {
   const names = new Set<string>();
-  for (const jobId of resolveAppDependentJobIds(paprDir, appId)) {
-    const command = readJobCommand(paprDir, jobId);
-    if (!command) {
-      continue;
-    }
-    for (const name of extractCustomKeyNames(command)) {
-      if (!isPlatformInjectedEnvKey(name)) {
-        names.add(name);
-      }
-    }
+  for (const ref of readLinkedJobCatalogKeyRefs(paprDir, appId)) {
+    names.add(ref.keyName);
   }
   return [...names].sort();
+}
+
+/** Linked job keys not yet listed in apps/{appId}/requirements.json (publish vault catalog). */
+export function readLinkedJobKeysMissingFromSavedRequirements(
+  paprDir: string,
+  appId: string,
+): LinkedJobCatalogKeyRef[] {
+  const savedNames = new Set(
+    readAppRequirements(paprDir, appId).map((spec) => spec.name),
+  );
+  return readLinkedJobCatalogKeyRefs(paprDir, appId).filter(
+    (ref) => !savedNames.has(ref.keyName),
+  );
 }
 
 /** requirements.json merged with backend/manifest.json keys (cloud catalog source of truth). */

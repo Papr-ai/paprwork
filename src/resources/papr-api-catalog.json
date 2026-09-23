@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-21T04:39:33.498Z",
-  "entryCount": 193,
+  "generatedAt": "2026-09-23T21:06:19.733Z",
+  "entryCount": 196,
   "entries": [
     {
       "id": "access-members",
@@ -319,6 +319,28 @@
         "tool",
         "agent"
       ]
+    },
+    {
+      "id": "agent-tool-check_cloud_app_contributions",
+      "title": "check_cloud_app_contributions",
+      "summary": "Check whether an app you own has incoming contributor PRs (OWNER ONLY). Lightweight first step before loading full PR review tools.\n\nReturns pending/preparing counts and request summaries. If PRs exist, use get_cloud_app_pr_review for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: \"cloud app contribution PR review owner approve reject\" }) then run_deferred_tool.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "check_cloud_app_contributions",
+      "keywords": [
+        "check_cloud_app_contributions",
+        "check",
+        "cloud",
+        "app",
+        "contributions",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
       "id": "agent-tool-complete_delegation",
@@ -869,6 +891,29 @@
         "app",
         "file",
         "version",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-get_cloud_app_pr_review",
+      "title": "get_cloud_app_pr_review",
+      "summary": "Fetch the GitHub pull request diff for an incoming contribute-back PR (OWNER ONLY).\n\nOWNER ONLY — incoming contributor GitHub PR, not local app development. Do not use inspect_cloud_repo (default branch only) or edit_file on $PAPR_HOME/apps/ to review a proposal.\n\nUses Papr's short-lived per-app GitHub read token — same credential family as inspect_cloud_repo, but reads the PR/contrib ref. Returns unified patches plus metadata (title, branch, headSha, stagedPaths).\n\nWorkflow: check_cloud_app_contributions({ appId }) or list_cloud_app_prs({ appId }) → get_cloud_app_pr_review({ requestId }) f...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_cloud_app_pr_review",
+      "keywords": [
+        "get_cloud_app_pr_review",
+        "get",
+        "cloud",
+        "app",
+        "pr",
+        "review",
         "tool",
         "agent"
       ],
@@ -1477,22 +1522,22 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
-      "id": "agent-tool-list_cloud_app_changes",
-      "title": "list_cloud_app_changes",
-      "summary": "List incoming contribute-back pull requests for apps you own (OWNER ONLY — published upstream apps).",
+      "id": "agent-tool-list_cloud_app_prs",
+      "title": "list_cloud_app_prs",
+      "summary": "List incoming contribute-back GitHub PRs for apps you own (OWNER ONLY). Optional appId filter. For diffs use get_cloud_app_pr_review — not inspect_cloud_repo (default branch) or local edit_file.",
       "surfaces": [
         "agent-tool"
       ],
       "runtimes": [
         "desktop"
       ],
-      "toolId": "list_cloud_app_changes",
+      "toolId": "list_cloud_app_prs",
       "keywords": [
-        "list_cloud_app_changes",
+        "list_cloud_app_prs",
         "list",
         "cloud",
         "app",
-        "changes",
+        "prs",
         "tool",
         "agent"
       ],
@@ -2237,6 +2282,29 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-read_cloud_app_pr_file",
+      "title": "read_cloud_app_pr_file",
+      "summary": "Read one file from an incoming contribute-back PR at its proposal HEAD ref (OWNER ONLY). Use after get_cloud_app_pr_review when you need full file content beyond the patch. OWNER ONLY — incoming contributor GitHub PR, not local app development. Do not use inspect_cloud_repo (default branch only) or edit_file on $PAPR_HOME/apps/ to review a proposal.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_cloud_app_pr_file",
+      "keywords": [
+        "read_cloud_app_pr_file",
+        "read",
+        "cloud",
+        "app",
+        "pr",
+        "file",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
       "id": "agent-tool-read_document",
       "title": "read_document",
       "summary": "Read a document by id. Returns content and filePath for bash editing.",
@@ -2475,22 +2543,22 @@
       ]
     },
     {
-      "id": "agent-tool-resolve_cloud_app_change",
-      "title": "resolve_cloud_app_change",
-      "summary": "Approve or reject an incoming contribute-back PR (OWNER ONLY). Approve merges the GitHub PR and triggers a local sync pull. Use list_cloud_app_changes first to get requestId and prUrl.",
+      "id": "agent-tool-resolve_cloud_app_pr",
+      "title": "resolve_cloud_app_pr",
+      "summary": "Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with get_cloud_app_pr_review.",
       "surfaces": [
         "agent-tool"
       ],
       "runtimes": [
         "desktop"
       ],
-      "toolId": "resolve_cloud_app_change",
+      "toolId": "resolve_cloud_app_pr",
       "keywords": [
-        "resolve_cloud_app_change",
+        "resolve_cloud_app_pr",
         "resolve",
         "cloud",
         "app",
-        "change",
+        "pr",
         "tool",
         "agent"
       ],
@@ -2704,22 +2772,22 @@
       ]
     },
     {
-      "id": "agent-tool-submit_cloud_app_change",
-      "title": "submit_cloud_app_change",
-      "summary": "Propose contribute-back changes to the upstream app owner (CONTRIBUTOR ONLY — you must have a local fork installed via install_cloud_app).\n\nOpens a pull request with your fork's app source, linked Jobs, and migration SQL on the owner's papr-work repo. Returns prUrl, branch, and headSha.",
+      "id": "agent-tool-submit_cloud_app_pr",
+      "title": "submit_cloud_app_pr",
+      "summary": "Open a contribute-back GitHub PR to the upstream app owner (CONTRIBUTOR ONLY — local fork via install_cloud_app).\n\nNot for editing the owner's app directly. Pushes your fork's app source, linked Jobs, and migration SQL to the owner's papr-work repo. Returns prUrl, branch, and headSha.",
       "surfaces": [
         "agent-tool"
       ],
       "runtimes": [
         "desktop"
       ],
-      "toolId": "submit_cloud_app_change",
+      "toolId": "submit_cloud_app_pr",
       "keywords": [
-        "submit_cloud_app_change",
+        "submit_cloud_app_pr",
         "submit",
         "cloud",
         "app",
-        "change",
+        "pr",
         "tool",
         "agent"
       ],

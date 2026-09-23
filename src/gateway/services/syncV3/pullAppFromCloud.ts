@@ -17,9 +17,19 @@ export interface PullAppFromCloudResult {
   registryMigrationsApplied?: string[];
 }
 
-/** After a successful Get updates, realign git fingerprint baseline with disk. */
+function shouldMarkAppCodeBaselineSynced(code: PullAppCodeFromRepoResult): boolean {
+  if (code.conflictFiles.length > 0) {
+    return false;
+  }
+  if (!code.skipped) {
+    return true;
+  }
+  return code.reason === "already at remote head";
+}
+
+/** After Get updates, clear stale git fingerprint so sync UI stops showing pending upload. */
 function markAppCodeBaselineSynced(appId: string, code: PullAppCodeFromRepoResult): void {
-  if (code.skipped || code.conflictFiles.length > 0) {
+  if (!shouldMarkAppCodeBaselineSynced(code)) {
     return;
   }
   const sync = getCloudSyncService();
@@ -36,11 +46,17 @@ export async function pullAppFromCloud(
     waitForTurso?: boolean;
     /** When false, always fetch remote HEAD (manual Get updates). */
     allowRecentSkip?: boolean;
+    /**
+     * Manual Get updates: ignore stale git/db flush flags only after writer HEAD
+     * is confirmed ahead of local ack. Per-file merge still conflicts on edits.
+     */
+    preferCloudOverLocal?: boolean;
   },
 ): Promise<PullAppFromCloudResult> {
   const code = await pullAppCodeFromRepo(appId, {
     token: options.token,
     allowRecentSkip: options.allowRecentSkip,
+    preferCloudOverLocal: options.preferCloudOverLocal,
   });
 
   let registryMigrationsApplied: string[] | undefined;

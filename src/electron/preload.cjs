@@ -125,6 +125,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
       getProfile: () => ipcRenderer.invoke("papr:get-profile"),
       refreshProfile: () => ipcRenderer.invoke("papr:refresh-profile"),
       syncProfile: (input) => ipcRenderer.invoke("papr:sync-profile", input),
+      getOnboardingState: () => ipcRenderer.invoke("papr:get-onboarding-state"),
+      setOnboardingState: (update) => ipcRenderer.invoke("papr:set-onboarding-state", update),
       getActiveWorkspace: () => ipcRenderer.invoke("papr:get-active-workspace"),
       
       // Listen for successful login (via deep link callback)

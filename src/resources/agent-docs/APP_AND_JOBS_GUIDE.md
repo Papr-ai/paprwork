@@ -437,13 +437,24 @@ Handlers receive **`PAPR_ACTION_PARAMS`** (JSON string of all merged params), **
 
 **Older apps:** may lack `backend/` entirely — `POST /api/app/backend/:action` returns ENOENT on manifest (route exists). Scaffold `manifest.json` + handler before first use. New apps get this from `create_app`.
 
+**Three different “requirements” (do not conflate):**
+
+| Artifact | Purpose |
+|----------|---------|
+| `job.json` → `requirements: []` | Python/Node **packages** for the job venv |
+| `job.json` → `requiredKeys: []` | **Runtime** env injection when the job runs (desktop + cloud sandbox) |
+| `apps/{appId}/requirements.json` | **Publish vault catalog** for `apps.papr.ai` (who may receive which integration keys) |
+| `apps/{appId}/papr-cloud-dependencies.json` | **Cross-app / database** install deps for community publish — **not** API keys |
+
 **Vault key injection (do not reverse-engineer):**
 1. User stores keys in **Settings → Integration Keys** (syncs to cloud vault on publish).
-2. List exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
-3. **Cloud only:** same keys must be in **requirements.json** (published catalog). `publish_cloud_app` **auto-syncs** manifest keys into requirements.json — republish after adding backend keys.
-4. Gateway injects as env vars — handler uses `os.environ["RR_ATTENTION_API_KEY"]` or `process.env.RR_ATTENTION_API_KEY`.
-5. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
-6. Cloud error "No matching catalog requirements" → republish the app (catalog out of date), not more keychain debugging.
+2. **Backend handlers:** list exact key names in **backend/manifest.json** `"keys": ["RR_ATTENTION_API_KEY"]` (per-action allowlist).
+3. **Linked jobs (buttons → `/api/jobs/run`):** declare `requiredKeys: ["RR_ATTENTION_API_KEY"]` in **job.json** and read `os.environ["RR_ATTENTION_API_KEY"]` (or add `${RR_ATTENTION_API_KEY}` in the job **command** so publish auto-detection sees it).
+4. **Cloud catalog:** the same key names must appear in **apps/{appId}/requirements.json**. **Sync now** / publish **auto-syncs** manifest keys, `${KEY}` in linked job commands, and **linked job `requiredKeys`** into requirements.json — or add manually in the publish credentials panel.
+5. Gateway injects as env vars — handler/job uses `os.environ[...]` or `process.env`.
+6. **Never** grep keychain, read `custom-keys.json`, or call `get_key` / `/api/keys` — those are agent-only.
+7. Cloud error "No matching catalog requirements" → **Sync now** / republish (catalog out of date), not more keychain debugging.
+8. **`validate_app`** warns when a linked job declares keys missing from requirements.json.
 
 **Frontend body shape:** `{ appId, params: { limit: "50" } }` — nested `params` required (`PAPR_ACTION_PARAMS`).
 
@@ -2969,7 +2980,7 @@ When someone installs your app with `codeAccess=install`, they get a local fork.
 
 ```javascript
 // Contributor (has a fork from install_cloud_app)
-submit_cloud_app_change({
+submit_cloud_app_pr({
   sourceNamespaceId: "upstream-namespace-id",
   sourceSlug: "your-app-slug",
   installedAppId: "local-fork-app-uuid",
@@ -2981,8 +2992,9 @@ submit_cloud_app_change({
 
 ```javascript
 // Owner (published the upstream app)
-list_cloud_app_changes({ status: "pending" })
-resolve_cloud_app_change({ requestId: "...", action: "approve" })  // merges PR, pulls locally
+list_cloud_app_prs({ status: "pending" })
+get_cloud_app_pr_review({ requestId: "..." })
+resolve_cloud_app_pr({ requestId: "...", action: "approve" })  // merges PR, then Get updates (pullAppFromCloud) for sourceAppId
 ```
 
 There is **no local folder merge** on the owner's machine — approve merges the PR on GitHub, then sync pulls. See `docs/SYNC_CONTRACT.md` §6.

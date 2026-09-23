@@ -18,6 +18,7 @@ import {
   invalidateCachedSyncItemsForApp,
   readCachedSyncItemsForApp,
   readCloudSyncTabSnapshot,
+  touchCachedSyncItemsFetchedAt,
   writeCachedSyncItemsForApp,
 } from "../utils/cloudSyncTabCache";
 import {
@@ -371,10 +372,13 @@ export function useAppCloudSyncStatus(
         setSyncItems(items);
         hasLoadedOnceRef.current = true;
 
+        const checkedAt = Date.now();
         if (shouldPersistSyncSnapshot(items, git)) {
           writeCachedSyncItemsForApp(appId, items);
+        } else {
+          touchCachedSyncItemsFetchedAt(appId, checkedAt);
         }
-        setLastCheckedAt(Date.now());
+        setLastCheckedAt(checkedAt);
         setCheckedThisSession(true);
       } catch (err) {
         setError((err as Error).message.slice(0, 120));
@@ -449,14 +453,34 @@ export function useAppCloudSyncStatus(
         throw new Error(body.error ?? `Get updates failed (${res.status})`);
       }
       const body = (await res.json()) as {
-        code?: { conflictFiles?: string[]; skipped?: boolean; reason?: string };
+        code?: {
+          conflictFiles?: string[];
+          skipped?: boolean;
+          reason?: string;
+          commitSha?: string | null;
+        };
       };
-      if (body.code?.skipped && body.code.reason) {
-        setError(body.code.reason.slice(0, 120));
-      } else if ((body.code?.conflictFiles?.length ?? 0) > 0) {
+      const code = body.code;
+      if (code?.skipped && code.reason) {
+        setError(code.reason.slice(0, 120));
+      } else if ((code?.conflictFiles?.length ?? 0) > 0) {
         setError(
-          `${body.code!.conflictFiles!.length} file conflict(s) — merge locally or ask the agent`,
+          `${code!.conflictFiles!.length} file conflict(s) — merge locally or ask the agent`,
         );
+      }
+      const pullSettledAtHead =
+        code &&
+        (code.conflictFiles?.length ?? 0) === 0 &&
+        (!code.skipped || code.reason === "already at remote head");
+      if (pullSettledAtHead) {
+        setRemoteCodeCheck((prev) => ({
+          upToDate: true,
+          remoteCommitSha: code.commitSha ?? prev?.remoteCommitSha ?? null,
+          checkFailed: false,
+          publisherUpdatesAvailable: prev?.publisherUpdatesAvailable,
+          publisherLiveRevision: prev?.publisherLiveRevision ?? null,
+          storedUpstreamRevision: prev?.storedUpstreamRevision ?? null,
+        }));
       }
       await refresh(true);
       await fetchRemoteCodeStatus();
@@ -509,6 +533,9 @@ export function useAppCloudSyncStatus(
     setSyncItems(cached);
     hasLoadedOnceRef.current = cached !== null;
     setLoading(cached === null);
+    if (fetchedAt !== null) {
+      setLastCheckedAt(fetchedAt);
+    }
 
     if (cacheFresh) {
       setLiveSyncPending(false);

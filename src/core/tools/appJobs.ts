@@ -1135,6 +1135,14 @@ export const createJobTool = createTool({
     const linkedAppIds = (args.appIds ?? []).filter(
       (appId) => appId !== "__standalone__",
     );
+    const publishCatalogReminder =
+      isScriptJob &&
+      (args.requiredKeys?.length ?? 0) > 0 &&
+      linkedAppIds.length > 0
+        ? `☁️ PUBLISH CATALOG: job.json requiredKeys inject at runtime, but apps.papr.ai vault uses apps/{appId}/requirements.json. ` +
+          `Sync now / publish auto-syncs requiredKeys and \${KEY} in the job command into requirements.json. ` +
+          `Or add keys in the publish credentials panel. Do NOT put API keys in papr-cloud-dependencies.json (cross-app install deps only).`
+        : undefined;
     let writeDbSummary: string | undefined;
     const writeDbIds = args.writeDbIds ?? [];
     if (writeDbIds.length > 0) {
@@ -1211,6 +1219,9 @@ export const createJobTool = createTool({
       data: job,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
       ...(keyReminder ? { _keyPatternReminder: keyReminder } : {}),
+      ...(publishCatalogReminder
+        ? { _publishCatalogReminder: publishCatalogReminder }
+        : {}),
       ...(agentJobReminder ? { _agentJobReminder: agentJobReminder } : {}),
       ...(appDbJobReminder ? { _appDbJobReminder: appDbJobReminder } : {}),
       ...(hardcodedDbIdReminder

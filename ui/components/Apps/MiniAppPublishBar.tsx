@@ -9,12 +9,16 @@ import { useAppCloudSyncStatus } from "../../hooks/useAppCloudSyncStatus";
 import {
   formatWebSyncStatusTooltip,
   resolvePublishBarStatus,
+  resolvePublishBarChipAction,
   resolvePublishBarChipForForkUpstream,
   resolvePublishBarChipLabel,
   resolvePublishBarPrimaryAction,
   webSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
-import { pullTrackUpstream } from "../../utils/cloudTrackSyncApi";
+import {
+  formatTrackSyncSummary,
+  pullTrackUpstream,
+} from "../../utils/cloudTrackSyncApi";
 import {
   resolveEffectiveAutoUpload,
 } from "../../utils/appUploadMode";
@@ -39,9 +43,12 @@ import {
   buildUpstreamPublishedWebUrl,
 } from "../../utils/cloudDesktopPreview";
 import { useIncomingCloudChangeRequests } from "../../hooks/useIncomingCloudChangeRequests";
+import {
+  contributionAudienceKind,
+  contributionPanelCopy,
+} from "../../utils/contributionPanelCopy";
 import { CloudChangeRequestsPanel } from "./CloudChangeRequestsPanel";
 import { CloudContributeBackPanel } from "./CloudContributeBackPanel";
-import { CloudUpstreamBar } from "./CloudUpstreamBar";
 import { CloudAppCredentialsPanel } from "./CloudAppCredentialsPanel";
 import { PublishBarOverflowMenu } from "./PublishBarOverflowMenu";
 import { AppWorkspacePanelMenu } from "./AppWorkspacePanelMenu";
@@ -325,13 +332,21 @@ interface ShareSheetProps {
   headerAside?: React.ReactNode;
   onClose: () => void;
   children: React.ReactNode;
+  /** Wider layout for contribution review cards. */
+  wide?: boolean;
 }
 
-function ShareSheet({ title, headerAside, onClose, children }: ShareSheetProps) {
+function ShareSheet({
+  title,
+  headerAside,
+  onClose,
+  children,
+  wide = false,
+}: ShareSheetProps) {
   return createPortal(
     <div className="share-sheet__backdrop" role="presentation" onClick={onClose}>
       <div
-        className="share-sheet"
+        className={`share-sheet${wide ? " share-sheet--wide" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="share-sheet-title"
@@ -425,6 +440,31 @@ export function MiniAppPublishBar({
   onOpenDependencyApp,
 }: MiniAppPublishBarProps) {
   const [shareOpen, setShareOpen] = useState(false);
+  /** Propose has its own sheet. It used to open Share and scroll to the
+   *  contribute form, but Share opens on "1. Who can access your copy" with a
+   *  "Publish your copy" banner — so asking to send edits upstream landed you
+   *  in the flow for putting your fork on the web, a different action. */
+  const [proposeOpen, setProposeOpen] = useState(false);
+  /** The ▾ half of the Publish split button on a shared fork. */
+  const [proposeMenuOpen, setProposeMenuOpen] = useState(false);
+  const proposeMenuRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!proposeMenuOpen) return;
+    const onDown = (ev: MouseEvent) => {
+      if (!proposeMenuRef.current?.contains(ev.target as Node)) {
+        setProposeMenuOpen(false);
+      }
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setProposeMenuOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [proposeMenuOpen]);
   const [contributionsOpen, setContributionsOpen] = useState(false);
   const [audience, setAudience] = useState<ShareAudience>("private");
   const [permission, setPermission] = useState<SharePermission>("write");
@@ -496,10 +536,17 @@ export function MiniAppPublishBar({
     null,
   );
   const [webSyncActionKind, setWebSyncActionKind] = useState<
-    "review" | "failed"
+    "review" | "failed" | "propose"
   >("review");
   const prevMergeRequiredRef = useRef(false);
   const [upstreamPulling, setUpstreamPulling] = useState(false);
+  /** Result of the last Update — what the pull changed, or why it failed.
+   *  CloudUpstreamBar used to own this feedback; folding it in means the bar
+   *  has to report it, or Update becomes a button with no visible outcome. */
+  const [upstreamNotice, setUpstreamNotice] = useState<{
+    tone: "ok" | "warn" | "bad";
+    message: string;
+  } | null>(null);
 
   const {
     status: webSyncStatus,
@@ -579,6 +626,29 @@ export function MiniAppPublishBar({
     prevFailedRef.current = Boolean(failed);
   }, [webSyncStatus?.codeStatus, webSyncStatus?.uploadStatus, webSyncStatus?.uploadRetryPending, webSyncPushing]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Post-publish propose offer (shared forks). Right after publishing your copy
+  // is when proposing upstream is most likely wanted, and the ▾ is easy to
+  // miss — so it is offered once, on a clean finish only. A failed or blocked
+  // push disarms it rather than inviting you to propose work that never landed.
+  const proposeOfferArmedRef = useRef(false);
+  const prevPushingRef = useRef(false);
+  useEffect(() => {
+    const finished = prevPushingRef.current && !webSyncPushing;
+    prevPushingRef.current = webSyncPushing;
+    if (!proposeOfferArmedRef.current) return;
+    if (webSyncError) {
+      proposeOfferArmedRef.current = false;
+      return;
+    }
+    if (!finished) return;
+    proposeOfferArmedRef.current = false;
+    if (!cloudLineage) return;
+    setWebSyncActionKind("propose");
+    setWebSyncActionNotice(
+      `Published to your copy. Propose these changes to ${cloudLineage.sourceSlug}?`,
+    );
+  }, [webSyncPushing, webSyncError]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     setCompatReport(cloud.compatibility);
   }, [cloud.compatibility]);
@@ -592,6 +662,7 @@ export function MiniAppPublishBar({
     setNeedsDesktopAck(false);
     setWebSyncPopoverOpen(false);
     setWebSyncActionNotice(null);
+    setContributionsOpen(false);
     prevMergeRequiredRef.current = false;
     prevFailedRef.current = false;
     const model = sharingToAudienceModel(
@@ -637,8 +708,10 @@ export function MiniAppPublishBar({
     setLastSyncedAt(cloudLineage?.lastSyncedAt);
   }, [cloudLineage?.lastSyncedAt, cloudLineage?.mode]);
 
+  // Keep share toggles aligned with loaded publish prefs (including after async
+  // fetch), not only while the sheet is open.
   useEffect(() => {
-    if (!shareOpen || applyingSharingRef.current) return;
+    if (applyingSharingRef.current) return;
     const model = sharingToAudienceModel(
       cloud.loginAccess,
       cloud.externalLink,
@@ -657,7 +730,6 @@ export function MiniAppPublishBar({
     }
   }, [
     appId,
-    shareOpen,
     cloud.loginAccess,
     cloud.externalLink,
     cloud.codeAccess,
@@ -954,25 +1026,24 @@ export function MiniAppPublishBar({
   const showCodePanel = isCodePermission(permission);
   const listsInCommunity = shouldListInCommunity(audience, cloud.live);
   const isFork = Boolean(cloudLineage);
-  const showUpstreamBar = viewMode === "local" && isFork && cloudLineage;
 
+  // Inbox follows published prefs (`cloud.codeAccess`), not draft `permission`
+  // state — that defaults to "write" and only synced while Share was open.
   const showOwnerChangeRequests =
-    cloud.live && isCodePermission(permission) && !isFork;
+    cloud.live && cloud.codeAccess === "install" && !isFork;
 
   const incomingChanges = useIncomingCloudChangeRequests(
     showOwnerChangeRequests ? appId : null,
   );
 
-  useEffect(() => {
-    if (incomingChanges.pending.length > 0) {
-      setContributionsOpen(true);
-    } else {
-      setContributionsOpen(false);
-    }
-  }, [incomingChanges.pending.length]);
+  const contributionKind = contributionAudienceKind(audience, cloud.live);
+  const contributionCopy = contributionPanelCopy(contributionKind);
 
-  const showContributionsInbox =
-    showOwnerChangeRequests && incomingChanges.pending.length > 0;
+  // Always show the inbox for published owners with code sharing — not only when
+  // the fetch returns pending rows (errors, preparing uploads, or a cleared list
+  // would otherwise remove the only entry point after we dropped auto-open).
+  const showContributionsInbox = showOwnerChangeRequests;
+  const contributionsBadgeCount = incomingChanges.open.length;
 
   const removeFromCommunity = () => {
     const nextPermission = permission === "edit" ? "edit" : "write";
@@ -996,6 +1067,7 @@ export function MiniAppPublishBar({
   const webSyncState = webSyncVisualState(webSyncStatus, {
     error: webSyncError,
     pushing: webSyncPushing,
+    pulling: webSyncPulling,
     refreshing: webSyncRefreshing,
   });
   const webSyncActionNeeded =
@@ -1027,6 +1099,7 @@ export function MiniAppPublishBar({
     cloudPublishFailed,
     cloudPublishErrorDetail: cloud.errorDetail,
   });
+
   // Re-render on a slow tick so the chip's age ("web checked 4 min ago") keeps
   // counting up while the tab sits open instead of freezing at its first value.
   const [, setChipAgeTick] = useState(0);
@@ -1034,8 +1107,35 @@ export function MiniAppPublishBar({
     const timer = setInterval(() => setChipAgeTick((n) => n + 1), 60_000);
     return () => clearInterval(timer);
   }, []);
-  const forkWebPreview =
-    workspaceMode === "preview" && viewMode === "published" && isFork;
+  // Role, not view. Gating on viewMode split one lane across two surfaces: the
+  // "Publisher has updates" chip and Update only existed in Web view, while
+  // Propose only existed in Local view, so a fork never saw its full set on one
+  // screen. A fork is a fork in both views — matches proposedBarV2.
+  const forkWebPreview = workspaceMode === "preview" && isFork;
+  // `cloud.live` means "your copy is published". A fresh fork has no share URL
+  // of its own, so it read as an owner's Draft — wrong chip, Share hidden, and
+  // a Publish button that duplicates Share my copy. For an unpublished fork the
+  // meaningful relationship is with the publisher, not the web.
+  const forkUnpublished = isFork && !cloud.live;
+  // Local edits on an unpublished fork have exactly one destination — the
+  // publisher — so they are "unpublished" until proposed. The file watcher
+  // already knows this without a round trip; hard-coding "In sync with
+  // publisher" here lied whenever you had edited anything.
+  const forkUnproposedEdits =
+    forkUnpublished && webSyncStatus?.hasLocalChanges === true;
+  // Where local edits go: a collaborator (track) or an unpublished fork sends
+  // them upstream for review; publishing your own copy lives under Share.
+  const proposeIsPrimary = isTrackCollaborator || forkUnpublished;
+  // A shared fork has two destinations: its own web copy (the common case,
+  // reversible — so the default click) and the publisher (occasional, lands
+  // in someone else's queue — so one deliberate step away on the ▾). The two
+  // halves have independent enabled states: right after you publish, Publish
+  // has nothing left to send, which is exactly when Propose is most wanted.
+  const showProposeSplit = isFork && cloud.live && Boolean(cloudLineage);
+  const openPropose = () => {
+    setShareOpen(false);
+    setProposeOpen(true);
+  };
   const forkUpstreamChip = resolvePublishBarChipForForkUpstream({
     forkWebPreview,
     publisherUpdatesAvailable: webSyncPublisherUpdatesAvailable,
@@ -1049,6 +1149,7 @@ export function MiniAppPublishBar({
     // publish the chip confirms that write, then falls back to the check age.
     lastPublishedAt: webSyncStatus?.lastUploadedAt ?? null,
     cloudPublishFailed,
+    pulling: webSyncPulling,
   });
   const forkChipOverrides =
     forkUpstreamChip != null &&
@@ -1060,25 +1161,50 @@ export function MiniAppPublishBar({
         showRefresh: false,
         tone: forkUpstreamChip.tone,
       }
-    : publishBarChipBase;
+    : forkUnproposedEdits
+      ? { label: "Unpublished changes", showRefresh: false, tone: "warn" as const }
+      : forkUnpublished
+        ? { label: "In sync with publisher", showRefresh: false, tone: "ok" as const }
+        : publishBarChipBase;
   const publishBarChipState = forkChipOverrides
     ? forkUpstreamChip.state
-    : publishBarStatus.state;
+    : forkUnproposedEdits
+      ? ("warn" as const)
+      : forkUnpublished
+        ? ("synced" as const)
+        : publishBarStatus.state;
   // Preview mode uses the chip for all web-sync states; draft publish failures
   // show the chip even in Files mode so "Failed to publish" is one click away.
   const chipSpeaks = workspaceMode === "preview" || cloudPublishFailed;
+  // One phrasing for both modes. "Tracking" vs "Fork" asked the reader to know
+  // the difference before the sentence told them anything; this says "Fork of
+  // {slug}" either way and lets the actions differ.
+  //
+  // Rendered as a glyph beside the title rather than inline text: it spent the
+  // widest run in the bar on a fact that never changes — you already know what
+  // you installed. The mark carries the part that matters at a glance (this is
+  // not your app) and the slug moves into the tooltip.
+  const lineageTitle =
+    isFork && cloudLineage ? `Fork of ${cloudLineage.sourceSlug}` : null;
   const metaStatusText = (() => {
-    const lineage =
-      isFork && cloudLineage && !showUpstreamBar
-        ? `${cloudLineage.mode === "track" ? "Tracking" : "Fork"} ${cloudLineage.sourceSlug}`
-        : null;
-    if (chipSpeaks) return lineage;
-    if (cloud.loading && !cloud.live) return lineage ?? "Draft";
-    const base = `${cloud.live ? "Live" : "Draft"} · ${cloud.statusLabel}${
+    if (chipSpeaks) return null;
+    if (cloud.loading && !cloud.live) return "Checking…";
+    return `${cloud.live ? "Live" : "Draft"} · ${cloud.statusLabel}${
       cloud.refreshing && cloud.live ? " · updating" : ""
     }`;
-    return lineage ? `${base} · ${lineage}` : base;
   })();
+  const publishBarChipAction = resolvePublishBarChipAction({
+    state: publishBarStatus.state,
+    // An unpublished fork can still pull from its publisher — gating on
+    // `live` alone hid "Update from publisher" on exactly those forks.
+    live: cloud.live || isFork,
+    syncEnabled: workspaceMode === "preview",
+    pushing: webSyncPushing || Boolean(shareSyncNotice),
+    pulling: webSyncPulling,
+    pullingUpstream: upstreamPulling,
+    publisherUpdatesAvailable: webSyncPublisherUpdatesAvailable,
+    forkWebPreview,
+  });
   const publishBarAction = resolvePublishBarPrimaryAction({
     state: publishBarStatus.state,
     live: cloud.live,
@@ -1163,6 +1289,14 @@ export function MiniAppPublishBar({
     ) : null;
 
   const shareSyncBanner = (() => {
+    // Update result outranks idle chatter: the user just changed local files
+    // and the outcome is the only thing they are waiting to read.
+    if (upstreamNotice) {
+      return {
+        tone: upstreamNotice.tone === "ok" ? ("success" as const) : ("warn" as const),
+        message: upstreamNotice.message,
+      };
+    }
     if (cloud.errorDetail && !needsDesktopAck) {
       return {
         tone: "error" as const,
@@ -1285,6 +1419,45 @@ export function MiniAppPublishBar({
     await guardedWebSyncPushNow();
   };
 
+  /**
+   * Pull from the publisher. Extracted from the old primary button so the chip
+   * action can call it — a pull that silently rewrites local files needs to say
+   * what it did, especially on conflicts where the user's edits were kept and
+   * something still needs a decision.
+   */
+  const handleUpstreamPull = async () => {
+    setUpstreamPulling(true);
+    setUpstreamNotice(null);
+    try {
+      const result = await pullTrackUpstream(appId);
+      setUpstreamNotice({
+        tone: result.conflictFiles.length > 0 ? "warn" : "ok",
+        message: formatTrackSyncSummary(result),
+      });
+      setLastSyncedAt(result.syncedAt ?? new Date().toISOString());
+      onTrackPullComplete?.();
+      await webSyncRefresh(true);
+    } catch (err) {
+      setUpstreamNotice({
+        tone: "bad",
+        message: (err as Error).message.slice(0, 120),
+      });
+    } finally {
+      setUpstreamPulling(false);
+    }
+  };
+
+  const handleChipAction = () => {
+    if (!publishBarChipAction) return;
+    if (publishBarChipAction.kind === "updates") {
+      void webSyncPullUpdates();
+    } else if (publishBarChipAction.kind === "upstream") {
+      void handleUpstreamPull();
+    } else {
+      handleWebSyncDotClick();
+    }
+  };
+
   return (
     <>
       <div className="mini-app-publish-bar">
@@ -1298,6 +1471,35 @@ export function MiniAppPublishBar({
               report={compatReport ?? cloud.compatibility}
               loading={false}
             />
+            {/* Lineage as a mark. Unlike the old text it survives the compact
+                bar, where "whose app is this" is still worth answering. */}
+            {lineageTitle ? (
+              <span
+                className="mini-app-publish-bar__lineage-mark"
+                title={lineageTitle}
+                aria-label={lineageTitle}
+              >
+                <svg
+                  width="13"
+                  height="13"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.7"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden
+                >
+                  {/* Two parents converging into one copy — reads as lineage at
+                      13px, where a duplicated-page glyph reads as "copy" and a
+                      branch arrow reads as "merge". */}
+                  <circle cx="6" cy="5" r="2" />
+                  <circle cx="18" cy="5" r="2" />
+                  <circle cx="12" cy="19" r="2" />
+                  <path d="M6 7v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7M12 11v6" />
+                </svg>
+              </span>
+            ) : null}
             {/* When the chip speaks it owns Live/Draft and the busy state, and
                 audience moved to the Share icon — so this line has nothing left
                 to say and is dropped entirely rather than rendered empty. */}
@@ -1328,30 +1530,27 @@ export function MiniAppPublishBar({
                       ? () => void webSyncCheckStatus()
                       : undefined
                   }
+                  action={
+                    publishBarChipAction
+                      ? {
+                          glyph: publishBarChipAction.glyph,
+                          verb: publishBarChipAction.verb,
+                          onRun: handleChipAction,
+                        }
+                      : // Pull-from-publisher wins when both apply: take
+                        // their changes first, then propose on top of them.
+                        forkUnproposedEdits
+                        ? {
+                            glyph: "up" as const,
+                            verb: "Propose changes",
+                            onRun: openPropose,
+                          }
+                        : undefined
+                  }
                 />
               </span>
             ) : null}
           </div>
-
-          {showUpstreamBar ? (
-            <CloudUpstreamBar
-              appTitle={appTitle}
-              lineage={{
-                mode: cloudLineage.mode,
-                sourceAppId: cloudLineage.sourceAppId,
-                sourceSlug: cloudLineage.sourceSlug,
-                sourceNamespaceId: cloudLineage.sourceNamespaceId,
-                installedAppId: appId,
-                lastSyncedAt: cloudLineage.lastSyncedAt,
-              }}
-              lastSyncedAt={lastSyncedAt}
-              busy={cloud.busy}
-              onLastSyncedAtChange={setLastSyncedAt}
-              onTrackPullComplete={() => {
-                onTrackPullComplete?.();
-              }}
-            />
-          ) : null}
 
         </div>
 
@@ -1480,6 +1679,11 @@ export function MiniAppPublishBar({
             isFork={isFork}
             busy={cloud.busy}
             onUnpublish={takeOffWeb}
+            upstreamSlug={cloudLineage?.sourceSlug}
+            // Propose never lives here now: it is the primary button for
+            // collaborators and unshared forks, and the ▾ on Publish for
+            // shared forks — the primary slot is the one place edits leave.
+            onPropose={undefined}
           />
 
           {showContributionsInbox ? (
@@ -1489,16 +1693,23 @@ export function MiniAppPublishBar({
               disabled={cloud.busy}
               aria-expanded={contributionsOpen}
               aria-label={`Contributions${
-                incomingChanges.pending.length > 0
-                  ? `, ${incomingChanges.pending.length} pending`
+                contributionsBadgeCount > 0
+                  ? `, ${contributionsBadgeCount} waiting for review`
                   : ""
               }`}
               title={
-                incomingChanges.pending.length > 0
-                  ? `${incomingChanges.pending.length} contributions waiting for review`
-                  : "Contributions"
+                contributionsBadgeCount > 0
+                  ? `${contributionsBadgeCount} contribution${
+                      contributionsBadgeCount === 1 ? "" : "s"
+                    } waiting for review`
+                  : incomingChanges.error
+                    ? "Contributions — could not refresh list"
+                    : "Contributions — review incoming proposals"
               }
-              onClick={() => setContributionsOpen((open) => !open)}
+              onClick={() => {
+                void incomingChanges.reload();
+                setContributionsOpen(true);
+              }}
             >
               {/* Inbox glyph plus a count, not the word: the number is the only
                   part that changes and the only part worth reading at a glance,
@@ -1512,24 +1723,38 @@ export function MiniAppPublishBar({
                   strokeLinejoin="round"
                 />
               </svg>
-              {incomingChanges.pending.length > 0 ? (
+              {contributionsBadgeCount > 0 ? (
                 <span className="mini-app-publish-bar__contributions-badge">
-                  {incomingChanges.pending.length}
+                  {contributionsBadgeCount}
+                </span>
+              ) : incomingChanges.error ? (
+                <span
+                  className="mini-app-publish-bar__contributions-badge mini-app-publish-bar__contributions-badge--warn"
+                  aria-hidden
+                >
+                  !
                 </span>
               ) : null}
             </button>
           ) : null}
 
-          {/* Draft has nothing to share yet, so Share waits until the app is
-              live and Publish carries the primary weight instead. */}
-          {cloud.live ? (
+          {/* An owner's draft has nothing to share yet, so Share waits until
+              the app is live. A fork always shows Share my copy — the sheet is
+              where you publish your copy in the first place. */}
+          {cloud.live || isFork ? (
             <button
               type="button"
               className={`mini-app-publish-bar__button${
-                publishBarAction ? "" : " mini-app-publish-bar__button--primary"
+                publishBarAction || proposeIsPrimary
+                  ? ""
+                  : " mini-app-publish-bar__button--primary"
               }`}
               disabled={cloud.busy}
-              title={`Shared: ${cloud.statusLabel}`}
+              title={
+                forkUnpublished
+                  ? "Publish your own copy to the web"
+                  : `Shared: ${cloud.statusLabel}`
+              }
               onClick={() => setShareOpen(true)}
             >
               <ShareAudienceIcon
@@ -1542,77 +1767,164 @@ export function MiniAppPublishBar({
 
           {/* Persistent, not a dismissible banner: unpublished work is a
               standing fact, and the action for it should not disappear. */}
-          {publishBarAction ? (
+          {proposeIsPrimary ? (
             <button
               type="button"
-              className={`mini-app-publish-bar__button mini-app-publish-bar__button--primary${
-                publishBarAction.kind === "review" || publishBarAction.kind === "retry"
-                  ? " mini-app-publish-bar__button--tone-bad"
-                  : publishBarAction.kind === "updates" ||
-                      publishBarAction.kind === "upstream"
-                    ? " mini-app-publish-bar__button--tone-info"
-                    : ""
+              className="mini-app-publish-bar__button mini-app-publish-bar__button--primary"
+              disabled={cloud.busy || upstreamPulling}
+              title={`Send your edits to ${cloudLineage?.sourceSlug ?? "the publisher"} for review`}
+              onClick={openPropose}
+            >
+              Propose changes
+            </button>
+          ) : publishBarAction ? (
+            <div
+              ref={proposeMenuRef}
+              className={`mini-app-publish-bar__split${
+                showProposeSplit ? " mini-app-publish-bar__split--on" : ""
               }`}
+            >
+            <button
+              type="button"
+              className={`mini-app-publish-bar__button mini-app-publish-bar__button--primary mini-app-publish-bar__split-main${
+                publishBarAction.kind === "retry"
+                  ? " mini-app-publish-bar__button--tone-bad"
+                  : ""
+              }`}
+              // Disabled in place rather than unmounted: a button that vanishes
+              // when there is nothing to publish reads the same as one hidden
+              // by a mode switch, and absence cannot explain itself. The title
+              // carries the reason.
               disabled={
+                Boolean(publishBarAction.disabled) ||
                 webSyncPushing ||
                 webSyncPulling ||
                 upstreamPulling ||
                 cloud.busy
               }
+              title={publishBarAction.title}
               onClick={() => {
-                if (publishBarAction.kind === "updates") {
-                  void webSyncPullUpdates();
-                } else if (publishBarAction.kind === "upstream") {
-                  void (async () => {
-                    setUpstreamPulling(true);
-                    try {
-                      await pullTrackUpstream(appId);
-                      await webSyncRefresh(true);
-                    } finally {
-                      setUpstreamPulling(false);
-                    }
-                  })();
-                } else if (publishBarAction.kind === "review") {
-                  handleWebSyncDotClick();
-                } else {
-                  void handleWebSyncPushOrPublish();
-                }
+                // Armed here, fired by the effect once the push actually
+                // finishes clean — pushNow swallows its own errors, so
+                // awaiting it cannot tell success from failure.
+                proposeOfferArmedRef.current = showProposeSplit;
+                void handleWebSyncPushOrPublish();
               }}
             >
               {publishBarAction.label}
             </button>
+            {showProposeSplit && cloudLineage ? (
+              <>
+                {/* Not tied to publishBarAction.disabled. Whether your copy
+                    differs from the publisher is a separate question from
+                    whether you have unpublished edits, and the app cannot
+                    answer it yet — so the ▾ stays live. TODO: grey it (with a
+                    reason) once a fork-vs-upstream diff signal exists; the
+                    Propose sheet does not yet say "nothing to send" either. */}
+                <button
+                  type="button"
+                  className="mini-app-publish-bar__button mini-app-publish-bar__button--primary mini-app-publish-bar__split-caret"
+                  aria-haspopup="menu"
+                  aria-expanded={proposeMenuOpen}
+                  aria-label={`More ways to send changes, including propose to ${cloudLineage.sourceSlug}`}
+                  title={`Propose to ${cloudLineage.sourceSlug}`}
+                  disabled={cloud.busy || upstreamPulling}
+                  onClick={() => setProposeMenuOpen((v) => !v)}
+                >
+                  <svg
+                    width="11"
+                    height="11"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2.2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <path d="m6 9 6 6 6-6" />
+                  </svg>
+                </button>
+                {proposeMenuOpen ? (
+                  <div
+                    className="pb-overflow__menu mini-app-publish-bar__split-menu"
+                    role="menu"
+                  >
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className="pb-overflow__item"
+                      onClick={() => {
+                        setProposeMenuOpen(false);
+                        openPropose();
+                      }}
+                    >
+                      Propose to {cloudLineage.sourceSlug}
+                      <span className="pb-overflow__hint">
+                        Send your edits to the publisher for review
+                      </span>
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : null}
+            </div>
           ) : null}
         </div>
       </div>
 
       {showContributionsInbox && contributionsOpen ? (
-        <div className="mini-app-publish-bar__contributions-panel">
-          <CloudChangeRequestsPanel
-            busy={cloud.busy}
-            variant="publish-bar"
-            requests={incomingChanges.requests}
-            pending={incomingChanges.pending}
-            loading={incomingChanges.loading}
-            error={incomingChanges.error}
-            onReload={incomingChanges.reload}
-          />
-        </div>
+        <ShareSheet
+          wide
+          title={contributionCopy.title}
+          onClose={() => setContributionsOpen(false)}
+        >
+          <div className="share-sheet__panel share-sheet__panel--contributions">
+            <p className="share-sheet__section-desc share-sheet__section-desc--lead">
+              {contributionCopy.description}
+            </p>
+            <CloudChangeRequestsPanel
+              busy={cloud.busy}
+              variant="modal"
+              shareAudience={audience}
+              appPublished={cloud.live}
+              showHeader={false}
+              requests={incomingChanges.requests}
+              pending={incomingChanges.open}
+              loading={incomingChanges.loading}
+              error={incomingChanges.error}
+              onReload={incomingChanges.reload}
+            />
+          </div>
+        </ShareSheet>
       ) : null}
 
       {workspaceMode === "preview" &&
-      webSyncActionNotice &&
-      (webSyncActionKind === "failed" || webSyncActionKind === "review") ? (
+      webSyncActionNotice ? (
         <div
           className="mini-app-publish-bar__action-callout"
-          role="alert"
+          // An offer is not an alarm — only review/failed interrupt.
+          role={webSyncActionKind === "propose" ? "status" : "alert"}
           aria-live="polite"
         >
           <span className="mini-app-publish-bar__action-callout-text">
             {webSyncActionNotice}
           </span>
-          {/* No action button here: the bar's primary button already offers it
-              persistently. This callout only explains and offers the agent. */}
-          {webSyncStatus ? (
+          {/* Review/failed get no action button: the bar's primary already
+              offers it persistently. Propose is the exception — its only other
+              home on a shared fork is the ▾, which is easy to miss. */}
+          {webSyncActionKind === "propose" ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__action-callout-btn"
+              onClick={() => {
+                setWebSyncActionNotice(null);
+                openPropose();
+              }}
+            >
+              Propose
+            </button>
+          ) : webSyncStatus ? (
             <button
               type="button"
               className="mini-app-publish-bar__action-callout-btn mini-app-publish-bar__action-callout-btn--secondary"
@@ -1634,6 +1946,27 @@ export function MiniAppPublishBar({
             ×
           </button>
         </div>
+      ) : null}
+
+      {proposeOpen && cloudLineage ? (
+        <ShareSheet
+          title={`Propose to ${cloudLineage.sourceSlug}`}
+          onClose={() => setProposeOpen(false)}
+        >
+          <div className="share-sheet__panel">
+            <CloudContributeBackPanel
+              appTitle={appTitle}
+              lineage={{
+                mode: cloudLineage.mode,
+                sourceAppId: cloudLineage.sourceAppId,
+                sourceSlug: cloudLineage.sourceSlug,
+                sourceNamespaceId: cloudLineage.sourceNamespaceId,
+                installedAppId: appId,
+              }}
+              busy={cloud.busy}
+            />
+          </div>
+        </ShareSheet>
       ) : null}
 
       {shareOpen ? (
@@ -1988,27 +2321,17 @@ export function MiniAppPublishBar({
               />
             )}
 
-            {isFork && cloudLineage ? (
-              <CloudContributeBackPanel
-                appTitle={appTitle}
-                lineage={{
-                  mode: cloudLineage.mode,
-                  sourceAppId: cloudLineage.sourceAppId,
-                  sourceSlug: cloudLineage.sourceSlug,
-                  sourceNamespaceId: cloudLineage.sourceNamespaceId,
-                  installedAppId: appId,
-                }}
-                busy={cloud.busy}
-              />
-            ) : null}
+            {/* Contribute-back lives in its own Propose sheet — Share is only
+                about who can reach your copy. */}
 
             {/* Scope is per key in this panel, which is why the tab summary
                 says "Per key" rather than one global owner/visitor answer. */}
-            {shareStep === "keys" && audience !== "private" && cloud.live && !isFork ? (
+            {shareStep === "keys" && audience !== "private" ? (
               <CloudAppCredentialsPanel
                 appId={appId}
                 appTitle={appTitle}
                 busy={cloud.busy}
+                appLive={cloud.live}
               />
             ) : null}
 
