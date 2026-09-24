@@ -197,7 +197,9 @@ describe("AppService", () => {
 
     const favorited = await appService.toggleFavorite(created.id);
     const appPath = await appService.getAppPath(created.id);
-    const deleted = await appService.deleteApp(created.id);
+    // Unconfirmed deleteApp returns a preview for the confirm modal; the UI
+    // calls again with confirmed: true to actually delete.
+    const deleted = await appService.deleteApp(created.id, { confirmed: true });
     const afterDelete = await appService.getApp(created.id);
 
     expect(favorited?.favorite).toBe(true);
