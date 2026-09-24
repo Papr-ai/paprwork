@@ -123,9 +123,11 @@ describe("tursoSyncBridgeCore", () => {
       const db = new Database(":memory:");
       db.exec(`
       CREATE TABLE tweets (id INTEGER PRIMARY KEY, content TEXT);
-      CREATE TABLE sqlite_sequence (name TEXT);
+      -- AUTOINCREMENT makes SQLite create sqlite_sequence itself; creating it
+      -- by name is rejected ("object name reserved for internal use").
+      CREATE TABLE counters (id INTEGER PRIMARY KEY AUTOINCREMENT);
     `);
-      expect(listUserTables(db)).toEqual(["tweets"]);
+      expect(listUserTables(db).sort()).toEqual(["counters", "tweets"]);
       db.close();
     },
   );

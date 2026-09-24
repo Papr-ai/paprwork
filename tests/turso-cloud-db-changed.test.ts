@@ -72,6 +72,8 @@ vi.mock("../src/gateway/services/tursoSyncState.js", () => ({
   loadTursoSyncState: vi.fn(() => ({ jobs: {} })),
   isJobDbDirty: vi.fn(() => false),
   resolveTursoPushStateEntry: vi.fn(() => ({})),
+  // Pull gate asks "any unpushed local writes?" — none in this fixture.
+  listDbDirtySyncKeysForApp: vi.fn(() => []),
 }));
 
 describe("resolveSyncKeysFromCloudDbChanges", () => {

@@ -13,10 +13,8 @@ import {
   saveTursoSyncState,
   type TursoSyncStateFile,
 } from "../src/gateway/services/tursoSyncState.js";
-import {
-  ensureLocalDbChangeLogReady,
-  SYNC_LOG_TABLE,
-} from "../src/gateway/services/tursoSyncLog.js";
+import { SYNC_LOG_TABLE } from "../src/gateway/services/tursoSyncLog.js";
+import { ensureLocalDbChangeLogReady } from "../src/gateway/services/tursoSyncBridgeCore.js";
 
 let canUseBetterSqlite = false;
 try {

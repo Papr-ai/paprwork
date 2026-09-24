@@ -148,6 +148,17 @@ describe("cloud sync hot path caching", () => {
 
   it("keeps ownership answers correct through the cached index", () => {
     const paprDir = makeWorkspace(2, 2);
+    // Apps without a prefs entry default to uploadMode "manual", and unowned
+    // jobs fall back to the global switch (default OFF without settings.json).
+    // Opt both in so this test exercises ownership resolution, not defaults.
+    fs.writeFileSync(
+      path.join(paprDir, "data", "settings.json"),
+      JSON.stringify({ preferences: { cloudAutoUploadEnabled: true } }),
+    );
+    fs.writeFileSync(
+      path.join(paprDir, "data", "cloud-publish-prefs.json"),
+      JSON.stringify({ apps: { "app-0": { uploadMode: "auto" } } }),
+    );
     expect(shouldAutoUploadJobFolder("job-0", paprDir)).toBe(true);
     expect(shouldAutoUploadJobFolder("job-unknown", paprDir)).toBe(true);
   });
