@@ -10,7 +10,9 @@ vi.mock("../src/gateway/services/appRuntime/memoryRuntimeClient.js", () => ({
   appendRuntimeWorkspaceLogEntry: vi.fn(),
 }));
 
-vi.mock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+// Partial: other imports (e.g. DATABASES_REGISTRY_FILENAME) must stay real.
+vi.mock("../src/gateway/services/DatabaseRegistryService.js", async (importOriginal) => ({
+  ...(await importOriginal<Record<string, unknown>>()),
   getDatabaseRegistryService: vi.fn(() => ({
     getRecordForSource: () => undefined,
   })),
