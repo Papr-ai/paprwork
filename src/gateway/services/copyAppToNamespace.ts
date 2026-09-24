@@ -752,6 +752,11 @@ export async function mergeDatabaseRegistryForCopy(input: {
       merged.databases[dbId] = {
         ...(existing ?? record),
         localPath,
+        // A reinstall/track-sync can reuse a dbId that was previously
+        // tombstoned when its owning app was deleted. Reviving it here
+        // must clear the tombstone or every future install-health check
+        // (assessCloudInstallHealth) will keep reporting it as missing.
+        status: "active",
         updatedAt: new Date().toISOString(),
       };
       registryDbIds.add(dbId);
@@ -791,6 +796,11 @@ export async function mergeDatabaseRegistryForCopy(input: {
       ...(input.forkDbIds && input.localAppId
         ? { schemaOwnerAppId: input.localAppId }
         : {}),
+      // Same reasoning as the ownerJobId branch above: reusing a dbId that
+      // was tombstoned on a prior app delete must revive it as active, or
+      // assessCloudInstallHealth will permanently report it missing and
+      // block install with "required linked resources missing".
+      status: "active",
       updatedAt: new Date().toISOString(),
       ...(input.forkDbIds ? { createdAt: new Date().toISOString() } : {}),
     };
