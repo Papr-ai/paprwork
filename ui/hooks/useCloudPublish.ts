@@ -405,8 +405,12 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       try {
         const targetAppId = appIdRef.current;
         const sharing = resolveSharing(state);
+        const allowedUserIds = state?.prefs?.allowedUserIds;
         const result = await publishCloudApp(targetAppId, {
           ...sharing,
+          // Keep a "specific people" allowlist on re-publish; dropping it here
+          // widened the app to the whole workspace (or left it private).
+          ...(allowedUserIds?.length ? { allowedUserIds } : {}),
           acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
         });
         applyPublishState(targetAppId, result);
@@ -529,6 +533,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     openInBrowser,
     setAutoUploadEnabled,
     clearError: clearPublishError,
+    reportError: setSimpleError,
     shareModel: sharingToAudienceModel(
       viewModel.loginAccess,
       viewModel.externalLink,

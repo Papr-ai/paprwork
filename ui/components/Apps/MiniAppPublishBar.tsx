@@ -406,6 +406,11 @@ function RefreshIcon() {
   );
 }
 
+function publishErrorMessage(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  return `Publish failed: ${message}`.slice(0, 400);
+}
+
 export function MiniAppPublishBar({
   appId,
   appTitle,
@@ -475,6 +480,9 @@ export function MiniAppPublishBar({
   );
   const [webSyncPopoverOpen, setWebSyncPopoverOpen] = useState(false);
   const webSyncAnchorRef = useRef<HTMLDivElement>(null);
+  // The desktop-only confirm renders at the bottom of a long, scrolling sheet;
+  // bring it into view so "Publish on Web" doesn't look like a no-op.
+  const desktopAckRef = useRef<HTMLDivElement>(null);
   const webSyncPopoverRef = useRef<HTMLDivElement>(null);
   const [webSyncPopoverPos, setWebSyncPopoverPos] = useState<{
     top: number;
@@ -491,6 +499,11 @@ export function MiniAppPublishBar({
   const [compatLoading, setCompatLoading] = useState(false);
   const [readinessLoading, setReadinessLoading] = useState(false);
   const [needsDesktopAck, setNeedsDesktopAck] = useState(false);
+  useEffect(() => {
+    if (needsDesktopAck) {
+      desktopAckRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [needsDesktopAck]);
   const [publishErrorDetailOpen, setPublishErrorDetailOpen] = useState(false);
   const [webSyncActionNotice, setWebSyncActionNotice] = useState<string | null>(
     null,
@@ -761,6 +774,7 @@ export function MiniAppPublishBar({
     nextRequireSignIn = requireSignIn,
     nextPerUserIsolation = perUserIsolation,
     nextAllowedUserIds = allowedUserIds,
+    publishOptions?: { acknowledgeDesktopOnly?: boolean },
   ): Promise<{ published: boolean }> => {
     setAudience(nextAudience);
     setPermission(nextPermission);
@@ -800,7 +814,7 @@ export function MiniAppPublishBar({
     applyingSharingRef.current = true;
     setShareSyncNotice("Saving sharing settings…");
     try {
-      await cloud.updateSharing(model);
+      await cloud.updateSharing(model, publishOptions);
       const needsCodeUpload = audienceModelNeedsInitialCodeUpload(model, cloud.live);
       if (needsCodeUpload) {
         setShareSyncNotice("Publishing app code and databases to the web…");
@@ -1250,6 +1264,9 @@ export function MiniAppPublishBar({
         setCompatReport(err.compatibility);
         setNeedsDesktopAck(true);
         setShareOpen(true);
+      } else {
+        // Previously swallowed: the button looked like it did nothing.
+        cloud.reportError(publishErrorMessage(err));
       }
     } finally {
       setShareSyncNotice(null);
@@ -1258,18 +1275,27 @@ export function MiniAppPublishBar({
 
   const handleConfirmDesktopPublish = () => {
     setShareSyncNotice("Publishing to the web…");
-    void cloud
-      .publish({ acknowledgeDesktopOnly: true })
-      .then(async () => {
+    // Re-apply the audience from the sheet (incl. the "specific people"
+    // allowlist). cloud.publish() re-used the saved sharing, so confirming a
+    // first publish silently dropped the people you had just added.
+    void applySharing(audience, permission, requireSignIn, perUserIsolation, allowedUserIds, {
+      acknowledgeDesktopOnly: true,
+    })
+      .then(async (result) => {
+        if (!result.published && !cloud.live) {
+          await cloud.publish({ acknowledgeDesktopOnly: true });
+          setShareSyncNotice("Publishing app code and databases to the web…");
+          await guardedWebSyncPushNow();
+        }
         setNeedsDesktopAck(false);
-        setShareSyncNotice("Publishing app code and databases to the web…");
-        await guardedWebSyncPushNow();
       })
       .catch((err: unknown) => {
         if (err instanceof CloudPublishBlockedError) {
           cloud.clearError();
           setCompatReport(err.compatibility);
           setNeedsDesktopAck(true);
+        } else {
+          cloud.reportError(publishErrorMessage(err));
         }
       })
       .finally(() => {
@@ -2050,6 +2076,7 @@ export function MiniAppPublishBar({
 
             {/* Cloud compatibility info - only show if blocking publish */}
             {needsDesktopAck ? (
+              <div ref={desktopAckRef}>
               <CloudCompatibilityPanel
                 report={compatReport ?? cloud.compatibility}
                 loading={compatLoading}
@@ -2057,6 +2084,7 @@ export function MiniAppPublishBar({
                 confirmBusy={cloud.busy}
                 onConfirmPublish={handleConfirmDesktopPublish}
               />
+              </div>
             ) : null}
           </div>
         </ShareSheet>
