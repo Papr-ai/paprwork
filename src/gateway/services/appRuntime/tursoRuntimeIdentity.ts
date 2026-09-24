@@ -1,8 +1,10 @@
 /**
- * Resolve which Parse user id selects a Turso replica segment for cloud mini-apps.
+ * Resolve Turso identity for cloud mini-apps and desktop replicas.
  *
- * Shared registry sources use the publish-catalog owner (publisher).
- * Per-user sources use the signed-in visitor (caller).
+ * - **Acting user** (tokens, cache keys): authenticated caller for per-user sources;
+ *   publisher for shared sources.
+ * - **Suffix user** (short name `d-{id8}-u-{uid8}`): only non-publishers on per-user
+ *   sources. The publisher keeps the shared primary (`d-{id8}`) — Option A.
  */
 
 import type { AppDataSource } from "../appDataSources.js";
@@ -18,6 +20,15 @@ export interface TursoDbActors {
   callerUserId?: string;
 }
 
+function normalizeUserIdForCompare(userId: string): string {
+  return userId.replace(/-/g, "").trim().toLowerCase();
+}
+
+export function isSamePaprUser(a: string, b: string): boolean {
+  return normalizeUserIdForCompare(a) === normalizeUserIdForCompare(b);
+}
+
+/** Authenticated user id for Turso token requests and client cache keys. */
 export function resolveTursoActingUserId(
   isolation: DatabaseRecord["isolation"] | undefined,
   actors: TursoDbActors,
@@ -34,6 +45,30 @@ export function resolveTursoActingUserId(
   return actors.publisherUserId;
 }
 
+/**
+ * User id passed to `tursoNameForRecord` for `-u-{uid8}` suffix.
+ * Returns `undefined` when the short name should stay on the shared primary.
+ */
+export function resolveTursoSuffixUserId(
+  isolation: DatabaseRecord["isolation"] | undefined,
+  actors: TursoDbActors,
+): string | undefined {
+  if (isolation !== "per-user") {
+    return undefined;
+  }
+  const caller = actors.callerUserId?.trim();
+  if (!caller) {
+    throw new Error(
+      "Sign in required to access per-user database sources",
+    );
+  }
+  const publisher = actors.publisherUserId?.trim();
+  if (publisher && isSamePaprUser(caller, publisher)) {
+    return undefined;
+  }
+  return caller;
+}
+
 /** Pick Turso replica user segment for one linked data source. */
 export function resolveTursoActingUserIdForSource(
   source: AppDataSource,
@@ -42,4 +77,14 @@ export function resolveTursoActingUserIdForSource(
   const registry = getDatabaseRegistryService();
   const record = registry.getRecordForSource(source);
   return resolveTursoActingUserId(record?.isolation, actors);
+}
+
+/** Pick `-u-{uid8}` suffix user for one linked data source (Option A). */
+export function resolveTursoSuffixUserIdForSource(
+  source: AppDataSource,
+  actors: TursoDbActors,
+): string | undefined {
+  const registry = getDatabaseRegistryService();
+  const record = registry.getRecordForSource(source);
+  return resolveTursoSuffixUserId(record?.isolation, actors);
 }

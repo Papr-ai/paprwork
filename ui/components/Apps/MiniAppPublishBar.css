@@ -466,8 +466,11 @@
 .mini-app-publish-bar__web-sync-chip-act {
   display: inline-flex;
   align-items: center;
-  margin: -3px -3px -3px 1px;
-  padding: 4px 6px;
+  /* Fill the chip's height (inset 2px) so the action reads as the pill's
+     right end, not a smaller button floating inside it. */
+  align-self: stretch;
+  margin: 2px 0 2px 1px;
+  padding: 0 7px;
   border: 0;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.55);
@@ -543,6 +546,19 @@
   color: var(--text-tertiary, var(--text-secondary));
   flex-shrink: 0;
   cursor: default;
+}
+
+/* Fork + audience badge for collaborator copies. */
+.mini-app-publish-bar__lineage-mark {
+  gap: 2px;
+}
+
+.mini-app-publish-bar__lineage-mark .mini-app-publish-bar__share-audience {
+  display: inline-flex;
+  opacity: 0.85;
+  /* The badge carries its own "Your team" title; let the mark's full
+     tooltip win so hovering either glyph explains the relationship. */
+  pointer-events: none;
 }
 
 .mini-app-publish-bar__lineage-mark:hover {
@@ -777,6 +793,35 @@
   text-overflow: ellipsis;
   flex-shrink: 0;
   max-width: min(180px, 28vw);
+}
+
+/* Click the name to rename. Looks like plain text until hovered. */
+.mini-app-publish-bar__title-button {
+  background: none;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  font-family: inherit;
+  text-align: left;
+  cursor: text;
+}
+
+.mini-app-publish-bar__title-button:hover {
+  border-color: var(--border-subtle, rgba(255, 255, 255, 0.12));
+  background: var(--surface-hover, rgba(255, 255, 255, 0.04));
+}
+
+.mini-app-publish-bar__title-input {
+  font-family: inherit;
+  background: var(--surface-input, rgba(0, 0, 0, 0.25));
+  border: 1px solid var(--accent, #3b82f6);
+  border-radius: 6px;
+  padding: 2px 6px;
+  margin-left: -6px;
+  outline: none;
+  width: min(220px, 30vw);
+  max-width: min(220px, 30vw);
 }
 
 .mini-app-publish-bar__status {
@@ -2577,4 +2622,106 @@ button.cloud-compat-badge--paused:hover {
 .share-sheet__row--selected:has(+ .share-sheet__people) {
   border-bottom-left-radius: 0;
   border-bottom-right-radius: 0;
+}
+
+/* Propose sheet — proposals you already sent, under Send to owner. */
+.propose-history {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
+.propose-history__heading {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+}
+
+.propose-history__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.propose-history__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary);
+}
+
+.propose-history__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.propose-history__title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.propose-history__meta {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.propose-history__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  border: 1px solid transparent;
+}
+
+.propose-history__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.propose-history__status--warn {
+  color: #cc7a00;
+  background: color-mix(in srgb, #cc7a00 12%, transparent);
+  border-color: color-mix(in srgb, #cc7a00 30%, transparent);
+}
+
+.propose-history__status--ok {
+  color: #0b7a45;
+  background: color-mix(in srgb, #0f9d58 12%, transparent);
+  border-color: color-mix(in srgb, #0f9d58 30%, transparent);
+}
+
+.propose-history__status--bad {
+  color: #c8372a;
+  background: color-mix(in srgb, #c8372a 12%, transparent);
+  border-color: color-mix(in srgb, #c8372a 30%, transparent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .propose-history__status--warn { color: #fbbf24; }
+  .propose-history__status--ok { color: #4ade80; }
+  .propose-history__status--bad { color: #f87171; }
 }

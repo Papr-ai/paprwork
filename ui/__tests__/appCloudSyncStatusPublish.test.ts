@@ -12,6 +12,7 @@
 
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
+  resolveCollaboratorBar,
   deriveAppCloudSyncStatus,
   formatWebSyncStatusTooltip,
   mergeRemoteCodeCheckIntoStatus,
@@ -263,7 +264,7 @@ describe("publish bar v2 chip labels", () => {
         pulling: true,
       }),
     ).toMatchObject({
-      label: "Getting updates…",
+      label: "Updating…",
       kind: "publish",
       disabled: true,
     });
@@ -312,7 +313,7 @@ describe("publish bar v2 chip labels", () => {
         syncEnabled: true,
         lastCheckedAt: Date.now(),
       }).label,
-    ).toBe("Updates on web");
+    ).toBe("Newer version on web");
     // Pull lives on the chip now. The primary stays put and greys out, because
     // nothing of yours is waiting to go up when the web copy is ahead.
     expect(
@@ -332,7 +333,7 @@ describe("publish bar v2 chip labels", () => {
         pushing: false,
         pulling: false,
       }),
-    ).toMatchObject({ label: "Publish changes", disabled: true });
+    ).toMatchObject({ label: "Publish", disabled: true });
 
     const review = {
       ...base,
@@ -348,7 +349,7 @@ describe("publish bar v2 chip labels", () => {
         pushing: false,
         pulling: false,
       }),
-    ).toMatchObject({ kind: "review", verb: "Review changes", glyph: "open" });
+    ).toMatchObject({ kind: "review", verb: "Review", glyph: "open" });
     expect(
       resolvePublishBarPrimaryAction({
         state: "action_required",
@@ -358,6 +359,27 @@ describe("publish bar v2 chip labels", () => {
         pulling: false,
       }),
     ).toMatchObject({ kind: "publish", disabled: true });
+  });
+
+  it("web ahead + local edits: Publish stays enabled and pulls first", () => {
+    const withEdits = resolvePublishBarPrimaryAction({
+      state: "updates_available",
+      live: true,
+      syncEnabled: true,
+      pushing: false,
+      pulling: false,
+      hasLocalChanges: true,
+    });
+    expect(withEdits).toMatchObject({ label: "Publish", pullFirst: true });
+    expect(withEdits?.disabled).toBeFalsy();
+  });
+
+  it("the primary label is Publish in every idle live state", () => {
+    for (const state of ["synced", "warn", "updates_available", "action_required", "error", "loading"] as const) {
+      expect(
+        resolvePublishBarPrimaryAction({ state, live: true, syncEnabled: true, pushing: false, pulling: false })?.label,
+      ).toBe("Publish");
+    }
   });
 
   it("keeps the primary slot present and push-only in every live state", () => {
@@ -415,6 +437,21 @@ describe("publish bar v2 chip labels", () => {
         publisherUpdatesAvailable: true,
       }),
     ).toMatchObject({ kind: "publish", disabled: true });
+  });
+
+  it("collaborator: Propose greys out with no edits and pulls first when the publisher is ahead", () => {
+    const base = { publisherAhead: false, pullingUpstream: false, busy: false, sourceSlug: "papr" };
+    const idle = resolveCollaboratorBar({ ...base, hasLocalEdits: false });
+    expect(idle.primary).toMatchObject({ label: "Propose", disabled: true });
+    expect(idle.chip.label).toBe("In sync with publisher");
+    const edits = resolveCollaboratorBar({ ...base, hasLocalEdits: true });
+    expect(edits.primary).toMatchObject({ label: "Propose", disabled: false, pullFirst: false });
+    expect(edits.chip.label).toBe("Edits not proposed");
+    const behind = resolveCollaboratorBar({ ...base, hasLocalEdits: true, publisherAhead: true });
+    expect(behind.primary).toMatchObject({ label: "Propose", pullFirst: true });
+    expect(behind.chipAction).toMatchObject({ kind: "upstream", verb: "Update" });
+    // Unknown (older install with no snapshot) never blocks Propose.
+    expect(resolveCollaboratorBar({ ...base, hasLocalEdits: null }).primary.disabled).toBe(false);
   });
 
   afterEach(() => {

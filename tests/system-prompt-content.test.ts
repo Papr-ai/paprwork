@@ -149,7 +149,7 @@ describe("SystemPrompt - Agent Docs & Skills Visibility", () => {
       includeExtendedAppPlaybook: true,
     });
 
-    expect(prompt).toContain("**2. Create a Plan (after brief for complex work):**");
+    expect(prompt).toContain("**2. Create a Plan (after Product Architect for new apps):**");
     expect(prompt).toContain('{ id: "design", description: "Design UI layout" }');
     expect(prompt).toContain('{ id: "build", description: "Build components" }');
     expect(prompt).toContain('{ id: "test", description: "Test functionality" }');

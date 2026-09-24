@@ -12,7 +12,8 @@ import {
 } from "../utils/cloudShareLink";
 import {
   audienceModelToPublishPrefs,
-  sharingToAudienceModel,
+  peopleAudienceUsesExternalGate,
+  publishPrefsToAudienceModel,
   type CodeAccess,
   type ShareAudienceModel,
 } from "../utils/shareAudienceModel";
@@ -337,7 +338,23 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             ? model.requireSignIn === true
             : model.audience === "link"
               ? model.requireSignIn !== false
-              : undefined;
+              : model.audience === "people" &&
+                  peopleAudienceUsesExternalGate(model)
+                ? true
+                : undefined;
+
+        const peopleAllowlist =
+          model.audience === "people"
+            ? {
+                allowedUserIds: model.allowedUserIds ?? [],
+                allowedEmails: model.allowedEmails ?? [],
+                allowedEmailDomains: model.allowedEmailDomains ?? [],
+              }
+            : {
+                allowedUserIds: [],
+                allowedEmails: [],
+                allowedEmailDomains: [],
+              };
 
         const targetAppId = appIdRef.current;
         const live = isCloudAppLive(state);
@@ -348,7 +365,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             codeAccess,
             requireSignIn,
             perUserIsolation: model.perUserIsolation,
-          allowedUserIds: model.allowedUserIds,
+            ...peopleAllowlist,
           });
           if (targetAppId !== appIdRef.current) {
             return;
@@ -363,7 +380,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             codeAccess,
             requireSignIn,
             perUserIsolation: model.perUserIsolation,
-          allowedUserIds: model.allowedUserIds,
+            ...peopleAllowlist,
             acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
           });
           applyPublishState(targetAppId, result);
@@ -373,7 +390,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
             codeAccess,
             requireSignIn,
             perUserIsolation: model.perUserIsolation,
-          allowedUserIds: model.allowedUserIds,
+            ...peopleAllowlist,
           });
           if (targetAppId !== appIdRef.current) {
             return;
@@ -529,7 +546,7 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     openInBrowser,
     setAutoUploadEnabled,
     clearError: clearPublishError,
-    shareModel: sharingToAudienceModel(
+    shareModel: publishPrefsToAudienceModel(
       viewModel.loginAccess,
       viewModel.externalLink,
       viewModel.codeAccess,
@@ -537,6 +554,8 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         requireSignIn: state?.prefs?.requireSignIn,
         perUserIsolation: state?.prefs?.perUserIsolation,
         allowedUserIds: state?.prefs?.allowedUserIds,
+        allowedEmails: state?.prefs?.allowedEmails,
+        allowedEmailDomains: state?.prefs?.allowedEmailDomains,
       },
     ),
     sharePrefs: {
@@ -545,6 +564,8 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       // Without this the saved allowlist never reaches the Share sheet, so a
       // "specific people" app reads back as plain "anyone in my workspace".
       allowedUserIds: state?.prefs?.allowedUserIds,
+      allowedEmails: state?.prefs?.allowedEmails,
+      allowedEmailDomains: state?.prefs?.allowedEmailDomains,
     },
   };
 }

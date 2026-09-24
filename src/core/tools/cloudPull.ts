@@ -37,6 +37,13 @@ const appIdSchema = z.object({
   appId: z.string().uuid().describe("Local mini-app ID"),
 });
 
+const pullCloudAppSchema = appIdSchema.extend({
+  resolution: z
+    .enum(["hold", "take_theirs", "keep_mine"])
+    .optional()
+    .describe("Conflict handling. Default hold (apply nothing on conflict). Only pass take_theirs/keep_mine after the user chose."),
+});
+
 export const pullCloudAppUpdatesTool = createTool({
   id: "pull_cloud_app_updates",
   description: `Pull this app's own web copy down to local — same as "Get updates" on the status chip.
@@ -45,12 +52,16 @@ Use when get_cloud_sync_status shows the web copy is ahead (gitUpdatesAvailable,
 Not for forks pulling from their publisher — use pull_publisher_updates for that.
 Not for database rows only — use papr_db_pull.
 
-Web wins on files that differ (same as the UI). Returns updatedFiles, conflictFiles, skipped/reason.
-**If conflictFiles is non-empty, STOP and tell the user which files need a decision — do not retry, publish, or edit those files blindly.**
+All-or-nothing (same as the UI): if any file was changed on both sides, NOTHING is applied — no code, no migrations — and conflictFiles lists them (heldForConflicts: true).
+**If conflictFiles is non-empty, STOP and ask the user: Keep mine / Take theirs / merge.** Then call again with resolution:
+- "take_theirs" — overwrite those local files with the web version, apply the rest + migrations
+- "keep_mine" — keep local versions of those files, apply everything else; publish afterwards so the web gets your version
+- To merge: read both versions (inspect_cloud_repo for theirs), write the merged file locally, then call with "keep_mine" and publish.
+Never pick a resolution without the user's choice.
 If the status shows gitRemoteRequiresReview or writerConflict, do not call this — the user must review in the app tab first.`,
-  inputSchema: appIdSchema,
+  inputSchema: pullCloudAppSchema,
   execute: async (input) => {
-    const { appId } = unwrapContext(input);
+    const { appId, resolution } = unwrapContext(input);
     const startTime = performance.now();
     try {
       const sync = getCloudSyncService();
@@ -60,6 +71,7 @@ If the status shows gitRemoteRequiresReview or writerConflict, do not call this 
         waitForTurso: true,
         allowRecentSkip: false,
         preferCloudOverLocal: true,
+        resolution,
       });
       return {
         success: true,
@@ -72,6 +84,8 @@ If the status shows gitRemoteRequiresReview or writerConflict, do not call this 
           reason: result.code.reason ?? null,
           registryMigrationsApplied: result.registryMigrationsApplied ?? [],
           needsUserDecision: result.code.conflictFiles.length > 0,
+          heldForConflicts: result.code.heldForConflicts ?? false,
+          keptLocalFiles: result.code.keptLocalFiles ?? [],
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),

@@ -149,6 +149,8 @@ export function formatLastUploadedAt(isoStr: string | null | undefined): string 
 }
 
 export interface AppCloudSyncStatus {
+  /** Remote update held back because these files changed on both sides. */
+  updateConflictFiles?: string[];
   overall: AppCloudSyncOverall;
   codeStatus: AppCloudCodeStatus;
   codePhase: AppCloudItemPhase;
@@ -1084,6 +1086,32 @@ export interface RemoteCodeCheckSnapshot {
   publisherUpdatesAvailable?: boolean;
   publisherLiveRevision?: string | null;
   storedUpstreamRevision?: string | null;
+  /** Remote commit arrived but auto-pull is deferred (gateway appRepoPendingUpdate). */
+  pendingUpdate?: {
+    commitSha: string;
+    reason: string;
+    conflictFiles?: string[];
+  } | null;
+}
+
+/** Short share-bar copy for a deferred remote update. */
+export function describePendingUpdate(
+  pending: NonNullable<RemoteCodeCheckSnapshot["pendingUpdate"]>,
+): { chipLabel: string; summaryLine: string } {
+  const conflicts = pending.conflictFiles?.length ?? 0;
+  if (conflicts > 0) {
+    return {
+      chipLabel: "Update conflicts",
+      summaryLine: "Update conflicts with your edits",
+    };
+  }
+  if (pending.reason === "local changes pending upload") {
+    return {
+      chipLabel: "Update waiting",
+      summaryLine: "Syncing your changes first, then updating",
+    };
+  }
+  return { chipLabel: "Update waiting", summaryLine: "Update waiting — click Get updates" };
 }
 
 /** Hide cached namespace-git "updates available" until live sync checks finish. */
@@ -1105,6 +1133,17 @@ export function mergeRemoteCodeCheckIntoStatus(
   status: AppCloudSyncStatus,
   remote: RemoteCodeCheckSnapshot | null,
 ): AppCloudSyncStatus {
+  if (remote?.pendingUpdate && status.overall !== "disabled") {
+    const copy = describePendingUpdate(remote.pendingUpdate);
+    return {
+      ...status,
+      gitUpdatesAvailable: true,
+      codeStatus: "updates_available",
+      chipLabel: copy.chipLabel,
+      summaryLine: copy.summaryLine,
+      updateConflictFiles: remote.pendingUpdate.conflictFiles ?? [],
+    };
+  }
   if (remote?.upToDate) {
     if (
       !status.gitUpdatesAvailable &&
@@ -1304,9 +1343,9 @@ export function resolvePublishBarChipLabel(input: {
       tone: "busy",
     };
   if (state === "updates_available")
-    return { label: "Updates on web", showRefresh: false, tone: "info" };
+    return { label: "Newer version on web", showRefresh: false, tone: "info" };
   if (state === "action_required")
-    return { label: "Needs review", showRefresh: false, tone: "bad" };
+    return { label: "Update conflicts", showRefresh: false, tone: "bad" };
   if (state === "warn")
     return { label: "Unpublished changes", showRefresh: false, tone: "warn" };
   if (state === "disabled" || !syncEnabled)
@@ -1367,17 +1406,23 @@ export function resolvePublishBarPrimaryAction(input: {
   pullingUpstream?: boolean;
   publisherUpdatesAvailable?: boolean;
   forkWebPreview?: boolean;
+  /** Local edits waiting while the web copy is also ahead (v4: pull, then publish). */
+  hasLocalChanges?: boolean;
 }): {
   label: string;
   kind: "publish" | "retry";
   disabled?: boolean;
   title: string;
+  /** Click runs Get updates first, then publishes. */
+  pullFirst?: boolean;
 } | null {
-  const { state, live, syncEnabled, pushing, pulling } = input;
+  const { state, live, syncEnabled, pushing, pulling, hasLocalChanges = false } = input;
   // Files mode hides the whole web-sync lane — chip included — so there is no
-  // slot for this button to persist in. The "vanishing" complaint was about
-  // disappearing *within* preview mode, which is what the rest of this fixes.
+  // slot for this button to persist in.
   if (!syncEnabled) return null;
+  // One verb in every state. What happens after the click shows as progress
+  // (Updating… then Publishing…); the chip explains the state, the button
+  // never does.
   if (!live) {
     return {
       label: pushing ? "Publishing…" : "Publish",
@@ -1388,46 +1433,41 @@ export function resolvePublishBarPrimaryAction(input: {
   }
   // Unknown, not idle: say so and stay put rather than blinking out and back.
   if (state === "loading") {
-    return {
-      label: "Publish changes",
-      kind: "publish",
-      disabled: true,
-      title: "Checking the web copy…",
-    };
+    return { label: "Publish", kind: "publish", disabled: true, title: "Checking the web copy…" };
   }
   if (state === "syncing" || pushing || pulling) {
     return {
-      label: pulling ? "Getting updates…" : "Publishing…",
+      label: pulling ? "Updating…" : "Publishing…",
       kind: "publish",
       disabled: true,
-      title: pulling ? "Update in progress" : "Upload in progress",
+      title: pulling ? "Getting the latest web version" : "Upload in progress",
     };
   }
   if (state === "error") {
-    return {
-      label: "Retry publish",
-      kind: "retry",
-      title: "Last publish failed — try again",
-    };
+    return { label: "Publish", kind: "retry", title: "Last publish failed. Try again" };
   }
   if (state === "warn") {
+    return { label: "Publish", kind: "publish", title: "Send your local edits to the web" };
+  }
+  if (state === "updates_available" && hasLocalChanges) {
     return {
-      label: "Publish changes",
+      label: "Publish",
       kind: "publish",
-      title: "Send your local edits to the web",
+      pullFirst: true,
+      title: "Gets the newer web version first, then publishes your edits. Stops if they conflict.",
     };
   }
-  // Up to date, web ahead, or needs review: nothing of yours is waiting to go
-  // up. Same slot, same words, greyed — with the reason one hover away.
+  // Up to date, web ahead with nothing local, or conflicts: nothing of yours
+  // is waiting to go up. Same slot, same word, greyed, with the reason on hover.
   return {
-    label: "Publish changes",
+    label: "Publish",
     kind: "publish",
     disabled: true,
     title:
       state === "updates_available"
-        ? "Nothing local to publish — the web copy is ahead of you"
+        ? "Nothing local to publish. Get the newer version from the status chip"
         : state === "action_required"
-          ? "Resolve the review on the status chip before publishing"
+          ? "Resolve the update conflicts on the status chip first"
           : "Everything here is already on the web",
   };
 }
@@ -1472,7 +1512,7 @@ export function resolvePublishBarChipAction(input: {
   // would imply a second operation.
   if (state === "syncing" || pushing || pulling || pullingUpstream) return null;
   if (state === "action_required") {
-    return { kind: "review", glyph: "open", verb: "Review changes" };
+    return { kind: "review", glyph: "open", verb: "Review" };
   }
   if (forkWebPreview && publisherUpdatesAvailable) {
     return { kind: "upstream", glyph: "down", verb: "Update from publisher" };
@@ -1609,5 +1649,59 @@ export function resolvePublishBarStatus(input: PublishBarStatusInput): {
     spinning,
     tooltip,
     interactive: true,
+  };
+}
+
+/**
+ * Collaborator (track install) bar, v4. The primary is always Propose; the
+ * chip explains the state. Code only leaves as a proposal, so there is no
+ * Publish here, and Propose greys out when nothing differs from the
+ * publisher's last synced code.
+ */
+export function resolveCollaboratorBar(input: {
+  /** true/false from the local-edits check; null = unknown (keep Propose enabled). */
+  hasLocalEdits: boolean | null;
+  publisherAhead: boolean;
+  pullingUpstream: boolean;
+  busy: boolean;
+  sourceSlug: string;
+}): {
+  chip: { label: string; tone: PublishBarChipTone; state: WebSyncVisualState };
+  chipAction: { kind: "upstream" | "propose"; glyph: "down" | "up"; verb: string } | null;
+  primary: { label: string; disabled: boolean; title: string; pullFirst: boolean };
+} {
+  const { hasLocalEdits, publisherAhead, pullingUpstream, busy, sourceSlug } = input;
+  const edits = hasLocalEdits !== false;
+  if (pullingUpstream) {
+    return {
+      chip: { label: "Updating…", tone: "busy", state: "syncing" },
+      chipAction: null,
+      primary: { label: "Updating…", disabled: true, title: "Getting the publisher's latest code", pullFirst: false },
+    };
+  }
+  const chip = publisherAhead
+    ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
+    : hasLocalEdits
+      ? { label: "Edits not proposed", tone: "warn" as const, state: "warn" as const }
+      : { label: "In sync with publisher", tone: "ok" as const, state: "synced" as const };
+  const chipAction = publisherAhead
+    ? { kind: "upstream" as const, glyph: "down" as const, verb: "Update" }
+    : hasLocalEdits
+      ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }
+      : null;
+  const pullFirst = publisherAhead && edits;
+  return {
+    chip,
+    chipAction,
+    primary: {
+      label: "Propose",
+      disabled: busy || !edits,
+      pullFirst,
+      title: !edits
+        ? "No code edits to propose"
+        : pullFirst
+          ? `Gets ${sourceSlug}'s latest code first, then proposes your edits. Stops if they conflict.`
+          : `Send your code edits to ${sourceSlug} for review`,
+    },
   };
 }

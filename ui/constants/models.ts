@@ -97,18 +97,6 @@ export const CHAT_MODELS: AIModel[] = [
       "Latest Opus frontier — adaptive thinking (always on), 1M context, agentic coding",
     group: "Anthropic",
     supportsThinking: true,
-    defaultThinkingBudget: 0,
-    maxTokens: 128000,
-    requiresApiKey: "ANTHROPIC_API_KEY",
-  },
-  {
-    id: "claude-opus-5-5",
-    name: "Claude Opus 5.5",
-    provider: "anthropic",
-    description:
-      "Fable-5.1-level work at Opus pricing — adaptive thinking, 1M context, agentic coding",
-    group: "Anthropic",
-    supportsThinking: true,
     // Adaptive, and on this model it cannot be switched off — see
     // `anthropicModelRequiresAlwaysOnThinking`. The 0 is the same "let the
     // model decide" value Opus 5 and Fable 5.1 carry, not a request for none.

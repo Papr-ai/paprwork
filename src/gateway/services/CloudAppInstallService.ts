@@ -57,6 +57,8 @@ export interface CloudAppInstallInput {
   catalogScope?: "global" | "namespace";
   /** Publish visibility from catalog entry — track requires team. */
   visibility?: string;
+  /** Name for the new app (Duplicate as my own app). Made unique locally. */
+  title?: string;
 }
 
 export interface CloudAppInstallResult {
@@ -230,7 +232,7 @@ export class CloudAppInstallService {
         );
       }
 
-      const title = resolveTitle(files, prepare.source.slug);
+      const title = input.title?.trim() || resolveTitle(files, prepare.source.slug);
       const description = resolveDescription(
         files,
         `Installed from Papr Cloud (${prepare.source.slug})`,
@@ -268,6 +270,7 @@ export class CloudAppInstallService {
         publisherAppId: prepare.source.appId,
         localAppId: app.id,
         installDbPolicy,
+        remapJobIds: prepare.mode === "fork",
       });
       if (linked.copiedJobIds.length > 0) {
         console.log(

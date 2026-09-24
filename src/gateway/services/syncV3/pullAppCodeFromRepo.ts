@@ -48,9 +48,28 @@ export interface PullAppCodeFromRepoResult {
   registryMigrationsCopied: string[];
   conflictFiles: string[];
   skippedFiles: string[];
+  /** Keep mine: conflicting files where the local version was kept on purpose. */
+  keptLocalFiles?: string[];
+  /** True when conflicts held the whole update back — nothing was written. */
+  heldForConflicts?: boolean;
   skipped?: boolean;
   reason?: string;
 }
+
+/**
+ * How to handle files both sides changed.
+ * - hold (default): all-or-nothing — if any file conflicts, write NOTHING
+ *   (no code, no migrations) and report conflictFiles for a user decision.
+ * - take_theirs: overwrite conflicting local files with the remote version.
+ * - keep_mine: keep local conflicting files, apply the rest of the update,
+ *   and accept the remote baseline so a later publish carries your version.
+ */
+export type PullConflictResolution = "hold" | "take_theirs" | "keep_mine";
+
+type PlannedFile =
+  | { action: "skip"; filePath: string }
+  | { action: "conflict"; filePath: string; content: string; isMigration: boolean }
+  | { action: "write"; filePath: string; content: string; isMigration: boolean };
 
 async function collectTextFiles(rootDir: string): Promise<Map<string, string>> {
   const files = new Map<string, string>();
@@ -87,6 +106,7 @@ export async function pullAppCodeFromRepo(
     allowRecentSkip?: boolean;
     /** Manual Get updates / post-approve: cloud wins over stale local-upload fingerprints. */
     preferCloudOverLocal?: boolean;
+    resolution?: PullConflictResolution;
   },
 ): Promise<PullAppCodeFromRepoResult> {
   const { PhaseTimer } = await import("../../utils/phaseTiming.js");
@@ -247,6 +267,8 @@ export async function pullAppCodeFromRepo(
       typeof repairPulledMetadataWorkspaceScope
     > | null = null;
 
+    // Phase 1 — classify every file without touching disk.
+    const plan: PlannedFile[] = [];
     for (const [filePath, upstreamContent] of upstreamFiles) {
       const remoteOid = remoteOidByPath.get(filePath);
       const lastSyncedOid = cachedPaths[filePath] ?? null;
@@ -257,23 +279,18 @@ export async function pullAppCodeFromRepo(
         content: upstreamContent,
         remoteOid,
         lastSyncedOid,
+        dryRun: true,
       });
-
       if (migrationOutcome.kind === "written") {
-        registryMigrationsCopied.push(migrationOutcome.registryRelativePath);
-        updatedFiles.push(filePath);
+        plan.push({ action: "write", filePath, content: upstreamContent, isMigration: true });
         continue;
       }
       if (migrationOutcome.kind === "conflict") {
-        conflictFiles.push(filePath);
+        plan.push({ action: "conflict", filePath, content: upstreamContent, isMigration: true });
         continue;
       }
-      if (migrationOutcome.kind === "unchanged") {
-        skippedFiles.push(filePath);
-        continue;
-      }
-      if (migrationOutcome.kind === "skipped") {
-        skippedFiles.push(filePath);
+      if (migrationOutcome.kind === "unchanged" || migrationOutcome.kind === "skipped") {
+        plan.push({ action: "skip", filePath });
         continue;
       }
 
@@ -284,11 +301,11 @@ export async function pullAppCodeFromRepo(
         : null;
 
       if (remoteOid && localOid === remoteOid) {
-        skippedFiles.push(filePath);
+        plan.push({ action: "skip", filePath });
         continue;
       }
       if (localContent !== undefined && upstreamHash === hashContent(localContent)) {
-        skippedFiles.push(filePath);
+        plan.push({ action: "skip", filePath });
         continue;
       }
 
@@ -297,15 +314,63 @@ export async function pullAppCodeFromRepo(
         (lastSyncedOid !== null && localOid === lastSyncedOid);
 
       if (!localUnchanged && remoteOid && localOid !== remoteOid) {
-        conflictFiles.push(filePath);
+        plan.push({ action: "conflict", filePath, content: upstreamContent, isMigration: false });
+        continue;
+      }
+      plan.push({ action: "write", filePath, content: upstreamContent, isMigration: false });
+    }
+
+    const resolution = options.resolution ?? "hold";
+    const planned = plan.filter((f) => f.action === "conflict").map((f) => f.filePath);
+
+    // All-or-nothing: a conflict holds the WHOLE update (code + migrations)
+    // so the user never runs half of someone else's change.
+    if (planned.length > 0 && resolution === "hold") {
+      timer.logIfSlow(`PullAppCode held app=${trimmed}`, 200);
+      return {
+        ...empty,
+        commitSha: head.commitSha,
+        conflictFiles: planned,
+        heldForConflicts: true,
+      };
+    }
+
+    // Phase 2 — apply.
+    const keptLocalFiles: string[] = [];
+    for (const item of plan) {
+      if (item.action === "skip") {
+        skippedFiles.push(item.filePath);
+        continue;
+      }
+      if (item.action === "conflict" && resolution === "keep_mine") {
+        keptLocalFiles.push(item.filePath);
+        skippedFiles.push(item.filePath);
         continue;
       }
 
-      let contentToWrite = upstreamContent;
-      if (filePath === "metadata.json") {
+      if (item.isMigration) {
+        const outcome = await persistPulledSchemaMigration({
+          appId: trimmed,
+          repoPath: item.filePath,
+          content: item.content,
+          remoteOid: remoteOidByPath.get(item.filePath),
+          lastSyncedOid: cachedPaths[item.filePath] ?? null,
+          overwrite: item.action === "conflict",
+        });
+        if (outcome.kind === "written") {
+          registryMigrationsCopied.push(outcome.registryRelativePath);
+          updatedFiles.push(item.filePath);
+        } else {
+          skippedFiles.push(item.filePath);
+        }
+        continue;
+      }
+
+      let contentToWrite = item.content;
+      if (item.filePath === "metadata.json") {
         const localApp = await appService.getApp(trimmed);
         const repair = repairPulledMetadataWorkspaceScope(
-          upstreamContent,
+          item.content,
           {
             organizationId: localApp?.organizationId,
             namespaceId: localApp?.namespaceId,
@@ -318,11 +383,11 @@ export async function pullAppCodeFromRepo(
         }
       }
 
-      const written = await appService.writeAppFile(trimmed, filePath, contentToWrite);
+      const written = await appService.writeAppFile(trimmed, item.filePath, contentToWrite);
       if (written) {
-        updatedFiles.push(filePath);
+        updatedFiles.push(item.filePath);
       } else {
-        skippedFiles.push(filePath);
+        skippedFiles.push(item.filePath);
       }
     }
 
@@ -389,42 +454,55 @@ export async function pullAppCodeFromRepo(
       registryMigrationsCopied,
       conflictFiles,
       skippedFiles,
+      ...(keptLocalFiles.length > 0 ? { keptLocalFiles } : {}),
     };
   } finally {
     await cleanup();
   }
 }
 
+export interface DesktopRemoteCommitPullOutcome {
+  /** True only when local code actually reached the remote commit (or already was there). */
+  pulled: boolean;
+  /** Why the update is still waiting — shown on the share bar chip. */
+  waitingReason?: string;
+  conflictFiles?: string[];
+}
+
 /** Pull per-app repo into $PAPR_HOME when a remote writer commit lands (cloud agent, other device). */
 export async function pullDesktopAppOnRemoteCommit(input: {
   appId: string;
   commitSha: string;
-}): Promise<void> {
+}): Promise<DesktopRemoteCommitPullOutcome> {
   const sync = getCloudSyncService();
   if (!sync) {
-    return;
+    return { pulled: false, waitingReason: "cloud sync unavailable" };
   }
 
   if (await appNeedsOrderedFlushAsync(sync, input.appId)) {
     console.log(
-      `[AppRepoRevisionSubscriber] Skipped desktop pull for ${input.appId} — local changes pending upload`,
+      `[AppRepoRevisionSubscriber] Deferred desktop pull for ${input.appId} — local changes pending upload`,
     );
-    return;
+    return { pulled: false, waitingReason: "local changes pending upload" };
   }
 
   let token: string | null = null;
   try {
     token = await sync.ensureFreshToken();
   } catch {
-    return;
+    return { pulled: false, waitingReason: "cloud login required" };
   }
 
-  const result = await pullAppCodeFromRepo(input.appId, { token });
+  // A new commit event means the "recently verified" cursor is stale by
+  // definition — always check the remote head.
+  const result = await pullAppCodeFromRepo(input.appId, { token, allowRecentSkip: false });
   if (result.skipped && result.reason) {
     console.log(
       `[AppRepoRevisionSubscriber] Desktop pull skipped for ${input.appId}: ${result.reason.slice(0, 80)}`,
     );
-    return;
+    return result.reason === "already at remote head"
+      ? { pulled: true }
+      : { pulled: false, waitingReason: result.reason };
   }
 
   if (result.conflictFiles.length === 0) {
@@ -452,7 +530,13 @@ export async function pullDesktopAppOnRemoteCommit(input: {
     console.warn(
       `[AppRepoRevisionSubscriber] ${result.conflictFiles.length} file conflict(s) pulling ${input.appId} — resolve locally or upload`,
     );
+    return {
+      pulled: false,
+      waitingReason: "conflicts with your edits",
+      conflictFiles: result.conflictFiles,
+    };
   }
+  return { pulled: true };
 }
 
 /** True when local file OID differs from last acked remote OID (cloud may be ahead). */

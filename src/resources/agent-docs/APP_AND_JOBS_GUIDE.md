@@ -132,6 +132,8 @@ For **per-user isolation**: `create_database({ isolation: "per-user" })` + `atta
 
 Registry DBs sync to Turso. Schema changes **must** use migration files — bash blocks raw `ALTER TABLE` on synced paths.
 
+**Create migrations with `papr_db_create_migration({ dbId, name, sql })`.** The system names the file `NNNN_YYYYMMDDHHMMSS_name.sql` (next number + UTC timestamp) and applies it, so collaborators can't collide on a filename. Don't hand-write migration files or pick numbers; never rename existing ones. (The `write_file` example below shows the resulting layout.)
+
 ```javascript
 write_file({
   path: "$PAPR_HOME/data/databases/billing/migrations/0001_init.sql",
@@ -151,7 +153,8 @@ CREATE TABLE invoices (
 
 | Task | Tool / API |
 |------|------------|
-| Apply `migrations/*.sql` | `papr_db_apply_migration({ dbId, migrationId })` — Turso primary when online |
+| New schema change | `papr_db_create_migration({ dbId, name, sql })` — names + applies |
+| Re-apply existing `migrations/*.sql` | `papr_db_apply_migration({ dbId, migrationId })` — Turso primary when online |
 | Row DML | `papr_db_exec({ dbId, sql })` or mini-app `/api/db/write` — **no DDL** under Plan A |
 | Sync status / recovery | `papr_db_sync_status`, `repair_cloud_sync` |
 | Local rows, empty Turso (copy/migration) | Restore backup if needed → strip sidecars → `papr_db_apply_migration_cloud` + `papr_db_push` — **not** `bootstrap_remote` |

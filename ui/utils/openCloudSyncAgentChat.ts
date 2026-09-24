@@ -237,3 +237,17 @@ export function buildPrReviewAgentPrompt(input: {
   );
   return parts.join(" ");
 }
+
+/** Held Get updates: same files edited locally and in the incoming update. */
+export function buildUpdateConflictAgentPrompt(input: {
+  appId?: string;
+  files: string[];
+}): string {
+  return [
+    "An update to my app conflicts with my local edits and is on hold.",
+    input.appId ? `App id: ${input.appId}.` : "",
+    `Conflicting files: ${input.files.join(", ")}.`,
+    "Use inspect_cloud_repo to read the incoming version and read_file for mine. Merge each file so both sets of changes survive, write the merged files locally,",
+    "then call pull_cloud_app_updates with resolution \"keep_mine\" to apply the rest of the update (including migrations), and tell me what you merged before I publish.",
+  ].filter(Boolean).join(" ");
+}

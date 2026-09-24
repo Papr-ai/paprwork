@@ -81,12 +81,12 @@ describe("WebSyncPopover", () => {
     ).not.toThrow();
   });
 
-  it("still offers Publish changes while status is unresolved (live app)", () => {
+  it("still offers Publish while status is unresolved (live app)", () => {
     render(
       <WebSyncPopover {...baseProps} status={null} loading={false} appLive />,
     );
 
-    expect(screen.getByRole("button", { name: /publish changes/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^publish$/i })).toBeTruthy();
   });
 
   it("offers Publish while status is unresolved (draft app)", () => {
@@ -100,7 +100,7 @@ describe("WebSyncPopover", () => {
   it("labels push action from publish state", () => {
     expect(webSyncPushButtonLabel({ appLive: false, pushing: false })).toBe("Publish");
     expect(webSyncPushButtonLabel({ appLive: false, pushing: true })).toBe("Publishing…");
-    expect(webSyncPushButtonLabel({ appLive: true, pushing: false })).toBe("Publish changes");
+    expect(webSyncPushButtonLabel({ appLive: true, pushing: false })).toBe("Publish");
     expect(webSyncPushButtonLabel({ appLive: true, pushing: true })).toBe("Publishing…");
   });
 
@@ -224,7 +224,7 @@ describe("WebSyncPopover", () => {
       />,
     );
 
-    expect(screen.getByRole("button", { name: /publish changes/i })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^publish$/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /get updates/i })).toBeTruthy();
   });
 

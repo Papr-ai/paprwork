@@ -25,6 +25,14 @@ interface PublishBarOverflowMenuProps {
   onPropose?: () => void;
   /** Upstream slug, so the menu item names who receives the proposal. */
   upstreamSlug?: string;
+  /** Collaborator (track install): new app you own — same code, fresh data. */
+  onDuplicateAsOwn?: () => void;
+  /** Collaborator with local edits: reset to the publisher's code. */
+  onDiscardEdits?: () => void;
+  /** Reveal the app folder in Finder / Explorer. */
+  onShowInFinder?: () => void;
+  /** Copy into another org or workspace (same dialog as the Apps page card menu). */
+  onCopyToWorkspace?: () => void;
 }
 
 /**
@@ -57,6 +65,10 @@ export function PublishBarOverflowMenu({
   onUnpublish,
   onPropose,
   upstreamSlug,
+  onDuplicateAsOwn,
+  onDiscardEdits,
+  onShowInFinder,
+  onCopyToWorkspace,
 }: PublishBarOverflowMenuProps) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -139,6 +151,48 @@ export function PublishBarOverflowMenu({
             </>
           ) : null}
 
+          {onDuplicateAsOwn || onDiscardEdits ? (
+            <>
+              <div className="pb-overflow__sep" />
+              {onDuplicateAsOwn ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pb-overflow__item"
+                  disabled={busy}
+                  onClick={() => {
+                    onDuplicateAsOwn();
+                    setOpen(false);
+                  }}
+                >
+                  Duplicate as my own app
+                  <span className="pb-overflow__hint">
+                    Your own copy, to edit or share. Fresh data, no link to the publisher
+                  </span>
+                </button>
+              ) : null}
+              {onDiscardEdits ? (
+                <button
+                  type="button"
+                  role="menuitem"
+                  className="pb-overflow__item pb-overflow__item--danger"
+                  disabled={busy}
+                  onClick={() => {
+                    onDiscardEdits();
+                    setOpen(false);
+                  }}
+                >
+                  Discard my edits
+                  <span className="pb-overflow__hint">
+                    {upstreamSlug
+                      ? `Go back to ${upstreamSlug}'s latest code`
+                      : "Go back to the publisher's latest code"}
+                  </span>
+                </button>
+              ) : null}
+            </>
+          ) : null}
+
           {live && !isFork ? (
             <>
               <div className="pb-overflow__sep" />
@@ -156,6 +210,42 @@ export function PublishBarOverflowMenu({
                 <span className="pb-overflow__hint">
                   Removes the live URL and Community listing
                 </span>
+              </button>
+            </>
+          ) : null}
+
+          {onCopyToWorkspace || onShowInFinder ? (
+            <div className="pb-overflow__sep" />
+          ) : null}
+          {onCopyToWorkspace ? (
+            <button
+              type="button"
+              role="menuitem"
+              className="pb-overflow__item"
+              disabled={busy}
+              onClick={() => {
+                onCopyToWorkspace();
+                setOpen(false);
+              }}
+            >
+              Copy to workspace…
+              <span className="pb-overflow__hint">
+                Independent copy in another org or workspace
+              </span>
+            </button>
+          ) : null}
+          {onShowInFinder ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                className="pb-overflow__item"
+                onClick={() => {
+                  onShowInFinder();
+                  setOpen(false);
+                }}
+              >
+                Show app files in Finder
               </button>
             </>
           ) : null}

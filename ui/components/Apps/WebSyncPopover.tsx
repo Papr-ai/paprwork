@@ -21,8 +21,9 @@ import {
   buildUploadFailureAgentPrompt,
   buildWriterConflictAgentPrompt,
   openCloudSyncAgentChat,
+  buildUpdateConflictAgentPrompt,
 } from "../../utils/openCloudSyncAgentChat";
-/** Primary push action label — Publish for first-time web deploy, Publish changes when already live. */
+/** Primary push action label — Publish in every state (v4: one verb, progress shows what happens). */
 export function webSyncPushButtonLabel(options: {
   appLive: boolean;
   pushing: boolean;
@@ -30,7 +31,7 @@ export function webSyncPushButtonLabel(options: {
   if (options.pushing) {
     return "Publishing…";
   }
-  return options.appLive ? "Publish changes" : "Publish";
+  return "Publish";
 }
 
 /**
@@ -93,6 +94,8 @@ export interface WebSyncPopoverProps {
   onBumpQueue?: () => void;
   onPullUpdates: () => void;
   onApplyRemoteUpdates: () => void;
+  /** Held update with conflicts: Keep mine / Take theirs. */
+  onResolveConflict?: (resolution: "take_theirs" | "keep_mine") => void;
   /** False when the app has never been published — primary action is Publish (share + upload). */
   appLive?: boolean;
   /** Per-app: upload to web automatically vs Publish changes only (hint copy only) */
@@ -179,7 +182,7 @@ function databaseBlockerHint(
   if (blocked.some((db) => db.migrationConflict)) {
     return "Your local database and the web version have different structures. Ask the agent to reconcile them, then publish again.";
   }
-  return "The database structure changed locally and isn't on the web yet. Click Publish changes — if that fails, ask the agent to align it.";
+  return "The database structure changed locally and isn't on the web yet. Click Publish — if that fails, ask the agent to align it.";
 }
 
 function resolveUploadFailureMessage(
@@ -223,6 +226,7 @@ export function WebSyncPopover({
   onBumpQueue,
   onPullUpdates,
   onApplyRemoteUpdates,
+  onResolveConflict,
   appLive = true,
   autoUploadEnabled,
   popoverRef,
@@ -247,6 +251,9 @@ export function WebSyncPopover({
   const queuedForUpload = status?.uploadQueued === true;
   const showMergeReview = remoteReviewNeeded && !metadataSync;
   const showWriterConflict = writerConflict && !showMergeReview && !metadataSync;
+  const updateConflictFiles = status?.updateConflictFiles ?? [];
+  const showUpdateConflict =
+    updateConflictFiles.length > 0 && !showMergeReview && !metadataSync && Boolean(onResolveConflict);
   // status is null until the first sync check resolves, and this runs above
   // the `!status` guard below — keep it optional-chained.
   const schemaDriftBlocked =
@@ -556,7 +563,7 @@ export function WebSyncPopover({
           <p className="mini-app-publish-bar__sync-popover-hint">
             {appLive ? (
               <>
-                Publishing is manual for this app — click <strong>Publish changes</strong> when you
+                Publishing is manual for this app — click <strong>Publish</strong> when you
                 want local changes on the web. After sharing changes, wait until this panel
                 shows synced before copying the external link.
               </>
@@ -616,7 +623,42 @@ export function WebSyncPopover({
             {refreshing ? "Checking…" : "Check status"}
           </button>
         ) : null}
-        {showWriterConflict ? (
+        {showUpdateConflict ? (
+          <>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              {updateConflictFiles.slice(0, 3).join(", ")}
+              {updateConflictFiles.length > 3 ? ` +${updateConflictFiles.length - 3} more` : ""}
+            </p>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => onResolveConflict?.("keep_mine")}
+            >
+              Keep mine
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => {
+                if (confirm(`Replace your edits in ${updateConflictFiles.length} file(s) with the update?`)) {
+                  onResolveConflict?.("take_theirs");
+                }
+              }}
+            >
+              Take theirs
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => openCloudSyncAgentChat(buildUpdateConflictAgentPrompt({ appId, files: updateConflictFiles }))}
+            >
+              Ask agent to merge
+            </button>
+          </>
+        ) : showWriterConflict ? (
           <>
             <button
               type="button"
@@ -776,7 +818,7 @@ export function WebSyncPopover({
               {pulling ? "Getting updates…" : "Get updates"}
             </button>
             <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
-              Publish didn't finish — try Publish changes again. If it keeps failing, ask the agent to look into it.
+              Publish didn't finish — try Publish again. If it keeps failing, ask the agent to look into it.
             </p>
           </>
         ) : showOversizedFilesHelp ? (

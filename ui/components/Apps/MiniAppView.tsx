@@ -882,6 +882,7 @@ export function MiniAppView({
           onWorkspacePanelChange={setWorkspacePanel}
           linkedJobCount={linkedJobCount}
           onTrackPullComplete={() => void refreshAppMetadata()}
+          onTitleChange={(title) => setAppTitle(title)}
           onRefreshPreview={handleRefreshPreview}
           previewTabVisible={previewTabVisible}
           previewShellLoaded={previewShellLoaded}
