@@ -103,6 +103,10 @@ describe("tursoReplicaPushScheduler routing", () => {
       getByPath: () => undefined,
     } as ReturnType<typeof registryMod.getDatabaseRegistryService>);
 
+        // Since ab6c6376 the watcher gates on auto-upload before the dirty check.
+    const uploadModeMod = await import("../src/gateway/services/cloudUploadMode.js");
+    vi.spyOn(uploadModeMod, "shouldAutoUploadReplicaSyncKey").mockReturnValue(true);
+
     const coordinatorMod = await import(
       "../src/gateway/services/cloudSync/SyncCoordinator.js"
     );
@@ -288,9 +292,9 @@ describe("tursoReplicaPushScheduler routing", () => {
     scheduleTursoReplicaPushForSyncKey("db-test", "normal", "watcher");
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("skipped (manual upload mode)"),
-    );
+    // The skip is silent now (no "manual upload mode" log); assert nothing was
+    // scheduled rather than pinning a log line.
+    expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining("debounce"));
 
     logSpy.mockRestore();
     resetTursoReplicaPushSchedulerForTests();
