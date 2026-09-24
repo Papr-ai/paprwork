@@ -112,6 +112,17 @@ export interface AppWriterRepoReport {
     updatedAt: string;
   } | null;
   syncV3: AppSyncV3Report;
+  /**
+   * Remote commit that arrived but was not applied yet (rows still pushing,
+   * conflicts, login). Same state the share bar chip shows as "Update waiting"
+   * / "Update conflicts". Resolve with pull_app_from_cloud.
+   */
+  pendingUpdate?: {
+    commitSha: string;
+    reason: string;
+    conflictFiles?: string[];
+    since: string;
+  } | null;
   pathGuide: {
     localAppDir: string;
     cloudRepoRoot: string;

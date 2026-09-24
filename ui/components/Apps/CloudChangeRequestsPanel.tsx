@@ -8,15 +8,32 @@ import {
   openCloudSyncAgentChat,
 } from "../../utils/openCloudSyncAgentChat";
 import {
-  contributorLabelForChangeRequest,
+  changeRequestProposedByLine,
   resolveCloudChangeRequest,
   type CloudChangeRequest,
 } from "../../utils/cloudChangeRequestsApi";
+import {
+  contributionAudienceKind,
+  contributionPanelCopy,
+} from "../../utils/contributionPanelCopy";
+import {
+  buildChangeRequestSummaryParts,
+  changeRequestStagedPaths,
+  changeRequestStatusLabel,
+  isChangeRequestReadyForReview,
+  listResolvedChangeRequests,
+} from "../../utils/changeRequestDisplay";
 import { formatChangeRequestWhen } from "../../utils/formatChangeRequestWhen";
+import type { ShareAudience } from "../../utils/shareAudienceModel";
 
 interface CloudChangeRequestsPanelProps {
   busy?: boolean;
-  variant?: "share-sheet" | "publish-bar";
+  variant?: "share-sheet" | "modal";
+  /** When set with variant modal, drives team vs community vs link copy. */
+  shareAudience?: ShareAudience;
+  appPublished?: boolean;
+  /** Modal puts the title in the sheet header — skip duplicate heading. */
+  showHeader?: boolean;
   requests: CloudChangeRequest[];
   pending: CloudChangeRequest[];
   loading: boolean;
@@ -27,6 +44,9 @@ interface CloudChangeRequestsPanelProps {
 export function CloudChangeRequestsPanel({
   busy = false,
   variant = "share-sheet",
+  shareAudience = "public",
+  appPublished = true,
+  showHeader = true,
   requests,
   pending,
   loading,
@@ -35,11 +55,16 @@ export function CloudChangeRequestsPanel({
 }: CloudChangeRequestsPanelProps) {
   const [resolvingId, setResolvingId] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
+  const [pastOpen, setPastOpen] = useState(false);
+
+  const resolved = listResolvedChangeRequests(requests);
 
   const displayError = localError ?? error;
+  const audienceKind = contributionAudienceKind(shareAudience, appPublished);
+  const copy = contributionPanelCopy(audienceKind);
   const rootClass =
-    variant === "publish-bar"
-      ? "publish-bar-contributions"
+    variant === "modal"
+      ? "share-sheet__section share-sheet__changes share-sheet__changes--modal"
       : "share-sheet__section share-sheet__changes";
 
   const resolve = async (requestId: string, action: "approve" | "reject") => {
@@ -57,37 +82,27 @@ export function CloudChangeRequestsPanel({
 
   return (
     <div className={rootClass}>
-      {variant === "publish-bar" ? (
+      {showHeader ? (
         <>
-          <p className="publish-bar-contributions__title">Community proposals</p>
-          <p className="publish-bar-contributions__desc">
-            People who installed your app can send changes back for review. Accept
-            merges their work into your app; decline closes the proposal without
-            affecting their copy.
-          </p>
+          <p className="share-sheet__section-title">{copy.title}</p>
+          <p className="share-sheet__section-desc">{copy.description}</p>
         </>
-      ) : (
-        <>
-          <p className="share-sheet__section-title">Suggested updates</p>
-          <p className="share-sheet__section-desc">
-            When someone installs your app and sends changes back, their proposal
-            appears here. Review the update, then accept to merge it into your app
-            or decline to close it.
-          </p>
-        </>
-      )}
+      ) : null}
 
       {loading ? (
-        <p className="share-sheet__footnote">Loading proposals…</p>
+        <p className="share-sheet__footnote">{copy.loading}</p>
       ) : displayError ? (
         <p className="share-sheet__error">{displayError}</p>
       ) : pending.length === 0 ? (
-        <p className="share-sheet__footnote">No pending proposals.</p>
+        <p className="share-sheet__footnote">{copy.emptyPending}</p>
       ) : (
         <ul className="share-sheet__changes-list">
           {pending.map((req) => {
-            const contributor = contributorLabelForChangeRequest(req);
+            const proposedBy = changeRequestProposedByLine(req, audienceKind);
             const when = formatChangeRequestWhen(req.createdAt);
+            const preparing = req.status === "preparing";
+            const ready = isChangeRequestReadyForReview(req);
+            const summary = buildChangeRequestSummaryParts(req);
             return (
               <li key={req.id} className="share-sheet__changes-item">
                 <div className="share-sheet__changes-head">
@@ -96,43 +111,68 @@ export function CloudChangeRequestsPanel({
                     <span className="share-sheet__changes-meta">{when}</span>
                   ) : null}
                 </div>
-                {contributor ? (
-                  <p className="share-sheet__changes-contributor">
-                    From {contributor}
+                {proposedBy ? (
+                  <p className="share-sheet__changes-contributor">{proposedBy}</p>
+                ) : null}
+                {preparing ? (
+                  <p className="share-sheet__footnote share-sheet__footnote--muted">
+                    Upload still in progress — Accept and Review with agent unlock
+                    when the proposal finishes uploading.
                   </p>
                 ) : null}
-                <p className="share-sheet__changes-desc">{req.description}</p>
-                {req.prUrl ? (
-                  <p className="share-sheet__changes-meta">
-                    <a
-                      className="share-sheet__link-btn"
-                      href={req.prUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      Review proposed changes
-                    </a>
-                    {typeof req.prNumber === "number" ? (
-                      <span> · PR #{req.prNumber}</span>
-                    ) : null}
-                  </p>
-                ) : (
-                  <p className="share-sheet__footnote">
-                    Waiting for change upload to finish…
-                  </p>
-                )}
+                <div className="share-sheet__changes-summary">
+                  <p className="share-sheet__changes-summary-label">Summary</p>
+                  {summary.narrative ? (
+                    <p className="share-sheet__changes-desc">{summary.narrative}</p>
+                  ) : (
+                    <p className="share-sheet__footnote">No description provided.</p>
+                  )}
+                  {summary.paths.length > 0 ? (
+                    <ul className="share-sheet__changes-paths">
+                      {summary.paths.map((path) => (
+                        <li key={path}>{path}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                  {summary.pathsOverflow > 0 ? (
+                    <p className="share-sheet__footnote">
+                      +{summary.pathsOverflow} more file
+                      {summary.pathsOverflow === 1 ? "" : "s"}
+                    </p>
+                  ) : null}
+                  {ready ? (
+                    <p className="share-sheet__changes-meta share-sheet__changes-meta--plain">
+                      {summary.commitRef ? (
+                        <span>Commit {summary.commitRef}</span>
+                      ) : null}
+                      {summary.commitRef && summary.branch ? (
+                        <span> · </span>
+                      ) : null}
+                      {summary.branch ? (
+                        <span>Branch {summary.branch}</span>
+                      ) : null}
+                    </p>
+                  ) : (
+                    <p className="share-sheet__footnote">
+                      Waiting for change upload to finish…
+                    </p>
+                  )}
+                </div>
                 <div className="share-sheet__changes-actions">
                   <button
                     type="button"
                     className="share-sheet__secondary-btn"
-                    disabled={busy || !req.prUrl}
+                    disabled={busy || !ready}
                     onClick={() => {
                       openCloudSyncAgentChat(
                         buildPrReviewAgentPrompt({
                           sourceAppId: req.sourceAppId,
                           title: req.title,
                           description: req.description,
-                          prUrl: req.prUrl,
+                          requestId: req.id,
+                          branch: req.branch,
+                          headSha: req.headSha,
+                          stagedPaths: changeRequestStagedPaths(req),
                         }),
                       );
                     }}
@@ -142,9 +182,9 @@ export function CloudChangeRequestsPanel({
                   <button
                     type="button"
                     className="share-sheet__primary-btn"
-                    disabled={busy || resolvingId === req.id || !req.prUrl}
+                    disabled={busy || resolvingId === req.id || !ready}
                     title={
-                      req.prUrl
+                      ready
                         ? "Merge this proposal into your app"
                         : "Available once the proposal upload completes"
                     }
@@ -167,11 +207,70 @@ export function CloudChangeRequestsPanel({
         </ul>
       )}
 
-      {requests.some((r) => r.status !== "pending") ? (
-        <p className="share-sheet__footnote">
-          {requests.filter((r) => r.status === "approved").length} accepted ·{" "}
-          {requests.filter((r) => r.status === "rejected").length} declined
-        </p>
+      {!loading && !displayError && resolved.length > 0 ? (
+        <div className="share-sheet__changes-history">
+          <button
+            type="button"
+            className="share-sheet__text-link share-sheet__changes-history-toggle"
+            onClick={() => setPastOpen((open) => !open)}
+          >
+            {pastOpen
+              ? copy.hidePastProposals
+              : copy.showPastProposals(resolved.length)}
+          </button>
+          {pastOpen ? (
+            <>
+              <p className="share-sheet__changes-summary-label share-sheet__changes-history-label">
+                {copy.pastProposalsHeading}
+              </p>
+              <ul className="share-sheet__changes-list share-sheet__changes-list--history">
+                {resolved.map((req) => {
+                  const proposedBy = changeRequestProposedByLine(
+                    req,
+                    audienceKind,
+                  );
+                  const when =
+                    formatChangeRequestWhen(req.resolvedAt ?? req.createdAt) ??
+                    formatChangeRequestWhen(req.createdAt);
+                  const summary = buildChangeRequestSummaryParts(req);
+                  const statusLabel = changeRequestStatusLabel(req);
+                  const statusClass =
+                    req.status === "approved"
+                      ? "share-sheet__changes-status--accepted"
+                      : "share-sheet__changes-status--declined";
+                  return (
+                    <li
+                      key={req.id}
+                      className="share-sheet__changes-item share-sheet__changes-item--history"
+                    >
+                      <div className="share-sheet__changes-head">
+                        <strong>{req.title}</strong>
+                        <span
+                          className={`share-sheet__changes-status ${statusClass}`}
+                        >
+                          {statusLabel}
+                        </span>
+                      </div>
+                      {proposedBy ? (
+                        <p className="share-sheet__changes-contributor">
+                          {proposedBy}
+                          {when ? ` · ${when}` : ""}
+                        </p>
+                      ) : when ? (
+                        <p className="share-sheet__changes-meta">{when}</p>
+                      ) : null}
+                      {summary.narrative ? (
+                        <p className="share-sheet__changes-desc share-sheet__changes-desc--history">
+                          {summary.narrative}
+                        </p>
+                      ) : null}
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          ) : null}
+        </div>
       ) : null}
     </div>
   );

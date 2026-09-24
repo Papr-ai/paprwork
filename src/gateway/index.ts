@@ -858,11 +858,16 @@ async function startGateway(): Promise<void> {
         const { checkPublisherUpstreamRevision } = await import(
           "./services/syncV3/checkPublisherUpstreamRevision.js"
         );
+        const { getPendingAppUpdate } = await import(
+          "./services/syncV3/appRepoPendingUpdate.js"
+        );
         const [status, publisher] = await Promise.all([
           checkAppRemoteCodeStatus(appId),
           checkPublisherUpstreamRevision(appId),
         ]);
-        res.json({ ...status, ...publisher });
+        // pendingUpdate: a remote commit arrived but auto-pull was deferred
+        // (pending row push, conflicts). Share bar shows "Update waiting".
+        res.json({ ...status, ...publisher, pendingUpdate: getPendingAppUpdate(appId) });
       } catch (err) {
         console.error("[Gateway] /api/apps/remote-code-status error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -877,8 +882,12 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const body = (req.body ?? {}) as { wait?: boolean };
+        const body = (req.body ?? {}) as { wait?: boolean; resolution?: string };
         const waitForCompletion = body.wait === true;
+        const resolution =
+          body.resolution === "take_theirs" || body.resolution === "keep_mine"
+            ? body.resolution
+            : "hold";
         const sync = getCloudSyncService();
         const token = sync ? await sync.ensureFreshToken() : null;
 
@@ -899,6 +908,8 @@ async function startGateway(): Promise<void> {
           token,
           waitForTurso: true,
           allowRecentSkip: false,
+          preferCloudOverLocal: true,
+          resolution,
         });
         timer.mark("pullAppFromCloud");
         if (result.code.skipped && result.code.reason) {
@@ -1198,20 +1209,10 @@ async function startGateway(): Promise<void> {
           }
         }
         console.error("[Gateway] /api/db/query error:", err);
-        const lowerMessage = message.toLowerCase();
-        const status =
-          message.includes("Turso fallback is unavailable") ||
-          message.includes("Local database not found") ||
-          message.includes("No data sources linked") ||
-          message.includes("Replica read timed out") ||
-          message.includes("Gateway was busy") ||
-          message.includes("Database sync in progress") ||
-          message.includes("Schema update pending") ||
-          lowerMessage.includes("no such table") ||
-          lowerMessage.includes("sync engine operation failed")
-            ? 503
-            : 500;
-        res.status(status).json({ error: message });
+        const { httpStatusForMiniAppDbQueryError } = await import(
+          "./services/tursoReplica/replicaSchemaQueryErrorMessage.js"
+        );
+        res.status(httpStatusForMiniAppDbQueryError(message)).json({ error: message });
       }
     });
     lapRouteRegistrationSection("database-registry");
@@ -2233,6 +2234,8 @@ async function startGateway(): Promise<void> {
           // POST (not PATCH), so omitting it here silently published the app
           // to the whole workspace.
           allowedUserIds?: string[];
+          allowedEmails?: string[];
+          allowedEmailDomains?: string[];
           slug?: string;
           autoPublish?: boolean;
           acknowledgeDesktopOnly?: boolean;
@@ -2262,7 +2265,9 @@ async function startGateway(): Promise<void> {
           body.codeAccess !== undefined ||
           body.requireSignIn !== undefined ||
           body.perUserIsolation !== undefined ||
-          body.allowedUserIds !== undefined
+          body.allowedUserIds !== undefined ||
+          body.allowedEmails !== undefined ||
+          body.allowedEmailDomains !== undefined
         ) {
           setAppPublishPrefs(req.params.appId, {
             ...(body.accessMode ? { accessMode: body.accessMode } : {}),
@@ -2283,6 +2288,12 @@ async function startGateway(): Promise<void> {
               : {}),
             ...(body.allowedUserIds !== undefined
               ? { allowedUserIds: body.allowedUserIds }
+              : {}),
+            ...(body.allowedEmails !== undefined
+              ? { allowedEmails: body.allowedEmails }
+              : {}),
+            ...(body.allowedEmailDomains !== undefined
+              ? { allowedEmailDomains: body.allowedEmailDomains }
               : {}),
           });
         }
@@ -2337,6 +2348,8 @@ async function startGateway(): Promise<void> {
           // so there is nothing for the memory server to update — the
           // allowlist is enforced by the gateway on each request.
           allowedUserIds?: string[];
+          allowedEmails?: string[];
+          allowedEmailDomains?: string[];
         };
         const prefs = setAppPublishPrefs(req.params.appId, body);
         invalidateCloudLinkSyncReportCache();
@@ -2380,6 +2393,7 @@ async function startGateway(): Promise<void> {
           catalogScope?: "global" | "namespace" | "community" | "team";
           visibility?: string;
           codeInstallable?: boolean;
+          title?: string;
         };
         if (!body.namespaceId || !body.slug) {
           res.status(400).json({ error: "namespaceId and slug are required" });
@@ -2497,10 +2511,24 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    app.get("/api/cloud/track-sync/:appId/local-edits", async (req, res) => {
+      try {
+        const result = await getCloudAppTrackSyncService().localEdits(
+          req.params.appId,
+        );
+        res.json(result);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.post("/api/cloud/track-sync/:appId", async (req, res) => {
       try {
+        const discardLocal =
+          (req.body as { discardLocal?: boolean } | undefined)?.discardLocal === true;
         const result = await getCloudAppTrackSyncService().syncTrackApp(
           req.params.appId,
+          { discardLocal },
         );
         res.json(result);
       } catch (err) {
@@ -2547,6 +2575,36 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Proposals this user sent, optionally for one installed copy. Used by the
+    // Propose sheet to show status (waiting / accepted / declined).
+    app.get("/api/cloud/apps/changes/outgoing", async (req, res) => {
+      try {
+        const paprApiKey = await getPaprApiKey();
+        if (!paprApiKey) {
+          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          return;
+        }
+        const installedAppId =
+          typeof req.query.installedAppId === "string" ? req.query.installedAppId.trim() : "";
+        const query = installedAppId ? `?installedAppId=${encodeURIComponent(installedAppId)}` : "";
+        const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
+        const upstream = await cloudApiFetch(`/v1/cloud/apps/changes/outgoing${query}`);
+        const bodyText = await upstream.text();
+        if (!upstream.ok) {
+          // Older memory servers have no outgoing route: show no history.
+          if (upstream.status === 404 || upstream.status === 405) {
+            res.json({ requests: [] });
+            return;
+          }
+          res.status(upstream.status).json({ error: bodyText.slice(0, 240) });
+          return;
+        }
+        res.status(200).type("application/json").send(bodyText);
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
     app.get("/api/cloud/apps/changes/incoming", async (req, res) => {
       try {
         const paprApiKey = await getPaprApiKey();
@@ -2584,12 +2642,24 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        res.status(200);
-        const contentType = upstream.headers.get("content-type");
-        if (contentType) {
-          res.setHeader("Content-Type", contentType);
+        let payload: unknown;
+        try {
+          payload = JSON.parse(bodyText) as unknown;
+        } catch {
+          res.status(200);
+          const contentType = upstream.headers.get("content-type");
+          if (contentType) {
+            res.setHeader("Content-Type", contentType);
+          }
+          res.send(bodyText);
+          return;
         }
-        res.send(bodyText);
+
+        const { enrichIncomingChangeRequestsBody } = await import(
+          "./services/changeRequestContributorEnrich.js"
+        );
+        const enriched = await enrichIncomingChangeRequestsBody(payload);
+        res.status(200).json(enriched);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -2628,43 +2698,10 @@ async function startGateway(): Promise<void> {
         const parsed = bodyText
           ? (JSON.parse(bodyText) as Record<string, unknown>)
           : {};
-        const sourceAppId =
-          typeof parsed.sourceAppId === "string" ? parsed.sourceAppId : undefined;
-
-        let pullResult: { pulled: boolean; error?: string } = { pulled: false };
-        try {
-          const sync = getCloudSyncService();
-          if (sync) {
-            await sync.pullNow();
-            pullResult = { pulled: true };
-            if (sourceAppId) {
-              const { getSyncCoordinator } = await import(
-                "./services/cloudSync/SyncCoordinator.js"
-              );
-              const coordinator = getSyncCoordinator();
-              if (coordinator) {
-                void coordinator
-                  .flushNow(sourceAppId, { trigger: "contribute" })
-                  .catch((flushErr: Error) => {
-                    console.warn(
-                      `[Gateway] Contribute flush failed for ${sourceAppId}:`,
-                      flushErr.message.slice(0, 120),
-                    );
-                  });
-              } else {
-                void sync.pushAppNow(sourceAppId);
-              }
-            } else {
-              void sync.pushNow();
-            }
-          }
-        } catch (pullErr) {
-          pullResult = { pulled: false, error: (pullErr as Error).message };
-          console.warn(
-            "[Gateway] Pull after contribute approve:",
-            pullResult.error,
-          );
-        }
+        const { readSourceAppIdFromApproveBody, followUpContributeApprove } =
+          await import("./services/contributeApproveFollowUp.js");
+        const sourceAppId = readSourceAppIdFromApproveBody(parsed);
+        const pullResult = await followUpContributeApprove(sourceAppId);
 
         res.json({ ...parsed, pull: pullResult, sourceAppId });
       } catch (err) {

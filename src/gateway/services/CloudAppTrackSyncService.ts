@@ -93,6 +93,25 @@ async function writeLineageFile(
   );
 }
 
+/**
+ * Files whose local content differs from the last synced upstream snapshot.
+ * Pure so the "nothing to propose" rule can be tested without git.
+ */
+export function listLocalEditsAgainstSnapshot(
+  localHashes: Map<string, string>,
+  snapshot: Record<string, string>,
+): string[] {
+  const edited: string[] = [];
+  for (const [rel, hash] of localHashes) {
+    const base = snapshot[rel];
+    if (base === undefined || base !== hash) edited.push(rel);
+  }
+  for (const rel of Object.keys(snapshot)) {
+    if (!localHashes.has(rel)) edited.push(rel);
+  }
+  return edited.sort();
+}
+
 export class CloudAppTrackSyncService {
   private readonly appsDir: string;
 
@@ -100,7 +119,37 @@ export class CloudAppTrackSyncService {
     this.appsDir = appsDir ?? getPaprAppsRoot();
   }
 
-  async syncTrackApp(appId: string): Promise<TrackSyncResult> {
+  /**
+   * Local-only: which files a collaborator changed since the last upstream
+   * sync. Drives Propose greying out when there is nothing to send. No
+   * snapshot (older installs) means unknown, so callers keep Propose enabled.
+   */
+  async localEdits(appId: string): Promise<{ known: boolean; files: string[] }> {
+    const lineage = await readLineageFile(appId, this.appsDir);
+    if (!lineage || lineage.mode !== "track" || !lineage.syncSnapshot) {
+      return { known: false, files: [] };
+    }
+    const local = await collectLocalFiles(path.join(this.appsDir, appId));
+    const hashes = new Map<string, string>();
+    for (const [rel, content] of local) hashes.set(rel, hashContent(content));
+    // Only compare paths the publisher ships; local-only build output (dist/)
+    // and job scratch are not edits the publisher could review.
+    const tracked = new Map([...hashes].filter(([rel]) => !rel.startsWith("dist/")));
+    const snapshot = Object.fromEntries(
+      Object.entries(lineage.syncSnapshot).filter(([rel]) => !rel.startsWith("dist/")),
+    );
+    return { known: true, files: listLocalEditsAgainstSnapshot(tracked, snapshot) };
+  }
+
+  /**
+   * Pull the publisher's code. With `discardLocal`, files the collaborator
+   * edited are overwritten with upstream instead of kept as conflicts
+   * (the ⋯ menu's Discard my edits). Local-only files are left alone.
+   */
+  async syncTrackApp(
+    appId: string,
+    options: { discardLocal?: boolean } = {},
+  ): Promise<TrackSyncResult> {
     const lineage = await readLineageFile(appId, this.appsDir);
     if (!lineage) {
       throw new Error(`No cloud lineage for app ${appId}`);
@@ -154,7 +203,7 @@ export class CloudAppTrackSyncService {
           localHash === snapshotHash ||
           snapshotHash === undefined;
 
-        if (!localUnchanged && localHash !== upstreamHash) {
+        if (!localUnchanged && localHash !== upstreamHash && !options.discardLocal) {
           conflictFiles.push(filename);
           continue;
         }

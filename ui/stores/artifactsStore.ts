@@ -25,6 +25,8 @@ export interface ArtifactCloudLineage {
   sourceNamespaceId: string;
   installedAt: string;
   lastSyncedAt?: string;
+  /** shared = team collaborator (publisher's data); forked = own data. */
+  databasePolicy?: "shared" | "forked";
 }
 
 export interface Artifact {

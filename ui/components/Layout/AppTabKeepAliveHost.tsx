@@ -11,19 +11,28 @@ import "./AppTabKeepAliveHost.css";
 /** Where a kept-alive app preview is shown within ContentArea. */
 export type AppTabKeepAlivePlacement = "full" | "left" | "right" | "hidden";
 
-function renderAppTabContent(tab: Tab, previewTabVisible: boolean): ReactNode {
+function renderAppTabContent(
+  tab: Tab,
+  previewTabVisible: boolean,
+  previewPaneActive: boolean,
+): ReactNode {
   if (
     readCloudCatalogPreviewTabMetadata(tab) ||
     isCatalogPreviewEntityId(tab.entityId)
   ) {
     return (
-      <CatalogPreviewTabView tab={tab} previewTabVisible={previewTabVisible} />
+      <CatalogPreviewTabView
+        tab={tab}
+        previewTabVisible={previewTabVisible}
+        previewPaneActive={previewPaneActive}
+      />
     );
   }
   return (
     <MiniAppView
       appId={tab.entityId}
       previewTabVisible={previewTabVisible}
+      previewPaneActive={previewPaneActive}
       previewKeepAliveWarm
     />
   );
@@ -45,13 +54,15 @@ export function AppTabKeepAliveHost({
   placement,
   documentVisible = true,
 }: AppTabKeepAliveHostProps) {
-  const previewTabVisible = placement !== "hidden" && documentVisible;
+  const previewPaneActive = placement !== "hidden";
+  /** Gate phase: pause fetches when the Paprwork window is backgrounded (sleep). */
+  const previewTabVisible = previewPaneActive && documentVisible;
 
   return (
     <div
       className={`content-pane__keep-alive content-pane__keep-alive--app content-pane__keep-alive--placement-${placement}`}
     >
-      {renderAppTabContent(tab, previewTabVisible)}
+      {renderAppTabContent(tab, previewTabVisible, previewPaneActive)}
     </div>
   );
 }

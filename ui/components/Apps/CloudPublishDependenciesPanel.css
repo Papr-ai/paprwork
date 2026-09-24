@@ -6,54 +6,111 @@
   line-height: 1.45;
 }
 
+.cloud-deps-panel__intro {
+  margin: 0.25rem 0 0;
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  color: var(--text-secondary, #6b7280);
+}
+
 .cloud-deps-panel__deps {
   list-style: none;
   padding-left: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .cloud-deps-panel__dep {
-  padding: 10px 12px;
-  border-radius: 10px;
+  padding: 8px 10px;
+  border-radius: 8px;
   border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
   background: color-mix(in srgb, var(--bg-primary, #fff) 60%, transparent);
 }
 
-.cloud-deps-panel__dep-header {
+.cloud-deps-panel__dep--app {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 0.75rem;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+
+.cloud-deps-panel__kind {
+  align-self: flex-start;
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-secondary, #6b7280);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-secondary, #6b7280) 12%, transparent);
+}
+
+.cloud-deps-panel__kind--db {
+  font-size: 0.5625rem;
 }
 
 .cloud-deps-panel__dep-title {
-  min-width: 0;
-  flex: 1;
-  font-size: 0.875rem;
+  margin: 0;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.cloud-deps-panel__dep-meta {
+  margin: 0;
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.75rem;
+  line-height: 1.4;
+}
+
+.cloud-deps-panel__dep-meta-sep {
+  margin: 0 0.35rem;
+  opacity: 0.65;
+}
+
+.cloud-deps-panel__nested {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 6px 8px 6px 10px;
+  border-left: 2px solid color-mix(in srgb, var(--accent-color, #3b82f6) 35%, transparent);
+  background: color-mix(in srgb, var(--bg-primary, #fff) 40%, transparent);
+  border-radius: 0 6px 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.cloud-deps-panel__nested-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 0.75rem;
   line-height: 1.35;
 }
 
-.cloud-deps-panel__dep-enables,
-.cloud-deps-panel__dep-status {
-  margin: 4px 0 0;
-  color: var(--text-secondary, #6b7280);
-  font-size: 0.8125rem;
-  line-height: 1.45;
+.cloud-deps-panel__nested-name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
-.cloud-deps-panel__dep-status {
-  margin-top: 2px;
+.cloud-deps-panel__nested-hint {
+  color: var(--text-secondary, #6b7280);
+  font-size: 0.6875rem;
 }
 
 .cloud-deps-panel__open-btn {
-  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 4px;
   white-space: nowrap;
 }
 
 .cloud-deps-panel__optional > .share-sheet__secondary-btn {
-  margin-top: 10px;
+  margin-top: 8px;
 }
 
 .cloud-deps-panel__reconcile {

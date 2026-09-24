@@ -4,6 +4,7 @@
 
 import path from "path";
 import { getPaprAppsRoot, getPaprJobsRoot } from "./paprRoot.js";
+import { migrationFileBlockReason } from "./migrationFileGuard.js";
 
 export type EditFileTarget =
   | {
@@ -27,6 +28,11 @@ export function resolveEditFileTarget(
   resolvedPath: string,
 ): EditFileTarget | { kind: "blocked"; reason: string } {
   const resolved = path.resolve(resolvedPath);
+
+  const migrationBlock = migrationFileBlockReason(resolved);
+  if (migrationBlock) {
+    return { kind: "blocked", reason: migrationBlock };
+  }
 
   const appsRoot = path.resolve(getPaprAppsRoot());
   const appsPrefix = `${appsRoot}${path.sep}`;

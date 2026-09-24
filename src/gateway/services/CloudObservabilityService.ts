@@ -354,6 +354,16 @@ export async function getCloudSyncStatus(options?: {
       stateManager: sync.stateManager,
       queuedPaths: githubFull.queuedPaths,
     });
+    const { getPendingAppUpdate } = await import("./syncV3/appRepoPendingUpdate.js");
+    const pending = getPendingAppUpdate(appId);
+    appWriterRepo.pendingUpdate = pending
+      ? {
+          commitSha: pending.commitSha,
+          reason: pending.reason,
+          conflictFiles: pending.conflictFiles,
+          since: pending.since,
+        }
+      : null;
   }
 
   const turso = await buildTursoSyncItemsReport(getPaprAppsRoot(), appId);

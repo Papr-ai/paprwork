@@ -64,6 +64,8 @@ export interface RunCloudCatalogInstallInput {
   visibility?: string;
   /** When known — drives fork vs collaborate gating. Defaults true for agent installs. */
   codeInstallable?: boolean;
+  /** Name for the new app; defaults to the publisher's title. */
+  title?: string;
 }
 
 function normalizeCatalogScope(
@@ -117,6 +119,7 @@ export function buildCloudCatalogInstallInput(
     // not told, so take the community reading — own data plus a code link.
     catalogScope: policyInput.catalogScope,
     visibility: input.visibility,
+    ...(input.title?.trim() ? { title: input.title.trim() } : {}),
   };
 }
 
