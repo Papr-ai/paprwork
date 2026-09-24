@@ -7,7 +7,7 @@ import {
 describe("appGetErrorMessage", () => {
   it("treats gateway timeouts as busy", () => {
     expect(classifyAppGetFailure("Request timeout")).toBe("gateway_busy");
-    expect(resolveAppGetUserMessage("Request timeout")).toMatch(/still starting or busy/i);
+    expect(resolveAppGetUserMessage("Request timeout")).toMatch(/gateway is starting/i);
   });
 
   it("treats app not found as workspace mismatch", () => {
