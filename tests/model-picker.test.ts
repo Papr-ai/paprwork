@@ -21,8 +21,10 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5, Opus 5, Fable 5.1, and nine cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(9);
+  test("default list includes Sonnet 5, Opus 5/5.5, Fable 5.1, and eleven cloud models", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(11);
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-6-astra");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-1");
