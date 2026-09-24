@@ -10,7 +10,10 @@ import type {
   AppCloudSyncStatus,
   WebSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
-import { formatLastUploadedAt } from "../../utils/appCloudSyncStatus";
+import {
+  formatLastUploadedAt,
+  webSyncShouldPullBeforePublish,
+} from "../../utils/appCloudSyncStatus";
 import {
   buildMergeReviewAgentPrompt,
   buildOversizedFilesAgentPrompt,
@@ -18,8 +21,9 @@ import {
   buildUploadFailureAgentPrompt,
   buildWriterConflictAgentPrompt,
   openCloudSyncAgentChat,
+  buildUpdateConflictAgentPrompt,
 } from "../../utils/openCloudSyncAgentChat";
-/** Primary push action label — Publish for first-time web deploy, Publish changes when already live. */
+/** Primary push action label — Publish in every state (v4: one verb, progress shows what happens). */
 export function webSyncPushButtonLabel(options: {
   appLive: boolean;
   pushing: boolean;
@@ -27,7 +31,7 @@ export function webSyncPushButtonLabel(options: {
   if (options.pushing) {
     return "Publishing…";
   }
-  return options.appLive ? "Publish changes" : "Publish";
+  return "Publish";
 }
 
 /**
@@ -90,6 +94,8 @@ export interface WebSyncPopoverProps {
   onBumpQueue?: () => void;
   onPullUpdates: () => void;
   onApplyRemoteUpdates: () => void;
+  /** Held update with conflicts: Keep mine / Take theirs. */
+  onResolveConflict?: (resolution: "take_theirs" | "keep_mine") => void;
   /** False when the app has never been published — primary action is Publish (share + upload). */
   appLive?: boolean;
   /** Per-app: upload to web automatically vs Publish changes only (hint copy only) */
@@ -176,7 +182,7 @@ function databaseBlockerHint(
   if (blocked.some((db) => db.migrationConflict)) {
     return "Your local database and the web version have different structures. Ask the agent to reconcile them, then publish again.";
   }
-  return "The database structure changed locally and isn't on the web yet. Click Publish changes — if that fails, ask the agent to align it.";
+  return "The database structure changed locally and isn't on the web yet. Click Publish — if that fails, ask the agent to align it.";
 }
 
 function resolveUploadFailureMessage(
@@ -220,6 +226,7 @@ export function WebSyncPopover({
   onBumpQueue,
   onPullUpdates,
   onApplyRemoteUpdates,
+  onResolveConflict,
   appLive = true,
   autoUploadEnabled,
   popoverRef,
@@ -244,6 +251,9 @@ export function WebSyncPopover({
   const queuedForUpload = status?.uploadQueued === true;
   const showMergeReview = remoteReviewNeeded && !metadataSync;
   const showWriterConflict = writerConflict && !showMergeReview && !metadataSync;
+  const updateConflictFiles = status?.updateConflictFiles ?? [];
+  const showUpdateConflict =
+    updateConflictFiles.length > 0 && !showMergeReview && !metadataSync && Boolean(onResolveConflict);
   // status is null until the first sync check resolves, and this runs above
   // the `!status` guard below — keep it optional-chained.
   const schemaDriftBlocked =
@@ -271,6 +281,8 @@ export function WebSyncPopover({
     !showDatabaseBlockerHelp &&
     !showUploadFailureHelp &&
     !metadataSync;
+  const pullBeforePublish =
+    status != null && webSyncShouldPullBeforePublish(status);
   const popoverClassName = className
     ? `mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked ${className}`
     : "mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked";
@@ -497,6 +509,18 @@ export function WebSyncPopover({
             <p className="mini-app-publish-bar__sync-remote-banner-body">{commitSummary}</p>
           ) : null}
         </div>
+      ) : pullBeforePublish ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Web has newer app code
+          </p>
+          <p className="mini-app-publish-bar__sync-remote-banner-body">
+            Get updates before publishing — like pulling on GitHub before you push.
+          </p>
+        </div>
       ) : showHeadline ? (
         <p className="mini-app-publish-bar__sync-popover-summary">{headlineText}</p>
       ) : null}
@@ -539,7 +563,7 @@ export function WebSyncPopover({
           <p className="mini-app-publish-bar__sync-popover-hint">
             {appLive ? (
               <>
-                Publishing is manual for this app — click <strong>Publish changes</strong> when you
+                Publishing is manual for this app — click <strong>Publish</strong> when you
                 want local changes on the web. After sharing changes, wait until this panel
                 shows synced before copying the external link.
               </>
@@ -599,7 +623,42 @@ export function WebSyncPopover({
             {refreshing ? "Checking…" : "Check status"}
           </button>
         ) : null}
-        {showWriterConflict ? (
+        {showUpdateConflict ? (
+          <>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              {updateConflictFiles.slice(0, 3).join(", ")}
+              {updateConflictFiles.length > 3 ? ` +${updateConflictFiles.length - 3} more` : ""}
+            </p>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => onResolveConflict?.("keep_mine")}
+            >
+              Keep mine
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => {
+                if (confirm(`Replace your edits in ${updateConflictFiles.length} file(s) with the update?`)) {
+                  onResolveConflict?.("take_theirs");
+                }
+              }}
+            >
+              Take theirs
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => openCloudSyncAgentChat(buildUpdateConflictAgentPrompt({ appId, files: updateConflictFiles }))}
+            >
+              Ask agent to merge
+            </button>
+          </>
+        ) : showWriterConflict ? (
           <>
             <button
               type="button"
@@ -759,7 +818,7 @@ export function WebSyncPopover({
               {pulling ? "Getting updates…" : "Get updates"}
             </button>
             <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
-              Publish didn't finish — try Publish changes again. If it keeps failing, ask the agent to look into it.
+              Publish didn't finish — try Publish again. If it keeps failing, ask the agent to look into it.
             </p>
           </>
         ) : showOversizedFilesHelp ? (
@@ -805,7 +864,8 @@ export function WebSyncPopover({
           </>
         ) : (
           <>
-            {(syncActionNeeded || pushing || queuedForUpload) && (
+            {(syncActionNeeded || pushing || queuedForUpload) &&
+            !pullBeforePublish ? (
               <>
                 {queuedForUpload && onBumpQueue ? (
                   <button
@@ -830,7 +890,7 @@ export function WebSyncPopover({
                   {pushLabel}
                 </button>
               </>
-            )}
+            ) : null}
             {/* Only when there is something to get. This merges cloud code
                 into the local folder and can raise conflicts — offering it
                 against an unchanged remote asked the user to run a git merge
@@ -839,7 +899,11 @@ export function WebSyncPopover({
             {status.gitUpdatesAvailable ? (
               <button
                 type="button"
-                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                className={`mini-app-publish-bar__sync-popover-btn${
+                  pullBeforePublish
+                    ? ""
+                    : " mini-app-publish-bar__sync-popover-btn--secondary"
+                }`}
                 disabled={busy || metadataSync || pushing}
                 onClick={() => void onPullUpdates()}
               >
@@ -884,6 +948,74 @@ interface WebSyncStatusDotProps {
   tone?: "ok" | "warn" | "bad" | "info" | "idle" | "busy";
   /** Re-asks the web. Only offered when the chip is showing an age. */
   onRefresh?: () => void;
+  /**
+   * Pull/review, carried by the chip rather than the primary slot — the label
+   * to the left already names the condition, so this is a glyph at rest and
+   * spells out `verb` on hover. Never set at the same time as onRefresh: an
+   * aged check only happens when calm, which is exactly when there is no pull.
+   */
+  action?: {
+    glyph: "down" | "open" | "up";
+    verb: string;
+    onRun: () => void;
+  };
+}
+
+/** Pull it down. */
+function WebSyncDownIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 5v13m5-5-5 5-5-5" />
+    </svg>
+  );
+}
+
+/** Send it up — the mirror of pull, used for propose-to-publisher. */
+function WebSyncUpIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 19V6m-5 5 5-5 5 5" />
+    </svg>
+  );
+}
+
+/** Go look at it — review is a destination, not a transfer. */
+function WebSyncOpenIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 5h5v5M19 5l-8 8M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+    </svg>
+  );
 }
 
 /**
@@ -980,6 +1112,7 @@ export function WebSyncStatusDot({
   label,
   tone,
   onRefresh,
+  action,
 }: WebSyncStatusDotProps) {
   const chip = Boolean(label);
   const className = `mini-app-publish-bar__web-sync-dot mini-app-publish-bar__web-sync-dot--${state}${
@@ -1021,11 +1154,40 @@ export function WebSyncStatusDot({
           {spinning ? <WebSyncSpinner /> : null}
           <span className="mini-app-publish-bar__web-sync-chip-text">{label}</span>
         </button>
-        {onRefresh ? (
+        {/* Action and refresh share one pill treatment so the chip has a
+            single kind of trailing control. They cannot collide: refresh is
+            only offered on an aged calm check, which is exactly the state
+            with no pull available. */}
+        {action ? (
           <button
             type="button"
-            className="mini-app-publish-bar__web-sync-chip-refresh"
-            title="Re-check the web copy now"
+            className="mini-app-publish-bar__web-sync-chip-act"
+            aria-label={action.verb}
+            onClick={(event) => {
+              event.stopPropagation();
+              action.onRun();
+            }}
+          >
+            {action.glyph === "down" ? (
+              <WebSyncDownIcon />
+            ) : action.glyph === "up" ? (
+              <WebSyncUpIcon />
+            ) : (
+              <WebSyncOpenIcon />
+            )}
+            {/* Present at all times, collapsed to zero width rather than
+                hidden — so it animates open on approach and screen readers
+                always reach it. A native title tooltip waits ~1s and lands
+                away from the cursor, too late to help someone deciding
+                whether this is the thing to click. */}
+            <span className="mini-app-publish-bar__web-sync-chip-act-verb">
+              {action.verb}
+            </span>
+          </button>
+        ) : onRefresh ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__web-sync-chip-act"
             aria-label="Re-check the web copy now"
             onClick={(event) => {
               event.stopPropagation();
@@ -1033,6 +1195,9 @@ export function WebSyncStatusDot({
             }}
           >
             <WebSyncRefreshIcon />
+            <span className="mini-app-publish-bar__web-sync-chip-act-verb">
+              Check now
+            </span>
           </button>
         ) : null}
       </span>

@@ -25,6 +25,10 @@ export interface CloudPublishPrefs {
   perUserIsolation?: boolean;
   /** Audience "people": Parse _User.objectId values allowed to open the app. */
   allowedUserIds?: string[];
+  /** Audience "people": signed-in guests by exact email (lowercase). */
+  allowedEmails?: string[];
+  /** Audience "people": signed-in guests by email domain (e.g. acme.com). */
+  allowedEmailDomains?: string[];
 }
 
 export interface CloudPublishState {
@@ -103,6 +107,8 @@ export async function publishCloudApp(
     perUserIsolation?: boolean;
     /** Audience "people" allowlist — must survive first publish, not just PATCH. */
     allowedUserIds?: string[];
+    allowedEmails?: string[];
+    allowedEmailDomains?: string[];
     autoPublish?: boolean;
     acknowledgeDesktopOnly?: boolean;
   },

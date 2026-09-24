@@ -4,9 +4,20 @@ import {
   type CloudChangeRequest,
 } from "../utils/cloudChangeRequestsApi";
 
+/** Owner-visible proposals still awaiting a decision (includes upload-in-progress). */
+export function isIncomingChangeRequestOpen(
+  req: CloudChangeRequest,
+): boolean {
+  const status = typeof req.status === "string" ? req.status.trim() : "";
+  return status === "pending" || status === "preparing";
+}
+
 export function useIncomingCloudChangeRequests(sourceAppId: string | null): {
   requests: CloudChangeRequest[];
+  /** Strict `pending` from the server. */
   pending: CloudChangeRequest[];
+  /** Pending plus still-uploading proposals — drives inbox badge and list. */
+  open: CloudChangeRequest[];
   loading: boolean;
   error: string | null;
   reload: () => Promise<void>;
@@ -46,7 +57,12 @@ export function useIncomingCloudChangeRequests(sourceAppId: string | null): {
       const detail = (event as CustomEvent).detail as
         | { type?: string }
         | undefined;
-      if (detail?.type !== "cloud-sync:items-stale") return;
+      if (
+        detail?.type !== "cloud-sync:items-stale" &&
+        detail?.type !== "cloud-change-requests:stale"
+      ) {
+        return;
+      }
       void reload();
     };
     window.addEventListener("gateway-broadcast", handler);
@@ -54,6 +70,7 @@ export function useIncomingCloudChangeRequests(sourceAppId: string | null): {
   }, [reload]);
 
   const pending = requests.filter((r) => r.status === "pending");
+  const open = requests.filter(isIncomingChangeRequestOpen);
 
-  return { requests, pending, loading, error, reload };
+  return { requests, pending, open, loading, error, reload };
 }

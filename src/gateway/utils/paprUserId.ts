@@ -144,20 +144,32 @@ export function resolveTrustedPaprUserId(
 }
 
 /** Caller identity for GET /api/access and verified job params on desktop. */
-export function getPaprCallerIdentity(): { userId?: string; email?: string } {
+export function getPaprCallerIdentity(): {
+  userId?: string;
+  email?: string;
+  displayName?: string;
+} {
   const userId = getPaprUserId();
   try {
     const settingsPath = path.join(getPaprDataDir(), "settings.json");
     const raw = fs.readFileSync(settingsPath, "utf-8");
     const settings = JSON.parse(raw) as {
-      paprProfile?: { userId?: string; email?: string };
-      profile?: { paprUserId?: string };
+      paprProfile?: { userId?: string; email?: string; displayName?: string };
+      profile?: { paprUserId?: string; name?: string; email?: string };
     };
-    const email = settings.paprProfile?.email?.trim() || undefined;
+    const email =
+      settings.paprProfile?.email?.trim() ||
+      settings.profile?.email?.trim() ||
+      undefined;
     const profileUserId = settings.paprProfile?.userId?.trim();
+    const displayName =
+      settings.paprProfile?.displayName?.trim() ||
+      settings.profile?.name?.trim() ||
+      undefined;
     return {
       userId: userId ?? profileUserId,
       email,
+      displayName,
     };
   } catch {
     return userId ? { userId } : {};

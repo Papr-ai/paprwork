@@ -143,7 +143,7 @@ Per-user sources without sign-in are blocked at access/schema gate (`cloudAppPer
 |-----------|------------|---------------------|
 | **Publish ACL check** | Caller session + namespace ACL | ✅ Caller via session |
 | **Shared Turso read/write (web)** | **Owner's** replica | ✅ `resolveTursoActingUserId("shared")` |
-| **Per-user Turso read/write (web)** | **Caller's** replica | ✅ **Fixed** — `tursoRuntimeIdentity.ts` |
+| **Per-user Turso read/write (web)** | Visitor suffix; **publisher → base primary** | ✅ Option A — `resolveTursoSuffixUserId*` |
 | **Turso token (desktop sync)** | Acting user (`external_user_id`) | ✅ |
 | **Vault: owner-scoped keys** | **Publisher's** vault | ✅ |
 | **Vault: user-scoped keys** | **Caller's** vault (sign-in required) | ✅ |

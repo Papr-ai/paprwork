@@ -87,6 +87,16 @@ function jobDbSchemaDdlBlockResult(
     };
   }
 
+  const migrationWrite = bashMigrationWriteBlockReason(command);
+  if (migrationWrite) {
+    return {
+      success: false,
+      error: migrationWrite,
+      type: "validation_error",
+      data: { stdout: "", stderr: migrationWrite, exitCode: 1, command },
+    } as never;
+  }
+
   const block = detectJobDbSchemaDdlBlock(command, {
     appDb:
       typeof mergedEnv.APP_DB === "string" ? mergedEnv.APP_DB : undefined,
@@ -118,6 +128,7 @@ import {
   JOBS_INDEX_BASH_BLOCK_MESSAGE,
 } from "../utils/jobsIndexBashGuard.js";
 import { detectJobDbSchemaDdlBlock } from "../utils/jobDbSchemaGuard.js";
+import { bashMigrationWriteBlockReason } from "../utils/migrationFileGuard.js";
 import { detectReplicaRegistrySqliteBlock } from "../utils/replicaBashSqliteGuard.js";
 import {
   buildNamespaceGitTrapWarning,

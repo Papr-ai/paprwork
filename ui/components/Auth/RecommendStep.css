@@ -1,0 +1,253 @@
+/**
+ * Gated recommend stage — visual port of the prototype's stage C
+ * (Onboarding Redesign Prototype: screens-build.ts stageC + style.css/cards.css).
+ *
+ * RecommendedApps is shared with the in-workspace OnboardingView, which is
+ * dark-themed. Everything here is scoped under `.recommend-step` so the gated
+ * screen gets the light prototype look without restyling the workspace tab.
+ * Colours come from the `--onb-*` tokens in onboardingTheme.css.
+ */
+
+.recommend-step__inner {
+  max-width: 880px; /* prototype .screen.wide */
+}
+
+.recommend-step__ribbon {
+  display: inline-block;
+  margin: 0 0 18px;
+  padding: 6px 13px;
+  border-radius: 20px;
+  background: #f0f9f3;
+  color: var(--onb-ok);
+  font-size: 13px;
+}
+
+/* Tiles: white cards on the light page. Two across, because we ship four
+   picks — three across (the prototype had three) leaves an orphan row. */
+.recommend-step .onboarding-recommend__grid {
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  max-width: none;
+  margin: 0;
+}
+
+.recommend-step .onboarding-recommend__tile {
+  display: grid;
+  gap: 8px;
+  align-content: start;
+  padding: 22px;
+  background: var(--onb-card);
+  border: 1px solid var(--onb-line);
+  border-radius: 15px;
+  color: var(--onb-ink);
+  text-align: left;
+  transition: 0.16s;
+}
+
+.recommend-step .onboarding-recommend__tile:hover:not(:disabled) {
+  border-color: var(--onb-g2);
+  transform: translateY(-2px);
+  box-shadow: 0 10px 26px rgba(10, 16, 32, 0.07);
+}
+
+.recommend-step .onboarding-recommend__tile-title {
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--onb-ink);
+}
+
+.recommend-step .onboarding-recommend__tile-desc {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--onb-mid);
+}
+
+.recommend-step .onboarding-recommend__tile-meta {
+  margin-top: 4px;
+  padding-top: 0;
+  font-size: 12.5px;
+  color: var(--onb-g1);
+}
+
+.recommend-step .onboarding-recommend__tile-flag {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--onb-ok);
+}
+
+/* Done state of the same pill: identical shape, green instead of blue. */
+.recommend-step .onboarding-recommend__tile-connect.is-connected {
+  background: rgba(15, 157, 88, 0.08);
+  color: var(--onb-ok);
+}
+
+/* The platform sign-in reads as the tile's action, not as more body copy. */
+.recommend-step .onboarding-recommend__tile-connect {
+  justify-self: start;
+  margin-top: 6px;
+  padding: 6px 12px;
+  border-radius: 9px;
+  background: rgba(0, 108, 224, 0.07);
+  color: var(--onb-g1);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* "Something else": dashed panel, prototype cards.css .ff-open */
+.recommend-step .onboarding-recommend__else {
+  display: grid;
+  gap: 3px;
+  max-width: none;
+  margin: 12px 0 0;
+  padding: 17px 20px;
+  border: 1px dashed #cfd9e8;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--onb-ink);
+  transition: 0.16s;
+}
+
+.recommend-step .onboarding-recommend__else:hover {
+  border-color: var(--onb-g2);
+  border-style: solid;
+  background: #fbfdff;
+}
+
+.recommend-step .onboarding-recommend__else-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--onb-ink);
+}
+
+.recommend-step .onboarding-recommend__else-sub {
+  font-size: 13.5px;
+  color: var(--onb-mid);
+}
+
+.recommend-step .onboarding-recommend__error {
+  color: #c62828;
+}
+
+.recommend-step .onboarding-recommend__status,
+.recommend-step .onboarding-recommend__status-text {
+  color: var(--onb-mid);
+}
+
+
+/*
+ * `.onboarding-skip-btn` is defined in BOTH OnboardingView.css (dark, borderless)
+ * and onboardingTheme.css (light pill). OnboardingView.css loads later in the
+ * bundle, so it wins — which is why Skip rendered as grey text. Re-assert the
+ * auth-stage pill here with higher specificity.
+ */
+.recommend-step .onboarding-skip-btn {
+  padding: 7px 15px;
+  border: 1px solid var(--onb-line);
+  border-radius: 9px;
+  background: #fff;
+  color: var(--onb-mid);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.recommend-step .onboarding-skip-btn:hover {
+  border-color: var(--onb-g2);
+  color: var(--onb-g1);
+  background: #fbfdff;
+}
+
+/* ---- Freeform ("Something else") — shared component, light re-ink ---- */
+.recommend-step .onboarding-freeform {
+  max-width: none;
+  margin: 0;
+  color: var(--onb-ink);
+}
+
+.recommend-step .onboarding-freeform .onboarding-view-title {
+  font-size: 25px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  background: none;
+  -webkit-text-fill-color: var(--onb-ink);
+  color: var(--onb-ink);
+  margin: 0 0 10px;
+}
+
+.recommend-step .onboarding-freeform .onboarding-view-subtitle {
+  max-width: 62ch;
+  margin: 0;
+  font-size: 16px;
+  color: var(--onb-mid);
+}
+
+.recommend-step .onboarding-freeform__back {
+  color: var(--onb-g1);
+}
+
+.recommend-step .onboarding-freeform__opener {
+  border: 1px solid var(--onb-line);
+  background: #fff;
+  color: var(--onb-mid);
+}
+
+.recommend-step .onboarding-freeform__opener:hover {
+  border-color: var(--onb-g2);
+  color: var(--onb-g1);
+}
+
+.recommend-step .onboarding-freeform__input {
+  background: var(--onb-card);
+  border: 1px solid var(--onb-line);
+  color: var(--onb-ink);
+}
+
+.recommend-step .onboarding-freeform__input:focus {
+  border-color: var(--onb-g2);
+  box-shadow: 0 0 0 3px rgba(0, 172, 250, 0.12);
+}
+
+.recommend-step .onboarding-freeform__coach-head {
+  color: var(--onb-soft);
+}
+
+.recommend-step .onboarding-freeform__tip.is-now {
+  color: var(--onb-mid);
+}
+
+.recommend-step .onboarding-freeform__tip.is-met {
+  color: var(--onb-soft);
+}
+
+.recommend-step .onboarding-freeform__example {
+  background: var(--onb-card);
+  border: 1px solid var(--onb-line);
+  color: var(--onb-mid);
+}
+
+.recommend-step .onboarding-freeform__example:hover {
+  border-color: var(--onb-g2);
+  color: var(--onb-ink);
+}
+
+/* Primary action = the auth stages' gradient CTA (.onboarding-cta). */
+.recommend-step .onboarding-primary-btn {
+  padding: 12px 26px;
+  border-radius: 11px;
+  background: var(--onb-grad);
+  color: #fff;
+  font-size: 15px;
+  box-shadow: 0 5px 16px rgba(0, 108, 224, 0.22);
+}
+
+/* Catalog-unreachable fallback: left-aligned like the rest of the stage. */
+.recommend-step .onboarding-recommend__status {
+  align-items: flex-start;
+  text-align: left;
+}
+
+@media (max-width: 720px) {
+  .recommend-step .onboarding-recommend__grid {
+    grid-template-columns: 1fr;
+  }
+}

@@ -108,6 +108,8 @@
     "test:cloud-app-host": "node scripts/test-cloud-app-host-e2e.mjs",
     "test:cloud-app-host-phases-2-4": "node scripts/test-cloud-app-host-phases-2-4-e2e.mjs",
     "test:plan-a-turso-direct-e2e": "npm run build:gateway && node scripts/test-plan-a-turso-direct-e2e.mjs",
+    "test:turso-option-a-e2e": "npm run build:gateway && node scripts/test-turso-option-a-e2e.mjs",
+    "test:turso-option-a-cloud-host-e2e": "node scripts/test-turso-option-a-cloud-host-e2e.mjs",
     "test:desktop-session-bridge": "node scripts/test-desktop-session-bridge.mjs",
     "test:cloud-app-backend": "node scripts/test-cloud-app-backend-e2e.mjs",
     "test:cloud-bash-run": "node scripts/test-cloud-bash-run-e2e.mjs",

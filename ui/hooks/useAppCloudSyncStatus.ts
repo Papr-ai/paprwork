@@ -18,6 +18,7 @@ import {
   invalidateCachedSyncItemsForApp,
   readCachedSyncItemsForApp,
   readCloudSyncTabSnapshot,
+  touchCachedSyncItemsFetchedAt,
   writeCachedSyncItemsForApp,
 } from "../utils/cloudSyncTabCache";
 import {
@@ -218,7 +219,8 @@ export function useAppCloudSyncStatus(
   refresh: (force?: boolean) => Promise<void>;
   pushNow: () => Promise<void>;
   bumpQueue: () => Promise<void>;
-  pullUpdates: () => Promise<void>;
+  /** Resolves true when local reached the web head with no conflicts. */
+  pullUpdates: (resolution?: "take_theirs" | "keep_mine") => Promise<boolean>;
   applyRemoteUpdates: () => Promise<void>;
 } {
   const active = options?.enabled !== false;
@@ -324,6 +326,7 @@ export function useAppCloudSyncStatus(
         publisherUpdatesAvailable: body.publisherUpdatesAvailable,
         publisherLiveRevision: body.publisherLiveRevision ?? null,
         storedUpstreamRevision: body.storedUpstreamRevision ?? null,
+        pendingUpdate: body.pendingUpdate ?? null,
       });
     } catch {
       // Non-blocking metadata check
@@ -371,10 +374,13 @@ export function useAppCloudSyncStatus(
         setSyncItems(items);
         hasLoadedOnceRef.current = true;
 
+        const checkedAt = Date.now();
         if (shouldPersistSyncSnapshot(items, git)) {
           writeCachedSyncItemsForApp(appId, items);
+        } else {
+          touchCachedSyncItemsFetchedAt(appId, checkedAt);
         }
-        setLastCheckedAt(Date.now());
+        setLastCheckedAt(checkedAt);
         setCheckedThisSession(true);
       } catch (err) {
         setError((err as Error).message.slice(0, 120));
@@ -428,11 +434,14 @@ export function useAppCloudSyncStatus(
     }
   }, [refresh, appId, status?.gitRemoteRequiresReview]);
 
-  const pullUpdates = useCallback(async () => {
+  const pullUpdates = useCallback(async (
+    resolution?: "take_theirs" | "keep_mine",
+  ): Promise<boolean> => {
     if (status?.gitRemoteRequiresReview) {
       setError("Use Merge remote changes — Get updates cannot merge diverged git history.");
-      return;
+      return false;
     }
+    let settled = false;
     setPulling(true);
     setError(null);
     try {
@@ -441,7 +450,7 @@ export function useAppCloudSyncStatus(
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ wait: true }),
+          body: JSON.stringify({ wait: true, ...(resolution ? { resolution } : {}) }),
         },
       );
       if (!res.ok) {
@@ -449,22 +458,43 @@ export function useAppCloudSyncStatus(
         throw new Error(body.error ?? `Get updates failed (${res.status})`);
       }
       const body = (await res.json()) as {
-        code?: { conflictFiles?: string[]; skipped?: boolean; reason?: string };
+        code?: {
+          conflictFiles?: string[];
+          skipped?: boolean;
+          reason?: string;
+          commitSha?: string | null;
+        };
       };
-      if (body.code?.skipped && body.code.reason) {
-        setError(body.code.reason.slice(0, 120));
-      } else if ((body.code?.conflictFiles?.length ?? 0) > 0) {
-        setError(
-          `${body.code!.conflictFiles!.length} file conflict(s) — merge locally or ask the agent`,
-        );
+      const code = body.code;
+      if (code?.skipped && code.reason) {
+        setError(code.reason.slice(0, 120));
+      }
+      // Conflicts are not an error: the update is held and the chip shows
+      // "Update conflicts" with Keep mine / Take theirs / Ask agent to merge.
+      const pullSettledAtHead =
+        code &&
+        (code.conflictFiles?.length ?? 0) === 0 &&
+        (!code.skipped || code.reason === "already at remote head");
+      if (pullSettledAtHead) {
+        settled = true;
+        setRemoteCodeCheck((prev) => ({
+          upToDate: true,
+          remoteCommitSha: code.commitSha ?? prev?.remoteCommitSha ?? null,
+          checkFailed: false,
+          publisherUpdatesAvailable: prev?.publisherUpdatesAvailable,
+          publisherLiveRevision: prev?.publisherLiveRevision ?? null,
+          storedUpstreamRevision: prev?.storedUpstreamRevision ?? null,
+        }));
       }
       await refresh(true);
       await fetchRemoteCodeStatus();
     } catch (err) {
       setError((err as Error).message.slice(0, 120));
+      settled = false;
     } finally {
       setPulling(false);
     }
+    return settled;
   }, [refresh, appId, status?.gitRemoteRequiresReview, fetchRemoteCodeStatus]);
 
   const applyRemoteUpdates = useCallback(async () => {
@@ -509,6 +539,9 @@ export function useAppCloudSyncStatus(
     setSyncItems(cached);
     hasLoadedOnceRef.current = cached !== null;
     setLoading(cached === null);
+    if (fetchedAt !== null) {
+      setLastCheckedAt(fetchedAt);
+    }
 
     if (cacheFresh) {
       setLiveSyncPending(false);
@@ -574,6 +607,11 @@ export function useAppCloudSyncStatus(
       const detail = (event as CustomEvent).detail as
         | { type?: string; data?: { appId?: string } }
         | undefined;
+      if (detail?.type === "app-update:pending") {
+        // Deferred remote update appeared / cleared — re-read remote status only.
+        if (detail.data?.appId === appId) void fetchRemoteCodeStatus();
+        return;
+      }
       if (detail?.type !== "cloud-sync:items-stale") {
         return;
       }
@@ -591,7 +629,7 @@ export function useAppCloudSyncStatus(
     };
     window.addEventListener("gateway-broadcast", handler);
     return () => window.removeEventListener("gateway-broadcast", handler);
-  }, [appId, refresh]);
+  }, [appId, refresh, fetchRemoteCodeStatus]);
 
   // Local dirty state comes from the file watcher and is knowable without any
   // round trip, so it must render immediately on tab open. Only the WEB half

@@ -1,9 +1,16 @@
 /**
- * Fork/track panel — contribute changes back to the upstream owner (Share sheet).
+ * Propose sheet body — send edits to the publisher, then see what you sent.
+ *
+ * No GitHub links: the publisher's repo is private, so a PR URL would 404 for
+ * the contributor. Status comes from the memory server's outgoing list.
  */
 
-import { useState } from "react";
-import { submitCloudAppChange } from "../../utils/cloudContributeApi";
+import { useCallback, useEffect, useState } from "react";
+import {
+  listSentProposals,
+  submitCloudAppChange,
+  type SentProposal,
+} from "../../utils/cloudContributeApi";
 
 export interface ForkLineageInfo {
   mode: "fork" | "track";
@@ -20,6 +27,24 @@ interface CloudContributeBackPanelProps {
   busy?: boolean;
 }
 
+const STATUS_LABEL: Record<string, { label: string; tone: string }> = {
+  pending: { label: "Waiting for review", tone: "warn" },
+  approved: { label: "Accepted", tone: "ok" },
+  rejected: { label: "Declined", tone: "bad" },
+};
+
+function relativeTime(iso?: string | null): string {
+  if (!iso) return "";
+  const ms = Date.now() - new Date(iso).getTime();
+  const min = Math.round(ms / 60_000);
+  if (min < 1) return "just now";
+  if (min < 60) return `${min}m ago`;
+  const h = Math.round(min / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.round(h / 24);
+  return d < 30 ? `${d}d ago` : new Date(iso).toLocaleDateString();
+}
+
 export function CloudContributeBackPanel({
   appTitle,
   lineage,
@@ -28,11 +53,21 @@ export function CloudContributeBackPanel({
   const [title, setTitle] = useState(`Updates to ${appTitle}`);
   const [description, setDescription] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [prUrl, setPrUrl] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [proposals, setProposals] = useState<SentProposal[] | null>(null);
 
-  const modeLabel = lineage.mode === "track" ? "Tracking upstream" : "Fork";
+  const loadProposals = useCallback(async () => {
+    try {
+      setProposals(await listSentProposals(lineage.installedAppId));
+    } catch {
+      setProposals([]);
+    }
+  }, [lineage.installedAppId]);
+
+  useEffect(() => {
+    void loadProposals();
+  }, [loadProposals]);
 
   const submit = async () => {
     if (!description.trim()) {
@@ -41,21 +76,18 @@ export function CloudContributeBackPanel({
     }
     setSubmitting(true);
     setError(null);
-    setMessage(null);
-    setPrUrl(null);
+    setSent(false);
     try {
-      const result = await submitCloudAppChange({
+      await submitCloudAppChange({
         sourceNamespaceId: lineage.sourceNamespaceId,
         sourceSlug: lineage.sourceSlug,
         installedAppId: lineage.installedAppId,
         title: title.trim(),
         description: description.trim(),
       });
-      setMessage("Your proposal was sent to the app owner for review.");
-      if (result.prUrl) {
-        setPrUrl(result.prUrl);
-      }
+      setSent(true);
       setDescription("");
+      void loadProposals();
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
     } finally {
@@ -65,13 +97,9 @@ export function CloudContributeBackPanel({
 
   return (
     <div className="share-sheet__section share-sheet__fork">
-      <p className="share-sheet__section-title">
-        {modeLabel} · from cloud
-      </p>
       <p className="share-sheet__section-desc">
-        Send your edits back to the original publisher for review. They can
-        accept your changes into the main app or decline without affecting your
-        local copy.
+        Send your edits to the owner. They can accept them into the main app or
+        decline; either way your copy stays as it is.
       </p>
 
       <label className="share-sheet__field-label" htmlFor="change-title">
@@ -94,21 +122,14 @@ export function CloudContributeBackPanel({
         rows={4}
         placeholder="Briefly explain the fix or feature you want the owner to review…"
         value={description}
-        onChange={(e) => setDescription(e.target.value)}
+        onChange={(e) => {
+          setDescription(e.target.value);
+          if (sent) setSent(false);
+        }}
         disabled={busy || submitting}
       />
 
       {error ? <p className="share-sheet__error">{error}</p> : null}
-      {message ? (
-        <p className="share-sheet__notice share-sheet__notice--success">{message}</p>
-      ) : null}
-      {prUrl ? (
-        <p className="share-sheet__footnote">
-          <a className="share-sheet__link-btn" href={prUrl} target="_blank" rel="noreferrer">
-            View proposed changes
-          </a>
-        </p>
-      ) : null}
 
       <button
         type="button"
@@ -116,8 +137,39 @@ export function CloudContributeBackPanel({
         disabled={busy || submitting}
         onClick={() => void submit()}
       >
-        {submitting ? "Sending proposal…" : "Send to owner"}
+        {submitting ? "Sending proposal…" : sent ? "Sent ✓" : "Send to owner"}
       </button>
+
+      {proposals && proposals.length > 0 ? (
+        <div className="propose-history">
+          <p className="propose-history__heading">Your proposals</p>
+          <ul className="propose-history__list">
+            {proposals.map((p) => {
+              const status = STATUS_LABEL[p.status] ?? { label: p.status, tone: "idle" };
+              const when =
+                p.status === "pending" ? relativeTime(p.createdAt) : relativeTime(p.resolvedAt ?? p.createdAt);
+              const files = p.stagedPaths?.length ?? 0;
+              return (
+                <li key={p.id} className="propose-history__item">
+                  <div className="propose-history__main">
+                    <span className="propose-history__title" title={p.description}>
+                      {p.title}
+                    </span>
+                    <span className="propose-history__meta">
+                      {when}
+                      {files > 0 ? ` · ${files} file${files === 1 ? "" : "s"}` : ""}
+                    </span>
+                  </div>
+                  <span className={`propose-history__status propose-history__status--${status.tone}`}>
+                    <span className="propose-history__dot" aria-hidden />
+                    {status.label}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      ) : null}
     </div>
   );
 }

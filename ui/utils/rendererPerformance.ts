@@ -15,6 +15,16 @@ export function trackPreviewFrame(id: string, frame: TrackedFrame): () => void {
   };
 }
 
+/** Re-send preview phase messages to every tracked mini-app iframe (sleep/wake resync). */
+export function resyncAllPreviewFramePhases(): number {
+  let count = 0;
+  for (const frame of frames.values()) {
+    frame.poll();
+    count++;
+  }
+  return count;
+}
+
 export function readGateReport(value: unknown): PreviewGateReport | null {
   if (!value || typeof value !== "object") return null;
   const v = value as PreviewGateReport;

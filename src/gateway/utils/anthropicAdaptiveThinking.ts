@@ -8,7 +8,8 @@
  * `display: "summarized"` is what makes the text materialise.
  *
  * Verified against the live API (same prompt, tools present):
- *   claude-opus-5     -> no thinking block
+ *   claude-opus-5     -> no thinking block (legacy)
+ *   claude-opus-5-5   -> adaptive thinking (always on)
  *   claude-fable-5-1  -> thinking block, 0 chars of text, signature required
  *   claude-sonnet-5   -> thinking block, 0 chars of text, signature required
  *

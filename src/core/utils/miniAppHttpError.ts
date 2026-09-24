@@ -48,6 +48,10 @@ export function shouldShowDataSourcesMigrationHint(errorMessage: string): boolea
     return false;
   }
 
+  if (m.includes("schema mismatch for")) {
+    return true;
+  }
+
   const unrelated =
     m.includes("job not found") ||
     m.includes("no such table") ||

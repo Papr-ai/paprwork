@@ -10,6 +10,7 @@ import {
 describe("piAiAnthropicAdaptiveThinking", () => {
   it("detects Fable 5.1, Opus 5, and Sonnet 5 as override models", () => {
     expect(requiresPiAiAdaptiveThinkingOverride("claude-fable-5-1")).toBe(true);
+    expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-5-5")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-5")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-opus-4-8")).toBe(true);
     expect(requiresPiAiAdaptiveThinkingOverride("claude-sonnet-5")).toBe(true);

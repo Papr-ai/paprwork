@@ -35,6 +35,7 @@ import {
   isReplicaMissingColumnError,
   isReplicaSchemaDriftError,
 } from "../tursoReplica/tursoReplicaSchemaDriftHeal.js";
+import { buildReplicaSchemaDriftFailureError } from "../tursoReplica/replicaSchemaQueryErrorMessage.js";
 import {
   awaitReplicaSchemaDriftHeal,
   scheduleReplicaSchemaDriftHeal,
@@ -456,6 +457,7 @@ export class DbRouter {
         console.warn(
           `[DbRouter] Schema drift on replica for ${source.alias ?? source.dbId} — applying migrations on handle`,
         );
+        let healMessage: string | undefined;
         try {
           await awaitReplicaSchemaDriftHeal(source);
           const healed = await queryLinkedDbViaTursoReplica(source, sql, params, {
@@ -467,26 +469,44 @@ export class DbRouter {
           );
           return { ...healed, backend: "turso-replica" };
         } catch (healError) {
+          healMessage = (healError as Error).message;
           console.warn(
             `[DbRouter] Schema heal/retry failed for ${source.alias ?? source.dbId}: ` +
-              `${(healError as Error).message.slice(0, 160)}`,
+              `${healMessage.slice(0, 160)}`,
           );
           scheduleReplicaSchemaDriftHeal(source);
         }
+        let primaryMessage: string | undefined;
+        let primaryUnavailable = false;
         if (isTursoReplicaOnline()) {
-          const remote = await this.queryViaTursoPrimary(appId, source, sql, params);
-          if (remote) {
+          const primary = await this.runTursoPrimaryQuery(
+            appId,
+            source,
+            sql,
+            params,
+          );
+          if (primary.ok) {
             console.warn(
               `[DbRouter] Served ${source.alias ?? source.dbId} from Turso primary ` +
                 "while local schema migrates in background",
             );
-            return remote;
+            return primary.result;
           }
+          if (primary.kind === "unavailable") {
+            primaryUnavailable = true;
+          } else {
+            primaryMessage = primary.message;
+          }
+        } else {
+          primaryUnavailable = true;
         }
-        throw new Error(
-          `Schema update pending for ${source.alias ?? source.dbId}. ` +
-            "Local replica is catching up — retry in a moment.",
-        );
+        throw buildReplicaSchemaDriftFailureError({
+          sourceLabel: String(source.alias ?? source.dbId),
+          localMessage: message,
+          healMessage,
+          primaryMessage,
+          primaryUnavailable,
+        });
       }
 
       if (isReplicaSqlSchemaError(message) && !isReplicaSchemaDriftError(message)) {
@@ -631,16 +651,20 @@ export class DbRouter {
     }
   }
 
-  private async queryViaTursoPrimary(
+  private async runTursoPrimaryQuery(
     appId: string,
     source: AppDataSource,
     sql: string,
     params?: unknown[],
     existingClient?: Client | null,
-  ): Promise<RoutedQueryResult | null> {
+  ): Promise<
+    | { ok: true; result: RoutedQueryResult }
+    | { ok: false; kind: "unavailable" }
+    | { ok: false; kind: "failed"; message: string }
+  > {
     const client = existingClient ?? (await getTursoClientForSource(source));
     if (!client) {
-      return null;
+      return { ok: false, kind: "unavailable" };
     }
 
     try {
@@ -660,18 +684,42 @@ export class DbRouter {
       );
 
       return {
-        rows,
-        columns,
-        count: rows.length,
-        backend: "turso",
+        ok: true,
+        result: {
+          rows,
+          columns,
+          count: rows.length,
+          backend: "turso",
+        },
       };
     } catch (error) {
+      const failMessage = (error as Error).message;
       console.warn(
         `[DbRouter] Turso primary query failed for ${source.alias ?? source.dbId}: ` +
-          `${(error as Error).message.slice(0, 160)}`,
+          `${failMessage.slice(0, 160)}`,
       );
-      return null;
+      return { ok: false, kind: "failed", message: failMessage };
     }
+  }
+
+  private async queryViaTursoPrimary(
+    appId: string,
+    source: AppDataSource,
+    sql: string,
+    params?: unknown[],
+    existingClient?: Client | null,
+  ): Promise<RoutedQueryResult | null> {
+    const outcome = await this.runTursoPrimaryQuery(
+      appId,
+      source,
+      sql,
+      params,
+      existingClient,
+    );
+    if (outcome.ok) {
+      return outcome.result;
+    }
+    return null;
   }
 
   async schema(

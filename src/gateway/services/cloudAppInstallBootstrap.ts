@@ -530,6 +530,25 @@ export async function bootstrapCopiedAppDatabasesInWorkspace(
   });
 }
 
+/** Whether install should return agentSetupMessage instead of failing the HTTP request. */
+export function shouldOfferInstallAgentSetup(
+  bootstrap: Pick<
+    InstallBootstrapResult,
+    "errors" | "ready" | "needsSeed" | "warnings"
+  >,
+  installDbPolicy: InstallDbPolicy,
+): boolean {
+  if (bootstrap.errors.length > 0) {
+    return true;
+  }
+  if (installDbPolicy === "fork_empty") {
+    return !bootstrap.ready;
+  }
+  return (
+    !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
+  );
+}
+
 /** Agent prompt when install bootstrap is incomplete or needs manual follow-up. */
 export function buildCloudInstallAgentSetupMessage(input: {
   appTitle: string;
@@ -538,10 +557,15 @@ export function buildCloudInstallAgentSetupMessage(input: {
   bootstrap: InstallBootstrapResult;
   linkedJobIds?: string[];
 }): string {
+  const hasErrors = input.bootstrap.errors.length > 0;
   const lines: string[] = [
-    `The community app "${input.appTitle}" (appId: ${input.appId}` +
-      (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
-      `) was installed but database setup needs attention.`,
+    hasErrors
+      ? `The app "${input.appTitle}" (appId: ${input.appId}` +
+        (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
+        `) was copied locally, but a database migration failed during setup. The user should not see raw SQLite errors — fix the migration and verify the app.`
+      : `The community app "${input.appTitle}" (appId: ${input.appId}` +
+        (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
+        `) was installed but database setup needs attention.`,
     "",
     "Please complete local setup so reads AND writes work (mini-apps require a local SQLite file; Turso alone is not enough for writes).",
     "",

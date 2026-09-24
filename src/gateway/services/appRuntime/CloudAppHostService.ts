@@ -1118,8 +1118,9 @@ export class CloudAppHostService {
     // covered by a single check instead of nine that can drift apart.
     const peopleDecision = applyPeopleAllowlist(
       access,
-      this.loadAllowedUserIds(access.appId),
+      this.loadSharePeopleAllowlist(access.appId),
       runtimeAuth.externalUserId,
+      this.auth.getSessionEmail(req),
     );
     if (peopleDecision.denied) {
       // null is the established "no access" result for every caller, and it
@@ -1141,9 +1142,21 @@ export class CloudAppHostService {
    * failures deliberately return undefined (not "deny all") so a missing or
    * malformed prefs file cannot take a published app offline.
    */
-  private loadAllowedUserIds(appId: string): string[] | undefined {
+  private loadSharePeopleAllowlist(appId: string): {
+    allowedUserIds?: string[];
+    allowedEmails?: string[];
+    allowedEmailDomains?: string[];
+  } | undefined {
     try {
-      return loadCloudPublishPrefs().apps[appId]?.allowedUserIds;
+      const prefs = loadCloudPublishPrefs().apps[appId];
+      if (!prefs) {
+        return undefined;
+      }
+      return {
+        allowedUserIds: prefs.allowedUserIds,
+        allowedEmails: prefs.allowedEmails,
+        allowedEmailDomains: prefs.allowedEmailDomains,
+      };
     } catch {
       return undefined;
     }
