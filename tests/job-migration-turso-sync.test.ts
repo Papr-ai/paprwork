@@ -15,78 +15,32 @@ try {
   canUseBetterSqlite = false;
 }
 
+/**
+ * Remote Turso stand-in backed by a real in-memory SQLite database.
+ *
+ * A hand-rolled SQL matcher broke every time the ledger/bootstrap SQL changed
+ * (quoted ledger name, legacy-column ALTERs, index probes). Real SQLite accepts
+ * whatever production sends, so these tests only pin behaviour.
+ */
 function createMockRemote(initialColumns: Record<string, string[]>): Client {
-  const columnsByTable = new Map<string, Set<string>>(
-    Object.entries(initialColumns).map(([table, cols]) => [table, new Set(cols)]),
-  );
-  const appliedMigrations = new Set<string>();
-
+  const db = new Database(":memory:");
+  for (const [table, cols] of Object.entries(initialColumns)) {
+    const defs = cols.map((c, i) => `"${c}" TEXT${i === 0 ? " PRIMARY KEY" : ""}`);
+    db.exec(`CREATE TABLE "${table}" (${defs.join(", ")})`);
+  }
   return {
     execute: vi.fn(async (input: string | { sql: string; args?: unknown[] }) => {
       const sql = typeof input === "string" ? input : input.sql;
-      const args = typeof input === "string" ? [] : (input.args ?? []);
-
-      if (sql.includes("CREATE TABLE IF NOT EXISTS _papr_schema_migrations")) {
-        return { rows: [], columns: [], rowsAffected: 0 };
+      const args = (typeof input === "string" ? [] : (input.args ?? [])) as unknown[];
+      const stmt = db.prepare(sql);
+      if (stmt.reader) {
+        const rows = stmt.all(...args) as Record<string, unknown>[];
+        return { rows, columns: stmt.columns().map((c) => c.name), rowsAffected: 0 };
       }
-      if (sql.includes("FROM sqlite_master") && sql.includes("type='table'")) {
-        return {
-          rows: [...columnsByTable.keys()].map((name) => ({ name })),
-          columns: ["name"],
-          rowsAffected: 0,
-        };
-      }
-      if (sql.startsWith("SELECT id FROM _papr_schema_migrations")) {
-        return {
-          rows: [...appliedMigrations].map((id) => ({ id })),
-          columns: ["id"],
-          rowsAffected: 0,
-        };
-      }
-      if (sql.startsWith("INSERT OR IGNORE INTO _papr_schema_migrations")) {
-        appliedMigrations.add(String(args[0]));
-        return { rows: [], columns: [], rowsAffected: 1 };
-      }
-      if (sql.startsWith("PRAGMA table_info(")) {
-        const table = sql.match(/PRAGMA table_info\("([^"]+)"\)/)?.[1];
-        const cols = table ? columnsByTable.get(table) : undefined;
-        return {
-          rows: [...(cols ?? [])].map((name) => ({
-            name,
-            type: "TEXT",
-            pk: 0,
-          })),
-          columns: ["name", "type", "pk"],
-          rowsAffected: 0,
-        };
-      }
-      const createTableMatch =
-        /^CREATE TABLE IF NOT EXISTS "([^"]+)" \((.+)\)$/i.exec(sql.trim());
-      if (createTableMatch) {
-        const table = createTableMatch[1]!;
-        if (!columnsByTable.has(table)) {
-          columnsByTable.set(table, new Set(["id"]));
-        }
-        return { rows: [], columns: [], rowsAffected: 0 };
-      }
-      if (/^CREATE INDEX IF NOT EXISTS/i.test(sql.trim())) {
-        return { rows: [], columns: [], rowsAffected: 0 };
-      }
-      const addMatch =
-        /^ALTER TABLE "([^"]+)" ADD COLUMN "([^"]+)" (.+)$/i.exec(sql.trim());
-      if (addMatch) {
-        const [, table, column] = addMatch;
-        const cols = columnsByTable.get(table!) ?? new Set<string>();
-        if (cols.has(column!)) {
-          throw new Error(`SQLITE_UNKNOWN: duplicate column name: ${column}`);
-        }
-        cols.add(column!);
-        columnsByTable.set(table!, cols);
-        return { rows: [], columns: [], rowsAffected: 0 };
-      }
-      throw new Error(`Unexpected SQL in mock remote: ${sql}`);
+      const info = stmt.run(...args);
+      return { rows: [], columns: [], rowsAffected: info.changes };
     }),
-    close: vi.fn(),
+    close: vi.fn(() => db.close()),
   } as unknown as Client;
 }
 
@@ -122,8 +76,16 @@ describe("jobMigrationTursoSync", () => {
         migrationRoot,
       );
 
-      expect(applied).toEqual(["0002_add_contact_fields.sql"]);
-      expect(remote.execute).toHaveBeenCalled();
+      // Ledger alignment sees the columns already on Turso and backfills the
+      // remote ledger up front, so nothing is left to "apply now". What matters:
+      // no duplicate ADD COLUMN reached Turso, and the ledger records 0002.
+      expect(applied).toEqual([]);
+      const sent = vi
+        .mocked(remote.execute)
+        .mock.calls.map(([q]) => (typeof q === "string" ? q : q.sql));
+      expect(sent.some((q) => /ALTER TABLE "?audits"? ADD COLUMN/i.test(q))).toBe(false);
+      const ledger = await remote.execute("SELECT id FROM _papr_schema_migrations");
+      expect(ledger.rows.map((r) => r.id)).toContain("0002_add_contact_fields.sql");
     },
   );
 
