@@ -10,6 +10,8 @@ export default defineConfig({
     // workspace at import time get a temp root instead of the developer's real
     // one. `useIsolatedPaprWorkspace()` still applies where a suite needs a
     // fresh workspace per test — this only makes the default safe.
+    // Bundles db-query-worker.ts so LocalStorageProvider read workers can start.
+    globalSetup: ["./tests/setup/buildDbQueryWorker.ts"],
     setupFiles: ["./tests/setup/defaultTempWorkspace.ts"],
     // Co-located `src/**` specs are included so tests living next to the code
     // they cover actually run in CI. Without this, repoHygiene.test.ts was
