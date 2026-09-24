@@ -7,9 +7,25 @@ import {
   CHECKPOINT_WAL_ERROR,
   tursoReplicaBridgeMock,
 } from "./helpers/tursoReplicaBridgeMock.js";
+import Database from "better-sqlite3";
+
+/**
+ * A replica file that holds user rows. Checkpoint recovery only skips the
+ * bootstrap-pending marker when it can prove data.db is populated; a placeholder
+ * text file counts as empty, so pull() would (correctly) report not-yet-synced.
+ */
+function writePopulatedReplica(dbPath: string): void {
+  const db = new Database(dbPath);
+  db.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)");
+  db.prepare("INSERT INTO items (label) VALUES (?)").run("row");
+  db.close();
+}
 
 describe("turso replica checkpoint wedge — production guarantees", () => {
   afterEach(() => {
+    // resetModules does not drop doMock registrations: one test stubs
+    // fs.existsSync → true, which later reads as "bootstrap marker present".
+    vi.doUnmock("fs");
     vi.resetModules();
     vi.clearAllMocks();
     vi.restoreAllMocks();
@@ -128,7 +144,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-recovery-exec-"));
     const dbPath = path.join(dir, "data.db");
-    fs.writeFileSync(dbPath, "sqlite");
+    writePopulatedReplica(dbPath);
 
     const fileGuard = await import(
       "../src/gateway/services/tursoReplica/tursoReplicaFileGuard.js"
@@ -140,7 +156,10 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
     resetTursoReplicaServiceForTests();
 
     const service = getTursoReplicaService();
-    const result = await service.runExec(dbPath, "d-abc12345", "CREATE TABLE t(id INTEGER)");
+    // Synchronous push path (default is background push via the scheduler).
+    const result = await service.runExec(dbPath, "d-abc12345", "CREATE TABLE t(id INTEGER)", {
+      pushAfterWrite: true,
+    });
 
     expect(result.pendingPush).toBe(false);
     expect(pull).toHaveBeenCalledTimes(2);
@@ -182,7 +201,7 @@ describe("turso replica checkpoint wedge — production guarantees", () => {
 
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "papr-recovery-pull-"));
     const dbPath = path.join(dir, "data.db");
-    fs.writeFileSync(dbPath, "sqlite");
+    writePopulatedReplica(dbPath);
 
     const fileGuard = await import(
       "../src/gateway/services/tursoReplica/tursoReplicaFileGuard.js"

@@ -151,7 +151,10 @@ describe("pullLinkedDbViaTursoReplica inbound drain", () => {
       }),
     );
 
-    vi.doMock("../src/gateway/services/DatabaseRegistryService.js", () => ({
+    // Partial mock: routing now also reads the registry (getDatabaseRegistryService)
+    // to decide replica ownership, so keep the real exports alongside the stub.
+    vi.doMock("../src/gateway/services/DatabaseRegistryService.js", async (importOriginal) => ({
+      ...(await importOriginal<Record<string, unknown>>()),
       resolveTursoDatabaseNameForSource: () => "d-test0001",
     }));
 

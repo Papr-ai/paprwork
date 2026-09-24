@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { getPaprRoot } from "../src/core/utils/paprRoot.js";
 import {
   isJobDbDirty,
   loadTursoSyncState,
@@ -19,6 +20,35 @@ try {
   canUseBetterSqlite = true;
 } catch {
   canUseBetterSqlite = false;
+}
+
+/**
+ * Global auto-upload defaults OFF when settings.json is missing, which makes
+ * shouldAutoUploadJobFolder() drop every non-manual schedule. Opt the test root
+ * in the same way a user does from Settings.
+ */
+function enableAutoUpload(paprRoot: string): void {
+  fs.mkdirSync(path.join(paprRoot, "data"), { recursive: true });
+  fs.writeFileSync(
+    path.join(paprRoot, "data", "settings.json"),
+    JSON.stringify({ preferences: { cloudAutoUploadEnabled: true } }),
+  );
+}
+
+const ROUTING_MODULE = "../src/gateway/services/tursoReplica/tursoReplicaRouting.js";
+
+/** DB path inside the test Papr root — WorkspaceWriteGuard blocks pushes for paths outside it. */
+function workspaceDbPath(jobId: string): string {
+  return path.join(getPaprRoot(), "Jobs", jobId, "data.db");
+}
+
+/** Route every key to the legacy queue these tests exercise (not the Plan A replica scheduler). */
+function mockLegacyRouting(): void {
+  vi.doMock(ROUTING_MODULE, async (importOriginal) => ({
+    ...(await importOriginal<Record<string, unknown>>()),
+    shouldSuppressLegacyTursoPush: () => false,
+    shouldSuppressLegacyTursoPushForLinkedSource: () => false,
+  }));
 }
 
 describe("tursoSyncState", () => {
@@ -54,10 +84,10 @@ describe("tursoSyncState", () => {
 
   it.skipIf(!canUseBetterSqlite)(
     "marks job dirty after local _papr_sync_log advances",
-    () => {
+    async () => {
       const Database = require("better-sqlite3") as typeof import("better-sqlite3");
-      const { ensureLocalDbChangeLogReady } = require("../src/gateway/services/tursoSyncBridgeCore.js") as typeof import("../src/gateway/services/tursoSyncBridgeCore.js");
-      const { maxSyncLogId } = require("../src/gateway/services/tursoSyncLog.js") as typeof import("../src/gateway/services/tursoSyncLog.js");
+      const { ensureLocalDbChangeLogReady } = await import("../src/gateway/services/tursoSyncBridgeCore.js");
+      const { maxSyncLogId } = await import("../src/gateway/services/tursoSyncLog.js");
 
       const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "turso-state-"));
       const dbPath = path.join(tmpDir, "data.db");
@@ -134,6 +164,10 @@ describe("tursoPushScheduler max-wait", () => {
     process.env.TURSO_PUSH_MAX_WAIT_MS = "5000";
     process.env.TURSO_PUSH_DEBOUNCE_MS = "60000";
     vi.resetModules();
+    enableAutoUpload(getPaprRoot());
+    // scheduleTursoPushForJob routes through a dynamic import of the replica
+    // router first; these tests cover the legacy queue, so opt every key out.
+    mockLegacyRouting();
     vi.doMock("../src/gateway/services/TursoSyncBridge.js", () => ({
       ensureTursoSyncBridge: () => ({
         enabled: true,
@@ -143,12 +177,19 @@ describe("tursoPushScheduler max-wait", () => {
             appId: "app-max-wait",
             jobId: "job-max-wait",
             dbId: "db-max-wait",
-            dbPath: "/tmp/job-max-wait/data.db",
+            dbPath: workspaceDbPath("job-max-wait"),
             alias: "primary",
           },
         ],
         linkedSourceNeedsPush: async () => false,
-        pushJob: async () => ({ status: "skipped" }),
+        // A reason-less skip is treated as a failure (backoff, stays dirty) since
+        // the push-livelock fix; model the real "nothing changed" outcome instead.
+        pushLinkedSourceIfNeeded: async () => ({
+          status: "skipped",
+          tables: [],
+          reason: "all_tables_unchanged",
+          lastPushedLogId: 0,
+        }),
       }),
     }));
   });
@@ -160,6 +201,7 @@ describe("tursoPushScheduler max-wait", () => {
     mod.resetTursoPushQueueForTests();
     vi.resetModules();
     vi.unmock("../src/gateway/services/TursoSyncBridge.js");
+    vi.unmock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js");
   });
 
   it("records first dirty time and arms max-wait without resetting on reschedules", async () => {
@@ -167,11 +209,14 @@ describe("tursoPushScheduler max-wait", () => {
     mod.resetTursoPushQueueForTests();
 
     mod.scheduleTursoPushForJob("job-max-wait", "normal", "watcher");
+
+    await vi.dynamicImportSettled();
     const firstAt = mod.getFirstDirtyAtMsForTests("job-max-wait");
     expect(firstAt).toBeTypeOf("number");
 
     vi.advanceTimersByTime(2000);
     mod.scheduleTursoPushForJob("job-max-wait", "normal", "watcher");
+    await vi.dynamicImportSettled();
     expect(mod.getFirstDirtyAtMsForTests("job-max-wait")).toBe(firstAt);
 
     vi.advanceTimersByTime(4000);
@@ -192,12 +237,12 @@ describe("tursoPushScheduler max-wait", () => {
             appId: "app-repeat-log",
             jobId: "job-repeat-log",
             dbId: "db-repeat-log",
-            dbPath: "/tmp/job-repeat-log/data.db",
+            dbPath: workspaceDbPath("job-repeat-log"),
             alias: "primary",
           },
         ],
         linkedSourceNeedsPush: async () => true,
-        pushJob: async () =>
+        pushLinkedSourceIfNeeded: async () =>
           new Promise(() => {
             /* never resolves — keeps job in queue */
           }),
@@ -215,6 +260,8 @@ describe("tursoPushScheduler max-wait", () => {
         String(args[0]).includes("trigger=max_wait"));
 
     mod.scheduleTursoPushForJob("job-repeat-log", "normal", "watcher");
+
+    await vi.dynamicImportSettled();
     vi.advanceTimersByTime(5000);
     await vi.runAllTimersAsync();
 
@@ -222,6 +269,8 @@ describe("tursoPushScheduler max-wait", () => {
     expect(maxWaitLogs.length).toBe(1);
 
     mod.scheduleTursoPushForJob("job-repeat-log", "normal", "watcher");
+
+    await vi.dynamicImportSettled();
     vi.advanceTimersByTime(5000);
     await vi.runAllTimersAsync();
 
@@ -244,12 +293,12 @@ describe("tursoPushScheduler max-wait", () => {
             appId: "app-backoff",
             jobId: "job-backoff",
             dbId: "db-backoff",
-            dbPath: "/tmp/job-backoff/data.db",
+            dbPath: workspaceDbPath("job-backoff"),
             alias: "primary",
           },
         ],
         linkedSourceNeedsPush: async () => true,
-        pushJob: async () => ({ status: "skipped", tables: [], reason: "local_db_empty" }),
+        pushLinkedSourceIfNeeded: async () => ({ status: "skipped", tables: [], reason: "local_db_empty" }),
       }),
     }));
 
@@ -263,11 +312,14 @@ describe("tursoPushScheduler max-wait", () => {
       String(args[0]).includes("max-wait elapsed");
 
     mod.scheduleTursoPushForJob("job-backoff", "normal", "watcher");
+
+    await vi.dynamicImportSettled();
     vi.advanceTimersByTime(5000);
     await vi.runAllTimersAsync();
 
     for (let i = 0; i < 20; i++) {
       mod.scheduleTursoPushForJob("job-backoff", "normal", "watcher");
+      await vi.dynamicImportSettled();
     }
 
     const maxWaitLogs = logSpy.mock.calls.filter(maxWaitDetail);
@@ -289,12 +341,12 @@ describe("tursoPushScheduler max-wait", () => {
             appId: "app-permanent-skip",
             jobId: "job-permanent-skip",
             dbId: "db-permanent-skip",
-            dbPath: "/tmp/job-permanent-skip/data.db",
+            dbPath: workspaceDbPath("job-permanent-skip"),
             alias: "primary",
           },
         ],
         linkedSourceNeedsPush: async () => true,
-        pushJob: async () => ({
+        pushLinkedSourceIfNeeded: async () => ({
           status: "skipped",
           tables: [],
           reason: "no_syncable_tables",
@@ -312,6 +364,8 @@ describe("tursoPushScheduler max-wait", () => {
       String(args[0]).includes("trigger=max_wait");
 
     mod.scheduleTursoPushForJob("job-permanent-skip", "normal", "watcher");
+
+    await vi.dynamicImportSettled();
     vi.advanceTimersByTime(5000);
     await vi.runAllTimersAsync();
     await mod.awaitTursoPushQueueForTests();
@@ -338,8 +392,10 @@ describe("tursoPushScheduler permanent skip integration", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     tmpPapr = fs.mkdtempSync(path.join(os.tmpdir(), "papr-perm-skip-"));
-    fs.mkdirSync(path.join(tmpPapr, "data"), { recursive: true });
-    tmpJobDir = fs.mkdtempSync(path.join(os.tmpdir(), "job-perm-skip-"));
+    enableAutoUpload(tmpPapr);
+    // Inside the Papr root: sync state ignores DBs outside the active workspace.
+    fs.mkdirSync(path.join(tmpPapr, "Jobs"), { recursive: true });
+    tmpJobDir = fs.mkdtempSync(path.join(tmpPapr, "Jobs", "job-perm-skip-"));
     dbPath = path.join(tmpJobDir, "data.db");
 
     if (canUseBetterSqlite) {
@@ -367,6 +423,7 @@ describe("tursoPushScheduler permanent skip integration", () => {
     vi.resetModules();
     vi.unmock("../src/core/utils/paprRoot.js");
     vi.unmock("../src/gateway/services/TursoSyncBridge.js");
+    vi.unmock("../src/gateway/services/tursoReplica/tursoReplicaRouting.js");
     fs.rmSync(tmpPapr, { recursive: true, force: true });
     fs.rmSync(tmpJobDir, { recursive: true, force: true });
   });
@@ -379,7 +436,9 @@ describe("tursoPushScheduler permanent skip integration", () => {
       markDbDirty(dbId, dbPath, tmpPapr);
       let state = loadTursoSyncState(tmpPapr);
       expect(state.jobs[dbId]?.dirtyFlag).toBe(true);
-      expect(isJobDbDirty(dbId, dbPath, state)).toBe(true);
+      // isJobDbDirty is content-based and ignores the persisted flag, so an
+      // infra-only DB already reads clean; the scheduler must still clear the flag.
+      expect(isJobDbDirty(dbId, dbPath, state)).toBe(false);
 
       // Spread the real module rather than listing exports by hand. The
       // hand-written version omitted getPaprDataDir, so anything reaching it
@@ -406,13 +465,15 @@ describe("tursoPushScheduler permanent skip integration", () => {
             },
           ],
           linkedSourceNeedsPush: async () => true,
-          pushJob: async () => ({
+          pushLinkedSourceIfNeeded: async () => ({
             status: "skipped",
             tables: [],
             reason: "no_syncable_tables",
           }),
         }),
       }));
+
+      mockLegacyRouting();
 
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
       const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -426,6 +487,7 @@ describe("tursoPushScheduler permanent skip integration", () => {
         String(args[0]).includes("trigger=max_wait");
 
       mod.scheduleTursoPushForJob(syncKey, "normal", "startup");
+      await vi.dynamicImportSettled();
       vi.advanceTimersByTime(5000);
       await vi.runAllTimersAsync();
       await mod.awaitTursoPushQueueForTests();

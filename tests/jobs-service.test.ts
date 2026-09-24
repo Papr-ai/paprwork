@@ -277,7 +277,10 @@ test("queued job stays live during reconciliation and can be stopped before laun
     const execution = service.runJob(job.id);
     await vi.waitFor(() => expect(gatewayBackgroundBudget.stats().queued.some(w => w.label === `job:${job.id}`)).toBe(true));
     await service.reconcileStaleRunningJobs(0);
-    expect((await service.getJob(job.id))?.status).toBe("running");
+    // Queued-for-capacity jobs sit in "pending" (c29d36bb) and flip to
+    // "running" only once the budget admits them. What matters here is that
+    // reconciliation leaves the queued job alone instead of failing it.
+    expect((await service.getJob(job.id))?.status).toBe("pending");
     await service.stopJob(job.id);
     expect((await execution).status).toBe("cancelled");
     release(); await occupied;

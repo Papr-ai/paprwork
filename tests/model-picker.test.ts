@@ -22,8 +22,8 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5, Opus 5.5, Fable 5.1, and nine cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(9);
+  test("default list includes Sonnet 5, Opus 5.5, Fable 5.1, and eight cloud models", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(11);
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-1");
@@ -163,13 +163,15 @@ describe("modelPicker", () => {
     ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
   });
 
-  test("preserves user-enabled models beyond defaults", () => {
-    expect(
-      resolveEnabledPickerModelIds([
-        ...PICKER_DEFAULT_MODEL_IDS,
-        "claude-haiku-4-5",
-      ]),
-    ).toEqual([...PICKER_DEFAULT_MODEL_IDS, "claude-haiku-4-5"]);
+  test("preserves user-enabled models while migrating retired defaults", () => {
+    const resolved = resolveEnabledPickerModelIds([
+      ...PICKER_DEFAULT_MODEL_IDS,
+      "claude-haiku-4-5",
+    ]);
+
+    expect(resolved).toContain("claude-haiku-4-5");
+    expect(resolved).toContain("claude-opus-5-5");
+    expect(resolved).not.toContain("claude-opus-5");
   });
 
   test("heals truncated Anthropic-only lists from clobbered settings saves", () => {

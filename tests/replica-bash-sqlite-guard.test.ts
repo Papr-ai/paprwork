@@ -1,7 +1,7 @@
 import fs from "fs";
 import os from "os";
 import path from "path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   detectReplicaRegistrySqliteBlock,
   isRegistryDatabasePath,
@@ -16,6 +16,10 @@ const PLAN_A_ENV = {
 } as const;
 
 describe("replicaBashSqliteGuard", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   useIsolatedPaprWorkspace("replica-bash-sqlite-guard");
 
   it("detects registry database paths", () => {
@@ -33,7 +37,7 @@ describe("replicaBashSqliteGuard", () => {
       `sqlite3 "${dbPath}" "INSERT INTO t VALUES (1)"`,
       { env: { ...PLAN_A_ENV } },
     );
-    expect(block?.message).toMatch(/papr_db_apply_migration/);
+    expect(block?.message).toMatch(/papr_db_exec/);
   });
 
   it("allows sqlite3 reads on job scratch DB without registry entry", () => {
@@ -146,7 +150,7 @@ describe("replicaBashSqliteGuard", () => {
       `sqlite3 "${dbPath}" < seed.sql`,
       { env: { ...PLAN_A_ENV } },
     );
-    expect(block?.message).toMatch(/papr_db_apply_migration/);
+    expect(block?.message).toMatch(/papr_db_exec/);
   });
 
   it("blocks registry sqlite when cloud sync defaults on (env unset)", () => {
@@ -159,10 +163,14 @@ describe("replicaBashSqliteGuard", () => {
         },
       },
     );
-    expect(block?.message).toMatch(/papr_db_apply_migration/);
+    expect(block?.message).toMatch(/papr_db_exec/);
   });
 
   it("allows registry sqlite when Plan A env is off", () => {
+    // The guard also consults process.env (a scoped tool env lacks host flags,
+    // cccaaee8), so "off" must hold for the host env too.
+    vi.stubEnv("PAPR_TURSO_REPLICA_SYNC", "off");
+    vi.stubEnv("CLOUD_SYNC_ENABLED", "false");
     const dbPath = "/Users/me/Papr/data/databases/replica-v3/data.db";
     const block = detectReplicaRegistrySqliteBlock(
       `sqlite3 "${dbPath}" "INSERT INTO t VALUES (1)"`,
