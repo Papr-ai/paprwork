@@ -89,6 +89,7 @@ describe("replica single-engine enforcement", () => {
     expect(replicaMigrations.applyReplicaRegistryDatabaseMigrations).toHaveBeenCalledWith(
       "/tmp/Papr/data/databases/replica-ui-test",
       dbPath,
+      expect.objectContaining({}),
     );
     expect(applied).toEqual(["0002_test.sql"]);
   });

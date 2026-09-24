@@ -11,6 +11,8 @@ export default defineConfig({
     // here resolved the workspace in `beforeAll` and so wrote to the real
     // `~/Papr`; two of them (agent-tracking, gateway-storage) asserted against
     // `os.homedir()/Papr` directly.
+    // Bundles db-query-worker.ts so LocalStorageProvider read workers can start.
+    globalSetup: ["./tests/setup/buildDbQueryWorker.ts"],
     setupFiles: ["./tests/setup/defaultTempWorkspace.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,

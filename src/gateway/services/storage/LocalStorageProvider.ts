@@ -90,7 +90,11 @@ export class LocalStorageProvider implements IStorageProvider {
 
   constructor(
     userDataPath: string,
-    private readonly readWorkerUrl = new URL("../../workers/db-query-worker.js", import.meta.url),
+    // PAPR_DB_QUERY_WORKER_URL lets test runners point at a bundled worker;
+    // the .js sibling only exists after the gateway is compiled.
+    private readonly readWorkerUrl = process.env.PAPR_DB_QUERY_WORKER_URL
+      ? new URL(process.env.PAPR_DB_QUERY_WORKER_URL)
+      : new URL("../../workers/db-query-worker.js", import.meta.url),
   ) {
     this.dbPath = path.join(userDataPath, "chats.db");
     this.exporter = new ChatExporter();

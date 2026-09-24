@@ -265,6 +265,10 @@ export class SyncCoordinator {
           console.log(
             `[SyncCoordinator] Upload skipped for ${item.appId} — already up to date (${item.trigger})`,
           );
+          // Release before resolving: callers awaiting flushNow() read status
+          // next, and the await below would otherwise leave activeFlush and the
+          // busy file set for a stale tick.
+          this.releaseActiveFlush(item.appId);
           item.resolve({
             appId: item.appId,
             localMigrationsApplied: [],
@@ -277,7 +281,6 @@ export class SyncCoordinator {
             "./cloudSyncBroadcast.js"
           );
           notifyCloudSyncItemsStale(item.appId);
-          this.releaseActiveFlush(item.appId);
           await yieldEventLoop();
           continue;
         }

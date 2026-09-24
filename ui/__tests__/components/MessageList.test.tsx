@@ -8,10 +8,11 @@
  * - Message grouping
  */
 
-import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MessageList } from "../../components/Chat/MessageList";
 import type { ChatMessage } from "../../types/chat";
+import { useChatStore } from "../../stores/chatStore";
 
 describe("MessageList", () => {
   const mockMessages: ChatMessage[] = [
@@ -286,6 +287,83 @@ describe("MessageList", () => {
       // Should include new message
       const newMessage = screen.getByText("New message");
       expect(newMessage).toBeDefined();
+    });
+  });
+
+  describe("Long chat history", () => {
+    it("makes earlier persisted messages explicit and accessible", () => {
+      const onLoadOlder = vi.fn();
+      useChatStore.setState((state) => ({
+        chats: [
+          ...state.chats.filter((chat) => chat.id !== "long-chat"),
+          {
+            id: "long-chat",
+            title: "Long chat",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messageCount: 641,
+          },
+        ],
+        chatStates: new Map(state.chatStates).set("long-chat", {
+          messages: mockMessages,
+          isLoading: false,
+          isSending: false,
+          isStreaming: false,
+          hasUnread: false,
+          hasMoreMessages: true,
+          isLoadingMore: false,
+        }),
+      }));
+
+      render(
+        <MessageList
+          chatId="long-chat"
+          messages={mockMessages}
+          onLoadOlder={onLoadOlder}
+        />,
+      );
+
+      const button = screen.getByTestId("load-full-history");
+      expect(button.textContent).toContain("Earlier637");
+      expect(button.getAttribute("aria-label")).toBe(
+        "Load 637 earlier messages",
+      );
+      fireEvent.click(button);
+      expect(onLoadOlder).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not imply history is missing when the full chat is loaded", () => {
+      useChatStore.setState((state) => ({
+        chats: [
+          ...state.chats.filter((chat) => chat.id !== "complete-chat"),
+          {
+            id: "complete-chat",
+            title: "Complete chat",
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messageCount: mockMessages.length,
+          },
+        ],
+        chatStates: new Map(state.chatStates).set("complete-chat", {
+          messages: mockMessages,
+          isLoading: false,
+          isSending: false,
+          isStreaming: false,
+          hasUnread: false,
+          hasMoreMessages: false,
+          isLoadingMore: false,
+        }),
+      }));
+
+      render(
+        <MessageList
+          chatId="complete-chat"
+          messages={mockMessages}
+          onLoadOlder={vi.fn()}
+        />,
+      );
+
+      expect(screen.queryByTestId("history-pagination")).toBeNull();
     });
   });
 

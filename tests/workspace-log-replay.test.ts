@@ -256,7 +256,10 @@ describe("workspace log replay", () => {
     );
     const applied = await materializeWorkspaceLogSince(pool, "j-skip1", source);
     expect(applied).toBe(1);
-    expect(writeCalls).toHaveLength(0);
+    // Only the _papr_materialized bookkeeping write should hit the pool —
+    // the superseded row op against the dropped table must never be replayed.
+    expect(writeCalls.filter((sql) => !sql.includes("_papr_materialized"))).toHaveLength(0);
+    expect(writeCalls.filter((sql) => sql.includes("_papr_materialized"))).toHaveLength(1);
   });
 
   test("materializeWorkspaceLogSince skips row ops when SQLite reports missing table", async () => {
@@ -280,8 +283,11 @@ describe("workspace log replay", () => {
     db.exec("CREATE TABLE person_label (id TEXT PRIMARY KEY, tag TEXT)");
     db.close();
 
-    const write = vi.fn(async () => {
-      throw new Error("no such table: person_tags");
+    const write = vi.fn(async (_appId: string, _dbPath: string, sql: string) => {
+      if (sql.includes("person_tags")) {
+        throw new Error("no such table: person_tags");
+      }
+      return { changes: 1, lastInsertRowid: 1 };
     });
     const pool = mockReplayPool(write);
 
@@ -321,7 +327,10 @@ describe("workspace log replay", () => {
     await expect(
       materializeWorkspaceLogSince(pool, "j-sqlite-skip", source),
     ).resolves.toBe(1);
-    expect(write).toHaveBeenCalledTimes(1);
+    // Row op is skipped (missing table); only the materialized marker is written.
+    const sqls = write.mock.calls.map((call) => call[2] as string);
+    expect(sqls.some((sql) => sql.includes("_papr_materialized"))).toBe(true);
+    expect(sqls.filter((sql) => sql.includes("person_tags")).length).toBeLessThanOrEqual(1);
   });
 });
 

@@ -4,10 +4,12 @@ import { isTelemetryPackagedFromEnv } from "../../core/telemetry/telemetryProduc
 import { isTelemetrySendingEnabled } from "../../core/telemetry/telemetryEnv.js";
 import { getPaprUserId } from "../utils/paprUserId.js";
 import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
-import {
-  getDesktopSyncProtocol,
-  registerSyncV3TelemetrySink,
-} from "./syncV3/index.js";
+// Import the leaf modules, not the syncV3 barrel: the barrel pulls in the
+// whole sync graph (which cycles back through JobsService). A concurrent
+// dynamic import of gatewayTelemetry + JobsService — which AppService.createApp
+// does — deadlocks the vitest module runner on that cycle.
+import { getDesktopSyncProtocol } from "./syncV3/syncV3Flags.js";
+import { registerSyncV3TelemetrySink } from "./syncV3/syncV3Metrics.js";
 import type { SyncV3MetricName } from "../../core/types/syncV3.js";
 
 let client: TelemetryClient | null = null;

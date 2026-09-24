@@ -28,10 +28,24 @@ export function installInProcessSyncWorker(): void {
         }
         async send(options: Record<string, unknown>): Promise<unknown> {
           const { timeoutMs: _t, retryOnCrash: _r, ...rest } = options;
-          return core.run({ id: randomUUID(), ...(rest as never) });
+          // core.run resolves { result, opTiming }; the real client unwraps result.
+          const { result } = await core.run({ id: randomUUID(), ...(rest as never) });
+          return result;
         }
         async query(o: Record<string, unknown>) {
           return this.send({ ...o, op: "query" });
+        }
+        async queryBatch(o: Record<string, unknown>) {
+          return this.send({ ...o, op: "queryBatch" });
+        }
+        /** Mirrors the real client: true while the (in-process) engine holds a handle. */
+        ownsPath(localPath: string): boolean {
+          const handles = (core as unknown as { handles: Map<string, unknown> }).handles;
+          const key = path.resolve(localPath);
+          return [...handles.keys()].some((k) => path.resolve(k) === key);
+        }
+        getRecentTimings(): string[] {
+          return [];
         }
         async write(o: Record<string, unknown>) {
           return this.send({ ...o, op: "write" });

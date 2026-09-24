@@ -2,8 +2,6 @@ import { describe, expect, test } from "vitest";
 
 import type { CommunityCatalogEntry } from "../src/core/types/communityCatalog.js";
 import {
-  countHiddenPreviewOnlyCommunityEntries,
-  isPreviewOnlyCommunityEntry,
   shouldShowInCommunityBrowse,
   sortCommunityEntriesInstallableFirst,
 } from "../ui/utils/communityCatalogBrowseFilter.js";
@@ -27,61 +25,24 @@ function cloudEntry(
 }
 
 describe("communityCatalogBrowseFilter", () => {
-  test("detects preview-only cloud entries", () => {
-    expect(
-      isPreviewOnlyCommunityEntry(
-        cloudEntry({ codeInstallable: false, liveViewable: true }),
-      ),
-    ).toBe(true);
-    expect(
-      isPreviewOnlyCommunityEntry(
-        cloudEntry({ codeInstallable: true, liveViewable: true }),
-      ),
-    ).toBe(false);
-  });
-
-  test("hides preview-only entries by default but keeps owned apps", () => {
-    const previewOnly = cloudEntry({
-      name: "Preview",
-      codeInstallable: false,
-      liveViewable: true,
-    });
+  test("hides preview-only cloud entries, including owned shares", () => {
+    const previewOnly = cloudEntry({ codeInstallable: false, liveViewable: true });
     const ownedPreview = cloudEntry({
-      name: "Mine",
       isOwned: true,
       codeInstallable: false,
       liveViewable: true,
     });
-    const installable = cloudEntry({
-      name: "Installable",
-      codeInstallable: true,
-    });
-
-    expect(
-      shouldShowInCommunityBrowse(previewOnly, { showPreviewOnly: false }),
-    ).toBe(false);
-    expect(
-      shouldShowInCommunityBrowse(ownedPreview, { showPreviewOnly: false }),
-    ).toBe(true);
-    expect(
-      shouldShowInCommunityBrowse(installable, { showPreviewOnly: false }),
-    ).toBe(true);
-    expect(
-      shouldShowInCommunityBrowse(previewOnly, { showPreviewOnly: true }),
-    ).toBe(true);
+    expect(shouldShowInCommunityBrowse(previewOnly)).toBe(false);
+    expect(shouldShowInCommunityBrowse(ownedPreview)).toBe(false);
   });
 
-  test("counts hidden preview-only entries excluding owned apps", () => {
-    const entries = [
-      cloudEntry({ codeInstallable: false, liveViewable: true }),
-      cloudEntry({
-        isOwned: true,
-        codeInstallable: false,
-        liveViewable: true,
-      }),
-      cloudEntry({ codeInstallable: true }),
-    ];
-    expect(countHiddenPreviewOnlyCommunityEntries(entries)).toBe(1);
+  test("shows installable cloud entries and open-source bundles", () => {
+    expect(shouldShowInCommunityBrowse(cloudEntry({ codeInstallable: true }))).toBe(true);
+    expect(
+      shouldShowInCommunityBrowse(
+        cloudEntry({ source: "opensource", codeInstallable: false }),
+      ),
+    ).toBe(true);
   });
 
   test("sorts installable entries before preview-only", () => {
