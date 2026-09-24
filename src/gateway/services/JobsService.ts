@@ -2568,9 +2568,14 @@ export class JobsService {
     );
     const writeTargets = await resolveJobWriteTargets(job);
     const registryMigrationSummaries: string[] = [];
+    const registryMigrationWarnings: string[] = [];
     for (const target of writeTargets) {
       const appliedRegistry = await applyRegistryDatabaseMigrations(
         target.dbPath,
+        {
+          onWarning: (message) =>
+            registryMigrationWarnings.push(`${target.alias}: ${message}`),
+        },
       );
       if (appliedRegistry.length > 0) {
         registryMigrationSummaries.push(
@@ -2601,6 +2606,9 @@ export class JobsService {
       await appendRunLog(
         `Applied registry DB migrations: ${registryMigrationSummaries.join("; ")}`,
       );
+    }
+    for (const warning of registryMigrationWarnings) {
+      await appendRunLog(`Registry DB migration warning: ${warning}`);
     }
 
     if ((job.writeDbIds ?? []).length > 0 || writeTargets.length > 0) {

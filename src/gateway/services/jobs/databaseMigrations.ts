@@ -207,11 +207,17 @@ export async function ensureRegistryDatabase(
   return layout.dbPath;
 }
 
+export interface ApplyDatabaseMigrationsOptions {
+  bypassReplicaEngine?: boolean;
+  /** Replica path: warnings and refused re-runs, surfaced in the job run log. */
+  onWarning?: (message: string) => void;
+}
+
 /** Apply pending migrations/*.sql under migrationRoot against dbPath. */
 export async function applyDatabaseMigrations(
   migrationRoot: string,
   dbPath: string,
-  options?: { bypassReplicaEngine?: boolean },
+  options?: ApplyDatabaseMigrationsOptions,
 ): Promise<string[]> {
   const layout = resolvePersistedDatabaseLayout(dbPath);
   const useReplicaEngine =
@@ -223,7 +229,9 @@ export async function applyDatabaseMigrations(
     const { applyReplicaRegistryDatabaseMigrations } = await import(
       "../tursoReplica/tursoReplicaRegistryMigrations.js"
     );
-    return applyReplicaRegistryDatabaseMigrations(migrationRoot, dbPath);
+    return applyReplicaRegistryDatabaseMigrations(migrationRoot, dbPath, {
+      onWarning: options?.onWarning,
+    });
   }
 
   const migrationsDir = path.join(migrationRoot, "migrations");
@@ -294,7 +302,7 @@ export async function applyDatabaseMigrations(
 /** Apply migrations for a registry db path (no-op when layout unrecognized). */
 export async function applyRegistryDatabaseMigrations(
   dbPath: string,
-  options?: { bypassReplicaEngine?: boolean },
+  options?: ApplyDatabaseMigrationsOptions,
 ): Promise<string[]> {
   const layout = resolvePersistedDatabaseLayout(dbPath);
   if (!layout || layout.kind !== "registry") {
