@@ -8,7 +8,10 @@ import { useChatStore, defaultChatState } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
 import { gateway } from "../src/lib/gateway";
 import { mapHistoryMessages } from "../utils/historyMapper";
-import { fetchChatHistory } from "../utils/chatHistoryApi";
+import {
+  fetchChatHistory,
+  getRemainingHistoryBatchSize,
+} from "../utils/chatHistoryApi";
 import { forgetChatModel } from "../utils/chatModelMemory";
 import { forgetChatSettings } from "../utils/chatModelSettings";
 import { forgetDraft } from "../utils/chatDraftStore";
@@ -223,18 +226,32 @@ export function useChat() {
 
   // Load older messages for pagination
   const loadOlderMessages = useCallback(
-    async (chatId: string, batchSize: number = 20) => {
-      const chatState = useChatStore.getState().chatStates.get(chatId);
+    async (chatId: string, batchSize?: number) => {
+      const store = useChatStore.getState();
+      const chatState = store.chatStates.get(chatId);
       if (!chatState || !chatState.hasMoreMessages || chatState.isLoadingMore) {
         return;
       }
 
       try {
-        useChatStore.getState().setLoadingMore(chatId, true);
+        store.setLoadingMore(chatId, true);
 
         const currentMessageCount = chatState.messages.length;
+        // Opening a long chat intentionally hydrates only the newest page. When
+        // the user asks for earlier history, fetch every known remaining row in
+        // one request instead of making hundreds of messages discoverable only
+        // through repeated, invisible scroll-to-top gestures.
+        const knownMessageCount = store.chats.find(
+          (chat) => chat.id === chatId,
+        )?.messageCount;
+        const effectiveBatchSize =
+          batchSize ??
+          getRemainingHistoryBatchSize({
+            loadedMessageCount: currentMessageCount,
+            knownMessageCount,
+          });
         const history = await fetchChatHistory(chatId, {
-          limit: batchSize,
+          limit: effectiveBatchSize,
           skip: currentMessageCount,
         });
 
@@ -248,7 +265,11 @@ export function useChat() {
           useChatStore.getState().prependMessages(olderMessages, chatId);
           
           // If we got fewer messages than requested, we've reached the beginning
-          if (olderMessages.length < batchSize) {
+          if (
+            olderMessages.length < effectiveBatchSize ||
+            (knownMessageCount !== undefined &&
+              currentMessageCount + olderMessages.length >= knownMessageCount)
+          ) {
             useChatStore.getState().setHasMoreMessages(chatId, false);
           }
         }

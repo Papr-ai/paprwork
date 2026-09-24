@@ -55,7 +55,6 @@ export const MessageList: React.FC<MessageListProps> = ({
   const lastScrollHeight = useRef(0);
   const hasLoadedOnce = useRef(false);
   const previousMessageCount = useRef(messages.length);
-  const scrollBottomBeforeLoad = useRef(0);
   
   // Get pagination state from chat store
   const chatState = useChatStore((state) => state.chatStates.get(chatId));
@@ -68,6 +67,10 @@ export const MessageList: React.FC<MessageListProps> = ({
     historyLoadFailed: chatState?.historyLoadFailed ?? false,
     knownMessageCount,
   });
+  const earlierMessageCount =
+    knownMessageCount !== undefined
+      ? Math.max(0, knownMessageCount - messages.length)
+      : undefined;
 
   const groupedMessages = useMemo(
     () => groupDelegationFollowUpMessages(messages),
@@ -151,7 +154,6 @@ export const MessageList: React.FC<MessageListProps> = ({
 
     // If messages were added to the beginning (count increased), restore scroll position
     if (messages.length > previousMessageCount.current) {
-      const addedCount = messages.length - previousMessageCount.current;
       // Only adjust scroll if we're not at the bottom (i.e., loading older messages)
       const distanceFromBottom = listElement.scrollHeight - (listElement.scrollTop + listElement.clientHeight);
       if (distanceFromBottom > 200) {
@@ -276,16 +278,30 @@ export const MessageList: React.FC<MessageListProps> = ({
           : undefined
       }
     >
-      {isLoadingMore && (
-        <div className="loading-older-indicator">
-          <div className="loading-dots">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span style={{ marginLeft: '8px', fontSize: '13px', color: 'var(--text-tertiary, #888)' }}>
-            Loading older messages...
-          </span>
+      {hasMoreMessages && onLoadOlder && (
+        <div className="history-pagination" data-testid="history-pagination">
+          {isLoadingMore ? (
+            <div className="loading-older-indicator">
+              <div className="loading-dots" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span>Loading full history…</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="load-full-history-button"
+              onClick={onLoadOlder}
+              data-testid="load-full-history"
+            >
+              Show full history
+              {earlierMessageCount !== undefined && earlierMessageCount > 0
+                ? ` (${earlierMessageCount} earlier ${earlierMessageCount === 1 ? "message" : "messages"})`
+                : ""}
+            </button>
+          )}
         </div>
       )}
       {filteredMessages.map((message) => (
