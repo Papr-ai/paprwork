@@ -127,6 +127,10 @@ export interface PersistPulledSchemaMigrationInput {
   remoteOid: string | undefined;
   lastSyncedOid: string | null;
   paprRoot?: string;
+  /** Classify only — report what would happen without writing (all-or-nothing pull). */
+  dryRun?: boolean;
+  /** Take theirs: overwrite a conflicting local migration file with the remote one. */
+  overwrite?: boolean;
 }
 
 export type PersistPulledSchemaMigrationOutcome =
@@ -148,6 +152,8 @@ export interface MirrorSchemaMigrationToRegistryInput {
   paprRoot?: string;
   remoteOid?: string;
   lastSyncedOid?: string | null;
+  dryRun?: boolean;
+  overwrite?: boolean;
 }
 
 /** Copy one migration SQL file into the registry folder (shared pull + install + write redirect). */
@@ -198,7 +204,7 @@ export async function mirrorSchemaMigrationToRegistry(
     return { kind: "unchanged" };
   }
 
-  if (localContent !== undefined) {
+  if (localContent !== undefined && !input.overwrite) {
     const localUnchanged =
       localOid === input.lastSyncedOid || input.lastSyncedOid === null;
     if (!localUnchanged && input.remoteOid && localOid !== input.remoteOid) {
@@ -209,12 +215,16 @@ export async function mirrorSchemaMigrationToRegistry(
     }
   }
 
-  await fs.mkdir(path.dirname(registryFullPath), { recursive: true });
-  await fs.writeFile(registryFullPath, input.content, { flush: true });
-
   const registryRelativePath = path
     .relative(paprRoot, registryFullPath)
     .replace(/\\/g, "/");
+
+  if (input.dryRun) {
+    return { kind: "written", registryRelativePath };
+  }
+
+  await fs.mkdir(path.dirname(registryFullPath), { recursive: true });
+  await fs.writeFile(registryFullPath, input.content, { flush: true });
 
   return { kind: "written", registryRelativePath };
 }
@@ -230,6 +240,8 @@ export async function persistPulledSchemaMigration(
     paprRoot: input.paprRoot,
     remoteOid: input.remoteOid,
     lastSyncedOid: input.lastSyncedOid,
+    dryRun: input.dryRun,
+    overwrite: input.overwrite,
   });
   if (outcome.kind === "not_migration") {
     return { kind: "not_migration" };

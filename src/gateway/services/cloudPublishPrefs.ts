@@ -52,6 +52,10 @@ export interface CloudPublishAppPrefs {
    * appRuntime/cloudAppPeopleAccess.ts, not in the UI.
    */
   allowedUserIds?: string[];
+  /** Audience "people": signed-in users with these emails (any workspace). */
+  allowedEmails?: string[];
+  /** Audience "people": signed-in users with *@{domain} emails. */
+  allowedEmailDomains?: string[];
   /** When true, linked registry DBs use per-user Turso isolation. */
   perUserIsolation?: boolean;
   lastAutoPublishAttemptAt?: string;

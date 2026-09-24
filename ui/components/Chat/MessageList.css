@@ -72,15 +72,94 @@
   color: var(--text-secondary, #888);
 }
 
+.history-pagination {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  justify-content: center;
+  padding: 4px 24px 12px;
+  pointer-events: none;
+}
+
+.load-full-history-button,
+.loading-older-indicator {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 17px;
+  background: transparent;
+  box-shadow: none;
+  -webkit-backdrop-filter: blur(0);
+  backdrop-filter: blur(0);
+  color: var(--text-secondary);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  pointer-events: auto;
+}
+
+.load-full-history-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition:
+    color var(--dur-2) var(--ease),
+    background var(--dur-2) var(--ease),
+    border-color var(--dur-2) var(--ease),
+    box-shadow var(--dur-2) var(--ease),
+    transform var(--dur-1) var(--ease);
+}
+
+.load-full-history-button:hover {
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--glass-bg-hover) 58%, transparent);
+  border-color: color-mix(in srgb, var(--border-color) 68%, transparent);
+  box-shadow: inset 0 0.5px 0 color-mix(in srgb, white 28%, transparent);
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  transform: translateY(-1px);
+}
+
+.load-full-history-button:active {
+  transform: translateY(0);
+  background: color-mix(in srgb, var(--glass-bg-active) 52%, transparent);
+}
+
+.load-full-history-button:focus-visible {
+  outline: 2px solid var(--primary-color, #0161e0);
+  outline-offset: 2px;
+}
+
+.load-full-history-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  opacity: 0.72;
+}
+
+.load-full-history-count {
+  min-width: 18px;
+  padding-left: 6px;
+  border-left: 1px solid color-mix(in srgb, currentColor 18%, transparent);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .loading-older-indicator {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 24px;
-  margin: 8px 0;
-  border-radius: 8px;
-  background: var(--surface, #2a2a3e);
-  border: 1px solid var(--border-color, #3a3a4e);
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .load-full-history-button {
+    transition: none;
+  }
 }
 
 .loading-dots {

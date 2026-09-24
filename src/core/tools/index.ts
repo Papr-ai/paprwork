@@ -27,6 +27,7 @@ import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
 import { cloudInstallTools } from "./cloudInstall.js";
 import { cloudObservabilityTools } from "./cloudObservability.js";
+import { cloudPullTools } from "./cloudPull.js";
 import { mediaGenerationTools } from "./generateMedia.js";
 import { appAgentChatTools } from "./appAgentChat.js";
 import { editFileTool } from "./editFile.js";
@@ -80,6 +81,7 @@ export const allTools = [
   ...cloudPublishTools,
   ...cloudInstallTools,
   ...cloudObservabilityTools,
+  ...cloudPullTools,
   ...mediaGenerationTools,
   ...jevTools,
   ...appAgentChatTools,
@@ -121,6 +123,7 @@ export const toolsByCategory = {
   cloudPublish: cloudPublishTools,
   cloudInstall: cloudInstallTools,
   cloudObservability: cloudObservabilityTools,
+  cloudPull: cloudPullTools,
   mediaGeneration: mediaGenerationTools,
   jev: jevTools,
   platformFeedback: platformFeedbackTools,
@@ -234,10 +237,28 @@ export {
 export {
   cloudInstallTools,
   installCloudAppTool,
+  checkCloudAppContributionsTool,
+  submitCloudAppPrTool,
+  listCloudAppPrsTool,
+  resolveCloudAppPrTool,
   submitCloudAppChangeTool,
   listCloudAppChangesTool,
   resolveCloudAppChangeTool,
 } from "./cloudInstall.js";
+export {
+  cloudAppPrReviewTools,
+  getCloudAppPrReviewTool,
+  readCloudAppPrFileTool,
+  cloudAppChangeReviewTools,
+  getCloudAppChangeReviewTool,
+  readCloudAppChangeFileTool,
+} from "./cloudAppChangeReview.js";
+export {
+  CLOUD_APP_PR_TOOL_IDS,
+  CLOUD_APP_PR_OWNER_WORKFLOW,
+  CLOUD_APP_PR_DEFERRED_FIND_QUERY,
+  resolveCloudAppPrToolAlias,
+} from "./cloudAppPrToolIds.js";
 
 export {
   cloudObservabilityTools,

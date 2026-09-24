@@ -381,6 +381,30 @@ function resolveRegistrySlug(record: DatabaseRecord): string | null {
   return null;
 }
 
+async function uniqueForkRegistryLocalPath(input: {
+  localPath: string;
+  targetDbId: string;
+  targetPaprHome: string;
+  registry: DatabasesRegistryFile;
+}): Promise<string> {
+  const slug = extractDatabaseSlugFromPath(input.localPath);
+  if (!slug) {
+    return input.localPath;
+  }
+  const inUse =
+    (await pathExists(path.dirname(input.localPath))) ||
+    Object.values(input.registry.databases).some(
+      (record) => record.localPath === input.localPath,
+    );
+  if (!inUse) {
+    return input.localPath;
+  }
+  return workspaceRegistryDbPath(
+    `${slug}-${input.targetDbId.replace(/^db-/, "")}`,
+    path.join(input.targetPaprHome, "data"),
+  );
+}
+
 function resolveCopiedRegistryLocalPath(
   record: DatabaseRecord,
   targetPaprHome: string,
@@ -602,6 +626,8 @@ async function copyRegistryDatabaseFiles(input: {
   copiedJobIds: ReadonlySet<string>;
   /** Fork: copy migrations only — never publisher data.db bytes. */
   schemaOnly?: boolean;
+  /** Forked dbId → publisher dbId, so schema is read from the publisher's folder. */
+  sourceDbIdFor?: ReadonlyMap<string, string>;
 }): Promise<string[]> {
   const sourceRegistry = await readDatabasesRegistry(input.sourceRegistryPath);
   const targetRegistry = await readDatabasesRegistry(input.targetRegistryPath);
@@ -610,8 +636,9 @@ async function copyRegistryDatabaseFiles(input: {
   const copiedSlugs: string[] = [];
 
   for (const dbId of input.dbIds) {
+    const sourceDbId = input.sourceDbIdFor?.get(dbId) ?? dbId;
     const record =
-      sourceRegistry.databases[dbId] ?? targetRegistry.databases[dbId];
+      sourceRegistry.databases[sourceDbId] ?? targetRegistry.databases[dbId];
     if (!record) {
       continue;
     }
@@ -624,15 +651,17 @@ async function copyRegistryDatabaseFiles(input: {
     if (!slug) {
       continue;
     }
+    const targetRecord = targetRegistry.databases[dbId];
+    const targetSlug = (targetRecord && resolveRegistrySlug(targetRecord)) || slug;
 
-    const targetPath = workspaceRegistryDbPath(slug, targetDataDir);
+    const targetPath = workspaceRegistryDbPath(targetSlug, targetDataDir);
     const sourcePath = resolveReadableRegistryDbPath({
-      dbPath: sourceRegistry.databases[dbId]?.localPath,
-      registryPath: sourceRegistry.databases[dbId]?.localPath,
+      dbPath: sourceRegistry.databases[sourceDbId]?.localPath,
+      registryPath: sourceRegistry.databases[sourceDbId]?.localPath,
       dataDir: sourceDataDir,
     });
     const sourceSlugDir = path.join(sourceDataDir, "databases", slug);
-    const targetSlugDir = path.join(targetDataDir, "databases", slug);
+    const targetSlugDir = path.join(targetDataDir, "databases", targetSlug);
 
     if (await pathExists(sourceSlugDir)) {
       if (!(await pathExists(targetSlugDir))) {
@@ -735,11 +764,22 @@ export async function mergeDatabaseRegistryForCopy(input: {
       dbIdRemap.set(dbId, targetDbId);
     }
 
-    const localPath = resolveCopiedRegistryLocalPath(
+    let localPath = resolveCopiedRegistryLocalPath(
       record,
       input.targetPaprHome,
       input.copiedJobIds,
     );
+    // A fork must not land in a folder another app already uses (the
+    // publisher's own copy on this machine, or an earlier install), or its
+    // "fresh data" silently becomes shared data.
+    if (targetDbId !== dbId) {
+      localPath = await uniqueForkRegistryLocalPath({
+        localPath,
+        targetDbId,
+        targetPaprHome: input.targetPaprHome,
+        registry: merged,
+      });
+    }
     const existing = merged.databases[dbId];
     const base = stripReplicaSyncFields(existing ?? record);
     const { syncMode: _forkOmitSyncMode, ...forkLocalBase } = base;
@@ -1072,6 +1112,9 @@ export async function syncAppDatabaseResourcesToTarget(
     dbIds: registryDbIds,
     copiedJobIds: copiedJobIdSet,
     schemaOnly,
+    sourceDbIdFor: new Map(
+      [...dbIdRemap].map(([sourceDbId, forkDbId]) => [forkDbId, sourceDbId]),
+    ),
   });
 
   await hydrateDataSourcesFromRegistry(

@@ -28,6 +28,58 @@ export async function pullTrackUpstream(appId: string): Promise<TrackSyncResult>
   return body;
 }
 
+/** Discard my edits: overwrite locally edited files with the publisher's code. */
+export async function discardTrackLocalEdits(appId: string): Promise<TrackSyncResult> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/track-sync/${encodeURIComponent(appId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discardLocal: true }),
+    },
+  );
+  const body = (await res.json()) as TrackSyncResult & { error?: string };
+  if (!res.ok) throw new Error(body.error ?? `Discard failed (${res.status})`);
+  return body;
+}
+
+/** Duplicate as my own app: a fork install of the same source (own code + fresh data). */
+export async function duplicateAsOwnApp(source: {
+  namespaceId: string;
+  slug: string;
+  /** Name for the new app, e.g. "Launch HQ (my copy)". */
+  title?: string;
+}): Promise<{ appId: string; title?: string }> {
+  const res = await fetch(`${GATEWAY}/api/cloud/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      namespaceId: source.namespaceId,
+      slug: source.slug,
+      mode: "fork",
+      ...(source.title ? { title: source.title } : {}),
+    }),
+  });
+  const body = (await res.json()) as { app?: { id: string; title?: string }; error?: string };
+  if (!res.ok || !body.app?.id) throw new Error(body.error ?? `Duplicate failed (${res.status})`);
+  return { appId: body.app.id, title: body.app.title };
+}
+
+/** Collaborator edits vs last upstream sync. `known: false` = cannot tell (keep Propose enabled). */
+export async function fetchTrackLocalEdits(
+  appId: string,
+): Promise<{ known: boolean; files: string[] }> {
+  try {
+    const res = await fetch(
+      `${GATEWAY}/api/cloud/track-sync/${encodeURIComponent(appId)}/local-edits`,
+    );
+    if (!res.ok) return { known: false, files: [] };
+    return (await res.json()) as { known: boolean; files: string[] };
+  } catch {
+    return { known: false, files: [] };
+  }
+}
+
 export function formatTrackSyncSummary(result: TrackSyncResult): string {
   const parts: string[] = [];
   if (result.updatedFiles.length > 0) {

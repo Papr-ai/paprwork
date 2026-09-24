@@ -3,6 +3,9 @@
  * track-syncing a mini-app from the owner's git repo.
  */
 
+import { randomUUID as randomRemapUUID } from "node:crypto";
+import { promises as fsRemap } from "node:fs";
+import { applyIdRemapsToDirectory as remapIdsInDir } from "../utils/applyIdRemaps.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { promises as fs } from "node:fs";
@@ -262,6 +265,58 @@ export interface InstallCloudAppLinkedResourcesResult {
   health: CloudInstallHealthReport;
 }
 
+const JOB_DIR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+async function listUuidDirs(dir: string): Promise<string[]> {
+  try {
+    const entries = await fsRemap.readdir(dir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isDirectory() && JOB_DIR_ID.test(entry.name))
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Fork installs: give every linked job a new ID before anything is copied, so
+ * the fork never shares a job (or its schedule, runs and data) with the
+ * publisher's copy or an earlier install on this machine. Rewrites the cloned
+ * repo and the new local app folder; the publisher's repo is a temp clone.
+ */
+export async function remapForkJobIds(input: {
+  repoDir: string;
+  publisherAppId: string;
+  localAppDir: string;
+  jobIds: readonly string[];
+}): Promise<Map<string, string>> {
+  const repoAppJobsDir = path.join(input.repoDir, "apps", input.publisherAppId, "jobs");
+  const localAppJobsDir = path.join(input.localAppDir, "jobs");
+  const oldIds = new Set<string>(input.jobIds);
+  for (const id of await listUuidDirs(repoAppJobsDir)) oldIds.add(id);
+  for (const id of await listUuidDirs(localAppJobsDir)) oldIds.add(id);
+
+  const remap = new Map<string, string>();
+  for (const id of oldIds) remap.set(id, randomRemapUUID());
+  if (remap.size === 0) return remap;
+
+  for (const parent of [path.join(input.repoDir, "Jobs"), repoAppJobsDir, localAppJobsDir]) {
+    for (const [oldId, newId] of remap) {
+      const from = path.join(parent, oldId);
+      if (existsSync(from)) await fsRemap.rename(from, path.join(parent, newId));
+    }
+  }
+  for (const dir of [
+    path.join(input.repoDir, "Jobs"),
+    path.join(input.repoDir, "data"),
+    path.join(input.repoDir, "apps", input.publisherAppId),
+    input.localAppDir,
+  ]) {
+    await remapIdsInDir(dir, remap);
+  }
+  return remap;
+}
+
 export async function installCloudAppLinkedResources(input: {
   repoDir: string;
   repoAppDir: string;
@@ -273,8 +328,22 @@ export async function installCloudAppLinkedResources(input: {
   /** Skip portable replica prep (track sync should not re-mark databases). */
   skipReplicaPrep?: boolean;
   env?: NodeJS.ProcessEnv;
+  /** Fork install: new job IDs so nothing is shared with the source. */
+  remapJobIds?: boolean;
 }): Promise<InstallCloudAppLinkedResourcesResult> {
-  const checkout = await ensureRepoHasLinkedAppResources(input);
+  let checkout = await ensureRepoHasLinkedAppResources(input);
+  if (input.remapJobIds) {
+    const jobIdRemap = await remapForkJobIds({
+      repoDir: input.repoDir,
+      publisherAppId: input.publisherAppId,
+      localAppDir: path.join(getPaprAppsRoot(), input.localAppId),
+      jobIds: checkout.jobIds,
+    });
+    checkout = {
+      ...checkout,
+      jobIds: checkout.jobIds.map((id) => jobIdRemap.get(id) ?? id),
+    };
+  }
 
   const sync = await syncAppLinkedResourcesToTarget({
     appId: input.localAppId,

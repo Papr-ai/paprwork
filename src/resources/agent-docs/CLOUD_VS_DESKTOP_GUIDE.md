@@ -211,8 +211,8 @@ User asks to run something while Mac might be asleep
 | Role | Action | Tools |
 |------|--------|-------|
 | **Publisher** | Share with `codeAccess=install` via `publish_cloud_app` | Others install with `install_cloud_app` |
-| **Contributor** | Edit local fork; propose changes | `submit_cloud_app_change` → GitHub PR on owner's papr-work repo |
-| **Owner** | Review incoming PRs | `list_cloud_app_changes` → `resolve_cloud_app_change({ action: "approve"|"reject" })` |
+| **Contributor** | Edit local fork; propose changes | `submit_cloud_app_pr` → GitHub PR on owner's papr-work repo |
+| **Owner** | Review incoming PRs | `check_cloud_app_contributions` / `list_cloud_app_prs` → `get_cloud_app_pr_review` → `resolve_cloud_app_pr({ action: "approve"|"reject" })` |
 
 Approve **merges the PR on GitHub** (via Papr GitHub App), then the owner's desktop runs `pullNow()` — there is no copy-from-contributor-folder merge on the owner's machine. Details: `docs/SYNC_CONTRACT.md` §6.
 

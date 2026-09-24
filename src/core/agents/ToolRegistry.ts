@@ -12,6 +12,7 @@
  */
 
 import type { Tool } from "@mastra/core/tools";
+import { resolveCloudAppPrToolAlias } from "../tools/cloudAppPrToolIds.js";
 
 // Type alias for any tool - necessary for registry storage
 // Mastra's Tool type has 7 generics, using 'any' is necessary for a generic registry
@@ -55,7 +56,8 @@ export class ToolRegistry {
    * Get tool by ID
    */
   getTool(toolId: string): AnyTool | undefined {
-    return this.tools.get(toolId);
+    const resolved = resolveCloudAppPrToolAlias(toolId);
+    return this.tools.get(resolved) ?? this.tools.get(toolId);
   }
 
   /**
@@ -86,6 +88,19 @@ export class ToolRegistry {
         toolsObject[id] = tool;
       }
     }
+    for (const requestedId of allowedToolIds) {
+      if (toolsObject[requestedId]) {
+        continue;
+      }
+      const resolved = resolveCloudAppPrToolAlias(requestedId);
+      if (resolved === requestedId) {
+        continue;
+      }
+      const tool = this.tools.get(resolved);
+      if (tool && !this.legacyToolIds.has(requestedId)) {
+        toolsObject[requestedId] = tool;
+      }
+    }
     return toolsObject;
   }
 
@@ -111,7 +126,8 @@ export class ToolRegistry {
    * Check if tool exists
    */
   hasTool(toolId: string): boolean {
-    return this.tools.has(toolId);
+    const resolved = resolveCloudAppPrToolAlias(toolId);
+    return this.tools.has(resolved) || this.tools.has(toolId);
   }
 
   /**

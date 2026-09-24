@@ -544,6 +544,51 @@ async function clearReplicaPushErrorOnSuccess(source: AppDataSource): Promise<vo
   });
 }
 
+/**
+ * Create a migration with a system-assigned filename (NNNN_YYYYMMDDHHMMSS_name.sql)
+ * and apply it. Agents supply only a short name + SQL.
+ */
+export async function paprDbCreateMigration(options: {
+  dbId: string;
+  name: string;
+  sql: string;
+  apply?: boolean;
+}): Promise<{
+  migrationId: string;
+  fileName: string;
+  path: string;
+  apply?: Awaited<ReturnType<typeof paprDbApplyMigration>>;
+}> {
+  await initializeDatabaseRegistry();
+  const source = resolveSource({ dbId: options.dbId });
+  const migrationRoot = resolveMigrationRootFromDbPath(source.dbPath);
+  if (!migrationRoot) {
+    throw new Error(`No migrations/ folder for database ${options.dbId}`);
+  }
+  if (!options.sql.trim()) {
+    throw new Error("sql is required");
+  }
+  const { createMigrationFile } = await import("../jobs/migrationFileNaming.js");
+  const created = await createMigrationFile({
+    migrationRoot,
+    name: options.name,
+    sql: options.sql,
+  });
+  if (options.apply === false) {
+    return { migrationId: created.migrationId, fileName: created.fileName, path: created.fullPath };
+  }
+  const apply = await paprDbApplyMigration({
+    dbId: options.dbId,
+    migrationId: created.migrationId,
+  });
+  return {
+    migrationId: created.migrationId,
+    fileName: created.fileName,
+    path: created.fullPath,
+    apply,
+  };
+}
+
 export async function paprDbApplyMigration(options: {
   dbId: string;
   migrationId: string;

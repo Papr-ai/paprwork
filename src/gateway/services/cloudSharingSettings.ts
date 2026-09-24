@@ -5,6 +5,7 @@
 import {
   audienceModelToSharing,
   liveLinkPermissionForAudienceModel,
+  publishPrefsToAudienceModel,
   sharingToAudienceModel,
   type ShareAudienceModel,
 } from "../../core/utils/shareAudienceModel.js";
@@ -149,15 +150,21 @@ export function resolvePublishFieldsFromPrefs(
     | "accessMode"
     | "codeAccess"
     | "requireSignIn"
+    | "allowedUserIds"
+    | "allowedEmails"
+    | "allowedEmailDomains"
   >,
 ): MemoryPublishSharingFields {
   const sharing = resolveSharingSettings(prefs);
-  const model = sharingToAudienceModel(
+  const model = publishPrefsToAudienceModel(
     sharing.loginAccess,
     sharing.externalLink,
     prefs.codeAccess ?? "off",
     {
       requireSignIn: prefs.requireSignIn,
+      allowedUserIds: prefs.allowedUserIds,
+      allowedEmails: prefs.allowedEmails,
+      allowedEmailDomains: prefs.allowedEmailDomains,
     },
   );
   return audienceModelToPublishFields(model, sharing);

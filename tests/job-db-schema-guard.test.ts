@@ -58,14 +58,14 @@ describe("jobDbSchemaGuard", () => {
     expect(block).not.toBeNull();
   });
 
-  test("blocks ALTER on registry db with papr_db_apply_migration guidance", () => {
+  test("blocks ALTER on registry db with papr_db_create_migration guidance", () => {
     const home = process.env.HOME ?? "/Users/test";
     const db = `${home}/Papr/data/databases/billing/data.db`;
     const block = detectJobDbSchemaDdlBlock(
       `sqlite3 "${db}" "ALTER TABLE invoices ADD COLUMN status TEXT"`,
     );
     expect(block).not.toBeNull();
-    expect(block?.message).toContain("papr_db_apply_migration");
+    expect(block?.message).toContain("papr_db_create_migration");
     expect(block?.message).toContain("papr_db_push");
   });
 

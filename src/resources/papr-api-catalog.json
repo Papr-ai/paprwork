@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-21T04:39:33.498Z",
-  "entryCount": 193,
+  "generatedAt": "2026-09-24T14:46:32.034Z",
+  "entryCount": 199,
   "entries": [
     {
       "id": "access-members",
@@ -319,6 +319,28 @@
         "tool",
         "agent"
       ]
+    },
+    {
+      "id": "agent-tool-check_cloud_app_contributions",
+      "title": "check_cloud_app_contributions",
+      "summary": "Check whether an app you own has incoming contributor PRs (OWNER ONLY). Lightweight first step before loading full PR review tools.\n\nReturns pending/preparing counts and request summaries. If PRs exist, use get_cloud_app_pr_review for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: \"cloud app contribution PR review owner approve reject\" }) then run_deferred_tool.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "check_cloud_app_contributions",
+      "keywords": [
+        "check_cloud_app_contributions",
+        "check",
+        "cloud",
+        "app",
+        "contributions",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
       "id": "agent-tool-complete_delegation",
@@ -875,6 +897,29 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-get_cloud_app_pr_review",
+      "title": "get_cloud_app_pr_review",
+      "summary": "Fetch the GitHub pull request diff for an incoming contribute-back PR (OWNER ONLY).\n\nOWNER ONLY — incoming contributor GitHub PR, not local app development. Do not use inspect_cloud_repo (default branch only) or edit_file on $PAPR_HOME/apps/ to review a proposal.\n\nUses Papr's short-lived per-app GitHub read token — same credential family as inspect_cloud_repo, but reads the PR/contrib ref. Returns unified patches plus metadata (title, branch, headSha, stagedPaths).\n\nWorkflow: check_cloud_app_contributions({ appId }) or list_cloud_app_prs({ appId }) → get_cloud_app_pr_review({ requestId }) f...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "get_cloud_app_pr_review",
+      "keywords": [
+        "get_cloud_app_pr_review",
+        "get",
+        "cloud",
+        "app",
+        "pr",
+        "review",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
       "id": "agent-tool-get_cloud_app_publish",
       "title": "get_cloud_app_publish",
       "summary": "Get cloud publish status for a mini-app (apps.papr.ai).\n\nReturns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, and URLs.\n\n**Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.\nIf Cloud Sync is off, the tool returns an error — use export_app_bundle instead (recommend enabling Cloud first).",
@@ -899,7 +944,7 @@
     {
       "id": "agent-tool-get_cloud_sync_status",
       "title": "get_cloud_sync_status",
-      "summary": "Inspect Papr Cloud health for the active workspace — one call for sync + jobs.\n\nReturns:\n- workspaceApps — apps in this workspace from local apps.json (what exists on disk)\n- appWriterRepo (when appId set) — per-app GitHub repo URL, last commit, Sync V3 upload status (use this to verify cloud code)\n- github — legacy namespace monorepo (workspace/, Jobs/ only — apps/ rows omitted as misleading)\n- Turso sync per linked database — check syncMode first: legacy = old Papr CDC/log path; replica = Plan A Turso Sync (pendingPush, pendingOps/cdcOperations are normal unpushed DML on replica — NOT leg...",
+      "summary": "Inspect Papr Cloud health for the active workspace — one call for sync + jobs.\n\nReturns:\n- workspaceApps — apps in this workspace from local apps.json (what exists on disk)\n- appWriterRepo (when appId set) — per-app GitHub repo URL, last commit, Sync V3 upload status (use this to verify cloud code). appWriterRepo.pendingUpdate = a collaborator's publish that has not been applied locally yet (same as the share bar \"Update waiting\" / \"Update conflicts\" chip): reason \"local changes pending upload\" auto-retries; conflictFiles non-empty needs a user decision\n- github — legacy namespace monorepo ...",
       "surfaces": [
         "agent-tool"
       ],
@@ -1477,22 +1522,22 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
-      "id": "agent-tool-list_cloud_app_changes",
-      "title": "list_cloud_app_changes",
-      "summary": "List incoming contribute-back pull requests for apps you own (OWNER ONLY — published upstream apps).",
+      "id": "agent-tool-list_cloud_app_prs",
+      "title": "list_cloud_app_prs",
+      "summary": "List incoming contribute-back GitHub PRs for apps you own (OWNER ONLY). Optional appId filter. For diffs use get_cloud_app_pr_review — not inspect_cloud_repo (default branch) or local edit_file.",
       "surfaces": [
         "agent-tool"
       ],
       "runtimes": [
         "desktop"
       ],
-      "toolId": "list_cloud_app_changes",
+      "toolId": "list_cloud_app_prs",
       "keywords": [
-        "list_cloud_app_changes",
+        "list_cloud_app_prs",
         "list",
         "cloud",
         "app",
-        "changes",
+        "prs",
         "tool",
         "agent"
       ],
@@ -1863,7 +1908,7 @@
     {
       "id": "agent-tool-papr_db_apply_migration",
       "title": "papr_db_apply_migration",
-      "summary": "Apply migrations/{id}.sql to a registry database (Plan A schema path). Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. Never pushes DDL via replica push — avoids schema drift on Turso. Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Publish changes. For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
+      "summary": "Apply migrations/{id}.sql to a registry database (Plan A schema path). Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. Never pushes DDL via replica push — avoids schema drift on Turso. Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. For NEW schema changes use papr_db_create_migration (names + applies in one step). This tool re-applies an EXISTING migration file (recovery, pulled files). For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1929,9 +1974,30 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-papr_db_create_migration",
+      "title": "papr_db_create_migration",
+      "summary": "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so collaborators can never produce the same filename. Then applies it like papr_db_apply_migration (replica → Turso primary → pull align). Use this for EVERY new schema change; do not write_file migration files or pick numbers yourself. Never edit or rename existing migration files.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "papr_db_create_migration",
+      "keywords": [
+        "papr_db_create_migration",
+        "papr",
+        "db",
+        "create",
+        "migration",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-papr_db_exec",
       "title": "papr_db_exec",
-      "summary": "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a Plan A registry database. Writes local replica then push() to Turso primary when online. Schema is NOT allowed — write migrations/*.sql and use papr_db_apply_migration.",
+      "summary": "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a Plan A registry database. Writes local replica then push() to Turso primary when online. Schema is NOT allowed — use papr_db_create_migration.",
       "surfaces": [
         "agent-tool"
       ],
@@ -2111,6 +2177,48 @@
       "playbookRef": "preloaded-app-and-jobs-guide"
     },
     {
+      "id": "agent-tool-pull_cloud_app_updates",
+      "title": "pull_cloud_app_updates",
+      "summary": "Pull this app's own web copy down to local — same as \"Get updates\" on the status chip.\n\nUse when get_cloud_sync_status shows the web copy is ahead (gitUpdatesAvailable, chip \"Updates on web\"), e.g. edited on another device or on apps.papr.ai.\nNot for forks pulling from their publisher — use pull_publisher_updates for that.\nNot for database rows only — use papr_db_pull.\n\nAll-or-nothing (same as the UI): if any file was changed on both sides, NOTHING is applied — no code, no migrations — and conflictFiles lists them (heldForConflicts: true).\n**If conflictFiles is non-empty, STOP and ask the u...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "pull_cloud_app_updates",
+      "keywords": [
+        "pull_cloud_app_updates",
+        "pull",
+        "cloud",
+        "app",
+        "updates",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-pull_publisher_updates",
+      "title": "pull_publisher_updates",
+      "summary": "Pull the publisher's latest version into an installed copy — same as \"Update from publisher\" on the status chip.\n\n**Call with checkOnly: true before submit_cloud_app_pr.** If publisherUpdatesAvailable, pull first so the proposal is based on the publisher's current code, not a stale snapshot.\n\nOnly works for apps installed in track mode (install_cloud_app mode: \"track\"). A mode: \"fork\" copy returns supported: false — tell the user rather than working around it.\n\nLocal edits are kept on conflict. Returns updatedFiles, conflictFiles, skippedFiles.\n**If conflictFiles is non-empty, STOP and tell...",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "pull_publisher_updates",
+      "keywords": [
+        "pull_publisher_updates",
+        "pull",
+        "publisher",
+        "updates",
+        "tool",
+        "agent"
+      ]
+    },
+    {
       "id": "agent-tool-push_cloud_sync",
       "title": "push_cloud_sync",
       "summary": "Force Cloud Sync push (same engine as Publish / Publish changes in the app tab) with **required scope** — full-workspace push is rejected.\n\nTargets (default: both github + turso — use this for appId when the live web app should update):\n- github — apps/{id}, Jobs/{id}, data/ to GitHub (code only — skips database + live link refresh)\n- turso — linked SQLite → Turso (syncMode=legacy: old CDC/log path; syncMode=replica: Plan A push — pendingOps is not legacy)\n\nFor registry DBs on Plan A replica path (syncMode=replica), turso target uses papr_db_push semantics (pull-before-push, migration confl...",
@@ -2230,6 +2338,29 @@
         "read_app_file",
         "read",
         "app",
+        "file",
+        "tool",
+        "agent"
+      ],
+      "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-read_cloud_app_pr_file",
+      "title": "read_cloud_app_pr_file",
+      "summary": "Read one file from an incoming contribute-back PR at its proposal HEAD ref (OWNER ONLY). Use after get_cloud_app_pr_review when you need full file content beyond the patch. OWNER ONLY — incoming contributor GitHub PR, not local app development. Do not use inspect_cloud_repo (default branch only) or edit_file on $PAPR_HOME/apps/ to review a proposal.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "read_cloud_app_pr_file",
+      "keywords": [
+        "read_cloud_app_pr_file",
+        "read",
+        "cloud",
+        "app",
+        "pr",
         "file",
         "tool",
         "agent"
@@ -2475,22 +2606,22 @@
       ]
     },
     {
-      "id": "agent-tool-resolve_cloud_app_change",
-      "title": "resolve_cloud_app_change",
-      "summary": "Approve or reject an incoming contribute-back PR (OWNER ONLY). Approve merges the GitHub PR and triggers a local sync pull. Use list_cloud_app_changes first to get requestId and prUrl.",
+      "id": "agent-tool-resolve_cloud_app_pr",
+      "title": "resolve_cloud_app_pr",
+      "summary": "Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with get_cloud_app_pr_review.",
       "surfaces": [
         "agent-tool"
       ],
       "runtimes": [
         "desktop"
       ],
-      "toolId": "resolve_cloud_app_change",
+      "toolId": "resolve_cloud_app_pr",
       "keywords": [
-        "resolve_cloud_app_change",
+        "resolve_cloud_app_pr",
         "resolve",
         "cloud",
         "app",
-        "change",
+        "pr",
         "tool",
         "agent"
       ],
@@ -2704,22 +2835,22 @@
       ]
     },
     {
-      "id": "agent-tool-submit_cloud_app_change",
-      "title": "submit_cloud_app_change",
-      "summary": "Propose contribute-back changes to the upstream app owner (CONTRIBUTOR ONLY — you must have a local fork installed via install_cloud_app).\n\nOpens a pull request with your fork's app source, linked Jobs, and migration SQL on the owner's papr-work repo. Returns prUrl, branch, and headSha.",
+      "id": "agent-tool-submit_cloud_app_pr",
+      "title": "submit_cloud_app_pr",
+      "summary": "Open a contribute-back GitHub PR to the upstream app owner (CONTRIBUTOR ONLY — local fork via install_cloud_app).\n\nNot for editing the owner's app directly. Pushes your fork's app source, linked Jobs, and migration SQL to the owner's papr-work repo. Returns prUrl, branch, and headSha.",
       "surfaces": [
         "agent-tool"
       ],
       "runtimes": [
         "desktop"
       ],
-      "toolId": "submit_cloud_app_change",
+      "toolId": "submit_cloud_app_pr",
       "keywords": [
-        "submit_cloud_app_change",
+        "submit_cloud_app_pr",
         "submit",
         "cloud",
         "app",
-        "change",
+        "pr",
         "tool",
         "agent"
       ],
