@@ -80,7 +80,11 @@ export function getPidsListeningOnPort(port: number): number[] {
       return [...pids];
     }
 
-    const output = execSync(`lsof -ti tcp:${port}`, { encoding: "utf8" }).trim();
+    // -sTCP:LISTEN matters: without it lsof also reports every *client* with a
+    // connection to the port — including this gateway after a CDP probe.
+    const output = execSync(`lsof -nP -t -iTCP:${port} -sTCP:LISTEN`, {
+      encoding: "utf8",
+    }).trim();
     if (!output) {
       return [];
     }
@@ -106,31 +110,115 @@ function getProcessCommandLine(pid: number): string {
   }
 }
 
+/** Electron is Chromium, so a bare "Chrome" match would also claim the app itself. */
+export function looksLikeChromeCommandLine(commandLine: string): boolean {
+  if (!commandLine || /Electron/i.test(commandLine)) {
+    return false;
+  }
+  return (
+    /Google Chrome|chrome\.exe|Chromium/i.test(commandLine) || commandLine.includes("Chrome")
+  );
+}
+
 /** True when the process listening on `port` is Chrome using Papr's profile dir. */
 export function isChromeUsingUserDataDir(port: number, userDataDir: string): boolean {
   const profileNeedle = `--user-data-dir=${userDataDir.replace(/\/$/, "")}`;
   for (const pid of getPidsListeningOnPort(port)) {
     const commandLine = getProcessCommandLine(pid);
-    if (!commandLine) {
-      continue;
-    }
-    const looksLikeChrome =
-      /Google Chrome|chrome\.exe|Chromium/i.test(commandLine) ||
-      commandLine.includes("Chrome");
-    if (looksLikeChrome && commandLine.includes(profileNeedle)) {
+    if (looksLikeChromeCommandLine(commandLine) && commandLine.includes(profileNeedle)) {
       return true;
     }
   }
   return false;
 }
 
+export type CdpPortHolderKind = "own_process" | "chrome" | "other";
+
+export interface CdpPortHolder {
+  pid: number;
+  commandLine: string;
+}
+
+export interface CdpPortTakeoverPlan {
+  killable: number[];
+  blockedBy: Array<CdpPortHolder & { kind: Exclude<CdpPortHolderKind, "chrome"> }>;
+}
+
+/**
+ * The gateway's parent is the Electron main process, which listens on
+ * PAPR_PLATFORM_CDP_PORT when PAPR_PLATFORM_EMBEDDED_CDP=1 — signalling it quits the app.
+ */
+export function ownProcessPids(): ReadonlySet<number> {
+  return new Set([process.pid, process.ppid]);
+}
+
+export function classifyCdpPortHolder(
+  holder: CdpPortHolder,
+  ownPids: ReadonlySet<number>,
+): CdpPortHolderKind {
+  if (ownPids.has(holder.pid)) {
+    return "own_process";
+  }
+  return looksLikeChromeCommandLine(holder.commandLine) ? "chrome" : "other";
+}
+
+/** Only a separate Chrome is ever stopped; anything else blocks the takeover outright. */
+export function planCdpPortTakeover(
+  holders: readonly CdpPortHolder[],
+  ownPids: ReadonlySet<number>,
+): CdpPortTakeoverPlan {
+  const plan: CdpPortTakeoverPlan = { killable: [], blockedBy: [] };
+  for (const holder of holders) {
+    const kind = classifyCdpPortHolder(holder, ownPids);
+    if (kind === "chrome") {
+      plan.killable.push(holder.pid);
+    } else {
+      plan.blockedBy.push({ ...holder, kind });
+    }
+  }
+  return plan;
+}
+
+export function describeBlockedCdpPort(
+  port: number,
+  blockedBy: CdpPortTakeoverPlan["blockedBy"],
+): string {
+  if (blockedBy.some((holder) => holder.kind === "own_process")) {
+    return (
+      `Port ${port} is Paprwork's own DevTools endpoint, not a separate Chrome. ` +
+      "PAPR_PLATFORM_EMBEDDED_CDP=1 makes the app listen on PAPR_PLATFORM_CDP_PORT, " +
+      "which is also the port real Chrome is launched on. Unset " +
+      "PAPR_PLATFORM_EMBEDDED_CDP and restart Paprwork to use browser tools."
+    );
+  }
+  const first = blockedBy[0];
+  const command = first ? first.commandLine.slice(0, 120) || "unknown command" : "unknown";
+  return (
+    `Port ${port} is held by a process that is not Chrome (pid ${first?.pid ?? "?"}: ${command}). ` +
+    "Paprwork will not stop it — free the port or set PAPR_PLATFORM_CDP_PORT to another one."
+  );
+}
+
 export async function killChromeListeningOnPort(port: number): Promise<void> {
-  const pids = getPidsListeningOnPort(port);
-  if (pids.length === 0) {
+  const holders = getPidsListeningOnPort(port).map((pid) => ({
+    pid,
+    commandLine: getProcessCommandLine(pid),
+  }));
+  if (holders.length === 0) {
     return;
   }
 
-  for (const pid of pids) {
+  // Stopping only the Chrome would not free the port anyway, so refuse before signalling anyone.
+  const plan = planCdpPortTakeover(holders, ownProcessPids());
+  if (plan.blockedBy.length > 0) {
+    throw new Error(describeBlockedCdpPort(port, plan.blockedBy));
+  }
+
+  const killable = new Set(plan.killable);
+  const stillListening = (): number[] =>
+    getPidsListeningOnPort(port).filter((pid) => killable.has(pid));
+
+  for (const pid of killable) {
     try {
       process.kill(pid, "SIGTERM");
     } catch {
@@ -140,13 +228,13 @@ export async function killChromeListeningOnPort(port: number): Promise<void> {
 
   const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    if (getPidsListeningOnPort(port).length === 0) {
+    if (stillListening().length === 0) {
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
 
-  for (const pid of getPidsListeningOnPort(port)) {
+  for (const pid of stillListening()) {
     try {
       process.kill(pid, "SIGKILL");
     } catch {
