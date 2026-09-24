@@ -324,7 +324,10 @@ describe("MessageList", () => {
       );
 
       const button = screen.getByTestId("load-full-history");
-      expect(button.textContent).toContain("637 earlier messages");
+      expect(button.textContent).toContain("Earlier637");
+      expect(button.getAttribute("aria-label")).toBe(
+        "Load 637 earlier messages",
+      );
       fireEvent.click(button);
       expect(onLoadOlder).toHaveBeenCalledTimes(1);
     });

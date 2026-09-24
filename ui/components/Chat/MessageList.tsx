@@ -295,11 +295,34 @@ export const MessageList: React.FC<MessageListProps> = ({
               className="load-full-history-button"
               onClick={onLoadOlder}
               data-testid="load-full-history"
+              aria-label={
+                earlierMessageCount !== undefined && earlierMessageCount > 0
+                  ? `Load ${earlierMessageCount} earlier ${earlierMessageCount === 1 ? "message" : "messages"}`
+                  : "Load earlier messages"
+              }
             >
-              Show full history
-              {earlierMessageCount !== undefined && earlierMessageCount > 0
-                ? ` (${earlierMessageCount} earlier ${earlierMessageCount === 1 ? "message" : "messages"})`
-                : ""}
+              <svg
+                className="load-full-history-icon"
+                viewBox="0 0 16 16"
+                width="16"
+                height="16"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M4.5 9.5 8 6l3.5 3.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>Earlier</span>
+              {earlierMessageCount !== undefined && earlierMessageCount > 0 && (
+                <span className="load-full-history-count" aria-hidden="true">
+                  {earlierMessageCount.toLocaleString()}
+                </span>
+              )}
             </button>
           )}
         </div>
