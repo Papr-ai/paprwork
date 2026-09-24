@@ -222,3 +222,86 @@ export function splitSqlStatements(sql: string): string[] {
     .map((statement) => statement.trim())
     .filter((statement) => statement.length > 0);
 }
+
+/**
+ * Can this migration run a SECOND time without losing rows?
+ *
+ * The Plan A replica runner executes before every job run and applies a
+ * migration again whenever it cannot confirm the migration already ran. That is
+ * harmless for additive DDL -- CREATE ... IF NOT EXISTS, ADD COLUMN (duplicate
+ * columns are tolerated), INSERT OR IGNORE -- and destructive for anything that
+ * drops, moves or overwrites rows. A copy-and-swap table rebuild replayed
+ * against live data is exactly that: on 2026-09-24 re-runs of one emptied the
+ * live tables of a telemetry database, in the replica and in Turso.
+ *
+ * Deliberately conservative: a false hazard costs a drift warning instead of an
+ * automatic repair; a missed one costs the data.
+ */
+export interface MigrationRerunSafety {
+  /** True when every statement is additive or idempotent. */
+  safe: boolean;
+  /** One entry per statement that would drop, move or overwrite rows. */
+  hazards: string[];
+}
+
+/** Blank out '…' literals so keyword checks cannot match inside string data. */
+function withoutStringLiterals(sql: string): string {
+  return sql.replace(/'(?:[^']|'')*'/g, "''");
+}
+
+function excerpt(sql: string): string {
+  return sql.length > 72 ? `${sql.slice(0, 69)}…` : sql;
+}
+
+function rerunHazard(statement: string): string | null {
+  const sql = statement.replace(/\s+/g, " ").trim();
+  if (sql.length === 0) {
+    return null;
+  }
+  const drop = parseDropStatement(sql);
+  if (drop) {
+    // Dropping an index loses no rows; dropping a table loses all of them.
+    return drop.objectType === "table" ? `DROP TABLE ${drop.name}` : null;
+  }
+  const rename = parseRenameTableStatement(sql);
+  if (rename) {
+    return `ALTER TABLE ${rename.from} RENAME TO ${rename.to}`;
+  }
+  if (new RegExp(String.raw`^ALTER\s+TABLE\s+${IDENT}\s+DROP\s`, "i").test(sql)) {
+    return excerpt(sql);
+  }
+  const bare = withoutStringLiterals(sql);
+  const insert = /^INSERT\s+(?:OR\s+([A-Z]+)\s+)?INTO\b/i.exec(bare);
+  if (insert) {
+    const onConflict = insert[1]?.toUpperCase();
+    if (onConflict === "IGNORE") {
+      return null;
+    }
+    // The upsert spelling of OR IGNORE. DO UPDATE overwrites, so it stays a hazard.
+    if (
+      onConflict === undefined &&
+      /\bON\s+CONFLICT\b/i.test(bare) &&
+      /\bDO\s+NOTHING\b/i.test(bare) &&
+      !/\bDO\s+UPDATE\b/i.test(bare)
+    ) {
+      return null;
+    }
+    // Plain INSERT duplicates rows (or aborts the run on a key conflict);
+    // OR REPLACE / DO UPDATE overwrite rows written since the first run.
+    return excerpt(sql);
+  }
+  if (/^(?:DELETE|UPDATE|REPLACE)\b/i.test(bare)) {
+    return excerpt(sql);
+  }
+  if (/^WITH\b/i.test(bare) && /\b(?:DELETE|UPDATE|INSERT|REPLACE)\b/i.test(bare)) {
+    return excerpt(sql);
+  }
+  return null;
+}
+
+export function migrationRerunSafety(sql: string): MigrationRerunSafety {
+  const hazards = splitSqlStatements(sql)
+    .map(rerunHazard)
+    .filter((hazard): hazard is string => hazard !== null);
+  return { safe: hazards.length === 0, hazards };
+}

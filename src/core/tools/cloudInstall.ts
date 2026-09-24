@@ -9,7 +9,6 @@ import {
   readActiveWorkspacePointer,
 } from "../utils/paprWorkspace.js";
 import { getCloudAppContributeService } from "../../gateway/services/CloudAppContributeService.js";
-import { getCloudSyncService } from "../../gateway/services/CloudSyncService.js";
 import {
   agentBrowseScopeToCatalogScope,
   buildAgentCommunityAppListings,
@@ -24,6 +23,14 @@ import { cloudApiFetch } from "../../gateway/utils/cloudApiClient.js";
 import {
   requirePaprCloudLogin,
 } from "../../gateway/utils/cloudPublishGate.js";
+import {
+  CLOUD_APP_PR_DEFERRED_FIND_QUERY,
+  CLOUD_APP_PR_OWNER_WORKFLOW,
+  CLOUD_APP_PR_TOOL_IDS,
+} from "./cloudAppPrToolIds.js";
+import { cloudAppPrReviewTools } from "./cloudAppChangeReview.js";
+import { getCloudAppChangeRequestService } from "../../gateway/services/CloudAppChangeRequestService.js";
+import type { IncomingChangeRequestStatus } from "../../gateway/services/CloudAppChangeRequestService.js";
 
 const installCloudAppSchema = z.object({
   namespaceId: z.string().min(1).describe("Source app namespace ID"),
@@ -60,8 +67,20 @@ const submitChangeSchema = z.object({
   description: z.string().min(1).max(4000),
 });
 
-const listChangesSchema = z.object({
+const listPrsSchema = z.object({
+  appId: z
+    .string()
+    .uuid()
+    .optional()
+    .describe("Filter to PRs for this owner upstream app id"),
   status: z.enum(["preparing", "pending", "approved", "rejected"]).optional(),
+});
+
+const checkContributionsSchema = z.object({
+  appId: z
+    .string()
+    .uuid()
+    .describe("Owner upstream app id to check for incoming contributor PRs"),
 });
 
 const resolveChangeSchema = z.object({
@@ -237,11 +256,11 @@ For team-shared apps, ask the user fork vs collaborate before calling — or omi
   },
 });
 
-export const submitCloudAppChangeTool = createTool({
-  id: "submit_cloud_app_change",
-  description: `Propose contribute-back changes to the upstream app owner (CONTRIBUTOR ONLY — you must have a local fork installed via install_cloud_app).
+export const submitCloudAppPrTool = createTool({
+  id: CLOUD_APP_PR_TOOL_IDS.submit,
+  description: `Open a contribute-back GitHub PR to the upstream app owner (CONTRIBUTOR ONLY — local fork via install_cloud_app).
 
-Opens a pull request with your fork's app source, linked Jobs, and migration SQL on the owner's papr-work repo. Returns prUrl, branch, and headSha.`,
+Not for editing the owner's app directly. Pushes your fork's app source, linked Jobs, and migration SQL to the owner's papr-work repo. Returns prUrl, branch, and headSha.`,
   inputSchema: submitChangeSchema,
   execute: async (input) => {
     const args =
@@ -276,30 +295,40 @@ Opens a pull request with your fork's app source, linked Jobs, and migration SQL
   },
 });
 
-export const listCloudAppChangesTool = createTool({
-  id: "list_cloud_app_changes",
-  description: `List incoming contribute-back pull requests for apps you own (OWNER ONLY — published upstream apps).`,
-  inputSchema: listChangesSchema,
+export const checkCloudAppContributionsTool = createTool({
+  id: CLOUD_APP_PR_TOOL_IDS.check,
+  description: `Check whether an app you own has incoming contributor PRs (OWNER ONLY). Lightweight first step before loading full PR review tools.
+
+Returns pending/preparing counts and request summaries. If PRs exist, use ${CLOUD_APP_PR_TOOL_IDS.review} for diffs (not inspect_cloud_repo or local edit_file). If PR tools are deferred this turn, call find_tools({ query: "${CLOUD_APP_PR_DEFERRED_FIND_QUERY}" }) then run_deferred_tool.`,
+  inputSchema: checkContributionsSchema,
   execute: async (input) => {
     const args =
-      (input as { context?: z.infer<typeof listChangesSchema> }).context ?? input;
+      (input as { context?: z.infer<typeof checkContributionsSchema> }).context ??
+      input;
     const startTime = performance.now();
     try {
       await requirePaprCloudLogin();
-      const query = args.status ? `?status=${args.status}` : "";
-      const response = await cloudApiFetch(
-        `/v1/cloud/apps/changes/incoming${query}`,
+      const service = getCloudAppChangeRequestService();
+      const forApp = await service.listIncoming({ appId: args.appId });
+      const pending = forApp.filter(
+        (r) => r.status === "pending" || r.status === "preparing",
       );
-      if (!response.ok) {
-        const body = await response.text();
-        throw new Error(
-          `List changes failed (${response.status}): ${body.slice(0, 200)}`,
-        );
-      }
-      const data = (await response.json()) as { requests?: unknown[] };
       return {
         success: true,
-        data: { requests: data.requests ?? [] },
+        data: {
+          appId: args.appId,
+          totalMatchingApp: forApp.length,
+          pendingCount: pending.length,
+          requests: pending.map((r) => ({
+            requestId: r.id,
+            status: r.status,
+            title: r.title,
+            sourceSlug: r.sourceSlug,
+            createdAt: r.createdAt,
+          })),
+          workflow: CLOUD_APP_PR_OWNER_WORKFLOW,
+          deferredDiscoveryQuery: CLOUD_APP_PR_DEFERRED_FIND_QUERY,
+        },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
       };
@@ -316,9 +345,43 @@ export const listCloudAppChangesTool = createTool({
   },
 });
 
-export const resolveCloudAppChangeTool = createTool({
-  id: "resolve_cloud_app_change",
-  description: `Approve or reject an incoming contribute-back PR (OWNER ONLY). Approve merges the GitHub PR and triggers a local sync pull. Use list_cloud_app_changes first to get requestId and prUrl.`,
+export const listCloudAppPrsTool = createTool({
+  id: CLOUD_APP_PR_TOOL_IDS.list,
+  description: `List incoming contribute-back GitHub PRs for apps you own (OWNER ONLY). Optional appId filter. For diffs use ${CLOUD_APP_PR_TOOL_IDS.review} — not inspect_cloud_repo (default branch) or local edit_file.`,
+  inputSchema: listPrsSchema,
+  execute: async (input) => {
+    const args =
+      (input as { context?: z.infer<typeof listPrsSchema> }).context ?? input;
+    const startTime = performance.now();
+    try {
+      await requirePaprCloudLogin();
+      const service = getCloudAppChangeRequestService();
+      const requests = await service.listIncoming({
+        appId: args.appId,
+        status: args.status as IncomingChangeRequestStatus | undefined,
+      });
+      return {
+        success: true,
+        data: { requests },
+        duration: performance.now() - startTime,
+        timestamp: new Date().toISOString(),
+      };
+    } catch (error) {
+      throw new Error(
+        JSON.stringify({
+          success: false,
+          error: (error as Error).message,
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        }),
+      );
+    }
+  },
+});
+
+export const resolveCloudAppPrTool = createTool({
+  id: CLOUD_APP_PR_TOOL_IDS.resolve,
+  description: `Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with ${CLOUD_APP_PR_TOOL_IDS.review}.`,
   inputSchema: resolveChangeSchema,
   execute: async (input) => {
     const args =
@@ -341,11 +404,26 @@ export const resolveCloudAppChangeTool = createTool({
       const data = (await response.json()) as Record<string, unknown>;
 
       if (args.action === "approve") {
-        const sync = getCloudSyncService();
-        if (sync) {
-          await sync.pullNow();
-          void sync.pushNow();
-        }
+        const { readSourceAppIdFromApproveBody, followUpContributeApprove } =
+          await import(
+            "../../gateway/services/contributeApproveFollowUp.js"
+          );
+        const sourceAppId = readSourceAppIdFromApproveBody(data);
+        const pull = await followUpContributeApprove(sourceAppId);
+        return {
+          success: true,
+          data: { ...data, pull, sourceAppId },
+          duration: performance.now() - startTime,
+          timestamp: new Date().toISOString(),
+        };
+      }
+
+      if (args.action === "reject") {
+        const {
+          notifyCloudChangeRequestsStale,
+          readSourceAppIdFromApproveBody,
+        } = await import("../../gateway/services/contributeApproveFollowUp.js");
+        notifyCloudChangeRequestsStale(readSourceAppIdFromApproveBody(data));
       }
 
       return {
@@ -370,7 +448,16 @@ export const resolveCloudAppChangeTool = createTool({
 export const cloudInstallTools = [
   listCommunityAppsTool,
   installCloudAppTool,
-  submitCloudAppChangeTool,
-  listCloudAppChangesTool,
-  resolveCloudAppChangeTool,
+  checkCloudAppContributionsTool,
+  submitCloudAppPrTool,
+  listCloudAppPrsTool,
+  resolveCloudAppPrTool,
+  ...cloudAppPrReviewTools,
 ];
+
+/** @deprecated use submitCloudAppPrTool */
+export const submitCloudAppChangeTool = submitCloudAppPrTool;
+/** @deprecated use listCloudAppPrsTool */
+export const listCloudAppChangesTool = listCloudAppPrsTool;
+/** @deprecated use resolveCloudAppPrTool */
+export const resolveCloudAppChangeTool = resolveCloudAppPrTool;

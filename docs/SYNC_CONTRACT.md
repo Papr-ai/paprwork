@@ -139,7 +139,7 @@ Each entry in `apps/{id}/data-sources.json` may declare who may write rows. **Pr
 
 **Legacy `role` field:** Deprecated. `scratch` sources remain local-only (no Turso sync) and must show **“not synced by design”** in UI.
 
-**Per-user isolation:** Registry `isolation: "per-user"` (Turso `d-{id8}-u-{user8}`) avoids cross-user row conflicts without writer IDs.
+**Per-user isolation (Option A):** Registry `isolation: "per-user"` gives visitors Turso `d-{id8}-u-{caller8}`; the **publisher keeps the shared primary** `d-{id8}` (desktop sync + cloud host). Memory `runtime_db_token` allowlist enforces this server-side.
 
 ### Enforcement (bidirectional-first)
 

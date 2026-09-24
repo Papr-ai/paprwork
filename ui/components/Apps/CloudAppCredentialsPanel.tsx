@@ -17,6 +17,8 @@ interface CloudAppCredentialsPanelProps {
   appId: string;
   appTitle: string;
   busy?: boolean;
+  /** When false, keys still save to requirements.json but are not on the live catalog yet. */
+  appLive?: boolean;
   onSaved?: () => void;
 }
 
@@ -53,6 +55,7 @@ export function CloudAppCredentialsPanel({
   appId,
   appTitle,
   busy = false,
+  appLive = true,
   onSaved,
 }: CloudAppCredentialsPanelProps) {
   const [rows, setRows] = useState<DraftRow[]>([]);
@@ -124,7 +127,11 @@ export function CloudAppCredentialsPanel({
     try {
       await saveAppRequirements(appId, normalized);
       setDetectedKeyNames([]);
-      setMessage("Saved. Republish to update the live app catalog.");
+      setMessage(
+        appLive
+          ? "Saved. Republish to update the live app catalog."
+          : "Saved to requirements.json. Publish on Web to apply the catalog.",
+      );
       onSaved?.();
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
@@ -144,6 +151,13 @@ export function CloudAppCredentialsPanel({
         Keys set to <strong>Mine</strong> run on your account and you pay for
         visitor usage. <strong>Theirs</strong> asks each visitor for their own —
         that needs Papr sign-in and a setup step before the app loads.
+        {!appLive ? (
+          <>
+            {" "}
+            Edits save to <code>requirements.json</code> in your app folder; publish
+            when you are ready for them to apply on the web.
+          </>
+        ) : null}
       </p>
 
       {loading ? (

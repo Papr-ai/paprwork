@@ -21,6 +21,8 @@ export interface CloudLineageAppEntry {
   sourceNamespaceId: string;
   installedAt: string;
   lastSyncedAt?: string;
+  /** shared = team collaborator (publisher's data); forked = own data. */
+  databasePolicy?: "shared" | "forked";
 }
 
 export interface CloudLineageIndex {
@@ -87,6 +89,9 @@ function toEntry(
     sourceNamespaceId: file.source.namespaceId,
     installedAt: file.installedAt,
     lastSyncedAt: file.lastSyncedAt,
+    // Older track installs predate the field; they were always shared.
+    databasePolicy:
+      file.databasePolicy ?? (file.mode === "track" ? "shared" : "forked"),
   };
 }
 

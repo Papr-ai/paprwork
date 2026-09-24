@@ -70,7 +70,7 @@ describe("mergeRemoteCodeCheckIntoStatus", () => {
     expect(merged.chipLabel).toBe("Synced");
   });
 
-  test("does not claim cloud is newer when local changes are waiting", () => {
+  test("warns to get updates first when cloud is ahead and local changes are waiting", () => {
     const localPending = baseStatus({
       overall: "needs_sync",
       codeStatus: "pending",
@@ -83,9 +83,10 @@ describe("mergeRemoteCodeCheckIntoStatus", () => {
       upToDate: false,
       remoteCommitSha: "abc123",
     });
-    expect(merged.gitUpdatesAvailable).toBe(false);
+    // 359cb229: cloud-ahead wins so the user pulls before publishing over it.
+    expect(merged.gitUpdatesAvailable).toBe(true);
     expect(merged.codeStatus).toBe("pending");
-    expect(merged.summaryLine).toContain("Local changes waiting");
+    expect(merged.summaryLine).toContain("get updates before publishing local edits");
   });
 
   test("clears stale namespace-git flag when live remote check is up to date", () => {
@@ -120,5 +121,26 @@ describe("suppressStaleGitUpdatesAvailable", () => {
       false,
     );
     expect(settled.gitUpdatesAvailable).toBe(true);
+  });
+});
+
+describe("mergeRemoteCodeCheckIntoStatus — deferred remote update", () => {
+  test("shows Update waiting while local rows sync first", () => {
+    const merged = mergeRemoteCodeCheckIntoStatus(baseStatus(), {
+      upToDate: false,
+      pendingUpdate: { commitSha: "sha-2", reason: "local changes pending upload" },
+    });
+    expect(merged.chipLabel).toBe("Update waiting");
+    expect(merged.summaryLine).toBe("Syncing your changes first, then updating");
+    expect(merged.gitUpdatesAvailable).toBe(true);
+  });
+
+  test("shows short conflict copy", () => {
+    const merged = mergeRemoteCodeCheckIntoStatus(baseStatus(), {
+      upToDate: false,
+      pendingUpdate: { commitSha: "sha-2", reason: "conflicts with your edits", conflictFiles: ["app.ts"] },
+    });
+    expect(merged.chipLabel).toBe("Update conflicts");
+    expect(merged.summaryLine).toBe("Update conflicts with your edits");
   });
 });

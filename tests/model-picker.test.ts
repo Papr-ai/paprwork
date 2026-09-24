@@ -4,6 +4,7 @@ import {
   PICKER_DEFAULT_MODEL_IDS,
   PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS,
   PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS,
+  PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS,
   getAllPickerToggleModelIds,
   getPickerModels,
   isChatPickerModelId,
@@ -21,12 +22,10 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5, Opus 5/5.5, Fable 5.1, and eleven cloud models", () => {
+  test("default list includes Sonnet 5, Opus 5.5, Fable 5.1, and eight cloud models", () => {
     expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(11);
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-6-astra");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-1");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-6");
@@ -65,7 +64,7 @@ describe("modelPicker", () => {
     ).toEqual([
       "claude-sonnet-5",
       "claude-opus-4-6",
-      "claude-opus-5",
+      "claude-opus-5-5",
       "gpt-5-6-sol",
       // Collapsed: max reasoning is now an Effort choice on glm-5.2, not a row.
       "glm-5.2",
@@ -98,9 +97,15 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("migrates retired Opus 4.8 picker id to Opus 5", () => {
+  test("migrates retired Opus 4.8 picker id to Opus 5.5", () => {
     expect(resolveEnabledPickerModelIds(["claude-opus-4-8"])).toEqual([
-      "claude-opus-5",
+      "claude-opus-5-5",
+    ]);
+  });
+
+  test("migrates retired Opus 5 picker id to Opus 5.5", () => {
+    expect(resolveEnabledPickerModelIds(["claude-opus-5"])).toEqual([
+      "claude-opus-5-5",
     ]);
   });
 
@@ -123,6 +128,12 @@ describe("modelPicker", () => {
     expect(
       resolveEnabledPickerModelIds(["gemini-3.6-flash", "gemini-3.7-flash"]),
     ).toEqual(["gemini-3.8-flash"]);
+  });
+
+  test("upgrades exact pre-Opus-5.5 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
   });
 
   test("upgrades exact pre-Gemini-3.8 default picker list", () => {
@@ -152,13 +163,15 @@ describe("modelPicker", () => {
     ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
   });
 
-  test("preserves user-enabled models beyond defaults", () => {
-    expect(
-      resolveEnabledPickerModelIds([
-        ...PICKER_DEFAULT_MODEL_IDS,
-        "claude-haiku-4-5",
-      ]),
-    ).toEqual([...PICKER_DEFAULT_MODEL_IDS, "claude-haiku-4-5"]);
+  test("preserves user-enabled models while migrating retired defaults", () => {
+    const resolved = resolveEnabledPickerModelIds([
+      ...PICKER_DEFAULT_MODEL_IDS,
+      "claude-haiku-4-5",
+    ]);
+
+    expect(resolved).toContain("claude-haiku-4-5");
+    expect(resolved).toContain("claude-opus-5-5");
+    expect(resolved).not.toContain("claude-opus-5");
   });
 
   test("heals truncated Anthropic-only lists from clobbered settings saves", () => {
@@ -177,7 +190,7 @@ describe("modelPicker", () => {
     const toggleIds = getAllPickerToggleModelIds();
     expect(toggleIds).toContain("claude-sonnet-4-6");
     expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
-    expect(isPickerDefaultModelId("claude-opus-5")).toBe(true);
+    expect(isPickerDefaultModelId("claude-opus-5-5")).toBe(true);
     expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(true);
     expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(true);
     expect(isPickerDefaultModelId("glm-5.2")).toBe(true);
@@ -199,13 +212,13 @@ describe("modelPicker", () => {
       "gpt-5-6-sol",
       "claude-fable-5-1",
       "claude-sonnet-5",
-      "claude-opus-5",
+      "claude-opus-5-5",
       "claude-opus-4-6",
     ]);
     expect(models.map((m) => m.id)).toEqual([
       "claude-sonnet-5",
       "claude-opus-4-6",
-      "claude-opus-5",
+      "claude-opus-5-5",
       "claude-fable-5-1",
       "gpt-5-6-sol",
     ]);

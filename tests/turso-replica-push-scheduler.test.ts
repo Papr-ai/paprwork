@@ -198,7 +198,7 @@ describe("tursoReplicaPushScheduler routing", () => {
     expect(publishDbChanged).not.toHaveBeenCalled();
   });
 
-  it("evaluateDbChange still emits SSE in manual upload mode when registry is dirty", async () => {
+  it("evaluateDbChange stays silent in manual upload mode", async () => {
     process.env.PAPR_TURSO_REPLICA_SYNC = "force";
     process.env.CLOUD_SYNC_ENABLED = "true";
 
@@ -262,7 +262,7 @@ describe("tursoReplicaPushScheduler routing", () => {
     });
 
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(publishDbChanged).toHaveBeenCalledWith({ dbId: "db-test" });
+    expect(publishDbChanged).not.toHaveBeenCalled();
   });
 
   it("scheduleTursoReplicaPushForSyncKey skips watcher push in manual upload mode", async () => {

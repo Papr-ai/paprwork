@@ -708,6 +708,18 @@ describe("resolvePublishBarStatus", () => {
 
     expect(
       resolvePublishBarStatus({
+        live: false,
+        loading: true,
+        refreshing: false,
+        syncEnabled: true,
+        webSyncState: "synced",
+        webSyncSpinning: false,
+        webSyncTooltip: "",
+      }).state,
+    ).toBe("loading");
+
+    expect(
+      resolvePublishBarStatus({
         live: true,
         loading: false,
         refreshing: false,

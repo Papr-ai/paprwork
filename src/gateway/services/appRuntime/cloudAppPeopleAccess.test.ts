@@ -188,4 +188,53 @@ describe("share audience model — people", () => {
       ),
     ).toBe(true);
   });
+
+  it("publishes external guests with public login access", () => {
+    expect(
+      audienceModelToSharing({
+        audience: "people",
+        permission: "write",
+        allowedEmailDomains: ["acme.com"],
+      }),
+    ).toEqual({ loginAccess: "public", externalLink: "off" });
+  });
+});
+
+describe("applyPeopleAllowlist — external email", () => {
+  it("allows a signed-in guest on the email list", () => {
+    const decision = applyPeopleAllowlist(
+      teamAccess(),
+      { allowedEmails: ["guest@acme.com"] },
+      undefined,
+      "guest@acme.com",
+    );
+    expect(decision.denied).toBe(false);
+  });
+
+  it("allows a signed-in guest on the domain list", () => {
+    const decision = applyPeopleAllowlist(
+      teamAccess(),
+      { allowedEmailDomains: ["acme.com"] },
+      undefined,
+      "anyone@acme.com",
+    );
+    expect(decision.denied).toBe(false);
+  });
+
+  it("denies a guest with the wrong email", () => {
+    const decision = applyPeopleAllowlist(
+      teamAccess(),
+      { allowedEmails: ["guest@acme.com"] },
+      undefined,
+      "other@evil.com",
+    );
+    expect(decision.denied).toBe(true);
+    expect(decision.reason).toBe("not_in_allowlist");
+  });
+
+  it("is restricted when only domains are listed", () => {
+    expect(isPeopleRestricted({ allowedEmailDomains: ["acme.com"] })).toBe(
+      true,
+    );
+  });
 });

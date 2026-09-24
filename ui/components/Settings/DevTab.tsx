@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { AuthFlow, type AuthFlowStage } from "../Auth/AuthFlow";
 import { ConnectAIStep } from "../Auth/ConnectAIStep";
+import { RecommendStep } from "../Auth/RecommendStep";
 import type { OrgNamespaceSetupRequest } from "../Auth/OrgNamespaceSetup";
 import {
   getOnboardingState,
@@ -94,7 +95,8 @@ const FAKE_ORG_REQUEST: OrgNamespaceSetupRequest = {
 
 type DevAuthPreview =
   | { kind: "flow"; stage: AuthFlowStage }
-  | { kind: "claude-setup" };
+  | { kind: "claude-setup" }
+  | { kind: "recommend" };
 
 const STAGES: Array<{ id: AuthFlowStage; label: string; note: string }> = [
   {
@@ -112,6 +114,11 @@ const STAGES: Array<{ id: AuthFlowStage; label: string; note: string }> = [
     label: "3 — Connect AI",
     note: "Real OAuth if you click a provider. Preview stays open even when you're already connected.",
   },
+  {
+    id: "recommend",
+    label: "4 — Recommended apps",
+    note: "Final gated stage. Picking a card runs a REAL install and closes the preview — the gate must release before tabs can open.",
+  },
 ];
 
 const CLAUDE_SETUP_PREVIEW: DevAuthPreview = { kind: "claude-setup" };
@@ -119,6 +126,7 @@ const CLAUDE_SETUP_PREVIEW: DevAuthPreview = { kind: "claude-setup" };
 const PHASES: OnboardingPhase[] = [
   "welcome",
   "connect_model",
+  "recommend",
   "choose_intent",
   "first_value",
   "activated",
@@ -139,7 +147,9 @@ export function DevTab() {
     const previewLabel =
       preview.kind === "claude-setup"
         ? "Claude guided setup (recover / stepper)"
-        : `AuthFlow — starting at "${preview.stage}"`;
+        : preview.kind === "recommend"
+          ? "Recommended apps — live catalog, real install"
+          : `AuthFlow — starting at "${preview.stage}"`;
 
     return (
       <div className="dev-preview">
@@ -156,7 +166,11 @@ export function DevTab() {
           </button>
         </div>
         <div className="dev-preview__stage">
-          {preview.kind === "claude-setup" ? (
+          {preview.kind === "recommend" ? (
+            // The real gated screen, not the bare card list. previewMode stops
+            // it from writing onboarding state; installs still run for real.
+            <RecommendStep onComplete={() => setPreview(null)} previewMode />
+          ) : preview.kind === "claude-setup" ? (
             <ConnectAIStep
               onDone={() => setPreview(null)}
               previewMode
@@ -253,7 +267,7 @@ export function DevTab() {
         ))}
         <div className="dev-tab__row">
           <div className="dev-tab__row-text">
-            <span className="dev-tab__row-label">4 — Claude guided setup</span>
+            <span className="dev-tab__row-label">3b — Claude guided setup</span>
             <span className="dev-tab__row-note">
               Opens the step-by-step &ldquo;Let&apos;s set up Claude together&rdquo;
               flow directly. Stays on screen when Claude is already connected; Run

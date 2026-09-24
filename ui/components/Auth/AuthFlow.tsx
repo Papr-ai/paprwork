@@ -1,7 +1,13 @@
 /**
  * AuthFlow — host for the continuous pre-app onboarding flow.
  *
- *   signin (AuthWall) → org (OrgNamespaceSetup) → connect (ConnectAIStep) → app
+ *   signin (AuthWall) → org (OrgNamespaceSetup) → connect (ConnectAIStep)
+ *     → recommend (RecommendStep) → app
+ *
+ * `recommend` is the last gated stage: the user picks their first automation
+ * while still in setup, rather than being dropped into an empty workspace with
+ * a dismissible tab. It releases the gate itself (see RecommendStep) because
+ * installing needs the workspace tabs to exist.
  *
  * Owns the stage machine, the org-setup request listeners, and the single
  * "you are now authenticated" side effect. Children are presentational steps
@@ -9,7 +15,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { setTelemetryPaprUserId } from "../../lib/telemetry";
+import { setTelemetryPaprUserId, trackEvent } from "../../lib/telemetry";
 import { useProfileStore } from "../../stores/profileStore";
 import { AuthWall } from "./AuthWall";
 import {
@@ -17,8 +23,14 @@ import {
   type OrgNamespaceSetupRequest,
 } from "./OrgNamespaceSetup";
 import { ConnectAIStep } from "./ConnectAIStep";
+import { RecommendStep } from "./RecommendStep";
+import {
+  fetchRemoteOnboarding,
+  recordOnboardingStep,
+  type OnboardingStepId,
+} from "../../utils/onboardingRemote";
 
-export type AuthFlowStage = "signin" | "org" | "connect";
+export type AuthFlowStage = "signin" | "org" | "connect" | "recommend";
 
 interface AuthFlowProps {
   /** Called once the user has cleared every pre-app stage. */
@@ -52,12 +64,40 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
   );
   const [setupRequest, setSetupRequest] =
     useState<OrgNamespaceSetupRequest | null>(devPreview?.orgRequest ?? null);
+  /**
+   * Did this USER already finish onboarding, on any machine? Read from Parse
+   * after sign-in, since onboarding state is per-user and the gate previously
+   * only remembered per-browser-profile.
+   */
+  const [alreadyOnboarded, setAlreadyOnboarded] = useState(false);
+
+  // Server-side breadcrumb for resume + funnel drop-off. Not load-bearing for
+  // navigation — the stage machine is still driven locally.
+  useEffect(() => {
+    if (devPreview) return; // Don't let previewing a stage rewrite real progress.
+    recordOnboardingStep(stage as OnboardingStepId);
+    // `signin` and `org` own components emit no telemetry, so without this the
+    // funnel starts at stage 3 and drop-off before sign-in is invisible.
+    // `connect` and `recommend` self-report (ConnectAIStep / RecommendedApps) —
+    // emitting here too would double-count them.
+    if (stage === "signin" || stage === "org") {
+      trackEvent("paprwork_onboarding_step_viewed", {
+        step_name: stage,
+        gated: true,
+      } as Record<string, unknown>);
+    }
+  }, [stage, devPreview]);
 
   // Runs exactly once, when Papr auth is confirmed — regardless of which
   // detection path (DOM event, IPC, poll, manual code) got us here.
   const handleSignedIn = useCallback(async () => {
     await identifyTelemetryAfterLogin();
     void useProfileStore.getState().loadProfile({ force: true });
+    // Only meaningful once we have a session; failures leave it false, which
+    // just means a returning user sees the recommend stage again.
+    void fetchRemoteOnboarding().then((remote) => {
+      if (remote?.completed) setAlreadyOnboarded(true);
+    });
     setStage((current) => (current === "signin" ? "connect" : current));
   }, []);
 
@@ -96,10 +136,18 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
     );
   }
 
+  if (stage === "recommend") {
+    return (
+      <RecommendStep onComplete={onComplete} previewMode={Boolean(devPreview)} />
+    );
+  }
+
   if (stage === "connect") {
     return (
       <ConnectAIStep
-        onDone={onComplete}
+        // Connecting no longer ends setup — the recommend stage does, unless
+        // this user already picked their first app on another machine.
+        onDone={() => (alreadyOnboarded ? onComplete() : setStage("recommend"))}
         previewMode={Boolean(devPreview)}
       />
     );

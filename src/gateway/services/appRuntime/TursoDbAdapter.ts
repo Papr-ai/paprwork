@@ -40,6 +40,7 @@ import type {
 import { rewriteSqlForTurso } from "./rewriteSqlForTurso.js";
 import {
   resolveTursoActingUserIdForSource,
+  resolveTursoSuffixUserIdForSource,
   type TursoDbActors,
 } from "./tursoRuntimeIdentity.js";
 import type { WorkspaceLogHostScope } from "../../../core/types/workspaceLog.js";
@@ -112,11 +113,11 @@ export class TursoDbAdapter {
     source: AppDataSource,
     actors: TursoDbActors,
   ): Promise<string> {
-    const actingUserId = resolveTursoActingUserIdForSource(source, actors);
+    const suffixUserId = resolveTursoSuffixUserIdForSource(source, actors);
     const registry = getDatabaseRegistryService();
     const record = registry.getRecordForSource(source);
     if (record) {
-      return tursoNameForRecord(record, actingUserId);
+      return tursoNameForRecord(record, suffixUserId);
     }
     if (source.dbId) {
       // Fail closed: a dbId source without a registry record could be

@@ -14,7 +14,6 @@ import { ChatContainer } from "../../components/Chat/ChatContainer";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import type { ChatMessage } from "../../types/chat";
-import { forgetDraft } from "../../utils/chatDraftStore";
 
 // Mock external dependencies (NOT stores - we use real Zustand stores)
 const mockSendMessage = vi.fn();
@@ -22,20 +21,15 @@ vi.mock("../../hooks/useAgent", () => ({
   useAgent: () => ({ sendMessage: mockSendMessage }),
 }));
 
-// Mirror GatewayClient's full public surface so descendants (connection
-// indicator, stream subscribers) don't crash on a missing method.
 vi.mock("../../src/lib/gateway", () => ({
-  GATEWAY_DISCONNECTED_ERROR: "Gateway disconnected",
   gateway: {
     send: vi.fn().mockResolvedValue({ data: {} }),
-    stream: vi.fn().mockResolvedValue(undefined),
-    subscribeStream: vi.fn().mockResolvedValue(() => {}),
+    stream: vi.fn(),
     cancelRequest: vi.fn(),
-    probeConnection: vi.fn().mockResolvedValue(true),
-    waitForConnection: vi.fn().mockResolvedValue(undefined),
     isConnected: vi.fn(() => true),
     getConnectionState: vi.fn(() => "connected"),
     onConnectionChange: vi.fn(() => () => {}),
+    probeConnection: vi.fn().mockResolvedValue(true),
   },
 }));
 
@@ -47,22 +41,15 @@ vi.mock("../../utils/historyMapper", () => ({
   mapHistoryMessages: vi.fn().mockReturnValue([]),
 }));
 
-// useAuthStatus reaches into window.electronAPI.oauth (main-process IPC),
-// which jsdom doesn't provide. ChatContainer only needs the resolved status.
-// Return the SAME object every render — a fresh status/isModelAvailable per
-// call re-fires ChatContainer's effects and loops forever.
+// useAuthStatus → useOAuth reads window.electronAPI.oauth, which jsdom lacks.
+// Stable references: fresh objects per render feed effect deps and loop forever.
 vi.mock("../../hooks/useAuthStatus", () => {
-  const authResult = {
-    status: {
-      openai: { oauth: false, apiKey: true, preference: "apiKey" },
-      anthropic: { oauth: false, apiKey: true, preference: "apiKey" },
-      google: { apiKey: false },
-      paprProxy: false,
-    },
+  const authStatus = {
+    status: {},
     isModelAvailable: () => true,
-    refresh: () => Promise.resolve(),
+    refresh: async () => {},
   };
-  return { useAuthStatus: () => authResult };
+  return { useAuthStatus: () => authStatus };
 });
 
 // Mock permission store used by MessageList
@@ -98,10 +85,7 @@ describe("ChatContainer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Reset stores. Drafts live in draftByChatId AND a durable copy
-    // (chatDraftStore), so text typed in one test would otherwise
-    // pre-fill the composer in the next.
-    forgetDraft(TEST_CHAT_ID);
+    // Reset stores
     useChatStore.setState({
       chats: [],
       chatStates: new Map(),
@@ -109,6 +93,8 @@ describe("ChatContainer", () => {
       isLoading: false,
       error: null,
     });
+    // Drafts also persist to localStorage; clear so tests don't leak input text.
+    localStorage.clear();
 
     useTabStore.setState({
       tabs: [],
@@ -339,11 +325,9 @@ describe("ChatContainer", () => {
 
       render(<ChatContainer chatId={TEST_CHAT_ID} />);
 
-      // Raw provider text now goes through describeProviderNotice: an
-      // unrecognised error shows a friendly headline, with the raw
-      // message tucked into the expandable details.
-      const headline = screen.queryByText(/Something went wrong/i);
-      expect(headline).not.toBeNull();
+      // Raw errors render through describeProviderNotice: a friendly headline,
+      // with the provider's own text behind the details disclosure.
+      expect(screen.queryByText(/Something went wrong/i)).not.toBeNull();
     });
 
     it("should allow sending messages after error", async () => {

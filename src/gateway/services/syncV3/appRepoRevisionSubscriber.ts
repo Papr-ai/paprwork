@@ -11,8 +11,33 @@ import {
 import { ingestAppRepoCommittedEvent } from "./appRepoCommittedInbound.js";
 import { pullDesktopAppOnRemoteCommit } from "./pullAppCodeFromRepo.js";
 import { parsePublishedAppRoute } from "../cloudSync/notifyCloudAppRevision.js";
+import { clearPendingAppUpdate, markPendingAppUpdate } from "./appRepoPendingUpdate.js";
 
 let unsubscribe: (() => void) | null = null;
+
+/**
+ * Pull a remote commit; advance the commit cursor ONLY when local code really
+ * reached it. Otherwise keep it as a pending update (visible + auto-retried),
+ * so a later Get updates never reports "already at remote head" falsely.
+ */
+export async function applyRemoteCommit(appId: string, commitSha: string): Promise<boolean> {
+  const outcome = await pullDesktopAppOnRemoteCommit({ appId, commitSha });
+  if (outcome.pulled) {
+    await writeAppRepoCommitCursor(appId, commitSha);
+    clearPendingAppUpdate(appId);
+    return true;
+  }
+  markPendingAppUpdate(
+    {
+      appId,
+      commitSha,
+      reason: outcome.waitingReason ?? "update waiting",
+      conflictFiles: outcome.conflictFiles,
+    },
+    () => applyRemoteCommit(appId, commitSha),
+  );
+  return false;
+}
 
 async function handleCommittedEvent(event: AppRepoCommittedEvent): Promise<void> {
   const cursors = await readAppRepoCommitCursors();
@@ -21,12 +46,7 @@ async function handleCommittedEvent(event: AppRepoCommittedEvent): Promise<void>
     return;
   }
 
-  await pullDesktopAppOnRemoteCommit({
-    appId: event.appId,
-    commitSha: event.commitSha,
-  });
-
-  await writeAppRepoCommitCursor(event.appId, event.commitSha);
+  await applyRemoteCommit(event.appId, event.commitSha);
 
   const { getCloudAppPublishService } = await import("../CloudAppPublishService.js");
   try {

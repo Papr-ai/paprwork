@@ -18,6 +18,7 @@ import type { Artifact } from "../../stores/artifactsStore";
 import {
   readCachedCloudPublishState,
   readCachedCloudPublishStates,
+  selectAppIdsForPublishRevalidation,
   writeCachedCloudPublishState,
 } from "../../utils/cloudPublishCache";
 import { fetchCloudPublishState } from "../../utils/cloudPublishApi";
@@ -365,19 +366,13 @@ export function AppsView() {
     );
   }, [allApps, publishRevision]);
 
-  // Revalidate only previously known publish states, after the app grid paints.
-  // This prevents cloud status from delaying the Apps tab or flooding the gateway.
+  // Revalidate publish state after the app grid paints (stale-while-revalidate).
   useEffect(() => {
     const cached = readCachedCloudPublishStates();
-    const ids = allApps
-      .map((app) => app.id)
-      .filter((id) => cached[id])
-      .sort(
-        (a, b) =>
-          Number(Boolean(cached[b]?.shareUrl)) -
-          Number(Boolean(cached[a]?.shareUrl)),
-      )
-      .slice(0, 24);
+    const ids = selectAppIdsForPublishRevalidation(
+      allApps.map((app) => app.id),
+      cached,
+    );
     if (ids.length === 0) return;
     let cancelled = false;
     const timer = window.setTimeout(async () => {

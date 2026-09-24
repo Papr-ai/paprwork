@@ -57,6 +57,8 @@ export interface CloudAppInstallInput {
   catalogScope?: "global" | "namespace";
   /** Publish visibility from catalog entry — track requires team. */
   visibility?: string;
+  /** Name for the new app (Duplicate as my own app). Made unique locally. */
+  title?: string;
 }
 
 export interface CloudAppInstallResult {
@@ -230,7 +232,7 @@ export class CloudAppInstallService {
         );
       }
 
-      const title = resolveTitle(files, prepare.source.slug);
+      const title = input.title?.trim() || resolveTitle(files, prepare.source.slug);
       const description = resolveDescription(
         files,
         `Installed from Papr Cloud (${prepare.source.slug})`,
@@ -268,6 +270,7 @@ export class CloudAppInstallService {
         publisherAppId: prepare.source.appId,
         localAppId: app.id,
         installDbPolicy,
+        remapJobIds: prepare.mode === "fork",
       });
       if (linked.copiedJobIds.length > 0) {
         console.log(
@@ -328,29 +331,31 @@ export class CloudAppInstallService {
       const {
         bootstrapInstalledAppDatabases,
         buildCloudInstallAgentSetupMessage,
+        shouldOfferInstallAgentSetup,
       } = await import("./cloudAppInstallBootstrap.js");
       const bootstrap = await bootstrapInstalledAppDatabases(app.id, {
         installDbPolicy,
       });
 
       if (bootstrap.errors.length > 0) {
-        throw new Error(
-          `Database bootstrap failed: ${bootstrap.errors.slice(0, 3).join("; ")}`,
+        console.warn(
+          `[CloudAppInstall] Bootstrap errors for ${app.id} — returning agent follow-up instead of failing install:`,
+          bootstrap.errors.slice(0, 3).join(" | "),
         );
       }
 
-      const agentSetupMessage =
-        installDbPolicy === "fork_empty"
-          ? undefined
-          : !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
-            ? buildCloudInstallAgentSetupMessage({
-                appTitle: app.title,
-                appId: app.id,
-                sourceSlug: prepare.source.slug,
-                bootstrap,
-                linkedJobIds: linked.copiedJobIds,
-              })
-            : undefined;
+      const agentSetupMessage = shouldOfferInstallAgentSetup(
+        bootstrap,
+        installDbPolicy,
+      )
+        ? buildCloudInstallAgentSetupMessage({
+            appTitle: app.title,
+            appId: app.id,
+            sourceSlug: prepare.source.slug,
+            bootstrap,
+            linkedJobIds: linked.copiedJobIds,
+          })
+        : undefined;
 
       if (bootstrap.warnings.length > 0) {
         console.warn(

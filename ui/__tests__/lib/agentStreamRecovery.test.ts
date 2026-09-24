@@ -20,6 +20,7 @@ import {
   trackActiveStream,
   untrackActiveStream,
   serverHasCompletedAssistantForStreamingTurn,
+  shouldResumeWithFreshGatewayStream,
 } from "../../lib/agentStreamRecovery";
 
 describe("serverHasCompletedAssistantForStreamingTurn", () => {
@@ -709,6 +710,22 @@ describe("post-reconnect stream recovery", () => {
         needsStreamRecovery: true,
         streamRecoveryReason: "rateLimit",
         isSending: false,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldResumeWithFreshGatewayStream", () => {
+  it("requires a fresh stream after rate limit or provider refusal", () => {
+    expect(
+      shouldResumeWithFreshGatewayStream({ streamRecoveryReason: "rateLimit" }),
+    ).toBe(true);
+    expect(
+      shouldResumeWithFreshGatewayStream({ lastTurnOutcome: "providerRefused" }),
+    ).toBe(true);
+    expect(
+      shouldResumeWithFreshGatewayStream({
+        streamRecoveryReason: "connection",
       }),
     ).toBe(false);
   });

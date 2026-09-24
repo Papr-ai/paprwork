@@ -4,10 +4,12 @@ import {
   audienceModelToSharing,
   isCodePermission,
   isPermissionAvailable,
+  isUserAllowedByAudienceModel,
   isWebLinkPermission,
   liveLinkPermissionForAudienceModel,
   permissionAffectsCloud,
   permissionToCodeAccess,
+  publishPrefsToAudienceModel,
   sharingToAudienceModel,
   shouldListInCommunity,
 } from "../src/core/utils/shareAudienceModel";
@@ -122,6 +124,43 @@ describe("shareAudienceModel", () => {
     expect(shouldListInCommunity("public", true)).toBe(true);
     expect(shouldListInCommunity("team", true)).toBe(false);
     expect(shouldListInCommunity("public", false)).toBe(false);
+  });
+
+  it("publishes people + external email as public with sign-in", () => {
+    expect(
+      audienceModelToSharing({
+        audience: "people",
+        permission: "write",
+        allowedEmails: ["guest@acme.com"],
+      }),
+    ).toEqual({ loginAccess: "public", externalLink: "off" });
+  });
+
+  it("allows guest by email or domain on people audience", () => {
+    const model = {
+      audience: "people" as const,
+      allowedEmails: ["guest@acme.com"],
+      allowedEmailDomains: ["partner.io"],
+    };
+    expect(
+      isUserAllowedByAudienceModel(model, undefined, "pub", "guest@acme.com"),
+    ).toBe(true);
+    expect(
+      isUserAllowedByAudienceModel(model, undefined, "pub", "x@partner.io"),
+    ).toBe(true);
+    expect(
+      isUserAllowedByAudienceModel(model, undefined, "pub", "other@evil.com"),
+    ).toBe(false);
+  });
+
+  it("round-trips public prefs with email allowlist to people audience", () => {
+    const model = publishPrefsToAudienceModel("public", "off", "off", {
+      requireSignIn: true,
+      allowedEmails: ["guest@acme.com"],
+    });
+    expect(model.audience).toBe("people");
+    expect(model.allowedEmails).toEqual(["guest@acme.com"]);
+    expect(model.requireSignIn).toBe(true);
   });
 
   it("maps public community sign-in requirement", () => {
