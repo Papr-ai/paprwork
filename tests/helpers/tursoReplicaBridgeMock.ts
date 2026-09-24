@@ -15,6 +15,9 @@ export function tursoReplicaBridgeMock(): {
       tursoUrl: "libsql://example.turso.io",
       authToken: "token",
     })),
+    // Replica push scheduler resolves linked sources under this root (null → Papr default).
+    getAppsRootDir: vi.fn(() => null),
+    listLinkedSources: vi.fn(async () => []),
   };
   return {
     ensureTursoSyncBridge: vi.fn(() => bridge),

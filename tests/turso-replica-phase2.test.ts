@@ -282,6 +282,8 @@ describe("TursoReplicaService.runWrite", () => {
       tursoDatabase: "d-abc12345",
       sql: "INSERT INTO t (id) VALUES (?)",
       params: [1],
+      // Default is background push via the scheduler; this covers the synchronous path.
+      writeOptions: { pushAfterWrite: true },
     });
 
     expect(pull).toHaveBeenCalledTimes(1);
