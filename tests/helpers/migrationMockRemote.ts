@@ -47,21 +47,22 @@ export function createMigrationMockRemote(
           rowsAffected: 0,
         };
       }
-      if (sql.startsWith("SELECT id FROM _papr_schema_migrations")) {
+      // Production quotes the ledger identifier ("_papr_schema_migrations"); accept both.
+      if (/^SELECT id FROM "?_papr_schema_migrations"?/.test(sql)) {
         return {
           rows: [...appliedMigrations].map((id) => ({ id })),
           columns: ["id"],
           rowsAffected: 0,
         };
       }
-      if (sql.includes("FROM _papr_schema_migrations")) {
+      if (/FROM "?_papr_schema_migrations"?/.test(sql)) {
         return {
           rows: [...appliedMigrations].map((id) => ({ id, applied_at: "now" })),
           columns: ["id", "applied_at"],
           rowsAffected: 0,
         };
       }
-      if (sql.startsWith("INSERT OR IGNORE INTO _papr_schema_migrations")) {
+      if (/^INSERT OR IGNORE INTO "?_papr_schema_migrations"?/.test(sql)) {
         appliedMigrations.add(String(args[0]));
         return { rows: [], columns: [], rowsAffected: 1 };
       }
