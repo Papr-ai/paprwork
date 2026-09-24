@@ -150,24 +150,23 @@ function buildBlockMessage(
 
   const jobId = jobIdFromDbPath(dbPath);
   const slug = registrySlugFromDbPath(dbPath);
-  const applyStep = slug
-    ? `2. papr_db_apply_migration({ dbId: "<from databases.json>", migrationId: "0002_add_columns" })`
-    : jobId
-      ? `2. run_job({ jobId: "${jobId}" }) — applies Jobs/${jobId}/migrations/ locally`
-      : `2. Apply migration via papr_db_apply_migration (registry) or run_job (job scratch)`;
   const syncStep =
-    `3. papr_db_push({ dbId }) or Publish changes / push_cloud_sync({ appId }) — Plan A replica sync\n` +
+    `papr_db_push({ dbId }) or Publish changes / push_cloud_sync({ appId }) — Plan A replica sync\n` +
     `   Do not use raw sqlite3 DDL on synced databases.`;
+
+  const steps = slug
+    ? // Registry DB: one tool names the file (number + timestamp) and applies it.
+      `1. papr_db_create_migration({ dbId: "<${slug} dbId from databases.json>", name: "add_columns", sql })\n` +
+      `   — the system names the migration file and applies it (do not write_file into migrations/)\n` +
+      `2. ${syncStep}`
+    : `1. write_file({ path: "${migrationPath.replace("000N_description", "0002_add_columns")}", content: ... })\n` +
+      `2. ${jobId ? `run_job({ jobId: "${jobId}" }) — applies Jobs/${jobId}/migrations/ locally` : "run_job — applies job migrations/ locally"}\n` +
+      `3. ${syncStep}`;
 
   const message =
     "⛔ Do not change synced SQLite table structure via bash/sqlite3. " +
-    "Use a migration file so the same DDL runs locally and on Turso primary.\n\n" +
-    `Instead:\n` +
-    `1. write_file({ path: "${migrationPath.replace("000N_description", "0002_add_columns")}", content: ... })\n` +
-    `   Registry (app) DBs: $PAPR_HOME/data/databases/{slug}/migrations/\n` +
-    `   Job scratch only: $PAPR_HOME/Jobs/{jobId}/migrations/\n` +
-    `${applyStep}\n` +
-    `${syncStep}\n\n` +
+    "Use a migration so the same DDL runs locally and on Turso primary.\n\n" +
+    `Instead:\n${steps}\n\n` +
     "Suggested SQL:\n" +
     suggestedSql.trim();
 

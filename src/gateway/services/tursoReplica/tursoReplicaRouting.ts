@@ -9,7 +9,7 @@ import {
   type DatabaseRecord,
 } from "../DatabaseRegistryService.js";
 import { getPaprUserId } from "../../utils/paprUserId.js";
-import { resolveTursoActingUserIdForSource } from "../appRuntime/tursoRuntimeIdentity.js";
+import { resolveTursoSuffixUserIdForSource } from "../appRuntime/tursoRuntimeIdentity.js";
 import { getTursoReplicaService } from "./TursoReplicaService.js";
 import type { TursoReplicaPushResponse, TursoReplicaWriteResult, TursoReplicaWriteOptions } from "./tursoReplicaTypes.js";
 import {
@@ -154,14 +154,14 @@ export function shouldUseTursoReplicaForSource(source: AppDataSource): boolean {
 function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
   const record = resolveRegistryRecordForSource(source);
   const callerUserId = getPaprUserId();
-  const userId =
-    record?.isolation === "per-user"
-      ? resolveTursoActingUserIdForSource(source, {
-          publisherUserId: callerUserId ?? "",
+  const suffixUserId =
+    record?.isolation === "per-user" && callerUserId
+      ? resolveTursoSuffixUserIdForSource(source, {
+          publisherUserId: callerUserId,
           callerUserId,
         })
       : undefined;
-  const tursoDatabase = resolveTursoDatabaseNameForSource(source, userId);
+  const tursoDatabase = resolveTursoDatabaseNameForSource(source, suffixUserId);
   if (!tursoDatabase) {
     throw new Error(
       `No Turso database mapped for source ${source.alias ?? source.dbPath}`,

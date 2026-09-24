@@ -1,13 +1,14 @@
 /**
- * Audience "people" — share a mini-app with named workspace users.
+ * Audience "people" — share a mini-app with named workspace users and/or
+ * signed-in guests by email or domain.
  *
  * Why this file exists at all:
  *
- * "people" is published with the *team* cloud ACL, because the memory server
- * has no per-user principal for app publishing. That means the cloud has
+ * "people" is usually published with the *team* cloud ACL, because the memory
+ * server has no per-user principal for app publishing. That means the cloud has
  * already answered "yes" for every member of the workspace by the time a
- * request reaches us. This module is the only thing that turns that into
- * "yes, for these people".
+ * request reaches us. When external emails/domains are listed, publish uses
+ * loginAccess "public" + requireSignIn instead — still narrowed here.
  *
  * So this is a security boundary, not a presentation detail. It has to run on
  * the server, before canRead/canWrite are consulted by /api/db/query and
@@ -17,9 +18,23 @@
 
 import {
   isUserAllowedByAudienceModel,
+  normalizeAllowedEmailDomains,
+  normalizeAllowedEmails,
   normalizeAllowedUserIds,
+  shareAudienceHasPeopleRestriction,
 } from "../../../core/utils/shareAudienceModel.js";
 import type { AppAccessContext } from "./types.js";
+
+export interface SharePeopleAllowlist {
+  allowedUserIds?: readonly string[];
+  allowedEmails?: readonly string[];
+  allowedEmailDomains?: readonly string[];
+}
+
+export interface PeopleAccessCaller {
+  userId?: string;
+  email?: string;
+}
 
 export interface PeopleAccessDecision {
   /** Access after the allowlist is applied. */
@@ -31,7 +46,7 @@ export interface PeopleAccessDecision {
 }
 
 /**
- * Narrow an app's access to an explicit list of workspace users.
+ * Narrow an app's access to an explicit audience list.
  *
  * An empty list is *not* "deny everyone" — it is the absence of a list, which
  * means the app is shared with the whole workspace ("team"). Treating empty as
@@ -40,13 +55,12 @@ export interface PeopleAccessDecision {
  */
 export function applyPeopleAllowlist(
   access: AppAccessContext,
-  allowedUserIds: readonly string[] | undefined,
+  allowlist: SharePeopleAllowlist | readonly string[] | undefined,
   callerUserId: string | undefined,
+  callerEmail?: string,
 ): PeopleAccessDecision {
-  const allowed = normalizeAllowedUserIds(
-    allowedUserIds as string[] | undefined,
-  );
-  if (allowed.length === 0) {
+  const normalizedAllowlist = normalizeSharePeopleAllowlist(allowlist);
+  if (!shareAudienceHasPeopleRestriction(normalizedAllowlist)) {
     return { access, denied: false };
   }
 
@@ -58,7 +72,8 @@ export function applyPeopleAllowlist(
   }
 
   const caller = callerUserId?.trim();
-  if (!caller) {
+  const email = callerEmail?.trim();
+  if (!caller && !email) {
     return {
       access: denyAccess(access),
       denied: true,
@@ -67,9 +82,10 @@ export function applyPeopleAllowlist(
   }
 
   const permitted = isUserAllowedByAudienceModel(
-    { audience: "people", allowedUserIds: allowed },
+    { audience: "people", ...normalizedAllowlist },
     caller,
     access.userId,
+    email,
   );
   if (permitted) {
     return { access, denied: false };
@@ -82,6 +98,40 @@ export function applyPeopleAllowlist(
   };
 }
 
+type NormalizedPeopleAllowlist = {
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
+};
+
+function isLegacyAllowedUserIdList(
+  allowlist: SharePeopleAllowlist | readonly string[],
+): allowlist is readonly string[] {
+  return Array.isArray(allowlist);
+}
+
+function normalizeSharePeopleAllowlist(
+  allowlist: SharePeopleAllowlist | readonly string[] | undefined,
+): NormalizedPeopleAllowlist {
+  if (!allowlist) {
+    return {};
+  }
+  if (isLegacyAllowedUserIdList(allowlist)) {
+    return { allowedUserIds: normalizeAllowedUserIds([...allowlist]) };
+  }
+  const record = allowlist;
+  const ids = record.allowedUserIds;
+  const emails = record.allowedEmails;
+  const domains = record.allowedEmailDomains;
+  return {
+    allowedUserIds: normalizeAllowedUserIds(ids ? [...ids] : undefined),
+    allowedEmails: normalizeAllowedEmails(emails ? [...emails] : undefined),
+    allowedEmailDomains: normalizeAllowedEmailDomains(
+      domains ? [...domains] : undefined,
+    ),
+  };
+}
+
 /**
  * Strip every capability rather than only the one being exercised, so a denial
  * cannot be converted into partial access by switching endpoints.
@@ -90,9 +140,9 @@ function denyAccess(access: AppAccessContext): AppAccessContext {
   return { ...access, canRead: false, canWrite: false };
 }
 
-/** True when the app is restricted to a named set of users. */
+/** True when the app is restricted to a named set of users, emails, or domains. */
 export function isPeopleRestricted(
-  allowedUserIds: readonly string[] | undefined,
+  allowlist: SharePeopleAllowlist | readonly string[] | undefined,
 ): boolean {
-  return normalizeAllowedUserIds(allowedUserIds as string[] | undefined).length > 0;
+  return shareAudienceHasPeopleRestriction(normalizeSharePeopleAllowlist(allowlist));
 }

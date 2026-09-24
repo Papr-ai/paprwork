@@ -176,6 +176,26 @@ export function invalidateCachedSyncItemsForApp(appId: string): void {
   });
 }
 
+/** Persist when /api/sync/items last succeeded for this app (even if payload is not cached). */
+export function touchCachedSyncItemsFetchedAt(
+  appId: string,
+  fetchedAtMs: number = Date.now(),
+): void {
+  const existing = readCloudSyncTabSnapshot();
+  const nextFetchedAt = touchNewest(
+    existing?.syncItemsFetchedAtByAppId ?? {},
+    appId,
+    fetchedAtMs,
+  );
+  writeCloudSyncTabSnapshot({
+    gitStatus: existing?.gitStatus ?? null,
+    vaultStatus: existing?.vaultStatus ?? null,
+    syncItems: existing?.syncItems ?? null,
+    syncItemsByAppId: existing?.syncItemsByAppId,
+    syncItemsFetchedAtByAppId: nextFetchedAt,
+  });
+}
+
 export function writeCachedSyncItemsForApp(
   appId: string,
   items: SyncItemsResponse,

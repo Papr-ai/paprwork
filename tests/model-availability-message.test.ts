@@ -4,7 +4,7 @@ import { getUnavailableModelMessage } from "../ui/utils/modelAvailabilityMessage
 
 describe("getUnavailableModelMessage", () => {
   it("returns Claude-specific copy for Anthropic models", () => {
-    const model = getModelById("claude-opus-5");
+    const model = getModelById("claude-opus-5-5");
     expect(model).toBeDefined();
     expect(getUnavailableModelMessage(model!)).toBe(
       "This model needs Claude OAuth or an API key.",

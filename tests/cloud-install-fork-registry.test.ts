@@ -139,6 +139,43 @@ describe("cloud install fork registry", () => {
     expect(registry.databases[newDbId]?.tursoShortName).toMatch(/^d-[a-f0-9]{8}$/);
   });
 
+  it("forked database gets its own folder when the publisher's folder is already on this machine", async () => {
+    const targetAppDir = path.join(targetHome, "apps", localAppId);
+    const targetRegistryPath = path.join(targetHome, "data", "databases.json");
+    // Publisher's (or an earlier install's) folder already exists here.
+    await fs.mkdir(path.join(targetHome, "data", "databases", "gtm-metrics"), {
+      recursive: true,
+    });
+
+    const { dbIdRemap } = await mergeDatabaseRegistryForCopy({
+      sourceRegistryPath: path.join(sourceHome, "data", "databases.json"),
+      targetRegistryPath,
+      targetPaprHome: targetHome,
+      copiedJobIds: new Set(),
+      dbIdsFromJobs: new Set(),
+      appDir: targetAppDir,
+      forkDbIds: true,
+      localAppId,
+    });
+    const forkDbId = dbIdRemap.get(publisherDbId)!;
+    const registry = JSON.parse(await fs.readFile(targetRegistryPath, "utf8")) as {
+      databases: Record<string, { localPath: string }>;
+    };
+    const forkPath = registry.databases[forkDbId]!.localPath;
+    expect(forkPath).not.toBe(
+      path.join(targetHome, "data", "databases", "gtm-metrics", "data.db"),
+    );
+    expect(forkPath).toBe(
+      path.join(
+        targetHome,
+        "data",
+        "databases",
+        `gtm-metrics-${forkDbId.replace(/^db-/, "")}`,
+        "data.db",
+      ),
+    );
+  });
+
   it("syncAppLinkedResourcesToTarget shared_primary keeps dbId but skips publisher data.db", async () => {
     const result = await syncAppLinkedResourcesToTarget({
       appId: localAppId,

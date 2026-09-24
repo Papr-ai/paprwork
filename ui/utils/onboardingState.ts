@@ -19,6 +19,8 @@ export type OnboardingPhase =
   | "welcome"
   | "connect_papr"
   | "connect_model"
+  /** Curated community app picks — the flow no longer dead-ends at connect. */
+  | "recommend"
   | "choose_intent"
   | "first_value"
   | "activated"
@@ -162,7 +164,8 @@ export function markPaprConnected(): OnboardingState {
 export function markModelConnected(): OnboardingState {
   const current = getOnboardingState();
   if (current.phase === "connect_model") {
-    return transitionTo("choose_intent", { modelConnected: true });
+    // Connecting a model no longer ends the flow — recommendations come next.
+    return transitionTo("recommend", { modelConnected: true });
   }
   current.modelConnected = true;
   saveOnboardingState(current);

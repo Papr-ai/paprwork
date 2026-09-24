@@ -23,11 +23,11 @@ import {
   markModelConnected,
   markPaprConnected,
   markFirstChatSent,
-  type OnboardingPhase,
   type OnboardingIntent,
   type OnboardingState,
 } from "../../utils/onboardingState";
 import { ProviderBrandIcon } from "../Settings/ProviderBrandIcon";
+import { RecommendStep } from "../Auth/RecommendStep";
 import "./OnboardingView.css";
 
 function countOnboardingProgress(state: OnboardingState): number {
@@ -417,6 +417,16 @@ export function OnboardingView() {
               </button>
             </div>
           </>
+        )}
+
+        {/* ---- RECOMMENDED APPS PHASE ---- */}
+        {state.phase === "recommend" && (
+          // Legacy fallback for users parked at this phase before the step moved
+          // into the auth gate. Renders the SAME screen as the gate so there is
+          // one recommend experience. RecommendStep advances the phase itself
+          // (localStorage + papr-onboarding-changed, which this view listens
+          // to), so there is nothing to release here.
+          <RecommendStep onComplete={() => undefined} />
         )}
 
         {/* ---- CHOOSE INTENT PHASE (also shown when reopening after completion) ---- */}

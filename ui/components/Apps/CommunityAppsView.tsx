@@ -52,10 +52,12 @@ import {
 import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import {
+  buildCloudInstallBootstrapFailureAgentMessage,
   buildCloudInstallTimeoutAgentMessage,
   CLOUD_INSTALL_FETCH_TIMEOUT_MS,
   CLOUD_INSTALL_TIMEOUT_MESSAGE,
   extractOptionalInstallDependencies,
+  isCloudInstallBootstrapError,
   isCloudInstallTimeoutError,
 } from "../../utils/cloudCatalogInstall";
 import {
@@ -591,6 +593,9 @@ export function CommunityAppsView({
           });
           return;
         }
+        if (needsAgentSetup) {
+          return;
+        }
         await openCloudInstalledAppWithChat(createChat, {
           appId: body.app.id,
           appTitle: title,
@@ -609,15 +614,24 @@ export function CommunityAppsView({
           : err instanceof Error
             ? err.message.slice(0, 240)
             : "Install failed";
-      setInstallError(message);
       if (isCloudInstallTimeoutError(message)) {
+        setInstallError(null);
         setInstallToast(
           `Install timed out for "${entry.name}" — opening chat for help…`,
         );
         void openAgentDatabaseSetup(
           buildCloudInstallTimeoutAgentMessage(entry, mode),
         );
+      } else if (isCloudInstallBootstrapError(message)) {
+        setInstallError(null);
+        setInstallToast(
+          `Finishing database setup for "${entry.name}" in chat…`,
+        );
+        void openAgentDatabaseSetup(
+          buildCloudInstallBootstrapFailureAgentMessage(entry, mode, message),
+        );
       } else {
+        setInstallError(message);
         setInstallToast(`Install failed for "${entry.name}": ${message}`);
       }
     } finally {

@@ -149,6 +149,8 @@ export function formatLastUploadedAt(isoStr: string | null | undefined): string 
 }
 
 export interface AppCloudSyncStatus {
+  /** Remote update held back because these files changed on both sides. */
+  updateConflictFiles?: string[];
   overall: AppCloudSyncOverall;
   codeStatus: AppCloudCodeStatus;
   codePhase: AppCloudItemPhase;
@@ -1084,6 +1086,32 @@ export interface RemoteCodeCheckSnapshot {
   publisherUpdatesAvailable?: boolean;
   publisherLiveRevision?: string | null;
   storedUpstreamRevision?: string | null;
+  /** Remote commit arrived but auto-pull is deferred (gateway appRepoPendingUpdate). */
+  pendingUpdate?: {
+    commitSha: string;
+    reason: string;
+    conflictFiles?: string[];
+  } | null;
+}
+
+/** Short share-bar copy for a deferred remote update. */
+export function describePendingUpdate(
+  pending: NonNullable<RemoteCodeCheckSnapshot["pendingUpdate"]>,
+): { chipLabel: string; summaryLine: string } {
+  const conflicts = pending.conflictFiles?.length ?? 0;
+  if (conflicts > 0) {
+    return {
+      chipLabel: "Update conflicts",
+      summaryLine: "Update conflicts with your edits",
+    };
+  }
+  if (pending.reason === "local changes pending upload") {
+    return {
+      chipLabel: "Update waiting",
+      summaryLine: "Syncing your changes first, then updating",
+    };
+  }
+  return { chipLabel: "Update waiting", summaryLine: "Update waiting — click Get updates" };
 }
 
 /** Hide cached namespace-git "updates available" until live sync checks finish. */
@@ -1105,6 +1133,17 @@ export function mergeRemoteCodeCheckIntoStatus(
   status: AppCloudSyncStatus,
   remote: RemoteCodeCheckSnapshot | null,
 ): AppCloudSyncStatus {
+  if (remote?.pendingUpdate && status.overall !== "disabled") {
+    const copy = describePendingUpdate(remote.pendingUpdate);
+    return {
+      ...status,
+      gitUpdatesAvailable: true,
+      codeStatus: "updates_available",
+      chipLabel: copy.chipLabel,
+      summaryLine: copy.summaryLine,
+      updateConflictFiles: remote.pendingUpdate.conflictFiles ?? [],
+    };
+  }
   if (remote?.upToDate) {
     if (
       !status.gitUpdatesAvailable &&
@@ -1143,21 +1182,21 @@ export function mergeRemoteCodeCheckIntoStatus(
     return status;
   }
 
-  // HEAD vs local OID check is directionless — when local edits are waiting,
-  // cloud is not necessarily ahead; upload messaging owns that state.
-  if (status.hasLocalChanges) {
-    return status;
-  }
+  const cloudAheadSummary = status.hasLocalChanges
+    ? "Cloud has newer approved changes — get updates before publishing local edits"
+    : "The web has newer changes — click Get updates";
 
   return {
     ...status,
     gitUpdatesAvailable: true,
     codeStatus:
-      status.codeStatus === "synced" || status.codeStatus === "unknown"
+      status.codeStatus === "synced" ||
+      status.codeStatus === "unknown" ||
+      status.codeStatus === "changed"
         ? "updates_available"
         : status.codeStatus,
     chipLabel: "Updates available",
-    summaryLine: "The web has newer changes — click Get updates",
+    summaryLine: cloudAheadSummary,
     overall: status.overall === "needs_sync" ? "needs_sync" : status.overall,
   };
 }
@@ -1215,10 +1254,14 @@ export function webSyncVisualState(
     loading?: boolean;
     error?: string | null;
     pushing?: boolean;
+    pulling?: boolean;
     refreshing?: boolean;
   } = {},
 ): WebSyncVisualState {
   if (options.error) return "error";
+  if (options.pulling) {
+    return status ? "syncing" : "loading";
+  }
   // Only an active refresh (or known status + legacy loading) is "busy".
   // Hook `loading` on tab open before the first items fetch is not — chip stays calm.
   if (options.refreshing) {
@@ -1275,21 +1318,34 @@ export function resolvePublishBarChipLabel(input: {
   /** ISO time of the last successful publish — drives "just published". */
   lastPublishedAt?: string | null;
   cloudPublishFailed?: boolean;
+  pulling?: boolean;
 }): { label: string; showRefresh: boolean; tone: PublishBarChipTone } {
-  const { state, live, syncEnabled, lastCheckedAt, lastPublishedAt, cloudPublishFailed } =
-    input;
+  const {
+    state,
+    live,
+    syncEnabled,
+    lastCheckedAt,
+    lastPublishedAt,
+    cloudPublishFailed,
+    pulling = false,
+  } = input;
   if (cloudPublishFailed || state === "error") {
     return { label: "Last publish failed", showRefresh: false, tone: "bad" };
   }
-  if (!live) return { label: "Draft", showRefresh: false, tone: "idle" };
-  if (state === "loading")
+  if (state === "loading") {
     return { label: "Checking…", showRefresh: false, tone: "busy" };
+  }
+  if (!live) return { label: "Draft", showRefresh: false, tone: "idle" };
   if (state === "syncing")
-    return { label: "Publishing…", showRefresh: false, tone: "busy" };
+    return {
+      label: pulling ? "Getting updates…" : "Publishing…",
+      showRefresh: false,
+      tone: "busy",
+    };
   if (state === "updates_available")
-    return { label: "Updates on web", showRefresh: false, tone: "info" };
+    return { label: "Newer version on web", showRefresh: false, tone: "info" };
   if (state === "action_required")
-    return { label: "Needs review", showRefresh: false, tone: "bad" };
+    return { label: "Update conflicts", showRefresh: false, tone: "bad" };
   if (state === "warn")
     return { label: "Unpublished changes", showRefresh: false, tone: "warn" };
   if (state === "disabled" || !syncEnabled)
@@ -1304,21 +1360,42 @@ export function resolvePublishBarChipLabel(input: {
     return { label: "Live, just updated", showRefresh: false, tone: "ok" };
   }
 
-  const age = lastCheckedAt
-    ? formatLastUploadedAt(new Date(lastCheckedAt).toISOString())
-    : null;
+  return resolveCalmLivePublishBarChip(lastCheckedAt);
+}
+
+function resolveCalmLivePublishBarChip(lastCheckedAt: number | null): {
+  label: string;
+  showRefresh: boolean;
+  tone: PublishBarChipTone;
+} {
+  if (lastCheckedAt == null) {
+    return { label: "Live", showRefresh: false, tone: "ok" };
+  }
+  const age = formatLastUploadedAt(new Date(lastCheckedAt).toISOString());
+  if (!age || age === "just now") {
+    return { label: "Live", showRefresh: false, tone: "ok" };
+  }
   return {
-    label: age ? `Live, web checked ${age}` : "Live",
-    showRefresh: Boolean(age),
-    tone: "idle",
+    label: `Live · last checked ${age}`,
+    showRefresh: true,
+    tone: "ok",
   };
 }
 
 /**
- * The one action the bar should offer right now, ranked worst-first to match
- * the chip. Persistent — not a dismissible notice — because "you have work that
- * isn't on the web" is a standing fact, not an alert. Returns null when the app
- * is calm and there is genuinely nothing to do.
+ * The primary slot only ever pushes, and never disappears while web sync is on.
+ *
+ * It used to render six verbs across two opposite directions — Publish and
+ * Publish changes send work up, Get updates and Update pull the web copy down,
+ * Review changes did neither — and returned null in three unrelated situations.
+ * People build muscle memory for position, not wording, so one pixel that flips
+ * between "send mine up" and "pull theirs down" eventually gets clicked in the
+ * wrong state, and the failure mode is losing your own edits. Pull and review
+ * now live on the status chip (resolvePublishBarChipAction), which already
+ * names those conditions.
+ *
+ * Absence cannot explain itself, so states with nothing to send return
+ * disabled: true with the reason in `title` rather than returning null.
  */
 export function resolvePublishBarPrimaryAction(input: {
   state: WebSyncVisualState;
@@ -1329,9 +1406,95 @@ export function resolvePublishBarPrimaryAction(input: {
   pullingUpstream?: boolean;
   publisherUpdatesAvailable?: boolean;
   forkWebPreview?: boolean;
+  /** Local edits waiting while the web copy is also ahead (v4: pull, then publish). */
+  hasLocalChanges?: boolean;
 }): {
   label: string;
-  kind: "publish" | "updates" | "review" | "retry" | "upstream";
+  kind: "publish" | "retry";
+  disabled?: boolean;
+  title: string;
+  /** Click runs Get updates first, then publishes. */
+  pullFirst?: boolean;
+} | null {
+  const { state, live, syncEnabled, pushing, pulling, hasLocalChanges = false } = input;
+  // Files mode hides the whole web-sync lane — chip included — so there is no
+  // slot for this button to persist in.
+  if (!syncEnabled) return null;
+  // One verb in every state. What happens after the click shows as progress
+  // (Updating… then Publishing…); the chip explains the state, the button
+  // never does.
+  if (!live) {
+    return {
+      label: pushing ? "Publishing…" : "Publish",
+      kind: "publish",
+      disabled: pushing,
+      title: pushing ? "Upload in progress" : "Put this app on the web",
+    };
+  }
+  // Unknown, not idle: say so and stay put rather than blinking out and back.
+  if (state === "loading") {
+    return { label: "Publish", kind: "publish", disabled: true, title: "Checking the web copy…" };
+  }
+  if (state === "syncing" || pushing || pulling) {
+    return {
+      label: pulling ? "Updating…" : "Publishing…",
+      kind: "publish",
+      disabled: true,
+      title: pulling ? "Getting the latest web version" : "Upload in progress",
+    };
+  }
+  if (state === "error") {
+    return { label: "Publish", kind: "retry", title: "Last publish failed. Try again" };
+  }
+  if (state === "warn") {
+    return { label: "Publish", kind: "publish", title: "Send your local edits to the web" };
+  }
+  if (state === "updates_available" && hasLocalChanges) {
+    return {
+      label: "Publish",
+      kind: "publish",
+      pullFirst: true,
+      title: "Gets the newer web version first, then publishes your edits. Stops if they conflict.",
+    };
+  }
+  // Up to date, web ahead with nothing local, or conflicts: nothing of yours
+  // is waiting to go up. Same slot, same word, greyed, with the reason on hover.
+  return {
+    label: "Publish",
+    kind: "publish",
+    disabled: true,
+    title:
+      state === "updates_available"
+        ? "Nothing local to publish. Get the newer version from the status chip"
+        : state === "action_required"
+          ? "Resolve the update conflicts on the status chip first"
+          : "Everything here is already on the web",
+  };
+}
+
+/**
+ * Pull and review, carried by the status chip instead of the primary slot.
+ *
+ * The chip already said "Updates on web" and "Needs review", so putting the
+ * same condition in a button restated one fact twice with two different
+ * affordances. Rendered as a glyph at rest — the label next to it already names
+ * the condition — with `verb` sliding open on hover so nobody has to guess what
+ * the arrow does.
+ */
+export function resolvePublishBarChipAction(input: {
+  state: WebSyncVisualState;
+  live: boolean;
+  syncEnabled: boolean;
+  pushing: boolean;
+  pulling: boolean;
+  pullingUpstream?: boolean;
+  publisherUpdatesAvailable?: boolean;
+  forkWebPreview?: boolean;
+}): {
+  kind: "updates" | "upstream" | "review";
+  glyph: "down" | "open";
+  verb: string;
+  busy?: boolean;
 } | null {
   const {
     state,
@@ -1343,39 +1506,34 @@ export function resolvePublishBarPrimaryAction(input: {
     publisherUpdatesAvailable = false,
     forkWebPreview = false,
   } = input;
-  if (!syncEnabled) return null;
-  if (!live) {
-    return { label: pushing ? "Publishing…" : "Publish", kind: "publish" };
-  }
+  if (!syncEnabled || !live) return null;
   if (state === "loading") return null;
-  if (state === "syncing" || pushing) {
-    return { label: "Publishing…", kind: "publish" };
-  }
+  // Mid-flight work owns the primary slot's label; a second spinner on the chip
+  // would imply a second operation.
+  if (state === "syncing" || pushing || pulling || pullingUpstream) return null;
   if (state === "action_required") {
-    return { label: "Review changes", kind: "review" };
+    return { kind: "review", glyph: "open", verb: "Review" };
   }
-  if (
-    forkWebPreview &&
-    publisherUpdatesAvailable &&
-    state !== "action_required"
-  ) {
-    return {
-      label: pullingUpstream ? "Updating…" : "Update",
-      kind: "upstream",
-    };
+  if (forkWebPreview && publisherUpdatesAvailable) {
+    return { kind: "upstream", glyph: "down", verb: "Update from publisher" };
   }
   if (state === "updates_available") {
-    return {
-      label: pulling ? "Getting updates…" : "Get updates",
-      kind: "updates",
-    };
+    return { kind: "updates", glyph: "down", verb: "Get updates" };
   }
-  if (state === "error") return { label: "Retry publish", kind: "retry" };
-  if (state === "warn") {
-    return { label: "Publish changes", kind: "publish" };
-  }
-  if (pulling) return { label: "Getting updates…", kind: "updates" };
   return null;
+}
+
+/**
+ * Web writer HEAD is ahead of this Mac's last ack — publish before pulling risks
+ * 409 / file conflicts. Matches the compact bar's pull-first primary action.
+ */
+export function webSyncShouldPullBeforePublish(status: AppCloudSyncStatus): boolean {
+  return (
+    status.gitUpdatesAvailable &&
+    !status.gitRemoteRequiresReview &&
+    !status.writerConflict &&
+    !status.gitRemoteMetadataSync
+  );
 }
 
 /** Fork/track on Web preview: publisher revision ahead of stored upstream cursor. */
@@ -1437,15 +1595,16 @@ export function resolvePublishBarStatus(input: PublishBarStatusInput): {
     };
   }
 
+  if (loading && !live) {
+    return {
+      state: "loading",
+      spinning: false,
+      tooltip: "Checking publish status…",
+      interactive: false,
+    };
+  }
+
   if (!syncEnabled) {
-    if (loading && !live) {
-      return {
-        state: "loading",
-        spinning: false,
-        tooltip: "Checking publish status…",
-        interactive: false,
-      };
-    }
     if (!live) {
       return {
         state: "disabled",
@@ -1490,5 +1649,59 @@ export function resolvePublishBarStatus(input: PublishBarStatusInput): {
     spinning,
     tooltip,
     interactive: true,
+  };
+}
+
+/**
+ * Collaborator (track install) bar, v4. The primary is always Propose; the
+ * chip explains the state. Code only leaves as a proposal, so there is no
+ * Publish here, and Propose greys out when nothing differs from the
+ * publisher's last synced code.
+ */
+export function resolveCollaboratorBar(input: {
+  /** true/false from the local-edits check; null = unknown (keep Propose enabled). */
+  hasLocalEdits: boolean | null;
+  publisherAhead: boolean;
+  pullingUpstream: boolean;
+  busy: boolean;
+  sourceSlug: string;
+}): {
+  chip: { label: string; tone: PublishBarChipTone; state: WebSyncVisualState };
+  chipAction: { kind: "upstream" | "propose"; glyph: "down" | "up"; verb: string } | null;
+  primary: { label: string; disabled: boolean; title: string; pullFirst: boolean };
+} {
+  const { hasLocalEdits, publisherAhead, pullingUpstream, busy, sourceSlug } = input;
+  const edits = hasLocalEdits !== false;
+  if (pullingUpstream) {
+    return {
+      chip: { label: "Updating…", tone: "busy", state: "syncing" },
+      chipAction: null,
+      primary: { label: "Updating…", disabled: true, title: "Getting the publisher's latest code", pullFirst: false },
+    };
+  }
+  const chip = publisherAhead
+    ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
+    : hasLocalEdits
+      ? { label: "Edits not proposed", tone: "warn" as const, state: "warn" as const }
+      : { label: "In sync with publisher", tone: "ok" as const, state: "synced" as const };
+  const chipAction = publisherAhead
+    ? { kind: "upstream" as const, glyph: "down" as const, verb: "Update" }
+    : hasLocalEdits
+      ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }
+      : null;
+  const pullFirst = publisherAhead && edits;
+  return {
+    chip,
+    chipAction,
+    primary: {
+      label: "Propose",
+      disabled: busy || !edits,
+      pullFirst,
+      title: !edits
+        ? "No code edits to propose"
+        : pullFirst
+          ? `Gets ${sourceSlug}'s latest code first, then proposes your edits. Stops if they conflict.`
+          : `Send your code edits to ${sourceSlug} for review`,
+    },
   };
 }

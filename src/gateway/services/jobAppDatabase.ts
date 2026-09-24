@@ -39,7 +39,10 @@ export interface JobWriteDatabaseTarget {
 }
 
 export interface ResolveJobWriteTargetsOptions {
+  /** Authenticated caller (cloud agent / per-user job). */
   actingUserId?: string;
+  /** App publisher; defaults to actingUserId (desktop publisher === caller). */
+  publisherUserId?: string;
   tursoCredsByDbId?: ReadonlyMap<string, CloudSandboxTursoCredentials>;
 }
 
@@ -146,7 +149,16 @@ async function resolveTursoCredsForRegistryRecord(
   }
 
   const { tursoNameForRecord } = await import("./DatabaseRegistryService.js");
-  const database = tursoNameForRecord(record, options?.actingUserId);
+  const { resolveTursoSuffixUserId } = await import(
+    "./appRuntime/tursoRuntimeIdentity.js"
+  );
+  const publisherUserId =
+    options?.publisherUserId?.trim() ?? options?.actingUserId?.trim() ?? "";
+  const suffixUserId = resolveTursoSuffixUserId(record.isolation, {
+    publisherUserId,
+    callerUserId: options?.actingUserId,
+  });
+  const database = tursoNameForRecord(record, suffixUserId);
   try {
     const creds = await bridge.fetchCredentials(database);
     return { url: creds.tursoUrl, authToken: creds.authToken };

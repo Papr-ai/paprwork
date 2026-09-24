@@ -170,6 +170,7 @@ export interface MiniAppCloudLineage {
   sourceNamespaceId: string;
   installedAt: string;
   lastSyncedAt?: string;
+  databasePolicy?: "shared" | "forked";
 }
 
 import type { AppAgentChatConfig } from "../../core/types/appAgentChat.js";
@@ -2430,6 +2431,23 @@ export class AppService {
     this.apps.set(id, updatedApp);
     await this.saveApps();
 
+    // Rename: the page <title> follows the app name when it matched the old
+    // one. A custom <title> (e.g. a shorter in-app heading) is left alone.
+    if (nextUpdates.title !== undefined && updatedApp.title !== app.title) {
+      const escapeTitle = (value: string) =>
+        value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const candidates = [app.title, escapeTitle(app.title)];
+      void this.updateAppFile(id, "index.html", (content) => {
+        for (const oldTitle of candidates) {
+          const tag = `<title>${oldTitle}</title>`;
+          if (content.includes(tag)) {
+            return content.replace(tag, `<title>${escapeTitle(updatedApp.title)}</title>`);
+          }
+        }
+        return content;
+      }).catch(() => undefined);
+    }
+
     if ("agentChat" in nextUpdates) {
       await writeAgentChatSidecar(this.paprRootDir, id, updatedApp.agentChat);
     }
@@ -3744,6 +3762,15 @@ export class AppService {
       console.warn("[AppService] Cloud compatibility lint failed:", lintError);
     }
     issues.push(...(await this.checkLinkedDataSources(appId, fileContents)));
+
+    try {
+      const { checkLinkedJobPublishCatalogGapsForApp } = await import(
+        "../utils/miniAppPublishCatalogLint.js"
+      );
+      issues.push(...checkLinkedJobPublishCatalogGapsForApp(appId));
+    } catch (lintError) {
+      console.warn("[AppService] Publish catalog lint failed:", lintError);
+    }
 
     // Startup health: heavy eager import graphs, render-blocking CSS count,
     // selector drift, and stale dist bundles (all warnings; stale-missing
