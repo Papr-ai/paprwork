@@ -14,6 +14,7 @@ import { ChatContainer } from "../../components/Chat/ChatContainer";
 import { useChatStore, defaultChatState } from "../../stores/chatStore";
 import { useTabStore } from "../../stores/tabStore";
 import type { ChatMessage } from "../../types/chat";
+import { forgetDraft } from "../../utils/chatDraftStore";
 
 // Mock external dependencies (NOT stores - we use real Zustand stores)
 const mockSendMessage = vi.fn();
@@ -21,8 +22,21 @@ vi.mock("../../hooks/useAgent", () => ({
   useAgent: () => ({ sendMessage: mockSendMessage }),
 }));
 
+// Mirror GatewayClient's full public surface so descendants (connection
+// indicator, stream subscribers) don't crash on a missing method.
 vi.mock("../../src/lib/gateway", () => ({
-  gateway: { send: vi.fn().mockResolvedValue({ data: {} }) },
+  GATEWAY_DISCONNECTED_ERROR: "Gateway disconnected",
+  gateway: {
+    send: vi.fn().mockResolvedValue({ data: {} }),
+    stream: vi.fn().mockResolvedValue(undefined),
+    subscribeStream: vi.fn().mockResolvedValue(() => {}),
+    cancelRequest: vi.fn(),
+    probeConnection: vi.fn().mockResolvedValue(true),
+    waitForConnection: vi.fn().mockResolvedValue(undefined),
+    isConnected: vi.fn(() => true),
+    getConnectionState: vi.fn(() => "connected"),
+    onConnectionChange: vi.fn(() => () => {}),
+  },
 }));
 
 vi.mock("../../utils/chatHistoryApi", () => ({
@@ -32,6 +46,24 @@ vi.mock("../../utils/chatHistoryApi", () => ({
 vi.mock("../../utils/historyMapper", () => ({
   mapHistoryMessages: vi.fn().mockReturnValue([]),
 }));
+
+// useAuthStatus reaches into window.electronAPI.oauth (main-process IPC),
+// which jsdom doesn't provide. ChatContainer only needs the resolved status.
+// Return the SAME object every render — a fresh status/isModelAvailable per
+// call re-fires ChatContainer's effects and loops forever.
+vi.mock("../../hooks/useAuthStatus", () => {
+  const authResult = {
+    status: {
+      openai: { oauth: false, apiKey: true, preference: "apiKey" },
+      anthropic: { oauth: false, apiKey: true, preference: "apiKey" },
+      google: { apiKey: false },
+      paprProxy: false,
+    },
+    isModelAvailable: () => true,
+    refresh: () => Promise.resolve(),
+  };
+  return { useAuthStatus: () => authResult };
+});
 
 // Mock permission store used by MessageList
 vi.mock("../../stores/permissionStore", () => ({
@@ -66,10 +98,14 @@ describe("ChatContainer", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    // Reset stores
+    // Reset stores. Drafts live in draftByChatId AND a durable copy
+    // (chatDraftStore), so text typed in one test would otherwise
+    // pre-fill the composer in the next.
+    forgetDraft(TEST_CHAT_ID);
     useChatStore.setState({
       chats: [],
       chatStates: new Map(),
+      draftByChatId: new Map(),
       isLoading: false,
       error: null,
     });
@@ -303,8 +339,11 @@ describe("ChatContainer", () => {
 
       render(<ChatContainer chatId={TEST_CHAT_ID} />);
 
-      const errorMessage = screen.queryByText(/Failed to connect/i);
-      expect(errorMessage).not.toBeNull();
+      // Raw provider text now goes through describeProviderNotice: an
+      // unrecognised error shows a friendly headline, with the raw
+      // message tucked into the expandable details.
+      const headline = screen.queryByText(/Something went wrong/i);
+      expect(headline).not.toBeNull();
     });
 
     it("should allow sending messages after error", async () => {
