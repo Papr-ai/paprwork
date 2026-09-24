@@ -11,6 +11,24 @@ import {
   pruneTursoSyncStateForWorkspace,
   saveTursoSyncState,
 } from "../src/gateway/services/tursoSyncState.js";
+import Database from "better-sqlite3";
+
+import { ensureLocalDbChangeLogReady } from "../src/gateway/services/tursoSyncBridgeCore.js";
+
+/**
+ * Dirty checks are content-based: a DB is dirty only when its _papr_sync_log
+ * has entries past the last push (no log → clean). A placeholder text file
+ * therefore reads as clean; use a real DB with the change log and one write.
+ */
+function writeUserDb(dbPath: string): void {
+  const db = new Database(dbPath);
+  db.exec("CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)");
+  db.close();
+  ensureLocalDbChangeLogReady(dbPath);
+  const db2 = new Database(dbPath);
+  db2.prepare("INSERT INTO items (label) VALUES (?)").run("row");
+  db2.close();
+}
 
 describe("turso sync state workspace scoping", () => {
   it("isTursoStateDbPathInWorkspace matches paths under paprDir only", () => {
@@ -32,8 +50,8 @@ describe("turso sync state workspace scoping", () => {
     fs.mkdirSync(outDbDir, { recursive: true });
     const inDb = path.join(inDbDir, "data.db");
     const outDb = path.join(outDbDir, "data.db");
-    fs.writeFileSync(inDb, "sqlite");
-    fs.writeFileSync(outDb, "sqlite");
+    writeUserDb(inDb);
+    writeUserDb(outDb);
 
     markDbDirty("db-in", inDb, workspace);
     saveTursoSyncState(
@@ -64,8 +82,8 @@ describe("turso sync state workspace scoping", () => {
     const outDb = path.join(other, "data", "databases", "demo", "data.db");
     fs.mkdirSync(path.dirname(inDb), { recursive: true });
     fs.mkdirSync(path.dirname(outDb), { recursive: true });
-    fs.writeFileSync(inDb, "sqlite");
-    fs.writeFileSync(outDb, "sqlite");
+    writeUserDb(inDb);
+    writeUserDb(outDb);
 
     saveTursoSyncState(
       {
@@ -103,8 +121,8 @@ describe("turso sync state workspace scoping", () => {
     const dbInB = path.join(workspaceB, "data", "databases", "b", "data.db");
     fs.mkdirSync(path.dirname(dbInA), { recursive: true });
     fs.mkdirSync(path.dirname(dbInB), { recursive: true });
-    fs.writeFileSync(dbInA, "sqlite");
-    fs.writeFileSync(dbInB, "sqlite");
+    writeUserDb(dbInA);
+    writeUserDb(dbInB);
 
     saveTursoSyncState(
       {
@@ -154,8 +172,8 @@ describe("turso sync state workspace scoping", () => {
     const outDb = path.join(other, "data", "databases", "out", "data.db");
     fs.mkdirSync(path.dirname(inDb), { recursive: true });
     fs.mkdirSync(path.dirname(outDb), { recursive: true });
-    fs.writeFileSync(inDb, "sqlite");
-    fs.writeFileSync(outDb, "sqlite");
+    writeUserDb(inDb);
+    writeUserDb(outDb);
 
     markDbDirty("db-in", inDb, workspace);
     markDbDirty("db-out", outDb, workspace);
@@ -174,8 +192,8 @@ describe("turso sync state workspace scoping", () => {
     const dbB = path.join(workspace, "data", "databases", "b", "data.db");
     fs.mkdirSync(path.dirname(dbA), { recursive: true });
     fs.mkdirSync(path.dirname(dbB), { recursive: true });
-    fs.writeFileSync(dbA, "sqlite");
-    fs.writeFileSync(dbB, "sqlite");
+    writeUserDb(dbA);
+    writeUserDb(dbB);
 
     markDbDirty("db-a", dbA, workspace);
     markDbDirty("db-b", dbB, workspace);
