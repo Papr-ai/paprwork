@@ -106,7 +106,7 @@ export const paprDbExecTool = createTool({
   description:
     "Execute DML (INSERT/UPDATE/DELETE/REPLACE) on a Plan A registry database. " +
     "Writes local replica then push() to Turso primary when online. " +
-    "Schema is NOT allowed — write migrations/*.sql and use papr_db_apply_migration.",
+    "Schema is NOT allowed — use papr_db_create_migration.",
   inputSchema: paprDbExecSchema,
   execute: async (input) => {
     const args = unwrapContext(input);
@@ -126,7 +126,34 @@ const paprDbApplyMigrationSchema = z.object({
   migrationId: z
     .string()
     .min(1)
-    .describe("Migration filename without .sql, e.g. 0001_init"),
+    .describe("Existing migration filename without .sql (e.g. 0001_init). For NEW migrations use papr_db_create_migration instead — it assigns the filename."),
+});
+
+export const paprDbCreateMigrationTool = createTool({
+  id: "papr_db_create_migration",
+  description:
+    "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — " +
+    "the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so " +
+    "collaborators can never produce the same filename. Then applies it like papr_db_apply_migration " +
+    "(replica → Turso primary → pull align). Use this for EVERY new schema change; do not write_file " +
+    "migration files or pick numbers yourself. Never edit or rename existing migration files.",
+  inputSchema: z.object({
+    dbId: z.string().min(1),
+    name: z.string().min(1).describe("Short description, e.g. add_notes_column"),
+    sql: z.string().min(1).describe("DDL (CREATE TABLE / ALTER TABLE / CREATE INDEX …)"),
+    apply: z
+      .boolean()
+      .optional()
+      .describe("Default true. false = write the file only (apply later with papr_db_apply_migration)."),
+  }),
+  execute: async (input) => {
+    const args = unwrapContext(input);
+    const { paprDbCreateMigration } = await import(
+      "../../gateway/services/tursoReplica/PaprDbService.js"
+    );
+    const data = await paprDbCreateMigration(args);
+    return { success: true, data };
+  },
 });
 
 export const paprDbApplyMigrationTool = createTool({
@@ -136,7 +163,8 @@ export const paprDbApplyMigrationTool = createTool({
     "Automated dual apply: embedded replica → Turso primary (HTTP) → pull to align. " +
     "Never pushes DDL via replica push — avoids schema drift on Turso. " +
     "Updates __papr__/app-meta.json requiredSchemaVersion for the schema-owner app. " +
-    "Workflow: write_file migration → papr_db_apply_migration → rebuild dist if UI changed → Publish changes. " +
+    "For NEW schema changes use papr_db_create_migration (names + applies in one step). " +
+    "This tool re-applies an EXISTING migration file (recovery, pulled files). " +
     "For manual control use papr_db_apply_migration_replica then papr_db_apply_migration_cloud.",
   inputSchema: paprDbApplyMigrationSchema,
   execute: async (input) => {
@@ -290,6 +318,7 @@ export const paprDbTools = [
   paprDbPushTool,
   paprDbPullTool,
   paprDbExecTool,
+  paprDbCreateMigrationTool,
   paprDbApplyMigrationTool,
   paprDbApplyMigrationReplicaTool,
   paprDbApplyMigrationCloudTool,

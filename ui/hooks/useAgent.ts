@@ -67,6 +67,8 @@ import {
   shouldIgnoreDuplicateDoneChunk,
   resolveChatIdForStreamRequest,
   markResuming,
+  releaseGatewayAgentStream,
+  shouldResumeWithFreshGatewayStream,
   mergeHistoryWithLocal,
   ensureStreamingAssistantMessageRow,
   rehydrateStreamingRefsForChat,
@@ -1405,6 +1407,7 @@ export function useAgent() {
                 `[useAgent] Provider quota exhausted for ${chatId} — surfacing the limit, no resume`,
               );
               setSending(chatId, false);
+              setWaitingForAgentSlot(chatId, false);
               setConnectionPaused(chatId, false);
               setFinishingWork(chatId, false);
               // The gateway already composed a message naming the limit, the
@@ -1434,6 +1437,7 @@ export function useAgent() {
                 `[useAgent] Rate limit retries exhausted for ${chatId} — showing resume UI`,
               );
               setSending(chatId, false);
+              setWaitingForAgentSlot(chatId, false);
               setConnectionPaused(chatId, false);
               setFinishingWork(chatId, false);
               // Carried into the banner rather than dropped. The gateway names
@@ -2078,9 +2082,13 @@ export function useAgent() {
 
   const retryStreamRecovery = useCallback(
     async (chatId: string, config?: AgentConfig) => {
+      const chatStateBefore = useChatStore.getState().chatStates.get(chatId);
       const wasAwaitingRecovery =
-        useChatStore.getState().chatStates.get(chatId)?.needsStreamRecovery ??
-        false;
+        chatStateBefore?.needsStreamRecovery ?? false;
+      const resumeWithFreshStream = shouldResumeWithFreshGatewayStream({
+        streamRecoveryReason: chatStateBefore?.streamRecoveryReason,
+        lastTurnOutcome: chatStateBefore?.lastTurnOutcome,
+      });
       setNeedsStreamRecovery(chatId, false);
       // Tapping Resume is the user deciding to try again, so the refusal or
       // stop that blocked auto-continue no longer applies.
@@ -2090,8 +2098,43 @@ export function useAgent() {
       // the banner without clearing `error` would reveal the copy underneath
       // and report the refusal a second time on the turn retrying it.
       setError(null);
+      setWaitingForAgentSlot(chatId, false);
       clearResumeRetry(chatId);
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
+
+      const releaseServerStream = async (): Promise<void> => {
+        await releaseGatewayAgentStream(chatId, {
+          onCancelRequest: (requestId) => {
+            rejectedRequestIdsRef.current.add(requestId);
+            gateway.cancelRequest(requestId);
+          },
+        });
+      };
+
+      if (resumeWithFreshStream && config) {
+        await releaseServerStream();
+        try {
+          await syncStreamFromHistory(chatId, "resolve");
+          await continueInterruptedTurn(chatId, config);
+        } catch (continueError) {
+          const message =
+            continueError instanceof Error
+              ? continueError.message
+              : String(continueError);
+          if (message === GATEWAY_DISCONNECTED_ERROR) {
+            setConnectionPaused(chatId, true);
+            setNeedsStreamRecovery(chatId, true);
+            return;
+          }
+          console.error(
+            `[useAgent] Fresh resume after provider backoff failed for ${chatId}:`,
+            continueError,
+          );
+          setError(message);
+          setNeedsStreamRecovery(chatId, true);
+        }
+        return;
+      }
 
       let requestId = activeStreamRequests.get(chatId);
       if (!requestId) {
@@ -2143,6 +2186,7 @@ export function useAgent() {
           return;
         }
         try {
+          await releaseServerStream();
           await continueInterruptedTurn(chatId, config);
         } catch (continueError) {
           const message =
@@ -2175,7 +2219,9 @@ export function useAgent() {
       resumeInterruptedStream,
       setConnectionPaused,
       setError,
+      setLastTurnOutcome,
       setNeedsStreamRecovery,
+      setWaitingForAgentSlot,
       streamingRefs,
       syncStreamFromHistory,
     ],

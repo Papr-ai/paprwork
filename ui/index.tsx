@@ -25,10 +25,15 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { startRendererPerformanceReporting } from "./utils/rendererPerformance";
+import { installMiniAppPreviewWakeResync } from "./utils/previewIframeLifecycle";
 const stopRendererPerformance = startRendererPerformanceReporting(
   `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}/api/debug/renderer-performance`,
 );
-if (import.meta.hot) import.meta.hot.dispose(stopRendererPerformance);
+const stopMiniAppPreviewWakeResync = installMiniAppPreviewWakeResync();
+if (import.meta.hot) {
+  import.meta.hot.dispose(stopRendererPerformance);
+  import.meta.hot.dispose(stopMiniAppPreviewWakeResync);
+}
 
 console.log('[React] Entry point reached - starting React initialization');
 const reactStartTime = performance.now();

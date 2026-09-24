@@ -72,6 +72,28 @@ export function isCloudInstallTimeoutError(error: string): boolean {
   return error === CLOUD_INSTALL_TIMEOUT_MESSAGE;
 }
 
+/** Legacy gateway responses that failed install before returning agentSetupMessage. */
+export function isCloudInstallBootstrapError(message: string): boolean {
+  return message.includes("Database bootstrap failed:");
+}
+
+export function buildCloudInstallBootstrapFailureAgentMessage(
+  entry: CommunityCatalogEntry,
+  mode: CloudInstallMode,
+  errorMessage: string,
+): string {
+  return [
+    `Install of "${entry.name}" (namespace: ${entry.namespaceId}, slug: ${entry.slug}, mode: ${mode}) hit a database migration error.`,
+    "",
+    "The user should not need to read SQLite errors — diagnose and fix the migration SQL, then verify bootstrap.",
+    "",
+    "Technical detail:",
+    errorMessage,
+    "",
+    "Check data/databases/*/migrations/ for the failing file. If the app was rolled back, guide the user to Personalize again after the fix.",
+  ].join("\n");
+}
+
 export function buildCloudInstallTimeoutAgentMessage(
   entry: CommunityCatalogEntry,
   mode: CloudInstallMode,

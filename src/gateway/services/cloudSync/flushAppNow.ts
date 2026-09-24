@@ -85,6 +85,11 @@ async function catchUpAppLinkedSources(
   }
 }
 
+/** Matches TursoReplicaSyncWorkerClient.assertNotCrashLooping's parked error. */
+export function isParkedReplicaError(error: string | undefined | null): boolean {
+  return typeof error === "string" && /is parked for this session/.test(error);
+}
+
 async function pushLinkedSourcesForFlush(
   pushSources: TursoLinkedSource[],
   syncKeys: string[],
@@ -135,9 +140,28 @@ async function pushLinkedSourcesForFlush(
   try {
     await withTursoPushInFlight(syncKeys, async () => {
       for (const source of sourcesNeedingTursoPush) {
-        const pushResult = await pushLinkedSourceWithReplicaRouting(source);
+        let pushResult: Awaited<ReturnType<typeof pushLinkedSourceWithReplicaRouting>>;
+        try {
+          pushResult = await pushLinkedSourceWithReplicaRouting(source);
+        } catch (err) {
+          // replica.pull() throws (rather than returns) the parked error.
+          const message = err instanceof Error ? err.message : String(err);
+          if (!isParkedReplicaError(message)) {
+            throw err;
+          }
+          pushResult = { ok: false, error: message } as typeof pushResult;
+        }
         if (pushResult.ok) {
           tursoPushed = true;
+        } else if (isParkedReplicaError(pushResult.error)) {
+          // A parked replica has sync paused *by design* for this session (local
+          // reads/writes still work). Aborting here blocked publishing every app
+          // that merely links the DB — e.g. a read-only shared "dataroom" — and
+          // the code upload never ran. Skip it; it catches up after a restart.
+          console.warn(
+            `[CloudSync] flushAppNow skipping Turso push for ${source.alias} — replica parked: ` +
+              `${(pushResult.error ?? "").slice(0, 160)}`,
+          );
         } else {
           throw new Error(
             `Turso push failed for ${source.alias}: ${pushResult.error ?? "unknown"}`,

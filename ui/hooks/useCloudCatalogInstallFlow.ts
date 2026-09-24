@@ -15,10 +15,12 @@ import { useChat } from "./useChat";
 import { useTabs } from "./useTabs";
 import { trackEvent } from "../lib/telemetry";
 import {
+  buildCloudInstallBootstrapFailureAgentMessage,
   buildCloudInstallTimeoutAgentMessage,
   fetchCloudLineageIndex,
   extractOptionalInstallDependencies,
   installCloudCatalogApp,
+  isCloudInstallBootstrapError,
   isCloudInstallTimeoutError,
   userProvidedRequirements,
   type CloudInstallMode,
@@ -189,6 +191,9 @@ export function useCloudCatalogInstallFlow() {
             });
             return;
           }
+          if (needsAgentSetup) {
+            return;
+          }
           await openCloudInstalledAppWithChat(createChat, {
             appId: body.app.id,
             appTitle: title,
@@ -203,7 +208,23 @@ export function useCloudCatalogInstallFlow() {
       } catch (err) {
         const message =
           err instanceof Error ? err.message.slice(0, 240) : "Install failed";
-        setInstallToast(`Install failed for "${entry.name}": ${message}`);
+        if (isCloudInstallTimeoutError(message)) {
+          setInstallToast(
+            `Install timed out for "${entry.name}" — opening chat for help…`,
+          );
+          void openAgentDatabaseSetup(
+            buildCloudInstallTimeoutAgentMessage(entry, mode),
+          );
+        } else if (isCloudInstallBootstrapError(message)) {
+          setInstallToast(
+            `Finishing database setup for "${entry.name}" in chat…`,
+          );
+          void openAgentDatabaseSetup(
+            buildCloudInstallBootstrapFailureAgentMessage(entry, mode, message),
+          );
+        } else {
+          setInstallToast(`Install failed for "${entry.name}": ${message}`);
+        }
       } finally {
         setInstallingId(null);
       }

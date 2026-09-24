@@ -4,7 +4,11 @@ import type {
   PreviewPhase,
   PreviewGateReport,
 } from "../../src/core/types/rendererPerformance";
-import { readGateReport, trackPreviewFrame } from "./rendererPerformance";
+import {
+  readGateReport,
+  resyncAllPreviewFramePhases,
+  trackPreviewFrame,
+} from "./rendererPerformance";
 
 export type PreviewLifecycleMessageType =
   | "papr:preview-hidden"
@@ -99,4 +103,41 @@ export function usePreviewTabLifecycle(
   useEffect(() => {
     pollRef.current();
   }, [previewTabVisible]);
+}
+
+const WAKE_RESYNC_FOLLOWUP_MS = [250, 1000] as const;
+
+function burstPreviewPhaseResync(): void {
+  resyncAllPreviewFramePhases();
+  for (const delayMs of WAKE_RESYNC_FOLLOWUP_MS) {
+    window.setTimeout(() => resyncAllPreviewFramePhases(), delayMs);
+  }
+}
+
+/**
+ * After OS sleep the preview fetch gate can disagree with the host until phase
+ * messages are re-sent. Gateway reconnect also finishes slightly after resume.
+ */
+export function installMiniAppPreviewWakeResync(): () => void {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+
+  const onWake = () => {
+    burstPreviewPhaseResync();
+  };
+
+  const onVisibility = () => {
+    if (!document.hidden) {
+      onWake();
+    }
+  };
+
+  window.addEventListener("system:resume", onWake);
+  document.addEventListener("visibilitychange", onVisibility);
+
+  return () => {
+    window.removeEventListener("system:resume", onWake);
+    document.removeEventListener("visibilitychange", onVisibility);
+  };
 }

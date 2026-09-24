@@ -193,6 +193,20 @@ export interface ElectronAPI {
       success: boolean;
       error?: string;
     }>;
+    /**
+     * Server-side onboarding progress (Parse _User). Authoritative over
+     * localStorage — `state` is undefined when signed out or unreachable.
+     */
+    getOnboardingState: () => Promise<{
+      success: boolean;
+      state?: { completed: boolean; completedAt?: string; step?: string };
+      error?: string;
+    }>;
+    /** Record a checkpoint (`step`) or completion. Soft-fails by design. */
+    setOnboardingState: (update: {
+      step?: string;
+      completed?: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
     getProfile: () => Promise<{
       success: boolean;
       profile?: {

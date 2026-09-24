@@ -33,12 +33,126 @@ export interface ShareAudienceModel {
    * gateway/services/appRuntime/miniAppAccess.ts.
    */
   allowedUserIds?: string[];
+  /**
+   * audience "people": any signed-in Papr user with this email (not necessarily
+   * a workspace member). Matched case-insensitively against the session email.
+   */
+  allowedEmails?: string[];
+  /**
+   * audience "people": any signed-in user whose email is *@{domain}*.
+   * Store without the leading @ (e.g. "client.com").
+   */
+  allowedEmailDomains?: string[];
 }
 
 export interface SharingToAudienceModelOptions {
   requireSignIn?: boolean;
   perUserIsolation?: boolean;
   allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
+const DOMAIN_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)+$/i;
+
+/** Normalize a single email for allowlist comparison. */
+export function normalizeEmail(raw: string): string | null {
+  const email = raw.trim().toLowerCase();
+  if (!email || !EMAIL_PATTERN.test(email)) {
+    return null;
+  }
+  return email;
+}
+
+/** Drop invalid entries, trim, de-dupe (preserves order). */
+export function normalizeAllowedEmails(
+  emails: readonly string[] | undefined,
+): string[] {
+  if (!emails) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of emails) {
+    const email = typeof raw === "string" ? normalizeEmail(raw) : null;
+    if (!email || seen.has(email)) {
+      continue;
+    }
+    seen.add(email);
+    out.push(email);
+  }
+  return out;
+}
+
+/** Normalize domain: lowercase, strip leading @, validate shape. */
+export function normalizeEmailDomain(raw: string): string | null {
+  let domain = raw.trim().toLowerCase();
+  if (domain.startsWith("@")) {
+    domain = domain.slice(1);
+  }
+  if (!domain || !DOMAIN_PATTERN.test(domain)) {
+    return null;
+  }
+  return domain;
+}
+
+export function normalizeAllowedEmailDomains(
+  domains: readonly string[] | undefined,
+): string[] {
+  if (!domains) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of domains) {
+    const domain = typeof raw === "string" ? normalizeEmailDomain(raw) : null;
+    if (!domain || seen.has(domain)) {
+      continue;
+    }
+    seen.add(domain);
+    out.push(domain);
+  }
+  return out;
+}
+
+export function emailDomainFromAddress(email: string): string | null {
+  const normalized = normalizeEmail(email);
+  if (!normalized) {
+    return null;
+  }
+  const at = normalized.lastIndexOf("@");
+  if (at < 0) {
+    return null;
+  }
+  return normalized.slice(at + 1);
+}
+
+/** True when any people allowlist field is non-empty. */
+export function shareAudienceHasPeopleRestriction(
+  model: Pick<
+    ShareAudienceModel,
+    "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
+  >,
+): boolean {
+  return (
+    normalizeAllowedUserIds(model.allowedUserIds).length > 0 ||
+    normalizeAllowedEmails(model.allowedEmails).length > 0 ||
+    normalizeAllowedEmailDomains(model.allowedEmailDomains).length > 0
+  );
+}
+
+/**
+ * External emails/domains require loginAccess "public" + requireSignIn on the
+ * memory server — workspace "team" ACL cannot admit non-members.
+ */
+export function peopleAudienceUsesExternalGate(
+  model: Pick<ShareAudienceModel, "allowedEmails" | "allowedEmailDomains">,
+): boolean {
+  return (
+    normalizeAllowedEmails(model.allowedEmails).length > 0 ||
+    normalizeAllowedEmailDomains(model.allowedEmailDomains).length > 0
+  );
 }
 
 /** Drop blanks and duplicates, preserving the order the user picked. */
@@ -67,22 +181,45 @@ export function normalizeAllowedUserIds(ids: readonly string[] | undefined): str
  * yourself from your own allowlist would lock you out of your own app.
  */
 export function isUserAllowedByAudienceModel(
-  model: Pick<ShareAudienceModel, "audience" | "allowedUserIds">,
+  model: Pick<
+    ShareAudienceModel,
+    "audience" | "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
+  >,
   callerUserId: string | undefined,
   publisherUserId?: string,
+  callerEmail?: string,
 ): boolean {
   if (model.audience !== "people") {
     return true;
   }
+  if (!shareAudienceHasPeopleRestriction(model)) {
+    return true;
+  }
   const caller = callerUserId?.trim();
-  if (!caller) {
+  const email = callerEmail ? normalizeEmail(callerEmail) : null;
+  if (!caller && !email) {
     return false;
   }
   const publisher = publisherUserId?.trim();
-  if (publisher && caller === publisher) {
+  if (publisher && caller && caller === publisher) {
     return true;
   }
-  return normalizeAllowedUserIds(model.allowedUserIds).includes(caller);
+  if (caller && normalizeAllowedUserIds(model.allowedUserIds).includes(caller)) {
+    return true;
+  }
+  if (email && normalizeAllowedEmails(model.allowedEmails).includes(email)) {
+    return true;
+  }
+  if (email) {
+    const domain = emailDomainFromAddress(email);
+    if (
+      domain &&
+      normalizeAllowedEmailDomains(model.allowedEmailDomains).includes(domain)
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /** Whether the share model requires Papr sign-in at the platform gate. */
@@ -180,10 +317,83 @@ function teamAudienceFor(
   options?: SharingToAudienceModelOptions,
 ): ShareAudienceModel {
   const allowedUserIds = normalizeAllowedUserIds(options?.allowedUserIds);
-  if (allowedUserIds.length > 0) {
-    return { audience: "people", permission, allowedUserIds };
+  const allowedEmails = normalizeAllowedEmails(options?.allowedEmails);
+  const allowedEmailDomains = normalizeAllowedEmailDomains(
+    options?.allowedEmailDomains,
+  );
+  const hasRestriction =
+    allowedUserIds.length > 0 ||
+    allowedEmails.length > 0 ||
+    allowedEmailDomains.length > 0;
+  if (!hasRestriction) {
+    return { audience: "team", permission };
   }
-  return { audience: "team", permission };
+  const model: ShareAudienceModel = { audience: "people", permission };
+  if (allowedUserIds.length > 0) {
+    model.allowedUserIds = allowedUserIds;
+  }
+  if (allowedEmails.length > 0) {
+    model.allowedEmails = allowedEmails;
+  }
+  if (allowedEmailDomains.length > 0) {
+    model.allowedEmailDomains = allowedEmailDomains;
+  }
+  if (peopleAudienceUsesExternalGate(model)) {
+    model.requireSignIn = true;
+  }
+  return model;
+}
+
+/**
+ * Map stored publish prefs back to the share UI model. When any people
+ * allowlist is present, prefer the "people" audience even if loginAccess is
+ * "public" (external guests).
+ */
+export function publishPrefsToAudienceModel(
+  loginAccess: CloudLoginAccess,
+  externalLink: CloudExternalLink,
+  codeAccess: CodeAccess = "off",
+  options?: SharingToAudienceModelOptions,
+): ShareAudienceModel {
+  const allowedUserIds = normalizeAllowedUserIds(options?.allowedUserIds);
+  const allowedEmails = normalizeAllowedEmails(options?.allowedEmails);
+  const allowedEmailDomains = normalizeAllowedEmailDomains(
+    options?.allowedEmailDomains,
+  );
+  if (
+    allowedUserIds.length > 0 ||
+    allowedEmails.length > 0 ||
+    allowedEmailDomains.length > 0
+  ) {
+    const editPermission = codeAccessToPermission(codeAccess);
+    if (editPermission) {
+      if (loginAccess === "none" && externalLink !== "off") {
+        return {
+          audience: "link",
+          permission: "edit",
+          requireSignIn: false,
+          allowedUserIds:
+            allowedUserIds.length > 0 ? allowedUserIds : undefined,
+          allowedEmails: allowedEmails.length > 0 ? allowedEmails : undefined,
+          allowedEmailDomains:
+            allowedEmailDomains.length > 0 ? allowedEmailDomains : undefined,
+        };
+      }
+      return teamAudienceFor("edit", {
+        ...options,
+        allowedUserIds,
+        allowedEmails,
+        allowedEmailDomains,
+      });
+    }
+    return teamAudienceFor("write", {
+      ...options,
+      allowedUserIds,
+      allowedEmails,
+      allowedEmailDomains,
+    });
+  }
+  return sharingToAudienceModel(loginAccess, externalLink, codeAccess, options);
 }
 
 /** Live-app ACL only (code access stored separately in publish prefs). */
@@ -210,8 +420,15 @@ export function audienceModelToSharing(model: ShareAudienceModel): {
   if (model.audience === "public") {
     return { loginAccess: "public", externalLink: "off" };
   }
-  // "people" shares the team ACL; the gateway allowlist narrows it per user.
-  if (model.audience === "team" || model.audience === "people") {
+  if (model.audience === "team") {
+    return { loginAccess: "team", externalLink: "off" };
+  }
+  // Workspace members only → team ACL + gateway allowlist.
+  // External emails/domains → public + sign-in (memory has no non-member principal).
+  if (model.audience === "people") {
+    if (peopleAudienceUsesExternalGate(model)) {
+      return { loginAccess: "public", externalLink: "off" };
+    }
     return { loginAccess: "team", externalLink: "off" };
   }
   return { loginAccess: "private", externalLink: "off" };

@@ -3870,6 +3870,55 @@ export function initializePaprLoginIPC(
     }
   });
 
+  /**
+   * Read server-side onboarding progress. The renderer treats this as
+   * authoritative over localStorage, so the gate survives a cleared cache or a
+   * new machine. Returns undefined (not an error) when signed out or offline —
+   * callers fall back to local state rather than trapping the user.
+   */
+  ipcMain.handle("papr:get-onboarding-state", async () => {
+    try {
+      const profile = settingsStorage.getPaprProfile();
+      if (!profile?.sessionToken || !profile.userId) {
+        return { success: true, state: undefined };
+      }
+
+      const { fetchOnboardingState } = await import("./paprOnboardingSync.js");
+      const state = await fetchOnboardingState(
+        profile.sessionToken,
+        profile.userId,
+      );
+      return { success: true, state };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
+    }
+  });
+
+  /** Record a checkpoint or completion. Never blocks the UI — failures are soft. */
+  ipcMain.handle(
+    "papr:set-onboarding-state",
+    async (_event, update: { step?: string; completed?: boolean }) => {
+      try {
+        const profile = settingsStorage.getPaprProfile();
+        if (!profile?.sessionToken || !profile.userId) {
+          return { success: true };
+        }
+
+        const { saveOnboardingState } = await import("./paprOnboardingSync.js");
+        await saveOnboardingState(profile.sessionToken, profile.userId, update);
+        return { success: true };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : "Unknown error",
+        };
+      }
+    },
+  );
+
   ipcMain.handle("papr:refresh-profile", async () => {
     try {
       const profile = settingsStorage.getPaprProfile();

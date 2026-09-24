@@ -39,3 +39,25 @@ export async function submitCloudAppChange(
   }
   return body;
 }
+
+export type SentProposalStatus = "preparing" | "pending" | "approved" | "rejected";
+
+export interface SentProposal {
+  id: string;
+  title: string;
+  description: string;
+  status: SentProposalStatus;
+  createdAt: string;
+  resolvedAt?: string | null;
+  stagedPaths?: string[] | null;
+}
+
+/** Proposals you sent from this installed copy, newest first. */
+export async function listSentProposals(installedAppId: string): Promise<SentProposal[]> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/apps/changes/outgoing?installedAppId=${encodeURIComponent(installedAppId)}`,
+  );
+  if (!res.ok) return [];
+  const body = (await res.json()) as { requests?: SentProposal[] };
+  return (body.requests ?? []).filter((r) => r.status !== "preparing");
+}

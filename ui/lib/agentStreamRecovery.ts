@@ -18,6 +18,7 @@ import { dedupeChatMessages } from "../utils/messageDedup";
 import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
 import { disarmFirstChunkWatchdog } from "./agentFirstChunkWatchdog";
 import { recoveryBannerSurvivesStreamEnd } from "./streamRecoveryPersistence";
+import { AGENT_INTERRUPT_TIMEOUT_MS } from "../utils/agentSendLifecycle";
 
 export type StreamChunkHandler = (chunk: StreamChunk) => void;
 
@@ -633,6 +634,34 @@ export function untrackActiveStream(chatId: string): void {
   // user stop, supersede). Disarming at each of the dozen call sites would
   // leave a timer armed the first time a new one is added.
   disarmFirstChunkWatchdog(chatId);
+}
+
+/** Resume after provider backoff must start a new stream, not resubscribe to the old lease. */
+export function shouldResumeWithFreshGatewayStream(state: {
+  streamRecoveryReason?: StreamRecoveryReason;
+  lastTurnOutcome?: LastTurnOutcome;
+}): boolean {
+  return (
+    state.streamRecoveryReason === "rateLimit" ||
+    state.lastTurnOutcome === "providerRefused"
+  );
+}
+
+/** Stop the gateway stream and release its concurrency slot without marking a user stop. */
+export async function releaseGatewayAgentStream(
+  chatId: string,
+  options?: {
+    onCancelRequest?: (requestId: string) => void;
+  },
+): Promise<void> {
+  const requestId = activeStreamRequests.get(chatId);
+  if (requestId && requestId !== RESUME_STREAM_PLACEHOLDER) {
+    options?.onCancelRequest?.(requestId);
+  }
+  untrackActiveStream(chatId);
+  await gateway
+    .send("agent:stop", { chatId }, { timeoutMs: AGENT_INTERRUPT_TIMEOUT_MS })
+    .catch(() => {});
 }
 
 export function clearResumeRetry(chatId: string): void {
