@@ -168,6 +168,7 @@ import {
   type CloudAccessMode,
 } from "./services/cloudPublishPrefs.js";
 import { prefsSharingFieldsChanged } from "./services/cloudPublishDrift.js";
+import { prefsPeopleAllowlistChanged } from "./services/cloudShareAllowlistMemory.js";
 import {
   initializeVaultSyncService,
   getVaultSyncService,
@@ -861,10 +862,28 @@ async function startGateway(): Promise<void> {
         const { getPendingAppUpdate } = await import(
           "./services/syncV3/appRepoPendingUpdate.js"
         );
-        const [status, publisher] = await Promise.all([
+        const { readCloudAppLineageMode } = await import(
+          "./services/CloudAppLineageService.js"
+        );
+        const [status, publisher, lineageMode] = await Promise.all([
           checkAppRemoteCodeStatus(appId),
           checkPublisherUpstreamRevision(appId),
+          readCloudAppLineageMode(appId),
         ]);
+        // A collaborator never publishes this copy: its own repo can't be
+        // "newer" in any way the user can act on. Updates come from the
+        // publisher only (publisherUpdatesAvailable), so the chip and the
+        // popover can't disagree.
+        if (lineageMode === "track") {
+          res.json({
+            ...status,
+            ...publisher,
+            upToDate: true,
+            codeReason: "collaborator: publisher is the source",
+            pendingUpdate: null,
+          });
+          return;
+        }
         // pendingUpdate: a remote commit arrived but auto-pull was deferred
         // (pending row push, conflicts). Share bar shows "Update waiting".
         res.json({ ...status, ...publisher, pendingUpdate: getPendingAppUpdate(appId) });
@@ -2343,17 +2362,15 @@ async function startGateway(): Promise<void> {
           codeAccess?: import("../core/utils/shareAudienceModel.js").CodeAccess;
           requireSignIn?: boolean;
           perUserIsolation?: boolean;
-          // Audience "people". Intentionally not part of
-          // prefsSharingFieldsChanged: the cloud ACL stays "team" either way,
-          // so there is nothing for the memory server to update — the
-          // allowlist is enforced by the gateway on each request.
           allowedUserIds?: string[];
           allowedEmails?: string[];
           allowedEmailDomains?: string[];
         };
         const prefs = setAppPublishPrefs(req.params.appId, body);
         invalidateCloudLinkSyncReportCache();
-        if (prefsSharingFieldsChanged(body)) {
+        const sharingChanged = prefsSharingFieldsChanged(body);
+        const allowlistChanged = prefsPeopleAllowlistChanged(body);
+        if (sharingChanged || allowlistChanged) {
           const config = await getCloudAppPublishService().updateSharing(
             req.params.appId,
             {
@@ -2389,11 +2406,13 @@ async function startGateway(): Promise<void> {
           namespaceId: string;
           slug: string;
           mode?: "fork" | "track";
+          installDbPolicy?: "fork_empty" | "shared_primary";
           shareToken?: string;
           catalogScope?: "global" | "namespace" | "community" | "team";
           visibility?: string;
           codeInstallable?: boolean;
           title?: string;
+          communityCatalogListed?: boolean;
         };
         if (!body.namespaceId || !body.slug) {
           res.status(400).json({ error: "namespaceId and slug are required" });
@@ -2569,6 +2588,10 @@ async function startGateway(): Promise<void> {
           title: body.title.trim(),
           description: body.description.trim(),
         });
+        // Those edits are now "proposed", not "unproposed", in the share bar.
+        await getCloudAppTrackSyncService()
+          .recordProposed(body.installedAppId.trim())
+          .catch(() => undefined);
         res.json(result);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });

@@ -26,6 +26,7 @@ describe("cloudSharingSettings", () => {
       visibility: "team",
       linkPermission: "read_write",
       shareLinkEnabled: true,
+      communityCatalogListed: false,
     });
     expect(sharingSettingsToAccessMode(settings)).toBe("team");
     expect(sharingSettingsRequireShareToken(settings)).toBe(true);
@@ -56,6 +57,7 @@ describe("cloudSharingSettings", () => {
       visibility: "public_read",
       linkPermission: "read_write",
       shareLinkEnabled: false,
+      communityCatalogListed: true,
     });
     expect(
       resolvePublishFieldsFromPrefs({
@@ -70,6 +72,7 @@ describe("cloudSharingSettings", () => {
       linkPermission: "read_write",
       shareLinkEnabled: false,
       requireSignIn: true,
+      communityCatalogListed: true,
     });
     expect(
       resolvePublishFieldsFromPrefs({
@@ -82,6 +85,7 @@ describe("cloudSharingSettings", () => {
       visibility: "public_read",
       linkPermission: "read_write",
       shareLinkEnabled: false,
+      communityCatalogListed: true,
     });
   });
 
@@ -98,6 +102,7 @@ describe("cloudSharingSettings", () => {
       linkPermission: "read",
       shareLinkEnabled: true,
       requireSignIn: true,
+      communityCatalogListed: false,
     });
   });
 
@@ -118,6 +123,42 @@ describe("cloudSharingSettings", () => {
       linkPermission: "read_write",
       shareLinkEnabled: true,
       requireSignIn: true,
+    });
+  });
+
+  it("does not list specific people (workspace allowlist) in community", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "team",
+        externalLink: "off",
+        accessMode: "team",
+        codeAccess: "off",
+        allowedUserIds: ["user-abc"],
+      }),
+    ).toEqual({
+      visibility: "team",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      communityCatalogListed: false,
+    });
+  });
+
+  it("does not list specific people (external email) in community", () => {
+    expect(
+      resolvePublishFieldsFromPrefs({
+        loginAccess: "public",
+        externalLink: "off",
+        accessMode: "public_read",
+        codeAccess: "off",
+        requireSignIn: true,
+        allowedEmails: ["guest@acme.com"],
+      }),
+    ).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
+      requireSignIn: true,
+      communityCatalogListed: false,
     });
   });
 

@@ -68,13 +68,13 @@ export async function duplicateAsOwnApp(source: {
 /** Collaborator edits vs last upstream sync. `known: false` = cannot tell (keep Propose enabled). */
 export async function fetchTrackLocalEdits(
   appId: string,
-): Promise<{ known: boolean; files: string[] }> {
+): Promise<{ known: boolean; files: string[]; unproposed?: string[] }> {
   try {
     const res = await fetch(
       `${GATEWAY}/api/cloud/track-sync/${encodeURIComponent(appId)}/local-edits`,
     );
     if (!res.ok) return { known: false, files: [] };
-    return (await res.json()) as { known: boolean; files: string[] };
+    return (await res.json()) as { known: boolean; files: string[]; unproposed?: string[] };
   } catch {
     return { known: false, files: [] };
   }

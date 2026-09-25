@@ -90,7 +90,10 @@ import {
 } from "./miniAppAccess.js";
 import { configHasPerUserLinkedSources } from "./cloudAppPerUserAccess.js";
 import { applyPeopleAllowlist } from "./cloudAppPeopleAccess.js";
-import { loadCloudPublishPrefs } from "../cloudPublishPrefs.js";
+import {
+  invalidateMemoryShareAllowlistCache,
+  loadSharePeopleAllowlistForCloudHost,
+} from "./cloudAppSharePeopleAllowlistLoader.js";
 import {
   assertMiniAppMembersAccess,
   listMiniAppMembers,
@@ -156,6 +159,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
     sessionToken?: string;
     shareToken?: string;
     externalUserId?: string;
+    callerEmail?: string;
   }): Promise<AppAccessContext | null> {
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -177,6 +181,7 @@ export class MemoryServerPublishResolver implements AppPublishResolver {
         shareToken: input.shareToken,
         ...(input.sessionToken ? { sessionToken: input.sessionToken } : {}),
         ...(input.externalUserId ? { external_user_id: input.externalUserId } : {}),
+        ...(input.callerEmail ? { callerEmail: input.callerEmail } : {}),
       }),
     });
     if (res.status === 401 || res.status === 403 || res.status === 404 || res.status === 422) {
@@ -1079,10 +1084,12 @@ export class CloudAppHostService {
     const runtimeAuth =
       enrichedAuth ?? ((await enrichRuntimeAuthWithPaprApiKey(baseAuth)) ?? baseAuth);
     const accessStats = { cacheHit: false as boolean | undefined };
+    const callerEmail = this.auth.getSessionEmail(req);
     const access = await validateCachedAccess(
       this.deps.publishResolver,
       runtimeAuth,
       accessStats,
+      callerEmail,
     );
     if (perf && accessStats.cacheHit !== undefined) {
       perf.accessCacheHit = accessStats.cacheHit;
@@ -1118,7 +1125,7 @@ export class CloudAppHostService {
     // covered by a single check instead of nine that can drift apart.
     const peopleDecision = applyPeopleAllowlist(
       access,
-      this.loadSharePeopleAllowlist(access.appId),
+      await loadSharePeopleAllowlistForCloudHost(runtimeAuth, access.appId),
       runtimeAuth.externalUserId,
       this.auth.getSessionEmail(req),
     );
@@ -1131,35 +1138,6 @@ export class CloudAppHostService {
     }
 
     return peopleDecision.access;
-  }
-
-  /**
-   * Allowlist for audience "people", or undefined when the app is not
-   * user-restricted.
-   *
-   * Read from cloud-publish-prefs.json, which lives under the cloud-synced
-   * data/ folder and therefore reaches the cloud host with the app. Read
-   * failures deliberately return undefined (not "deny all") so a missing or
-   * malformed prefs file cannot take a published app offline.
-   */
-  private loadSharePeopleAllowlist(appId: string): {
-    allowedUserIds?: string[];
-    allowedEmails?: string[];
-    allowedEmailDomains?: string[];
-  } | undefined {
-    try {
-      const prefs = loadCloudPublishPrefs().apps[appId];
-      if (!prefs) {
-        return undefined;
-      }
-      return {
-        allowedUserIds: prefs.allowedUserIds,
-        allowedEmails: prefs.allowedEmails,
-        allowedEmailDomains: prefs.allowedEmailDomains,
-      };
-    } catch {
-      return undefined;
-    }
   }
 
   /**
@@ -2313,6 +2291,7 @@ export class CloudAppHostService {
     }
 
     invalidateAccessCacheForPublishedApp(namespaceId, slug);
+    invalidateMemoryShareAllowlistCache();
     res.json({ ok: true, cacheInvalidated: true, scope: "access" });
   }
 

@@ -35,6 +35,7 @@ async function enrichAppWithLineage<T extends { id: string }>(
       installedAt: lineage.installedAt,
       lastSyncedAt: lineage.lastSyncedAt,
       databasePolicy: lineage.databasePolicy,
+      sourceAudience: lineage.sourceAudience,
     },
   };
 }
@@ -177,6 +178,7 @@ export async function setupAppHandlers(
               installedAt: lineage.installedAt,
               lastSyncedAt: lineage.lastSyncedAt,
               databasePolicy: lineage.databasePolicy,
+              sourceAudience: lineage.sourceAudience,
             },
           };
         });

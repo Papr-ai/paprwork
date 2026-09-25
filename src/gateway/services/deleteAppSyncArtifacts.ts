@@ -22,6 +22,7 @@ export interface DeleteAppSyncArtifactsResult {
 export async function deleteAppSyncArtifacts(
   appId: string,
   paprHome?: string,
+  options?: { skipSchemaOwnerRegistryTombstone?: boolean },
 ): Promise<DeleteAppSyncArtifactsResult> {
   const trimmed = appId.trim();
   if (!trimmed) {
@@ -48,12 +49,14 @@ export async function deleteAppSyncArtifacts(
 
   let tombstonedSchemaOwnerDbs = 0;
   try {
-    await initializeDatabaseRegistry();
-    const registry = getDatabaseRegistryService();
-    const owned = registry.listBySchemaOwnerApp(trimmed);
-    for (const record of owned) {
-      await registry.tombstone(record.dbId);
-      tombstonedSchemaOwnerDbs += 1;
+    if (options?.skipSchemaOwnerRegistryTombstone !== true) {
+      await initializeDatabaseRegistry();
+      const registry = getDatabaseRegistryService();
+      const owned = registry.listBySchemaOwnerApp(trimmed);
+      for (const record of owned) {
+        await registry.tombstone(record.dbId);
+        tombstonedSchemaOwnerDbs += 1;
+      }
     }
   } catch (error) {
     console.warn(

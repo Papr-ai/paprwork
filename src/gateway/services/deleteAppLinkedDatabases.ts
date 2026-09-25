@@ -14,6 +14,7 @@ import {
 import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
 import { getPaprJobsRoot } from "../../core/utils/paprRoot.js";
 import { isTursoStateDbPathInWorkspace } from "./tursoSyncState.js";
+import { shouldBlockTursoDeleteForSharedPrimary } from "./appDeleteScope.js";
 
 export interface LinkedRegistryDbPreview {
   dbId: string;
@@ -199,18 +200,24 @@ export async function deleteSoleLinkerRegistryDatabases(
     }
 
     if (deleteTurso && tursoBridge) {
-      try {
-        const deleted = await tursoBridge.deleteTursoDatabaseByName(
-          record.tursoShortName,
-        );
-        if (deleted) {
-          deletedRegistryTursoCount += 1;
-        }
-      } catch (error) {
+      if (shouldBlockTursoDeleteForSharedPrimary(record.tursoShortName)) {
         console.warn(
-          `[deleteApp] Could not delete Turso replica for ${dbId}:`,
-          (error as Error).message,
+          `[deleteApp] Skipping Turso delete for ${record.tursoShortName} — shared primary (publisher only)`,
         );
+      } else {
+        try {
+          const deleted = await tursoBridge.deleteTursoDatabaseByName(
+            record.tursoShortName,
+          );
+          if (deleted) {
+            deletedRegistryTursoCount += 1;
+          }
+        } catch (error) {
+          console.warn(
+            `[deleteApp] Could not delete Turso replica for ${dbId}:`,
+            (error as Error).message,
+          );
+        }
       }
     }
 

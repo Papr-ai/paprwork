@@ -206,6 +206,7 @@ describe("cloud app install bootstrap", () => {
     async () => {
       const bootstrap = await bootstrapInstalledAppDatabases(appId, {
         installDbPolicy: "fork_empty",
+        deferTursoUntilPublish: true,
       });
 
       expect(syncTursoAfterAppInstall).not.toHaveBeenCalled();

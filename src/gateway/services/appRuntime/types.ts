@@ -143,6 +143,7 @@ export interface AppPublishResolver {
     sessionToken?: string;
     shareToken?: string;
     externalUserId?: string;
+    callerEmail?: string;
   }): Promise<AppAccessContext | null>;
 }
 

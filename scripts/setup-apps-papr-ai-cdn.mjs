@@ -11,7 +11,7 @@
  *   - Cloud App Host deployed to Cloud Run (see deploy-cloud-app-host.mjs)
  *
  * Usage:
- *   node scripts/setup-apps-papr-ai-cdn.mjs --project=papr-apps-prod --region=us-west1
+ *   node scripts/setup-apps-papr-ai-cdn.mjs --project=gen-lang-client-0873281406 --region=us-west1
  *   node scripts/setup-apps-papr-ai-cdn.mjs --dry-run
  *
  * Options:
@@ -31,7 +31,11 @@ const getArg = (name, fallback) => {
 };
 const dryRun = args.includes("--dry-run");
 
-const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
+const DEFAULT_APPS_GCP_PROJECT = "gen-lang-client-0873281406";
+const project = getArg(
+  "project",
+  process.env.GCP_APPS_PROJECT_ID ?? DEFAULT_APPS_GCP_PROJECT,
+);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
 const service = getArg("service", "papr-cloud-app-host");
 const domain = getArg("domain", "apps.papr.ai");
@@ -55,7 +59,9 @@ function fail(msg) {
 }
 
 if (!project) {
-  fail("Missing --project=YOUR_GCP_PROJECT (or GCP_APPS_PROJECT_ID env var)");
+  fail(
+    "Missing --project=gen-lang-client-0873281406 (or GCP_APPS_PROJECT_ID in .env.local)",
+  );
 }
 
 console.log("apps.papr.ai — Cloud CDN setup (Phase 4)");

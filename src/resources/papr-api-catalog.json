@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-24T14:46:32.034Z",
+  "generatedAt": "2026-09-25T08:32:05.653Z",
   "entryCount": 199,
   "entries": [
     {
@@ -922,7 +922,7 @@
     {
       "id": "agent-tool-get_cloud_app_publish",
       "title": "get_cloud_app_publish",
-      "summary": "Get cloud publish status for a mini-app (apps.papr.ai).\n\nReturns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, and URLs.\n\n**Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.\nIf Cloud Sync is off, the tool returns an error — use export_app_bundle instead (recommend enabling Cloud first).",
+      "summary": "Get cloud publish status for a mini-app (apps.papr.ai).\n\nReturns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.\n\nIf lineage.mode is **track**, also returns trackInstallWarning — you are a collaborator; use submit_cloud_app_pr + push_cloud_sync, not publish_cloud_app, to update the publisher's live URL.\n\n**Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.\nIf Cloud Sync is off, the tool returns an...",
       "surfaces": [
         "agent-tool"
       ],
@@ -2158,7 +2158,7 @@
     {
       "id": "agent-tool-publish_cloud_app",
       "title": "publish_cloud_app",
-      "summary": "Publish or update cloud sharing for a mini-app on apps.papr.ai.\n\n**Preferred path for sharing** (when Cloud Sync + Papr login are on):\n- **Community + fork/install:** loginAccess=public, codeAccess=install\n- **Live web only:** loginAccess=public (or team/link), codeAccess=off\n- **Private cloud:** loginAccess=private, externalLink=off\n\nThree axes (memory server ACL):\n1. loginAccess — private | team | public | none  → maps to visibility on memory server\n2. externalLink — off | read | read_write\n3. codeAccess — off (view/use live app) | install (Community fork + install_cloud_app)\n\n**Share she...",
+      "summary": "Publish or update cloud sharing for a mini-app on apps.papr.ai.\n\n**Track collaborator guard:** If papr-cloud-lineage.json has mode=track (team collaborate install), this tool registers sharing for YOUR local app id — it does NOT update the publisher's live apps.papr.ai bundle. Check get_cloud_app_publish → lineage; when mode=track, use push_cloud_sync + submit_cloud_app_pr instead. Shared DB rows still need push_cloud_sync (Turso).\n\n**Preferred path for sharing** (when Cloud Sync + Papr login are on):\n- **Community + fork/install:** loginAccess=public, codeAccess=install\n- **Live web only:*...",
       "surfaces": [
         "agent-tool"
       ],

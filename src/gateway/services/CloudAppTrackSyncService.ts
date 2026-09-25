@@ -94,6 +94,27 @@ async function writeLineageFile(
 }
 
 /**
+ * Files the platform writes on build, link or install. They always differ from
+ * the publisher's copy (different app/db ids, rebuilt bundle), so they are not
+ * edits a collaborator made or could propose.
+ */
+const PLATFORM_MANAGED_FILES = new Set([
+  "backend/bundle.json",
+  "papr-cloud-dependencies.json",
+  "linked-databases.json",
+  "metadata.json",
+  "data-sources.json",
+]);
+
+export function isCollaboratorEditablePath(rel: string): boolean {
+  return (
+    !rel.startsWith("dist/") &&
+    !rel.startsWith("__papr__/") &&
+    !PLATFORM_MANAGED_FILES.has(rel)
+  );
+}
+
+/**
  * Files whose local content differs from the last synced upstream snapshot.
  * Pure so the "nothing to propose" rule can be tested without git.
  */
@@ -124,21 +145,49 @@ export class CloudAppTrackSyncService {
    * sync. Drives Propose greying out when there is nothing to send. No
    * snapshot (older installs) means unknown, so callers keep Propose enabled.
    */
-  async localEdits(appId: string): Promise<{ known: boolean; files: string[] }> {
+  async localEdits(
+    appId: string,
+  ): Promise<{ known: boolean; files: string[]; unproposed: string[] }> {
     const lineage = await readLineageFile(appId, this.appsDir);
     if (!lineage || lineage.mode !== "track" || !lineage.syncSnapshot) {
-      return { known: false, files: [] };
+      return { known: false, files: [], unproposed: [] };
     }
     const local = await collectLocalFiles(path.join(this.appsDir, appId));
     const hashes = new Map<string, string>();
     for (const [rel, content] of local) hashes.set(rel, hashContent(content));
     // Only compare paths the publisher ships; local-only build output (dist/)
     // and job scratch are not edits the publisher could review.
-    const tracked = new Map([...hashes].filter(([rel]) => !rel.startsWith("dist/")));
+    const tracked = new Map([...hashes].filter(([rel]) => isCollaboratorEditablePath(rel)));
     const snapshot = Object.fromEntries(
-      Object.entries(lineage.syncSnapshot).filter(([rel]) => !rel.startsWith("dist/")),
+      Object.entries(lineage.syncSnapshot).filter(([rel]) => isCollaboratorEditablePath(rel)),
     );
-    return { known: true, files: listLocalEditsAgainstSnapshot(tracked, snapshot) };
+    const files = listLocalEditsAgainstSnapshot(tracked, snapshot);
+    // Edits already sent in a proposal (same content as when proposed) are
+    // waiting on the owner, not "unproposed".
+    const proposed = lineage.proposedSnapshot ?? {};
+    const unproposed = files.filter((rel) => {
+      const sent = proposed[rel];
+      if (sent === undefined) return true;
+      const now = tracked.get(rel);
+      return now === undefined ? sent !== "" : now !== sent;
+    });
+    return { known: true, files, unproposed };
+  }
+
+  /** After a proposal is sent: remember the content that went out. */
+  async recordProposed(appId: string): Promise<void> {
+    const lineage = await readLineageFile(appId, this.appsDir);
+    if (!lineage || lineage.mode !== "track") return;
+    const local = await collectLocalFiles(path.join(this.appsDir, appId));
+    const proposedSnapshot: Record<string, string> = {};
+    for (const [rel, content] of local) {
+      if (isCollaboratorEditablePath(rel)) proposedSnapshot[rel] = hashContent(content);
+    }
+    // Deleted files: "" marks "sent as deleted".
+    for (const rel of Object.keys(lineage.syncSnapshot ?? {})) {
+      if (isCollaboratorEditablePath(rel) && !(rel in proposedSnapshot)) proposedSnapshot[rel] = "";
+    }
+    await writeLineageFile(appId, this.appsDir, { ...lineage, proposedSnapshot });
   }
 
   /**

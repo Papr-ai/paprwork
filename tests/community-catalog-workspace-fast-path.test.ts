@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
 import type { CommunityCatalogEntry } from "../src/core/types/communityCatalog.js";
-import { mergeNamespaceWorkspaceCatalog } from "../src/gateway/services/CommunityCatalogService.js";
+import {
+  mergeNamespaceWorkspaceCatalog,
+  resolveCatalogCodeInstallable,
+} from "../src/gateway/services/CommunityCatalogService.js";
+import {
+  getAppPublishPrefs,
+  hasStoredAppPublishPrefs,
+} from "../src/gateway/services/cloudPublishPrefs.js";
 
 vi.mock("../src/gateway/services/cloudPublishPrefs.js", () => ({
   getAppPublishPrefs: vi.fn(() => ({
@@ -116,6 +123,29 @@ describe("mergeNamespaceWorkspaceCatalog", () => {
     ).toBe(true);
   });
 
+  it("does not let local publish prefs override memory codeAccess off", () => {
+    vi.mocked(hasStoredAppPublishPrefs).mockReturnValue(true);
+    vi.mocked(getAppPublishPrefs).mockReturnValue({
+      loginAccess: "team",
+      externalLink: "off",
+      codeAccess: "install",
+      accessMode: "team",
+    });
+
+    expect(
+      resolveCatalogCodeInstallable(
+        {
+          appId: "locked-app",
+          codeAccess: "off",
+          codeInstallable: false,
+        },
+        "/tmp/papr",
+      ),
+    ).toBe(false);
+
+    vi.mocked(hasStoredAppPublishPrefs).mockReturnValue(false);
+  });
+
   it("honors explicit codeInstallable false from memory", () => {
     const entries = mergeNamespaceWorkspaceCatalog({
       workspaceRemote: [
@@ -172,5 +202,42 @@ describe("mergeNamespaceWorkspaceCatalog", () => {
     expect(entries[0]?.slug).toBe("talent-assessment-1");
     expect(entries[0]?.name).toBe("Talent Assessment_1");
     expect(entries[0]?.isOwned).toBe(true);
+  });
+
+  it("prefers a teammate team publish over your duplicate for the same appId", () => {
+    const entries = mergeNamespaceWorkspaceCatalog({
+      workspaceRemote: [
+        {
+          appId: "65b7eb05-5ec0-47da-918a-c63e64916f1e",
+          namespaceId: "ns-1",
+          slug: "talent-assessment-1-1",
+          name: "SQA Talent Assessment",
+          author: "Dale",
+          visibility: "team",
+          publisherUserId: "user-dale",
+          codeAccess: "install",
+        },
+        {
+          appId: "65b7eb05-5ec0-47da-918a-c63e64916f1e",
+          namespaceId: "ns-1",
+          slug: "talent-assessment-1",
+          name: "Talent Assessment_1",
+          author: "Amir Kabbara",
+          visibility: "team",
+          publisherUserId: "user-amir",
+          codeAccess: "install",
+        },
+      ],
+      localTeamEntries: [],
+      paprDir: "/tmp/papr",
+      namespaceId: "ns-1",
+      ownedAppIds: new Set(["65b7eb05-5ec0-47da-918a-c63e64916f1e"]),
+    });
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.name).toBe("SQA Talent Assessment");
+    expect(entries[0]?.slug).toBe("talent-assessment-1-1");
+    expect(entries[0]?.isOwned).toBe(false);
+    expect(entries[0]?.codeInstallable).toBe(true);
   });
 });

@@ -23,6 +23,7 @@ import {
   isCloudInstallBootstrapError,
   isCloudInstallTimeoutError,
   userProvidedRequirements,
+  type CloudCatalogInstallSelection,
   type CloudInstallMode,
 } from "../utils/cloudCatalogInstall";
 import {
@@ -117,12 +118,18 @@ export function useCloudCatalogInstallFlow() {
   const installCloudApp = useCallback(
     async (
       entry: CommunityCatalogEntry,
-      mode: CloudInstallMode = "fork",
+      selection: CloudCatalogInstallSelection = {
+        mode: "fork",
+        installDbPolicy: "fork_empty",
+      },
       catalogScope?: CommunityCatalogScope,
     ) => {
+      const { mode } = selection;
       setInstallingId(entry.catalogId);
       try {
-        const result = await installCloudCatalogApp(entry, mode, { catalogScope });
+        const result = await installCloudCatalogApp(entry, selection, {
+          catalogScope,
+        });
         if (!result.ok) {
           if (isCloudInstallTimeoutError(result.error)) {
             setInstallToast(
@@ -239,7 +246,11 @@ export function useCloudCatalogInstallFlow() {
     ) => {
       const catalogScope = options?.catalogScope ?? "global";
       if (!entry.codeInstallable) {
-        void installCloudApp(entry, "fork", catalogScope);
+        void installCloudApp(
+          entry,
+          { mode: "fork", installDbPolicy: "fork_empty" },
+          catalogScope,
+        );
         return;
       }
       if (
@@ -249,7 +260,11 @@ export function useCloudCatalogInstallFlow() {
           codeInstallable: entry.codeInstallable,
         })
       ) {
-        void installCloudApp(entry, "fork", catalogScope);
+        void installCloudApp(
+          entry,
+          { mode: "fork", installDbPolicy: "fork_empty" },
+          catalogScope,
+        );
         return;
       }
       setInstallModeEntry({ entry, catalogScope });

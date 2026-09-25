@@ -50,25 +50,78 @@ export function databasePolicyFromInstallPolicy(
  * and Propose changes, while every installer still gets their own rows. The
  * publisher's data is never exposed to the public catalog.
  */
-export function resolveInstallDbPolicy(
-  mode: CloudAppInstallMode,
+function assertPerUserTrackAllowed(
   linkedIsolations: readonly DatabaseIsolation[],
-  catalogScope?: "global" | "namespace",
-): InstallDbPolicy {
-  if (mode === "fork") {
-    return "fork_empty";
-  }
-
-  if (catalogScope === "global") {
-    return "fork_empty";
-  }
-
+): void {
   if (linkedIsolations.some((isolation) => isolation === "per-user")) {
     throw new CloudInstallDbPolicyError(
       "per_user_db",
       "Collaborate install is not supported for per-user databases. Fork the app or use the web app.",
     );
   }
+}
+
+function assertExplicitInstallDbPolicyAllowed(input: {
+  mode: CloudAppInstallMode;
+  catalogScope?: "global" | "namespace";
+  explicitPolicy: InstallDbPolicy;
+}): void {
+  if (input.mode === "fork") {
+    if (input.explicitPolicy !== "fork_empty") {
+      throw new CloudInstallDbPolicyError(
+        "invalid_install_db_policy",
+        "Install a copy always uses a private empty database.",
+      );
+    }
+    return;
+  }
+
+  if (input.catalogScope === "global") {
+    if (input.explicitPolicy !== "fork_empty") {
+      throw new CloudInstallDbPolicyError(
+        "invalid_install_db_policy",
+        "Community collaborate never shares the publisher's database.",
+      );
+    }
+    return;
+  }
+
+  if (
+    input.explicitPolicy !== "fork_empty" &&
+    input.explicitPolicy !== "shared_primary"
+  ) {
+    throw new CloudInstallDbPolicyError(
+      "invalid_install_db_policy",
+      "Team collaborate must use private data or the shared team database.",
+    );
+  }
+}
+
+export function resolveInstallDbPolicy(
+  mode: CloudAppInstallMode,
+  linkedIsolations: readonly DatabaseIsolation[],
+  catalogScope?: "global" | "namespace",
+  explicitPolicy?: InstallDbPolicy,
+): InstallDbPolicy {
+  if (mode === "fork") {
+    return "fork_empty";
+  }
+
+  if (explicitPolicy) {
+    assertExplicitInstallDbPolicyAllowed({
+      mode,
+      catalogScope,
+      explicitPolicy,
+    });
+    assertPerUserTrackAllowed(linkedIsolations);
+    return explicitPolicy;
+  }
+
+  if (catalogScope === "global") {
+    return "fork_empty";
+  }
+
+  assertPerUserTrackAllowed(linkedIsolations);
 
   return "shared_primary";
 }

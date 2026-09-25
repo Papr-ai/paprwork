@@ -102,6 +102,9 @@ describe("WebSyncPopover", () => {
     expect(webSyncPushButtonLabel({ appLive: false, pushing: true })).toBe("Publishing…");
     expect(webSyncPushButtonLabel({ appLive: true, pushing: false })).toBe("Publish");
     expect(webSyncPushButtonLabel({ appLive: true, pushing: true })).toBe("Publishing…");
+    expect(webSyncPushButtonLabel({ appLive: false, pushing: false, trackCollaborator: true })).toBe(
+      "Sync code & data",
+    );
   });
 
   it("surfaces an error alongside the unresolved state", () => {
@@ -226,6 +229,46 @@ describe("WebSyncPopover", () => {
 
     expect(screen.getByRole("button", { name: /^publish$/i })).toBeTruthy();
     expect(screen.getByRole("button", { name: /get updates/i })).toBeTruthy();
+  });
+
+  it("team collaborator with draft cloud.live does not offer first-time owner publish copy", () => {
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        appLive={false}
+        trackCollaborator
+        sourceSlug="sqa-talent-assessment"
+        autoUploadEnabled={false}
+        status={minimalSyncStatus({
+          overall: "needs_sync",
+          summaryLine: "local app changes not on web yet",
+        })}
+        syncActionNeeded
+      />,
+    );
+
+    expect(screen.queryByText(/not on the web yet/i)).toBeNull();
+    expect(screen.getByRole("button", { name: /sync code & data/i })).toBeTruthy();
+    expect(screen.queryByText(/Proposal waiting for review/i)).toBeNull();
+  });
+
+  it("proposal waiting shows status banner and view proposals", () => {
+    const onView = vi.fn();
+    render(
+      <WebSyncPopover
+        {...baseProps}
+        appLive={false}
+        trackCollaborator
+        sourceSlug="demo"
+        proposalWaiting
+        onViewProposals={onView}
+        status={minimalSyncStatus()}
+      />,
+    );
+
+    expect(screen.getByText(/Proposal waiting for review/i)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /view your proposals/i }));
+    expect(onView).toHaveBeenCalled();
   });
 
   it("shows Ask agent when large files are skipped from web sync", () => {

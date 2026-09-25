@@ -14,9 +14,25 @@ describe("cloudInstallDbPolicy", () => {
     );
   });
 
-  it("track + shared resolves to shared_primary", () => {
-    expect(resolveInstallDbPolicy("track", ["shared"])).toBe("shared_primary");
-    expect(resolveInstallDbPolicy("track", [])).toBe("shared_primary");
+  it("track + shared resolves to shared_primary by default on team apps", () => {
+    expect(resolveInstallDbPolicy("track", ["shared"], "namespace")).toBe(
+      "shared_primary",
+    );
+    expect(resolveInstallDbPolicy("track", [], "namespace")).toBe(
+      "shared_primary",
+    );
+  });
+
+  it("honours explicit team track + fork_empty", () => {
+    expect(
+      resolveInstallDbPolicy("track", ["shared"], "namespace", "fork_empty"),
+    ).toBe("fork_empty");
+  });
+
+  it("rejects shared_primary on community track", () => {
+    expect(() =>
+      resolveInstallDbPolicy("track", [], "global", "shared_primary"),
+    ).toThrow(CloudInstallDbPolicyError);
   });
 
   it("track + per-user throws", () => {

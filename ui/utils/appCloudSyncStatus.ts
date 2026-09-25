@@ -1658,9 +1658,15 @@ export function resolvePublishBarStatus(input: PublishBarStatusInput): {
  * Publish here, and Propose greys out when nothing differs from the
  * publisher's last synced code.
  */
+export type CollaboratorLatestProposalStatus = "pending" | "approved" | "rejected";
+
 export function resolveCollaboratorBar(input: {
   /** true/false from the local-edits check; null = unknown (keep Propose enabled). */
   hasLocalEdits: boolean | null;
+  /** Edits not yet sent in a proposal. Omitted = same as hasLocalEdits. */
+  hasUnproposedEdits?: boolean | null;
+  /** Newest outgoing proposal status (collaborator install). */
+  latestProposalStatus?: CollaboratorLatestProposalStatus | null;
   publisherAhead: boolean;
   pullingUpstream: boolean;
   busy: boolean;
@@ -1669,39 +1675,104 @@ export function resolveCollaboratorBar(input: {
   chip: { label: string; tone: PublishBarChipTone; state: WebSyncVisualState };
   chipAction: { kind: "upstream" | "propose"; glyph: "down" | "up"; verb: string } | null;
   primary: { label: string; disabled: boolean; title: string; pullFirst: boolean };
+  /** Status chip should open the Propose sheet (history + owner decision). */
+  openProposeSheetOnChipClick: boolean;
 } {
   const { hasLocalEdits, publisherAhead, pullingUpstream, busy, sourceSlug } = input;
-  const edits = hasLocalEdits !== false;
+  // Everything edited was already proposed: waiting on the owner, nothing new to send.
+  const allProposed = hasLocalEdits === true && input.hasUnproposedEdits === false;
+  const edits = hasLocalEdits !== false && !allProposed;
   if (pullingUpstream) {
     return {
       chip: { label: "Updating…", tone: "busy", state: "syncing" },
       chipAction: null,
       primary: { label: "Updating…", disabled: true, title: "Getting the publisher's latest code", pullFirst: false },
+      openProposeSheetOnChipClick: false,
     };
   }
-  const chip = publisherAhead
+  const proposalChip = ((): {
+    label: string;
+    tone: PublishBarChipTone;
+    state: WebSyncVisualState;
+  } | null => {
+    if (!allProposed || !input.latestProposalStatus) {
+      return null;
+    }
+    switch (input.latestProposalStatus) {
+      case "pending":
+        return { label: "Waiting for review", tone: "info", state: "syncing" };
+      case "approved":
+        return publisherAhead
+          ? { label: "Accepted — pull updates", tone: "ok", state: "updates_available" }
+          : { label: "Accepted by owner", tone: "ok", state: "synced" };
+      case "rejected":
+        return { label: "Declined — propose again", tone: "warn", state: "warn" };
+      default:
+        return null;
+    }
+  })();
+
+  const chip = publisherAhead && input.latestProposalStatus !== "approved"
     ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
-    : hasLocalEdits
-      ? { label: "Edits not proposed", tone: "warn" as const, state: "warn" as const }
-      : { label: "In sync with publisher", tone: "ok" as const, state: "synced" as const };
+    : proposalChip ??
+      (publisherAhead
+        ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
+        : allProposed
+          ? { label: "Proposal sent", tone: "info" as const, state: "synced" as const }
+          : hasLocalEdits
+            ? { label: "Edits not proposed", tone: "warn" as const, state: "warn" as const }
+            : { label: "In sync with publisher", tone: "ok" as const, state: "synced" as const });
   const chipAction = publisherAhead
     ? { kind: "upstream" as const, glyph: "down" as const, verb: "Update" }
-    : hasLocalEdits
+    : hasLocalEdits && !allProposed
       ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }
-      : null;
+      : input.latestProposalStatus === "rejected"
+        ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }
+        : null;
   const pullFirst = publisherAhead && edits;
+  const openProposeSheetOnChipClick =
+    allProposed ||
+    input.latestProposalStatus === "pending" ||
+    input.latestProposalStatus === "approved" ||
+    input.latestProposalStatus === "rejected";
   return {
     chip,
     chipAction,
+    openProposeSheetOnChipClick,
     primary: {
       label: "Propose",
-      disabled: busy || !edits,
+      disabled:
+        busy ||
+        (input.latestProposalStatus === "rejected" && input.hasUnproposedEdits === false) ||
+        (!edits &&
+          input.latestProposalStatus !== "rejected" &&
+          !(allProposed && input.latestProposalStatus === "pending")),
       pullFirst,
-      title: !edits
-        ? "No code edits to propose"
-        : pullFirst
-          ? `Gets ${sourceSlug}'s latest code first, then proposes your edits. Stops if they conflict.`
-          : `Send your code edits to ${sourceSlug} for review`,
+      title: allProposed
+        ? input.latestProposalStatus === "approved"
+          ? publisherAhead
+            ? `${sourceSlug} accepted your proposal. Pull their latest code to match the live app.`
+            : `${sourceSlug} accepted your proposal. You're aligned with the live app.`
+          : input.latestProposalStatus === "rejected"
+            ? `${sourceSlug} declined your last proposal. Edit and send a new one.`
+            : input.latestProposalStatus === "pending"
+              ? `Waiting for ${sourceSlug} to review your proposal.`
+              : `Your edits were sent to ${sourceSlug}. Edit again to propose more.`
+        : !edits
+          ? "No code edits to propose"
+          : pullFirst
+            ? `Gets ${sourceSlug}'s latest code first, then proposes your edits. Stops if they conflict.`
+            : `Send your code edits to ${sourceSlug} for review`,
     },
   };
+}
+
+/** @deprecated Prefer `openProposeSheetOnChipClick` from resolveCollaboratorBar. */
+export function collaboratorChipOpensProposeSheet(chipLabel: string): boolean {
+  return (
+    chipLabel === "Proposal sent" ||
+    chipLabel === "Waiting for review" ||
+    chipLabel.startsWith("Accepted") ||
+    chipLabel.startsWith("Declined")
+  );
 }

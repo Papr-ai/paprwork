@@ -23,6 +23,7 @@ export interface CloudLineageAppEntry {
   lastSyncedAt?: string;
   /** shared = team collaborator (publisher's data); forked = own data. */
   databasePolicy?: "shared" | "forked";
+  sourceAudience?: "team" | "people" | "community";
 }
 
 export interface CloudLineageIndex {
@@ -92,6 +93,7 @@ function toEntry(
     // Older track installs predate the field; they were always shared.
     databasePolicy:
       file.databasePolicy ?? (file.mode === "track" ? "shared" : "forked"),
+    ...(file.sourceAudience ? { sourceAudience: file.sourceAudience } : {}),
   };
 }
 
@@ -108,4 +110,20 @@ export function getCloudAppLineageService(
     singleton = new CloudAppLineageService(appsDir ?? defaultAppsDir());
   }
   return singleton;
+}
+
+/** "track" (collaborator), "fork" (own copy), or null when the app was not installed from the cloud. */
+export async function readCloudAppLineageMode(
+  appId: string,
+): Promise<"track" | "fork" | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(getPaprAppsRoot(), appId.trim(), CLOUD_LINEAGE_FILENAME),
+      "utf8",
+    );
+    const mode = (JSON.parse(raw) as { mode?: string }).mode;
+    return mode === "track" ? "track" : mode ? "fork" : null;
+  } catch {
+    return null;
+  }
 }

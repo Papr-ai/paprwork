@@ -60,6 +60,8 @@ export interface CommunityCatalogEntry {
   visibility?: string;
   /** External invite link enabled (unlisted — not Community Apps listed) */
   shareLinkEnabled?: boolean;
+  /** Memory server: false for specific-people / team shares not in global Community */
+  communityCatalogListed?: boolean;
   /** Publisher Papr user id — used to hide own apps from Shared with me */
   publisherUserId?: string;
   /** Scheduled job summary (denormalized at publish time) */

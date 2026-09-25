@@ -39,7 +39,13 @@ const installCloudAppSchema = z.object({
     .enum(["fork", "track"])
     .optional()
     .describe(
-      'fork = independent copy. track = shared team database (team-shared apps only). Omit on team-shared apps to get the same fork vs collaborate choice as the UI modal.',
+      "fork = independent copy. track = collaborate (code link). Omit on apps that need a choice to get the same options as the UI modal.",
+    ),
+  installDbPolicy: z
+    .enum(["fork_empty", "shared_primary"])
+    .optional()
+    .describe(
+      "DATA policy with mode. fork_empty = private database. shared_primary = shared team database (team track only). Must match the UI option the user picked.",
     ),
   catalogScope: z
     .enum(["community", "team", "global", "namespace"])
@@ -203,6 +209,7 @@ For team-shared apps, ask the user fork vs collaborate before calling — or omi
         namespaceId: args.namespaceId,
         slug: args.slug,
         mode: args.mode,
+        installDbPolicy: args.installDbPolicy,
         shareToken: args.shareToken,
         catalogScope: args.catalogScope,
         visibility: args.visibility,

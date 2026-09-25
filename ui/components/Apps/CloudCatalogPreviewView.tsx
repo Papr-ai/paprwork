@@ -384,10 +384,10 @@ export function CloudCatalogPreviewView({
           catalogScope={installModeEntry.catalogScope}
           installing={installingId === installModeEntry.entry.catalogId}
           onClose={() => setInstallModeEntry(null)}
-          onSelectMode={(mode) => {
+          onSelectMode={(selection) => {
             const { entry: target, catalogScope } = installModeEntry;
             setInstallModeEntry(null);
-            void installCloudApp(target, mode, catalogScope);
+            void installCloudApp(target, selection, catalogScope);
           }}
         />
       ) : null}

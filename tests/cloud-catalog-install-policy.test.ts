@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  getCloudCatalogInstallModeOptions,
+  cloudCatalogInstallOptionKey,
   getCloudCatalogInstallModeOptions,
   requiresInstallModeChoice,
   resolveAutomaticInstallMode,
@@ -28,8 +28,15 @@ describe("cloudCatalogInstallPolicy", () => {
         catalogScope: "global",
         visibility: "public_read",
         codeInstallable: true,
-      }).map((option) => option.mode),
-    ).toEqual(["fork", "track"]);
+      }).map((option) => cloudCatalogInstallOptionKey(option)),
+    ).toEqual(["fork:fork_empty", "track:fork_empty"]);
+    expect(
+      getCloudCatalogInstallModeOptions({
+        catalogScope: "global",
+        visibility: "public_read",
+        codeInstallable: true,
+      }).map((option) => option.label),
+    ).toEqual(["Install a copy", "Collaborate (no data sharing)"]);
   });
 
   it("prompts fork vs collaborate for team-shared namespace apps", () => {
@@ -52,8 +59,23 @@ describe("cloudCatalogInstallPolicy", () => {
         catalogScope: "namespace",
         visibility: "team",
         codeInstallable: true,
-      }).map((option) => option.mode),
-    ).toEqual(["fork", "track"]);
+      }).map((option) => cloudCatalogInstallOptionKey(option)),
+    ).toEqual([
+      "fork:fork_empty",
+      "track:fork_empty",
+      "track:shared_primary",
+    ]);
+    expect(
+      getCloudCatalogInstallModeOptions({
+        catalogScope: "namespace",
+        visibility: "team",
+        codeInstallable: true,
+      }).map((option) => option.label),
+    ).toEqual([
+      "Install a copy",
+      "Collaborate (no data sharing)",
+      "Collaborate (data sharing)",
+    ]);
   });
 
   it("auto-forks non-team-shared namespace apps", () => {

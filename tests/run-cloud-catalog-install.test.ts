@@ -72,7 +72,21 @@ describe("runCloudCatalogInstall", () => {
     }
 
     expect(raised?.message).toContain("Team app");
-    expect(raised?.message).toContain("Shared team database");
+    expect(raised?.message).toContain("Collaborate (data sharing)");
+    expect(raised?.message).toContain('installDbPolicy "shared_primary"');
+  });
+
+  it("passes explicit installDbPolicy through", () => {
+    expect(
+      buildCloudCatalogInstallInput({
+        namespaceId: "ns-1",
+        slug: "team-app",
+        mode: "track",
+        installDbPolicy: "fork_empty",
+        catalogScope: "namespace",
+        visibility: "team",
+      }),
+    ).toMatchObject({ mode: "track", installDbPolicy: "fork_empty" });
   });
 
   it("passes explicit track mode through", () => {

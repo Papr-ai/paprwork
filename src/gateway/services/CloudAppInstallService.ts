@@ -52,6 +52,7 @@ export interface CloudAppInstallInput {
   namespaceId: string;
   slug: string;
   mode?: CloudAppInstallMode;
+  installDbPolicy?: import("./cloudInstallDbPolicy.js").InstallDbPolicy;
   shareToken?: string;
   /** Catalog tab scope — community (global) forbids track. */
   catalogScope?: "global" | "namespace";
@@ -59,6 +60,8 @@ export interface CloudAppInstallInput {
   visibility?: string;
   /** Name for the new app (Duplicate as my own app). Made unique locally. */
   title?: string;
+  /** Who the source is shared with (team / people / community), for the lineage mark. */
+  sourceAudience?: "team" | "people" | "community";
 }
 
 export interface CloudAppInstallResult {
@@ -218,6 +221,7 @@ export class CloudAppInstallService {
       mode,
       linkedIsolations,
       input.catalogScope,
+      input.installDbPolicy,
     );
     const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
 
@@ -333,8 +337,12 @@ export class CloudAppInstallService {
         buildCloudInstallAgentSetupMessage,
         shouldOfferInstallAgentSetup,
       } = await import("./cloudAppInstallBootstrap.js");
+      const deferTursoUntilPublish =
+        mode === "fork" ||
+        (mode === "track" && input.catalogScope === "global");
       const bootstrap = await bootstrapInstalledAppDatabases(app.id, {
         installDbPolicy,
+        deferTursoUntilPublish,
       });
 
       if (bootstrap.errors.length > 0) {
@@ -370,6 +378,7 @@ export class CloudAppInstallService {
         mode: prepare.mode,
         source: prepare.source,
         databasePolicy,
+        ...(input.sourceAudience ? { sourceAudience: input.sourceAudience } : {}),
         installedAt: new Date().toISOString(),
         ...(prepare.mode === "track"
           ? {

@@ -222,6 +222,8 @@ export function useAppCloudSyncStatus(
   /** Resolves true when local reached the web head with no conflicts. */
   pullUpdates: (resolution?: "take_theirs" | "keep_mine") => Promise<boolean>;
   applyRemoteUpdates: () => Promise<void>;
+  /** Track-mode installs: publisher has newer code than last upstream sync. */
+  publisherUpdatesAvailable: boolean;
 } {
   const active = options?.enabled !== false;
   const previewTabVisible = options?.previewTabVisible !== false;

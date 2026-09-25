@@ -2,10 +2,12 @@
  * Maps Paprwork cloud link prefs ↔ memory server publish API fields.
  */
 
-import type { CloudAccessMode } from "./cloudPublishPrefs.js";
+import type { CloudAccessMode, CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
 import { formatShareLink } from "../../core/utils/cloudShareLink.js";
 import {
   accessModeToSharingSettings,
+  mergePublishPrefsForFields,
+  resolvePublishFieldsFromPrefs,
   sharingSettingsToPublishFields,
   type CloudSharingSettings,
   type MemoryPublishSharingFields,
@@ -20,6 +22,7 @@ export {
   sharingSettingsToPublishFields,
   resolveSharingSettings,
   resolvePublishFieldsFromPrefs,
+  mergePublishPrefsForFields,
   sharingSettingsSummary,
   type CloudSharingSettings,
   type CloudLoginAccess,
@@ -59,6 +62,10 @@ export interface MemoryPublishResponseFields {
   shareUrl?: string;
   shareToken?: string;
   publishedAt?: string;
+  /** Audience "people" — enforced again on Cloud App Host. */
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
   catalogRequirements?: MemoryCatalogRequirementFields[];
   catalogTitle?: string;
   catalogDescription?: string;
@@ -100,6 +107,27 @@ export function memoryPublishResponseToSharingSettings(
   memory: MemoryPublishResponseFields,
 ): CloudSharingSettings {
   return accessModeToSharingSettings(visibilityToAccessMode(memory.visibility));
+}
+
+/**
+ * Catalog-only sync must not rewrite community listing from memory visibility alone.
+ * Memory stores public_read for external-email "people" apps; prefs carry allowlists
+ * and the correct communityCatalogListed flag.
+ */
+export function resolvePublishFieldsWhenPreservingCloudSharing(
+  memory: MemoryPublishResponseFields,
+  prefs: CloudPublishAppPrefs,
+): MemoryPublishSharingFields & { codeAccess: CodeAccess } {
+  const fromMemory = resolvePublishFieldsFromMemory(memory);
+  const fromPrefs = resolvePublishFieldsFromPrefs(mergePublishPrefsForFields(prefs));
+  return {
+    ...fromMemory,
+    communityCatalogListed: fromPrefs.communityCatalogListed,
+    requireSignIn:
+      fromPrefs.requireSignIn !== undefined
+        ? fromPrefs.requireSignIn
+        : fromMemory.requireSignIn,
+  };
 }
 
 /** ACL fields currently live on the memory server — for code-only republish. */

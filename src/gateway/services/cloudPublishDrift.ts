@@ -39,6 +39,8 @@ export function prefsSharingFieldsChanged(
   );
 }
 
+export { prefsPeopleAllowlistChanged } from "./cloudShareAllowlistMemory.js";
+
 export interface PublishDriftInput {
   memory: MemoryPublishResponseFields | null;
   prefs: CloudPublishAppPrefs;

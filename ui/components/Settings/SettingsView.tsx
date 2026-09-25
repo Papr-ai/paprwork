@@ -1180,6 +1180,38 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.17" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.17</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Safer app delete</strong>
+                <p>
+                  Deleting an app respects cloud lineage and sharing — linked
+                  publisher databases and team share settings are handled
+                  explicitly instead of leaving orphaned cloud state.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Community install and sync</strong>
+                <p>
+                  Catalog install, track sync, and publish flows preserve sharing
+                  and upstream revision checks; share audience is clearer in the
+                  publish bar and sync popover.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.17"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.16" && (
           <div className="about-card">
             <h3>What's New in v2.6.16</h3>

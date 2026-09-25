@@ -27,6 +27,8 @@ export interface ArtifactCloudLineage {
   lastSyncedAt?: string;
   /** shared = team collaborator (publisher's data); forked = own data. */
   databasePolicy?: "shared" | "forked";
+  /** Who the source is shared with: collaborator mark by the title. */
+  sourceAudience?: "team" | "people" | "community";
 }
 
 export interface Artifact {

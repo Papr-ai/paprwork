@@ -9,7 +9,7 @@
  *   Sourced from .env.local or ../memory/.env (GITHUB_APP_*).
  *
  * Usage:
- *   node scripts/deploy-cloud-app-repo-writer.mjs --project=papr-apps-prod --region=us-west1
+ *   node scripts/deploy-cloud-app-repo-writer.mjs --project=gen-lang-client-0873281406 --region=us-west1
  *   node scripts/deploy-cloud-app-repo-writer.mjs --fast --project=...   # env/secrets only
  *   node scripts/deploy-cloud-app-repo-writer.mjs --refresh-github-secrets # push new secret versions from env
  */
@@ -71,7 +71,11 @@ const dryRun = args.includes("--dry-run");
 const fastDeploy = args.includes("--fast");
 const refreshGithubSecrets = args.includes("--refresh-github-secrets");
 
-const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
+const DEFAULT_APPS_GCP_PROJECT = "gen-lang-client-0873281406";
+const project = getArg(
+  "project",
+  process.env.GCP_APPS_PROJECT_ID ?? DEFAULT_APPS_GCP_PROJECT,
+);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
 const service = getArg("service", "app-repo-writer");
 const memoryUrl =
@@ -217,7 +221,9 @@ function grantComputeSecretAccess(secretNames) {
 }
 
 if (!project) {
-  fail("Missing --project or GCP_APPS_PROJECT_ID");
+  fail(
+    "Missing --project=gen-lang-client-0873281406 (or GCP_APPS_PROJECT_ID in .env.local)",
+  );
 }
 
 const imageTag = getArg("tag", "latest");

@@ -10,7 +10,7 @@
  *   - Auth0 callback: https://apps.papr.ai/auth/callback
  *
  * Usage:
- *   node scripts/deploy-cloud-app-host.mjs --project=papr-apps-prod --region=us-west1
+ *   node scripts/deploy-cloud-app-host.mjs --project=gen-lang-client-0873281406 --region=us-west1
  *
  * Options:
  *   --project=ID          GCP project (required)
@@ -55,7 +55,11 @@ const getArg = (name, fallback) => {
 const dryRun = args.includes("--dry-run");
 const fastDeploy = args.includes("--fast");
 
-const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
+const DEFAULT_APPS_GCP_PROJECT = "gen-lang-client-0873281406";
+const project = getArg(
+  "project",
+  process.env.GCP_APPS_PROJECT_ID ?? DEFAULT_APPS_GCP_PROJECT,
+);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
 const service = getArg("service", "papr-cloud-app-host");
 const repo = getArg("repo", "papr-apps");
@@ -92,7 +96,9 @@ function fail(msg) {
 }
 
 if (!project) {
-  fail("Missing --project=YOUR_GCP_PROJECT (or GCP_APPS_PROJECT_ID env var)");
+  fail(
+    "Missing --project=gen-lang-client-0873281406 (or GCP_APPS_PROJECT_ID in .env.local)",
+  );
 }
 
 console.log("Cloud App Host — production deploy");

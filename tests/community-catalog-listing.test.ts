@@ -68,6 +68,27 @@ describe("isCommunityCatalogListed", () => {
     ).toBe(false);
   });
 
+  it("excludes specific people when prefs use an allowlist", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        shareLinkEnabled: false,
+        sharing: { loginAccess: "public", externalLink: "off" },
+        requireSignIn: true,
+        allowedEmails: ["guest@acme.com"],
+      }),
+    ).toBe(false);
+  });
+
+  it("excludes memory rows marked not community-listed", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        communityCatalogListed: false,
+      }),
+    ).toBe(false);
+  });
+
   it("excludes link audience even when loginAccess is public", () => {
     expect(
       isCommunityCatalogListed({
@@ -130,6 +151,23 @@ describe("shouldIncludeInPublicCommunity — link-only apps", () => {
     const entry = cloudEntry({
       visibility: "public_read",
       shareLinkEnabled: false,
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+
+  it("excludes owned specific-people shares from global Community Apps", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "team",
+      externalLink: "off",
+      codeAccess: "off",
+      allowedUserIds: ["user-abc"],
+    });
+
+    const entry = cloudEntry({
+      visibility: "team",
       isOwned: true,
     });
     expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(

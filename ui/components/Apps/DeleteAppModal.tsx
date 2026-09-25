@@ -30,6 +30,9 @@ interface DeleteAppPreview {
   linkedJobs: LinkedJobInfo[];
   tursoDbCount: number;
   linkedRegistryDatabases: LinkedRegistryDbInfo[];
+  localUninstallOnly?: boolean;
+  publisherSharedDeprecation?: boolean;
+  sourceSlug?: string | null;
 }
 
 interface DeleteAppModalProps {
@@ -74,14 +77,15 @@ export function DeleteAppModal({
   useEffect(() => {
     if (isOpen) {
       setConfirmText("");
-      setDeleteJobs(true);
-      setDeleteTurso(true);
+      const localOnly = preview?.localUninstallOnly === true;
+      setDeleteJobs(!localOnly);
+      setDeleteTurso(!localOnly);
       setDeleteRegistryDbs(false);
-      setDeleteRegistryTurso(true);
+      setDeleteRegistryTurso(!localOnly);
       setIsDeleting(false);
       setTimeout(() => inputRef.current?.focus(), 50);
     }
-  }, [isOpen]);
+  }, [isOpen, preview?.localUninstallOnly]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -98,19 +102,27 @@ export function DeleteAppModal({
   const isConfirmValid = confirmText === preview.appTitle;
   const hasLinkedJobs = preview.linkedJobs.length > 0;
   const hasTursoDbs = preview.tursoDbCount > 0;
+  const localUninstallOnly = preview.localUninstallOnly === true;
+  const publisherSharedDeprecation =
+    !localUninstallOnly && preview.publisherSharedDeprecation === true;
 
   const handleConfirm = async () => {
     if (!isConfirmValid || isDeleting) return;
     setIsDeleting(true);
     try {
       await onConfirm({
-        deleteLinkedJobs: deleteJobs,
-        deleteTursoDatabases: deleteTurso && deleteJobs,
-        deleteRegistryDbIds: deleteRegistryDbs
-          ? soleLinkerRegistryDbs.map((db) => db.dbId)
-          : [],
-        deleteRegistryTurso: deleteRegistryTurso && deleteRegistryDbs,
-        unpublishFromCloud: preview.isPublished,
+        deleteLinkedJobs: localUninstallOnly ? false : deleteJobs,
+        deleteTursoDatabases: localUninstallOnly
+          ? false
+          : deleteTurso && deleteJobs,
+        deleteRegistryDbIds:
+          localUninstallOnly || !deleteRegistryDbs
+            ? []
+            : soleLinkerRegistryDbs.map((db) => db.dbId),
+        deleteRegistryTurso: localUninstallOnly
+          ? false
+          : deleteRegistryTurso && deleteRegistryDbs,
+        unpublishFromCloud: localUninstallOnly ? false : preview.isPublished,
       });
     } finally {
       setIsDeleting(false);
@@ -140,12 +152,31 @@ export function DeleteAppModal({
               />
             </svg>
           </div>
-          <h3 className="delete-app-modal__title">Delete App</h3>
+          <h3 className="delete-app-modal__title">
+            {localUninstallOnly ? "Remove from this device" : "Delete App"}
+          </h3>
         </div>
 
+        {localUninstallOnly && (
+          <p className="delete-app-modal__notice">
+            Removes your local copy only. Cloud app code, shared databases, and jobs
+            for other collaborators are <strong>not</strong> changed.
+          </p>
+        )}
+
+        {publisherSharedDeprecation && (
+          <p className="delete-app-modal__notice delete-app-modal__notice--deprecate">
+            This app is shared with your team
+            {preview.sourceSlug ? ` (${preview.sourceSlug})` : ""}. Unpublishing
+            breaks it for everyone — notify collaborators before you continue.
+          </p>
+        )}
+
         <p className="delete-app-modal__warning">
-          This action <strong>cannot be undone</strong>. This will permanently delete
-          the app <strong>"{preview.appTitle}"</strong> and its source files.
+          This action <strong>cannot be undone</strong>.{" "}
+          {localUninstallOnly
+            ? `This removes "${preview.appTitle}" from this device.`
+            : `This will permanently delete the app "${preview.appTitle}" and its source files.`}
         </p>
 
         <div className="delete-app-modal__summary">
@@ -156,11 +187,11 @@ export function DeleteAppModal({
             <span>App source files (HTML, JS, config)</span>
           </div>
 
-          {preview.isPublished && (
+          {preview.isPublished && !localUninstallOnly && (
             <div className="delete-app-modal__item delete-app-modal__item--always">
               <span className="delete-app-modal__item-icon">🌐</span>
               <span>
-                Published web app
+                Published web app (unpublish from cloud)
                 {preview.shareUrl && (
                   <span className="delete-app-modal__url">{preview.shareUrl}</span>
                 )}
@@ -187,7 +218,7 @@ export function DeleteAppModal({
             </div>
           ))}
 
-          {soleLinkerRegistryDbs.length > 0 && (
+          {!localUninstallOnly && soleLinkerRegistryDbs.length > 0 && (
             <label className="delete-app-modal__option">
               <input
                 type="checkbox"
@@ -241,7 +272,7 @@ export function DeleteAppModal({
             </label>
           )}
 
-          {hasLinkedJobs && (
+          {!localUninstallOnly && hasLinkedJobs && (
             <label className="delete-app-modal__option">
               <input
                 type="checkbox"
@@ -342,6 +373,8 @@ export function DeleteAppModal({
                 <span className="delete-app-modal__progress-spinner delete-app-modal__progress-spinner--inline" aria-hidden />
                 Deleting…
               </>
+            ) : localUninstallOnly ? (
+              "Remove"
             ) : (
               "Delete App"
             )}

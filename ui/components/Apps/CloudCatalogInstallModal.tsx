@@ -7,7 +7,10 @@ import type {
   CommunityCatalogScope,
 } from "../../../src/core/types/communityCatalog";
 import { getCloudCatalogInstallModeOptions } from "../../../src/core/utils/cloudCatalogInstallPolicy";
-import type { CloudInstallMode } from "../../utils/cloudCatalogInstall";
+import {
+  cloudCatalogInstallOptionKey,
+} from "../../../src/core/utils/cloudCatalogInstallPolicy";
+import type { CloudCatalogInstallSelection } from "../../utils/cloudCatalogInstall";
 import "./CommunityAppsView.css";
 
 interface CloudCatalogInstallModalProps {
@@ -15,7 +18,7 @@ interface CloudCatalogInstallModalProps {
   catalogScope?: CommunityCatalogScope;
   installing: boolean;
   onClose: () => void;
-  onSelectMode: (mode: CloudInstallMode) => void;
+  onSelectMode: (selection: CloudCatalogInstallSelection) => void;
 }
 
 export function CloudCatalogInstallModal({
@@ -57,16 +60,21 @@ export function CloudCatalogInstallModal({
         */}
         <p className="community-install-modal__desc">
           {teamTab
-            ? "Install this team app locally. Choose whether you want your own database or the shared team database."
+            ? "Install this team app locally. Choose a private copy, collaborate on code only, or share the team database."
             : "Your data stays private either way. The only question is whether this copy stays connected to the original."}
         </p>
         {options.map((option) => (
           <button
-            key={option.mode}
+            key={cloudCatalogInstallOptionKey(option)}
             type="button"
             className="community-install-modal__option"
             disabled={installing}
-            onClick={() => onSelectMode(option.mode)}
+            onClick={() =>
+              onSelectMode({
+                mode: option.mode,
+                installDbPolicy: option.installDbPolicy,
+              })
+            }
           >
             <strong>{option.label}</strong>
             <span>{option.description}</span>

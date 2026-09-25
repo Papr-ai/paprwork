@@ -13,6 +13,13 @@ import type { RequirementItem } from "../../src/core/types/bundles";
 
 export type CloudInstallMode = "fork" | "track";
 
+export type CloudInstallDbPolicy = "fork_empty" | "shared_primary";
+
+export interface CloudCatalogInstallSelection {
+  mode: CloudInstallMode;
+  installDbPolicy: CloudInstallDbPolicy;
+}
+
 const GATEWAY =
   typeof import.meta !== "undefined" && import.meta.env?.VITE_GATEWAY_PORT
     ? `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}`
@@ -117,9 +124,10 @@ export function buildCloudInstallTimeoutAgentMessage(
 
 export async function installCloudCatalogApp(
   entry: CommunityCatalogEntry,
-  mode: CloudInstallMode,
+  selection: CloudCatalogInstallSelection,
   options?: { catalogScope?: CommunityCatalogScope },
 ): Promise<{ ok: true; data: CloudInstallResponse } | { ok: false; error: string }> {
+  const { mode, installDbPolicy } = selection;
   if (!entry.namespaceId || !entry.slug) {
     return { ok: false, error: "This cloud app is missing namespace or slug metadata" };
   }
@@ -138,8 +146,10 @@ export async function installCloudCatalogApp(
         namespaceId: entry.namespaceId,
         slug: entry.slug,
         mode,
+        installDbPolicy,
         catalogScope: options?.catalogScope,
         visibility: entry.visibility,
+        communityCatalogListed: entry.communityCatalogListed,
       }),
       signal: controller.signal,
     });

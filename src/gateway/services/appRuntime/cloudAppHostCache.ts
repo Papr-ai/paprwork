@@ -461,6 +461,7 @@ export async function validateCachedAccess(
   publishResolver: AppPublishResolver,
   runtimeAuth: AppRuntimeRouteAuth,
   stats?: { cacheHit?: boolean },
+  callerEmail?: string,
 ): Promise<AppAccessContext | null> {
   const key = runtimeAuthKey(runtimeAuth);
   const cached = readTimed(accessCache, key);
@@ -482,6 +483,7 @@ export async function validateCachedAccess(
     sessionToken: runtimeAuth.sessionToken,
     shareToken: runtimeAuth.shareToken,
     externalUserId: runtimeAuth.externalUserId,
+    callerEmail,
   });
   // Do not negative-cache denials — shared cookies can briefly point at the wrong app.
   if (access !== null) {

@@ -28,6 +28,8 @@ import {
   throwCloudPublishUnavailable,
 } from "../../gateway/utils/cloudPublishGate.js";
 import { formatShareLink } from "../utils/cloudShareLink.js";
+import { appendLineageToPublishData } from "../utils/cloudPublishLineageHints.js";
+import { getCloudAppLineageService } from "../../gateway/services/CloudAppLineageService.js";
 
 const loginAccessSchema = z.enum(["private", "team", "public", "none"]);
 const externalLinkSchema = z.enum(["off", "read", "read_write"]);
@@ -146,6 +148,10 @@ function formatPublishResult(
   };
 }
 
+async function readLineageForPublishTool(appId: string) {
+  return getCloudAppLineageService().readLineageForApp(appId);
+}
+
 function toolError(error: unknown, startTime: number): never {
   throw new Error(
     JSON.stringify({
@@ -161,7 +167,9 @@ export const getCloudAppPublishTool = createTool({
   id: "get_cloud_app_publish",
   description: `Get cloud publish status for a mini-app (apps.papr.ai).
 
-Returns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, and URLs.
+Returns live status, slug, loginAccess, externalLink, codeAccess (off | install), requireSignIn, perUserIsolation, Community listing, URLs, and **lineage** (mode fork|track, source.slug) when installed via install_cloud_app.
+
+If lineage.mode is **track**, also returns trackInstallWarning — you are a collaborator; use submit_cloud_app_pr + push_cloud_sync, not publish_cloud_app, to update the publisher's live URL.
 
 **Prefer this over export_app_bundle** when Cloud Sync + Papr login are enabled.
 If Cloud Sync is off, the tool returns an error — use export_app_bundle instead (recommend enabling Cloud first).`,
@@ -186,12 +194,16 @@ If Cloud Sync is off, the tool returns an error — use export_app_bundle instea
         accessMode: config.accessMode,
       });
       const codeAccess: CodeAccess = prefs.codeAccess ?? "off";
+      const lineage = await readLineageForPublishTool(args.appId);
       return {
         success: true,
-        data: formatPublishResult(args.appId, config, sharing, codeAccess, {
-          requireSignIn: prefs.requireSignIn,
-          perUserIsolation: prefs.perUserIsolation,
-        }),
+        data: appendLineageToPublishData(
+          formatPublishResult(args.appId, config, sharing, codeAccess, {
+            requireSignIn: prefs.requireSignIn,
+            perUserIsolation: prefs.perUserIsolation,
+          }),
+          lineage,
+        ),
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
       };
@@ -204,6 +216,8 @@ If Cloud Sync is off, the tool returns an error — use export_app_bundle instea
 export const publishCloudAppTool = createTool({
   id: "publish_cloud_app",
   description: `Publish or update cloud sharing for a mini-app on apps.papr.ai.
+
+**Track collaborator guard:** If papr-cloud-lineage.json has mode=track (team collaborate install), this tool registers sharing for YOUR local app id — it does NOT update the publisher's live apps.papr.ai bundle. Check get_cloud_app_publish → lineage; when mode=track, use push_cloud_sync + submit_cloud_app_pr instead. Shared DB rows still need push_cloud_sync (Turso).
 
 **Preferred path for sharing** (when Cloud Sync + Papr login are on):
 - **Community + fork/install:** loginAccess=public, codeAccess=install
@@ -313,12 +327,16 @@ If Cloud Sync is disabled, returns an error with fallbackTool=export_app_bundle 
         accessMode: config.accessMode,
       });
       const codeAccess: CodeAccess = prefs.codeAccess ?? args.codeAccess ?? "off";
+      const lineage = await readLineageForPublishTool(args.appId);
       return {
         success: true,
-        data: formatPublishResult(args.appId, config, sharing, codeAccess, {
-          requireSignIn: prefs.requireSignIn,
-          perUserIsolation: prefs.perUserIsolation,
-        }),
+        data: appendLineageToPublishData(
+          formatPublishResult(args.appId, config, sharing, codeAccess, {
+            requireSignIn: prefs.requireSignIn,
+            perUserIsolation: prefs.perUserIsolation,
+          }),
+          lineage,
+        ),
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),
       };

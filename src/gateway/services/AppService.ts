@@ -171,6 +171,7 @@ export interface MiniAppCloudLineage {
   installedAt: string;
   lastSyncedAt?: string;
   databasePolicy?: "shared" | "forked";
+  sourceAudience?: "team" | "people" | "community";
 }
 
 import type { AppAgentChatConfig } from "../../core/types/appAgentChat.js";
@@ -270,6 +271,11 @@ export interface DeleteAppPreview {
   tursoDbCount: number;
   /** Registry databases linked via data-sources.json */
   linkedRegistryDatabases: LinkedRegistryDbPreview[];
+  /** Collaborator copy: remove locally only (no cloud / shared Turso). */
+  localUninstallOnly?: boolean;
+  /** Publisher removing a shared live app — warn collaborators will break. */
+  publisherSharedDeprecation?: boolean;
+  sourceSlug?: string | null;
 }
 
 export interface DeleteAppResult {
@@ -2603,6 +2609,14 @@ export class AppService {
       }
     }
 
+    const { resolveAppDeleteScope, sanitizeDeleteAppOptionsForScope } =
+      await import("./appDeleteScope.js");
+    const deleteScope = await resolveAppDeleteScope(
+      id,
+      this.appsDir,
+      cloudStatus.published,
+    );
+
     // If user hasn't confirmed, return preview for the deletion modal
     if (!confirmed) {
       return {
@@ -2615,14 +2629,30 @@ export class AppService {
           linkedJobs: exclusiveJobs,
           tursoDbCount,
           linkedRegistryDatabases,
+          localUninstallOnly: deleteScope.localUninstallOnly,
+          publisherSharedDeprecation: deleteScope.publisherSharedDeprecation,
+          sourceSlug: deleteScope.sourceSlug,
         },
       };
     }
 
     // --- User has confirmed, proceed with deletion ---
 
+    const safeOptions = sanitizeDeleteAppOptionsForScope(deleteScope, {
+      unpublishFromCloud: options?.unpublishFromCloud,
+      deleteLinkedJobs: options?.deleteLinkedJobs,
+      deleteTursoDatabases: options?.deleteTursoDatabases,
+      deleteRegistryDbIds: options?.deleteRegistryDbIds,
+      deleteRegistryTurso: options?.deleteRegistryTurso,
+    });
+    if (deleteScope.localUninstallOnly) {
+      console.log(
+        `[AppService] Collaborator uninstall for ${id} — skipping cloud/shared deletes`,
+      );
+    }
+
     let unpublished = false;
-    if (cloudStatus.published && options?.unpublishFromCloud === true) {
+    if (cloudStatus.published && safeOptions.unpublishFromCloud) {
       const { getCloudAppPublishService } = await import(
         "./CloudAppPublishService.js"
       );
@@ -2633,14 +2663,14 @@ export class AppService {
     // Delete linked jobs and their Turso databases if requested
     let deletedJobCount = 0;
     let deletedTursoDbCount = 0;
-    if (options?.deleteLinkedJobs && exclusiveJobs.length > 0) {
+    if (safeOptions.deleteLinkedJobs && exclusiveJobs.length > 0) {
       try {
         const { getJobsService } = await import("./JobsService.js");
         const jobsService = getJobsService();
         
         // Get Turso bridge for database cleanup
         let tursoSyncBridge: Awaited<ReturnType<typeof import("./TursoSyncBridge.js").getTursoSyncBridge>> | null = null;
-        if (options?.deleteTursoDatabases) {
+        if (safeOptions.deleteTursoDatabases) {
           try {
             const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
             tursoSyncBridge = getTursoSyncBridge();
@@ -2651,7 +2681,7 @@ export class AppService {
         
         for (const job of exclusiveJobs) {
           // Delete Turso database first (if requested and exists)
-          if (options?.deleteTursoDatabases && job.hasTursoDb && tursoSyncBridge) {
+          if (safeOptions.deleteTursoDatabases && job.hasTursoDb && tursoSyncBridge) {
             try {
               const deleted = await tursoSyncBridge.deleteJobTursoDatabase(job.id);
               if (deleted) deletedTursoDbCount++;
@@ -2675,15 +2705,15 @@ export class AppService {
 
     let deletedRegistryDbCount = 0;
     let deletedRegistryTursoCount = 0;
-    if (options?.deleteRegistryDbIds && options.deleteRegistryDbIds.length > 0) {
+    if (safeOptions.deleteRegistryDbIds.length > 0) {
       try {
         const { deleteSoleLinkerRegistryDatabases } = await import(
           "./deleteAppLinkedDatabases.js"
         );
         const registryResult = await deleteSoleLinkerRegistryDatabases(
           id,
-          options.deleteRegistryDbIds,
-          options.deleteRegistryTurso === true,
+          safeOptions.deleteRegistryDbIds,
+          safeOptions.deleteRegistryTurso,
         );
         deletedRegistryDbCount = registryResult.deletedRegistryDbCount;
         deletedRegistryTursoCount = registryResult.deletedRegistryTursoCount;
@@ -2698,10 +2728,21 @@ export class AppService {
     const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
     removeAppPublishPrefs(id, this.paprRootDir);
 
+    try {
+      const { removeSharedPrimaryTursoEntriesForApp } = await import(
+        "./sharedPrimaryTursoStore.js"
+      );
+      removeSharedPrimaryTursoEntriesForApp(id, this.paprRootDir);
+    } catch {
+      /* optional */
+    }
+
     // Stop cloud sync / writer state before removing files (prevents ghost __papr__ rebuild).
     try {
       const { deleteAppSyncArtifacts } = await import("./deleteAppSyncArtifacts.js");
-      await deleteAppSyncArtifacts(id, this.paprRootDir);
+      await deleteAppSyncArtifacts(id, this.paprRootDir, {
+        skipSchemaOwnerRegistryTombstone: deleteScope.localUninstallOnly,
+      });
     } catch (error) {
       console.warn(
         `[AppService] Sync artifact cleanup failed for ${id}:`,

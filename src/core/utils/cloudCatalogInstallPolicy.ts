@@ -6,14 +6,26 @@ import type { CommunityCatalogScope } from "../types/communityCatalog.js";
 import { isTeamSharedVisibility } from "../types/communityCatalog.js";
 import type { CloudAppInstallMode } from "../types/cloudAppLineage.js";
 
+/** Runtime install pipeline policy (matches gateway cloudInstallDbPolicy). */
+export type CloudCatalogInstallDbPolicy = "fork_empty" | "shared_primary";
+
 export interface CloudCatalogInstallModeOption {
   mode: CloudAppInstallMode;
+  /** Which database policy this choice applies (DATA axis, distinct from mode). */
+  installDbPolicy: CloudCatalogInstallDbPolicy;
   label: string;
   description: string;
 }
 
+export function cloudCatalogInstallOptionKey(
+  option: Pick<CloudCatalogInstallModeOption, "mode" | "installDbPolicy">,
+): string {
+  return `${option.mode}:${option.installDbPolicy}`;
+}
+
 export const COMMUNITY_FORK_OPTION: CloudCatalogInstallModeOption = {
   mode: "fork",
+  installDbPolicy: "fork_empty",
   label: "Install a copy",
   description:
     "Yours to change freely. No link to the original — no updates, no way to send changes back.",
@@ -26,23 +38,34 @@ export const COMMUNITY_FORK_OPTION: CloudCatalogInstallModeOption = {
  */
 export const COMMUNITY_TRACK_OPTION: CloudCatalogInstallModeOption = {
   mode: "track",
-  label: "Collaborate on it",
+  installDbPolicy: "fork_empty",
+  label: "Collaborate (no data sharing)",
   description:
     "Your own private data, still linked to the original: pull the author's updates and propose your changes back.",
 };
 
 export const TEAM_FORK_OPTION: CloudCatalogInstallModeOption = {
   mode: "fork",
-  label: "My own database (empty)",
+  installDbPolicy: "fork_empty",
+  label: "Install a copy",
   description:
-    "Independent copy with a fresh database. Your edits won't affect teammates.",
+    "Independent copy with a fresh database. No link to the original — your edits won't affect teammates.",
 };
 
-export const TEAM_TRACK_OPTION: CloudCatalogInstallModeOption = {
+export const TEAM_TRACK_NO_DATA_OPTION: CloudCatalogInstallModeOption = {
   mode: "track",
-  label: "Shared team database",
+  installDbPolicy: "fork_empty",
+  label: "Collaborate (no data sharing)",
   description:
-    "Same data as the web app — collaborate on the publisher's database and pull code updates when ready.",
+    "Your own private database, still linked to the team app: pull code updates and propose changes without sharing rows with teammates.",
+};
+
+export const TEAM_TRACK_SHARED_DATA_OPTION: CloudCatalogInstallModeOption = {
+  mode: "track",
+  installDbPolicy: "shared_primary",
+  label: "Collaborate (data sharing)",
+  description:
+    "Same data as the web app — collaborate on the shared team database and pull code updates when ready.",
 };
 
 /**
@@ -86,7 +109,11 @@ export function getCloudCatalogInstallModeOptions(input: {
     return [COMMUNITY_FORK_OPTION, COMMUNITY_TRACK_OPTION];
   }
   if (requiresInstallModeChoice(input)) {
-    return [TEAM_FORK_OPTION, TEAM_TRACK_OPTION];
+    return [
+      TEAM_FORK_OPTION,
+      TEAM_TRACK_NO_DATA_OPTION,
+      TEAM_TRACK_SHARED_DATA_OPTION,
+    ];
   }
   return [TEAM_FORK_OPTION];
 }

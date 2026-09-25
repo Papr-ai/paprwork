@@ -321,8 +321,12 @@ export async function pullTrackSharedAppDatabase(
 
 export interface BootstrapInstalledAppOptions {
   tursoPullOnly?: boolean;
-  /** Community fork: apply local migrations only; defer Turso until publish/sync. */
   installDbPolicy?: InstallDbPolicy;
+  /**
+   * Fork or community collaborate: apply local schema only; defer Turso until
+   * the user publishes/syncs. Team track (private or shared) runs Turso bootstrap.
+   */
+  deferTursoUntilPublish?: boolean;
   /**
    * Apply pending migrations under this workspace (cross-namespace copy).
    * Skips Turso sync — target namespace credentials are not active during copy.
@@ -330,18 +334,26 @@ export interface BootstrapInstalledAppOptions {
   paprHome?: string;
 }
 
-function isForkLocalOnlyBootstrap(
-  options?: BootstrapInstalledAppOptions,
-): boolean {
-  return (
-    options?.installDbPolicy === "fork_empty" && options.tursoPullOnly !== true
-  );
-}
-
 function shouldSkipTursoDuringBootstrap(
   options?: BootstrapInstalledAppOptions,
 ): boolean {
-  return isForkLocalOnlyBootstrap(options) || Boolean(options?.paprHome?.trim());
+  return (
+    Boolean(options?.deferTursoUntilPublish && options.tursoPullOnly !== true) ||
+    Boolean(options?.paprHome?.trim())
+  );
+}
+
+function shouldRunMigrationsBeforeTurso(
+  options?: BootstrapInstalledAppOptions,
+): boolean {
+  if (options?.tursoPullOnly || shouldSkipTursoDuringBootstrap(options)) {
+    return false;
+  }
+  // Shared team database: pull remote rows first, then apply forward-only migrations.
+  if (options?.installDbPolicy === "shared_primary") {
+    return false;
+  }
+  return true;
 }
 
 /** Apply migrations + optional Turso pull for one installed app. */
@@ -376,8 +388,7 @@ export async function bootstrapInstalledAppDatabases(
   let tursoSummary: SyncSummary | null = null;
   const pullResults = new Map<string, PullResult | undefined>();
   const migrationsByAlias = new Map<string, string[]>();
-  const runMigrationsBeforeTurso =
-    !options?.tursoPullOnly && !localOnly;
+  const runMigrationsBeforeTurso = shouldRunMigrationsBeforeTurso(options);
 
   if (runMigrationsBeforeTurso) {
     for (const source of sources) {
@@ -526,6 +537,7 @@ export async function bootstrapCopiedAppDatabasesInWorkspace(
 ): Promise<InstallBootstrapResult> {
   return bootstrapInstalledAppDatabases(appId, {
     installDbPolicy: "fork_empty",
+    deferTursoUntilPublish: true,
     paprHome: path.resolve(paprHome),
   });
 }

@@ -73,6 +73,11 @@ const GATEWAY =
     : "http://localhost:18789";
 
 type CloudInstallMode = "fork" | "track";
+type CloudInstallDbPolicy = "fork_empty" | "shared_primary";
+interface CloudCatalogInstallSelection {
+  mode: CloudInstallMode;
+  installDbPolicy: CloudInstallDbPolicy;
+}
 
 interface CommunityCatalog {
   schemaVersion: string;
@@ -499,8 +504,12 @@ export function CommunityAppsView({
 
   const installCloudApp = async (
     entry: CommunityCatalogEntry,
-    mode: CloudInstallMode = "fork",
+    selection: CloudCatalogInstallSelection = {
+      mode: "fork",
+      installDbPolicy: "fork_empty",
+    },
   ) => {
+    const { mode, installDbPolicy } = selection;
     if (!entry.namespaceId || !entry.slug) {
       setError("This cloud app is missing namespace or slug metadata");
       return;
@@ -521,8 +530,10 @@ export function CommunityAppsView({
           namespaceId: entry.namespaceId,
           slug: entry.slug,
           mode,
+          installDbPolicy,
           catalogScope: scope,
           visibility: entry.visibility,
+          communityCatalogListed: entry.communityCatalogListed,
         }),
         signal: controller.signal,
       });
@@ -652,7 +663,10 @@ export function CommunityAppsView({
         codeInstallable: entry.codeInstallable,
       })
     ) {
-      void installCloudApp(entry, "fork");
+      void installCloudApp(entry, {
+        mode: "fork",
+        installDbPolicy: "fork_empty",
+      });
       return;
     }
     setInstallModeEntry(entry);
@@ -1012,10 +1026,10 @@ export function CommunityAppsView({
           catalogScope={scope}
           installing={installingId === installModeEntry.catalogId}
           onClose={() => setInstallModeEntry(null)}
-          onSelectMode={(mode) => {
+          onSelectMode={(selection) => {
             const target = installModeEntry;
             setInstallModeEntry(null);
-            void installCloudApp(target, mode);
+            void installCloudApp(target, selection);
           }}
         />
       ) : null}

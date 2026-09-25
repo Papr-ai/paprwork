@@ -15,12 +15,13 @@ export function publishedAppRevisionJsonUrl(
 export async function fetchPublishedAppRevision(
   namespaceId: string,
   slug: string,
+  authHeaders?: Record<string, string>,
 ): Promise<string | null> {
   const url = publishedAppRevisionJsonUrl(namespaceId, slug);
   try {
     const response = await fetch(url, {
       cache: "no-store",
-      headers: { "Cache-Control": "no-cache" },
+      headers: { ...(authHeaders ?? {}), "Cache-Control": "no-cache" },
     });
     if (!response.ok) {
       return null;

@@ -23,11 +23,21 @@ import {
   openCloudSyncAgentChat,
   buildUpdateConflictAgentPrompt,
 } from "../../utils/openCloudSyncAgentChat";
-/** Primary push action label — Publish in every state (v4: one verb, progress shows what happens). */
+import type { ShareAudience } from "../../utils/shareAudienceModel";
+import {
+  loginAccessToShareAudience,
+  shareAudienceGlyphPath,
+  shareAudienceShortLabel,
+} from "../../utils/shareAudienceGlyphs";
+/** Primary push action label — Publish for owners; sync for team collaborators. */
 export function webSyncPushButtonLabel(options: {
   appLive: boolean;
   pushing: boolean;
+  trackCollaborator?: boolean;
 }): string {
+  if (options.trackCollaborator) {
+    return options.pushing ? "Syncing…" : "Sync code & data";
+  }
   if (options.pushing) {
     return "Publishing…";
   }
@@ -98,6 +108,12 @@ export interface WebSyncPopoverProps {
   onResolveConflict?: (resolution: "take_theirs" | "keep_mine") => void;
   /** False when the app has never been published — primary action is Publish (share + upload). */
   appLive?: boolean;
+  /** Team track install: push writer repo + DB; team app is already live at the publisher. */
+  trackCollaborator?: boolean;
+  sourceSlug?: string;
+  /** Waiting on owner review — show proposal context, not first-time publish. */
+  proposalWaiting?: boolean;
+  onViewProposals?: () => void;
   /** Per-app: upload to web automatically vs Publish changes only (hint copy only) */
   autoUploadEnabled?: boolean;
   popoverRef?: React.RefObject<HTMLDivElement | null>;
@@ -228,6 +244,10 @@ export function WebSyncPopover({
   onApplyRemoteUpdates,
   onResolveConflict,
   appLive = true,
+  trackCollaborator = false,
+  sourceSlug,
+  proposalWaiting = false,
+  onViewProposals,
   autoUploadEnabled,
   popoverRef,
   className,
@@ -243,7 +263,10 @@ export function WebSyncPopover({
     onPushNow();
   };
   const busy = pushing || pulling || applyingUpdates || loading || refreshing;
-  const pushLabel = webSyncPushButtonLabel({ appLive, pushing });
+  const ownerFirstPublish = !appLive && !trackCollaborator;
+  const pushLabel = webSyncPushButtonLabel({ appLive, pushing, trackCollaborator });
+  const popoverTitle = trackCollaborator ? "Cloud sync" : "Web sync";
+  const popoverAriaLabel = popoverTitle;
   const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
   const writerConflict = status?.writerConflict === true;
   const metadataSync = status?.gitRemoteMetadataSync === true;
@@ -296,10 +319,33 @@ export function WebSyncPopover({
         className={popoverClassName}
         style={style}
         role="dialog"
-        aria-label="Web sync"
+        aria-label={popoverAriaLabel}
       >
-        <p className="mini-app-publish-bar__sync-popover-title">Web sync</p>
+        <p className="mini-app-publish-bar__sync-popover-title">{popoverTitle}</p>
         <PaprCloudRequirementsPanel featureId="publish_share" compact />
+        {trackCollaborator && proposalWaiting ? (
+          <div
+            className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+            role="status"
+          >
+            <p className="mini-app-publish-bar__sync-remote-banner-title">
+              Proposal waiting for review
+            </p>
+            <p className="mini-app-publish-bar__sync-remote-banner-body">
+              Code you sent to {sourceSlug ?? "the owner"} is not on the live team app until they
+              accept it. Sync here only uploads your writer copy and shared database rows.
+            </p>
+            {onViewProposals ? (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                onClick={() => onViewProposals()}
+              >
+                View your proposals
+              </button>
+            ) : null}
+          </div>
+        ) : null}
         <p className="mini-app-publish-bar__sync-popover-summary">
           {loading || refreshing ? "Checking…" : "Click Check status to compare local vs web."}
         </p>
@@ -467,11 +513,44 @@ export function WebSyncPopover({
       className={popoverClassName}
       style={style}
       role="dialog"
-      aria-label="Web sync"
+      aria-label={popoverAriaLabel}
     >
-      <p className="mini-app-publish-bar__sync-popover-title">Web sync</p>
+      <p className="mini-app-publish-bar__sync-popover-title">{popoverTitle}</p>
 
       <PaprCloudRequirementsPanel featureId="publish_share" compact />
+
+      {trackCollaborator && proposalWaiting ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Proposal waiting for review
+          </p>
+          <p className="mini-app-publish-bar__sync-remote-banner-body">
+            The live team app at apps.papr.ai stays on the owner&apos;s version until they accept
+            your proposal. This panel syncs your cloud writer copy and shared database — not a new
+            standalone publish.
+          </p>
+          {onViewProposals ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => onViewProposals()}
+            >
+              View your proposals
+            </button>
+          ) : null}
+        </div>
+      ) : trackCollaborator ? (
+        <p className="mini-app-publish-bar__sync-popover-hint">
+          Team app from <strong>{sourceSlug ?? "the publisher"}</strong> — use{" "}
+          <strong>Propose</strong> to send code edits for review. Use{" "}
+          <strong>{pushLabel}</strong> here to push local files and database rows to your cloud
+          writer (visitors still use the team link).
+        </p>
+      ) : null}
 
       {showMergeReview ? (
         <div
@@ -530,15 +609,23 @@ export function WebSyncPopover({
           location of each keeps "checked" from reading as generic freshness. */}
       <dl className="mini-app-publish-bar__sync-sides">
         <div className="mini-app-publish-bar__sync-side">
-          <dt>Your copy, on this Mac</dt>
+          <dt>{trackCollaborator ? "Your Mac (collaborator)" : "Your copy, on this Mac"}</dt>
           <dd>
             {status && status.overall !== "synced" && status.overall !== "disabled"
-              ? "Edited since last publish"
-              : "No unpublished edits"}
+              ? trackCollaborator
+                ? "Local changes not in cloud writer yet"
+                : "Edited since last publish"
+              : trackCollaborator
+                ? "Matches last cloud sync"
+                : "No unpublished edits"}
           </dd>
         </div>
         <div className="mini-app-publish-bar__sync-side">
-          <dt>Web copy, apps.papr.ai</dt>
+          <dt>
+            {trackCollaborator
+              ? `Cloud writer + DB (${sourceSlug ?? "team"})`
+              : "Web copy, apps.papr.ai"}
+          </dt>
           <dd>
             {lastCheckedAt
               ? `Checked ${formatLastUploadedAt(new Date(lastCheckedAt).toISOString()) ?? "recently"}`
@@ -547,7 +634,9 @@ export function WebSyncPopover({
         </div>
       </dl>
       <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
-        Your copy is watched and never out of date. Only the web copy is asked, every 5 minutes.
+        {trackCollaborator
+          ? "The team live link uses the owner's published app. This check compares your Mac to your cloud writer repo and databases."
+          : "Your copy is watched and never out of date. Only the web copy is asked, every 5 minutes."}
       </p>
 
       <div className="mini-app-publish-bar__sync-popover-scroll">
@@ -559,7 +648,10 @@ export function WebSyncPopover({
             Turn on cloud sync in Settings.
           </p>
         ) : null}
-        {!autoUploadEnabled && status.overall !== "synced" && status.overall !== "disabled" ? (
+        {!trackCollaborator &&
+        !autoUploadEnabled &&
+        status.overall !== "synced" &&
+        status.overall !== "disabled" ? (
           <p className="mini-app-publish-bar__sync-popover-hint">
             {appLive ? (
               <>
@@ -575,7 +667,7 @@ export function WebSyncPopover({
             )}
           </p>
         ) : null}
-        {appLive === false &&
+        {ownerFirstPublish &&
         autoUploadEnabled &&
         status.overall !== "synced" &&
         status.overall !== "disabled" ? (
@@ -1025,30 +1117,24 @@ function WebSyncOpenIcon() {
  * button's tooltip plus the Share sheet still spell it out in full.
  */
 export function ShareAudienceIcon({
+  audience: audienceOverride,
   loginAccess,
   codeAccess,
 }: {
+  /** Resolved share UI audience (includes "people" when an allowlist is set). */
+  audience?: ShareAudience | null;
   loginAccess: "private" | "team" | "public" | "none" | null;
   /** When people can fork the source, the audience glyph carries a code badge. */
   codeAccess?: "off" | "install" | null;
 }) {
-  const path =
-    loginAccess === "public"
-      ? // Globe
-        "M8 1.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13ZM1.5 8h13M8 1.5c1.7 1.8 2.6 4.1 2.6 6.5S9.7 12.7 8 14.5c-1.7-1.8-2.6-4.1-2.6-6.5S6.3 3.3 8 1.5Z"
-      : loginAccess === "team"
-        ? // Two people
-          "M6 7.5a2.25 2.25 0 1 0 0-4.5 2.25 2.25 0 0 0 0 4.5ZM1.5 13c0-2 2-3.5 4.5-3.5s4.5 1.5 4.5 3.5M11 3.2a2.25 2.25 0 0 1 0 4.4M12.2 9.8c1.4.5 2.3 1.7 2.3 3.2"
-        : // Lock
-          "M4.5 7V5.2a3.5 3.5 0 0 1 7 0V7M3.5 7h9v6.5h-9V7Z";
   const audience =
-    loginAccess === "public"
-      ? "Anyone on the web"
-      : loginAccess === "team"
-        ? "Your team"
-        : "Only you";
+    audienceOverride ?? loginAccessToShareAudience(loginAccess);
+  const path = shareAudienceGlyphPath(audience);
+  const audienceLabel = shareAudienceShortLabel(audience);
   const canFork = codeAccess === "install";
-  const label = canFork ? `${audience} · can copy the code` : audience;
+  const label = canFork
+    ? `${audienceLabel} · can copy the code`
+    : audienceLabel;
   return (
     <span
       className={`mini-app-publish-bar__share-audience${

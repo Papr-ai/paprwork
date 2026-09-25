@@ -5,8 +5,10 @@
 import {
   audienceModelToSharing,
   liveLinkPermissionForAudienceModel,
+  peopleAudienceUsesExternalGate,
   publishPrefsToAudienceModel,
   sharingToAudienceModel,
+  shouldListInCommunity,
   type ShareAudienceModel,
 } from "../../core/utils/shareAudienceModel.js";
 import type { CloudAccessMode, CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
@@ -24,6 +26,8 @@ export interface MemoryPublishSharingFields {
   linkPermission: "read" | "read_write";
   shareLinkEnabled: boolean;
   requireSignIn?: boolean;
+  /** False for team / people / link — only true public community shares. */
+  communityCatalogListed?: boolean;
 }
 
 const LOGIN_ACCESS_MODES: readonly CloudLoginAccess[] = [
@@ -124,6 +128,7 @@ export function audienceModelToPublishFields(
       visibility: "public_read",
       linkPermission,
       shareLinkEnabled,
+      communityCatalogListed: true,
       ...(model.requireSignIn === true ? { requireSignIn: true } : {}),
     };
   }
@@ -133,13 +138,36 @@ export function audienceModelToPublishFields(
       visibility: "team",
       linkPermission,
       shareLinkEnabled,
+      communityCatalogListed: false,
     };
   }
 
-  return sharingSettingsToPublishFields({
+  if (model.audience === "people") {
+    if (peopleAudienceUsesExternalGate(model)) {
+      return {
+        visibility: "public_read",
+        linkPermission,
+        shareLinkEnabled,
+        requireSignIn: true,
+        communityCatalogListed: false,
+      };
+    }
+    return {
+      visibility: "team",
+      linkPermission,
+      shareLinkEnabled,
+      communityCatalogListed: false,
+    };
+  }
+
+  const fallback = sharingSettingsToPublishFields({
     loginAccess: sharing.loginAccess,
     externalLink,
   });
+  return {
+    ...fallback,
+    communityCatalogListed: shouldListInCommunity(model.audience, true),
+  };
 }
 
 export function resolvePublishFieldsFromPrefs(
@@ -167,7 +195,44 @@ export function resolvePublishFieldsFromPrefs(
       allowedEmailDomains: prefs.allowedEmailDomains,
     },
   );
-  return audienceModelToPublishFields(model, sharing);
+  const fields = audienceModelToPublishFields(model, sharing);
+  if (fields.communityCatalogListed === undefined) {
+    return {
+      ...fields,
+      communityCatalogListed: shouldListInCommunity(model.audience, true),
+    };
+  }
+  return fields;
+}
+
+/** Merge stored publish prefs with PATCH overrides for memory field resolution. */
+export function mergePublishPrefsForFields(
+  prefs: CloudPublishAppPrefs,
+  patch: Partial<
+    Pick<
+      CloudPublishAppPrefs,
+      | "loginAccess"
+      | "externalLink"
+      | "accessMode"
+      | "codeAccess"
+      | "requireSignIn"
+      | "allowedUserIds"
+      | "allowedEmails"
+      | "allowedEmailDomains"
+    >
+  > = {},
+): Parameters<typeof resolvePublishFieldsFromPrefs>[0] {
+  return {
+    loginAccess: patch.loginAccess ?? prefs.loginAccess,
+    externalLink: patch.externalLink ?? prefs.externalLink,
+    accessMode: patch.accessMode ?? prefs.accessMode,
+    codeAccess: patch.codeAccess ?? prefs.codeAccess ?? "off",
+    requireSignIn:
+      patch.requireSignIn !== undefined ? patch.requireSignIn : prefs.requireSignIn,
+    allowedUserIds: patch.allowedUserIds ?? prefs.allowedUserIds,
+    allowedEmails: patch.allowedEmails ?? prefs.allowedEmails,
+    allowedEmailDomains: patch.allowedEmailDomains ?? prefs.allowedEmailDomains,
+  };
 }
 
 export function sharingSettingsToPublishFields(

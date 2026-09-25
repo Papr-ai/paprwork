@@ -41,7 +41,10 @@ export class CloudCatalogInstallChoiceRequiredError extends Error {
     // in `options`, so read it from there rather than restating it.
     const kind = input.catalogScope === "global" ? "Community app" : "Team app";
     const choices = options
-      .map((option) => `mode "${option.mode}" (${option.label} — ${option.description})`)
+      .map(
+        (option) =>
+          `mode "${option.mode}" with installDbPolicy "${option.installDbPolicy}" (${option.label} — ${option.description})`,
+      )
       .join(" or ");
     super(
       `${kind} "${input.slug}" requires a copy vs collaborate choice. Ask the user, then call install_cloud_app with ${choices}.`,
@@ -59,6 +62,8 @@ export interface RunCloudCatalogInstallInput {
   namespaceId: string;
   slug: string;
   mode?: CloudAppInstallMode;
+  /** DATA policy from the install modal (team track can be private or shared). */
+  installDbPolicy?: import("./cloudInstallDbPolicy.js").InstallDbPolicy;
   shareToken?: string;
   catalogScope?: CommunityCatalogScope | "community" | "team";
   visibility?: string;
@@ -66,6 +71,29 @@ export interface RunCloudCatalogInstallInput {
   codeInstallable?: boolean;
   /** Name for the new app; defaults to the publisher's title. */
   title?: string;
+  /** Catalog flag: false for team / specific-people shares (not in Community). */
+  communityCatalogListed?: boolean;
+}
+
+/**
+ * Who the source app is shared with, from the catalog entry. Team visibility is
+ * a team app; a listed public app in the global catalog is Community; anything
+ * else reachable by a signed-in installer (public_read but unlisted, allowlist)
+ * is a specific-people share.
+ */
+export function resolveSourceAudience(input: {
+  visibility?: string;
+  catalogScope?: string;
+  communityCatalogListed?: boolean;
+}): "team" | "people" | "community" | undefined {
+  const v = input.visibility;
+  if (!v) return undefined;
+  if (v === "team" || v.startsWith("team_")) return "team";
+  if (v === "link_read" || v === "link_read_write") return undefined;
+  if (v === "public_read") {
+    return input.communityCatalogListed === false ? "people" : "community";
+  }
+  return undefined;
 }
 
 function normalizeCatalogScope(
@@ -110,6 +138,7 @@ export function buildCloudCatalogInstallInput(
     namespaceId: input.namespaceId,
     slug: input.slug,
     mode,
+    ...(input.installDbPolicy ? { installDbPolicy: input.installDbPolicy } : {}),
     shareToken: input.shareToken,
     // Forward the defaulted scope, not the raw one. Both entry points (the
     // /api/cloud/install route and the install_cloud_app tool) accept
@@ -120,6 +149,11 @@ export function buildCloudCatalogInstallInput(
     catalogScope: policyInput.catalogScope,
     visibility: input.visibility,
     ...(input.title?.trim() ? { title: input.title.trim() } : {}),
+    sourceAudience: resolveSourceAudience({
+      visibility: input.visibility,
+      catalogScope: policyInput.catalogScope,
+      communityCatalogListed: input.communityCatalogListed,
+    }),
   };
 }
 

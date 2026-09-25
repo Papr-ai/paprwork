@@ -33,11 +33,14 @@ import {
   memoryPublishResponseToSharingSettings,
   resolvePublishFieldsFromMemory,
   resolvePublishFieldsFromPrefs,
+  resolvePublishFieldsWhenPreservingCloudSharing,
+  mergePublishPrefsForFields,
   sharingSettingsRequireShareToken,
   resolveSharingSettings,
   type CloudSharingSettings,
   type MemoryPublishResponseFields,
 } from "./cloudPublishMapping.js";
+import { memoryShareAllowlistBodyFromPrefs } from "./cloudShareAllowlistMemory.js";
 import {
   detectAutoPublishDrift,
   resolveShareTokenForConfig,
@@ -412,14 +415,8 @@ export class CloudAppPublishService {
         : resolveSharingSettings(prefs);
     const publishFields =
       options?.preserveCloudSharing && liveMemory?.enabled
-        ? resolvePublishFieldsFromMemory(liveMemory)
-        : resolvePublishFieldsFromPrefs({
-            loginAccess: sharing.loginAccess,
-            externalLink: sharing.externalLink,
-            accessMode: prefs.accessMode,
-            codeAccess: prefs.codeAccess ?? "off",
-            requireSignIn: prefs.requireSignIn,
-          });
+        ? resolvePublishFieldsWhenPreservingCloudSharing(liveMemory, prefs)
+        : resolvePublishFieldsFromPrefs(mergePublishPrefsForFields(prefs));
     const codeAccess: CodeAccess =
       (options?.preserveCloudSharing && liveMemory?.enabled
         ? liveMemory.codeAccess
@@ -448,6 +445,7 @@ export class CloudAppPublishService {
       linkPermission: publishFields.linkPermission,
       shareLinkEnabled: publishFields.shareLinkEnabled,
       requireSignIn: publishFields.requireSignIn,
+      communityCatalogListed: publishFields.communityCatalogListed,
       codeAccess,
       catalogPlatform: manifest.platform,
       catalogRequiresDesktop: manifest.requiresDesktopForFullFunctionality,
@@ -457,6 +455,7 @@ export class CloudAppPublishService {
       catalogIcon: catalogIconResult.icon,
       catalogTags: appMeta?.tags,
       catalogAutomation,
+      shareAllowlist: memoryShareAllowlistBodyFromPrefs(prefs),
     });
 
     const config = parsePublishConfig(appId, data, sharing);
@@ -512,13 +511,15 @@ export class CloudAppPublishService {
         ? options.requireSignIn
         : prefs.requireSignIn,
     );
-    const publishFields = resolvePublishFieldsFromPrefs({
-      loginAccess: sharing.loginAccess,
-      externalLink: sharing.externalLink,
-      accessMode: options?.accessMode ?? prefs.accessMode,
-      codeAccess,
-      requireSignIn,
-    });
+    const publishFields = resolvePublishFieldsFromPrefs(
+      mergePublishPrefsForFields(prefs, {
+        loginAccess: sharing.loginAccess,
+        externalLink: sharing.externalLink,
+        accessMode: options?.accessMode ?? prefs.accessMode,
+        codeAccess,
+        requireSignIn,
+      }),
+    );
 
     if (perUserIsolation !== undefined) {
       const { applyPerUserIsolationForApp } = await import(
@@ -544,7 +545,9 @@ export class CloudAppPublishService {
       linkPermission: publishFields.linkPermission,
       shareLinkEnabled: publishFields.shareLinkEnabled,
       requireSignIn: publishFields.requireSignIn,
+      communityCatalogListed: publishFields.communityCatalogListed,
       codeAccess,
+      shareAllowlist: memoryShareAllowlistBodyFromPrefs(prefs),
     });
 
     const config = parsePublishConfig(appId, data, sharing);
@@ -617,6 +620,7 @@ export class CloudAppPublishService {
       >["linkPermission"];
       shareLinkEnabled?: boolean;
       requireSignIn?: boolean;
+      communityCatalogListed?: boolean;
       codeAccess: CodeAccess;
       catalogPlatform?: string[];
       catalogRequiresDesktop?: boolean;
@@ -626,6 +630,7 @@ export class CloudAppPublishService {
       catalogIcon?: string;
       catalogTags?: string[];
       catalogAutomation?: CatalogAutomation | null;
+      shareAllowlist?: ReturnType<typeof memoryShareAllowlistBodyFromPrefs>;
     },
   ): Promise<PublishApiResponse> {
     if (!this.isWriteAllowed(`postPublishToMemory ${appId}`)) {
@@ -652,6 +657,9 @@ export class CloudAppPublishService {
             : body.requireSignIn
               ? { requireSignIn: true }
               : {}),
+          ...(body.communityCatalogListed !== undefined
+            ? { communityCatalogListed: body.communityCatalogListed }
+            : {}),
           codeAccess: body.codeAccess,
           intent,
           skipPlatformScan: body.skipPlatformScan === true,
@@ -676,6 +684,13 @@ export class CloudAppPublishService {
             : {}),
           ...(body.catalogAutomation !== undefined
             ? { catalogAutomation: body.catalogAutomation }
+            : {}),
+          ...(body.shareAllowlist
+            ? {
+                allowedUserIds: body.shareAllowlist.allowedUserIds,
+                allowedEmails: body.shareAllowlist.allowedEmails,
+                allowedEmailDomains: body.shareAllowlist.allowedEmailDomains,
+              }
             : {}),
         },
       });
@@ -819,19 +834,25 @@ export class CloudAppPublishService {
         options?.requireSignIn !== undefined
           ? options.requireSignIn
           : prefs.requireSignIn;
-      publishFields = resolvePublishFieldsFromPrefs({
-        loginAccess: sharing.loginAccess,
-        externalLink: sharing.externalLink,
-        accessMode: options?.accessMode ?? prefs.accessMode,
-        codeAccess,
-        requireSignIn,
-      });
+      publishFields = resolvePublishFieldsFromPrefs(
+        mergePublishPrefsForFields(prefs, {
+          loginAccess: sharing.loginAccess,
+          externalLink: sharing.externalLink,
+          accessMode: options?.accessMode ?? prefs.accessMode,
+          codeAccess,
+          requireSignIn,
+        }),
+      );
     } else if (liveMemory?.enabled) {
       const fromMemory = resolvePublishFieldsFromMemory(liveMemory);
       sharing = memoryPublishResponseToSharingSettings(liveMemory);
       codeAccess = fromMemory.codeAccess;
-      requireSignIn = fromMemory.requireSignIn;
-      publishFields = fromMemory;
+      const preserved = resolvePublishFieldsWhenPreservingCloudSharing(
+        liveMemory,
+        prefs,
+      );
+      requireSignIn = preserved.requireSignIn;
+      publishFields = preserved;
     } else {
       sharing = resolveSharingSettings({
         loginAccess: prefs.loginAccess,
@@ -840,13 +861,14 @@ export class CloudAppPublishService {
       });
       codeAccess = prefs.codeAccess ?? "off";
       requireSignIn = prefs.requireSignIn;
-      publishFields = resolvePublishFieldsFromPrefs({
-        loginAccess: sharing.loginAccess,
-        externalLink: sharing.externalLink,
-        accessMode: prefs.accessMode,
-        codeAccess,
-        requireSignIn,
-      });
+      publishFields = resolvePublishFieldsFromPrefs(
+        mergePublishPrefsForFields(prefs, {
+          loginAccess: sharing.loginAccess,
+          externalLink: sharing.externalLink,
+          codeAccess,
+          requireSignIn,
+        }),
+      );
     }
 
     const perUserIsolation =
@@ -857,13 +879,15 @@ export class CloudAppPublishService {
     if (perUserIsolation === true && requireSignIn !== true) {
       requireSignIn = true;
       if (hasExplicitSharing) {
-        publishFields = resolvePublishFieldsFromPrefs({
-          loginAccess: sharing.loginAccess,
-          externalLink: sharing.externalLink,
-          accessMode: options?.accessMode ?? prefs.accessMode,
-          codeAccess,
-          requireSignIn: true,
-        });
+        publishFields = resolvePublishFieldsFromPrefs(
+          mergePublishPrefsForFields(prefs, {
+            loginAccess: sharing.loginAccess,
+            externalLink: sharing.externalLink,
+            accessMode: options?.accessMode ?? prefs.accessMode,
+            codeAccess,
+            requireSignIn: true,
+          }),
+        );
       }
     }
 
@@ -1032,6 +1056,7 @@ export class CloudAppPublishService {
           linkPermission: publishFields.linkPermission,
           shareLinkEnabled: publishFields.shareLinkEnabled,
           requireSignIn: publishFields.requireSignIn,
+          communityCatalogListed: publishFields.communityCatalogListed,
           codeAccess,
           credentialRequirements,
           catalogTitle: appMeta?.title,
@@ -1041,6 +1066,7 @@ export class CloudAppPublishService {
           catalogPlatform: manifestPlatform,
           catalogRequiresDesktop: manifestRequiresDesktop,
           catalogAutomation,
+          shareAllowlist: memoryShareAllowlistBodyFromPrefs(prefs),
         });
         if (slug !== resolvedSlug) {
           console.log(

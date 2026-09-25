@@ -17,8 +17,8 @@ import {
 import { formatShareLink } from "../../core/utils/cloudShareLink.js";
 import {
   communityCodeInstallable,
+  publishPrefsToAudienceModel,
   shouldListInCommunity,
-  sharingToAudienceModel,
 } from "../../core/utils/shareAudienceModel.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import { getPaprApiKey } from "../utils/keyResolver.js";
@@ -96,6 +96,8 @@ interface CloudCommunityApiEntry {
     hasAgentJob?: boolean;
     cardLine: string;
   };
+  /** False for team / specific-people shares stored as public_read for guests. */
+  communityCatalogListed?: boolean;
 }
 
 interface CloudCommunityApiResponse {
@@ -242,9 +244,10 @@ export function resolveCatalogLiveUrl(input: {
 
 /**
  * Resolve whether a catalog row allows fork/install (Customize).
- * Memory workspace rows often omit codeAccess/codeInstallable; papr web treats
- * omitted codeInstallable as installable (`!== false`). Desktop matches that,
- * with local synced publish prefs as a fallback when fields are missing.
+ * Memory is authoritative for code access — do not let local publish prefs
+ * override `codeAccess: off` or explicit `codeInstallable: false` from the server.
+ * When fields are omitted, papr web treats omitted codeInstallable as installable
+ * (`!== false`); desktop matches that. Local prefs may only fill in missing fields.
  */
 export function resolveCatalogCodeInstallable(
   entry: CloudCommunityApiEntry,
@@ -309,6 +312,7 @@ function cloudEntryFromApi(
     requirements: mapCatalogRequirements(entry.catalogRequirements),
     visibility: entry.visibility,
     shareLinkEnabled: entry.shareLinkEnabled,
+    communityCatalogListed: entry.communityCatalogListed,
     publisherUserId: entry.publisherUserId,
     catalogAutomation: entry.catalogAutomation
       ? {
@@ -330,7 +334,16 @@ export function isCommunityCatalogListed(input: {
   liveUrl?: string | null;
   sharing?: Pick<CloudSharingSettings, "loginAccess" | "externalLink">;
   published?: boolean;
+  communityCatalogListed?: boolean;
+  requireSignIn?: boolean;
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
+  codeAccess?: "off" | "install";
 }): boolean {
+  if (input.communityCatalogListed === false) {
+    return false;
+  }
   if (isLinkOnlyVisibility(input.visibility)) {
     return false;
   }
@@ -341,9 +354,16 @@ export function isCommunityCatalogListed(input: {
     return false;
   }
   if (input.sharing) {
-    const model = sharingToAudienceModel(
+    const model = publishPrefsToAudienceModel(
       input.sharing.loginAccess,
       input.sharing.externalLink,
+      input.codeAccess ?? "off",
+      {
+        requireSignIn: input.requireSignIn,
+        allowedUserIds: input.allowedUserIds,
+        allowedEmails: input.allowedEmails,
+        allowedEmailDomains: input.allowedEmailDomains,
+      },
     );
     return shouldListInCommunity(model.audience, input.published ?? true);
   }
@@ -530,8 +550,19 @@ function scoreCatalogEntryForDedupe(
   }
 
   const currentUserId = getPaprUserId()?.trim();
-  if (currentUserId && entry.publisherUserId?.trim() === currentUserId) {
-    score += 100;
+  const publisherUserId = entry.publisherUserId?.trim();
+  if (currentUserId && publisherUserId) {
+    if (publisherUserId === currentUserId) {
+      // Same appId can have your team publish plus a teammate's — prefer theirs for
+      // Personalize / install (your copy is already in My Apps).
+      if (isTeamSharedVisibility(entry.visibility)) {
+        score -= 40;
+      } else {
+        score += 100;
+      }
+    } else if (isTeamSharedVisibility(entry.visibility)) {
+      score += 90;
+    }
   }
 
   if (paprDir && entry.appId) {
@@ -640,6 +671,12 @@ function shouldIncludeInPublicCommunity(
       shareLinkEnabled: entry.shareLinkEnabled,
       liveUrl: entry.liveUrl,
       sharing,
+      requireSignIn: prefs.requireSignIn,
+      allowedUserIds: prefs.allowedUserIds,
+      allowedEmails: prefs.allowedEmails,
+      allowedEmailDomains: prefs.allowedEmailDomains,
+      codeAccess: prefs.codeAccess ?? "off",
+      communityCatalogListed: entry.communityCatalogListed,
     });
   }
 
@@ -647,6 +684,7 @@ function shouldIncludeInPublicCommunity(
     visibility: entry.visibility,
     shareLinkEnabled: entry.shareLinkEnabled,
     liveUrl: entry.liveUrl,
+    communityCatalogListed: entry.communityCatalogListed,
   });
 }
 
@@ -762,7 +800,14 @@ async function buildLocalCloudEntriesForSharing(
     if (sharing.loginAccess !== options.loginAccess) continue;
     if (
       options.loginAccess === "public" &&
-      !isCommunityCatalogListed({ sharing })
+      !isCommunityCatalogListed({
+        sharing,
+        requireSignIn: prefs.requireSignIn,
+        allowedUserIds: prefs.allowedUserIds,
+        allowedEmails: prefs.allowedEmails,
+        allowedEmailDomains: prefs.allowedEmailDomains,
+        codeAccess: prefs.codeAccess ?? "off",
+      })
     ) {
       continue;
     }
