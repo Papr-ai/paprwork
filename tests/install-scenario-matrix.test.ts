@@ -18,7 +18,7 @@
  */
 import { createClient } from "@libsql/client";
 import { createRequire } from "node:module";
-import { promises as fs, existsSync, mkdirSync } from "node:fs";
+import { promises as fs, copyFileSync, existsSync, mkdirSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -107,6 +107,7 @@ const bridge = {
     return true;
   }),
   pullAppLinkedSources: vi.fn(async () => emptySummary),
+  runExclusiveForDbPath: vi.fn(async <T>(_p: string, op: () => Promise<T>) => op()),
   getAppsRootDir: vi.fn(() => null),
   listLinkedSources: vi.fn(async () => []),
 };
@@ -133,8 +134,13 @@ vi.mock("../src/gateway/services/TursoSyncBridge.js", async (orig) => {
 // replica scenarios check the local replica; the primary is checked through
 // the paired HTTP apply that migrations also do (libsql file above).
 vi.mock("@tursodatabase/sync", () => ({
-  connect: vi.fn(async (opts: { path: string }) => {
+  connect: vi.fn(async (opts: { path: string; url?: string }) => {
+    const remoteFile = opts.url?.startsWith("file:") ? opts.url.slice(5) : null;
     mkdirSync(path.dirname(opts.path), { recursive: true });
+    // Real engine: a missing local replica bootstraps from the primary.
+    if (!existsSync(opts.path) && remoteFile && existsSync(remoteFile)) {
+      copyFileSync(remoteFile, opts.path);
+    }
     const db = new DatabaseSync!(opts.path);
     const stmt = (sql: string) => {
       const s = db.prepare(sql);
@@ -165,7 +171,13 @@ vi.mock("@tursodatabase/sync", () => ({
         },
       }),
       pull: async () => false,
-      push: async () => undefined,
+      // Push = the primary becomes a copy of the replica (enough for the
+      // "did the push really seed Turso?" check the product performs).
+      push: async () => {
+        if (!remoteFile) return;
+        await fs.rm(remoteFile, { force: true });
+        db.exec(`VACUUM INTO '${remoteFile.replace(/'/g, "''")}'`);
+      },
       checkpoint: async () => undefined,
       stats: async () => ({ cdcOperations: 0 }),
       close: async () => db.close(),
@@ -189,7 +201,15 @@ const EXPECTED_FORK_MODE: Record<Device, string | undefined> = {
 const DEVICES: Device[] = ["replica", "cloud-direct", "local"];
 
 // ── helpers ─────────────────────────────────────────────────────────────────
-async function writeFixtureRepo(opts: { broken?: boolean; snapshot?: boolean }) {
+/**
+ * snapshot:
+ *   false          — no snapshot; installer replays 0001-0003
+ *   "seed-file"    — publisher seeds via seed.sql (0003 absent); snapshot covers 0001-0002
+ *   "stale-seeding"— snapshot published before the row-writing check, covering 0003_seed;
+ *                    installers must reject it and replay, or the seed row is lost
+ */
+type SnapshotMode = false | "seed-file" | "stale-seeding";
+async function writeFixtureRepo(opts: { broken?: boolean; snapshot?: SnapshotMode }) {
   fixtureRepo = path.join(tmp, `fixture-${Math.random().toString(36).slice(2, 8)}`);
   const appDir = path.join(fixtureRepo, "apps", PUBLISHER_APP_ID);
   const slugDir = path.join(fixtureRepo, "data", "databases", SLUG);
@@ -213,7 +233,11 @@ async function writeFixtureRepo(opts: { broken?: boolean; snapshot?: boolean }) 
       ],
     }),
   );
-  const migrations = { ...MIGRATIONS, ...(opts.broken ? { "0004_broken.sql": BROKEN } : {}) };
+  const base: Record<string, string> =
+    opts.snapshot === "seed-file"
+      ? { "0001_init.sql": MIGRATIONS["0001_init.sql"], "0002_rename.sql": MIGRATIONS["0002_rename.sql"] }
+      : MIGRATIONS;
+  const migrations = { ...base, ...(opts.broken ? { "0004_broken.sql": BROKEN } : {}) };
   for (const [file, sql] of Object.entries(migrations)) {
     await fs.writeFile(path.join(slugDir, "migrations", file), sql);
   }
@@ -238,15 +262,18 @@ async function writeFixtureRepo(opts: { broken?: boolean; snapshot?: boolean }) 
     }),
   );
   await fs.writeFile(path.join(fixtureRepo, "data", "jobs.json"), "[]");
-  if (opts.snapshot) {
-    await writeSnapshot(slugDir);
+  if (opts.snapshot === "seed-file") {
+    await fs.writeFile(path.join(slugDir, "seed.sql"), MIGRATIONS["0003_seed.sql"]);
+    await writeSnapshot(slugDir, base);
+  } else if (opts.snapshot === "stale-seeding") {
+    await writeStaleSeedingSnapshot(slugDir);
   }
 }
 
 /** Publisher's real schema → snapshot.json, exactly as publish does. */
-async function writeSnapshot(slugDir: string) {
+async function writeSnapshot(slugDir: string, migrations: Record<string, string>) {
   const pub = new DatabaseSync!(":memory:");
-  for (const sql of Object.values(MIGRATIONS)) {
+  for (const sql of Object.values(migrations)) {
     pub.exec(sql.replace("{{papr.owner_user_id}}", PUBLISHER_USER));
   }
   const rows = pub
@@ -259,10 +286,33 @@ async function writeSnapshot(slugDir: string) {
   const snapshot = await buildSchemaSnapshot({
     migrationRoot: slugDir,
     schemaRows: rows as never,
-    appliedLedgerIds: new Set(Object.keys(MIGRATIONS).map((f) => f.replace(/\.sql$/, ""))),
+    appliedLedgerIds: new Set(Object.keys(migrations).map((f) => f.replace(/\.sql$/, ""))),
   });
   expect(snapshot, "fixture snapshot should build").not.toBeNull();
   await writeSchemaSnapshot(slugDir, snapshot);
+}
+
+/** What publish wrote before the row-writing check: covers 0003_seed, schema only. */
+async function writeStaleSeedingSnapshot(slugDir: string) {
+  const { sha256Of } = await import("../src/gateway/services/jobs/schemaSnapshot.js");
+  const pub = new DatabaseSync!(":memory:");
+  for (const sql of Object.values(MIGRATIONS)) {
+    pub.exec(sql.replace("{{papr.owner_user_id}}", PUBLISHER_USER));
+  }
+  const schema = pub
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND sql IS NOT NULL")
+    .all()
+    .map((r) => String(r.sql));
+  pub.close();
+  await fs.writeFile(
+    path.join(slugDir, "migrations", "snapshot.json"),
+    JSON.stringify({
+      formatVersion: 1,
+      migrations: Object.entries(MIGRATIONS).map(([file, sql]) => ({ file, sha256: sha256Of(sql) })),
+      schema,
+      generatedAt: "2026-09-01T00:00:00.000Z",
+    }),
+  );
 }
 
 /** The publisher's live team database: all migrations applied + real data. */
@@ -409,18 +459,15 @@ async function runInstall(kind: InstallKind) {
   } as never);
 }
 
-const expectFreshFork = (state: DbState, owner: string) => {
+const FULL_LEDGER = ["0001_init", "0002_rename", "0003_seed"];
+const expectFreshFork = (state: DbState, owner: string, ledger: string[] = FULL_LEDGER) => {
   expect.soft(state.where, "database exists where the storage mode says").not.toBe("missing");
   expect.soft(state.columns, "0002 rename applied").toContain("member_id");
   expect.soft(state.columns, "old column gone").not.toContain("prospect_ref");
   expect.soft(state.rows, "only the seeded row, owned by the installer — no publisher data").toEqual([
     { name: "Welcome", owner },
   ]);
-  expect.soft(state.ledger, "one ledger entry per migration").toEqual([
-    "0001_init",
-    "0002_rename",
-    "0003_seed",
-  ]);
+  expect.soft(state.ledger, "one ledger entry per migration").toEqual(ledger);
 };
 
 // ── suite ───────────────────────────────────────────────────────────────────
@@ -442,8 +489,10 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
     setCloudDirectClientFactoryForTests(async (name) => createClient({ url: `file:${tursoFile(name)}` }));
     const { setTursoReplicaOnlineForTests } = await import("../src/gateway/utils/tursoReplicaEnabled.js");
     setTursoReplicaOnlineForTests(null);
-    vi.spyOn(console, "log").mockImplementation(() => undefined);
-    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    if (!process.env.PAPR_MATRIX_DEBUG) {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    }
   });
 
   afterEach(async () => {
@@ -470,8 +519,8 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
   for (const device of DEVICES) {
     describe(`device: ${device}`, () => {
       for (const kind of ["community-fork", "team-fork", "community-collaborate"] as const) {
-        for (const snapshot of [false, true]) {
-          it(`${kind} (${snapshot ? "snapshot" : "replay"}) → fresh database, installer owns seed`, async () => {
+        for (const snapshot of [false, "seed-file", "stale-seeding"] as const) {
+          it(`${kind} (${snapshot || "replay"}) → fresh database, installer owns seed`, async () => {
             withDevice(device);
             await writeFixtureRepo({ snapshot });
             const home = await useWorkspace("org-me", "ns-me");
@@ -483,14 +532,18 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
             expect.soft(record!.syncMode, "storage mode chosen for this device").toBe(
               EXPECTED_FORK_MODE[device],
             );
-            expectFreshFork(await readDb(record!), INSTALLER_USER);
+            expectFreshFork(
+              await readDb(record!),
+              INSTALLER_USER,
+              snapshot === "seed-file" ? ["0001_init", "0002_rename"] : FULL_LEDGER,
+            );
           });
         }
       }
 
       it("team-collaborate → uses the publisher's database, nothing re-run, no duplicate seed", async () => {
         withDevice(device);
-        await writeFixtureRepo({ snapshot: true });
+        await writeFixtureRepo({ snapshot: "stale-seeding" });
         await seedPublisherPrimary();
         const home = await useWorkspace("org-pub", "ns-team-member");
         const result = await runInstall("team-collaborate");
@@ -520,7 +573,12 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
         const registry = JSON.parse(
           await fs.readFile(path.join(home, "data", "databases.json"), "utf8").catch(() => '{"databases":{}}'),
         );
-        expect.soft(Object.values(registry.databases as Record<string, { label?: string }>).filter((d) => d.label?.startsWith("Outreach")).map((d) => d), "no database record left").toEqual([]);
+        // Deleted databases stay as tombstones (that is how deletes sync); none may be active.
+        const records = Object.values(
+          registry.databases as Record<string, { label?: string; status?: string }>,
+        ).filter((d) => d.label?.toLowerCase().startsWith("outreach"));
+        expect.soft(records.filter((d) => d.status === "active"), "no active database left").toEqual([]);
+        expect.soft(records.length, "no database re-registered during rollback").toBeLessThanOrEqual(1);
         const dbDirs = await fs.readdir(path.join(home, "data", "databases")).catch(() => []);
         expect.soft(dbDirs.filter((d: string) => d.startsWith("outreach")), "no database folder left").toEqual([]);
         const leftoverPrimaries = (await fs.readdir(path.join(tmp, "turso"))).filter((f) => f !== "d-5eed1234.db");

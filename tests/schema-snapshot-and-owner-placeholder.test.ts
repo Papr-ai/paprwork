@@ -306,3 +306,21 @@ describe("portableOwnerIdInSql (papr_db_create_migration)", () => {
     expect(await substituteMigrationPlaceholders(portable, root)).toBe(original);
   });
 });
+
+describe("migrationWritesRows (snapshot must not cover seeding migrations)", () => {
+  it("flags INSERT/REPLACE, ignores DDL and trigger bodies and string data", async () => {
+    const { migrationWritesRows } = await import(
+      "../src/gateway/services/jobs/migrationSqlHelpers.js"
+    );
+    expect(migrationWritesRows("INSERT INTO t (a) VALUES (1);")).toBe(true);
+    expect(migrationWritesRows("insert or ignore into t (a) values (1);")).toBe(true);
+    expect(migrationWritesRows("REPLACE INTO t (a) VALUES (1);")).toBe(true);
+    expect(migrationWritesRows("CREATE TABLE t (a TEXT); ALTER TABLE t ADD COLUMN b TEXT;")).toBe(false);
+    expect(
+      migrationWritesRows(
+        "CREATE TRIGGER tr AFTER UPDATE ON t BEGIN INSERT INTO log (x) VALUES (1); END;",
+      ),
+    ).toBe(false);
+    expect(migrationWritesRows("CREATE TABLE t (note TEXT DEFAULT 'insert into x');")).toBe(false);
+  });
+});

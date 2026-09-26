@@ -22,6 +22,7 @@
 import { createHash } from "crypto";
 import { promises as fs } from "fs";
 import path from "path";
+import { migrationWritesRows } from "./migrationSqlHelpers.js";
 
 export const SCHEMA_SNAPSHOT_FILE = "snapshot.json";
 export const SCHEMA_SNAPSHOT_FORMAT = 1;
@@ -110,7 +111,8 @@ function bareId(fileOrId: string): string {
 
 /**
  * Build a snapshot, or null when the publisher's database is not in a state a
- * snapshot can describe honestly: nothing applied, or the applied set is not a
+ * snapshot can describe honestly: nothing applied, a covered migration inserts
+ * rows (the snapshot is structure only), or the applied set is not a
  * prefix of the migration files (a gap means the schema is not "migrations
  * 0001..N" and marking them applied on an installer would be a lie).
  */
@@ -136,6 +138,10 @@ export async function buildSchemaSnapshot(input: {
     }
     const raw = await readRaw(path.join(input.migrationRoot, "migrations", file));
     if (raw === null) {
+      return null;
+    }
+    if (migrationWritesRows(raw)) {
+      // Structure-only snapshot would drop this migration's rows on install.
       return null;
     }
     covered.push({ file, sha256: sha256Of(raw) });
@@ -223,6 +229,13 @@ export async function validateSchemaSnapshot(
     }
     if (sha256Of(raw) !== entry.sha256) {
       return { ok: false, reason: `${entry.file} changed after the snapshot was taken` };
+    }
+    if (migrationWritesRows(raw)) {
+      // Snapshots published before this check could cover a seeding migration.
+      return {
+        ok: false,
+        reason: `${entry.file} inserts rows, which a schema snapshot cannot carry`,
+      };
     }
   }
   return { ok: true };

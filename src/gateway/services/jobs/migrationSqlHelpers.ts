@@ -305,3 +305,21 @@ export function migrationRerunSafety(sql: string): MigrationRerunSafety {
     .filter((hazard): hazard is string => hazard !== null);
   return { safe: hazards.length === 0, hazards };
 }
+
+/**
+ * Does this migration put rows into the database (INSERT / REPLACE)?
+ *
+ * A schema snapshot carries structure only, so it cannot stand in for a
+ * migration that writes rows: marking it "applied" from a snapshot silently
+ * drops those rows (default settings, a welcome row, …). CREATE statements are
+ * skipped — an INSERT inside a trigger body is schema, not data.
+ */
+export function migrationWritesRows(sql: string): boolean {
+  return splitSqlStatements(sql).some((statement) => {
+    const bare = withoutStringLiterals(statement).trim();
+    if (/^CREATE\b/i.test(bare)) {
+      return false;
+    }
+    return /\b(INSERT|REPLACE)\b(\s+OR\s+\w+)?\s+INTO\b/i.test(bare);
+  });
+}

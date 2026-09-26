@@ -743,6 +743,16 @@ export class DatabaseRegistryService {
             );
             continue;
           }
+          if (
+            source.dbId &&
+            this.getState().databases[source.dbId]?.status === "tombstone"
+          ) {
+            // The app points at a database that was deleted (e.g. an install
+            // rollback that has not removed the app folder yet). Registering
+            // the path again would mint a new id — and on replica devices a
+            // new cloud database — for something that was just cleaned up.
+            continue;
+          }
           const existing = byPath.get(normalized);
           if (!existing) {
             byPath.set(normalized, {
