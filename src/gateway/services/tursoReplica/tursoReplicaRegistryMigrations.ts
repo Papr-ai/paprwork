@@ -12,6 +12,7 @@ import * as path from "path";
 import type { DatabaseRecord } from "../DatabaseRegistryService.js";
 import { getDatabaseRegistryService } from "../DatabaseRegistryService.js";
 import type { AppDataSource } from "../appDataSources.js";
+import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
 import {
   isMissingTableError,
   migrationRerunSafety,
@@ -138,6 +139,15 @@ export async function applyReplicaRegistryDatabaseMigrations(
   };
 
   const ledgers = await readMigrationLedgers(source);
+  const snapshotApplied =
+    ledgers.readable &&
+    [...ledgers.ids].every((id) => isMigrationLedgerMarker(id.replace(/\.sql$/, "")))
+      ? await applySnapshotToFreshReplica(source, migrationRoot, report)
+      : [];
+  for (const id of snapshotApplied) {
+    ledgers.ids.add(id);
+    ledgers.ids.add(`${id}.sql`);
+  }
   if (!ledgers.readable) {
     report(
       `[TursoReplica] Could not read the migration ledger of ${dbLabel} ` +
@@ -193,5 +203,50 @@ export async function applyReplicaRegistryDatabaseMigrations(
     }
   }
 
-  return appliedNow;
+  return [...snapshotApplied.map((id) => `${id}.sql`), ...appliedNow];
+}
+
+/**
+ * Fresh replica + valid snapshot: schema, seed and ledger rows in one engine
+ * transaction (worker "migrate" op), then pushed like any migration.
+ */
+async function applySnapshotToFreshReplica(
+  source: AppDataSource,
+  migrationRoot: string,
+  report: (message: string, level: "warn" | "error") => void,
+): Promise<string[]> {
+  const { FRESH_TABLES_SQL, hasNoAppTables, planSnapshotInstall } = await import(
+    "../jobs/schemaSnapshotApply.js"
+  );
+  try {
+    const tables = await queryLinkedDbViaTursoReplica(source, FRESH_TABLES_SQL, [], {
+      pullBeforeRead: false,
+    });
+    if (!hasNoAppTables(tables.rows.map((row) => String(row.name ?? "")))) {
+      return [];
+    }
+    const plan = await planSnapshotInstall(migrationRoot);
+    if (!plan) {
+      return [];
+    }
+    const { migrateLinkedDbViaTursoReplica } = await import("./tursoReplicaRouting.js");
+    const { localLedgerStatements } = await import("../jobs/migrationAtomicApply.js");
+    const ledger = plan.coveredIds.flatMap((id, index) =>
+      index === 0 ? localLedgerStatements(id) : localLedgerStatements(id).slice(1),
+    );
+    await migrateLinkedDbViaTursoReplica(source, plan.statements, ledger);
+    console.log(
+      `[SchemaSnapshot] Built replica ${source.dbId} from snapshot ` +
+        `(${plan.coveredIds.length} migrations covered)`,
+    );
+    return plan.coveredIds;
+  } catch (error) {
+    // Rolled back as one transaction — fall through to normal replay.
+    report(
+      `[SchemaSnapshot] Snapshot install failed on ${source.dbId}, replaying migrations: ` +
+        `${error instanceof Error ? error.message : String(error)}`,
+      "warn",
+    );
+    return [];
+  }
 }

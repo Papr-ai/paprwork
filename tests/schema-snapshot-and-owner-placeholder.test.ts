@@ -1,0 +1,236 @@
+/**
+ * Items 5-6: schema snapshot at publish + {{papr.owner_user_id}}.
+ */
+import { createClient } from "@libsql/client";
+import Database from "better-sqlite3";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  setMigrationOwnerResolverForTests,
+  substituteMigrationPlaceholders,
+} from "../src/gateway/services/jobs/migrationPlaceholders.js";
+import {
+  buildSchemaSnapshot,
+  readSchemaSnapshot,
+  schemaStatementsFromRows,
+  validateSchemaSnapshot,
+  writeSchemaSnapshot,
+} from "../src/gateway/services/jobs/schemaSnapshot.js";
+import { applyDatabaseMigrations } from "../src/gateway/services/jobs/databaseMigrations.js";
+import { applySnapshotToRemoteIfFresh } from "../src/gateway/services/cloudDirect/cloudDirectMigrations.js";
+
+let canUseBetterSqlite = false;
+try {
+  new Database(":memory:").close();
+  canUseBetterSqlite = true;
+} catch {
+  canUseBetterSqlite = false;
+}
+
+const M1 = "CREATE TABLE replies (id INTEGER PRIMARY KEY, prospect_id TEXT, owner_id TEXT);";
+const M2 = "ALTER TABLE replies RENAME COLUMN prospect_id TO member_id;";
+const M3 = "CREATE INDEX idx_replies_owner ON replies(owner_id);";
+
+let tmp: string;
+let root: string;
+
+function writeMigrations(files: Record<string, string>): void {
+  fs.mkdirSync(path.join(root, "migrations"), { recursive: true });
+  for (const [name, sql] of Object.entries(files)) {
+    fs.writeFileSync(path.join(root, "migrations", name), sql);
+  }
+}
+
+/** Publisher side: real DB with migrations applied, then snapshot it. */
+async function publishSnapshot(appliedFiles: string[]): Promise<void> {
+  const pub = createClient({ url: ":memory:" });
+  for (const f of appliedFiles) {
+    await pub.executeMultiple(fs.readFileSync(path.join(root, "migrations", f), "utf8"));
+  }
+  await pub.execute("CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, applied_at TEXT)");
+  const res = await pub.execute(
+    "SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY rowid",
+  );
+  pub.close();
+  const rows = res.rows.map((r) => ({
+    type: String(r.type),
+    name: String(r.name),
+    tbl_name: String(r.tbl_name),
+    sql: r.sql == null ? null : String(r.sql),
+  }));
+  const snapshot = await buildSchemaSnapshot({
+    migrationRoot: root,
+    schemaRows: rows,
+    appliedLedgerIds: new Set(appliedFiles),
+  });
+  await writeSchemaSnapshot(root, snapshot);
+}
+
+beforeEach(() => {
+  tmp = fs.mkdtempSync(path.join(os.tmpdir(), "papr-snapshot-"));
+  root = path.join(tmp, "data", "databases", "outreach");
+  setMigrationOwnerResolverForTests(() => "installer-user");
+});
+
+afterEach(() => {
+  setMigrationOwnerResolverForTests(null);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+describe("owner placeholder", () => {
+  it("fills {{papr.owner_user_id}} with the database owner, SQL-escaped", async () => {
+    setMigrationOwnerResolverForTests(() => "o'brien");
+    const out = await substituteMigrationPlaceholders(
+      "INSERT INTO t (owner) VALUES ('{{papr.owner_user_id}}');",
+      root,
+    );
+    expect(out).toBe("INSERT INTO t (owner) VALUES ('o''brien');");
+  });
+
+  it("refuses to run when a placeholder exists but no owner is known", async () => {
+    setMigrationOwnerResolverForTests(() => undefined);
+    await expect(
+      substituteMigrationPlaceholders("SELECT '{{papr.owner_user_id}}'", root),
+    ).rejects.toThrow(/no database owner/);
+  });
+
+  it("leaves SQL without placeholders untouched", async () => {
+    setMigrationOwnerResolverForTests(() => undefined);
+    expect(await substituteMigrationPlaceholders("SELECT 1", root)).toBe("SELECT 1");
+  });
+});
+
+describe("snapshot build + validation", () => {
+  it("orders tables before indexes and drops platform/engine objects", () => {
+    const stmts = schemaStatementsFromRows([
+      { type: "index", name: "idx_a", tbl_name: "a", sql: "CREATE INDEX idx_a ON a(x)" },
+      { type: "table", name: "a", tbl_name: "a", sql: "CREATE TABLE a (x)" },
+      { type: "table", name: "_papr_schema_migrations", sql: "CREATE TABLE _papr_schema_migrations (id)" },
+      { type: "table", name: "turso_sync_last_change_id", sql: "CREATE TABLE turso_sync_last_change_id (x)" },
+      { type: "table", name: "schema_migrations", sql: "CREATE TABLE schema_migrations (id)" },
+    ]);
+    expect(stmts).toEqual(["CREATE TABLE a (x)", "CREATE INDEX idx_a ON a(x)"]);
+  });
+
+  it("returns null when applied migrations have a gap (would lie about coverage)", async () => {
+    writeMigrations({ "0001_init.sql": M1, "0002_rename.sql": M2, "0003_idx.sql": M3 });
+    const snap = await buildSchemaSnapshot({
+      migrationRoot: root,
+      schemaRows: [{ type: "table", name: "replies", sql: "CREATE TABLE replies (id)" }],
+      appliedLedgerIds: new Set(["0001_init.sql", "0003_idx"]),
+    });
+    expect(snap).toBeNull();
+  });
+
+  it("is invalidated when a covered migration file changes", async () => {
+    writeMigrations({ "0001_init.sql": M1 });
+    await publishSnapshot(["0001_init.sql"]);
+    const snap = (await readSchemaSnapshot(root))!;
+    expect((await validateSchemaSnapshot(root, snap)).ok).toBe(true);
+    fs.writeFileSync(path.join(root, "migrations", "0001_init.sql"), M1 + "\n-- edited");
+    expect((await validateSchemaSnapshot(root, snap)).ok).toBe(false);
+  });
+
+  it("republishing an unchanged schema does not rewrite the file", async () => {
+    writeMigrations({ "0001_init.sql": M1 });
+    await publishSnapshot(["0001_init.sql"]);
+    const before = fs.statSync(path.join(root, "migrations", "snapshot.json")).mtimeMs;
+    const changed = await writeSchemaSnapshot(root, {
+      ...(await readSchemaSnapshot(root))!,
+      generatedAt: new Date(Date.now() + 60_000).toISOString(),
+    });
+    expect(changed).toBe(false);
+    expect(fs.statSync(path.join(root, "migrations", "snapshot.json")).mtimeMs).toBe(before);
+  });
+});
+
+describe.skipIf(!canUseBetterSqlite)("fresh install from snapshot (local runner)", () => {
+  it("builds schema + seed from the snapshot, marks covered migrations, runs only newer ones", async () => {
+    writeMigrations({ "0001_init.sql": M1, "0002_rename.sql": M2 });
+    fs.writeFileSync(
+      path.join(root, "seed.sql"),
+      "INSERT INTO replies (member_id, owner_id) VALUES ('m1', '{{papr.owner_user_id}}');",
+    );
+    await publishSnapshot(["0001_init.sql", "0002_rename.sql"]);
+    // Publisher later ships 0003, not in the snapshot.
+    writeMigrations({ "0003_idx.sql": M3 });
+
+    const dbPath = path.join(root, "data.db");
+    const applied = await applyDatabaseMigrations(root, dbPath);
+    expect(applied).toEqual(["0001_init.sql", "0002_rename.sql", "0003_idx.sql"]);
+
+    const db = new Database(dbPath, { readonly: true });
+    const cols = (db.prepare("PRAGMA table_info(replies)").all() as Array<{ name: string }>).map((c) => c.name);
+    expect(cols).toContain("member_id");
+    expect(cols).not.toContain("prospect_id");
+    expect(db.prepare("SELECT owner_id FROM replies").get()).toEqual({ owner_id: "installer-user" });
+    expect(
+      db.prepare("SELECT name FROM sqlite_master WHERE name='idx_replies_owner'").get(),
+    ).toBeTruthy();
+    db.close();
+
+    // Re-run is a no-op.
+    expect(await applyDatabaseMigrations(root, dbPath)).toEqual([]);
+  });
+
+  it("never applies a snapshot to a database that already has tables", async () => {
+    writeMigrations({ "0001_init.sql": M1, "0002_rename.sql": M2 });
+    await publishSnapshot(["0001_init.sql", "0002_rename.sql"]);
+    const dbPath = path.join(root, "data.db");
+    const existing = new Database(dbPath);
+    existing.exec("CREATE TABLE user_notes (id INTEGER PRIMARY KEY)");
+    existing.close();
+    // No ledger → normal replay path; 0001 creates replies, 0002 renames.
+    await applyDatabaseMigrations(root, dbPath);
+    const db = new Database(dbPath, { readonly: true });
+    const seed = db.prepare("SELECT COUNT(*) AS n FROM replies").get() as { n: number };
+    expect(seed.n).toBe(0);
+    db.close();
+  });
+
+  it("falls back to replay when a covered migration was edited", async () => {
+    writeMigrations({ "0001_init.sql": M1 });
+    await publishSnapshot(["0001_init.sql"]);
+    fs.writeFileSync(
+      path.join(root, "migrations", "0001_init.sql"),
+      "CREATE TABLE replies (id INTEGER PRIMARY KEY, prospect_id TEXT, owner_id TEXT, extra TEXT);",
+    );
+    const dbPath = path.join(root, "data.db");
+    await applyDatabaseMigrations(root, dbPath);
+    const db = new Database(dbPath, { readonly: true });
+    const cols = (db.prepare("PRAGMA table_info(replies)").all() as Array<{ name: string }>).map((c) => c.name);
+    expect(cols).toContain("extra");
+    db.close();
+  });
+});
+
+describe("fresh install from snapshot (Turso primary / cloud-direct)", () => {
+  it("one batch: schema + seed + _papr_schema_migrations rows; skipped when not fresh", async () => {
+    writeMigrations({ "0001_init.sql": M1, "0002_rename.sql": M2 });
+    fs.writeFileSync(
+      path.join(root, "seed.sql"),
+      "INSERT INTO replies (member_id, owner_id) VALUES ('m1', '{{papr.owner_user_id}}');",
+    );
+    await publishSnapshot(["0001_init.sql", "0002_rename.sql"]);
+    const remote = createClient({ url: `file:${path.join(tmp, "primary.db")}` });
+    try {
+      expect(await applySnapshotToRemoteIfFresh(remote, root)).toEqual([
+        "0001_init",
+        "0002_rename",
+      ]);
+      const owner = await remote.execute("SELECT owner_id FROM replies");
+      expect(owner.rows[0].owner_id).toBe("installer-user");
+      const ledger = await remote.execute("SELECT id, source FROM _papr_schema_migrations ORDER BY id");
+      expect(ledger.rows.map((r) => [r.id, r.source])).toEqual([
+        ["0001_init", "schema_snapshot"],
+        ["0002_rename", "schema_snapshot"],
+      ]);
+      // Second call: not fresh any more.
+      expect(await applySnapshotToRemoteIfFresh(remote, root)).toEqual([]);
+    } finally {
+      remote.close();
+    }
+  });
+});

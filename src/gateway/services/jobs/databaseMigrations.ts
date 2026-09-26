@@ -365,6 +365,20 @@ export async function applyDatabaseMigrations(
     const appliedIds = new Set(listAppliedMigrationIdsReadOnly(db));
     const appliedNow: string[] = [];
 
+    // Fresh registry database: build from the publisher's schema snapshot in
+    // one transaction instead of replaying every migration.
+    const { isMigrationLedgerMarker } = await import("./migrationLedgerPolicy.js");
+    const realApplied = [...appliedIds].filter(
+      (id) => !isMigrationLedgerMarker(id.replace(/\.sql$/, "")),
+    );
+    if (layout?.kind === "registry" && realApplied.length === 0) {
+      const snapshotApplied = await applySnapshotToLocalDb(db, migrationRoot);
+      for (const file of snapshotApplied) {
+        appliedIds.add(file);
+        appliedNow.push(file);
+      }
+    }
+
     for (const fileName of files) {
       if (appliedIds.has(fileName)) {
         continue;
@@ -386,7 +400,12 @@ export async function applyDatabaseMigrations(
       // rolls everything back, so a half-applied migration is never left for
       // the next run to trip over.
       const localDb = db;
-      const statements = splitSqlStatements(sql);
+      const { substituteMigrationPlaceholders } = await import(
+        "./migrationPlaceholders.js"
+      );
+      const statements = splitSqlStatements(
+        await substituteMigrationPlaceholders(sql, migrationRoot),
+      );
       localDb.transaction(() => {
         for (const statement of statements) {
           executeLocalSqlIdempotent(localDb, statement);
@@ -402,6 +421,43 @@ export async function applyDatabaseMigrations(
   } finally {
     db?.close();
   }
+}
+
+async function applySnapshotToLocalDb(
+  db: Database.Database,
+  migrationRoot: string,
+): Promise<string[]> {
+  const tables = (
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+      name: string;
+    }>
+  ).map((row) => row.name);
+  const { hasNoAppTables, planSnapshotInstall } = await import(
+    "./schemaSnapshotApply.js"
+  );
+  if (!hasNoAppTables(tables)) {
+    return [];
+  }
+  const plan = await planSnapshotInstall(migrationRoot);
+  if (!plan) {
+    return [];
+  }
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    for (const statement of plan.statements) {
+      db.exec(statement);
+    }
+    const record = db.prepare(
+      "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+    );
+    for (const file of plan.coveredFiles) {
+      record.run(file, now);
+    }
+  }).immediate();
+  console.log(
+    `[SchemaSnapshot] Built ${migrationRoot} from snapshot (${plan.coveredFiles.length} migrations covered)`,
+  );
+  return plan.coveredFiles;
 }
 
 /** Apply migrations for a registry db path (no-op when layout unrecognized). */
