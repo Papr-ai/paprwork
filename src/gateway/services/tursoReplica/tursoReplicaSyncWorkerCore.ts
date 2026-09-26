@@ -15,6 +15,11 @@ import type {
   TursoSyncWorkerResult,
 } from "./tursoReplicaSyncWorkerProtocol.js";
 import { TursoReplicaPathScheduler } from "./tursoReplicaPathScheduler.js";
+import {
+  applyMigrationInTx,
+  type MigrationTx,
+} from "../jobs/migrationAtomicApply.js";
+import type { TursoSyncWorkerMigrateResult } from "./tursoReplicaSyncWorkerProtocol.js";
 import type { TursoSyncWorkerOpTiming } from "./tursoReplicaSyncWorkerProtocol.js";
 
 type Db = Awaited<ReturnType<typeof connectTursoReplica>>;
@@ -34,7 +39,9 @@ function isParallelReadWorkerOp(op: TursoSyncWorkerRequest["op"]): boolean {
 }
 
 function isExclusiveInteractiveWorkerOp(op: TursoSyncWorkerRequest["op"]): boolean {
-  return op === "write" || op === "exec" || op === "connect" || op === "close";
+  return (
+    op === "write" || op === "exec" || op === "migrate" || op === "connect" || op === "close"
+  );
 }
 
 export class TursoSyncWorkerCore {
@@ -138,6 +145,8 @@ export class TursoSyncWorkerCore {
         case "exec":
           await db.exec(request.sql ?? "");
           return {};
+        case "migrate":
+          return await runMigrationTransaction(db, request);
         case "pull":
           return { pulled: Boolean(await db.pull()) };
         case "push":
@@ -250,4 +259,45 @@ function extractWriteMetrics(runResult: unknown): {
     return { changes, lastInsertRowid };
   }
   return { changes: 0, lastInsertRowid: 0 };
+}
+
+type TxStatement = {
+  all(...params: unknown[]): Promise<unknown>;
+  run(...params: unknown[]): Promise<unknown>;
+};
+type TxHandle = { prepare(sql: string): Promise<TxStatement>; exec(sql: string): Promise<void> };
+
+/**
+ * One migration = one transaction on the handle's own connection
+ * (transactionAsync holds the execution lock from BEGIN to COMMIT, so no app
+ * write can interleave). Any failure rolls the whole migration back, ledger
+ * row included.
+ */
+export async function runMigrationTransaction(
+  db: Db,
+  request: TursoSyncWorkerRequest,
+): Promise<TursoSyncWorkerMigrateResult> {
+  const statements = (request.statements ?? []).map((s) => s.sql);
+  const ledger = request.ledger ?? [];
+  const txFn = (db as unknown as {
+    transactionAsync<T>(fn: (txn: TxHandle) => Promise<T>): { immediate: () => Promise<T> };
+  }).transactionAsync(async (txn: TxHandle) => {
+    const tx: MigrationTx = {
+      async query(sql, params) {
+        const stmt = await txn.prepare(sql);
+        const rows = await stmt.all(...(params ?? []));
+        return Array.isArray(rows) ? (rows as Record<string, unknown>[]) : [];
+      },
+      async run(sql, params) {
+        if (params && params.length > 0) {
+          const stmt = await txn.prepare(sql);
+          await stmt.run(...params);
+        } else {
+          await txn.exec(sql);
+        }
+      },
+    };
+    return applyMigrationInTx(tx, statements, ledger);
+  });
+  return txFn.immediate();
 }

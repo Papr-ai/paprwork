@@ -192,6 +192,36 @@ export class TursoReplicaService {
     });
   }
 
+  /**
+   * Apply one migration atomically on the replica: statement guard, statements
+   * and ledger rows commit in ONE transaction, or roll back together.
+   */
+  async runMigration(options: {
+    localPath: string;
+    tursoDatabase: string;
+    statements: readonly string[];
+    ledger: ReadonlyArray<{ sql: string; params?: unknown[] }>;
+    writeOptions?: TursoReplicaWriteOptions;
+  }): Promise<{
+    executed: string[];
+    skipped: Array<{ statement: string; reason: string }>;
+    pendingPush: boolean;
+  }> {
+    const pushMode = this.resolvePushMode(options.writeOptions);
+    return this.withInteractivePath(options.localPath, async () => {
+      const spec = await this.openSpec(options.localPath, options.tursoDatabase);
+      const result = await getTursoReplicaSyncWorkerClient().migrate({
+        ...spec,
+        statements: options.statements.map((sql) => ({ sql })),
+        ledger: options.ledger.map((s) => ({ sql: s.sql, params: s.params })),
+        timeoutMs: REPLICA_QUERY_TIMEOUT_MS,
+        retryOnCrash: "never",
+      });
+      const pendingPush = await this.syncAfterWrite(spec, options.localPath, pushMode);
+      return { executed: result.executed, skipped: result.skipped, pendingPush };
+    });
+  }
+
   async runExec(
     localPath: string,
     tursoDatabase: string,

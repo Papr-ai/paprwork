@@ -22,6 +22,7 @@ export type TursoSyncWorkerOp =
   | "queryBatch" // prepare + all() for each statement in one scheduler slot
   | "write" // prepare + run() for each statement
   | "exec" // db.exec(sql)
+  | "migrate" // one migration: guard + statements + ledger in ONE transaction
   | "pull"
   | "push"
   | "pullPush"
@@ -60,8 +61,15 @@ export interface TursoSyncWorkerRequest extends TursoSyncWorkerOpenSpec {
   sql?: string;
   /** query */
   params?: unknown[];
-  /** write / queryBatch */
+  /** write / queryBatch / migrate (the migration's statements) */
   statements?: TursoSyncWorkerStatement[];
+  /** migrate: ledger rows committed in the same transaction as `statements`. */
+  ledger?: TursoSyncWorkerStatement[];
+}
+
+export interface TursoSyncWorkerMigrateResult {
+  executed: string[];
+  skipped: Array<{ statement: string; reason: string }>;
 }
 
 export interface TursoSyncWorkerQueryResult {
@@ -91,6 +99,7 @@ export type TursoSyncWorkerResult =
   | TursoSyncWorkerWriteResult
   | TursoSyncWorkerPullResult
   | TursoSyncWorkerStatsResult
+  | TursoSyncWorkerMigrateResult
   | Record<string, never>;
 
 /** Emitted just before the worker hands a request to the engine. */
@@ -146,6 +155,7 @@ export function isSyncWorkerRequest(value: unknown): value is TursoSyncWorkerReq
     (IDEMPOTENT_WORKER_OPS.has(c.op as TursoSyncWorkerOp) ||
       c.op === "write" ||
       c.op === "exec" ||
+      c.op === "migrate" ||
       c.op === "queryBatch")
   );
 }

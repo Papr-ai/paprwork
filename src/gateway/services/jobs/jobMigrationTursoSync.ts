@@ -7,7 +7,12 @@
 
 import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 
-import type { Client } from "@libsql/client";
+import type { Client, InValue, Transaction } from "@libsql/client";
+import {
+  applyMigrationInTx,
+  type MigrationTx,
+  type MigrationTxStatement,
+} from "./migrationAtomicApply.js";
 import Database from "better-sqlite3";
 import { promises as fs } from "fs";
 import path from "path";
@@ -117,6 +122,9 @@ export async function applySchemaOpToRemote(
       if (!(await remoteTableExists(remote, op.table))) {
         return;
       }
+      if (!(await remoteTableHasColumn(remote, op.table, op.column))) {
+        return; // already dropped
+      }
       await dropRemoteTableSyncTriggers(remote, op.table);
       await remote.execute({
         sql:
@@ -127,6 +135,12 @@ export async function applySchemaOpToRemote(
     case "rename_column":
       if (!(await remoteTableExists(remote, op.table))) {
         return;
+      }
+      if (
+        (await remoteTableHasColumn(remote, op.table, op.to)) &&
+        !(await remoteTableHasColumn(remote, op.table, op.from))
+      ) {
+        return; // already renamed
       }
       await dropRemoteTableSyncTriggers(remote, op.table);
       await remote.execute({
@@ -141,10 +155,18 @@ export async function applySchemaOpToRemote(
   }
 }
 
+interface ApplyToRemoteOptions {
+  /** Write this ledger id in the same transaction as the migration (SQL path). */
+  recordAs?: string;
+  /** Out: true when the ledger row was written atomically with the SQL. */
+  recorded?: boolean;
+}
+
 async function applyMigrationToRemote(
   remote: Client,
   migrationRoot: string,
   migrationId: string,
+  options: ApplyToRemoteOptions = {},
 ): Promise<void> {
   const manifest = await loadJobMigrationManifest(migrationRoot);
   const entry = manifestEntryById(manifest, migrationId);
@@ -180,9 +202,68 @@ async function applyMigrationToRemote(
     }
     throw new Error(`Migration SQL missing for ${migrationId}`);
   }
-  for (const statement of splitSqlStatements(sql)) {
-    await executeRemoteSqlIdempotent(remote, statement);
+  await applySqlMigrationAtomicallyOnRemote(
+    remote,
+    splitSqlStatements(sql),
+    options.recordAs ? remoteLedgerStatements(options.recordAs) : [],
+  );
+  options.recorded = Boolean(options.recordAs);
+}
+
+function remoteLedgerStatements(migrationId: string): MigrationTxStatement[] {
+  return [
+    {
+      sql:
+        `INSERT OR IGNORE INTO ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)} ` +
+        `(id, applied_at, source) VALUES (?, datetime('now'), 'database_migration')`,
+      params: [migrationId],
+    },
+  ];
+}
+
+/**
+ * One migration = one Turso transaction (statement guard + statements + ledger
+ * row). Falls back to guarded statement-by-statement execution only for
+ * clients without interactive transactions (test doubles).
+ */
+async function applySqlMigrationAtomicallyOnRemote(
+  remote: Client,
+  statements: readonly string[],
+  ledger: readonly MigrationTxStatement[],
+): Promise<void> {
+  const guardOptions = { skipAddColumnOnMissingTable: true };
+  if (typeof (remote as Partial<Client>).transaction !== "function") {
+    await applyMigrationInTx(clientAsMigrationTx(remote), statements, ledger, guardOptions);
+    return;
   }
+  const tx = await remote.transaction("write");
+  try {
+    await applyMigrationInTx(clientAsMigrationTx(tx), statements, ledger, guardOptions);
+    await tx.commit();
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch {
+      /* connection already closed the transaction */
+    }
+    throw error;
+  } finally {
+    tx.close();
+  }
+}
+
+function clientAsMigrationTx(
+  exec: Pick<Client, "execute"> | Pick<Transaction, "execute">,
+): MigrationTx {
+  return {
+    async query(sql, params) {
+      const result = await exec.execute({ sql, args: (params ?? []) as InValue[] });
+      return result.rows as unknown as Record<string, unknown>[];
+    },
+    async run(sql, params) {
+      await exec.execute({ sql, args: (params ?? []) as InValue[] });
+    },
+  };
 }
 
 async function recordRemoteMigrationApplied(
@@ -255,8 +336,11 @@ export async function applyPendingDatabaseMigrationsToTurso(
         `[MigrationTurso] Remote ledger lists ${migrationId} but schema is incomplete — re-applying`,
       );
     }
-    await applyMigrationToRemote(remote, migrationRoot, migrationId);
-    await recordRemoteMigrationApplied(remote, migrationId);
+    const applyOptions: ApplyToRemoteOptions = { recordAs: migrationId };
+    await applyMigrationToRemote(remote, migrationRoot, migrationId, applyOptions);
+    if (!applyOptions.recorded) {
+      await recordRemoteMigrationApplied(remote, migrationId);
+    }
     appliedNow.push(migrationId);
   }
 
@@ -290,8 +374,11 @@ export async function applyAndRecordMigrationOnTursoPrimary(
       return { applied: false };
     }
   }
-  await applyMigrationToRemote(remote, migrationRoot, normalizedId);
-  await recordRemoteMigrationApplied(remote, normalizedId);
+  const applyOptions: ApplyToRemoteOptions = { recordAs: normalizedId };
+  await applyMigrationToRemote(remote, migrationRoot, normalizedId, applyOptions);
+  if (!applyOptions.recorded) {
+    await recordRemoteMigrationApplied(remote, normalizedId);
+  }
   return { applied: true };
 }
 

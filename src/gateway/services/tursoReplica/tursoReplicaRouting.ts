@@ -252,6 +252,32 @@ export async function writeLinkedDbBatchViaTursoReplica(
   return result;
 }
 
+/** One migration, atomically, on the replica handle (see TursoReplicaService.runMigration). */
+export async function migrateLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  statements: readonly string[],
+  ledger: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  writeOptions?: TursoReplicaWriteOptions,
+): Promise<{
+  executed: string[];
+  skipped: Array<{ statement: string; reason: string }>;
+  pendingPush: boolean;
+}> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+  const result = await getTursoReplicaService().runMigration({
+    localPath: source.dbPath,
+    tursoDatabase,
+    statements,
+    ledger,
+    writeOptions,
+  });
+  await noteReplicaWriteOutcome(source, result.pendingPush);
+  if (!result.pendingPush) {
+    notifyReplicaDbChanged(source);
+  }
+  return result;
+}
+
 export async function execLinkedDbViaTursoReplica(
   source: AppDataSource,
   sql: string,
