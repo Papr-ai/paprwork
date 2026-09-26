@@ -558,6 +558,7 @@ export async function paprDbCreateMigration(options: {
   fileName: string;
   path: string;
   apply?: Awaited<ReturnType<typeof paprDbApplyMigration>>;
+  note?: string;
 }> {
   await initializeDatabaseRegistry();
   const source = resolveSource({ dbId: options.dbId });
@@ -568,14 +569,37 @@ export async function paprDbCreateMigration(options: {
   if (!options.sql.trim()) {
     throw new Error("sql is required");
   }
+  // Portable by default: the current user's literal id becomes
+  // {{papr.owner_user_id}} when they own this database, so forks/copies get
+  // their own id instead of the author's. Same result on this machine.
+  const { getPaprUserId } = await import("../../utils/paprUserId.js");
+  const { portableOwnerIdInSql, resolveMigrationOwnerUserId } = await import(
+    "../jobs/migrationPlaceholders.js"
+  );
+  const currentUser = getPaprUserId()?.trim();
+  const owner = await resolveMigrationOwnerUserId(migrationRoot);
+  const portable =
+    currentUser && owner === currentUser
+      ? portableOwnerIdInSql(options.sql, currentUser)
+      : { sql: options.sql, replaced: 0 };
   const { createMigrationFile } = await import("../jobs/migrationFileNaming.js");
   const created = await createMigrationFile({
     migrationRoot,
     name: options.name,
-    sql: options.sql,
+    sql: portable.sql,
   });
+  const note =
+    portable.replaced > 0
+      ? `Replaced ${portable.replaced} literal user id(s) with {{papr.owner_user_id}} — ` +
+        "filled in with the database owner when the migration runs, so copies and forks get their own id."
+      : undefined;
   if (options.apply === false) {
-    return { migrationId: created.migrationId, fileName: created.fileName, path: created.fullPath };
+    return {
+      migrationId: created.migrationId,
+      fileName: created.fileName,
+      path: created.fullPath,
+      ...(note ? { note } : {}),
+    };
   }
   const apply = await paprDbApplyMigration({
     dbId: options.dbId,
@@ -586,6 +610,7 @@ export async function paprDbCreateMigration(options: {
     fileName: created.fileName,
     path: created.fullPath,
     apply,
+    ...(note ? { note } : {}),
   };
 }
 

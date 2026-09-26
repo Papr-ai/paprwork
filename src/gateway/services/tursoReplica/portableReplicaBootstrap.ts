@@ -180,9 +180,12 @@ export async function rebootstrapPendingPortableReplicas(): Promise<RebootstrapP
     failed: [],
   };
 
-  if (!isTursoReplicaSyncFeatureEnabled() || !isTursoReplicaOnline()) {
+  // Cloud-direct copies (devices with no sync engine) are finished here too,
+  // so the replica-feature gate applies to replica records only.
+  if (!isTursoReplicaOnline()) {
     return result;
   }
+  const replicaEnabled = isTursoReplicaSyncFeatureEnabled();
 
   const { getDatabaseRegistryService } = await import(
     "../DatabaseRegistryService.js"
@@ -190,7 +193,19 @@ export async function rebootstrapPendingPortableReplicas(): Promise<RebootstrapP
   const registry = getDatabaseRegistryService();
 
   for (const record of registry.listActive()) {
-    if (!shouldUseTursoReplicaForDb({ syncMode: record.syncMode })) {
+    if (record.syncMode === "cloud-direct") {
+      const outcome = await finishCloudDirectCopy(record);
+      if (outcome !== "skipped") {
+        result.attempted += 1;
+        if (outcome === "ok") {
+          result.succeeded += 1;
+        } else {
+          result.failed.push({ dbId: record.dbId, error: outcome.error });
+        }
+      }
+      continue;
+    }
+    if (!replicaEnabled || !shouldUseTursoReplicaForDb({ syncMode: record.syncMode })) {
       continue;
     }
     if (!hasBootstrapPendingMarker(record.localPath)) {
@@ -242,4 +257,32 @@ export async function rebootstrapPendingPortableReplicas(): Promise<RebootstrapP
   }
 
   return result;
+}
+
+/**
+ * Cloud-direct database copied from another workspace: the copy left a
+ * schema-only local file + marker because the target workspace's cloud was
+ * not reachable yet. Build the primary from the migrations (atomic, snapshot
+ * aware), then drop the local file — cloud-direct keeps no local copy.
+ */
+async function finishCloudDirectCopy(
+  record: DatabaseRecord,
+): Promise<"skipped" | "ok" | { error: string }> {
+  const marker = readBootstrapPendingMarker(record.localPath);
+  if (!isPortableTransferMarker(marker)) {
+    return "skipped";
+  }
+  try {
+    const { applyCloudDirectMigrations } = await import(
+      "../cloudDirect/cloudDirectMigrations.js"
+    );
+    await applyCloudDirectMigrations(path.dirname(record.localPath), record.localPath);
+    const { removeTursoReplicaLocalFiles } = await import("./tursoReplicaFileGuard.js");
+    removeTursoReplicaLocalFiles(record.localPath);
+    console.log(`[PortableReplica] Built cloud-direct primary for ${record.dbId}`);
+    return "ok";
+  } catch (error) {
+    // Marker stays: retried on the next switch/startup.
+    return { error: (error as Error).message };
+  }
 }

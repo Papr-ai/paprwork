@@ -136,7 +136,11 @@ export const paprDbCreateMigrationTool = createTool({
     "the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so " +
     "collaborators can never produce the same filename. Then applies it like papr_db_apply_migration " +
     "(replica → Turso primary → pull align). Use this for EVERY new schema change; do not write_file " +
-    "migration files or pick numbers yourself. Never edit or rename existing migration files.",
+    "migration files or pick numbers yourself. Never edit or rename existing migration files. " +
+    "Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in " +
+    "seed rows or backfills — it is filled with the database owner when the migration runs " +
+    "(publisher for a team shared DB, the installer on forks/copies). A literal copy of your own id " +
+    "is converted automatically.",
   inputSchema: z.object({
     dbId: z.string().min(1),
     name: z.string().min(1).describe("Short description, e.g. add_notes_column"),

@@ -271,3 +271,38 @@ describe("install setup prompt", () => {
     expect(msg).toMatch(/Do not paste API keys/);
   });
 });
+
+describe("portableOwnerIdInSql (papr_db_create_migration)", () => {
+  it("replaces only whole quoted literals of the owner's id", async () => {
+    const { portableOwnerIdInSql } = await import(
+      "../src/gateway/services/jobs/migrationPlaceholders.js"
+    );
+    const out = portableOwnerIdInSql(
+      "UPDATE t SET owner_id = 'abc123XYZ' WHERE owner_id = 'abc123XYZ' OR note = 'abc123XYZ-suffix';",
+      "abc123XYZ",
+    );
+    expect(out.replaced).toBe(2);
+    expect(out.sql).toBe(
+      "UPDATE t SET owner_id = '{{papr.owner_user_id}}' WHERE owner_id = '{{papr.owner_user_id}}' OR note = 'abc123XYZ-suffix';",
+    );
+  });
+
+  it("is a no-op without an id, for short ids, or when the id is absent", async () => {
+    const { portableOwnerIdInSql } = await import(
+      "../src/gateway/services/jobs/migrationPlaceholders.js"
+    );
+    expect(portableOwnerIdInSql("SELECT 'x'", undefined).replaced).toBe(0);
+    expect(portableOwnerIdInSql("SELECT 'abc'", "abc").replaced).toBe(0);
+    expect(portableOwnerIdInSql("SELECT 1", "abc123XYZ").replaced).toBe(0);
+  });
+
+  it("round-trips: portable file fills back to the same id for the owner", async () => {
+    const { portableOwnerIdInSql, substituteMigrationPlaceholders } = await import(
+      "../src/gateway/services/jobs/migrationPlaceholders.js"
+    );
+    setMigrationOwnerResolverForTests(() => "abc123XYZ");
+    const original = "INSERT INTO t (owner) VALUES ('abc123XYZ');";
+    const portable = portableOwnerIdInSql(original, "abc123XYZ").sql;
+    expect(await substituteMigrationPlaceholders(portable, root)).toBe(original);
+  });
+});

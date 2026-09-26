@@ -92,3 +92,29 @@ export async function substituteMigrationPlaceholders(
   }
   return sql.split(OWNER_USER_ID_PLACEHOLDER).join(sqlStringContent(owner));
 }
+
+/**
+ * Agent-authored migrations: replace the owner's literal id with the
+ * placeholder so the file is portable. Only whole quoted literals
+ * ('<id>' → '{{papr.owner_user_id}}') and only when `ownerUserId` is the
+ * database owner — on a team shared database written by a collaborator the
+ * literal means that collaborator, not the owner, so it is left alone.
+ */
+export function portableOwnerIdInSql(
+  sql: string,
+  ownerUserId: string | undefined,
+): { sql: string; replaced: number } {
+  const id = ownerUserId?.trim();
+  if (!id || id.length < 6) {
+    return { sql, replaced: 0 };
+  }
+  const literal = `'${id.replace(/'/g, "''")}'`;
+  const parts = sql.split(literal);
+  if (parts.length === 1) {
+    return { sql, replaced: 0 };
+  }
+  return {
+    sql: parts.join(`'${OWNER_USER_ID_PLACEHOLDER}'`),
+    replaced: parts.length - 1,
+  };
+}
