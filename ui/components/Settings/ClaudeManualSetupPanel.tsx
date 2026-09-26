@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProviderSteps";
 import {
   detectManualConnectionPlatform,
@@ -26,7 +27,7 @@ export function ClaudeManualSetupPanel({
 
   const handleCopyCommand = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command);
+      if (!(await copyTextToClipboard(command))) throw new Error("copy failed");
       setCopiedCommand(command);
       window.setTimeout(() => setCopiedCommand(null), 2000);
     } catch {

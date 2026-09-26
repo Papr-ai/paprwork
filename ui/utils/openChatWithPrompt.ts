@@ -17,9 +17,9 @@ import { useTabStore } from "../stores/tabStore";
 /** Delay lets the new tab's ChatContainer mount and attach its listener. */
 const SEND_DELAY_MS = 300;
 
-export function openChatWithPrompt(message: string): void {
+/** Register an empty temp chat (same as useChat().createChat()) and return its id. */
+export function createTempChat(): string {
   const chatId = `temp-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-
   const { chatStates } = useChatStore.getState();
   const next = new Map(chatStates);
   next.set(chatId, {
@@ -30,7 +30,11 @@ export function openChatWithPrompt(message: string): void {
     hasUnread: false,
   });
   useChatStore.setState({ chatStates: next });
+  return chatId;
+}
 
+export function openChatWithPrompt(message: string): void {
+  const chatId = createTempChat();
   const { createTab, switchToTab } = useTabStore.getState();
   const tabId = createTab("chat", chatId, "New Chat");
   switchToTab(tabId);

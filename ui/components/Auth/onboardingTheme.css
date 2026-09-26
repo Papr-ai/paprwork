@@ -15,6 +15,12 @@
 
   min-height: 100vh;
   width: 100%;
+  /* body and #root are overflow:hidden for the workspace, so the gate must
+     scroll itself — otherwise long steps (Claude token, recommendations) are
+     clipped and the token can't be reached to copy. */
+  height: 100vh;
+  overflow-y: auto;
+  box-sizing: border-box;
   background: var(--onb-bg);
   color: var(--onb-ink);
   font-family:
@@ -352,6 +358,39 @@
 
 .onboarding-head-row .onboarding-stepdots {
   margin-bottom: 0;
+}
+
+.onboarding-head-left {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.onboarding-back-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--onb-mid);
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.onboarding-back-btn:hover {
+  color: var(--onb-g1);
+}
+
+.onboarding-connecting-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.onboarding-check-msg {
+  margin: 0;
+  color: var(--onb-mid);
+  font-size: 14px;
 }
 
 .onboarding-skip-btn {
@@ -929,4 +968,85 @@
   .onboarding-opts {
     grid-template-columns: 1fr;
   }
+}
+
+/* ---- Round 2: shared shell pieces ---- */
+/* Back lives bottom-left in the footer on every step, never beside the dots. */
+.onboarding-foot .onboarding-back-btn {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.onboarding-connected-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 0 0 18px;
+  padding: 14px 16px;
+  border: 1px solid #cfe9d9;
+  border-radius: 13px;
+  background: #f1faf4;
+  color: var(--onb-ink);
+  font-size: 14px;
+}
+
+.onboarding-connected-banner b {
+  color: var(--onb-ok);
+  font-weight: 600;
+}
+
+.onboarding-wait-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0 22px;
+  color: var(--onb-mid);
+  font-size: 14px;
+}
+
+.onboarding-spinner--inline {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  border-width: 2px;
+}
+
+.onboarding-check-msg {
+  margin-top: 12px;
+}
+
+/* API-key path: provider segmented control */
+.onboarding-keyseg {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  margin: 0 0 20px;
+  border: 1px solid var(--onb-line, #e3e9f2);
+  border-radius: 12px;
+  background: #fff;
+}
+
+.onboarding-keyseg__btn {
+  padding: 8px 16px;
+  border: 0;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--onb-mid);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.onboarding-keyseg__btn.is-on {
+  background: #eef4fd;
+  color: var(--onb-ink);
+  font-weight: 600;
+}
+
+/* Connected provider pill on the picker cards */
+.onboarding-opt__time--ok {
+  color: var(--onb-ok);
+  background: #e8f7ee;
+  font-weight: 600;
 }

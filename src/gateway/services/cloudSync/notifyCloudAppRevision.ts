@@ -8,6 +8,13 @@ export interface NotifyCloudAppRevisionInput {
   slug: string;
 }
 
+export interface NotifyCloudAppAccessUpdatedInput extends NotifyCloudAppRevisionInput {
+  appId?: string;
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
+}
+
 export function resolvePublishRouteForNotify(input: {
   shareUrl?: string | null;
   slug?: string | null;
@@ -27,7 +34,7 @@ export function resolvePublishRouteForNotify(input: {
 
 /** Bust cloud app host access cache after publish ACL changes (no repo snapshot warm). */
 export async function notifyCloudAppAccessUpdated(
-  input: NotifyCloudAppRevisionInput,
+  input: NotifyCloudAppAccessUpdatedInput,
 ): Promise<void> {
   const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
   if (!hostKey) {

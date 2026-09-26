@@ -157,77 +157,94 @@
   background: #fbfdff;
 }
 
-/* ---- Freeform ("Something else") — shared component, light re-ink ---- */
+/* ---- Freeform ("Something else"): pills above one chat box ---- */
 .recommend-step .onboarding-freeform {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
   max-width: none;
   margin: 0;
   color: var(--onb-ink);
 }
 
 .recommend-step .onboarding-freeform .onboarding-view-title {
+  margin: 0;
   font-size: 25px;
   font-weight: 600;
   letter-spacing: -0.02em;
   background: none;
   -webkit-text-fill-color: var(--onb-ink);
   color: var(--onb-ink);
-  margin: 0 0 10px;
-}
-
-.recommend-step .onboarding-freeform .onboarding-view-subtitle {
-  max-width: 62ch;
-  margin: 0;
-  font-size: 16px;
-  color: var(--onb-mid);
 }
 
 .recommend-step .onboarding-freeform__back {
+  align-self: flex-start;
+  padding: 0;
+  border: none;
+  background: none;
   color: var(--onb-g1);
+  font-size: 14px;
+  cursor: pointer;
 }
 
-.recommend-step .onboarding-freeform__opener {
+.recommend-step .onboarding-freeform__pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recommend-step .onboarding-freeform__pill {
+  padding: 7px 13px;
   border: 1px solid var(--onb-line);
+  border-radius: 999px;
   background: #fff;
   color: var(--onb-mid);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: 0.15s;
 }
 
-.recommend-step .onboarding-freeform__opener:hover {
+.recommend-step .onboarding-freeform__pill:hover {
   border-color: var(--onb-g2);
   color: var(--onb-g1);
 }
 
-.recommend-step .onboarding-freeform__input {
-  background: var(--onb-card);
+.recommend-step .onboarding-freeform__box {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--onb-line);
-  color: var(--onb-ink);
+  border-radius: 14px;
+  background: var(--onb-card);
 }
 
-.recommend-step .onboarding-freeform__input:focus {
+.recommend-step .onboarding-freeform__box:focus-within {
   border-color: var(--onb-g2);
   box-shadow: 0 0 0 3px rgba(0, 172, 250, 0.12);
 }
 
-.recommend-step .onboarding-freeform__coach-head {
-  color: var(--onb-soft);
-}
-
-.recommend-step .onboarding-freeform__tip.is-now {
-  color: var(--onb-mid);
-}
-
-.recommend-step .onboarding-freeform__tip.is-met {
-  color: var(--onb-soft);
-}
-
-.recommend-step .onboarding-freeform__example {
-  background: var(--onb-card);
-  border: 1px solid var(--onb-line);
-  color: var(--onb-mid);
-}
-
-.recommend-step .onboarding-freeform__example:hover {
-  border-color: var(--onb-g2);
+.recommend-step .onboarding-freeform__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 4px;
+  border: none;
+  outline: none;
+  resize: vertical;
+  background: transparent;
   color: var(--onb-ink);
+  font: inherit;
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+.recommend-step .onboarding-freeform__box .onboarding-primary-btn {
+  align-self: flex-end;
+}
+
+.recommend-step .onboarding-primary-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 
 /* Primary action = the auth stages' gradient CTA (.onboarding-cta). */
@@ -250,4 +267,16 @@
   .recommend-step .onboarding-recommend__grid {
     grid-template-columns: 1fr;
   }
+}
+
+.recommend-step .onboarding-freeform__lede {
+  margin: -6px 0 0;
+  color: var(--onb-mid);
+  font-size: 15px;
+  line-height: 1.5;
+  max-width: 620px;
+}
+
+.recommend-step .onboarding-freeform .onboarding-view-title {
+  font-size: 32px;
 }

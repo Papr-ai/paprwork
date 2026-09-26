@@ -73,9 +73,6 @@
 }
 
 .history-pagination {
-  position: sticky;
-  top: 0;
-  z-index: 3;
   display: flex;
   justify-content: center;
   padding: 4px 24px 12px;

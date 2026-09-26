@@ -277,6 +277,23 @@ export interface DirectChromeSpawnResult {
  * Launch Google Chrome as a detached process (Chrome Manager style).
  * Does not use Playwright — caller attaches via connectOverCDP afterward.
  */
+/**
+ * macOS attributes a child process's actions to the app that launched it.
+ * Spawned directly, Chrome — and its built-in updater — run "as" Papr Work, so
+ * Chrome updating itself trips the "Papr Work was prevented from modifying
+ * apps on your Mac" App Management notice. `open` hands the launch to
+ * LaunchServices, making Chrome responsible for itself. (`-n`: a separate
+ * instance for the Papr profile, same as the direct spawn.) Returned pid is
+ * `open`'s, which callers only log; readiness is still detected via CDP.
+ */
+function spawnViaLaunchServices(executable: string, args: string[]) {
+  const appBundle = executable.replace(/\/Contents\/MacOS\/[^/]+$/, "");
+  return spawn("/usr/bin/open", ["-n", "-a", appBundle, "--args", ...args], {
+    detached: true,
+    stdio: "ignore",
+  });
+}
+
 export async function spawnDirectGoogleChrome(options: {
   userDataDir: string;
   startUrl?: string;
@@ -312,10 +329,10 @@ export async function spawnDirectGoogleChrome(options: {
     startUrl: options.startUrl,
   });
 
-  const child = spawn(executable, args, {
-    detached: true,
-    stdio: "ignore",
-  });
+  const child =
+    process.platform === "darwin"
+      ? spawnViaLaunchServices(executable, args)
+      : spawn(executable, args, { detached: true, stdio: "ignore" });
   child.unref();
 
   console.log(

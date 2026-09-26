@@ -95,6 +95,10 @@ import {
   loadSharePeopleAllowlistForCloudHost,
 } from "./cloudAppSharePeopleAllowlistLoader.js";
 import {
+  setSharePeopleAllowlistPush,
+  shareAllowlistFromPushBody,
+} from "./cloudAppHostShareAllowlistPushStore.js";
+import {
   assertMiniAppMembersAccess,
   listMiniAppMembers,
   MiniAppMembersError,
@@ -2282,7 +2286,19 @@ export class CloudAppHostService {
       return;
     }
 
-    const body = req.body as { namespaceId?: string; slug?: string };
+    const body = req.body as {
+      namespaceId?: string;
+      slug?: string;
+      appId?: string;
+      allowedUserIds?: string[];
+      allowedEmails?: string[];
+      allowedEmailDomains?: string[];
+      shareAllowlist?: {
+        allowedUserIds?: string[];
+        allowedEmails?: string[];
+        allowedEmailDomains?: string[];
+      };
+    };
     const namespaceId = body.namespaceId?.trim();
     const slug = body.slug?.trim();
     if (!namespaceId || !slug) {
@@ -2290,9 +2306,26 @@ export class CloudAppHostService {
       return;
     }
 
+    const allowlist = shareAllowlistFromPushBody(body);
+    setSharePeopleAllowlistPush({
+      namespaceId,
+      slug,
+      appId: body.appId?.trim(),
+      allowlist,
+    });
+
     invalidateAccessCacheForPublishedApp(namespaceId, slug);
-    invalidateMemoryShareAllowlistCache();
-    res.json({ ok: true, cacheInvalidated: true, scope: "access" });
+    if (body.appId?.trim()) {
+      invalidateMemoryShareAllowlistCache(body.appId.trim());
+    } else {
+      invalidateMemoryShareAllowlistCache();
+    }
+    res.json({
+      ok: true,
+      cacheInvalidated: true,
+      scope: "access",
+      allowlistStored: allowlist !== undefined,
+    });
   }
 
   private async handleInternalAppRevisionUpdated(

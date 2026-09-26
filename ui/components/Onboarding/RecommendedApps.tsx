@@ -35,13 +35,16 @@ import {
   ONBOARDING_RECOMMENDATIONS,
   type OnboardingRecommendation,
 } from "../../constants/onboardingRecommendations";
-import { useCloudCatalogInstallFlow } from "../../hooks/useCloudCatalogInstallFlow";
+import {
+  installCloudCatalogApp,
+  type CloudInstallResponse,
+} from "../../utils/cloudCatalogInstall";
 import { FreeformPrompt } from "./FreeformPrompt";
 import { trackEvent } from "../../lib/telemetry";
 
 interface RecommendedAppsProps {
-  /** Install started — the phase machine advances and the tab gets out of the way. */
-  onInstalling: (appName: string) => void;
+  /** Install FINISHED (the app exists) — the host releases the gate and opens it. */
+  onInstalled: (entry: CommunityCatalogEntry, result: CloudInstallResponse) => void;
   /** User described their own automation instead of picking a card. */
   onFreeform: (prompt: string) => void;
   /** User declined everything. */
@@ -53,17 +56,25 @@ interface RecommendedAppsProps {
    * dots like every other auth stage. The workspace tab keeps it at the bottom.
    */
   hideSkip?: boolean;
+  /**
+   * Controlled "Something else" view. The gated step owns it so its single
+   * bottom Back closes the freeform box instead of rendering a second Back.
+   */
+  freeformOpen?: boolean;
+  onFreeformOpenChange?: (open: boolean) => void;
 }
 
 type LoadState = "loading" | "ready" | "unavailable";
 type ConnectState = "unknown" | "disconnected" | "connecting" | "connected";
 
 export function RecommendedApps({
-  onInstalling,
+  onInstalled,
   onFreeform,
   onSkip,
   providerLine,
   hideSkip = false,
+  freeformOpen,
+  onFreeformOpenChange,
 }: RecommendedAppsProps) {
   const [loadState, setLoadState] = useState<LoadState>("loading");
   const [entries, setEntries] = useState<CommunityCatalogEntry[]>([]);
@@ -71,8 +82,13 @@ export function RecommendedApps({
     {},
   );
   const [connectError, setConnectError] = useState<string | null>(null);
-  const [freeform, setFreeform] = useState(false);
-  const { startCloudInstall, installingId } = useCloudCatalogInstallFlow();
+  const [localFreeform, setLocalFreeform] = useState(false);
+  const controlled = freeformOpen !== undefined;
+  const freeform = controlled ? freeformOpen : localFreeform;
+  const setFreeform = (open: boolean) =>
+    controlled ? onFreeformOpenChange?.(open) : setLocalFreeform(open);
+  const [installingId, setInstallingId] = useState<string | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -182,20 +198,40 @@ export function RecommendedApps({
     }
   }, []);
 
-  const handleInstall = (entry: CommunityCatalogEntry) => {
+  /**
+   * Install here and WAIT for it. The Community-tab hook this used to call
+   * opens a fork/track dialog for global-catalog apps — a dialog this screen
+   * never renders — and the gate was released before anything happened, so
+   * nothing installed. Onboarding always forks into the user's workspace.
+   */
+  const handleInstall = async (entry: CommunityCatalogEntry) => {
     trackEvent("paprwork_onboarding_step_completed", {
       step_name: "recommend",
       app_slug: entry.slug,
     } as Record<string, unknown>);
-    startCloudInstall(entry, { catalogScope: "global" });
-    onInstalling(entry.name);
+    setInstallingId(entry.catalogId);
+    setInstallError(null);
+    const result = await installCloudCatalogApp(
+      entry,
+      { mode: "fork", installDbPolicy: "fork_empty" },
+      { catalogScope: "global" },
+    ).catch((err: unknown) => ({
+      ok: false as const,
+      error: err instanceof Error ? err.message : "Install failed",
+    }));
+    if (!result.ok) {
+      setInstallingId(null);
+      setInstallError(`Couldn't install ${entry.name}: ${result.error.slice(0, 200)}`);
+      return;
+    }
+    onInstalled(entry, result.data);
   };
 
   if (freeform) {
     return (
       <FreeformPrompt
         onSubmit={onFreeform}
-        onBack={() => setFreeform(false)}
+        onBack={controlled ? undefined : () => setFreeform(false)}
       />
     );
   }
@@ -254,7 +290,7 @@ export function RecommendedApps({
               className="onboarding-recommend__tile"
               disabled={busy || Boolean(installingId) || connecting}
               onClick={() =>
-                needsConnect ? void handleConnect(rec) : handleInstall(entry)
+                needsConnect ? void handleConnect(rec) : void handleInstall(entry)
               }
             >
               <span className="onboarding-recommend__tile-title">
@@ -276,7 +312,7 @@ export function RecommendedApps({
               )}
               {busy && (
                 <span className="onboarding-recommend__tile-connect">
-                  Installing…
+                  Installing… this can take a minute
                 </span>
               )}
             </button>
@@ -287,9 +323,13 @@ export function RecommendedApps({
       {connectError && (
         <p className="onboarding-recommend__error">{connectError}</p>
       )}
+      {installError && (
+        <p className="onboarding-recommend__error">{installError}</p>
+      )}
 
       <button
         className="onboarding-recommend__else"
+        disabled={Boolean(installingId)}
         onClick={() => setFreeform(true)}
       >
         <span className="onboarding-recommend__else-title">Something else</span>

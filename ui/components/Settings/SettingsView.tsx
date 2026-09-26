@@ -1180,6 +1180,37 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.18" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.18</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Onboarding and sign-in</strong>
+                <p>
+                  Refreshed Connect AI flow with API key step, provider logos,
+                  and smoother recommended-app install after onboarding.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Share allowlist on publish</strong>
+                <p>
+                  People you share with sync to the cloud app host when you
+                  publish, so link and team access stay aligned with desktop
+                  settings.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.18"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.17" && (
           <div className="about-card">
             <h3>What's New in v2.6.17</h3>

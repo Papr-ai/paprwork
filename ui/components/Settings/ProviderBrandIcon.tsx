@@ -2,18 +2,27 @@
  * Official provider brand marks used across Profile + onboarding.
  */
 
-import React from "react";
+import openaiSvg from "../../assets/brand/openai-logomark.svg?raw";
+import anthropicSvg from "../../assets/brand/anthropic-logomark.svg?raw";
 import "./ProviderBrandIcon.css";
 
 export type ProviderBrandId = "openai" | "anthropic";
 
+/**
+ * Inlined, not fetched from /images/. On first launch the UI can render
+ * before the gateway serves static files, and a failed <img> request never
+ * retries — the onboarding cards showed broken icons until a relaunch.
+ */
+const toDataUri = (svg: string) =>
+  `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+
 const PROVIDER_LOGOS: Record<ProviderBrandId, { src: string; alt: string }> = {
   openai: {
-    src: "/images/openai-logomark.svg",
+    src: toDataUri(openaiSvg),
     alt: "OpenAI",
   },
   anthropic: {
-    src: "/images/anthropic-logomark.svg",
+    src: toDataUri(anthropicSvg),
     alt: "Anthropic",
   },
 };

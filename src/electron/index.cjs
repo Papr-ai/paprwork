@@ -2621,6 +2621,9 @@ app.whenReady().then(async () => {
     const isLocalApp = (url) => typeof url === "string" && url.startsWith(LOCAL_APP_ORIGIN);
 
     session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      // Write-only clipboard (navigator.clipboard.writeText). Denying it broke
+      // every "Copy" button in the renderer, e.g. the Claude setup command.
+      if (permission === "clipboard-sanitized-write") return callback(true);
       if (!MEDIA_PERMISSIONS.has(permission)) return callback(false);
       const url = details?.requestingUrl || webContents?.getURL?.() || "";
       const allowed = isLocalApp(url);
@@ -2632,6 +2635,7 @@ app.whenReady().then(async () => {
     // state "denied" and can show a misleading "check System Settings" message
     // before it has even tried.
     session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+      if (permission === "clipboard-sanitized-write") return true;
       if (!MEDIA_PERMISSIONS.has(permission)) return false;
       return isLocalApp(requestingOrigin);
     });

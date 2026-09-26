@@ -60,6 +60,54 @@ export async function findAvailablePort(
   );
 }
 
+
+const escapeHtml = (v: string) =>
+  v.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
+
+/**
+ * Browser page shown after an OAuth redirect. Same light look as the in-app
+ * onboarding. `charset=utf-8` is required both in the header and the markup —
+ * without it the ✓ rendered as "âœ“".
+ */
+function oauthResultPage(opts: { ok: boolean; title: string; body: string; autoClose?: boolean }): string {
+  const mark = opts.ok ? "&#10003;" : "!";
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>${escapeHtml(opts.title)} · Papr Work</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #f8fafd; color: #0a1020;
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Inter", system-ui, sans-serif; }
+  .card { width: min(440px, calc(100vw - 40px)); padding: 40px 36px 34px; text-align: center;
+    background: #fff; border: 1px solid #e3e9f2; border-radius: 18px;
+    box-shadow: 0 12px 40px rgba(10, 16, 32, 0.06); }
+  .mark { width: 54px; height: 54px; margin: 0 auto 20px; border-radius: 50%;
+    display: grid; place-items: center; color: #fff; font-size: 26px; font-weight: 600;
+    background: ${opts.ok ? "linear-gradient(135deg, #3b63e0, #6fc6ff)" : "#d93a3a"}; }
+  h1 { margin: 0 0 8px; font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+  p { margin: 0; color: #5a6b85; }
+  .brand { margin-top: 26px; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #9aa7bb; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <div class="mark">${mark}</div>
+    <h1>${escapeHtml(opts.title)}</h1>
+    <p>${opts.body}</p>
+    <div class="brand">Papr Work</div>
+  </main>
+  ${opts.autoClose ? "<script>setTimeout(() => window.close(), 2500);</script>" : ""}
+</body>
+</html>`;
+}
+
+const HTML_HEADERS = { "Content-Type": "text/html; charset=utf-8" };
+
 export class OAuthCallbackServer {
   private server: http.Server | null = null;
   private requestedPort: number;
@@ -145,34 +193,14 @@ export class OAuthCallbackServer {
             const errorDescription =
               params.get("error_description") || "Unknown error";
 
-            res.writeHead(400, { "Content-Type": "text/html" });
-            res.end(`
-              <!DOCTYPE html>
-              <html>
-                <head>
-                  <title>Authentication Error</title>
-                  <style>
-                    body {
-                      font-family: system-ui, -apple-system, sans-serif;
-                      max-width: 600px;
-                      margin: 100px auto;
-                      padding: 20px;
-                      text-align: center;
-                    }
-                    .error {
-                      color: #d32f2f;
-                      font-size: 18px;
-                      margin: 20px 0;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <h1>Authentication Failed</h1>
-                  <div class="error">${error}: ${errorDescription}</div>
-                  <p>You can close this window and try again.</p>
-                </body>
-              </html>
-            `);
+            res.writeHead(400, HTML_HEADERS);
+            res.end(
+              oauthResultPage({
+                ok: false,
+                title: "Sign-in didn't finish",
+                body: `${escapeHtml(errorDescription || error || "Unknown error")}<br/>Close this tab and try again from Papr Work.`,
+              }),
+            );
 
             // Close server after error
             setTimeout(() => this.stop(), 1000);
@@ -183,66 +211,27 @@ export class OAuthCallbackServer {
           const code = params.get("code");
 
           if (!code) {
-            res.writeHead(400, { "Content-Type": "text/html" });
-            res.end(`
-              <!DOCTYPE html>
-              <html>
-                <head>
-                  <title>Authentication Error</title>
-                  <style>
-                    body {
-                      font-family: system-ui, -apple-system, sans-serif;
-                      max-width: 600px;
-                      margin: 100px auto;
-                      padding: 20px;
-                      text-align: center;
-                    }
-                  </style>
-                </head>
-                <body>
-                  <h1>Authentication Error</h1>
-                  <p>No authorization code received.</p>
-                  <p>You can close this window and try again.</p>
-                </body>
-              </html>
-            `);
+            res.writeHead(400, HTML_HEADERS);
+            res.end(
+              oauthResultPage({
+                ok: false,
+                title: "Sign-in didn't finish",
+                body: "No authorization code came back. Close this tab and try again from Papr Work.",
+              }),
+            );
             return;
           }
 
           // Success! Return success page
-          res.writeHead(200, { "Content-Type": "text/html" });
+          res.writeHead(200, HTML_HEADERS);
           res.end(
             this.successHtml ??
-              `<!DOCTYPE html>
-            <html>
-              <head>
-                <title>Authentication Successful</title>
-                <style>
-                  body {
-                    font-family: system-ui, -apple-system, sans-serif;
-                    max-width: 600px;
-                    margin: 100px auto;
-                    padding: 20px;
-                    text-align: center;
-                  }
-                  .success {
-                    color: #2e7d32;
-                    font-size: 24px;
-                    margin: 20px 0;
-                  }
-                </style>
-              </head>
-              <body>
-                <h1>Authentication Successful!</h1>
-                <div class="success">✓ You can now close this window</div>
-                <p>Return to Papr Work to continue.</p>
-                <script>
-                  setTimeout(() => {
-                    window.close();
-                  }, 2000);
-                </script>
-              </body>
-            </html>`,
+              oauthResultPage({
+                ok: true,
+                title: "You're signed in",
+                body: "Head back to Papr Work — it's already picked this up. You can close this tab.",
+                autoClose: true,
+              }),
           );
 
           // Call callback handler

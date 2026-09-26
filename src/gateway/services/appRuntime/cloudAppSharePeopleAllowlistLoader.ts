@@ -11,31 +11,25 @@ import type { CloudPublishAppPrefs } from "../cloudPublishPrefs.js";
 import { loadCloudPublishPrefs } from "../cloudPublishPrefs.js";
 import { fetchCachedRuntimeRepoFile } from "./cloudAppHostCache.js";
 import type { SharePeopleAllowlist } from "./cloudAppPeopleAccess.js";
+import { getSharePeopleAllowlistPush } from "./cloudAppHostShareAllowlistPushStore.js";
 import { getCloudAppHostKey, runtimeFetch } from "./memoryRuntimeClient.js";
+import {
+  parseSharePeopleAllowlistRepoFile,
+  SHARE_PEOPLE_ALLOWLIST_REPO_PATH,
+} from "./sharePeopleAllowlistRepoArtifact.js";
+import { sharePeopleAllowlistFromFields } from "./sharePeopleAllowlistFields.js";
 import type { AppRuntimeRouteAuth } from "./types.js";
 
 export const CLOUD_PUBLISH_PREFS_REPO_PATH = "data/cloud-publish-prefs.json";
 
+/** @deprecated use sharePeopleAllowlistFromFields */
 export function sharePeopleAllowlistFromAppPrefs(
   prefs: Pick<
     CloudPublishAppPrefs,
     "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
   > | undefined,
 ): SharePeopleAllowlist | undefined {
-  if (!prefs) {
-    return undefined;
-  }
-  const allowedUserIds = prefs.allowedUserIds;
-  const allowedEmails = prefs.allowedEmails;
-  const allowedEmailDomains = prefs.allowedEmailDomains;
-  if (
-    (allowedUserIds?.length ?? 0) === 0 &&
-    (allowedEmails?.length ?? 0) === 0 &&
-    (allowedEmailDomains?.length ?? 0) === 0
-  ) {
-    return undefined;
-  }
-  return { allowedUserIds, allowedEmails, allowedEmailDomains };
+  return sharePeopleAllowlistFromFields(prefs);
 }
 
 export function parseSharePeopleAllowlistFromPrefsFile(
@@ -47,7 +41,7 @@ export function parseSharePeopleAllowlistFromPrefsFile(
     if (!parsed.apps || typeof parsed.apps !== "object") {
       return undefined;
     }
-    return sharePeopleAllowlistFromAppPrefs(parsed.apps[appId]);
+    return sharePeopleAllowlistFromFields(parsed.apps[appId]);
   } catch {
     return undefined;
   }
@@ -59,7 +53,52 @@ const memoryAllowlistCache = new Map<
   { allowlist: SharePeopleAllowlist | undefined; expiresAt: number }
 >();
 
-/** Publish record on memory (source of truth after desktop publish). */
+async function fetchShareAllowlistFromMemoryRuntime(
+  runtimeAuth: AppRuntimeRouteAuth,
+  appId: string,
+): Promise<SharePeopleAllowlist | undefined> {
+  try {
+    const resp = await runtimeFetch(
+      `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/share-people-allowlist`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Cloud-App-Host-Key": getCloudAppHostKey(),
+        },
+        body: JSON.stringify({
+          namespaceId: runtimeAuth.namespaceId,
+          slug: runtimeAuth.slug,
+          appId,
+        }),
+      },
+      15_000,
+    );
+    if (resp.status === 404) {
+      return undefined;
+    }
+    if (!resp.ok) {
+      return undefined;
+    }
+    const payload = (await resp.json()) as {
+      shareAllowlist?: Pick<
+        CloudPublishAppPrefs,
+        "allowedUserIds" | "allowedEmails" | "allowedEmailDomains"
+      >;
+      allowedUserIds?: string[];
+      allowedEmails?: string[];
+      allowedEmailDomains?: string[];
+    };
+    return (
+      sharePeopleAllowlistFromFields(payload.shareAllowlist) ??
+      sharePeopleAllowlistFromFields(payload)
+    );
+  } catch {
+    return undefined;
+  }
+}
+
+/** Publish record on memory (owner auth — host key alone usually 401). */
 export async function fetchShareAllowlistFromMemoryPublish(
   appId: string,
 ): Promise<SharePeopleAllowlist | undefined> {
@@ -93,8 +132,8 @@ export async function fetchShareAllowlistFromMemoryPublish(
         >;
       };
       allowlist =
-        sharePeopleAllowlistFromAppPrefs(payload.shareAllowlist) ??
-        sharePeopleAllowlistFromAppPrefs(payload);
+        sharePeopleAllowlistFromFields(payload.shareAllowlist) ??
+        sharePeopleAllowlistFromFields(payload);
     }
   } catch {
     allowlist = undefined;
@@ -115,14 +154,38 @@ export function invalidateMemoryShareAllowlistCache(appId?: string): void {
   memoryAllowlistCache.clear();
 }
 
-/** Local prefs → repo file → memory publish record (Cloud Run). */
+/** Local prefs → host push → app repo file → workspace prefs file → memory. */
 export async function loadSharePeopleAllowlistForCloudHost(
   runtimeAuth: AppRuntimeRouteAuth,
   appId: string,
 ): Promise<SharePeopleAllowlist | undefined> {
-  const local = sharePeopleAllowlistFromAppPrefs(loadCloudPublishPrefs().apps[appId]);
+  const local = sharePeopleAllowlistFromFields(loadCloudPublishPrefs().apps[appId]);
   if (local) {
     return local;
+  }
+
+  const pushed = getSharePeopleAllowlistPush(
+    runtimeAuth.namespaceId,
+    runtimeAuth.slug,
+    appId,
+  );
+  if (pushed) {
+    return pushed;
+  }
+
+  try {
+    const perAppFile = await fetchCachedRuntimeRepoFile(
+      runtimeAuth,
+      SHARE_PEOPLE_ALLOWLIST_REPO_PATH,
+    );
+    if (perAppFile?.content) {
+      const fromRepo = parseSharePeopleAllowlistRepoFile(perAppFile.content);
+      if (fromRepo) {
+        return fromRepo;
+      }
+    }
+  } catch {
+    /* fall through */
   }
 
   try {
@@ -138,6 +201,11 @@ export async function loadSharePeopleAllowlistForCloudHost(
     }
   } catch {
     /* fall through to memory */
+  }
+
+  const fromRuntime = await fetchShareAllowlistFromMemoryRuntime(runtimeAuth, appId);
+  if (fromRuntime) {
+    return fromRuntime;
   }
 
   return fetchShareAllowlistFromMemoryPublish(appId);

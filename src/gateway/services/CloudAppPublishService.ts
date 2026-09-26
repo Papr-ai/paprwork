@@ -4,7 +4,6 @@
 
 import * as fs from "fs";
 import { getPaprRoot } from "../../core/utils/paprRoot.js";
-import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 import * as path from "path";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import {
@@ -41,6 +40,7 @@ import {
   type MemoryPublishResponseFields,
 } from "./cloudPublishMapping.js";
 import { memoryShareAllowlistBodyFromPrefs } from "./cloudShareAllowlistMemory.js";
+import { scheduleCloudAppHostAccessInvalidation } from "./cloudAppPublishAllowlistSync.js";
 import {
   detectAutoPublishDrift,
   resolveShareTokenForConfig,
@@ -257,29 +257,6 @@ function parsePublishConfig(
   };
 }
 
-function scheduleCloudAppHostAccessInvalidation(
-  config: Pick<CloudPublishConfig, "shareUrl" | "slug">,
-): void {
-  void import("./cloudSync/notifyCloudAppRevision.js")
-    .then(({ notifyCloudAppAccessUpdated, resolvePublishRouteForNotify }) => {
-      const route = resolvePublishRouteForNotify({
-        shareUrl: config.shareUrl,
-        slug: config.slug,
-        namespaceId: readActiveWorkspacePointer()?.namespaceId,
-      });
-      if (!route) {
-        return;
-      }
-      return notifyCloudAppAccessUpdated(route);
-    })
-    .catch((error: unknown) => {
-      console.warn(
-        "[CloudPublish] App access cache notify skipped:",
-        error instanceof Error ? error.message.slice(0, 120) : String(error),
-      );
-    });
-}
-
 export class CloudAppPublishService {
   private readonly boundPaprDir: string;
   private readonly boundWriteGeneration: number;
@@ -467,7 +444,12 @@ export class CloudAppPublishService {
       },
       this.paprDir,
     );
-    scheduleCloudAppHostAccessInvalidation(config);
+    scheduleCloudAppHostAccessInvalidation(
+      this.paprDir,
+      appId,
+      config,
+      getAppPublishPrefs(appId, this.paprDir),
+    );
     return config;
   }
 
@@ -569,7 +551,12 @@ export class CloudAppPublishService {
       },
       this.paprDir,
     );
-    scheduleCloudAppHostAccessInvalidation(config);
+    scheduleCloudAppHostAccessInvalidation(
+      this.paprDir,
+      appId,
+      config,
+      prefs,
+    );
     return config;
   }
 
@@ -1132,7 +1119,12 @@ export class CloudAppPublishService {
         );
       });
 
-    scheduleCloudAppHostAccessInvalidation(config);
+    scheduleCloudAppHostAccessInvalidation(
+      this.paprDir,
+      appId,
+      config,
+      getAppPublishPrefs(appId, this.paprDir),
+    );
     return config;
   }
 
@@ -1213,10 +1205,15 @@ export class CloudAppPublishService {
     );
     if (response.status === 404) {
       if (memory) {
-        scheduleCloudAppHostAccessInvalidation({
-          shareUrl: memory.shareUrl ?? null,
-          slug: memory.slug ?? null,
-        });
+        scheduleCloudAppHostAccessInvalidation(
+          this.paprDir,
+          appId,
+          {
+            shareUrl: memory.shareUrl ?? null,
+            slug: memory.slug ?? null,
+          },
+          {},
+        );
       }
       return;
     }
@@ -1228,10 +1225,15 @@ export class CloudAppPublishService {
     }
 
     if (memory) {
-      scheduleCloudAppHostAccessInvalidation({
-        shareUrl: memory.shareUrl ?? null,
-        slug: memory.slug ?? null,
-      });
+      scheduleCloudAppHostAccessInvalidation(
+        this.paprDir,
+        appId,
+        {
+          shareUrl: memory.shareUrl ?? null,
+          slug: memory.slug ?? null,
+        },
+        {},
+      );
     }
   }
 

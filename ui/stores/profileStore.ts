@@ -140,20 +140,29 @@ async function fetchProfileContext(options?: {
     };
   }
 
-  const [paprProfileResult, planResult, orgsResult] = await Promise.all([
-    (async () => {
-      const refreshResult = await window.electronAPI.papr.refreshProfile();
-      if (refreshResult.success && refreshResult.profile) {
-        return { success: true, profile: refreshResult.profile };
-      }
-      return window.electronAPI.papr.getProfile();
-    })(),
-    window.electronAPI.papr.getPlanSummary(),
-    window.electronAPI.papr.listOrganizations(),
-  ]);
+  const [paprProfileResult, planResult, orgsResult, workspaceResult] =
+    await Promise.all([
+      (async () => {
+        const refreshResult = await window.electronAPI.papr.refreshProfile();
+        if (refreshResult.success && refreshResult.profile) {
+          return { success: true, profile: refreshResult.profile };
+        }
+        return window.electronAPI.papr.getProfile();
+      })(),
+      window.electronAPI.papr.getPlanSummary(),
+      window.electronAPI.papr.listOrganizations(),
+      window.electronAPI.papr.getActiveWorkspace(),
+    ]);
 
-  if (paprProfileResult.success && paprProfileResult.profile) {
-    const paprProfile = paprProfileResult.profile;
+  const paprProfile = paprProfileResult.success
+    ? paprProfileResult.profile
+    : undefined;
+  const workspacePointer =
+    workspaceResult.success && workspaceResult.pointer
+      ? workspaceResult.pointer
+      : undefined;
+
+  if (paprProfile) {
     if (!name) name = paprProfile.displayName?.trim() || "";
     if (!email) email = paprProfile.email || "";
     imageUrl = resolveDisplayProfileImage(
@@ -165,7 +174,6 @@ async function fetchProfileContext(options?: {
     if (profilePlan) {
       plan = profilePlan;
     }
-    namespaceName = paprProfile.activeNamespaceName?.trim() || namespaceName;
     workspaceName = paprProfile.workspaceName?.trim() || workspaceName;
   }
 
@@ -173,33 +181,64 @@ async function fetchProfileContext(options?: {
     plan = planResult.summary.planName;
   }
 
+  const activeWorkspaceId =
+    orgsResult.success && orgsResult.activeOrganizationId
+      ? orgsResult.activeOrganizationId
+      : undefined;
+  const activeNamespaceId =
+    paprProfile?.activeNamespaceId?.trim() ||
+    workspacePointer?.namespaceId?.trim() ||
+    undefined;
+
   if (orgsResult.success && orgsResult.organizations?.length) {
     const activeOrg =
-      orgsResult.organizations.find(
-        (org) => org.id === orgsResult.activeOrganizationId,
-      ) ?? orgsResult.organizations[0];
+      orgsResult.organizations.find((org) => org.id === activeWorkspaceId) ??
+      orgsResult.organizations[0];
+    // Match Settings → Organization dropdown (`org.name` from workspaceDisplayName).
     organizationName =
+      activeOrg.name?.trim() ||
       activeOrg.organizationName?.trim() ||
       activeOrg.workspaceName?.trim() ||
-      activeOrg.name?.trim() ||
       organizationName;
     workspaceName =
       activeOrg.workspaceName?.trim() || activeOrg.name?.trim() || workspaceName;
+  }
 
-    const parseOrgId = activeOrg.organizationId;
-    if (parseOrgId && !namespaceName) {
-      const namespacesResult = await window.electronAPI.papr.listNamespaces({
-        organizationId: parseOrgId,
-        peek: true,
-      });
-      if (namespacesResult.success && namespacesResult.namespaces?.length) {
-        const activeNs =
-          namespacesResult.namespaces.find(
-            (ns) => ns.id === namespacesResult.activeNamespaceId,
-          ) ?? namespacesResult.namespaces[0];
-        namespaceName = activeNs.name?.trim() || namespaceName;
+  if (activeWorkspaceId) {
+    const namespacesResult = await window.electronAPI.papr.listAllNamespaces({
+      workspaceId: activeWorkspaceId,
+    });
+    if (namespacesResult.success && namespacesResult.groups?.length) {
+      const resolvedNamespaceId =
+        namespacesResult.activeNamespaceId?.trim() ||
+        activeNamespaceId ||
+        undefined;
+      for (const group of namespacesResult.groups) {
+        if (!resolvedNamespaceId) {
+          break;
+        }
+        const activeNs = group.namespaces.find(
+          (ns) => ns.id === resolvedNamespaceId,
+        );
+        if (activeNs?.name?.trim()) {
+          namespaceName = activeNs.name.trim();
+          if (!organizationName && group.organizationName?.trim()) {
+            organizationName = group.organizationName.trim();
+          }
+          break;
+        }
       }
     }
+  }
+
+  if (!namespaceName && workspacePointer?.namespaceName?.trim()) {
+    namespaceName = workspacePointer.namespaceName.trim();
+  }
+  if (!organizationName && workspacePointer?.organizationName?.trim()) {
+    organizationName = workspacePointer.organizationName.trim();
+  }
+  if (!namespaceName && paprProfile?.activeNamespaceName?.trim()) {
+    namespaceName = paprProfile.activeNamespaceName.trim();
   }
 
   return {

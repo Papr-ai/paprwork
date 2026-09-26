@@ -323,6 +323,20 @@ describe("MessageList", () => {
         />,
       );
 
+      expect(screen.queryByTestId("load-full-history")).toBeNull();
+
+      const list = screen.getByTestId("message-list");
+      Object.defineProperty(list, "scrollTop", { value: 0, configurable: true });
+      Object.defineProperty(list, "scrollHeight", {
+        value: 2000,
+        configurable: true,
+      });
+      Object.defineProperty(list, "clientHeight", {
+        value: 800,
+        configurable: true,
+      });
+      fireEvent.scroll(list);
+
       const button = screen.getByTestId("load-full-history");
       expect(button.textContent).toContain("Earlier637");
       expect(button.getAttribute("aria-label")).toBe(

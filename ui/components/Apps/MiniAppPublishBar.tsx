@@ -408,26 +408,6 @@ function CopyIcon() {
   );
 }
 
-function RefreshIcon() {
-  return (
-    <svg className="share-sheet__icon" viewBox="0 0 16 16" fill="none" aria-hidden>
-      <path
-        d="M13.5 8a5.5 5.5 0 01-9.2 4M2.5 8a5.5 5.5 0 019.2-4"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-      />
-      <path
-        d="M11.5 2.5V5.5H8.5M4.5 13.5V10.5H7.5"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 function publishErrorMessage(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);
   return `Publish failed: ${message}`.slice(0, 400);

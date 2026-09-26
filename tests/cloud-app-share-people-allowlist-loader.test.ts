@@ -3,6 +3,7 @@ import type { AppRuntimeRouteAuth } from "../src/gateway/services/appRuntime/typ
 
 const loadCloudPublishPrefs = vi.fn();
 const fetchCachedRuntimeRepoFile = vi.fn();
+const getSharePeopleAllowlistPush = vi.fn();
 
 vi.mock("../src/gateway/services/cloudPublishPrefs.js", () => ({
   loadCloudPublishPrefs: (...args: unknown[]) => loadCloudPublishPrefs(...args),
@@ -21,6 +22,11 @@ vi.mock("../src/gateway/services/appRuntime/memoryRuntimeClient.js", () => ({
 
 vi.mock("../src/gateway/utils/cloudApiClient.js", () => ({
   getMemoryServerBaseUrl: () => "https://memory.test",
+}));
+
+vi.mock("../src/gateway/services/appRuntime/cloudAppHostShareAllowlistPushStore.js", () => ({
+  getSharePeopleAllowlistPush: (...args: unknown[]) =>
+    getSharePeopleAllowlistPush(...args),
 }));
 
 import {
@@ -59,6 +65,8 @@ describe("loadSharePeopleAllowlistForCloudHost", () => {
   beforeEach(() => {
     loadCloudPublishPrefs.mockReset();
     fetchCachedRuntimeRepoFile.mockReset();
+    getSharePeopleAllowlistPush.mockReset();
+    getSharePeopleAllowlistPush.mockReturnValue(undefined);
     runtimeFetch.mockReset();
     invalidateMemoryShareAllowlistCache();
   });
@@ -69,6 +77,16 @@ describe("loadSharePeopleAllowlistForCloudHost", () => {
     });
     const result = await loadSharePeopleAllowlistForCloudHost(auth, "app-1");
     expect(result).toEqual({ allowedEmails: ["local@x.com"] });
+    expect(fetchCachedRuntimeRepoFile).not.toHaveBeenCalled();
+  });
+
+  it("uses host push store before repo file", async () => {
+    loadCloudPublishPrefs.mockReturnValue({ apps: {} });
+    getSharePeopleAllowlistPush.mockReturnValue({
+      allowedEmails: ["pushed@x.com"],
+    });
+    const result = await loadSharePeopleAllowlistForCloudHost(auth, "app-1");
+    expect(result).toEqual({ allowedEmails: ["pushed@x.com"] });
     expect(fetchCachedRuntimeRepoFile).not.toHaveBeenCalled();
   });
 
@@ -91,15 +109,29 @@ describe("loadSharePeopleAllowlistForCloudHost", () => {
   it("falls back to memory publish when local and repo have no allowlist", async () => {
     loadCloudPublishPrefs.mockReturnValue({ apps: {} });
     fetchCachedRuntimeRepoFile.mockResolvedValue(null);
-    runtimeFetch.mockResolvedValue({
-      ok: true,
-      json: async () => ({
-        allowedUserIds: ["user-from-memory"],
-      }),
-    });
+    runtimeFetch
+      .mockResolvedValueOnce({ status: 404, ok: false })
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          allowedUserIds: ["user-from-memory"],
+        }),
+      });
     const result = await loadSharePeopleAllowlistForCloudHost(auth, "app-1");
     expect(result).toEqual({ allowedUserIds: ["user-from-memory"] });
-    expect(runtimeFetch).toHaveBeenCalledWith(
+    expect(runtimeFetch).toHaveBeenNthCalledWith(
+      1,
+      "https://memory.test/v1/cloud/apps/runtime/share-people-allowlist",
+      expect.objectContaining({
+        method: "POST",
+        headers: expect.objectContaining({
+          "X-Cloud-App-Host-Key": "test-host-key",
+        }),
+      }),
+      15_000,
+    );
+    expect(runtimeFetch).toHaveBeenNthCalledWith(
+      2,
       "https://memory.test/v1/cloud/apps/publish/app-1",
       expect.objectContaining({
         method: "GET",

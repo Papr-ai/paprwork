@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
+import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProviderSteps";
 import {
   buildClaudeManualAgentPrompt,
@@ -15,6 +16,8 @@ interface ClaudeOnboardingStepperProps {
   onAskAgent?: () => void;
   /** Settings modal uses "Close"; onboarding uses provider picker copy. */
   pickDifferentLabel?: string;
+  /** Onboarding renders its own Back — hide the agent / pick-different links. */
+  hideFooterLinks?: boolean;
 }
 
 export function ClaudeOnboardingStepper({
@@ -23,6 +26,7 @@ export function ClaudeOnboardingStepper({
   onPickDifferent,
   onAskAgent,
   pickDifferentLabel = "Pick a different option",
+  hideFooterLinks = false,
 }: ClaudeOnboardingStepperProps) {
   const steps = useMemo(() => getClaudeOnboardingSteps(), []);
   const stepCount = steps.length;
@@ -74,7 +78,7 @@ export function ClaudeOnboardingStepper({
 
   const handleCopyCommand = async (command: string) => {
     try {
-      await navigator.clipboard.writeText(command);
+      if (!(await copyTextToClipboard(command))) throw new Error("copy failed");
       setCopiedCmd(command);
       window.setTimeout(() => {
         setCopiedCmd((current) => (current === command ? null : current));
@@ -268,6 +272,7 @@ export function ClaudeOnboardingStepper({
         })}
       </div>
 
+      {!hideFooterLinks && (
       <div className="onboarding-foot onboarding-foot--split claude-stepper__foot">
         <button type="button" className="onboarding-link" onClick={handleAskAgent}>
           Have an agent walk me through it
@@ -276,6 +281,7 @@ export function ClaudeOnboardingStepper({
           {pickDifferentLabel}
         </button>
       </div>
+      )}
     </>
   );
 }

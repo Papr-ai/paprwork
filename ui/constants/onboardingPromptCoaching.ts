@@ -23,6 +23,38 @@ export const PROMPT_EXAMPLES = [
   "When a competitor changes pricing, show me the diff and what it means for us",
 ] as const;
 
+/**
+ * Pills above the "Something else" box — tap fills the full prompt. Chosen to
+ * show range: multi-source apps with scheduled jobs, not one-off summaries.
+ */
+export const PROMPT_PILLS = [
+  {
+    label: "Pipeline command center",
+    prompt:
+      "Build a pipeline dashboard that pulls my open deals from HubSpot every morning, scores which ones are going cold, and drafts a personalized follow-up email for each",
+  },
+  {
+    label: "Competitor intel tracker",
+    prompt:
+      "Track 5 competitors' websites, pricing pages and LinkedIn every day, log every change in a searchable app, and send me a weekly brief on what it means for us",
+  },
+  {
+    label: "Meeting prep + CRM notes",
+    prompt:
+      "Before every meeting on my calendar, research the attendees and their company and write a one-page brief — then after the call turn my notes into CRM updates and next steps",
+  },
+  {
+    label: "Recruiting pipeline",
+    prompt:
+      "Build a recruiting app that pulls applicants from my inbox, scores each one against the job description, and gives me a ranked shortlist with interview questions every day",
+  },
+  {
+    label: "Content engine",
+    prompt:
+      "Turn my weekly notes into a LinkedIn post, a newsletter and a short thread, keep a content calendar app, and track which posts performed best",
+  },
+] as const;
+
 /** Sentence openers — the hardest part of a blank box is the first three words. */
 export const PROMPT_STARTERS = [
   "Every morning…",

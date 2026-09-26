@@ -2,7 +2,13 @@
  * MessageList Component - Scrollable list of messages
  */
 
-import React, { useLayoutEffect, useRef, useEffect, useMemo } from "react";
+import React, {
+  useLayoutEffect,
+  useRef,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { MessageItem } from "./MessageItem";
 import { WelcomeMessage } from "./WelcomeMessage";
 import { HistoryUnavailable } from "./HistoryUnavailable";
@@ -53,9 +59,11 @@ export const MessageList: React.FC<MessageListProps> = ({
   const activeRequest = usePermissionStore((s) => s.activeRequest);
   const autoScrollEnabled = useRef(true);
   const lastScrollHeight = useRef(0);
-  const hasLoadedOnce = useRef(false);
   const previousMessageCount = useRef(messages.length);
-  
+  /** True when the viewport is at the start of loaded history (older pages not yet shown). */
+  const [nearHistoryStart, setNearHistoryStart] = useState(false);
+  const historyStartThresholdPx = 200;
+
   // Get pagination state from chat store
   const chatState = useChatStore((state) => state.chatStates.get(chatId));
   const hasMoreMessages = chatState?.hasMoreMessages ?? false;
@@ -124,28 +132,18 @@ export const MessageList: React.FC<MessageListProps> = ({
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = listElement;
       const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+      const atHistoryStart = scrollTop < historyStartThresholdPx;
+
+      setNearHistoryStart(atHistoryStart);
 
       // If user scrolled more than 100px from bottom, disable auto-scroll
       // If they scroll back to within 100px of bottom, re-enable
       autoScrollEnabled.current = distanceFromBottom < 100;
-
-      // Load older messages when user scrolls near the top (within 200px)
-      if (scrollTop < 200 && hasMoreMessages && !isLoadingMore && onLoadOlder && hasLoadedOnce.current) {
-        console.log("[MessageList] User scrolled near top, loading older messages...");
-        onLoadOlder();
-      }
     };
 
     listElement.addEventListener("scroll", handleScroll);
     return () => listElement.removeEventListener("scroll", handleScroll);
-  }, [hasMoreMessages, isLoadingMore, onLoadOlder]);
-
-  // Mark as loaded once messages appear (to avoid triggering on mount)
-  useEffect(() => {
-    if (messages.length > 0) {
-      hasLoadedOnce.current = true;
-    }
-  }, [messages.length]);
+  }, []);
 
   // Preserve scroll position when older messages are loaded (prepended to top)
   useEffect(() => {
@@ -278,7 +276,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           : undefined
       }
     >
-      {hasMoreMessages && onLoadOlder && (
+      {nearHistoryStart && hasMoreMessages && onLoadOlder && (
         <div className="history-pagination" data-testid="history-pagination">
           {isLoadingMore ? (
             <div className="loading-older-indicator">

@@ -24,6 +24,7 @@ import {
 } from "./OrgNamespaceSetup";
 import { ConnectAIStep } from "./ConnectAIStep";
 import { RecommendStep } from "./RecommendStep";
+import { transitionTo } from "../../utils/onboardingState";
 import {
   fetchRemoteOnboarding,
   recordOnboardingStep,
@@ -70,6 +71,8 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
    * only remembered per-browser-profile.
    */
   const [alreadyOnboarded, setAlreadyOnboarded] = useState(false);
+  /** Set when the user steps back from recommend → connect. */
+  const [returnedToConnect, setReturnedToConnect] = useState(false);
 
   // Server-side breadcrumb for resume + funnel drop-off. Not load-bearing for
   // navigation — the stage machine is still driven locally.
@@ -138,7 +141,14 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
 
   if (stage === "recommend") {
     return (
-      <RecommendStep onComplete={onComplete} previewMode={Boolean(devPreview)} />
+      <RecommendStep
+        onComplete={onComplete}
+        previewMode={Boolean(devPreview)}
+        onBack={() => {
+          setReturnedToConnect(true);
+          setStage("connect");
+        }}
+      />
     );
   }
 
@@ -147,8 +157,19 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
       <ConnectAIStep
         // Connecting no longer ends setup — the recommend stage does, unless
         // this user already picked their first app on another machine.
-        onDone={() => (alreadyOnboarded ? onComplete() : setStage("recommend"))}
+        onDone={() => {
+          // Coming back from recommend (or previewing) means they want the
+          // recommend screen again — never jump straight into the app.
+          if (!alreadyOnboarded || returnedToConnect || devPreview) {
+            setStage("recommend");
+            return;
+          }
+          // Finished on another machine — don't reopen the local intent picker.
+          if (!devPreview) transitionTo("completed");
+          onComplete();
+        }}
         previewMode={Boolean(devPreview)}
+        returning={returnedToConnect}
       />
     );
   }
