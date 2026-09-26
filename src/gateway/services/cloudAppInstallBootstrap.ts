@@ -88,6 +88,34 @@ function countUserTables(dbPath: string): number {
   }
 }
 
+/** Health check for a cloud-direct source; null when the source is not cloud-direct. */
+async function probeCloudDirectSource(
+  source: AppDataSource,
+  localPath: string,
+): Promise<{ reachable: boolean; userTableCount: number } | null> {
+  const { isCloudDirectSource, cloudDirectQuery } = await import(
+    "./cloudDirect/cloudDirectDb.js"
+  );
+  const probe = { ...source, dbPath: localPath };
+  if (!isCloudDirectSource(probe)) {
+    return null;
+  }
+  try {
+    const result = await cloudDirectQuery(
+      probe,
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name NOT LIKE 'sqlite_%'
+         AND name NOT LIKE '_papr_%'
+         AND name NOT LIKE 'turso_%'
+         AND name NOT IN ('schema_migrations', 'job_runs', 'job_events')`,
+    );
+    return { reachable: true, userTableCount: result.count };
+  } catch {
+    return { reachable: false, userTableCount: 0 };
+  }
+}
+
 function mapTursoPullOutcome(
   summary: SyncSummary | null,
   syncKey: string,
@@ -129,11 +157,15 @@ function mapTursoPullOutcome(
 async function applyMigrationsForSource(
   source: AppDataSource,
   localPath: string,
-  options?: { localOnly?: boolean },
+  options?: { crossWorkspace?: boolean },
 ): Promise<string[]> {
   const label = `cloud-install-migration:${source.alias ?? localPath}`;
   return retryWhileReplicaBusy(async () => {
-    const migrationOptions = options?.localOnly
+    // Only a cross-workspace copy bypasses the engine: the registry singleton
+    // belongs to the *current* workspace, not the target one. Every other
+    // install (fork included) migrates through the engine its record names —
+    // forcing forks onto better-sqlite3 is what broke LinkedIn Outreach.
+    const migrationOptions = options?.crossWorkspace
       ? { bypassReplicaEngine: true as const }
       : undefined;
     if (source.dbId && !source.jobId) {
@@ -219,7 +251,7 @@ async function bootstrapLinkedSource(
   if (!options?.tursoPullOnly && !options?.skipMigrations) {
     try {
       migrationsApplied = await applyMigrationsForSource(source, localPath, {
-        localOnly: options?.localOnly,
+        crossWorkspace: Boolean(options?.paprHome?.trim()),
       });
     } catch (error) {
       errors.push(
@@ -250,14 +282,18 @@ async function bootstrapLinkedSource(
   }
 
   // Plan A replica files: never open with better-sqlite3 (even readonly) on pull-only track sync.
-  const userTableCount = options?.tursoPullOnly
-    ? -1
-    : countUserTables(localPath);
-  const writable = isLocalDbReadable(localPath);
+  // Cloud-direct has no local file: ask the primary instead.
+  const cloudDirect = await probeCloudDirectSource(source, localPath);
+  const userTableCount = cloudDirect
+    ? cloudDirect.userTableCount
+    : options?.tursoPullOnly
+      ? -1
+      : countUserTables(localPath);
+  const writable = cloudDirect ? cloudDirect.reachable : isLocalDbReadable(localPath);
 
   if (!writable && errors.length === 0) {
     errors.push(
-      `Local database not readable at ${localPath} after bootstrap.`,
+      `Database "${source.alias}" is not reachable after setup (${localPath}).`,
     );
   }
 
@@ -403,9 +439,7 @@ export async function bootstrapInstalledAppDatabases(
         continue;
       }
       try {
-        const applied = await applyMigrationsForSource(source, localPath, {
-          localOnly: false,
-        });
+        const applied = await applyMigrationsForSource(source, localPath);
         migrationsByAlias.set(source.alias, applied);
       } catch (error) {
         errors.push(

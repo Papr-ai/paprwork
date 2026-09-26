@@ -14,6 +14,7 @@ import { shouldAutoUploadReplicaSyncKey } from "../cloudUploadMode.js";
 import { getPaprAppsRoot } from "../../../core/utils/paprRoot.js";
 import { assertReplaySafeRowSql } from "./replaySafeSql.js";
 import { assertNoEngineOwnedTableWrite } from "../appRuntime/engineOwnedTables.js";
+import { isCloudDirectSource } from "../cloudDirect/cloudDirectDb.js";
 import { shouldUseTursoReplicaForSource, writeLinkedDbViaTursoReplica, writeLinkedDbBatchViaTursoReplica, execLinkedDbViaTursoReplica } from "../tursoReplica/tursoReplicaRouting.js";
 
 export interface LocalFirstWriteResult extends WriteResult {
@@ -21,7 +22,7 @@ export interface LocalFirstWriteResult extends WriteResult {
   cloudSyncScheduled: boolean;
   /** True when write is queued on local replica pending Turso push (Plan A). */
   pendingPush?: boolean;
-  backend?: "local" | "turso-replica";
+  backend?: "local" | "turso-replica" | "turso";
 }
 
 function syncKeyForSource(source: AppDataSource): string {
@@ -38,6 +39,16 @@ function scheduleWorkspaceLogShip(syncKey: string): void {
   });
 }
 
+/** Cloud-direct writes land on the primary — tell open app tabs to refresh. */
+function publishCloudDirectChange(source: AppDataSource): void {
+  void import("../../utils/publishJobRunEvents.js").then(({ publishDbChanged }) => {
+    publishDbChanged({
+      ...(source.dbId ? { dbId: source.dbId } : {}),
+      ...(source.jobId ? { jobId: source.jobId } : {}),
+    });
+  });
+}
+
 /** Row write: local SQLite first; workspace log ship when cloud sync is on. */
 export async function writeLinkedDbRowLocalFirst(
   pool: DbQueryPool,
@@ -49,6 +60,12 @@ export async function writeLinkedDbRowLocalFirst(
 ): Promise<LocalFirstWriteResult> {
   assertReplaySafeRowSql(sql);
   assertNoEngineOwnedTableWrite(sql);
+
+  if (isCloudDirectSource(source)) {
+    const direct = await dbRouter.write(appId, source, sql, params);
+    publishCloudDirectChange(source);
+    return { ...direct, cloudSyncScheduled: false, backend: "turso" };
+  }
 
   if (shouldUseTursoReplicaForSource(source)) {
     const replicaResult = await writeLinkedDbViaTursoReplica(source, sql, params);
@@ -101,6 +118,12 @@ export async function writeLinkedDbBatchAtomic(
     assertNoEngineOwnedTableWrite(stmt.sql);
   }
 
+  if (isCloudDirectSource(source)) {
+    const results = await dbRouter.writeBatch(appId, source, statements);
+    publishCloudDirectChange(source);
+    return { source, results };
+  }
+
   if (shouldUseTursoReplicaForSource(source)) {
     const replicaResult = await writeLinkedDbBatchViaTursoReplica(source, statements);
     const writeResult = {
@@ -145,6 +168,12 @@ export async function execLinkedDbSchemaLocalFirst(
   // and `CREATE TABLE IF NOT EXISTS turso_sync_last_change_id (...)` is the exact
   // statement that plants an index-free engine table and aborts the sync worker.
   assertNoEngineOwnedTableWrite(sql);
+
+  if (isCloudDirectSource(source)) {
+    await dbRouter.exec(appId, source, sql);
+    publishCloudDirectChange(source);
+    return { cloudSyncScheduled: false };
+  }
 
   if (shouldUseTursoReplicaForSource(source)) {
     const { assertReplicaDdlAllowed } = await import(

@@ -181,6 +181,11 @@ async function resolveWriteTargetForRecord(
     }
   }
 
+  if (record.syncMode === "cloud-direct") {
+    // No local file by design; the job reaches it through the gateway proxy.
+    return targetFromRegistryRecord(record, record.localPath);
+  }
+
   const dbPath = resolveExistingRegistryDbPath(record.localPath);
   if (!dbPath) {
     throw new Error(
@@ -338,7 +343,12 @@ export function isReplicaManagedTarget(
   target: Pick<JobWriteDatabaseTarget, "syncMode" | "turso">,
 ): boolean {
   // Cloud sandbox Turso-direct already writes over HTTP — no local WAL at risk.
-  return !target.turso && target.syncMode === "replica";
+  // Cloud-direct has no local file at all: papr_db must route every read and
+  // write through the gateway proxy, exactly like a replica.
+  return (
+    !target.turso &&
+    (target.syncMode === "replica" || target.syncMode === "cloud-direct")
+  );
 }
 
 export function jobWriteDatabaseEnv(

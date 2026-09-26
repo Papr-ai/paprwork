@@ -49,6 +49,14 @@ import { isReplicaPathPublishQuiesced } from "../tursoReplica/tursoReplicaPublis
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import { shouldMiniAppUseReplicaOnlyForReads } from "./miniAppInteractiveLoadWindow.js";
 import { timeReplicaReadPhase } from "../tursoReplica/replicaReadPhaseTrace.js";
+import {
+  cloudDirectExec,
+  cloudDirectQuery,
+  cloudDirectTableExists,
+  cloudDirectWrite,
+  cloudDirectWriteBatch,
+  isCloudDirectSource,
+} from "../cloudDirect/cloudDirectDb.js";
 
 export type DbBackend = "local" | "turso" | "turso-replica";
 
@@ -218,6 +226,28 @@ async function getTursoClientForSource(
   return promise;
 }
 
+async function readRemoteSchema(client: Client): Promise<RoutedSchemaResult["tables"]> {
+  const tablesResult = await client.execute({
+    sql: `SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name`,
+    args: [],
+  });
+  return Promise.all(
+    filterSyncableTables(
+      tablesResult.rows.map((row) => String(row.name ?? "")),
+    ).map(async (localName) => {
+      const cols = await client.execute(`PRAGMA table_info(${quoteIdent(localName)})`);
+      return {
+        table: localName,
+        columns: cols.rows.map((column) => ({
+          name: String(column.name ?? ""),
+          type: String(column.type ?? ""),
+          pk: Number(column.pk ?? 0) === 1,
+        })),
+      };
+    }),
+  );
+}
+
 export class DbRouter {
   constructor(private readonly pool: DbQueryPool) {}
 
@@ -226,6 +256,9 @@ export class DbRouter {
     table: string,
     source: AppDataSource,
   ): Promise<boolean> {
+    if (isCloudDirectSource(source)) {
+      return cloudDirectTableExists(source, table);
+    }
     if (shouldUseTursoReplicaForSource(source)) {
       const result = await queryLinkedDbViaTursoReplica(
         source,
@@ -259,6 +292,10 @@ export class DbRouter {
   ): Promise<RoutedQueryResult> {
     const started = performance.now();
     let result: RoutedQueryResult;
+    if (isCloudDirectSource(source)) {
+      const direct = await cloudDirectQuery(source, sql, params);
+      return { ...direct, backend: "turso" };
+    }
     if (shouldUseTursoReplicaForSource(source)) {
       result = await this.queryReplicaSource(appId, source, sql, params);
     } else if (isLocalDbReadable(source.dbPath)) {
@@ -726,6 +763,13 @@ export class DbRouter {
     dbPath: string,
     source: AppDataSource,
   ): Promise<RoutedSchemaResult> {
+    if (isCloudDirectSource(source)) {
+      const { cloudDirectClientForSource } = await import(
+        "../cloudDirect/cloudDirectDb.js"
+      );
+      const client = await cloudDirectClientForSource(source);
+      return { tables: await readRemoteSchema(client), backend: "turso" };
+    }
     if (shouldUseTursoReplicaForSource(source)) {
       if (isReplicaReadPathDegraded(source.dbPath) && isTursoReplicaOnline()) {
         try {
@@ -878,6 +922,9 @@ export class DbRouter {
     sql: string,
     params?: unknown[],
   ): Promise<import("../DbQueryPool.js").WriteResult> {
+    if (isCloudDirectSource(source)) {
+      return cloudDirectWrite(source, sql, params);
+    }
     if (shouldUseTursoReplicaForSource(source)) {
       const result = await writeLinkedDbViaTursoReplica(source, sql, params);
       return {
@@ -902,6 +949,9 @@ export class DbRouter {
     source: AppDataSource,
     statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
   ): Promise<import("../DbQueryPool.js").WriteResult[]> {
+    if (isCloudDirectSource(source)) {
+      return cloudDirectWriteBatch(source, statements);
+    }
     if (shouldUseTursoReplicaForSource(source)) {
       const result = await writeLinkedDbBatchViaTursoReplica(source, statements);
       return [
@@ -924,6 +974,9 @@ export class DbRouter {
   }
 
   async exec(appId: string, source: AppDataSource, sql: string): Promise<void> {
+    if (isCloudDirectSource(source)) {
+      return cloudDirectExec(source, sql);
+    }
     if (shouldUseTursoReplicaForSource(source)) {
       await execLinkedDbViaTursoReplica(source, sql);
       return;

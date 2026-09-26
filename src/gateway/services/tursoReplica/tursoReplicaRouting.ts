@@ -189,6 +189,11 @@ export function shouldSuppressLegacyTursoPush(options: {
     (options.dbId ? registry.getById(options.dbId) : undefined) ??
     (options.dbPath ? registry.getByPath(options.dbPath) : undefined) ??
     registry.getById(options.syncKey);
+  // Cloud-direct: the primary is the only copy — there is nothing for legacy
+  // sync to push or pull, and it must not create a local file to push from.
+  if (record?.syncMode === "cloud-direct") {
+    return true;
+  }
   if (!isReplicaOwnedRecord(record) || !record) {
     return false;
   }

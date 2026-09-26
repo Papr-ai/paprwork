@@ -35,6 +35,7 @@ import {
   sha256Hex,
 } from "./jobMigrationManifest.js";
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
+import { isCloudDirectDbPath } from "../cloudDirect/cloudDirectDb.js";
 export type PersistedDatabaseKind = "registry" | "job";
 
 export interface PersistedDatabaseLayout {
@@ -264,7 +265,11 @@ export async function ensureRegistryDatabase(
   });
   await fs.mkdir(path.dirname(layout.dbPath), { recursive: true });
 
-  if (!options?.deferSqliteFile && !isReplicaManagedDbPath(layout.dbPath)) {
+  if (
+    !options?.deferSqliteFile &&
+    !isReplicaManagedDbPath(layout.dbPath) &&
+    !isCloudDirectDbPath(layout.dbPath)
+  ) {
     let db: Database.Database | null = null;
     try {
       db = openDiagnosticDatabase(Database, "services/jobs/databaseMigrations", layout.dbPath);
@@ -308,6 +313,15 @@ export async function applyDatabaseMigrations(
     !options?.bypassReplicaEngine &&
     layout?.kind === "registry" &&
     isReplicaManagedDbPath(dbPath);
+
+  // Cloud-direct: the Turso primary is the only copy — migrate it directly,
+  // one transaction per migration (statements + ledger row together).
+  if (layout?.kind === "registry" && isCloudDirectDbPath(dbPath)) {
+    const { applyCloudDirectMigrations } = await import(
+      "../cloudDirect/cloudDirectMigrations.js"
+    );
+    return applyCloudDirectMigrations(migrationRoot, dbPath);
+  }
 
   if (useReplicaEngine) {
     const { applyReplicaRegistryDatabaseMigrations } = await import(
@@ -401,7 +415,8 @@ export async function applyRegistryDatabaseMigrations(
   }
   if (
     !options?.bypassReplicaEngine &&
-    !isReplicaManagedDbPath(layout.dbPath)
+    !isReplicaManagedDbPath(layout.dbPath) &&
+    !isCloudDirectDbPath(layout.dbPath)
   ) {
     await ensureRegistryDatabase(layout.dbPath);
   }
