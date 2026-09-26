@@ -53,6 +53,9 @@ export function installInProcessSyncWorker(): void {
         async exec(o: Record<string, unknown>) {
           await this.send({ ...o, op: "exec" });
         }
+        async migrate(o: Record<string, unknown>) {
+          return this.send({ ...o, op: "migrate" });
+        }
         async sync(o: Record<string, unknown>, op: string) {
           const r = (await this.send({ ...o, op })) as { pulled?: boolean };
           return Boolean(r.pulled);
