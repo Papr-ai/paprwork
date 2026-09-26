@@ -782,6 +782,8 @@ export async function mergeDatabaseRegistryForCopy(input: {
     }
     const existing = merged.databases[dbId];
     const base = stripReplicaSyncFields(existing ?? record);
+    // Fork keeps no storage mode from the publisher: provisionInstalledDatabases
+    // picks one for THIS device (replica / cloud-direct / local) right after merge.
     const { syncMode: _forkOmitSyncMode, ...forkLocalBase } = base;
     merged.databases[targetDbId] = {
       ...(input.forkDbIds ? forkLocalBase : base),

@@ -62,10 +62,18 @@ export function closeCloudDirectClient(tursoDatabase: string): void {
 export function resolveCloudDirectRecord(
   source: Pick<AppDataSource, "dbId" | "dbPath">,
 ): DatabaseRecord | undefined {
-  const registry = getDatabaseRegistryService();
-  const record =
-    (source.dbId ? registry.getById(source.dbId) : undefined) ??
-    (source.dbPath ? registry.getByPath(source.dbPath) : undefined);
+  // This check sits on every read/write hot path. A registry that cannot answer
+  // (not initialised yet, or a partial stub) means "not cloud-direct" — the
+  // existing replica/local routing then decides, exactly as before this mode.
+  let record: DatabaseRecord | undefined;
+  try {
+    const registry = getDatabaseRegistryService();
+    record =
+      (source.dbId ? registry.getById?.(source.dbId) : undefined) ??
+      (source.dbPath ? registry.getByPath?.(source.dbPath) : undefined);
+  } catch {
+    return undefined;
+  }
   return record && isCloudDirectSyncMode(record.syncMode) ? record : undefined;
 }
 
