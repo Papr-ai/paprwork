@@ -2444,7 +2444,9 @@ async function startGateway(): Promise<void> {
           code === "per_user_db" ||
           code === "install_mode_choice_required"
             ? 400
-            : 500;
+            : code === "install_db_setup_failed"
+              ? 422
+              : 500;
         res.status(status).json({ error: message, ...(code ? { code } : {}) });
       }
     });

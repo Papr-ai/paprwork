@@ -234,3 +234,40 @@ describe("fresh install from snapshot (Turso primary / cloud-direct)", () => {
     }
   });
 });
+
+describe("install setup prompt", () => {
+  it("uses real workspace paths, names storage mode, and never hard-codes ~/Papr", async () => {
+    const { buildCloudInstallAgentSetupMessage } = await import(
+      "../src/gateway/services/cloudAppInstallBootstrap.js"
+    );
+    const { getPaprDataDir } = await import("../src/core/utils/paprRoot.js");
+    const msg = buildCloudInstallAgentSetupMessage({
+      appTitle: "LinkedIn Outreach",
+      appId: "app-1",
+      bootstrap: {
+        appId: "app-1",
+        linkedDbs: [
+          {
+            alias: "outreach",
+            localPath: "/x/data.db",
+            migrationsApplied: [],
+            tursoPull: "skipped",
+            userTableCount: 0,
+            writable: false,
+            warnings: [],
+            errors: ["boom"],
+          },
+        ],
+        ready: false,
+        needsSeed: false,
+        errors: ["boom"],
+        warnings: [],
+      },
+    });
+    expect(msg).not.toContain("~/Papr");
+    expect(msg).toContain(getPaprDataDir());
+    expect(msg).toContain("{{papr.owner_user_id}}");
+    expect(msg).toContain("storage=local");
+    expect(msg).toMatch(/Do not paste API keys/);
+  });
+});

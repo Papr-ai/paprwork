@@ -375,8 +375,18 @@ export class CloudAppInstallService {
           deferTursoUntilPublish,
         });
         if (bootstrap.errors.length > 0) {
-          throw new Error(
-            `Could not set up this app's database: ${bootstrap.errors[0]}`,
+          // Raw SQL/engine detail goes to the log; the user gets one plain
+          // sentence and a clean slate (rollback below removes everything).
+          console.error(
+            `[CloudAppInstall] Database setup failed twice for ${app.id}:`,
+            bootstrap.errors.join(" | "),
+          );
+          throw Object.assign(
+            new Error(
+              `Couldn't set up the database for "${app.title}". Nothing was installed — ` +
+                "please try again. If it keeps failing, the publisher may need to publish a fix.",
+            ),
+            { code: "install_db_setup_failed", status: 422 },
           );
         }
       }
