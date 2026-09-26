@@ -85,9 +85,15 @@ async function catchUpAppLinkedSources(
   }
 }
 
-/** Matches TursoReplicaSyncWorkerClient.assertNotCrashLooping's parked error. */
+/**
+ * Matches TursoReplicaSyncWorkerClient.assertNotCrashLooping's parked error, in both its
+ * session and cross-restart wordings.
+ */
 export function isParkedReplicaError(error: string | undefined | null): boolean {
-  return typeof error === "string" && /is parked for this session/.test(error);
+  return (
+    typeof error === "string" &&
+    /Turso replica .+ is parked(?: for this session)?:/.test(error)
+  );
 }
 
 async function pushLinkedSourcesForFlush(

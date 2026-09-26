@@ -36,6 +36,7 @@ import {
   type ReplicaCrashRemedy,
 } from "./replicaCrashRemedy.js";
 import { repairReplicaEngineTables } from "./replicaEngineTableGuard.js";
+import { readDurablePark, writeDurablePark } from "./replicaDurablePark.js";
 import {
   markReplicaReadPhase,
   setReplicaReadMeta,
@@ -134,6 +135,10 @@ export class TursoReplicaSyncWorkerClient {
    * provably cannot reach is worth parking on sight rather than after three aborts.
    */
   private readonly parkedPaths = new Map<string, string>();
+  /** Parked on file evidence, so a relaunch honours the park instead of re-aborting. */
+  private readonly durablyParkedPaths = new Set<string>();
+  /** Paths whose on-disk park record has been read this session; it is read once. */
+  private readonly durableParksChecked = new Set<string>();
 
   constructor(
     private readonly resolveCommand: () => TursoSyncWorkerCommand = defaultWorkerCommand,
@@ -340,17 +345,20 @@ export class TursoReplicaSyncWorkerClient {
         );
         return;
       }
-      case "park":
-        this.parkPath(
-          error.localPath,
-          `${remedy.reason}. Malformed: ${remedy.defects}`,
-        );
+      case "park": {
+        const reason = `${remedy.reason}. Malformed: ${remedy.defects}`;
+        this.parkPath(error.localPath, reason);
+        // Unlike a streak park, this one is evidence about the file's bytes, so the same
+        // file would abort the next launch too.
+        this.durablyParkedPaths.add(error.localPath);
+        writeDurablePark(error.localPath, reason);
         console.error(
           `[TursoSyncWorker] Parking ${error.localPath} after an abort during ` +
             `${error.op}: ${remedy.reason} (${remedy.defects}). Sync is paused for ` +
             `this database; local reads and writes still work. ${tail}`,
         );
         return;
+      }
     }
   }
 
@@ -364,14 +372,43 @@ export class TursoReplicaSyncWorkerClient {
     if (options.op === "close") {
       return;
     }
-    const parked = this.parkedPaths.get(options.localPath);
+    const parked =
+      this.parkedPaths.get(options.localPath) ?? this.loadDurablePark(options.localPath);
     if (parked) {
+      const durable = this.durablyParkedPaths.has(options.localPath);
       throw new Error(
-        `Turso replica ${options.localPath} is parked for this session: ${parked}. ` +
-          "Sync is paused for this database; local reads and writes still work. " +
-          "Restart the app to try again.",
+        `Turso replica ${options.localPath} is parked${durable ? "" : " for this session"}: ` +
+          `${parked}. Sync is paused for this database; local reads and writes still work. ` +
+          (durable
+            ? "It stays parked across restarts until the file changes — for example a " +
+              "re-seed from cloud — or for 24 hours."
+            : "Restart the app to try again."),
       );
     }
+  }
+
+  /**
+   * Honour a park recorded by an earlier session, before the engine opens the file.
+   *
+   * Must run ahead of the first `sendOnce` for the path: a native abort cannot be caught,
+   * so the only way not to abort on a file known to abort is never to hand it over.
+   */
+  private loadDurablePark(localPath: string): string | undefined {
+    if (this.durableParksChecked.has(localPath)) {
+      return undefined;
+    }
+    this.durableParksChecked.add(localPath);
+    const reason = readDurablePark(localPath);
+    if (reason === null) {
+      return undefined;
+    }
+    this.parkPath(localPath, reason);
+    this.durablyParkedPaths.add(localPath);
+    console.warn(
+      `[TursoSyncWorker] ${localPath} was parked by an earlier session and has not ` +
+        `changed since, so it is not reopened: ${reason}`,
+    );
+    return reason;
   }
 
   private noteEngineCrash(localPath: string): void {
