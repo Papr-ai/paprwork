@@ -40,6 +40,13 @@ export function TabBar({
     useState<React.CSSProperties>({ display: "none" });
   const [dropIndicatorOnTop, setDropIndicatorOnTop] = useState(false);
   const [showHistory, setShowHistory] = useState(false);
+
+  // Rail "All chats" opens this same history dropdown.
+  useEffect(() => {
+    const open = () => setShowHistory(true);
+    window.addEventListener("papr-open-chat-history", open);
+    return () => window.removeEventListener("papr-open-chat-history", open);
+  }, []);
   const tabBarRef = useRef<HTMLDivElement>(null);
   const historyBtnRef = useRef<HTMLButtonElement>(null);
   const historyDropdownRef = useRef<HTMLDivElement>(null);

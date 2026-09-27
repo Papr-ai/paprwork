@@ -16,12 +16,13 @@
 }
 
 .input-bar__wrapper {
-  background: var(--background-color);
-  border: 1px solid var(--border-color);
-  border-radius: 24px;
-  padding: 14px 16px;
-  box-shadow: var(--shadow-sm);
-  transition: box-shadow 0.15s var(--ease);
+  /* Composer — quiet card: hairline border, soft lift, Papr blue only on actions. */
+  background: #fff;
+  border: 1px solid #e3e8f0;
+  border-radius: 18px;
+  padding: 12px 12px 10px 14px;
+  box-shadow: 0 2px 10px rgba(10, 16, 32, 0.04);
+  transition: box-shadow 0.15s var(--ease), border-color 0.15s var(--ease);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -35,7 +36,8 @@
 }
 
 .input-bar__wrapper:focus-within {
-  box-shadow: var(--shadow-md);
+  border-color: #d6deea;
+  box-shadow: 0 6px 22px rgba(10, 16, 32, 0.07);
 }
 
 /* Context section - above textarea */
@@ -522,3 +524,85 @@
   padding-bottom: 2px;
 }
 
+
+/* ---------- Composer controls (rail redesign) — visual only, same components ---------- */
+.input-bar__wrapper .context-pill--add {
+  padding: 5px 11px;
+  border: 1px solid var(--papr-blue-deep, #0060e0);
+  border-radius: 10px;
+  background: transparent;
+  color: var(--papr-blue-deep, #0060e0);
+  font-size: 12.5px;
+  font-weight: 500;
+}
+
+.input-bar__wrapper .context-pill--add:hover {
+  background: rgba(0, 96, 224, 0.06);
+  color: var(--papr-blue-deep, #0060e0);
+}
+
+.input-bar__wrapper .model-selector-pill,
+.input-bar__wrapper .chat-memory-scope__trigger {
+  padding: 4px 8px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.input-bar__wrapper .model-selector-pill:hover,
+.input-bar__wrapper .chat-memory-scope__trigger:hover {
+  border-color: #d6deea;
+  background: rgba(10, 16, 32, 0.03);
+  color: var(--text-primary);
+}
+
+.input-bar__wrapper .chat-memory-scope__trigger-value {
+  color: var(--text-primary);
+}
+
+.input-bar__wrapper .send-button {
+  width: 30px;
+  height: 30px;
+}
+
+.input-bar__wrapper .send-button-active {
+  background: var(--papr-blue-deep, #0060e0);
+  box-shadow: 0 3px 10px rgba(0, 96, 224, 0.25);
+}
+
+.input-bar__wrapper .send-button-active:hover:not(:disabled),
+.input-bar__wrapper .send-button:hover:not(:disabled):not(.send-button-stop) {
+  background: var(--papr-blue-deep, #0060e0);
+  filter: brightness(1.08);
+}
+
+.input-bar__wrapper .send-button-stop,
+.input-bar__wrapper .send-button-stop:hover:not(:disabled) {
+  background: var(--error-color, #e74c3c);
+  box-shadow: none;
+}
+
+@media (prefers-color-scheme: dark) {
+  .input-bar__wrapper {
+    background: #161a22;
+    border-color: #2a3240;
+    box-shadow: none;
+  }
+  .input-bar__wrapper:focus-within {
+    border-color: #36405a;
+    box-shadow: 0 6px 22px rgba(0, 0, 0, 0.3);
+  }
+  .input-bar__wrapper .model-selector-pill,
+  .input-bar__wrapper .chat-memory-scope__trigger {
+    border-color: #2a3240;
+  }
+  .input-bar__wrapper .context-pill--add {
+    border-color: #4c9dff;
+    color: #4c9dff;
+  }
+  .input-bar__wrapper .send-button-active,
+  .input-bar__wrapper .send-button-active:hover:not(:disabled) {
+    background: #2f7fed;
+  }
+}

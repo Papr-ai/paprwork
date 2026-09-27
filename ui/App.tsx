@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { AppLayout } from "./components/Layout/AppLayout";
 import { Sidebar } from "./components/Sidebar/Sidebar";
+import { AgentPersonalizeSheet } from "./components/Agent/AgentPersonalizeSheet";
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
@@ -459,6 +460,13 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Rail search button opens the same palette as Cmd+K
+  useEffect(() => {
+    const openPalette = () => setCommandPaletteOpen(true);
+    window.addEventListener("papr-open-command-palette", openPalette);
+    return () => window.removeEventListener("papr-open-command-palette", openPalette);
+  }, []);
+
   // Initialize permission listeners
   useEffect(() => {
     initPermissionListener();
@@ -622,6 +630,7 @@ export function App() {
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <AgentPersonalizeSheet />
       <PaprQuotaBanner />
       <CloudFeatureLockModal />
       <ConnectionIndicator />

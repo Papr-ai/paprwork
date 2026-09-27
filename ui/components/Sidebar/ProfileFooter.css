@@ -1,100 +1,136 @@
-/* ProfileFooter — sidebar identity row */
-.profile-footer {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-  padding: 8px 10px;
-  border-radius: 10px;
-  transition: background-color 0.15s var(--ease);
-}
+/**
+ * Rail account — avatar at the bottom of the rail; hover card with identity, your agent,
+ * Edit profile and Settings. Shares peek styles with Sidebar.css.
+ */
 
-.profile-footer__row {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-}
-
-.profile-footer:hover {
-  background: var(--hover-bg);
-}
-
-/* Avatar — the circle itself is UserAvatar (.papr-avatar).
-   This button is only the hit target and must not restate shape. The rule it
-   replaces set `overflow: visible` on a 1px-bordered box filled with a
-   periwinkle gradient, so the photo was never clipped to the circle and the
-   gradient read as a blue ring. */
-.profile-footer__avatar {
+.rail-account__avatar {
   position: relative;
-  flex-shrink: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  border-radius: 50%;
-  display: grid;
-  place-items: center;
-  line-height: 0;
-  cursor: pointer;
-  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
-}
-
-.profile-footer__avatar:hover {
-  transform: scale(1.05);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-}
-
-/* Name + plan */
-.profile-footer__id {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+  width: 36px;
+  height: 36px;
+  margin-top: 6px;
   padding: 0;
   border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: transform 0.15s var(--ease);
+}
+
+.rail-account__avatar:hover {
+  transform: scale(1.05);
+}
+
+.rail-account__avatar:focus-visible {
+  outline: 2px solid rgba(0, 96, 224, 0.45);
+  outline-offset: 2px;
+}
+
+.rail-account__card {
+  width: 280px;
+}
+
+.rail-account__head {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 8px 12px;
+  margin-bottom: 2px;
+  border: none;
+  border-bottom: 1px solid var(--rail-line);
   background: transparent;
   cursor: pointer;
   text-align: left;
+  font: inherit;
 }
 
-.profile-footer__name {
-  max-width: 100%;
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.profile-footer__plan {
-  max-width: 100%;
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* More (…) */
-.profile-footer__more {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
+.rail-account__head span {
+  min-width: 0;
   display: grid;
-  place-items: center;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-secondary);
-  cursor: pointer;
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+  gap: 2px;
 }
 
-.profile-footer__more:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
+.rail-account__head b {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rail-ink);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-account__head small {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-account__card h6 {
+  margin: 10px 8px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--rail-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.rail-account__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+
+.rail-account__row:hover {
+  background: var(--rail-row-hover);
+}
+
+.rail-account__label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rail-ink);
+}
+
+.rail-account__row em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rail-blue);
+}
+
+.rail-account__attention {
+  margin: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9a5b00;
+  background: rgba(240, 167, 66, 0.12);
+}
+
+.rail-account__footer button {
+  color: var(--rail-ink);
+  font-weight: 500;
+}
+
+.rail-account__footer button:hover {
+  background: var(--rail-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-account__attention {
+    color: #f6b54a;
+  }
 }

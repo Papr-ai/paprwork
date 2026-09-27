@@ -1,0 +1,55 @@
+/* AgentGlyph — the agent's mark. Faces blink and glance (see agentLife.ts). */
+.agent-glyph {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  overflow: hidden;
+}
+
+.agent-glyph svg {
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.agent-glyph--papr svg {
+  width: 72%;
+  height: 86%;
+}
+
+.agent-glyph--face svg {
+  filter: drop-shadow(0 0 3px color-mix(in srgb, var(--agent-a2) 45%, transparent));
+}
+
+.agent-glyph__eyes {
+  transform: translate(var(--agent-ex, 0px), var(--agent-ey, 0px));
+  transition: transform 0.18s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.agent-glyph__lids {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.agent-glyph__lids.is-blinking {
+  animation: agent-blink 0.17s ease-in-out;
+}
+
+@keyframes agent-blink {
+  0%,
+  100% {
+    transform: scaleY(1);
+  }
+  45% {
+    transform: scaleY(0.12);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-glyph__eyes {
+    transition: none;
+  }
+  .agent-glyph__lids.is-blinking {
+    animation: none;
+  }
+}
