@@ -1253,7 +1253,12 @@ function CommunityAppCard({
   /** Prefer local install over slow web preview when source is installable. */
   const showWebOpen = Boolean(onOpen) && (!showInstall || Boolean(localAppId));
   const shareBadge = getCatalogShareBadge(entry);
-  const byline = getCatalogByline(entry);
+  const installs = entry.installCount;
+  // Everyone's installs (from Papr Cloud), not just the copies on this machine.
+  const byline =
+    typeof installs === "number" && installs > 0
+      ? `${getCatalogByline(entry)} · ${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
+      : getCatalogByline(entry);
   const displayTags = filterCatalogDisplayTags(entry.tags);
   const share = shareGlyphForCatalogEntry(entry);
 

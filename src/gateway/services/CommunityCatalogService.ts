@@ -77,6 +77,8 @@ interface CloudCommunityApiEntry {
   codeInstallable?: boolean;
   visibility?: string;
   publisherUserId?: string;
+  /** Distinct users who installed this app (memory server lineage). */
+  installCount?: number;
   catalogRequirements?: Array<{
     name: string;
     service: string;
@@ -314,6 +316,9 @@ function cloudEntryFromApi(
     shareLinkEnabled: entry.shareLinkEnabled,
     communityCatalogListed: entry.communityCatalogListed,
     publisherUserId: entry.publisherUserId,
+    ...(typeof entry.installCount === "number"
+      ? { installCount: entry.installCount }
+      : {}),
     catalogAutomation: entry.catalogAutomation
       ? {
           scheduleLabel: entry.catalogAutomation.scheduleLabel,
