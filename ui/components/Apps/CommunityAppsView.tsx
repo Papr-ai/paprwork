@@ -1309,18 +1309,6 @@ function CommunityAppCard({
         {entry.catalogAutomation?.cardLine ? (
           <p className="community-card__automation">{entry.catalogAutomation.cardLine}</p>
         ) : null}
-        <div className="community-card__meta">
-          <span className="community-card__byline">{byline}</span>
-          <button
-            className="community-card__details-toggle"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowDetails(!showDetails);
-            }}
-          >
-            {showDetails ? "Less" : "Details"}
-          </button>
-        </div>
         {displayTags.length > 0 || showPlatformBadge ? (
           <div className="community-card__tags">
             {displayTags.map((tag) => (
@@ -1393,41 +1381,57 @@ function CommunityAppCard({
         )}
       </div>
 
-      {entry.source === "cloud" ? (
-        <div className="community-card__actions">
-          <div className="community-card__actions-row">
-            {showWebOpen ? (
-              <button
-                type="button"
-                className={`community-card__action-btn${showInstall && localAppId ? "" : " community-card__action-btn--primary"}`}
-                onClick={onOpen}
-                onMouseEnter={onOpenHover}
-                onFocus={onOpenHover}
-              >
-                {localAppId ? "Open" : "Open in web"}
-              </button>
-            ) : null}
-            {showInstall ? (
-              <button
-                type="button"
-                className={`community-card__action-btn${showWebOpen ? "" : " community-card__action-btn--primary"}`}
-                onClick={onCloudInstall}
-                disabled={isInstalling}
-              >
-                {isInstalling ? "Installing…" : "Personalize"}
-              </button>
-            ) : null}
+      {/* One footer row, pinned to the bottom of every card: who made it,
+          Details, and one compact action. */}
+      <div className="community-card__foot">
+          <div className="community-card__meta community-card__meta--foot">
+            <span className="community-card__byline">{byline}</span>
+            <button
+              className="community-card__details-toggle"
+              onClick={(e) => {
+                e.stopPropagation();
+                setShowDetails(!showDetails);
+              }}
+            >
+              {showDetails ? "Less" : "Details"}
+            </button>
           </div>
-        </div>
-      ) : (
-        <button
-          className={`community-card__import-btn ${isInstalled ? "community-card__import-btn--disabled community-card__import-btn--success" : ""}`}
-          onClick={onOssImport}
-          disabled={isInstalled}
-        >
-          {isInstalled ? "Installed" : "Import"}
-        </button>
-      )}
+      {entry.source === "cloud" ? (
+          <div className="community-card__actions">
+            <div className="community-card__actions-row">
+              {showWebOpen ? (
+                <button
+                  type="button"
+                  className={`community-card__action-btn${showInstall && localAppId ? "" : " community-card__action-btn--primary"}`}
+                  onClick={onOpen}
+                  onMouseEnter={onOpenHover}
+                  onFocus={onOpenHover}
+                >
+                  {localAppId ? "Open" : "Open in web"}
+                </button>
+              ) : null}
+              {showInstall ? (
+                <button
+                  type="button"
+                  className={`community-card__action-btn${showWebOpen ? "" : " community-card__action-btn--primary"}`}
+                  onClick={onCloudInstall}
+                  disabled={isInstalling}
+                >
+                  {isInstalling ? "Installing…" : "Personalize"}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : (
+          <button
+            className={`community-card__import-btn ${isInstalled ? "community-card__import-btn--disabled community-card__import-btn--success" : ""}`}
+            onClick={onOssImport}
+            disabled={isInstalled}
+          >
+            {isInstalled ? "Installed" : "Import"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
