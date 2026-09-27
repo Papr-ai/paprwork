@@ -333,14 +333,6 @@ export function AppCard({
                 {artifact.cloudLineage.mode === "track" ? "Track" : "Fork"}
               </span>
             ) : null}
-            {isPublished && (
-              <span
-                className="app-card__status-badge app-card__status-badge--published"
-                title="Live on apps.papr.ai"
-              >
-                Live
-              </span>
-            )}
             {status !== "active" && !(isPublished && status === "draft") && (
               <span
                 className={`app-card__status-badge app-card__status-badge--${status}`}

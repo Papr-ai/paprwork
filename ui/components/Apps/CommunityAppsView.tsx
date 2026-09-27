@@ -1289,21 +1289,6 @@ function CommunityAppCard({
               codeAccess={share.codeAccess}
             />
           </span>
-          {entry.isOwned ? (
-            <span className="community-card__badge community-card__badge--owned">
-              Yours
-            </span>
-          ) : null}
-          {installedForkCount > 0 ? (
-            <span
-              className="community-card__badge community-card__badge--fork"
-              title="Copies installed on this computer — not everyone's forks"
-            >
-              {installedForkCount === 1
-                ? "In your library"
-                : `${installedForkCount} copies in your library`}
-            </span>
-          ) : null}
           {entry.source === "opensource" ? (
             <span className="community-card__badge community-card__badge--share community-card__badge--share-oss">
               Open source
@@ -1351,6 +1336,23 @@ function CommunityAppCard({
           one compact action. */}
       <div className="community-card__foot">
           <div className="community-card__meta community-card__meta--foot">
+            {entry.isOwned || installedForkCount > 0 ? (
+              <span
+                className="community-card__mine"
+                title={
+                  entry.isOwned
+                    ? "You published this app"
+                    : installedForkCount === 1
+                      ? "A copy is in your library"
+                      : `${installedForkCount} copies in your library`
+                }
+              >
+                <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M3.5 8.5l3 3 6-7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                {entry.isOwned ? "Yours" : "In library"}
+              </span>
+            ) : null}
             <span className="community-card__byline">{byline}</span>
           </div>
       {entry.source === "cloud" ? (
