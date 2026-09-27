@@ -78,6 +78,8 @@ export const MEASURED_CORE_TOOL_IDS: readonly string[] = [
   // interaction loop (~125 tokens for both). Previously clicks went through browser_test_script.
   "browser_click",
   "browser_type",
+  // Hand-placed: webview_snapshot returns numbered refs too; click by ref in previews (~60 tokens).
+  "webview_click",
   "page_wait_for",
   "get_key",
   "search_files",
