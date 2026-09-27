@@ -3,6 +3,7 @@ import {
   PROMOTE_AT,
   createSeedStore,
   hashText,
+  interpretJevPick,
   itemText,
   needsCategorizing,
   normalizeCategoryName,
@@ -67,5 +68,22 @@ describe("new app prompt", () => {
     const full = buildCreateAppPrompt({ goal: "Lead digest", cadence: "daily", connections: ["Gmail", "HubSpot"] });
     expect(full).toContain("run on its own daily");
     expect(full).toContain("Gmail, HubSpot");
+  });
+});
+
+describe("interpreting Jev picks", () => {
+  const N = "None of these";
+  it("takes a confident pick", () => {
+    expect(interpretJevPick({ probabilities: { Sales: 0.92, Marketing: 0.08, [N]: 0 } }, N))
+      .toEqual({ kind: "accept", category: "Sales", confidence: 0.92 });
+  });
+  it("takes the top pick when Jev is split but something fits (Delaware tax)", () => {
+    expect(interpretJevPick({ probabilities: { Operations: 0.5, Finance: 0.49, [N]: 0.01 } }, N).kind).toBe("accept");
+  });
+  it("asks for a new category only when nothing fits", () => {
+    expect(interpretJevPick({ probabilities: { Engineering: 0.32, Support: 0.13, [N]: 0.43 } }, N).kind).toBe("propose");
+  });
+  it("leaves it as Other when unsure either way", () => {
+    expect(interpretJevPick({ probabilities: { Research: 0.45, Marketing: 0.3, [N]: 0.25 } }, N).kind).toBe("other");
   });
 });
