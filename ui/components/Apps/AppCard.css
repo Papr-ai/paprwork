@@ -698,3 +698,16 @@
 .app-card__lineage:hover { color: var(--text-secondary); }
 /* Leave room for share glyph + ⋯ so the hover menu never covers the title row. */
 .app-card .app-card__content > .app-card__title-row { padding-right: 64px; }
+
+/* Category picker inside the ⋯ menu. */
+.app-card__menu-cats {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  margin: 4px 0;
+  padding: 4px 0;
+}
+.app-card__menu-cats .is-current { font-weight: 600; color: var(--accent, var(--text-primary)); }

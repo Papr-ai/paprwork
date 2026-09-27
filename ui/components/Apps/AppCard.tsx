@@ -35,6 +35,10 @@ interface AppCardProps {
   onShowDuplicates?: () => void;
   /** "Fix" — open the app next to Pen with the failure already described. */
   onFix?: () => void;
+  /** Broad category (Jev-sorted); null = Other. */
+  category?: string | null;
+  categoryOptions?: string[];
+  onSetCategory?: (category: string | null) => void;
 }
 
 export function AppCard({
@@ -54,9 +58,13 @@ export function AppCard({
   duplicateCount = 0,
   onShowDuplicates,
   onFix,
+  category = null,
+  categoryOptions = [],
+  onSetCategory,
 }: AppCardProps) {
   const status: AppStatus = artifact.status ?? "active";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pickingCategory, setPickingCategory] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(artifact.title);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -64,6 +72,10 @@ export function AppCard({
   const menuPopRef = useRef<HTMLDivElement>(null);
   // Menu renders in a portal (fixed) so the card's overflow:hidden can't clip it.
   const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) setPickingCategory(false);
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -460,6 +472,34 @@ export function AppCard({
             >
               Rename
             </button>
+            {onSetCategory && categoryOptions.length > 0 ? (
+              pickingCategory ? (
+                <div className="app-card__menu-cats" role="group" aria-label="Category">
+                  {[...categoryOptions, "Other"].map((c) => {
+                    const value = c === "Other" ? null : c;
+                    return (
+                      <button
+                        key={c}
+                        role="menuitemradio"
+                        aria-checked={category === value}
+                        className={category === value ? "is-current" : undefined}
+                        onClick={() => {
+                          setPickingCategory(false);
+                          setMenuOpen(false);
+                          onSetCategory(value);
+                        }}
+                      >
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <button role="menuitem" onClick={() => setPickingCategory(true)}>
+                  Category: {category ?? "Other"} ›
+                </button>
+              )
+            ) : null}
             <button
               role="menuitem"
               onClick={() => {

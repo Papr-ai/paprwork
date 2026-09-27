@@ -18,6 +18,7 @@ import {
   PUBLISH_STATE_CHANGED_EVENT,
   useAppsHealth,
 } from "../../hooks/useAppsHealth";
+import { useAppCategories } from "../../hooks/useAppCategories";
 import {
   findDuplicateGroups,
   isLibrarySection,
@@ -95,6 +96,7 @@ export function AppsView() {
     writeAppsSection(next);
   }, []);
   const { health, sharing, refresh: refreshHealth } = useAppsHealth();
+  const { syncLibrary: syncCategories } = useAppCategories();
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
@@ -423,6 +425,18 @@ export function AppsView() {
     };
   }, [allApps]);
 
+  // Sort new / changed apps into broad categories in the background (Jev).
+  // Keyed on titles + descriptions so it only reruns when something changed.
+  const categorySig = useMemo(
+    () => allApps.map((a) => `${a.id}:${a.title}:${a.description ?? ""}`).join("|"),
+    [allApps],
+  );
+  useEffect(() => {
+    if (!categorySig) return;
+    const t = window.setTimeout(syncCategories, 1500);
+    return () => window.clearTimeout(t);
+  }, [categorySig, syncCategories]);
+
   // Library sorted once by recency; sections, stacking and banners read from it.
   const sortedApps = useMemo(
     () => [...allApps].sort((a, b) => lastActivity(b) - lastActivity(a)),
@@ -690,6 +704,7 @@ export function AppsView() {
       <CreateAppModal
         isOpen={showCreateModal}
         onClose={() => setShowCreateModal(false)}
+        onBrowse={() => setSection(showNamespaceTabs ? "team" : "community")}
       />
       <CopyAppModal
         app={copyAppTarget}

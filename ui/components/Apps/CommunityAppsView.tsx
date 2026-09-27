@@ -18,6 +18,8 @@ import { requiresInstallModeChoice } from "../../../src/core/utils/cloudCatalogI
 import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/bundles";
 import { normalizeRequirements } from "../../../src/core/types/bundles";
 import { lookupService } from "../../../src/core/data/knownServices";
+import { useAppCategories } from "../../hooks/useAppCategories";
+import { CategoryPills, matchesCategory } from "./CategoryPills";
 import "./CommunityAppsView.css";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -266,6 +268,8 @@ export function CommunityAppsView({
   const searchQuery = searchQueryProp ?? internalSearchQuery;
   const setSearchQuery = onSearchQueryChange ?? setInternalSearchQuery;
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
+  const [category, setCategory] = useState<string | null>(null);
+  const { snapshot: cats, categorize: categorizeEntries } = useAppCategories();
   const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
@@ -821,14 +825,36 @@ export function CommunityAppsView({
       );
     }) ?? [];
 
+  // Broad categories (Jev-sorted) for the filter pills. Keys are per catalog id.
+  const catKey = (entry: CommunityCatalogEntry) => `catalog:${entry.catalogId}`;
+  const categorizeSig = filteredEntries.map((e) => e.catalogId).join("|");
+  useEffect(() => {
+    if (!filteredEntries.length || resultsHeading) return;
+    categorizeEntries(
+      filteredEntries.map((e) => ({
+        key: catKey(e),
+        title: e.name,
+        description: e.description,
+        tags: e.tags,
+      })),
+      scope === "namespace" ? "team" : "community",
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [categorizeSig, scope, resultsHeading]);
+  useEffect(() => setCategory(null), [scope]);
+  const categoryEntries =
+    category === null || resultsHeading
+      ? filteredEntries
+      : filteredEntries.filter((e) => matchesCategory(catKey(e), cats.byKey, category));
+
   const teamEntries =
     scope === "namespace"
-      ? filteredEntries.filter((entry) => isTeamSharedVisibility(entry.visibility))
+      ? categoryEntries.filter((entry) => isTeamSharedVisibility(entry.visibility))
       : [];
   const publicWorkspaceEntries =
     scope === "namespace"
-      ? filteredEntries.filter((entry) => !isTeamSharedVisibility(entry.visibility))
-      : sortCommunityEntriesInstallableFirst(filteredEntries);
+      ? categoryEntries.filter((entry) => !isTeamSharedVisibility(entry.visibility))
+      : sortCommunityEntriesInstallableFirst(categoryEntries);
 
   const renderCatalogGrid = (entries: CommunityCatalogEntry[]) => (
     <div className="community-apps__grid">
@@ -1031,6 +1057,16 @@ export function CommunityAppsView({
             {emptyMessage(scope, searchQuery, namespaceName)}
           </p>
         </div>
+      )}
+
+      {resultsHeading ? null : (
+        <CategoryPills
+          keys={filteredEntries.map(catKey)}
+          byKey={cats.byKey}
+          order={cats.categories.map((c) => c.name)}
+          value={category}
+          onChange={setCategory}
+        />
       )}
 
       {resultsHeading ? null : scope === "namespace" ? (
