@@ -1,9 +1,11 @@
 /**
  * ProfileFooter - Bottom-of-rail identity: avatar (→ profile) with a hover card showing
- * name + active org/namespace, your agent (→ personalize), Edit profile and Settings.
+ * name + active org/namespace, your agent (→ personalize), org color, Edit profile and Settings.
+ * The avatar wears an org-colored ring so you always know which workspace you are in.
  */
 
 import { useEffect } from "react";
+import type React from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
 import { UserAvatar } from "../common/UserAvatar";
@@ -11,6 +13,7 @@ import { useProfileStore } from "../../stores/profileStore";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { RailIcons } from "./railIcons";
+import { ORG_SWATCHES, useOrgColor, useOrgColors } from "./orgColorStore";
 import "./ProfileFooter.css";
 
 interface ProfileFooterProps {
@@ -42,6 +45,9 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       namespaceName,
       workspaceName,
     }) ?? "";
+  const orgKey = workspaceLabel || organizationName;
+  const orgColor = useOrgColor(orgKey);
+  const setOrgColor = useOrgColors((s) => s.setColor);
   useEffect(() => {
     void loadProfile();
 
@@ -102,10 +108,13 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
   }, [loadProfile, setProfile]);
 
   return (
-    <div className="rail-item rail-item--has-peek rail-item--peek-bottom rail-account">
+    <div
+      className="rail-item rail-item--has-peek rail-item--peek-bottom rail-account"
+      style={{ "--org": orgColor } as React.CSSProperties}
+    >
       <button
         type="button"
-        className="rail-account__avatar"
+        className="rail-account__avatar rail-account__ring"
         onClick={onOpenProfile}
         aria-label={planAttention ? `Account — ${planAttentionHint}` : "Account"}
       >
@@ -115,10 +124,17 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
 
       <div className="rail-peek rail-account__card" role="menu" aria-label="Account">
         <button type="button" className="rail-account__head" onClick={onOpenProfile} title="Edit profile">
-          <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={40} />
+          <span className="rail-account__ring rail-account__ring--lg">
+            <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={40} />
+          </span>
           <span>
             <b>{displayName}</b>
-            {workspaceLabel ? <small>{workspaceLabel}</small> : null}
+            {workspaceLabel ? (
+              <small>
+                <i className="rail-account__dot" aria-hidden="true" />
+                {workspaceLabel}
+              </small>
+            ) : null}
           </span>
         </button>
 
@@ -128,6 +144,26 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
           <span className="rail-account__label">{agentName}</span>
           <em>Personalize</em>
         </button>
+
+        {orgKey ? (
+          <>
+            <h6>Org color</h6>
+            <div className="rail-account__swatches" role="radiogroup" aria-label="Org color">
+              {ORG_SWATCHES.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  role="radio"
+                  aria-checked={c === orgColor}
+                  aria-label={`Org color ${c}`}
+                  className={`rail-account__swatch${c === orgColor ? " is-on" : ""}`}
+                  style={{ "--c": c } as React.CSSProperties}
+                  onClick={() => setOrgColor(orgKey, c)}
+                />
+              ))}
+            </div>
+          </>
+        ) : null}
 
         {planAttention ? (
           <p className="rail-account__attention" role="status">{planAttentionHint}</p>

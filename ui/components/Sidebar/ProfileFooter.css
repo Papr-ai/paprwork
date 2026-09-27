@@ -18,6 +18,60 @@
   transition: transform 0.15s var(--ease);
 }
 
+/* Org-colored outer ring: a gap in the surface color, then the org accent. */
+.rail-account__ring {
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--rail-bg), 0 0 0 4px var(--org, #0161e0);
+  transition: box-shadow 0.2s var(--ease), transform 0.15s var(--ease);
+}
+
+.rail-account__ring--lg {
+  display: grid;
+  flex: 0 0 auto;
+  margin: 4px;
+  box-shadow: 0 0 0 2px var(--rail-card), 0 0 0 4px var(--org, #0161e0);
+}
+
+.rail-account__dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--org, #0161e0);
+  vertical-align: 1px;
+}
+
+.rail-account__swatches {
+  display: flex;
+  gap: 8px;
+  padding: 2px 8px 6px;
+}
+
+.rail-account__swatch {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--c);
+  cursor: pointer;
+  transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
+}
+
+.rail-account__swatch:hover {
+  transform: scale(1.12);
+}
+
+.rail-account__swatch.is-on {
+  box-shadow: 0 0 0 2px var(--rail-card), 0 0 0 4px var(--c);
+}
+
+.rail-account__swatch:focus-visible {
+  outline: 2px solid rgba(0, 96, 224, 0.45);
+  outline-offset: 3px;
+}
+
 .rail-account__avatar:hover {
   transform: scale(1.05);
 }
