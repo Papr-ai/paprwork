@@ -884,3 +884,11 @@
 }
 .community-card .community-card__description { margin-top: 8px; }
 .community-card .community-card__actions { margin: 8px 0 0; }
+/* Actions (and anything else outside __content) are direct grid children —
+   without this they land in the 40px icon column and the buttons wrap. */
+.community-card > :not(.community-card__preview):not(.community-card__content) {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.community-card .community-card__actions { align-self: end; }
+.community-card .community-card__actions button { white-space: nowrap; }
