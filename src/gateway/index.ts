@@ -44,6 +44,7 @@ import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
 import { buildAppsHealth } from "../core/utils/appsHealth.js";
+import { getAppCategoryService } from "./services/AppCategoryService.js";
 import {
   clearGatewaySyncBusy,
   clearStaleGatewaySyncBusy,
@@ -1753,6 +1754,73 @@ async function startGateway(): Promise<void> {
       } catch (err) {
         console.error("[Gateway] /api/apps/health error:", err);
         res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    //  App categories (filter pills on Library / Team / Community).
+    //  GET  /api/apps/categories            → live categories + key → category
+    //  POST /api/apps/categories/sync       → categorize library apps (Jev, LLM for new)
+    //  POST /api/apps/categories/categorize → categorize catalog entries { items, scope }
+    //  POST /api/apps/categories/assign     → user override { key, category|null }
+    app.get("/api/apps/categories", (_req, res) => {
+      try {
+        res.json(getAppCategoryService().snapshot());
+      } catch (err) {
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.post("/api/apps/categories/sync", async (_req, res) => {
+      try {
+        const appService = getAppService();
+        await appService.initialize();
+        const apps = await appService.listApps();
+        const items = apps
+          .filter((a) => a.status !== "archived")
+          .map((a) => ({
+            key: `app:${a.id}`,
+            title: a.title,
+            description: a.description,
+            tags: a.tags,
+          }));
+        res.json(await getAppCategoryService().categorize(items, { allowPropose: true }));
+      } catch (err) {
+        console.error("[Gateway] /api/apps/categories/sync error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.post("/api/apps/categories/categorize", async (req, res) => {
+      try {
+        const body = (req.body ?? {}) as {
+          items?: Array<{ key?: string; title?: string; description?: string; tags?: string[] }>;
+          scope?: "team" | "community";
+        };
+        const items = (body.items ?? [])
+          .filter((i) => typeof i.key === "string" && typeof i.title === "string")
+          .slice(0, 400)
+          .map((i) => ({
+            key: i.key as string,
+            title: i.title as string,
+            description: i.description,
+            tags: Array.isArray(i.tags) ? i.tags : undefined,
+          }));
+        // Community is a shared, public list: never invent categories from it.
+        const allowPropose = body.scope === "team";
+        res.json(await getAppCategoryService().categorize(items, { allowPropose }));
+      } catch (err) {
+        console.error("[Gateway] /api/apps/categories/categorize error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+    app.post("/api/apps/categories/assign", (req, res) => {
+      try {
+        const { key, category } = (req.body ?? {}) as { key?: string; category?: string | null };
+        if (!key) {
+          res.status(400).json({ error: "key is required" });
+          return;
+        }
+        res.json(getAppCategoryService().setUserCategory(key, category ?? null));
+      } catch (err) {
+        res.status(400).json({ error: (err as Error).message });
       }
     });
 

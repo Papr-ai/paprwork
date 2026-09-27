@@ -3,7 +3,9 @@
  * status lines on every card, near-duplicates stacked, and banners that
  * point at the two things worth fixing (failing apps, duplicate copies).
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useAppCategories } from "../../hooks/useAppCategories";
+import { CategoryPills, matchesCategory } from "./CategoryPills";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { AppsHealthMap } from "../../../src/core/utils/appsHealth";
 import { AppCard, type AppStatus } from "./AppCard";
@@ -66,9 +68,21 @@ export function LibraryPane(props: LibraryPaneProps) {
   const ctx = useMemo(() => ({ publishedIds, health }), [publishedIds, health]);
   const searching = searchQuery.trim().length > 0;
 
-  const list = useMemo(
+  const sectionList = useMemo(
     () => apps.filter((a) => (searching ? true : inSection(a, section, ctx))),
     [apps, section, ctx, searching],
+  );
+
+  // Broad category pills (Jev-sorted). Reset when the section changes.
+  const { snapshot: cats, assign: assignCategory } = useAppCategories();
+  const [category, setCategory] = useState<string | null>(null);
+  useEffect(() => setCategory(null), [section]);
+  const list = useMemo(
+    () =>
+      searching || category === null
+        ? sectionList
+        : sectionList.filter((a) => matchesCategory(`app:${a.id}`, cats.byKey, category)),
+    [sectionList, cats.byKey, category, searching],
   );
 
   // Stack copies behind the most recent one (list is already sorted by recency).
@@ -128,6 +142,9 @@ export function LibraryPane(props: LibraryPaneProps) {
                 showCopyAction={props.showCopyAction}
                 onCopy={() => props.onCopy(app)}
                 onFix={() => props.onFix(app)}
+                category={cats.byKey[`app:${app.id}`] ?? null}
+                categoryOptions={cats.categories.map((c) => c.name)}
+                onSetCategory={(c) => assignCategory(`app:${app.id}`, c)}
               />
             );
   };
@@ -185,6 +202,16 @@ export function LibraryPane(props: LibraryPaneProps) {
             </div>
           ) : null}
         </div>
+      ) : null}
+
+      {!searching ? (
+        <CategoryPills
+          keys={sectionList.map((a) => `app:${a.id}`)}
+          byKey={cats.byKey}
+          order={cats.categories.map((c) => c.name)}
+          value={category}
+          onChange={setCategory}
+        />
       ) : null}
 
       {visible.length === 0 ? (
