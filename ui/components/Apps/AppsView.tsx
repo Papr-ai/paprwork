@@ -18,6 +18,7 @@ import {
   PUBLISH_STATE_CHANGED_EVENT,
   useAppsHealth,
 } from "../../hooks/useAppsHealth";
+import { buildCreateAppStarters } from "../../utils/createAppStarters";
 import { useAppCategories } from "../../hooks/useAppCategories";
 import {
   findDuplicateGroups,
@@ -96,7 +97,7 @@ export function AppsView() {
     writeAppsSection(next);
   }, []);
   const { health, sharing, refresh: refreshHealth } = useAppsHealth();
-  const { syncLibrary: syncCategories } = useAppCategories();
+  const { syncLibrary: syncCategories, snapshot: categorySnapshot } = useAppCategories();
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
@@ -437,6 +438,12 @@ export function AppsView() {
     return () => window.clearTimeout(t);
   }, [categorySig, syncCategories]);
 
+  // New app examples come from what this user already builds.
+  const createStarters = useMemo(
+    () => (showCreateModal ? buildCreateAppStarters(allApps, categorySnapshot.byKey) : []),
+    [showCreateModal, allApps, categorySnapshot.byKey],
+  );
+
   // Library sorted once by recency; sections, stacking and banners read from it.
   const sortedApps = useMemo(
     () => [...allApps].sort((a, b) => lastActivity(b) - lastActivity(a)),
@@ -703,6 +710,7 @@ export function AppsView() {
 
       <CreateAppModal
         isOpen={showCreateModal}
+        starters={createStarters}
         onClose={() => setShowCreateModal(false)}
         onBrowse={() => setSection(showNamespaceTabs ? "team" : "community")}
       />

@@ -9,6 +9,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { openChatWithPrompt } from "../../utils/openChatWithPrompt";
+import type { CreateAppStarter } from "../../utils/createAppStarters";
 import "./CreateAppModal.css";
 
 interface CreateAppModalProps {
@@ -16,11 +17,13 @@ interface CreateAppModalProps {
   onClose: () => void;
   /** "Or start from a Team / Community app" link. */
   onBrowse?: () => void;
+  /** Examples built from the user's own library (see createAppStarters). */
+  starters?: readonly CreateAppStarter[];
 }
 
 type Cadence = "off" | "hourly" | "daily" | "weekly";
 
-const STARTERS: ReadonlyArray<{ label: string; prompt: string }> = [
+const FALLBACK_STARTERS: readonly CreateAppStarter[] = [
   { label: "Expense tracker", prompt: "Track my expenses from receipts I upload, categorize them, and show monthly totals." },
   { label: "Lead digest", prompt: "Every morning, collect new leads and send me a short digest of who to follow up with." },
   { label: "Revenue dashboard", prompt: "A dashboard of my revenue: MRR, new vs churned customers, and a trend chart." },
@@ -58,7 +61,8 @@ export function buildCreateAppPrompt(input: {
   return lines.join("\n");
 }
 
-export function CreateAppModal({ isOpen, onClose, onBrowse }: CreateAppModalProps) {
+export function CreateAppModal({ isOpen, onClose, onBrowse, starters }: CreateAppModalProps) {
+  const examples = starters?.length ? starters : FALLBACK_STARTERS;
   const [goal, setGoal] = useState("");
   const [cadence, setCadence] = useState<Cadence>("off");
   const [connections, setConnections] = useState<string[]>([]);
@@ -127,14 +131,20 @@ export function CreateAppModal({ isOpen, onClose, onBrowse }: CreateAppModalProp
 
         {goal.trim() ? null : (
           <div className="create-app-modal__starters" aria-label="Examples">
-            {STARTERS.map((s) => (
+            {examples.map((s) => (
               <button
                 key={s.label}
                 type="button"
                 className="create-app-modal__chip"
                 onClick={() => {
                   setGoal(s.prompt);
-                  goalRef.current?.focus();
+                  // "Like <app>, but for " ends open: put the cursor at the end.
+                  window.setTimeout(() => {
+                    const el = goalRef.current;
+                    if (!el) return;
+                    el.focus();
+                    el.setSelectionRange(el.value.length, el.value.length);
+                  }, 0);
                 }}
               >
                 {s.label}

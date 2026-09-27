@@ -87,3 +87,23 @@ describe("interpreting Jev picks", () => {
     expect(interpretJevPick({ probabilities: { Research: 0.45, Marketing: 0.3, [N]: 0.25 } }, N).kind).toBe("other");
   });
 });
+
+describe("new app starters come from the user's library", () => {
+  it("leads with their most-used apps, then their top categories", async () => {
+    const { buildCreateAppStarters } = await import("../ui/utils/createAppStarters");
+    const apps = [
+      { id: "a", title: "Reddit Research Agent", description: "Watches Reddit for pain points.", openCount: 40 },
+      { id: "b", title: "Reddit Research Agent_2", openCount: 30 },
+      { id: "c", title: "SEO Audit", openCount: 20 },
+      { id: "d", title: "LinkedIn Outreach", openCount: 1 },
+      { id: "e", title: "a3f9c1e2-77b0-4c1e-9d2a", openCount: 99 },
+    ];
+    const byKey = { "app:a": "Research", "app:b": "Research", "app:c": "Marketing", "app:d": "Sales" };
+    const s = buildCreateAppStarters(apps, byKey);
+    expect(s.map((x) => x.label)).toEqual([
+      "Like Reddit Research Agent", "Like SEO Audit", "Topic monitor", "Content repurposer", "Follow-up reminders",
+    ]);
+    expect(s[0].prompt).toBe('An app like my "Reddit Research Agent" (Watches Reddit for pain points), but for ');
+    expect(buildCreateAppStarters([], {})).toHaveLength(5);
+  });
+});
