@@ -55,6 +55,44 @@ export interface CategorizableItem {
 
 /** Jev confidence needed to accept a pick from the existing list. */
 export const ACCEPT_CONFIDENCE = 0.6;
+/**
+ * When Jev's top pick is below ACCEPT_CONFIDENCE but "None of these" is
+ * unlikely, the app fits the list and Jev is just split between two
+ * categories (e.g. Finance vs Operations) — take the top pick instead of
+ * inventing a new category.
+ */
+export const MAX_NONE_FOR_SPLIT = 0.2;
+/** Only ask the LLM for a new category when "None of these" is at least this likely. */
+export const MIN_NONE_TO_PROPOSE = 0.3;
+
+export type JevPick =
+  | { kind: "accept"; category: string; confidence: number }
+  | { kind: "propose" }
+  | { kind: "other" };
+
+/** Turn one Jev choice answer into accept / propose-new / leave as Other. */
+export function interpretJevPick(
+  answer: { choice?: string; confidence?: number; probabilities?: Record<string, number> } | undefined,
+  noneLabel: string,
+): JevPick {
+  if (!answer?.probabilities) {
+    if (answer?.choice && answer.choice !== noneLabel && (answer.confidence ?? 0) >= ACCEPT_CONFIDENCE) {
+      return { kind: "accept", category: answer.choice, confidence: answer.confidence ?? 0 };
+    }
+    return { kind: "other" };
+  }
+  const probs = answer.probabilities;
+  const pNone = probs[noneLabel] ?? 0;
+  const [top, pTop] = Object.entries(probs)
+    .filter(([k]) => k !== noneLabel)
+    .sort((a, b) => b[1] - a[1])[0] ?? [undefined, 0];
+  if (top && (pTop >= ACCEPT_CONFIDENCE || (pNone <= MAX_NONE_FOR_SPLIT && pTop > pNone))) {
+    return { kind: "accept", category: top, confidence: pTop };
+  }
+  if (pNone >= MIN_NONE_TO_PROPOSE) return { kind: "propose" };
+  return { kind: "other" };
+}
+
 /** Items needed before a pending category becomes a filter pill. */
 export const PROMOTE_AT = 3;
 /** Hard cap on live categories. */

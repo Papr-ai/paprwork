@@ -20,6 +20,7 @@ import {
   createSeedStore,
   findCategory,
   hashText,
+  interpretJevPick,
   itemText,
   liveCategories,
   needsCategorizing,
@@ -200,10 +201,10 @@ export class AppCategoryService {
         break; // leave the rest for the next pass
       }
       batch.forEach((it, n) => {
-        const a = answers[`app_${n + 1}`];
-        const ok = a?.choice && a.choice !== NONE && (a.confidence ?? 0) >= ACCEPT_CONFIDENCE;
-        if (ok) assign(store, it, a.choice!, a.confidence ?? 0, "jev");
-        else unresolved.push(it);
+        const pick = interpretJevPick(answers[`app_${n + 1}`], NONE);
+        if (pick.kind === "accept") assign(store, it, pick.category, pick.confidence, "jev");
+        else if (pick.kind === "propose") unresolved.push(it);
+        else assign(store, it, null, 0, "jev");
       });
     }
 
