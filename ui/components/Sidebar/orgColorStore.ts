@@ -1,7 +1,7 @@
 /**
  * Org color — a per-workspace accent drawn as a ring around the rail avatar so you can
- * tell at a glance which org/namespace you're in. Each workspace gets a stable default
- * from the palette; the user can recolor it from the account card. Stored locally.
+ * tell at a glance which org you're in. Keyed by org (workspace) id; each org gets a stable
+ * default from the palette and can be recolored from the account card. Stored locally.
  */
 import { create } from "zustand";
 
@@ -46,6 +46,10 @@ export const useOrgColors = create<OrgColorState>((set, get) => ({
     set({ colors });
   },
 }));
+
+export function orgColorFor(key: string, colors: Record<string, string>): string {
+  return colors[key] ?? defaultColor(key);
+}
 
 export function useOrgColor(key: string): string {
   return useOrgColors((s) => s.colors[key]) ?? defaultColor(key);

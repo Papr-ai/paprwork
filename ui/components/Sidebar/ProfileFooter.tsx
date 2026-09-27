@@ -13,7 +13,9 @@ import { useProfileStore } from "../../stores/profileStore";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { RailIcons } from "./railIcons";
-import { ORG_SWATCHES, useOrgColor, useOrgColors } from "./orgColorStore";
+import { useOrgColor } from "./orgColorStore";
+import { OrgColorList } from "./OrgColorList";
+import { useOrgList } from "./useOrgList";
 import "./ProfileFooter.css";
 
 interface ProfileFooterProps {
@@ -45,9 +47,9 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       namespaceName,
       workspaceName,
     }) ?? "";
-  const orgKey = workspaceLabel || organizationName;
-  const orgColor = useOrgColor(orgKey);
-  const setOrgColor = useOrgColors((s) => s.setColor);
+  const { orgs, activeId, switching, switchTo } = useOrgList();
+  // Color is per org: key by the active org id, falling back to the label until orgs load.
+  const orgColor = useOrgColor(activeId || workspaceLabel || organizationName);
   useEffect(() => {
     void loadProfile();
 
@@ -145,25 +147,7 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
           <em>Personalize</em>
         </button>
 
-        {orgKey ? (
-          <>
-            <h6>Org color</h6>
-            <div className="rail-account__swatches" role="radiogroup" aria-label="Org color">
-              {ORG_SWATCHES.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  role="radio"
-                  aria-checked={c === orgColor}
-                  aria-label={`Org color ${c}`}
-                  className={`rail-account__swatch${c === orgColor ? " is-on" : ""}`}
-                  style={{ "--c": c } as React.CSSProperties}
-                  onClick={() => setOrgColor(orgKey, c)}
-                />
-              ))}
-            </div>
-          </>
-        ) : null}
+        <OrgColorList orgs={orgs} activeId={activeId} switching={switching} onSwitch={switchTo} />
 
         {planAttention ? (
           <p className="rail-account__attention" role="status">{planAttentionHint}</p>

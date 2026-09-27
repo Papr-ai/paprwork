@@ -188,3 +188,87 @@
     color: #f6b54a;
   }
 }
+
+/* Org list: per-org color dot (tap to recolor) + name (tap to switch). */
+.rail-orgs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 240px;
+  overflow-y: auto;
+}
+
+.rail-org__row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 8px 0 2px;
+  border-radius: 10px;
+}
+
+.rail-org__row:hover {
+  background: var(--rail-row-hover);
+}
+
+.rail-org__dot {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+
+.rail-org__dot::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: 50%;
+  background: var(--c);
+  transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
+}
+
+.rail-org__dot:hover::after,
+.rail-org__dot.is-open::after {
+  transform: scale(1.25);
+  box-shadow: 0 0 0 2px var(--rail-card), 0 0 0 3.5px var(--c);
+}
+
+.rail-org__name {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  font: inherit;
+  font-size: 13px;
+  color: var(--rail-ink);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-org.is-active .rail-org__name {
+  font-weight: 600;
+  cursor: default;
+}
+
+.rail-org__name:disabled {
+  opacity: 1;
+}
+
+.rail-org__check {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--rail-blue);
+}
+
+.rail-org .rail-account__swatches {
+  padding: 4px 8px 8px 30px;
+}
