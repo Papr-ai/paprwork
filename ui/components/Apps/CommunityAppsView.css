@@ -892,3 +892,11 @@
 }
 .community-card .community-card__actions { align-self: end; }
 .community-card .community-card__actions button { white-space: nowrap; }
+/* Share glyph pinned top-right so it never eats into the title. */
+.community-card { position: relative; }
+.community-card .community-card__share {
+  position: absolute;
+  top: 22px;
+  right: 20px;
+}
+.community-card .community-card__content > .community-card__title-row { padding-right: 30px; }
