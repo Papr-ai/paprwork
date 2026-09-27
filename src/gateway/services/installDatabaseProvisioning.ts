@@ -40,6 +40,46 @@ async function removeLocalFiles(localPath: string): Promise<void> {
   removeTursoReplicaLocalFiles(localPath);
 }
 
+const NETWORK_RETRY_DELAYS_MS = [300, 1200];
+
+function isNetworkError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("fetch error") ||
+    lower.includes("fetch failed") ||
+    lower.includes("connect timeout") ||
+    lower.includes("und_err_connect_timeout") ||
+    lower.includes("econnrefused") ||
+    lower.includes("econnreset") ||
+    lower.includes("enotfound") ||
+    lower.includes("etimedout") ||
+    lower.includes("network request failed")
+  );
+}
+
+/**
+ * A brief network blip while creating the cloud database should not fail the
+ * whole install. Retries only network errors; anything else fails at once.
+ */
+async function withNetworkRetry<T>(operation: () => Promise<T>): Promise<T> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      const delay = NETWORK_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !isNetworkError(error)) {
+        throw error;
+      }
+      console.warn(
+        `[InstallProvision] Network error setting up cloud database, retrying in ${delay}ms:`,
+        (error as Error).message,
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 async function provisionOne(
   record: DatabaseRecord,
   installDbPolicy: InstallDbPolicy,
@@ -68,7 +108,7 @@ async function provisionOne(
     const { provisionTursoReplicaForRecord } = await import(
       "./tursoReplica/tursoReplicaProvision.js"
     );
-    await provisionTursoReplicaForRecord(updated);
+    await withNetworkRetry(() => provisionTursoReplicaForRecord(updated));
   }
 
   return { dbId: record.dbId, syncMode };
@@ -94,6 +134,19 @@ export async function provisionInstalledDatabases(input: {
     try {
       out.push(await provisionOne(record, input.installDbPolicy));
     } catch (error) {
+      console.error(
+        `[InstallProvision] Could not set up database ${dbId}:`,
+        (error as Error).message,
+      );
+      if (isNetworkError(error)) {
+        throw Object.assign(
+          new Error(
+            `Couldn't reach Papr cloud to set up the "${record.label ?? dbId}" database. ` +
+              "Nothing was installed — check your connection and try again.",
+          ),
+          { code: "install_network_unavailable", status: 503 },
+        );
+      }
       throw new Error(
         `Could not set up database "${record.label ?? dbId}": ${(error as Error).message}`,
       );

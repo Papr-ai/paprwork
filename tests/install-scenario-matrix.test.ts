@@ -90,14 +90,24 @@ vi.mock("../src/gateway/services/cloudSync/trackUpstreamRevision.js", async (ori
   fetchPublishedAppRevision: vi.fn(async () => null),
 }));
 
+/** Fail the next N cloud credential calls (simulated network drop). */
+let credentialFailuresLeft = 0;
+const credentialCalls: string[] = [];
+const maybeDropNetwork = (name: string) => {
+  credentialCalls.push(name);
+  if (credentialFailuresLeft > 0) {
+    credentialFailuresLeft -= 1;
+    throw new Error("fetch failed: getaddrinfo ENOTFOUND api.papr.ai (simulated)");
+  }
+};
 const emptySummary = { attempted: 0, pushed: 0, pulled: 0, skipped: 0, failed: 0, results: [] };
 const bridge = {
   enabled: true,
-  fetchCredentials: vi.fn(async (name: string) => ({
+  fetchCredentials: vi.fn(async (name: string) => (maybeDropNetwork(name), {
     tursoUrl: `file:${tursoFile(name)}`,
     authToken: "test",
   })),
-  resolveCredentialsForReplicaOpen: vi.fn(async (name: string) => ({
+  resolveCredentialsForReplicaOpen: vi.fn(async (name: string) => (maybeDropNetwork(name), {
     tursoUrl: `file:${tursoFile(name)}`,
     authToken: "test",
   })),
@@ -486,7 +496,10 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
     const { setCloudDirectClientFactoryForTests } = await import(
       "../src/gateway/services/cloudDirect/cloudDirectDb.js"
     );
-    setCloudDirectClientFactoryForTests(async (name) => createClient({ url: `file:${tursoFile(name)}` }));
+    setCloudDirectClientFactoryForTests(async (name) => {
+      maybeDropNetwork(name);
+      return createClient({ url: `file:${tursoFile(name)}` });
+    });
     const { setTursoReplicaOnlineForTests } = await import("../src/gateway/utils/tursoReplicaEnabled.js");
     setTursoReplicaOnlineForTests(null);
     if (!process.env.PAPR_MATRIX_DEBUG) {
@@ -496,6 +509,7 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
   });
 
   afterEach(async () => {
+    credentialFailuresLeft = 0;
     const { shutdownTursoReplicaSyncWorker } = await import(
       "../src/gateway/services/tursoReplica/TursoReplicaSyncWorkerClient.js"
     );
@@ -584,6 +598,82 @@ describe.skipIf(!DatabaseSync)("install scenario matrix", () => {
         const leftoverPrimaries = (await fs.readdir(path.join(tmp, "turso"))).filter((f) => f !== "d-5eed1234.db");
         expect.soft(leftoverPrimaries, "no cloud database left").toEqual([]);
       });
+
+      it("fork over a half-built database left by an earlier failed attempt → clean fresh database", async () => {
+        withDevice(device);
+        await writeFixtureRepo({ snapshot: false });
+        const home = await useWorkspace("org-me", "ns-me");
+        // The Intel Mac failure: 0001 + 0002 already applied, no ledger rows.
+        // Replaying 0002 on this file fails with: no such column "prospect_ref".
+        const leftover = path.join(home, "data", "databases", SLUG, "data.db");
+        mkdirSync(path.dirname(leftover), { recursive: true });
+        const stale = new DatabaseSync!(leftover);
+        stale.exec(MIGRATIONS["0001_init.sql"]);
+        stale.exec(MIGRATIONS["0002_rename.sql"]);
+        stale.exec("INSERT INTO prospects (name, member_id, owner_user_id) VALUES ('Stale', 'm-0', 'someone-else')");
+        stale.close();
+
+        const result = await runInstall("community-fork");
+        expect.soft(result.bootstrap.errors).toEqual([]);
+        const record = await linkedRecord(home, result.app.id);
+        expect(record).toBeDefined();
+        expect.soft(record!.syncMode, "storage mode chosen for this device").toBe(EXPECTED_FORK_MODE[device]);
+        expectFreshFork(await readDb(record!), INSTALLER_USER);
+      });
+
+      if (device !== "local") {
+        it("network drops once while the cloud database is being set up → install recovers", async () => {
+          withDevice(device);
+          await writeFixtureRepo({ snapshot: false });
+          const home = await useWorkspace("org-me", "ns-me");
+          credentialCalls.length = 0;
+          credentialFailuresLeft = 1;
+          const result = await runInstall("community-fork");
+          expect.soft(credentialCalls.length, "the cloud was actually contacted").toBeGreaterThan(0);
+          expect.soft(credentialFailuresLeft, "the simulated drop happened").toBe(0);
+          expect.soft(result.bootstrap.errors).toEqual([]);
+          const record = await linkedRecord(home, result.app.id);
+          expect(record).toBeDefined();
+          expect.soft(record!.syncMode).toBe(EXPECTED_FORK_MODE[device]);
+          expectFreshFork(await readDb(record!), INSTALLER_USER);
+          const primaries = (await fs.readdir(path.join(tmp, "turso"))).filter((f) => f !== "d-5eed1234.db");
+          expect.soft(primaries, "one cloud database, no orphan from the failed attempt").toHaveLength(
+            device === "replica" || device === "cloud-direct" ? 1 : 0,
+          );
+        });
+
+        it("network stays down during setup → install fails cleanly, nothing left behind", async () => {
+          withDevice(device);
+          await writeFixtureRepo({ snapshot: false });
+          const home = await useWorkspace("org-me", "ns-me");
+          credentialFailuresLeft = 1000;
+          let installError: unknown = null;
+          let result: Awaited<ReturnType<typeof runInstall>> | null = null;
+          try {
+            result = await runInstall("community-fork");
+          } catch (error) {
+            installError = error;
+          }
+          credentialFailuresLeft = 0;
+          if (result) {
+            // Acceptable only if it fell back to a working local database.
+            const record = await linkedRecord(home, result.app.id);
+            expect(record).toBeDefined();
+            expectFreshFork(await readDb(record!), INSTALLER_USER);
+            return;
+          }
+          expect.soft(String(installError), "error names the network, not a migration").not.toMatch(/no such column|Migration failed/i);
+          expect.soft(String(installError), "plain-language error").toMatch(/connection|reach Papr cloud|try again/i);
+          const registry = JSON.parse(
+            await fs.readFile(path.join(home, "data", "databases.json"), "utf8").catch(() => '{"databases":{}}'),
+          );
+          const active = Object.values(registry.databases as Record<string, { label?: string; status?: string }>)
+            .filter((d) => d.label?.toLowerCase().startsWith("outreach") && d.status === "active");
+          expect.soft(active, "no active database left").toEqual([]);
+          const dbDirs = await fs.readdir(path.join(home, "data", "databases")).catch(() => []);
+          expect.soft(dbDirs.filter((d: string) => d.startsWith("outreach")), "no database folder left").toEqual([]);
+        });
+      }
 
       it("copy to another workspace → fresh database, finished on first switch", async () => {
         withDevice(device);
