@@ -568,3 +568,46 @@
   background: var(--popover-bg, #fff);
   color: var(--accent);
 }
+
+/* Redesign: small icon with the name beside it (not a big orb above). */
+.app-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 12px;
+  align-content: start;
+}
+.app-card .app-card__preview {
+  grid-column: 1;
+  grid-row: 1;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+}
+.app-card .app-card__orb,
+.app-card .app-card__screenshot {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+.app-card .app-card__orb::after { display: none; }
+.app-card .app-card__orb-inner { width: 100%; height: 100%; display: grid; place-items: center; }
+.app-card .app-card__orb-icon,
+.app-card .app-card__orb-icon svg { width: 20px; height: 20px; font-size: 18px !important; }
+.app-card .app-card__orb-icon--image { width: 40px; height: 40px; }
+.app-card .app-card__content { display: contents; }
+.app-card .app-card__content > * { grid-column: 1 / -1; }
+.app-card .app-card__content > .app-card__title-row,
+.app-card .app-card__content > .app-card__title-input {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  padding-right: 36px; /* clear the ⋯ menu */
+  min-width: 0;
+}
+.app-card .app-card__description { margin-top: 10px; }
