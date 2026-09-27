@@ -42,6 +42,7 @@ export interface LibraryCardHandlers {
   onRename: (id: string, title: string) => void;
   onSetStatus: (id: string, status: AppStatus) => void;
   onCopy: (app: Artifact) => void;
+  onFix: (app: Artifact) => void;
 }
 
 interface LibraryPaneProps extends LibraryCardHandlers {
@@ -55,6 +56,8 @@ interface LibraryPaneProps extends LibraryCardHandlers {
   duplicateExtraCount: number;
   onSelectSection: (s: LibrarySection) => void;
   onStartCleanup: () => void;
+  /** Unified search page: just "In your library" + matches, no page heading. */
+  resultsOnly?: boolean;
 }
 
 export function LibraryPane(props: LibraryPaneProps) {
@@ -96,6 +99,49 @@ export function LibraryPane(props: LibraryPaneProps) {
         "In your library. Team and Community are searched from their own sections.",
       ]
     : HEADINGS[section];
+
+  const renderCard = (app: Artifact) => {
+            const k = duplicateKey(app.title);
+            const copies =
+              stackable && k && !expanded.has(k)
+                ? (stackSize.get(k) ?? 1) - 1
+                : 0;
+            return (
+              <AppCard
+                key={app.id}
+                artifact={app}
+                isPublished={publishedIds.has(app.id)}
+                statusLine={appStatusLine(app, {
+                  health: health[app.id],
+                  isPublished: publishedIds.has(app.id),
+                })}
+                share={props.shareById[app.id]}
+                duplicateCount={copies}
+                onShowDuplicates={() =>
+                  k && setExpanded((s) => new Set(s).add(k))
+                }
+                onOpen={() => props.onOpen(app)}
+                onDelete={() => props.onDelete(app.id)}
+                onToggleFavorite={() => props.onToggleFavorite(app.id)}
+                onRename={(t) => props.onRename(app.id, t)}
+                onSetStatus={(s) => props.onSetStatus(app.id, s)}
+                showCopyAction={props.showCopyAction}
+                onCopy={() => props.onCopy(app)}
+                onFix={() => props.onFix(app)}
+              />
+            );
+  };
+
+  if (props.resultsOnly) {
+    return visible.length === 0 ? null : (
+      <section className="apps-view__results">
+        <h2 className="apps-view__results-title">
+          In your library <em>{visible.length}</em>
+        </h2>
+        <div className="apps-view__grid">{visible.map(renderCard)}</div>
+      </section>
+    );
+  }
 
   return (
     <>
@@ -147,36 +193,7 @@ export function LibraryPane(props: LibraryPaneProps) {
         </p>
       ) : (
         <div className="apps-view__grid">
-          {visible.map((app) => {
-            const k = duplicateKey(app.title);
-            const copies =
-              stackable && k && !expanded.has(k)
-                ? (stackSize.get(k) ?? 1) - 1
-                : 0;
-            return (
-              <AppCard
-                key={app.id}
-                artifact={app}
-                isPublished={publishedIds.has(app.id)}
-                statusLine={appStatusLine(app, {
-                  health: health[app.id],
-                  isPublished: publishedIds.has(app.id),
-                })}
-                share={props.shareById[app.id]}
-                duplicateCount={copies}
-                onShowDuplicates={() =>
-                  k && setExpanded((s) => new Set(s).add(k))
-                }
-                onOpen={() => props.onOpen(app)}
-                onDelete={() => props.onDelete(app.id)}
-                onToggleFavorite={() => props.onToggleFavorite(app.id)}
-                onRename={(t) => props.onRename(app.id, t)}
-                onSetStatus={(s) => props.onSetStatus(app.id, s)}
-                showCopyAction={props.showCopyAction}
-                onCopy={() => props.onCopy(app)}
-              />
-            );
-          })}
+          {visible.map(renderCard)}
         </div>
       )}
     </>

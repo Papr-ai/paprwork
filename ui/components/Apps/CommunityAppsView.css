@@ -819,3 +819,17 @@
 .community-install-modal__primary:hover:not(:disabled) {
   filter: brightness(1.05);
 }
+
+/* Share audience glyph — right of the title, same as library cards. */
+.community-card__title-row .community-card__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.community-card__share {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}

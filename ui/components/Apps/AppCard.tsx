@@ -32,6 +32,8 @@ interface AppCardProps {
   /** Near-duplicate copies stacked under this card. */
   duplicateCount?: number;
   onShowDuplicates?: () => void;
+  /** "Fix" — open the app next to Pen with the failure already described. */
+  onFix?: () => void;
 }
 
 export function AppCard({
@@ -50,6 +52,7 @@ export function AppCard({
   share,
   duplicateCount = 0,
   onShowDuplicates,
+  onFix,
 }: AppCardProps) {
   const status: AppStatus = artifact.status ?? "active";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -350,11 +353,27 @@ export function AppCard({
             </button>
           ) : null}
           {statusLine && statusLine.action !== "Open" ? (
-            <span
+            <button
+              type="button"
               className={`app-card__action app-card__action--${statusLine.tone}`}
+              title={
+                statusLine.action === "Fix"
+                  ? "Open with Pen and ask it to fix this"
+                  : undefined
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                if (statusLine.action === "Fix") {
+                  (onFix ?? onOpen)();
+                } else if (statusLine.action === "Name it") {
+                  startRename(e);
+                } else if (statusLine.action === "Restore") {
+                  onSetStatus?.("active");
+                }
+              }}
             >
               {statusLine.action}
-            </span>
+            </button>
           ) : null}
         </div>
       </div>

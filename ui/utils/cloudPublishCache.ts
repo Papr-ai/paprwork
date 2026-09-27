@@ -64,6 +64,12 @@ export function writeCachedCloudPublishState(
     delete byAppId[appId];
   }
   writeSnapshot(byAppId);
+  // Apps grid listens so share icons update without reopening the app.
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(
+      new CustomEvent("papr-publish-state-changed", { detail: { appId } }),
+    );
+  }
 }
 
 const DEFAULT_PUBLISH_REVALIDATION_LIMIT = 24;

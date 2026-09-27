@@ -165,6 +165,7 @@ import { getCloudAppContributeService } from "./services/CloudAppContributeServi
 import { getCloudAppTrackSyncService } from "./services/CloudAppTrackSyncService.js";
 import {
   getAppPublishPrefs,
+  loadCloudPublishPrefs,
   setAppPublishPrefs,
   type CloudAccessMode,
 } from "./services/cloudPublishPrefs.js";
@@ -1729,7 +1730,26 @@ async function startGateway(): Promise<void> {
     app.get("/api/apps/health", async (_req, res) => {
       try {
         const jobs = await getJobsService().listJobs();
-        res.json({ apps: buildAppsHealth(jobs), generatedAt: new Date().toISOString() });
+        // Sharing prefs ride along so card share icons come from the same local
+        // file the Share sheet writes — not a partial, possibly stale cache.
+        const sharing: Record<string, unknown> = {};
+        for (const [id, p] of Object.entries(loadCloudPublishPrefs().apps)) {
+          if (p.loginAccess === undefined && p.externalLink === undefined) continue;
+          sharing[id] = {
+            loginAccess: p.loginAccess,
+            externalLink: p.externalLink,
+            codeAccess: p.codeAccess,
+            requireSignIn: p.requireSignIn,
+            allowedUserIds: p.allowedUserIds,
+            allowedEmails: p.allowedEmails,
+            allowedEmailDomains: p.allowedEmailDomains,
+          };
+        }
+        res.json({
+          apps: buildAppsHealth(jobs),
+          sharing,
+          generatedAt: new Date().toISOString(),
+        });
       } catch (err) {
         console.error("[Gateway] /api/apps/health error:", err);
         res.status(500).json({ error: (err as Error).message });

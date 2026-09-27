@@ -35,6 +35,7 @@ export interface AppHealth {
   nextRunAt: string | null;
   /** Set when state is "failed": the job that failed and its stored error. */
   failingJobName: string | null;
+  failingJobId: string | null;
   error: string | null;
   /** Consecutive permanent failures on the failing job (0 when unknown). */
   failureStreak: number;
@@ -76,6 +77,7 @@ function emptyHealth(): AppHealth {
     lastRunAt: null,
     nextRunAt: null,
     failingJobName: null,
+    failingJobId: null,
     error: null,
     failureStreak: 0,
   };
@@ -103,6 +105,7 @@ export function buildAppsHealth(
         if (h.state !== "failed") {
           h.state = "failed";
           h.failingJobName = job.name;
+          h.failingJobId = job.id;
           h.error = shortError(job.error);
           h.failureStreak =
             job.scheduleState?.consecutivePermanentFailures ?? 0;

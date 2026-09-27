@@ -37,28 +37,71 @@
   min-width: 8px;
 }
 
-.apps-view__topbar-search {
-  width: min(240px, 30vw);
-  min-width: 160px;
-  padding: 8px 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 9px;
-  background: color-mix(in srgb, var(--background-secondary, #f5f5f7) 88%, transparent);
-  color: var(--text-primary);
-  font-size: 13px;
-  font-family: var(--font-body);
-  transition: border-color 160ms ease, box-shadow 160ms ease;
-}
-
-.apps-view__topbar-search::placeholder {
+/* One search box for library + team + community (prototype: .p-search). */
+.apps-view__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  width: min(520px, 46vw);
+  min-width: 220px;
+  padding: 0 10px 0 12px;
+  border-radius: 11px;
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--text-primary) 6%, transparent);
   color: var(--text-tertiary);
+  cursor: text;
+  transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
 }
-
-.apps-view__topbar-search:focus {
-  outline: none;
+.apps-view__search:focus-within {
+  background: var(--popover-bg, #fff);
   border-color: color-mix(in srgb, var(--accent) 45%, var(--border-color));
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent);
 }
+.apps-view__search-icon { flex-shrink: 0; }
+.apps-view__search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: none;
+  font: inherit;
+  font-family: var(--font-body);
+  font-size: 13.5px;
+  color: var(--text-primary);
+}
+.apps-view__search input::placeholder { color: var(--text-tertiary); }
+.apps-view__search input::-webkit-search-cancel-button { display: none; }
+.apps-view__search-clear {
+  border: 0;
+  background: none;
+  color: var(--text-tertiary);
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.apps-view__search-clear:hover { color: var(--text-primary); }
+
+/* Unified search results: one block per source. */
+.apps-view__results { margin-bottom: 28px; }
+.apps-view__results-title,
+.apps-view__results-pending {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin: 0 0 12px;
+}
+.apps-view__results-title em,
+.apps-view__results-pending span {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--text-tertiary);
+  margin-left: 4px;
+}
+.apps-view__results-pending { margin-bottom: 20px; }
+
 
 /* Segmented control — inline in topbar */
 .apps-view__tabs {
