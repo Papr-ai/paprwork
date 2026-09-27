@@ -183,25 +183,14 @@ export function App() {
   const { createTab, switchToTab, createArtifactFromChat } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+  // The rail is always visible; clear the legacy collapsed flag from the old hide/show toggle.
+  useEffect(() => {
     try {
-      return localStorage.getItem("paprwork-sidebar-collapsed") === "true";
+      localStorage.removeItem("paprwork-sidebar-collapsed");
     } catch {
-      return false;
+      // Ignore storage errors
     }
-  });
-
-  const toggleSidebarCollapsed = () => {
-    setSidebarCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("paprwork-sidebar-collapsed", String(next));
-      } catch {
-        // Ignore storage errors
-      }
-      return next;
-    });
-  };
+  }, []);
   
   // Create getting-started tab on first run
   useEffect(() => {
@@ -612,14 +601,8 @@ export function App() {
     <>
       <WorkspaceSwitchOverlay />
       <AppLayout
-        sidebar={<Sidebar onToggleCollapse={toggleSidebarCollapsed} />}
-        sidebarCollapsed={sidebarCollapsed}
-        topBar={
-          <TabBar
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={toggleSidebarCollapsed}
-          />
-        }
+        sidebar={<Sidebar />}
+        topBar={<TabBar />}
         content={<ContentArea />}
       />
       {activeRequest && !claimedByChat && (

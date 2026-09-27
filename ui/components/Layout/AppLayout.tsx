@@ -10,23 +10,16 @@ interface AppLayoutProps {
   sidebar: React.ReactNode;
   topBar: React.ReactNode;
   content: React.ReactNode;
-  sidebarCollapsed?: boolean;
 }
 
 export function AppLayout({
   sidebar,
   topBar,
   content,
-  sidebarCollapsed = false,
 }: AppLayoutProps) {
   return (
-    <div
-      className={`app-layout${sidebarCollapsed ? " app-layout--sidebar-collapsed" : ""}`}
-    >
-      <aside
-        className="app-layout__sidebar"
-        aria-hidden={sidebarCollapsed}
-      >
+    <div className="app-layout">
+      <aside className="app-layout__sidebar">
         {sidebar}
       </aside>
       <div className="app-layout__main">
