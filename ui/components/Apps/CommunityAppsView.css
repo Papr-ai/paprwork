@@ -883,3 +883,4 @@
   row-gap: 6px;
 }
 .community-card .community-card__description { margin-top: 8px; }
+.community-card .community-card__actions { margin: 8px 0 0; }
