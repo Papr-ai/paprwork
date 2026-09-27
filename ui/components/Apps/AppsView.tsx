@@ -465,16 +465,15 @@ export function AppsView() {
   // swaps whatever section is showing for a single results page.
   const searching = searchQuery.trim().length > 0;
   const searchRef = useRef<HTMLInputElement>(null);
-  const isMac =
-    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
-  // ⌘K / Ctrl+K focuses the search — the hint in the box teaches the shortcut.
+  // "/" focuses the Apps search (⌘K stays the global command palette).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
-        e.preventDefault();
-        searchRef.current?.focus();
-        searchRef.current?.select();
-      }
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -511,8 +510,8 @@ export function AppsView() {
             aria-label="Search apps"
           />
           {searching ? null : (
-            <kbd className="apps-view__search-kbd" aria-hidden="true">
-              {isMac ? "⌘" : "Ctrl"}K
+            <kbd className="apps-view__search-kbd" title="Press / to search" aria-hidden="true">
+              /
             </kbd>
           )}
           {searching ? (
