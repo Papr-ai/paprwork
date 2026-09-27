@@ -478,11 +478,12 @@ IMPORTANT:
                   : undefined,
               nextSteps: result.success
                 ? [
-                    "browser_snapshot — read page HTML (how you see the UI)",
+                    "browser_snapshot — page text + numbered elements [N] (how you see the UI); pass goal to get only the relevant parts",
+                    "browser_goto({ goal }) — find a fact across the site in one call (Jev-guided)",
                     "browser_network_logs({ limit: 100 }) — network tab (xhr/fetch URLs, status)",
                     "browser_console_logs({ limit: 50 }) — JS errors",
                     "browser_navigate — go to other URLs (auto settle wait after each navigation)",
-                    "browser_click / browser_type — interact via CSS selectors from snapshot",
+                    "browser_click / browser_type — interact by ref (the [N] from snapshot) or CSS selector",
                     "page_wait_for({ target: 'browser', time: 3 }) — extra wait if SPA still loading",
                     "browser_test_script — extract structured data",
                   ]

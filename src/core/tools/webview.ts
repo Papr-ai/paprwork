@@ -4,6 +4,16 @@ import type { WebviewTestRequest } from "../types/gateway-ipc.js";
 import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { markWebviewPreviewActivity } from "./webviewActivity.js";
 import { syncWebviewPreviewActivityLatch } from "./webviewSessionGuard.js";
+import {
+  EXTRACT_PAGE_SCRIPT,
+  buildSections,
+  formatElements,
+  formatRanking,
+  formatSections,
+  rankAgainstGoal,
+  refSelector,
+  type RawExtraction,
+} from "./pageExtract.js";
 
 const launchSchema = z.object({
   appId: z.string().min(1),
@@ -21,6 +31,19 @@ const launchSchema = z.object({
 
 const snapshotSchema = z.object({
   webviewId: z.string().optional(),
+  goal: z
+    .string()
+    .min(3)
+    .optional()
+    .describe(
+      "What to check or find in the preview (e.g. 'list of saved notes', 'error message'). " +
+        "Returns only the most relevant sections/elements, ranked by Jev.",
+    ),
+  format: z
+    .enum(["text", "html"])
+    .optional()
+    .describe("text (default): readable sections + numbered elements. html: raw HTML (debug markup/CSS only)."),
+  maxChars: z.number().int().min(200).max(50000).optional().describe("Max chars of page text (format text)"),
   maxHtmlChars: z.number().int().min(500).max(150000).optional(),
   maxTextChars: z.number().int().min(200).max(50000).optional(),
   includeScreenshot: z
@@ -62,7 +85,8 @@ const fillFormSchema = z.object({
 
 const clickSchema = z.object({
   webviewId: z.string().optional(),
-  selector: z.string().min(1).describe("CSS selector to click"),
+  ref: z.number().int().min(0).optional().describe("Element number [N] from webview_snapshot"),
+  selector: z.string().min(1).optional().describe("CSS selector to click (use ref when you have one)"),
 });
 
 export function buildWebviewFillFormScript(
@@ -211,23 +235,111 @@ export async function runWebviewWait(
   }
 }
 
+async function extractWebviewPage(webviewId: string | undefined): Promise<RawExtraction | null> {
+  try {
+    // The preview host wraps scripts in a function body, so the expression must be returned explicitly.
+    const data = (await request("execute", { webviewId, script: `return ${EXTRACT_PAGE_SCRIPT};` })) as
+      | { result?: RawExtraction; execError?: unknown }
+      | undefined;
+    const raw = data?.result;
+    if (data?.execError || !raw || !Array.isArray(raw.blocks) || !Array.isArray(raw.elements)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
 export const webviewSnapshotTool = createTool({
   id: "webview_snapshot",
   description:
-    "Capture HTML + visible text + visualState from mini-app preview (NOT a screenshot, no vision tokens). " +
+    "See the mini-app preview (NOT a screenshot, no vision tokens): readable text grouped under headings, " +
+    "a numbered list of buttons/links/inputs (click with webview_click({ ref })), and visualState. " +
     "Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. " +
+    "Pass goal (e.g. 'saved notes list', 'error message') to get only the relevant parts, ranked by Jev. " +
+    "format: 'html' returns raw HTML (debug markup/CSS only). " +
     "Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
   inputSchema: snapshotSchema,
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof snapshotSchema> }).context ?? input;
-    const data = await request("snapshot", {
+    if (args.format === "html") {
+      const data = await request("snapshot", {
+        webviewId: args.webviewId,
+        maxHtmlChars: args.maxHtmlChars ?? 80000,
+        maxTextChars: args.maxTextChars ?? 12000,
+        includeScreenshot: args.includeScreenshot ?? true,
+      });
+      return { success: true, data };
+    }
+    // visualState + screenshot from the host; page text comes from the extractor instead of raw HTML.
+    const snap = (await request("snapshot", {
       webviewId: args.webviewId,
-      maxHtmlChars: args.maxHtmlChars ?? 80000,
-      maxTextChars: args.maxTextChars ?? 12000,
+      maxHtmlChars: 1,
+      maxTextChars: 1,
       includeScreenshot: args.includeScreenshot ?? true,
-    });
-    return { success: true, data };
+    })) as Record<string, unknown> | undefined;
+    const { html: _html, text: _text, ...rest } = snap ?? {};
+    const raw = await extractWebviewPage(args.webviewId);
+    if (!raw) {
+      const data = await request("snapshot", {
+        webviewId: args.webviewId,
+        maxHtmlChars: args.maxHtmlChars ?? 80000,
+        maxTextChars: args.maxTextChars ?? 12000,
+        includeScreenshot: false,
+      });
+      return {
+        success: true,
+        data: { ...(data as object), note: "Text extraction failed; returned raw HTML." },
+      };
+    }
+    const sections = buildSections(raw.blocks);
+    const pageUrl = typeof rest.url === "string" ? rest.url : "http://localhost/";
+    const base = { ...rest, pageStats: { sections: sections.length, elements: raw.elements.length } };
+    if (sections.length === 0) {
+      (base as Record<string, unknown>).emptyPage =
+        "No visible text in the preview — check webview_get_console for errors and visualState.boot.";
+    }
+
+    if (args.goal) {
+      try {
+        const ranking = await rankAgainstGoal(args.goal, sections, raw.elements, pageUrl);
+        const f = formatRanking(ranking, pageUrl);
+        const best = ranking.bestSectionScore;
+        return {
+          success: true,
+          data: sanitizeToolOutput(
+            {
+              ...base,
+              goal: args.goal,
+              content: f.content,
+              elements: f.elements,
+              confidence: best >= 2.3 ? "high" : best >= 1.5 ? "medium" : "low",
+              hint:
+                best >= 1.5
+                  ? "Relevant content found above."
+                  : "Goal not clearly present — call webview_snapshot without goal to read the whole preview.",
+            },
+            getApiKeysForSanitization(),
+          ),
+        };
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        (base as Record<string, unknown>).goalError =
+          msg === "JEV_AUTH_MISSING"
+            ? "goal ranking needs Jev (Papr login or TYPESAFE_API_KEY) — returning the full preview instead."
+            : `goal ranking failed (${msg.slice(0, 160)}) — returning the full preview instead.`;
+      }
+    }
+
+    const content = formatSections(sections, args.maxChars ?? 12000);
+    const elements = formatElements(raw.elements, pageUrl, 150);
+    return {
+      success: true,
+      data: sanitizeToolOutput(
+        { ...base, content: content.text, elements: elements.text },
+        getApiKeysForSanitization(),
+      ),
+    };
   },
 });
 
@@ -295,15 +407,19 @@ export const webviewFillFormTool = createTool({
 export const webviewClickTool = createTool({
   id: "webview_click",
   description:
-    "Click an element in the mini-app preview session by CSS selector. " +
+    "Click an element in the mini-app preview session. Prefer ref (the [N] number from webview_snapshot); selector is a fallback. " +
     "Use instead of browser_click when webview_launch_app preview is open.",
   inputSchema: clickSchema,
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof clickSchema> }).context ?? input;
+    const target = args.ref !== undefined ? refSelector(args.ref) : args.selector;
+    if (!target) {
+      return { success: false, error: "Pass ref (the [N] number from webview_snapshot) or selector." };
+    }
     const data = await request("execute", {
       webviewId: args.webviewId,
-      script: buildWebviewClickScript(args.selector),
+      script: buildWebviewClickScript(target),
     });
     const execError =
       data && typeof data === "object" && "execError" in data

@@ -362,11 +362,12 @@ create_job({
 
 **Agent sees & drives the real Chrome window (after prepare_browser on desktop):**
 - Chrome opens **outside Papr** — passkeys, Google/Apple OAuth, and 2FA work normally
-- **See:** \`browser_snapshot\` (HTML) — not screenshots; parse DOM for selectors
+- **See:** \`browser_snapshot\` — readable page text under headings + numbered elements \`[N]\`; act with \`browser_click({ ref: N })\` / \`browser_type({ ref: N, text })\`. Looking for something specific on a long page? \`browser_snapshot({ goal: "..." })\` returns only the relevant sections/elements (Jev-ranked). \`format: "html"\` only when you truly need raw markup
 - **Act:** \`browser_navigate\`, \`browser_click\`, \`browser_type\`, \`browser_fill_form\`, \`browser_scroll\` (direction/delta), \`browser_test_script\`
 - **Debug:** \`browser_network_logs\`, \`browser_console_logs\`
 - **Wait:** \`browser_navigate\` **automatically pauses** after each navigation (platform-aware — ~5.5s on LinkedIn) so the SPA can render before your next tool. Use \`page_wait_for\` only if scripts still race the page load.
-- **Loop:** snapshot → decide selector → click/type → snapshot again
+- **Loop:** snapshot → pick element ref → click/type → snapshot again (refs change after navigation)
+- **To find information on a website, call \`browser_goto({ url, goal })\` first** (a price, a limit, a policy, a spec, a docs detail). Jev walks the site and returns the answering passages + path in one call. Only fall back to snapshot + click if it returns \`found: false\` (continue from its \`finalUrl\`), or if the task needs you to act on the page (forms, logins, posting, multi-step actions)
 
 **\`prepare_browser\` timed out (60s)?**
 - Desktop Papr only (Gateway must run as Electron child process).
@@ -772,7 +773,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         enabled: has("browser_navigate") || has("browser_snapshot"),
         details:
           "Platform Connections: connect_platform prepare_browser FIRST, then browser_* (Papr Chrome on desktop; headless Playwright + keychain cookies in cloud). " +
-          "Agent sees pages via browser_snapshot (HTML). " +
+          "Agent sees pages via browser_snapshot (page text + numbered elements; goal param for Jev-ranked relevant parts; click by ref). To find information on a website call browser_goto({ url, goal }) FIRST; snapshot+click only if it returns found:false or the task needs actions on the page. " +
           "page_wait_for target=browser: text/selector work on Papr Chrome and headless Playwright; time-only on embedded Electron fallback (Chrome not installed). " +
           "page_wait_for target=mini_app after webview_launch_app. " +
           "browser_scroll scroll-into-view (selector) is Playwright-only — use direction/delta scroll on embedded Electron fallback. " +
@@ -3352,7 +3353,7 @@ If the UI shell renders but data never loads, the entry script may have failed t
 **Mini-apps — after EVERY \`edit_file\` ($PAPR_HOME/apps/…) / \`edit_app_file_lines\` / \`create_app\` file write:**
 1. \`validate_app({ appId })\` — **esbuild** + syntax/LOC checks + **auto runtime console preview** (fails on JS errors)
 2. Fix ALL errors before any other edits
-3. Optional: \`webview_snapshot\` for visual layout (\`visualState.userWouldSeeBlankUi\`)
+3. Optional: \`webview_snapshot\` — page text + numbered elements + \`visualState.userWouldSeeBlankUi\`. Checking one thing? \`webview_snapshot({ goal: "saved notes list" })\` returns only the relevant parts. Click by \`webview_click({ ref: N })\`
 4. API/DB: \`bash\` + \`curl http://localhost:18789/api/...\`
 
 **Mini-app testing — pick the right tool (CRITICAL):**

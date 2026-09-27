@@ -71,7 +71,13 @@ export const MEASURED_CORE_TOOL_IDS: readonly string[] = [
   "read_job_file",
   "list_documents",
   "list_apps",
-  "browser_wait_for",
+  // Hand-placed (not yet measurable — new tool): lookups should go through browser_goto,
+  // not snapshot→click loops. Replaces browser_wait_for, which is deprecated for page_wait_for.
+  "browser_goto",
+  // Hand-placed: snapshot now returns numbered refs, so click/type by ref is the main
+  // interaction loop (~125 tokens for both). Previously clicks went through browser_test_script.
+  "browser_click",
+  "browser_type",
   "page_wait_for",
   "get_key",
   "search_files",

@@ -7,6 +7,18 @@ import { getApiKeysForSanitization, sanitizeToolOutput } from "./security.js";
 import { wrapUntrustedContent } from "./contentProvenance.js";
 import { getBrowserToolWebviewBlockReason } from "./webviewSessionGuard.js";
 import { detectManualAuthCheckpoint } from "../utils/platformBrowserBashGuard.js";
+import {
+  EXTRACT_PAGE_SCRIPT,
+  buildSections,
+  formatElements,
+  formatRanking,
+  formatSections,
+  rankAgainstGoal,
+  refSelector,
+  type RawExtraction,
+} from "./pageExtract.js";
+import { runGoto, type GotoPage } from "./browserGoto.js";
+import { recordBrowseAction } from "./browseNudge.js";
 
 import { EmbeddedBrowserPageAdapter } from "../../gateway/services/platforms/embeddedBrowserPageAdapter.js";
 
@@ -553,17 +565,39 @@ const navigateSchema = z.object({
 });
 
 const snapshotSchema = z.object({
+  goal: z
+    .string()
+    .min(3)
+    .optional()
+    .describe(
+      "What you are looking for on this page (e.g. 'Business plan price', 'link to API rate limits'). " +
+        "Returns only the most relevant sections and elements, ranked by Jev. Omit to get the whole page.",
+    ),
+  format: z
+    .enum(["text", "html"])
+    .optional()
+    .describe("text (default): readable sections + numbered elements. html: raw HTML (debugging selectors only)."),
   maxChars: z.number().int().min(200).max(100000).optional(),
 });
 
-const clickSchema = z.object({
-  selector: z.string().min(1),
-});
+const clickSchema = z
+  .object({
+    ref: z.number().int().min(0).optional().describe("Element number [N] from browser_snapshot"),
+    selector: z.string().min(1).optional().describe("CSS selector (use ref when you have one)"),
+  });
 
-const typeSchema = z.object({
-  selector: z.string().min(1),
-  text: z.string(),
-});
+const typeSchema = z
+  .object({
+    ref: z.number().int().min(0).optional().describe("Element number [N] from browser_snapshot"),
+    selector: z.string().min(1).optional().describe("CSS selector (use ref when you have one)"),
+    text: z.string(),
+  });
+
+function targetSelector(args: { ref?: number; selector?: string }): string {
+  if (args.ref !== undefined) return refSelector(args.ref);
+  if (args.selector) return args.selector;
+  throw new Error("Pass ref (the [N] number from browser_snapshot) or selector.");
+}
 
 const tabsSchema = z.object({
   action: z.enum(["list", "close"]),
@@ -685,10 +719,24 @@ export const browserNavigateTool = createTool({
   },
 });
 
+async function extractPage(page: BrowserPage): Promise<RawExtraction | null> {
+  try {
+    const raw = (await page.evaluate(EXTRACT_PAGE_SCRIPT)) as RawExtraction | undefined;
+    if (!raw || !Array.isArray(raw.blocks) || !Array.isArray(raw.elements)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
 export const browserSnapshotTool = createTool({
   id: "browser_snapshot",
   description:
-    "How the agent SEES the page: returns HTML (truncated). After prepare_browser, read LinkedIn/social UIs here, find CSS selectors, then browser_click/browser_type. Primary vision tool — not screenshots.",
+    "How the agent SEES the page. Returns readable text grouped under page headings plus a numbered list of " +
+    "links/buttons/inputs — act on them with browser_click({ ref }) / browser_type({ ref, text }). " +
+    "Pass goal (e.g. 'Enterprise plan price', 'link to rate limit docs') to get only the most relevant sections " +
+    "and elements, ranked by Jev — much cheaper on long pages. format: 'html' returns raw HTML (debugging only). " +
+    "Primary vision tool — not screenshots.",
   inputSchema: snapshotSchema,
   execute: async (input) => {
     const args =
@@ -696,58 +744,129 @@ export const browserSnapshotTool = createTool({
     await assertBrowserToolAllowed("browser_snapshot");
     await requestBrowserPermission("snapshot");
     const session = await getBrowserSession();
-    const html = await session.page.content();
-    const maxChars = args.maxChars ?? 8000;
     const url = session.page.url();
     const title = await session.page.title();
-    const rawHtml =
-      html.length > maxChars
-        ? `${html.slice(0, maxChars)}\n<!-- truncated -->`
-        : html;
     const ctx = `url: ${url}`;
-    const manualAuthTip = detectManualAuthCheckpoint(rawHtml);
+    const wrap = (v: string) => wrapUntrustedContent("browser", ctx, v);
+
+    const raw = args.format === "html" ? null : await extractPage(session.page);
+    if (!raw) {
+      const html = await session.page.content();
+      const maxChars = args.maxChars ?? 8000;
+      const rawHtml =
+        html.length > maxChars ? `${html.slice(0, maxChars)}\n<!-- truncated -->` : html;
+      const manualAuthTip = detectManualAuthCheckpoint(rawHtml);
+      return sanitizeBrowserData({
+        success: true,
+        data: {
+          url: wrap(url),
+          title: wrap(title),
+          html: wrap(rawHtml),
+          ...(args.format !== "html" ? { note: "Text extraction failed on this page; returned raw HTML." } : {}),
+          ...(manualAuthTip ? { manualAuthTip } : {}),
+        },
+      });
+    }
+
+    const sections = buildSections(raw.blocks);
+    const plain = sections.map((x) => x.text).join(" ");
+    const manualAuthTip = detectManualAuthCheckpoint(plain);
+    const lookupTip = recordBrowseAction(session.page, "snapshot");
+    const base = {
+      url: wrap(url),
+      title: wrap(title),
+      ...(manualAuthTip ? { manualAuthTip } : {}),
+      ...(lookupTip ? { lookupTip } : {}),
+    };
+
+    if (args.goal) {
+      try {
+        const ranking = await rankAgainstGoal(args.goal, sections, raw.elements, url);
+        const f = formatRanking(ranking, url);
+        const best = ranking.bestSectionScore;
+        return sanitizeBrowserData({
+          success: true,
+          data: {
+            ...base,
+            goal: args.goal,
+            content: wrap(f.content),
+            elements: wrap(f.elements),
+            confidence: best >= 2.3 ? "high" : best >= 1.5 ? "medium" : "low",
+            hint:
+              best >= 2.3
+                ? "The answer is likely in content above."
+                : "Content may not answer the goal — click the best-scoring element, or call browser_snapshot without goal to read the whole page.",
+            pageStats: { sections: sections.length, elements: raw.elements.length },
+          },
+        });
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        (base as Record<string, unknown>).goalError =
+          msg === "JEV_AUTH_MISSING"
+            ? "goal ranking needs Jev (Papr login or TYPESAFE_API_KEY) — returning the full page instead."
+            : `goal ranking failed (${msg.slice(0, 160)}) — returning the full page instead.`;
+      }
+    }
+
+    const maxChars = args.maxChars ?? 8000;
+    const content = formatSections(sections, maxChars);
+    const elements = formatElements(raw.elements, url, 150);
     return sanitizeBrowserData({
       success: true,
       data: {
-        url: wrapUntrustedContent("browser", ctx, url),
-        title: wrapUntrustedContent("browser", ctx, title),
-        html: wrapUntrustedContent("browser", ctx, rawHtml),
-        ...(manualAuthTip ? { manualAuthTip } : {}),
+        ...base,
+        content: wrap(content.text),
+        elements: wrap(elements.text),
+        ...(content.truncated || elements.truncated
+          ? { hint: "Page is long. Call browser_snapshot({ goal: \"...\" }) to get only the relevant parts." }
+          : {}),
       },
-    }) as {
-      success: boolean;
-      data: { url: string; title: string; html: string; manualAuthTip?: string };
-    };
+    });
   },
 });
 
 export const browserClickTool = createTool({
   id: "browser_click",
-  description: "Click an element on the current browser page",
+  description:
+    "Click an element on the current browser page. Prefer ref (the [N] number from browser_snapshot); selector is a fallback.",
   inputSchema: clickSchema,
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof clickSchema> }).context ?? input;
+    const target = targetSelector(args);
     await assertBrowserToolAllowed("browser_click");
-    await requestBrowserPermission(`click:${args.selector}`);
+    await requestBrowserPermission(`click:${target}`);
     const session = await getBrowserSession();
-    await session.page.click(args.selector);
-    return { success: true, data: { clicked: args.selector } };
+    try {
+      await session.page.click(target);
+      recordBrowseAction(session.page, "click");
+    } catch (error) {
+      if (args.ref !== undefined) {
+        throw new Error(
+          `Element [${args.ref}] not found — the page changed since the last snapshot. Call browser_snapshot again. (${error instanceof Error ? error.message.slice(0, 160) : String(error)})`,
+        );
+      }
+      throw error;
+    }
+    return { success: true, data: { clicked: target } };
   },
 });
 
 export const browserTypeTool = createTool({
   id: "browser_type",
-  description: "Fill text into an element on the current browser page",
+  description:
+    "Fill text into an element on the current browser page. Prefer ref (the [N] number from browser_snapshot); selector is a fallback.",
   inputSchema: typeSchema,
   execute: async (input) => {
     const args =
       (input as { context?: z.infer<typeof typeSchema> }).context ?? input;
+    const target = targetSelector(args);
     await assertBrowserToolAllowed("browser_type");
-    await requestBrowserPermission(`type:${args.selector}`);
+    await requestBrowserPermission(`type:${target}`);
     const session = await getBrowserSession();
-    await session.page.fill(args.selector, args.text);
-    return { success: true, data: { selector: args.selector } };
+    await session.page.fill(target, args.text);
+    recordBrowseAction(session.page, "input");
+    return { success: true, data: { selector: target } };
   },
 });
 
@@ -1058,6 +1177,7 @@ export const browserFillFormTool = createTool({
     await assertBrowserToolAllowed("browser_fill_form");
     await requestBrowserPermission(`fill_form:${args.fields.length} fields`);
     const session = await getBrowserSession();
+    recordBrowseAction(session.page, "input");
 
     const results = [];
     for (const field of args.fields) {
@@ -1143,9 +1263,106 @@ export const browserScrollTool = createTool({
   },
 });
 
+async function settleSession(session: BrowserSessionState): Promise<void> {
+  const url = session.page.url();
+  const { waitForPlaywrightPageSettle, sleepForNavigationSettle } = await import(
+    "../../gateway/services/platforms/platformBrowserSettle.js"
+  );
+  if (isPlaywrightPage(session.page)) {
+    await waitForPlaywrightPageSettle(session.page, url, { platformId: session.platformId });
+  } else {
+    await sleepForNavigationSettle(url, session.platformId);
+  }
+}
+
+const gotoSchema = z.object({
+  goal: z
+    .string()
+    .min(3)
+    .describe("What to find, e.g. 'Enterprise plan price', 'API rate limits', 'SAML SSO availability'"),
+  url: z.string().url().optional().describe("Start here (default: the current page)"),
+  maxSteps: z.number().int().min(1).max(8).optional().describe("Max pages to visit (default 5)"),
+  allowOffsite: z.boolean().optional().describe("Follow links to other sites (default: same site only)"),
+});
+
+export const browserGotoTool = createTool({
+  id: "browser_goto",
+  description:
+    "Find something on a website without reading every page. From the current page (or url), Jev scores each page's " +
+    "sections and links against the goal, follows the most promising same-site link, and stops when a section clearly " +
+    "answers it (up to maxSteps pages). Returns the best passages with their URLs, the path taken, and top elements on " +
+    "the final page. Much cheaper than snapshot→click loops for lookups (pricing, docs, policies, specs). Use " +
+    "browser_snapshot + browser_click for forms, logins, or step-by-step actions. Requires Jev (Papr login or TYPESAFE_API_KEY).",
+  inputSchema: gotoSchema,
+  execute: async (input) => {
+    const args = (input as { context?: z.infer<typeof gotoSchema> }).context ?? input;
+    await assertBrowserToolAllowed("browser_goto");
+    await requestBrowserPermission(`goto:${args.url ?? "current page"} — find "${args.goal}"`);
+    const session = await getBrowserSession();
+    recordBrowseAction(session.page, "goto");
+    const page = session.page;
+    const adapter: GotoPage = {
+      url: () => page.url(),
+      goto: async (u) => {
+        await page.goto(u, { waitUntil: "domcontentloaded" });
+      },
+      click: (sel) => page.click(sel),
+      evaluate: (script) => page.evaluate(script),
+      settle: () => settleSession(session),
+    };
+    if (args.url) {
+      await adapter.goto(args.url);
+      await adapter.settle();
+    }
+    let result;
+    try {
+      result = await runGoto(adapter, args.goal, {
+        maxSteps: args.maxSteps,
+        allowOffsite: args.allowOffsite,
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      return {
+        success: false,
+        error:
+          msg === "JEV_AUTH_MISSING"
+            ? "browser_goto needs Jev (Papr login or TYPESAFE_API_KEY). Use browser_snapshot + browser_click instead."
+            : `browser_goto failed: ${msg.slice(0, 300)}`,
+      };
+    }
+    const ctx = `url: ${result.finalUrl}`;
+    const wrap = (v: string) => wrapUntrustedContent("browser", ctx, v);
+    const passages = result.passages
+      .map((p) => `[${p.url}] ## ${p.path || "(top of page)"}  (score ${p.score.toFixed(2)})\n${p.text}`)
+      .join("\n\n");
+    const path = result.steps.map(
+      (s) =>
+        `${s.url} (best ${s.bestScore.toFixed(2)})` +
+        (s.followed ? ` → "${s.followed.text}" (${s.followed.score.toFixed(2)})` : "") +
+        (s.error ? ` [${s.error}]` : ""),
+    );
+    return sanitizeBrowserData({
+      success: true,
+      data: {
+        found: result.found,
+        confidence: result.confidence,
+        stopReason: result.stopReason,
+        finalUrl: wrap(result.finalUrl),
+        passages: wrap(passages),
+        path: wrap(path.join("\n")),
+        elements: wrap(result.elements.join("\n")),
+        hint: result.found
+          ? "Answer from passages and cite their URLs. The browser is left on finalUrl."
+          : "Not clearly found. Read passages; then browser_snapshot({ goal }) + browser_click({ ref }) from finalUrl, or retry with a different url/goal.",
+      },
+    });
+  },
+});
+
 export const browserTools = [
   browserNavigateTool,
   browserSnapshotTool,
+  browserGotoTool,
   browserClickTool,
   browserTypeTool,
   browserTabsTool,
