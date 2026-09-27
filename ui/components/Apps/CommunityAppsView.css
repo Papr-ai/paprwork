@@ -833,3 +833,46 @@
   flex-shrink: 0;
   color: var(--text-tertiary);
 }
+
+/* Redesign: small icon with the name beside it (not a big orb above). */
+.community-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 12px;
+  align-content: start;
+}
+.community-card .community-card__preview {
+  grid-column: 1;
+  grid-row: 1;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+}
+.community-card .community-card__orb,
+.community-card .community-card__screenshot {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+.community-card .community-card__orb::after { display: none; }
+.community-card .community-card__orb-inner { width: 100%; height: 100%; display: grid; place-items: center; }
+.community-card .community-card__orb-icon,
+.community-card .community-card__orb-icon svg { width: 20px; height: 20px; font-size: 18px !important; }
+.community-card .community-card__orb-icon--image { width: 40px; height: 40px; }
+.community-card .community-card__content { display: contents; }
+.community-card .community-card__content > * { grid-column: 1 / -1; }
+.community-card .community-card__content > .community-card__title-row,
+.community-card .community-card__content > .community-card__title-input {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  padding-right: 36px; 
+  min-width: 0;
+}
+.community-card .community-card__description { margin-top: 10px; }

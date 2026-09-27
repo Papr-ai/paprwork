@@ -54,6 +54,19 @@ export type { AppStatus };
 const lastActivity = (a: Artifact) =>
   new Date(a.lastOpenedAt ?? a.updatedAt).getTime();
 
+function relativeWhen(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60_000);
+  const days = Math.floor(diff / 86_400_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (days === 0) return `${Math.floor(minutes / 60)}h ago`;
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+  return new Date(iso).toLocaleDateString();
+}
+
 export function AppsView() {
   const {
     filteredArtifacts,
@@ -336,9 +349,24 @@ export function AppsView() {
     const out: Record<string, ShareGlyph> = {};
     for (const a of allApps) {
       const prefs = sharing[a.id];
+      const lin = a.cloudLineage;
       out[a.id] = prefs
         ? shareGlyphForPrefs(prefs)
-        : shareGlyphForPublishState(states[a.id]);
+        : lin?.mode === "track"
+          ? {
+              // Collaborator copy: who the publisher shared it with, exactly
+              // like the fork mark in the app's share bar.
+              audience:
+                (lin.sourceAudience ??
+                  (lin.databasePolicy === "forked" ? "community" : "team")) ===
+                "community"
+                  ? "public"
+                  : (lin.sourceAudience ?? "team") === "people"
+                    ? "people"
+                    : "team",
+              codeAccess: "off",
+            }
+          : shareGlyphForPublishState(states[a.id]);
     }
     return out;
   }, [allApps, sharing, publishRevision]);
@@ -608,9 +636,9 @@ export function AppsView() {
             <DuplicateCleanupView
               groups={duplicateGroups}
               formatWhen={(a) =>
-                a.lastOpenedAt
-                  ? `Opened ${new Date(a.lastOpenedAt).toLocaleDateString()}`
-                  : `Updated ${new Date(a.updatedAt).toLocaleDateString()}`
+                `${a.lastOpenedAt ? "Opened" : "Updated"} ${relativeWhen(
+                  a.lastOpenedAt ?? a.updatedAt,
+                )}`
               }
               onCancel={() => setCleaningUp(false)}
               onArchive={archiveApps}

@@ -341,7 +341,7 @@ export function AppCard({
           <span className="app-card__date">
             {artifact.lastOpenedAt
               ? `Opened ${formatDate(artifact.lastOpenedAt).toLowerCase()}`
-              : formatDate(artifact.updatedAt)}
+              : `Updated ${formatDate(artifact.updatedAt).toLowerCase()}`}
           </span>
           {duplicateCount > 0 ? (
             <button

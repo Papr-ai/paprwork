@@ -1285,8 +1285,13 @@ function CommunityAppCard({
             </span>
           ) : null}
           {installedForkCount > 0 ? (
-            <span className="community-card__badge community-card__badge--fork">
-              {installedForkCount} fork{installedForkCount === 1 ? "" : "s"}
+            <span
+              className="community-card__badge community-card__badge--fork"
+              title="Copies installed on this computer — not everyone's forks"
+            >
+              {installedForkCount === 1
+                ? "In your library"
+                : `${installedForkCount} copies in your library`}
             </span>
           ) : null}
           {entry.source === "opensource" ? (
