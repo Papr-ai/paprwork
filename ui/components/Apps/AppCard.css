@@ -686,3 +686,15 @@
 
 /* Footer strip stays the card colour; a hairline divider does the separating. */
 .app-card .app-card__footer { background: transparent; }
+
+/* Fork / linked copy: a small lineage mark after the title, not a pill. */
+.app-card__lineage {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.app-card__lineage:hover { color: var(--text-secondary); }
+/* Leave room for share glyph + ⋯ so the hover menu never covers the title row. */
+.app-card .app-card__content > .app-card__title-row { padding-right: 64px; }
