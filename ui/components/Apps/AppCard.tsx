@@ -3,6 +3,7 @@
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./AppCard.css";
 import type { AppStatusLine } from "../../utils/appStatusLine";
@@ -60,14 +61,38 @@ export function AppCard({
   const [editTitle, setEditTitle] = useState(artifact.title);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuPopRef = useRef<HTMLDivElement>(null);
+  // Menu renders in a portal (fixed) so the card's overflow:hidden can't clip it.
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
-    const closeMenu = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    const place = () => {
+      const r = menuRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const menuH = menuPopRef.current?.offsetHeight ?? 260;
+      const below = r.bottom + 6;
+      const top = below + menuH > window.innerHeight - 8 ? Math.max(8, r.top - menuH - 6) : below;
+      setMenuPos({ top, right: Math.max(8, window.innerWidth - r.right) });
     };
+    place();
+    requestAnimationFrame(place);
+    const closeMenu = (event: MouseEvent) => {
+      const t = event.target as Node;
+      if (!menuRef.current?.contains(t) && !menuPopRef.current?.contains(t)) setMenuOpen(false);
+    };
+    const close = () => setMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
     document.addEventListener("mousedown", closeMenu);
-    return () => document.removeEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
   }, [menuOpen]);
 
   const formatDate = (dateString: string) => {
@@ -393,10 +418,17 @@ export function AppCard({
         >
           <span>•••</span>
         </button>
-        {menuOpen && (
+        {menuOpen && createPortal(
           <div
-            className="app-card__menu"
+            ref={menuPopRef}
+            className="app-card__menu app-card__menu--portal"
             role="menu"
+            style={{
+              position: "fixed",
+              top: menuPos?.top ?? -9999,
+              right: menuPos?.right ?? 0,
+              zIndex: 1000,
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -504,7 +536,8 @@ export function AppCard({
             >
               Delete app
             </button>
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     </div>

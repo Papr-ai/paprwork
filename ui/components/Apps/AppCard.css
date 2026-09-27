@@ -631,3 +631,8 @@
 .app-card:hover .app-card__share,
 .app-card:focus-within .app-card__share { opacity: 0; }
 .app-card .app-card__content > .app-card__title-row { padding-right: 34px; }
+/* Share glyph stays visible; the ⋯ trigger appears just to its left on hover. */
+.app-card:hover .app-card__share,
+.app-card:focus-within .app-card__share { opacity: 1; }
+.app-card .app-card__menu-wrap { top: 14px; right: 44px; }
+.app-card__menu--portal { width: 184px; }
