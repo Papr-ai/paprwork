@@ -5,8 +5,11 @@
 import React, { useState, useRef, useCallback, useEffect } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./AppCard.css";
+import type { AppStatusLine } from "../../utils/appStatusLine";
+import type { ShareGlyph } from "../../utils/shareGlyph";
+import { ShareAudienceIcon } from "./WebSyncPopover";
 
-type AppStatus = "draft" | "active" | "archived";
+export type AppStatus = "draft" | "active" | "archived";
 
 interface AppCardProps {
   artifact: Artifact;
@@ -22,6 +25,13 @@ interface AppCardProps {
   /** Show "Copy to namespace" when logged into Papr with multiple namespaces. */
   showCopyAction?: boolean;
   onCopy?: () => void;
+  /** One-line health/provenance summary (schedule, last run, live, fork…). */
+  statusLine?: AppStatusLine;
+  /** Who can open it (share-bar glyph) and whether others can copy the code. */
+  share?: ShareGlyph;
+  /** Near-duplicate copies stacked under this card. */
+  duplicateCount?: number;
+  onShowDuplicates?: () => void;
 }
 
 export function AppCard({
@@ -36,6 +46,10 @@ export function AppCard({
   isPublished = false,
   showCopyAction = false,
   onCopy,
+  statusLine,
+  share,
+  duplicateCount = 0,
+  onShowDuplicates,
 }: AppCardProps) {
   const status: AppStatus = artifact.status ?? "active";
   const [menuOpen, setMenuOpen] = useState(false);
@@ -267,6 +281,15 @@ export function AppCard({
             >
               {artifact.title}
             </h3>
+            {share ? (
+              <span className="app-card__share">
+                <ShareAudienceIcon
+                  audience={share.audience}
+                  loginAccess={null}
+                  codeAccess={share.codeAccess}
+                />
+              </span>
+            ) : null}
             {artifact.cloudLineage ? (
               <span
                 className={
@@ -300,11 +323,40 @@ export function AppCard({
         {artifact.description && (
           <p className="app-card__description">{artifact.description}</p>
         )}
-        <span className="app-card__date">
-          {artifact.lastOpenedAt
-            ? `Opened ${formatDate(artifact.lastOpenedAt).toLowerCase()}`
-            : formatDate(artifact.updatedAt)}
-        </span>
+        {statusLine?.text ? (
+          <span
+            className={`app-card__status-line app-card__status-line--${statusLine.tone}`}
+            title={statusLine.text}
+          >
+            {statusLine.text}
+          </span>
+        ) : null}
+        <div className="app-card__footer">
+          <span className="app-card__date">
+            {artifact.lastOpenedAt
+              ? `Opened ${formatDate(artifact.lastOpenedAt).toLowerCase()}`
+              : formatDate(artifact.updatedAt)}
+          </span>
+          {duplicateCount > 0 ? (
+            <button
+              type="button"
+              className="app-card__stack-chip"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowDuplicates?.();
+              }}
+            >
+              +{duplicateCount} {duplicateCount === 1 ? "copy" : "copies"}
+            </button>
+          ) : null}
+          {statusLine && statusLine.action !== "Open" ? (
+            <span
+              className={`app-card__action app-card__action--${statusLine.tone}`}
+            >
+              {statusLine.action}
+            </span>
+          ) : null}
+        </div>
       </div>
 
       <div className="app-card__menu-wrap" ref={menuRef}>

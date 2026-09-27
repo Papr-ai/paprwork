@@ -1,0 +1,124 @@
+/* Team / Community side panel. Tokens from ui/styles/liquid-glass.css. */
+.catalog-panel__scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.18);
+}
+.catalog-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 41;
+  width: min(420px, 92vw);
+  overflow-y: auto;
+  padding: 22px 22px 28px;
+  background: var(--popover-bg);
+  border-left: 1px solid var(--border-color);
+  box-shadow: -12px 0 40px rgba(0, 0, 0, 0.12);
+  color: var(--text-primary);
+}
+.catalog-panel__close {
+  position: absolute;
+  top: 12px;
+  right: 14px;
+  border: none;
+  background: none;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  cursor: pointer;
+}
+.catalog-panel__title {
+  font-size: 20px;
+  font-weight: 650;
+  margin: 0 28px 6px 0;
+}
+.catalog-panel__byline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.catalog-panel__desc {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 14px 0 0;
+}
+.catalog-panel__automation {
+  font-size: 12.5px;
+  color: var(--accent);
+  margin: 8px 0 0;
+}
+.catalog-panel__note {
+  margin-top: 14px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 13px;
+  background: color-mix(in srgb, var(--accent) 9%, transparent);
+}
+.catalog-panel__section {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--text-tertiary);
+  margin: 20px 0 8px;
+}
+.catalog-panel__keys {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+.catalog-panel__keys li {
+  display: flex;
+  justify-content: space-between;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  background: var(--hover);
+}
+.catalog-panel__ok {
+  color: var(--success);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.catalog-panel__todo {
+  color: var(--warning);
+  font-size: 12.5px;
+  font-weight: 550;
+}
+.catalog-panel__actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 20px;
+}
+.catalog-panel__btn {
+  padding: 8px 14px;
+  border-radius: 9px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.catalog-panel__btn--primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.catalog-panel .community-install-modal__option {
+  width: 100%;
+  margin-bottom: 8px;
+}
+.community-card__share {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
