@@ -162,6 +162,28 @@ export async function readMigrationSql(
   const fileName = migrationId.endsWith(".sql")
     ? migrationId
     : `${migrationId}.sql`;
+  let raw: string;
+  try {
+    raw = await fs.readFile(path.join(migrationsDir(jobDir), fileName), "utf8");
+  } catch {
+    return null;
+  }
+  // Every apply path (replica, Turso primary, cloud-direct, verification)
+  // reads through here, so owner placeholders are filled in one place.
+  const { substituteMigrationPlaceholders } = await import(
+    "./migrationPlaceholders.js"
+  );
+  return substituteMigrationPlaceholders(raw, jobDir);
+}
+
+/** Raw file text, no placeholder substitution (checksums, publish). */
+export async function readMigrationSqlRaw(
+  jobDir: string,
+  migrationId: string,
+): Promise<string | null> {
+  const fileName = migrationId.endsWith(".sql")
+    ? migrationId
+    : `${migrationId}.sql`;
   try {
     return await fs.readFile(path.join(migrationsDir(jobDir), fileName), "utf8");
   } catch {

@@ -65,6 +65,21 @@ export async function prepareAppForCloudGitSync(
     );
     await writeLinkedDatabasesForApp(paprDir, appId);
 
+    // Publisher's exact schema → migrations/snapshot.json (installers build
+    // from it instead of replaying every migration). Isolated: a failure here
+    // must not block the rest of publish prep.
+    try {
+      const { writeSchemaSnapshotsForApp } = await import(
+        "./publishSchemaSnapshots.js"
+      );
+      await writeSchemaSnapshotsForApp(paprDir, appId);
+    } catch (error) {
+      console.warn(
+        `[CloudSync] schema snapshot skipped for ${appId}:`,
+        (error as Error).message.slice(0, 120),
+      );
+    }
+
     await ensureAppRequirementsSyncedWithBackend(paprDir, appId);
 
     const { buildMiniApp } = await import("../../utils/miniAppBuild.js");

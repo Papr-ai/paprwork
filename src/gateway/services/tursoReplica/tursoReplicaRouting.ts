@@ -189,6 +189,11 @@ export function shouldSuppressLegacyTursoPush(options: {
     (options.dbId ? registry.getById(options.dbId) : undefined) ??
     (options.dbPath ? registry.getByPath(options.dbPath) : undefined) ??
     registry.getById(options.syncKey);
+  // Cloud-direct: the primary is the only copy — there is nothing for legacy
+  // sync to push or pull, and it must not create a local file to push from.
+  if (record?.syncMode === "cloud-direct") {
+    return true;
+  }
   if (!isReplicaOwnedRecord(record) || !record) {
     return false;
   }
@@ -244,6 +249,32 @@ export async function writeLinkedDbBatchViaTursoReplica(
     localPath: source.dbPath,
     tursoDatabase,
     statements,
+  });
+  await noteReplicaWriteOutcome(source, result.pendingPush);
+  if (!result.pendingPush) {
+    notifyReplicaDbChanged(source);
+  }
+  return result;
+}
+
+/** One migration, atomically, on the replica handle (see TursoReplicaService.runMigration). */
+export async function migrateLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  statements: readonly string[],
+  ledger: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  writeOptions?: TursoReplicaWriteOptions,
+): Promise<{
+  executed: string[];
+  skipped: Array<{ statement: string; reason: string }>;
+  pendingPush: boolean;
+}> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+  const result = await getTursoReplicaService().runMigration({
+    localPath: source.dbPath,
+    tursoDatabase,
+    statements,
+    ledger,
+    writeOptions,
   });
   await noteReplicaWriteOutcome(source, result.pendingPush);
   if (!result.pendingPush) {

@@ -706,20 +706,19 @@ export class JobsService {
     }
   }
 
-  private voidDeleteJobCloudArtifacts(
+  private async deleteJobCloudArtifactsForJob(
     jobId: string,
     options?: { skipWorkspacePush?: boolean },
-  ): void {
-    void import("./jobs/jobCloudCleanup.js")
-      .then(({ deleteJobCloudArtifacts }) =>
-        deleteJobCloudArtifacts(jobId, options),
-      )
-      .catch((err) => {
-        console.warn(
-          `[JobsService] Cloud cleanup failed for ${jobId}:`,
-          err instanceof Error ? err.message.slice(0, 120) : err,
-        );
-      });
+  ): Promise<void> {
+    try {
+      const { deleteJobCloudArtifacts } = await import("./jobs/jobCloudCleanup.js");
+      await deleteJobCloudArtifacts(jobId, options);
+    } catch (err) {
+      console.warn(
+        `[JobsService] Cloud cleanup failed for ${jobId}:`,
+        err instanceof Error ? err.message.slice(0, 120) : err,
+      );
+    }
   }
 
   private async flushDeferredDeleteCloudPush(): Promise<void> {
@@ -729,6 +728,7 @@ export class JobsService {
       return;
     }
     try {
+      await this.saveJobs({ awaitCloudMetadata: true });
       const { getCloudSyncService } = await import("./CloudSyncService.js");
       const cloudSync = getCloudSyncService();
       if (cloudSync) {
@@ -1043,7 +1043,7 @@ export class JobsService {
     }
 
     if (removed.length > 0) {
-      await this.saveJobs();
+      await this.saveJobs({ awaitCloudMetadata: true });
       console.log(
         `[JobsService] Removed ${removed.length} tombstoned job(s) from registry: [${removed.join(", ")}]`,
       );
@@ -1099,7 +1099,9 @@ export class JobsService {
     };
   }
 
-  private async saveJobs(): Promise<void> {
+  private async saveJobs(options?: {
+    awaitCloudMetadata?: boolean;
+  }): Promise<void> {
     if (!this.isWriteContextValid("jobs.json save")) {
       return;
     }
@@ -1107,6 +1109,8 @@ export class JobsService {
     if (this.saveLock) {
       await this.saveLock;
     }
+
+    const awaitCloudMetadata = options?.awaitCloudMetadata === true;
 
     // Create new save promise
     this.saveLock = (async () => {
@@ -1128,16 +1132,12 @@ export class JobsService {
         await fs.rename(tmpPath, this.jobsIndexPath);
 
         const updatedAt = new Date().toISOString();
-        void import("./syncV3/MetadataRegistryClient.js")
-          .then(({ uploadJobsIndexToCloud }) =>
-            uploadJobsIndexToCloud(list, updatedAt),
-          )
-          .catch((err: Error) => {
-            console.warn(
-              "[JobsService] jobs index cloud upload failed:",
-              err.message.slice(0, 120),
-            );
-          });
+        const { pushJobsIndexToCloudAfterLocalWrite } = await import(
+          "./jobs/jobDeletionCatalogSync.js"
+        );
+        await pushJobsIndexToCloudAfterLocalWrite(list, updatedAt, {
+          awaitCloudMetadata,
+        });
       } finally {
         // Clear lock after save completes or fails
         this.saveLock = null;
@@ -3570,15 +3570,15 @@ export class JobsService {
 
     // Remove from index and upload updated catalog (job absent = deleted in cloud metadata)
     this.deleteJobFromMemory(jobId);
-    await this.saveJobs();
+    await this.saveJobs({ awaitCloudMetadata: true });
     notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
 
     if (options?.deferCloudCleanup === true) {
       this.deferredDeleteCloudPush = true;
-      this.voidDeleteJobCloudArtifacts(jobId, { skipWorkspacePush: true });
+      await this.deleteJobCloudArtifactsForJob(jobId, { skipWorkspacePush: true });
     } else {
-      this.voidDeleteJobCloudArtifacts(jobId);
+      await this.deleteJobCloudArtifactsForJob(jobId);
     }
 
     // Optionally remove the job directory (scripts, logs, scratch db)

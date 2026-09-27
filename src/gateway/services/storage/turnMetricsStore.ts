@@ -30,6 +30,20 @@ const TURN_METRIC_COLUMNS = [
   { name: "turn_plan_total_steps", sql: "INTEGER" },
   { name: "turn_plan_completed_steps", sql: "INTEGER" },
   { name: "turn_duration_ms", sql: "INTEGER" },
+  // Memory-catalog experiment (Jev gate). TEXT arm so `WHERE arm='treatment'`
+  // reads naturally; NULL = not assigned, which is NOT the control group.
+  { name: "turn_catalog_arm", sql: "TEXT" },
+  { name: "turn_catalog_positional_tokens", sql: "INTEGER" },
+  { name: "turn_catalog_injected_tokens", sql: "INTEGER" },
+  { name: "turn_catalog_jev_ms", sql: "INTEGER" },
+  // Tool-result trim experiment (Jev). Same arm semantics as catalog.
+  { name: "turn_tooltrim_arm", sql: "TEXT" },
+  { name: "turn_tooltrim_applied", sql: "INTEGER" },
+  { name: "turn_tooltrim_fallbacks", sql: "INTEGER" },
+  { name: "turn_tooltrim_lookback_yes", sql: "INTEGER" },
+  { name: "turn_tooltrim_chars_before", sql: "INTEGER" },
+  { name: "turn_tooltrim_chars_after", sql: "INTEGER" },
+  { name: "turn_tooltrim_jev_ms", sql: "INTEGER" },
 ] as const;
 
 export function migrateTurnMetricsColumns(db: Database.Database): void {
@@ -66,7 +80,18 @@ export function storeTurnMetrics(
          turn_context_budget_tokens = ?,
          turn_plan_total_steps = ?,
          turn_plan_completed_steps = ?,
-         turn_duration_ms = ?
+         turn_duration_ms = ?,
+         turn_catalog_arm = ?,
+         turn_catalog_positional_tokens = ?,
+         turn_catalog_injected_tokens = ?,
+         turn_catalog_jev_ms = ?,
+         turn_tooltrim_arm = ?,
+         turn_tooltrim_applied = ?,
+         turn_tooltrim_fallbacks = ?,
+         turn_tooltrim_lookback_yes = ?,
+         turn_tooltrim_chars_before = ?,
+         turn_tooltrim_chars_after = ?,
+         turn_tooltrim_jev_ms = ?
      WHERE id = ?`,
   ).run(
     summary.steps,
@@ -84,6 +109,17 @@ export function storeTurnMetrics(
     summary.planTotalSteps,
     summary.planCompletedSteps,
     durationMs ?? null,
+    summary.catalogExperimentArm ?? null,
+    summary.catalogPositionalTokens ?? null,
+    summary.catalogInjectedTokens ?? null,
+    summary.catalogJevMs ?? null,
+    summary.toolTrimArm ?? null,
+    summary.toolTrimApplied ?? 0,
+    summary.toolTrimFallbacks ?? 0,
+    summary.toolTrimLookbackYes ?? 0,
+    summary.toolTrimCharsBefore ?? 0,
+    summary.toolTrimCharsAfter ?? 0,
+    summary.toolTrimJevMs ?? 0,
     messageId,
   );
 }

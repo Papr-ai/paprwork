@@ -56,6 +56,44 @@ export interface PaprCatalogSnapshot {
   tier1: MemoryObject[];
 }
 
+/**
+ * Machine-generated memories that should never headline the catalog.
+ *
+ * On a live snapshot 36/45 tier items were `conversation_batch` summaries —
+ * mostly from job sessions — plus job DB snapshots and daily logs. They are
+ * useful for deep recall via search_agent_memory but score ~0 against any
+ * human message and crowd out the goals/decisions/learnings the tiers exist
+ * to surface. Filtered here, at the read side, so the server contract is
+ * unchanged.
+ */
+const CATALOG_NOISE_CONTENT_TYPES = new Set([
+  "conversation_batch",
+  "job_database_snapshot",
+  "job_database_summary",
+  "daily_log",
+]);
+
+export function isCatalogNoiseMemory(memory: MemoryObject): boolean {
+  const cm = (memory.customMetadata ?? {}) as Record<string, unknown>;
+  const contentType =
+    (cm.content_type as string | undefined) ??
+    (cm.source_type as string | undefined) ??
+    (memory as { source_type?: string }).source_type;
+  if (contentType && CATALOG_NOISE_CONTENT_TYPES.has(contentType)) {
+    return true;
+  }
+  const chatId = cm.chatId as string | undefined;
+  if (typeof chatId === "string" && chatId.startsWith("job:")) {
+    return true;
+  }
+  const content = (memory.content ?? "").trimStart();
+  return content.startsWith("# Conversation Batch");
+}
+
+export function filterCatalogNoise(memories: MemoryObject[]): MemoryObject[] {
+  return memories.filter((m) => !isCatalogNoiseMemory(m));
+}
+
 function truncateText(text: string, maxChars: number): string {
   if (text.length <= maxChars) {
     return text;
@@ -332,8 +370,15 @@ export async function fetchPaprCatalogSnapshot(
       },
       { timeout: CATALOG_SYNC_TIERS_TIMEOUT_MS },
     );
-    const tier0 = tiersResult.tier0;
-    const tier1 = tiersResult.tier1;
+    const tier0 = filterCatalogNoise(tiersResult.tier0);
+    const tier1 = filterCatalogNoise(tiersResult.tier1);
+    const dropped =
+      tiersResult.tier0.length + tiersResult.tier1.length - tier0.length - tier1.length;
+    if (dropped > 0) {
+      console.log(
+        `[MemoryGraphCatalog] Filtered ${dropped} machine-generated tier item(s) from catalog`,
+      );
+    }
     if (tier0.length === 0 && tier1.length === 0) {
       return null;
     }

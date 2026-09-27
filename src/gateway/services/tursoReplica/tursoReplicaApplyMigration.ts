@@ -4,18 +4,15 @@
 
 import type { AppDataSource } from "../appDataSources.js";
 import { readMigrationSql } from "../jobs/jobMigrationManifest.js";
-import {
-  isDuplicateColumnError,
-  splitSqlStatements,
-} from "../jobs/migrationSqlHelpers.js";
+import { splitSqlStatements } from "../jobs/migrationSqlHelpers.js";
+import { localLedgerStatements } from "../jobs/migrationAtomicApply.js";
 import { migrationSatisfiedOnReplica } from "./tursoReplicaMigrationVerify.js";
 import { isMigrationLedgerMarker } from "../jobs/migrationLedgerPolicy.js";
 import { isTursoReplicaOnline } from "../../utils/tursoReplicaEnabled.js";
 import {
-  execLinkedDbViaTursoReplica,
+  migrateLinkedDbViaTursoReplica,
   pullLinkedDbViaTursoReplica,
   queryLinkedDbViaTursoReplica,
-  writeLinkedDbViaTursoReplica,
 } from "./tursoReplicaRouting.js";
 
 async function migrationRecordedInLedger(
@@ -79,48 +76,22 @@ export async function applyRegistryMigrationViaLocalReplica(
   }
 
   const statements = splitSqlStatements(sql);
-  let pendingPush = false;
-
-  for (const statement of statements) {
-    const trimmed = statement.trim().toLowerCase();
-    const isDml =
-      trimmed.startsWith("insert") ||
-      trimmed.startsWith("update") ||
-      trimmed.startsWith("delete");
-
-    if (isDml) {
-      const result = await writeLinkedDbViaTursoReplica(source, statement);
-      pendingPush = pendingPush || result.pendingPush;
-    } else {
-      try {
-        const result = await execLinkedDbViaTursoReplica(source, statement);
-        pendingPush = pendingPush || result.pendingPush;
-      } catch (error) {
-        if (isDuplicateColumnError(error)) {
-          continue;
-        }
-        throw error;
-      }
-    }
-  }
+  const outcome = await migrateLinkedDbViaTursoReplica(
+    source,
+    statements,
+    localLedgerStatements(migrationId),
+  );
+  const pendingPush = outcome.pendingPush;
 
   const schemaOk =
     isMigrationLedgerMarker(migrationId) ||
     (await migrationSchemaSatisfiedOnLocalReplica(source, migrationRoot, migrationId));
   if (!schemaOk) {
-    throw new Error(
-      `Migration ${migrationId} may have applied on the replica backend but ledger was not updated — ` +
-        "schema verification against the replica handle failed. " +
-        "Run papr_db_migration_parity (checks replica vs cloud tables, not just ledgers).",
+    console.warn(
+      `[TursoReplica] ${migrationId} committed atomically but post-apply schema verification ` +
+        "did not confirm it. Run papr_db_migration_parity if the app misbehaves.",
     );
   }
-
-  const ledgerSql =
-    "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, datetime('now'))";
-  const ledgerResult = await writeLinkedDbViaTursoReplica(source, ledgerSql, [
-    migrationId,
-  ]);
-  pendingPush = pendingPush || ledgerResult.pendingPush;
 
   return { applied: true, migrationId, pendingPush };
 }

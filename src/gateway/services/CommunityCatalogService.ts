@@ -37,6 +37,8 @@ import { slugifyPublishTitle } from "./cloudPublishDrift.js";
 import { getAppPublishPrefs, hasStoredAppPublishPrefs } from "./cloudPublishPrefs.js";
 import { readAppRequirements } from "./cloudAppRequirements.js";
 import { resolveCatalogEntryTags } from "../../core/utils/catalogTags.js";
+import { catalogCardLine } from "../../core/utils/catalogAutomation.js";
+import { sanitizeScheduleLabel } from "../../core/utils/jobScheduleLabel.js";
 import { readPlatformCatalogManifest } from "./syncV3/platformCatalogManifest.js";
 
 interface CatalogPlatformMeta {
@@ -77,6 +79,10 @@ interface CloudCommunityApiEntry {
   codeInstallable?: boolean;
   visibility?: string;
   publisherUserId?: string;
+  /** Distinct users who installed this app (memory server lineage). */
+  installCount?: number;
+  /** Last publish time (ISO 8601). */
+  updatedAt?: string;
   catalogRequirements?: Array<{
     name: string;
     service: string;
@@ -90,6 +96,7 @@ interface CloudCommunityApiEntry {
   }>;
   catalogPlatform?: string[];
   catalogRequiresDesktop?: boolean;
+  catalogCategory?: string;
   catalogAutomation?: {
     scheduleLabel: string;
     scheduledJobCount: number;
@@ -123,6 +130,7 @@ function loadLocalAppMeta(
     description: string;
     icon?: string;
     tags?: string[];
+    updatedAt?: string;
   }
 > {
   const meta = new Map<
@@ -132,6 +140,7 @@ function loadLocalAppMeta(
       description: string;
       icon?: string;
       tags?: string[];
+      updatedAt?: string;
     }
   >();
   try {
@@ -144,6 +153,7 @@ function loadLocalAppMeta(
           icon?: string;
           ownerUserId?: string;
           tags?: string[];
+          updatedAt?: string;
           organizationId?: string;
           namespaceId?: string;
         }>
@@ -156,6 +166,7 @@ function loadLocalAppMeta(
             icon?: string;
             ownerUserId?: string;
             tags?: string[];
+            updatedAt?: string;
             organizationId?: string;
             namespaceId?: string;
           }
@@ -170,6 +181,7 @@ function loadLocalAppMeta(
         description: app.description?.trim() || "",
         icon: app.icon,
         tags: app.tags,
+        updatedAt: app.updatedAt,
         organizationId: app.organizationId,
         namespaceId: app.namespaceId,
       });
@@ -314,12 +326,21 @@ function cloudEntryFromApi(
     shareLinkEnabled: entry.shareLinkEnabled,
     communityCatalogListed: entry.communityCatalogListed,
     publisherUserId: entry.publisherUserId,
+    ...(typeof entry.installCount === "number"
+      ? { installCount: entry.installCount }
+      : {}),
+    ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
+    ...(entry.catalogCategory ? { category: entry.catalogCategory } : {}),
     catalogAutomation: entry.catalogAutomation
       ? {
-          scheduleLabel: entry.catalogAutomation.scheduleLabel,
+          scheduleLabel: sanitizeScheduleLabel(entry.catalogAutomation.scheduleLabel),
           scheduledJobCount: entry.catalogAutomation.scheduledJobCount,
           hasAgentJob: entry.catalogAutomation.hasAgentJob ?? false,
-          cardLine: entry.catalogAutomation.cardLine,
+          // Re-derive: lines stored by older publishes contain raw cron.
+          cardLine: catalogCardLine(
+            entry.catalogAutomation.scheduledJobCount,
+            entry.catalogAutomation.scheduleLabel,
+          ),
         }
       : undefined,
   };
@@ -847,6 +868,7 @@ async function buildLocalCloudEntriesForSharing(
       codeInstallable: communityCodeInstallable(prefs.codeAccess ?? "off"),
       liveViewable: true,
       isOwned: true,
+      ...(appMeta.updatedAt ? { updatedAt: appMeta.updatedAt } : {}),
       visibility: teamShared ? "team" : "public_read",
       shareLinkEnabled: sharing.externalLink !== "off",
       requirements:

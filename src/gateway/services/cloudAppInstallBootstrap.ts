@@ -9,7 +9,12 @@ import { existsSync, statSync } from "fs";
 import fs from "fs/promises";
 import Database from "better-sqlite3";
 import path from "path";
-import { getPaprAppsRoot, getPaprJobsRoot } from "../../core/utils/paprRoot.js";
+import {
+  getPaprAppsRoot,
+  getPaprDataDir,
+  getPaprJobsRoot,
+} from "../../core/utils/paprRoot.js";
+import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
 import {
   parseDataSourcesFile,
   type AppDataSource,
@@ -88,6 +93,34 @@ function countUserTables(dbPath: string): number {
   }
 }
 
+/** Health check for a cloud-direct source; null when the source is not cloud-direct. */
+async function probeCloudDirectSource(
+  source: AppDataSource,
+  localPath: string,
+): Promise<{ reachable: boolean; userTableCount: number } | null> {
+  const { isCloudDirectSource, cloudDirectQuery } = await import(
+    "./cloudDirect/cloudDirectDb.js"
+  );
+  const probe = { ...source, dbPath: localPath };
+  if (!isCloudDirectSource(probe)) {
+    return null;
+  }
+  try {
+    const result = await cloudDirectQuery(
+      probe,
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name NOT LIKE 'sqlite_%'
+         AND name NOT LIKE '_papr_%'
+         AND name NOT LIKE 'turso_%'
+         AND name NOT IN ('schema_migrations', 'job_runs', 'job_events')`,
+    );
+    return { reachable: true, userTableCount: result.count };
+  } catch {
+    return { reachable: false, userTableCount: 0 };
+  }
+}
+
 function mapTursoPullOutcome(
   summary: SyncSummary | null,
   syncKey: string,
@@ -129,11 +162,15 @@ function mapTursoPullOutcome(
 async function applyMigrationsForSource(
   source: AppDataSource,
   localPath: string,
-  options?: { localOnly?: boolean },
+  options?: { crossWorkspace?: boolean },
 ): Promise<string[]> {
   const label = `cloud-install-migration:${source.alias ?? localPath}`;
   return retryWhileReplicaBusy(async () => {
-    const migrationOptions = options?.localOnly
+    // Only a cross-workspace copy bypasses the engine: the registry singleton
+    // belongs to the *current* workspace, not the target one. Every other
+    // install (fork included) migrates through the engine its record names —
+    // forcing forks onto better-sqlite3 is what broke LinkedIn Outreach.
+    const migrationOptions = options?.crossWorkspace
       ? { bypassReplicaEngine: true as const }
       : undefined;
     if (source.dbId && !source.jobId) {
@@ -219,7 +256,7 @@ async function bootstrapLinkedSource(
   if (!options?.tursoPullOnly && !options?.skipMigrations) {
     try {
       migrationsApplied = await applyMigrationsForSource(source, localPath, {
-        localOnly: options?.localOnly,
+        crossWorkspace: Boolean(options?.paprHome?.trim()),
       });
     } catch (error) {
       errors.push(
@@ -250,14 +287,18 @@ async function bootstrapLinkedSource(
   }
 
   // Plan A replica files: never open with better-sqlite3 (even readonly) on pull-only track sync.
-  const userTableCount = options?.tursoPullOnly
-    ? -1
-    : countUserTables(localPath);
-  const writable = isLocalDbReadable(localPath);
+  // Cloud-direct has no local file: ask the primary instead.
+  const cloudDirect = await probeCloudDirectSource(source, localPath);
+  const userTableCount = cloudDirect
+    ? cloudDirect.userTableCount
+    : options?.tursoPullOnly
+      ? -1
+      : countUserTables(localPath);
+  const writable = cloudDirect ? cloudDirect.reachable : isLocalDbReadable(localPath);
 
   if (!writable && errors.length === 0) {
     errors.push(
-      `Local database not readable at ${localPath} after bootstrap.`,
+      `Database "${source.alias}" is not reachable after setup (${localPath}).`,
     );
   }
 
@@ -403,9 +444,7 @@ export async function bootstrapInstalledAppDatabases(
         continue;
       }
       try {
-        const applied = await applyMigrationsForSource(source, localPath, {
-          localOnly: false,
-        });
+        const applied = await applyMigrationsForSource(source, localPath);
         migrationsByAlias.set(source.alias, applied);
       } catch (error) {
         errors.push(
@@ -561,6 +600,54 @@ export function shouldOfferInstallAgentSetup(
   );
 }
 
+/** Real workspace paths (org/namespace aware) — never a hard-coded ~/Papr. */
+function resolveSetupPromptPaths(): {
+  registry: string;
+  databasesDir: string;
+  jobsDir: string;
+  dataSources: string;
+} {
+  const dataDir = getPaprDataDir();
+  return {
+    registry: path.join(dataDir, "databases.json"),
+    databasesDir: path.join(dataDir, "databases"),
+    jobsDir: getPaprJobsRoot(),
+    dataSources: path.join(getPaprAppsRoot(), "{appId}", "data-sources.json"),
+  };
+}
+
+function storageModeForPrompt(db: LinkedDbBootstrapResult): {
+  label: string;
+  instruction: string;
+} {
+  let syncMode: string | undefined;
+  try {
+    const record = db.dbId ? getDatabaseRegistryService().getById(db.dbId) : undefined;
+    syncMode = record?.syncMode;
+  } catch {
+    syncMode = undefined;
+  }
+  if (syncMode === "cloud-direct") {
+    return {
+      label: "cloud-direct",
+      instruction:
+        "Lives only in Papr Cloud (no local file by design — this device has no sync engine). " +
+        "A missing local file is expected; check reachability/sign-in instead.",
+    };
+  }
+  if (syncMode === "replica") {
+    return {
+      label: "replica",
+      instruction:
+        "Synced replica managed by the sync engine — use papr_db tools only, never raw sqlite.",
+    };
+  }
+  return {
+    label: "local",
+    instruction: "Local SQLite file.",
+  };
+}
+
 /** Agent prompt when install bootstrap is incomplete or needs manual follow-up. */
 export function buildCloudInstallAgentSetupMessage(input: {
   appTitle: string;
@@ -579,9 +666,10 @@ export function buildCloudInstallAgentSetupMessage(input: {
         (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
         `) was installed but database setup needs attention.`,
     "",
-    "Please complete local setup so reads AND writes work (mini-apps require a local SQLite file; Turso alone is not enough for writes).",
+    "Please finish database setup so the app's reads AND writes work.",
     "",
   ];
+  const paths = resolveSetupPromptPaths();
 
   if (input.linkedJobIds && input.linkedJobIds.length > 0) {
     lines.push(
@@ -601,22 +689,26 @@ export function buildCloudInstallAgentSetupMessage(input: {
   if (input.bootstrap.linkedDbs.length > 0) {
     lines.push("**Linked databases:**");
     for (const db of input.bootstrap.linkedDbs) {
+      const mode = storageModeForPrompt(db);
       lines.push(
-        `- alias "${db.alias}": path=${db.localPath || "(unresolved)"}, ` +
+        `- alias "${db.alias}"${db.dbId ? ` (dbId ${db.dbId})` : ""}: storage=${mode.label}, ` +
+          `path=${db.localPath || "(unresolved)"}, ` +
           `migrations=[${db.migrationsApplied.join(", ") || "none"}], ` +
-          `tables=${db.userTableCount}, turso=${db.tursoPull}, writable=${db.writable}`,
+          `tables=${db.userTableCount}, reachable=${db.writable}`,
       );
+      lines.push(`  ${mode.instruction}`);
     }
     lines.push("");
   }
 
   lines.push(
     "**Do this:**",
-    "1. Inspect data-sources.json and ~/Papr/data/databases.json — hydrate empty dbPath from registry label/slug if needed.",
-    "2. Apply pending migrations under data/databases/{slug}/migrations/*.sql (or Jobs/{id}/migrations for job DBs).",
-    "3. If Turso is available, run pull/sync for this app; if remote is empty, run the linked seed/setup job once.",
-    "4. Verify POST /api/db/write works for the app before telling the user setup is complete.",
-    "5. Open the app tab when done.",
+    `1. Read ${paths.dataSources.replace("{appId}", input.appId)} and the registry at ${paths.registry} — fill an empty dbPath from the registry entry's localPath.`,
+    `2. Apply pending migrations with the papr_db migration tools (they pick the right engine per database). Migration files live in ${paths.databasesDir}/{slug}/migrations/ (job databases: ${paths.jobsDir}/{jobId}/migrations/). Do not open replica or cloud-direct databases with sqlite3 or better-sqlite3.`,
+    "3. Never hard-code a user id in SQL — use {{papr.owner_user_id}}; it is filled in with the database owner when the migration runs.",
+    "4. If a linked seed/setup job exists and the database is empty, run it once.",
+    "5. Verify POST /api/db/write succeeds for this app before telling the user setup is complete, then open the app tab.",
+    "Do not paste API keys or database tokens into chat or files — credentials are fetched by the platform.",
   );
 
   return lines.join("\n");

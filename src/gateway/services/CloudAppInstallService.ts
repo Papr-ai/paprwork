@@ -226,6 +226,8 @@ export class CloudAppInstallService {
     const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
 
     let createdAppId: string | null = null;
+    // Fork databases created by this install — dropped (local + cloud) on rollback.
+    let forkDbIdsForRollback: string[] = [];
 
     try {
       const files = await collectAppFiles(cloned.sourceDir);
@@ -308,6 +310,18 @@ export class CloudAppInstallService {
         });
       }
 
+      // One decision point for how each installed database is stored on this
+      // device (replica / cloud-direct / local), made before any migration runs.
+      const { provisionInstalledDatabases, resetForkDatabaseForRetry } =
+        await import("./installDatabaseProvisioning.js");
+      if (installDbPolicy === "fork_empty") {
+        forkDbIdsForRollback = [...linked.registryDbIds];
+      }
+      await provisionInstalledDatabases({
+        registryDbIds: linked.registryDbIds,
+        installDbPolicy,
+      });
+
       const installWarnings = [...linked.health.warnings];
       if (linked.skippedSparsePaths.length > 0) {
         installWarnings.push(
@@ -340,10 +354,42 @@ export class CloudAppInstallService {
       const deferTursoUntilPublish =
         mode === "fork" ||
         (mode === "track" && input.catalogScope === "global");
-      const bootstrap = await bootstrapInstalledAppDatabases(app.id, {
+      let bootstrap = await bootstrapInstalledAppDatabases(app.id, {
         installDbPolicy,
         deferTursoUntilPublish,
       });
+
+      // Fork: one clean-slate retry (drop the fresh databases, re-provision,
+      // re-migrate). A second failure fails the whole install and rolls back —
+      // never leave a half-initialized database behind for the next attempt.
+      if (bootstrap.errors.length > 0 && installDbPolicy === "fork_empty") {
+        console.warn(
+          `[CloudAppInstall] Bootstrap failed for ${app.id}, retrying once from a clean slate:`,
+          bootstrap.errors.slice(0, 3).join(" | "),
+        );
+        for (const dbId of forkDbIdsForRollback) {
+          await resetForkDatabaseForRetry(dbId);
+        }
+        bootstrap = await bootstrapInstalledAppDatabases(app.id, {
+          installDbPolicy,
+          deferTursoUntilPublish,
+        });
+        if (bootstrap.errors.length > 0) {
+          // Raw SQL/engine detail goes to the log; the user gets one plain
+          // sentence and a clean slate (rollback below removes everything).
+          console.error(
+            `[CloudAppInstall] Database setup failed twice for ${app.id}:`,
+            bootstrap.errors.join(" | "),
+          );
+          throw Object.assign(
+            new Error(
+              `Couldn't set up the database for "${app.title}". Nothing was installed — ` +
+                "please try again. If it keeps failing, the publisher may need to publish a fix.",
+            ),
+            { code: "install_db_setup_failed", status: 422 },
+          );
+        }
+      }
 
       if (bootstrap.errors.length > 0) {
         console.warn(
@@ -443,8 +489,13 @@ export class CloudAppInstallService {
       if (createdAppId) {
         try {
           const appService = getAppService();
+          // confirmed: true — without it deleteApp only returns a preview and
+          // a failed install silently leaves its app, jobs and databases behind.
           await appService.deleteApp(createdAppId, {
+            confirmed: true,
             deleteLinkedJobs: true,
+            deleteRegistryDbIds: forkDbIdsForRollback,
+            deleteRegistryTurso: forkDbIdsForRollback.length > 0,
           });
           console.warn(
             `[CloudAppInstall] Rolled back partial install for app ${createdAppId}`,

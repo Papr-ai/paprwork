@@ -132,7 +132,7 @@ For **per-user isolation**: `create_database({ isolation: "per-user" })` + `atta
 
 Registry DBs sync to Turso. Schema changes **must** use migration files — bash blocks raw `ALTER TABLE` on synced paths.
 
-**Create migrations with `papr_db_create_migration({ dbId, name, sql })`.** The system names the file `NNNN_YYYYMMDDHHMMSS_name.sql` (next number + UTC timestamp) and applies it, so collaborators can't collide on a filename. Don't hand-write migration files or pick numbers; never rename existing ones. (The `write_file` example below shows the resulting layout.)
+**Create migrations with `papr_db_create_migration({ dbId, name, sql })`.** The system names the file `NNNN_YYYYMMDDHHMMSS_name.sql` (next number + UTC timestamp) and applies it, so collaborators can't collide on a filename. Don't hand-write migration files or pick numbers; never rename existing ones. **Never hard-code a user id in migration or seed SQL** — write `'{{papr.owner_user_id}}'`; it's filled with the database owner at apply time (publisher on a team shared DB, the installer on a fork or copy). Your own literal id is converted automatically by `papr_db_create_migration`. (The `write_file` example below shows the resulting layout.)
 
 ```javascript
 write_file({

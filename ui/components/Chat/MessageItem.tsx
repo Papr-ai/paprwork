@@ -31,10 +31,7 @@ import {
 } from "./ToolCallStatus";
 import { PlanCard, parsePlanFromToolResult } from "./PlanCard";
 import { JobStatusCard, parseJobStatusFromToolResult } from "./JobStatusCard";
-import {
-  DelegationCard,
-  parseDelegationFromToolResult,
-} from "./DelegationCard";
+import { DelegationCard } from "./DelegationCard";
 import {
   KeyRequestCard,
   parseKeyRequestFromToolResult,
@@ -45,6 +42,11 @@ import { MessageAttachments } from "./MessageAttachments";
 import "./MessageAttachments.css";
 import { resolveToolCallStatus } from "../../../src/core/utils/interruptedToolResult";
 import { getToolDisplayLabel } from "../../utils/toolDisplay";
+import {
+  delegateTaskArgsFromToolCall,
+  isDelegateTaskInvocation,
+  parseDelegationFromToolCall,
+} from "../../utils/delegationFromToolCall";
 import {
   parseGeneratedMediaGalleryItem,
   type GeneratedMediaGalleryItem,
@@ -327,23 +329,26 @@ function renderSequence(
           }
         }
 
-        // Parse delegate_task – show card when running (no result) OR when finished (with result)
+        // Parse delegate_task (or run_deferred_tool wrapping it) – MiniChat outside Working card
         let delegationData:
           | Parameters<typeof DelegationCard>[0]["data"]
           | null = null;
-        if (toolName === "delegate_task") {
+        if (isDelegateTaskInvocation(toolCall.toolName, toolCall.args)) {
+          const delegateArgs = delegateTaskArgsFromToolCall(
+            toolCall.toolName,
+            toolCall.args,
+          );
           if (toolCall.result) {
-            // Delegation finished – parse result
-            delegationData = parseDelegationFromToolResult(
-              toolName,
+            delegationData = parseDelegationFromToolCall(
+              toolCall.toolName,
               typeof toolCall.result === "string"
                 ? toolCall.result
                 : toolCall.result,
             );
           } else {
-            // Delegation is running – use MiniChatCard if we have jobId from subagent-job-started broadcast.
-            const task = (toolCall.args?.task as string) || "Delegated task";
-            const requestedAgentId = toolCall.args?.useAgentId as
+            const task =
+              (delegateArgs?.task as string) || "Delegated task";
+            const requestedAgentId = delegateArgs?.useAgentId as
               | string
               | undefined;
             const { agentId, agentName } = resolveDelegationAgentDisplay(
@@ -359,9 +364,9 @@ function renderSequence(
               agentId,
               agentName,
               task,
-              context: (toolCall.args?.context as string) || undefined,
+              context: (delegateArgs?.context as string) || undefined,
               status: "running",
-              reportChatId: chatId, // Always set - this is the chat where delegation was initiated
+              reportChatId: chatId,
             };
           }
         }
@@ -977,10 +982,12 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                   >();
 
                   message.toolCalls.forEach((tc, index) => {
-                    if (tc.toolName !== "delegate_task") return;
+                    if (!isDelegateTaskInvocation(tc.toolName, tc.args)) {
+                      return;
+                    }
 
                     if (tc.result) {
-                      const delegationData = parseDelegationFromToolResult(
+                      const delegationData = parseDelegationFromToolCall(
                         tc.toolName,
                         tc.result,
                       );
@@ -1008,8 +1015,13 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                     }
 
                     if (tc.status === "calling") {
-                      const task = (tc.args?.task as string) || "Delegated task";
-                      const requestedAgentId = tc.args?.useAgentId as
+                      const delegateArgs = delegateTaskArgsFromToolCall(
+                        tc.toolName,
+                        tc.args,
+                      );
+                      const task =
+                        (delegateArgs?.task as string) || "Delegated task";
+                      const requestedAgentId = delegateArgs?.useAgentId as
                         | string
                         | undefined;
                       const { agentId, agentName } =
@@ -1019,8 +1031,6 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                           getAgentName,
                         );
                       const jobIdFromStore = subagentJobForChat?.jobId;
-                      // Index, not Date.now(): a timestamp changes on every
-                      // render, remounting the card and dropping its state.
                       const placeholderId =
                         jobIdFromStore || tc.id || `delegation-${index}`;
                       if (!chatId && !jobIdFromStore) return;
@@ -1029,7 +1039,7 @@ const MessageItemInner: React.FC<MessageItemProps> = ({
                         subAgentName: agentName ?? agentId,
                         task,
                         status: "active",
-                        context: (tc.args?.context as string) || undefined,
+                        context: (delegateArgs?.context as string) || undefined,
                         defaultExpanded: false,
                       });
                     }

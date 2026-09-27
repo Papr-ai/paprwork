@@ -435,9 +435,20 @@ describe("copyAppToNamespace", () => {
     const targetRegistry = JSON.parse(
       await fs.readFile(path.join(targetHome, "data", "databases.json"), "utf8"),
     ) as { databases: Record<string, { syncMode?: string }> };
+    // Same storage decision as a fork install, for THIS device — never the
+    // source's mode copied across.
+    const { syncModeForInstalledDatabase } = await import(
+      "../src/gateway/utils/tursoReplicaEnabled.js"
+    );
+    const expectedMode = syncModeForInstalledDatabase({ installDbPolicy: "fork_empty" });
     const forkedRecord = Object.values(targetRegistry.databases)[0];
-    expect(forkedRecord?.syncMode).toBeUndefined();
-    expect(await fs.stat(bootstrapMarkerPath(targetDbPath)).catch(() => null)).toBeNull();
+    expect(forkedRecord?.syncMode).toBe(expectedMode);
+    // Replica/cloud-direct: the cloud side is built on first switch into the
+    // target workspace, which the marker requests.
+    const markerExists = Boolean(
+      await fs.stat(bootstrapMarkerPath(targetDbPath)).catch(() => null),
+    );
+    expect(markerExists).toBe(expectedMode !== undefined);
   });
 
   test("repairs hardcoded Papr paths in copied job commands", async () => {
@@ -584,5 +595,98 @@ describe("copyAppToNamespace", () => {
     ).rejects.toMatchObject({
       code: "same_namespace",
     } satisfies Partial<CopyAppError>);
+  });
+
+  test("failed copy rolls back everything it created in the target workspace", async () => {
+    const appId = "22222222-2222-2222-2222-222222222222";
+    const dbId = "db-rollback";
+    const slug = "rollback-guide";
+    const app: MiniApp = {
+      id: appId,
+      title: "Rollback App",
+      description: "",
+      type: "app",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+    };
+    const sourceHome = await seedNamespace("org-rb", "ns-rb-src", [app], {
+      [appId]: {
+        html: "<h1>RB</h1>",
+        dataSources: serializeDataSourcesFile({
+          sources: [
+            {
+              id: `${dbId}:main`,
+              type: "sqlite",
+              dbId,
+              alias: "main",
+              dbPath: "",
+              tables: [],
+              linkedAt: "2026-01-01T00:00:00.000Z",
+            },
+          ],
+        }),
+      },
+    });
+    const migrationsDir = path.join(sourceHome, "data", "databases", slug, "migrations");
+    await fs.mkdir(migrationsDir, { recursive: true });
+    // Always fails: references a table that never exists.
+    await fs.writeFile(
+      path.join(migrationsDir, "0001_broken.sql"),
+      "INSERT INTO table_that_does_not_exist (x) VALUES (1);",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(sourceHome, "data", "databases.json"),
+      JSON.stringify({
+        version: 1,
+        databases: {
+          [dbId]: {
+            dbId,
+            localPath: path.join(sourceHome, "data", "databases", slug, "data.db"),
+            tursoShortName: "d-rollback",
+            isolation: "shared",
+            status: "active",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+      "utf8",
+    );
+    const targetHome = await seedNamespace("org-rb", "ns-rb-tgt", [], {}, []);
+    const targetRegistryBefore = await fs
+      .readFile(path.join(targetHome, "data", "databases.json"), "utf8")
+      .catch(() => null);
+
+    // Source is active; the target is NOT — the copy must not depend on it.
+    await writeActiveWorkspacePointer(
+      await ensureWorkspaceLayout({ organizationId: "org-rb", namespaceId: "ns-rb-src" }),
+    );
+
+    await expect(
+      copyAppToNamespace({
+        appId,
+        targetOrganizationId: "org-rb",
+        targetNamespaceId: "ns-rb-tgt",
+        sourcePaprHome: sourceHome,
+      }),
+    ).rejects.toMatchObject({ code: "database_bootstrap_failed" });
+
+    const targetApps = await fs.readdir(path.join(targetHome, "apps")).catch(() => []);
+    expect(targetApps).toEqual([]);
+    const registryAfter = JSON.parse(
+      await fs
+        .readFile(path.join(targetHome, "data", "databases.json"), "utf8")
+        .catch(() => targetRegistryBefore ?? '{"databases":{}}'),
+    ) as { databases: Record<string, unknown> };
+    expect(Object.keys(registryAfter.databases)).toEqual([]);
+    const dbDirs = await fs
+      .readdir(path.join(targetHome, "data", "databases"))
+      .catch(() => [] as string[]);
+    expect(dbDirs).toEqual([]);
+    // Source untouched.
+    expect(
+      await fs.stat(path.join(sourceHome, "apps", appId)).then(() => true),
+    ).toBe(true);
   });
 });

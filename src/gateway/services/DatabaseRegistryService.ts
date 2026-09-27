@@ -136,6 +136,15 @@ export function resolveTursoDatabaseNameForSource(
   return null;
 }
 
+/** A local file with real content (promotion / bundle import) — not an empty placeholder. */
+function hasPopulatedFile(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
 let registryInstance: DatabaseRegistryService | null = null;
 
 export class DatabaseRegistryService {
@@ -404,6 +413,11 @@ export class DatabaseRegistryService {
     isolation?: DatabaseIsolation;
     dbId?: string;
     tursoShortName?: string;
+    /**
+     * Caller already decided (cloud install). Omit to let
+     * chooseSyncModeForNewDatabase() decide — the normal case.
+     */
+    syncMode?: DatabaseSyncMode | null;
   }): Promise<DatabaseRecord> {
     const normalizedPath = normalizeDbPath(input.localPath);
     if (isJobScratchDatabasePath(normalizedPath)) {
@@ -425,7 +439,13 @@ export class DatabaseRegistryService {
         ? jobTursoDatabaseName(input.ownerJobId)
         : dbTursoDatabaseName(dbId));
 
-    const syncMode = defaultSyncModeForNewRegistryDb();
+    const syncMode =
+      input.syncMode === null
+        ? undefined
+        : input.syncMode ??
+          defaultSyncModeForNewRegistryDb({
+            hasExistingLocalData: hasPopulatedFile(normalizedPath),
+          });
     const record: DatabaseRecord = {
       dbId,
       localPath: normalizedPath,
@@ -463,8 +483,35 @@ export class DatabaseRegistryService {
         });
       }
     }
+    // cloud-direct needs no provisioning: the Turso primary is created on the
+    // first credential fetch, and there is deliberately no local file.
 
     return record;
+  }
+
+  /**
+   * Set the storage mode on an existing record. Cloud install uses this after
+   * the registry merge (see provisionInstalledDatabase), which then does the
+   * provisioning for the chosen mode.
+   */
+  async assignSyncMode(
+    dbId: string,
+    syncMode: DatabaseSyncMode | undefined,
+  ): Promise<DatabaseRecord | undefined> {
+    const state = this.getState();
+    const record = state.databases[dbId];
+    if (!record || record.status === "tombstone") {
+      return undefined;
+    }
+    const { syncMode: _previous, ...rest } = record;
+    const next: DatabaseRecord = {
+      ...rest,
+      ...(syncMode ? { syncMode } : {}),
+      updatedAt: new Date().toISOString(),
+    };
+    state.databases[dbId] = next;
+    await this.save(state);
+    return next;
   }
 
   async ensureForPath(
@@ -694,6 +741,16 @@ export class DatabaseRegistryService {
             console.warn(
               `[DatabaseRegistry] Skipping job scratch dbPath in data-sources sync: ${normalized}`,
             );
+            continue;
+          }
+          if (
+            source.dbId &&
+            this.getState().databases[source.dbId]?.status === "tombstone"
+          ) {
+            // The app points at a database that was deleted (e.g. an install
+            // rollback that has not removed the app folder yet). Registering
+            // the path again would mint a new id — and on replica devices a
+            // new cloud database — for something that was just cleaned up.
             continue;
           }
           const existing = byPath.get(normalized);

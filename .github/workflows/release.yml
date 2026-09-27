@@ -102,6 +102,7 @@ jobs:
           node scripts/verify-packaged-native-arch.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-mini-app-sdk.mjs "${{ matrix.app_path }}"
           node scripts/verify-packaged-job-sdk.mjs "${{ matrix.app_path }}"
+          node scripts/verify-packaged-turso-sync.mjs "${{ matrix.app_path }}/Contents/Resources" darwin ${{ matrix.arch }}
 
       - name: Cleanup keychain
         if: always()
@@ -160,6 +161,7 @@ jobs:
         run: |
           node scripts/verify-packaged-mini-app-sdk.mjs release/win-unpacked
           node scripts/verify-packaged-job-sdk.mjs release/win-unpacked
+          node scripts/verify-packaged-turso-sync.mjs release/win-unpacked/resources win32 x64
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4

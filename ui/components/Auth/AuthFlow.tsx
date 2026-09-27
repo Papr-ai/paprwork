@@ -14,7 +14,7 @@
  * that report upward — they do not decide what comes next.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { setTelemetryPaprUserId, trackEvent } from "../../lib/telemetry";
 import { useProfileStore } from "../../stores/profileStore";
 import { AuthWall } from "./AuthWall";
@@ -71,6 +71,9 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
    * only remembered per-browser-profile.
    */
   const [alreadyOnboarded, setAlreadyOnboarded] = useState(false);
+  /** Current stage for async callbacks (state updaters aren't a safe read). */
+  const stageRef = useRef(stage);
+  stageRef.current = stage;
   /** Set when the user steps back from recommend → connect. */
   const [returnedToConnect, setReturnedToConnect] = useState(false);
 
@@ -98,11 +101,22 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
     void useProfileStore.getState().loadProfile({ force: true });
     // Only meaningful once we have a session; failures leave it false, which
     // just means a returning user sees the recommend stage again.
-    void fetchRemoteOnboarding().then((remote) => {
-      if (remote?.completed) setAlreadyOnboarded(true);
-    });
+    // Finished onboarding before (on any machine)? Then signing in is the whole
+    // flow — straight into the app. Awaited on purpose: fire-and-forget let
+    // the Connect screen render first, so returning users got re-onboarded.
+    // Soft: offline / unreadable just falls through to the normal flow.
+    const remote = devPreview ? undefined : await fetchRemoteOnboarding();
+    if (remote?.completed) {
+      setAlreadyOnboarded(true);
+      // Org setup still required (e.g. new workspace) — can't skip that.
+      if (stageRef.current !== "org") {
+        transitionTo("completed");
+        onComplete();
+        return;
+      }
+    }
     setStage((current) => (current === "signin" ? "connect" : current));
-  }, []);
+  }, [devPreview, onComplete]);
 
   // Org setup can arrive from either transport; whichever lands first wins
   // and moves us off the sign-in stage.
@@ -157,10 +171,16 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
       <ConnectAIStep
         // Connecting no longer ends setup — the recommend stage does, unless
         // this user already picked their first app on another machine.
-        onDone={() => {
-          // Coming back from recommend (or previewing) means they want the
-          // recommend screen again — never jump straight into the app.
-          if (!alreadyOnboarded || returnedToConnect || devPreview) {
+        onDone={(info) => {
+          // Only a returning, already-onboarded user who breezed through
+          // (provider already connected on this Mac) skips recommendations.
+          // Anyone who actually connected or saved a key HERE goes to
+          // recommend — before, `alreadyOnboarded` alone sent every account
+          // that had ever finished setup straight into the app after a
+          // successful sign-in, which looked like a broken flow.
+          const skipRecommend =
+            alreadyOnboarded && info?.auto === true && !returnedToConnect && !devPreview;
+          if (!skipRecommend) {
             setStage("recommend");
             return;
           }

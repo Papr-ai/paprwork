@@ -19,6 +19,7 @@ import {
   TursoSyncWorkerCrashError,
   isTursoSyncWorkerCrash,
   type TursoSyncWorkerLine,
+  type TursoSyncWorkerMigrateResult,
   type TursoSyncWorkerOp,
   type TursoSyncWorkerOpenSpec,
   type TursoSyncWorkerPullResult,
@@ -74,6 +75,7 @@ export interface SendOptions extends TursoSyncWorkerOpenSpec {
   sql?: string;
   params?: unknown[];
   statements?: TursoSyncWorkerStatement[];
+  ledger?: TursoSyncWorkerStatement[];
   /**
    * Override the default crash policy (retry idempotent ops once after a sidecar reset).
    * `never`: surface the crash immediately.
@@ -179,6 +181,13 @@ export class TursoReplicaSyncWorkerClient {
 
   async exec(options: Omit<SendOptions, "op" | "params" | "statements">): Promise<void> {
     await this.send({ ...options, op: "exec" });
+  }
+
+  /** One migration, atomically (guard + statements + ledger in one transaction). */
+  async migrate(
+    options: Omit<SendOptions, "op" | "sql" | "params">,
+  ): Promise<TursoSyncWorkerMigrateResult> {
+    return (await this.send({ ...options, op: "migrate" })) as TursoSyncWorkerMigrateResult;
   }
 
   async sync(
@@ -459,6 +468,7 @@ export class TursoReplicaSyncWorkerClient {
       sql: options.sql,
       params: options.params,
       statements: options.statements,
+      ledger: options.ledger,
     };
 
     return new Promise<TursoSyncWorkerResult>((resolve, reject) => {

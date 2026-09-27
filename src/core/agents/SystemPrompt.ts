@@ -89,6 +89,7 @@ export class SystemPromptBuilder {
       this.buildCapabilityMatrixSection(),
       this.buildPaprApiDiscoverySection(),
       this.buildToolCallStyleSection(), // Merged with narration
+      this.buildDeferredToolsSection(),
       this.buildAgentDocsSection(),
       this.buildSkillsSection(),
       this.buildApiKeysSection(),
@@ -362,11 +363,12 @@ create_job({
 
 **Agent sees & drives the real Chrome window (after prepare_browser on desktop):**
 - Chrome opens **outside Papr** — passkeys, Google/Apple OAuth, and 2FA work normally
-- **See:** \`browser_snapshot\` (HTML) — not screenshots; parse DOM for selectors
+- **See:** \`browser_snapshot\` — readable page text under headings + numbered elements \`[N]\`; act with \`browser_click({ ref: N })\` / \`browser_type({ ref: N, text })\`. Looking for something specific on a long page? \`browser_snapshot({ goal: "..." })\` returns only the relevant sections/elements (Jev-ranked). \`format: "html"\` only when you truly need raw markup
 - **Act:** \`browser_navigate\`, \`browser_click\`, \`browser_type\`, \`browser_fill_form\`, \`browser_scroll\` (direction/delta), \`browser_test_script\`
 - **Debug:** \`browser_network_logs\`, \`browser_console_logs\`
 - **Wait:** \`browser_navigate\` **automatically pauses** after each navigation (platform-aware — ~5.5s on LinkedIn) so the SPA can render before your next tool. Use \`page_wait_for\` only if scripts still race the page load.
-- **Loop:** snapshot → decide selector → click/type → snapshot again
+- **Loop:** snapshot → pick element ref → click/type → snapshot again (refs change after navigation)
+- **To find information on a website, call \`browser_goto({ url, goal })\` first** (a price, a limit, a policy, a spec, a docs detail). Jev walks the site and returns the answering passages + path in one call. Only fall back to snapshot + click if it returns \`found: false\` (continue from its \`finalUrl\`), or if the task needs you to act on the page (forms, logins, posting, multi-step actions). **Keep looking on your own before answering "not published":** if the passages don't state the specific detail (a number, duration, name), call \`browser_goto\` again from its \`unvisited\` links or the site's docs/help/support site — up to ~3 calls — instead of asking the user whether to continue. Start lookups from the site root (not a page you guessed), and run \`browser_goto\` calls one at a time
 
 **\`prepare_browser\` timed out (60s)?**
 - Desktop Papr only (Gateway must run as Electron child process).
@@ -772,7 +774,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         enabled: has("browser_navigate") || has("browser_snapshot"),
         details:
           "Platform Connections: connect_platform prepare_browser FIRST, then browser_* (Papr Chrome on desktop; headless Playwright + keychain cookies in cloud). " +
-          "Agent sees pages via browser_snapshot (HTML). " +
+          "Agent sees pages via browser_snapshot (page text + numbered elements; goal param for Jev-ranked relevant parts; click by ref). To find information on a website call browser_goto({ url, goal }) FIRST; snapshot+click only if it returns found:false or the task needs actions on the page. " +
           "page_wait_for target=browser: text/selector work on Papr Chrome and headless Playwright; time-only on embedded Electron fallback (Chrome not installed). " +
           "page_wait_for target=mini_app after webview_launch_app. " +
           "browser_scroll scroll-into-view (selector) is Playwright-only — use direction/delta scroll on embedded Electron fallback. " +
@@ -1026,6 +1028,51 @@ argument lists right now, without seeing either result. If yes, batch them.
 **Reading files:** Just call read_file, then show content
 **Creating jobs:** Call create_job + run_job, then read_job_logs
 **Bash commands:** Execute silently, then show output`;
+  }
+
+  /**
+   * How to reach tools whose schemas are withheld for token savings.
+   */
+  private buildDeferredToolsSection(): string {
+    return `# Deferred tools (find_tools + run_deferred_tool)
+
+Most requests include only the **core** tool schemas plus tools whose names/descriptions match the user's message. Everything else is **deferred** — still available, but **not callable by direct name**.
+
+**If you call a deferred tool by its id** (e.g. \`get_delegation_run\`, \`register_schema\`, \`delegate_task\`) **without it being in your visible tool list**, the gateway returns **Tool not found**. That is expected — use the dispatcher path below.
+
+## Required path for deferred tools
+
+1. **Optional:** \`find_tools({ query: "what you need" })\` — tool name or task description (e.g. \`"delegate_task"\`, \`"get_delegation_run"\`, \`"register memory schema"\`). Returns full argument schemas for matches.
+2. **Execute:** \`run_deferred_tool({ tool_name: "<exact tool id>", arguments: { ... } })\` — \`arguments\` is the **same object** you would pass to that tool if it were visible (not wrapped again).
+
+**When a tool IS visible** in your tool list, call it **directly** — do not use \`run_deferred_tool\`.
+
+## Delegation (often deferred)
+
+Sub-agent tools (\`list_sub_agents\`, \`delegate_task\`, \`get_delegation_run\`, \`list_delegation_runs\`) are frequently deferred. Use \`run_deferred_tool\` for each step:
+
+\`\`\`javascript
+run_deferred_tool({ tool_name: "list_sub_agents", arguments: {} })
+run_deferred_tool({
+  tool_name: "delegate_task",
+  arguments: {
+    useAgentId: "product-architect",
+    task: "...",
+    context: "...",
+  },
+})
+// Save runId from the result, then poll until completed:
+run_deferred_tool({
+  tool_name: "get_delegation_run",
+  arguments: { runId: "<id from delegate_task>" },
+})
+\`\`\`
+
+The **MiniChat / DelegationCard** still appears when you delegate via \`run_deferred_tool\` wrapping \`delegate_task\`. Do **not** bash/sleep to poll — use \`get_delegation_run\` through \`run_deferred_tool\`.
+
+## Other common deferred tools
+
+Same pattern for cloud PR tools, schema registration, Stripe \`connect_service\`, etc. — \`find_tools\` then \`run_deferred_tool\`. One discovery call can cover several related tools; batch independent \`run_deferred_tool\` calls in one step when arguments do not depend on each other.`;
   }
 
   /**
@@ -2163,19 +2210,15 @@ api_key = "\${OPENAI_API_KEY}"  # This will NOT be substituted!
 
 ## Non-negotiable order (new mini-app)
 
-\`\`\`
-1. list_sub_agents()
-2. delegate_task({
-     useAgentId: "product-architect",
-     task: "Product brief + Paprwork architecture for: [one-sentence user goal]",
-     context: "Constraints, existing apps/jobs, data sources, brand..."
-   })
-3. Wait for delegation to complete (MiniChat card or get_delegation_run)
+1. \`list_sub_agents()\` — if deferred: \`run_deferred_tool({ tool_name: "list_sub_agents", arguments: {} })\`
+2. \`delegate_task({ useAgentId: "product-architect", task, context })\` — if deferred: same fields inside \`run_deferred_tool({ tool_name: "delegate_task", arguments: { ... } })\`
+3. Wait for completion (MiniChat card); poll with \`get_delegation_run\` (via \`run_deferred_tool\` when deferred)
 4. Present brief → user approves Phase 1 scope
-5. create_plan (from approved Phase 1 — NOT before step 2 completes)
-6. create_app / create_job / build
-7. validate_app + webview for UI
-\`\`\`
+5. \`create_plan\` (from approved Phase 1 — NOT before step 2 completes)
+6. \`create_app\` / \`create_job\` / build
+7. \`validate_app\` + webview for UI
+
+(See **Deferred tools** when sub-agent tools are not in your visible tool list.)
 
 **delegate_task parameter rules (strict — wrong names fail with retry hint):**
 - **Required field:** \`useAgentId\` — exact spelling, camelCase
@@ -2228,7 +2271,7 @@ delegate_task({
 - **V3 / Plan A sync:** Two DB tiers only — **replica** (desktop embedded sync) and **cloud** (Turso primary). Schema via \`papr_db_apply_migration\`; rows via replica push.
 
 **Plan A cloud DB (Product Architect must specify when linked DBs + cloud sync):**
-- List each schema change in §2 Shared SQLite. **Create migrations with \`papr_db_create_migration({ dbId, name, sql })\`** — the system assigns the filename (\`NNNN_YYYYMMDDHHMMSS_name.sql\`) and applies it. Never write migration files or pick numbers/timestamps yourself; never rename existing ones.
+- List each schema change in §2 Shared SQLite. **Create migrations with \`papr_db_create_migration({ dbId, name, sql })\`** — the system assigns the filename (\`NNNN_YYYYMMDDHHMMSS_name.sql\`) and applies it. Never write migration files or pick numbers/timestamps yourself; never rename existing ones. Never hard-code a user id in SQL — use \`'{{papr.owner_user_id}}'\` (filled with the DB owner at apply time).
 - Schema path: \`papr_db_create_migration({ dbId, name, sql })\` (re-apply existing files with \`papr_db_apply_migration\`) — replica apply → Turso primary (HTTP) → pull align (never DDL via replica push)
 - Row path: \`/api/db/write\` or job \`$PAPR_DB_*\` — DML only; Publish / Publish changes / \`push_cloud_sync({ appId })\` for git + replica push
 - Schema recovery: \`papr_db_migration_parity\` → \`papr_db_reconcile_sync\` (\`repair_sidecar_wedge\`, \`pull_and_align\`, \`dedupe_migration_ledger\` for legacy \`0001_foo\` + \`0001_foo.sql\` duplicates) or explicit \`papr_db_apply_migration_replica\` + \`papr_db_apply_migration_cloud\`. Row recovery (in order): \`repair_cloud_sync({ strategy: 'pull' })\` → \`papr_db_reconcile_sync({ action: 'repair_sidecar_wedge' })\` (auto full reseed if WAL I/O persists) → \`repair_cloud_sync({ strategy: 'accept_cloud' })\` only when Turso has the rows you need (wipes unpushed local data). **Local has rows, Turso empty** (cross-namespace copy, mistaken \`bootstrap_remote\`, stale sidecars): restore \`data.db\` from \`.pre-replica.bak\` / \`.sync-backup\` if needed → strip replica sidecars → \`papr_db_apply_migration_cloud\` + \`papr_db_push\` — **not** \`bootstrap_remote\` (reseed wipes local when Turso stays empty). **not** \`merge_lww\` (deprecated; only rebases ledger)
@@ -2270,7 +2313,7 @@ Paprwork has **three separate ways** to run AI. Pick the right one **before** bu
 
 **When:** One-off builder work in chat: product brief, research, code review, "score this while I'm building."
 
-**How:** \`list_sub_agents()\` → \`delegate_task({ useAgentId, task, context })\` → \`get_delegation_run({ runId })\` when done.
+**How:** \`list_sub_agents\` → \`delegate_task\` → \`get_delegation_run({ runId })\` when done. When those tools are **deferred**, use \`run_deferred_tool\` for each (see **Deferred tools**).
 
 **NOT for:** End-user features inside a published mini-app. **NOT for:** Testing embedded app chat — that is path 3.
 
@@ -2367,11 +2410,11 @@ See \`docs/APP_AGENT_CHAT.md\` and \`read_file({ path: "src/resources/agent-docs
 - Relevant prior findings
 
 **Getting delegation results (main agent):**
-- \`delegate_task\` returns immediately with \`{ id: runId, status: "running" }\` — **save that id**
-- When done: \`get_delegation_run({ runId: "<id from delegate_task>" })\` → full \`resultText\` (large outputs preserved)
+- \`delegate_task\` (or \`run_deferred_tool\` wrapping it) returns immediately with \`{ id: runId, status: "running" }\` — **save that id**
+- When done: \`get_delegation_run({ runId })\` — via \`run_deferred_tool\` when deferred → full \`resultText\` (large outputs preserved)
 - Or wait for the **delivered assistant message** in this chat (auto-deliver on job complete when \`deliver: { channel: "chat" }\`)
-- **You are auto-notified** when a sub-agent delegation finishes — post a user-facing summary immediately; point them to expand the sub-agent delegation card on the message where you called \`delegate_task\` for the full document
-- Do **NOT** grep disk, sqlite, or bash-hunt for delegation output — use \`get_delegation_run\`
+- **You are auto-notified** when a sub-agent delegation finishes — post a user-facing summary immediately; point them to expand the sub-agent delegation card on the message where you delegated for the full document
+- Do **NOT** grep disk, sqlite, bash/sleep, or hunt for delegation output — use \`get_delegation_run\` through the deferred path if needed
 
 **Sub-agent delivery options:**
 1. **Final assistant message** (default) — full text auto-delivered to main chat when the job completes
@@ -3352,7 +3395,7 @@ If the UI shell renders but data never loads, the entry script may have failed t
 **Mini-apps — after EVERY \`edit_file\` ($PAPR_HOME/apps/…) / \`edit_app_file_lines\` / \`create_app\` file write:**
 1. \`validate_app({ appId })\` — **esbuild** + syntax/LOC checks + **auto runtime console preview** (fails on JS errors)
 2. Fix ALL errors before any other edits
-3. Optional: \`webview_snapshot\` for visual layout (\`visualState.userWouldSeeBlankUi\`)
+3. Optional: \`webview_snapshot\` — page text + numbered elements + \`visualState.userWouldSeeBlankUi\`. Checking one thing? \`webview_snapshot({ goal: "saved notes list" })\` returns only the relevant parts. Click by \`webview_click({ ref: N })\`
 4. API/DB: \`bash\` + \`curl http://localhost:18789/api/...\`
 
 **Mini-app testing — pick the right tool (CRITICAL):**

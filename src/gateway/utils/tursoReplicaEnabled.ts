@@ -25,11 +25,46 @@ export function tursoReplicaRolloutMode(): TursoReplicaRolloutMode {
 }
 
 /**
- * Turso Sync publishes `@tursodatabase/sync-darwin-arm64` but no darwin-x64 binding yet.
- * Intel Mac must stay on legacy HTTP/libsql sync until upstream ships x64 natives.
+ * Turso Sync engine builds that upstream actually publishes (see
+ * `@tursodatabase/sync` optionalDependencies). Anything not listed — Intel Mac
+ * (darwin-x64), Windows ARM (win32-arm64), musl Linux — has no engine and
+ * uses cloud-direct instead.
+ */
+export const TURSO_SYNC_NATIVE_PACKAGES: Readonly<Record<string, string>> = {
+  "darwin-arm64": "@tursodatabase/sync-darwin-arm64",
+  "win32-x64": "@tursodatabase/sync-win32-x64-msvc",
+  "linux-x64": "@tursodatabase/sync-linux-x64-gnu",
+  "linux-arm64": "@tursodatabase/sync-linux-arm64-gnu",
+};
+
+/** Engine package for a platform/arch pair, or null when upstream ships none. */
+export function tursoSyncNativePackageFor(
+  platform: string = process.platform,
+  arch: string = process.arch,
+): string | null {
+  return TURSO_SYNC_NATIVE_PACKAGES[`${platform}-${arch}`] ?? null;
+}
+
+/**
+ * True when upstream publishes a Turso Sync engine build for this OS/CPU.
+ *
+ * Deliberately a table lookup, not a runtime `require.resolve`: resolution
+ * inside a packaged asar is fragile, and a false negative would silently move
+ * every Apple Silicon user off the replica engine. Presence of the binding in
+ * each packaged build is verified in CI (scripts/verify-packaged-turso-sync.mjs).
+ *
+ * `PAPR_TURSO_REPLICA_NATIVE=0|1` overrides (tests; kill switch if a shipped
+ * binding turns out broken on some machine).
  */
 export function isTursoReplicaNativeAvailable(): boolean {
-  return !(process.platform === "darwin" && process.arch === "x64");
+  const override = process.env.PAPR_TURSO_REPLICA_NATIVE?.trim();
+  if (override === "0") {
+    return false;
+  }
+  if (override === "1") {
+    return true;
+  }
+  return tursoSyncNativePackageFor() !== null;
 }
 
 export function isTursoReplicaSyncFeatureEnabled(): boolean {
@@ -62,20 +97,78 @@ export function isTursoReplicaOnline(): boolean {
   return isTursoReplicaReachable();
 }
 
-/** Default sync mode for newly registered standalone databases. */
-export function defaultSyncModeForNewRegistryDb(): DatabaseSyncMode | undefined {
-  if (!isCloudSyncEnabled() || !isTursoReplicaSyncFeatureEnabled()) {
+/**
+ * The one decision for how a NEW database is stored on this device.
+ *
+ *   replica      — Turso Sync engine available: local replica file, synced.
+ *   cloud-direct — rollout on, cloud sync on, but no engine build for this
+ *                  OS/CPU (Intel Mac, Windows ARM): no local file; every read,
+ *                  write and migration goes to the Turso primary over HTTP.
+ *   undefined    — cloud sync off / rollout off: plain local SQLite (legacy).
+ *
+ * `hasExistingLocalData` keeps a database that already has a populated local
+ * file (promotion, bundle import) on the local path — cloud-direct would
+ * otherwise orphan those rows.
+ */
+export function chooseSyncModeForNewDatabase(options?: {
+  hasExistingLocalData?: boolean;
+}): DatabaseSyncMode | undefined {
+  if (!isCloudSyncEnabled()) {
     return undefined;
   }
   const rollout = tursoReplicaRolloutMode();
-  if (rollout === "force" || rollout === "replica-records") {
+  if (rollout === "off") {
+    return undefined;
+  }
+  if (isTursoReplicaNativeAvailable()) {
     return "replica";
   }
-  return undefined;
+  if (options?.hasExistingLocalData) {
+    return undefined;
+  }
+  if (process.env.PAPR_CLOUD_DIRECT === "0") {
+    return undefined;
+  }
+  return "cloud-direct";
 }
 
+/** Default sync mode for newly registered standalone databases. */
+export function defaultSyncModeForNewRegistryDb(options?: {
+  hasExistingLocalData?: boolean;
+}): DatabaseSyncMode | undefined {
+  return chooseSyncModeForNewDatabase(options);
+}
+
+/**
+ * Sync mode for a database attached by a cloud install.
+ *
+ * Fork / private copy: a brand-new database — same choice as create_database.
+ * Team shared database: keep the publisher's mode where this device can run it;
+ * on a device with no engine, read/write the shared primary directly instead
+ * of silently not syncing (a replica-owned record is declined by legacy sync).
+ */
+export function syncModeForInstalledDatabase(input: {
+  installDbPolicy: "fork_empty" | "shared_primary";
+  publisherSyncMode?: DatabaseSyncMode;
+}): DatabaseSyncMode | undefined {
+  if (input.installDbPolicy === "fork_empty") {
+    return chooseSyncModeForNewDatabase();
+  }
+  const fresh = chooseSyncModeForNewDatabase();
+  if (fresh === "cloud-direct") {
+    return "cloud-direct";
+  }
+  return input.publisherSyncMode;
+}
+
+export function isCloudDirectSyncMode(mode: DatabaseSyncMode | undefined): boolean {
+  return mode === "cloud-direct";
+}
+
+/** New registry DBs whose local file must NOT be created by better-sqlite3. */
 export function shouldDeferRegistrySqliteFileForReplica(): boolean {
-  return defaultSyncModeForNewRegistryDb() === "replica";
+  const mode = defaultSyncModeForNewRegistryDb();
+  return mode === "replica" || mode === "cloud-direct";
 }
 
 /**
@@ -134,9 +227,11 @@ export function shouldUseTursoReplicaForDb(options: {
 /** Log startup guard when Plan A rollout env is active. */
 export function logTursoReplicaStartupGuard(): void {
   if (!isTursoReplicaNativeAvailable()) {
+    const pkg = tursoSyncNativePackageFor();
     console.warn(
-      "[TursoReplica] Plan A replica sync disabled on Intel Mac — no @tursodatabase/sync-darwin-x64. " +
-        "Using legacy Turso HTTP sync.",
+      `[TursoReplica] No Turso Sync engine for ${process.platform}-${process.arch}` +
+        (pkg ? ` (${pkg} not installed)` : " (no upstream build)") +
+        ". New databases use cloud-direct (Turso primary over HTTP) when cloud sync is on.",
     );
     return;
   }

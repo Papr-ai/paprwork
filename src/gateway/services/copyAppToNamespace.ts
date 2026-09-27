@@ -782,6 +782,8 @@ export async function mergeDatabaseRegistryForCopy(input: {
     }
     const existing = merged.databases[dbId];
     const base = stripReplicaSyncFields(existing ?? record);
+    // Fork keeps no storage mode from the publisher: provisionInstalledDatabases
+    // picks one for THIS device (replica / cloud-direct / local) right after merge.
     const { syncMode: _forkOmitSyncMode, ...forkLocalBase } = base;
     merged.databases[targetDbId] = {
       ...(input.forkDbIds ? forkLocalBase : base),
@@ -871,17 +873,36 @@ export async function finalizeCopiedAppResources(
     skipDataSources: true,
   });
 
+  // Same rules as a fork install: schema-only databases, one clean retry,
+  // then a storage mode chosen for this device. Everything is written into the
+  // TARGET workspace's files — it is not the active workspace, so nothing here
+  // may go through the active-workspace registry singleton.
   const { bootstrapCopiedAppDatabasesInWorkspace } = await import(
     "./cloudAppInstallBootstrap.js"
   );
-  const bootstrap = await bootstrapCopiedAppDatabasesInWorkspace(
+  let bootstrap = await bootstrapCopiedAppDatabasesInWorkspace(
     input.appId,
     input.targetPaprHome,
   );
   if (bootstrap.errors.length > 0) {
+    console.warn(
+      `[CopyApp] Database setup failed for ${input.appId}, retrying once from a clean slate:`,
+      bootstrap.errors.slice(0, 3).join(" | "),
+    );
+    await resetCopiedDatabaseFiles(input.targetPaprHome, input.registryDbIds);
+    bootstrap = await bootstrapCopiedAppDatabasesInWorkspace(
+      input.appId,
+      input.targetPaprHome,
+    );
+  }
+  if (bootstrap.errors.length > 0) {
+    console.error(
+      `[CopyApp] Database setup failed twice for ${input.appId}:`,
+      bootstrap.errors.join(" | "),
+    );
     throw new CopyAppError(
       "database_bootstrap_failed",
-      `Database setup after copy failed: ${bootstrap.errors.slice(0, 3).join("; ")}`,
+      "Couldn't set up this app's database in the other workspace. Nothing was copied — please try again.",
     );
   }
   if (bootstrap.warnings.length > 0) {
@@ -890,6 +911,8 @@ export async function finalizeCopiedAppResources(
       bootstrap.warnings.slice(0, 3).join(" | "),
     );
   }
+
+  await assignCopiedDatabaseStorage(input.targetPaprHome, input.registryDbIds);
 
   const { preparePortableReplicaDatabases } = await import(
     "./tursoReplica/portableReplicaBootstrap.js"
@@ -900,6 +923,145 @@ export async function finalizeCopiedAppResources(
     copiedJobIds: input.copiedJobIds,
     reason: "cross_namespace_copy",
   });
+}
+
+function isUnderDir(child: string, parent: string): boolean {
+  const rel = path.relative(path.resolve(parent), path.resolve(child));
+  return rel.length > 0 && !rel.startsWith("..") && !path.isAbsolute(rel);
+}
+
+/** Registry records this copy created (never job-owned ones). */
+async function copiedRegistryRecords(
+  targetPaprHome: string,
+  registryDbIds: readonly string[],
+): Promise<DatabaseRecord[]> {
+  const registry = await readDatabasesRegistry(
+    path.join(targetPaprHome, "data", "databases.json"),
+  );
+  return registryDbIds
+    .map((dbId) => registry.databases[dbId])
+    .filter(
+      (record): record is DatabaseRecord =>
+        Boolean(record) && !record.ownerJobId && Boolean(record.localPath),
+    );
+}
+
+/** Clean slate before the one retry: drop the half-built database files. */
+async function resetCopiedDatabaseFiles(
+  targetPaprHome: string,
+  registryDbIds: readonly string[],
+): Promise<void> {
+  const { removeTursoReplicaLocalFiles } = await import(
+    "./tursoReplica/tursoReplicaFileGuard.js"
+  );
+  for (const record of await copiedRegistryRecords(targetPaprHome, registryDbIds)) {
+    if (isUnderDir(record.localPath, path.join(targetPaprHome, "data"))) {
+      removeTursoReplicaLocalFiles(record.localPath);
+    }
+  }
+}
+
+/**
+ * Pick how each copied database is stored on this device — the same decision
+ * a fork install makes (replica with an engine build, cloud-direct without,
+ * local when cloud sync is off). The cloud side is created when the user
+ * switches to the target workspace (rebootstrapPendingPortableReplicas),
+ * because only then do credentials and the registry belong to it.
+ */
+async function assignCopiedDatabaseStorage(
+  targetPaprHome: string,
+  registryDbIds: readonly string[],
+): Promise<void> {
+  const { syncModeForInstalledDatabase } = await import(
+    "../utils/tursoReplicaEnabled.js"
+  );
+  const syncMode = syncModeForInstalledDatabase({ installDbPolicy: "fork_empty" });
+  if (!syncMode) {
+    return;
+  }
+  const registryPath = path.join(targetPaprHome, "data", "databases.json");
+  const registry = await readDatabasesRegistry(registryPath);
+  const cloudDirectPaths: string[] = [];
+  let changed = false;
+  for (const dbId of registryDbIds) {
+    const record = registry.databases[dbId];
+    if (!record || record.ownerJobId) {
+      continue;
+    }
+    registry.databases[dbId] = {
+      ...record,
+      syncMode,
+      updatedAt: new Date().toISOString(),
+    };
+    changed = true;
+    if (syncMode === "cloud-direct") {
+      cloudDirectPaths.push(record.localPath);
+    }
+  }
+  if (changed) {
+    await writeDatabasesRegistry(registryPath, registry);
+  }
+  if (cloudDirectPaths.length > 0) {
+    // The local file is schema-only scaffolding. On first switch into the
+    // target workspace, rebootstrapPendingPortableReplicas builds the cloud
+    // primary from the migrations and removes the file (marker = "do that").
+    const { writeBootstrapPendingMarker } = await import(
+      "./tursoReplica/tursoReplicaBootstrapMarker.js"
+    );
+    for (const localPath of cloudDirectPaths) {
+      if (await pathExists(localPath)) {
+        writeBootstrapPendingMarker(localPath, "cross_namespace_copy");
+      }
+    }
+  }
+}
+
+/**
+ * Undo a copy that failed part-way: app folder, the databases it created,
+ * and jobs that did not exist in the target before. Never touches anything
+ * the target workspace already had.
+ */
+async function rollbackFailedCopy(input: {
+  targetPaprHome: string;
+  targetAppDir: string;
+  registryDbIds: readonly string[];
+  newJobIds: readonly string[];
+}): Promise<void> {
+  await fs.rm(input.targetAppDir, { recursive: true, force: true });
+
+  const registryPath = path.join(input.targetPaprHome, "data", "databases.json");
+  const records = await copiedRegistryRecords(input.targetPaprHome, input.registryDbIds);
+  if (records.length > 0) {
+    const registry = await readDatabasesRegistry(registryPath);
+    const databasesDir = path.join(input.targetPaprHome, "data", "databases");
+    for (const record of records) {
+      delete registry.databases[record.dbId];
+      const folder = path.dirname(record.localPath);
+      const stillUsed = Object.values(registry.databases).some(
+        (other) => path.dirname(other.localPath) === folder,
+      );
+      if (!stillUsed && isUnderDir(folder, databasesDir)) {
+        await fs.rm(folder, { recursive: true, force: true });
+      }
+    }
+    await writeDatabasesRegistry(registryPath, registry);
+  }
+
+  if (input.newJobIds.length > 0) {
+    const jobsIndexPath = path.join(input.targetPaprHome, "data", "jobs.json");
+    const drop = new Set(input.newJobIds);
+    const jobs = await readJobsIndex(jobsIndexPath);
+    await writeJobsIndex(
+      jobsIndexPath,
+      jobs.filter((job) => !drop.has(job.id)),
+    );
+    for (const jobId of input.newJobIds) {
+      await fs.rm(path.join(input.targetPaprHome, "Jobs", jobId), {
+        recursive: true,
+        force: true,
+      });
+    }
+  }
 }
 
 async function resolveSourceJobDirectory(
@@ -1266,21 +1428,47 @@ export async function copyAppToNamespace(
     );
   }
 
-  const { copiedJobIds, skippedJobIds, copiedRegistryDbSlugs, registryDbIds } =
-    await syncAppLinkedResourcesToTarget({
-      appId: newAppId,
-      sourceAppId,
-      sourcePaprHome,
-      targetPaprHome,
-      installDbPolicy: NAMESPACE_COPY_DB_POLICY,
-    });
+  const jobIdsBefore = new Set(
+    (await readJobsIndex(path.join(targetPaprHome, "data", "jobs.json"))).map(
+      (job) => job.id,
+    ),
+  );
+  let copiedJobIds: string[] = [];
+  let skippedJobIds: string[] = [];
+  let copiedRegistryDbSlugs: string[] = [];
+  let registryDbIds: string[] = [];
+  try {
+    ({ copiedJobIds, skippedJobIds, copiedRegistryDbSlugs, registryDbIds } =
+      await syncAppLinkedResourcesToTarget({
+        appId: newAppId,
+        sourceAppId,
+        sourcePaprHome,
+        targetPaprHome,
+        installDbPolicy: NAMESPACE_COPY_DB_POLICY,
+      }));
 
-  await finalizeCopiedAppResources({
-    targetPaprHome,
-    appId: newAppId,
-    copiedJobIds,
-    registryDbIds,
-  });
+    await finalizeCopiedAppResources({
+      targetPaprHome,
+      appId: newAppId,
+      copiedJobIds,
+      registryDbIds,
+    });
+  } catch (error) {
+    try {
+      await rollbackFailedCopy({
+        targetPaprHome,
+        targetAppDir,
+        registryDbIds,
+        newJobIds: copiedJobIds.filter((jobId) => !jobIdsBefore.has(jobId)),
+      });
+    } catch (rollbackError) {
+      console.error(
+        `[CopyApp] Rollback after failed copy of ${sourceAppId} also failed:`,
+        (rollbackError as Error).message,
+      );
+    }
+    throw error;
+  }
 
   const uniqueTitle = ensureUniqueAppTitle(
     app.title,

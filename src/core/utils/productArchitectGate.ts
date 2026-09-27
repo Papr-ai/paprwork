@@ -11,9 +11,9 @@ export const PRODUCT_ARCHITECT_PLAN_REMINDER =
 export const PRODUCT_ARCHITECT_BLOCK_MESSAGE =
   "⛔ Product Architect required before this step.\n\n" +
   "Every new mini-app (create_app) requires a completed product-architect delegation in this chat — including simple CRUD apps.\n\n" +
-  "1. list_sub_agents()\n" +
-  '2. delegate_task({ useAgentId: "product-architect", task: "Product brief + architecture for: ...", context: "..." })\n' +
-  "3. Wait for delegation to complete (MiniChat card or get_delegation_run)\n" +
+  "1. list_sub_agents() — or run_deferred_tool({ tool_name: \"list_sub_agents\", arguments: {} }) if deferred\n" +
+  '2. delegate_task({ useAgentId: "product-architect", ... }) — or run_deferred_tool({ tool_name: "delegate_task", arguments: { ... } })\n' +
+  "3. Wait for delegation (MiniChat card); poll get_delegation_run via run_deferred_tool when deferred\n" +
   "4. create_plan aligned with the approved brief\n" +
   "5. create_app / create_job\n\n" +
   "Use exact field useAgentId — not agentId or subAgentId.\n\n" +

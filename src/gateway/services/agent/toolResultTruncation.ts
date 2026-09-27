@@ -265,7 +265,7 @@ export function getDefaultHistoryCharLimit(
   return getConfiguredCategoryCharLimit(category, toolName);
 }
 
-function buildTruncationSuffix(
+export function buildTruncationSuffix(
   omitted: number,
   toolCallId: string,
   toolName: string,

@@ -13,6 +13,10 @@ import {
   type ToolResultTruncationSettings,
 } from "../../core/types/toolResultTruncationSettings.js";
 import {
+  mergeExperimentSettings,
+  type ExperimentSettings,
+} from "../../core/types/experimentSettings.js";
+import {
   loadSettings,
   patchSettings,
   type CodeIndexingSettings,
@@ -121,6 +125,18 @@ export async function setupSettingsHandlers(
           success: true,
           data: settings.toolResultTruncation,
         });
+        break;
+      }
+
+      case "settings:save-experiments": {
+        const payload = message.payload as Partial<ExperimentSettings>;
+        const settings = await patchSettings({ experiments: payload });
+        const merged = mergeExperimentSettings(settings.experiments);
+        const { setExperimentSettings } = await import(
+          "../services/experimentSettings.js"
+        );
+        setExperimentSettings(merged);
+        sendResponse(ws, { id: message.id, success: true, data: merged });
         break;
       }
 

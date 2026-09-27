@@ -56,6 +56,10 @@ export interface CommunityCatalogEntry {
   isOwned?: boolean;
   /** Number of local fork/track copies installed from this catalog entry */
   installedForkCount?: number;
+  /** Everyone who installed it (fork or collaborate), from Papr Cloud. */
+  installCount?: number;
+  /** Last time the publisher published this app (ISO 8601). */
+  updatedAt?: string;
   /** Cloud publish visibility (team, public_read, …) when known */
   visibility?: string;
   /** External invite link enabled (unlisted — not Community Apps listed) */
@@ -64,6 +68,8 @@ export interface CommunityCatalogEntry {
   communityCatalogListed?: boolean;
   /** Publisher Papr user id — used to hide own apps from Shared with me */
   publisherUserId?: string;
+  /** Broad category the publisher's app was sorted into (set at publish). */
+  category?: string;
   /** Scheduled job summary (denormalized at publish time) */
   catalogAutomation?: CatalogAutomation;
 }

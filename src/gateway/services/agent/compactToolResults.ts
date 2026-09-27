@@ -6,6 +6,19 @@ import {
 } from "./toolResultTruncation.js";
 import { getToolResultTruncationSettings } from "./toolResultTruncationSettings.js";
 import {
+  assembleJevTrim,
+  settledJevTrim,
+  trimBudgetFor,
+  JEV_TRIM_LOOKBACK_THRESHOLD,
+  type JevTrimRegistry,
+} from "./jevToolResultTrim.js";
+import {
+  recordToolTrimApplied,
+  recordToolTrimFallback,
+  type TurnMetrics,
+} from "./turnMetrics.js";
+import { buildTruncationSuffix } from "./toolResultTruncation.js";
+import {
   COMPACTION_PRESSURE_RATIO,
   MID_TURN_INLINE_FLOOR_CHARS,
   resolveStaleLengthAllowance,
@@ -55,6 +68,13 @@ export interface CompactOpts {
    * unconditionally, as this function always used to.
    */
   historyTokenBudget?: number;
+  /**
+   * JEV_TOOL_TRIM experiment: when a stale bash result has a resolved Jev
+   * plan, replace head+tail with the Jev-selected excerpt. Unresolved / null
+   * plans fall through to head+tail.
+   */
+  jevTrim?: JevTrimRegistry;
+  turnMetrics?: TurnMetrics;
 }
 
 /** Stale batches beyond this many recent tool steps stay full before mid-turn cuts. */
@@ -285,6 +305,45 @@ function truncateObjectStrings(
 /**
  * Check if a message is a tool result (either format).
  */
+/**
+ * Replace a stale pi-ai bash result with its Jev-selected excerpt. Returns
+ * false (and records a fallback when the plan failed) when head+tail should
+ * run instead. Idempotent: a message already trimmed is left alone.
+ */
+function applyJevTrim(msg: any, reg: JevTrimRegistry, metrics?: TurnMetrics): boolean {
+  if (msg.role !== "toolResult" || !Array.isArray(msg.content)) return false;
+  if (msg.__jevTrimmed) return true;
+  const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : undefined;
+  const toolName = typeof msg.toolName === "string" ? msg.toolName : "bash";
+  const plan = settledJevTrim(reg, toolCallId);
+  if (plan === undefined) return false;
+  if (plan === null) {
+    recordToolTrimFallback(metrics);
+    return false;
+  }
+  const part = msg.content.find((p: any) => p.type === "text" && typeof p.text === "string");
+  if (!part) return false;
+  const before: string = part.text;
+  const budget = trimBudgetFor(plan);
+  // Same inline floor as head+tail: short results stay whole either way.
+  if (before.length <= resolveStaleLengthAllowance(before.length, budget)) return false;
+  const suffix = buildTruncationSuffix(before.length, toolCallId ?? "", toolName);
+  const next = assembleJevTrim(plan, budget, suffix);
+  if (!next) {
+    recordToolTrimFallback(metrics);
+    return false;
+  }
+  part.text = next;
+  msg.__jevTrimmed = true;
+  recordToolTrimApplied(metrics, {
+    charsBefore: before.length,
+    charsAfter: next.length,
+    jevMs: plan.jevMs,
+    lookback: plan.lookback >= JEV_TRIM_LOOKBACK_THRESHOLD,
+  });
+  return true;
+}
+
 function isToolResultMessage(msg: any): boolean {
   return msg.role === "toolResult" || msg.role === "tool";
 }
@@ -604,6 +663,10 @@ export function compactStaleToolResults(
     // they're noise once the model has moved past them.
 
     if (i < freshCutoffIdx) {
+      if (o.jevTrim && o.forceStaleMaxLen === undefined && applyJevTrim(msg, o.jevTrim, o.turnMetrics)) {
+        stats.staleResultsTruncated++;
+        continue;
+      }
       // Stale: aggressive truncation (forceStaleMaxLen overrides per-tool limits)
       const staleMaxLen = o.forceStaleMaxLen ?? o.maxStaleLength;
       const shortened = truncateToolMessage(

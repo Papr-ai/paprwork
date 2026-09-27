@@ -4,8 +4,12 @@
 
 import type { MigrationPushConflict } from "./tursoReplicaMigrationConflict.js";
 
-/** Per-database sync path in databases.json */
-export type DatabaseSyncMode = "legacy" | "replica";
+/**
+ * Per-database sync path in databases.json.
+ * cloud-direct: no local file — reads/writes/migrations hit the Turso primary
+ * (devices without a Turso Sync engine build: Intel Mac, Windows ARM).
+ */
+export type DatabaseSyncMode = "legacy" | "replica" | "cloud-direct";
 
 export interface TursoReplicaDatabaseStats {
   cdcOperations: number;

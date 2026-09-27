@@ -17,7 +17,7 @@ Paprwork exposes Jev as the **`jev_decide`** Mastra tool. Jev is **not** a chat 
 
 If the Papr proxy is not deployed (404/503) and BYOK is configured, the client retries direct TypeSafe once.
 
-**Memory server note:** Papr cloud must expose `POST /v1/typesafe/systemone` (forward to TypeSafe with org billing). Until then, use BYOK or deploy the route on `memory.papr.ai`.
+**Memory server:** Implemented in the `memory` repo at `routers/v1/typesafe_routes.py` (`POST /v1/typesafe/systemone`). Auth and upstream TypeSafe share a **pooled** `httpx.AsyncClient` (`routers/v1/ai_proxy_http_clients.py`) — same pattern as `/v1/ai/{openai,anthropic,google,...}` non-streaming and streaming proxies. E2E: `memory/tests/test_ai_proxy_upstream_e2e.py`.
 
 Env overrides:
 
@@ -56,6 +56,22 @@ See `src/core/tools/jevGuardrails.ts`:
 - `src/core/tools/jevGuardrails.ts` — limits
 - `src/core/tools/jevDecide.ts` — Mastra tool
 - `tests/jev-decide-tool.test.ts` — unit tests
+
+## Latency benchmark
+
+Measure where time goes (client wall clock + server `X-Papr-Proxy-Timing` when memory is deployed):
+
+```bash
+export BENCH_PAPR_API_KEY='sk-org-...'   # Papr login key
+export BENCH_PAPR_USER_ID='...'          # optional for --include-turn2
+npm run benchmark:jev-latency
+npm run benchmark:jev-latency -- --include-turn2 --iterations=5
+npm run benchmark:jev-latency -- --include-llm   # one mini OpenAI proxy call (uses credits)
+```
+
+Phases: memory health RTT, minimal `jev_decide`, one catalog batch (12 scores), optional turn-2 (sync tiers, message search, Jev catalog gate), optional LLM proxy.
+
+Memory server splits proxy time into **auth**, **limits**, **upstream** via `routers/v1/proxy_request_timing.py`.
 
 ## Follow-ups
 

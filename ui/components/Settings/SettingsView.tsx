@@ -40,6 +40,9 @@ import {
   readSettingsViewTab,
   writeSettingsViewTab,
 } from "../../utils/settingsViewTabPersistence";
+import { ExperimentRows } from "./ExperimentsSection";
+import { SettingRow } from "./SettingRow";
+import { Toggle } from "./Toggle";
 import "./SettingsView.css";
 
 type SettingsNavItem = {
@@ -723,41 +726,22 @@ function PrivacyTab() {
   return (
     <div className="settings-content">
       <div className="settings-section">
-        <h2 className="settings-section__title">Privacy &amp; Analytics</h2>
-        <p className="settings-section__description">
-          Help us improve Paprwork by sharing anonymous usage data. This data is
-          used to identify bugs, fix crashes, improve performance, and
-          understand which features are most valuable — so we can build a better
-          product for you.
-        </p>
+        <h2 className="settings-section__title">Privacy &amp; experiments</h2>
 
-        <label className="permission-option" style={{ marginTop: "1rem" }}>
-          <input
-            type="checkbox"
+        <SettingRow
+          label="Send anonymous usage data"
+          hint="Feature usage, error reports, performance. Never your messages, files, prompts, or keys."
+          tooltip="Events are anonymous unless you are signed in with Papr. You can turn this off at any time."
+        >
+          <Toggle
             checked={telemetryEnabled}
             disabled={saving}
-            onChange={(e) => void handleTelemetryChange(e.target.checked)}
+            onChange={(v) => void handleTelemetryChange(v)}
+            ariaLabel="Send anonymous usage data"
           />
-          <div className="permission-card">
-            <div className="permission-header">
-              <h4>Help improve Paprwork</h4>
-            </div>
-            <p>
-              Share anonymous usage statistics, crash reports, and performance
-              data to help us fix issues and build better features. You can
-              turn this off at any time.
-            </p>
-          </div>
-        </label>
+        </SettingRow>
 
-        <div style={{ marginTop: "1.25rem", padding: "0.75rem 1rem", background: "var(--bg-secondary, #f5f5f7)", borderRadius: "8px", fontSize: "0.8rem", color: "var(--text-secondary, #666)" }}>
-          <strong style={{ display: "block", marginBottom: "0.35rem" }}>What we collect</strong>
-          <span>Feature usage (e.g. chat started, app created), error reports, and performance metrics.</span>
-          <br /><br />
-          <strong style={{ display: "block", marginBottom: "0.35rem" }}>What we never collect</strong>
-          <span>Your messages, file contents, API keys, prompts, or any personal data. All events are
-          anonymous unless you&apos;re signed in with Papr.</span>
-        </div>
+        <ExperimentRows />
 
         <GatewayDiagnosticsCopySection />
       </div>

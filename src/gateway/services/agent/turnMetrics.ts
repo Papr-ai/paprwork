@@ -59,6 +59,65 @@ export interface TurnMetrics {
   widthNudgesIssued: number;
   deferredToolCount: number;
   deferredToolTokens: number;
+  /**
+   * Memory-catalog experiment (Jev gate). Arm is null when the turn was not
+   * assigned; token fields are what the positional block would have cost vs
+   * what was injected. Set once, on the turn that injects the deferred block.
+   */
+  catalogExperimentArm: "treatment" | "control" | null;
+  catalogPositionalTokens: number | null;
+  catalogInjectedTokens: number | null;
+  catalogJevMs: number | null;
+  /** Tool-result trim experiment (Jev). See jevToolResultTrim.ts. */
+  toolTrimArm: "treatment" | "control" | null;
+  toolTrimApplied: number;
+  toolTrimFallbacks: number;
+  toolTrimLookbackYes: number;
+  toolTrimCharsBefore: number;
+  toolTrimCharsAfter: number;
+  toolTrimJevMs: number;
+}
+
+export function recordToolTrimArm(
+  metrics: TurnMetrics | null | undefined,
+  arm: "treatment" | "control" | null,
+): void {
+  if (metrics) metrics.toolTrimArm = arm;
+}
+
+export function recordToolTrimApplied(
+  metrics: TurnMetrics | null | undefined,
+  rec: { charsBefore: number; charsAfter: number; jevMs: number; lookback: boolean },
+): void {
+  if (!metrics) return;
+  metrics.toolTrimApplied += 1;
+  metrics.toolTrimCharsBefore += rec.charsBefore;
+  metrics.toolTrimCharsAfter += rec.charsAfter;
+  metrics.toolTrimJevMs += rec.jevMs;
+  if (rec.lookback) metrics.toolTrimLookbackYes += 1;
+}
+
+export function recordToolTrimFallback(metrics: TurnMetrics | null | undefined): void {
+  if (metrics) metrics.toolTrimFallbacks += 1;
+}
+
+export function recordCatalogExperiment(
+  metrics: TurnMetrics | null | undefined,
+  rec: {
+    arm: "treatment" | "control" | null;
+    positionalTokens: number;
+    gatedTokens: number | null;
+    jevMs: number | null;
+  } | null,
+): void {
+  if (!metrics || !rec) return;
+  metrics.catalogExperimentArm = rec.arm;
+  metrics.catalogPositionalTokens = rec.positionalTokens;
+  metrics.catalogInjectedTokens =
+    rec.arm === "treatment" && rec.gatedTokens !== null
+      ? rec.gatedTokens
+      : rec.positionalTokens;
+  metrics.catalogJevMs = rec.jevMs;
 }
 
 export function createTurnMetrics(): TurnMetrics {
@@ -78,6 +137,17 @@ export function createTurnMetrics(): TurnMetrics {
     widthNudgesIssued: 0,
     deferredToolCount: 0,
     deferredToolTokens: 0,
+    catalogExperimentArm: null,
+    catalogPositionalTokens: null,
+    catalogInjectedTokens: null,
+    catalogJevMs: null,
+    toolTrimArm: null,
+    toolTrimApplied: 0,
+    toolTrimFallbacks: 0,
+    toolTrimLookbackYes: 0,
+    toolTrimCharsBefore: 0,
+    toolTrimCharsAfter: 0,
+    toolTrimJevMs: 0,
   };
 }
 
@@ -301,6 +371,18 @@ export interface TurnMetricsSummary {
   planCompletedSteps: number;
   /** True only when a plan existed and finished. Null when no plan ran. */
   planCompleted: boolean | null;
+  /** Memory-catalog experiment — see {@link TurnMetrics}. */
+  catalogExperimentArm: "treatment" | "control" | null;
+  catalogPositionalTokens: number | null;
+  catalogInjectedTokens: number | null;
+  catalogJevMs: number | null;
+  toolTrimArm: "treatment" | "control" | null;
+  toolTrimApplied: number;
+  toolTrimFallbacks: number;
+  toolTrimLookbackYes: number;
+  toolTrimCharsBefore: number;
+  toolTrimCharsAfter: number;
+  toolTrimJevMs: number;
 }
 
 export function summarizeTurnMetrics(
@@ -352,6 +434,17 @@ export function summarizeTurnMetrics(
     planTotalSteps: plan?.totalSteps ?? 0,
     planCompletedSteps: plan?.completedSteps ?? 0,
     planCompleted: planCount > 0 ? (plan?.pendingSteps ?? 0) === 0 : null,
+    catalogExperimentArm: metrics.catalogExperimentArm,
+    catalogPositionalTokens: metrics.catalogPositionalTokens,
+    catalogInjectedTokens: metrics.catalogInjectedTokens,
+    catalogJevMs: metrics.catalogJevMs,
+    toolTrimArm: metrics.toolTrimArm,
+    toolTrimApplied: metrics.toolTrimApplied,
+    toolTrimFallbacks: metrics.toolTrimFallbacks,
+    toolTrimLookbackYes: metrics.toolTrimLookbackYes,
+    toolTrimCharsBefore: metrics.toolTrimCharsBefore,
+    toolTrimCharsAfter: metrics.toolTrimCharsAfter,
+    toolTrimJevMs: metrics.toolTrimJevMs,
   };
 }
 

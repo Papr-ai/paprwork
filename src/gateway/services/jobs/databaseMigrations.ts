@@ -19,13 +19,23 @@ import { quoteIdent } from "../tursoSyncBridgeCore.js";
 import {
   isDuplicateColumnError,
   parseAddColumnStatement,
+  parseCreateIndexStatement,
+  parseCreateTableStatement,
+  parseDropStatement,
+  parseRenameTableStatement,
   splitSqlStatements,
 } from "./migrationSqlHelpers.js";
+import {
+  isTransactionControlStatement,
+  parseDropColumnStatement,
+  parseRenameColumnStatement,
+} from "./migrationStatementGuard.js";
 import {
   loadJobMigrationManifest,
   sha256Hex,
 } from "./jobMigrationManifest.js";
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
+import { isCloudDirectDbPath } from "../cloudDirect/cloudDirectDb.js";
 export type PersistedDatabaseKind = "registry" | "job";
 
 export interface PersistedDatabaseLayout {
@@ -130,17 +140,92 @@ export function localTableHasColumn(
   return rows.some((row) => row.name === columnName);
 }
 
+function localObjectExists(
+  db: Database.Database,
+  type: "table" | "index" | "view" | "trigger",
+  name: string,
+): boolean {
+  return Boolean(
+    db
+      .prepare(
+        "SELECT 1 FROM sqlite_master WHERE type = ? AND name = ? COLLATE NOCASE LIMIT 1",
+      )
+      .get(type, name),
+  );
+}
+
+function localColumnExistsCi(db: Database.Database, table: string, column: string): boolean {
+  const rows = db
+    .prepare(`PRAGMA table_info(${quoteIdent(table)})`)
+    .all() as Array<{ name: string }>;
+  const wanted = column.toLowerCase();
+  return rows.some((row) => row.name.toLowerCase() === wanted);
+}
+
+/**
+ * Synchronous twin of migrationStatementGuard.guardStatement for
+ * better-sqlite3 (whose transactions cannot await). Same rules: skip only when
+ * the statement's effect is provably already present.
+ */
+function localStatementAlreadyApplied(db: Database.Database, statement: string): boolean {
+  const sql = statement.replace(/\s+/g, " ").trim();
+  if (isTransactionControlStatement(sql)) {
+    return true;
+  }
+  const renameColumn = /\bRENAME\s+TO\b/i.test(sql) ? null : parseRenameColumnStatement(sql);
+  if (renameColumn) {
+    return (
+      localObjectExists(db, "table", renameColumn.table) &&
+      localColumnExistsCi(db, renameColumn.table, renameColumn.to) &&
+      !localColumnExistsCi(db, renameColumn.table, renameColumn.from)
+    );
+  }
+  const renameTable = parseRenameTableStatement(sql);
+  if (renameTable) {
+    return (
+      localObjectExists(db, "table", renameTable.to) &&
+      !localObjectExists(db, "table", renameTable.from)
+    );
+  }
+  const addColumn = parseAddColumnStatement(sql);
+  if (addColumn) {
+    return (
+      localObjectExists(db, "table", addColumn.table) &&
+      localColumnExistsCi(db, addColumn.table, addColumn.column)
+    );
+  }
+  const dropColumn = parseDropColumnStatement(sql);
+  if (dropColumn) {
+    return (
+      !localObjectExists(db, "table", dropColumn.table) ||
+      !localColumnExistsCi(db, dropColumn.table, dropColumn.column)
+    );
+  }
+  const drop = parseDropStatement(sql);
+  if (drop) {
+    return !localObjectExists(db, drop.objectType, drop.name);
+  }
+  if (/\bIF\s+NOT\s+EXISTS\b/i.test(sql)) {
+    return false; // already idempotent; let SQLite decide
+  }
+  const createTable = parseCreateTableStatement(sql);
+  if (createTable) {
+    return localObjectExists(db, "table", createTable.table);
+  }
+  const createIndex = parseCreateIndexStatement(sql);
+  if (createIndex) {
+    return localObjectExists(db, "index", createIndex.indexName);
+  }
+  return false;
+}
+
 function executeLocalSqlIdempotent(
   db: Database.Database,
   statement: string,
 ): void {
-  const addColumn = parseAddColumnStatement(statement);
-  if (addColumn) {
-    if (localTableHasColumn(db, addColumn.table, addColumn.column)) {
-      return;
-    }
+  if (localStatementAlreadyApplied(db, statement)) {
+    return;
   }
-
   try {
     db.exec(`${statement};`);
   } catch (error) {
@@ -180,7 +265,11 @@ export async function ensureRegistryDatabase(
   });
   await fs.mkdir(path.dirname(layout.dbPath), { recursive: true });
 
-  if (!options?.deferSqliteFile && !isReplicaManagedDbPath(layout.dbPath)) {
+  if (
+    !options?.deferSqliteFile &&
+    !isReplicaManagedDbPath(layout.dbPath) &&
+    !isCloudDirectDbPath(layout.dbPath)
+  ) {
     let db: Database.Database | null = null;
     try {
       db = openDiagnosticDatabase(Database, "services/jobs/databaseMigrations", layout.dbPath);
@@ -225,6 +314,15 @@ export async function applyDatabaseMigrations(
     layout?.kind === "registry" &&
     isReplicaManagedDbPath(dbPath);
 
+  // Cloud-direct: the Turso primary is the only copy — migrate it directly,
+  // one transaction per migration (statements + ledger row together).
+  if (layout?.kind === "registry" && isCloudDirectDbPath(dbPath)) {
+    const { applyCloudDirectMigrations } = await import(
+      "../cloudDirect/cloudDirectMigrations.js"
+    );
+    return applyCloudDirectMigrations(migrationRoot, dbPath);
+  }
+
   if (useReplicaEngine) {
     const { applyReplicaRegistryDatabaseMigrations } = await import(
       "../tursoReplica/tursoReplicaRegistryMigrations.js"
@@ -267,6 +365,20 @@ export async function applyDatabaseMigrations(
     const appliedIds = new Set(listAppliedMigrationIdsReadOnly(db));
     const appliedNow: string[] = [];
 
+    // Fresh registry database: build from the publisher's schema snapshot in
+    // one transaction instead of replaying every migration.
+    const { isMigrationLedgerMarker } = await import("./migrationLedgerPolicy.js");
+    const realApplied = [...appliedIds].filter(
+      (id) => !isMigrationLedgerMarker(id.replace(/\.sql$/, "")),
+    );
+    if (layout?.kind === "registry" && realApplied.length === 0) {
+      const snapshotApplied = await applySnapshotToLocalDb(db, migrationRoot);
+      for (const file of snapshotApplied) {
+        appliedIds.add(file);
+        appliedNow.push(file);
+      }
+    }
+
     for (const fileName of files) {
       if (appliedIds.has(fileName)) {
         continue;
@@ -284,12 +396,24 @@ export async function applyDatabaseMigrations(
           `Migration checksum mismatch for ${fileName}: manifest does not match SQL file`,
         );
       }
-      for (const statement of splitSqlStatements(sql)) {
-        executeLocalSqlIdempotent(db, statement);
-      }
-      db.prepare(
-        "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
-      ).run(fileName, new Date().toISOString());
+      // One migration = one transaction (statements + ledger row). A failure
+      // rolls everything back, so a half-applied migration is never left for
+      // the next run to trip over.
+      const localDb = db;
+      const { substituteMigrationPlaceholders } = await import(
+        "./migrationPlaceholders.js"
+      );
+      const statements = splitSqlStatements(
+        await substituteMigrationPlaceholders(sql, migrationRoot),
+      );
+      localDb.transaction(() => {
+        for (const statement of statements) {
+          executeLocalSqlIdempotent(localDb, statement);
+        }
+        localDb
+          .prepare("INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)")
+          .run(fileName, new Date().toISOString());
+      }).immediate();
       appliedNow.push(fileName);
     }
 
@@ -297,6 +421,43 @@ export async function applyDatabaseMigrations(
   } finally {
     db?.close();
   }
+}
+
+async function applySnapshotToLocalDb(
+  db: Database.Database,
+  migrationRoot: string,
+): Promise<string[]> {
+  const tables = (
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{
+      name: string;
+    }>
+  ).map((row) => row.name);
+  const { hasNoAppTables, planSnapshotInstall } = await import(
+    "./schemaSnapshotApply.js"
+  );
+  if (!hasNoAppTables(tables)) {
+    return [];
+  }
+  const plan = await planSnapshotInstall(migrationRoot);
+  if (!plan) {
+    return [];
+  }
+  const now = new Date().toISOString();
+  db.transaction(() => {
+    for (const statement of plan.statements) {
+      db.exec(statement);
+    }
+    const record = db.prepare(
+      "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+    );
+    for (const file of plan.coveredFiles) {
+      record.run(file, now);
+    }
+  }).immediate();
+  console.log(
+    `[SchemaSnapshot] Built ${migrationRoot} from snapshot (${plan.coveredFiles.length} migrations covered)`,
+  );
+  return plan.coveredFiles;
 }
 
 /** Apply migrations for a registry db path (no-op when layout unrecognized). */
@@ -310,7 +471,8 @@ export async function applyRegistryDatabaseMigrations(
   }
   if (
     !options?.bypassReplicaEngine &&
-    !isReplicaManagedDbPath(layout.dbPath)
+    !isReplicaManagedDbPath(layout.dbPath) &&
+    !isCloudDirectDbPath(layout.dbPath)
   ) {
     await ensureRegistryDatabase(layout.dbPath);
   }

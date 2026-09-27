@@ -10,6 +10,11 @@ import {
   mergeToolResultTruncationSettings,
   type ToolResultTruncationSettings,
 } from "../../core/types/toolResultTruncationSettings.js";
+import {
+  DEFAULT_EXPERIMENT_SETTINGS,
+  mergeExperimentSettings,
+  type ExperimentSettings,
+} from "../../core/types/experimentSettings.js";
 
 export interface ProfileData {
   name: string;
@@ -61,6 +66,7 @@ export interface SettingsData {
   uiPreferences: UIPreferences;
   preferences: PreferencesData;
   toolResultTruncation: ToolResultTruncationSettings;
+  experiments?: ExperimentSettings;
   telemetry?: TelemetryData;
 }
 
@@ -100,6 +106,7 @@ export const DEFAULT_SETTINGS: SettingsData = {
     defaultMemoryScope: "user",
   },
   toolResultTruncation: { ...DEFAULT_TOOL_RESULT_TRUNCATION_SETTINGS },
+  experiments: { ...DEFAULT_EXPERIMENT_SETTINGS },
 };
 
 /** Resolved at call time so per-run PAPR_HOME clones (cloud agent) pick up settings.json. */
@@ -144,6 +151,7 @@ export async function loadSettings(): Promise<SettingsData> {
       toolResultTruncation: mergeToolResultTruncationSettings(
         saved.toolResultTruncation,
       ),
+      experiments: mergeExperimentSettings(saved.experiments),
     });
 
     await syncToolResultTruncationCache(settings.toolResultTruncation);
@@ -168,6 +176,7 @@ export interface SettingsPatch {
   uiPreferences?: Partial<UIPreferences>;
   preferences?: Partial<PreferencesData>;
   toolResultTruncation?: Partial<ToolResultTruncationSettings>;
+  experiments?: Partial<ExperimentSettings>;
   telemetry?: Partial<TelemetryData>;
 }
 
@@ -196,6 +205,13 @@ function applySettingsPatch(
     next.toolResultTruncation = mergeToolResultTruncationSettings({
       ...current.toolResultTruncation,
       ...patch.toolResultTruncation,
+    });
+  }
+  if (patch.experiments) {
+    next.experiments = mergeExperimentSettings({
+      ...current.experiments,
+      ...patch.experiments,
+      flags: { ...current.experiments?.flags, ...patch.experiments.flags },
     });
   }
   if (patch.telemetry && current.telemetry) {

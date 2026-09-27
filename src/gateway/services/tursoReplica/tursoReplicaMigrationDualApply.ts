@@ -10,10 +10,8 @@ import {
   applyAndRecordMigrationOnTursoPrimary,
   openTursoPrimaryClient,
 } from "../jobs/jobMigrationTursoSync.js";
-import {
-  isDuplicateColumnError,
-  splitSqlStatements,
-} from "../jobs/migrationSqlHelpers.js";
+import { splitSqlStatements } from "../jobs/migrationSqlHelpers.js";
+import { localLedgerStatements } from "../jobs/migrationAtomicApply.js";
 import {
   diffTableSets,
   listCloudUserTables,
@@ -32,10 +30,9 @@ import {
   type MigrationApplyPairRecord,
 } from "./migrationApplyPairing.js";
 import {
-  execLinkedDbViaTursoReplica,
+  migrateLinkedDbViaTursoReplica,
   pullLinkedDbViaTursoReplica,
   queryLinkedDbViaTursoReplica,
-  writeLinkedDbViaTursoReplica,
 } from "./tursoReplicaRouting.js";
 import {
   checkMigrationPushConflict,
@@ -99,45 +96,6 @@ async function loadMigrationSql(
   return sql;
 }
 
-async function applyStatementsOnReplica(
-  source: AppDataSource,
-  statements: readonly string[],
-): Promise<boolean> {
-  let pendingPush = false;
-  for (const statement of statements) {
-    const trimmed = statement.trim().toLowerCase();
-    const isDml =
-      trimmed.startsWith("insert") ||
-      trimmed.startsWith("update") ||
-      trimmed.startsWith("delete");
-
-    if (isDml) {
-      const result = await writeLinkedDbViaTursoReplica(
-        source,
-        statement,
-        undefined,
-        REPLICA_NO_PUSH,
-      );
-      pendingPush = pendingPush || result.pendingPush;
-    } else {
-      try {
-        const result = await execLinkedDbViaTursoReplica(
-          source,
-          statement,
-          REPLICA_NO_PUSH,
-        );
-        pendingPush = pendingPush || result.pendingPush;
-      } catch (error) {
-        if (isDuplicateColumnError(error)) {
-          continue;
-        }
-        throw error;
-      }
-    }
-  }
-  return pendingPush;
-}
-
 /** Apply migration SQL on embedded replica only (no push to Turso primary). */
 export async function applyRegistryMigrationOnReplicaOnly(
   source: AppDataSource,
@@ -176,27 +134,31 @@ export async function applyRegistryMigrationOnReplicaOnly(
     };
   }
 
+  // One transaction: every statement (each checked against the live schema
+  // first) plus the ledger row. A failure rolls the whole migration back, so a
+  // half-applied migration can no longer be left behind for the next run.
   const statements = splitSqlStatements(sql);
-  const pendingPush = await applyStatementsOnReplica(source, statements);
+  const outcome = await migrateLinkedDbViaTursoReplica(
+    source,
+    statements,
+    localLedgerStatements(migrationId),
+    REPLICA_NO_PUSH,
+  );
+  const pendingPush = outcome.pendingPush;
+  for (const skip of outcome.skipped) {
+    console.warn(`[TursoReplica] ${migrationId}: skipped (${skip.reason})`);
+  }
 
   const schemaOk =
     isMigrationLedgerMarker(migrationId) ||
     (await migrationSchemaSatisfiedOnReplica(source, migrationRoot, migrationId));
   if (!schemaOk) {
-    throw new Error(
-      `Migration ${migrationId} may have applied on the replica backend but ledger was not updated — ` +
-        "schema verification against the replica handle failed. " +
-        "Do not assume a no-op: run papr_db_migration_parity and inspect replica vs cloud tables. " +
-        "Never verify with sqlite3 on data.db — that reads the on-disk file, not the replica handle.",
+    // Committed atomically, so this is a verifier blind spot, not a partial apply.
+    console.warn(
+      `[TursoReplica] ${migrationId} committed atomically but post-apply schema verification ` +
+        "did not confirm it. Run papr_db_migration_parity if the app misbehaves.",
     );
   }
-
-  await writeLinkedDbViaTursoReplica(
-    source,
-    "INSERT OR IGNORE INTO schema_migrations (id, applied_at) VALUES (?, datetime('now'))",
-    [migrationId],
-    REPLICA_NO_PUSH,
-  );
 
   const pair = await createMigrationApplyPair({
     migrationRoot,

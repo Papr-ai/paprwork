@@ -3140,3 +3140,59 @@ button.about-link {
 .whats-new-list__link {
   margin-top: 4px;
 }
+
+/* ── Compact setting rows (Privacy tab) ─────────────────────────────── */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.setting-row:last-of-type {
+  border-bottom: none;
+}
+.setting-row--nested {
+  padding-left: 20px;
+}
+.setting-row--disabled .setting-row__text {
+  opacity: 0.45;
+}
+.setting-row__text {
+  min-width: 0;
+}
+.setting-row__label {
+  font-size: 0.875rem;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.setting-row__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border: 1px solid currentColor;
+  cursor: help;
+}
+.setting-row__hint {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.setting-row__control {
+  flex-shrink: 0;
+}
+.setting-rows__footer {
+  margin-top: 10px;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}

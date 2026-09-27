@@ -32,8 +32,12 @@ const isUsable = (s: OAuthStatus | null | undefined): boolean =>
   Boolean(s?.connected && (!s.isExpired || s.canRenew));
 
 interface ConnectAIStepProps {
-  /** Called when the user is done here — connected or deliberately skipped. */
-  onDone: () => void;
+  /**
+   * Called when the user is done here — connected or deliberately skipped.
+   * `auto` = we passed straight through because a provider was ALREADY
+   * connected; the user did nothing on this screen.
+   */
+  onDone: (info?: { auto?: boolean }) => void;
   /** Settings → Dev preview: do not auto-close when OAuth is already connected. */
   previewMode?: boolean;
   /**
@@ -136,7 +140,7 @@ export function ConnectAIStep({
       setConnected(next);
       if ((next.anthropic || next.openai) && !previewMode && !returning) {
         markModelConnected();
-        onDone();
+        onDone({ auto: true });
       }
     })();
     return () => {

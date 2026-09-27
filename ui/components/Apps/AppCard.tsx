@@ -3,10 +3,14 @@
  */
 
 import React, { useState, useRef, useCallback, useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./AppCard.css";
+import type { AppStatusLine } from "../../utils/appStatusLine";
+import type { ShareGlyph } from "../../utils/shareGlyph";
+import { ShareAudienceIcon } from "./WebSyncPopover";
 
-type AppStatus = "draft" | "active" | "archived";
+export type AppStatus = "draft" | "active" | "archived";
 
 interface AppCardProps {
   artifact: Artifact;
@@ -22,6 +26,19 @@ interface AppCardProps {
   /** Show "Copy to namespace" when logged into Papr with multiple namespaces. */
   showCopyAction?: boolean;
   onCopy?: () => void;
+  /** One-line health/provenance summary (schedule, last run, live, fork…). */
+  statusLine?: AppStatusLine;
+  /** Who can open it (share-bar glyph) and whether others can copy the code. */
+  share?: ShareGlyph;
+  /** Near-duplicate copies stacked under this card. */
+  duplicateCount?: number;
+  onShowDuplicates?: () => void;
+  /** "Fix" — open the app next to Pen with the failure already described. */
+  onFix?: () => void;
+  /** Broad category (Jev-sorted); null = Other. */
+  category?: string | null;
+  categoryOptions?: string[];
+  onSetCategory?: (category: string | null) => void;
 }
 
 export function AppCard({
@@ -36,30 +53,70 @@ export function AppCard({
   isPublished = false,
   showCopyAction = false,
   onCopy,
+  statusLine,
+  share,
+  duplicateCount = 0,
+  onShowDuplicates,
+  onFix,
+  category = null,
+  categoryOptions = [],
+  onSetCategory,
 }: AppCardProps) {
   const status: AppStatus = artifact.status ?? "active";
   const [menuOpen, setMenuOpen] = useState(false);
+  const [pickingCategory, setPickingCategory] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(artifact.title);
   const titleInputRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const menuPopRef = useRef<HTMLDivElement>(null);
+  // Menu renders in a portal (fixed) so the card's overflow:hidden can't clip it.
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null);
+
+  useEffect(() => {
+    if (!menuOpen) setPickingCategory(false);
+  }, [menuOpen]);
 
   useEffect(() => {
     if (!menuOpen) return;
-    const closeMenu = (event: MouseEvent) => {
-      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false);
+    const place = () => {
+      const r = menuRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const menuH = menuPopRef.current?.offsetHeight ?? 260;
+      const below = r.bottom + 6;
+      const top = below + menuH > window.innerHeight - 8 ? Math.max(8, r.top - menuH - 6) : below;
+      setMenuPos({ top, right: Math.max(8, window.innerWidth - r.right) });
     };
+    place();
+    requestAnimationFrame(place);
+    const closeMenu = (event: MouseEvent) => {
+      const t = event.target as Node;
+      if (!menuRef.current?.contains(t) && !menuPopRef.current?.contains(t)) setMenuOpen(false);
+    };
+    const close = () => setMenuOpen(false);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setMenuOpen(false); };
     document.addEventListener("mousedown", closeMenu);
-    return () => document.removeEventListener("mousedown", closeMenu);
+    document.addEventListener("keydown", onKey);
+    window.addEventListener("resize", close);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      document.removeEventListener("mousedown", closeMenu);
+      document.removeEventListener("keydown", onKey);
+      window.removeEventListener("resize", close);
+      window.removeEventListener("scroll", close, true);
+    };
   }, [menuOpen]);
 
   const formatDate = (dateString: string) => {
     const date = new Date(dateString);
     const now = new Date();
     const diff = now.getTime() - date.getTime();
+    const minutes = Math.floor(diff / 60_000);
     const days = Math.floor(diff / (1000 * 60 * 60 * 24));
 
-    if (days === 0) return "Today";
+    if (minutes < 1) return "Just now";
+    if (minutes < 60) return `${minutes}m ago`;
+    if (days === 0) return `${Math.floor(minutes / 60)}h ago`;
     if (days === 1) return "Yesterday";
     if (days < 7) return `${days} days ago`;
     if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
@@ -267,26 +324,34 @@ export function AppCard({
             >
               {artifact.title}
             </h3>
-            {artifact.cloudLineage ? (
-              <span
-                className={
-                  artifact.cloudLineage.mode === "track"
-                    ? "app-card__cloud-badge app-card__cloud-badge--track"
-                    : "app-card__cloud-badge app-card__cloud-badge--fork"
-                }
-                title={`From cloud: ${artifact.cloudLineage.sourceSlug}`}
-              >
-                {artifact.cloudLineage.mode === "track" ? "Track" : "Fork"}
+            {share ? (
+              <span className="app-card__share">
+                <ShareAudienceIcon
+                  audience={share.audience}
+                  loginAccess={null}
+                  codeAccess={share.codeAccess}
+                />
               </span>
             ) : null}
-            {isPublished && (
+            {artifact.cloudLineage ? (
               <span
-                className="app-card__status-badge app-card__status-badge--published"
-                title="Live on apps.papr.ai"
+                className="app-card__lineage"
+                title={
+                  artifact.cloudLineage.mode === "track"
+                    ? `Linked copy of ${artifact.cloudLineage.sourceSlug}. Your edits go to the owner as proposals.`
+                    : `Forked from ${artifact.cloudLineage.sourceSlug}. Your own app.`
+                }
+                aria-label={artifact.cloudLineage.mode === "track" ? "Linked copy" : "Fork"}
               >
-                Live
+                {/* Same lineage mark as the app's share bar. */}
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="6" cy="5" r="2" />
+                  <circle cx="18" cy="5" r="2" />
+                  <circle cx="12" cy="19" r="2" />
+                  <path d="M6 7v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7M12 11v6" />
+                </svg>
               </span>
-            )}
+            ) : null}
             {status !== "active" && !(isPublished && status === "draft") && (
               <span
                 className={`app-card__status-badge app-card__status-badge--${status}`}
@@ -300,11 +365,68 @@ export function AppCard({
         {artifact.description && (
           <p className="app-card__description">{artifact.description}</p>
         )}
-        <span className="app-card__date">
-          {artifact.lastOpenedAt
-            ? `Opened ${formatDate(artifact.lastOpenedAt).toLowerCase()}`
-            : formatDate(artifact.updatedAt)}
-        </span>
+        {statusLine?.text ? (
+          <span
+            className={`app-card__status-line app-card__status-line--${statusLine.tone}`}
+            title={statusLine.text}
+          >
+            {statusLine.text}
+          </span>
+        ) : null}
+        <div className="app-card__footer">
+          <span className="app-card__date">
+            {artifact.lastOpenedAt
+              ? `Opened ${formatDate(artifact.lastOpenedAt).toLowerCase()}`
+              : `Updated ${formatDate(artifact.updatedAt).toLowerCase()}`}
+          </span>
+          {duplicateCount > 0 ? (
+            <button
+              type="button"
+              className="app-card__stack-chip"
+              onClick={(e) => {
+                e.stopPropagation();
+                onShowDuplicates?.();
+              }}
+            >
+              +{duplicateCount} {duplicateCount === 1 ? "copy" : "copies"}
+            </button>
+          ) : null}
+          {!statusLine || statusLine.action === "Open" ? (
+            <button
+              type="button"
+              className="app-card__action"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen();
+              }}
+            >
+              Open
+            </button>
+          ) : null}
+          {statusLine && statusLine.action !== "Open" ? (
+            <button
+              type="button"
+              className={`app-card__action app-card__action--${statusLine.tone}`}
+              title={
+                statusLine.action === "Fix"
+                  ? "Open with Pen and ask it to fix this"
+                  : undefined
+              }
+              onClick={(e) => {
+                e.stopPropagation();
+                if (statusLine.action === "Fix") {
+                  (onFix ?? onOpen)();
+                } else if (statusLine.action === "Name it") {
+                  startRename(e);
+                } else if (statusLine.action === "Restore") {
+                  onSetStatus?.("active");
+                }
+              }}
+            >
+              {statusLine.action}
+            </button>
+          ) : null}
+        </div>
       </div>
 
       <div className="app-card__menu-wrap" ref={menuRef}>
@@ -319,10 +441,17 @@ export function AppCard({
         >
           <span>•••</span>
         </button>
-        {menuOpen && (
+        {menuOpen && createPortal(
           <div
-            className="app-card__menu"
+            ref={menuPopRef}
+            className="app-card__menu app-card__menu--portal"
             role="menu"
+            style={{
+              position: "fixed",
+              top: menuPos?.top ?? -9999,
+              right: menuPos?.right ?? 0,
+              zIndex: 1000,
+            }}
             onClick={(e) => e.stopPropagation()}
           >
             <button
@@ -343,6 +472,34 @@ export function AppCard({
             >
               Rename
             </button>
+            {onSetCategory && categoryOptions.length > 0 ? (
+              pickingCategory ? (
+                <div className="app-card__menu-cats" role="group" aria-label="Category">
+                  {[...categoryOptions, "Other"].map((c) => {
+                    const value = c === "Other" ? null : c;
+                    return (
+                      <button
+                        key={c}
+                        role="menuitemradio"
+                        aria-checked={category === value}
+                        className={category === value ? "is-current" : undefined}
+                        onClick={() => {
+                          setPickingCategory(false);
+                          setMenuOpen(false);
+                          onSetCategory(value);
+                        }}
+                      >
+                        {c}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <button role="menuitem" onClick={() => setPickingCategory(true)}>
+                  Category: {category ?? "Other"} ›
+                </button>
+              )
+            ) : null}
             <button
               role="menuitem"
               onClick={() => {
@@ -430,7 +587,8 @@ export function AppCard({
             >
               Delete app
             </button>
-          </div>
+          </div>,
+          document.body,
         )}
       </div>
     </div>

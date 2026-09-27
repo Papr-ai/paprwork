@@ -3,12 +3,30 @@
  * Clean, minimal interface focused on app discovery and creation
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
+import { useChat } from "../../hooks/useChat";
+import { openAppToFix } from "../../utils/openAppToFix";
 import { gateway } from "../../src/lib/gateway";
-import { AppCard } from "./AppCard";
+import { type AppStatus } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
+import { AppsSidebar } from "./AppsSidebar";
+import { LibraryPane } from "./LibraryPane";
+import { DuplicateCleanupView } from "./DuplicateCleanupView";
+import {
+  PUBLISH_STATE_CHANGED_EVENT,
+  useAppsHealth,
+} from "../../hooks/useAppsHealth";
+import { buildCreateAppStarters } from "../../utils/createAppStarters";
+import { useAppCategories } from "../../hooks/useAppCategories";
+import {
+  findDuplicateGroups,
+  isLibrarySection,
+  sectionCounts,
+  type AppsSection,
+  type LibrarySection,
+} from "../../utils/appsLibrary";
 import { CreateAppModal } from "./CreateAppModal";
 import { CopyAppModal } from "./CopyAppModal";
 import { DeleteAppModal } from "./DeleteAppModal";
@@ -23,26 +41,33 @@ import {
 } from "../../utils/cloudPublishCache";
 import { fetchCloudPublishState } from "../../utils/cloudPublishApi";
 import {
-  readAppsViewTab,
-  writeAppsViewTab,
-  type AppsViewTab,
+  shareGlyphForPrefs,
+  shareGlyphForPublishState,
+  type ShareGlyph,
+} from "../../utils/shareGlyph";
+import {
+  readAppsSection,
+  toAppsSection,
+  writeAppsSection,
 } from "../../utils/appsViewTabPersistence";
-import { openSkillsTab } from "../../utils/openSkillsTab";
 
-type ViewTab = AppsViewTab;
-type SortOption = "recent" | "name";
-type StatusFilter =
-  | "all"
-  | "favorites"
-  | "active"
-  | "draft"
-  | "archived"
-  | "published";
-export type AppStatus = "draft" | "active" | "archived";
+export type { AppStatus };
 
-const appStatus = (a: Artifact): AppStatus => a.status ?? "active";
 const lastActivity = (a: Artifact) =>
   new Date(a.lastOpenedAt ?? a.updatedAt).getTime();
+
+function relativeWhen(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const minutes = Math.floor(diff / 60_000);
+  const days = Math.floor(diff / 86_400_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  if (days === 0) return `${Math.floor(minutes / 60)}h ago`;
+  if (days === 1) return "yesterday";
+  if (days < 7) return `${days} days ago`;
+  if (days < 30) return `${Math.floor(days / 7)} weeks ago`;
+  return new Date(iso).toLocaleDateString();
+}
 
 export function AppsView() {
   const {
@@ -56,77 +81,23 @@ export function AppsView() {
     loadArtifacts,
   } = useArtifacts("apps");
   const { createTab, switchToTab } = useTabs();
+  const { createChat } = useChat();
   const papr = usePaprNamespace();
-
-  const openSkillsMarketplace = useCallback(() => {
-    openSkillsTab(createTab, switchToTab, "marketplace");
-  }, [createTab, switchToTab]);
-
-  const openInstalledSkills = useCallback(() => {
-    openSkillsTab(createTab, switchToTab, "installed");
-  }, [createTab, switchToTab]);
-
-  const skillsMarketplaceButton = (
-    <button
-      type="button"
-      className="apps-view__skills-link"
-      onClick={openSkillsMarketplace}
-    >
-      Skills Marketplace
-    </button>
-  );
 
   const showNamespaceTabs = papr.isLoggedIn && Boolean(papr.namespaceId);
 
-  const teamAppsTabTitle = papr.namespaceName?.trim()
-    ? `Team and public apps in ${papr.namespaceName}`
-    : "Team and public apps in your workspace";
 
-  const renderLibraryFilters = () => (
-    <>
-      <select
-        className="apps-view__inline-select"
-        aria-label="Filter apps"
-        value={statusFilter}
-        onChange={(event) =>
-          setStatusFilter(event.target.value as StatusFilter)
-        }
-      >
-        <option value="all">Current apps</option>
-        <option value="favorites">Favorites</option>
-        <option value="published">
-          Published
-          {statusCounts.published ? ` (${statusCounts.published})` : ""}
-        </option>
-        <option value="draft">
-          Drafts{statusCounts.draft ? ` (${statusCounts.draft})` : ""}
-        </option>
-        <option value="archived">
-          Archived
-          {statusCounts.archived ? ` (${statusCounts.archived})` : ""}
-        </option>
-      </select>
-      <select
-        className="apps-view__inline-select"
-        aria-label="Sort apps"
-        value={sortBy}
-        onChange={(event) => setSortBy(event.target.value as SortOption)}
-      >
-        <option value="recent">Recently opened</option>
-        <option value="name">Name A–Z</option>
-      </select>
-    </>
+  const [section, setSectionState] = useState<AppsSection>(
+    () => readAppsSection() ?? "recent",
   );
-
-  const [viewTab, setViewTabState] = useState<ViewTab>(
-    () => readAppsViewTab() ?? "my-apps",
-  );
-  const setViewTab = useCallback((tab: ViewTab) => {
-    setViewTabState(tab);
-    writeAppsViewTab(tab);
+  const [cleaningUp, setCleaningUp] = useState(false);
+  const setSection = useCallback((next: AppsSection) => {
+    setSectionState(next);
+    setCleaningUp(false);
+    writeAppsSection(next);
   }, []);
-  const [sortBy, setSortBy] = useState<SortOption>("recent");
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const { health, sharing, refresh: refreshHealth } = useAppsHealth();
+  const { syncLibrary: syncCategories, snapshot: categorySnapshot } = useAppCategories();
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
@@ -144,7 +115,6 @@ export function AppsView() {
   const [currentOrganizationId, setCurrentOrganizationId] = useState<string | null>(
     null,
   );
-  const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -180,31 +150,37 @@ export function AppsView() {
 
   useEffect(() => {
     const onAppsTab = (event: Event) => {
-      const tab = (event as CustomEvent<{ tab?: ViewTab }>).detail?.tab;
-      if (
-        tab === "community" ||
-        tab === "my-apps" ||
-        tab === "namespace-community"
-      ) {
-        setViewTab(tab);
-      }
+      const next = toAppsSection((event as CustomEvent<{ tab?: string }>).detail?.tab);
+      if (next) setSection(next);
     };
     window.addEventListener("papr-apps-view-tab", onAppsTab);
     return () => window.removeEventListener("papr-apps-view-tab", onAppsTab);
-  }, [setViewTab]);
+  }, [setSection]);
 
   useEffect(() => {
     if (papr.loading) {
       return;
     }
-    if (!showNamespaceTabs && viewTab === "namespace-community") {
-      setViewTab("my-apps");
+    if (!showNamespaceTabs && section === "team") {
+      setSection("recent");
     }
-  }, [papr.loading, showNamespaceTabs, viewTab, setViewTab]);
+  }, [papr.loading, showNamespaceTabs, section, setSection]);
 
   useEffect(() => {
-    setCatalogSearchQuery("");
-  }, [viewTab]);
+    setSearchQuery("");
+  }, [section]);
+
+  // The catalog refreshes itself when the window regains focus, replacing the
+  // old bare "↻" button. Its own caches (30 min UI / 5 min gateway) keep this cheap.
+  useEffect(() => {
+    const onFocus = () => {
+      if (section === "team" || section === "community") {
+        window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
+      }
+    };
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [section]);
 
   useEffect(() => {
     if (!papr.isLoggedIn || !papr.namespaceId) {
@@ -320,6 +296,7 @@ export function AppsView() {
       })
       .then(() => loadArtifacts())
       .catch(() => {});
+    refreshHealth();
   };
 
   const handleSetStatus = useCallback(
@@ -338,10 +315,10 @@ export function AppsView() {
       // "deleted" — so a misclick felt unrecoverable. Move the list to Archived
       // instead: the user sees exactly where the app went, and Unarchive is one
       // menu away rather than something they have to go hunting for.
-      if (status === "archived") setStatusFilter("archived");
+      if (status === "archived") setSection("archived");
       loadArtifacts();
     },
-    [loadArtifacts, setStatusFilter],
+    [loadArtifacts, setSection],
   );
 
   const handleRename = useCallback(
@@ -365,6 +342,52 @@ export function AppsView() {
       allApps.filter((a) => Boolean(states[a.id]?.shareUrl)).map((a) => a.id),
     );
   }, [allApps, publishRevision]);
+
+  // Share-bar audience glyph. Source of truth is the local sharing prefs the
+  // Share sheet writes (from /api/apps/health) — the publish cache only covers
+  // recently opened apps, which is why icons used to be wrong until opened.
+  // The cache is a fallback for apps that have no prefs entry.
+  const shareById = useMemo(() => {
+    const states = readCachedCloudPublishStates();
+    const out: Record<string, ShareGlyph> = {};
+    for (const a of allApps) {
+      const prefs = sharing[a.id];
+      const lin = a.cloudLineage;
+      out[a.id] = prefs
+        ? shareGlyphForPrefs(prefs)
+        : lin?.mode === "track"
+          ? {
+              // Collaborator copy: who the publisher shared it with, exactly
+              // like the fork mark in the app's share bar.
+              audience:
+                (lin.sourceAudience ??
+                  (lin.databasePolicy === "forked" ? "community" : "team")) ===
+                "community"
+                  ? "public"
+                  : (lin.sourceAudience ?? "team") === "people"
+                    ? "people"
+                    : "team",
+              codeAccess: "off",
+            }
+          : shareGlyphForPublishState(states[a.id]);
+    }
+    return out;
+  }, [allApps, sharing, publishRevision]);
+
+  // Share sheet / publish in an app tab writes the publish cache — re-read it so
+  // "Live" and share icons update without reopening the Apps page.
+  useEffect(() => {
+    let timer: number | undefined;
+    const onChange = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setPublishRevision((v) => v + 1), 250);
+    };
+    window.addEventListener(PUBLISH_STATE_CHANGED_EVENT, onChange);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener(PUBLISH_STATE_CHANGED_EVENT, onChange);
+    };
+  }, []);
 
   // Revalidate publish state after the app grid paints (stale-while-revalidate).
   useEffect(() => {
@@ -403,356 +426,293 @@ export function AppsView() {
     };
   }, [allApps]);
 
-  // Counts per status for filter chips
-  const statusCounts = useMemo(() => {
-    const counts = { active: 0, draft: 0, archived: 0, published: 0 };
-    for (const a of allApps) {
-      const published = publishedIds.has(a.id);
-      if (published) counts.published++;
-      // Published supersedes draft in the UI, but archived remains visible locally.
-      if (!(published && appStatus(a) === "draft")) counts[appStatus(a)]++;
-    }
-    return counts;
-  }, [allApps, publishedIds]);
-
-  // Apply status filter, then sort
-  const apps = useMemo(() => {
-    let result =
-      statusFilter === "all"
-        ? allApps.filter((a) => appStatus(a) !== "archived")
-        : statusFilter === "published"
-          ? allApps.filter((a) => publishedIds.has(a.id))
-          : statusFilter === "favorites"
-            ? allApps.filter((a) => a.favorite && appStatus(a) !== "archived")
-            : allApps.filter(
-                (a) =>
-                  appStatus(a) === statusFilter &&
-                  !(statusFilter === "draft" && publishedIds.has(a.id)),
-              );
-
-    switch (sortBy) {
-      case "name":
-        result = [...result].sort((a, b) => a.title.localeCompare(b.title));
-        break;
-      case "recent":
-      default:
-        result = [...result].sort((a, b) => lastActivity(b) - lastActivity(a));
-    }
-
-    return result;
-  }, [allApps, publishedIds, statusFilter, sortBy]);
-
-  const recentApps = useMemo(
-    () =>
-      allApps
-        .filter((app) => app.lastOpenedAt && appStatus(app) !== "archived")
-        .sort((a, b) => lastActivity(b) - lastActivity(a))
-        .slice(0, 4),
+  // Sort new / changed apps into broad categories in the background (Jev).
+  // Keyed on titles + descriptions so it only reruns when something changed.
+  const categorySig = useMemo(
+    () => allApps.map((a) => `${a.id}:${a.title}:${a.description ?? ""}`).join("|"),
     [allApps],
   );
-  const showRecentApps =
-    statusFilter === "all" && !searchQuery.trim() && recentApps.length > 0;
+  useEffect(() => {
+    if (!categorySig) return;
+    const t = window.setTimeout(syncCategories, 1500);
+    return () => window.clearTimeout(t);
+  }, [categorySig, syncCategories]);
+
+  // New app examples come from what this user already builds.
+  const createStarters = useMemo(
+    () => (showCreateModal ? buildCreateAppStarters(allApps, categorySnapshot.byKey) : []),
+    [showCreateModal, allApps, categorySnapshot.byKey],
+  );
+
+  // Library sorted once by recency; sections, stacking and banners read from it.
+  const sortedApps = useMemo(
+    () => [...allApps].sort((a, b) => lastActivity(b) - lastActivity(a)),
+    [allApps],
+  );
+  const counts = useMemo(
+    () => sectionCounts(sortedApps, { publishedIds, health }),
+    [sortedApps, publishedIds, health],
+  );
+  const duplicateGroups = useMemo(
+    () => findDuplicateGroups(sortedApps, lastActivity),
+    [sortedApps],
+  );
+  const duplicateExtraCount = duplicateGroups.reduce((n, g) => n + g.length - 1, 0);
+
+  const archiveApps = useCallback(
+    async (ids: string[]) => {
+      await Promise.all(
+        ids.map((appId) => gateway.send("app:update", { appId, status: "archived" })),
+      );
+      setCleaningUp(false);
+      await loadArtifacts({ forceRefresh: true });
+    },
+    [loadArtifacts],
+  );
+
+  const fixApp = useCallback(
+    (app: Artifact) => {
+      void openAppToFix(createChat, {
+        appId: app.id,
+        appTitle: app.title,
+        health: health[app.id],
+      });
+    },
+    [createChat, health],
+  );
+
+  const librarySection: LibrarySection = isLibrarySection(section) ? section : "recent";
+  // One search box covers the library, the team and the community; typing
+  // swaps whatever section is showing for a single results page.
+  const searching = searchQuery.trim().length > 0;
+  const searchRef = useRef<HTMLInputElement>(null);
+  // "/" focuses the Apps search (⌘K stays the global command palette).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+      e.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const searchPlaceholder = showNamespaceTabs
+    ? `Search your apps, ${papr.namespaceName?.trim() || "your team"} and the community`
+    : "Search your apps and the community";
 
   return (
     <div className="apps-view">
       <header className="apps-view__topbar">
         <h2 className="apps-view__brand">Apps</h2>
-
-        <div className="apps-view__tabs" role="tablist" aria-label="Apps library">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewTab === "my-apps"}
-            className={`apps-view__tab ${viewTab === "my-apps" ? "apps-view__tab--active" : ""}`}
-            onClick={() => setViewTab("my-apps")}
+        <label className="apps-view__search">
+          <svg
+            className="apps-view__search-icon"
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
           >
-            My Apps
-          </button>
-          {showNamespaceTabs ? (
+            <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+            <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <input
+            ref={searchRef}
+            type="search"
+            placeholder={searchPlaceholder}
+            value={searchQuery}
+            onChange={handleSearch}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSearchQuery("");
+            }}
+            aria-label="Search apps"
+          />
+          {searching ? null : (
+            <kbd className="apps-view__search-kbd" title="Press / to search" aria-hidden="true">
+              /
+            </kbd>
+          )}
+          {searching ? (
             <button
               type="button"
-              role="tab"
-              aria-selected={viewTab === "namespace-community"}
-              className={`apps-view__tab ${viewTab === "namespace-community" ? "apps-view__tab--active" : ""}`}
-              onClick={() => setViewTab("namespace-community")}
-              title={teamAppsTabTitle}
+              className="apps-view__search-clear"
+              aria-label="Clear search"
+              onClick={() => setSearchQuery("")}
             >
-              Team Apps
+              ×
             </button>
           ) : null}
-          <button
-            type="button"
-            role="tab"
-            aria-selected={viewTab === "community"}
-            className={`apps-view__tab ${viewTab === "community" ? "apps-view__tab--active" : ""}`}
-            onClick={() => setViewTab("community")}
-          >
-            Community Apps
-          </button>
-        </div>
-
+        </label>
         <div className="apps-view__topbar-grow" />
-
-        {viewTab === "my-apps" ? (
-          <>
-            <input
-              type="search"
-              className="apps-view__topbar-search"
-              placeholder="Search apps…"
-              value={searchQuery}
-              onChange={handleSearch}
-              aria-label="Search apps"
-            />
-            <button
-              type="button"
-              onClick={() => setShowCreateModal(true)}
-              className="apps-view__create-btn"
-            >
-              + Create
-            </button>
-          </>
-        ) : (
-          <>
-            <input
-              type="search"
-              className="apps-view__topbar-search"
-              placeholder={
-                viewTab === "namespace-community"
-                  ? "Search team apps…"
-                  : "Search community apps…"
-              }
-              value={catalogSearchQuery}
-              onChange={(event) => setCatalogSearchQuery(event.target.value)}
-              aria-label={
-                viewTab === "namespace-community"
-                  ? "Search team apps"
-                  : "Search community apps"
-              }
-            />
-            <button
-              type="button"
-              className="apps-view__topbar-refresh"
-              aria-label="Refresh catalog"
-              onClick={() => setCatalogRefreshToken((token) => token + 1)}
-            >
-              ↻
-            </button>
-          </>
-        )}
+        <button
+          type="button"
+          onClick={() => setShowCreateModal(true)}
+          className="apps-view__create-btn"
+        >
+          + New app
+        </button>
       </header>
 
-      {viewTab === "community" ? (
+      <div className="apps-view__body">
+        <AppsSidebar
+          active={searching ? null : section}
+          counts={counts}
+          showTeam={showNamespaceTabs}
+          onSelect={(next) => {
+            setSearchQuery("");
+            setSection(next);
+          }}
+        />
         <div className="apps-view__content">
-          <CommunityAppsView
-            scope="global"
-            loadingLabel="Loading community apps..."
-            searchQuery={catalogSearchQuery}
-            onSearchQueryChange={setCatalogSearchQuery}
-            hideToolbar
-            toolbarTrailing={skillsMarketplaceButton}
-            refreshToken={catalogRefreshToken}
-          />
-        </div>
-      ) : viewTab === "namespace-community" ? (
-        <div className="apps-view__content">
-          <CommunityAppsView
-            key={papr.namespaceId ?? "no-namespace"}
-            scope="namespace"
-            loadingLabel="Loading team apps..."
-            namespaceId={papr.namespaceId}
-            namespaceName={papr.namespaceName}
-            searchQuery={catalogSearchQuery}
-            onSearchQueryChange={setCatalogSearchQuery}
-            hideToolbar
-            toolbarTrailing={skillsMarketplaceButton}
-            refreshToken={catalogRefreshToken}
-          />
-        </div>
-      ) : (
-        <div className="apps-view__content">
-            {!loading ? (
-              <div className="apps-view__library-toolbar">
-                <div className="apps-view__library-toolbar-leading">
-                  <span className="apps-view__section-label">App library</span>
-                  <span className="apps-view__library-count">{apps.length} apps</span>
-                </div>
-                <div className="apps-view__library-toolbar-actions">
-                  {renderLibraryFilters()}
-                  <button
-                    type="button"
-                    className="apps-view__skills-link"
-                    onClick={openInstalledSkills}
-                  >
-                    Installed Skills
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {loading && (
-              <div className="apps-view__empty">
-                <p>Loading apps...</p>
-              </div>
-            )}
-
-            {error && (
-              <div className="apps-view__empty">
-                <p style={{ color: "var(--error)" }}>{error}</p>
-                <button
-                  className="apps-view__retry-btn"
-                  onClick={loadArtifacts}
-                >
-                  Retry
-                </button>
-              </div>
-            )}
-
-            {!loading && !error && apps.length === 0 && (
-              <div className="apps-view__empty">
-                <svg
-                  width="64"
-                  height="64"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  opacity="0.2"
-                >
-                  <rect
-                    x="3"
-                    y="3"
-                    width="7"
-                    height="7"
-                    rx="2"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  />
-                  <rect
-                    x="14"
-                    y="3"
-                    width="7"
-                    height="7"
-                    rx="2"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  />
-                  <rect
-                    x="3"
-                    y="14"
-                    width="7"
-                    height="7"
-                    rx="2"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  />
-                  <rect
-                    x="14"
-                    y="14"
-                    width="7"
-                    height="7"
-                    rx="2"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                  />
-                </svg>
-                <p className="apps-view__empty-title">No apps yet</p>
-                <p className="apps-view__empty-subtitle">
-                  Import apps built by the community, ask the AI to create one,
-                  or build your own above.
+          {searching ? (
+            <>
+              <div className="apps-view__page-head">
+                <h1 className="apps-view__page-title">
+                  Results for “{searchQuery.trim()}”
+                </h1>
+                <p className="apps-view__page-subtitle">
+                  {showNamespaceTabs
+                    ? `Across your library, ${papr.namespaceName?.trim() || "your team"} and the community.`
+                    : "Across your library and the community."}
                 </p>
+              </div>
+              <LibraryPane
+                section="recent"
+                resultsOnly
+                apps={sortedApps}
+                health={health}
+                publishedIds={publishedIds}
+                shareById={shareById}
+                searchQuery={searchQuery}
+                showCopyAction={showCopyAction}
+                duplicateExtraCount={0}
+                onSelectSection={setSection}
+                onStartCleanup={() => setCleaningUp(true)}
+                onOpen={handleOpen}
+                onDelete={(id) => void handleDelete(id)}
+                onToggleFavorite={(id) => void handleToggleFavorite(id)}
+                onRename={(id, t) => void handleRename(id, t)}
+                onSetStatus={(id, st) => void handleSetStatus(id, st)}
+                onCopy={setCopyAppTarget}
+                onFix={fixApp}
+              />
+              {showNamespaceTabs ? (
+                <CommunityAppsView
+                  key={`search-${papr.namespaceId ?? "no-namespace"}`}
+                  scope="namespace"
+                  namespaceId={papr.namespaceId}
+                  namespaceName={papr.namespaceName}
+                  searchQuery={searchQuery}
+                  onSearchQueryChange={setSearchQuery}
+                  hideToolbar
+                  refreshToken={catalogRefreshToken}
+                  resultsHeading={`From ${papr.namespaceName?.trim() || "your team"}`}
+                />
+              ) : null}
+              <CommunityAppsView
+                key="search-community"
+                scope="global"
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                hideToolbar
+                refreshToken={catalogRefreshToken}
+                resultsHeading="From the community"
+              />
+            </>
+          ) : section === "community" ? (
+            <CommunityAppsView
+              scope="global"
+              loadingLabel="Loading community apps..."
+              searchQuery=""
+              onSearchQueryChange={setSearchQuery}
+              hideToolbar
+              refreshToken={catalogRefreshToken}
+            />
+          ) : section === "team" ? (
+            <CommunityAppsView
+              key={papr.namespaceId ?? "no-namespace"}
+              scope="namespace"
+              loadingLabel="Loading team apps..."
+              namespaceId={papr.namespaceId}
+              namespaceName={papr.namespaceName}
+              searchQuery=""
+              onSearchQueryChange={setSearchQuery}
+              hideToolbar
+              refreshToken={catalogRefreshToken}
+            />
+          ) : loading ? (
+            <div className="apps-view__empty">
+              <p>Loading apps...</p>
+            </div>
+          ) : error ? (
+            <div className="apps-view__empty">
+              <p style={{ color: "var(--error)" }}>{error}</p>
+              <button className="apps-view__retry-btn" onClick={() => void loadArtifacts()}>
+                Retry
+              </button>
+            </div>
+          ) : allApps.length === 0 ? (
+            <div className="apps-view__empty">
+              <p className="apps-view__empty-title">Start your library</p>
+              <p className="apps-view__empty-subtitle">
+                Apps you build or add live here. Describe one and Pen builds it, or see
+                what others have made.
+              </p>
+              <div className="apps-view__empty-actions">
+                <button className="apps-view__create-btn" onClick={() => setShowCreateModal(true)}>
+                  + New app
+                </button>
                 <button
                   className="apps-view__empty-community-btn"
-                  onClick={() => setViewTab("community")}
+                  onClick={() => setSection(showNamespaceTabs ? "team" : "community")}
                 >
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none">
-                    <path
-                      d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <polyline
-                      points="7 10 12 15 17 10"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                    <line
-                      x1="12"
-                      y1="15"
-                      x2="12"
-                      y2="3"
-                      stroke="currentColor"
-                      strokeWidth="1.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    />
-                  </svg>
-                  Browse Community Apps
+                  {showNamespaceTabs ? "See what your team uses" : "Browse Community apps"}
                 </button>
               </div>
-            )}
-
-            {!loading && !error && apps.length > 0 && (
-              <>
-                {showRecentApps && (
-                  <section className="apps-view__recent">
-                    <div className="apps-view__section-heading">
-                      <span className="apps-view__section-label">
-                        Continue working
-                      </span>
-                      <span>{recentApps.length} recent</span>
-                    </div>
-                    <div className="apps-view__recent-row">
-                      {recentApps.map((app) => (
-                        <AppCard
-                          key={`recent-${app.id}`}
-                          compact
-                          isPublished={publishedIds.has(app.id)}
-                          artifact={app}
-                          onDelete={() => handleDelete(app.id)}
-                          onToggleFavorite={() => handleToggleFavorite(app.id)}
-                          onOpen={() => handleOpen(app)}
-                          onRename={(title) => handleRename(app.id, title)}
-                          onSetStatus={(status) =>
-                            handleSetStatus(app.id, status)
-                          }
-                          showCopyAction={showCopyAction}
-                          onCopy={() => setCopyAppTarget(app)}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                )}
-
-                <section className="apps-view__section">
-                  <div className="apps-view__grid">
-                    {apps.map((app) => (
-                      <AppCard
-                        key={app.id}
-                        isPublished={publishedIds.has(app.id)}
-                        artifact={app}
-                        onDelete={() => handleDelete(app.id)}
-                        onToggleFavorite={() => handleToggleFavorite(app.id)}
-                        onOpen={() => handleOpen(app)}
-                        onRename={(title) => handleRename(app.id, title)}
-                        onSetStatus={(status) =>
-                          handleSetStatus(app.id, status)
-                        }
-                        showCopyAction={showCopyAction}
-                        onCopy={() => setCopyAppTarget(app)}
-                      />
-                    ))}
-                  </div>
-                </section>
-              </>
-            )}
-          </div>
-      )}
+            </div>
+          ) : cleaningUp && duplicateGroups.length > 0 ? (
+            <DuplicateCleanupView
+              groups={duplicateGroups}
+              formatWhen={(a) =>
+                `${a.lastOpenedAt ? "Opened" : "Updated"} ${relativeWhen(
+                  a.lastOpenedAt ?? a.updatedAt,
+                )}`
+              }
+              onCancel={() => setCleaningUp(false)}
+              onArchive={archiveApps}
+            />
+          ) : (
+            <LibraryPane
+              section={librarySection}
+              apps={sortedApps}
+              health={health}
+              publishedIds={publishedIds}
+              shareById={shareById}
+              searchQuery={searchQuery}
+              showCopyAction={showCopyAction}
+              duplicateExtraCount={duplicateExtraCount}
+              onSelectSection={setSection}
+              onStartCleanup={() => setCleaningUp(true)}
+              onOpen={handleOpen}
+              onDelete={(id) => void handleDelete(id)}
+              onToggleFavorite={(id) => void handleToggleFavorite(id)}
+              onRename={(id, t) => void handleRename(id, t)}
+              onSetStatus={(id, st) => void handleSetStatus(id, st)}
+              onCopy={setCopyAppTarget}
+              onFix={fixApp}
+            />
+          )}
+        </div>
+      </div>
 
       <CreateAppModal
         isOpen={showCreateModal}
+        starters={createStarters}
         onClose={() => setShowCreateModal(false)}
+        onBrowse={() => setSection(showNamespaceTabs ? "team" : "community")}
       />
       <CopyAppModal
         app={copyAppTarget}
