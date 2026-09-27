@@ -20,8 +20,12 @@ function load(): Record<string, string> {
   }
 }
 
-/** Stable default per workspace so two orgs rarely share a color before anyone picks one. */
-function defaultColor(key: string): string {
+/**
+ * Default until the user picks: the Nth org in your list gets the Nth swatch (first org = Papr blue).
+ * Falls back to a stable hash when the org's position isn't known yet.
+ */
+function defaultColor(key: string, index = -1): string {
+  if (index >= 0) return ORG_SWATCHES[index % ORG_SWATCHES.length];
   if (!key) return ORG_SWATCHES[0];
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
@@ -47,10 +51,10 @@ export const useOrgColors = create<OrgColorState>((set, get) => ({
   },
 }));
 
-export function orgColorFor(key: string, colors: Record<string, string>): string {
-  return colors[key] ?? defaultColor(key);
+export function orgColorFor(key: string, colors: Record<string, string>, index = -1): string {
+  return colors[key] ?? defaultColor(key, index);
 }
 
-export function useOrgColor(key: string): string {
-  return useOrgColors((s) => s.colors[key]) ?? defaultColor(key);
+export function useOrgColor(key: string, index = -1): string {
+  return useOrgColors((s) => s.colors[key]) ?? defaultColor(key, index);
 }

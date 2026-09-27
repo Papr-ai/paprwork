@@ -13,7 +13,7 @@ import { useProfileStore } from "../../stores/profileStore";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { RailIcons } from "./railIcons";
-import { useOrgColor } from "./orgColorStore";
+import { useOrgColor, useOrgColors } from "./orgColorStore";
 import { OrgColorList } from "./OrgColorList";
 import { useOrgList } from "./useOrgList";
 import "./ProfileFooter.css";
@@ -49,7 +49,17 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
     }) ?? "";
   const { orgs, activeId, switching, switchTo } = useOrgList();
   // Color is per org: key by the active org id, falling back to the label until orgs load.
-  const orgColor = useOrgColor(activeId || workspaceLabel || organizationName);
+  const orgColor = useOrgColor(
+    activeId || workspaceLabel || organizationName,
+    orgs.findIndex((o) => o.id === activeId),
+  );
+  // One-time carry-over: early builds keyed the color by the "Org · namespace" label.
+  useEffect(() => {
+    const { colors, setColor } = useOrgColors.getState();
+    if (activeId && !colors[activeId] && workspaceLabel && colors[workspaceLabel]) {
+      setColor(activeId, colors[workspaceLabel]);
+    }
+  }, [activeId, workspaceLabel]);
   useEffect(() => {
     void loadProfile();
 

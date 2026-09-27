@@ -14,6 +14,7 @@ export interface OrgEntry {
   id: string;
   name: string;
   organizationId?: string;
+  organizationName?: string;
   defaultNamespaceId?: string;
 }
 
