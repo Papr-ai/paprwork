@@ -1,22 +1,30 @@
 /**
- * Sidebar - Left navigation panel with enhanced navigation
- * Reference: Paprwork v1 index.html lines 21-215
+ * Sidebar — the left rail. 96px, icon-first, clears the macOS traffic lights.
+ * Your agent sits on top and is Home; Chats / Apps / Docs show Pinned + Recent in hover peeks
+ * (replacing the always-on Favorites list); account, settings and personalization live on the avatar.
+ * Every destination and action from the previous 240px sidebar is still here.
  */
 
-import { useMemo, useCallback, useEffect } from "react";
+import { useMemo, useCallback, useEffect, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
 import { WeatherWidget } from "./WeatherWidget";
-import { NavButton } from "./NavButton";
-import { FavoritesList } from "./FavoritesList";
-import { NewChatButton } from "./NewChatButton";
 import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
-import { SidebarToggleButton } from "./SidebarToggleButton";
-import { HomeIcon } from "../common/HomeIcon";
+import { RailItem } from "./RailItem";
+import { RailPeek } from "./RailPeek";
+import { RailIcons } from "./railIcons";
+import { useSidebarFavorites } from "./useSidebarFavorites";
+import { useRailPeeks } from "./useRailPeeks";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { shouldShowOnboarding } from "../../utils/onboardingState";
 import { switchToChatTab, switchToHomeTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
+
+const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+const SEARCH_SHORTCUT = IS_MAC ? "⌘K" : "Ctrl K";
 
 type View = "chat" | "apps" | "memory" | "documents";
 
@@ -38,7 +46,7 @@ function tabTypeToView(type: TabType | undefined): View {
   }
 }
 
-export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
+export function Sidebar() {
   const { createChat } = useChat();
   const { tabs, createTab, switchToTab, activeLeftTab } = useTabs();
 
@@ -137,148 +145,127 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
     return () => window.removeEventListener("papr-open-community-apps", openCommunity);
   }, [createTab, switchToTab]);
 
+  const favoritesApi = useSidebarFavorites();
+  const { chatGroups, appGroups, docGroups, hasUnreadChats } = useRailPeeks(favoritesApi);
+  const agentName = useAgentName();
+  const agentLook = useAgentIdentity((s) => s.look);
+  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
+
+  useEffect(() => {
+    const sync = () => setShowOnboarding(shouldShowOnboarding());
+    window.addEventListener("papr-onboarding-changed", sync);
+    return () => window.removeEventListener("papr-onboarding-changed", sync);
+  }, []);
+
+  const openSearch = () => window.dispatchEvent(new CustomEvent("papr-open-command-palette"));
+  const openChatHistory = () => {
+    switchToChatTab();
+    window.setTimeout(() => window.dispatchEvent(new CustomEvent("papr-open-chat-history")), 60);
+  };
+
   return (
-    <div className="sidebar">
-      <div className="sidebar__header">
-        {onToggleCollapse && (
-          <SidebarToggleButton
-            onClick={onToggleCollapse}
-            ariaLabel="Hide sidebar"
+    <nav
+      className={`sidebar rail${favoritesApi.isDragOver ? " rail--drag-over" : ""}`}
+      aria-label="Main"
+      {...favoritesApi.dropHandlers}
+    >
+      <div className="rail__drag" aria-hidden="true" />
+
+      <RailItem
+        variant="agent"
+        label={`Home · ${agentName}`}
+        ariaLabel="Home"
+        active={activeView === "memory"}
+        onClick={() => handleNavClick("memory")}
+        icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} />}
+        peek={
+          <div className="rail-home-peek">
+            <header className="rail-peek__header">
+              <b>Home</b>
+              <span>{agentName} · today&apos;s brief</span>
+            </header>
+            <WeatherWidget />
+          </div>
+        }
+      />
+      <RailItem
+        variant="new"
+        label="New chat"
+        onClick={handleNewChat}
+        testId="new-chat-button"
+        icon={
+          <span className="rail-btn__new-orb">
+            <RailIcons.plus />
+          </span>
+        }
+      />
+      <RailItem label="Search" shortcut={SEARCH_SHORTCUT} onClick={openSearch} icon={<RailIcons.search />} />
+
+      <span className="rail__sep" aria-hidden="true" />
+
+      <RailItem
+        label="Chats"
+        active={activeView === "chat"}
+        onClick={() => handleNavClick("chat")}
+        icon={<RailIcons.chats />}
+        badge={hasUnreadChats}
+        peek={
+          <RailPeek
+            title="Chats"
+            groups={chatGroups}
+            empty="No chats yet. Start one with +."
+            footer={{ label: "All chats", onClick: openChatHistory }}
           />
-        )}
-      </div>
-
-      <div className="sidebar__content">
-        <WeatherWidget />
-
-        <NewChatButton onClick={handleNewChat} />
-
-        <div className="sidebar__nav">
-          <NavButton
-            icon={<HomeIcon size={20} />}
-            label="Home"
-            isActive={activeView === "memory"}
-            onClick={() => handleNavClick("memory")}
+        }
+      />
+      <RailItem
+        label="Apps"
+        active={activeView === "apps"}
+        onClick={() => handleNavClick("apps")}
+        icon={<RailIcons.apps />}
+        peek={
+          <RailPeek
+            title="Apps"
+            groups={appGroups}
+            empty="Drag an app here to pin it."
+            footer={{ label: "See all apps", onClick: () => handleNavClick("apps") }}
           />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </svg>
-            }
-            label="Chat"
-            isActive={activeView === "chat"}
-            onClick={() => handleNavClick("chat")}
+        }
+      />
+      <RailItem
+        label="Docs"
+        ariaLabel="Documents"
+        active={activeView === "documents"}
+        onClick={() => handleNavClick("documents")}
+        icon={<RailIcons.docs />}
+        peek={
+          <RailPeek
+            title="Docs"
+            groups={docGroups}
+            empty="Drag a doc here to pin it."
+            footer={{ label: "See all docs", onClick: () => handleNavClick("documents") }}
           />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <rect
-                  x="3"
-                  y="3"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <rect
-                  x="14"
-                  y="3"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <rect
-                  x="3"
-                  y="14"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-                <rect
-                  x="14"
-                  y="14"
-                  width="7"
-                  height="7"
-                  rx="2"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                />
-              </svg>
-            }
-            label="Apps"
-            isActive={activeView === "apps"}
-            onClick={() => handleNavClick("apps")}
-          />
-          <NavButton
-            icon={
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-                <path
-                  d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <path
-                  d="M14 2v6h6"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-                <line
-                  x1="9"
-                  y1="13"
-                  x2="15"
-                  y2="13"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-                <line
-                  x1="9"
-                  y1="17"
-                  x2="15"
-                  y2="17"
-                  stroke="currentColor"
-                  strokeWidth="1.5"
-                  strokeLinecap="round"
-                />
-              </svg>
-            }
-            label="Documents"
-            isActive={activeView === "documents"}
-            onClick={() => handleNavClick("documents")}
-          />
-        </div>
+        }
+      />
 
-        <FavoritesList />
+      <span className="rail__grow" />
 
-        {/* Spacer between nav and favorites */}
-      </div>
-
-      <div className="sidebar__footer">
-        <OnboardingCard
-          onOpenGettingStarted={handleOpenGettingStarted}
-          onSendMessage={handleOnboardingSendMessage}
-        />
-        <ProfileFooter
-          onOpenProfile={handleOpenProfile}
-          onOpenSettings={handleOpenSettings}
-        />
-      </div>
-    </div>
+      <RailItem
+        label="Getting started"
+        onClick={handleOpenGettingStarted}
+        icon={<RailIcons.start />}
+        badge={showOnboarding}
+        peekFromBottom
+        peek={
+          showOnboarding ? (
+            <OnboardingCard
+              onOpenGettingStarted={handleOpenGettingStarted}
+              onSendMessage={handleOnboardingSendMessage}
+            />
+          ) : undefined
+        }
+      />
+      <ProfileFooter onOpenProfile={handleOpenProfile} onOpenSettings={handleOpenSettings} />
+    </nav>
   );
 }

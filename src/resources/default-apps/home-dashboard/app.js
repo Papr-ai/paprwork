@@ -201,10 +201,12 @@ const App = {
     this.isStaleBrief = !this.loadError && !this.isSampleData && testBrief._isStale === true;
     
     await this.render(testBrief); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
-    document.getElementById('sections').addEventListener('click', async (e) => {
+    Tasks.bind();
+    document.getElementById('view-today').addEventListener('click', async (e) => {
+      if (e.target.closest('#goals')) return; // Goals has its own handler
       const reviewBtn = e.target.closest('[data-review]');
       if (reviewBtn) { e.stopPropagation(); await this.review(reviewBtn); return; }
-      const agentEl = e.target.closest('.hi-btn[data-agent]');
+      const agentEl = e.target.closest('[data-agent]');
       if (agentEl) { e.stopPropagation(); this.openAgent(agentEl); return; }
       const card = e.target.closest('.card[data-idx]');
       if (card) {
@@ -226,6 +228,16 @@ const App = {
       } catch (e) { /* paprAPI may not be available */ }
     });
   },
+  /** Lift the top active priority into the "Do this first" card; the rest stay in the list. */
+  pickFocus(sections) {
+    const i = sections.findIndex((s) => s.type === 'priorities' && s.items && s.items.length);
+    if (i < 0) return { focus: null, sections };
+    const [focus, ...rest] = sections[i].items;
+    const next = sections.slice();
+    if (rest.length) next[i] = { ...sections[i], title: 'Up next', items: rest };
+    else next.splice(i, 1);
+    return { focus, sections: next };
+  },
   async render(cachedBrief) {
     const date = this.dates[this.idx];
     let brief = (cachedBrief && this.idx === 0) ? cachedBrief : await Data.load(date);
@@ -242,9 +254,11 @@ const App = {
         ? this.renderSampleDataBanner()
         : this.renderStaleBriefBanner();
     
+    const { focus, sections } = this.pickFocus(this.brief.sections || []);
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
+    document.getElementById('focus').innerHTML = R.focus(focus);
     document.getElementById('goals').innerHTML = this.idx === 0 ? Goals.render() : '';
-    document.getElementById('sections').innerHTML = (this.brief.sections || []).map((s) => R.section(s)).join('');
+    document.getElementById('sections').innerHTML = sections.map((s) => R.section(s)).join('');
     if (this.loadError) {
       this.bindLoadErrorButton(this.brief._errorMessage);
     } else if (this.isSampleData || this.isStaleBrief) {
@@ -291,11 +305,10 @@ const App = {
     document.getElementById('fold-next').classList.toggle('disabled', !canNext);
     document.getElementById('peek-prev').textContent = canPrev ? this.fmtDate(this.dates[this.idx + 1]) : '';
     document.getElementById('peek-next').textContent = canNext ? this.fmtDate(this.dates[this.idx - 1]) : '';
+    document.getElementById('fold-prev').title = canPrev ? this.fmtDate(this.dates[this.idx + 1]) : '';
+    document.getElementById('fold-next').title = canNext ? this.fmtDate(this.dates[this.idx - 1]) : '';
     const label = document.getElementById('nav-label');
     label.textContent = this.idx === 0 ? 'Today' : this.fmtDate(this.dates[this.idx]);
-    label.classList.toggle('visible', this.idx > 0);
-    clearTimeout(this.labelTimer);
-    if (this.idx > 0) this.labelTimer = setTimeout(() => label.classList.remove('visible'), 2400);
   },
   openAgent(btn) {
     const data = JSON.parse(decodeURIComponent(btn.dataset.agent));

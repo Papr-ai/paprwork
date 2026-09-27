@@ -6,6 +6,7 @@
 import { useEffect, useState } from "react";
 import { AppLayout } from "./components/Layout/AppLayout";
 import { Sidebar } from "./components/Sidebar/Sidebar";
+import { AgentPersonalizeSheet } from "./components/Agent/AgentPersonalizeSheet";
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
@@ -182,25 +183,14 @@ export function App() {
   const { createTab, switchToTab, createArtifactFromChat } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+  // The rail is always visible; clear the legacy collapsed flag from the old hide/show toggle.
+  useEffect(() => {
     try {
-      return localStorage.getItem("paprwork-sidebar-collapsed") === "true";
+      localStorage.removeItem("paprwork-sidebar-collapsed");
     } catch {
-      return false;
+      // Ignore storage errors
     }
-  });
-
-  const toggleSidebarCollapsed = () => {
-    setSidebarCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("paprwork-sidebar-collapsed", String(next));
-      } catch {
-        // Ignore storage errors
-      }
-      return next;
-    });
-  };
+  }, []);
   
   // Create getting-started tab on first run
   useEffect(() => {
@@ -459,6 +449,13 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Rail search button opens the same palette as Cmd+K
+  useEffect(() => {
+    const openPalette = () => setCommandPaletteOpen(true);
+    window.addEventListener("papr-open-command-palette", openPalette);
+    return () => window.removeEventListener("papr-open-command-palette", openPalette);
+  }, []);
+
   // Initialize permission listeners
   useEffect(() => {
     initPermissionListener();
@@ -604,14 +601,8 @@ export function App() {
     <>
       <WorkspaceSwitchOverlay />
       <AppLayout
-        sidebar={<Sidebar onToggleCollapse={toggleSidebarCollapsed} />}
-        sidebarCollapsed={sidebarCollapsed}
-        topBar={
-          <TabBar
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={toggleSidebarCollapsed}
-          />
-        }
+        sidebar={<Sidebar />}
+        topBar={<TabBar />}
         content={<ContentArea />}
       />
       {activeRequest && !claimedByChat && (
@@ -622,6 +613,7 @@ export function App() {
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <AgentPersonalizeSheet />
       <PaprQuotaBanner />
       <CloudFeatureLockModal />
       <ConnectionIndicator />

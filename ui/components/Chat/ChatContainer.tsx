@@ -72,6 +72,7 @@ import {
 import { clearQueuedMessagesForChat } from "../../utils/messageQueue";
 import { useGatewaySupervisorStatus } from "../../hooks/useGatewaySupervisorStatus";
 import { useGatewayConnectionState } from "../../hooks/useGatewayConnectionState";
+import { useAgentName } from "../Agent/agentIdentityStore";
 
 const DEFAULT_SYSTEM_PROMPT = `You're Pen, an AI assistant running in Paprwork—a cross-platform AI workspace.
 
@@ -321,6 +322,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
     isRestarting: gatewaySupervisorRestarting,
   } = useGatewaySupervisorStatus();
   const gatewayConnectionState = useGatewayConnectionState();
+  const agentName = useAgentName();
   const prevGatewaySupervisorReadyRef = useRef(gatewaySupervisorReady);
   const prevIsSendingRef = useRef(isSending);
   const autoContinueInFlightRef = useRef(false);
@@ -1261,7 +1263,7 @@ export const ChatContainer: React.FC<ChatContainerProps> = ({ chatId }): React.R
             ? `Preparing ${selectedModel.name}...` 
             : currentChatQueue.length > 0
               ? "Send follow-up..." 
-              : "Type a message...") as string
+              : `Message ${agentName}…`) as string
         }
         selectedModel={selectedModel}
         onModelChange={handleModelChange}

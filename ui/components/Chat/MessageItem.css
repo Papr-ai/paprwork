@@ -55,6 +55,28 @@
   border: 1px solid var(--border-color);
 }
 
+/* Your agent: the avatar is also the personalize entry */
+.message-avatar-assistant--agent {
+  padding: 0;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), border-color 0.15s var(--ease);
+}
+
+.message-avatar-assistant--agent:hover {
+  border-color: rgba(0, 96, 224, 0.35);
+}
+
+/* Face looks carry their own outline, so drop the circle frame */
+.message-avatar-assistant--face {
+  border-color: transparent;
+  background: transparent;
+}
+
+.message-avatar-assistant--face:hover {
+  border-color: transparent;
+  background: var(--hover-bg);
+}
+
 .message-avatar-icon {
   width: 16px;
   height: 16px;

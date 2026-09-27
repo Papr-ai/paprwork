@@ -1,0 +1,222 @@
+/* AgentPersonalizeSheet — liquid glass dialog: preview, name, look, color, Done. */
+.agent-sheet-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+}
+
+.agent-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 16, 32, 0.18);
+  animation: agent-sheet-fade 0.16s ease;
+}
+
+.agent-sheet {
+  position: relative;
+  width: 400px;
+  display: grid;
+  gap: 18px;
+  padding: 26px 26px 20px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(28px) saturate(1.7);
+  -webkit-backdrop-filter: blur(28px) saturate(1.7);
+  border: 1px solid rgba(255, 255, 255, 0.8);
+  box-shadow: 0 30px 80px rgba(10, 16, 32, 0.22), 0 0 0 1px rgba(10, 16, 32, 0.05);
+  animation: agent-sheet-in 0.18s cubic-bezier(0.3, 0.7, 0.2, 1);
+  font-family: var(--font-body);
+}
+
+.agent-sheet__preview {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 6px 0 4px;
+}
+
+.agent-sheet__preview .agent-glyph {
+  margin-bottom: 8px;
+}
+
+.agent-sheet__preview .agent-glyph--face svg {
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--agent-a2) 55%, transparent));
+}
+
+.agent-sheet__preview b {
+  font-family: var(--font-display);
+  font-size: 22px;
+  letter-spacing: -0.02em;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.agent-sheet__preview span {
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+
+.agent-sheet__field {
+  display: grid;
+  grid-template-columns: 56px 1fr;
+  align-items: center;
+  gap: 12px;
+}
+
+.agent-sheet__field > span {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.agent-sheet__field input {
+  font: 500 14px var(--font-body);
+  color: var(--text-primary);
+  padding: 9px 12px;
+  border-radius: 11px;
+  border: 1px solid rgba(10, 16, 32, 0.12);
+  background: #fff;
+  outline: none;
+}
+
+.agent-sheet__field input:focus {
+  border-color: var(--papr-blue-deep);
+  box-shadow: 0 0 0 3px rgba(0, 96, 224, 0.12);
+}
+
+.agent-sheet__looks {
+  display: flex;
+  gap: 8px;
+}
+
+.agent-sheet__look {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: pointer;
+  transition: background 0.15s var(--ease);
+}
+
+.agent-sheet__look:hover {
+  background: var(--hover-bg);
+}
+
+.agent-sheet__look.is-on {
+  border-color: rgba(10, 16, 32, 0.12);
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(10, 16, 32, 0.06);
+}
+
+.agent-sheet__colors {
+  display: flex;
+  gap: 12px;
+  padding-left: 4px;
+}
+
+.agent-sheet__color {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  background: linear-gradient(135deg, var(--agent-a1), var(--agent-a2));
+  transition: transform 0.12s var(--ease);
+}
+
+.agent-sheet__color:hover {
+  transform: scale(1.1);
+}
+
+.agent-sheet__color.is-on {
+  box-shadow: 0 0 0 2px var(--popover-bg, #fff), 0 0 0 4px var(--agent-a1);
+}
+
+.agent-sheet__footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-top: 4px;
+}
+
+.agent-sheet__reset {
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
+.agent-sheet__reset:hover {
+  color: var(--text-primary);
+}
+
+.agent-sheet__done {
+  border: none;
+  cursor: pointer;
+  padding: 9px 18px;
+  border-radius: 11px;
+  background: var(--papr-blue-deep);
+  color: #fff;
+  font-size: 13.5px;
+  font-weight: 600;
+  box-shadow: 0 4px 14px rgba(0, 96, 224, 0.25);
+}
+
+.agent-sheet__done:hover {
+  filter: brightness(1.06);
+}
+
+@keyframes agent-sheet-in {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.98);
+  }
+}
+
+@keyframes agent-sheet-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-color-scheme: dark) {
+  .agent-sheet-scrim {
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .agent-sheet {
+    background: rgba(24, 29, 38, 0.96);
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  }
+  .agent-sheet__field input {
+    background: #11151c;
+    border-color: #2a3240;
+  }
+  .agent-sheet__look.is-on {
+    background: #1f2531;
+    border-color: #2f3746;
+    box-shadow: none;
+  }
+  .agent-sheet__color.is-on {
+    box-shadow: 0 0 0 2px #181d26, 0 0 0 4px var(--agent-a1);
+  }
+  .agent-sheet__done {
+    background: #2f7fed;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-sheet,
+  .agent-sheet-scrim {
+    animation: none;
+  }
+}
