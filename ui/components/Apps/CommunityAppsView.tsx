@@ -2,7 +2,7 @@
  * CommunityAppsView - Browse Papr Cloud + open-source community apps
  */
 
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useChat } from "../../hooks/useChat";
@@ -827,11 +827,23 @@ export function CommunityAppsView({
 
   // Broad categories (Jev-sorted) for the filter pills. Keys are per catalog id.
   const catKey = (entry: CommunityCatalogEntry) => `catalog:${entry.catalogId}`;
-  const categorizeSig = filteredEntries.map((e) => e.catalogId).join("|");
+  // The publisher's category (sent at publish) wins; older publishes without
+  // one are sorted locally until they're republished.
+  const entryCats = useMemo(() => {
+    const m: Record<string, string | null> = { ...cats.byKey };
+    const live = new Set(cats.categories.map((c) => c.name));
+    for (const e of filteredEntries) {
+      if (e.category && (live.has(e.category) || scope === "namespace")) m[catKey(e)] = e.category;
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cats, filteredEntries, scope]);
+  const unsorted = filteredEntries.filter((e) => !e.category);
+  const categorizeSig = unsorted.map((e) => e.catalogId).join("|");
   useEffect(() => {
-    if (!filteredEntries.length || resultsHeading) return;
+    if (!unsorted.length || resultsHeading) return;
     categorizeEntries(
-      filteredEntries.map((e) => ({
+      unsorted.map((e) => ({
         key: catKey(e),
         title: e.name,
         description: e.description,
@@ -845,7 +857,7 @@ export function CommunityAppsView({
   const categoryEntries =
     category === null || resultsHeading
       ? filteredEntries
-      : filteredEntries.filter((e) => matchesCategory(catKey(e), cats.byKey, category));
+      : filteredEntries.filter((e) => matchesCategory(catKey(e), entryCats, category));
 
   const teamEntries =
     scope === "namespace"
@@ -1062,8 +1074,13 @@ export function CommunityAppsView({
       {resultsHeading ? null : (
         <CategoryPills
           keys={filteredEntries.map(catKey)}
-          byKey={cats.byKey}
-          order={cats.categories.map((c) => c.name)}
+          byKey={entryCats}
+          order={[
+            ...cats.categories.map((c) => c.name),
+            ...[...new Set(Object.values(entryCats))].filter(
+              (c): c is string => !!c && !cats.categories.some((x) => x.name === c),
+            ),
+          ]}
           value={category}
           onChange={setCategory}
         />

@@ -107,3 +107,11 @@ describe("new app starters come from the user's library", () => {
     expect(buildCreateAppStarters([], {})).toHaveLength(5);
   });
 });
+
+describe("categorizing happens in the background", () => {
+  it("background categorize is a no-op under tests (never blocks create/update)", async () => {
+    const { AppCategoryService } = await import("../src/gateway/services/AppCategoryService");
+    const svc = new AppCategoryService();
+    expect(() => svc.categorizeAppInBackground({ id: "x", title: "Anything" })).not.toThrow();
+  });
+});

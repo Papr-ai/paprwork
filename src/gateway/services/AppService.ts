@@ -2284,6 +2284,11 @@ export class AppService {
       await this.scaffoldAppBackend(appPath);
     }
 
+    // Sort into a broad category now, not the next time Apps is opened.
+    void import("./AppCategoryService.js")
+      .then(({ getAppCategoryService }) => getAppCategoryService().categorizeAppInBackground(app))
+      .catch(() => undefined);
+
     return app;
   }
 
@@ -2456,6 +2461,13 @@ export class AppService {
 
     if ("agentChat" in nextUpdates) {
       await writeAgentChatSidecar(this.paprRootDir, id, updatedApp.agentChat);
+    }
+
+    // Name or description changed: re-sort in the background (no-op if unchanged).
+    if (updatedApp.title !== app.title || updatedApp.description !== app.description) {
+      void import("./AppCategoryService.js")
+        .then(({ getAppCategoryService }) => getAppCategoryService().categorizeAppInBackground(updatedApp))
+        .catch(() => undefined);
     }
 
     import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {

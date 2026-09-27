@@ -57,6 +57,16 @@ import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
 import { prepareCatalogIconForPublish } from "../utils/catalogIconForPublish.js";
 import type { CatalogAutomation } from "../../core/types/catalogAutomation.js";
 import { resolveCatalogAutomationForApp } from "./cloudCatalogAutomation.js";
+import { getAppCategoryService } from "./AppCategoryService.js";
+
+/** The app's broad category (Jev or user-picked) for Team/Community pills. */
+function publishCategory(appId: string): string | undefined {
+  try {
+    return getAppCategoryService().categoryFor(`app:${appId}`) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 import { normalizeCatalogTags } from "../../core/utils/catalogTags.js";
 import { buildMiniApp } from "../utils/miniAppBuild.js";
 import {
@@ -431,6 +441,7 @@ export class CloudAppPublishService {
       catalogDescription: appMeta?.description,
       catalogIcon: catalogIconResult.icon,
       catalogTags: appMeta?.tags,
+      catalogCategory: publishCategory(appId),
       catalogAutomation,
       shareAllowlist: memoryShareAllowlistBodyFromPrefs(prefs),
     });
@@ -616,6 +627,7 @@ export class CloudAppPublishService {
       catalogDescription?: string;
       catalogIcon?: string;
       catalogTags?: string[];
+      catalogCategory?: string;
       catalogAutomation?: CatalogAutomation | null;
       shareAllowlist?: ReturnType<typeof memoryShareAllowlistBodyFromPrefs>;
     },
@@ -663,6 +675,7 @@ export class CloudAppPublishService {
             : {}),
           ...(body.catalogIcon ? { catalogIcon: body.catalogIcon } : {}),
           ...(body.catalogTags?.length ? { catalogTags: body.catalogTags } : {}),
+          ...(body.catalogCategory ? { catalogCategory: body.catalogCategory } : {}),
           ...(body.catalogPlatform?.length
             ? { catalogPlatform: body.catalogPlatform }
             : {}),
@@ -1050,6 +1063,7 @@ export class CloudAppPublishService {
           catalogDescription: appMeta?.description,
           catalogIcon: catalogIconResult.icon,
           catalogTags: appMeta?.tags,
+          catalogCategory: publishCategory(appId),
           catalogPlatform: manifestPlatform,
           catalogRequiresDesktop: manifestRequiresDesktop,
           catalogAutomation,

@@ -68,6 +68,8 @@ export interface CommunityCatalogEntry {
   communityCatalogListed?: boolean;
   /** Publisher Papr user id — used to hide own apps from Shared with me */
   publisherUserId?: string;
+  /** Broad category the publisher's app was sorted into (set at publish). */
+  category?: string;
   /** Scheduled job summary (denormalized at publish time) */
   catalogAutomation?: CatalogAutomation;
 }
