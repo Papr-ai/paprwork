@@ -601,3 +601,28 @@
 .apps-cleanup__tag { width: 56px; text-align: right; font-size: 11.5px; font-weight: 600; color: var(--text-tertiary); }
 .apps-cleanup__row--kept .apps-cleanup__tag { color: var(--accent); }
 .apps-cleanup__footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+/* Search: centered on top, with the ⌘K hint so people learn the shortcut. */
+.apps-view__topbar {
+  justify-content: center;
+  position: relative;
+}
+.apps-view__search {
+  width: min(560px, 100%);
+  flex: none;
+}
+.apps-view__search-kbd {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  font: 500 11px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
+  color: var(--text-tertiary);
+  background: var(--glass-bg-subtle, rgba(0, 0, 0, 0.04));
+  border: 1px solid var(--glass-border, rgba(0, 0, 0, 0.08));
+  border-radius: 6px;
+  padding: 4px 6px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+.apps-view__search:focus-within .apps-view__search-kbd { opacity: 0; }
