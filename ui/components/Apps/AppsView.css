@@ -648,3 +648,7 @@
   gap: 16px;
 }
 .apps-view__recent-row { overflow-x: visible; }
+
+/* Anchor the "/" hint inside the search box (it was positioning against the
+   top bar and landing under the New app button). */
+.apps-view__search { position: relative; }
