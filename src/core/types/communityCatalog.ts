@@ -58,6 +58,8 @@ export interface CommunityCatalogEntry {
   installedForkCount?: number;
   /** Everyone who installed it (fork or collaborate), from Papr Cloud. */
   installCount?: number;
+  /** Last time the publisher published this app (ISO 8601). */
+  updatedAt?: string;
   /** Cloud publish visibility (team, public_read, …) when known */
   visibility?: string;
   /** External invite link enabled (unlisted — not Community Apps listed) */

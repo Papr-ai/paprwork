@@ -33,6 +33,21 @@ export function getCatalogShareBadge(entry: CommunityCatalogEntry): string | nul
   return null;
 }
 
+/** "3d ago" style relative time for catalog footers. */
+export function formatCatalogUpdated(iso?: string): string | null {
+  if (!iso) return null;
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) return null;
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  const m = s / 60, h = m / 60, d = h / 24;
+  if (m < 60) return `${Math.floor(m)}m ago`;
+  if (h < 24) return `${Math.floor(h)}h ago`;
+  if (d < 30) return `${Math.floor(d)}d ago`;
+  if (d < 365) return `${Math.floor(d / 30)}mo ago`;
+  return `${Math.floor(d / 365)}y ago`;
+}
+
 /** Single author line under the description. */
 export function getCatalogByline(entry: CommunityCatalogEntry): string {
   const author = entry.author?.trim() || "Unknown";

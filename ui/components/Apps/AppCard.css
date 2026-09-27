@@ -683,3 +683,6 @@
   border-radius: 999px;
   white-space: nowrap;
 }
+
+/* Footer strip stays the card colour; a hairline divider does the separating. */
+.app-card .app-card__footer { background: transparent; }
