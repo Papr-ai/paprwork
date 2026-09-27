@@ -39,7 +39,7 @@ export function appStatusLine(
   app: Artifact,
   opts: { health?: AppHealth; isPublished: boolean; now?: number },
 ): AppStatusLine {
-  const { health, isPublished } = opts;
+  const { health } = opts;
   const status = app.status ?? "active";
   if (status === "archived") {
     return { tone: "neutral", text: "Archived", action: "Restore" };
@@ -81,24 +81,7 @@ export function appStatusLine(
         : " · hasn't run yet";
     return { tone: "ok", text: `${schedule}${last}`, action: "Open" };
   }
-  if (app.cloudLineage) {
-    const src = app.cloudLineage.sourceSlug;
-    return {
-      tone: "neutral",
-      text:
-        app.cloudLineage.mode === "track"
-          ? `Follows ${src}`
-          : `Your copy of ${src}`,
-      action: "Open",
-    };
-  }
-  if (isPublished)
-    return { tone: "live", text: "Live on the web", action: "Open" };
-  if (status === "draft")
-    return {
-      tone: "neutral",
-      text: "Draft · only you can see it",
-      action: "Open",
-    };
+  // Live / private / fork are shown by the share and lineage icons on the
+  // card, so the status line is only for job health.
   return { tone: "neutral", text: "", action: "Open" };
 }
