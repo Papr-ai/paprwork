@@ -987,3 +987,26 @@
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 16px;
 }
+
+/* Small "Yours" / "In library" marker in the footer instead of a title pill. */
+.community-card__meta--foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.community-card__meta--foot .community-card__byline {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.community-card__mine {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--success, #1f9d55);
+}
