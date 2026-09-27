@@ -1,5 +1,5 @@
 /**
- * Sidebar — the left rail. 80px, icon-first, fully contains the macOS traffic lights.
+ * Sidebar — the left rail. 96px, icon-first, clears the macOS traffic lights.
  * Your agent sits on top and is Home; Chats / Apps / Docs show Pinned + Recent in hover peeks
  * (replacing the always-on Favorites list); account, settings and personalization live on the avatar.
  * Every destination and action from the previous 240px sidebar is still here.
@@ -12,7 +12,6 @@ import type { TabType } from "../../types/tabs";
 import { WeatherWidget } from "./WeatherWidget";
 import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
-import { SidebarToggleIcon } from "./SidebarToggleIcon";
 import { RailItem } from "./RailItem";
 import { RailPeek } from "./RailPeek";
 import { RailIcons } from "./railIcons";
@@ -47,7 +46,7 @@ function tabTypeToView(type: TabType | undefined): View {
   }
 }
 
-export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void }) {
+export function Sidebar() {
   const { createChat } = useChat();
   const { tabs, createTab, switchToTab, activeLeftTab } = useTabs();
 
@@ -266,9 +265,6 @@ export function Sidebar({ onToggleCollapse }: { onToggleCollapse?: () => void })
           ) : undefined
         }
       />
-      {onToggleCollapse ? (
-        <RailItem label="Hide sidebar" onClick={onToggleCollapse} icon={<SidebarToggleIcon />} />
-      ) : null}
       <ProfileFooter onOpenProfile={handleOpenProfile} onOpenSettings={handleOpenSettings} />
     </nav>
   );
