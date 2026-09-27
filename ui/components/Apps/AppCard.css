@@ -611,3 +611,11 @@
   min-width: 0;
 }
 .app-card .app-card__description { margin-top: 10px; }
+/* Content wrapper is display:contents in the compact layout, so its padding
+   and gap live on the card grid instead. */
+.app-card {
+  padding: 16px 18px 16px;
+  row-gap: 4px;
+}
+.app-card .app-card__description { margin-top: 8px; }
+.app-card .app-card__menu-wrap { top: 14px; right: 14px; }

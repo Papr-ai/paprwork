@@ -876,3 +876,10 @@
   min-width: 0;
 }
 .community-card .community-card__description { margin-top: 10px; }
+/* Content wrapper is display:contents in the compact layout, so its padding
+   and gap live on the card grid instead. */
+.community-card {
+  padding: 16px 18px 14px;
+  row-gap: 6px;
+}
+.community-card .community-card__description { margin-top: 8px; }
