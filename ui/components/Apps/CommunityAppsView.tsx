@@ -1163,11 +1163,9 @@ function CommunityAppCard({
   onOpen,
   onOpenHover,
 }: CommunityAppCardProps) {
-  const [showDetails, setShowDetails] = useState(false);
 
   const rawReqs = entry.requirements ?? [];
   const requirements = normalizeRequirements(rawReqs);
-  const hasNoRequirements = requirements.length === 0;
 
   const allPlatforms = ["macos", "windows", "linux"];
   const platforms = entry.platform ?? allPlatforms;
@@ -1322,79 +1320,31 @@ function CommunityAppCard({
           </div>
         ) : null}
 
-        {showDetails && (
-          <div className="community-card__details">
-            <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Requirements</span>
-              <span
-                className={`community-card__detail-value ${hasNoRequirements ? "community-card__detail-value--good" : "community-card__detail-value--warn"}`}
-              >
-                {requirements.length > 0
-                  ? requirements
-                      .map((r) => lookupService(r.name)?.service ?? r.name)
-                      .join(", ")
-                  : "No API keys needed"}
-              </span>
-            </div>
-            {showPlatformBadge ? (
-              <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Platform</span>
-                <span
-                  className={`community-card__detail-value ${isCrossPlatform ? "community-card__detail-value--good" : ""}`}
-                >
-                  {platformLabel}
-                  {entry.source === "cloud" && requiresDesktop
-                    ? " for full functionality"
-                    : ""}
-                </span>
-              </div>
-            ) : null}
-            <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Open</span>
-              <span className="community-card__detail-value">
-                {entry.source === "cloud"
-                  ? localAppId
-                    ? "Open in My Apps"
-                    : entry.codeInstallable
-                      ? "Personalize locally (recommended)"
-                      : entry.liveViewable
-                        ? "Live preview in Paprwork"
-                        : "Web app only"
-                  : "GitHub bundle"}
-              </span>
-            </div>
-            {entry.source === "cloud" && entry.codeInstallable ? (
-              <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Personalize</span>
-                <span className="community-card__detail-value">
-                  Install a personal copy to edit or contribute (optional)
-                </span>
-              </div>
-            ) : null}
-            {entry.source === "cloud" && entry.slug ? (
-              <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Slug</span>
-                <span className="community-card__detail-value">{entry.slug}</span>
-              </div>
-            ) : null}
+        {requirements.length > 0 ? (
+          <div
+            className="community-card__needs"
+            title="You'll be asked for these keys when you install"
+          >
+            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+              <circle cx="5.5" cy="10.5" r="3" />
+              <path d="M7.7 8.3 13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2" strokeLinecap="round" />
+            </svg>
+            <span>
+              Needs{" "}
+              {requirements
+                .map((r) => lookupService(r.name)?.service ?? r.name)
+                .join(", ")}{" "}
+              key{requirements.length === 1 ? "" : "s"}
+            </span>
           </div>
-        )}
+        ) : null}
       </div>
 
-      {/* One footer row, pinned to the bottom of every card: who made it,
-          Details, and one compact action. */}
+      {/* One footer row, pinned to the bottom of every card: who made it and
+          one compact action. */}
       <div className="community-card__foot">
           <div className="community-card__meta community-card__meta--foot">
             <span className="community-card__byline">{byline}</span>
-            <button
-              className="community-card__details-toggle"
-              onClick={(e) => {
-                e.stopPropagation();
-                setShowDetails(!showDetails);
-              }}
-            >
-              {showDetails ? "Less" : "Details"}
-            </button>
           </div>
       {entry.source === "cloud" ? (
           <div className="community-card__actions">
