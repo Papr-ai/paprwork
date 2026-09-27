@@ -57,6 +57,11 @@ import {
 import { toolRepetitionDedupKey } from "../agent/toolRepetitionKey.js";
 import { truncateToolResultForModelContext } from "../agent/toolResultTruncation.js";
 import {
+  buildTrimGoal,
+  scheduleJevTrim,
+  type JevTrimRegistry,
+} from "../agent/jevToolResultTrim.js";
+import {
   EMPTY_PI_AI_BILLING_USAGE,
   accumulatePiAiBillingUsage,
   extractPiAiUsageFromDoneEvent,
@@ -227,6 +232,8 @@ async function executeToolCall(
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
     turnMetrics?: TurnMetrics;
+    jevTrim?: JevTrimRegistry;
+    userMessage?: string;
   },
 ): Promise<{ toolCallId: string; toolName: string; result: unknown }> {
   const tool = mastraTools[toolCall.toolName];
@@ -334,6 +341,11 @@ function appendToolTurnToContext(
   },
   toolResults: Array<{ toolCallId: string; toolName: string; result: unknown }>,
   _cumulativeTokens: number,
+  trim?: {
+    registry?: JevTrimRegistry;
+    userMessage?: string;
+    argsByCallId?: Map<string, unknown>;
+  },
 ): void {
   context.messages.push(assistantMessage);
   const now = Date.now();
@@ -363,6 +375,17 @@ function appendToolTurnToContext(
     const isError = resultObj
       ? resultObj.success === false || typeof resultObj.error === "string"
       : false;
+
+    if (trim?.registry) {
+      const args = trim.argsByCallId?.get(tr.toolCallId) as { command?: unknown } | undefined;
+      scheduleJevTrim(
+        trim.registry,
+        tr.toolCallId,
+        tr.toolName,
+        text,
+        buildTrimGoal(trim.userMessage ?? "", typeof args?.command === "string" ? args.command : ""),
+      );
+    }
 
     // Cap pathological results; full data remains in SQLite for get_full_tool_result.
     context.messages.push({
@@ -441,6 +464,10 @@ export async function* createPiCodexStreamWithToolLoop(
     jobEnv?: Record<string, string>;
     delegationJobId?: string;
     turnMetrics?: TurnMetrics;
+    /** JEV_TOOL_TRIM experiment registry for this turn (see jevToolResultTrim.ts). */
+    jevTrim?: JevTrimRegistry;
+    /** The user's message, for the Jev trim goal. */
+    userMessage?: string;
   },
   /**
    * Consulted when the model stops on its own. Returning a nudge keeps the loop
@@ -667,7 +694,11 @@ export async function* createPiCodexStreamWithToolLoop(
       context.messages,
       historyTrimBounds,
       memoryPressure,
-      { skipStaleToolCompaction: step === 0 },
+      {
+        skipStaleToolCompaction: step === 0,
+        jevTrim: toolContext?.jevTrim,
+        turnMetrics: toolContext?.turnMetrics,
+      },
     );
 
     const toolCallsThisTurn: ToolCallAccum[] = [];
@@ -1236,7 +1267,11 @@ export async function* createPiCodexStreamWithToolLoop(
 
       if (isToolUseStep) {
         // Append full tool results for the current turn (never truncated mid-turn).
-        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens);
+        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens, {
+          registry: toolContext?.jevTrim,
+          userMessage: toolContext?.userMessage,
+          argsByCallId: new Map(toolCallsThisTurn.map((tc) => [tc.toolCallId, tc.args])),
+        });
 
         // Reasoning blocks are only needed while the model is thinking — drop immediately.
         stripAllAssistantReasoning(context.messages as unknown[]);
@@ -1273,7 +1308,11 @@ export async function* createPiCodexStreamWithToolLoop(
         );
       } else {
         // Orphan drain — tools ran after stop/length; continue so the model sees results.
-        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens);
+        appendToolTurnToContext(context, doneMessage, toolResults, cumulativeTokens, {
+          registry: toolContext?.jevTrim,
+          userMessage: toolContext?.userMessage,
+          argsByCallId: new Map(toolCallsThisTurn.map((tc) => [tc.toolCallId, tc.args])),
+        });
         stripAllAssistantReasoning(context.messages as unknown[]);
         step++;
         console.log(

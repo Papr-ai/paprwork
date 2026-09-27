@@ -8,6 +8,8 @@ import {
   trimOldestHistoryTurns,
   type MidTurnTrimOpts,
 } from "../agent/midTurnContextTrim.js";
+import type { JevTrimRegistry } from "../agent/jevToolResultTrim.js";
+import type { TurnMetrics } from "../agent/turnMetrics.js";
 import type { PiStreamMemoryCheck } from "./piStreamMemoryLimits.js";
 
 export const WRAP_UP_AFTER_MEMORY_BUDGET =
@@ -75,7 +77,11 @@ export function applyMidTurnContextShaping(
   messages: unknown[],
   historyTrimBounds: MidTurnTrimOpts | undefined,
   memoryPressure: boolean,
-  opts?: { skipStaleToolCompaction?: boolean },
+  opts?: {
+    skipStaleToolCompaction?: boolean;
+    jevTrim?: JevTrimRegistry;
+    turnMetrics?: TurnMetrics;
+  },
 ): void {
   if (memoryPressure) {
     const stats = compactMidTurnContextForMemoryPressure(messages);
@@ -89,6 +95,8 @@ export function applyMidTurnContextShaping(
     if (!opts?.skipStaleToolCompaction) {
       compactStaleToolResults(messages, {
         historyTokenBudget: historyTrimBounds?.maxTokens,
+        jevTrim: opts?.jevTrim,
+        turnMetrics: opts?.turnMetrics,
       });
     }
   }
