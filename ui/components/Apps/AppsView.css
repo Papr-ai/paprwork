@@ -640,3 +640,11 @@
   top: 50%;
   transform: translateY(-50%);
 }
+
+/* Wider cards (match the prototype): fewer, roomier columns. */
+.apps-view__grid,
+.apps-view__recent-row {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
+.apps-view__recent-row { overflow-x: visible; }
