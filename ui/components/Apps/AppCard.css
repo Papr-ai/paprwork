@@ -636,3 +636,32 @@
 .app-card:focus-within .app-card__share { opacity: 1; }
 .app-card .app-card__menu-wrap { top: 14px; right: 44px; }
 .app-card__menu--portal { width: 184px; }
+
+/* Compact card v2: flex column so the footer (Opened/Updated · Open) is pinned
+   to the bottom regardless of how many lines sit above it. Icon is absolute. */
+.app-card {
+  display: flex;
+  flex-direction: column;
+}
+.app-card .app-card__preview {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+}
+.app-card .app-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+.app-card .app-card__content > .app-card__title-row,
+.app-card .app-card__content > .app-card__title-input {
+  min-height: 40px;
+  margin-left: 52px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+.app-card .app-card__footer { margin-top: auto; padding-top: 10px; }
