@@ -323,14 +323,21 @@ export function AppCard({
             ) : null}
             {artifact.cloudLineage ? (
               <span
-                className={
+                className="app-card__lineage"
+                title={
                   artifact.cloudLineage.mode === "track"
-                    ? "app-card__cloud-badge app-card__cloud-badge--track"
-                    : "app-card__cloud-badge app-card__cloud-badge--fork"
+                    ? `Linked copy of ${artifact.cloudLineage.sourceSlug}. Your edits go to the owner as proposals.`
+                    : `Forked from ${artifact.cloudLineage.sourceSlug}. Your own app.`
                 }
-                title={`From cloud: ${artifact.cloudLineage.sourceSlug}`}
+                aria-label={artifact.cloudLineage.mode === "track" ? "Linked copy" : "Fork"}
               >
-                {artifact.cloudLineage.mode === "track" ? "Track" : "Fork"}
+                {/* Same lineage mark as the app's share bar. */}
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="6" cy="5" r="2" />
+                  <circle cx="18" cy="5" r="2" />
+                  <circle cx="12" cy="19" r="2" />
+                  <path d="M6 7v2a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7M12 11v6" />
+                </svg>
               </span>
             ) : null}
             {status !== "active" && !(isPublished && status === "draft") && (

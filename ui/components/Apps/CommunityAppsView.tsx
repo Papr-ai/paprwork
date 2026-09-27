@@ -32,7 +32,6 @@ import {
 } from "../../utils/communityCatalogCache";
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import {
-  filterCatalogDisplayTags,
   formatCatalogUpdated,
   getCatalogByline,
   getCatalogShareBadge,
@@ -1256,7 +1255,7 @@ function CommunityAppCard({
   // Everyone's installs (from Papr Cloud), not just the copies on this machine.
   const updatedAgo = formatCatalogUpdated(entry.updatedAt);
   const byline = [
-    getCatalogByline(entry),
+    entry.isOwned ? null : getCatalogByline(entry),
     updatedAgo ? `Updated ${updatedAgo}` : null,
     typeof installs === "number" && installs > 0
       ? `${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
@@ -1264,7 +1263,6 @@ function CommunityAppCard({
   ]
     .filter(Boolean)
     .join(" · ");
-  const displayTags = filterCatalogDisplayTags(entry.tags);
   const share = shareGlyphForCatalogEntry(entry);
 
   return (
@@ -1296,61 +1294,84 @@ function CommunityAppCard({
           ) : null}
         </div>
         <p className="community-card__description">{entry.description}</p>
-        {entry.catalogAutomation?.cardLine ? (
-          <p className="community-card__automation">{entry.catalogAutomation.cardLine}</p>
-        ) : null}
-        {displayTags.length > 0 || showPlatformBadge ? (
-          <div className="community-card__tags">
-            {displayTags.map((tag) => (
-              <span key={tag} className="community-card__tag">
-                {tag}
-              </span>
-            ))}
-            {showPlatformBadge ? (
-              <span className="community-card__platform-badge">{platformLabel}</span>
-            ) : null}
-          </div>
-        ) : null}
-
-        {requirements.length > 0 ? (
-          <div
-            className="community-card__needs"
-            title="You'll be asked for these keys when you install"
-          >
-            <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-              <circle cx="5.5" cy="10.5" r="3" />
-              <path d="M7.7 8.3 13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2" strokeLinecap="round" />
-            </svg>
-            <span>
-              Needs{" "}
-              {requirements
-                .map((r) => lookupService(r.name)?.service ?? r.name)
-                .join(", ")}{" "}
-              key{requirements.length === 1 ? "" : "s"}
-            </span>
-          </div>
-        ) : null}
+        {/* One quiet facts list: same icon + text style for schedule, keys
+            and platform, instead of mixed pills and coloured lines. Tags stay
+            searchable but are not shown on the card. */}
+        {(() => {
+          const keyServices = Array.from(
+            new Set(
+              requirements.map((r) => {
+                const svc =
+                  (r as { service?: string }).service ??
+                  lookupService(r.name)?.service;
+                if (svc) return svc;
+                const head = r.name.split("_")[0] ?? r.name;
+                return head.charAt(0) + head.slice(1).toLowerCase();
+              }),
+            ),
+          );
+          const facts: Array<{ key: string; icon: React.ReactNode; text: string; title?: string }> = [];
+          if (entry.catalogAutomation?.cardLine) {
+            facts.push({
+              key: "sched",
+              icon: (
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <circle cx="8" cy="8" r="6" />
+                  <path d="M8 5v3.2l2 1.3" strokeLinecap="round" />
+                </svg>
+              ),
+              text: entry.catalogAutomation.cardLine,
+            });
+          }
+          if (keyServices.length > 0) {
+            facts.push({
+              key: "keys",
+              icon: (
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <circle cx="5.5" cy="10.5" r="3" />
+                  <path d="M7.7 8.3 13.5 2.5M11.5 4.5l1.5 1.5M10 6l1.2 1.2" strokeLinecap="round" />
+                </svg>
+              ),
+              text: `Needs ${keyServices.join(", ")} key${requirements.length === 1 ? "" : "s"}`,
+              title: `You'll be asked for these when you install: ${requirements.map((r) => r.name).join(", ")}`,
+            });
+          }
+          if (showPlatformBadge) {
+            facts.push({
+              key: "platform",
+              icon: (
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+                  <rect x="2" y="3" width="12" height="8" rx="1.5" />
+                  <path d="M6 13.5h4" strokeLinecap="round" />
+                </svg>
+              ),
+              text: platformLabel,
+            });
+          }
+          if (facts.length === 0) return null;
+          return (
+            <ul className="community-card__facts">
+              {facts.map((f) => (
+                <li key={f.key} className="community-card__fact" title={f.title ?? f.text}>
+                  {f.icon}
+                  <span>{f.text}</span>
+                </li>
+              ))}
+            </ul>
+          );
+        })()}
       </div>
 
       {/* One footer row, pinned to the bottom of every card: who made it and
           one compact action. */}
       <div className="community-card__foot">
           <div className="community-card__meta community-card__meta--foot">
-            {entry.isOwned || installedForkCount > 0 ? (
-              <span
-                className="community-card__mine"
-                title={
-                  entry.isOwned
-                    ? "You published this app"
-                    : installedForkCount === 1
-                      ? "A copy is in your library"
-                      : `${installedForkCount} copies in your library`
-                }
-              >
+            {entry.isOwned ? (
+              <span className="community-card__mine" title="You published this app">
                 <svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
                   <path d="M3.5 8.5l3 3 6-7" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
-                {entry.isOwned ? "Yours" : "In library"}
+                Yours
               </span>
             ) : null}
             <span className="community-card__byline">{byline}</span>
@@ -1361,8 +1382,15 @@ function CommunityAppCard({
               {showWebOpen ? (
                 <button
                   type="button"
-                  className={`community-card__action-btn${showInstall && localAppId ? "" : " community-card__action-btn--primary"}`}
+                  className={`community-card__action-btn${localAppId || entry.isOwned ? "" : " community-card__action-btn--primary"}`}
                   onClick={onOpen}
+                  title={
+                    installedForkCount > 1
+                      ? `${installedForkCount} copies in your library`
+                      : localAppId
+                        ? "Open your copy"
+                        : undefined
+                  }
                   onMouseEnter={onOpenHover}
                   onFocus={onOpenHover}
                 >
