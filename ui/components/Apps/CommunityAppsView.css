@@ -900,3 +900,53 @@
   right: 20px;
 }
 .community-card .community-card__content > .community-card__title-row { padding-right: 30px; }
+
+/* ── Compact card v2: flex column, small icon pinned top-left, one footer
+   row pinned to the bottom so actions line up across every card. ── */
+.community-card {
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px 14px;
+}
+.community-card .community-card__preview {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+}
+.community-card .community-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  padding: 0;
+}
+.community-card .community-card__content > .community-card__title-row {
+  min-height: 40px;
+  padding-left: 52px;
+  padding-right: 30px;
+  align-self: stretch;
+}
+.community-card .community-card__description { margin-top: 6px; }
+.community-card__foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.community-card__foot .community-card__meta--foot {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+}
+.community-card__foot .community-card__actions { margin: 0; flex: none; }
+.community-card__foot .community-card__actions-row { gap: 6px; }
+.community-card__foot .community-card__action-btn,
+.community-card__foot .community-card__import-btn {
+  flex: none;
+  margin: 0;
+  padding: 5px 14px;
+  font-size: 12.5px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
