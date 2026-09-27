@@ -33,6 +33,8 @@ const EMPTY: CategoriesSnapshot = { categories: [], byKey: {}, version: 0 };
 
 /** Shared across views so Library / Team / Community stay in sync. */
 let shared: CategoriesSnapshot = EMPTY;
+/** True while the first-ever library sort is running (nothing stored yet). */
+let firstRun = false;
 const listeners = new Set<(s: CategoriesSnapshot) => void>();
 function publish(next: CategoriesSnapshot): void {
   shared = next;
@@ -55,6 +57,8 @@ async function post(path: string, body: unknown): Promise<CategoriesSnapshot | n
 
 export function useAppCategories(): {
   snapshot: CategoriesSnapshot;
+  /** Reserve space for the pill row: first sort is running, nothing to show yet. */
+  sorting: boolean;
   syncLibrary: () => void;
   categorize: (items: CategorizeItem[], scope: "team" | "community") => void;
   assign: (key: string, category: string | null) => void;
@@ -76,7 +80,15 @@ export function useAppCategories(): {
   }, []);
 
   const syncLibrary = useCallback(() => {
-    void post("/api/apps/categories/sync", {}).then((s) => s && publish(s));
+    const first = Object.keys(shared.byKey).length === 0;
+    if (first) {
+      firstRun = true;
+      publish({ ...shared });
+    }
+    void post("/api/apps/categories/sync", {}).then((s) => {
+      firstRun = false;
+      publish(s ?? { ...shared });
+    });
   }, []);
 
   const categorize = useCallback((items: CategorizeItem[], scope: "team" | "community") => {
@@ -92,5 +104,5 @@ export function useAppCategories(): {
     void post("/api/apps/categories/assign", { key, category }).then((s) => s && publish(s));
   }, []);
 
-  return { snapshot, syncLibrary, categorize, assign };
+  return { snapshot, sorting: firstRun && Object.keys(snapshot.byKey).length === 0, syncLibrary, categorize, assign };
 }

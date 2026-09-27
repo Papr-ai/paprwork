@@ -146,6 +146,23 @@ export class AppCategoryService {
     return toSnapshot(load());
   }
 
+  /** Live category for one key (null = Other / not sorted yet). Used at publish. */
+  categoryFor(key: string): string | null {
+    return visibleCategory(load(), key);
+  }
+
+  /**
+   * Fire-and-forget for one app right after it's created or edited, so it has
+   * a category before the user next opens Apps. Skips unchanged text.
+   */
+  categorizeAppInBackground(app: { id: string; title: string; description?: string; tags?: string[] }): void {
+    if (process.env.VITEST) return;
+    void this.categorize(
+      [{ key: `app:${app.id}`, title: app.title, description: app.description, tags: app.tags }],
+      { allowPropose: true },
+    ).catch((err) => console.warn("[AppCategories] background categorize failed:", (err as Error).message));
+  }
+
   /** Serialized so concurrent calls never clobber the JSON file. */
   categorize(items: CategorizableItem[], opts: { allowPropose: boolean }): Promise<CategoriesSnapshot> {
     const run = this.queue.then(() => this.categorizeNow(items, opts));
@@ -206,6 +223,7 @@ export class AppCategoryService {
         else if (pick.kind === "propose") unresolved.push(it);
         else assign(store, it, null, 0, "jev");
       });
+      save(store); // keep progress if the app quits mid-run
     }
 
     const canPropose = () =>

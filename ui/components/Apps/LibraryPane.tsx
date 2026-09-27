@@ -74,7 +74,7 @@ export function LibraryPane(props: LibraryPaneProps) {
   );
 
   // Broad category pills (Jev-sorted). Reset when the section changes.
-  const { snapshot: cats, assign: assignCategory } = useAppCategories();
+  const { snapshot: cats, sorting, assign: assignCategory } = useAppCategories();
   const [category, setCategory] = useState<string | null>(null);
   useEffect(() => setCategory(null), [section]);
   const list = useMemo(
@@ -204,7 +204,9 @@ export function LibraryPane(props: LibraryPaneProps) {
         </div>
       ) : null}
 
-      {!searching ? (
+      {!searching && sorting && sectionList.length >= 6 ? (
+        <div className="category-pills category-pills--reserve" aria-hidden="true" />
+      ) : !searching ? (
         <CategoryPills
           keys={sectionList.map((a) => `app:${a.id}`)}
           byKey={cats.byKey}

@@ -32,3 +32,6 @@
   font-size: 11.5px;
   opacity: 0.6;
 }
+
+/* Same height as the pill row while the first sort runs, so the grid doesn't jump. */
+.category-pills--reserve { min-height: 30px; }
