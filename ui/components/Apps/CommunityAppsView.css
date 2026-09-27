@@ -967,3 +967,14 @@
   white-space: nowrap;
 }
 .community-card__needs svg { flex: none; color: var(--text-tertiary); }
+
+/* Footer tray, same as Library cards: byline left, action right, edge to edge. */
+.community-card .community-card__foot {
+  margin: auto -18px -14px;
+  padding: 10px 14px 10px 18px;
+  min-height: 48px;
+  box-sizing: border-box;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.community-card .community-card__content { padding-bottom: 12px; }

@@ -380,6 +380,18 @@ export function AppCard({
               +{duplicateCount} {duplicateCount === 1 ? "copy" : "copies"}
             </button>
           ) : null}
+          {!statusLine || statusLine.action === "Open" ? (
+            <button
+              type="button"
+              className="app-card__action"
+              onClick={(e) => {
+                e.stopPropagation();
+                onOpen();
+              }}
+            >
+              Open
+            </button>
+          ) : null}
           {statusLine && statusLine.action !== "Open" ? (
             <button
               type="button"

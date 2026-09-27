@@ -665,3 +665,21 @@
   align-items: center;
 }
 .app-card .app-card__footer { margin-top: auto; padding-top: 10px; }
+
+/* Footer tray: a tinted strip that runs edge to edge at the bottom of the card.
+   Opened/Updated on the left, one action (Open / Fix / Name it / Restore) right. */
+.app-card .app-card__footer {
+  margin: auto -18px -16px;
+  padding: 10px 14px 10px 18px;
+  min-height: 48px;
+  box-sizing: border-box;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.app-card .app-card__content { padding-bottom: 12px; }
+.app-card .app-card__footer .app-card__action {
+  padding: 5px 14px;
+  font-size: 12.5px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
