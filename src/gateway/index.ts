@@ -43,6 +43,7 @@ import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
 import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
+import { buildAppsHealth } from "../core/utils/appsHealth.js";
 import {
   clearGatewaySyncBusy,
   clearStaleGatewaySyncBusy,
@@ -1718,6 +1719,19 @@ async function startGateway(): Promise<void> {
         res.json({ jobs: summary, count: summary.length });
       } catch (err) {
         console.error("[Gateway] /api/jobs/list error:", err);
+        res.status(500).json({ error: (err as Error).message });
+      }
+    });
+
+    //  GET  /api/apps/health             → per-app job health for Apps library cards
+    //    One batched call for the whole library, built from in-memory job
+    //    records (never run logs or job databases).
+    app.get("/api/apps/health", async (_req, res) => {
+      try {
+        const jobs = await getJobsService().listJobs();
+        res.json({ apps: buildAppsHealth(jobs), generatedAt: new Date().toISOString() });
+      } catch (err) {
+        console.error("[Gateway] /api/apps/health error:", err);
         res.status(500).json({ error: (err as Error).message });
       }
     });

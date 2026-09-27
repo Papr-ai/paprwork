@@ -70,7 +70,7 @@ function assertExplicitInstallDbPolicyAllowed(input: {
     if (input.explicitPolicy !== "fork_empty") {
       throw new CloudInstallDbPolicyError(
         "invalid_install_db_policy",
-        "Install a copy always uses a private empty database.",
+        "Make my own copy always uses a private empty database.",
       );
     }
     return;

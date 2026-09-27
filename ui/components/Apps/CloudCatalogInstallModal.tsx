@@ -48,7 +48,7 @@ export function CloudCatalogInstallModal({
         onClick={(e) => e.stopPropagation()}
       >
         <h3 id="cloud-catalog-install-title" className="community-install-modal__title">
-          Install {entry.name}
+          Get {entry.name}
         </h3>
         {/*
           Community installs used to describe themselves as "an independent
@@ -60,8 +60,8 @@ export function CloudCatalogInstallModal({
         */}
         <p className="community-install-modal__desc">
           {teamTab
-            ? "Install this team app locally. Choose a private copy, collaborate on code only, or share the team database."
-            : "Your data stays private either way. The only question is whether this copy stays connected to the original."}
+            ? "How do you want it?"
+            : "How do you want it? Your data stays private either way."}
         </p>
         {options.map((option) => (
           <button

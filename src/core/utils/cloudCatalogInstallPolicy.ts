@@ -26,9 +26,9 @@ export function cloudCatalogInstallOptionKey(
 export const COMMUNITY_FORK_OPTION: CloudCatalogInstallModeOption = {
   mode: "fork",
   installDbPolicy: "fork_empty",
-  label: "Install a copy",
+  label: "Make my own copy",
   description:
-    "Yours to change freely. No link to the original — no updates, no way to send changes back.",
+    "Change anything. It stops following the original — no updates, nothing sent back.",
 };
 
 /**
@@ -39,33 +39,33 @@ export const COMMUNITY_FORK_OPTION: CloudCatalogInstallModeOption = {
 export const COMMUNITY_TRACK_OPTION: CloudCatalogInstallModeOption = {
   mode: "track",
   installDbPolicy: "fork_empty",
-  label: "Collaborate (no data sharing)",
+  label: "Use it",
   description:
-    "Your own private data, still linked to the original: pull the author's updates and propose your changes back.",
+    "Get the app as published. Your data stays private; the author's updates arrive and you can suggest changes back.",
 };
 
 export const TEAM_FORK_OPTION: CloudCatalogInstallModeOption = {
   mode: "fork",
   installDbPolicy: "fork_empty",
-  label: "Install a copy",
+  label: "Make my own copy",
   description:
-    "Independent copy with a fresh database. No link to the original — your edits won't affect teammates.",
+    "Change anything, with a fresh empty database. It stops following the team app — your edits never reach teammates.",
 };
 
 export const TEAM_TRACK_NO_DATA_OPTION: CloudCatalogInstallModeOption = {
   mode: "track",
   installDbPolicy: "fork_empty",
-  label: "Collaborate (no data sharing)",
+  label: "Build it with the team",
   description:
-    "Your own private database, still linked to the team app: pull code updates and propose changes without sharing rows with teammates.",
+    "Your own test data, still linked to the team app: pull code updates and propose changes back without touching the team's data.",
 };
 
 export const TEAM_TRACK_SHARED_DATA_OPTION: CloudCatalogInstallModeOption = {
   mode: "track",
   installDbPolicy: "shared_primary",
-  label: "Collaborate (data sharing)",
+  label: "Use it",
   description:
-    "Same data as the web app — collaborate on the shared team database and pull code updates when ready.",
+    "Work in the same app and the same data as your team. Code updates arrive when you're ready.",
 };
 
 /**
@@ -106,13 +106,13 @@ export function getCloudCatalogInstallModeOptions(input: {
   // team collaborate shares one database, community collaborate shares only
   // code. The wording has to say which, or the modal is a coin flip.
   if (input.catalogScope === "global") {
-    return [COMMUNITY_FORK_OPTION, COMMUNITY_TRACK_OPTION];
+    return [COMMUNITY_TRACK_OPTION, COMMUNITY_FORK_OPTION];
   }
   if (requiresInstallModeChoice(input)) {
     return [
+      TEAM_TRACK_SHARED_DATA_OPTION,
       TEAM_FORK_OPTION,
       TEAM_TRACK_NO_DATA_OPTION,
-      TEAM_TRACK_SHARED_DATA_OPTION,
     ];
   }
   return [TEAM_FORK_OPTION];
