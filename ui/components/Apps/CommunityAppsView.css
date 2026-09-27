@@ -981,3 +981,9 @@
 
 /* Footer strip stays the card colour; a hairline divider does the separating. */
 .community-card .community-card__foot { background: transparent; }
+
+/* Wider cards (match the prototype and Library). */
+.community-apps__grid {
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 16px;
+}
