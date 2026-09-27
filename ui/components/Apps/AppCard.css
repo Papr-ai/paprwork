@@ -525,3 +525,32 @@
   border-color: color-mix(in srgb, var(--error) 35%, transparent);
   background: color-mix(in srgb, var(--error) 8%, transparent);
 }
+
+/* Share audience glyph — same icon and code badge as the app's share bar. */
+.app-card__share {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.app-card__share .mini-app-publish-bar__share-audience,
+.community-card__share .mini-app-publish-bar__share-audience {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+}
+.app-card__share .mini-app-publish-bar__share-audience--code,
+.community-card__share .mini-app-publish-bar__share-audience--code {
+  margin-right: 4px;
+}
+.app-card__share .mini-app-publish-bar__share-code-badge,
+.community-card__share .mini-app-publish-bar__share-code-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--popover-bg, #fff);
+  color: var(--accent);
+}

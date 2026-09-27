@@ -8,6 +8,7 @@ import type { Artifact } from "../../stores/artifactsStore";
 import type { AppsHealthMap } from "../../../src/core/utils/appsHealth";
 import { AppCard, type AppStatus } from "./AppCard";
 import { appStatusLine } from "../../utils/appStatusLine";
+import type { ShareGlyph } from "../../utils/shareGlyph";
 import {
   duplicateKey,
   inSection,
@@ -48,6 +49,7 @@ interface LibraryPaneProps extends LibraryCardHandlers {
   apps: Artifact[];
   health: AppsHealthMap;
   publishedIds: ReadonlySet<string>;
+  shareById: Readonly<Record<string, ShareGlyph>>;
   searchQuery: string;
   showCopyAction: boolean;
   duplicateExtraCount: number;
@@ -160,6 +162,7 @@ export function LibraryPane(props: LibraryPaneProps) {
                   health: health[app.id],
                   isPublished: publishedIds.has(app.id),
                 })}
+                share={props.shareById[app.id]}
                 duplicateCount={copies}
                 onShowDuplicates={() =>
                   k && setExpanded((s) => new Set(s).add(k))

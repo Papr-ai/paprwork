@@ -29,14 +29,14 @@ describe("cloudCatalogInstallPolicy", () => {
         visibility: "public_read",
         codeInstallable: true,
       }).map((option) => cloudCatalogInstallOptionKey(option)),
-    ).toEqual(["track:fork_empty", "fork:fork_empty"]);
+    ).toEqual(["fork:fork_empty", "track:fork_empty"]);
     expect(
       getCloudCatalogInstallModeOptions({
         catalogScope: "global",
         visibility: "public_read",
         codeInstallable: true,
       }).map((option) => option.label),
-    ).toEqual(["Use it", "Make my own copy"]);
+    ).toEqual(["Install a copy", "Collaborate (no data sharing)"]);
   });
 
   it("prompts fork vs collaborate for team-shared namespace apps", () => {
@@ -61,9 +61,9 @@ describe("cloudCatalogInstallPolicy", () => {
         codeInstallable: true,
       }).map((option) => cloudCatalogInstallOptionKey(option)),
     ).toEqual([
-      "track:shared_primary",
       "fork:fork_empty",
       "track:fork_empty",
+      "track:shared_primary",
     ]);
     expect(
       getCloudCatalogInstallModeOptions({
@@ -71,7 +71,11 @@ describe("cloudCatalogInstallPolicy", () => {
         visibility: "team",
         codeInstallable: true,
       }).map((option) => option.label),
-    ).toEqual(["Use it", "Make my own copy", "Build it with the team"]);
+    ).toEqual([
+      "Install a copy",
+      "Collaborate (no data sharing)",
+      "Collaborate (data sharing)",
+    ]);
   });
 
   it("auto-forks non-team-shared namespace apps", () => {

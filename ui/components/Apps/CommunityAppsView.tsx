@@ -17,7 +17,6 @@ import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog
 import { requiresInstallModeChoice } from "../../../src/core/utils/cloudCatalogInstallPolicy";
 import type { RequirementItem, RequiredKeySpec } from "../../../src/core/types/bundles";
 import { normalizeRequirements } from "../../../src/core/types/bundles";
-import { lookupService } from "../../../src/core/data/knownServices";
 import "./CommunityAppsView.css";
 import { trackEvent } from "../../lib/telemetry";
 import {
@@ -49,7 +48,9 @@ import {
   cloudCatalogPreviewEntityId,
   type CloudCatalogPreviewTabMetadata,
 } from "../../types/cloudCatalogPreviewTab";
-import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
+import { CatalogSidePanel } from "./CatalogSidePanel";
+import { ShareAudienceIcon } from "./WebSyncPopover";
+import { shareGlyphForCatalogEntry } from "../../utils/shareGlyph";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import {
   buildCloudInstallBootstrapFailureAgentMessage,
@@ -261,7 +262,7 @@ export function CommunityAppsView({
   const [installToast, setInstallToast] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
-  const [installModeEntry, setInstallModeEntry] = useState<CommunityCatalogEntry | null>(null);
+  const [panelEntry, setPanelEntry] = useState<CommunityCatalogEntry | null>(null);
   const [cloudInstallWizard, setCloudInstallWizard] = useState<{
     appId: string;
     appTitle: string;
@@ -669,7 +670,7 @@ export function CommunityAppsView({
       });
       return;
     }
-    setInstallModeEntry(entry);
+    setPanelEntry(entry);
   };
 
   const openLocalApp = useCallback(
@@ -841,6 +842,7 @@ export function CommunityAppsView({
             installedForkCount={installedForkCountForEntry(entry, lineageIndex)}
             onOssImport={() => handleOssImportClick(entry)}
             onCloudInstall={() => startCloudInstall(entry)}
+            onShowDetails={() => setPanelEntry(entry)}
             isInstalling={installingId === entry.catalogId}
             onOpen={
               localAppId
@@ -1020,19 +1022,46 @@ export function CommunityAppsView({
         renderCatalogGrid(publicWorkspaceEntries)
       )}
 
-      {installModeEntry ? (
-        <CloudCatalogInstallModal
-          entry={installModeEntry}
-          catalogScope={scope}
-          installing={installingId === installModeEntry.catalogId}
-          onClose={() => setInstallModeEntry(null)}
-          onSelectMode={(selection) => {
-            const target = installModeEntry;
-            setInstallModeEntry(null);
-            void installCloudApp(target, selection);
-          }}
-        />
-      ) : null}
+      {panelEntry
+        ? (() => {
+            const localAppId = resolveLocalAppIdForCatalogEntry(
+              panelEntry,
+              installedAppIds,
+              lineageIndex,
+            );
+            const canOpenWeb = Boolean(
+              panelEntry.liveUrl || (panelEntry.namespaceId && panelEntry.slug),
+            );
+            return (
+              <CatalogSidePanel
+                entry={panelEntry}
+                scope={scope}
+                localAppId={localAppId}
+                installedForkCount={installedForkCountForEntry(panelEntry, lineageIndex)}
+                canInstall={canInstallCloudCatalogEntry(panelEntry, localAppId)}
+                installing={installingId === panelEntry.catalogId}
+                onClose={() => setPanelEntry(null)}
+                onOpen={
+                  localAppId
+                    ? () => openLocalApp(localAppId, panelEntry.name)
+                    : canOpenWeb
+                      ? () => openCloudPreview(panelEntry)
+                      : undefined
+                }
+                onInstall={(selection) => {
+                  const target = panelEntry;
+                  setPanelEntry(null);
+                  void installCloudApp(target, selection);
+                }}
+                onOssImport={() => {
+                  const target = panelEntry;
+                  setPanelEntry(null);
+                  handleOssImportClick(target);
+                }}
+              />
+            );
+          })()
+        : null}
 
       {wizardEntry && (
         <ImportSetupWizard
@@ -1118,6 +1147,7 @@ interface CommunityAppCardProps {
   onCloudInstall: () => void;
   onOpen?: () => void;
   onOpenHover?: () => void;
+  onShowDetails: () => void;
 }
 
 function CommunityAppCard({
@@ -1130,12 +1160,10 @@ function CommunityAppCard({
   onCloudInstall,
   onOpen,
   onOpenHover,
+  onShowDetails,
 }: CommunityAppCardProps) {
-  const [showDetails, setShowDetails] = useState(false);
+  const share = shareGlyphForCatalogEntry(entry);
 
-  const rawReqs = entry.requirements ?? [];
-  const requirements = normalizeRequirements(rawReqs);
-  const hasNoRequirements = requirements.length === 0;
 
   const allPlatforms = ["macos", "windows", "linux"];
   const platforms = entry.platform ?? allPlatforms;
@@ -1234,6 +1262,13 @@ function CommunityAppCard({
 
       <div className="community-card__content">
         <div className="community-card__title-row">
+          <span className="community-card__share">
+            <ShareAudienceIcon
+              audience={share.audience}
+              loginAccess={null}
+              codeAccess={share.codeAccess}
+            />
+          </span>
           <h3 className="community-card__title">{entry.name}</h3>
           {entry.isOwned ? (
             <span className="community-card__badge community-card__badge--owned">
@@ -1269,10 +1304,10 @@ function CommunityAppCard({
             className="community-card__details-toggle"
             onClick={(e) => {
               e.stopPropagation();
-              setShowDetails(!showDetails);
+              onShowDetails();
             }}
           >
-            {showDetails ? "Less" : "Details"}
+            Details
           </button>
         </div>
         {displayTags.length > 0 || showPlatformBadge ? (
@@ -1288,63 +1323,6 @@ function CommunityAppCard({
           </div>
         ) : null}
 
-        {showDetails && (
-          <div className="community-card__details">
-            <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Requirements</span>
-              <span
-                className={`community-card__detail-value ${hasNoRequirements ? "community-card__detail-value--good" : "community-card__detail-value--warn"}`}
-              >
-                {requirements.length > 0
-                  ? requirements
-                      .map((r) => lookupService(r.name)?.service ?? r.name)
-                      .join(", ")
-                  : "No API keys needed"}
-              </span>
-            </div>
-            {showPlatformBadge ? (
-              <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Platform</span>
-                <span
-                  className={`community-card__detail-value ${isCrossPlatform ? "community-card__detail-value--good" : ""}`}
-                >
-                  {platformLabel}
-                  {entry.source === "cloud" && requiresDesktop
-                    ? " for full functionality"
-                    : ""}
-                </span>
-              </div>
-            ) : null}
-            <div className="community-card__detail-row">
-              <span className="community-card__detail-label">Open</span>
-              <span className="community-card__detail-value">
-                {entry.source === "cloud"
-                  ? localAppId
-                    ? "Open in My Apps"
-                    : entry.codeInstallable
-                      ? "Personalize locally (recommended)"
-                      : entry.liveViewable
-                        ? "Live preview in Paprwork"
-                        : "Web app only"
-                  : "GitHub bundle"}
-              </span>
-            </div>
-            {entry.source === "cloud" && entry.codeInstallable ? (
-              <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Personalize</span>
-                <span className="community-card__detail-value">
-                  Install a personal copy to edit or contribute (optional)
-                </span>
-              </div>
-            ) : null}
-            {entry.source === "cloud" && entry.slug ? (
-              <div className="community-card__detail-row">
-                <span className="community-card__detail-label">Slug</span>
-                <span className="community-card__detail-value">{entry.slug}</span>
-              </div>
-            ) : null}
-          </div>
-        )}
       </div>
 
       {entry.source === "cloud" ? (

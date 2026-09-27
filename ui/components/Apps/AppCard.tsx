@@ -6,6 +6,8 @@ import React, { useState, useRef, useCallback, useEffect } from "react";
 import type { Artifact } from "../../stores/artifactsStore";
 import "./AppCard.css";
 import type { AppStatusLine } from "../../utils/appStatusLine";
+import type { ShareGlyph } from "../../utils/shareGlyph";
+import { ShareAudienceIcon } from "./WebSyncPopover";
 
 export type AppStatus = "draft" | "active" | "archived";
 
@@ -25,6 +27,8 @@ interface AppCardProps {
   onCopy?: () => void;
   /** One-line health/provenance summary (schedule, last run, live, fork…). */
   statusLine?: AppStatusLine;
+  /** Who can open it (share-bar glyph) and whether others can copy the code. */
+  share?: ShareGlyph;
   /** Near-duplicate copies stacked under this card. */
   duplicateCount?: number;
   onShowDuplicates?: () => void;
@@ -43,6 +47,7 @@ export function AppCard({
   showCopyAction = false,
   onCopy,
   statusLine,
+  share,
   duplicateCount = 0,
   onShowDuplicates,
 }: AppCardProps) {
@@ -276,6 +281,15 @@ export function AppCard({
             >
               {artifact.title}
             </h3>
+            {share ? (
+              <span className="app-card__share">
+                <ShareAudienceIcon
+                  audience={share.audience}
+                  loginAccess={null}
+                  codeAccess={share.codeAccess}
+                />
+              </span>
+            ) : null}
             {artifact.cloudLineage ? (
               <span
                 className={

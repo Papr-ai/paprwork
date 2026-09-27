@@ -72,7 +72,7 @@ describe("runCloudCatalogInstall", () => {
     }
 
     expect(raised?.message).toContain("Team app");
-    expect(raised?.message).toContain("Use it");
+    expect(raised?.message).toContain("Collaborate (data sharing)");
     expect(raised?.message).toContain('installDbPolicy "shared_primary"');
   });
 

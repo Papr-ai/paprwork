@@ -33,6 +33,7 @@ import {
   writeCachedCloudPublishState,
 } from "../../utils/cloudPublishCache";
 import { fetchCloudPublishState } from "../../utils/cloudPublishApi";
+import { shareGlyphForPublishState, type ShareGlyph } from "../../utils/shareGlyph";
 import {
   readAppsSection,
   toAppsSection,
@@ -317,6 +318,14 @@ export function AppsView() {
     );
   }, [allApps, publishRevision]);
 
+  // Same cached publish state as "Live", reduced to the share-bar audience glyph.
+  const shareById = useMemo(() => {
+    const states = readCachedCloudPublishStates();
+    const out: Record<string, ShareGlyph> = {};
+    for (const a of allApps) out[a.id] = shareGlyphForPublishState(states[a.id]);
+    return out;
+  }, [allApps, publishRevision]);
+
   // Revalidate publish state after the app grid paints (stale-while-revalidate).
   useEffect(() => {
     const cached = readCachedCloudPublishStates();
@@ -490,6 +499,7 @@ export function AppsView() {
               apps={sortedApps}
               health={health}
               publishedIds={publishedIds}
+              shareById={shareById}
               searchQuery={searchQuery}
               showCopyAction={showCopyAction}
               duplicateExtraCount={duplicateExtraCount}
