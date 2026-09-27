@@ -978,3 +978,6 @@
   background: color-mix(in srgb, var(--text-primary) 3%, transparent);
 }
 .community-card .community-card__content { padding-bottom: 12px; }
+
+/* Footer strip stays the card colour; a hairline divider does the separating. */
+.community-card .community-card__foot { background: transparent; }

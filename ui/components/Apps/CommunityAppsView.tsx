@@ -33,6 +33,7 @@ import {
 import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import {
   filterCatalogDisplayTags,
+  formatCatalogUpdated,
   getCatalogByline,
   getCatalogShareBadge,
 } from "../../utils/communityCatalogDisplay";
@@ -1253,10 +1254,16 @@ function CommunityAppCard({
   const shareBadge = getCatalogShareBadge(entry);
   const installs = entry.installCount;
   // Everyone's installs (from Papr Cloud), not just the copies on this machine.
-  const byline =
+  const updatedAgo = formatCatalogUpdated(entry.updatedAt);
+  const byline = [
+    getCatalogByline(entry),
+    updatedAgo ? `Updated ${updatedAgo}` : null,
     typeof installs === "number" && installs > 0
-      ? `${getCatalogByline(entry)} · ${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
-      : getCatalogByline(entry);
+      ? `${installs.toLocaleString()} install${installs === 1 ? "" : "s"}`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
   const displayTags = filterCatalogDisplayTags(entry.tags);
   const share = shareGlyphForCatalogEntry(entry);
 

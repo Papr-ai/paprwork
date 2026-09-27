@@ -79,6 +79,8 @@ interface CloudCommunityApiEntry {
   publisherUserId?: string;
   /** Distinct users who installed this app (memory server lineage). */
   installCount?: number;
+  /** Last publish time (ISO 8601). */
+  updatedAt?: string;
   catalogRequirements?: Array<{
     name: string;
     service: string;
@@ -125,6 +127,7 @@ function loadLocalAppMeta(
     description: string;
     icon?: string;
     tags?: string[];
+    updatedAt?: string;
   }
 > {
   const meta = new Map<
@@ -134,6 +137,7 @@ function loadLocalAppMeta(
       description: string;
       icon?: string;
       tags?: string[];
+      updatedAt?: string;
     }
   >();
   try {
@@ -146,6 +150,7 @@ function loadLocalAppMeta(
           icon?: string;
           ownerUserId?: string;
           tags?: string[];
+          updatedAt?: string;
           organizationId?: string;
           namespaceId?: string;
         }>
@@ -158,6 +163,7 @@ function loadLocalAppMeta(
             icon?: string;
             ownerUserId?: string;
             tags?: string[];
+            updatedAt?: string;
             organizationId?: string;
             namespaceId?: string;
           }
@@ -172,6 +178,7 @@ function loadLocalAppMeta(
         description: app.description?.trim() || "",
         icon: app.icon,
         tags: app.tags,
+        updatedAt: app.updatedAt,
         organizationId: app.organizationId,
         namespaceId: app.namespaceId,
       });
@@ -319,6 +326,7 @@ function cloudEntryFromApi(
     ...(typeof entry.installCount === "number"
       ? { installCount: entry.installCount }
       : {}),
+    ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
     catalogAutomation: entry.catalogAutomation
       ? {
           scheduleLabel: entry.catalogAutomation.scheduleLabel,
@@ -852,6 +860,7 @@ async function buildLocalCloudEntriesForSharing(
       codeInstallable: communityCodeInstallable(prefs.codeAccess ?? "off"),
       liveViewable: true,
       isOwned: true,
+      ...(appMeta.updatedAt ? { updatedAt: appMeta.updatedAt } : {}),
       visibility: teamShared ? "team" : "public_read",
       shareLinkEnabled: sharing.externalLink !== "off",
       requirements:
