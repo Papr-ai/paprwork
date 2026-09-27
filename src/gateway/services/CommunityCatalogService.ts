@@ -37,6 +37,8 @@ import { slugifyPublishTitle } from "./cloudPublishDrift.js";
 import { getAppPublishPrefs, hasStoredAppPublishPrefs } from "./cloudPublishPrefs.js";
 import { readAppRequirements } from "./cloudAppRequirements.js";
 import { resolveCatalogEntryTags } from "../../core/utils/catalogTags.js";
+import { catalogCardLine } from "../../core/utils/catalogAutomation.js";
+import { sanitizeScheduleLabel } from "../../core/utils/jobScheduleLabel.js";
 import { readPlatformCatalogManifest } from "./syncV3/platformCatalogManifest.js";
 
 interface CatalogPlatformMeta {
@@ -329,10 +331,14 @@ function cloudEntryFromApi(
     ...(entry.updatedAt ? { updatedAt: entry.updatedAt } : {}),
     catalogAutomation: entry.catalogAutomation
       ? {
-          scheduleLabel: entry.catalogAutomation.scheduleLabel,
+          scheduleLabel: sanitizeScheduleLabel(entry.catalogAutomation.scheduleLabel),
           scheduledJobCount: entry.catalogAutomation.scheduledJobCount,
           hasAgentJob: entry.catalogAutomation.hasAgentJob ?? false,
-          cardLine: entry.catalogAutomation.cardLine,
+          // Re-derive: lines stored by older publishes contain raw cron.
+          cardLine: catalogCardLine(
+            entry.catalogAutomation.scheduledJobCount,
+            entry.catalogAutomation.scheduleLabel,
+          ),
         }
       : undefined,
   };

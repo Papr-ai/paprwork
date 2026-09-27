@@ -1,6 +1,7 @@
 import type { CatalogAutomation } from "../types/catalogAutomation.js";
 import {
   formatJobScheduleLabel,
+  sanitizeScheduleLabel,
   type JobScheduleLike,
 } from "./jobScheduleLabel.js";
 
@@ -17,11 +18,16 @@ function isScheduledStandaloneJob(job: CatalogAutomationJobInput): boolean {
   return Boolean(job.schedule?.enabled) && deps.length === 0;
 }
 
+/** Card line from a job count + schedule label (also used to re-derive lines
+ *  stored on the server by older builds, e.g. "every hour at :*\/5"). */
+export function catalogCardLine(jobCount: number, scheduleLabel: string): string {
+  const label = sanitizeScheduleLabel(scheduleLabel);
+  if (jobCount <= 1) return `Runs ${label}`;
+  return `Runs ${jobCount} scheduled jobs`;
+}
+
 function buildCardLine(scheduledJobs: CatalogAutomationJobInput[], scheduleLabel: string): string {
-  if (scheduledJobs.length === 1) {
-    return `App plus a job that runs ${scheduleLabel}`;
-  }
-  return `App plus ${scheduledJobs.length} scheduled jobs`;
+  return catalogCardLine(scheduledJobs.length, scheduleLabel);
 }
 
 /** Build publish-time catalog automation from jobs linked to an app. */
