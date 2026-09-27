@@ -619,3 +619,15 @@
 }
 .app-card .app-card__description { margin-top: 8px; }
 .app-card .app-card__menu-wrap { top: 14px; right: 14px; }
+/* Share glyph pinned top-right (not inline after the title, which truncated
+   it). At rest the corner shows who can see the app; on hover it gives way
+   to the ⋯ menu in the same spot. */
+.app-card .app-card__share {
+  position: absolute;
+  top: 22px;
+  right: 20px;
+  transition: opacity 140ms ease;
+}
+.app-card:hover .app-card__share,
+.app-card:focus-within .app-card__share { opacity: 0; }
+.app-card .app-card__content > .app-card__title-row { padding-right: 34px; }
