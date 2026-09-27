@@ -3,7 +3,7 @@
  * Clean, minimal interface focused on app discovery and creation
  */
 
-import React, { useState, useCallback, useMemo, useEffect } from "react";
+import React, { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
@@ -464,6 +464,21 @@ export function AppsView() {
   // One search box covers the library, the team and the community; typing
   // swaps whatever section is showing for a single results page.
   const searching = searchQuery.trim().length > 0;
+  const searchRef = useRef<HTMLInputElement>(null);
+  const isMac =
+    typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  // ⌘K / Ctrl+K focuses the search — the hint in the box teaches the shortcut.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const searchPlaceholder = showNamespaceTabs
     ? `Search your apps, ${papr.namespaceName?.trim() || "your team"} and the community`
     : "Search your apps and the community";
@@ -485,6 +500,7 @@ export function AppsView() {
             <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
           </svg>
           <input
+            ref={searchRef}
             type="search"
             placeholder={searchPlaceholder}
             value={searchQuery}
@@ -494,6 +510,11 @@ export function AppsView() {
             }}
             aria-label="Search apps"
           />
+          {searching ? null : (
+            <kbd className="apps-view__search-kbd" aria-hidden="true">
+              {isMac ? "⌘" : "Ctrl"}K
+            </kbd>
+          )}
           {searching ? (
             <button
               type="button"

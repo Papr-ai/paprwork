@@ -613,7 +613,7 @@
 }
 .apps-view__search-kbd {
   position: absolute;
-  right: 10px;
+  right: 8px;
   top: 50%;
   transform: translateY(-50%);
   font: 500 11px/1 ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -626,3 +626,17 @@
   pointer-events: none;
 }
 .apps-view__search:focus-within .apps-view__search-kbd { opacity: 0; }
+
+.apps-view__topbar > .apps-view__brand {
+  position: absolute;
+  left: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.apps-view__topbar > .apps-view__topbar-grow { display: none; }
+.apps-view__topbar > .apps-view__create-btn {
+  position: absolute;
+  right: 20px;
+  top: 50%;
+  transform: translateY(-50%);
+}
