@@ -56,6 +56,8 @@ export interface CommunityCatalogEntry {
   isOwned?: boolean;
   /** Number of local fork/track copies installed from this catalog entry */
   installedForkCount?: number;
+  /** Everyone who installed it (fork or collaborate), from Papr Cloud. */
+  installCount?: number;
   /** Cloud publish visibility (team, public_read, …) when known */
   visibility?: string;
   /** External invite link enabled (unlisted — not Community Apps listed) */
