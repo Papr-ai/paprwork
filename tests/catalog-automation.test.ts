@@ -21,7 +21,7 @@ describe("catalogAutomation", () => {
       scheduleLabel: "every weekday at 8 am",
       scheduledJobCount: 1,
       hasAgentJob: true,
-      cardLine: "App plus a job that runs every weekday at 8 am",
+      cardLine: "Runs every weekday at 8 am",
     });
   });
 
@@ -42,7 +42,7 @@ describe("catalogAutomation", () => {
     ]);
 
     expect(result?.scheduledJobCount).toBe(2);
-    expect(result?.cardLine).toBe("App plus 2 scheduled jobs");
+    expect(result?.cardLine).toBe("Runs 2 scheduled jobs");
     expect(result?.hasAgentJob).toBe(true);
   });
 
@@ -62,5 +62,20 @@ describe("catalogAutomation", () => {
     ]);
 
     expect(result).toBeNull();
+  });
+});
+
+describe("schedule labels never show raw cron", () => {
+  it("humanizes step/range/list cron and cleans stored legacy labels", async () => {
+    const { humanizeJobCron, sanitizeScheduleLabel } = await import(
+      "../src/core/utils/jobScheduleLabel"
+    );
+    const { catalogCardLine } = await import("../src/core/utils/catalogAutomation");
+    expect(humanizeJobCron("*/5 * * * *")).toBe("every 5 minutes");
+    expect(humanizeJobCron("0 */2 * * *")).toBe("every 2 hours");
+    expect(humanizeJobCron("0 9,17 * * *")).toBe("at 9 am and 5 pm");
+    expect(humanizeJobCron("5 4 * 2 *")).toBe("on a custom schedule");
+    expect(sanitizeScheduleLabel("every hour at :*/5")).toBe("every 5 minutes");
+    expect(catalogCardLine(1, "every hour at :*/5")).toBe("Runs every 5 minutes");
   });
 });

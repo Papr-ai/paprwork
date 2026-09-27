@@ -130,3 +130,21 @@ export function formatJobScheduleLabel(schedule: JobScheduleLike | undefined): s
 
   return "on a schedule";
 }
+
+/**
+ * Clean up a schedule label that was stored at publish time by an older
+ * humanizer (e.g. "every hour at :*\/5"). Never lets raw cron reach the UI.
+ */
+export function sanitizeScheduleLabel(label: string): string {
+  const t = label.trim();
+  const step = /^every hour at :\*\/(\d+)$/.exec(t);
+  if (step) return `every ${parseInt(step[1], 10)} minutes`;
+  const at = /^every hour at :(\d{1,2})$/.exec(t);
+  if (at) return parseInt(at[1], 10) === 0 ? "every hour" : `every hour at ${parseInt(at[1], 10)} past`;
+  if (/[*/]/.test(t) || /^[\d\s,*/-]+$/.test(t)) {
+    const parts = t.replace(/^(every hour at :|daily at )/, "").split(/\s+/);
+    if (parts.length >= 5) return humanizeJobCron(parts.slice(0, 5).join(" "));
+    return "on a custom schedule";
+  }
+  return t;
+}
