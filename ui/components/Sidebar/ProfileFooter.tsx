@@ -1,9 +1,11 @@
 /**
  * ProfileFooter - Bottom-of-rail identity: avatar (→ profile) with a hover card showing
- * name + active org/namespace, your agent (→ personalize), Edit profile and Settings.
+ * name + active org/namespace, your agent (→ personalize), org color, Edit profile and Settings.
+ * The avatar wears an org-colored ring so you always know which workspace you are in.
  */
 
 import { useEffect } from "react";
+import type React from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
 import { UserAvatar } from "../common/UserAvatar";
@@ -11,6 +13,9 @@ import { useProfileStore } from "../../stores/profileStore";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { RailIcons } from "./railIcons";
+import { useOrgColor, useOrgColors } from "./orgColorStore";
+import { OrgColorList } from "./OrgColorList";
+import { useOrgList } from "./useOrgList";
 import "./ProfileFooter.css";
 
 interface ProfileFooterProps {
@@ -42,6 +47,19 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
       namespaceName,
       workspaceName,
     }) ?? "";
+  const { orgs, activeId, switching, switchTo } = useOrgList();
+  // Color is per org: key by the active org id, falling back to the label until orgs load.
+  const orgColor = useOrgColor(
+    activeId || workspaceLabel || organizationName,
+    orgs.findIndex((o) => o.id === activeId),
+  );
+  // One-time carry-over: early builds keyed the color by the "Org · namespace" label.
+  useEffect(() => {
+    const { colors, setColor } = useOrgColors.getState();
+    if (activeId && !colors[activeId] && workspaceLabel && colors[workspaceLabel]) {
+      setColor(activeId, colors[workspaceLabel]);
+    }
+  }, [activeId, workspaceLabel]);
   useEffect(() => {
     void loadProfile();
 
@@ -102,10 +120,13 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
   }, [loadProfile, setProfile]);
 
   return (
-    <div className="rail-item rail-item--has-peek rail-item--peek-bottom rail-account">
+    <div
+      className="rail-item rail-item--has-peek rail-item--peek-bottom rail-account"
+      style={{ "--org": orgColor } as React.CSSProperties}
+    >
       <button
         type="button"
-        className="rail-account__avatar"
+        className="rail-account__avatar rail-account__ring"
         onClick={onOpenProfile}
         aria-label={planAttention ? `Account — ${planAttentionHint}` : "Account"}
       >
@@ -115,10 +136,17 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
 
       <div className="rail-peek rail-account__card" role="menu" aria-label="Account">
         <button type="button" className="rail-account__head" onClick={onOpenProfile} title="Edit profile">
-          <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={40} />
+          <span className="rail-account__ring rail-account__ring--lg">
+            <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={40} />
+          </span>
           <span>
             <b>{displayName}</b>
-            {workspaceLabel ? <small>{workspaceLabel}</small> : null}
+            {workspaceLabel ? (
+              <small>
+                <i className="rail-account__dot" aria-hidden="true" />
+                {workspaceLabel}
+              </small>
+            ) : null}
           </span>
         </button>
 
@@ -128,6 +156,8 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
           <span className="rail-account__label">{agentName}</span>
           <em>Personalize</em>
         </button>
+
+        <OrgColorList orgs={orgs} activeId={activeId} switching={switching} onSwitch={switchTo} />
 
         {planAttention ? (
           <p className="rail-account__attention" role="status">{planAttentionHint}</p>
