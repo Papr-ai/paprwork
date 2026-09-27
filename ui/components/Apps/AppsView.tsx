@@ -6,13 +6,18 @@
 import React, { useState, useCallback, useMemo, useEffect } from "react";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
+import { useChat } from "../../hooks/useChat";
+import { openAppToFix } from "../../utils/openAppToFix";
 import { gateway } from "../../src/lib/gateway";
 import { type AppStatus } from "./AppCard";
 import { CommunityAppsView } from "./CommunityAppsView";
 import { AppsSidebar } from "./AppsSidebar";
 import { LibraryPane } from "./LibraryPane";
 import { DuplicateCleanupView } from "./DuplicateCleanupView";
-import { useAppsHealth } from "../../hooks/useAppsHealth";
+import {
+  PUBLISH_STATE_CHANGED_EVENT,
+  useAppsHealth,
+} from "../../hooks/useAppsHealth";
 import {
   findDuplicateGroups,
   isLibrarySection,
@@ -33,7 +38,11 @@ import {
   writeCachedCloudPublishState,
 } from "../../utils/cloudPublishCache";
 import { fetchCloudPublishState } from "../../utils/cloudPublishApi";
-import { shareGlyphForPublishState, type ShareGlyph } from "../../utils/shareGlyph";
+import {
+  shareGlyphForPrefs,
+  shareGlyphForPublishState,
+  type ShareGlyph,
+} from "../../utils/shareGlyph";
 import {
   readAppsSection,
   toAppsSection,
@@ -57,6 +66,7 @@ export function AppsView() {
     loadArtifacts,
   } = useArtifacts("apps");
   const { createTab, switchToTab } = useTabs();
+  const { createChat } = useChat();
   const papr = usePaprNamespace();
 
   const showNamespaceTabs = papr.isLoggedIn && Boolean(papr.namespaceId);
@@ -71,7 +81,7 @@ export function AppsView() {
     setCleaningUp(false);
     writeAppsSection(next);
   }, []);
-  const { health, refresh: refreshHealth } = useAppsHealth();
+  const { health, sharing, refresh: refreshHealth } = useAppsHealth();
   const [publishRevision, setPublishRevision] = useState(0);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copyAppTarget, setCopyAppTarget] = useState<Artifact | null>(null);
@@ -89,7 +99,6 @@ export function AppsView() {
   const [currentOrganizationId, setCurrentOrganizationId] = useState<string | null>(
     null,
   );
-  const [catalogSearchQuery, setCatalogSearchQuery] = useState("");
   const [catalogRefreshToken, setCatalogRefreshToken] = useState(0);
 
   useEffect(() => {
@@ -142,7 +151,7 @@ export function AppsView() {
   }, [papr.loading, showNamespaceTabs, section, setSection]);
 
   useEffect(() => {
-    setCatalogSearchQuery("");
+    setSearchQuery("");
   }, [section]);
 
   // The catalog refreshes itself when the window regains focus, replacing the
@@ -318,13 +327,36 @@ export function AppsView() {
     );
   }, [allApps, publishRevision]);
 
-  // Same cached publish state as "Live", reduced to the share-bar audience glyph.
+  // Share-bar audience glyph. Source of truth is the local sharing prefs the
+  // Share sheet writes (from /api/apps/health) — the publish cache only covers
+  // recently opened apps, which is why icons used to be wrong until opened.
+  // The cache is a fallback for apps that have no prefs entry.
   const shareById = useMemo(() => {
     const states = readCachedCloudPublishStates();
     const out: Record<string, ShareGlyph> = {};
-    for (const a of allApps) out[a.id] = shareGlyphForPublishState(states[a.id]);
+    for (const a of allApps) {
+      const prefs = sharing[a.id];
+      out[a.id] = prefs
+        ? shareGlyphForPrefs(prefs)
+        : shareGlyphForPublishState(states[a.id]);
+    }
     return out;
-  }, [allApps, publishRevision]);
+  }, [allApps, sharing, publishRevision]);
+
+  // Share sheet / publish in an app tab writes the publish cache — re-read it so
+  // "Live" and share icons update without reopening the Apps page.
+  useEffect(() => {
+    let timer: number | undefined;
+    const onChange = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => setPublishRevision((v) => v + 1), 250);
+    };
+    window.addEventListener(PUBLISH_STATE_CHANGED_EVENT, onChange);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener(PUBLISH_STATE_CHANGED_EVENT, onChange);
+    };
+  }, []);
 
   // Revalidate publish state after the app grid paints (stale-while-revalidate).
   useEffect(() => {
@@ -389,30 +421,62 @@ export function AppsView() {
     [loadArtifacts],
   );
 
+  const fixApp = useCallback(
+    (app: Artifact) => {
+      void openAppToFix(createChat, {
+        appId: app.id,
+        appTitle: app.title,
+        health: health[app.id],
+      });
+    },
+    [createChat, health],
+  );
+
   const librarySection: LibrarySection = isLibrarySection(section) ? section : "recent";
-  const isCatalog = section === "team" || section === "community";
-  const searchValue = isCatalog ? catalogSearchQuery : searchQuery;
-  const searchPlaceholder =
-    section === "team"
-      ? "Search team apps…"
-      : section === "community"
-        ? "Search community apps…"
-        : "Search your apps…";
+  // One search box covers the library, the team and the community; typing
+  // swaps whatever section is showing for a single results page.
+  const searching = searchQuery.trim().length > 0;
+  const searchPlaceholder = showNamespaceTabs
+    ? `Search your apps, ${papr.namespaceName?.trim() || "your team"} and the community`
+    : "Search your apps and the community";
 
   return (
     <div className="apps-view">
       <header className="apps-view__topbar">
         <h2 className="apps-view__brand">Apps</h2>
-        <input
-          type="search"
-          className="apps-view__topbar-search"
-          placeholder={searchPlaceholder}
-          value={searchValue}
-          onChange={(event) =>
-            isCatalog ? setCatalogSearchQuery(event.target.value) : handleSearch(event)
-          }
-          aria-label={searchPlaceholder.replace("…", "")}
-        />
+        <label className="apps-view__search">
+          <svg
+            className="apps-view__search-icon"
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            aria-hidden="true"
+          >
+            <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="2" />
+            <path d="m20 20-3.5-3.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+          </svg>
+          <input
+            type="search"
+            placeholder={searchPlaceholder}
+            value={searchQuery}
+            onChange={handleSearch}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") setSearchQuery("");
+            }}
+            aria-label="Search apps"
+          />
+          {searching ? (
+            <button
+              type="button"
+              className="apps-view__search-clear"
+              aria-label="Clear search"
+              onClick={() => setSearchQuery("")}
+            >
+              ×
+            </button>
+          ) : null}
+        </label>
         <div className="apps-view__topbar-grow" />
         <button
           type="button"
@@ -425,18 +489,76 @@ export function AppsView() {
 
       <div className="apps-view__body">
         <AppsSidebar
-          active={section}
+          active={searching ? null : section}
           counts={counts}
           showTeam={showNamespaceTabs}
-          onSelect={setSection}
+          onSelect={(next) => {
+            setSearchQuery("");
+            setSection(next);
+          }}
         />
         <div className="apps-view__content">
-          {section === "community" ? (
+          {searching ? (
+            <>
+              <div className="apps-view__page-head">
+                <h1 className="apps-view__page-title">
+                  Results for “{searchQuery.trim()}”
+                </h1>
+                <p className="apps-view__page-subtitle">
+                  {showNamespaceTabs
+                    ? `Across your library, ${papr.namespaceName?.trim() || "your team"} and the community.`
+                    : "Across your library and the community."}
+                </p>
+              </div>
+              <LibraryPane
+                section="recent"
+                resultsOnly
+                apps={sortedApps}
+                health={health}
+                publishedIds={publishedIds}
+                shareById={shareById}
+                searchQuery={searchQuery}
+                showCopyAction={showCopyAction}
+                duplicateExtraCount={0}
+                onSelectSection={setSection}
+                onStartCleanup={() => setCleaningUp(true)}
+                onOpen={handleOpen}
+                onDelete={(id) => void handleDelete(id)}
+                onToggleFavorite={(id) => void handleToggleFavorite(id)}
+                onRename={(id, t) => void handleRename(id, t)}
+                onSetStatus={(id, st) => void handleSetStatus(id, st)}
+                onCopy={setCopyAppTarget}
+                onFix={fixApp}
+              />
+              {showNamespaceTabs ? (
+                <CommunityAppsView
+                  key={`search-${papr.namespaceId ?? "no-namespace"}`}
+                  scope="namespace"
+                  namespaceId={papr.namespaceId}
+                  namespaceName={papr.namespaceName}
+                  searchQuery={searchQuery}
+                  onSearchQueryChange={setSearchQuery}
+                  hideToolbar
+                  refreshToken={catalogRefreshToken}
+                  resultsHeading={`From ${papr.namespaceName?.trim() || "your team"}`}
+                />
+              ) : null}
+              <CommunityAppsView
+                key="search-community"
+                scope="global"
+                searchQuery={searchQuery}
+                onSearchQueryChange={setSearchQuery}
+                hideToolbar
+                refreshToken={catalogRefreshToken}
+                resultsHeading="From the community"
+              />
+            </>
+          ) : section === "community" ? (
             <CommunityAppsView
               scope="global"
               loadingLabel="Loading community apps..."
-              searchQuery={catalogSearchQuery}
-              onSearchQueryChange={setCatalogSearchQuery}
+              searchQuery=""
+              onSearchQueryChange={setSearchQuery}
               hideToolbar
               refreshToken={catalogRefreshToken}
             />
@@ -447,8 +569,8 @@ export function AppsView() {
               loadingLabel="Loading team apps..."
               namespaceId={papr.namespaceId}
               namespaceName={papr.namespaceName}
-              searchQuery={catalogSearchQuery}
-              onSearchQueryChange={setCatalogSearchQuery}
+              searchQuery=""
+              onSearchQueryChange={setSearchQuery}
               hideToolbar
               refreshToken={catalogRefreshToken}
             />
@@ -511,6 +633,7 @@ export function AppsView() {
               onRename={(id, t) => void handleRename(id, t)}
               onSetStatus={(id, st) => void handleSetStatus(id, st)}
               onCopy={setCopyAppTarget}
+              onFix={fixApp}
             />
           )}
         </div>

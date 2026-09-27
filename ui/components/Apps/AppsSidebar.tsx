@@ -59,7 +59,7 @@ const DISCOVER: Item[] = [
 ];
 
 interface AppsSidebarProps {
-  active: AppsSection;
+  active: AppsSection | null;
   counts: Record<LibrarySection, number>;
   showTeam: boolean;
   onSelect: (section: AppsSection) => void;

@@ -46,6 +46,36 @@ export function shareGlyphForPublishState(
   };
 }
 
+/**
+ * From the local sharing prefs (what the share bar shows). Preferred over the
+ * publish cache, which only covers apps opened recently and goes stale.
+ */
+export function shareGlyphForPrefs(prefs: {
+  loginAccess?: "private" | "team" | "public" | "none";
+  externalLink?: "off" | "read" | "read_write";
+  codeAccess?: "off" | "install";
+  requireSignIn?: boolean;
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
+}): ShareGlyph {
+  const model = sharingToAudienceModel(
+    prefs.loginAccess ?? "private",
+    prefs.externalLink ?? "off",
+    prefs.codeAccess ?? "off",
+    {
+      requireSignIn: prefs.requireSignIn,
+      allowedUserIds: prefs.allowedUserIds,
+      allowedEmails: prefs.allowedEmails,
+      allowedEmailDomains: prefs.allowedEmailDomains,
+    },
+  );
+  return {
+    audience: model.audience,
+    codeAccess: model.permission === "edit" ? "install" : "off",
+  };
+}
+
 /** From catalog visibility — the catalog never carries a people allowlist. */
 export function shareGlyphForCatalogEntry(
   entry: CommunityCatalogEntry,
