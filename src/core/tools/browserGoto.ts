@@ -66,7 +66,10 @@ export interface GotoResult {
 }
 
 const UNSAFE_LINK = /log ?out|sign ?out|unsubscribe|delete|remove|cancel (plan|subscription)/i;
-const FOLLOWABLE_KINDS = new Set(["link", "tab", "summary"]);
+const FOLLOWABLE_KINDS = new Set(["link", "tab", "summary", "button"]);
+/** Buttons are followed only as in-page view switches (tabs, "Plan GP", "Striking distance") — never actions. */
+const UNSAFE_BUTTON =
+  /submit|save|send|buy|purchase|pay|checkout|order|sign ?up|register|subscribe|post|publish|create|add|new|confirm|accept|approve|invite|share|upload|download|install|connect|reset|run|start|book|apply|build|generate|close|×|✕/i;
 const LIST_PARTIAL_SCORE = 1.8;
 const LIST_MIN_PARTIALS = 3;
 
@@ -141,6 +144,7 @@ export async function runGoto(page: GotoPage, goal: string, opts: GotoOptions = 
     }
     for (const e of ranking.elements) {
       if (!FOLLOWABLE_KINDS.has(e.kind) || UNSAFE_LINK.test(e.text)) continue;
+      if (e.kind === "button" && (e.href || UNSAFE_BUTTON.test(e.text) || e.text.trim().length < 2)) continue;
       let key: string;
       if (e.href) {
         if (!/^https?:/i.test(e.href)) continue;

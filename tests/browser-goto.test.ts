@@ -125,3 +125,30 @@ describe("browser_goto list answers + unvisited", () => {
     expect(r.unvisited).toContain("https://acme.com/pricing");
   });
 });
+
+describe("browser_goto follows view-switch buttons, not action buttons", () => {
+  it("clicks a tab-like button to reach the answer, skips action buttons", async () => {
+    let view = "overview";
+    const clicked: string[] = [];
+    const page: GotoPage = {
+      url: () => "http://localhost/app",
+      goto: async () => {},
+      settle: async () => {},
+      click: async (sel) => { clicked.push(sel); if (sel.includes('"2"')) view = "gp"; },
+      evaluate: async () => view === "overview"
+        ? { blocks: [{ h: 1, t: "Overview" }, { h: 0, t: "Revenue summary" }],
+            elements: [
+              { ref: 1, kind: "button", text: "Delete plan" },
+              { ref: 2, kind: "button", text: "Plan GP" },
+              { ref: 3, kind: "button", text: "Save scenario" },
+            ] }
+        : { blocks: [{ h: 1, t: "Plan GP" }, { h: 0, t: "Cloud $30: gross margin 90.0%" }], elements: [] },
+    };
+    const scorer: ItemScorer = async (_g, kind, items) =>
+      Object.fromEntries(Object.entries(items).map(([k, v]) => [k,
+        kind === "sections" ? (String(v).includes("90.0%") ? 3 : 0.2) : 2.5]));
+    const r = await runGoto(page, "gross margin for Cloud $30", { scorer });
+    expect(r.found).toBe(true);
+    expect(clicked).toEqual(['[data-pjid="2"]']);
+  });
+});
