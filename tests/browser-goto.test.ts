@@ -102,3 +102,26 @@ describe("browser_goto loop", () => {
     expect(siteKey("https://www.acme.com")).toBe("acme.com");
   });
 });
+
+describe("browser_goto list answers + unvisited", () => {
+  const LIST: Record<string, RawExtraction> = {
+    "https://vc.com/": {
+      blocks: [{ h: 1, t: "Portfolio" }, { h: 2, t: "Linear" }, { h: 0, t: "dev tools" }, { h: 2, t: "Retool" }, { h: 0, t: "dev tools" }, { h: 2, t: "Vercel" }, { h: 0, t: "dev tools" }],
+      elements: [link(0, "Pricing", "https://vc.com/pricing")],
+    },
+  };
+  it("counts several partial sections on one page as found", async () => {
+    const partial: ItemScorer = async (_g, kind, items) =>
+      Object.fromEntries(Object.keys(items).map((k) => [k, kind === "sections" ? 2.0 : 2.5]));
+    const { page } = fakeSite(LIST, "https://vc.com/");
+    const r = await runGoto(page, "which dev tools companies", { scorer: partial });
+    expect(r.found).toBe(true);
+    expect(r.steps).toHaveLength(1);
+    expect(r.passages.length).toBe(3);
+  });
+  it("reports promising unvisited links when not found", async () => {
+    const { page } = fakeSite(SITE, "https://acme.com/");
+    const r = await runGoto(page, "audit logs", { scorer, maxSteps: 1 });
+    expect(r.unvisited).toContain("https://acme.com/pricing");
+  });
+});

@@ -119,6 +119,8 @@ async function closeActiveBrowserSession(): Promise<void> {
     console.warn("[Browser Tool] Error closing browser session:", error);
   }
   browserSession = null;
+  chatSessions.clear();
+  basePageClaimedBy = null;
 }
 
 function bindRealChromeSession(
@@ -136,6 +138,17 @@ function bindRealChromeSession(
     persistentContext: context,
     platformId,
   };
+}
+
+export function realChromeUserAgent(version: string, platform: string = process.platform): string {
+  const os =
+    platform === "darwin"
+      ? "Macintosh; Intel Mac OS X 10_15_7"
+      : platform === "win32"
+        ? "Windows NT 10.0; Win64; x64"
+        : "X11; Linux x86_64";
+  const v = /^\d+/.test(version) ? version : "130.0.0.0";
+  return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${v} Safari/537.36`;
 }
 
 /** Cap wait timeouts — LLM args skip Zod parse; timeout:0 hangs forever in Playwright */
@@ -428,7 +441,80 @@ export async function preparePlatformBrowserSession(
   };
 }
 
+/**
+ * Per-chat pages for the plain headless browser, so parallel agent chats don't drive the same tab.
+ * The first chat reuses the base page; later chats get their own page in the same context.
+ * Platform sessions (Papr Chrome / embedded tab) are one logged-in tab and stay shared.
+ */
+const chatSessions = new Map<string, BrowserSessionState>();
+let basePageClaimedBy: string | null = null;
+const MAX_CHAT_PAGES = 8;
+
 async function getBrowserSession(): Promise<BrowserSessionState> {
+  const base = await getBaseBrowserSession();
+  if (!base.browser || base.platformId || base.embeddedPlatformId) {
+    return base;
+  }
+  const { getCurrentChatId } = await import("./context.js");
+  const chatId = getCurrentChatId();
+  if (!chatId) {
+    return base;
+  }
+  const existing = chatSessions.get(chatId);
+  if (existing && !requirePlaywrightPage(existing).isClosed()) {
+    return existing;
+  }
+  if (!basePageClaimedBy || basePageClaimedBy === chatId) {
+    basePageClaimedBy = chatId;
+    chatSessions.set(chatId, base);
+    return base;
+  }
+  const page = await requirePlaywrightPage(base).context().newPage();
+  const consoleLogs: BrowserConsoleLog[] = [];
+  const networkLogs: BrowserNetworkLog[] = [];
+  attachPageListeners(page, consoleLogs, networkLogs);
+  const session: BrowserSessionState = { browser: base.browser, page, consoleLogs, networkLogs };
+  chatSessions.set(chatId, session);
+  if (chatSessions.size > MAX_CHAT_PAGES) {
+    for (const [id, s2] of chatSessions) {
+      if (s2 === base || id === chatId) continue;
+      chatSessions.delete(id);
+      await requirePlaywrightPage(s2).close().catch(() => {});
+      break;
+    }
+  }
+  return session;
+}
+
+/** Close only this chat's own page (never the shared base page). Returns true if one was closed. */
+async function closeChatPage(): Promise<boolean> {
+  const { getCurrentChatId } = await import("./context.js");
+  const chatId = getCurrentChatId();
+  const own = chatId ? chatSessions.get(chatId) : undefined;
+  if (!chatId || !own || own === browserSession) return false;
+  chatSessions.delete(chatId);
+  await requirePlaywrightPage(own).close().catch(() => {});
+  return true;
+}
+
+/** Serialize long multi-navigation work (browser_goto) on one page — parallel calls in a chat collide. */
+const pageLocks = new WeakMap<object, Promise<unknown>>();
+async function withPageLock<T>(page: object, fn: () => Promise<T>): Promise<T> {
+  const prev = pageLocks.get(page) ?? Promise.resolve();
+  let release!: () => void;
+  const mine = new Promise<void>((r) => {
+    release = r;
+  });
+  pageLocks.set(page, prev.then(() => mine));
+  await prev.catch(() => {});
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+async function getBaseBrowserSession(): Promise<BrowserSessionState> {
   if (browserSession) {
     return browserSession;
   }
@@ -495,9 +581,12 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
 
   const launchOptions: Parameters<typeof module.chromium.launch>[0] = {
     headless: true,
+    // Some sites (e.g. a16z) serve a stripped page when navigator.webdriver is true.
+    args: ["--disable-blink-features=AutomationControlled"],
   };
   if (isCloudAgentGatewayMode() || process.env.PLAYWRIGHT_DOCKER === "1") {
     launchOptions.args = [
+      ...(launchOptions.args ?? []),
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
@@ -550,6 +639,8 @@ async function getBrowserSession(): Promise<BrowserSessionState> {
   const context = await browser.newContext({
     viewport: { width: 1280, height: 900 },
     locale: "en-US",
+    // Headless Chromium advertises "HeadlessChrome"; bot-shy sites then serve empty pages.
+    userAgent: realChromeUserAgent(browser.version()),
   });
   const page = await context.newPage();
   const consoleLogs: BrowserConsoleLog[] = [];
@@ -864,7 +955,16 @@ export const browserTypeTool = createTool({
     await assertBrowserToolAllowed("browser_type");
     await requestBrowserPermission(`type:${target}`);
     const session = await getBrowserSession();
-    await session.page.fill(target, args.text);
+    try {
+      await session.page.fill(target, args.text);
+    } catch (error) {
+      if (args.ref !== undefined) {
+        throw new Error(
+          `Element [${args.ref}] not found — the page changed since the last snapshot. Call browser_snapshot again. (${error instanceof Error ? error.message.slice(0, 160) : String(error)})`,
+        );
+      }
+      throw error;
+    }
     recordBrowseAction(session.page, "input");
     return { success: true, data: { selector: target } };
   },
@@ -879,6 +979,9 @@ export const browserTabsTool = createTool({
       (input as { context?: z.infer<typeof tabsSchema> }).context ?? input;
     await requestBrowserPermission(`tabs:${args.action}`);
     if (args.action === "close") {
+      if (await closeChatPage()) {
+        return { success: true, data: { closed: true, scope: "this chat's page" } };
+      }
       await closeActiveBrowserSession();
       return { success: true, data: { closed: true } };
     }
@@ -1024,8 +1127,11 @@ export const browserEvaluateScriptTool = createTool({
     await requestBrowserPermission("test_script");
     const session = await getBrowserSession();
     try {
+      const script = /(^|[;{}\n]\s*)return\b/.test(args.script) && !/^\s*\(/.test(args.script)
+        ? `(() => { ${args.script} })()`
+        : args.script;
       const result = await Promise.race([
-        session.page.evaluate(args.script),
+        session.page.evaluate(script),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error("Script timed out after 10s")), 10000)
         ),
@@ -1310,15 +1416,17 @@ export const browserGotoTool = createTool({
       evaluate: (script) => page.evaluate(script),
       settle: () => settleSession(session),
     };
-    if (args.url) {
-      await adapter.goto(args.url);
-      await adapter.settle();
-    }
     let result;
     try {
-      result = await runGoto(adapter, args.goal, {
-        maxSteps: args.maxSteps,
-        allowOffsite: args.allowOffsite,
+      result = await withPageLock(page, async () => {
+        if (args.url) {
+          await adapter.goto(args.url);
+          await adapter.settle();
+        }
+        return runGoto(adapter, args.goal, {
+          maxSteps: args.maxSteps,
+          allowOffsite: args.allowOffsite,
+        });
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -1351,9 +1459,10 @@ export const browserGotoTool = createTool({
         passages: wrap(passages),
         path: wrap(path.join("\n")),
         elements: wrap(result.elements.join("\n")),
+        ...(result.unvisited.length ? { unvisited: wrap(result.unvisited.join("\n")) } : {}),
         hint: result.found
-          ? "Answer from passages and cite their URLs. The browser is left on finalUrl."
-          : "Not clearly found. Read passages; then browser_snapshot({ goal }) + browser_click({ ref }) from finalUrl, or retry with a different url/goal.",
+          ? "Answer from passages and cite their URLs. If they don't actually contain the specific detail asked for, keep looking (next bullet) before answering."
+          : "Not found yet — keep going yourself, don't ask the user: call browser_goto again starting from an unvisited link or the site's docs/help/support site (allowOffsite: true for a docs subdomain on another domain), or browser_snapshot({ goal }) + browser_click({ ref }) from finalUrl. Only report 'not published' after checking the docs/help site.",
       },
     });
   },

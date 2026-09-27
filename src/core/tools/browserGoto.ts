@@ -60,11 +60,15 @@ export interface GotoResult {
   finalUrl: string;
   /** Top-scoring elements on the final page, for the agent's next move. */
   elements: string[];
+  /** Promising links not visited yet (URLs), e.g. a docs/help site — try these next when not found. */
+  unvisited: string[];
   stopReason: "found" | "max_steps" | "no_promising_links" | "extract_failed";
 }
 
 const UNSAFE_LINK = /log ?out|sign ?out|unsubscribe|delete|remove|cancel (plan|subscription)/i;
 const FOLLOWABLE_KINDS = new Set(["link", "tab", "summary"]);
+const LIST_PARTIAL_SCORE = 1.8;
+const LIST_MIN_PARTIALS = 3;
 
 export function siteKey(url: string): string {
   try {
@@ -102,6 +106,7 @@ export async function runGoto(page: GotoPage, goal: string, opts: GotoOptions = 
   const steps: GotoStep[] = [];
   let lastElements: string[] = [];
   let stopReason: GotoResult["stopReason"] = "max_steps";
+  let listFound = false;
 
   for (let step = 0; step < maxSteps; step++) {
     const url = page.url();
@@ -127,12 +132,13 @@ export async function runGoto(page: GotoPage, goal: string, opts: GotoOptions = 
     const current: GotoStep = { url, bestScore: ranking.bestSectionScore };
     steps.push(current);
 
-    if (ranking.bestSectionScore >= stopScore) {
+    // List answers are spread across several partial sections on one page.
+    const partialsHere = ranking.sections.filter((x) => x.score >= LIST_PARTIAL_SCORE).length;
+    if (ranking.bestSectionScore >= stopScore || partialsHere >= LIST_MIN_PARTIALS) {
+      if (ranking.bestSectionScore < stopScore) listFound = true;
       stopReason = "found";
       break;
     }
-    if (step === maxSteps - 1) break;
-
     for (const e of ranking.elements) {
       if (!FOLLOWABLE_KINDS.has(e.kind) || UNSAFE_LINK.test(e.text)) continue;
       let key: string;
@@ -147,6 +153,8 @@ export async function runGoto(page: GotoPage, goal: string, opts: GotoOptions = 
       const prev = pool.get(key);
       if (!prev || prev.score < e.score) pool.set(key, { el: e, score: e.score, fromUrl: url });
     }
+
+    if (step === maxSteps - 1) break;
 
     // Best candidate overall (lets us back out of a dead-end page). In-page clicks only valid on their page.
     let bestKey: string | null = null;
@@ -177,10 +185,17 @@ export async function runGoto(page: GotoPage, goal: string, opts: GotoOptions = 
 
   passages.sort((a, b) => b.score - a.score);
   const bestScore = passages[0]?.score ?? 0;
+  const found = bestScore >= stopScore || listFound;
+  const unvisited = [...pool.values()]
+    .filter((c) => c.el.href && c.score >= minLinkScore)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 5)
+    .map((c) => c.el.href as string);
   return {
-    found: bestScore >= stopScore,
-    confidence: bestScore >= stopScore ? "high" : bestScore >= 1.5 ? "medium" : "low",
-    passages: passages.slice(0, 5),
+    found,
+    confidence: found ? "high" : bestScore >= 1.5 ? "medium" : "low",
+    passages: passages.slice(0, listFound ? 8 : 5),
+    unvisited,
     steps,
     finalUrl: page.url(),
     elements: lastElements,

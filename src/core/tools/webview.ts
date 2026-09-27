@@ -426,7 +426,14 @@ export const webviewClickTool = createTool({
         ? String((data as { execError: unknown }).execError)
         : undefined;
     if (execError) {
-      return { success: false, error: execError, data };
+      const stale = args.ref !== undefined && /Element not found/.test(execError);
+      return {
+        success: false,
+        error: stale
+          ? `Element [${args.ref}] not found — the preview re-rendered since the last snapshot. Call webview_snapshot again and use the new number.`
+          : execError,
+        data,
+      };
     }
     return { success: true, data };
   },

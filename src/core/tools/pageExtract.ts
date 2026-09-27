@@ -193,6 +193,14 @@ export function formatElements(elements: PageElement[], pageUrl: string, maxItem
 
 export const GOAL_LEVELS = ["irrelevant", "related", "likely helps", "definitely what is needed"];
 
+/** Sections are scored on whether they STATE the answer, not whether they are on topic. */
+export const SECTION_LEVELS = [
+  "irrelevant",
+  "on topic but does not state what the goal asks for",
+  "partially answers (some of the asked-for facts or items)",
+  "directly states the answer",
+];
+
 /** Scores items 0..3. Injected so tests can run without the network. */
 export type ItemScorer = (
   goal: string,
@@ -220,24 +228,34 @@ export const jevItemScorer: ItemScorer = async (goal, kind, items) => {
   const batches: string[][] = [];
   for (let i = 0; i < keys.length; i += 12) batches.push(keys.slice(i, i + 12));
   const noun = kind === "sections" ? "page section" : "page element";
+  let failures = 0;
+  let lastError: unknown;
   const results = await mapLimit(batches, 8, async (batch) => {
-    const res = await evaluateJevWithAuth({
+    let res: Awaited<ReturnType<typeof evaluateJevWithAuth>>;
+    try {
+      res = await evaluateJevWithAuth({
       state: { goal, [kind]: Object.fromEntries(batch.map((k) => [k, items[k]])) },
       questions: Object.fromEntries(
         batch.map((k) => [
           k,
           {
             type: "score" as const,
-            criteria: GOAL_LEVELS,
+            criteria: kind === "sections" ? SECTION_LEVELS : GOAL_LEVELS,
             instructions:
               kind === "sections"
-                ? `Does ${noun} ${k} contain information that serves the goal?`
+                ? `Does ${noun} ${k} state the specific fact(s) the goal asks for? Mentioning the topic without the asked-for detail (number, name, duration, yes/no) is only "on topic".`
                 : `Would clicking or using ${noun} ${k} move toward the goal?`,
           },
         ]),
       ),
       timeoutMs: 20_000,
-    });
+      });
+    } catch (error) {
+      // One slow/failed batch shouldn't sink the page — score it 0 and keep the rest.
+      failures++;
+      lastError = error;
+      return Object.fromEntries(batch.map((k) => [k, 0]));
+    }
     const scores: Record<string, number> = {};
     for (const k of batch) {
       const a = res.answers[k] as { score?: number } | undefined;
@@ -245,6 +263,7 @@ export const jevItemScorer: ItemScorer = async (goal, kind, items) => {
     }
     return scores;
   });
+  if (failures === batches.length && lastError) throw lastError;
   return Object.assign({}, ...results);
 };
 

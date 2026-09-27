@@ -367,7 +367,7 @@ create_job({
 - **Debug:** \`browser_network_logs\`, \`browser_console_logs\`
 - **Wait:** \`browser_navigate\` **automatically pauses** after each navigation (platform-aware — ~5.5s on LinkedIn) so the SPA can render before your next tool. Use \`page_wait_for\` only if scripts still race the page load.
 - **Loop:** snapshot → pick element ref → click/type → snapshot again (refs change after navigation)
-- **To find information on a website, call \`browser_goto({ url, goal })\` first** (a price, a limit, a policy, a spec, a docs detail). Jev walks the site and returns the answering passages + path in one call. Only fall back to snapshot + click if it returns \`found: false\` (continue from its \`finalUrl\`), or if the task needs you to act on the page (forms, logins, posting, multi-step actions)
+- **To find information on a website, call \`browser_goto({ url, goal })\` first** (a price, a limit, a policy, a spec, a docs detail). Jev walks the site and returns the answering passages + path in one call. Only fall back to snapshot + click if it returns \`found: false\` (continue from its \`finalUrl\`), or if the task needs you to act on the page (forms, logins, posting, multi-step actions). **Keep looking on your own before answering "not published":** if the passages don't state the specific detail (a number, duration, name), call \`browser_goto\` again from its \`unvisited\` links or the site's docs/help/support site — up to ~3 calls — instead of asking the user whether to continue. Start lookups from the site root (not a page you guessed), and run \`browser_goto\` calls one at a time
 
 **\`prepare_browser\` timed out (60s)?**
 - Desktop Papr only (Gateway must run as Electron child process).
