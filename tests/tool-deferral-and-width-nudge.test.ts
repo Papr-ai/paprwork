@@ -78,6 +78,20 @@ describe("turn tool selection", () => {
     }
   });
 
+  it("defers delegation tools on generic requests (agent uses run_deferred_tool)", () => {
+    const tools = [
+      ...MEASURED_CORE_TOOL_IDS.map((id) => deferrable(id, 200)),
+      deferrable("delegate_task", 444),
+      deferrable("get_delegation_run", 110),
+      ...bulkTools(30),
+    ];
+    const sel = selectTurnToolIds({ tools, requestText: "hello" });
+    expect(sel.enabled).toBe(true);
+    expect(sel.activeToolIds).not.toContain("delegate_task");
+    expect(sel.deferredToolIds).toContain("delegate_task");
+    expect(sel.deferredToolIds).toContain("get_delegation_run");
+  });
+
   it("always sends the dispatcher pair, or deferred tools are unreachable", () => {
     const tools = [
       ...DEFERRAL_ESCAPE_TOOL_IDS.map((id) => deferrable(id, 300)),

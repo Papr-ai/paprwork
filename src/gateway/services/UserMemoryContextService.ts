@@ -71,6 +71,20 @@ function createEmptyBootstrapState(): ChatBootstrapState {
   return { blocks: null, fetchPromise: null, injected: false, wikiInjected: false };
 }
 
+export const JEV_CATALOG_EXPERIMENT = "JEV_CATALOG";
+
+export interface CatalogExperimentRecord {
+  arm: "treatment" | "control" | null;
+  positionalTokens: number;
+  /** Null when not in treatment or when Jev fell back. */
+  gatedTokens: number | null;
+  jevMs: number | null;
+}
+
+function estimateTokens(text: string | undefined): number {
+  return Math.ceil((text ?? "").length / 4);
+}
+
 function extractRole(message: HistoryMessageLike): string | null {
   const role = message.role ?? message.message_role;
   return typeof role === "string" ? role : null;
@@ -299,6 +313,8 @@ export class UserMemoryContextService {
   private static instance: UserMemoryContextService | null = null;
   private readonly chatBootstrap = new Map<string, ChatBootstrapState>();
   private paprSnapshotCache: PaprCatalogSnapshot | null = null;
+  private catalogExperiment = new Map<string, CatalogExperimentRecord>();
+  private snapshotRefreshInFlight = false;
   private wikiHomeCache: Awaited<ReturnType<typeof fetchLocalWikiHome>> | null =
     null;
   private wikiHomeCacheAt = 0;
@@ -370,9 +386,64 @@ export class UserMemoryContextService {
   }
 
   /**
+   * Tiers snapshot, stale-while-revalidate.
+   *
+   * Order: in-memory (fresh) → disk (any age ≤ 7d, refresh in background if
+   * past TTL) → network (only when nothing cached). sync.getTiers takes
+   * 20–90s, so a blocking fetch is reserved for a cold install.
+   */
+  private async resolvePaprSnapshot(
+    client: Papr,
+    userId: string,
+  ): Promise<PaprCatalogSnapshot | null> {
+    const now = Date.now();
+    const isFresh = (s: PaprCatalogSnapshot | null): s is PaprCatalogSnapshot =>
+      !!s && now - s.fetchedAt <= CATALOG_SNAPSHOT_TTL_MS;
+
+    if (isFresh(this.paprSnapshotCache)) {
+      return this.paprSnapshotCache;
+    }
+
+    const { readPaprCatalogSnapshotCache, writePaprCatalogSnapshotCache } =
+      await import("./paprCatalogSnapshotCache.js");
+
+    const stale = this.paprSnapshotCache ?? (await readPaprCatalogSnapshotCache(userId, now));
+    if (stale) {
+      this.paprSnapshotCache = stale;
+      const staleAgeMin = Math.round((now - stale.fetchedAt) / 60000);
+      if (!isFresh(stale) && !this.snapshotRefreshInFlight) {
+        this.snapshotRefreshInFlight = true;
+        void fetchPaprCatalogSnapshot(client, userId)
+          .then(async (fresh) => {
+            if (fresh) {
+              this.paprSnapshotCache = fresh;
+              await writePaprCatalogSnapshotCache(userId, fresh);
+              console.log(
+                `[UserMemoryContext] Tiers snapshot refreshed in background (was ${staleAgeMin}m old)`,
+              );
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            this.snapshotRefreshInFlight = false;
+          });
+      }
+      return stale;
+    }
+
+    const fresh = await fetchPaprCatalogSnapshot(client, userId);
+    if (fresh) {
+      this.paprSnapshotCache = fresh;
+      await writePaprCatalogSnapshotCache(userId, fresh);
+    }
+    return fresh;
+  }
+
+  /**
    * Papr tiers + message-scoped search — background only, injects turn 2.
    */
   private async fetchPaprMemoryCatalogBlock(
+    chatId: string,
     userMessage: string,
   ): Promise<string | undefined> {
     const papr = await createPaprClientForCatalog();
@@ -380,15 +451,7 @@ export class UserMemoryContextService {
       return undefined;
     }
 
-    const now = Date.now();
-    let snapshot = this.paprSnapshotCache;
-    if (!snapshot || now - snapshot.fetchedAt > CATALOG_SNAPSHOT_TTL_MS) {
-      const fresh = await fetchPaprCatalogSnapshot(papr.client, papr.userId);
-      if (fresh) {
-        snapshot = fresh;
-        this.paprSnapshotCache = fresh;
-      }
-    }
+    const snapshot = await this.resolvePaprSnapshot(papr.client, papr.userId);
 
     let relatedMemories: MemoryObject[] = [];
     try {
@@ -408,11 +471,69 @@ export class UserMemoryContextService {
       return undefined;
     }
 
-    return buildPaprMemoryCatalogBlock({
-      tier0: snapshot?.tier0 ?? [],
-      tier1: snapshot?.tier1 ?? [],
-      relatedMemories,
+    const tier0 = snapshot?.tier0 ?? [];
+    const tier1 = snapshot?.tier1 ?? [];
+    const positional = buildPaprMemoryCatalogBlock({ tier0, tier1, relatedMemories });
+
+    // Experiment: Jev-gated catalog (see jevMemoryCatalogGate.ts). Arm is
+    // recorded per chat so the turn that injects it can log it.
+    const { decideExperimentArm } = await import("../../core/utils/experimentArm.js");
+    const { experimentRatesFor } = await import("./experimentSettings.js");
+    const rates = experimentRatesFor(JEV_CATALOG_EXPERIMENT);
+    const arm = decideExperimentArm({
+      name: JEV_CATALOG_EXPERIMENT,
+      defaultTreatmentRate: rates.treatmentRate,
+      defaultControlRate: rates.controlRate,
     });
+    this.catalogExperiment.set(chatId, {
+      arm,
+      positionalTokens: estimateTokens(positional),
+      gatedTokens: null,
+      jevMs: null,
+    });
+    if (arm !== "treatment") {
+      return positional;
+    }
+
+    const { gateCatalogWithJev } = await import("./jevMemoryCatalogGate.js");
+    const gated = await gateCatalogWithJev(userMessage, [
+      ...tier0,
+      ...tier1,
+      ...relatedMemories,
+    ]);
+    if (!gated) {
+      return positional; // Jev failed — measure as fallback, keep old behaviour
+    }
+
+    const tierIds = new Set([...tier0, ...tier1].map((m) => m.id));
+    const block =
+      gated.kept.length === 0
+        ? undefined
+        : buildPaprMemoryCatalogBlock({
+            tier0: gated.kept.filter((m) => tierIds.has(m.id)),
+            tier1: [],
+            relatedMemories: gated.kept.filter((m) => !tierIds.has(m.id)),
+          });
+    const rec = this.catalogExperiment.get(chatId);
+    if (rec) {
+      rec.gatedTokens = estimateTokens(block);
+      rec.jevMs = gated.jevMs;
+    }
+    console.log(
+      `[UserMemoryContext] Jev catalog gate kept ${gated.kept.length}/${gated.candidates} in ${gated.jevMs}ms (${estimateTokens(positional)}→${estimateTokens(block)} tok)`,
+    );
+    return block;
+  }
+
+  /**
+   * One-shot read of the catalog experiment record for a chat. Consumed by
+   * the turn that injects the deferred block so it can be logged with the
+   * turn's cost and latency.
+   */
+  takeCatalogExperiment(chatId: string): CatalogExperimentRecord | null {
+    const rec = this.catalogExperiment.get(chatId) ?? null;
+    this.catalogExperiment.delete(chatId);
+    return rec;
   }
 
   private handleBootstrapTriggerTurn(
@@ -550,7 +671,7 @@ export class UserMemoryContextService {
 
     const [catalogSettled, goalsSettled, usecasesSettled] =
       await Promise.allSettled([
-        this.fetchPaprMemoryCatalogBlock(userMessage),
+        this.fetchPaprMemoryCatalogBlock(chatId, userMessage),
         sessionToken
           ? fetchParseGoalsForUser(sessionToken, userId)
           : Promise.resolve([]),

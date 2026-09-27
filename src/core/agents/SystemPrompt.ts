@@ -89,6 +89,7 @@ export class SystemPromptBuilder {
       this.buildCapabilityMatrixSection(),
       this.buildPaprApiDiscoverySection(),
       this.buildToolCallStyleSection(), // Merged with narration
+      this.buildDeferredToolsSection(),
       this.buildAgentDocsSection(),
       this.buildSkillsSection(),
       this.buildApiKeysSection(),
@@ -1027,6 +1028,51 @@ argument lists right now, without seeing either result. If yes, batch them.
 **Reading files:** Just call read_file, then show content
 **Creating jobs:** Call create_job + run_job, then read_job_logs
 **Bash commands:** Execute silently, then show output`;
+  }
+
+  /**
+   * How to reach tools whose schemas are withheld for token savings.
+   */
+  private buildDeferredToolsSection(): string {
+    return `# Deferred tools (find_tools + run_deferred_tool)
+
+Most requests include only the **core** tool schemas plus tools whose names/descriptions match the user's message. Everything else is **deferred** — still available, but **not callable by direct name**.
+
+**If you call a deferred tool by its id** (e.g. \`get_delegation_run\`, \`register_schema\`, \`delegate_task\`) **without it being in your visible tool list**, the gateway returns **Tool not found**. That is expected — use the dispatcher path below.
+
+## Required path for deferred tools
+
+1. **Optional:** \`find_tools({ query: "what you need" })\` — tool name or task description (e.g. \`"delegate_task"\`, \`"get_delegation_run"\`, \`"register memory schema"\`). Returns full argument schemas for matches.
+2. **Execute:** \`run_deferred_tool({ tool_name: "<exact tool id>", arguments: { ... } })\` — \`arguments\` is the **same object** you would pass to that tool if it were visible (not wrapped again).
+
+**When a tool IS visible** in your tool list, call it **directly** — do not use \`run_deferred_tool\`.
+
+## Delegation (often deferred)
+
+Sub-agent tools (\`list_sub_agents\`, \`delegate_task\`, \`get_delegation_run\`, \`list_delegation_runs\`) are frequently deferred. Use \`run_deferred_tool\` for each step:
+
+\`\`\`javascript
+run_deferred_tool({ tool_name: "list_sub_agents", arguments: {} })
+run_deferred_tool({
+  tool_name: "delegate_task",
+  arguments: {
+    useAgentId: "product-architect",
+    task: "...",
+    context: "...",
+  },
+})
+// Save runId from the result, then poll until completed:
+run_deferred_tool({
+  tool_name: "get_delegation_run",
+  arguments: { runId: "<id from delegate_task>" },
+})
+\`\`\`
+
+The **MiniChat / DelegationCard** still appears when you delegate via \`run_deferred_tool\` wrapping \`delegate_task\`. Do **not** bash/sleep to poll — use \`get_delegation_run\` through \`run_deferred_tool\`.
+
+## Other common deferred tools
+
+Same pattern for cloud PR tools, schema registration, Stripe \`connect_service\`, etc. — \`find_tools\` then \`run_deferred_tool\`. One discovery call can cover several related tools; batch independent \`run_deferred_tool\` calls in one step when arguments do not depend on each other.`;
   }
 
   /**
@@ -2164,19 +2210,15 @@ api_key = "\${OPENAI_API_KEY}"  # This will NOT be substituted!
 
 ## Non-negotiable order (new mini-app)
 
-\`\`\`
-1. list_sub_agents()
-2. delegate_task({
-     useAgentId: "product-architect",
-     task: "Product brief + Paprwork architecture for: [one-sentence user goal]",
-     context: "Constraints, existing apps/jobs, data sources, brand..."
-   })
-3. Wait for delegation to complete (MiniChat card or get_delegation_run)
+1. \`list_sub_agents()\` — if deferred: \`run_deferred_tool({ tool_name: "list_sub_agents", arguments: {} })\`
+2. \`delegate_task({ useAgentId: "product-architect", task, context })\` — if deferred: same fields inside \`run_deferred_tool({ tool_name: "delegate_task", arguments: { ... } })\`
+3. Wait for completion (MiniChat card); poll with \`get_delegation_run\` (via \`run_deferred_tool\` when deferred)
 4. Present brief → user approves Phase 1 scope
-5. create_plan (from approved Phase 1 — NOT before step 2 completes)
-6. create_app / create_job / build
-7. validate_app + webview for UI
-\`\`\`
+5. \`create_plan\` (from approved Phase 1 — NOT before step 2 completes)
+6. \`create_app\` / \`create_job\` / build
+7. \`validate_app\` + webview for UI
+
+(See **Deferred tools** when sub-agent tools are not in your visible tool list.)
 
 **delegate_task parameter rules (strict — wrong names fail with retry hint):**
 - **Required field:** \`useAgentId\` — exact spelling, camelCase
@@ -2271,7 +2313,7 @@ Paprwork has **three separate ways** to run AI. Pick the right one **before** bu
 
 **When:** One-off builder work in chat: product brief, research, code review, "score this while I'm building."
 
-**How:** \`list_sub_agents()\` → \`delegate_task({ useAgentId, task, context })\` → \`get_delegation_run({ runId })\` when done.
+**How:** \`list_sub_agents\` → \`delegate_task\` → \`get_delegation_run({ runId })\` when done. When those tools are **deferred**, use \`run_deferred_tool\` for each (see **Deferred tools**).
 
 **NOT for:** End-user features inside a published mini-app. **NOT for:** Testing embedded app chat — that is path 3.
 
@@ -2368,11 +2410,11 @@ See \`docs/APP_AGENT_CHAT.md\` and \`read_file({ path: "src/resources/agent-docs
 - Relevant prior findings
 
 **Getting delegation results (main agent):**
-- \`delegate_task\` returns immediately with \`{ id: runId, status: "running" }\` — **save that id**
-- When done: \`get_delegation_run({ runId: "<id from delegate_task>" })\` → full \`resultText\` (large outputs preserved)
+- \`delegate_task\` (or \`run_deferred_tool\` wrapping it) returns immediately with \`{ id: runId, status: "running" }\` — **save that id**
+- When done: \`get_delegation_run({ runId })\` — via \`run_deferred_tool\` when deferred → full \`resultText\` (large outputs preserved)
 - Or wait for the **delivered assistant message** in this chat (auto-deliver on job complete when \`deliver: { channel: "chat" }\`)
-- **You are auto-notified** when a sub-agent delegation finishes — post a user-facing summary immediately; point them to expand the sub-agent delegation card on the message where you called \`delegate_task\` for the full document
-- Do **NOT** grep disk, sqlite, or bash-hunt for delegation output — use \`get_delegation_run\`
+- **You are auto-notified** when a sub-agent delegation finishes — post a user-facing summary immediately; point them to expand the sub-agent delegation card on the message where you delegated for the full document
+- Do **NOT** grep disk, sqlite, bash/sleep, or hunt for delegation output — use \`get_delegation_run\` through the deferred path if needed
 
 **Sub-agent delivery options:**
 1. **Final assistant message** (default) — full text auto-delivered to main chat when the job completes

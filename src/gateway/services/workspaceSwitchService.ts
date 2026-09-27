@@ -341,6 +341,7 @@ async function initializeWorkspaceServicesPhased(input?: {
   await yieldEventLoop();
 
   const truncationSettings = await refreshToolResultTruncationSettings();
+  await (await import("./experimentSettings.js")).refreshExperimentSettings();
   console.log(
     `[WorkspaceSwitch] Tool truncation loaded from ${process.env.PAPR_HOME ?? "Papr"}/data/settings.json` +
       (truncationSettings.disableAllTruncation ? " (truncation disabled)" : ""),

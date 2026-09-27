@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-26T01:30:20.492Z",
-  "entryCount": 199,
+  "generatedAt": "2026-09-27T20:29:20.565Z",
+  "entryCount": 200,
   "entries": [
     {
       "id": "access-members",
@@ -109,7 +109,7 @@
     {
       "id": "agent-tool-browser_click",
       "title": "browser_click",
-      "summary": "Click an element on the current browser page",
+      "summary": "Click an element on the current browser page. Prefer ref (the [N] number from browser_snapshot); selector is a fallback.",
       "surfaces": [
         "agent-tool"
       ],
@@ -161,6 +161,25 @@
         "browser",
         "fill",
         "form",
+        "tool",
+        "agent"
+      ]
+    },
+    {
+      "id": "agent-tool-browser_goto",
+      "title": "browser_goto",
+      "summary": "Find something on a website without reading every page. From the current page (or url), Jev scores each page's sections and links against the goal, follows the most promising same-site link, and stops when a section clearly answers it (up to maxSteps pages). Returns the best passages with their URLs, the path taken, and top elements on the final page. Much cheaper than snapshot→click loops for lookups (pricing, docs, policies, specs). Use browser_snapshot + browser_click for forms, logins, or step-by-step actions. Requires Jev (Papr login or TYPESAFE_API_KEY).",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "browser_goto",
+      "keywords": [
+        "browser_goto",
+        "browser",
+        "goto",
         "tool",
         "agent"
       ]
@@ -226,7 +245,7 @@
     {
       "id": "agent-tool-browser_snapshot",
       "title": "browser_snapshot",
-      "summary": "How the agent SEES the page: returns HTML (truncated). After prepare_browser, read LinkedIn/social UIs here, find CSS selectors, then browser_click/browser_type. Primary vision tool — not screenshots.",
+      "summary": "How the agent SEES the page. Returns readable text grouped under page headings plus a numbered list of links/buttons/inputs — act on them with browser_click({ ref }) / browser_type({ ref, text }). Pass goal (e.g. 'Enterprise plan price', 'link to rate limit docs') to get only the most relevant sections and elements, ranked by Jev — much cheaper on long pages. format: 'html' returns raw HTML (debugging only). Primary vision tool — not screenshots.",
       "surfaces": [
         "agent-tool"
       ],
@@ -284,7 +303,7 @@
     {
       "id": "agent-tool-browser_type",
       "title": "browser_type",
-      "summary": "Fill text into an element on the current browser page",
+      "summary": "Fill text into an element on the current browser page. Prefer ref (the [N] number from browser_snapshot); selector is a fallback.",
       "surfaces": [
         "agent-tool"
       ],
@@ -1976,7 +1995,7 @@
     {
       "id": "agent-tool-papr_db_create_migration",
       "title": "papr_db_create_migration",
-      "summary": "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so collaborators can never produce the same filename. Then applies it like papr_db_apply_migration (replica → Turso primary → pull align). Use this for EVERY new schema change; do not write_file migration files or pick numbers yourself. Never edit or rename existing migration files.",
+      "summary": "Create AND apply a new schema migration on a registry database. Pass a short name + SQL only — the system assigns the filename NNNN_YYYYMMDDHHMMSS_name.sql (next number + UTC timestamp) so collaborators can never produce the same filename. Then applies it like papr_db_apply_migration (replica → Turso primary → pull align). Use this for EVERY new schema change; do not write_file migration files or pick numbers yourself. Never edit or rename existing migration files. Never hard-code a user id: write '{{papr.owner_user_id}}' (quoted) for owner/user columns in seed rows or backfills — it is fil...",
       "surfaces": [
         "agent-tool"
       ],
@@ -3042,7 +3061,7 @@
     {
       "id": "agent-tool-webview_click",
       "title": "webview_click",
-      "summary": "Click an element in the mini-app preview session by CSS selector. Use instead of browser_click when webview_launch_app preview is open.",
+      "summary": "Click an element in the mini-app preview session. Prefer ref (the [N] number from webview_snapshot); selector is a fallback. Use instead of browser_click when webview_launch_app preview is open.",
       "surfaces": [
         "agent-tool"
       ],
@@ -3199,7 +3218,7 @@
     {
       "id": "agent-tool-webview_snapshot",
       "title": "webview_snapshot",
-      "summary": "Capture HTML + visible text + visualState from mini-app preview (NOT a screenshot, no vision tokens). Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
+      "summary": "See the mini-app preview (NOT a screenshot, no vision tokens): readable text grouped under headings, a numbered list of buttons/links/inputs (click with webview_click({ ref })), and visualState. Check visualState.userWouldSeeBlankUi and visualState.warnings — DOM can look fine while overlays block the user. Pass goal (e.g. 'saved notes list', 'error message') to get only the relevant parts, ranked by Jev. format: 'html' returns raw HTML (debug markup/CSS only). Also use webview_get_console and webview_get_network for runtime errors and failed external requests.",
       "surfaces": [
         "agent-tool"
       ],

@@ -131,10 +131,18 @@ import {
   recordObservedContext,
   recordStep,
   recordToolDeferral,
+  recordCatalogExperiment,
+  recordToolTrimArm,
   recordWidthNudge,
   setToolCallCount,
   summarizeTurnMetrics,
 } from "./agent/turnMetrics.js";
+import { decideExperimentArm } from "../../core/utils/experimentArm.js";
+import { experimentRatesFor } from "./experimentSettings.js";
+import {
+  createJevTrimRegistry,
+  JEV_TOOL_TRIM_EXPERIMENT,
+} from "./agent/jevToolResultTrim.js";
 import {
   beginLiveTurn,
   endLiveTurn,
@@ -984,6 +992,10 @@ export class AgentService {
             width_nudges_issued: summary.widthNudgesIssued,
             deferred_tool_count: summary.deferredToolCount,
             deferred_tool_tokens: summary.deferredToolTokens,
+            catalog_arm: summary.catalogExperimentArm,
+            catalog_positional_tokens: summary.catalogPositionalTokens,
+            catalog_injected_tokens: summary.catalogInjectedTokens,
+            catalog_jev_ms: summary.catalogJevMs,
             duration_ms: durationMs,
             prompt_tokens: tokenUsage?.promptTokens ?? 0,
             completion_tokens: tokenUsage?.completionTokens ?? 0,
@@ -1222,13 +1234,20 @@ export class AgentService {
 
       let memoryContextBlocks: string[] = [];
       try {
+        const memoryContextService = getUserMemoryContextService();
         memoryContextBlocks =
-          await getUserMemoryContextService().getMemoryContextBlocks(
+          await memoryContextService.getMemoryContextBlocks(
             chatId,
             userMessage,
             history,
             { mode: "stream" },
           );
+        // The catalog experiment record is written when the deferred block is
+        // built and consumed here, on the turn that actually injects it.
+        recordCatalogExperiment(
+          turnMetrics,
+          memoryContextService.takeCatalogExperiment(chatId),
+        );
       } catch (error) {
         console.warn("[AgentService] Memory bootstrap failed:", error);
       }
@@ -1340,9 +1359,19 @@ export class AgentService {
           ? { jobEnv: mergedJobEnv }
           : {}),
       });
+      const toolTrimArm = decideExperimentArm({
+        name: JEV_TOOL_TRIM_EXPERIMENT,
+        ...(() => {
+          const r = experimentRatesFor(JEV_TOOL_TRIM_EXPERIMENT);
+          return { defaultTreatmentRate: r.treatmentRate, defaultControlRate: r.controlRate };
+        })(),
+      });
+      recordToolTrimArm(turnMetrics, toolTrimArm);
       const piToolContext = {
         chatId,
         turnMetrics,
+        jevTrim: createJevTrimRegistry(toolTrimArm),
+        userMessage,
         ...(focusAppId ? { activeAppId: focusAppId } : {}),
         ...(Object.keys(mergedJobEnv).length > 0
           ? { jobEnv: mergedJobEnv }

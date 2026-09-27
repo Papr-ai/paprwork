@@ -42,7 +42,12 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { initializeAgentService } from "./services/AgentService.js";
 import { registerAppFilesRoutes } from "./services/appFiles/appFilesRoutes.js";
-import { getPaprAppsRoot, getPaprRoot, isCloudAgentGatewayMode } from "../core/utils/paprRoot.js";
+import { registerChatgptHistoryRoutes } from "./services/chatgptHistoryRoutes.js";
+import {
+  getPaprAppsRoot,
+  getPaprRoot,
+  isCloudAgentGatewayMode,
+} from "../core/utils/paprRoot.js";
 import { buildAppsHealth } from "../core/utils/appsHealth.js";
 import { getAppCategoryService } from "./services/AppCategoryService.js";
 import {
@@ -76,9 +81,7 @@ import { createGatewayBootGate } from "./services/gatewayBootGate.js";
 import { initializeChatService } from "./services/ChatService.js";
 import { initializeDocumentService } from "./services/DocumentService.js";
 import { initializeAppService, getAppService } from "./services/AppService.js";
-import {
-  resolveAppDataSource,
-} from "./services/appDataSources.js";
+import { resolveAppDataSource } from "./services/appDataSources.js";
 import { resolveMiniAppIdFromRequest } from "./utils/inferMiniAppIdFromRequest.js";
 import {
   registerCloudDesktopPreviewApiProxy,
@@ -112,7 +115,10 @@ import { setPermissionRequester } from "./permissions/PermissionRequester.js";
 import type { KeyPermissionRequest } from "../core/types/permissions.js";
 import { initializeDbPool } from "./services/DbQueryPool.js";
 import { initializeDbRouter } from "./services/appRuntime/DbRouter.js";
-import { prepareRendererTelemetry, sendPreparedRendererTelemetry } from "./services/rendererTelemetryForward.js";
+import {
+  prepareRendererTelemetry,
+  sendPreparedRendererTelemetry,
+} from "./services/rendererTelemetryForward.js";
 import { getPaprApiKey } from "./utils/keyResolver.js";
 import { getMemoryServerBaseUrl } from "./utils/cloudApiClient.js";
 import {
@@ -149,9 +155,7 @@ import {
   buildLocalDbBatchCoalesceKey,
   coalesceInFlightLocalDbRead,
 } from "./services/appRuntime/localDbReadCoalesce.js";
-import {
-  getCloudAppPublishService,
-} from "./services/CloudAppPublishService.js";
+import { getCloudAppPublishService } from "./services/CloudAppPublishService.js";
 import {
   CloudCatalogInstallChoiceRequiredError,
   runCloudCatalogInstall,
@@ -199,17 +203,22 @@ const HOST = process.env.GATEWAY_HOST || "0.0.0.0";
 async function initializeServices(): Promise<void> {
   console.log("[Gateway] Initializing services...");
 
-  const { timeStartupStep, timeStartupSync } = await import(
-    "./services/gatewayStartupTiming.js"
-  );
+  const { timeStartupStep, timeStartupSync } =
+    await import("./services/gatewayStartupTiming.js");
 
   try {
-    await timeStartupStep("services", "toolResultTruncationSettings", async () => {
-      const { refreshToolResultTruncationSettings } = await import(
-        "./services/agent/toolResultTruncationSettings.js"
-      );
-      await refreshToolResultTruncationSettings();
-    });
+    await timeStartupStep(
+      "services",
+      "toolResultTruncationSettings",
+      async () => {
+        const { refreshToolResultTruncationSettings } =
+          await import("./services/agent/toolResultTruncationSettings.js");
+        await refreshToolResultTruncationSettings();
+        const { refreshExperimentSettings } =
+          await import("./services/experimentSettings.js");
+        await refreshExperimentSettings();
+      },
+    );
     console.log("[Gateway] Tool truncation settings loaded");
     // DON'T request keys on startup!
     // AgentService will lazy-load them when first message is sent
@@ -251,7 +260,9 @@ async function initializeServices(): Promise<void> {
 
     // Initialize other services
     console.log("[Gateway] Initializing ChatService...");
-    await timeStartupStep("services", "ChatService", () => initializeChatService());
+    await timeStartupStep("services", "ChatService", () =>
+      initializeChatService(),
+    );
     console.log("[Gateway] ChatService initialized");
 
     console.log("[Gateway] Initializing DocumentService...");
@@ -261,11 +272,15 @@ async function initializeServices(): Promise<void> {
     console.log("[Gateway] DocumentService initialized");
 
     console.log("[Gateway] Initializing AppService...");
-    await timeStartupStep("services", "AppService", () => initializeAppService());
+    await timeStartupStep("services", "AppService", () =>
+      initializeAppService(),
+    );
     console.log("[Gateway] AppService initialized");
 
     console.log("[Gateway] Initializing JobsService...");
-    await timeStartupStep("services", "JobsService", () => initializeJobsService());
+    await timeStartupStep("services", "JobsService", () =>
+      initializeJobsService(),
+    );
     console.log("[Gateway] JobsService core ready (maintenance in background)");
 
     if (
@@ -299,13 +314,14 @@ async function initializeServices(): Promise<void> {
     console.log("[Gateway] SubAgentService initialized");
 
     console.log("[Gateway] Initializing PlanService...");
-    await timeStartupStep("services", "PlanService", () => initializePlanService());
+    await timeStartupStep("services", "PlanService", () =>
+      initializePlanService(),
+    );
     console.log("[Gateway] PlanService initialized");
 
     await timeStartupStep("services", "appRepoRevisionSubscriber", async () => {
-      const { startAppRepoRevisionSubscriber } = await import(
-        "./services/syncV3/appRepoRevisionSubscriber.js"
-      );
+      const { startAppRepoRevisionSubscriber } =
+        await import("./services/syncV3/appRepoRevisionSubscriber.js");
       startAppRepoRevisionSubscriber();
     });
 
@@ -323,9 +339,7 @@ async function initializeServices(): Promise<void> {
  * Start the Gateway server
  */
 const productionUiPath =
-  process.env.NODE_ENV === "production"
-    ? path.join(__dirname, "../ui")
-    : null;
+  process.env.NODE_ENV === "production" ? path.join(__dirname, "../ui") : null;
 
 function registerEarlyProductionUi(app: express.Application): void {
   if (!productionUiPath) return;
@@ -359,7 +373,9 @@ function registerProductionUiCatchAll(app: express.Application): void {
     }
     // Unknown /api/* must not fall through to the SPA shell (apps parse HTML as JSON).
     if (req.path.startsWith("/api/")) {
-      res.status(404).json({ error: `Unknown API route: ${req.method} ${req.path}` });
+      res
+        .status(404)
+        .json({ error: `Unknown API route: ${req.method} ${req.path}` });
       return;
     }
     res.sendFile(path.join(productionUiPath, "index.html"));
@@ -401,7 +417,6 @@ async function startGateway(): Promise<void> {
     console.log(
       `[Gateway] Active workspace: org=${activeWorkspace.organizationId} ns=${activeWorkspace.namespaceId}`,
     );
-
   }
 
   try {
@@ -427,21 +442,22 @@ async function startGateway(): Promise<void> {
 
     // Set up key cache invalidation listener
     console.log("[Gateway] Setting up key cache invalidation listener...");
-    await timeStartupStep("pre-http", "keyCacheInvalidationListener", async () => {
-      const { setupKeyCacheInvalidationListener } = await import(
-        "./utils/keyResolver.js"
-      );
-      setupKeyCacheInvalidationListener();
-    });
+    await timeStartupStep(
+      "pre-http",
+      "keyCacheInvalidationListener",
+      async () => {
+        const { setupKeyCacheInvalidationListener } =
+          await import("./utils/keyResolver.js");
+        setupKeyCacheInvalidationListener();
+      },
+    );
     console.log("[Gateway] Key cache invalidation listener ready");
 
     await timeStartupStep("pre-http", "paprQuotaListener", async () => {
-      const { setPaprQuotaExceededListener } = await import(
-        "../core/utils/paprQuota.js"
-      );
-      const { broadcastPaprQuotaStatus } = await import(
-        "./utils/paprQuotaNotify.js"
-      );
+      const { setPaprQuotaExceededListener } =
+        await import("../core/utils/paprQuota.js");
+      const { broadcastPaprQuotaStatus } =
+        await import("./utils/paprQuotaNotify.js");
       setPaprQuotaExceededListener(broadcastPaprQuotaStatus);
     });
     console.log("[Gateway] Papr quota status listener ready");
@@ -464,11 +480,21 @@ async function startGateway(): Promise<void> {
       if (origin) {
         try {
           const url = new URL(origin);
-          if (url.hostname === "localhost" || url.hostname === "127.0.0.1" || url.hostname === "[::1]") {
+          if (
+            url.hostname === "localhost" ||
+            url.hostname === "127.0.0.1" ||
+            url.hostname === "[::1]"
+          ) {
             res.setHeader("Access-Control-Allow-Origin", origin);
             res.setHeader("Vary", "Origin");
-            res.setHeader("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-            res.setHeader("Access-Control-Allow-Headers", "Content-Type,Authorization");
+            res.setHeader(
+              "Access-Control-Allow-Methods",
+              "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+            );
+            res.setHeader(
+              "Access-Control-Allow-Headers",
+              "Content-Type,Authorization",
+            );
           }
         } catch {
           // Invalid Origin headers receive no CORS grant.
@@ -554,9 +580,8 @@ async function startGateway(): Promise<void> {
     //  - Multiple sources without legacy default → sourceId required (400)
     // ─────────────────────────────────────────────────────────────────────────
 
-    const { resolveDbQueryPoolSize } = await import(
-      "./services/gatewayBackgroundConcurrency.js"
-    );
+    const { resolveDbQueryPoolSize } =
+      await import("./services/gatewayBackgroundConcurrency.js");
     const dbPool = initializeDbPool(
       new URL("./workers/db-query-worker.js", import.meta.url),
       resolveDbQueryPoolSize(),
@@ -610,8 +635,9 @@ async function startGateway(): Promise<void> {
     }
 
     app.use((req, _res, next) => {
-      (req as import("express").Request & { paprReceivedAt?: number }).paprReceivedAt =
-        performance.now();
+      (
+        req as import("express").Request & { paprReceivedAt?: number }
+      ).paprReceivedAt = performance.now();
       next();
     });
     app.use(express.json({ limit: "5mb" }));
@@ -673,9 +699,8 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const { getDataContractService } = await import(
-          "./services/DataContractService.js"
-        );
+        const { getDataContractService } =
+          await import("./services/DataContractService.js");
         const report = await getDataContractService().getDataHealth(appId);
         res.json(report);
       } catch (err) {
@@ -696,9 +721,8 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const { assessAppFeatureAvailabilityForApp } = await import(
-          "./services/cloudAppPublishReadiness.js"
-        );
+        const { assessAppFeatureAvailabilityForApp } =
+          await import("./services/cloudAppPublishReadiness.js");
         const report = await assessAppFeatureAvailabilityForApp(appId);
         res.json(report);
       } catch (err) {
@@ -716,9 +740,8 @@ async function startGateway(): Promise<void> {
           return;
         }
         const { getAppService } = await import("./services/AppService.js");
-        const { toPublicAppAgentChatConfig } = await import(
-          "../core/types/appAgentChat.js"
-        );
+        const { toPublicAppAgentChatConfig } =
+          await import("../core/types/appAgentChat.js");
         const appService = getAppService();
         await appService.initialize();
         const miniApp = await appService.getApp(appId);
@@ -748,10 +771,11 @@ async function startGateway(): Promise<void> {
         const limit =
           typeof limitRaw === "string" ? Number.parseInt(limitRaw, 10) : 100;
         const sinceMs =
-          typeof sinceRaw === "string" ? Number.parseInt(sinceRaw, 10) : undefined;
-        const { getAppRuntimeLogService } = await import(
-          "./services/AppRuntimeLogService.js"
-        );
+          typeof sinceRaw === "string"
+            ? Number.parseInt(sinceRaw, 10)
+            : undefined;
+        const { getAppRuntimeLogService } =
+          await import("./services/AppRuntimeLogService.js");
         const logs = getAppRuntimeLogService().getLogs(appId, {
           limit: Number.isFinite(limit) ? limit : 100,
           sinceMs: Number.isFinite(sinceMs) ? sinceMs : undefined,
@@ -768,9 +792,8 @@ async function startGateway(): Promise<void> {
     // ── Database registry (independent first-class DBs) ──
     app.get("/api/databases", async (_req, res) => {
       try {
-        const { initializeDatabaseRegistry } = await import(
-          "./services/DatabaseRegistryService.js"
-        );
+        const { initializeDatabaseRegistry } =
+          await import("./services/DatabaseRegistryService.js");
         const registry = await initializeDatabaseRegistry();
         const databases = await Promise.all(
           registry.listActive().map(async (record) => ({
@@ -810,9 +833,8 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId and dbId required" });
           return;
         }
-        const { initializeDatabaseRegistry } = await import(
-          "./services/DatabaseRegistryService.js"
-        );
+        const { initializeDatabaseRegistry } =
+          await import("./services/DatabaseRegistryService.js");
         const registry = await initializeDatabaseRegistry();
         const record = registry.getById(body.dbId);
         if (!record) {
@@ -821,9 +843,8 @@ async function startGateway(): Promise<void> {
         }
         const appService = getAppService();
         await appService.initialize();
-        const { resolveAttachAlias } = await import(
-          "./services/appDataSources.js"
-        );
+        const { resolveAttachAlias } =
+          await import("./services/appDataSources.js");
         const alias = resolveAttachAlias({
           requested: body.alias,
           registryLabel: record.label,
@@ -856,18 +877,14 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const { checkAppRemoteCodeStatus } = await import(
-          "./services/syncV3/checkAppRemoteCodeStatus.js"
-        );
-        const { checkPublisherUpstreamRevision } = await import(
-          "./services/syncV3/checkPublisherUpstreamRevision.js"
-        );
-        const { getPendingAppUpdate } = await import(
-          "./services/syncV3/appRepoPendingUpdate.js"
-        );
-        const { readCloudAppLineageMode } = await import(
-          "./services/CloudAppLineageService.js"
-        );
+        const { checkAppRemoteCodeStatus } =
+          await import("./services/syncV3/checkAppRemoteCodeStatus.js");
+        const { checkPublisherUpstreamRevision } =
+          await import("./services/syncV3/checkPublisherUpstreamRevision.js");
+        const { getPendingAppUpdate } =
+          await import("./services/syncV3/appRepoPendingUpdate.js");
+        const { readCloudAppLineageMode } =
+          await import("./services/CloudAppLineageService.js");
         const [status, publisher, lineageMode] = await Promise.all([
           checkAppRemoteCodeStatus(appId),
           checkPublisherUpstreamRevision(appId),
@@ -889,7 +906,11 @@ async function startGateway(): Promise<void> {
         }
         // pendingUpdate: a remote commit arrived but auto-pull was deferred
         // (pending row push, conflicts). Share bar shows "Update waiting".
-        res.json({ ...status, ...publisher, pendingUpdate: getPendingAppUpdate(appId) });
+        res.json({
+          ...status,
+          ...publisher,
+          pendingUpdate: getPendingAppUpdate(appId),
+        });
       } catch (err) {
         console.error("[Gateway] /api/apps/remote-code-status error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -904,7 +925,10 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const body = (req.body ?? {}) as { wait?: boolean; resolution?: string };
+        const body = (req.body ?? {}) as {
+          wait?: boolean;
+          resolution?: string;
+        };
         const waitForCompletion = body.wait === true;
         const resolution =
           body.resolution === "take_theirs" || body.resolution === "keep_mine"
@@ -923,9 +947,8 @@ async function startGateway(): Promise<void> {
         }
 
         const timer = new PhaseTimer();
-        const { pullAppFromCloud } = await import(
-          "./services/syncV3/pullAppFromCloud.js"
-        );
+        const { pullAppFromCloud } =
+          await import("./services/syncV3/pullAppFromCloud.js");
         const result = await pullAppFromCloud(appId, {
           token,
           waitForTurso: true,
@@ -949,66 +972,78 @@ async function startGateway(): Promise<void> {
 
     // Diagnostics: per-op worker timings (queue wait vs engine time) for replica stalls.
     app.get("/api/debug/turso-worker-timings", async (_req, res) => {
-      const { getTursoReplicaSyncWorkerClient } = await import(
-        "./services/tursoReplica/TursoReplicaSyncWorkerClient.js"
-      );
-      res.json({ timings: getTursoReplicaSyncWorkerClient().getRecentTimings() });
+      const { getTursoReplicaSyncWorkerClient } =
+        await import("./services/tursoReplica/TursoReplicaSyncWorkerClient.js");
+      res.json({
+        timings: getTursoReplicaSyncWorkerClient().getRecentTimings(),
+      });
     });
 
     app.get("/api/debug/replica-read-phases", async (_req, res) => {
-      const { getRecentReplicaReadPhaseTraces } = await import(
-        "./services/tursoReplica/replicaReadPhaseTrace.js"
-      );
+      const { getRecentReplicaReadPhaseTraces } =
+        await import("./services/tursoReplica/replicaReadPhaseTrace.js");
       res.json({ traces: getRecentReplicaReadPhaseTraces() });
     });
 
     // Small, bounded diagnostic snapshots; no request contents or URLs retained.
     app.post("/api/debug/renderer-performance", async (req, res) => {
-      const { rendererPerformanceDiagnostics } = await import("./services/rendererPerformanceDiagnostics.js");
+      const { rendererPerformanceDiagnostics } =
+        await import("./services/rendererPerformanceDiagnostics.js");
       if (!rendererPerformanceDiagnostics.record(req.body)) {
-        res.status(400).json({ error: "Invalid or out-of-order renderer sample" });
+        res
+          .status(400)
+          .json({ error: "Invalid or out-of-order renderer sample" });
         return;
       }
       res.status(204).end();
     });
 
-    app.get(["/api/debug/gateway-background", "/api/debug/gateway-performance"], async (_req, res) => {
-      const { getRecentBackgroundTaskTimings } = await import(
-        "./services/gatewayBackgroundWork.js"
-      );
-      const { sampleEventLoopLagMs, getGatewayResourceDiagnostics } = await import(
-        "./services/gatewayEventLoopMonitor.js"
-      );
-      const { getPerformanceDiagnostics } = await import(
-        "../core/utils/performanceDiagnostics.js"
-      );
-      const { buildGatewayPerformanceTimeline } = await import(
-        "./services/gatewayPerformanceTimeline.js"
-      );
-      const capturedAt = new Date().toISOString();
-      const resources = getGatewayResourceDiagnostics();
-      const operations = getPerformanceDiagnostics();
-      const timeline = buildGatewayPerformanceTimeline({
-        capturedAt,
-        samples: resources.samples,
-        active: operations.active,
-        recent: operations.recent,
-      });
-      res.json({
-        schemaVersion: 7,
-        renderer: (await import("./services/rendererPerformanceDiagnostics.js")).rendererPerformanceDiagnostics.snapshot(),
-        cloudPause: (await import("../core/utils/paprQuota.js")).getPaprCloudPauseDiagnostics(),
-        capturedAt,
-        process: { pid: process.pid, uptimeSeconds: process.uptime() },
-        resources,
-        operations,
-        timeline,
-        agentConcurrency: (await import("./services/agent/agentStreamConcurrency.js")).getAgentStreamConcurrencyGate().getStats(),
-        backgroundBudget: (await import("./services/gatewayBackgroundBudget.js")).gatewayBackgroundBudget.stats(),
-        recentTasks: getRecentBackgroundTaskTimings(),
-        eventLoopLagMs: sampleEventLoopLagMs(false),
-      });
-    });
+    app.get(
+      ["/api/debug/gateway-background", "/api/debug/gateway-performance"],
+      async (_req, res) => {
+        const { getRecentBackgroundTaskTimings } =
+          await import("./services/gatewayBackgroundWork.js");
+        const { sampleEventLoopLagMs, getGatewayResourceDiagnostics } =
+          await import("./services/gatewayEventLoopMonitor.js");
+        const { getPerformanceDiagnostics } =
+          await import("../core/utils/performanceDiagnostics.js");
+        const { buildGatewayPerformanceTimeline } =
+          await import("./services/gatewayPerformanceTimeline.js");
+        const capturedAt = new Date().toISOString();
+        const resources = getGatewayResourceDiagnostics();
+        const operations = getPerformanceDiagnostics();
+        const timeline = buildGatewayPerformanceTimeline({
+          capturedAt,
+          samples: resources.samples,
+          active: operations.active,
+          recent: operations.recent,
+        });
+        res.json({
+          schemaVersion: 7,
+          renderer: (
+            await import("./services/rendererPerformanceDiagnostics.js")
+          ).rendererPerformanceDiagnostics.snapshot(),
+          cloudPause: (
+            await import("../core/utils/paprQuota.js")
+          ).getPaprCloudPauseDiagnostics(),
+          capturedAt,
+          process: { pid: process.pid, uptimeSeconds: process.uptime() },
+          resources,
+          operations,
+          timeline,
+          agentConcurrency: (
+            await import("./services/agent/agentStreamConcurrency.js")
+          )
+            .getAgentStreamConcurrencyGate()
+            .getStats(),
+          backgroundBudget: (
+            await import("./services/gatewayBackgroundBudget.js")
+          ).gatewayBackgroundBudget.stats(),
+          recentTasks: getRecentBackgroundTaskTimings(),
+          eventLoopLagMs: sampleEventLoopLagMs(false),
+        });
+      },
+    );
 
     app.get("/api/debug/gateway-performance/view", async (_req, res) => {
       const { readFile } = await import("node:fs/promises");
@@ -1025,12 +1060,10 @@ async function startGateway(): Promise<void> {
 
     app.get("/api/dev/papr-api-catalog", async (req, res) => {
       try {
-        const { getPaprApiCatalog } = await import(
-          "../core/paprApiCatalog/loadCatalog.js"
-        );
-        const { searchPaprApiCatalog, formatCatalogEntryForAgent } = await import(
-          "../core/paprApiCatalog/searchCatalog.js"
-        );
+        const { getPaprApiCatalog } =
+          await import("../core/paprApiCatalog/loadCatalog.js");
+        const { searchPaprApiCatalog, formatCatalogEntryForAgent } =
+          await import("../core/paprApiCatalog/searchCatalog.js");
         const catalog = getPaprApiCatalog();
         const q = typeof req.query.q === "string" ? req.query.q.trim() : "";
         if (!q) {
@@ -1074,10 +1107,10 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId required" });
           return;
         }
-        const apply = (req.body as { apply?: boolean } | undefined)?.apply === true;
-        const { normalizeAppDatabases } = await import(
-          "./services/dbPathNormalization.js"
-        );
+        const apply =
+          (req.body as { apply?: boolean } | undefined)?.apply === true;
+        const { normalizeAppDatabases } =
+          await import("./services/dbPathNormalization.js");
         const report = await normalizeAppDatabases(appId, { dryRun: !apply });
         res.json(report);
       } catch (err) {
@@ -1093,11 +1126,16 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/db/query", async (req, res) => {
       const receivedAt =
-        (req as import("express").Request & { paprReceivedAt?: number }).paprReceivedAt ??
-        performance.now();
+        (req as import("express").Request & { paprReceivedAt?: number })
+          .paprReceivedAt ?? performance.now();
       let traceActive = false;
       try {
-        const { appId: bodyAppId, sourceId, sql, params } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId,
+          sql,
+          params,
+        } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
@@ -1115,9 +1153,8 @@ async function startGateway(): Promise<void> {
           return;
         }
         const appId = resolved.appId;
-        const { markMiniAppInteractiveLoadWindow } = await import(
-          "./services/appRuntime/miniAppInteractiveLoadWindow.js"
-        );
+        const { markMiniAppInteractiveLoadWindow } =
+          await import("./services/appRuntime/miniAppInteractiveLoadWindow.js");
         markMiniAppInteractiveLoadWindow(appId);
 
         const trimmed = sql.trim().toLowerCase();
@@ -1149,18 +1186,16 @@ async function startGateway(): Promise<void> {
           });
           const cached = getCachedLocalDbReadResult(cacheKey);
           if (cached) {
-            const { notifyMiniAppFirstDataPaint } = await import(
-              "./services/tursoPullScheduler.js"
-            );
+            const { notifyMiniAppFirstDataPaint } =
+              await import("./services/tursoPullScheduler.js");
             notifyMiniAppFirstDataPaint(appId);
             res.json(cached);
             return;
           }
         }
 
-        const { shouldUseTursoReplicaForSource } = await import(
-          "./services/tursoReplica/tursoReplicaRouting.js"
-        );
+        const { shouldUseTursoReplicaForSource } =
+          await import("./services/tursoReplica/tursoReplicaRouting.js");
         const useReplicaTrace = shouldUseTursoReplicaForSource(source);
         const {
           withReplicaReadTrace,
@@ -1169,9 +1204,8 @@ async function startGateway(): Promise<void> {
         } = await import("./services/tursoReplica/replicaReadPhaseTrace.js");
 
         const runQuery = async () => {
-          const { withInteractiveHotPath } = await import(
-            "./services/gatewayInteractivePriority.js"
-          );
+          const { withInteractiveHotPath } =
+            await import("./services/gatewayInteractivePriority.js");
           const coalesceKey =
             cacheKey ??
             buildLocalDbReadCacheKey({ appId, sourceKey, sql, params });
@@ -1181,7 +1215,10 @@ async function startGateway(): Promise<void> {
               dbRouter.query(appId, source, sql, params),
             ),
           );
-          markReplicaReadPhase("dbRouterCoalesceMs", performance.now() - routerStarted);
+          markReplicaReadPhase(
+            "dbRouterCoalesceMs",
+            performance.now() - routerStarted,
+          );
           return result;
         };
 
@@ -1215,26 +1252,25 @@ async function startGateway(): Promise<void> {
         if (cacheKey) {
           setCachedLocalDbReadResult(cacheKey, payload, appId);
         }
-        const { notifyMiniAppFirstDataPaint } = await import(
-          "./services/tursoPullScheduler.js"
-        );
+        const { notifyMiniAppFirstDataPaint } =
+          await import("./services/tursoPullScheduler.js");
         notifyMiniAppFirstDataPaint(appId);
         res.json(payload);
       } catch (err) {
         const message = (err as Error).message;
         if (traceActive) {
-          const { finishReplicaReadTrace, getReplicaReadTraceStore } = await import(
-            "./services/tursoReplica/replicaReadPhaseTrace.js"
-          );
+          const { finishReplicaReadTrace, getReplicaReadTraceStore } =
+            await import("./services/tursoReplica/replicaReadPhaseTrace.js");
           if (getReplicaReadTraceStore()) {
             finishReplicaReadTrace({ error: message.slice(0, 160) });
           }
         }
         console.error("[Gateway] /api/db/query error:", err);
-        const { httpStatusForMiniAppDbQueryError } = await import(
-          "./services/tursoReplica/replicaSchemaQueryErrorMessage.js"
-        );
-        res.status(httpStatusForMiniAppDbQueryError(message)).json({ error: message });
+        const { httpStatusForMiniAppDbQueryError } =
+          await import("./services/tursoReplica/replicaSchemaQueryErrorMessage.js");
+        res
+          .status(httpStatusForMiniAppDbQueryError(message))
+          .json({ error: message });
       }
     });
     lapRouteRegistrationSection("database-registry");
@@ -1250,10 +1286,18 @@ async function startGateway(): Promise<void> {
       res: import("express").Response,
     ): Promise<void> => {
       try {
-        const { appId: bodyAppId, sourceId: batchSourceId, statements } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId: batchSourceId,
+          statements,
+        } = req.body as {
           appId?: string;
           sourceId?: string;
-          statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
+          statements?: Array<{
+            sourceId?: string;
+            sql?: string;
+            params?: unknown[];
+          }>;
         };
         if (!Array.isArray(statements) || statements.length === 0) {
           res.status(400).json({ error: "non-empty statements[] is required" });
@@ -1266,83 +1310,95 @@ async function startGateway(): Promise<void> {
           return;
         }
         const appId = resolved.appId;
-        const { markMiniAppInteractiveLoadWindow } = await import(
-          "./services/appRuntime/miniAppInteractiveLoadWindow.js"
-        );
+        const { markMiniAppInteractiveLoadWindow } =
+          await import("./services/appRuntime/miniAppInteractiveLoadWindow.js");
         markMiniAppInteractiveLoadWindow(appId);
         if (statements.length > 25) {
           res.status(400).json({ error: "Batch limited to 25 statements" });
           return;
         }
 
-        const { withInteractiveHotPath } = await import(
-          "./services/gatewayInteractivePriority.js"
+        const { withInteractiveHotPath } =
+          await import("./services/gatewayInteractivePriority.js");
+        const batchCoalesceKey = buildLocalDbBatchCoalesceKey(
+          appId,
+          statements,
         );
-        const batchCoalesceKey = buildLocalDbBatchCoalesceKey(appId, statements);
-        const { executeMiniAppReadBatch } = await import(
-          "./services/appRuntime/miniAppDbReadBatch.js"
-        );
-        const { coalesceBatchSourceId } = await import("./services/appDataSources.js");
-        type Prepared = import("./services/appRuntime/miniAppDbReadBatch.js").PreparedMiniAppReadStatement;
-        const payload = await withInteractiveHotPath("mini-app:db-query-batch", () =>
-          coalesceInFlightLocalDbRead(batchCoalesceKey, async () => {
-            const prepared: Prepared[] = [];
-            const validationRows: Array<Record<string, unknown>> = new Array(
-              statements.length,
-            );
-            for (let index = 0; index < statements.length; index++) {
-              const stmt = statements[index];
-              const sql = stmt?.sql;
-              if (!sql) {
-                validationRows[index] = { ok: false, error: "sql is required" };
-                continue;
-              }
-              const trimmed = sql.trim().toLowerCase();
-              if (!trimmed.startsWith("select") && !trimmed.startsWith("with")) {
-                validationRows[index] = {
-                  ok: false,
-                  error: "Only SELECT (and WITH ... SELECT) queries are allowed",
-                };
-                continue;
-              }
-              try {
-                const source = await resolveLinkedSource(
-                  appId,
-                  coalesceBatchSourceId(stmt.sourceId, batchSourceId),
-                  sql,
-                  "read",
-                );
-                prepared.push({ index, source, sql, params: stmt.params });
-              } catch (resolveErr) {
-                validationRows[index] = {
-                  ok: false,
-                  error: (resolveErr as Error).message,
-                };
-              }
-            }
-
-            const results: Array<Record<string, unknown>> = validationRows.map(
-              (row) => row ?? { ok: false, error: "Statement was not executed" },
-            );
-            if (prepared.length > 0) {
-              const executed = await executeMiniAppReadBatch(
-                dbRouter,
-                appId,
-                prepared,
+        const { executeMiniAppReadBatch } =
+          await import("./services/appRuntime/miniAppDbReadBatch.js");
+        const { coalesceBatchSourceId } =
+          await import("./services/appDataSources.js");
+        type Prepared =
+          import("./services/appRuntime/miniAppDbReadBatch.js").PreparedMiniAppReadStatement;
+        const payload = await withInteractiveHotPath(
+          "mini-app:db-query-batch",
+          () =>
+            coalesceInFlightLocalDbRead(batchCoalesceKey, async () => {
+              const prepared: Prepared[] = [];
+              const validationRows: Array<Record<string, unknown>> = new Array(
                 statements.length,
               );
-              for (let i = 0; i < statements.length; i++) {
-                if (executed[i] !== undefined) {
-                  results[i] = executed[i];
+              for (let index = 0; index < statements.length; index++) {
+                const stmt = statements[index];
+                const sql = stmt?.sql;
+                if (!sql) {
+                  validationRows[index] = {
+                    ok: false,
+                    error: "sql is required",
+                  };
+                  continue;
+                }
+                const trimmed = sql.trim().toLowerCase();
+                if (
+                  !trimmed.startsWith("select") &&
+                  !trimmed.startsWith("with")
+                ) {
+                  validationRows[index] = {
+                    ok: false,
+                    error:
+                      "Only SELECT (and WITH ... SELECT) queries are allowed",
+                  };
+                  continue;
+                }
+                try {
+                  const source = await resolveLinkedSource(
+                    appId,
+                    coalesceBatchSourceId(stmt.sourceId, batchSourceId),
+                    sql,
+                    "read",
+                  );
+                  prepared.push({ index, source, sql, params: stmt.params });
+                } catch (resolveErr) {
+                  validationRows[index] = {
+                    ok: false,
+                    error: (resolveErr as Error).message,
+                  };
                 }
               }
-            }
-            return { results };
-          }),
+
+              const results: Array<Record<string, unknown>> =
+                validationRows.map(
+                  (row) =>
+                    row ?? { ok: false, error: "Statement was not executed" },
+                );
+              if (prepared.length > 0) {
+                const executed = await executeMiniAppReadBatch(
+                  dbRouter,
+                  appId,
+                  prepared,
+                  statements.length,
+                );
+                for (let i = 0; i < statements.length; i++) {
+                  if (executed[i] !== undefined) {
+                    results[i] = executed[i];
+                  }
+                }
+              }
+              return { results };
+            }),
         );
-        const { notifyMiniAppFirstDataPaint } = await import(
-          "./services/tursoPullScheduler.js"
-        );
+        const { notifyMiniAppFirstDataPaint } =
+          await import("./services/tursoPullScheduler.js");
         notifyMiniAppFirstDataPaint(appId);
         res.json(payload);
       } catch (err) {
@@ -1373,7 +1429,12 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/db/write", async (req, res) => {
       try {
-        const { appId: bodyAppId, sourceId, sql, params } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId,
+          sql,
+          params,
+        } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
@@ -1416,16 +1477,13 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const { writeLinkedDbRowLocalFirst } = await import(
-          "./services/syncV3/localFirstDbWrite.js"
-        );
-        const { assertReplaySafeRowSql } = await import(
-          "./services/syncV3/replaySafeSql.js"
-        );
+        const { writeLinkedDbRowLocalFirst } =
+          await import("./services/syncV3/localFirstDbWrite.js");
+        const { assertReplaySafeRowSql } =
+          await import("./services/syncV3/replaySafeSql.js");
         assertReplaySafeRowSql(sql);
-        const { assertValidHomeBriefWrite } = await import(
-          "./services/dailyBriefWriteGuard.js"
-        );
+        const { assertValidHomeBriefWrite } =
+          await import("./services/dailyBriefWriteGuard.js");
         assertValidHomeBriefWrite(appId, source, sql, params);
         const result = await writeLinkedDbRowLocalFirst(
           dbPool,
@@ -1466,13 +1524,21 @@ async function startGateway(): Promise<void> {
 
     app.post("/api/db/write-batch", async (req, res) => {
       try {
-        const { appId: bodyAppId, sourceId: batchSourceId, statements, atomic } =
-          req.body as {
-            appId?: string;
+        const {
+          appId: bodyAppId,
+          sourceId: batchSourceId,
+          statements,
+          atomic,
+        } = req.body as {
+          appId?: string;
+          sourceId?: string;
+          statements?: Array<{
             sourceId?: string;
-            statements?: Array<{ sourceId?: string; sql?: string; params?: unknown[] }>;
-            atomic?: boolean;
-          };
+            sql?: string;
+            params?: unknown[];
+          }>;
+          atomic?: boolean;
+        };
 
         if (!Array.isArray(statements) || statements.length === 0) {
           res.status(400).json({ error: "non-empty statements[] is required" });
@@ -1490,10 +1556,10 @@ async function startGateway(): Promise<void> {
         }
         const appId = resolved.appId;
 
-        const { executeMiniAppWriteBatch } = await import(
-          "./services/miniAppWriteBatch.js"
-        );
-        const { coalesceBatchSourceId } = await import("./services/appDataSources.js");
+        const { executeMiniAppWriteBatch } =
+          await import("./services/miniAppWriteBatch.js");
+        const { coalesceBatchSourceId } =
+          await import("./services/appDataSources.js");
 
         const payload = await executeMiniAppWriteBatch({
           appId,
@@ -1532,17 +1598,15 @@ async function startGateway(): Promise<void> {
     // Python papr_db uses PAPR_DB_MODE=proxy to route query/write here instead
     // of raw sqlite3 or Turso tokens in the subprocess.
     // ─────────────────────────────────────────────────────────────────────────
-    const { createDesktopBackendDbProxyRouter } = await import(
-      "./services/appRuntime/backendDbProxy.js"
-    );
+    const { createDesktopBackendDbProxyRouter } =
+      await import("./services/appRuntime/backendDbProxy.js");
     app.use(
       "/internal/backend-db",
       createDesktopBackendDbProxyRouter({
         resolveSource: resolveLinkedSource,
         resolveRegistrySource: async (dbId, sourceId) => {
-          const { getDatabaseRegistryService } = await import(
-            "./services/DatabaseRegistryService.js"
-          );
+          const { getDatabaseRegistryService } =
+            await import("./services/DatabaseRegistryService.js");
           const { resolveExistingRegistryDbPath, targetFromRegistryRecord } =
             await import("./services/jobAppDatabase.js");
           const record = getDatabaseRegistryService().getById(dbId);
@@ -1558,7 +1622,9 @@ async function startGateway(): Promise<void> {
             sourceId.trim() !== dbId
           ) {
             throw Object.assign(
-              new Error(`Unknown sourceId ${sourceId} for registry database ${dbId}`),
+              new Error(
+                `Unknown sourceId ${sourceId} for registry database ${dbId}`,
+              ),
               { status: 400 },
             );
           }
@@ -1575,18 +1641,16 @@ async function startGateway(): Promise<void> {
           };
         },
         query: async (appId, source, sql, params) => {
-          const { withInteractiveHotPath } = await import(
-            "./services/gatewayInteractivePriority.js"
-          );
+          const { withInteractiveHotPath } =
+            await import("./services/gatewayInteractivePriority.js");
           const result = await withInteractiveHotPath("mini-app:db-query", () =>
             dbRouter.query(appId, source, sql, params),
           );
           return { rows: result.rows, count: result.count };
         },
         write: async (appId, source, sql, params) => {
-          const { writeLinkedDbRowLocalFirst } = await import(
-            "./services/syncV3/localFirstDbWrite.js"
-          );
+          const { writeLinkedDbRowLocalFirst } =
+            await import("./services/syncV3/localFirstDbWrite.js");
           const result = await writeLinkedDbRowLocalFirst(
             dbPool,
             dbRouter,
@@ -1610,6 +1674,7 @@ async function startGateway(): Promise<void> {
     // Bytes never go through git — repoHygiene rejects anything over 25 MB, so
     // this is where large assets belong.
     // ─────────────────────────────────────────────────────────────────────────
+    registerChatgptHistoryRoutes(app);
     registerAppFilesRoutes(app, {
       resolveSource: (appId, sourceId, sql, operation) =>
         resolveLinkedSource(appId, sourceId, sql, operation),
@@ -1639,7 +1704,11 @@ async function startGateway(): Promise<void> {
     // ─────────────────────────────────────────────────────────────────────────
     app.post("/api/db/exec", async (req, res) => {
       try {
-        const { appId: bodyAppId, sourceId, sql } = req.body as {
+        const {
+          appId: bodyAppId,
+          sourceId,
+          sql,
+        } = req.body as {
           appId?: string;
           sourceId?: string;
           sql?: string;
@@ -1675,10 +1744,15 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const { execLinkedDbSchemaLocalFirst } = await import(
-          "./services/syncV3/localFirstDbWrite.js"
+        const { execLinkedDbSchemaLocalFirst } =
+          await import("./services/syncV3/localFirstDbWrite.js");
+        await execLinkedDbSchemaLocalFirst(
+          dbPool,
+          dbRouter,
+          appId,
+          source,
+          sql,
         );
-        await execLinkedDbSchemaLocalFirst(dbPool, dbRouter, appId, source, sql);
         console.log(
           `[Gateway] /api/db/exec app=${appId} source=${source.alias}`,
         );
@@ -1735,7 +1809,8 @@ async function startGateway(): Promise<void> {
         // file the Share sheet writes — not a partial, possibly stale cache.
         const sharing: Record<string, unknown> = {};
         for (const [id, p] of Object.entries(loadCloudPublishPrefs().apps)) {
-          if (p.loginAccess === undefined && p.externalLink === undefined) continue;
+          if (p.loginAccess === undefined && p.externalLink === undefined)
+            continue;
           sharing[id] = {
             loginAccess: p.loginAccess,
             externalLink: p.externalLink,
@@ -1782,7 +1857,11 @@ async function startGateway(): Promise<void> {
             description: a.description,
             tags: a.tags,
           }));
-        res.json(await getAppCategoryService().categorize(items, { allowPropose: true }));
+        res.json(
+          await getAppCategoryService().categorize(items, {
+            allowPropose: true,
+          }),
+        );
       } catch (err) {
         console.error("[Gateway] /api/apps/categories/sync error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -1791,11 +1870,18 @@ async function startGateway(): Promise<void> {
     app.post("/api/apps/categories/categorize", async (req, res) => {
       try {
         const body = (req.body ?? {}) as {
-          items?: Array<{ key?: string; title?: string; description?: string; tags?: string[] }>;
+          items?: Array<{
+            key?: string;
+            title?: string;
+            description?: string;
+            tags?: string[];
+          }>;
           scope?: "team" | "community";
         };
         const items = (body.items ?? [])
-          .filter((i) => typeof i.key === "string" && typeof i.title === "string")
+          .filter(
+            (i) => typeof i.key === "string" && typeof i.title === "string",
+          )
           .slice(0, 400)
           .map((i) => ({
             key: i.key as string,
@@ -1805,7 +1891,9 @@ async function startGateway(): Promise<void> {
           }));
         // Community is a shared, public list: never invent categories from it.
         const allowPropose = body.scope === "team";
-        res.json(await getAppCategoryService().categorize(items, { allowPropose }));
+        res.json(
+          await getAppCategoryService().categorize(items, { allowPropose }),
+        );
       } catch (err) {
         console.error("[Gateway] /api/apps/categories/categorize error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -1813,12 +1901,17 @@ async function startGateway(): Promise<void> {
     });
     app.post("/api/apps/categories/assign", (req, res) => {
       try {
-        const { key, category } = (req.body ?? {}) as { key?: string; category?: string | null };
+        const { key, category } = (req.body ?? {}) as {
+          key?: string;
+          category?: string | null;
+        };
         if (!key) {
           res.status(400).json({ error: "key is required" });
           return;
         }
-        res.json(getAppCategoryService().setUserCategory(key, category ?? null));
+        res.json(
+          getAppCategoryService().setUserCategory(key, category ?? null),
+        );
       } catch (err) {
         res.status(400).json({ error: (err as Error).message });
       }
@@ -1878,11 +1971,14 @@ async function startGateway(): Promise<void> {
             }
           }
         }
-        const { mergeVerifiedCallerJobParams } = await import(
-          "./services/appRuntime/miniAppAccess.js"
-        );
+        const { mergeVerifiedCallerJobParams } =
+          await import("./services/appRuntime/miniAppAccess.js");
         const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
-        const verifiedParams = mergeVerifiedCallerJobParams(params, true, getPaprCallerIdentity());
+        const verifiedParams = mergeVerifiedCallerJobParams(
+          params,
+          true,
+          getPaprCallerIdentity(),
+        );
         const jobsService = getJobsService();
         const job = await jobsService.getJob(jobId);
         if (!job) {
@@ -1902,9 +1998,10 @@ async function startGateway(): Promise<void> {
           } catch (runErr: unknown) {
             if (isExpectedJobRunCollision(runErr)) {
               const snapshot = await jobsService.getJob(jobId);
-              const reason = runErr instanceof JobsService.DependencyRunningError
-                ? "dependency_running"
-                : "already_running";
+              const reason =
+                runErr instanceof JobsService.DependencyRunningError
+                  ? "dependency_running"
+                  : "already_running";
               res.status(409).json({
                 jobId,
                 status: snapshot?.status ?? "pending",
@@ -2007,11 +2104,15 @@ async function startGateway(): Promise<void> {
           res.status(resolved.status).json({ error: resolved.error });
           return;
         }
-        const { buildLocalDesktopAccessResponse } = await import(
-          "./services/appRuntime/miniAppAccess.js"
-        );
+        const { buildLocalDesktopAccessResponse } =
+          await import("./services/appRuntime/miniAppAccess.js");
         const { getPaprCallerIdentity } = await import("./utils/paprUserId.js");
-        res.json(buildLocalDesktopAccessResponse(resolved.appId, getPaprCallerIdentity()));
+        res.json(
+          buildLocalDesktopAccessResponse(
+            resolved.appId,
+            getPaprCallerIdentity(),
+          ),
+        );
       } catch (err) {
         console.error("[Gateway] /api/access error:", err);
         res.status(500).json({ error: (err as Error).message });
@@ -2029,15 +2130,12 @@ async function startGateway(): Promise<void> {
         void resolved;
 
         const { getApiKey } = await import("./utils/keyResolver.js");
-        const { getPaprWorkspaceId, getGatewayPaprProfile } = await import(
-          "./utils/paprGatewayProfile.js"
-        );
-        const { readActiveWorkspacePointer } = await import(
-          "../core/utils/paprWorkspace.js"
-        );
-        const {
-          listMiniAppMembers,
-        } = await import("./services/appRuntime/miniAppMembers.js");
+        const { getPaprWorkspaceId, getGatewayPaprProfile } =
+          await import("./utils/paprGatewayProfile.js");
+        const { readActiveWorkspacePointer } =
+          await import("../core/utils/paprWorkspace.js");
+        const { listMiniAppMembers } =
+          await import("./services/appRuntime/miniAppMembers.js");
 
         const sessionToken = await getApiKey("PAPR_SESSION_TOKEN");
         if (!sessionToken) {
@@ -2188,12 +2286,11 @@ async function startGateway(): Promise<void> {
         const jobsService = getJobsService();
         const createInput: CreateJobInput = {
           ...input,
-          appIds:
-            input.appIds?.length
-              ? input.appIds
-              : input.appId
-                ? [input.appId]
-                : [],
+          appIds: input.appIds?.length
+            ? input.appIds
+            : input.appId
+              ? [input.appId]
+              : [],
         };
         const job = await jobsService.createJob(createInput);
 
@@ -2298,9 +2395,8 @@ async function startGateway(): Promise<void> {
         const prefs = getAppPublishPrefs(req.params.appId);
         let compatibility: unknown = null;
         try {
-          const { scanAppCloudCompatibility } = await import(
-            "./services/cloudAppCompatibility.js"
-          );
+          const { scanAppCloudCompatibility } =
+            await import("./services/cloudAppCompatibility.js");
           compatibility = await scanAppCloudCompatibility(req.params.appId);
         } catch (compatErr) {
           console.warn(
@@ -2320,9 +2416,8 @@ async function startGateway(): Promise<void> {
 
     app.get("/api/cloud/publish/:appId/compatibility", async (req, res) => {
       try {
-        const { scanAppCloudCompatibility } = await import(
-          "./services/cloudAppCompatibility.js"
-        );
+        const { scanAppCloudCompatibility } =
+          await import("./services/cloudAppCompatibility.js");
         const compatibility = await scanAppCloudCompatibility(req.params.appId);
         res.json(compatibility);
       } catch (err) {
@@ -2332,10 +2427,11 @@ async function startGateway(): Promise<void> {
 
     app.get("/api/cloud/publish/:appId/readiness", async (req, res) => {
       try {
-        const { buildCloudPublishReadinessForApp } = await import(
-          "./services/cloudAppPublishReadiness.js"
+        const { buildCloudPublishReadinessForApp } =
+          await import("./services/cloudAppPublishReadiness.js");
+        const readiness = await buildCloudPublishReadinessForApp(
+          req.params.appId,
         );
-        const readiness = await buildCloudPublishReadinessForApp(req.params.appId);
         res.json(readiness);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -2361,9 +2457,8 @@ async function startGateway(): Promise<void> {
           autoPublish?: boolean;
           acknowledgeDesktopOnly?: boolean;
         };
-        const { scanAppCloudCompatibility } = await import(
-          "./services/cloudAppCompatibility.js"
-        );
+        const { scanAppCloudCompatibility } =
+          await import("./services/cloudAppCompatibility.js");
         const compatibility = await scanAppCloudCompatibility(req.params.appId);
         if (
           compatibility.requiresAcknowledgement &&
@@ -2377,7 +2472,9 @@ async function startGateway(): Promise<void> {
           return;
         }
         if (body.autoPublish !== undefined) {
-          setAppPublishPrefs(req.params.appId, { autoPublish: body.autoPublish });
+          setAppPublishPrefs(req.params.appId, {
+            autoPublish: body.autoPublish,
+          });
         }
         if (
           body.accessMode ||
@@ -2560,12 +2657,13 @@ async function startGateway(): Promise<void> {
           res.status(400).json({ error: "appId is required" });
           return;
         }
-        const { finalizePortableCloudAppResources } = await import(
-          "./services/cloudAppLinkedResourcesInstall.js"
-        );
+        const { finalizePortableCloudAppResources } =
+          await import("./services/cloudAppLinkedResourcesInstall.js");
         await finalizePortableCloudAppResources();
-        const { bootstrapInstalledAppDatabases, buildCloudInstallAgentSetupMessage } =
-          await import("./services/cloudAppInstallBootstrap.js");
+        const {
+          bootstrapInstalledAppDatabases,
+          buildCloudInstallAgentSetupMessage,
+        } = await import("./services/cloudAppInstallBootstrap.js");
         const bootstrap = await bootstrapInstalledAppDatabases(appId);
         const appService = getAppService();
         const app = await appService.getApp(appId);
@@ -2589,7 +2687,10 @@ async function startGateway(): Promise<void> {
     app.get("/api/cloud/apps/:appId/requirements", async (req, res) => {
       try {
         const paprDir = getPaprRoot();
-        const discovery = await discoverAppRequirements(paprDir, req.params.appId);
+        const discovery = await discoverAppRequirements(
+          paprDir,
+          req.params.appId,
+        );
         res.json(discovery);
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
@@ -2609,7 +2710,10 @@ async function startGateway(): Promise<void> {
           req.params.appId,
           body.requirements as RequiredKeySpec[],
         );
-        res.json({ requirements: file.requirements, updatedAt: file.updatedAt });
+        res.json({
+          requirements: file.requirements,
+          updatedAt: file.updatedAt,
+        });
       } catch (err) {
         res.status(500).json({ error: (err as Error).message });
       }
@@ -2648,7 +2752,8 @@ async function startGateway(): Promise<void> {
     app.post("/api/cloud/track-sync/:appId", async (req, res) => {
       try {
         const discardLocal =
-          (req.body as { discardLocal?: boolean } | undefined)?.discardLocal === true;
+          (req.body as { discardLocal?: boolean } | undefined)?.discardLocal ===
+          true;
         const result = await getCloudAppTrackSyncService().syncTrackApp(
           req.params.appId,
           { discardLocal },
@@ -2663,7 +2768,11 @@ async function startGateway(): Promise<void> {
       try {
         const paprApiKey = await getPaprApiKey();
         if (!paprApiKey) {
-          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
           return;
         }
 
@@ -2681,7 +2790,9 @@ async function startGateway(): Promise<void> {
           !body.title?.trim() ||
           !body.description?.trim()
         ) {
-          res.status(400).json({ error: "Missing required contribute-back fields" });
+          res
+            .status(400)
+            .json({ error: "Missing required contribute-back fields" });
           return;
         }
 
@@ -2708,14 +2819,24 @@ async function startGateway(): Promise<void> {
       try {
         const paprApiKey = await getPaprApiKey();
         if (!paprApiKey) {
-          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
           return;
         }
         const installedAppId =
-          typeof req.query.installedAppId === "string" ? req.query.installedAppId.trim() : "";
-        const query = installedAppId ? `?installedAppId=${encodeURIComponent(installedAppId)}` : "";
+          typeof req.query.installedAppId === "string"
+            ? req.query.installedAppId.trim()
+            : "";
+        const query = installedAppId
+          ? `?installedAppId=${encodeURIComponent(installedAppId)}`
+          : "";
         const { cloudApiFetch } = await import("./utils/cloudApiClient.js");
-        const upstream = await cloudApiFetch(`/v1/cloud/apps/changes/outgoing${query}`);
+        const upstream = await cloudApiFetch(
+          `/v1/cloud/apps/changes/outgoing${query}`,
+        );
         const bodyText = await upstream.text();
         if (!upstream.ok) {
           // Older memory servers have no outgoing route: show no history.
@@ -2782,9 +2903,8 @@ async function startGateway(): Promise<void> {
           return;
         }
 
-        const { enrichIncomingChangeRequestsBody } = await import(
-          "./services/changeRequestContributorEnrich.js"
-        );
+        const { enrichIncomingChangeRequestsBody } =
+          await import("./services/changeRequestContributorEnrich.js");
         const enriched = await enrichIncomingChangeRequestsBody(payload);
         res.status(200).json(enriched);
       } catch (err) {
@@ -2796,12 +2916,17 @@ async function startGateway(): Promise<void> {
       try {
         const paprApiKey = await getPaprApiKey();
         if (!paprApiKey) {
-          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
           return;
         }
 
         const memoryServerBase = getMemoryServerBaseUrl();
-        const { appendCloudActingUserQuery } = await import("./utils/cloudActingUser.js");
+        const { appendCloudActingUserQuery } =
+          await import("./utils/cloudActingUser.js");
         const targetUrl = `${memoryServerBase}${appendCloudActingUserQuery(
           `/v1/cloud/apps/changes/${encodeURIComponent(req.params.requestId)}/approve`,
         )}`;
@@ -2842,20 +2967,26 @@ async function startGateway(): Promise<void> {
     // Proxy /api/cloud/* → Memory Server /v1/cloud/*
     // Attaches user's PAPR_API_KEY from keychain automatically.
     // ─────────────────────────────────────────────────────────────────────────
-    const cloudProxyHandler: import("express").RequestHandler = async (req, res) => {
+    const cloudProxyHandler: import("express").RequestHandler = async (
+      req,
+      res,
+    ) => {
       try {
         const paprApiKey = await getPaprApiKey();
         if (!paprApiKey) {
-          res.status(401).json({ error: "PAPR_API_KEY not configured. Login with Papr first." });
+          res
+            .status(401)
+            .json({
+              error: "PAPR_API_KEY not configured. Login with Papr first.",
+            });
           return;
         }
 
         const memoryServerBase = getMemoryServerBaseUrl();
 
         const cloudPath = req.originalUrl.replace(/^\/api\/cloud/, "/v1/cloud");
-        const { appendCloudActingUserQuery, mergeCloudActingUserBody } = await import(
-          "./utils/cloudActingUser.js"
-        );
+        const { appendCloudActingUserQuery, mergeCloudActingUserBody } =
+          await import("./utils/cloudActingUser.js");
 
         const headers: Record<string, string> = {
           "X-API-Key": paprApiKey,
@@ -2867,9 +2998,8 @@ async function startGateway(): Promise<void> {
         const isRuntimeJobRun = cloudPath.includes("/runtime/job-run");
         let proxyTimeoutMs: number;
         if (isVaultSync) {
-          const { resolveVaultPushTimeoutMs } = await import(
-            "./services/vaultSyncBackgroundPush.js"
-          );
+          const { resolveVaultPushTimeoutMs } =
+            await import("./services/vaultSyncBackgroundPush.js");
           proxyTimeoutMs = resolveVaultPushTimeoutMs();
         } else if (isRuntimeJobRun) {
           proxyTimeoutMs = 930_000;
@@ -2879,7 +3009,10 @@ async function startGateway(): Promise<void> {
           proxyTimeoutMs = 30_000;
         }
         const proxyController = new AbortController();
-        const proxyTimer = setTimeout(() => proxyController.abort(), proxyTimeoutMs);
+        const proxyTimer = setTimeout(
+          () => proxyController.abort(),
+          proxyTimeoutMs,
+        );
 
         const fetchOpts: RequestInit = {
           method: req.method,
@@ -2889,7 +3022,9 @@ async function startGateway(): Promise<void> {
         let proxiedPath = cloudPath;
         if (req.method !== "GET" && req.method !== "HEAD" && req.body) {
           const payload =
-            typeof req.body === "object" && req.body !== null && !Array.isArray(req.body)
+            typeof req.body === "object" &&
+            req.body !== null &&
+            !Array.isArray(req.body)
               ? mergeCloudActingUserBody(req.body as Record<string, unknown>)
               : req.body;
           fetchOpts.body = JSON.stringify(payload);
@@ -2898,7 +3033,9 @@ async function startGateway(): Promise<void> {
         }
 
         const targetUrl = `${memoryServerBase}${proxiedPath}`;
-        console.log(`[Gateway] Cloud proxy: ${req.method} ${proxiedPath} → ${memoryServerBase}`);
+        console.log(
+          `[Gateway] Cloud proxy: ${req.method} ${proxiedPath} → ${memoryServerBase}`,
+        );
 
         const upstream = await fetch(targetUrl, fetchOpts);
         clearTimeout(proxyTimer);
@@ -2922,7 +3059,9 @@ async function startGateway(): Promise<void> {
         res.send(body);
       } catch (err) {
         console.error("[Gateway] Cloud proxy error:", err);
-        res.status(502).json({ error: `Cloud proxy failed: ${(err as Error).message}` });
+        res
+          .status(502)
+          .json({ error: `Cloud proxy failed: ${(err as Error).message}` });
       }
     };
 
@@ -2990,13 +3129,13 @@ async function startGateway(): Promise<void> {
         });
         res.json(result);
       } catch (error) {
-        const { WorkspaceSwitchApiKeyError: ApiKeyError } = await import(
-          "./services/workspaceSwitchService.js"
-        );
+        const { WorkspaceSwitchApiKeyError: ApiKeyError } =
+          await import("./services/workspaceSwitchService.js");
         const status = error instanceof ApiKeyError ? 400 : 500;
         res.status(status).json({
           success: false,
-          error: error instanceof Error ? error.message : "Workspace switch failed",
+          error:
+            error instanceof Error ? error.message : "Workspace switch failed",
         });
       }
     });
@@ -3014,7 +3153,9 @@ async function startGateway(): Promise<void> {
           ? req.body.paprApiKey.trim()
           : "";
       if (!paprApiKey) {
-        res.status(400).json({ success: false, error: "paprApiKey is required" });
+        res
+          .status(400)
+          .json({ success: false, error: "paprApiKey is required" });
         return;
       }
       try {
@@ -3024,7 +3165,9 @@ async function startGateway(): Promise<void> {
         res.status(500).json({
           success: false,
           error:
-            error instanceof Error ? error.message : "Failed to apply Papr API key",
+            error instanceof Error
+              ? error.message
+              : "Failed to apply Papr API key",
         });
       }
     });
@@ -3033,9 +3176,8 @@ async function startGateway(): Promise<void> {
     // goals are edited through chat so the agent keeps IDENTITY.md canonical).
     app.get("/api/workspace/goals", async (_req, res) => {
       try {
-        const { readWorkspaceGoals } = await import(
-          "./services/workspaceGoals.js"
-        );
+        const { readWorkspaceGoals } =
+          await import("./services/workspaceGoals.js");
         res.json(await readWorkspaceGoals());
       } catch (error) {
         res.status(500).json({
@@ -3048,9 +3190,8 @@ async function startGateway(): Promise<void> {
     app.post("/api/home/ensure-brief-setup", async (req, res) => {
       try {
         const { appId: bodyAppId } = (req.body ?? {}) as { appId?: string };
-        const { DEFAULT_HOME_APP_ID } = await import(
-          "./services/defaultHomeBundle.js"
-        );
+        const { DEFAULT_HOME_APP_ID } =
+          await import("./services/defaultHomeBundle.js");
         const appId = bodyAppId?.trim() || DEFAULT_HOME_APP_ID;
         const result = await getAppService().ensureHomeDailyBriefReady(appId);
         res.json(result);
@@ -3064,11 +3205,17 @@ async function startGateway(): Promise<void> {
     // Unified tasks (L3 goals + entity Open Items), projected into the Home DB.
     app.get("/api/workspace/tasks", async (req, res) => {
       try {
-        const status = typeof req.query.status === "string" ? req.query.status : "open";
-        const { readWorkspaceTasks } = await import("./services/workspaceTasks.js");
+        const status =
+          typeof req.query.status === "string" ? req.query.status : "open";
+        const { readWorkspaceTasks } =
+          await import("./services/workspaceTasks.js");
         res.json(await readWorkspaceTasks({ status }));
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+        res
+          .status(500)
+          .json({
+            error: error instanceof Error ? error.message : String(error),
+          });
       }
     });
 
@@ -3078,10 +3225,18 @@ async function startGateway(): Promise<void> {
       try {
         const body = (req.body ?? {}) as { done?: boolean; outcome?: string };
         const { setTaskDone } = await import("./services/workspaceTasks.js");
-        const result = await setTaskDone(String(req.params.taskId), body.done !== false, body.outcome);
+        const result = await setTaskDone(
+          String(req.params.taskId),
+          body.done !== false,
+          body.outcome,
+        );
         res.status(result.ok ? 200 : 404).json(result);
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+        res
+          .status(500)
+          .json({
+            error: error instanceof Error ? error.message : String(error),
+          });
       }
     });
 
@@ -3089,10 +3244,15 @@ async function startGateway(): Promise<void> {
     // (agents call this after editing goals in chat; Sleep/Wiki trigger it on completion).
     app.post("/api/workspace/project", async (_req, res) => {
       try {
-        const { projectGoalsAndTasks } = await import("./services/goalsTasksProjection.js");
+        const { projectGoalsAndTasks } =
+          await import("./services/goalsTasksProjection.js");
         res.json(await projectGoalsAndTasks("api"));
       } catch (error) {
-        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+        res
+          .status(500)
+          .json({
+            error: error instanceof Error ? error.message : String(error),
+          });
       }
     });
 
@@ -3121,7 +3281,8 @@ async function startGateway(): Promise<void> {
         return;
       }
 
-      const forceRefresh = req.query.refresh === "1" || req.query.refresh === "true";
+      const forceRefresh =
+        req.query.refresh === "1" || req.query.refresh === "true";
       const appId =
         typeof req.query.appId === "string" && req.query.appId.trim().length > 0
           ? req.query.appId.trim()
@@ -3148,9 +3309,8 @@ async function startGateway(): Promise<void> {
       }
 
       try {
-        const { yieldToInteractiveHotPath } = await import(
-          "./services/gatewayBackgroundWork.js"
-        );
+        const { yieldToInteractiveHotPath } =
+          await import("./services/gatewayBackgroundWork.js");
         await yieldToInteractiveHotPath("api:sync/items", {
           minQuietMs: 300,
           maxWaitMs: 45_000,
@@ -3167,13 +3327,10 @@ async function startGateway(): Promise<void> {
             }
           | undefined;
         if (appId) {
-          const {
-            resolveAppDependentJobIds,
-            readDataSourceRegistryDbIds,
-          } = await import("./services/cloudSync/resolveAppDependentJobs.js");
-          const { isCloudAutoUploadGloballyEnabled } = await import(
-            "./services/cloudUploadMode.js"
-          );
+          const { resolveAppDependentJobIds, readDataSourceRegistryDbIds } =
+            await import("./services/cloudSync/resolveAppDependentJobs.js");
+          const { isCloudAutoUploadGloballyEnabled } =
+            await import("./services/cloudUploadMode.js");
           if (forceRefresh) {
             await sync.reconcileAppDependentPathsIfNeeded(appId);
             timer.mark("reconcileIfNeeded");
@@ -3181,9 +3338,8 @@ async function startGateway(): Promise<void> {
           let publishLive = false;
           let publishedAt: string | null = null;
           try {
-            const { getCloudAppPublishService } = await import(
-              "./services/CloudAppPublishService.js"
-            );
+            const { getCloudAppPublishService } =
+              await import("./services/CloudAppPublishService.js");
             const publishService = getCloudAppPublishService();
             if (publishService) {
               const cfg = await publishService.getPublishConfig(appId);
@@ -3196,10 +3352,7 @@ async function startGateway(): Promise<void> {
           timer.mark("publishConfig");
           appContext = {
             appId,
-            dependentJobIds: resolveAppDependentJobIds(
-              getPaprRoot(),
-              appId,
-            ),
+            dependentJobIds: resolveAppDependentJobIds(getPaprRoot(), appId),
             registryDbIds: readDataSourceRegistryDbIds(getPaprRoot(), appId),
             globalAutoUploadEnabled: isCloudAutoUploadGloballyEnabled(),
             publishLive,
@@ -3226,9 +3379,8 @@ async function startGateway(): Promise<void> {
 
         let publish = null;
         if (appId) {
-          const { buildPublishLayerReport } = await import(
-            "./services/cloudSync/webReady.js"
-          );
+          const { buildPublishLayerReport } =
+            await import("./services/cloudSync/webReady.js");
           publish = await buildPublishLayerReport(appId, {
             paprDir: getPaprRoot(),
             cloudPublishing: sync.isCloudPublishingForApp(appId),
@@ -3248,12 +3400,10 @@ async function startGateway(): Promise<void> {
           conflictPaths?: string[];
         } | null = null;
         {
-          const { getSyncCoordinator } = await import(
-            "./services/cloudSync/SyncCoordinator.js"
-          );
-          const { buildCoordinatorStatusReport } = await import(
-            "./services/cloudSync/coordinatorStatusReport.js"
-          );
+          const { getSyncCoordinator } =
+            await import("./services/cloudSync/SyncCoordinator.js");
+          const { buildCoordinatorStatusReport } =
+            await import("./services/cloudSync/coordinatorStatusReport.js");
           const coordinator = getSyncCoordinator();
           upload = buildCoordinatorStatusReport(coordinator, appId);
           timer.mark("uploadCoordinator");
@@ -3277,9 +3427,8 @@ async function startGateway(): Promise<void> {
               };
             }
 
-            const { buildAppSyncV3Report } = await import(
-              "./services/syncV3/appSyncV3StatusReport.js"
-            );
+            const { buildAppSyncV3Report } =
+              await import("./services/syncV3/appSyncV3StatusReport.js");
             const githubReport = sync.getGitHubSyncItemsReport();
             appSync = await buildAppSyncV3Report({
               appId,
@@ -3312,9 +3461,8 @@ async function startGateway(): Promise<void> {
 
         let oversizedAppFiles = undefined;
         if (appId) {
-          const { buildOversizedAppFilesReport } = await import(
-            "./services/cloudSync/oversizedAppFilesReport.js"
-          );
+          const { buildOversizedAppFilesReport } =
+            await import("./services/cloudSync/oversizedAppFilesReport.js");
           oversizedAppFiles = await buildOversizedAppFilesReport(
             getPaprRoot(),
             appId,
@@ -3372,14 +3520,14 @@ async function startGateway(): Promise<void> {
           : undefined;
       try {
         if (appId) {
-          const { getSyncCoordinator } = await import(
-            "./services/cloudSync/SyncCoordinator.js"
-          );
+          const { getSyncCoordinator } =
+            await import("./services/cloudSync/SyncCoordinator.js");
           const coordinator = getSyncCoordinator();
           if (coordinator) {
             coordinator.bumpFlushQueue(appId);
           }
-          const inFlight = coordinator?.getStatus().activeFlush?.appId === appId;
+          const inFlight =
+            coordinator?.getStatus().activeFlush?.appId === appId;
           sync.pushAppNowInBackground(appId);
           res.status(202).json({
             accepted: true,
@@ -3441,7 +3589,9 @@ async function startGateway(): Promise<void> {
         return;
       }
       const relativePath =
-        typeof req.body?.relativePath === "string" ? req.body.relativePath.trim() : "";
+        typeof req.body?.relativePath === "string"
+          ? req.body.relativePath.trim()
+          : "";
       if (!relativePath) {
         res.status(400).json({ error: "relativePath is required" });
         return;
@@ -3468,7 +3618,8 @@ async function startGateway(): Promise<void> {
         return;
       }
       try {
-        const { repairTursoJobDatabase } = await import("./services/tursoSyncState.js");
+        const { repairTursoJobDatabase } =
+          await import("./services/tursoSyncState.js");
         const result = repairTursoJobDatabase(jobId, dbPath);
         res.json(result);
       } catch (err) {
@@ -3529,8 +3680,13 @@ async function startGateway(): Promise<void> {
         targetOrgId?: string;
         mode?: "delete" | "update";
       };
-      if (!body.name?.trim() || (body.mode !== "delete" && body.mode !== "update")) {
-        res.status(400).json({ error: "name and mode (delete|update) are required" });
+      if (
+        !body.name?.trim() ||
+        (body.mode !== "delete" && body.mode !== "update")
+      ) {
+        res
+          .status(400)
+          .json({ error: "name and mode (delete|update) are required" });
         return;
       }
       try {
@@ -3579,9 +3735,8 @@ async function startGateway(): Promise<void> {
           res.status(resolved.status).json({ error: resolved.error });
           return;
         }
-        const { resolveDesktopClientKeys } = await import(
-          "./services/ClientKeysService.js"
-        );
+        const { resolveDesktopClientKeys } =
+          await import("./services/ClientKeysService.js");
         const result = await resolveDesktopClientKeys({
           appId: resolved.appId,
           names: body.names,
@@ -3618,15 +3773,12 @@ async function startGateway(): Promise<void> {
         }
         const appId = resolved.appId;
 
-        const { AppBackendService } = await import(
-          "./services/appRuntime/AppBackendService.js"
-        );
-        const { substituteCustomKeysInCommand } = await import(
-          "./utils/keySubstitution.js"
-        );
-        const { isPlatformInjectedEnvKey } = await import(
-          "../core/utils/platformInjectedEnvKeys.js"
-        );
+        const { AppBackendService } =
+          await import("./services/appRuntime/AppBackendService.js");
+        const { substituteCustomKeysInCommand } =
+          await import("./utils/keySubstitution.js");
+        const { isPlatformInjectedEnvKey } =
+          await import("../core/utils/platformInjectedEnvKeys.js");
         const { sanitizeError } = await import("../core/tools/security.js");
 
         const backend = new AppBackendService();
@@ -3634,14 +3786,10 @@ async function startGateway(): Promise<void> {
         const fs = await import("fs/promises");
         const path = await import("path");
         const { getPaprRoot } = await import("../core/utils/paprRoot.js");
-        const { parseAppBackendManifest } = await import(
-          "./services/appRuntime/appBackendManifest.js"
-        );
+        const { parseAppBackendManifest } =
+          await import("./services/appRuntime/appBackendManifest.js");
         const manifestRaw = JSON.parse(
-          await fs.readFile(
-            path.join(getPaprRoot(), manifestPath),
-            "utf8",
-          ),
+          await fs.readFile(path.join(getPaprRoot(), manifestPath), "utf8"),
         ) as unknown;
         const manifest = parseAppBackendManifest(manifestRaw);
         const spec = manifest.actions[action.trim()];
@@ -3657,21 +3805,23 @@ async function startGateway(): Promise<void> {
             if (isPlatformInjectedEnvKey(keyName)) {
               continue;
             }
-            const sub = await substituteCustomKeysInCommand(`echo \${${keyName}}`);
+            const sub = await substituteCustomKeysInCommand(
+              `echo \${${keyName}}`,
+            );
             if (sub.usedKeyNames.includes(keyName)) {
               // Extract actual value from the substituted command
-              const extractedValue = sub.command.replace(/^echo /,"").trim();
+              const extractedValue = sub.command.replace(/^echo /, "").trim();
               vaultEnv[keyName] = extractedValue;
               secretValues.push(...sub.keyValues);
             }
           }
         }
 
-        const { resolveDesktopAppBackendDatabaseEnv, collectBackendDatabaseSecrets } =
-          await import("./services/appRuntime/appBackendDatabase.js");
-        const actionSourceId =
-          body.params?.sourceId ??
-          spec.sourceId;
+        const {
+          resolveDesktopAppBackendDatabaseEnv,
+          collectBackendDatabaseSecrets,
+        } = await import("./services/appRuntime/appBackendDatabase.js");
+        const actionSourceId = body.params?.sourceId ?? spec.sourceId;
         const databaseEnv = await resolveDesktopAppBackendDatabaseEnv({
           appId,
           paprRoot: getPaprRoot(),
@@ -3713,7 +3863,7 @@ async function startGateway(): Promise<void> {
     app.get("/api/jobs/:jobId/files/:filename", async (req, res) => {
       try {
         const { jobId, filename } = req.params;
-        
+
         // Security: prevent directory traversal
         if (filename.includes("..") || filename.includes("/")) {
           res.status(400).send("Invalid filename");
@@ -3761,7 +3911,7 @@ async function startGateway(): Promise<void> {
 
         const contentType = mimeTypes[ext] || "application/octet-stream";
         res.setHeader("Content-Type", contentType);
-        
+
         // Send the file as binary
         res.sendFile(filePath);
       } catch (error) {
@@ -3805,7 +3955,10 @@ async function startGateway(): Promise<void> {
           ".gif": "image/gif",
           ".webp": "image/webp",
         };
-        res.setHeader("Content-Type", mimeTypes[ext] ?? "application/octet-stream");
+        res.setHeader(
+          "Content-Type",
+          mimeTypes[ext] ?? "application/octet-stream",
+        );
         res.sendFile(resolved);
       } catch (error) {
         console.error("[Gateway] Failed to serve generated media:", error);
@@ -3827,13 +3980,11 @@ async function startGateway(): Promise<void> {
       let staticRequestedPath = "index.html";
       let staticStatusCode = 500;
       let staticByteLength: number | undefined;
-      const { createMiniAppStaticServeTimer } = await import(
-        "./utils/miniAppStaticServeLog.js"
-      );
+      const { createMiniAppStaticServeTimer } =
+        await import("./utils/miniAppStaticServeLog.js");
       const staticServeTimer = createMiniAppStaticServeTimer(staticReceivedAt);
-      const { enterInteractiveHotPath, leaveInteractiveHotPath } = await import(
-        "./services/gatewayInteractivePriority.js"
-      );
+      const { enterInteractiveHotPath, leaveInteractiveHotPath } =
+        await import("./services/gatewayInteractivePriority.js");
       enterInteractiveHotPath("mini-app:static");
       try {
         const appService = getAppService();
@@ -3857,9 +4008,8 @@ async function startGateway(): Promise<void> {
         // cannot share a main thread with the chat UI, and refuse to serve one
         // app's files from another app's origin — that would pull B's code into
         // A's process and undo the isolation we just asked for.
-        const { appIdFromHost } = await import(
-          "../core/miniApps/miniAppOrigin.js"
-        );
+        const { appIdFromHost } =
+          await import("../core/miniApps/miniAppOrigin.js");
         const hostAppId = appIdFromHost(req.headers.host);
         if (hostAppId) {
           if (hostAppId.toLowerCase() !== appId.toLowerCase()) {
@@ -3872,10 +4022,8 @@ async function startGateway(): Promise<void> {
 
         const ext = path.extname(requestedPath).toLowerCase();
 
-        const {
-          getMiniAppContentType,
-          isMiniAppBinaryExtension,
-        } = await import("./utils/miniAppStaticAssets.js");
+        const { getMiniAppContentType, isMiniAppBinaryExtension } =
+          await import("./utils/miniAppStaticAssets.js");
 
         if (isMiniAppBinaryExtension(ext)) {
           const filePath = await appService.resolveAppFilePath(
@@ -3898,7 +4046,10 @@ async function startGateway(): Promise<void> {
         // For bundled apps: serve dist/ output when requesting the bundled JS/CSS.
         // The iframe's index.html references dist/app.js and dist/app.css.
         if (requestedPath.startsWith("dist/")) {
-          const distPath = await appService.resolveAppFilePath(appId, requestedPath);
+          const distPath = await appService.resolveAppFilePath(
+            appId,
+            requestedPath,
+          );
           staticServeTimer.markPhase("resolveMs");
           if (!distPath) {
             staticStatusCode = 404;
@@ -3925,9 +4076,7 @@ async function startGateway(): Promise<void> {
           res.setHeader("Cache-Control", MINI_APP_DIST_CACHE_CONTROL);
           res.setHeader("ETag", etag);
           res.setHeader("Content-Type", getMiniAppContentType(ext));
-          if (
-            ifNoneMatchIncludes(readIfNoneMatchHeader(req.headers), etag)
-          ) {
+          if (ifNoneMatchIncludes(readIfNoneMatchHeader(req.headers), etag)) {
             staticStatusCode = 304;
             res.status(304).end();
             return;
@@ -3936,9 +4085,8 @@ async function startGateway(): Promise<void> {
           staticServeTimer.markPhase("readMs");
           staticByteLength = Buffer.byteLength(distContent, "utf8");
           if (ext === ".js") {
-            const { appendModuleRanMarker } = await import(
-              "./utils/miniAppBootWatchdog.js"
-            );
+            const { appendModuleRanMarker } =
+              await import("./utils/miniAppBootWatchdog.js");
             const body = appendModuleRanMarker(distContent);
             staticByteLength = Buffer.byteLength(body, "utf8");
             staticServeTimer.markPhase("transformMs");
@@ -3964,10 +4112,19 @@ async function startGateway(): Promise<void> {
         if (ext === ".ts" || ext === ".tsx") {
           try {
             const nodeBuiltins = [
-              "fs", "path", "crypto", "child_process", "os",
-              "net", "http", "https", "stream", "buffer", "process",
+              "fs",
+              "path",
+              "crypto",
+              "child_process",
+              "os",
+              "net",
+              "http",
+              "https",
+              "stream",
+              "buffer",
+              "process",
             ];
-            
+
             const contentStr = content as string;
             const hasNodeImports = nodeBuiltins.some(
               (mod) =>
@@ -3986,19 +4143,16 @@ async function startGateway(): Promise<void> {
               );
             }
 
-            const { transpileMiniAppTypeScript } = await import(
-              "./utils/miniAppTranspile.js"
-            );
+            const { transpileMiniAppTypeScript } =
+              await import("./utils/miniAppTranspile.js");
             const transpileResult = await transpileMiniAppTypeScript(
               contentStr,
               requestedPath,
             );
             if (!transpileResult.success) {
-              const { isEsbuildInfrastructureError } = await import(
-                "./utils/miniAppTranspile.js"
-              );
-              const rawMessage =
-                transpileResult.message ?? "Unknown error";
+              const { isEsbuildInfrastructureError } =
+                await import("./utils/miniAppTranspile.js");
+              const rawMessage = transpileResult.message ?? "Unknown error";
               const location =
                 transpileResult.line !== undefined
                   ? ` at line ${transpileResult.line}`
@@ -4017,16 +4171,16 @@ async function startGateway(): Promise<void> {
             }
 
             {
-              const { appendModuleRanMarker } = await import(
-                "./utils/miniAppBootWatchdog.js"
+              const { appendModuleRanMarker } =
+                await import("./utils/miniAppBootWatchdog.js");
+              content = appendModuleRanMarker(
+                transpileResult.code ?? contentStr,
               );
-              content = appendModuleRanMarker(transpileResult.code ?? contentStr);
             }
             staticServeTimer.markPhase("transpileMs");
           } catch (transpileError) {
-            const { formatEsbuildErrorMessage } = await import(
-              "./utils/miniAppTranspile.js"
-            );
+            const { formatEsbuildErrorMessage } =
+              await import("./utils/miniAppTranspile.js");
             const formatted = formatEsbuildErrorMessage(
               (transpileError as Error).message,
             );
@@ -4043,42 +4197,35 @@ async function startGateway(): Promise<void> {
         if (ext === ".html" && typeof content === "string") {
           const appDir = await appService.getAppPath(appId);
           if (appDir && requestedPath === "index.html") {
-            const { preferBundledEntryInHtml } = await import(
-              "./utils/miniAppBuild.js"
-            );
+            const { preferBundledEntryInHtml } =
+              await import("./utils/miniAppBuild.js");
             content = await preferBundledEntryInHtml(content, appDir);
           }
 
-          const { injectMiniAppBaseStyles } = await import(
-            "./utils/miniAppBaseStyles.js"
-          );
-          const { getBrandService, buildBrandStyleTag } = await import(
-            "./services/BrandService.js"
-          );
+          const { injectMiniAppBaseStyles } =
+            await import("./utils/miniAppBaseStyles.js");
+          const { getBrandService, buildBrandStyleTag } =
+            await import("./services/BrandService.js");
           const brand = await getBrandService().loadMergedBrand(appId);
           const brandStyleTag = buildBrandStyleTag(brand.cssVariables);
           content = injectMiniAppBaseStyles(content, brandStyleTag);
 
-          const { injectMiniAppNativeDialogShim } = await import(
-            "./utils/injectMiniAppNativeDialogShim.js"
-          );
+          const { injectMiniAppNativeDialogShim } =
+            await import("./utils/injectMiniAppNativeDialogShim.js");
           content = injectMiniAppNativeDialogShim(content);
 
-          const { injectMiniAppApiErrorFetch } = await import(
-            "./utils/injectMiniAppApiErrorFetch.js"
-          );
+          const { injectMiniAppApiErrorFetch } =
+            await import("./utils/injectMiniAppApiErrorFetch.js");
           content = injectMiniAppApiErrorFetch(content);
 
-          const { injectMiniAppPreviewFetchGate } = await import(
-            "./utils/injectMiniAppPreviewFetchGate.js"
-          );
+          const { injectMiniAppPreviewFetchGate } =
+            await import("./utils/injectMiniAppPreviewFetchGate.js");
           content = await injectMiniAppPreviewFetchGate(content);
 
           // Boot watchdog: turns a silent blank iframe into a labeled
           // diagnostic banner (entry module never ran / threw / rendered nothing).
-          const { injectMiniAppBootWatchdog } = await import(
-            "./utils/miniAppBootWatchdog.js"
-          );
+          const { injectMiniAppBootWatchdog } =
+            await import("./utils/miniAppBootWatchdog.js");
           content = injectMiniAppBootWatchdog(content);
           staticServeTimer.markPhase("htmlInjectMs");
         }
@@ -4122,9 +4269,8 @@ async function startGateway(): Promise<void> {
     lapRouteRegistrationSection("mini-app-hosting-and-preview-routes");
 
     gatewayReady = true;
-    const { markGatewayRoutesReady } = await import(
-      "./services/gatewayReadiness.js"
-    );
+    const { markGatewayRoutesReady } =
+      await import("./services/gatewayReadiness.js");
     markGatewayRoutesReady();
     printGatewayStartupSummary();
     console.log("[Gateway] All routes registered — gateway fully ready");
@@ -4174,7 +4320,10 @@ async function startGateway(): Promise<void> {
     // Cloud services start AFTER the HTTP server is listening.
     // Staggered to avoid thundering herd on memory.papr.ai at startup.
     // Skipped in cloud_agent mode (Cloud Run agent gateway is stateless per-run).
-    if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false") {
+    if (
+      !isCloudAgentGatewayMode() &&
+      process.env.CLOUD_SYNC_ENABLED !== "false"
+    ) {
       const cloudSyncStartupDelayMs = Number(
         process.env.CLOUD_SYNC_STARTUP_DELAY_MS ?? "30000",
       );
@@ -4184,28 +4333,31 @@ async function startGateway(): Promise<void> {
 
       const tryDeferredCloudSyncStartup = (): void => {
         void (async () => {
-          await timeStartupStep("deferred", "CloudSync.startup (wait+init)", async () => {
-            const { waitForWorkspaceReady } = await import(
-              "./services/workspaceReadiness.js"
-            );
-            await waitForWorkspaceReady();
+          await timeStartupStep(
+            "deferred",
+            "CloudSync.startup (wait+init)",
+            async () => {
+              const { waitForWorkspaceReady } =
+                await import("./services/workspaceReadiness.js");
+              await waitForWorkspaceReady();
 
-            const { waitForInteractiveQuietBeforeBackgroundWork } =
-              await import("./services/gatewayInteractivePriority.js");
-            await waitForInteractiveQuietBeforeBackgroundWork(
-              "CloudSync.startup",
-            );
-
-            if (getCloudSyncService()) {
-              console.log(
-                "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+              const { waitForInteractiveQuietBeforeBackgroundWork } =
+                await import("./services/gatewayInteractivePriority.js");
+              await waitForInteractiveQuietBeforeBackgroundWork(
+                "CloudSync.startup",
               );
-              return;
-            }
-            const cloudSync = initializeCloudSyncService();
-            ensureTursoSyncBridge();
-            await cloudSync.initialize();
-          }).catch((err) => {
+
+              if (getCloudSyncService()) {
+                console.log(
+                  "[Gateway] Cloud sync already initialized (e.g. workspace switch) — skipping deferred startup init",
+                );
+                return;
+              }
+              const cloudSync = initializeCloudSyncService();
+              ensureTursoSyncBridge();
+              await cloudSync.initialize();
+            },
+          ).catch((err) => {
             console.warn(
               "[Gateway] Cloud sync init failed (non-fatal):",
               (err as Error).message,
@@ -4224,41 +4376,48 @@ async function startGateway(): Promise<void> {
 
       const tryDeferredVaultSyncStartup = (): void => {
         void (async () => {
-          await timeStartupStep("deferred", "VaultSync.startup (wait+init)", async () => {
-            const { waitForWorkspaceReady } = await import(
-              "./services/workspaceReadiness.js"
-            );
-            await waitForWorkspaceReady();
+          await timeStartupStep(
+            "deferred",
+            "VaultSync.startup (wait+init)",
+            async () => {
+              const { waitForWorkspaceReady } =
+                await import("./services/workspaceReadiness.js");
+              await waitForWorkspaceReady();
 
-            const { waitForInteractiveQuietBeforeBackgroundWork } =
-              await import("./services/gatewayInteractivePriority.js");
-            await waitForInteractiveQuietBeforeBackgroundWork(
-              "VaultSync.startup",
-            );
+              const { waitForInteractiveQuietBeforeBackgroundWork } =
+                await import("./services/gatewayInteractivePriority.js");
+              await waitForInteractiveQuietBeforeBackgroundWork(
+                "VaultSync.startup",
+              );
 
-            const vaultStartupDelayMs = Number(
-              process.env.VAULT_STARTUP_DELAY_MS ?? "5000",
-            );
-            if (vaultStartupDelayMs > 0) {
-              await new Promise((resolve) => setTimeout(resolve, vaultStartupDelayMs));
-            }
-
-            const vaultSync = await initializeVaultSyncService({
-              gatewayPort: Number(PORT),
-            });
-            getCustomKeysService().onKeyChange((keyName) => {
-              if (keyName) {
-                vaultSync.onKeyChanged(keyName).catch((e) =>
-                  console.warn(
-                    "[Gateway] Vault key push failed:",
-                    (e as Error).message,
-                  ),
+              const vaultStartupDelayMs = Number(
+                process.env.VAULT_STARTUP_DELAY_MS ?? "5000",
+              );
+              if (vaultStartupDelayMs > 0) {
+                await new Promise((resolve) =>
+                  setTimeout(resolve, vaultStartupDelayMs),
                 );
-              } else {
-                vaultSync.scheduleDebouncedPushAll();
               }
-            });
-          });
+
+              const vaultSync = await initializeVaultSyncService({
+                gatewayPort: Number(PORT),
+              });
+              getCustomKeysService().onKeyChange((keyName) => {
+                if (keyName) {
+                  vaultSync
+                    .onKeyChanged(keyName)
+                    .catch((e) =>
+                      console.warn(
+                        "[Gateway] Vault key push failed:",
+                        (e as Error).message,
+                      ),
+                    );
+                } else {
+                  vaultSync.scheduleDebouncedPushAll();
+                }
+              });
+            },
+          );
         })().catch((err) => {
           console.warn(
             "[Gateway] Vault sync init failed (non-fatal):",
@@ -4286,9 +4445,8 @@ async function startGateway(): Promise<void> {
               "deferred",
               "Turso.syncTursoFromSyncIndex",
               async () => {
-                const { syncTursoFromSyncIndex } = await import(
-                  "./services/TursoSyncBridge.js"
-                );
+                const { syncTursoFromSyncIndex } =
+                  await import("./services/TursoSyncBridge.js");
                 const summary = await syncTursoFromSyncIndex();
                 if (summary.pulled > 0 || summary.pushed > 0) {
                   console.log(
@@ -4305,24 +4463,26 @@ async function startGateway(): Promise<void> {
             ),
           );
         if (process.env.TURSO_PULL_ON_STARTUP === "true") {
-          void tursoBridge.pullLinkedSourcesIfNeeded().catch((err) =>
-            console.warn(
-              "[Gateway] Turso startup pull failed (non-fatal):",
-              (err as Error).message.slice(0, 120),
-            ),
-          );
+          void tursoBridge
+            .pullLinkedSourcesIfNeeded()
+            .catch((err) =>
+              console.warn(
+                "[Gateway] Turso startup pull failed (non-fatal):",
+                (err as Error).message.slice(0, 120),
+              ),
+            );
         }
         void import("./services/tursoPushScheduler.js")
-          .then(({ pushDirtyLinkedJobsOnStartup }) => pushDirtyLinkedJobsOnStartup())
+          .then(({ pushDirtyLinkedJobsOnStartup }) =>
+            pushDirtyLinkedJobsOnStartup(),
+          )
           .catch((err) =>
             console.warn(
               "[Gateway] Turso startup dirty push failed (non-fatal):",
               (err as Error).message.slice(0, 120),
             ),
           );
-        void import(
-          "./services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js"
-        )
+        void import("./services/tursoReplica/cutover/tursoReplicaCutoverOrchestrator.js")
           .then(({ runPendingReplicaCutovers }) =>
             runPendingReplicaCutovers({ fromStartup: true }).then((batch) => {
               if (batch.results.length === 0) {
@@ -4347,9 +4507,7 @@ async function startGateway(): Promise<void> {
               (err as Error).message.slice(0, 120),
             ),
           );
-        void import(
-          "./services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js"
-        )
+        void import("./services/tursoReplica/cutover/tursoReplicaCutoverMigrationAuthority.js")
           .then(({ repairAllReplicaMigrationAuthorityOnStartup }) => {
             const repairEnabled =
               process.env.TURSO_MIGRATION_REPAIR_ON_STARTUP === "1" ||
@@ -4440,9 +4598,8 @@ async function startGateway(): Promise<void> {
       stopGatewayEventLoopMonitor();
 
       try {
-        const { shutdownGatewayBackgroundWorker } = await import(
-          "./services/GatewayBackgroundWorkerClient.js"
-        );
+        const { shutdownGatewayBackgroundWorker } =
+          await import("./services/GatewayBackgroundWorkerClient.js");
         await shutdownGatewayBackgroundWorker();
       } catch (error) {
         console.error("[Gateway] Failed to stop background worker:", error);
@@ -4450,9 +4607,8 @@ async function startGateway(): Promise<void> {
 
       // Stop code indexing
       try {
-        const { stopCodeIndexing } = await import(
-          "./services/CodeIndexingService.js"
-        );
+        const { stopCodeIndexing } =
+          await import("./services/CodeIndexingService.js");
         await stopCodeIndexing();
       } catch (error) {
         console.error("[Gateway] Failed to stop code indexing:", error);
@@ -4484,46 +4640,42 @@ async function startGateway(): Promise<void> {
 
       try {
         try {
-          const { stopDatabaseMemorySync } = await import(
-            "./services/DatabaseMemorySync.js"
-          );
+          const { stopDatabaseMemorySync } =
+            await import("./services/DatabaseMemorySync.js");
           stopDatabaseMemorySync();
         } catch {
           /* non-fatal */
         }
-        const { stopTursoLinkedDbWatcher } = await import(
-          "./services/TursoLinkedDbWatcher.js"
-        );
+        const { stopTursoLinkedDbWatcher } =
+          await import("./services/TursoLinkedDbWatcher.js");
         await stopTursoLinkedDbWatcher();
       } catch (error) {
         console.error("[Gateway] Failed to stop Turso DB watcher:", error);
       }
 
       try {
-        const { cancelAllScheduledTursoReplicaPushes } = await import(
-          "./services/tursoReplica/tursoReplicaPushScheduler.js"
-        );
+        const { cancelAllScheduledTursoReplicaPushes } =
+          await import("./services/tursoReplica/tursoReplicaPushScheduler.js");
         cancelAllScheduledTursoReplicaPushes("gateway shutdown");
-        const { drainTursoReplicaConnections } = await import(
-          "./services/tursoReplica/TursoReplicaService.js"
-        );
+        const { drainTursoReplicaConnections } =
+          await import("./services/tursoReplica/TursoReplicaService.js");
         await drainTursoReplicaConnections("gateway shutdown");
       } catch (error) {
-        console.error("[Gateway] Failed to drain Turso replica connections:", error);
+        console.error(
+          "[Gateway] Failed to drain Turso replica connections:",
+          error,
+        );
       }
 
       try {
-        const { getSessionKeeperService } = await import(
-          "./services/platforms/SessionKeeperService.js"
-        );
+        const { getSessionKeeperService } =
+          await import("./services/platforms/SessionKeeperService.js");
         getSessionKeeperService().stop();
-        const { closeRealChromePlatformSession } = await import(
-          "./services/platforms/platformAgentBrowser.js"
-        );
+        const { closeRealChromePlatformSession } =
+          await import("./services/platforms/platformAgentBrowser.js");
         await closeRealChromePlatformSession();
-        const { getPlatformSessionService } = await import(
-          "./services/platforms/PlatformSessionService.js"
-        );
+        const { getPlatformSessionService } =
+          await import("./services/platforms/PlatformSessionService.js");
         await getPlatformSessionService().shutdown();
       } catch (error) {
         console.error("[Gateway] Failed to stop platform sessions:", error);
@@ -4549,14 +4701,21 @@ async function startGateway(): Promise<void> {
         });
       });
     }
-    
+
     // Handle system power state changes from Electron main process
     process.on("message", async (message: unknown) => {
       if (typeof message !== "object" || message === null) return;
-      
-      const msg = message as { type?: string; timestamp?: number; event?: unknown };
-      if (msg.type === "HEALTH_OBSERVATION") { recordGatewayHealthEvent(msg.event); return; }
-      
+
+      const msg = message as {
+        type?: string;
+        timestamp?: number;
+        event?: unknown;
+      };
+      if (msg.type === "HEALTH_OBSERVATION") {
+        recordGatewayHealthEvent(msg.event);
+        return;
+      }
+
       if (msg.type === "SYSTEM_SUSPEND") {
         console.log("[Gateway] System suspending - pausing operations");
         // Note: Node.js process will be suspended by OS, no cleanup needed
@@ -4582,29 +4741,35 @@ async function startGateway(): Promise<void> {
         });
       }
     });
-    
+
     // Scheduler + session keeper start after deferred jobs bootstrap (see gatewayReady block).
 
     // Start code indexing after a delay (non-blocking)
-    console.log('[Gateway] Scheduling code indexing check in 3 seconds...');
+    console.log("[Gateway] Scheduling code indexing check in 3 seconds...");
     setTimeout(async () => {
-      console.log('[Gateway] Code indexing check starting...');
+      console.log("[Gateway] Code indexing check starting...");
       try {
-        const { getPaprApiKey: resolvePaprKey } = await import('./utils/keyResolver.js');
-        console.log('[Gateway] Requesting PAPR_API_KEY...');
+        const { getPaprApiKey: resolvePaprKey } =
+          await import("./utils/keyResolver.js");
+        console.log("[Gateway] Requesting PAPR_API_KEY...");
         const paprKey = await resolvePaprKey();
-        
+
         if (paprKey) {
-          console.log('[Gateway] PAPR_API_KEY found, starting code indexing...');
-          const { ensureIndexingStarted } = await import('./services/CodeIndexingService.js');
+          console.log(
+            "[Gateway] PAPR_API_KEY found, starting code indexing...",
+          );
+          const { ensureIndexingStarted } =
+            await import("./services/CodeIndexingService.js");
           await ensureIndexingStarted(paprKey);
-          console.log('[Gateway] Code indexing initialization complete');
+          console.log("[Gateway] Code indexing initialization complete");
         } else {
-          console.log('[Gateway] No PAPR_API_KEY found, skipping code indexing');
+          console.log(
+            "[Gateway] No PAPR_API_KEY found, skipping code indexing",
+          );
         }
       } catch (error) {
-        console.error('[Gateway] Failed to start code indexing:', error);
-        console.error('[Gateway] Error stack:', (error as Error).stack);
+        console.error("[Gateway] Failed to start code indexing:", error);
+        console.error("[Gateway] Error stack:", (error as Error).stack);
       }
     }, 3000); // Wait 3 seconds after Gateway starts
   } catch (error) {
@@ -4638,8 +4803,7 @@ void import("../core/utils/spawnResourceErrorHandler.js")
   .then(({ setSpawnResourceErrorHandler }) =>
     setSpawnResourceErrorHandler((reason) => {
       void import("./services/fdPressureRecovery.js").then(
-        ({ attemptFdPressureRecovery }) =>
-          attemptFdPressureRecovery(reason),
+        ({ attemptFdPressureRecovery }) => attemptFdPressureRecovery(reason),
       );
     }),
   )

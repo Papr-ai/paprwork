@@ -99,8 +99,9 @@ describe("workspace switch — JobsService invariants", () => {
       "async stopJob(",
     );
 
-    expect(deleteFn).toContain("voidDeleteJobCloudArtifacts");
-    expect(deleteFn).not.toMatch(/await deleteJobCloudArtifacts\(/);
+    expect(deleteFn).toContain("deleteJobCloudArtifactsForJob");
+    expect(deleteFn).toContain("await this.saveJobs({ awaitCloudMetadata: true })");
+    expect(deleteFn).toMatch(/await this\.deleteJobCloudArtifactsForJob\(/);
   });
 
   it("startup reconcile uses deferCloudCleanup (no blocking cloud push during initialize)", () => {
@@ -119,7 +120,7 @@ describe("workspace switch — JobsService invariants", () => {
       read(JOBS),
       JOBS,
       "private async runInitialize",
-      "private voidDeleteJobCloudArtifacts",
+      "private async deleteJobCloudArtifactsForJob",
     );
 
     const installIdx = requireIndex(
