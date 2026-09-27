@@ -1,13 +1,16 @@
 /**
- * ProfileFooter - Bottom-of-sidebar identity row.
- * Avatar (→ profile), user name + active org/namespace, and a more (…) button → Settings.
+ * ProfileFooter - Bottom-of-rail identity: avatar (→ profile) with a hover card showing
+ * name + active org/namespace, your agent (→ personalize), Edit profile and Settings.
  */
 
-import React, { useEffect } from "react";
+import { useEffect } from "react";
 import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
 import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
 import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { RailIcons } from "./railIcons";
 import "./ProfileFooter.css";
 
 interface ProfileFooterProps {
@@ -31,6 +34,8 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
     setProfile,
   } = useProfileStore();
   const displayName = name.trim() || "Your account";
+  const agentName = useAgentName();
+  const openAgentSheet = useAgentIdentity((s) => s.openSheet);
   const workspaceLabel =
     formatActiveWorkspaceLabel({
       organizationName,
@@ -97,47 +102,47 @@ export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterPr
   }, [loadProfile, setProfile]);
 
   return (
-    <div className="profile-footer">
-      <div className="profile-footer__row">
-        <button
-          className="profile-footer__avatar"
-          onClick={onOpenProfile}
-          aria-label={
-            planAttention ? `Edit profile — ${planAttentionHint}` : "Edit profile"
-          }
-          title={planAttention ? planAttentionHint : "Edit profile"}
-        >
-          <UserAvatar
-            imageUrl={imageUrl}
-            displayName={name}
-            alt={displayName}
-            size={34}
-          />
+    <div className="rail-item rail-item--has-peek rail-item--peek-bottom rail-account">
+      <button
+        type="button"
+        className="rail-account__avatar"
+        onClick={onOpenProfile}
+        aria-label={planAttention ? `Account — ${planAttentionHint}` : "Account"}
+      >
+        <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={32} />
+        {planAttention ? <i className="rail-btn__badge rail-btn__badge--warn" aria-hidden="true" /> : null}
+      </button>
+
+      <div className="rail-peek rail-account__card" role="menu" aria-label="Account">
+        <button type="button" className="rail-account__head" onClick={onOpenProfile} title="Edit profile">
+          <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={40} />
+          <span>
+            <b>{displayName}</b>
+            {workspaceLabel ? <small>{workspaceLabel}</small> : null}
+          </span>
         </button>
 
-        <button
-          className="profile-footer__id"
-          onClick={onOpenProfile}
-          title={workspaceLabel || undefined}
-        >
-          <span className="profile-footer__name">{displayName}</span>
-          {workspaceLabel ? (
-            <span className="profile-footer__plan">{workspaceLabel}</span>
-          ) : null}
+        <h6>Your agent</h6>
+        <button type="button" className="rail-account__row" onClick={openAgentSheet} data-agent-hover>
+          <AgentGlyph size={24} />
+          <span className="rail-account__label">{agentName}</span>
+          <em>Personalize</em>
         </button>
 
-        <button
-          className="profile-footer__more"
-          onClick={onOpenSettings}
-          aria-label={planAttention ? `Settings — ${planAttentionHint}` : "Settings"}
-          title={planAttention ? planAttentionHint : "Settings"}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-            <circle cx="5" cy="12" r="1.6" />
-            <circle cx="12" cy="12" r="1.6" />
-            <circle cx="19" cy="12" r="1.6" />
-          </svg>
-        </button>
+        {planAttention ? (
+          <p className="rail-account__attention" role="status">{planAttentionHint}</p>
+        ) : null}
+
+        <footer className="rail-peek__footer rail-account__footer">
+          <button type="button" onClick={onOpenProfile}>
+            <RailIcons.person />
+            Edit profile
+          </button>
+          <button type="button" onClick={onOpenSettings}>
+            <RailIcons.settings />
+            Settings
+          </button>
+        </footer>
       </div>
     </div>
   );

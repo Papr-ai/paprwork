@@ -5,6 +5,7 @@ function hoverActions(item, type, context) {
 const CHECK_SVG = `<svg viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const DISMISS_SVG = `<svg viewBox="0 0 16 16" fill="none"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>`;
 const UNDO_SVG = `<svg viewBox="0 0 16 16" fill="none"><path d="M3 6h7a3 3 0 0 1 0 6H8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M5.5 3.5L3 6l2.5 2.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+const ARROW_SVG = `<svg viewBox="0 0 16 16" fill="none"><path d="M3 8h10M9 4l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 const EDIT_SVG = `<svg viewBox="0 0 16 16" fill="none"><path d="M9.5 3.5l3 3L5 14H2v-3l7.5-7.5z" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 function reviewMeta(item) {
   const r = item._review || {};
@@ -22,8 +23,20 @@ function reviewIcons(item) {
 const R = {
   hero(h) {
     const hero = h && typeof h === 'object' ? h : { date: '', title: 'Daily Brief', stats: [] };
-    const stats = (hero.stats||[]).map(s => `<div class="stat"><div class="stat-num">${s.value}</div><div class="stat-label">${s.label}</div></div>`).join('');
-    return `<div class="hero-date">${hero.date || ''}</div><h1 class="hero-title">${hero.title || 'Daily Brief'}</h1><div class="hero-stats">${stats}</div>`;
+    const stats = (hero.stats||[]).map(s => `<span class="stat"><b class="stat-num">${s.value}</b> <span class="stat-label">${s.label}</span></span>`).join('');
+    return `<p class="hero-date">${hero.date || ''}</p><h1 class="hero-title">${hero.title || 'Daily Brief'}</h1>${stats ? `<p class="hero-stats">${stats}</p>` : ''}`;
+  },
+  /* The one job of Home: what should I do next? Top priority, one primary action. */
+  focus(p) {
+    if (!p) return '';
+    const attr = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/"/g, '&quot;');
+    const ctx = encodeURIComponent(JSON.stringify({ type: 'priority', rank: p.rank, title: p.title, why: p.why }));
+    return `<section class="hfocus"><header><small>Do this first</small></header>
+      <h3>${p.title}</h3>${p.why ? `<p>${p.why}</p>` : ''}
+      <div class="hfocus-acts">
+        <button type="button" class="hfocus-primary" data-agent="${ctx}">Start in chat ${ARROW_SVG}</button>
+        <button type="button" class="hfocus-ghost" data-review="complete" data-id="${p._id}" data-title="${attr(p.title)}">${CHECK_SVG}Mark done</button>
+      </div></section>`;
   },
   timeline(items) {
     return items.map((m,i) => {
