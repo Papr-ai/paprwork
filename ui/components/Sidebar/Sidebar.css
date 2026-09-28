@@ -316,6 +316,13 @@
   white-space: nowrap;
 }
 
+.rail-peek__working {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  margin-left: 2px;
+}
+
 .rail-peek__live {
   width: 7px;
   height: 7px;

@@ -19,6 +19,7 @@ import { useSidebarFavorites } from "./useSidebarFavorites";
 import { useRailPeeks } from "./useRailPeeks";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { useAgentWork } from "../Agent/agentWork";
 import { shouldShowOnboarding } from "../../utils/onboardingState";
 import { switchToChatTab, switchToHomeTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
@@ -149,6 +150,8 @@ export function Sidebar() {
   const { chatGroups, appGroups, docGroups, hasUnreadChats } = useRailPeeks(favoritesApi);
   const agentName = useAgentName();
   const agentLook = useAgentIdentity((s) => s.look);
+  const work = useAgentWork();
+  const workingLabel = `${agentName} is working · ${work.count} ${work.count === 1 ? "chat" : "chats"}`;
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
 
   useEffect(() => {
@@ -173,16 +176,17 @@ export function Sidebar() {
 
       <RailItem
         variant="agent"
-        label={`Home · ${agentName}`}
-        ariaLabel="Home"
+        label={work.state === "working" ? workingLabel : `Home · ${agentName}`}
+        ariaLabel={work.state === "working" ? `Home · ${workingLabel}` : "Home"}
+        busy={work.state === "working"}
         active={activeView === "memory"}
         onClick={() => handleNavClick("memory")}
-        icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} />}
+        icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} state={work.state} />}
         peek={
           <div className="rail-home-peek">
             <header className="rail-peek__header">
               <b>Home</b>
-              <span>{agentName} · today&apos;s brief</span>
+              <span>{work.state === "working" ? workingLabel : <>{agentName} · today&apos;s brief</>}</span>
             </header>
             <WeatherWidget />
           </div>

@@ -4,6 +4,8 @@
  */
 import type { ReactNode } from "react";
 import { RailIcons } from "./railIcons";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 
 export interface PeekRow {
   id: string;
@@ -28,12 +30,23 @@ interface RailPeekProps {
   footer?: { label: string; onClick: () => void };
 }
 
+/** Chats the agent is writing in carry the same Replay mark — nothing else. */
+function Working() {
+  const name = useAgentName();
+  const papr = useAgentIdentity((s) => s.look) === "papr";
+  return (
+    <span className="rail-peek__working" role="img" aria-label={`${name} is working`} title={`${name} is working`}>
+      <AgentGlyph size={papr ? 14 : 16} state="working" />
+    </span>
+  );
+}
+
 function Row({ row }: { row: PeekRow }) {
   return (
     <div className="rail-peek__row">
       <button type="button" className="rail-peek__open" onClick={row.onOpen} role="menuitem">
         <span className="rail-peek__title">{row.title}</span>
-        {row.live ? <i className="rail-peek__live" aria-label="Running" /> : null}
+        {row.live ? <Working /> : null}
         {row.sub ? <span className="rail-peek__sub">{row.sub}</span> : null}
       </button>
       {row.onRemove ? (
