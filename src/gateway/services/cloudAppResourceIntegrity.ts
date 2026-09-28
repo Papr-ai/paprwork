@@ -78,13 +78,37 @@ async function readAppsIndexTitles(
 async function readDatabasesRegistry(
   paprDir: string,
 ): Promise<DatabasesRegistryFile> {
+  return (await readDatabasesRegistryStrict(paprDir)) ?? { version: 1, databases: {} };
+}
+
+/**
+ * Read databases.json, or null when it cannot be trusted (missing, mid-write,
+ * truncated, unparsable). Retries once — the registry is rewritten via
+ * tmp+rename many times a second during replica repair, and a read that races
+ * a writer on some filesystems surfaces as ENOENT or a JSON parse error.
+ *
+ * Callers that DELETE things based on registry membership must use this and
+ * treat null as "unknown", never as "no databases exist".
+ */
+export async function readDatabasesRegistryStrict(
+  paprDir: string,
+): Promise<DatabasesRegistryFile | null> {
   const registryPath = path.join(paprDir, "data", DATABASES_REGISTRY_FILENAME);
-  try {
-    const raw = await fs.readFile(registryPath, "utf8");
-    return JSON.parse(raw) as DatabasesRegistryFile;
-  } catch {
-    return { version: 1, databases: {} };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const raw = await fs.readFile(registryPath, "utf8");
+      const parsed = JSON.parse(raw) as DatabasesRegistryFile;
+      if (parsed && typeof parsed.databases === "object" && parsed.databases !== null) {
+        return parsed;
+      }
+    } catch {
+      /* retry once, then give up */
+    }
+    if (attempt === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }
+  return null;
 }
 
 function jobExistsOnDisk(paprDir: string, jobId: string): boolean {
@@ -129,7 +153,21 @@ export async function reconcileAppDataSourcesForPublish(
   }
 
   const canonicalJobIds = new Set(await collectCanonicalAppJobIds(paprDir, appId));
-  const registry = await readDatabasesRegistry(paprDir);
+  // Fail closed: an unreadable registry (or one with zero entries while this app
+  // links registry dbIds) means "unknown", not "every database was deleted".
+  // Treating it as empty used to wipe every dbId-linked source from the local
+  // data-sources.json during publish — and then upload the empty file to cloud.
+  const strictRegistry = await readDatabasesRegistryStrict(paprDir);
+  const linksRegistryDbs = config.sources.some((source) => Boolean(source.dbId?.trim()));
+  const registryTrusted =
+    strictRegistry !== null &&
+    (!linksRegistryDbs || Object.keys(strictRegistry.databases).length > 0);
+  if (!registryTrusted && linksRegistryDbs) {
+    report.warnings.push(
+      "databases.json was unreadable or empty — skipped pruning of registry-linked sources",
+    );
+  }
+  const registry: DatabasesRegistryFile = strictRegistry ?? { version: 1, databases: {} };
   const knownDbIds = new Set(
     Object.keys(registry.databases).filter(
       (dbId) => registry.databases[dbId]?.status !== "tombstone",
@@ -163,7 +201,7 @@ export async function reconcileAppDataSourcesForPublish(
       }
       seenJobIds.add(source.jobId);
     }
-    if (source.dbId && !knownDbIds.has(source.dbId)) {
+    if (source.dbId && registryTrusted && !knownDbIds.has(source.dbId)) {
       const owner = registry.databases[source.dbId]?.schemaOwnerAppId;
       if (owner && owner !== appId) {
         keptSources.push(source);
@@ -186,6 +224,23 @@ export async function reconcileAppDataSourcesForPublish(
     report.warnings.push(
       `Job ${jobId} is not linked in data-sources. Link the job's writeDbIds registry database with attach_database — job scratch is not auto-linked.`,
     );
+  }
+
+  // Never let a publish-time reconcile empty an app that had links. Losing every
+  // source breaks the app on /api/db/* (404 "No data sources linked"); if the
+  // links really are all stale, that is a deliberate user action, not a side
+  // effect of Publish.
+  if (report.changed && keptSources.length === 0 && config.sources.length > 0) {
+    report.changed = false;
+    report.removedJobIds = [];
+    report.removedDbIds = [];
+    report.warnings.push(
+      `Refused to remove all ${config.sources.length} data sources during publish reconcile — left data-sources.json unchanged`,
+    );
+    console.warn(
+      `[CloudSync] reconcile for ${appId} would drop all ${config.sources.length} data sources; skipped write`,
+    );
+    return report;
   }
 
   if (report.changed && options?.dryRun !== true) {
