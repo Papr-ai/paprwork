@@ -19,6 +19,8 @@ interface RailItemProps {
   variant?: "default" | "agent" | "new";
   testId?: string;
   ariaLabel?: string;
+  /** Announces background work (e.g. the agent is working) to assistive tech. */
+  busy?: boolean;
 }
 
 export function RailItem({
@@ -33,6 +35,7 @@ export function RailItem({
   variant = "default",
   testId,
   ariaLabel,
+  busy,
 }: RailItemProps) {
   const classes = ["rail-item", peek ? "rail-item--has-peek" : "", peekFromBottom ? "rail-item--peek-bottom" : ""];
   return (
@@ -43,6 +46,7 @@ export function RailItem({
         onClick={onClick}
         aria-label={ariaLabel ?? label}
         aria-current={active ? "page" : undefined}
+        aria-busy={busy || undefined}
         data-testid={testId}
       >
         {icon}

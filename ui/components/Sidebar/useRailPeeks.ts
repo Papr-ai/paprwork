@@ -7,6 +7,7 @@ import { useChat } from "../../hooks/useChat";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useTabs } from "../../hooks/useTabs";
 import { isUserFacingChatId } from "../../utils/chatVisibility";
+import { useWorkingChatIds } from "../Agent/agentWork";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { SidebarFavorite } from "./useSidebarFavorites";
 import { relativeTime, type PeekGroup, type PeekRow } from "./RailPeek";
@@ -24,6 +25,7 @@ interface Args {
 
 export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) {
   const { chats, loadMessages } = useChat();
+  const workingIds = useWorkingChatIds();
   const { artifacts, loadArtifacts } = useArtifacts();
   const { createTab, switchToTab } = useTabs();
 
@@ -36,10 +38,11 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
       favorites.filter(match).map((f) => ({
         id: `fav-${f.id}`,
         title: f.title,
+        live: workingIds.has(f.id),
         onOpen: () => openFavorite(f),
         onRemove: () => removeFavorite(f.id),
       })),
-    [favorites, openFavorite, removeFavorite],
+    [favorites, workingIds, openFavorite, removeFavorite],
   );
 
   const openArtifact = useCallback(
@@ -58,7 +61,7 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
         id: c.id,
         title: c.title || "New Chat",
         sub: relativeTime(c.updatedAt),
-        live: !!c.isStreaming,
+        live: workingIds.has(c.id),
         onOpen: () => {
           void loadMessages(c.id);
           switchToTab(createTab("chat", c.id, c.title || "New Chat"));
@@ -70,7 +73,7 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
       { title: "Pinned", pinned: true, rows: pinned },
       { title: "Recent", rows: recent },
     ];
-  }, [chats, favorites, pinnedRows, loadMessages, createTab, switchToTab]);
+  }, [chats, workingIds, favorites, pinnedRows, loadMessages, createTab, switchToTab]);
 
   const artifactGroups = useCallback(
     (type: "app" | "document"): PeekGroup[] => {
