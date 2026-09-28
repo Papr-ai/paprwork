@@ -1164,6 +1164,43 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.21" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.21</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Claude sign-in</strong>
+                <p>
+                  Smoother onboarding stepper, auth flow persistence, and
+                  clearer setup-token guidance in Settings.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Agent tooling</strong>
+                <p>
+                  Architect triage for complex builds, stronger design and
+                  multi-user ACL guidance, and cloud install schema snapshots.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>macOS installer</strong>
+                <p>
+                  PKG installs show a short conclusion screen when setup
+                  finishes.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.21"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.20" && (
           <div className="about-card">
             <h3>What's New in v2.6.20</h3>
