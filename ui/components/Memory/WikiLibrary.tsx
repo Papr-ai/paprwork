@@ -34,8 +34,10 @@ import {
   UpdatedAtBadge,
   WikiEntitySections,
 } from "./WikiEntitySections";
-import { WikiTasksView } from "./WikiTasksView";
-import { HomeTodayView } from "./HomeTodayView";
+import {
+  MEMORY_OPEN_ENTITY_EVENT,
+  takePendingMemoryEntity,
+} from "../../lib/memoryNav";
 import { RelatedMemoriesPanel } from "./WikiRelatedMemories";
 import { entityUpdatedAt, KEY_DETAIL_HIDDEN_KEYS, normalizeEntitySections, parseDailyLogDate, sortWikiNodesByUpdatedAt } from "../../utils/wikiSectionUtils";
 import { getActiveWorkspaceUiCacheKey } from "../../lib/workspaceUiCache";
@@ -117,15 +119,10 @@ function sortContextFiles(
   });
 }
 
-export type HomeWorkspaceTab = "today" | "tasks" | "memory";
-
 interface WikiLibraryProps {
   refreshToken?: number;
-  paletteOpen?: boolean;
-  onPaletteOpenChange?: (open: boolean) => void;
   onFocusChange?: (label: string | null, backFn: (() => void) | null) => void;
   onWikiLastUpdatedChange?: (value: string | null) => void;
-  workspaceTab?: HomeWorkspaceTab;
 }
 
 function bodyPreview(body: string, maxLen = 140): string {
@@ -419,128 +416,6 @@ function WikiRailSection({
         ))}
       </div>
     </section>
-  );
-}
-
-/* ── Search Palette ────────────────────────────────── */
-
-function SearchPalette({
-  open,
-  onClose,
-  onPick,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onPick: (n: WikiNode) => void;
-}) {
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<WikiNode[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [selected, setSelected] = useState(0);
-
-  useEffect(() => {
-    if (!open) return;
-    setQuery("");
-    setResults([]);
-    setSelected(0);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) return;
-    const trimmed = query.trim();
-    if (!trimmed) {
-      setResults([]);
-      return;
-    }
-    const timer = window.setTimeout(async () => {
-      setLoading(true);
-      try {
-        const response = await gateway.send("memory:wiki-search", {
-          query: trimmed,
-        });
-        setResults(
-          (response.data as { results?: WikiNode[] } | undefined)?.results ??
-            [],
-        );
-        setSelected(0);
-      } catch {
-        setResults([]);
-      } finally {
-        setLoading(false);
-      }
-    }, 300);
-    return () => window.clearTimeout(timer);
-  }, [open, query]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
-      else if (event.key === "ArrowDown") {
-        event.preventDefault();
-        setSelected((s) => Math.min(s + 1, Math.max(results.length - 1, 0)));
-      } else if (event.key === "ArrowUp") {
-        event.preventDefault();
-        setSelected((s) => Math.max(s - 1, 0));
-      } else if (event.key === "Enter" && results[selected]) {
-        onPick(results[selected]);
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, results, selected, onClose, onPick]);
-
-  if (!open) return null;
-  return (
-    <div className="wiki-palette-scrim" onClick={onClose} role="presentation">
-      <div
-        className="wiki-palette"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-      >
-        <input
-          className="wiki-palette__input"
-          placeholder="Search your knowledge graph…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          autoFocus
-        />
-        <div className="wiki-palette__results">
-          {loading ? (
-            <div className="wiki-palette__empty">Searching…</div>
-          ) : null}
-          {!loading && query.trim() && results.length === 0 ? (
-            <div className="wiki-palette__empty">No matches found.</div>
-          ) : null}
-          {results.map((node, index) => {
-            const meta = wikiTypeMeta(node.type);
-            return (
-              <button
-                key={`${node.type}-${node.id}`}
-                type="button"
-                className={`wiki-palette__result${index === selected ? " wiki-palette__result--sel" : ""}`}
-                onMouseEnter={() => setSelected(index)}
-                onClick={() => {
-                  onPick(node);
-                  onClose();
-                }}
-              >
-                <span
-                  className="wiki-palette__glyph"
-                  style={{ color: meta.color }}
-                >
-                  {meta.glyph}
-                </span>
-                <span className="wiki-palette__label">{node.label}</span>
-                <span className="wiki-palette__meta">{meta.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -1088,7 +963,6 @@ function WikiHome({
   loadError,
   onRetry,
   onPick,
-  onSearch,
   onAdd,
   onOpenContextFile,
   contextFiles,
@@ -1099,7 +973,6 @@ function WikiHome({
   loadError?: string | null;
   onRetry?: () => void;
   onPick: (n: WikiNode) => void;
-  onSearch: () => void;
   onAdd?: () => void;
   onOpenContextFile: (file: WorkspaceFilePreview) => void;
   contextFiles: WorkspaceFilePreview[];
@@ -1205,12 +1078,6 @@ function WikiHome({
           }
         />
       ) : null}
-
-      <button type="button" className="wiki-search-float" onClick={onSearch}>
-        <span className="wiki-search-float__icon">⌕</span>
-        <span>Search entities, memories, relationships…</span>
-        <span className="wiki-search-float__kbd">⌘K</span>
-      </button>
 
       {sortedContextFiles.length > 0 ? (
         <section className="wiki-rail wiki-rail--context">
@@ -1553,11 +1420,8 @@ function WikiEntityPage({
 
 export function WikiLibrary({
   refreshToken = 0,
-  paletteOpen: paletteOpenProp,
-  onPaletteOpenChange,
   onFocusChange,
   onWikiLastUpdatedChange,
-  workspaceTab = "today",
 }: WikiLibraryProps) {
   const [home, setHome] = useState<WikiHomeData | null>(null);
   const [homeLoading, setHomeLoading] = useState(true);
@@ -1574,9 +1438,6 @@ export function WikiLibrary({
   >([]);
   const [entityLoading, setEntityLoading] = useState(false);
   const [entityError, setEntityError] = useState<string | undefined>();
-  const [paletteOpenLocal, setPaletteOpenLocal] = useState(false);
-  const paletteOpen = paletteOpenProp ?? paletteOpenLocal;
-  const setPaletteOpen = onPaletteOpenChange ?? setPaletteOpenLocal;
   const [createOpen, setCreateOpen] = useState(false);
   const [contextFiles, setContextFiles] = useState<WorkspaceFilePreview[]>([]);
   const [onboardingPending, setOnboardingPending] = useState(false);
@@ -1863,6 +1724,12 @@ export function WikiLibrary({
   useEffect(() => {
     void loadHome();
     void loadContext();
+    // An entity picked from ⌘K before this tab mounted wins over the cached focus.
+    const requested = takePendingMemoryEntity();
+    if (requested) {
+      void loadEntity(normalizeWikiNode(requested));
+      return;
+    }
     // Restore cached entity focus for this workspace only
     try {
       const cached = sessionStorage.getItem(getFocusCacheKey());
@@ -1934,17 +1801,18 @@ export function WikiLibrary({
     [loadEntity],
   );
 
+  useEffect(() => {
+    const onRequest = () => {
+      const node = takePendingMemoryEntity();
+      if (node) handlePick(normalizeWikiNode(node));
+    };
+    window.addEventListener(MEMORY_OPEN_ENTITY_EVENT, onRequest);
+    return () => window.removeEventListener(MEMORY_OPEN_ENTITY_EVENT, onRequest);
+  }, [handlePick]);
+
   return (
     <div className="wiki-shell">
-      <div
-        className={`wiki-shell__content${
-          workspaceTab === "tasks"
-            ? " wiki-shell__content--tasks"
-            : workspaceTab === "today"
-              ? " wiki-shell__content--today"
-              : ""
-        }`}
-      >
+      <div className="wiki-shell__content">
         {focus ? (
           <WikiEntityPage
             node={focus}
@@ -1973,16 +1841,6 @@ export function WikiLibrary({
             allNodes={allNodes}
             onPick={handlePick}
           />
-        ) : workspaceTab === "tasks" ? (
-          <WikiTasksView
-            nodes={allNodes}
-            onPick={handlePick}
-            onChanged={() => {
-              void loadHome({ silent: true, forceRefresh: true });
-            }}
-          />
-        ) : workspaceTab === "today" ? (
-          <HomeTodayView refreshToken={refreshToken} />
         ) : (
           <WikiHome
             data={home}
@@ -1990,7 +1848,6 @@ export function WikiLibrary({
             loadError={homeLoadError}
             onRetry={reloadLibrary}
             onPick={handlePick}
-            onSearch={() => setPaletteOpen(true)}
             onAdd={() => setCreateOpen(true)}
             onOpenContextFile={(file) => {
               void openContextFile(file);
@@ -2000,11 +1857,6 @@ export function WikiLibrary({
           />
         )}
       </div>
-      <SearchPalette
-        open={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        onPick={handlePick}
-      />
       <CreateDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}

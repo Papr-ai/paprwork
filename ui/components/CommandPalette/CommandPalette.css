@@ -290,3 +290,46 @@
       0 0 0 1px rgba(255, 255, 255, 0.06) inset;
   }
 }
+
+/* Scope chip — search follows where you are; × or Backspace widens to everything. */
+.cmd-palette__scope {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 3px 4px 3px 10px;
+  border-radius: 999px;
+  background: rgba(var(--accent-rgb, 0, 113, 227), 0.1);
+  border: 1px solid rgba(var(--accent-rgb, 0, 113, 227), 0.22);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.cmd-palette__scope-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.cmd-palette__scope-clear:hover {
+  opacity: 1;
+  background: rgba(var(--accent-rgb, 0, 113, 227), 0.14);
+}
+
+.cmd-palette__wiki-glyph {
+  font-size: 15px;
+  line-height: 1;
+}

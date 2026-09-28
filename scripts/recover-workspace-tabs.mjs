@@ -34,6 +34,7 @@ const KNOWN_TAB_TYPES = new Set([
   "document",
   "documents",
   "memory",
+  "focus",
   "settings",
   "home",
   "landing",
