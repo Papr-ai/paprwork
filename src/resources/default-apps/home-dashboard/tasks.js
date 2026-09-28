@@ -34,7 +34,9 @@ const Tasks = {
     const entity = t.entity_ref ? t.entity_ref.split('/').pop().replace(/-/g, ' ') : '';
     const meta = [this.fmtDue(t.due), entity].filter(Boolean).join(' · ');
     const owner = t.owner && !/^(me|user|you|self)$/i.test(t.owner) ? `<em class="hk">${this.esc(t.owner)}</em>` : '';
-    const goal = t.goal_id ? `<span class="hg">${this.esc(t.goal_id)}</span>` : '';
+    // Tag by goal name when it's one of your three; anything else stays a quiet grey code.
+    const lab = t.goal_id && typeof Three !== 'undefined' ? Three.label(t.goal_id) : null;
+    const goal = t.goal_id ? `<span class="hg${lab ? ' on' : ''}" title="${lab ? `One of your three: ${this.esc(Three.find(t.goal_id)?.title || '')}` : 'Not one of your three'}">${this.esc(lab || t.goal_id)}</span>` : '';
     return `<div class="hrow${done ? ' done' : ''}">
       <button type="button" class="hchk" data-task="${this.esc(t.id)}" data-done="${done ? '0' : '1'}" aria-label="${done ? 'Reopen' : 'Mark done'}">${this.CHECK}</button>
       <div class="hrt"><b>${this.esc(t.title)}</b>${meta ? `<span>${meta}</span>` : ''}</div>${owner}${goal}

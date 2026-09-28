@@ -3194,6 +3194,37 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Focus — "Your three". Pen picks from IDENTITY.md goals + onboarding OKRs, ranked by chat
+    // time, daily logs, open tasks and goal-linked apps; the user keeps / edits / swaps any time.
+    // Saved to workspace/goals/focus.json (IDENTITY.md stays agent-owned).
+    app.get("/api/workspace/focus", async (_req, res) => {
+      try {
+        const { getFocus } = await import("./services/focusGoals.js");
+        res.json(await getFocus());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.put("/api/workspace/focus", async (req, res) => {
+      try {
+        const { setFocus } = await import("./services/focusGoals.js");
+        res.json(await setFocus((req.body ?? {}) as Parameters<typeof setFocus>[0]));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(message.startsWith("Pick at least") ? 400 : 500).json({ error: message });
+      }
+    });
+
+    app.post("/api/workspace/focus/repick", async (_req, res) => {
+      try {
+        const { repickFocus } = await import("./services/focusGoals.js");
+        res.json(await repickFocus());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
     // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
     app.post("/api/home/ensure-brief-setup", async (req, res) => {
       try {
