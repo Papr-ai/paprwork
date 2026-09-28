@@ -46,12 +46,23 @@ async function main() {
   }
   console.log("[test-claude-cli-on-demand] Check:", check);
 
+  const onPath = await service.getClaudeCliOnPathCheck();
+  console.log("[test-claude-cli-on-demand] on PATH:", onPath);
+
   const shellCmd = await service.getSetupTokenShellCommand();
   console.log("[test-claude-cli-on-demand] setup-token command:", shellCmd);
 
   if (shellCmd.includes("npm")) {
     throw new Error("setup-token command must not reference npm");
   }
+
+  const launcherPath = await service.writeSetupTokenLauncherScript();
+  const fs = await import("node:fs/promises");
+  const launcherBody = await fs.readFile(launcherPath, "utf8");
+  if (!launcherBody.includes("setup-token")) {
+    throw new Error("launcher script missing setup-token");
+  }
+  console.log("[test-claude-cli-on-demand] launcher:", launcherPath);
 
   console.log("[test-claude-cli-on-demand] OK");
   app.quit();

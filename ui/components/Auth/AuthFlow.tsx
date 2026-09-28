@@ -30,12 +30,25 @@ import {
   recordOnboardingStep,
   type OnboardingStepId,
 } from "../../utils/onboardingRemote";
+import {
+  markAuthFlowCompleteLocal,
+  persistAuthFlowStage,
+  type AuthFlowStage,
+} from "../../utils/authFlowPersistence";
 
-export type AuthFlowStage = "signin" | "org" | "connect" | "recommend";
+export type { AuthFlowStage };
 
 interface AuthFlowProps {
   /** Called once the user has cleared every pre-app stage. */
   onComplete: () => void;
+  /**
+   * Commercial relaunch: Papr session exists but connect/recommend not finished.
+   * Opens the saved stage instead of the main workspace.
+   */
+  resume?: {
+    initialStage: AuthFlowStage;
+    paprSignedIn: boolean;
+  };
   /**
    * Dev preview only (Settings → Dev). Starts the flow on a given stage and
    * stops AuthWall auto-advancing past sign-in when you're already logged in.
@@ -59,9 +72,9 @@ async function identifyTelemetryAfterLogin(): Promise<void> {
   }
 }
 
-export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
+export function AuthFlow({ onComplete, devPreview, resume }: AuthFlowProps) {
   const [stage, setStage] = useState<AuthFlowStage>(
-    devPreview?.initialStage ?? "signin",
+    devPreview?.initialStage ?? resume?.initialStage ?? "signin",
   );
   const [setupRequest, setSetupRequest] =
     useState<OrgNamespaceSetupRequest | null>(devPreview?.orgRequest ?? null);
@@ -81,6 +94,7 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
   // navigation — the stage machine is still driven locally.
   useEffect(() => {
     if (devPreview) return; // Don't let previewing a stage rewrite real progress.
+    persistAuthFlowStage(stage);
     recordOnboardingStep(stage as OnboardingStepId);
     // `signin` and `org` own components emit no telemetry, so without this the
     // funnel starts at stage 3 and drop-off before sign-in is invisible.
@@ -93,6 +107,23 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
       } as Record<string, unknown>);
     }
   }, [stage, devPreview]);
+
+  // Relaunch with an existing Papr session: hydrate profile/telemetry without
+  // re-running sign-in detection (AuthWall would auto-advance instantly).
+  useEffect(() => {
+    if (devPreview || !resume?.paprSignedIn) return;
+    void (async () => {
+      await identifyTelemetryAfterLogin();
+      void useProfileStore.getState().loadProfile({ force: true });
+      const remote = await fetchRemoteOnboarding();
+      if (remote?.completed) {
+        setAlreadyOnboarded(true);
+        markAuthFlowCompleteLocal();
+        transitionTo("completed");
+        onComplete();
+      }
+    })();
+  }, [devPreview, resume?.paprSignedIn, onComplete]);
 
   // Runs exactly once, when Papr auth is confirmed — regardless of which
   // detection path (DOM event, IPC, poll, manual code) got us here.
@@ -110,12 +141,20 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
       setAlreadyOnboarded(true);
       // Org setup still required (e.g. new workspace) — can't skip that.
       if (stageRef.current !== "org") {
+        markAuthFlowCompleteLocal();
         transitionTo("completed");
         onComplete();
         return;
       }
     }
     setStage((current) => (current === "signin" ? "connect" : current));
+  }, [devPreview, onComplete]);
+
+  const wrapComplete = useCallback(() => {
+    if (!devPreview) {
+      markAuthFlowCompleteLocal();
+    }
+    onComplete();
   }, [devPreview, onComplete]);
 
   // Org setup can arrive from either transport; whichever lands first wins
@@ -156,7 +195,7 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
   if (stage === "recommend") {
     return (
       <RecommendStep
-        onComplete={onComplete}
+        onComplete={wrapComplete}
         previewMode={Boolean(devPreview)}
         onBack={() => {
           setReturnedToConnect(true);
@@ -186,13 +225,22 @@ export function AuthFlow({ onComplete, devPreview }: AuthFlowProps) {
           }
           // Finished on another machine — don't reopen the local intent picker.
           if (!devPreview) transitionTo("completed");
-          onComplete();
+          wrapComplete();
         }}
         previewMode={Boolean(devPreview)}
-        returning={returnedToConnect}
+        returning={
+          returnedToConnect ||
+          Boolean(resume?.paprSignedIn && resume.initialStage === "connect")
+        }
       />
     );
   }
+
+  useEffect(() => {
+    if (stage === "org" && !setupRequest) {
+      setStage("connect");
+    }
+  }, [stage, setupRequest]);
 
   return (
     <AuthWall

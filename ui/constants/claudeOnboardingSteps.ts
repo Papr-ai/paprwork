@@ -35,6 +35,8 @@ export function getClaudeOnboardingSteps(
   const installCmd = getClaudeCliInstallCommand(platform);
   const checkCmd =
     platform === "windows" ? "where claude && claude --version" : "which claude && claude --version";
+  const switchAppHint =
+    platform === "mac" ? "the Dock or ⌘Tab" : platform === "windows" ? "the taskbar or Alt+Tab" : "your window switcher";
 
   return [
     {
@@ -57,7 +59,7 @@ export function getClaudeOnboardingSteps(
     },
     {
       title: "Sign in to Claude",
-      body: `This one needs you — it opens your browser and prints a token that only you should see. Papr opens ${terminal} and runs the command; finish the sign-in there.`,
+      body: `This step needs you — it opens your browser and prints a token that only you should see. Papr opens ${terminal} and runs sign-in (using \`claude\` on your PATH, or Papr's downloaded copy if not). Finish in ${terminal}, then continue here to paste the token.`,
       cmd: "claude setup-token",
       mode: "hand",
       action: `Open ${terminal} and run it`,
@@ -66,7 +68,7 @@ export function getClaudeOnboardingSteps(
     },
     {
       title: "Paste your token",
-      body: "Copy the whole line starting with sk-ant-oat01- from Terminal and paste it below. Extra spaces and line breaks are fine — Papr trims them before verifying with Anthropic.",
+      body: `Switch to the ${terminal} window Papr opened in the previous step (use ${switchAppHint} if you do not see it). When sign-in finishes, copy the whole line starting with sk-ant-oat01- from that window and paste it below. Extra spaces and line breaks are fine — Papr trims them before verifying with Anthropic.`,
       cmd: null,
       mode: "paste",
       action: "Verify token",

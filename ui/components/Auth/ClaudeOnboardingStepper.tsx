@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { copyTextToClipboard } from "../../utils/copyToClipboard";
 import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProviderSteps";
 import {
@@ -39,6 +39,26 @@ export function ClaudeOnboardingStepper({
   const [running, setRunning] = useState(false);
   const [stepError, setStepError] = useState<string | null>(null);
   const [copiedCmd, setCopiedCmd] = useState<string | null>(null);
+  const [setupTokenCmd, setSetupTokenCmd] = useState<string | null>(null);
+  const [terminalSignInReady, setTerminalSignInReady] = useState(false);
+
+  useEffect(() => {
+    if (stepIndex !== 2 || stepDone[2]) {
+      return;
+    }
+    let cancelled = false;
+    void window.electronAPI.oauth.claude.getSetupTokenShellCommand().then((result) => {
+      if (cancelled) {
+        return;
+      }
+      if (result.success) {
+        setSetupTokenCmd(result.command);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [stepIndex, stepDone]);
 
   const completeStep = useCallback(
     (
@@ -111,7 +131,7 @@ export function ClaudeOnboardingStepper({
             0,
             result.okMessage,
             result.skipInstallStep
-              ? [{ index: 1, okMessage: "Claude Code is already installed — skipped." }]
+              ? [{ index: 1, okMessage: "Claude Code is already on your PATH — install skipped." }]
               : [],
           );
           return;
@@ -136,11 +156,15 @@ export function ClaudeOnboardingStepper({
         const result = await window.electronAPI.oauth.claude.openSetupTokenTerminal({
           source: oauthSource,
         });
+        if ("command" in result && result.command) {
+          setSetupTokenCmd(result.command);
+        }
         if (!result.success) {
           setStepError(result.error);
           return;
         }
-        completeStep(2, step.defaultOk);
+        setTerminalSignInReady(true);
+        setStepError(null);
       }
     } catch (error) {
       setStepError(error instanceof Error ? error.message : "Something went wrong");
@@ -199,6 +223,8 @@ export function ClaudeOnboardingStepper({
             );
           }
 
+          const displayedCmd =
+            index === 2 && setupTokenCmd ? setupTokenCmd : step.cmd;
           const cmdLabel =
             step.mode === "run" ? "Papr runs this for you" : "Runs in Terminal on your computer";
 
@@ -209,20 +235,27 @@ export function ClaudeOnboardingStepper({
                 <h3>{step.title}</h3>
                 <p>{step.body}</p>
 
-                {step.cmd && (
+                {displayedCmd && (
                   <>
                     <p className="claude-stepper__cmd-label">{cmdLabel}</p>
                     <div className="claude-stepper__cmd">
-                      <code>{step.cmd}</code>
+                      <code>{displayedCmd}</code>
                       <button
                         type="button"
-                        className={`claude-stepper__copy${copiedCmd === step.cmd ? " claude-stepper__copy--ok" : ""}`}
-                        onClick={() => void handleCopyCommand(step.cmd ?? "")}
+                        className={`claude-stepper__copy${copiedCmd === displayedCmd ? " claude-stepper__copy--ok" : ""}`}
+                        onClick={() => void handleCopyCommand(displayedCmd)}
                       >
-                        {copiedCmd === step.cmd ? "Copied" : "Copy"}
+                        {copiedCmd === displayedCmd ? "Copied" : "Copy"}
                       </button>
                     </div>
                   </>
+                )}
+
+                {index === 2 && terminalSignInReady && (
+                  <p className="claude-stepper__st-ok" role="status">
+                    Terminal should be open with sign-in running. Finish in Terminal, then continue
+                    below.
+                  </p>
                 )}
 
                 {step.mode === "paste" ? (
@@ -240,6 +273,17 @@ export function ClaudeOnboardingStepper({
                         <span className="claude-stepper__running-dot" aria-hidden />
                         {step.running}…
                       </div>
+                    ) : index === 2 && terminalSignInReady ? (
+                      <button
+                        type="button"
+                        className="onboarding-cta onboarding-cta--small"
+                        onClick={() => {
+                          setTerminalSignInReady(false);
+                          completeStep(2, step.defaultOk);
+                        }}
+                      >
+                        I finished sign-in — paste token
+                      </button>
                     ) : (
                       <button
                         type="button"
@@ -249,11 +293,11 @@ export function ClaudeOnboardingStepper({
                         {step.action}
                       </button>
                     )}
-                    {step.mode === "run" && step.cmd && !running && (
+                    {step.mode === "run" && displayedCmd && !running && (
                       <button
                         type="button"
                         className="onboarding-link claude-stepper__run-self"
-                        onClick={() => void handleCopyCommand(step.cmd ?? "")}
+                        onClick={() => void handleCopyCommand(displayedCmd)}
                       >
                         I would rather run it myself
                       </button>

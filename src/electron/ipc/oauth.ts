@@ -848,23 +848,26 @@ export async function initializeOAuthIPC(
 
   async function openClaudeSetupTokenTerminal(): Promise<boolean> {
     const { exec: execCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(execCb);
     try {
+      await claudeSetupTokenService!.installClaudeCLI();
+      const scriptPath = await claudeSetupTokenService!.writeSetupTokenLauncherScript();
       const setupCmd = await claudeSetupTokenService!.getSetupTokenShellCommand();
-      const escapedForAppleScript = setupCmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 
       if (process.platform === "darwin") {
-        execCb(
-          `osascript -e 'tell application "Terminal" to do script "${escapedForAppleScript}"' -e 'tell application "Terminal" to activate'`,
+        const escapedForAppleScript = scriptPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        await execAsync(
+          `osascript -e 'tell application "Terminal" to do script "bash " & quoted form of "${escapedForAppleScript}"' -e 'tell application "Terminal" to activate'`,
         );
         return true;
       }
       if (process.platform === "win32") {
-        execCb(`start cmd.exe /k "${setupCmd.replace(/"/g, '\\"')}"`);
+        await execAsync(`start cmd.exe /k "${setupCmd.replace(/"/g, '\\"')}"`);
         return true;
       }
-      const escapedForBash = setupCmd.replace(/"/g, '\\"');
-      execCb(
-        `x-terminal-emulator -e "${escapedForBash}" 2>/dev/null || gnome-terminal -- bash -c "${escapedForBash}; exec bash" 2>/dev/null || xterm -e "${escapedForBash}" 2>/dev/null`,
+      await execAsync(
+        `x-terminal-emulator -e "bash \\"${scriptPath.replace(/"/g, '\\"')}\\"" 2>/dev/null || gnome-terminal -- bash -c "bash \\"${scriptPath.replace(/"/g, '\\"')}\\"; exec bash" 2>/dev/null || xterm -e "bash \\"${scriptPath.replace(/"/g, '\\"')}\\"" 2>/dev/null`,
       );
       return true;
     } catch (termErr) {
@@ -907,12 +910,17 @@ export async function initializeOAuthIPC(
         const staleCredentials = Boolean(existingCredentials);
 
         const cli = await claudeSetupTokenService!.getClaudeCliCheck();
+        const onPath = await claudeSetupTokenService!.getClaudeCliOnPathCheck();
 
         let okMessage: string;
-        if (cli.installed && cli.version) {
+        if (onPath.installed && onPath.version) {
           okMessage = staleCredentials
-            ? `Found Claude Code ${cli.version}. We will sign in fresh in the next step.`
-            : `Found Claude Code ${cli.version}. Nothing stale to clean up.`;
+            ? `Found Claude Code ${onPath.version} on your PATH. We will sign in fresh in the next step.`
+            : `Found Claude Code ${onPath.version} on your PATH. Nothing stale to clean up.`;
+        } else if (cli.installed) {
+          okMessage = staleCredentials
+            ? "Papr has a downloaded Claude Code copy (not on PATH yet). Next step prepares it, then we sign in."
+            : "Papr has a downloaded Claude Code copy. Next step prepares it before sign-in.";
         } else if (staleCredentials) {
           okMessage =
             "No install found. We will install Claude Code, then sign in again.";
@@ -923,7 +931,7 @@ export async function initializeOAuthIPC(
         return {
           connected: false as const,
           okMessage,
-          skipInstallStep: cli.installed,
+          skipInstallStep: onPath.installed,
         };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Check failed";
@@ -950,9 +958,15 @@ export async function initializeOAuthIPC(
           return { success: false as const, error: installResult.error ?? "Install failed" };
         }
         const cli = await claudeSetupTokenService!.getClaudeCliCheck();
-        const okMessage = cli.version
-          ? `Installed Claude Code ${cli.version}`
-          : "Installed Claude Code";
+        const onPath = await claudeSetupTokenService!.getClaudeCliOnPathCheck();
+        let okMessage: string;
+        if (onPath.installed && onPath.version) {
+          okMessage = `Claude Code ${onPath.version} is on your PATH.`;
+        } else if (cli.version) {
+          okMessage = `Prepared Claude Code ${cli.version} for Papr. Sign-in uses Papr's copy — \`claude\` on PATH is optional.`;
+        } else {
+          okMessage = "Prepared Claude Code for Papr.";
+        }
         return { success: true as const, okMessage };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Install failed";
@@ -960,6 +974,17 @@ export async function initializeOAuthIPC(
       }
     },
   );
+
+  ipcMain.handle("auth:claude:get-setup-token-shell-command", async () => {
+    try {
+      await claudeSetupTokenService!.installClaudeCLI();
+      const command = await claudeSetupTokenService!.getSetupTokenShellCommand();
+      return { success: true as const, command };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Command unavailable";
+      return { success: false as const, error: message };
+    }
+  });
 
   ipcMain.handle(
     "auth:claude:open-setup-token-terminal",
@@ -974,13 +999,15 @@ export async function initializeOAuthIPC(
           source: telemetrySource,
           terminal_opened: terminalOpened,
         });
+        const command = await claudeSetupTokenService!.getSetupTokenShellCommand();
         if (!terminalOpened) {
           return {
             success: false as const,
-            error: "Could not open Terminal. Run claude setup-token yourself.",
+            error: "Could not open Terminal. Run the command below yourself.",
+            command,
           };
         }
-        return { success: true as const };
+        return { success: true as const, command };
       } catch (error) {
         const message = error instanceof Error ? error.message : "Terminal failed";
         return { success: false as const, error: message };

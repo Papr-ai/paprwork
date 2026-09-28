@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-28T20:21:32.368Z",
-  "entryCount": 200,
+  "generatedAt": "2026-09-28T23:26:04.102Z",
+  "entryCount": 201,
   "entries": [
     {
       "id": "access-members",
@@ -68,6 +68,25 @@
         "agent"
       ],
       "playbookRef": "preloaded-app-and-jobs-guide"
+    },
+    {
+      "id": "agent-tool-architect_triage",
+      "title": "architect_triage",
+      "summary": "Call FIRST for every new mini-app, before delegate_task(product-architect). Jev classifies the request: tier 'lite' (single-screen frontend, visualization, calculator, one-off analysis report — returns design/frontend rules; you build directly and create_app is unlocked) or tier 'full' (jobs, schedules, shared DB, multi-user/ACL, integrations — delegate to product-architect as usual). Fails closed to 'full'. A lite pass unlocks create_app only; app-linked/scheduled/agent create_job still requires the full architect.",
+      "surfaces": [
+        "agent-tool"
+      ],
+      "runtimes": [
+        "desktop"
+      ],
+      "toolId": "architect_triage",
+      "keywords": [
+        "architect_triage",
+        "architect",
+        "triage",
+        "tool",
+        "agent"
+      ]
     },
     {
       "id": "agent-tool-attach_database",
@@ -402,7 +421,7 @@
     {
       "id": "agent-tool-create_app",
       "title": "create_app",
-      "summary": "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. ENFORCED: Every new app requires a completed product-architect delegation in this chat first — delegate_task({ useAgentId: \"product-architect\", task: \"...\", context: \"...\" }) after list_sub_agents(). Simple todo/CRUD apps still require the brief (fast). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
+      "summary": "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. ENFORCED: call architect_triage({ request }) first. Tier lite (simple frontend/report) unlocks create_app directly; tier full requires a completed product-architect delegation — delegate_task({ useAgentId: \"product-architect\", task: \"...\", context: \"...\" }). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll. DESIGN DIRECTIVE: Use the Papr Liquid Glass design skill. Less is more: minimalist, modern, ...",
       "surfaces": [
         "agent-tool"
       ],

@@ -307,6 +307,90 @@ describe("portableOwnerIdInSql (papr_db_create_migration)", () => {
   });
 });
 
+describe("snapshot carries migration seed rows", () => {
+  const INIT =
+    "CREATE TABLE settings (id TEXT PRIMARY KEY, owner TEXT);\n" +
+    "CREATE TABLE stats (id TEXT PRIMARY KEY, n INTEGER DEFAULT 0);\n" +
+    "INSERT OR IGNORE INTO settings (id, owner) VALUES ('singleton', '{{papr.owner_user_id}}');\n" +
+    "INSERT OR IGNORE INTO stats (id) VALUES ('singleton');";
+
+  it("installs schema + migration rows + seed.sql in order, for the installer", async () => {
+    writeMigrations({ "0001_init.sql": INIT, "0002_col.sql": "ALTER TABLE stats ADD COLUMN day TEXT;" });
+    fs.writeFileSync(path.join(root, "seed.sql"), "UPDATE stats SET n = 7 WHERE id = 'singleton';");
+    await publishSnapshot(["0001_init.sql", "0002_col.sql"]);
+    const snap = await readSchemaSnapshot(root);
+    expect(snap?.migrations.map((m) => m.rows?.length)).toEqual([2, 0]);
+
+    // Same plan every backend (local / replica / cloud-direct) executes.
+    const { planSnapshotInstall } = await import(
+      "../src/gateway/services/jobs/schemaSnapshotApply.js"
+    );
+    const plan = await planSnapshotInstall(root);
+    expect(plan?.coveredFiles).toEqual(["0001_init.sql", "0002_col.sql"]);
+    const db = createClient({ url: ":memory:" });
+    for (const sql of plan!.statements) {
+      await db.execute(sql);
+    }
+    expect((await db.execute("SELECT owner FROM settings")).rows[0].owner).toBe("installer-user");
+    expect(Number((await db.execute("SELECT n FROM stats")).rows[0].n)).toBe(7); // seed.sql after rows
+    db.close();
+  });
+
+  it("falls back (no snapshot) when a later migration reshapes a seeded table", async () => {
+    writeMigrations({
+      "0001_init.sql": INIT,
+      "0002_rename.sql": "ALTER TABLE stats RENAME TO app_stats;",
+    });
+    await publishSnapshot(["0001_init.sql", "0002_rename.sql"]);
+    expect(await readSchemaSnapshot(root)).toBeNull();
+  });
+
+  it("falls back on INSERT … SELECT (depends on replay-time data)", async () => {
+    writeMigrations({
+      "0001_init.sql": INIT,
+      "0002_copy.sql": "CREATE TABLE s2 (id TEXT PRIMARY KEY); INSERT INTO s2 SELECT id FROM stats;",
+    });
+    await publishSnapshot(["0001_init.sql", "0002_copy.sql"]);
+    expect(await readSchemaSnapshot(root)).toBeNull();
+  });
+
+  it("only parses migrations that are new or changed since the last snapshot", async () => {
+    writeMigrations({ "0001_init.sql": INIT });
+    await publishSnapshot(["0001_init.sql"]);
+    const first = await readSchemaSnapshot(root);
+    // Poison the cached rows: if 0001 were re-parsed, the real rows would come back.
+    const poisoned = {
+      ...first!,
+      migrations: [{ ...first!.migrations[0], rows: [{ table: "stats", sql: "SELECT 'cached'" }] }],
+    };
+    writeMigrations({ "0002_col.sql": "ALTER TABLE stats ADD COLUMN day TEXT;" });
+    const next = await buildSchemaSnapshot({
+      migrationRoot: root,
+      schemaRows: [
+        { type: "table", name: "settings", sql: "CREATE TABLE settings (id TEXT)" },
+        { type: "table", name: "stats", sql: "CREATE TABLE stats (id TEXT, day TEXT)" },
+      ],
+      appliedLedgerIds: new Set(["0001_init.sql", "0002_col.sql"]),
+      previous: poisoned,
+    });
+    expect(next?.migrations[0].rows).toEqual([{ table: "stats", sql: "SELECT 'cached'" }]);
+    expect(next?.migrations[1].rows).toEqual([]);
+
+    // A changed 0001 (different sha) is re-parsed.
+    writeMigrations({ "0001_init.sql": `${INIT}\n-- edited` });
+    const reparsed = await buildSchemaSnapshot({
+      migrationRoot: root,
+      schemaRows: [
+        { type: "table", name: "settings", sql: "CREATE TABLE settings (id TEXT)" },
+        { type: "table", name: "stats", sql: "CREATE TABLE stats (id TEXT, day TEXT)" },
+      ],
+      appliedLedgerIds: new Set(["0001_init.sql", "0002_col.sql"]),
+      previous: poisoned,
+    });
+    expect(reparsed?.migrations[0].rows?.map((r) => r.table)).toEqual(["settings", "stats"]);
+  });
+});
+
 describe("migrationWritesRows (snapshot must not cover seeding migrations)", () => {
   it("flags INSERT/REPLACE, ignores DDL and trigger bodies and string data", async () => {
     const { migrationWritesRows } = await import(

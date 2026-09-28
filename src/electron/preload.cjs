@@ -80,6 +80,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
         ipcRenderer.invoke("auth:claude:onboarding-install-cli", options),
       openSetupTokenTerminal: (options) =>
         ipcRenderer.invoke("auth:claude:open-setup-token-terminal", options),
+      getSetupTokenShellCommand: () =>
+        ipcRenderer.invoke("auth:claude:get-setup-token-shell-command"),
     },
     // Generic paste token that maps providers correctly
     pasteToken: (provider, token, options) => {

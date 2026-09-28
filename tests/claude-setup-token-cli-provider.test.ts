@@ -54,6 +54,25 @@ describe("ClaudeSetupTokenService on-demand CLI provider", () => {
     expect(check.version).toBe("2.1.97");
   });
 
+  it("writeSetupTokenLauncherScript includes setup-token and cached cli path", async () => {
+    const cliPath = "/cache/claude-cli/package/cli.js";
+    const provider: ClaudeCliInstallProvider = {
+      ensureCLI: vi.fn(async () => cliPath),
+      isAvailable: vi.fn(async () => true),
+      getVersion: vi.fn(async () => null),
+    };
+
+    const service = new ClaudeSetupTokenService();
+    service.setClaudeCliProvider(provider);
+    mockNoGlobalClaude(service);
+
+    const scriptPath = await service.writeSetupTokenLauncherScript();
+    const fs = await import("fs/promises");
+    const contents = await fs.readFile(scriptPath, "utf8");
+    expect(contents).toContain("setup-token");
+    expect(contents).toContain(cliPath);
+  });
+
   it("getSetupTokenShellCommand quotes cached cli path", async () => {
     const cliPath = "/cache/claude-cli/package/cli.js";
     const provider: ClaudeCliInstallProvider = {
