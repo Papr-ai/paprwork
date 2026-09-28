@@ -18,6 +18,7 @@ import { wikiTypeMeta } from "../../types/wiki";
 import { scopeForActiveTab, useScopedMemorySearch, type PaletteScope } from "./usePaletteScope";
 import { usePaletteEntities, type PaletteEntity } from "./usePaletteEntities";
 import { COMMANDS, KIND_ICON, KIND_LABEL, isMac, type CommandItem } from "./paletteCommands";
+import { renderAppIcon } from "../../utils/renderAppIcon";
 import "./CommandPalette.css";
 
 interface CommandPaletteProps {
@@ -32,6 +33,15 @@ interface Section {
 
 const MAX_PINNED = 6;
 
+/**
+ * The app's own icon (the same one the Apps grid shows), falling back to the kind glyph.
+ * Docs and chats have no per-item icon, so they always use the kind glyph.
+ */
+function entityIcon(e: PaletteEntity): React.ReactNode {
+  if (e.kind !== "app" || !e.icon?.trim()) return KIND_ICON[e.kind];
+  return renderAppIcon(e.icon, { size: 30, className: "cmd-palette__app-icon" });
+}
+
 function entityItem(e: PaletteEntity, section: string): CommandItem {
   return {
     id: `${section}:${e.key}`,
@@ -39,7 +49,7 @@ function entityItem(e: PaletteEntity, section: string): CommandItem {
     description: "",
     tabType: e.kind as TabType,
     entityId: e.id,
-    icon: KIND_ICON[e.kind],
+    icon: entityIcon(e),
     entity: e,
     kindLabel: KIND_LABEL[e.kind],
     live: e.live,
@@ -272,7 +282,9 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
                     onClick={(e) => executeCommand(cmd, e.metaKey || e.ctrlKey)}
                     onMouseEnter={() => setSelectedIndex(index)}
                   >
-                    <span className="cmd-palette__item-icon">{cmd.icon}</span>
+                    <span className={`cmd-palette__item-icon${cmd.entity?.kind === "app" && cmd.entity.icon ? " cmd-palette__item-icon--app" : ""}`}>
+                      {cmd.icon}
+                    </span>
                     <span className="cmd-palette__item-label">{cmd.label}</span>
                     {cmd.live && <i className="cmd-palette__live" title="Pen is working" />}
                     {cmd.shortcut ? (

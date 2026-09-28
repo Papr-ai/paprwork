@@ -522,3 +522,33 @@
     background: rgba(255, 255, 255, 0.06);
   }
 }
+
+/*
+ * Apps show their own icon (the droplet PNG or SVG from the Apps grid), filling the
+ * tile. SVG icons get the usual tinted tile; image icons bring their own background.
+ */
+.cmd-palette__item-icon--app {
+  overflow: hidden;
+}
+
+.cmd-palette__item-icon--app:has(img) {
+  background: transparent;
+}
+
+.cmd-palette__app-icon {
+  display: grid;
+  place-items: center;
+}
+
+img.cmd-palette__app-icon {
+  width: 30px;
+  height: 30px;
+  object-fit: cover;
+  border-radius: 9px !important;
+}
+
+span.cmd-palette__app-icon,
+span.cmd-palette__app-icon svg {
+  width: 18px;
+  height: 18px;
+}

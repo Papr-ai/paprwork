@@ -33,7 +33,7 @@ function seed() {
   useArtifactsStore.setState({
     artifacts: [
       { id: "app-train", title: "Stage A Training Monitor", type: "app", updatedAt: "2026-09-28T20:00:00Z" },
-      { id: "app-meet", title: "Meetings Manager", type: "app", updatedAt: "2026-09-01T00:00:00Z", favorite: true },
+      { id: "app-meet", title: "Meetings Manager", type: "app", updatedAt: "2026-09-01T00:00:00Z", favorite: true, icon: "data:image/png;base64,MEET" },
       { id: "doc-memo", title: "Papr Investment Memo", type: "document", updatedAt: "2026-09-27T00:00:00Z", favorite: true },
     ] as unknown as Artifact[],
   });
@@ -61,6 +61,15 @@ describe("⌘K sections", () => {
     ]);
     expect(rows.filter((r) => r === "Papr Investment Memo")).toHaveLength(1);
     expect(container.querySelector(".cmd-palette__foot")?.textContent).toContain("open beside chat");
+  });
+
+  it("shows an app's own icon, like the Apps grid, and the kind glyph when it has none", () => {
+    const { container } = render(<CommandPalette isOpen onClose={() => {}} />);
+    const row = (title: string) =>
+      [...container.querySelectorAll(".cmd-palette__item")].find((b) => b.textContent?.includes(title))!;
+    expect(row("Meetings Manager").querySelector("img")?.getAttribute("src")).toBe("data:image/png;base64,MEET");
+    expect(row("Stage A Training Monitor").querySelector("img")).toBeNull();
+    expect(row("Stage A Training Monitor").querySelector("svg")).toBeTruthy();
   });
 
   it("searches chats, apps, and docs by title", () => {
