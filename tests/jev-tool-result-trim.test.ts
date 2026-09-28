@@ -159,3 +159,29 @@ describe("registry + compaction integration", () => {
     expect(metrics.toolTrimApplied).toBe(0);
   });
 });
+
+describe("applyMidTurnContextShaping records compaction into turn metrics", () => {
+  it("counts a mid-turn stale cut (previously invisible)", async () => {
+    const { applyMidTurnContextShaping } = await import(
+      "../src/gateway/services/providers/piStreamMemoryWrapUp.js"
+    );
+    const big = JSON.stringify({ success: true, data: { stdout: "x".repeat(6000), stderr: "", exitCode: 0 } });
+    const tr = (id: string) => ({ role: "toolResult", toolCallId: id, toolName: "bash", content: [{ type: "text", text: big }] });
+    const asst = { role: "assistant", content: [{ type: "toolCall", id: "x" }] };
+    const msgs = [{ role: "user", content: "hi" }, asst, tr("a"), asst, tr("b"), asst, tr("c"), asst, tr("d")];
+    const metrics = createTurnMetrics();
+    applyMidTurnContextShaping(msgs, undefined, false, { turnMetrics: metrics });
+    expect(metrics.compactionRuns).toBe(1);
+    expect(metrics.staleResultsTruncated).toBeGreaterThan(0);
+  });
+
+  it("counts a pressure-gate skip", async () => {
+    const { applyMidTurnContextShaping } = await import(
+      "../src/gateway/services/providers/piStreamMemoryWrapUp.js"
+    );
+    const msgs = [{ role: "user", content: "hi" }];
+    const metrics = createTurnMetrics();
+    applyMidTurnContextShaping(msgs, { maxTokens: 1_000_000 } as never, false, { turnMetrics: metrics });
+    expect(metrics.compactionSkips).toBe(1);
+  });
+});

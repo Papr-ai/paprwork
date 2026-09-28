@@ -9,7 +9,11 @@ import {
   type MidTurnTrimOpts,
 } from "../agent/midTurnContextTrim.js";
 import type { JevTrimRegistry } from "../agent/jevToolResultTrim.js";
-import type { TurnMetrics } from "../agent/turnMetrics.js";
+import {
+  recordCompactionRun,
+  recordCompactionSkipped,
+  type TurnMetrics,
+} from "../agent/turnMetrics.js";
 import type { PiStreamMemoryCheck } from "./piStreamMemoryLimits.js";
 
 export const WRAP_UP_AFTER_MEMORY_BUDGET =
@@ -83,8 +87,12 @@ export function applyMidTurnContextShaping(
     turnMetrics?: TurnMetrics;
   },
 ): void {
+  // Every cut the tool loop makes is counted, same as the prepareStep path in
+  // AgentService — otherwise turn_stale_truncated only sees one of the two
+  // places results get shortened and reads near zero while page-backs climb.
   if (memoryPressure) {
     const stats = compactMidTurnContextForMemoryPressure(messages);
+    recordCompactionRun(opts?.turnMetrics, stats);
     console.warn(
       `[PiCodexToolLoop] Memory-pressure compaction: ` +
         `truncated ${stats.staleResultsTruncated} stale tool result(s), ` +
@@ -93,11 +101,13 @@ export function applyMidTurnContextShaping(
   } else {
     compactStaleAssistantReasoning(messages);
     if (!opts?.skipStaleToolCompaction) {
-      compactStaleToolResults(messages, {
+      const stats = compactStaleToolResults(messages, {
         historyTokenBudget: historyTrimBounds?.maxTokens,
         jevTrim: opts?.jevTrim,
         turnMetrics: opts?.turnMetrics,
       });
+      if (stats.skipped) recordCompactionSkipped(opts?.turnMetrics);
+      else recordCompactionRun(opts?.turnMetrics, stats);
     }
   }
 
