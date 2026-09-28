@@ -202,6 +202,8 @@ const App = {
     
     await this.render(testBrief); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
     Tasks.bind(); Three.bind();
+    this.ready = true; // a rail deep link that arrived during load opens now
+    if (Three.pendingOpen) setTimeout(() => Three.openGoal(Three.pendingOpen), 0);
     document.getElementById('view-today').addEventListener('click', async (e) => {
       if (e.target.closest('#goals, #three')) return; // Goals and Your three have their own handlers
       const reviewBtn = e.target.closest('[data-review]');

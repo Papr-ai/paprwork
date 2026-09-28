@@ -38,7 +38,9 @@ const Goals = {
     const kids = (g.children || []);
     const l3 = kids.filter(k => k.level === 'L3'), l2 = kids.filter(k => k.level !== 'L3');
     return `<div class="goal ${g.level} ${g.status}">
-      <div class="goal-head"><span class="goal-title">${this.esc(g.title)}</span>${this.badges(g)}</div>
+      <div class="goal-head">${typeof Three !== 'undefined' && Three.find(g.id)
+        ? `<button type="button" class="goal-title goal-open" data-three="open" data-gid="${this.esc(g.id)}">${this.esc(g.title)}</button>`
+        : `<span class="goal-title">${this.esc(g.title)}</span>`}${this.badges(g)}</div>
       ${g.nextMilestone ? `<div class="goal-next">Next: ${this.esc(g.nextMilestone)}</div>` : ''}
       ${this.entityChips(g)}
       ${this.actions(g)}
@@ -62,7 +64,9 @@ const Goals = {
     const roots = (d.tree && d.tree.length) ? d.tree : d.goals.map(g => ({ ...g, children: [] }));
     const past = (d.archive || []);
     const byPeriod = past.reduce((m, g) => ((m[g.period || '—'] ||= []).push(g), m), {});
-    const pastHtml = past.length ? `<details class="goals-past"><summary>Past goals (${past.length})</summary>${Object.entries(byPeriod).map(([p, gs]) => `<div class="goals-past-period"><h3>${this.esc(p)}</h3>${gs.map(g => `<div class="goal past ${g.level} ${g.status}"><div class="goal-head"><span class="goal-title">${this.esc(g.title)}</span></div>${this.actions(g)}</div>`).join('')}</div>`).join('')}</details>` : '';
+    const pastHtml = past.length ? `<details class="goals-past"><summary>Past goals (${past.length})</summary>${Object.entries(byPeriod).map(([p, gs]) => `<div class="goals-past-period"><h3>${this.esc(p)}</h3>${gs.map(g => `<div class="goal past ${g.level} ${g.status}"><div class="goal-head">${typeof Three !== 'undefined' && Three.find(g.id)
+        ? `<button type="button" class="goal-title goal-open" data-three="open" data-gid="${this.esc(g.id)}">${this.esc(g.title)}</button>`
+        : `<span class="goal-title">${this.esc(g.title)}</span>`}</div>${this.actions(g)}</div>`).join('')}</div>`).join('')}</details>` : '';
     return `<section class="goals">
       <div class="goals-head"><h2 class="section-title">Goals ${drafts}</h2><div class="goals-actions">${d.proposedCount > 1 ? '<button class="goals-btn tiny" data-goals="confirm-all">Confirm all</button>' : ''}<button class="goals-btn ghost" data-goals="edit">Update goals</button></div></div>
       <div class="goals-tree">${roots.map(g => this.node(g)).join('')}</div>

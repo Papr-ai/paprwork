@@ -3,12 +3,14 @@
    "Not now" keeps Pen's picks as they are (they were already quietly accepted). */
 const ThreeEdit = {
   draft: null, pool: null, editing: '', swapping: '', saving: false,
+  /** Goal id being promoted from outside the three: each card offers "Replace with this". */
+  promote: '',
   esc(s) { return Three.esc(s); },
   reset(focusId) {
     const d = Three.data || { three: [], candidates: [] };
     this.draft = d.three.map((g) => ({ ...g, origTitle: g.title }));
     this.pool = d.candidates.map((g) => ({ ...g, origTitle: g.title }));
-    this.editing = focusId || ''; this.swapping = '';
+    this.editing = focusId || ''; this.swapping = ''; this.promote = '';
   },
   /** "I'll tell you": open a blank slot (a new one when there's room, else slot 1) ready to type. */
   startOwn() {
@@ -49,6 +51,11 @@ const ThreeEdit = {
     const editing = own || this.editing === g.id;
     const body = editing ? this.editor(g, own) : `<h3>${this.esc(g.title)}</h3>${Three.sub(g) ? `<p class="t3done">${this.esc(Three.sub(g))}</p>` : ''}
       <p class="t3why">${Three.SPARK}${this.esc(g.why)}</p>`;
+    const pr = this.promote && this.pool.find((x) => x.id === this.promote);
+    if (pr && !editing) {
+      return `<article class="t3card"><span class="t3num">${i + 1}</span><div class="t3body"><h3>${this.esc(g.title)}</h3>${Three.sub(g) ? `<p class="t3done">${this.esc(Three.sub(g))}</p>` : ''}</div>
+        <div class="t3acts"><button type="button" class="on" data-three="use" data-gid="${this.esc(g.id)}" data-cid="${this.esc(pr.id)}">Replace with this</button></div></article>`;
+    }
     const acts = editing ? '' : `<div class="t3acts"><button type="button" data-three="edit-one" data-gid="${this.esc(g.id)}">Edit</button>
       <button type="button" class="${this.swapping === g.id ? 'on' : ''}" data-three="swap" data-gid="${this.esc(g.id)}">Swap</button></div>`;
     return `<article class="t3card${editing ? ' editing' : ''}"><span class="t3num">${i + 1}</span>
@@ -58,7 +65,8 @@ const ThreeEdit = {
     if (!this.draft) this.reset();
     const first = this.firstRun();
     const blank = !Three.has();
-    const sub = blank ? 'Name up to three outcomes you want to move. Pen builds your brief around them.' : first ? `${this.esc(Three.data?.evidence || 'From your goals')}. Keep them, edit one, or swap it out.` : "Change what's changed. Pen keeps the rest as is.";
+    const pr = this.promote && this.pool.find((x) => x.id === this.promote);
+    const sub = pr ? `Pick the goal "${this.esc(pr.title)}" replaces. Three at most.` : blank ? 'Name up to three outcomes you want to move. Pen builds your brief around them.' : first ? `${this.esc(Three.data?.evidence || 'From your goals')}. Keep them, edit one, or swap it out.` : "Change what's changed. Pen keeps the rest as is.";
     return `<div class="t3wrap">
       <p class="hero-date">${first ? "Pen's picks" : 'Edit Focus'}</p>
       <h2 class="hero-title">${first ? 'Pen picked your three.' : 'Your three.'}</h2><p class="t3sub">${sub}</p>
@@ -91,7 +99,7 @@ const ThreeEdit = {
     else if (act === 'use' && i >= 0) {
       const j = this.pool.findIndex((c) => c.id === b.dataset.cid);
       if (j >= 0) { const [picked] = this.pool.splice(j, 1); this.pool.unshift(this.draft[i]); this.draft[i] = picked; }
-      this.swapping = '';
+      this.swapping = ''; this.promote = '';
     } else if (act === 'save' && i >= 0) {
       const own = this.editing === `own:${gid}`;
       const f = { title: this.val('te-t'), target: this.val('te-m'), due: this.val('te-d') };

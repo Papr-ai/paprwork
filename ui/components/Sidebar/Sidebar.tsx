@@ -9,7 +9,7 @@ import { useMemo, useCallback, useEffect, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
-import { FocusPeek } from "./FocusPeek";
+import { FocusPeek, openFocusGoal } from "./FocusPeek";
 import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
 import { RailItem } from "./RailItem";
@@ -185,7 +185,10 @@ export function Sidebar() {
         peek={
           <FocusPeek
             status={work.state === "working" ? workingLabel : <>{agentName}&apos;s picks</>}
-            onOpen={() => handleNavClick("memory")}
+            onOpen={(goalId) => {
+              handleNavClick("memory");
+              if (goalId) openFocusGoal(goalId);
+            }}
           />
         }
       />

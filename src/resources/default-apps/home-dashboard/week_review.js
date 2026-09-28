@@ -30,7 +30,7 @@ const WeekReview = {
     return `${f(start, { month: 'short', day: 'numeric' })}–${sameMonth ? end.getDate() : f(end, { month: 'short', day: 'numeric' })}`;
   },
   /** Moved = real time went in; touched = a little; none = the goal sat still. */
-  pace(s) { return s.hours7 >= 1 ? ['on', 'Moved'] : s.hours7 > 0 || s.logDays ? ['risk', 'Barely touched'] : ['off', 'No time']; },
+  pace(s) { return Three.pace(s); },
   row(g) {
     const s = g.signals || {};
     const [cls, label] = this.pace(s);

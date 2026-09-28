@@ -54,7 +54,8 @@ export function useFocusState() {
 
 interface FocusPeekProps {
   status: React.ReactNode;
-  onOpen: () => void;
+  /** Open Focus; with a goal id, Home opens that goal's detail view. */
+  onOpen: (goalId?: string) => void;
 }
 
 export function FocusPeek({ status, onOpen }: FocusPeekProps) {
@@ -67,7 +68,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
         <span>{status}</span>
       </header>
       {state?.next ? (
-        <button type="button" className="focus-peek__next" onClick={onOpen} role="menuitem">
+        <button type="button" className="focus-peek__next" onClick={() => onOpen(state.next?.goalId)} role="menuitem">
           <small>Next</small>
           <span>{state.next.title}</span>
         </button>
@@ -76,7 +77,7 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
         <ol className="focus-peek__three">
           {three.map((g, i) => (
             <li key={g.id}>
-              <button type="button" onClick={onOpen} role="menuitem">
+              <button type="button" onClick={() => onOpen(g.id)} role="menuitem">
                 <i>{i + 1}</i>
                 <span className="focus-peek__goal">
                   <b>{g.title}</b>
@@ -96,11 +97,28 @@ export function FocusPeek({ status, onOpen }: FocusPeekProps) {
             <b>{state.alignedPct}%</b> of this week on these
           </span>
         ) : null}
-        <button type="button" onClick={onOpen}>
+        <button type="button" onClick={() => onOpen()}>
           Open Focus
           <RailIcons.arrow />
         </button>
       </footer>
     </div>
   );
+}
+
+/**
+ * Ask the Home mini-app to open one goal. Home lives in a cross-origin iframe, so post to every
+ * iframe (only Home listens for this type) and retry briefly while a freshly-shown Home loads.
+ */
+export function openFocusGoal(goalId: string): void {
+  const nonce = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const post = () =>
+    document.querySelectorAll("iframe").forEach((f) => {
+      try {
+        f.contentWindow?.postMessage({ type: "papr-focus-open", goalId, nonce }, "*");
+      } catch {
+        /* detached frame */
+      }
+    });
+  [0, 300, 900, 2000].forEach((ms) => window.setTimeout(post, ms));
 }
