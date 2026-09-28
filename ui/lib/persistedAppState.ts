@@ -379,12 +379,18 @@ export async function loadPersistedAppStateFromGateway(
   applyPersistedAppStateToTabStore(snapshot, options);
 }
 
+/** Before Focus had its own tab type, it was a "memory" tab titled "Home". */
+export function isLegacyFocusRow(tab: Pick<TabRow, "type" | "title">): boolean {
+  return tab.type === "memory" && tab.title === "Home";
+}
+
 function mapTabRow(tab: TabRow) {
+  const legacyFocus = isLegacyFocusRow(tab);
   return {
     id: tab.id,
-    type: tab.type as TabType,
+    type: (legacyFocus ? "focus" : tab.type) as TabType,
     entityId: tab.entityId,
-    title: tab.title,
+    title: legacyFocus ? "Focus" : tab.title,
     displayMode: tab.displayMode as "standalone" | "parent" | "child",
     parentTabId: tab.parentTabId,
     childTabIds: [] as string[],

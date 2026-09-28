@@ -52,6 +52,12 @@ export const RailIcons = {
       <path d="M14 3.5V8h4.5M9 13h6M9 16.5h4" />
     </Icon>
   ),
+  /** Memory — the same infinity mark Memory uses everywhere, redrawn on the rail grid. */
+  memory: () => (
+    <Icon>
+      <path d="M12 12c-1.7-2.3-2.8-3.2-4.3-3.2a3.2 3.2 0 0 0 0 6.4c1.5 0 2.6-.9 4.3-3.2s2.8-3.2 4.3-3.2a3.2 3.2 0 0 1 0 6.4c-1.5 0-2.6-.9-4.3-3.2z" />
+    </Icon>
+  ),
   start: () => (
     <Icon>
       <path d="M12 3.5c.6 3.9 2.6 5.9 6.5 6.5-3.9.6-5.9 2.6-6.5 6.5-.6-3.9-2.6-5.9-6.5-6.5 3.9-.6 5.9-2.6 6.5-6.5z" />

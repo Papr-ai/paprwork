@@ -26,6 +26,7 @@ import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import { OnboardingView } from "../Onboarding/OnboardingView";
 import { MemoryView } from "../Memory/MemoryView";
+import { FocusView } from "../Focus/FocusView";
 import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
 import { gateway } from "../../src/lib/gateway";
 import { PaneErrorBoundary } from "./PaneErrorBoundary";
@@ -409,6 +410,8 @@ export function ContentArea() {
         return <AgentsView />;
       case "skills":
         return <SkillsView />;
+      case "focus":
+        return <FocusView />;
       case "memory":
         return <MemoryView />;
       case "settings":

@@ -21,13 +21,13 @@ import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { useAgentWork } from "../Agent/agentWork";
 import { shouldShowOnboarding } from "../../utils/onboardingState";
-import { switchToChatTab, switchToHomeTab } from "../../lib/ensureDefaultChatTab";
+import { switchToChatTab, switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
 
 const IS_MAC = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
 const SEARCH_SHORTCUT = IS_MAC ? "⌘K" : "Ctrl K";
 
-type View = "chat" | "apps" | "memory" | "documents";
+type View = "chat" | "apps" | "focus" | "memory" | "documents";
 
 /** Map tab types to sidebar nav views */
 function tabTypeToView(type: TabType | undefined): View {
@@ -35,8 +35,10 @@ function tabTypeToView(type: TabType | undefined): View {
     case "app":
     case "apps":
       return "apps";
-    case "memory":
+    case "focus":
     case "home":
+      return "focus";
+    case "memory":
       return "memory";
     case "document":
     case "documents":
@@ -54,7 +56,7 @@ export function Sidebar() {
   // Derive active view from the current left-pane tab type
   // For split view, activeLeftTab is the parent/left pane
   const activeView = useMemo<View>(() => {
-    if (!activeLeftTab) return "memory";
+    if (!activeLeftTab) return "focus";
     const tab = tabs.find((t) => t.id === activeLeftTab);
     if (!tab) return "chat";
 
@@ -117,8 +119,11 @@ export function Sidebar() {
     let tabId: string | undefined;
     if (view === "apps") {
       tabId = createTab("apps" as TabType, "apps", "Apps");
+    } else if (view === "focus") {
+      switchToFocusTab();
+      return;
     } else if (view === "memory") {
-      tabId = switchToHomeTab();
+      switchToMemoryTab();
       return;
     } else if (view === "documents") {
       tabId = createTab("documents" as TabType, "documents", "Documents");
@@ -179,14 +184,14 @@ export function Sidebar() {
         label={work.state === "working" ? workingLabel : `Focus · ${agentName}`}
         ariaLabel={work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}
         busy={work.state === "working"}
-        active={activeView === "memory"}
-        onClick={() => handleNavClick("memory")}
+        active={activeView === "focus"}
+        onClick={() => handleNavClick("focus")}
         icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} state={work.state} />}
         peek={
           <FocusPeek
             status={work.state === "working" ? workingLabel : <>{agentName}&apos;s picks</>}
             onOpen={(goalId) => {
-              handleNavClick("memory");
+              handleNavClick("focus");
               if (goalId) openFocusGoal(goalId);
             }}
           />
@@ -253,6 +258,14 @@ export function Sidebar() {
       />
 
       <span className="rail__grow" />
+
+      <RailItem
+        label="Memory"
+        ariaLabel={`Memory · what ${agentName} knows`}
+        active={activeView === "memory"}
+        onClick={() => handleNavClick("memory")}
+        icon={<RailIcons.memory />}
+      />
 
       <RailItem
         label="Getting started"

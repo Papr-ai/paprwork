@@ -17,6 +17,7 @@ export type TabType =
   | "agents"
   | "skills"
   | "memory"
+  | "focus"
   | "settings"
   | "platform"
   | "getting-started"

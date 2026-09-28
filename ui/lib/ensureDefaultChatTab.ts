@@ -30,26 +30,35 @@ function createEmptyChatTab(): string {
   return tabId;
 }
 
-/** Switch to an existing Home (memory) tab, or open a new one. */
-export function switchToHomeTab(): string {
-  const { tabs, switchToTab, createTab, updateTabTitle } =
-    useTabStore.getState();
-  const existingHome = [...tabs]
+/** Switch to the standalone tab of `type`, or open one. */
+function switchToSingleton(type: "focus" | "memory", entityId: string, title: string): string {
+  const { tabs, switchToTab, createTab } = useTabStore.getState();
+  const existing = [...tabs]
     .reverse()
-    .find((tab) => tab.type === "memory" && tab.displayMode === "standalone");
-  if (existingHome) {
-    if (existingHome.title === "Memory") {
-      updateTabTitle(existingHome.id, "Home");
-    }
-    switchToTab(existingHome.id);
-    return existingHome.id;
+    .find((tab) => tab.type === type && tab.displayMode === "standalone");
+  if (existing) {
+    switchToTab(existing.id);
+    return existing.id;
   }
-  const tabId = createTab("memory", "memory", "Home");
+  const tabId = createTab(type, entityId, title);
   switchToTab(tabId);
   return tabId;
 }
 
-/** Returns the active tab id after ensuring Home exists when none is selected. */
+/** Focus — the agent's page (today's brief, your three, tasks). Opened from the rail agent. */
+export function switchToFocusTab(): string {
+  return switchToSingleton("focus", "focus", "Focus");
+}
+
+/** Memory — what the agent knows (people, projects, context). Its own rail destination. */
+export function switchToMemoryTab(): string {
+  return switchToSingleton("memory", "wiki", "Memory");
+}
+
+/** @deprecated Home is now Focus. */
+export const switchToHomeTab = switchToFocusTab;
+
+/** Returns the active tab id after ensuring Focus exists when none is selected. */
 export function ensureDefaultHomeTab(): string {
   const { activeTabId, getTab, switchToTab } = useTabStore.getState();
 
@@ -57,7 +66,7 @@ export function ensureDefaultHomeTab(): string {
     return activeTabId;
   }
 
-  return switchToHomeTab();
+  return switchToFocusTab();
 }
 
 /** Switch to an existing chat tab, or open a new empty one. */
