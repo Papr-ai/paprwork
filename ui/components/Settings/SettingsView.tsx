@@ -1164,6 +1164,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.19" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.19</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Apps library</strong>
+                <p>
+                  One Library and Discover experience with categories, clearer
+                  cards, install counts, and safer cloud database setup when
+                  you fork or copy apps.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Navigation and identity</strong>
+                <p>
+                  Wider sidebar rail, per-org colors on your avatar, and a
+                  refreshed home composer with Replay while the agent works.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Browser and agent tools</strong>
+                <p>
+                  Stronger in-app browser tools for previews, plus optional
+                  Jev experiments in Settings for smarter tool results.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.19"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.18" && (
           <div className="about-card">
             <h3>What's New in v2.6.18</h3>
