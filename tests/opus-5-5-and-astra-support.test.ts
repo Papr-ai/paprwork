@@ -42,8 +42,11 @@ import type { AIModel } from "../ui/constants/models";
 import {
   PICKER_DEFAULT_MODEL_IDS,
   PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS,
+  PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS,
   migrateEnabledPickerModelIds,
 } from "../ui/constants/modelPicker";
+
+const SONNET_5_5 = "claude-sonnet-5-5";
 
 const OPUS_5_5 = "claude-opus-5-5";
 const ASTRA = "gpt-6-astra";
@@ -79,6 +82,7 @@ function modelById(id: string): AIModel {
 
 describe("registry", () => {
   it("lists both models in the picker catalogue", () => {
+    expect(modelById(SONNET_5_5).provider).toBe("anthropic");
     expect(modelById(OPUS_5_5).provider).toBe("anthropic");
     expect(modelById(ASTRA).provider).toBe("openai");
   });
@@ -96,11 +100,17 @@ describe("registry", () => {
   });
 
   it("offers both in the default picker and upgrades existing users", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain(SONNET_5_5);
     expect(PICKER_DEFAULT_MODEL_IDS).toContain(OPUS_5_5);
     expect(PICKER_DEFAULT_MODEL_IDS).toContain(ASTRA);
 
     // Without the migration branch a user who never edited their picker keeps
     // the old list forever and never sees either model.
+    const migratedSonnet = migrateEnabledPickerModelIds([
+      ...PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS,
+    ]);
+    expect(migratedSonnet).toContain(SONNET_5_5);
+
     const migrated = migrateEnabledPickerModelIds([
       ...PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS,
     ]);
@@ -120,9 +130,12 @@ describe("registry", () => {
     expect(migrated).toContain(ASTRA);
   });
 
-  it("leaves a hand-picked list alone", () => {
+  it("upgrades Sonnet 5 to 5.5 in a short hand-picked list", () => {
     const chosen = ["claude-sonnet-5", "gpt-5-6-sol"];
-    expect(migrateEnabledPickerModelIds(chosen)).toEqual(chosen);
+    expect(migrateEnabledPickerModelIds(chosen)).toEqual([
+      "claude-sonnet-5-5",
+      "gpt-5-6-sol",
+    ]);
   });
 
   it("accepts both as sub-agent and job models", () => {
@@ -145,6 +158,14 @@ describe("registry", () => {
 
 describe("pricing", () => {
   const MILLION = 1_000_000;
+
+  it("bills Sonnet 5.5 at $2 in / $10 out", () => {
+    const cost = calculateCostWithCache(SONNET_5_5, {
+      promptTokens: MILLION,
+      completionTokens: MILLION,
+    });
+    expect(cost).toBeCloseTo(12, 6);
+  });
 
   it("bills Opus 5.5 at $4 in / $20 out", () => {
     const cost = calculateCostWithCache(OPUS_5_5, {

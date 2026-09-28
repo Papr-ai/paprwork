@@ -96,4 +96,28 @@ describe("cloud install bootstrap UI helpers", () => {
     expect(msg).toContain("gtm-gap-audit");
     expect(msg).toContain("Database bootstrap failed");
   });
+
+  // Regression: 6fb3139c changed the gateway copy to "Couldn't set up the
+  // database…" + code install_db_setup_failed, which silently stopped the
+  // agent chat handoff because only the old string was matched.
+  it("detects install_db_setup_failed by code and by current copy", () => {
+    expect(isCloudInstallBootstrapError("anything", "install_db_setup_failed")).toBe(true);
+    expect(
+      isCloudInstallBootstrapError(
+        'Couldn\'t set up the database for "LinkedIn Outreach". Nothing was installed — please try again.',
+      ),
+    ).toBe(true);
+    expect(isCloudInstallBootstrapError("Install failed (500)", "per_user_db")).toBe(false);
+  });
+
+  it("includes gateway engine detail in the agent message", () => {
+    const msg = buildCloudInstallBootstrapFailureAgentMessage(
+      entry,
+      "fork",
+      'Couldn\'t set up the database for "GTM Gap Audit".',
+      'Migration failed for "linkedin-outreach": no such table: action_log_new',
+    );
+    expect(msg).toContain("no such table: action_log_new");
+    expect(msg).toContain("rolled back");
+  });
 });

@@ -58,7 +58,22 @@ export interface CloudInstallResponse {
     missingRequiredDbIds?: string[];
   };
   error?: string;
+  /** Machine-readable failure code from the gateway (e.g. install_db_setup_failed). */
+  code?: string;
+  /** Raw engine/SQL detail for the agent — never shown to the user as-is. */
+  detail?: string;
 }
+
+/** Failed install result — `code`/`detail` let callers route to agent setup. */
+export interface CloudInstallFailure {
+  ok: false;
+  error: string;
+  code?: string;
+  detail?: string;
+}
+
+/** Gateway code for "database setup failed twice; install rolled back". */
+export const INSTALL_DB_SETUP_FAILED_CODE = "install_db_setup_failed";
 
 export function userProvidedRequirements(
   reqs: RequirementItem[] | RequiredKeySpec[] | undefined,
@@ -79,25 +94,42 @@ export function isCloudInstallTimeoutError(error: string): boolean {
   return error === CLOUD_INSTALL_TIMEOUT_MESSAGE;
 }
 
-/** Legacy gateway responses that failed install before returning agentSetupMessage. */
-export function isCloudInstallBootstrapError(message: string): boolean {
-  return message.includes("Database bootstrap failed:");
+/**
+ * Database setup failure that should hand off to an agent chat.
+ * Matches the current gateway code (install_db_setup_failed) and the legacy
+ * message strings, so the handoff survives future copy changes.
+ */
+export function isCloudInstallBootstrapError(
+  message: string,
+  code?: string,
+): boolean {
+  if (code === INSTALL_DB_SETUP_FAILED_CODE) {
+    return true;
+  }
+  return (
+    message.includes("Database bootstrap failed:") ||
+    message.includes("Couldn't set up the database for")
+  );
 }
 
 export function buildCloudInstallBootstrapFailureAgentMessage(
   entry: CommunityCatalogEntry,
   mode: CloudInstallMode,
   errorMessage: string,
+  detail?: string,
 ): string {
   return [
-    `Install of "${entry.name}" (namespace: ${entry.namespaceId}, slug: ${entry.slug}, mode: ${mode}) hit a database migration error.`,
+    `Install of "${entry.name}" (namespace: ${entry.namespaceId}, slug: ${entry.slug}, mode: ${mode}) hit a database migration error and was rolled back — nothing was installed.`,
     "",
-    "The user should not need to read SQLite errors — diagnose and fix the migration SQL, then verify bootstrap.",
+    "The user should not need to read SQLite errors — diagnose the root cause and explain it plainly.",
     "",
-    "Technical detail:",
+    "What the user saw:",
     errorMessage,
     "",
-    "Check data/databases/*/migrations/ for the failing file. If the app was rolled back, guide the user to Personalize again after the fix.",
+    "Engine detail (per linked database):",
+    detail?.trim() || "(not provided by the gateway — replay the publisher's migrations on an empty DB to reproduce)",
+    "",
+    "The failing migrations belong to the PUBLISHER's app, so the fix is usually on the publisher side (new baseline migration, a schema snapshot at publish, or dropping a stale linked DB), then re-publish and retry the install.",
   ].join("\n");
 }
 
@@ -126,7 +158,7 @@ export async function installCloudCatalogApp(
   entry: CommunityCatalogEntry,
   selection: CloudCatalogInstallSelection,
   options?: { catalogScope?: CommunityCatalogScope },
-): Promise<{ ok: true; data: CloudInstallResponse } | { ok: false; error: string }> {
+): Promise<{ ok: true; data: CloudInstallResponse } | CloudInstallFailure> {
   const { mode, installDbPolicy } = selection;
   if (!entry.namespaceId || !entry.slug) {
     return { ok: false, error: "This cloud app is missing namespace or slug metadata" };
@@ -156,7 +188,12 @@ export async function installCloudCatalogApp(
 
     const body = (await res.json()) as CloudInstallResponse;
     if (!res.ok) {
-      return { ok: false, error: body.error ?? `Install failed (${res.status})` };
+      return {
+        ok: false,
+        error: body.error ?? `Install failed (${res.status})`,
+        ...(body.code ? { code: body.code } : {}),
+        ...(body.detail ? { detail: body.detail } : {}),
+      };
     }
 
     return { ok: true, data: body };

@@ -3304,7 +3304,13 @@ export class AppService {
   async buildApp(appId: string): Promise<MiniAppBuildResult> {
     const inFlight = this.buildInFlight.get(appId);
     if (inFlight) {
-      return inFlight;
+      // Parallel agent writes: a build that started before this caller's file
+      // landed does not include it. Returning that promise made validate report
+      // "source newer than dist" on the second file (~50 false BUILD FAILED per
+      // month). Wait for the running build, then run one fresh build.
+      await inFlight.catch(() => undefined);
+      const again = this.buildInFlight.get(appId);
+      if (again) return again;
     }
 
     const run = (async (): Promise<MiniAppBuildResult> => {
@@ -4702,6 +4708,11 @@ export class AppService {
     config: AppDataSourcesFile,
     previousSources?: AppDataSource[],
   ): Promise<void> {
+    const { assertDataSourcesEligibleForRegistry } = await import(
+      "./registryDatabaseEligibility.js"
+    );
+    assertDataSourcesEligibleForRegistry(config.sources);
+
     await fs.writeFile(
       this.getDataSourcesPath(appId),
       serializeDataSourcesFile(config),
@@ -4819,6 +4830,16 @@ export class AppService {
           `[AppService] Promoted job database → ${dbPath} (${promoted.dbId})`,
         );
       }
+    }
+
+    const { isJobScratchDatabasePath } = await import(
+      "./jobs/jobScratchDatabasePath.js"
+    );
+    if (isJobScratchDatabasePath(dbPath)) {
+      throw new Error(
+        "Cannot link job scratch to an app for Turso sync. " +
+          "Use create_database → attach_database({ dbId }) and set writeDbIds on the job.",
+      );
     }
 
     const { initializeDatabaseRegistry } = await import(

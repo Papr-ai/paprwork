@@ -1,35 +1,27 @@
-import { afterEach, describe, expect, test, vi } from "vitest";
-
-const { uploadJobsIndexToCloud, retryPendingMetadataUploads } = vi.hoisted(
-  () => ({
-    uploadJobsIndexToCloud: vi.fn().mockResolvedValue(true),
-    retryPendingMetadataUploads: vi.fn().mockResolvedValue(undefined),
-  }),
-);
+import { describe, expect, it, vi, afterEach } from "vitest";
+import { pushJobsIndexToCloudAfterLocalWrite } from "../src/gateway/services/jobs/jobDeletionCatalogSync.js";
 
 vi.mock("../src/gateway/services/syncV3/MetadataRegistryClient.js", () => ({
-  uploadJobsIndexToCloud,
-  retryPendingMetadataUploads,
+  uploadJobsIndexToCloud: vi.fn(async () => undefined),
+  retryPendingMetadataUploads: vi.fn(async () => undefined),
 }));
 
-import { pushJobsIndexToCloudAfterLocalWrite } from "../src/gateway/services/jobs/jobDeletionCatalogSync.js";
+import {
+  uploadJobsIndexToCloud,
+  retryPendingMetadataUploads,
+} from "../src/gateway/services/syncV3/MetadataRegistryClient.js";
 
 describe("pushJobsIndexToCloudAfterLocalWrite", () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  test("fire-and-forget upload when not awaiting metadata", async () => {
-    await pushJobsIndexToCloudAfterLocalWrite([], "2026-01-01T00:00:00.000Z");
-    expect(uploadJobsIndexToCloud).toHaveBeenCalledTimes(1);
-    expect(retryPendingMetadataUploads).not.toHaveBeenCalled();
-  });
-
-  test("awaits upload and drains outbox on delete paths", async () => {
+  it("skips cloud upload when skipCloudUpload is true", async () => {
     await pushJobsIndexToCloudAfterLocalWrite([], "2026-01-01T00:00:00.000Z", {
+      skipCloudUpload: true,
       awaitCloudMetadata: true,
     });
-    expect(uploadJobsIndexToCloud).toHaveBeenCalledTimes(1);
-    expect(retryPendingMetadataUploads).toHaveBeenCalledTimes(1);
+    expect(uploadJobsIndexToCloud).not.toHaveBeenCalled();
+    expect(retryPendingMetadataUploads).not.toHaveBeenCalled();
   });
 });

@@ -4,9 +4,13 @@ import * as path from "path";
 import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 import {
   resolveAppDeleteScope,
+  resolveDatabaseDeleteScope,
+  resolveJobDeleteScope,
   sanitizeDeleteAppOptionsForScope,
   shouldBlockTursoDeleteForSharedPrimary,
+  TEAM_SHARED_REGISTRY_DELETE_MESSAGE,
 } from "../src/gateway/services/appDeleteScope.js";
+import type { JobGraph } from "../src/gateway/services/jobs/types.js";
 import { invalidatePaprUserIdCache } from "../src/gateway/utils/paprUserId.js";
 import { CLOUD_LINEAGE_FILENAME } from "../src/gateway/services/CloudAppLineageService.js";
 import {
@@ -130,5 +134,75 @@ describe("appDeleteScope", () => {
 
     const scope = await resolveAppDeleteScope(appId, appsRoot(), false);
     expect(scope.localUninstallOnly).toBe(false);
+  });
+
+  it("job linked only to collaborator track app is local-only delete", async () => {
+    setUserId("user-collaborator");
+    writeLineage("track", "user-publisher", "shared");
+
+    const graph: JobGraph = {
+      version: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      folders: {},
+      appLinks: {
+        [appId]: { name: "Team", jobIds: ["job-linked"] },
+      },
+      edges: [],
+    };
+
+    const scope = await resolveJobDeleteScope("job-linked", {
+      graph,
+      jobAppIds: [appId],
+      appsRootDir: appsRoot(),
+    });
+    expect(scope.localOnly).toBe(true);
+    expect(scope.blockDelete).toBe(false);
+    expect(scope.linkedAppIds).toContain(appId);
+  });
+
+  it("job linked to publisher-owned app is not local-only", async () => {
+    setUserId("user-publisher");
+    writeLineage("track", "user-publisher", "shared");
+
+    const graph: JobGraph = {
+      version: 1,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      folders: {},
+      appLinks: {
+        [appId]: { name: "Team", jobIds: ["job-pub"] },
+      },
+      edges: [],
+    };
+
+    const scope = await resolveJobDeleteScope("job-pub", {
+      graph,
+      appsRootDir: appsRoot(),
+    });
+    expect(scope.localOnly).toBe(false);
+  });
+
+  it("database delete blocked for shared-primary non-publisher", async () => {
+    setUserId("user-collaborator");
+    registerSharedPrimaryTursoEntries(
+      [
+        {
+          tursoShortName: "d-block01",
+          namespaceId: "ns-pub",
+          slug: "team-dashboard",
+          publisherUserId: "user-publisher",
+          localAppId: appId,
+        },
+      ],
+      workspace.paprHome,
+    );
+
+    const scope = await resolveDatabaseDeleteScope(
+      "d-block01",
+      [],
+      appsRoot(),
+      workspace.paprHome,
+    );
+    expect(scope.blockDelete).toBe(true);
+    expect(scope.blockReason).toBe(TEAM_SHARED_REGISTRY_DELETE_MESSAGE);
   });
 });

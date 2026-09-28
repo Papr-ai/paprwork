@@ -2,7 +2,14 @@
  * CommunityAppsView - Browse Papr Cloud + open-source community apps
  */
 
-import { useState, useEffect, useCallback, useMemo, type ReactNode } from "react";
+import {
+  useState,
+  useEffect,
+  useCallback,
+  useMemo,
+  type ReactElement,
+  type ReactNode,
+} from "react";
 import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useChat } from "../../hooks/useChat";
@@ -563,9 +570,27 @@ export function CommunityAppsView({
         installWarnings?: string[];
         agentSetupMessage?: string;
         error?: string;
+        code?: string;
+        detail?: string;
       };
       if (!res.ok) {
-        throw new Error(body.error ?? `Install failed (${res.status})`);
+        const failMessage = body.error ?? `Install failed (${res.status})`;
+        if (isCloudInstallBootstrapError(failMessage, body.code)) {
+          setInstallError(null);
+          setInstallToast(
+            `Couldn't set up "${entry.name}" — opening chat to diagnose…`,
+          );
+          void openAgentDatabaseSetup(
+            buildCloudInstallBootstrapFailureAgentMessage(
+              entry,
+              mode,
+              failMessage,
+              body.detail,
+            ),
+          );
+          return;
+        }
+        throw new Error(failMessage);
       }
 
       const title = body.app?.title ?? entry.name;
@@ -1113,8 +1138,10 @@ export function CommunityAppsView({
           onClose={() => setInstallModeEntry(null)}
           onSelectMode={(selection) => {
             const target = installModeEntry;
-            setInstallModeEntry(null);
-            void installCloudApp(target, selection);
+            if (!target) return;
+            void installCloudApp(target, selection).finally(() => {
+              setInstallModeEntry(null);
+            });
           }}
         />
       ) : null}
@@ -1191,6 +1218,24 @@ export function CommunityAppsView({
       ) : null}
     </div>
   );
+}
+
+function CommunityInstallButtonLabel({
+  installing,
+  idleLabel,
+}: {
+  installing: boolean;
+  idleLabel: string;
+}): ReactElement {
+  if (installing) {
+    return (
+      <>
+        <span className="community-card__import-spinner" aria-hidden="true" />
+        Installing…
+      </>
+    );
+  }
+  return <>{idleLabel}</>;
 }
 
 interface CommunityAppCardProps {
@@ -1453,11 +1498,15 @@ function CommunityAppCard({
               {showInstall ? (
                 <button
                   type="button"
-                  className={`community-card__action-btn${showWebOpen ? "" : " community-card__action-btn--primary"}`}
+                  className={`community-card__action-btn${showWebOpen ? "" : " community-card__action-btn--primary"}${isInstalling ? " community-card__action-btn--installing" : ""}`}
                   onClick={onCloudInstall}
                   disabled={isInstalling}
+                  aria-busy={isInstalling}
                 >
-                  {isInstalling ? "Installing…" : "Personalize"}
+                  <CommunityInstallButtonLabel
+                    installing={isInstalling}
+                    idleLabel="Personalize"
+                  />
                 </button>
               ) : null}
             </div>

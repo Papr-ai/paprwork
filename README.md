@@ -36,11 +36,11 @@
 **Download the packaged app - no prerequisites needed!**
 
 1. Download the latest release from [GitHub Releases](https://github.com/Papr-ai/paprwork/releases)
-   - **macOS:** Download `.pkg` (recommended) or `.dmg`
+   - **macOS:** Download **`.pkg` (recommended — installs to Applications and opens the app)** or `.zip` (manual: unzip → drag to Applications)
    - **Windows:** Download `.exe` installer
    - **Linux:** Download `.AppImage` or `.deb`
 
-2. **Install and run** - that's it! Everything is included.
+2. **Install and run** — the Mac **PKG** and Windows installer can launch the app when setup finishes. Everything is included.
 
 3. **Optional:** Sign in with Papr for automatic API key provisioning
 

@@ -11,6 +11,19 @@ import { getPaprUserId } from "../utils/paprUserId.js";
 import { CLOUD_LINEAGE_FILENAME } from "./CloudAppLineageService.js";
 import { lookupSharedPrimaryTursoEntry } from "./sharedPrimaryTursoStore.js";
 import { promises as fs } from "fs";
+import type { JobGraph } from "./jobs/types.js";
+
+export const TEAM_SHARED_REGISTRY_DELETE_MESSAGE =
+  "This database is the publisher's shared team copy. Unlink it from your apps or remove your local app install instead of tombstoning the registry entry.";
+
+export interface ResourceDeleteLocalScope {
+  /** Remove local index/registry only — no cloud metadata or Turso side effects. */
+  localOnly: boolean;
+  linkedAppIds: string[];
+  /** Non-publishers must not delete shared-primary registry / Turso rows. */
+  blockDelete: boolean;
+  blockReason?: string;
+}
 
 export interface AppDeleteScope {
   /** Remove this machine's copy only — no cloud or shared Turso side effects. */
@@ -152,4 +165,82 @@ export function sanitizeDeleteAppOptionsForScope(
     deleteRegistryDbIds: [],
     deleteRegistryTurso: false,
   };
+}
+
+async function resolveLocalOnlyFromLinkedApps(
+  appIds: string[],
+  appsRootDir: string,
+): Promise<Pick<ResourceDeleteLocalScope, "localOnly" | "linkedAppIds">> {
+  const linkedAppIds = [...new Set(appIds.map((id) => id.trim()).filter(Boolean))];
+  if (linkedAppIds.length === 0) {
+    return { localOnly: false, linkedAppIds: [] };
+  }
+
+  let hasCollaboratorScope = false;
+  let hasPublisherFullScope = false;
+  for (const linkedAppId of linkedAppIds) {
+    const scope = await resolveAppDeleteScope(linkedAppId, appsRootDir, false);
+    if (scope.localUninstallOnly) {
+      hasCollaboratorScope = true;
+    } else {
+      hasPublisherFullScope = true;
+    }
+  }
+
+  return {
+    localOnly: hasCollaboratorScope && !hasPublisherFullScope,
+    linkedAppIds,
+  };
+}
+
+/** Standalone job delete — mirror app uninstall scope for linked track/shared installs. */
+export async function resolveJobDeleteScope(
+  jobId: string,
+  options: {
+    graph: JobGraph | null;
+    jobAppIds?: string[] | null;
+    appsRootDir: string;
+  },
+): Promise<ResourceDeleteLocalScope> {
+  const trimmedJobId = jobId.trim();
+  const appIdSet = new Set<string>();
+  for (const appId of options.jobAppIds ?? []) {
+    const trimmed = appId.trim();
+    if (trimmed) {
+      appIdSet.add(trimmed);
+    }
+  }
+  if (options.graph?.appLinks) {
+    for (const [appId, link] of Object.entries(options.graph.appLinks)) {
+      if (link.jobIds.includes(trimmedJobId)) {
+        appIdSet.add(appId);
+      }
+    }
+  }
+
+  const base = await resolveLocalOnlyFromLinkedApps([...appIdSet], options.appsRootDir);
+  return { ...base, blockDelete: false };
+}
+
+/** Standalone registry database delete — block shared-primary for non-publishers. */
+export async function resolveDatabaseDeleteScope(
+  tursoShortName: string,
+  referencingAppIds: string[],
+  appsRootDir: string,
+  paprDir?: string,
+): Promise<ResourceDeleteLocalScope> {
+  if (shouldBlockTursoDeleteForSharedPrimary(tursoShortName, paprDir)) {
+    return {
+      localOnly: true,
+      linkedAppIds: referencingAppIds,
+      blockDelete: true,
+      blockReason: TEAM_SHARED_REGISTRY_DELETE_MESSAGE,
+    };
+  }
+
+  const base = await resolveLocalOnlyFromLinkedApps(
+    referencingAppIds,
+    appsRootDir,
+  );
+  return { ...base, blockDelete: false };
 }

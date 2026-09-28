@@ -140,6 +140,20 @@ export function useCloudCatalogInstallFlow() {
             );
             return;
           }
+          if (isCloudInstallBootstrapError(result.error, result.code)) {
+            setInstallToast(
+              `Couldn't set up "${entry.name}" — opening chat to diagnose…`,
+            );
+            void openAgentDatabaseSetup(
+              buildCloudInstallBootstrapFailureAgentMessage(
+                entry,
+                mode,
+                result.error,
+                result.detail,
+              ),
+            );
+            return;
+          }
           throw new Error(result.error);
         }
 

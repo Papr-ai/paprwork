@@ -11,6 +11,8 @@ import {
 export interface PushJobsIndexToCloudOptions {
   /** When true, await upload + drain metadata outbox (delete paths). */
   awaitCloudMetadata?: boolean;
+  /** Collaborator local-only delete — do not upload jobs index to cloud metadata. */
+  skipCloudUpload?: boolean;
 }
 
 export async function pushJobsIndexToCloudAfterLocalWrite(
@@ -18,6 +20,9 @@ export async function pushJobsIndexToCloudAfterLocalWrite(
   updatedAt: string,
   options?: PushJobsIndexToCloudOptions,
 ): Promise<void> {
+  if (options?.skipCloudUpload === true) {
+    return;
+  }
   if (!options?.awaitCloudMetadata) {
     void uploadJobsIndexToCloud(jobs, updatedAt).catch((err: Error) => {
       console.warn(

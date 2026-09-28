@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-28T04:56:12.085Z",
+  "generatedAt": "2026-09-28T20:21:32.368Z",
   "entryCount": 200,
   "entries": [
     {
@@ -72,7 +72,7 @@
     {
       "id": "agent-tool-attach_database",
       "title": "attach_database",
-      "summary": "Link a registry database to a mini-app. Apps may attach many DBs. Mini-app code names the DB on every call: sourceId = alias (e.g. 'billing'). Reads: POST /api/db/query. Writes: POST /api/db/write. Both endpoints accept sourceId.",
+      "summary": "Link a registry database to a mini-app (data/databases/{slug}/data.db only). Never attach Jobs/{jobId}/data/data.db — job scratch is local infra; use writeDbIds on jobs. Mini-app code names the DB on every call: sourceId = alias (e.g. 'billing'). Reads: POST /api/db/query. Writes: POST /api/db/write. Both endpoints accept sourceId.",
       "surfaces": [
         "agent-tool"
       ],
@@ -616,7 +616,7 @@
     {
       "id": "agent-tool-delete_database",
       "title": "delete_database",
-      "summary": "Tombstone a registry database when no apps reference it. Optionally delete Turso replica when deleteTurso=true. NEVER use to fix schema drift or cutover — that destroys cloud row data. For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing Turso instance).",
+      "summary": "Tombstone a registry database when no apps reference it. On team track/shared installs you are a collaborator on, this removes the local registry row only (no cloud upload, no Turso delete). Publisher shared-primary databases cannot be deleted by collaborators — unlink from apps or remove your local app install. Optionally delete Turso replica when deleteTurso=true (publisher-only for shared resources; default false). NEVER use to fix schema drift or cutover — that destroys cloud row data. For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing T...",
       "surfaces": [
         "agent-tool"
       ],
@@ -635,7 +635,7 @@
     {
       "id": "agent-tool-delete_job",
       "title": "delete_job",
-      "summary": "Delete a job by id. Stops it first if currently running.\nBy default, keeps the job's files on disk (scripts, logs, database) but removes it from the job index.\nSet deleteFiles: true to also wipe the directory — use this for jobs created by mistake with no useful data.\nDoes NOT affect other jobs that depend on this job; update or recreate those separately.",
+      "summary": "Delete a job by id. Stops it first if currently running.\nBy default, keeps the job's files on disk (scripts, logs, database) but removes it from the job index.\nSet deleteFiles: true to also wipe the directory — use this for jobs created by mistake with no useful data.\nJobs linked only to team track/shared apps you collaborate on (not the publisher) are removed from this device's jobs index only — no cloud catalog upload or Turso delete.\ndeleteTursoDb defaults false; publisher-only for shared cloud resources.\nDoes NOT affect other jobs that depend on this job; update or recreate those separa...",
       "surfaces": [
         "agent-tool"
       ],

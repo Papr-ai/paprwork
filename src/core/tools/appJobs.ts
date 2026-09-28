@@ -670,6 +670,7 @@ const createJobSchemaCore = z
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
       "claude-sonnet-5",
+      "claude-sonnet-5-5",
       "claude-opus-4-6",
       "claude-opus-5",
       "claude-opus-5-5",
@@ -720,7 +721,7 @@ const createJobSchemaCore = z
     ])
     .optional()
     .describe(
-      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5', 'gpt-5-6-sol', 'gemini-3.8-flash', 'qwen3.5:latest'",
+      "Model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5-5', 'gpt-5-6-sol', 'gemini-3.8-flash', 'qwen3.5:latest'",
     ),
   recipe: recipeConfigSchema.optional().describe(
     "Execution recipe configuration. When enabled, an agent evaluates each run against the recipe's quality rubric. " +
@@ -2002,6 +2003,7 @@ const updateJobSchema = z.object({
       "claude-haiku-4-5",
       "claude-sonnet-4-6",
       "claude-sonnet-5",
+      "claude-sonnet-5-5",
       "claude-opus-4-6",
       "claude-opus-5",
       "claude-opus-5-5",
@@ -2052,7 +2054,7 @@ const updateJobSchema = z.object({
     ])
     .optional()
     .describe(
-      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5', 'gpt-5.5', 'gemini-3.8-flash', 'qwen3.5:latest'",
+      "Update model ID for agent/subagent jobs. Must match exact model ID. Recommended: 'claude-sonnet-5-5', 'gpt-5.6-sol', 'gemini-3.8-flash', 'qwen3.5:latest'",
     ),
 });
 
@@ -2063,6 +2065,13 @@ const deleteJobSchema = z.object({
     .optional()
     .describe(
       "Also delete the job's directory (scripts, logs, database). Default: false — keeps files on disk but removes the job from the index.",
+    ),
+  deleteTursoDb: z
+    .boolean()
+    .optional()
+    .describe(
+      "Delete legacy per-job Turso cloud database. Default false. " +
+        "Ignored for team track/shared collaborator installs (local jobs index only).",
     ),
 });
 
@@ -2854,6 +2863,8 @@ export const deleteJobTool = createTool({
   description: `Delete a job by id. Stops it first if currently running.
 By default, keeps the job's files on disk (scripts, logs, database) but removes it from the job index.
 Set deleteFiles: true to also wipe the directory — use this for jobs created by mistake with no useful data.
+Jobs linked only to team track/shared apps you collaborate on (not the publisher) are removed from this device's jobs index only — no cloud catalog upload or Turso delete.
+deleteTursoDb defaults false; publisher-only for shared cloud resources.
 Does NOT affect other jobs that depend on this job; update or recreate those separately.`,
   inputSchema: deleteJobSchema,
   execute: async (input) => {
@@ -2865,12 +2876,15 @@ Does NOT affect other jobs that depend on this job; update or recreate those sep
     const result = await jobsService.deleteJob(
       args.jobId,
       args.deleteFiles ?? false,
+      args.deleteTursoDb ?? false,
     );
     return {
       success: true,
       data: {
         deleted: result,
         filesRemoved: args.deleteFiles ?? false,
+        localOnly: result.localOnly,
+        cloudArtifactsSkipped: result.cloudArtifactsSkipped,
       },
     };
   },

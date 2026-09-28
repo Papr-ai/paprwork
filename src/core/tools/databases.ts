@@ -40,7 +40,11 @@ const deleteDatabaseSchema = z.object({
   deleteTurso: z
     .boolean()
     .optional()
-    .describe("When true and no app references remain, delete Turso replica"),
+    .describe(
+      "When true and no app references remain, delete Turso replica. Default false. " +
+        "Never applies on team track/shared installs (local tombstone only). " +
+        "Publisher-only for shared-primary team databases.",
+    ),
 });
 
 function slugifyName(name: string): string {
@@ -75,6 +79,11 @@ export const createDatabaseTool = createTool({
     const localPath =
       args.localPath ??
       path.join(getPaprDataDir(), "databases", slug, "data.db");
+
+    const { assertEligibleRegistryLocalPath } = await import(
+      "../../gateway/services/registryDatabaseEligibility.js"
+    );
+    assertEligibleRegistryLocalPath(localPath);
 
     await fs.promises.mkdir(path.dirname(localPath), { recursive: true });
 
@@ -111,7 +120,8 @@ export const createDatabaseTool = createTool({
 export const attachDatabaseTool = createTool({
   id: "attach_database",
   description:
-    "Link a registry database to a mini-app. Apps may attach many DBs. " +
+    "Link a registry database to a mini-app (data/databases/{slug}/data.db only). " +
+    "Never attach Jobs/{jobId}/data/data.db — job scratch is local infra; use writeDbIds on jobs. " +
     "Mini-app code names the DB on every call: sourceId = alias (e.g. 'billing'). " +
     "Reads: POST /api/db/query. Writes: POST /api/db/write. Both endpoints accept sourceId.",
   inputSchema: attachDatabaseSchema,
@@ -130,6 +140,11 @@ export const attachDatabaseTool = createTool({
     if (!record) {
       throw new Error(`Database not found in registry: ${args.dbId}`);
     }
+
+    const { assertEligibleRegistryLocalPath } = await import(
+      "../../gateway/services/registryDatabaseEligibility.js"
+    );
+    assertEligibleRegistryLocalPath(record.localPath);
 
     const appService = getAppService();
     await appService.initialize();
@@ -171,7 +186,9 @@ export const deleteDatabaseTool = createTool({
   id: "delete_database",
   description:
     "Tombstone a registry database when no apps reference it. " +
-    "Optionally delete Turso replica when deleteTurso=true. " +
+    "On team track/shared installs you are a collaborator on, this removes the local registry row only (no cloud upload, no Turso delete). " +
+    "Publisher shared-primary databases cannot be deleted by collaborators — unlink from apps or remove your local app install. " +
+    "Optionally delete Turso replica when deleteTurso=true (publisher-only for shared resources; default false). " +
     "NEVER use to fix schema drift or cutover — that destroys cloud row data. " +
     "For legacy→replica migration use `npm run cutover:replica -- --db-id=<dbId>` (preserves the existing Turso instance).",
   inputSchema: deleteDatabaseSchema,
@@ -196,10 +213,31 @@ export const deleteDatabaseTool = createTool({
       );
     }
 
-    await registry.tombstone(args.dbId);
+    const { getPaprRoot, getPaprAppsRoot } = await import("../utils/paprRoot.js");
+    const { resolveDatabaseDeleteScope } = await import(
+      "../../gateway/services/appDeleteScope.js"
+    );
+    const referencingAppIds = await registry.listReferencingAppIds(
+      args.dbId,
+      record.localPath,
+    );
+    const deleteScope = await resolveDatabaseDeleteScope(
+      record.tursoShortName,
+      referencingAppIds,
+      getPaprAppsRoot(),
+      getPaprRoot(),
+    );
+    if (deleteScope.blockDelete) {
+      throw new Error(deleteScope.blockReason ?? "Delete not allowed for this database.");
+    }
+
+    await registry.tombstone(args.dbId, {
+      skipCloudUpload: deleteScope.localOnly,
+    });
 
     let tursoDeleted = false;
-    if (args.deleteTurso) {
+    const deleteTurso = deleteScope.localOnly ? false : args.deleteTurso === true;
+    if (deleteTurso) {
       const { getTursoSyncBridge } = await import(
         "../../gateway/services/TursoSyncBridge.js"
       );
@@ -217,6 +255,7 @@ export const deleteDatabaseTool = createTool({
         dbId: args.dbId,
         tombstoned: true,
         tursoDeleted,
+        localOnly: deleteScope.localOnly || undefined,
       },
     };
   },

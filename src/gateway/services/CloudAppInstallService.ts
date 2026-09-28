@@ -386,7 +386,14 @@ export class CloudAppInstallService {
               `Couldn't set up the database for "${app.title}". Nothing was installed — ` +
                 "please try again. If it keeps failing, the publisher may need to publish a fix.",
             ),
-            { code: "install_db_setup_failed", status: 422 },
+            {
+              code: "install_db_setup_failed",
+              status: 422,
+              // Raw engine errors for the agent setup chat — the UI never shows
+              // these to the user directly, but without them the agent has
+              // nothing to diagnose (gateway stdout is not persisted).
+              detail: bootstrap.errors.join("\n").slice(0, 4000),
+            },
           );
         }
       }

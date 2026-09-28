@@ -50,7 +50,13 @@ The workflow now:
 - **Fails the job** if yml URLs don't match zip artifacts on disk
 - Creates/updates the GitHub release with all binaries + metadata in one step
 
-### 4. Optional: edit release notes after CI
+### 4. Release notes (automatic)
+
+The release job prepends [`.github/RELEASE_DOWNLOAD_GUIDE.md`](../.github/RELEASE_DOWNLOAD_GUIDE.md) (PKG vs ZIP, etc.) to GitHub’s auto-generated changelog.
+
+To tweak download copy for **future** releases, edit that file on `master` before tagging.
+
+Optional one-off edit after CI:
 
 ```bash
 gh release edit v2.x.y --notes-file release-notes.md

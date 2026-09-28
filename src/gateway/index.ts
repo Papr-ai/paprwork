@@ -2646,7 +2646,15 @@ async function startGateway(): Promise<void> {
             : code === "install_db_setup_failed"
               ? 422
               : 500;
-        res.status(status).json({ error: message, ...(code ? { code } : {}) });
+        const detail =
+          err instanceof Error && "detail" in err
+            ? String((err as { detail?: string }).detail ?? "")
+            : "";
+        res.status(status).json({
+          error: message,
+          ...(code ? { code } : {}),
+          ...(detail ? { detail } : {}),
+        });
       }
     });
 

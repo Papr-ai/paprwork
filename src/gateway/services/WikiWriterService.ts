@@ -31,7 +31,7 @@ export const WIKI_WRITER_PROMPT_VERSION = 11;
 
 export const WIKI_WRITER_JOB_DEFAULTS = {
   provider: "anthropic" as const,
-  model: "claude-sonnet-5",
+  model: "claude-sonnet-5-5",
   maxTurns: 80,
   memoryPolicy: "none" as const,
   schedule: {

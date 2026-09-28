@@ -15,6 +15,7 @@ export const GLOBAL_INITIAL_DEFAULT_MODEL_ID = "gemini-3.8-flash";
 
 /** Curated order when the user has cloud access (OAuth, API key, or Papr+BYOK). */
 export const CURATED_MODEL_PRIORITY: readonly string[] = [
+  "claude-sonnet-5-5",
   "claude-sonnet-5",
   "gpt-5-6-sol",
   GLOBAL_INITIAL_DEFAULT_MODEL_ID,
@@ -58,7 +59,7 @@ export function resolveAuthAwareDefaultModelIds(
  */
 export function resolveGlobalDefaultForAuth(status: AuthStatus): string {
   if (status.anthropic.oauth || status.anthropic.apiKey) {
-    return "claude-sonnet-5";
+    return "claude-sonnet-5-5";
   }
   if (status.openai.oauth || status.openai.apiKey) {
     return "gpt-5-6-sol";

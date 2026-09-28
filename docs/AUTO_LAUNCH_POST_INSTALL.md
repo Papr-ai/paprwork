@@ -42,11 +42,12 @@ Created post-install script: `build/pkg-scripts/postinstall`
 
 ```bash
 #!/bin/bash
-# Opens the app after PKG installation completes
-sleep 1
-open -a "Papr Work" || true
+# Opens the app after PKG installation completes (as the console user — not root)
+launchctl asuser "$CONSOLE_UID" open "/Applications/Papr Work.app"
 exit 0
 ```
+
+**Note:** The **ZIP** download (unzip → drag to Applications) has **no** post-install hook — only the **PKG** auto-opens. Release notes should steer Mac users to the `.pkg` when possible.
 
 **Behavior:**
 - After PKG installation completes, the app automatically opens

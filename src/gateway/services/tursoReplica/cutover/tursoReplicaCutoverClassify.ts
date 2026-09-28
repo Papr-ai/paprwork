@@ -3,6 +3,7 @@
  */
 
 import type { DatabaseRecord } from "../../DatabaseRegistryService.js";
+import { isEligibleRegistryLocalPath } from "../../registryDatabaseEligibility.js";
 import { isCloudSyncEnabled } from "../../../utils/cloudSyncEnabled.js";
 import {
   isTursoReplicaSyncFeatureEnabled,
@@ -26,6 +27,15 @@ function bucketReason(
 export async function classifyRecordForReplicaCutover(
   record: DatabaseRecord,
 ): Promise<CutoverClassification> {
+  if (!isEligibleRegistryLocalPath(record.localPath)) {
+    return {
+      dbId: record.dbId,
+      bucket: "skip",
+      reason: bucketReason("skip", "Job scratch path is not eligible for replica cutover"),
+      snapshot: await snapshotLegacyRecordForCutover(record),
+    };
+  }
+
   const snapshot = await snapshotLegacyRecordForCutover(record);
 
   if (record.syncMode === "replica") {

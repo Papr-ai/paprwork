@@ -139,7 +139,19 @@ export async function reconcileAppDataSourcesForPublish(
   const keptSources: AppDataSource[] = [];
   const seenJobIds = new Set<string>();
 
+  const { isEligibleRegistryLocalPath } = await import(
+    "./registryDatabaseEligibility.js"
+  );
+
   for (const source of config.sources) {
+    const sourcePath = source.dbPath?.trim();
+    if (sourcePath && !isEligibleRegistryLocalPath(sourcePath)) {
+      report.changed = true;
+      report.warnings.push(
+        `Removed job scratch path from data-sources (${source.alias}). Use attach_database with a registry dbId.`,
+      );
+      continue;
+    }
     if (source.jobId) {
       if (!canonicalJobIds.has(source.jobId)) {
         report.removedJobIds.push(source.jobId);
@@ -171,18 +183,9 @@ export async function reconcileAppDataSourcesForPublish(
     if (seenJobIds.has(jobId)) {
       continue;
     }
-    keptSources.push({
-      id: jobId.slice(0, 8),
-      type: "sqlite",
-      jobId,
-      alias: jobId.slice(0, 8),
-      dbPath: "",
-      tables: [],
-      linkedAt: new Date().toISOString(),
-    });
-    report.addedJobIds.push(jobId);
-    report.changed = true;
-    report.warnings.push(`Added bundled job ${jobId} to data-sources`);
+    report.warnings.push(
+      `Job ${jobId} is not linked in data-sources. Link the job's writeDbIds registry database with attach_database — job scratch is not auto-linked.`,
+    );
   }
 
   if (report.changed && options?.dryRun !== true) {

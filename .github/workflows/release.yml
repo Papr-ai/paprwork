@@ -292,9 +292,27 @@ jobs:
           test "${LINUX_DEB}" -ge 1 || { echo "::error::Missing Linux deb package"; exit 1; }
           echo "✓ Full release asset set present"
 
+      - name: Compose release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          GENERATED=$(gh api \
+            --method POST \
+            "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f "tag_name=${GITHUB_REF_NAME}" \
+            -f "target_commitish=${GITHUB_SHA}" \
+            --jq .body)
+          {
+            cat .github/RELEASE_DOWNLOAD_GUIDE.md
+            echo
+            echo "$GENERATED"
+          } > /tmp/release-notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: /tmp/release-notes.md
+          generate_release_notes: false
           draft: false
           files: artifacts/*

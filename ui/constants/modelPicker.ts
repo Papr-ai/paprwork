@@ -55,6 +55,9 @@ export function migratePickerModelId(modelId: string): string {
   ) {
     return "gpt-5-6-sol";
   }
+  if (modelId === "claude-sonnet-5") {
+    return "claude-sonnet-5-5";
+  }
   if (modelId === "claude-opus-4-8" || modelId === "claude-opus-5") {
     return "claude-opus-5-5";
   }
@@ -75,6 +78,21 @@ export function migratePickerModelId(modelId: string): string {
 
 /** Flat default list shown to new users (cloud models only). */
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "claude-sonnet-5-5",
+  "claude-opus-5",
+  "claude-opus-5-5",
+  "claude-fable-5-1",
+  "gpt-5-6-sol",
+  "gpt-6-astra",
+  "glm-5.2",
+  "qwen/qwen3-32b",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
+  "gemini-3.1-pro-preview",
+];
+
+/** Pre-Sonnet-5.5 defaults — upgrade saved picker preferences on next load. */
+export const PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
   "claude-sonnet-5",
   "claude-opus-5",
   "claude-opus-5-5",
@@ -211,6 +229,10 @@ export function migrateEnabledPickerModelIds(
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
+  if (sameModelIdSet(enabledIds, PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
   if (sameModelIdSet(enabledIds, PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
@@ -257,18 +279,39 @@ export function migrateEnabledPickerModelIds(
   // holding a variant id such as `glm-5.2-max` does not match any snapshot
   // until the collapse has run, and one holding only base ids is answered by
   // the earlier round without paying for the map.
+  if (sameModelIdSet(migrated, PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
+  }
+
   if (sameModelIdSet(migrated, PRE_OPUS_5_5_PICKER_DEFAULT_MODEL_IDS)) {
     return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
-  // Swap the default Sonnet slot when users still have 4.6 enabled without 5.
+  // Swap the default Sonnet slot when users still have 4.6 enabled without 5.5.
   if (
     migrated.includes("claude-sonnet-4-6") &&
-    !migrated.includes("claude-sonnet-5")
+    !migrated.includes("claude-sonnet-5-5")
   ) {
     return migrated.map((id) =>
-      id === "claude-sonnet-4-6" ? "claude-sonnet-5" : id,
+      id === "claude-sonnet-4-6" ? "claude-sonnet-5-5" : id,
     );
+  }
+
+  // Upgrade Sonnet 5 → 5.5 in customized lists that still carry the old id.
+  if (
+    migrated.includes("claude-sonnet-5") &&
+    !migrated.includes("claude-sonnet-5-5")
+  ) {
+    return migrated.map((id) =>
+      id === "claude-sonnet-5" ? "claude-sonnet-5-5" : id,
+    );
+  }
+
+  const preOpus55Collapsed = [
+    ...new Set(PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS.map(migratePickerModelId)),
+  ];
+  if (sameModelIdSet(migrated, preOpus55Collapsed)) {
+    return [...PICKER_DEFAULT_MODEL_IDS];
   }
 
   return healTruncatedPickerList(migrated);

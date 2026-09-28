@@ -55,7 +55,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         ...emptyStatus,
         anthropic: { oauth: true, apiKey: false },
       }),
-    ).toBe("claude-sonnet-5");
+    ).toBe("claude-sonnet-5-5");
   });
 
   it("prefers GPT when only OpenAI auth is present", () => {
@@ -74,7 +74,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         anthropic: { oauth: true, apiKey: false },
         openai: { oauth: true, apiKey: false },
       }),
-    ).toBe("claude-sonnet-5");
+    ).toBe("claude-sonnet-5-5");
   });
 
   it("falls back to Gemini for Papr proxy only", () => {

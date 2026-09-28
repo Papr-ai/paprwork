@@ -2043,11 +2043,15 @@
   padding: 10px 14px;
   border: 0;
   border-radius: 10px;
-  background: var(--accent);
+  background: var(
+    --papr-blue-gradient,
+    linear-gradient(135deg, #0060e0, #00acfa)
+  );
   color: #fff;
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+  box-shadow: 0 2px 10px var(--papr-blue-glow, rgba(0, 96, 224, 0.28));
 }
 
 .share-sheet__primary-btn:disabled {
@@ -2279,6 +2283,51 @@
 .share-sheet__changes-history-label {
   margin-top: 12px;
   margin-bottom: 8px;
+}
+
+.share-sheet__changes-success {
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  color: var(--papr-blue-deep, #0060e0);
+  background: color-mix(in srgb, var(--papr-blue-deep, #0060e0) 10%, transparent);
+}
+
+.share-sheet__changes-uploading {
+  margin-top: 16px;
+  padding-top: 4px;
+}
+
+.share-sheet__changes-list--uploading {
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.share-sheet__changes-item--uploading {
+  opacity: 0.92;
+  border-style: dashed;
+}
+
+.share-sheet__changes-upload-spinner {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  margin-right: 6px;
+  vertical-align: -2px;
+  border: 2px solid rgba(0, 96, 224, 0.2);
+  border-top-color: var(--papr-blue-deep, #0060e0);
+  border-radius: 50%;
+  animation: share-sheet-changes-spin 0.7s linear infinite;
+}
+
+@keyframes share-sheet-changes-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.share-sheet__changes-actions--compact {
+  margin-top: 8px;
 }
 
 .share-sheet__changes-list--history {

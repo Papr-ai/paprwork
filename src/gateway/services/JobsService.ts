@@ -1101,6 +1101,7 @@ export class JobsService {
 
   private async saveJobs(options?: {
     awaitCloudMetadata?: boolean;
+    skipCloudUpload?: boolean;
   }): Promise<void> {
     if (!this.isWriteContextValid("jobs.json save")) {
       return;
@@ -1111,6 +1112,7 @@ export class JobsService {
     }
 
     const awaitCloudMetadata = options?.awaitCloudMetadata === true;
+    const skipCloudUpload = options?.skipCloudUpload === true;
 
     // Create new save promise
     this.saveLock = (async () => {
@@ -1137,6 +1139,7 @@ export class JobsService {
         );
         await pushJobsIndexToCloudAfterLocalWrite(list, updatedAt, {
           awaitCloudMetadata,
+          skipCloudUpload,
         });
       } finally {
         // Clear lock after save completes or fails
@@ -3533,10 +3536,29 @@ export class JobsService {
     deleteFiles = false,
     deleteTursoDb = false,
     options?: { deferCloudCleanup?: boolean },
-  ): Promise<{ id: string; name: string; tursoDbDeleted?: boolean }> {
+  ): Promise<{
+    id: string;
+    name: string;
+    tursoDbDeleted?: boolean;
+    localOnly?: boolean;
+    cloudArtifactsSkipped?: boolean;
+  }> {
     const job = this.jobs.get(jobId);
     if (!job) {
       throw new Error(`Job not found: ${jobId}`);
+    }
+
+    const { getPaprAppsRoot } = await import("../../core/utils/paprRoot.js");
+    const { resolveJobDeleteScope } = await import("./appDeleteScope.js");
+    const deleteScope = await resolveJobDeleteScope(jobId, {
+      graph: await this.getJobGraph(),
+      jobAppIds: job.appIds,
+      appsRootDir: getPaprAppsRoot(),
+    });
+    const localOnlyDelete = deleteScope.localOnly;
+    let effectiveDeleteTursoDb = deleteTursoDb;
+    if (localOnlyDelete) {
+      effectiveDeleteTursoDb = false;
     }
 
     // Stop the process if it's currently running
@@ -3553,7 +3575,7 @@ export class JobsService {
 
     // Delete Turso cloud database if requested
     let tursoDbDeleted = false;
-    if (deleteTursoDb) {
+    if (effectiveDeleteTursoDb) {
       try {
         const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
         const bridge = getTursoSyncBridge();
@@ -3568,13 +3590,23 @@ export class JobsService {
       }
     }
 
-    // Remove from index and upload updated catalog (job absent = deleted in cloud metadata)
+    // Remove from index; upload catalog unless collaborator local-only delete
     this.deleteJobFromMemory(jobId);
-    await this.saveJobs({ awaitCloudMetadata: true });
+    if (localOnlyDelete) {
+      await this.saveJobs({ skipCloudUpload: true });
+    } else {
+      await this.saveJobs({ awaitCloudMetadata: true });
+    }
     notifyJobOwnershipChanged(getPaprRoot());
     void this.rebuildGraph();
 
-    if (options?.deferCloudCleanup === true) {
+    let cloudArtifactsSkipped = false;
+    if (localOnlyDelete) {
+      cloudArtifactsSkipped = true;
+      console.log(
+        `[JobsService] Skipped cloud job catalog cleanup for ${jobId} (collaborator local-only delete)`,
+      );
+    } else if (options?.deferCloudCleanup === true) {
       this.deferredDeleteCloudPush = true;
       await this.deleteJobCloudArtifactsForJob(jobId, { skipWorkspacePush: true });
     } else {
@@ -3600,7 +3632,13 @@ export class JobsService {
       job_type: job.type,
     });
 
-    return { id: job.id, name: job.name };
+    return {
+      id: job.id,
+      name: job.name,
+      tursoDbDeleted: tursoDbDeleted || undefined,
+      localOnly: localOnlyDelete || undefined,
+      cloudArtifactsSkipped: cloudArtifactsSkipped || undefined,
+    };
   }
 
   async stopJob(jobId: string): Promise<JobRecord> {

@@ -201,6 +201,32 @@ export function buildWriterConflictAgentPrompt(input: {
   return parts.join(" ");
 }
 
+export function buildChangeRequestResolveAgentPrompt(input: {
+  action: "approve" | "reject";
+  requestId: string;
+  title: string;
+  sourceAppId: string;
+  description?: string;
+  error: string;
+}): string {
+  const verb = input.action === "approve" ? "accept" : "decline";
+  const parts = [
+    `I tried to ${verb} a contribute-back proposal for my app but Papr returned an error.`,
+    `App id: ${input.sourceAppId}.`,
+    `Proposal title: ${input.title}.`,
+    `Change request id: ${input.requestId}.`,
+  ];
+  if (input.description?.trim()) {
+    parts.push(`Contributor summary: ${input.description.trim()}.`);
+  }
+  parts.push(`Error from Papr: ${input.error.trim()}.`);
+  parts.push(
+    `Please diagnose why ${verb} failed, retry safely if appropriate, and tell me the next step.`,
+    "Use check_cloud_app_contributions, get_cloud_app_pr_review, get_cloud_sync_status, and resolve_cloud_app_pr as needed.",
+  );
+  return parts.join(" ");
+}
+
 export function buildPrReviewAgentPrompt(input: {
   sourceAppId: string;
   title: string;

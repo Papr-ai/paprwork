@@ -3,14 +3,9 @@ import {
   fetchIncomingCloudChangeRequests,
   type CloudChangeRequest,
 } from "../utils/cloudChangeRequestsApi";
+import { isIncomingChangeRequestOpen } from "../utils/changeRequestDisplay";
 
-/** Owner-visible proposals still awaiting a decision (includes upload-in-progress). */
-export function isIncomingChangeRequestOpen(
-  req: CloudChangeRequest,
-): boolean {
-  const status = typeof req.status === "string" ? req.status.trim() : "";
-  return status === "pending" || status === "preparing";
-}
+export { isIncomingChangeRequestOpen };
 
 export function useIncomingCloudChangeRequests(sourceAppId: string | null): {
   requests: CloudChangeRequest[];

@@ -26,7 +26,7 @@ export const SLEEP_PROMPT_VERSION = 24;
 
 export const SLEEP_JOB_DEFAULTS = {
   provider: "anthropic" as const,
-  model: "claude-sonnet-5",
+  model: "claude-sonnet-5-5",
   maxTurns: 100,
   memoryPolicy: "none" as const,
   schedule: {

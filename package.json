@@ -75,6 +75,7 @@
     "repair:post-migration": "node --import tsx scripts/repair-post-migration.mjs",
     "test:key-similarity": "npx tsx scripts/test-key-similarity.mjs",
     "test:papr-sdk": "node scripts/test-papr-sdk-update.mjs",
+    "test:claude-cli-on-demand": "npm run build:electron && electron scripts/test-claude-cli-on-demand.mjs",
     "test:papr-sync-tiers": "node --import tsx scripts/test-papr-sync-tiers.mjs",
     "benchmark:jev-latency": "node --import tsx scripts/benchmark-jev-llm-latency.mjs",
     "benchmark:jev-memory-catalog": "node --import tsx scripts/benchmark-jev-memory-catalog.mjs",

@@ -44,11 +44,22 @@ export const CHAT_MODELS: AIModel[] = [
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
-    id: "claude-sonnet-5",
-    name: "Claude Sonnet 5",
+    id: "claude-sonnet-5-5",
+    name: "Claude Sonnet 5.5",
     provider: "anthropic",
     description:
       "Latest Sonnet — agentic coding, tool use, browser/terminal work (recommended)",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet 5",
+    provider: "anthropic",
+    description: "Previous Sonnet generation — still available for pinned chats",
     group: "Anthropic",
     supportsThinking: true,
     defaultThinkingBudget: 0,
@@ -87,6 +98,17 @@ export const CHAT_MODELS: AIModel[] = [
     extendedThinking: true,
     defaultThinkingBudget: 64000,
     maxTokens: 16000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
+  {
+    id: "claude-opus-5",
+    name: "Claude Opus 5",
+    provider: "anthropic",
+    description: "Previous Opus generation — still available for pinned chats",
+    group: "Anthropic",
+    supportsThinking: true,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
     requiresApiKey: "ANTHROPIC_API_KEY",
   },
   {
@@ -629,7 +651,8 @@ export const getModelById = (id: string): AIModel | undefined => {
 
 /** Mid-tier model IDs per provider, in preference order for default selection */
 export const MID_TIER_MODEL_IDS = [
-  "claude-sonnet-5", // Anthropic mid (latest)
+  "claude-sonnet-5-5", // Anthropic mid (latest)
+  "claude-sonnet-5", // Anthropic mid (previous)
   "claude-sonnet-4-6", // Anthropic mid (legacy)
   "gpt-5-6-sol", // OpenAI flagship
   "gpt-5-6-terra", // OpenAI balanced
@@ -640,7 +663,8 @@ export const MID_TIER_MODEL_IDS = [
 
 /** Default model IDs when no saved preference - first available wins */
 export const DEFAULT_MODEL_IDS = [
-  "claude-sonnet-5", // Anthropic
+  "claude-sonnet-5-5", // Anthropic
+  "claude-sonnet-5", // Anthropic legacy
   "claude-sonnet-4-6", // Anthropic legacy
   "gpt-5-6-sol", // OpenAI latest
   "gemini-3.8-flash", // Google

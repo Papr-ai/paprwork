@@ -7,6 +7,7 @@ import {
   getDatabaseRegistryService,
   initializeDatabaseRegistry,
 } from "../../DatabaseRegistryService.js";
+import { isEligibleRegistryLocalPath } from "../../registryDatabaseEligibility.js";
 import { discoverTursoLinkedSources } from "../../tursoLinkedSources.js";
 import { ensureTursoSyncBridge } from "../../TursoSyncBridge.js";
 
@@ -42,8 +43,10 @@ export async function listLinkedLegacyCutoverCandidates(options?: {
 
   return candidates.filter(
     (record) =>
-      linkedDbIds.has(record.dbId) ||
-      (record.ownerJobId !== undefined && linkedJobIds.has(record.ownerJobId)),
+      isEligibleRegistryLocalPath(record.localPath) &&
+      (linkedDbIds.has(record.dbId) ||
+        (record.ownerJobId !== undefined &&
+          linkedJobIds.has(record.ownerJobId))),
   );
 }
 

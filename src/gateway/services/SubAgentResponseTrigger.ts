@@ -85,7 +85,7 @@ async function resolveConfigForChat(
   }
 
   const provider: Provider = "anthropic";
-  const model = "claude-sonnet-5";
+  const model = "claude-sonnet-5-5";
   const auth = await getProviderAuth("anthropic");
   let apiKey: string;
   let authType: "oauth" | "apiKey" = "apiKey";

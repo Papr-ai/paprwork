@@ -6,6 +6,64 @@ import type { CloudChangeRequest } from "./cloudChangeRequestsApi";
 
 const MAX_LISTED_PATHS = 12;
 
+export type OptimisticChangeRequestResolution = ReadonlyMap<
+  string,
+  "approved" | "rejected"
+>;
+
+/** Owner-visible proposals still awaiting a decision (includes upload-in-progress). */
+export function isIncomingChangeRequestOpen(
+  req: CloudChangeRequest,
+): boolean {
+  const status = typeof req.status === "string" ? req.status.trim() : "";
+  return status === "pending" || status === "preparing";
+}
+
+export function mergeOptimisticChangeRequestResolutions(
+  requests: CloudChangeRequest[],
+  optimistic: OptimisticChangeRequestResolution,
+): CloudChangeRequest[] {
+  if (optimistic.size === 0) {
+    return requests;
+  }
+  const now = new Date().toISOString();
+  return requests.map((req) => {
+    const action = optimistic.get(req.id);
+    if (!action) {
+      return req;
+    }
+    return {
+      ...req,
+      status: action,
+      resolvedAt: req.resolvedAt ?? now,
+    };
+  });
+}
+
+/** Ready to Accept / Review — excludes resolved and still-uploading rows. */
+export function listActionableIncomingChangeRequests(
+  requests: CloudChangeRequest[],
+): CloudChangeRequest[] {
+  return requests.filter(
+    (req) =>
+      isIncomingChangeRequestOpen(req) &&
+      isChangeRequestReadyForReview(req) &&
+      !isResolvedChangeRequest(req),
+  );
+}
+
+/** Upload in progress — show separately so it is not confused with actionable cards. */
+export function listUploadingIncomingChangeRequests(
+  requests: CloudChangeRequest[],
+): CloudChangeRequest[] {
+  return requests.filter(
+    (req) =>
+      isIncomingChangeRequestOpen(req) &&
+      !isChangeRequestReadyForReview(req) &&
+      !isResolvedChangeRequest(req),
+  );
+}
+
 export function isResolvedChangeRequest(req: CloudChangeRequest): boolean {
   const status = typeof req.status === "string" ? req.status.trim() : "";
   return status === "approved" || status === "rejected";

@@ -25,6 +25,10 @@ import {
 import type { DatabaseSyncMode } from "./tursoReplica/tursoReplicaTypes.js";
 import { defaultSyncModeForNewRegistryDb } from "../utils/tursoReplicaEnabled.js";
 import { isJobScratchDatabasePath } from "./jobs/jobScratchDatabasePath.js";
+import {
+  assertEligibleRegistryLocalPath,
+  isEligibleRegistryLocalPath,
+} from "./registryDatabaseEligibility.js";
 
 export const DATABASES_REGISTRY_FILENAME = "databases.json";
 
@@ -503,6 +507,14 @@ export class DatabaseRegistryService {
     if (!record || record.status === "tombstone") {
       return undefined;
     }
+    if (
+      syncMode === "replica" &&
+      !isEligibleRegistryLocalPath(record.localPath)
+    ) {
+      throw new Error(
+        `Cannot assign syncMode=replica to job scratch path: ${record.localPath}`,
+      );
+    }
     const { syncMode: _previous, ...rest } = record;
     const next: DatabaseRecord = {
       ...rest,
@@ -588,7 +600,10 @@ export class DatabaseRegistryService {
     return record;
   }
 
-  async tombstone(dbId: string): Promise<void> {
+  async tombstone(
+    dbId: string,
+    options?: DatabaseRegistrySaveOptions,
+  ): Promise<void> {
     const state = this.getState();
     const record = state.databases[dbId];
     if (!record) {
@@ -596,7 +611,7 @@ export class DatabaseRegistryService {
     }
     record.status = "tombstone";
     record.updatedAt = new Date().toISOString();
-    await this.save(state);
+    await this.save(state, options);
   }
 
   /**
@@ -842,7 +857,15 @@ export class DatabaseRegistryService {
         existing.status === "tombstone" ||
         incoming.updatedAt > existing.updatedAt
       ) {
-        state.databases[dbId] = incoming;
+        const next =
+          !isEligibleRegistryLocalPath(incoming.localPath) &&
+          incoming.syncMode === "replica"
+            ? (() => {
+                const { syncMode: _drop, ...rest } = incoming;
+                return rest as DatabaseRecord;
+              })()
+            : incoming;
+        state.databases[dbId] = next;
         merged += 1;
       }
     }
@@ -867,6 +890,7 @@ export class DatabaseRegistryService {
     }
 
     const normalizedPath = normalizeDbPath(source.dbPath);
+    assertEligibleRegistryLocalPath(normalizedPath);
     const dbId = source.dbId ?? dbIdFromPath(normalizedPath);
     const now = new Date().toISOString();
     const record: DatabaseRecord = {

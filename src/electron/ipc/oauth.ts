@@ -8,6 +8,7 @@ import type { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js"
 import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
 import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
+import { getClaudeCLIManager } from "../services/ClaudeCLIManager.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 import { invalidateKeyCache } from "./customKeys.js";
 import {
@@ -646,6 +647,16 @@ export async function initializeOAuthIPC(
   claudeSetupTokenService = new ClaudeSetupTokenService();
   claudeOAuthService = new ClaudeOAuthService();
 
+  const claudeCliManager = getClaudeCLIManager();
+  claudeCliManager.setProgressCallback((progress) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send("claude-cli:download-progress", progress);
+      }
+    }
+  });
+  claudeSetupTokenService.setClaudeCliProvider(claudeCliManager);
+
   // OpenAI OAuth handlers
   ipcMain.handle(
     "auth:openai:start-oauth",
@@ -838,18 +849,22 @@ export async function initializeOAuthIPC(
   async function openClaudeSetupTokenTerminal(): Promise<boolean> {
     const { exec: execCb } = await import("child_process");
     try {
+      const setupCmd = await claudeSetupTokenService!.getSetupTokenShellCommand();
+      const escapedForAppleScript = setupCmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+
       if (process.platform === "darwin") {
         execCb(
-          `osascript -e 'tell application "Terminal" to do script "claude setup-token"' -e 'tell application "Terminal" to activate'`,
+          `osascript -e 'tell application "Terminal" to do script "${escapedForAppleScript}"' -e 'tell application "Terminal" to activate'`,
         );
         return true;
       }
       if (process.platform === "win32") {
-        execCb(`start cmd.exe /k "claude setup-token"`);
+        execCb(`start cmd.exe /k "${setupCmd.replace(/"/g, '\\"')}"`);
         return true;
       }
+      const escapedForBash = setupCmd.replace(/"/g, '\\"');
       execCb(
-        `x-terminal-emulator -e "claude setup-token" 2>/dev/null || gnome-terminal -- bash -c "claude setup-token; exec bash" 2>/dev/null || xterm -e "claude setup-token" 2>/dev/null`,
+        `x-terminal-emulator -e "${escapedForBash}" 2>/dev/null || gnome-terminal -- bash -c "${escapedForBash}; exec bash" 2>/dev/null || xterm -e "${escapedForBash}" 2>/dev/null`,
       );
       return true;
     } catch (termErr) {

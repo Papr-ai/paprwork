@@ -213,6 +213,7 @@ export const MODEL_CONTEXT_WINDOWS: Readonly<Record<string, number>> = {
   "claude-haiku-4-5": 200_000,
   "claude-sonnet-4-6": 1_000_000,
   "claude-sonnet-5": 1_000_000,
+  "claude-sonnet-5-5": 1_000_000,
   "claude-opus-4-6": 1_000_000,
   "claude-opus-5-5": 1_000_000,
   "claude-opus-5": 1_000_000,

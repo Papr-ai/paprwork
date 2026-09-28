@@ -112,6 +112,13 @@ const MODEL_CAPABILITIES: Record<string, ModelCapabilities> = {
     cost: "medium",
     specialties: ["reasoning", "writing", "analysis"],
   },
+  "claude-sonnet-5-5": {
+    reasoningLevel: "advanced",
+    contextWindow: 1000000,
+    speed: "medium",
+    cost: "medium",
+    specialties: ["reasoning", "agentic", "coding", "tool-use"],
+  },
   "claude-sonnet-5": {
     reasoningLevel: "advanced",
     contextWindow: 1000000,
@@ -269,7 +276,7 @@ export async function getBestFallbackModel(
   const defaultModelByProvider: Record<Provider, string> = {
     openai: "gpt-5-6-sol",
     "openai-codex": "gpt-5.3-codex",
-    anthropic: "claude-sonnet-5",
+    anthropic: "claude-sonnet-5-5",
     google: "gemini-3.8-flash",
     ollama: "qwen3.5:latest",
     cursor: "composer-2.5",
@@ -381,8 +388,8 @@ export function getUpgradeModelForTask(
     anthropic: {
       reasoning: "claude-fable-5-1",
       coding: "claude-fable-5-1",
-      writing: "claude-sonnet-5",
-      general: "claude-sonnet-5",
+      writing: "claude-sonnet-5-5",
+      general: "claude-sonnet-5-5",
     },
     google: {
       reasoning: "gemini-3.1-pro-preview",

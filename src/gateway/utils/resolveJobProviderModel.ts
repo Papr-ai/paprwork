@@ -10,7 +10,7 @@ import { normalizeOpenAIModelId } from "./modelNormalizer.js";
 export const DEFAULT_MODEL_BY_PROVIDER: Record<Provider, string> = {
   openai: "gpt-5-6-sol",
   "openai-codex": "gpt-5.3-codex",
-  anthropic: "claude-sonnet-5",
+  anthropic: "claude-sonnet-5-5",
   google: "gemini-3.8-flash",
   ollama: "qwen3.5:latest",
   cursor: "composer-2.5",

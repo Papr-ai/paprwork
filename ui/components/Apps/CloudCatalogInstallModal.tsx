@@ -63,6 +63,15 @@ export function CloudCatalogInstallModal({
             ? "Install this team app locally. Choose a private copy, collaborate on code only, or share the team database."
             : "Your data stays private either way. The only question is whether this copy stays connected to the original."}
         </p>
+        {installing ? (
+          <p className="community-install-modal__installing" role="status" aria-live="polite">
+            <span
+              className="community-card__import-spinner community-card__import-spinner--on-surface"
+              aria-hidden="true"
+            />
+            Installing…
+          </p>
+        ) : null}
         {options.map((option) => (
           <button
             key={cloudCatalogInstallOptionKey(option)}
