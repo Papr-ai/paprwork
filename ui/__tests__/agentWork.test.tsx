@@ -1,5 +1,5 @@
 /**
- * Replay: the rail agent retraces its mark while any user-facing chat is streaming,
+ * Replay: the rail agent retraces its mark while any user-facing chat is working,
  * seals once when the last one finishes, then rests.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -23,7 +23,7 @@ function stream(ids: string[]) {
 describe("useAgentWork", () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    useChatStore.setState({ chatStates: new Map() });
+    useChatStore.setState({ chatStates: new Map(), streamingState: new Map() });
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -40,6 +40,31 @@ describe("useAgentWork", () => {
     expect(result.current).toEqual({ state: "working", count: 2 });
     stream(["a"]);
     expect(result.current).toEqual({ state: "working", count: 1 });
+  });
+
+  it("counts a chat running tools between replies (sending, not streaming text)", () => {
+    const { result } = renderHook(() => useAgentWork());
+    stream(["a"]);
+    act(() => {
+      useChatStore.setState((s) => {
+        const next: ChatStates = new Map(s.chatStates);
+        next.set("b", { ...s.getChatState("b"), isSending: true, isStreaming: false });
+        return { chatStates: next };
+      });
+    });
+    expect(result.current).toEqual({ state: "working", count: 2 });
+  });
+
+  it("counts a chat with a live streaming slice", () => {
+    const { result } = renderHook(() => useAgentWork());
+    act(() => {
+      useChatStore.getState().initStreamingState("c", "m1");
+    });
+    expect(result.current).toEqual({ state: "working", count: 1 });
+    act(() => {
+      useChatStore.getState().clearStreamingState("c");
+    });
+    expect(result.current.count).toBe(0);
   });
 
   it("ignores background job and delegation sessions", () => {
