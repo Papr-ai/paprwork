@@ -9,12 +9,14 @@ import { useAgentWork } from "../components/Agent/agentWork";
 
 type ChatStates = ReturnType<typeof useChatStore.getState>["chatStates"];
 
-function stream(ids: string[]) {
+function stream(ids: string[], running: string[] = []) {
   act(() => {
     useChatStore.setState((s) => {
       const next: ChatStates = new Map();
-      s.chatStates.forEach((v, k) => next.set(k, { ...v, isStreaming: false }));
-      ids.forEach((id) => next.set(id, { ...(s.chatStates.get(id) ?? s.getChatState(id)), isStreaming: true }));
+      s.chatStates.forEach((v, k) => next.set(k, { ...v, isStreaming: false, isAgentRunning: false }));
+      const base = (id: string) => next.get(id) ?? s.getChatState(id);
+      ids.forEach((id) => next.set(id, { ...base(id), isStreaming: true }));
+      running.forEach((id) => next.set(id, { ...base(id), isAgentRunning: true }));
       return { chatStates: next };
     });
   });
@@ -39,6 +41,14 @@ describe("useAgentWork", () => {
     stream(["a", "b"]);
     expect(result.current).toEqual({ state: "working", count: 2 });
     stream(["a"]);
+    expect(result.current).toEqual({ state: "working", count: 1 });
+  });
+
+  it("counts chats where the agent is running tools between replies", () => {
+    const { result } = renderHook(() => useAgentWork());
+    stream(["a"], ["b"]);
+    expect(result.current).toEqual({ state: "working", count: 2 });
+    stream([], ["b"]);
     expect(result.current).toEqual({ state: "working", count: 1 });
   });
 

@@ -15,13 +15,19 @@ const SEAL_MS = 1500;
 type ChatStoreState = ReturnType<typeof useChatStore.getState>;
 
 /**
- * Live streams are tracked per chat in `chatStates` (the chat-list metadata flag can lag behind).
- * Returned as a sorted id string so the selector result is stable between unrelated store updates.
+ * A chat is "working" while the agent is streaming a reply OR running tools between replies
+ * (`isAgentRunning` — the same signal the chat's "Working on it…" card uses). Tracked per chat in
+ * `chatStates`; the chat-list metadata flag can lag behind. Returned as a sorted id string so the
+ * selector result is stable between unrelated store updates.
  */
+export function isChatWorking(state: { isStreaming?: boolean; isAgentRunning?: boolean }): boolean {
+  return !!(state.isStreaming || state.isAgentRunning);
+}
+
 function workingKey(s: ChatStoreState): string {
   const ids: string[] = [];
   s.chatStates.forEach((state, id) => {
-    if (state.isStreaming && isUserFacingChatId(id)) ids.push(id);
+    if (isChatWorking(state) && isUserFacingChatId(id)) ids.push(id);
   });
   return ids.sort().join("|");
 }
