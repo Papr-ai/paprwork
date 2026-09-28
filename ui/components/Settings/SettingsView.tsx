@@ -1164,6 +1164,44 @@ function AboutTab() {
           </div>
         </div>
 
+        {currentVersion === "2.6.20" && (
+          <div className="about-card">
+            <h3>What's New in v2.6.20</h3>
+            <ul className="whats-new-list">
+              <li className="whats-new-list__item">
+                <strong>Claude subscription sign-in</strong>
+                <p>
+                  Connect Claude Pro or Max with an on-demand Claude Code CLI
+                  install—no npm required—and clearer OAuth setup in Settings.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Cloud sync and installs</strong>
+                <p>
+                  Improved incoming change requests, catalog install agent
+                  setup, and safer handling when deleting apps and linked
+                  databases.
+                </p>
+              </li>
+              <li className="whats-new-list__item">
+                <strong>Installers and updates</strong>
+                <p>
+                  macOS and Windows installers can open Papr Work when setup
+                  finishes; GitHub releases include a clearer download guide.
+                </p>
+              </li>
+            </ul>
+            <a
+              href="https://github.com/Papr-ai/paprwork/releases/tag/v2.6.20"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="about-card__link"
+            >
+              View release notes on GitHub
+            </a>
+          </div>
+        )}
+
         {currentVersion === "2.6.19" && (
           <div className="about-card">
             <h3>What's New in v2.6.19</h3>
