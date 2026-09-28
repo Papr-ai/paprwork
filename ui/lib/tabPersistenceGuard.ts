@@ -33,7 +33,17 @@ export function shouldBlockTabPersistence(outcome: WorkspaceTabReadOutcome): boo
   return outcome.status === "unreadable";
 }
 
-let blockedReason: string | null = null;
+/**
+ * Closed until the first successful read. Every launch starts with an empty
+ * store, and scaffolding (a Getting Started tab from the onboarding check in
+ * App.tsx) lands in it before `app:load_tabs` answers. With the latch open by
+ * default, the debounced save could fire in that window and DELETE the saved
+ * rows before they were ever read — which is how a restart wiped 13 tabs down
+ * to "Getting Started". Nothing may be written until we know what is there.
+ */
+const INITIAL_BLOCK_REASON = "saved tab bar has not been read yet";
+
+let blockedReason: string | null = INITIAL_BLOCK_REASON;
 
 /**
  * Suspend tab persistence until a successful read clears it.
@@ -68,7 +78,7 @@ export function getTabPersistenceBlockReason(): string | null {
   return blockedReason;
 }
 
-/** Test hook — reset the latch between unit tests. */
+/** Test hook — return the latch to its launch state (closed, not yet read). */
 export function resetTabPersistenceGuardForTests(): void {
-  blockedReason = null;
+  blockedReason = INITIAL_BLOCK_REASON;
 }

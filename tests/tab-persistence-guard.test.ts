@@ -65,9 +65,17 @@ describe("shouldBlockTabPersistence", () => {
 });
 
 describe("the block latch", () => {
-  it("starts open", () => {
+  it("starts closed, so nothing is saved before the first read answers", () => {
+    // Regression: on restart the onboarding check put a Getting Started tab in
+    // the empty store, the debounced save fired before app:load_tabs returned,
+    // and DELETE-then-insert replaced 13 saved tabs with that one.
+    expect(isTabPersistenceBlocked()).toBe(true);
+    expect(getTabPersistenceBlockReason()).toBe("saved tab bar has not been read yet");
+  });
+
+  it("opens once the first read succeeds", () => {
+    allowTabPersistence();
     expect(isTabPersistenceBlocked()).toBe(false);
-    expect(getTabPersistenceBlockReason()).toBeNull();
   });
 
   it("holds until a successful read clears it", () => {
@@ -105,6 +113,7 @@ describe("the block latch", () => {
   });
 
   it("is quiet when allow is called on an already-open latch", () => {
+    allowTabPersistence();
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     allowTabPersistence();
     expect(log).not.toHaveBeenCalled();
