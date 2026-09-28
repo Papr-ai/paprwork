@@ -408,3 +408,147 @@
 @media (prefers-color-scheme: dark) and (prefers-reduced-transparency: reduce) {
   .cmd-palette { background: rgb(30, 32, 38); }
 }
+
+/*
+ * Continue · Pinned · Go to. Rows match the rail peeks: kind icon, title,
+ * and the kind (or shortcut) on the right. Keyboard hints live in the footer.
+ */
+.cmd-palette {
+  width: 560px;
+  max-height: min(520px, 72vh);
+}
+
+.cmd-palette__list {
+  min-height: 0;
+  padding: 2px 8px 8px;
+}
+
+.cmd-palette__section-label {
+  padding: 10px 10px 4px;
+  letter-spacing: 0.06em;
+}
+
+.cmd-palette__item {
+  gap: 12px;
+  padding: 8px 10px;
+}
+
+.cmd-palette__item-icon {
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border-radius: 9px;
+  border: none;
+  background: rgba(10, 16, 32, 0.045);
+  color: var(--text-secondary);
+}
+
+.cmd-palette__item-icon svg {
+  width: 17px;
+  height: 17px;
+}
+
+.cmd-palette__item--selected .cmd-palette__item-icon {
+  color: var(--accent);
+  background: rgba(var(--accent-rgb, 0, 113, 227), 0.12);
+}
+
+.cmd-palette__item-label {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.cmd-palette__kind {
+  flex-shrink: 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+/* Pen is working in this chat. */
+.cmd-palette__live {
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb, 0, 113, 227), 0.18);
+}
+
+.cmd-palette__foot {
+  flex-shrink: 0;
+  display: flex;
+  gap: 18px;
+  padding: 9px 16px;
+  border-top: 1px solid rgba(10, 16, 32, 0.07);
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.cmd-palette__foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cmd-palette__foot kbd {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.6);
+  font: 11px var(--font-body);
+  color: var(--text-secondary);
+}
+
+.cmd-palette__foot span kbd:last-of-type {
+  margin-right: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .cmd-palette__item-icon {
+    background: rgba(255, 255, 255, 0.06);
+  }
+
+  .cmd-palette__foot {
+    border-top-color: rgba(255, 255, 255, 0.07);
+  }
+
+  .cmd-palette__foot kbd {
+    background: rgba(255, 255, 255, 0.06);
+  }
+}
+
+/*
+ * Apps show their own icon (the droplet PNG or SVG from the Apps grid), filling the
+ * tile. SVG icons get the usual tinted tile; image icons bring their own background.
+ */
+.cmd-palette__item-icon--app {
+  overflow: hidden;
+}
+
+.cmd-palette__item-icon--app:has(img) {
+  background: transparent;
+}
+
+.cmd-palette__app-icon {
+  display: grid;
+  place-items: center;
+}
+
+img.cmd-palette__app-icon {
+  width: 30px;
+  height: 30px;
+  object-fit: cover;
+  border-radius: 9px !important;
+}
+
+span.cmd-palette__app-icon,
+span.cmd-palette__app-icon svg {
+  width: 18px;
+  height: 18px;
+}

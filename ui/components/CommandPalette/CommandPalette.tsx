@@ -1,149 +1,70 @@
 /**
- * CommandPalette - Cmd+K power user interface
- * Provides quick access to all internal features (Artifacts, Views, Meetings, Agents, Jobs, Skills)
+ * CommandPalette (⌘K). One job: get to the thing you want.
+ *
+ * Empty query: Continue (latest chat, app, doc) · Pinned · Go to.
+ * Typing:      Results (chats, apps, docs by title) · Go to.
+ * Opened from Focus or Memory it starts scoped to memory (a removable chip).
+ * ↵ opens; ⌘↵ opens an app or doc beside the chat on screen.
  */
-
 import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useTabs } from "../../hooks/useTabs";
-import { useArtifactsStore } from "../../stores/artifactsStore";
 import { useArtifacts } from "../../hooks/useArtifacts";
+import { useChat } from "../../hooks/useChat";
+import { useTabStore } from "../../stores/tabStore";
 import type { TabType } from "../../types/tabs";
-import { MemoryIcon } from "../Memory/MemoryIcon";
-import { AgentGlyph } from "../Agent/AgentGlyph";
 import { switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
 import { requestMemoryEntity } from "../../lib/memoryNav";
-import { wikiTypeMeta, type WikiNode } from "../../types/wiki";
+import { wikiTypeMeta } from "../../types/wiki";
 import { scopeForActiveTab, useScopedMemorySearch, type PaletteScope } from "./usePaletteScope";
+import { usePaletteEntities, type PaletteEntity } from "./usePaletteEntities";
+import { COMMANDS, KIND_ICON, KIND_LABEL, isMac, type CommandItem } from "./paletteCommands";
+import { renderAppIcon } from "../../utils/renderAppIcon";
 import "./CommandPalette.css";
-
-// Platform-aware modifier key detection
-const isMac = navigator.platform.toUpperCase().includes("MAC");
-const modKey = isMac ? "\u2318" : "Ctrl+";
-const modName = isMac ? "Cmd" : "Ctrl";
-
-interface CommandItem {
-  id: string;
-  label: string;
-  description: string;
-  tabType: TabType;
-  entityId: string;
-  shortcut?: string;
-  icon: React.ReactNode;
-  /** Memory result — opens the entity on the Memory page. */
-  node?: WikiNode;
-}
 
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const COMMANDS: CommandItem[] = [
-  {
-    id: "artifacts",
-    label: "Documents & Artifacts",
-    description: "Browse all documents and artifacts",
-    tabType: "artifacts",
-    entityId: "artifacts",
-    shortcut: `${modKey}D`,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M14 2v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    id: "views",
-    label: "Views",
-    description: "Data views and tables",
-    tabType: "views",
-    entityId: "views",
-    shortcut: `${modKey}Shift+V`,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <rect x="3" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.5" />
-        <rect x="14" y="3" width="7" height="7" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="3" y1="14" x2="10" y2="14" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="14" y1="14" x2="21" y2="14" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="3" y1="18" x2="10" y2="18" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="14" y1="18" x2="21" y2="18" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-    ),
-  },
-  {
-    id: "agents",
-    label: "Agents",
-    description: "AI agents and sub-agents",
-    tabType: "agents",
-    entityId: "agents",
-    shortcut: `${modKey}Shift+A`,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M6 21v-2a4 4 0 014-4h4a4 4 0 014 4v2" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-    ),
-  },
-  {
-    id: "jobs",
-    label: "Jobs",
-    description: "Scheduled jobs and automation",
-    tabType: "jobs",
-    entityId: "jobs",
-    shortcut: `${modKey}J`,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
-        <path d="M12 1v6m0 6v6M4.22 4.22l4.24 4.24m5.08 5.08l4.24 4.24M1 12h6m6 0h6M4.22 19.78l4.24-4.24m5.08-5.08l4.24-4.24" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-    ),
-  },
-  {
-    id: "skills",
-    label: "Skills",
-    description: "Skills marketplace and management",
-    tabType: "skills",
-    entityId: "skills",
-    shortcut: `${modKey}Shift+S`,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-      </svg>
-    ),
-  },
-  {
-    id: "focus",
-    label: "Focus",
-    description: "Today's brief, your three, and tasks",
-    tabType: "focus",
-    entityId: "focus",
-    icon: <AgentGlyph size={20} />,
-  },
-  {
-    id: "memory",
-    label: "Memory",
-    description: "People, projects, and context your agent knows",
-    tabType: "memory",
-    entityId: "wiki",
-    shortcut: `${modKey}Shift+M`,
-    icon: <MemoryIcon size={20} />,
-  },
-  {
-    id: "settings",
-    label: "Settings",
-    description: "App preferences and configuration",
-    tabType: "settings",
-    entityId: "settings",
-    shortcut: `${modKey},`,
-    icon: (
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
-        <path d="M12.22 2h-.44a2 2 0 00-2 2v.18a2 2 0 01-1 1.73l-.43.25a2 2 0 01-2 0l-.15-.08a2 2 0 00-2.73.73l-.22.38a2 2 0 00.73 2.73l.15.1a2 2 0 011 1.72v.51a2 2 0 01-1 1.74l-.15.09a2 2 0 00-.73 2.73l.22.38a2 2 0 002.73.73l.15-.08a2 2 0 012 0l.43.25a2 2 0 011 1.73V20a2 2 0 002 2h.44a2 2 0 002-2v-.18a2 2 0 011-1.73l.43-.25a2 2 0 012 0l.15.08a2 2 0 002.73-.73l.22-.39a2 2 0 00-.73-2.73l-.15-.08a2 2 0 01-1-1.74v-.5a2 2 0 011-1.74l.15-.09a2 2 0 00.73-2.73l-.22-.38a2 2 0 00-2.73-.73l-.15.08a2 2 0 01-2 0l-.43-.25a2 2 0 01-1-1.73V4a2 2 0 00-2-2z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.5" />
-      </svg>
-    ),
-  },
-];
+interface Section {
+  title: string;
+  items: CommandItem[];
+}
+
+const MAX_PINNED = 6;
+
+/**
+ * The app's own icon (the same one the Apps grid shows), falling back to the kind glyph.
+ * Docs and chats have no per-item icon, so they always use the kind glyph.
+ */
+function entityIcon(e: PaletteEntity): React.ReactNode {
+  if (e.kind !== "app" || !e.icon?.trim()) return KIND_ICON[e.kind];
+  return renderAppIcon(e.icon, { size: 30, className: "cmd-palette__app-icon" });
+}
+
+function entityItem(e: PaletteEntity, section: string): CommandItem {
+  return {
+    id: `${section}:${e.key}`,
+    label: e.title,
+    description: "",
+    tabType: e.kind as TabType,
+    entityId: e.id,
+    icon: entityIcon(e),
+    entity: e,
+    kindLabel: KIND_LABEL[e.kind],
+    live: e.live,
+  };
+}
+
+/** The chat on screen, in either pane, if there is one. */
+function activeChatTabId(): string | null {
+  const { tabs, activeLeftTab, activeRightTab, activeTabId } = useTabStore.getState();
+  for (const id of [activeLeftTab, activeRightTab, activeTabId]) {
+    const tab = id ? tabs.find((t) => t.id === id) : undefined;
+    if (tab?.type === "chat") return tab.id;
+  }
+  return null;
+}
 
 export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
@@ -153,127 +74,53 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const { createTab, switchToTab } = useTabs();
-  const artifacts = useArtifactsStore((s) => s.artifacts);
   const { loadArtifacts } = useArtifacts();
+  const { loadMessages } = useChat();
+  const { continueItems, pinned, search } = usePaletteEntities();
 
-  // Load apps when palette opens
   useEffect(() => {
-    if (isOpen) loadArtifacts();
+    if (isOpen) void loadArtifacts();
   }, [isOpen, loadArtifacts]);
 
-  // Helper to render app icon based on type (data URL, SVG, emoji, or fallback)
-  const renderAppIcon = useCallback((icon: string | undefined, title: string) => {
-    const fallbackIcon = (
-      <svg className="cmd-palette__app-orb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none">
-        <defs>
-          <linearGradient id="cmd-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-            <stop offset="0%" stopColor="#00D4FF" />
-            <stop offset="100%" stopColor="#0066FF" />
-          </linearGradient>
-        </defs>
-        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-      </svg>
-    );
-
-    if (!icon) return fallbackIcon;
-
-    const trimmed = icon.trim();
-
-    // Data URLs or HTTP URLs — render as <img>
-    if (trimmed.startsWith("data:image/") || trimmed.startsWith("http")) {
-      return (
-        <img
-          className="cmd-palette__app-orb-icon cmd-palette__app-orb-icon--image"
-          src={icon}
-          alt={title}
-          draggable={false}
-        />
-      );
-    }
-
-    // SVG markup — use dangerouslySetInnerHTML
-    if (trimmed.startsWith("<svg") || trimmed.startsWith("<")) {
-      return <span className="cmd-palette__app-orb-icon" dangerouslySetInnerHTML={{ __html: icon }} />;
-    }
-
-    // Check if it's a valid emoji
-    const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
-    if (isEmoji) {
-      return <span className="cmd-palette__app-orb-icon" style={{ fontSize: "14px" }}>{icon}</span>;
-    }
-
-    // Plain text or invalid — use fallback
-    return fallbackIcon;
-  }, []);
-
-  // Build dynamic app commands from artifacts store
-  const appCommands: CommandItem[] = useMemo(
-    () =>
-      artifacts
-        .filter((a) => a.type === "app")
-        .map((app) => ({
-          id: `app-${app.id}`,
-          label: app.title || "Untitled App",
-          description: "Open app",
-          tabType: "app" as TabType,
-          entityId: app.id,
-          icon: (
-            <span className="cmd-palette__app-orb">
-              {renderAppIcon(app.icon, app.title || "Untitled App")}
-            </span>
-          ),
-        })),
-    [artifacts, renderAppIcon],
-  );
-
-  // Filter commands + apps based on query
-  const filtered = useMemo(() => {
-    const q = query.toLowerCase().trim();
-    const filteredCommands = q
-      ? COMMANDS.filter(
-          (cmd) =>
-            cmd.label.toLowerCase().includes(q) ||
-            cmd.description.toLowerCase().includes(q),
-        )
+  const sections = useMemo<Section[]>(() => {
+    const q = query.trim().toLowerCase();
+    const memoryItems: CommandItem[] = memory.results.map((node) => {
+      const meta = wikiTypeMeta(node.type);
+      return {
+        id: `wiki-${node.type}-${node.id}`,
+        label: node.label,
+        description: meta.label,
+        tabType: "memory" as TabType,
+        entityId: "wiki",
+        node,
+        kindLabel: meta.label,
+        icon: (
+          <span className="cmd-palette__wiki-glyph" style={{ color: meta.color }}>
+            {meta.glyph}
+          </span>
+        ),
+      };
+    });
+    const goTo = q
+      ? COMMANDS.filter((c) => c.label.toLowerCase().includes(q) || c.description.toLowerCase().includes(q))
       : COMMANDS;
-    const filteredApps = q
-      ? appCommands.filter(
-          (cmd) =>
-            cmd.label.toLowerCase().includes(q) ||
-            cmd.description.toLowerCase().includes(q),
-        )
-      : appCommands;
-    return { commands: filteredCommands, apps: filteredApps };
-  }, [query, appCommands]);
 
-  // Memory results first (when scoped), then commands, then apps — one flat list for the keyboard.
-  const memoryItems: CommandItem[] = useMemo(
-    () =>
-      memory.results.map((node) => {
-        const meta = wikiTypeMeta(node.type);
-        return {
-          id: `wiki-${node.type}-${node.id}`,
-          label: node.label,
-          description: meta.label,
-          tabType: "memory" as TabType,
-          entityId: "wiki",
-          node,
-          icon: (
-            <span className="cmd-palette__wiki-glyph" style={{ color: meta.color }}>
-              {meta.glyph}
-            </span>
-          ),
-        };
-      }),
-    [memory.results],
-  );
-  const allItems = useMemo(
-    () => [...memoryItems, ...filtered.commands, ...filtered.apps],
-    [memoryItems, filtered],
-  );
+    const out: Section[] = [];
+    if (scope) out.push({ title: `In ${scope.label}`, items: memoryItems });
+    if (q) {
+      out.push({ title: "Results", items: search(q).map((e) => entityItem(e, "result")) });
+    } else {
+      out.push({ title: "Continue", items: continueItems.map((e) => entityItem(e, "continue")) });
+      // Something you just touched and also pinned shows once, under Continue.
+      const shown = new Set(continueItems.map((e) => e.key));
+      const pins = pinned.filter((e) => !shown.has(e.key)).slice(0, MAX_PINNED);
+      out.push({ title: "Pinned", items: pins.map((e) => entityItem(e, "pinned")) });
+    }
+    out.push({ title: "Go to", items: goTo });
+    return out.filter((s) => s.items.length > 0);
+  }, [query, memory.results, scope, search, continueItems, pinned]);
+
+  const allItems = useMemo(() => sections.flatMap((s) => s.items), [sections]);
 
   // Reset state when opened
   useEffect(() => {
@@ -292,9 +139,27 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     }
   }, [allItems.length, selectedIndex]);
 
+  const openEntity = useCallback(
+    (e: PaletteEntity, beside: boolean) => {
+      if (e.kind === "chat") {
+        void loadMessages(e.id);
+        switchToTab(e.tabId ?? createTab("chat", e.id, e.title));
+        return;
+      }
+      // Read the chat on screen before createTab, which can make the new tab active.
+      const chatTabId = beside ? activeChatTabId() : null;
+      const tabId = createTab(e.kind, e.id, e.title, e.icon ? { icon: e.icon } : {});
+      if (chatTabId) useTabStore.getState().createArtifactFromChat(chatTabId, tabId);
+      else switchToTab(tabId);
+    },
+    [createTab, switchToTab, loadMessages],
+  );
+
   const executeCommand = useCallback(
-    (cmd: CommandItem) => {
-      if (cmd.node) {
+    (cmd: CommandItem, beside = false) => {
+      if (cmd.entity) {
+        openEntity(cmd.entity, beside);
+      } else if (cmd.node) {
         switchToMemoryTab();
         requestMemoryEntity(cmd.node);
       } else if (cmd.tabType === "focus") {
@@ -306,7 +171,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
       }
       onClose();
     },
-    [createTab, switchToTab, onClose],
+    [openEntity, createTab, switchToTab, onClose],
   );
 
   const handleKeyDown = useCallback(
@@ -323,7 +188,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
         case "Enter":
           e.preventDefault();
           if (allItems[selectedIndex]) {
-            executeCommand(allItems[selectedIndex]);
+            executeCommand(allItems[selectedIndex], e.metaKey || e.ctrlKey);
           }
           break;
         case "Escape":
@@ -344,32 +209,24 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
 
   // Scroll selected item into view
   useEffect(() => {
-    const list = listRef.current;
-    if (!list) return;
-    const item = list.querySelector(`[data-cmd-index="${selectedIndex}"]`) as HTMLElement;
-    if (item) {
-      item.scrollIntoView({ block: "nearest" });
-    }
+    const item = listRef.current?.querySelector(`[data-cmd-index="${selectedIndex}"]`) as HTMLElement | null;
+    item?.scrollIntoView({ block: "nearest" });
   }, [selectedIndex]);
 
   if (!isOpen) return null;
 
+  let flatIndex = -1;
   return (
     <div className="cmd-palette__overlay" onClick={onClose}>
       <div
         className="cmd-palette"
+        role="dialog"
+        aria-label="Command palette"
         onClick={(e) => e.stopPropagation()}
         onKeyDown={handleKeyDown}
       >
-        {/* Search input */}
         <div className="cmd-palette__input-wrapper">
-          <svg
-            className="cmd-palette__search-icon"
-            width="18"
-            height="18"
-            viewBox="0 0 24 24"
-            fill="none"
-          >
+          <svg className="cmd-palette__search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none">
             <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" />
             <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
@@ -394,7 +251,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
             className="cmd-palette__input"
             type="text"
             aria-label="Search"
-            placeholder={scope ? "Search goals, people, projects…" : "Search commands and apps…"}
+            placeholder={scope ? "Search goals, people, projects…" : "Search chats, apps, docs, or jump to…"}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -404,83 +261,48 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
           <kbd className="cmd-palette__esc">esc</kbd>
         </div>
 
-        {/* Commands list */}
         <div className="cmd-palette__list" ref={listRef}>
           {allItems.length === 0 && (
             <div className="cmd-palette__empty">
-              {memory.loading ? "Searching…" : "No results found"}
+              {memory.loading ? "Searching…" : `No match for “${query.trim()}”`}
             </div>
           )}
-          {memoryItems.length > 0 && scope && (
-            <div className="cmd-palette__section-label">In {scope.label}</div>
-          )}
-          {memoryItems.map((cmd) => {
-            const flatIndex = allItems.indexOf(cmd);
-            return (
-              <button
-                key={cmd.id}
-                data-cmd-index={flatIndex}
-                className={`cmd-palette__item ${flatIndex === selectedIndex ? "cmd-palette__item--selected" : ""}`}
-                onClick={() => executeCommand(cmd)}
-                onMouseEnter={() => setSelectedIndex(flatIndex)}
-              >
-                <span className="cmd-palette__item-icon">{cmd.icon}</span>
-                <div className="cmd-palette__item-text">
-                  <span className="cmd-palette__item-label">{cmd.label}</span>
-                  <span className="cmd-palette__item-desc">{cmd.description}</span>
-                </div>
-              </button>
-            );
-          })}
-          {memoryItems.length > 0 && filtered.commands.length > 0 && (
-            <div className="cmd-palette__section-label">Go to</div>
-          )}
-          {filtered.commands.map((cmd) => {
-            const flatIndex = allItems.indexOf(cmd);
-            return (
-              <button
-                key={cmd.id}
-                data-cmd-index={flatIndex}
-                className={`cmd-palette__item ${flatIndex === selectedIndex ? "cmd-palette__item--selected" : ""}`}
-                onClick={() => executeCommand(cmd)}
-                onMouseEnter={() => setSelectedIndex(flatIndex)}
-              >
-                <span className="cmd-palette__item-icon">{cmd.icon}</span>
-                <div className="cmd-palette__item-text">
-                  <span className="cmd-palette__item-label">{cmd.label}</span>
-                  <span className="cmd-palette__item-desc">
-                    {cmd.description}
-                  </span>
-                </div>
-                {cmd.shortcut && (
-                  <kbd className="cmd-palette__shortcut">{cmd.shortcut}</kbd>
-                )}
-              </button>
-            );
-          })}
-          {filtered.apps.length > 0 && (
-            <div className="cmd-palette__section-label">Apps</div>
-          )}
-          {filtered.apps.map((cmd) => {
-            const flatIndex = allItems.indexOf(cmd);
-            return (
-              <button
-                key={cmd.id}
-                data-cmd-index={flatIndex}
-                className={`cmd-palette__item ${flatIndex === selectedIndex ? "cmd-palette__item--selected" : ""}`}
-                onClick={() => executeCommand(cmd)}
-                onMouseEnter={() => setSelectedIndex(flatIndex)}
-              >
-                <span className="cmd-palette__item-icon">{cmd.icon}</span>
-                <div className="cmd-palette__item-text">
-                  <span className="cmd-palette__item-label">{cmd.label}</span>
-                  <span className="cmd-palette__item-desc">
-                    {cmd.description}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
+          {sections.map((section) => (
+            <React.Fragment key={section.title}>
+              <div className="cmd-palette__section-label">{section.title}</div>
+              {section.items.map((cmd) => {
+                flatIndex += 1;
+                const index = flatIndex;
+                return (
+                  <button
+                    key={cmd.id}
+                    type="button"
+                    data-cmd-index={index}
+                    className={`cmd-palette__item ${index === selectedIndex ? "cmd-palette__item--selected" : ""}`}
+                    onClick={(e) => executeCommand(cmd, e.metaKey || e.ctrlKey)}
+                    onMouseEnter={() => setSelectedIndex(index)}
+                  >
+                    <span className={`cmd-palette__item-icon${cmd.entity?.kind === "app" && cmd.entity.icon ? " cmd-palette__item-icon--app" : ""}`}>
+                      {cmd.icon}
+                    </span>
+                    <span className="cmd-palette__item-label">{cmd.label}</span>
+                    {cmd.live && <i className="cmd-palette__live" title="Pen is working" />}
+                    {cmd.shortcut ? (
+                      <kbd className="cmd-palette__shortcut">{cmd.shortcut}</kbd>
+                    ) : cmd.kindLabel ? (
+                      <span className="cmd-palette__kind">{cmd.kindLabel}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </React.Fragment>
+          ))}
+        </div>
+
+        <div className="cmd-palette__foot" aria-hidden="true">
+          <span><kbd>↑</kbd><kbd>↓</kbd> move</span>
+          <span><kbd>↵</kbd> open</span>
+          <span><kbd>{isMac ? "⌘" : "Ctrl"}</kbd><kbd>↵</kbd> open beside chat</span>
         </div>
       </div>
     </div>
