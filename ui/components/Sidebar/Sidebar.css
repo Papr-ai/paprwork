@@ -390,11 +390,6 @@
   background: rgba(0, 96, 224, 0.06);
 }
 
-/* Home peek: date + weather moved here from the old sidebar header */
-.rail-home-peek .weather-widget {
-  margin: 0;
-}
-
 @media (prefers-color-scheme: dark) {
   .rail {
     --rail-bg: #0c0f14;

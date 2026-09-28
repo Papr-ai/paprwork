@@ -1,6 +1,6 @@
 /**
  * Sidebar — the left rail. 96px, icon-first, clears the macOS traffic lights.
- * Your agent sits on top and is Home; Chats / Apps / Docs show Pinned + Recent in hover peeks
+ * Your agent sits on top and is Focus (Home) — its peek shows your three goals; Chats / Apps / Docs show Pinned + Recent in hover peeks
  * (replacing the always-on Favorites list); account, settings and personalization live on the avatar.
  * Every destination and action from the previous 240px sidebar is still here.
  */
@@ -9,7 +9,7 @@ import { useMemo, useCallback, useEffect, useState } from "react";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
 import type { TabType } from "../../types/tabs";
-import { WeatherWidget } from "./WeatherWidget";
+import { FocusPeek, openFocusGoal } from "./FocusPeek";
 import { OnboardingCard } from "./OnboardingCard";
 import { ProfileFooter } from "./ProfileFooter";
 import { RailItem } from "./RailItem";
@@ -176,20 +176,20 @@ export function Sidebar() {
 
       <RailItem
         variant="agent"
-        label={work.state === "working" ? workingLabel : `Home · ${agentName}`}
-        ariaLabel={work.state === "working" ? `Home · ${workingLabel}` : "Home"}
+        label={work.state === "working" ? workingLabel : `Focus · ${agentName}`}
+        ariaLabel={work.state === "working" ? `Focus · ${workingLabel}` : "Focus"}
         busy={work.state === "working"}
         active={activeView === "memory"}
         onClick={() => handleNavClick("memory")}
         icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} state={work.state} />}
         peek={
-          <div className="rail-home-peek">
-            <header className="rail-peek__header">
-              <b>Home</b>
-              <span>{work.state === "working" ? workingLabel : <>{agentName} · today&apos;s brief</>}</span>
-            </header>
-            <WeatherWidget />
-          </div>
+          <FocusPeek
+            status={work.state === "working" ? workingLabel : <>{agentName}&apos;s picks</>}
+            onOpen={(goalId) => {
+              handleNavClick("memory");
+              if (goalId) openFocusGoal(goalId);
+            }}
+          />
         }
       />
       <RailItem

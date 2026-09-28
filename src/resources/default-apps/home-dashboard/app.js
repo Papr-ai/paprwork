@@ -195,15 +195,17 @@ const App = {
     }
     if (!this.dates.length) this.dates = [Data.todayKey()];
 
-    await Goals.load();
+    await Promise.all([Goals.load(), Three.load()]);
     this.loadError = testBrief._loadError === true;
     this.isSampleData = !this.loadError && testBrief._isSample === true;
     this.isStaleBrief = !this.loadError && !this.isSampleData && testBrief._isStale === true;
     
     await this.render(testBrief); FoldNav.bind(this); Goals.bind(document.getElementById('goals'));
-    Tasks.bind();
+    Tasks.bind(); Three.bind();
+    this.ready = true; // a rail deep link that arrived during load opens now
+    if (Three.pendingOpen) setTimeout(() => Three.openGoal(Three.pendingOpen), 0);
     document.getElementById('view-today').addEventListener('click', async (e) => {
-      if (e.target.closest('#goals')) return; // Goals has its own handler
+      if (e.target.closest('#goals, #three')) return; // Goals and Your three have their own handlers
       const reviewBtn = e.target.closest('[data-review]');
       if (reviewBtn) { e.stopPropagation(); await this.review(reviewBtn); return; }
       const agentEl = e.target.closest('[data-agent]');
@@ -227,6 +229,14 @@ const App = {
         });
       } catch (e) { /* paprAPI may not be available */ }
     });
+  },
+  /** With Your three set, the full goal tree folds away under "All goals" so it never competes. */
+  goalsBlock() {
+    const html = Goals.render();
+    const n = Goals.data?.goals?.length || 0;
+    if (!html || !Three.has()) return html;
+    if (!n) return ''; // "What are you working toward?" would contradict the three shown above
+    return `<details class="goals-all"><summary>All goals <em>${n}</em></summary>${html}</details>`;
   },
   /** Lift the top active priority into the "Do this first" card; the rest stay in the list. */
   pickFocus(sections) {
@@ -257,7 +267,8 @@ const App = {
     const { focus, sections } = this.pickFocus(this.brief.sections || []);
     document.getElementById('hero').innerHTML = banner + R.hero(this.brief.hero);
     document.getElementById('focus').innerHTML = R.focus(focus);
-    document.getElementById('goals').innerHTML = this.idx === 0 ? Goals.render() : '';
+    document.getElementById('three').innerHTML = this.idx === 0 ? Three.section() : '';
+    document.getElementById('goals').innerHTML = this.idx === 0 ? this.goalsBlock() : '';
     document.getElementById('sections').innerHTML = sections.map((s) => R.section(s)).join('');
     if (this.loadError) {
       this.bindLoadErrorButton(this.brief._errorMessage);

@@ -60,6 +60,8 @@ export interface WorkspaceGoal {
   entities?: string[];
   /** True when Parent names a goal that does not exist or is the wrong level. */
   parentMissing?: boolean;
+  /** Chat titles Sleep cited as evidence ("from chat: \"…\"", "Chats/<title>.txt"), lowercased. */
+  chatRefs?: string[];
 }
 
 export interface WorkspaceGoalNode extends WorkspaceGoal {
@@ -235,10 +237,18 @@ export function parseGoals(sectionBody: string): WorkspaceGoal[] {
         if (mm) goal.mentions = Number.parseInt(mm[1], 10);
       }
     }
+    const refs = parseChatRefs(block);
+    if (refs.length) goal.chatRefs = refs;
     // Level: explicit wins; otherwise infer from parent presence (legacy blocks are L1).
     goal.level = explicitLevel ?? (goal.parent ? "L2" : "L1");
     if (goal.level === "L1") goal.parent = undefined;
     goals.push(goal);
+  }
+  // Sleep also writes one-line bullets (`- **(G1) Title** — Status: … Update: …`); parse those too
+  // so a workspace in that shape doesn't read as "no goals".
+  const seen = new Set(goals.map((g) => g.id));
+  for (const g of parseBulletGoals(withoutFences)) {
+    if (!seen.has(g.id)) goals.push(g);
   }
   // Validate parent links: must exist and be exactly one level up.
   const byId = new Map(goals.map((g) => [g.id, g]));
@@ -248,6 +258,83 @@ export function parseGoals(sectionBody: string): WorkspaceGoal[] {
     if (!parent || parent.level !== LEVEL_PARENT[g.level]) g.parentMissing = true;
   }
   return goals;
+}
+
+/** Chat titles cited in a goal's evidence: `Chats/<title>.txt` and `(from chat: "Title" 2026-09-02; "Other")`. */
+export function parseChatRefs(text: string): string[] {
+  const refs = new Set<string>();
+  const add = (t: string) => {
+    const v = t.toLowerCase().replace(/[.…\s]+$/g, "").trim();
+    if (v.length >= 6) refs.add(v);
+  };
+  for (const m of text.matchAll(/Chats\/([^\n]+?)\.txt/g)) add(m[1]);
+  for (const m of text.matchAll(/from chats?:\s*([^)]*)\)/gi)) {
+    for (const q of m[1].matchAll(/"([^"]{6,120})"/g)) add(q[1]);
+  }
+  return [...refs];
+}
+
+const BULLET_HEAD = /^\s*[-*]\s+\*\*\((G\d+)\)\s*(.+?)\*\*\s*[—–:-]?\s*(.*)$/;
+
+function bulletStatus(raw: string | undefined): GoalStatus {
+  const v = raw?.toLowerCase() ?? "";
+  if (!v) return "unknown";
+  if (/at[- ]risk|needs review/.test(v)) return "at-risk";
+  if (v.includes("blocked")) return "blocked";
+  if (v.includes("proposed")) return "proposed";
+  if (/\b(done|achieved|closed)\b/.test(v)) return "done";
+  if (v.includes("dropped")) return "dropped";
+  if (/in[- ]progress|on[- ]track|active/.test(v)) return "on-track";
+  return normalizeStatus(v);
+}
+
+/** "…Next milestone: X. Y" → "X" (bold markers stripped, capped). The LAST one wins — Sleep appends newer updates. */
+function lastClause(body: string, key: string): string | undefined {
+  // Sentence ends at ". " + capital — but not after "vs." / "e.g." / "i.e.".
+  const re = new RegExp(`${key}:\\s*([\\s\\S]*?)(?:(?<!\\bvs|\\be\\.g|\\bi\\.e)\\.\\s(?=[A-Z*(>])|$)`, "gi");
+  let last: string | undefined;
+  for (const m of body.matchAll(re)) last = m[1];
+  const clean = last?.replace(/\*\*/g, "").replace(/\s+/g, " ").trim();
+  if (!clean) return undefined;
+  return clean.length > 180 ? `${clean.slice(0, 177).trimEnd()}…` : clean;
+}
+
+/** Parse one-line goal bullets: `- **(G4) Title** — Status: **proposed**. Level: L1. Period: 2026-Q3. …`. */
+export function parseBulletGoals(sectionBody: string): WorkspaceGoal[] {
+  const out: WorkspaceGoal[] = [];
+  for (const line of sectionBody.split("\n")) {
+    const m = line.match(BULLET_HEAD);
+    if (!m) continue;
+    const [, id, rawTitle, body] = m;
+    // Keys describing the goal itself sit before the first dated "Update"; later text can name other goals.
+    const head = body.split(/\*\*Update\b/)[0].slice(0, 700);
+    const level = normalizeLevel(head.match(/\bLevel:\s*(L[123])/i)?.[1] ?? head.match(/\((L[123])\b/)?.[1]);
+    const parent = head.match(/\bParent:\s*(G\d+)\b/)?.[1];
+    const entities = new Set<string>();
+    for (const e of body.matchAll(/Entities:\s*([^\n]*?)(?:\.\s|\.$|$)/g)) {
+      for (const ref of parseEntityRefs(e[1].replace(/\.$/, ""))) entities.add(ref);
+    }
+    const mentions = head.match(/\((\d+)\s+(?:explicit\s+)?mentions?\b/i)?.[1];
+    const goal: WorkspaceGoal = {
+      id,
+      title: rawTitle.replace(/\*+$/, "").trim(),
+      status: bulletStatus(head.match(/Status:\s*\**\s*([^*.;\n]+)/i)?.[1]),
+      level: level ?? (parent && parent !== id ? "L2" : "L1"),
+      confidence: normalizeConfidence(head.match(/Confidence:\s*\**\s*(high|medium|low)/i)?.[1]),
+      priority: out.length + 1,
+      parent: parent && parent !== id ? parent : undefined,
+      nextMilestone: lastClause(body, "Next milestone"),
+      period: head.match(/Period:\s*(\d{4}(?:-Q[1-4])?)/)?.[1],
+      evidence: lastClause(body, "Evidence"),
+    };
+    if (goal.level === "L1") goal.parent = undefined;
+    if (mentions) goal.mentions = Number.parseInt(mentions, 10);
+    if (entities.size) goal.entities = [...entities];
+    const refs = parseChatRefs(body);
+    if (refs.length) goal.chatRefs = refs;
+    out.push(goal);
+  }
+  return out;
 }
 
 function sortByPriority<T extends WorkspaceGoal>(list: T[]): T[] {
