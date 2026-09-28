@@ -3860,8 +3860,17 @@ export class AppService {
             // ignore unreadable files
           }
         }
+        // validateApp rebuilt dist moments ago. If that build passed, a newer
+        // source mtime is a sibling write racing this check, not stale code —
+        // only a failed build leaves the iframe on old output.
+        const lastBuild = this.lastBuildResult.get(appId);
+        const buildJustPassed = lastBuild?.success === true && !lastBuild.legacy;
         issues.push(
-          ...checkStaleBundle(indexHtmlContent, distMtimeMs, newestSourceMtimeMs),
+          ...checkStaleBundle(
+            indexHtmlContent,
+            distMtimeMs,
+            buildJustPassed ? null : newestSourceMtimeMs,
+          ),
         );
       }
     } catch (healthError) {
