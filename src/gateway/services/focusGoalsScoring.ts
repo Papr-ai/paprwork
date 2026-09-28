@@ -67,6 +67,8 @@ export interface FocusGoal {
   level?: string;
   status?: string;
   parent?: string;
+  /** True when the user renamed Pen's goal — the title is an override, keep sending it on save. */
+  edited?: boolean;
   /** Done-when, as the user phrased it (set when they edit). */
   target?: string;
   due?: string;

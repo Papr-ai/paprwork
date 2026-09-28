@@ -10,6 +10,24 @@ const ThreeEdit = {
     this.pool = d.candidates.map((g) => ({ ...g, origTitle: g.title }));
     this.editing = focusId || ''; this.swapping = '';
   },
+  /** "I'll tell you": open a blank slot (a new one when there's room, else slot 1) ready to type. */
+  startOwn() {
+    if (!this.draft) this.reset();
+    let slot = this.draft[0];
+    if (this.draft.length < 3) {
+      slot = { id: `F-new-${Date.now()}`, title: '', why: 'Written by you', origin: 'custom', signals: {} };
+      this.draft.push(slot);
+    }
+    this.editing = `own:${slot.id}`; this.swapping = '';
+    this.paint();
+    document.getElementById('te-t')?.focus();
+  },
+  /** PUT body for a set of goals — custom ones carry their text, Pen's carry the goal id. */
+  picksFrom(goals) {
+    return goals.filter((g) => g.title).map((g) => g.origin === 'custom'
+      ? { id: g.id, title: g.title, target: g.target, due: g.due }
+      : { id: g.id, goalId: g.id, title: g.edited || (g.origTitle && g.title !== g.origTitle) ? g.title : undefined, target: g.target, due: g.due });
+  },
   firstRun() { return Three.data?.source === 'pen' && !Three.data?.confirmed; },
   editor(g, own) {
     const v = (s) => (own ? '' : this.esc(s || ''));
@@ -39,11 +57,13 @@ const ThreeEdit = {
   render() {
     if (!this.draft) this.reset();
     const first = this.firstRun();
-    const sub = first ? `${this.esc(Three.data?.evidence || 'From your goals')}. Keep them, edit one, or swap it out.` : "Change what's changed. Pen keeps the rest as is.";
+    const blank = !Three.has();
+    const sub = blank ? 'Name up to three outcomes you want to move. Pen builds your brief around them.' : first ? `${this.esc(Three.data?.evidence || 'From your goals')}. Keep them, edit one, or swap it out.` : "Change what's changed. Pen keeps the rest as is.";
     return `<div class="t3wrap">
       <p class="hero-date">${first ? "Pen's picks" : 'Edit Focus'}</p>
       <h2 class="hero-title">${first ? 'Pen picked your three.' : 'Your three.'}</h2><p class="t3sub">${sub}</p>
       <div class="t3cards">${this.draft.map((g, i) => this.card(g, i)).join('')}</div>
+      ${this.draft.length < 3 && !this.editing ? '<button type="button" class="t3add" data-three="add">Add a goal</button>' : ''}
       <footer class="t3foot"><button type="button" class="hfocus-primary" data-three="lock"${this.saving ? ' disabled' : ''}>${first ? 'Lock in my three' : 'Save'}</button>
         <button type="button" class="hfocus-ghost" data-three="close">${first ? 'Not now' : 'Cancel'}</button></footer>
       <p class="t3note">Three at most. Pen never changes them on its own. <button type="button" class="t3link" data-three="repick">Let Pen pick again</button></p>
@@ -65,7 +85,8 @@ const ThreeEdit = {
     const i = this.draft ? this.draft.findIndex((g) => g.id === gid) : -1;
     if (act === 'edit-one') { this.editing = this.editing === gid ? '' : gid; this.swapping = ''; }
     else if (act === 'swap') { this.swapping = this.swapping === gid ? '' : gid; this.editing = ''; }
-    else if (act === 'cancel') this.editing = '';
+    else if (act === 'cancel') { this.editing = ''; this.draft = this.draft.filter((g) => g.title); }
+    else if (act === 'add') { this.startOwn(); return; }
     else if (act === 'own') { this.editing = `own:${gid}`; this.swapping = ''; }
     else if (act === 'use' && i >= 0) {
       const j = this.pool.findIndex((c) => c.id === b.dataset.cid);
@@ -76,14 +97,13 @@ const ThreeEdit = {
       const f = { title: this.val('te-t'), target: this.val('te-m'), due: this.val('te-d') };
       if (!f.title) return;
       if (own) {
-        this.pool.unshift(this.draft[i]);
+        if (this.draft[i].title) this.pool.unshift(this.draft[i]);
         this.draft[i] = { id: `F-${Date.now()}`, title: f.title, target: f.target, due: f.due, why: 'Written by you', origin: 'custom', signals: {} };
       } else Object.assign(this.draft[i], f);
       this.editing = '';
     } else if (act === 'lock') {
-      const picks = this.draft.map((g) => g.origin === 'custom'
-        ? { id: g.id, title: g.title, target: g.target, due: g.due }
-        : { id: g.id, goalId: g.id, title: g.title !== g.origTitle ? g.title : undefined, target: g.target, due: g.due });
+      const picks = this.picksFrom(this.draft);
+      if (!picks.length) return;
       await this.put('/api/workspace/focus', 'PUT', { picks, confirm: true });
       Three.close(); return;
     } else if (act === 'repick') {

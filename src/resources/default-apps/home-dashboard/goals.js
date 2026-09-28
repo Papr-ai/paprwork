@@ -113,6 +113,9 @@ const Goals = {
       const btn = e.target.closest('[data-goals]');
       if (!btn) return;
       e.stopPropagation();
+      // First run stays on Home: Pen shows its picks (or a blank slot) instead of opening a chat.
+      if (btn.dataset.goals === 'draft' && typeof FocusStart !== 'undefined') { FocusStart.draft(btn); return; }
+      if (btn.dataset.goals === 'set' && typeof FocusStart !== 'undefined') { FocusStart.write(); return; }
       if (window.paprAPI?.invoke) window.paprAPI.invoke('chat.open', { message: this.prompt(btn.dataset.goals, btn.dataset.gid) });
       else alert('Open Paprwork on desktop to manage goals with the agent.');
     });

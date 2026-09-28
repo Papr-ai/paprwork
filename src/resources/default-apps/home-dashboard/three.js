@@ -6,6 +6,7 @@ const Three = {
   data: null, loadedAt: 0, view: 'page', gid: null,
   SPARK: '<svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 1.5l1.4 4.1 4.1 1.4-4.1 1.4L8 12.5 6.6 8.4 2.5 7l4.1-1.4z"/></svg>',
   BACK: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5L5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  ARROW: '<svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5L10.5 8 6 12.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   esc(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); },
   async load() {
     try {
@@ -52,7 +53,8 @@ const Three = {
     }).join('');
     const aligned = d.alignedPct == null ? '' : `<p class="t3aligned"><span class="t3bar"><i style="width:${Math.min(100, d.alignedPct)}%"></i></span><b>${d.alignedPct}%</b> of this week's chat time went to these</p>`;
     const pick = d.source === 'pen' && !d.confirmed ? '<em class="t3pick" title="Pen picked these from your goals and activity. Edit any time.">Pen\'s picks</em>' : '';
-    return `<section class="hthree"><header><h2 class="section-title">Your three ${pick}</h2>
+    const review = typeof WeekReview !== 'undefined' ? WeekReview.banner() : '';
+    return `${review}<section class="hthree"><header><h2 class="section-title">Your three ${pick}</h2>
       <button type="button" class="t3link" data-three="edit">Edit</button></header>${rows}${aligned}</section>`;
   },
   /** One goal: where it stands, what moves it, and one tap to work on it. */
@@ -79,6 +81,7 @@ const Three = {
     const root = document.getElementById('view-three');
     const g = gid ? this.find(gid) : null;
     if (view === 'goal' && g) root.innerHTML = this.detail(g);
+    else if (view === 'review' && this.has()) root.innerHTML = WeekReview.render();
     else { ThreeEdit.reset(gid); root.innerHTML = ThreeEdit.render(); }
     ['view-today', 'view-tasks'].forEach((id) => { document.getElementById(id).hidden = true; });
     document.querySelector('.htop')?.classList.add('is-sub');
@@ -90,7 +93,11 @@ const Three = {
     document.getElementById('view-three').hidden = true;
     document.querySelector('.htop')?.classList.remove('is-sub');
     const el = document.getElementById('three');
-    if (el) el.innerHTML = typeof App !== 'undefined' && App.idx !== 0 ? '' : this.section();
+    const onToday = typeof App === 'undefined' || App.idx === 0;
+    if (el) el.innerHTML = onToday ? this.section() : '';
+    // The first-run "What are you working toward?" prompt folds away once there is a three.
+    const goals = document.getElementById('goals');
+    if (goals && onToday && typeof App !== 'undefined') goals.innerHTML = App.goalsBlock();
     Tasks.setView('today');
   },
   chat(g) {
@@ -109,6 +116,8 @@ const Three = {
       else if (act === 'close') this.close();
       else if (act === 'chat') this.chat(this.find(gid) || {});
       else if (act === 'edit') this.show('edit', gid);
+      else if (act === 'review') this.show('review');
+      else if (act.startsWith('wr-')) WeekReview.act(act);
       else ThreeEdit.act(act, b);
     });
     // Goals change in chat (and Sleep re-ranks evidence) — refresh when Home comes back into view.

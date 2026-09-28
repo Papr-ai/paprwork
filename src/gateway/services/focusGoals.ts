@@ -266,7 +266,14 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
       signals: { chats30: 0, hours7: 0, hours30: 0, logDays: 0, openTasks: 0, appsOpened: 0 },
     };
   }
-  return { ...base, id: pick.id, title: pick.title || base.title, target: pick.target ?? base.target, due: pick.due ?? base.due };
+  return {
+    ...base,
+    id: pick.id,
+    title: pick.title || base.title,
+    edited: Boolean(pick.title && pick.title !== base.title) || undefined,
+    target: pick.target ?? base.target,
+    due: pick.due ?? base.due,
+  };
 }
 
 /** Resolve the saved three against today's evidence; first run quietly saves Pen's picks. */
