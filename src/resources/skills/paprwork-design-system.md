@@ -25,6 +25,27 @@ Blends:
 - Measure success with 1-2 metrics.
 - **No emojis** in UI text, labels, buttons, headings, or tab icons — use SVG icons and plain text only (`validate_app` enforces `no-emojis`).
 
+
+## Design Directive (read first, apply to every screen)
+
+Less is more. Minimalist, modern, simple. Focus on ONE job-to-be-done. Steve Jobs meets Elon Musk: taste plus first-principles — delete every element that does not serve the job, then simplify what remains. Use cognitive-neuroscience UX research to make the app instantly intuitive in **empty and filled states**, **dark and light mode**, **small and large screens**.
+
+| Research principle | Rule |
+|---|---|
+| Hick's law (choices add decision time) | One screen = one job, one primary action |
+| Fitts's law + visual salience | Primary action findable in <2s: largest, highest contrast, in the F/Z scan path |
+| Working memory ~4 chunks (Cowan) | Max 3 sections per screen; group; progressive disclosure |
+| Recognition over recall | Visible labels + icons, no hidden gestures, no jargon |
+| Pre-attentive processing | One accent color, size, position to point at what matters — never decoration |
+| Doherty threshold (<400ms) | Feedback within 100ms of every action; skeletons, not full-page spinners |
+
+**Design the 4-state matrix before writing code:**
+- **Empty** = onboarding. One sentence of value, one CTA to first success, optional sample data. Never a blank table.
+- **Filled** = scannable. Key number first, sensible default sort, details on demand.
+- **Dark + light** = both via `prefers-color-scheme` and Liquid Glass tokens; WCAG AA on glass in both.
+- **390px + 1440px** = mobile-first single column, 44px targets, content max-width on wide screens, zero horizontal overflow.
+- Motion 150-250ms, transform/opacity only, honor `prefers-reduced-motion`.
+
 ---
 
 ## Layer 1: Visual Foundations
@@ -374,6 +395,8 @@ Mini-apps that read or write data through `/api/db/query`, `/api/db/write`, or `
 - [ ] Tap targets >= 44px
 - [ ] Primary action obvious within 2 seconds
 - [ ] Loading/empty/error states exist
+- [ ] Empty state has one value sentence + one CTA to first success
+- [ ] Checked at 390px and 1440px in both dark and light
 - [ ] One concept per card
 - [ ] Keyboard navigation works
 - [ ] Contrast ratios meet WCAG AA

@@ -7,6 +7,10 @@ import {
   isValidClaudeOAuthToken,
   previewClaudeOAuthToken,
 } from "../../utils/claudeOAuthToken";
+import {
+  detectManualConnectionPlatform,
+  getTerminalLabel,
+} from "../../constants/claudeManualConnection";
 
 const POLL_INTERVAL_MS = 3_000;
 const POLL_MAX_MS = 10 * 60 * 1000;
@@ -38,6 +42,14 @@ export function ClaudeOnboardingTokenStep({
   );
   const tokenLooksValid = cleanedToken.length > 0 && isValidClaudeOAuthToken(cleanedToken);
   const hadWhitespace = pastedToken.length > 0 && pastedToken !== cleanedToken;
+  const platform = useMemo(() => detectManualConnectionPlatform(), []);
+  const terminalLabel = useMemo(() => getTerminalLabel(platform), [platform]);
+  const switchAppHint =
+    platform === "mac"
+      ? "the Dock or ⌘Tab"
+      : platform === "windows"
+        ? "the taskbar or Alt+Tab"
+        : "your window switcher";
 
   const trySyncFromStorage = useCallback(async (): Promise<boolean> => {
     setSyncing(true);
@@ -123,6 +135,11 @@ export function ClaudeOnboardingTokenStep({
 
   return (
     <>
+      <p className="claude-stepper__token-instructions">
+        The token is in the <strong>{terminalLabel}</strong> window from the sign-in step — not in
+        this app. Use {switchAppHint} to find it, select the full <code>sk-ant-oat01-…</code> line,
+        copy it, then paste here.
+      </p>
       <ClaudeSetupTokenTerminalExample />
 
       <input

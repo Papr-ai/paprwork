@@ -216,6 +216,68 @@ Architect must specify the **job runtime path** per platform — do not mix Link
 
 Reference: `preloaded-social-media-auth` skill.
 
+
+### 10. Access & Row ACL (required for multi-user apps on a shared DB)
+
+Skip with one line ("single-user, no row ACL") when only the owner uses the app. Otherwise decide this **before** the schema — retrofitting ACL onto shared Turso tables means migrations + backfills.
+
+**Isolation choice**
+
+| Situation | Choice |
+|---|---|
+| Each user's data is never seen by others | `create_database({ isolation: "per-user" })` — no ACL columns needed |
+| Users collaborate, or an admin sees everything | Shared DB + row ACL (below) |
+| Anonymous public funnel, no sign-in | Shared DB + `owner_session` (UX isolation only — sensitive reads via backend) |
+
+**ACL schema on shared registry tables** (every table has a PRIMARY KEY for sync):
+
+```sql
+-- on each user-facing table
+owner_user_id TEXT NOT NULL,                 -- Papr userId from PAPR_CALLER_USER_ID
+visibility TEXT NOT NULL DEFAULT 'private'
+  CHECK (visibility IN ('private','team','public')),
+CREATE INDEX idx_<t>_owner ON <t>(owner_user_id);
+CREATE INDEX idx_<t>_vis ON <t>(visibility);
+
+CREATE TABLE app_roles (
+  papr_user_id TEXT PRIMARY KEY,
+  role TEXT NOT NULL CHECK (role IN ('admin','editor','viewer')),
+  granted_by TEXT, granted_at TEXT DEFAULT (datetime('now'))
+);
+INSERT OR IGNORE INTO app_roles (papr_user_id, role, granted_by)
+  VALUES ('{{papr.owner_user_id}}', 'admin', 'migration');   -- never hard-code an id
+
+CREATE TABLE row_acl (                        -- only if rows are shared with specific people
+  table_name TEXT NOT NULL, row_id TEXT NOT NULL,
+  principal_user_id TEXT NOT NULL,
+  permission TEXT NOT NULL CHECK (permission IN ('read','write')),
+  PRIMARY KEY (table_name, row_id, principal_user_id)
+);
+```
+
+**Runtime wiring**
+
+| Need | Use |
+|---|---|
+| Who is calling, is this the publisher | `GET /api/access` → `{ loggedIn, isOwner, userId, email, mode }` at startup |
+| Admin UI gating | `access.isOwner` **or** `app_roles.role = 'admin'` for `access.userId` — hide admin tabs entirely otherwise |
+| Assigning roles / sharing rows | `GET /api/members` → pick from real workspace members by `userId` (never free-text email); flag roles whose user left |
+| Enforcing reads/writes | `POST /api/app/backend/:action` with server-injected `PAPR_CALLER_USER_ID` — `/api/db/query` does **not** enforce row ACL |
+| Browser-direct reads | Only `visibility='public'` rows or aggregates (e.g. `app_stats`) |
+
+Canonical backend read filter (admins skip it):
+
+```sql
+WHERE visibility = 'public'
+   OR (visibility = 'team' AND :caller_is_member)
+   OR owner_user_id = :caller
+   OR id IN (SELECT row_id FROM row_acl WHERE table_name = :t AND principal_user_id = :caller)
+```
+
+Writes to `owner_user_id`, `visibility`, `app_roles`, `row_acl` happen **only** in backend actions after checking the caller's role. Publish access (`publish_cloud_app` loginAccess) decides who can open the app; these tables decide which rows each person sees.
+
+**Architect output:** isolation choice + why; roles matrix (role → read / write / admin pages); ACL columns per table; backend actions that enforce ACL; which reads are browser-safe; owner bootstrap + `/api/members` role assignment; publish loginAccess.
+
 ## Paprwork Rules (non-negotiable)
 
 1. **One task per page; one related workflow per app; split apps when jobs/audiences differ** — multiple pages per app is normal; multiple unrelated workflows in one app is not
@@ -225,7 +287,7 @@ Reference: `preloaded-social-media-auth` skill.
 5. **Design** — load design system skill before any UI implementation (main agent enforces)
 6. **Delegate implementation** — Product Architect plans; Implementation Specialist or main agent builds after approval
 7. **One canonical DB contract** — name every table/column once, plus its writers and readers; multi-job apps require `data-contract.json`
-8. **Multi-user ACL** — sensitive reads/writes go through backend handlers using **`PAPR_CALLER_USER_ID`**; tag rows with `papr_user_id` but never rely on client-side SQL filters alone
+8. **Multi-user ACL** — shared-DB tables carry `owner_user_id` + `visibility` (+ `app_roles` / `row_acl`); identity from `GET /api/access`, role pickers from `GET /api/members`; sensitive reads/writes go through backend handlers using **`PAPR_CALLER_USER_ID`** — never rely on client-side SQL filters alone (see §10)
 8. **No filesystem coupling** — jobs never read another job's `job.json`, `jobs.json`, or hardcoded `$PAPR_HOME/Jobs/...` paths
 9. **Evidence before completion** — interrupted or unavailable tool results are unknown, never proof; rerun validation and acceptance checks before claiming success
 

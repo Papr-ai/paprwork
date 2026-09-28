@@ -6,6 +6,9 @@
 
 import { spawn, exec } from "child_process";
 import { promisify } from "util";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
 import {
   parseClaudeCliCredentials,
   type ClaudeCliCredentials,
@@ -120,6 +123,11 @@ export class ClaudeSetupTokenService {
     return { installed: false };
   }
 
+  /** Global `claude` on PATH only — not Papr's cached download. */
+  async getClaudeCliOnPathCheck(): Promise<ClaudeCliCheckResult> {
+    return this.getClaudeCliCheckOnPath();
+  }
+
   private async getClaudeCliCheckOnPath(): Promise<ClaudeCliCheckResult> {
     try {
       const whichCmd = process.platform === "win32" ? "where claude" : "which claude";
@@ -223,6 +231,49 @@ export class ClaudeSetupTokenService {
         error: (error as Error).message,
       };
     }
+  }
+
+  /**
+   * Writes a launcher script with login-shell PATH so Terminal can run setup-token
+   * even when `claude` is not on PATH (Papr's cached CLI + node).
+   */
+  async writeSetupTokenLauncherScript(): Promise<string> {
+    const spec = await this.resolveSetupTokenSpawn();
+    const env = getShellEnv();
+    const scriptPath = path.join(
+      os.tmpdir(),
+      `paprwork-claude-setup-token-${process.pid}.sh`,
+    );
+
+    const pathExport = (env.PATH ?? "").replace(/"/g, '\\"');
+    const extraEnvLines = spec.extraEnv
+      ? Object.entries(spec.extraEnv)
+          .map(([key, value]) => `export ${key}="${String(value).replace(/"/g, '\\"')}"`)
+          .join("\n")
+      : "";
+
+    const commandLine = await this.getSetupTokenShellCommand();
+
+    const script = `#!/bin/bash
+export PATH="${pathExport}"
+${extraEnvLines}
+echo "Papr Work — Claude sign-in"
+echo "Running: ${commandLine.replace(/"/g, '\\"')}"
+echo ""
+${spec.shell ? commandLine : `${this.shellQuote(spec.command)} ${spec.args.map((a) => this.shellQuote(a)).join(" ")}`}
+echo ""
+echo "Copy the full sk-ant-oat01-… line above, then paste it into Papr Work."
+`;
+
+    await fs.writeFile(scriptPath, script, { mode: 0o755 });
+    return scriptPath;
+  }
+
+  private shellQuote(value: string): string {
+    if (process.platform === "win32") {
+      return `"${value.replace(/"/g, '\\"')}"`;
+    }
+    return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
   /** Shell command for `claude setup-token` (PATH binary or cached cli.js). */

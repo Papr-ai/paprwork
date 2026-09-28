@@ -157,9 +157,15 @@ export interface ElectronAPI {
         | { success: true; okMessage: string }
         | { success: false; error: string }
       >;
+      getSetupTokenShellCommand: () => Promise<
+        { success: true; command: string } | { success: false; error: string }
+      >;
       openSetupTokenTerminal: (options?: {
         source?: "settings" | "onboarding" | "unknown";
-      }) => Promise<{ success: true } | { success: false; error: string }>;
+      }) => Promise<
+        | { success: true; command: string }
+        | { success: false; error: string; command?: string }
+      >;
     };
     pasteToken: (
       provider: string,

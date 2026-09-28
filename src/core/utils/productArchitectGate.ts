@@ -1,8 +1,11 @@
+import { MULTI_USER_ACL_CONTRACT } from "../constants/multiUserAclDirective.js";
+import { readTriageTierFromToolCall } from "./architectTriage.js";
+
 /** Stable id for the built-in Product Architect sub-agent profile */
 export const PRODUCT_ARCHITECT_ID = "product-architect";
 
 export const PRODUCT_ARCHITECT_REMINDER =
-  "Every create_app requires a completed product-architect delegation first (tool-enforced). " +
+  "Every create_app requires architect_triage (lite) or a completed product-architect delegation first (tool-enforced). " +
   'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) — useAgentId only.';
 
 export const PRODUCT_ARCHITECT_PLAN_REMINDER =
@@ -10,7 +13,8 @@ export const PRODUCT_ARCHITECT_PLAN_REMINDER =
 
 export const PRODUCT_ARCHITECT_BLOCK_MESSAGE =
   "⛔ Product Architect required before this step.\n\n" +
-  "Every new mini-app (create_app) requires a completed product-architect delegation in this chat — including simple CRUD apps.\n\n" +
+  "Every new mini-app (create_app) requires either a lite architect triage or a completed product-architect delegation in this chat.\n\n" +
+  "0. architect_triage({ request, context }) — Jev decides: tier \"lite\" (simple frontend/report) unlocks create_app directly with design rules; tier \"full\" → continue below\n" +
   "1. list_sub_agents() — or run_deferred_tool({ tool_name: \"list_sub_agents\", arguments: {} }) if deferred\n" +
   '2. delegate_task({ useAgentId: "product-architect", ... }) — or run_deferred_tool({ tool_name: "delegate_task", arguments: { ... } })\n' +
   "3. Wait for delegation (MiniChat card); poll get_delegation_run via run_deferred_tool when deferred\n" +
@@ -32,6 +36,7 @@ export const PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION =
   "- Plan A schema (cloud sync on): write_file migrations/{id}.sql → papr_db_apply_migration({ dbId, migrationId }) — Turso primary when online; never papr_db_exec DDL or bash/sqlite3 on registry DB files\n" +
   "- Plan A rows: papr_db_exec DML or /api/db/write; Publish changes / push_cloud_sync({ appId }) ships git + Turso ordered flush — not legacy CDC (syncMode=legacy). Replica pendingOps/cdcOperations on syncMode=replica is normal pending push\n" +
   "- Platform scrape jobs: LinkedIn only → linkedin-api + CDP (desktop); X/Reddit/Instagram → \\${KEY} + headless Playwright — never reddit-api/x-api CDP; cloud uses vault-synced cookies\n" +
+  MULTI_USER_ACL_CONTRACT +
   "- Extend backend/ping.py scaffold pattern — do not replace with stdin-based handlers";
 
 /** Returned on create_app after product-architect gate passes — reminds builder of platform contracts. */
@@ -204,6 +209,25 @@ export async function hasCompletedProductArchitectInChat(
   return hasCompletedProductArchitectJob(chatId);
 }
 
+/** True when architect_triage returned tier "lite" in this chat (latest triage wins). */
+export async function hasLiteArchitectTriageInChat(chatId: string): Promise<boolean> {
+  const { getAgentService } = await import(
+    "../../gateway/services/AgentService.js"
+  );
+  const messages = await getAgentService()
+    .getStorageManager()
+    .loadMessages(chatId);
+  let latest: "lite" | "full" | null = null;
+  for (const message of messages) {
+    if (message.role !== "assistant" || !message.toolCalls?.length) continue;
+    for (const toolCall of message.toolCalls as DelegateToolCallRow[]) {
+      const tier = readTriageTierFromToolCall(toolCall);
+      if (tier) latest = tier;
+    }
+  }
+  return latest === "lite";
+}
+
 export async function assertProductArchitectGate(
   chatId: string | null | undefined,
   input: ProductArchitectGateInput,
@@ -221,6 +245,10 @@ export async function assertProductArchitectGate(
 
   const completed = await hasCompletedProductArchitectInChat(chatId);
   if (completed) {
+    return { allowed: true };
+  }
+  // Lite triage (Jev-routed simple frontend/report) unlocks create_app only.
+  if (input.tool === "create_app" && (await hasLiteArchitectTriageInChat(chatId))) {
     return { allowed: true };
   }
 

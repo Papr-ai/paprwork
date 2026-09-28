@@ -52,9 +52,16 @@ export async function planSnapshotInstall(
   const schema = await Promise.all(
     snapshot.schema.map((sql) => substituteMigrationPlaceholders(sql, migrationRoot)),
   );
+  // Row writes carried from covered migrations (e.g. singleton seeds), in
+  // migration order, after the DDL and before the publisher's seed.sql.
+  const migrationRows = await Promise.all(
+    snapshot.migrations
+      .flatMap((m) => m.rows ?? [])
+      .map((row) => substituteMigrationPlaceholders(row.sql, migrationRoot)),
+  );
   const coveredFiles = snapshot.migrations.map((m) => m.file);
   return {
-    statements: [...schema, ...seed],
+    statements: [...schema, ...migrationRows, ...seed],
     coveredFiles,
     coveredIds: coveredFiles.map((file) => file.replace(/\.sql$/, "")),
   };

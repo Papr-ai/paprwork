@@ -28,6 +28,7 @@ import {
 import { getPaprWorkspacePathsForAgent } from "../utils/paprAgentPaths.js";
 import { validateMiniAppIcon } from "../utils/miniAppIconValidation.js";
 import { getPaprBundlesDir } from "../utils/paprRoot.js";
+import { DESIGN_DIRECTIVE_SHORT } from "../constants/designDirective.js";
 import { asToonOrRows } from "../utils/toonRows.js";
 import { platformIdsFromRequirements } from "../../gateway/utils/platformCdpBridge.js";
 import { getApiKeysForSanitization, sanitizeError } from "./security.js";
@@ -876,9 +877,10 @@ export const createAppTool = createTool({
   id: "create_app",
   description:
     "Create a mini-app artifact with one or more files. Uses TypeScript (.ts) and Liquid Glass design system by default. " +
-    "ENFORCED: Every new app requires a completed product-architect delegation in this chat first — " +
-    'delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }) after list_sub_agents(). ' +
-    "Simple todo/CRUD apps still require the brief (fast). Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll.",
+    "ENFORCED: call architect_triage({ request }) first. Tier lite (simple frontend/report) unlocks create_app directly; " +
+    'tier full requires a completed product-architect delegation — delegate_task({ useAgentId: "product-architect", task: "...", context: "..." }). ' +
+    "Apps that trigger jobs MUST use subscribeJobEvents (onDbChanged for $APP_DB writes, onStatusChanged for lastOutput) — never poll. " +
+    DESIGN_DIRECTIVE_SHORT,
   inputSchema: createAppSchema,
   execute: async (input) => {
     const args = (input as { context?: CreateAppArgs }).context ?? input;
@@ -970,8 +972,7 @@ export const createAppTool = createTool({
           `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
           `Also check $PAPR_HOME/workspace/BRAND.md and brand.json for user brand colors/fonts/logo — use them when set. ` +
           `Mini-apps: fetch('/api/brand?appId=...') or CSS vars (--brand-primary, etc.). ` +
-          `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
-          `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
+          `${DESIGN_DIRECTIVE_SHORT} ` +
           `Follow user brand when set; otherwise follow the design system.`,
         _architectReminder: PRODUCT_ARCHITECT_REMINDER,
         _implementationReminder: CREATE_APP_IMPLEMENTATION_REMINDER,
@@ -1006,8 +1007,7 @@ export const createAppTool = createTool({
         `read_skill({ skillId: "preloaded-paprwork-design-system" }). ` +
         `Also check $PAPR_HOME/workspace/BRAND.md and brand.json for brand colors/fonts/logo — use them when set. ` +
         `Mini-apps: fetch('/api/brand?appId=...') or CSS vars (--brand-primary, etc.). ` +
-        `Design target: Steve Jobs meets Elon Musk — obsessively clean, premium, zero clutter. ` +
-        `2-3 focused sections max, ONE primary action per screen, generous whitespace. ` +
+        `${DESIGN_DIRECTIVE_SHORT} ` +
         `Follow user brand when set; otherwise follow the design system.`,
       _architectReminder: PRODUCT_ARCHITECT_REMINDER,
       _implementationReminder: CREATE_APP_IMPLEMENTATION_REMINDER,

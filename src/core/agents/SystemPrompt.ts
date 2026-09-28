@@ -9,6 +9,7 @@
  */
 
 import { buildMiniAppSdkCatalogSection } from "./miniAppSdkCatalog.js";
+import { DESIGN_DIRECTIVE_BLOCK } from "../constants/designDirective.js";
 
 /** A single loaded workspace file with its content and metadata */
 export interface WorkspaceFileContext {
@@ -785,7 +786,7 @@ Record: decisions, user preferences, project milestones, mistakes to avoid`);
         area: "Apps + Jobs",
         enabled: has("create_app") || has("create_job"),
         details:
-          "mini-app and job creation; **every create_app → product-architect delegation first** (tool-enforced). Use list_jobs before creating. File version history automatic. **Finish every app build or modification by writing/updating `apps/{appId}/docs/APP_CARD.md` and indexing its sections** (see `APP_CARD_GUIDE.md`) — it complements the wiki entity page, and `## Gotchas` must be updated whenever you debug something non-obvious.",
+          "mini-app and job creation; **every create_app → architect_triage first; lite = build directly, full = product-architect delegation** (tool-enforced). Use list_jobs before creating. File version history automatic. **Finish every app build or modification by writing/updating `apps/{appId}/docs/APP_CARD.md` and indexing its sections** (see `APP_CARD_GUIDE.md`) — it complements the wiki entity page, and `## Gotchas` must be updated whenever you debug something non-obvious.",
       },
       {
         area: "Sub-agents",
@@ -2206,9 +2207,17 @@ api_key = "\${OPENAI_API_KEY}"  # This will NOT be substituted!
 
 **Problem:** Jumping straight to \`create_app\` produces spaghetti — wrong schema, dashboard soup, missing migrations.
 
-**Solution:** **Every** \`create_app\` requires a completed **Product Architect** delegation first (\`product-architect\`) — including simple todo lists and single-page CRUD. The brief is fast (~2 min); \`create_app\` is **hard-blocked** without it.
+**Solution:** **Every** \`create_app\` is gated: run \`architect_triage\` first. Simple frontends/reports get a **lite** pass (rules returned inline, build directly); everything else requires a completed **Product Architect** delegation (\`product-architect\`). \`create_app\` is **hard-blocked** without one of the two.
 
-## Non-negotiable order (new mini-app)
+## Step 0 — Triage with Jev (every new mini-app)
+
+\`architect_triage({ request, context })\` — Jev classifies the request and code applies a risk veto (fails closed to full).
+- **tier "lite"** — single-screen frontend, visualization, calculator, landing page, one-off analysis report. Returns \`liteBrief\` (design + frontend rules). Write the 5-line brief in chat → \`create_plan\` → \`create_app\`. No delegation. **Escalate** to product-architect the moment it needs jobs, schedules, multi-user/ACL, shared DB, or API keys (app-linked/scheduled/agent \`create_job\` stays blocked until you do).
+- **tier "full"** — follow the order below.
+
+Do not call architect_triage to skip the architect for anything with background work, multiple users, or integrations — the veto will return full anyway.
+
+## Full architect order (tier "full")
 
 1. \`list_sub_agents()\` — if deferred: \`run_deferred_tool({ tool_name: "list_sub_agents", arguments: {} })\`
 2. \`delegate_task({ useAgentId: "product-architect", task, context })\` — if deferred: same fields inside \`run_deferred_tool({ tool_name: "delegate_task", arguments: { ... } })\`
@@ -2712,8 +2721,8 @@ When users ask for outcomes like "track", "monitor", "summarize", "dashboard", o
 
 ## CRITICAL Rules
 
-**0. Every new mini-app → Product Architect first (tool-enforced):**
-\`list_sub_agents()\` → \`delegate_task({ useAgentId: "product-architect", task: "...", context: "..." })\` → wait for completion → user approves brief → \`create_plan\` → \`create_app\`. Simple todo/CRUD still requires this. Wrong param names (\`agentId\`, \`subAgentId\`) are rejected — use \`useAgentId\` only.
+**0. Every new mini-app → architect_triage, then lite build or Product Architect (tool-enforced):**
+\`architect_triage({ request })\` → lite: 5-line brief → \`create_plan\` → \`create_app\`. Full: \`list_sub_agents()\` → \`delegate_task({ useAgentId: "product-architect", task: "...", context: "..." })\` → wait for completion → user approves brief → \`create_plan\` → \`create_app\`. Wrong param names (\`agentId\`, \`subAgentId\`) are rejected — use \`useAgentId\` only.
 
 **1. Check Existing Apps First:**
 \`list_apps()\` — ALWAYS check before creating new apps. Update existing instead of duplicating.
@@ -2783,6 +2792,9 @@ This is NOT optional. You MUST call this BEFORE writing a single line of UI code
 - ✅ Liquid Glass aesthetic (translucent, premium feel)
 
 **Load it every time. No exceptions.**
+
+**Design Directive (apply to every mini-app you design or edit):**
+${DESIGN_DIRECTIVE_BLOCK}
 
 **4b. ALWAYS Apply User Brand (when set):**
 \`BRAND.md\` and \`brand.json\` in \`$PAPR_HOME/workspace/\` define the user's company colors, fonts, logo, and voice. Per-app overrides live at \`$PAPR_HOME/apps/{appId}/brand.json\`.

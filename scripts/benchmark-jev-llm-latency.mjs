@@ -78,8 +78,21 @@ function recordPhase(stats, name, ms, serverTiming = null) {
   }
 }
 
+async function resolveBenchKey() {
+  const { loadEnvLocal, resolvePaprApiKey } = await import("./lib/testEnv.mjs");
+  loadEnvLocal();
+  const benchOverride = process.env.BENCH_PAPR_API_KEY?.trim();
+  if (benchOverride) return benchOverride;
+  const resolved = await resolvePaprApiKey();
+  if (resolved) {
+    console.log(`(Papr API key from ${resolved.source})\n`);
+    return resolved.key;
+  }
+  return null;
+}
+
 async function setupJev() {
-  const benchKey = process.env.BENCH_PAPR_API_KEY?.trim() || process.env.PAPR_API_KEY?.trim();
+  const benchKey = await resolveBenchKey();
   const { JEV_PROXY_PATH } = await import("../src/core/tools/jevAuth.js");
   const base = (process.env.PAPR_MEMORY_SERVER_URL ?? "https://memory.papr.ai").replace(/\/$/, "");
   if (process.env.TYPESAFE_API_KEY?.trim()) {
@@ -93,7 +106,11 @@ async function setupJev() {
     };
   }
   if (!benchKey) {
-    throw new Error("Set BENCH_PAPR_API_KEY or PAPR_API_KEY (or TYPESAFE_API_KEY for direct)");
+    throw new Error(
+      "No Papr API key: set BENCH_PAPR_API_KEY or PAPR_API_KEY in .env.local, " +
+        "or log in via Papr Work (dev Electron often cannot read keys encrypted by the installed app). " +
+        "Or set TYPESAFE_API_KEY for direct TypeSafe.",
+    );
   }
   return {
     mode: "papr_proxy",
@@ -223,7 +240,7 @@ async function main() {
         ].slice(0, 40);
         const gateT = await timed("gate", () => gateCatalogWithJev(SAMPLE_MESSAGE, candidates));
         recordPhase(stats, "turn2_jev_catalog_gate", gateT.ms);
-        if (gateT.result) {
+        if (gateT.result?.jevCalls != null) {
           recordPhase(stats, "turn2_jev_catalog_calls", gateT.result.jevCalls);
         }
       }

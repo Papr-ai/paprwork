@@ -10,7 +10,13 @@ import { AgentPersonalizeSheet } from "./components/Agent/AgentPersonalizeSheet"
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
-import { AuthFlow } from "./components/Auth/AuthFlow";
+import { AuthFlow, type AuthFlowStage } from "./components/Auth/AuthFlow";
+import { fetchRemoteOnboarding } from "./utils/onboardingRemote";
+import {
+  getLocalAuthFlowStep,
+  isAuthFlowCompleteLocal,
+  resumeStageWhenLoggedIn,
+} from "./utils/authFlowPersistence";
 import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import { PlatformConnectModal } from "./components/Platforms/PlatformConnectModal";
 import { initPlatformConnectListener } from "./components/Platforms/platformConnectStore";
@@ -84,28 +90,59 @@ export function App() {
   // Check this FIRST before loading anything else
   const [isAuthenticated, setIsAuthenticated] = useState(!REQUIRE_PAPR_AUTH);
   const [authChecked, setAuthChecked] = useState(false);
+  /** Papr signed out, or signed in but pre-app connect/recommend not finished. */
+  const [needsAuthFlow, setNeedsAuthFlow] = useState(REQUIRE_PAPR_AUTH);
+  const [authFlowResume, setAuthFlowResume] = useState<
+    { initialStage: AuthFlowStage; paprSignedIn: boolean } | undefined
+  >(undefined);
   // Check authentication immediately (before loading preferences/SQLite)
   useEffect(() => {
     if (!REQUIRE_PAPR_AUTH) {
       setAuthChecked(true);
+      setNeedsAuthFlow(false);
       return;
     }
 
-    // Check if user is already authenticated
     const checkAuth = async () => {
       try {
         const result = await window.electronAPI.papr.checkLoginStatus();
-        if (result.success && result.isLoggedIn) {
-          setIsAuthenticated(true);
+        const loggedIn = Boolean(result.success && result.isLoggedIn);
+
+        if (!loggedIn) {
+          setIsAuthenticated(false);
+          setNeedsAuthFlow(true);
+          setAuthFlowResume(undefined);
+          return;
         }
+
+        const remote = await fetchRemoteOnboarding();
+        const flowComplete =
+          isAuthFlowCompleteLocal() || remote?.completed === true;
+
+        if (flowComplete) {
+          setIsAuthenticated(true);
+          setNeedsAuthFlow(false);
+          setAuthFlowResume(undefined);
+          return;
+        }
+
+        const initialStage = resumeStageWhenLoggedIn(
+          getLocalAuthFlowStep(),
+          remote?.step,
+        );
+        setIsAuthenticated(false);
+        setNeedsAuthFlow(true);
+        setAuthFlowResume({ initialStage, paprSignedIn: true });
       } catch (err) {
-        console.error('[App] Failed to check authentication:', err);
+        console.error("[App] Failed to check authentication:", err);
+        setIsAuthenticated(false);
+        setNeedsAuthFlow(true);
       } finally {
         setAuthChecked(true);
       }
     };
 
-    checkAuth();
+    void checkAuth();
   }, []);
 
   // Initialize SQLite persistence for tabs/favorites (fast!)
@@ -416,6 +453,8 @@ export function App() {
       if (REQUIRE_PAPR_AUTH) {
         console.log("[App] Papr logout — returning to auth wall (commercial build)");
         setIsAuthenticated(false);
+        setNeedsAuthFlow(true);
+        setAuthFlowResume(undefined);
       }
     };
 
@@ -586,8 +625,17 @@ export function App() {
     );
   }
 
-  if (REQUIRE_PAPR_AUTH && !isAuthenticated) {
-    return <AuthFlow onComplete={() => setIsAuthenticated(true)} />;
+  if (REQUIRE_PAPR_AUTH && needsAuthFlow) {
+    return (
+      <AuthFlow
+        resume={authFlowResume}
+        onComplete={() => {
+          setIsAuthenticated(true);
+          setNeedsAuthFlow(false);
+          setAuthFlowResume(undefined);
+        }}
+      />
+    );
   }
 
   // Don't render app until preferences AND SQLite are loaded

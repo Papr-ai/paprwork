@@ -597,6 +597,20 @@
   border-color: var(--onb-g2);
 }
 
+.claude-stepper__token-instructions {
+  margin: 0 0 10px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--onb-text);
+}
+
+.claude-stepper__token-instructions code {
+  font-size: 12px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+}
+
 .claude-stepper__token-auto {
   margin-bottom: 12px;
 }

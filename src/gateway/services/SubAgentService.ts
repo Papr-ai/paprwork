@@ -13,6 +13,8 @@ import type { JobRecord, JobStatus } from "./jobs/types.js";
 import type { StoredMessage } from "./storage/IStorageProvider.js";
 import { DEFAULT_AGENT_MAX_TURNS } from "../../core/constants/agentLimits.js";
 import { PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION } from "../../core/utils/productArchitectGate.js";
+import { DESIGN_DIRECTIVE_BLOCK } from "../../core/constants/designDirective.js";
+import { MULTI_USER_ACL_SECTION } from "../../core/constants/multiUserAclDirective.js";
 import {
   collectSubAgentReferences,
   formatOrphanedSubAgentWarning,
@@ -236,8 +238,12 @@ If the app calls ANY external API with secrets, those calls MUST go through back
 ${PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION}
 ## Cloud Read Budget — estimated rows read per page; aggregate tables (app_stats) for KPIs, not runtime COUNT(*) from frontend
 ## Plan A Cloud DB (when linked DBs + cloud sync) — three lanes: Git (Sync V3 per-app repo), Turso (attach_database / data-sources.json), Vault (Integration Keys + platform cookies — cloud jobs read vault, not keychain). Schema: migrations/{id}.sql → papr_db_apply_migration; rows via DML; Publish changes / push_cloud_sync({ appId }) = git + Turso ordered flush
+${MULTI_USER_ACL_SECTION}
 ## Platform Connections (when social/login scraping) — LinkedIn jobs ONLY: linkedin-api + papr_platform_browser (CDP :9222, desktop). X/Reddit/Instagram: \${PLATFORM_*} keys + headless Playwright — NO reddit-api/x-api CDP. Cloud non-LinkedIn: vault-synced keys + headless; no Papr Chrome
 ## Design System — one task per page, 2-3 sections per page, ONE primary action per page, Liquid Glass + brand
+For EACH page specify: the one job, the primary action, EMPTY state (value sentence + first-success CTA), FILLED state (hierarchy, key number first), dark/light notes, small (390px) vs large (1440px) layout.
+Design Directive:
+${DESIGN_DIRECTIVE_BLOCK}
 ## Phased Plan — Phase 1 MVP, later phases
 ## Risks & Open Questions
 ## Recommendation — proceed / simplify / defer
@@ -250,6 +256,7 @@ RULES:
 - Mini-apps use window.paprAPI (browser context, not Node fs)
 - Never recommend spaghetti (50+ files in one app)
 - Backend handlers for ANY server-side logic: DB CRUD, external APIs, vault secrets, auth, file ops — not just SQL
+- Multi-user + shared DB: design row ACL (owner_user_id, visibility, app_roles, row_acl) up front — retrofitting ACL onto shared Turso tables later means migrations + data backfill
 - Plan A (cloud sync on): schema changes = migration files + papr_db_apply_migration only — never papr_db_exec DDL or bash/sqlite3 on registry DB paths
 - Platform scraping jobs: LinkedIn → linkedin-api + CDP (desktop Papr Chrome); all other platforms → \${KEY} + headless Playwright in job command — never reddit-api/x-api for scrapers; cloud uses vault-synced cookies (desktop must sync while awake)
 - Scheduled jobs while Mac asleep: cloud runs automatically when heartbeat stale — job code must be pushed to git + vault keys synced while desktop was awake (see CLOUD_VS_DESKTOP_GUIDE)

@@ -43,6 +43,7 @@ import { platformFeedbackTools } from "./platformFeedback.js";
 import { paprDbTools } from "./paprDb.js";
 import { paprApiReferenceTools } from "./paprApiReference.js";
 import { jevTools } from "./jevDecide.js";
+import { architectTriageTools } from "./architectTriage.js";
 
 export const databaseTools = [
   createDatabaseTool,
@@ -71,6 +72,7 @@ export const allTools = [
   ...jobFolderTools,
   ...webviewTools,
   ...delegationTools,
+  ...architectTriageTools,
   ...planningTools,
   ...keyManagementTools,
   ...recipeTools,
@@ -113,7 +115,7 @@ export const toolsByCategory = {
   documents: documentTools,
   skills: skillsTools,
   automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
-  delegation: delegationTools,
+  delegation: [...delegationTools, ...architectTriageTools],
   planning: planningTools,
   keyManagement: keyManagementTools,
   recipes: recipeTools,

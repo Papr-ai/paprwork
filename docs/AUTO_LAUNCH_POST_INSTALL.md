@@ -40,12 +40,14 @@ Added to `electron-builder.json` → `pkg`:
 
 Created post-install script: `build/pkg-scripts/postinstall`
 
-```bash
-#!/bin/bash
-# Opens the app after PKG installation completes (as the console user — not root)
-launchctl asuser "$CONSOLE_UID" open "/Applications/Papr Work.app"
-exit 0
-```
+Post-install (`build/pkg-scripts/postinstall`):
+
+1. Fixes ownership on `/Applications/Papr Work.app` for the console user (ShipIt updates).
+2. Registers a **one-shot LaunchAgent** in the user’s GUI session (`launchctl bootstrap gui/$uid`) that runs `/usr/bin/open` — this is more reliable on macOS 13+ than `launchctl asuser` alone from a root postinstall script.
+3. Falls back to `sudo -u … open` if bootstrap fails.
+4. Logs to `/var/log/paprwork-postinstall.log` if launch does not work (support debugging).
+
+The PKG **conclusion** screen (`build/pkg-conclusion.html`) tells users Papr Work should open when they click Close, and how to find it in Applications / Spotlight if not.
 
 **Note:** The **ZIP** download (unzip → drag to Applications) has **no** post-install hook — only the **PKG** auto-opens. Release notes should steer Mac users to the `.pkg` when possible.
 
