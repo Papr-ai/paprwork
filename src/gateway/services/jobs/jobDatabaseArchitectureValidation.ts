@@ -121,6 +121,21 @@ function schemaReadIssue(
     ];
   }
 
+  if (code === "parked") {
+    // The link is fine — the replica file itself is parked by the sync layer.
+    // Suggesting a restart or re-link sends users (and agents) the wrong way:
+    // neither changes data.db, so the park survives both.
+    return [
+      {
+        rule: "primary-database-parked",
+        severity: "error",
+        message: `Primary app database at ${databasePath} is a parked Turso replica: ${message}`,
+        remediation:
+          "The data-source link is correct — do not re-link. Re-seed the replica from cloud with repair_cloud_sync({ dbId, strategy: \"accept_cloud\" }) (check papr_db_sync_status first for unpushed local ops), then re-run the job.",
+      },
+    ];
+  }
+
   if (code === "unreadable") {
     return [
       {
