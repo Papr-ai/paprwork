@@ -2,6 +2,17 @@
  * Error classifiers shared by the gateway and the sync worker. No native imports here.
  */
 
+/**
+ * Matches TursoReplicaSyncWorkerClient.assertNotCrashLooping's parked error, in
+ * both its session and cross-restart wordings. A parked replica is a sync-layer
+ * state (corrupt pages / crash loop), not a broken data-source link.
+ */
+export function isParkedReplicaError(error: unknown): boolean {
+  const msg =
+    error instanceof Error ? error.message : typeof error === "string" ? error : "";
+  return /Turso replica .+ is parked(?: for this session)?:/.test(msg);
+}
+
 export function isTursoHostNotReadyError(error: unknown): boolean {
   const msg = error instanceof Error ? error.message : String(error);
   return (
