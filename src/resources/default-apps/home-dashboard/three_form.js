@@ -7,9 +7,9 @@ const ThreeForm = {
     '': { what: 'Close Tranche 2', done: 'Done when', ph: '$1.25M raised',
       tip: 'Name a result you can count, not an activity. "$1.25M raised" beats "work on the raise".' },
     daily: { what: 'Post daily on X and LinkedIn', done: 'Each day', ph: '1 post on X and LinkedIn',
-      tip: 'Small enough to do every day. Pen puts it on your list each morning.' },
+      tip: 'Small enough to do on your worst day. One post counts.' },
     weekly: { what: 'Publish every week', done: 'Each week', ph: '3 posts and 1 long-form piece',
-      tip: 'What a good week looks like. Pen checks in each Monday.' },
+      tip: 'What a good week looks like, in numbers you can count.' },
   },
   /** yyyy-mm-dd in local time, the format <input type="date"> reads and writes. */
   ymd(d) {
