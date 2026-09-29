@@ -10,6 +10,9 @@ import {
 } from "./models";
 import { EFFORT_VARIANT_MODELS } from "./modelControls";
 
+/** Jev-routed pseudo-model — see src/gateway/services/agent/jevTurnRouter.ts. */
+export const AUTO_MODEL_ID = "auto";
+
 /**
  * Models kept for jobs/runtime but hidden from chat picker.
  *
@@ -334,6 +337,10 @@ export function getPickerModels(
   enabledIds: string[] | null | undefined,
 ): AIModel[] {
   const enabledSet = new Set(resolveEnabledPickerModelIds(enabledIds));
+  // Auto is always pinned: it is not a model the user opts into, it is the
+  // router over whatever models they already have. Saved picker lists that
+  // predate it would otherwise hide it for good.
+  enabledSet.add(AUTO_MODEL_ID);
   return CHAT_MODELS.filter(
     (model) => enabledSet.has(model.id) && isChatPickerModelId(model.id),
   );

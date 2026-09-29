@@ -61,6 +61,9 @@ export function resolveAuthAwareDefaultModelIds(
  * so new chats open on something reachable — not a stale disconnected model.
  */
 export function resolveGlobalDefaultForAuth(status: AuthStatus): string {
+  // Any cloud path (OAuth, BYOK, or Papr Cloud proxy) can run Auto: the
+  // router picks from whichever provider ladder the user can reach.
+  if (hasDirectCloudAuth(status) || status.paprProxy) return "auto";
   if (status.anthropic.oauth || status.anthropic.apiKey) {
     return "claude-sonnet-5-5";
   }

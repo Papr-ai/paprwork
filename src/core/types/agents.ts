@@ -96,6 +96,12 @@ export interface AgentConfig {
    * the first-party API only, so it is never set on the pi-ai (OAuth) path.
    */
   speed?: "fast" | "standard";
+  /**
+   * When model is `auto` and the router cannot decide (Jev down / timeout),
+   * run this model instead — the next default the user can reach. Sent by
+   * the UI; the gateway falls back to the ladder's standard rung without it.
+   */
+  autoFallbackModelId?: string;
 }
 
 /**

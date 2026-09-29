@@ -37,9 +37,11 @@ describe("modelPicker", () => {
 
   test("getPickerModels resolves known model metadata", () => {
     const models = getPickerModels(["claude-sonnet-5-5", "gpt-5-6-sol"]);
-    expect(models).toHaveLength(2);
-    expect(models[0]?.id).toBe("claude-sonnet-5-5");
-    expect(models[1]?.name).toBe("GPT-5.6 Sol");
+    // Auto is always pinned first, on top of whatever the user enabled.
+    expect(models).toHaveLength(3);
+    expect(models[0]?.id).toBe("auto");
+    expect(models[1]?.id).toBe("claude-sonnet-5-5");
+    expect(models[2]?.name).toBe("GPT-5.6 Sol");
   });
 
   test("filters unknown ids and migrates retired gpt-5.5 from user override", () => {
@@ -219,6 +221,7 @@ describe("modelPicker", () => {
     expect(isChatPickerModelId("gpt-5.5")).toBe(false);
     expect(getAllPickerToggleModelIds()).not.toContain("gpt-5.5");
     expect(getPickerModels(["gpt-5.5", "gpt-5-6-sol"]).map((m) => m.id)).toEqual([
+      "auto",
       "gpt-5-6-sol",
     ]);
   });
@@ -232,6 +235,7 @@ describe("modelPicker", () => {
       "claude-opus-4-6",
     ]);
     expect(models.map((m) => m.id)).toEqual([
+      "auto",
       "claude-sonnet-5-5",
       "claude-opus-4-6",
       "claude-opus-5-5",

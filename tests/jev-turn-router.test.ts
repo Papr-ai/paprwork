@@ -76,3 +76,40 @@ describe("Auto model routing — capability × effort", () => {
     expect(oa?.rung).toEqual({ model: "gpt-5.4-mini", effort: "low" });
   });
 });
+
+describe("Auto in the picker and defaults", () => {
+  it("getPickerModels pins auto first even when the saved list predates it", async () => {
+    const { getPickerModels } = await import("../ui/constants/modelPicker.js");
+    const ids = getPickerModels(["claude-sonnet-5-5", "gpt-5.5"]).map((m) => m.id);
+    expect(ids[0]).toBe("auto");
+    expect(ids.filter((id) => id === "auto")).toHaveLength(1);
+  });
+
+  it("new chats default to auto on any cloud path; local-only stays local", async () => {
+    const { resolveGlobalDefaultForAuth } = await import("../ui/utils/authAwareModelDefaults.js");
+    const base = {
+      anthropic: { oauth: false, apiKey: false },
+      openai: { oauth: false, apiKey: false },
+      google: { apiKey: false },
+      paprProxy: false,
+    } as any;
+    expect(resolveGlobalDefaultForAuth({ ...base, paprProxy: true })).toBe("auto");
+    expect(resolveGlobalDefaultForAuth({ ...base, google: { apiKey: true } })).toBe("auto");
+    expect(resolveGlobalDefaultForAuth(base)).not.toBe("auto");
+  });
+
+  it("resolveAutoProvider follows the best reachable provider, not the catalog entry", async () => {
+    const { resolveAutoProvider } = await import("../ui/utils/buildAgentConfig.js");
+    const only = (p: "anthropic" | "openai" | "google") =>
+      ({
+        anthropic: { oauth: false, apiKey: p === "anthropic" },
+        openai: { oauth: false, apiKey: p === "openai" },
+        google: { apiKey: p === "google" },
+        paprProxy: false,
+      }) as any;
+    expect(resolveAutoProvider(only("google"))).toBe("google");
+    expect(resolveAutoProvider(only("openai"))).toBe("openai");
+    expect(resolveAutoProvider(only("anthropic"))).toBe("anthropic");
+    expect(resolveAutoProvider(undefined)).toBe("anthropic");
+  });
+});

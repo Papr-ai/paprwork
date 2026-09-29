@@ -203,6 +203,19 @@ export function useAuthStatus() {
         return true;
       }
 
+      // Auto routes over whatever cloud provider the user can reach — it is
+      // not tied to the Anthropic auth its catalog entry nominally carries.
+      if (model.id === "auto") {
+        return (
+          status.anthropic.oauth ||
+          status.anthropic.apiKey ||
+          status.openai.oauth ||
+          status.openai.apiKey ||
+          status.google.apiKey ||
+          status.paprProxy
+        );
+      }
+
       if (isPaprProxyOnlyModel(model.provider)) {
         if (!status.paprProxy) {
           return false;

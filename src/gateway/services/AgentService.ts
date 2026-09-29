@@ -626,8 +626,12 @@ export class AgentService {
         config.model = rung.model as typeof config.model;
         if (rung.effort) config.reasoning = { effort: rung.effort };
         else delete config.reasoning;
+      } else if (config.autoFallbackModelId && config.autoFallbackModelId !== AUTO_MODEL_ID) {
+        // Jev gave no decision: run the next default the UI says the user can
+        // reach, on the provider this turn already resolved credentials for.
+        config.model = config.autoFallbackModelId as typeof config.model;
+        delete config.reasoning;
       } else {
-        // No decision (Jev down / provider without ladder): standard rung.
         const { resolveAutoRung } = await import("./agent/jevTurnRouter.js");
         const fallback = resolveAutoRung(config.provider, "strong", "medium");
         if (!fallback) {

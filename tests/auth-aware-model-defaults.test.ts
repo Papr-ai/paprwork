@@ -48,6 +48,8 @@ describe("resolveAuthAwareDefaultModelIds", () => {
   });
 });
 
+// Any cloud path opens new chats on Auto; explicit models survive only as the
+// fallback Auto uses when Jev cannot decide.
 describe("resolveGlobalDefaultForAuth", () => {
   it("prefers Sonnet when Claude OAuth or API key is present", () => {
     expect(
@@ -55,7 +57,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         ...emptyStatus,
         anthropic: { oauth: true, apiKey: false },
       }),
-    ).toBe("claude-sonnet-5-5");
+    ).toBe("auto");
   });
 
   it("prefers GPT when only OpenAI auth is present", () => {
@@ -64,7 +66,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         ...emptyStatus,
         openai: { oauth: true, apiKey: false },
       }),
-    ).toBe("gpt-5-6-sol");
+    ).toBe("auto");
   });
 
   it("prefers Sonnet when both OAuth providers are connected", () => {
@@ -74,7 +76,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         anthropic: { oauth: true, apiKey: false },
         openai: { oauth: true, apiKey: false },
       }),
-    ).toBe("claude-sonnet-5-5");
+    ).toBe("auto");
   });
 
   it("falls back to Gemini for Papr proxy only", () => {
@@ -83,7 +85,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         ...emptyStatus,
         paprProxy: true,
       }),
-    ).toBe(GLOBAL_INITIAL_DEFAULT_MODEL_ID);
+    ).toBe("auto");
   });
 
   it("falls back to Gemini after Claude disconnect when Papr remains", () => {
@@ -94,7 +96,7 @@ describe("resolveGlobalDefaultForAuth", () => {
         openai: { oauth: false, apiKey: false },
         anthropic: { oauth: false, apiKey: false },
       }),
-    ).toBe(GLOBAL_INITIAL_DEFAULT_MODEL_ID);
+    ).toBe("auto");
   });
 
   it("falls back to Ollama when no cloud auth remains", () => {

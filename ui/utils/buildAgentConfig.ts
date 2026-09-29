@@ -36,6 +36,10 @@ export interface BuildAgentConfigInput {
   systemPrompt: string;
   /** Fast mode is API-key only; pi-ai has no `speed` parameter. */
   authType?: "oauth" | "apiKey";
+  /** Needed when model is Auto: picks the provider ladder to route within. */
+  authStatus?: AuthStatus;
+  /** Auto only: the next default the user can reach, if Jev cannot decide. */
+  autoFallbackModelId?: string;
 }
 
 export interface BuiltAgentConfig {
@@ -49,6 +53,8 @@ export interface BuiltAgentConfig {
   /** Only ever `false`, and only when the user turned reasoning off. */
   thinking?: false;
   speed?: "fast";
+  /** Auto only: next default model to run if the router cannot decide. */
+  autoFallbackModelId?: string;
 }
 
 /**
@@ -95,6 +101,20 @@ export function resolveModelSettings(
   };
 }
 
+/**
+ * Provider Auto should route within. Best reachable in ladder order; the
+ * catalog entry says Anthropic but a Google-only user must not be sent there.
+ */
+export function resolveAutoProvider(
+  status: AuthStatus | undefined,
+): AIModel["provider"] {
+  if (!status) return "anthropic";
+  if (status.anthropic.oauth || status.anthropic.apiKey) return "anthropic";
+  if (status.openai.oauth || status.openai.apiKey) return "openai";
+  if (status.google.apiKey) return "google";
+  return "anthropic"; // Papr Cloud proxy carries Anthropic models
+}
+
 export function buildAgentConfig(
   input: BuildAgentConfigInput,
 ): BuiltAgentConfig {
@@ -102,7 +122,10 @@ export function buildAgentConfig(
   const resolved = resolveModelSettings(model, settings);
 
   const config: BuiltAgentConfig = {
-    provider: model.provider,
+    provider:
+      model.id === AUTO_MODEL_ID
+        ? resolveAutoProvider(input.authStatus)
+        : model.provider,
     model: model.id,
     systemPrompt,
     maxTokens: model.maxTokens,
@@ -111,6 +134,10 @@ export function buildAgentConfig(
 
   if (resolved.effort) {
     config.reasoning = { effort: resolved.effort };
+  }
+
+  if (model.id === AUTO_MODEL_ID && input.autoFallbackModelId) {
+    config.autoFallbackModelId = input.autoFallbackModelId;
   }
 
   // `thinkingBudget: 0` cannot mean "off": Opus 5 and Fable 5.1 ship a default
