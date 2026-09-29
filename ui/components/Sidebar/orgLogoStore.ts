@@ -26,14 +26,26 @@ export function cleanSite(value: string): string {
   return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(s) ? s : "";
 }
 
-/** Your work domain when the org's name carries it; a personal org or a Gmail address gets none. */
+const SLUG_TLD = /^([a-z0-9][a-z0-9-]*[a-z0-9])-(com|ai|io|co|app|dev|org|net|so|xyz|tech|us|uk|de)$/;
+
+/**
+ * Best guess at the org's website, so most people never set one:
+ *   1. your work email's domain, when the org name carries it (shawkat@papr.ai ↔ "papr-ai-production")
+ *   2. a Parse org slug that spells its domain ("sqaservices-com" → sqaservices.com)
+ * A personal org or a Gmail address gets none, and shows its monogram.
+ */
 export function defaultOrgSite(names: Array<string | undefined>, email: string): string {
   const domain = email.split("@")[1]?.trim().toLowerCase() ?? "";
-  if (!domain || PERSONAL.has(domain)) return "";
   const root = domain.split(".")[0];
-  if (!root || root.length < 3) return "";
-  const flat = (s?: string) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
-  return names.some((n) => flat(n).includes(root)) ? domain : "";
+  if (domain && !PERSONAL.has(domain) && root.length >= 3) {
+    const flat = (s?: string) => (s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    if (names.some((n) => flat(n).includes(root))) return domain;
+  }
+  for (const n of names) {
+    const m = SLUG_TLD.exec((n ?? "").trim().toLowerCase());
+    if (m) return `${m[1]}.${m[2]}`;
+  }
+  return "";
 }
 
 export function orgLogoSrc(b: OrgBranding | undefined, fallbackSite: string): string {

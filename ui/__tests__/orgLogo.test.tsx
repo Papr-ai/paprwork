@@ -42,6 +42,13 @@ describe("orgLogoStore", () => {
     expect(defaultOrgSite(["Acme"], "")).toBe("");
   });
 
+  it("reads the domain out of a Parse org slug when email does not match", () => {
+    expect(defaultOrgSite(["Sqaservices", "sqaservices-com"], EMAIL)).toBe("sqaservices.com");
+    expect(defaultOrgSite(["Papr", "papr-ai"], "a@gmail.com")).toBe("papr.ai");
+    expect(defaultOrgSite(["papr-ai-production"], "a@gmail.com")).toBe(""); // slug must end in the TLD
+    expect(defaultOrgSite(["shawkat"], EMAIL)).toBe("");
+  });
+
   it("prefers an upload, then the website icon, then nothing (monogram)", () => {
     expect(orgLogoSrc({ logo: "data:image/png;base64,x" }, "papr.ai")).toBe("data:image/png;base64,x");
     expect(orgLogoSrc(undefined, "papr.ai")).toBe(favicon("papr.ai"));
