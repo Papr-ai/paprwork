@@ -652,3 +652,135 @@
 /* Anchor the "/" hint inside the search box (it was positioning against the
    top bar and landing under the New app button). */
 .apps-view__search { position: relative; }
+
+/* ══ Rail language ═══════════════════════════════════════════════════════════
+   Match the left rail: flat quiet page, Papr blue, tint-for-selected,
+   one filled control, glass only for things that float. */
+.apps-view,
+.create-app-modal__backdrop {
+  --accent: var(--papr-blue-deep, #0060e0);
+  --apps-sel: rgba(0, 96, 224, 0.09);
+  --apps-sel-hover: rgba(0, 96, 224, 0.07);
+  --apps-card: #ffffff;
+  --apps-card-line: rgba(10, 16, 32, 0.07);
+  --apps-float: rgba(255, 255, 255, 0.92);
+  --apps-float-line: rgba(10, 16, 32, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  .apps-view,
+  .create-app-modal__backdrop {
+    --accent: #3d8bff;
+    --apps-sel: rgba(61, 139, 255, 0.16);
+    --apps-sel-hover: rgba(61, 139, 255, 0.10);
+    --apps-card: #1c1e24;
+    --apps-card-line: rgba(255, 255, 255, 0.07);
+    --apps-float: rgba(28, 30, 36, 0.92);
+    --apps-float-line: rgba(255, 255, 255, 0.08);
+  }
+}
+
+/* Flat top bar, 52px to line up with the rail. */
+.apps-view__topbar {
+  height: 52px;
+  background: transparent;
+  border-bottom: none;
+}
+
+/* Selected = blue ink on a light blue tint (tabs, sections, pills). */
+.apps-view__tabs { background: transparent; border: none; padding: 0; gap: 2px; }
+.apps-view__tab { border-radius: 9px; }
+.apps-view__tab:hover:not(.apps-view__tab--active) { background: var(--apps-sel-hover); }
+.apps-view__tab--active {
+  background: var(--apps-sel);
+  color: var(--accent);
+  box-shadow: none;
+}
+.apps-sidebar { background: transparent; }
+.apps-sidebar__item { border-radius: 9px; }
+.apps-sidebar__item:hover { background: var(--apps-sel-hover); }
+.apps-sidebar__item--active { background: var(--apps-sel); color: var(--accent); }
+.apps-sidebar__heading,
+.community-apps__section-title {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+.category-pills__pill { border-color: var(--apps-card-line); }
+.category-pills__pill:hover { background: var(--apps-sel-hover); border-color: transparent; }
+.category-pills__pill.is-active,
+.category-pills__pill.is-active:hover {
+  background: var(--apps-sel);
+  border-color: transparent;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The one filled control — same Papr gradient as New chat. */
+.apps-view__create-btn,
+.create-app-modal__submit {
+  background: var(--papr-blue-gradient, linear-gradient(135deg, #0060e0 0%, #00acfa 60%, #0bcdff 100%));
+  border-radius: 12px;
+  box-shadow: 0 3px 10px rgba(0, 108, 224, 0.22);
+}
+.apps-view__topbar-refresh { background: transparent; border-radius: 12px; }
+
+/* Solid cards, hairline border, 16px corners. No glass on the page. */
+.apps-view .app-card,
+.apps-view .community-card {
+  background: var(--apps-card);
+  border: 1px solid var(--apps-card-line);
+  border-radius: 16px;
+  box-shadow: none;
+}
+.apps-view .app-card:hover,
+.apps-view .community-card:hover {
+  background: var(--apps-card);
+  transform: translateY(-2px);
+  box-shadow: 0 12px 32px rgba(10, 16, 32, 0.08);
+}
+
+/* Quiet until hover: secondary card details sit at 55%, like rail icons. */
+.apps-view .app-card__share,
+.apps-view .app-card__date { opacity: 0.55; transition: opacity 0.15s ease; }
+.apps-view .app-card:hover .app-card__share,
+.apps-view .app-card:hover .app-card__date,
+.apps-view .app-card:focus-within .app-card__share { opacity: 1; }
+
+/* Live dot — same as the rail's working indicator. */
+.app-card__status-line--live::before,
+.app-card__status-line--running::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: var(--papr-blue-mid, #00acfa);
+  box-shadow: 0 0 0 3px rgba(0, 172, 250, 0.18);
+}
+.app-card__status-line--fail::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  vertical-align: 1px;
+  background: #f0a742;
+  box-shadow: 0 0 0 3px rgba(240, 167, 66, 0.2);
+}
+
+/* Glass only for floating surfaces (rail peek recipe). */
+.app-card__menu,
+.create-app-modal {
+  background: var(--apps-float);
+  backdrop-filter: blur(22px) saturate(1.6);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  border: 1px solid var(--apps-float-line);
+  border-radius: 16px;
+  box-shadow: 0 18px 50px rgba(10, 16, 32, 0.16), 0 0 0 1px var(--apps-float-line);
+}
+.app-card__menu button { border-radius: 9px; }
+.app-card__menu button:hover { background: var(--apps-sel-hover); }
+.create-app-modal__chip.is-on { background: var(--apps-sel); border-color: transparent; }
