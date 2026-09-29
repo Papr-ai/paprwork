@@ -315,4 +315,39 @@ jobs:
           body_path: /tmp/release-notes.md
           generate_release_notes: false
           draft: false
-          files: artifacts/*
+
+      - name: Upload release assets (sequential)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(artifacts/*)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::No files in artifacts/"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            base=$(basename "$f")
+            echo "Uploading ${base}..."
+            for attempt in 1 2 3; do
+              if gh release upload "${GITHUB_REF_NAME}" "$f" --clobber; then
+                break
+              fi
+              if [ "$attempt" -eq 3 ]; then
+                echo "::error::Failed to upload ${base} after 3 attempts"
+                exit 1
+              fi
+              echo "Retry ${attempt}/3 for ${base} in 15s..."
+              sleep 15
+            done
+          done
+          expected=${#files[@]}
+          actual=$(gh release view "${GITHUB_REF_NAME}" --json assets -q '.assets | length')
+          echo "Published ${actual} assets (expected ${expected})"
+          if [ "${actual}" -lt "${expected}" ]; then
+            echo "::error::Release missing assets: expected ${expected}, got ${actual}"
+            gh release view "${GITHUB_REF_NAME}" --json assets -q '.assets[].name' | sort
+            exit 1
+          fi
+          echo "✓ All release assets uploaded"
