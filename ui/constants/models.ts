@@ -22,8 +22,8 @@ export interface AIModel {
 export const CHAT_MODELS: AIModel[] = [
   // Auto — Jev picks the model + effort per turn from the ladder for whichever
   // provider the chat is authenticated with (see agent/jevTurnRouter.ts).
-  // Cheap turns go to Haiku, ordinary work to Sonnet (low/medium/high), and
-  // architecture/debugging to Opus.
+  // Two axes: capability (Haiku / Sonnet / Opus) and effort (low / medium /
+  // high), chosen independently per message.
   {
     id: "auto",
     name: "Auto",

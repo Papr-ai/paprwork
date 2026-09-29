@@ -21,63 +21,73 @@ export const AUTO_ROUTE_TIMEOUT_MS = 2_500;
 /** Below this confidence, round the tier UP: a misroute down is user-visible. */
 export const AUTO_ROUTE_MIN_CONFIDENCE = 0.6;
 
-export const AUTO_TIERS = ["trivial", "light", "standard", "deep", "hard"] as const;
-export type AutoTier = (typeof AUTO_TIERS)[number];
+export const AUTO_CAPABILITIES = ["basic", "strong", "frontier"] as const;
+export type AutoCapability = (typeof AUTO_CAPABILITIES)[number];
+
+export const AUTO_EFFORTS = ["low", "medium", "high"] as const;
+export type AutoEffort = (typeof AUTO_EFFORTS)[number];
+
+/** Kept for metrics/back-compat: the capability axis is what gets stored as tier. */
+export type AutoTier = AutoCapability;
 
 export interface AutoRung {
   model: string;
   effort?: ReasoningEffort;
 }
 
-export type AutoLadder = Record<AutoTier, AutoRung>;
-
 /**
- * Default ladders. Effort is only set on rungs whose model honours it
- * (Anthropic adaptive-thinking models, OpenAI reasoning models). Haiku 4.5 is
- * a budget-thinking model with no effort field.
+ * Per-provider capability ladder. Effort is a separate axis: any rung whose
+ * model honours a reasoning effort gets Jev's effort pick applied; the rest
+ * (Haiku 4.5, Gemini) run without one. So Sonnet and Opus each have
+ * low/medium/high, chosen independently of which model is picked.
  */
+export interface AutoLadder {
+  models: Record<AutoCapability, string>;
+  /** Models on this ladder that accept a reasoning effort. */
+  effortModels: ReadonlySet<string>;
+}
+
 export const DEFAULT_AUTO_LADDERS: Partial<Record<Provider, AutoLadder>> = {
   anthropic: {
-    trivial: { model: "claude-haiku-4-5" },
-    light: { model: "claude-sonnet-5-5", effort: "low" },
-    standard: { model: "claude-sonnet-5-5", effort: "medium" },
-    deep: { model: "claude-sonnet-5-5", effort: "high" },
-    hard: { model: "claude-opus-5-5", effort: "high" },
+    models: {
+      basic: "claude-haiku-4-5",
+      strong: "claude-sonnet-5-5",
+      frontier: "claude-opus-5-5",
+    },
+    effortModels: new Set(["claude-sonnet-5-5", "claude-opus-5-5"]),
   },
   openai: {
-    trivial: { model: "gpt-5.4-mini", effort: "low" },
-    light: { model: "gpt-5.5", effort: "low" },
-    standard: { model: "gpt-5.5", effort: "medium" },
-    deep: { model: "gpt-5.5", effort: "high" },
-    hard: { model: "gpt-5.5", effort: "high" },
+    models: { basic: "gpt-5.4-mini", strong: "gpt-5.5", frontier: "gpt-5.5" },
+    effortModels: new Set(["gpt-5.4-mini", "gpt-5.5"]),
   },
   "openai-codex": {
-    trivial: { model: "gpt-5.4-mini", effort: "low" },
-    light: { model: "gpt-5.5", effort: "low" },
-    standard: { model: "gpt-5.5", effort: "medium" },
-    deep: { model: "gpt-5.5", effort: "high" },
-    hard: { model: "gpt-5.5", effort: "high" },
+    models: { basic: "gpt-5.4-mini", strong: "gpt-5.5", frontier: "gpt-5.5" },
+    effortModels: new Set(["gpt-5.4-mini", "gpt-5.5"]),
   },
   google: {
-    trivial: { model: "gemini-3.5-flash-lite" },
-    light: { model: "gemini-3.8-flash" },
-    standard: { model: "gemini-3.8-flash" },
-    deep: { model: "gemini-3.8-flash" },
-    hard: { model: "gemini-3.1-pro-preview" },
+    models: {
+      basic: "gemini-3.5-flash-lite",
+      strong: "gemini-3.8-flash",
+      frontier: "gemini-3.1-pro-preview",
+    },
+    effortModels: new Set(),
   },
 };
 
-const TIER_CRITERIA: Record<AutoTier, string> = {
-  trivial:
-    "Greeting, acknowledgement, yes/no, or a one-line factual answer that needs no tools, no files, and no reasoning.",
-  light:
-    "Small, well-specified task: one lookup, one small edit, a short explanation, a quick status check. Little ambiguity.",
-  standard:
-    "Typical work: implement a described change, write or fix a script, answer a question that needs a few tool calls and some judgement.",
-  deep:
-    "Requires sustained reasoning: debugging an unclear failure, multi-file changes, analysis with trade-offs, or reading a lot of context before acting.",
-  hard:
-    "Architecture, design decisions, root-cause investigations across systems, long multi-step builds, or anything where a wrong answer is expensive.",
+const CAPABILITY_CRITERIA: Record<AutoCapability, string> = {
+  basic:
+    "A small, fast model is enough: greetings, acknowledgements, yes/no, one-line facts, trivial reformatting. No judgement calls.",
+  strong:
+    "Ordinary work: implement a described change, write or fix a script, look things up with a few tool calls, explain something. Some judgement, bounded scope.",
+  frontier:
+    "Needs the strongest model's judgement or breadth: architecture and design decisions, reviewing trade-offs, root-cause investigations across systems, nuanced writing, or anywhere a wrong answer is expensive.",
+};
+
+const EFFORT_CRITERIA: Record<AutoEffort, string> = {
+  low: "Answer is mostly recall or a direct action; little step-by-step reasoning needed. Speed matters more than deliberation.",
+  medium:
+    "Some working-through required: a few steps of reasoning, checking a couple of things, modest ambiguity.",
+  high: "Sustained reasoning: debugging unclear failures, multi-file changes, reconciling conflicting constraints, or long multi-step plans.",
 };
 
 export interface AutoRouteSignals {
@@ -90,10 +100,12 @@ export interface AutoRouteSignals {
 }
 
 export interface AutoRouteDecision {
-  tier: AutoTier;
-  /** Tier Jev picked before the confidence round-up. */
-  rawTier: AutoTier;
-  confidence: number;
+  capability: AutoCapability;
+  rawCapability: AutoCapability;
+  capabilityConfidence: number;
+  effort: AutoEffort;
+  rawEffort: AutoEffort;
+  effortConfidence: number;
   needsTools: boolean;
   jevMs: number;
 }
@@ -102,14 +114,15 @@ export type AutoRouteEvaluator = (
   signals: AutoRouteSignals,
 ) => Promise<AutoRouteDecision | null>;
 
-function tierIndex(tier: AutoTier): number {
-  return AUTO_TIERS.indexOf(tier);
-}
-
-export function roundUpTier(tier: AutoTier, confidence: number): AutoTier {
-  if (confidence >= AUTO_ROUTE_MIN_CONFIDENCE) return tier;
-  const next = Math.min(tierIndex(tier) + 1, AUTO_TIERS.length - 1);
-  return AUTO_TIERS[next]!;
+/** Below the confidence floor, round UP one step — a misroute down is user-visible. */
+export function roundUp<T extends string>(
+  scale: readonly T[],
+  value: T,
+  confidence: number,
+): T {
+  if (confidence >= AUTO_ROUTE_MIN_CONFIDENCE) return value;
+  const next = Math.min(scale.indexOf(value) + 1, scale.length - 1);
+  return scale[next]!;
 }
 
 function buildState(s: AutoRouteSignals): string {
@@ -130,11 +143,17 @@ export const jevAutoRouteEvaluator: AutoRouteEvaluator = async (signals) => {
     const res = await evaluateJevWithAuth({
       state: buildState(signals),
       questions: {
-        tier: {
+        capability: {
           type: "choice",
           instructions:
-            "How much model capability does answering this message well require? Pick the lowest tier that would produce a correct, complete response.",
-          criteria: TIER_CRITERIA,
+            "Which model class does answering this message well require? Pick the lowest class that would produce a correct, complete response.",
+          criteria: CAPABILITY_CRITERIA,
+        },
+        effort: {
+          type: "choice",
+          instructions:
+            "How much step-by-step reasoning will a good response need, independent of which model answers?",
+          criteria: EFFORT_CRITERIA,
         },
         needs_tools: {
           type: "noul",
@@ -144,19 +163,27 @@ export const jevAutoRouteEvaluator: AutoRouteEvaluator = async (signals) => {
       },
       timeoutMs: AUTO_ROUTE_TIMEOUT_MS,
     });
-    const tierAns = res.answers.tier as
-      | { choice?: string; confidence?: number }
-      | undefined;
+    type Choice = { choice?: string; confidence?: number } | undefined;
+    const cap = res.answers.capability as Choice;
+    const eff = res.answers.effort as Choice;
     // Noul answers are a 0..1 truth value (see jevToolResultTrim lookback).
     const toolsAns = res.answers.needs_tools as { noul?: number } | undefined;
-    const rawTier = AUTO_TIERS.includes(tierAns?.choice as AutoTier)
-      ? (tierAns!.choice as AutoTier)
-      : "standard";
-    const confidence = typeof tierAns?.confidence === "number" ? tierAns.confidence : 0;
+
+    const rawCapability = AUTO_CAPABILITIES.includes(cap?.choice as AutoCapability)
+      ? (cap!.choice as AutoCapability)
+      : "strong";
+    const capabilityConfidence = typeof cap?.confidence === "number" ? cap.confidence : 0;
+    const rawEffort = AUTO_EFFORTS.includes(eff?.choice as AutoEffort)
+      ? (eff!.choice as AutoEffort)
+      : "medium";
+    const effortConfidence = typeof eff?.confidence === "number" ? eff.confidence : 0;
     return {
-      rawTier,
-      tier: roundUpTier(rawTier, confidence),
-      confidence,
+      rawCapability,
+      capability: roundUp(AUTO_CAPABILITIES, rawCapability, capabilityConfidence),
+      capabilityConfidence,
+      rawEffort,
+      effort: roundUp(AUTO_EFFORTS, rawEffort, effortConfidence),
+      effortConfidence,
       needsTools: (toolsAns?.noul ?? 0) >= 0.5,
       jevMs: Date.now() - started,
     };
@@ -165,14 +192,17 @@ export const jevAutoRouteEvaluator: AutoRouteEvaluator = async (signals) => {
   }
 };
 
-/** Tier → rung for this provider. Null when the provider has no ladder. */
+/** (capability, effort) → rung for this provider. Null when no ladder. */
 export function resolveAutoRung(
   provider: Provider,
-  tier: AutoTier,
+  capability: AutoCapability,
+  effort: AutoEffort = "medium",
   ladders: Partial<Record<Provider, AutoLadder>> = DEFAULT_AUTO_LADDERS,
 ): AutoRung | null {
   const ladder = ladders[provider];
-  return ladder ? ladder[tier] : null;
+  if (!ladder) return null;
+  const model = ladder.models[capability];
+  return ladder.effortModels.has(model) ? { model, effort } : { model };
 }
 
 export interface AutoRoutePick {
@@ -193,5 +223,8 @@ export async function routeTurn(
   if (!ladders[provider]) return null;
   const decision = await evaluate(signals);
   if (!decision) return null;
-  return { decision, rung: resolveAutoRung(provider, decision.tier, ladders) };
+  return {
+    decision,
+    rung: resolveAutoRung(provider, decision.capability, decision.effort, ladders),
+  };
 }
