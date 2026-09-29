@@ -27,6 +27,11 @@ import { migrationWritesRows, splitSqlStatements } from "./migrationSqlHelpers.j
 export const SCHEMA_SNAPSHOT_FILE = "snapshot.json";
 export const SCHEMA_SNAPSHOT_FORMAT = 1;
 export const SEED_FILE = "seed.sql";
+/**
+ * Version of the row-write extraction rules. Cached `rows` from a snapshot
+ * built under different rules are never reused (they would be re-parsed).
+ */
+export const SNAPSHOT_ROWS_VERSION = 2;
 
 /** A row-writing statement carried from a covered migration into the snapshot. */
 export interface SchemaSnapshotRowWrite {
@@ -53,6 +58,8 @@ export interface SchemaSnapshot {
   migrations: SchemaSnapshotMigration[];
   schema: string[];
   seed?: string;
+  /** Extraction rules the migrations[].rows were built with. */
+  rowsVersion?: number;
   generatedAt: string;
 }
 
@@ -141,24 +148,53 @@ type RowWriteKind =
   | { kind: "write"; table: string }
   | { kind: "unsupported" };
 
+const READ_SOURCE = new RegExp(String.raw`\b(?:FROM|JOIN)\s+${IDENT}`, "gi");
+
+/** Tables a statement reads via FROM/JOIN (lower-case). */
+function readSources(bare: string): string[] {
+  return [...bare.matchAll(READ_SOURCE)].map((m) => m[1].toLowerCase());
+}
+
 /**
- * Top-level row write we can carry: INSERT/REPLACE … VALUES, UPDATE, DELETE
- * on one named table. Anything reading other tables (… SELECT, CTEs) depends
- * on replay-time state, so it is unsupported and the snapshot falls back.
+ * Classify a statement as replayed on a FRESH install, where a table holds
+ * rows only if an earlier carried write put them there (`seededTables`):
+ *
+ *   - UPDATE/DELETE on an unseeded table, or INSERT … SELECT reading only
+ *     unseeded tables, touches zero rows on install → "none" (skipped). This
+ *     is the copy-and-swap rebuild (0002_rebuild_audits) and backfills like
+ *     `UPDATE t SET owner = '<publisher id>'`, which must not reach installers.
+ *   - INSERT/REPLACE … VALUES, or UPDATE/DELETE on a seeded table without a
+ *     subquery → carried as-is.
+ *   - Anything else that writes rows (SELECT without FROM, subqueries over
+ *     seeded tables, CTEs) depends on replay-time state → "unsupported".
  */
-function classifyRowWrite(statement: string): RowWriteKind {
+function classifyRowWrite(statement: string, seededTables: ReadonlySet<string>): RowWriteKind {
   const bare = bareSql(statement);
   if (/^CREATE\b/i.test(bare)) {
     return { kind: "none" };
   }
-  const match =
-    bare.match(INSERT_TARGET) ?? bare.match(UPDATE_TARGET) ?? bare.match(DELETE_TARGET);
-  if (match) {
-    return /\bSELECT\b/i.test(bare)
-      ? { kind: "unsupported" }
-      : { kind: "write", table: match[1].toLowerCase() };
+  if (/^WITH\b/i.test(bare)) {
+    return migrationWritesRows(statement) ? { kind: "unsupported" } : { kind: "none" };
   }
-  return migrationWritesRows(statement) ? { kind: "unsupported" } : { kind: "none" };
+  const insert = bare.match(INSERT_TARGET);
+  const change = insert ? null : (bare.match(UPDATE_TARGET) ?? bare.match(DELETE_TARGET));
+  const match = insert ?? change;
+  if (!match) {
+    return migrationWritesRows(statement) ? { kind: "unsupported" } : { kind: "none" };
+  }
+  const table = match[1].toLowerCase();
+  const hasSelect = /\bSELECT\b/i.test(bare);
+  const sources = readSources(bare).filter((t) => !(change && t === table && /^DELETE/i.test(bare)));
+  if (change && !seededTables.has(table)) {
+    return { kind: "none" }; // no rows to update/delete on a fresh install
+  }
+  if (!hasSelect) {
+    return { kind: "write", table };
+  }
+  if (insert && sources.length > 0 && sources.every((t) => !seededTables.has(t))) {
+    return { kind: "none" }; // copies from tables that are empty on a fresh install
+  }
+  return { kind: "unsupported" };
 }
 
 /** Tables a statement renames, drops, or drops/renames columns of. */
@@ -194,7 +230,7 @@ function extractRowWrites(
     if (reshapedTables(statement).some((table) => seededTables.has(table))) {
       return null;
     }
-    const kind = classifyRowWrite(statement);
+    const kind = classifyRowWrite(statement, seededTables);
     if (kind.kind === "unsupported") {
       return null;
     }
@@ -233,7 +269,8 @@ export async function buildSchemaSnapshot(input: {
     input.previous === undefined
       ? await readSchemaSnapshot(input.migrationRoot)
       : input.previous;
-  const cached = previous?.migrations ?? [];
+  const cached =
+    previous?.rowsVersion === SNAPSHOT_ROWS_VERSION ? previous.migrations : [];
 
   const covered: SchemaSnapshotMigration[] = [];
   const seededTables = new Set<string>();
@@ -285,6 +322,7 @@ export async function buildSchemaSnapshot(input: {
     migrations: covered,
     schema,
     ...(seed?.trim() ? { seed } : {}),
+    rowsVersion: SNAPSHOT_ROWS_VERSION,
     generatedAt: (input.now ?? new Date()).toISOString(),
   };
 }

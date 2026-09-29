@@ -15,17 +15,15 @@
  * is nothing honest to show, so we surface a skip instead of fake cards — this
  * screen must never advertise an app it cannot actually install.
  *
- * Install is delegated to useCloudCatalogInstallFlow, the same hook the
- * Community Apps tab uses, so fork/track policy, the API-key wizard and the
- * post-install welcome chat behave identically here.
+ * Install uses the same cloud install path as Community Apps. After install,
+ * Pen opens beside the app with a welcome message that includes any missing
+ * keys or platform connections — no blocking setup wizard.
  *
- * PLATFORM CONNECT: `platform:connect` opens Papr Chrome and, on success,
- * platformSessionService.storeRequiredCookies() writes the cookies through the
- * SAME custom-keys service the setup wizard reads — so connecting first makes
- * the wizard open already satisfied instead of demanding a paste.
+ * Platform connect badges are informational; the tile installs the app and Pen
+ * can walk through connect_platform / API keys in chat.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
 import type {
   CommunityCatalog,
@@ -37,8 +35,10 @@ import {
 } from "../../constants/onboardingRecommendations";
 import {
   installCloudCatalogApp,
+  planCloudInstallFailureHandoff,
   type CloudInstallResponse,
 } from "../../utils/cloudCatalogInstall";
+import { openChatWithPrompt } from "../../utils/openChatWithPrompt";
 import { FreeformPrompt } from "./FreeformPrompt";
 import { trackEvent } from "../../lib/telemetry";
 
@@ -62,6 +62,10 @@ interface RecommendedAppsProps {
    */
   freeformOpen?: boolean;
   onFreeformOpenChange?: (open: boolean) => void;
+  /**
+   * Auth recommend runs before the workspace exists. Release the gate so a
+   * sign-in window / platform tab can actually render.
+   */
 }
 
 type LoadState = "loading" | "ready" | "unavailable";
@@ -81,7 +85,6 @@ export function RecommendedApps({
   const [connectState, setConnectState] = useState<Record<string, ConnectState>>(
     {},
   );
-  const [connectError, setConnectError] = useState<string | null>(null);
   const [localFreeform, setLocalFreeform] = useState(false);
   const controlled = freeformOpen !== undefined;
   const freeform = controlled ? freeformOpen : localFreeform;
@@ -89,6 +92,7 @@ export function RecommendedApps({
     controlled ? onFreeformOpenChange?.(open) : setLocalFreeform(open);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
+  /** null = still checking host; false = need agent + Chrome install path. */
 
   useEffect(() => {
     let cancelled = false;
@@ -163,39 +167,11 @@ export function RecommendedApps({
       };
       if (status === "connected") {
         setConnectState((prev) => ({ ...prev, [platformId]: "connected" }));
-        setConnectError(null);
       }
     };
 
     window.addEventListener("gateway-broadcast", onBroadcast);
     return () => window.removeEventListener("gateway-broadcast", onBroadcast);
-  }, []);
-
-  const handleConnect = useCallback(async (rec: OnboardingRecommendation) => {
-    const platformId = rec.connect!.platformId;
-    setConnectState((prev) => ({ ...prev, [platformId]: "connecting" }));
-    setConnectError(null);
-    trackEvent("paprwork_onboarding_platform_connect_started", {
-      step_name: "recommend",
-      platform: platformId,
-    } as Record<string, unknown>);
-
-    try {
-      const res = await gateway.send("platform:connect", { platformId });
-      const data = res.data as { status?: string } | undefined;
-      if (data?.status === "connected") {
-        setConnectState((prev) => ({ ...prev, [platformId]: "connected" }));
-        return;
-      }
-      if (!res.success) {
-        setConnectError(res.error || "Couldn't open the sign-in window.");
-        setConnectState((prev) => ({ ...prev, [platformId]: "disconnected" }));
-      }
-      // Otherwise Chrome is open and the broadcast listener takes it from here.
-    } catch (err) {
-      setConnectError(err instanceof Error ? err.message : "Connection failed.");
-      setConnectState((prev) => ({ ...prev, [platformId]: "disconnected" }));
-    }
   }, []);
 
   /**
@@ -221,7 +197,13 @@ export function RecommendedApps({
     }));
     if (!result.ok) {
       setInstallingId(null);
-      setInstallError(`Couldn't install ${entry.name}: ${result.error.slice(0, 200)}`);
+      const plan = planCloudInstallFailureHandoff(entry, "fork", result);
+      if (plan.kind === "agent") {
+        setInstallError(null);
+        openChatWithPrompt(plan.agentMessage);
+        return;
+      }
+      setInstallError(`Couldn't install ${entry.name}: ${plan.message.slice(0, 200)}`);
       return;
     }
     onInstalled(entry, result.data);
@@ -282,16 +264,15 @@ export function RecommendedApps({
           const platformId = rec.connect?.platformId;
           const state = platformId ? connectState[platformId] : undefined;
           const needsConnect = Boolean(rec.connect) && state !== "connected";
-          const connecting = state === "connecting";
 
           return (
             <button
               key={entry.catalogId}
               className="onboarding-recommend__tile"
-              disabled={busy || Boolean(installingId) || connecting}
-              onClick={() =>
-                needsConnect ? void handleConnect(rec) : void handleInstall(entry)
-              }
+              disabled={busy || Boolean(installingId)}
+              onClick={() => {
+                void handleInstall(entry);
+              }}
             >
               <span className="onboarding-recommend__tile-title">
                 {rec.title}
@@ -300,9 +281,9 @@ export function RecommendedApps({
               <span className="onboarding-recommend__tile-meta">{rec.meta}</span>
               {/* One pill slot, two states: the platform requirement reads the
                   same whether it's still to do or already done. */}
-              {needsConnect && (
+              {needsConnect && rec.connect && (
                 <span className="onboarding-recommend__tile-connect">
-                  {connecting ? "Waiting for sign-in…" : rec.connect!.label}
+                  Pen can help connect {rec.connect.label.replace("Connect ", "")} in chat after install
                 </span>
               )}
               {rec.connect && state === "connected" && (
@@ -320,9 +301,6 @@ export function RecommendedApps({
         })}
       </div>
 
-      {connectError && (
-        <p className="onboarding-recommend__error">{connectError}</p>
-      )}
       {installError && (
         <p className="onboarding-recommend__error">{installError}</p>
       )}

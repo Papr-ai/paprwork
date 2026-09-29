@@ -34,7 +34,7 @@
 }
 
 /* Compact: collapse by worst-value-per-pixel. The URL row goes first (the app
-   itself and Share both reach the link), then the chip drops its words. */
+   itself and Share both reach the link). The chip keeps its words. */
 @container publishbar (max-width: 1000px) {
   /* Descendant selector for specificity, not style: a container query adds
      none, and the base `.mini-app-publish-bar__url-row { display: flex }` is
@@ -44,10 +44,15 @@
     display: none;
   }
 
-  /* Dot only. The pill keeps its title attribute, so the sentence is one
-     hover away rather than gone. */
+  /* The status words stay in compact mode: a coloured dot alone is not
+     enough to read the state. Long labels shrink with an ellipsis instead
+     (the pill's title attribute keeps the full sentence). */
   .mini-app-publish-bar__web-sync-chip-text {
-    display: none;
+    min-width: 0;
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   /* Files-mode fallback text ("Live · …"), not lineage — lineage is a glyph
@@ -55,17 +60,6 @@
      says whenever the chip is present, so it yields space first. */
   .mini-app-publish-bar .mini-app-publish-bar__status {
     display: none;
-  }
-
-  /* Double class to match the base rule's specificity — a single-class
-     override here loses silently and the pill keeps its text-width padding. */
-  .mini-app-publish-bar__web-sync-dot.mini-app-publish-bar__web-sync-dot--chip {
-    padding: 0;
-  }
-
-  .mini-app-publish-bar__web-sync-chip-main {
-    gap: 0;
-    padding: 5px 7px;
   }
 }
 

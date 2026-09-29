@@ -55,10 +55,17 @@ export function appCodeUsesDatabaseApi(content: string): boolean {
   return DB_API_USAGE_PATTERNS.some((pattern) => pattern.test(code));
 }
 
+function isScaffoldDbHelper(filename: string): boolean {
+  return filename.replace(/\\/g, "/").replace(/^\.\//, "") === "db.ts";
+}
+
 export function appFilesUseDatabaseApi(
   fileContents: Map<string, string>,
 ): boolean {
-  for (const content of fileContents.values()) {
+  for (const [filename, content] of fileContents.entries()) {
+    // db.ts is auto-scaffolded into every app; it only counts as DB usage when
+    // another file imports it (matched by the `from './db'` patterns).
+    if (isScaffoldDbHelper(filename)) continue;
     if (appCodeUsesDatabaseApi(content)) {
       return true;
     }

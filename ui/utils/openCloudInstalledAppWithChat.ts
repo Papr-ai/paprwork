@@ -2,42 +2,13 @@
  * After cloud/community install: open app in split view with chat on the left.
  */
 
-import type { CloudInstallMode } from "./cloudCatalogInstall";
 import { useTabStore } from "../stores/tabStore";
 import { isAppTabMergedWithChat } from "./appTabMerge";
 
-export interface CloudInstallWelcomeInput {
-  appTitle: string;
-  appId: string;
-  mode: CloudInstallMode;
-  needsSeed?: boolean;
-}
-
-/** First message when install succeeded and the user should explore the app. */
-export function buildCloudInstallWelcomeMessage(
-  input: CloudInstallWelcomeInput,
-): string {
-  const modeLabel =
-    input.mode === "track"
-      ? "linked to the publisher for updates"
-      : "forked locally for my workspace";
-
-  const lines = [
-    `I just installed the app "${input.appTitle}" (appId: ${input.appId}) — it is ${modeLabel}.`,
-    "The app is open beside this chat. Help me get started:",
-    "- Brief overview of what it does and who it is for",
-    "- The first 1–2 actions I should take in the UI",
-    "- Any linked jobs, schedules, databases, or API keys I should configure",
-  ];
-
-  if (input.needsSeed) {
-    lines.push(
-      "- The schema looks ready but data may be empty — guide me through running the seed/setup job if needed",
-    );
-  }
-
-  return lines.join("\n");
-}
+export type {
+  CloudInstallWelcomeInput,
+} from "./cloudCatalogInstall";
+export { buildCloudInstallWelcomeMessage } from "./cloudCatalogInstall";
 
 export async function openCloudInstalledAppWithChat(
   createChat: () => Promise<string | null>,

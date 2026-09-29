@@ -9,7 +9,6 @@ import { canInstallCloudCatalogEntry } from "../../utils/communityAppLocalOpen";
 import { fetchCatalogEntryById } from "../../utils/fetchCatalogEntry";
 import { prepareCloudPreviewIframe } from "../../utils/cloudPreviewSession";
 import { useCloudCatalogInstallFlow } from "../../hooks/useCloudCatalogInstallFlow";
-import { ImportSetupWizard } from "./ImportSetupWizard";
 import { CloudCatalogInstallModal } from "./CloudCatalogInstallModal";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import { MiniAppPreviewUrlBar } from "./MiniAppPreviewUrlBar";
@@ -93,7 +92,6 @@ export function CloudCatalogPreviewView({
     setInstallModeEntry,
     installingId,
     installToast,
-    cloudInstallWizard,
     optionalDepsNotice,
     setOptionalDepsNotice,
     continueFromOptionalDeps,
@@ -101,8 +99,6 @@ export function CloudCatalogPreviewView({
     installCloudApp,
     startCloudInstall,
     resolveLocalAppId,
-    finishInstallWizard,
-    openInstallHelp,
   } = useCloudCatalogInstallFlow();
 
   useCloudPreviewChatBridge(true);
@@ -389,16 +385,6 @@ export function CloudCatalogPreviewView({
             setInstallModeEntry(null);
             void installCloudApp(target, selection, catalogScope);
           }}
-        />
-      ) : null}
-
-      {cloudInstallWizard ? (
-        <ImportSetupWizard
-          appName={cloudInstallWizard.appTitle}
-          requirements={cloudInstallWizard.requirements}
-          onComplete={finishInstallWizard}
-          onCancel={finishInstallWizard}
-          onRequestHelp={(req) => void openInstallHelp(req)}
         />
       ) : null}
 

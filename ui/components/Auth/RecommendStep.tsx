@@ -72,6 +72,7 @@ export function RecommendStep({ onComplete, previewMode = false, onBack }: Recom
       if (!(await isGatewayReady())) {
         setPreparing(true);
         await waitForGatewayReady();
+        setPreparing(false);
       }
       onComplete();
       window.setTimeout(then, 400);

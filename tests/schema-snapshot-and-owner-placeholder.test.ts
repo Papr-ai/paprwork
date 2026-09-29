@@ -15,6 +15,7 @@ import {
   buildSchemaSnapshot,
   readSchemaSnapshot,
   schemaStatementsFromRows,
+  sha256Of,
   validateSchemaSnapshot,
   writeSchemaSnapshot,
 } from "../src/gateway/services/jobs/schemaSnapshot.js";
@@ -345,13 +346,71 @@ describe("snapshot carries migration seed rows", () => {
     expect(await readSchemaSnapshot(root)).toBeNull();
   });
 
-  it("falls back on INSERT … SELECT (depends on replay-time data)", async () => {
+  it("falls back on INSERT … SELECT from a seeded table (depends on replay-time data)", async () => {
     writeMigrations({
       "0001_init.sql": INIT,
       "0002_copy.sql": "CREATE TABLE s2 (id TEXT PRIMARY KEY); INSERT INTO s2 SELECT id FROM stats;",
     });
     await publishSnapshot(["0001_init.sql", "0002_copy.sql"]);
     expect(await readSchemaSnapshot(root)).toBeNull();
+  });
+
+  // SEO Audit 0002: copy-and-swap rebuild of an UNSEEDED table. On a fresh
+  // install it moves zero rows, so the snapshot covers it with no row writes —
+  // and installers never replay the DROP/RENAME that wedged the replica tape.
+  it("covers a copy-and-swap rebuild of an unseeded table", async () => {
+    writeMigrations({
+      "0001_init.sql":
+        "CREATE TABLE audits (id TEXT PRIMARY KEY, owner_session TEXT, created_at TEXT);\n" +
+        "CREATE INDEX IF NOT EXISTS idx_audits_session ON audits(owner_session, created_at);",
+      "0002_rebuild.sql":
+        "CREATE TABLE audits_rebuild (id TEXT PRIMARY KEY, owner_session TEXT, created_at TEXT);\n" +
+        "INSERT INTO audits_rebuild (id, owner_session, created_at) SELECT id, owner_session, created_at FROM audits;\n" +
+        "DROP TABLE audits;\nALTER TABLE audits_rebuild RENAME TO audits;\n" +
+        "CREATE INDEX IF NOT EXISTS idx_audits_session ON audits(owner_session, created_at);",
+      "0003_user.sql": "ALTER TABLE audits ADD COLUMN user_id TEXT;",
+    });
+    await publishSnapshot(["0001_init.sql", "0002_rebuild.sql", "0003_user.sql"]);
+    const snap = await readSchemaSnapshot(root);
+    expect(snap?.migrations.map((m) => m.rows)).toEqual([[], [], []]);
+    expect(snap?.schema.some((s) => /idx_audits_session/.test(s))).toBe(true);
+  });
+
+  // LinkedIn Outreach 0003-0005: `UPDATE people SET owner = '<publisher id>'`
+  // backfills. On an empty table they are no-ops and must not be carried.
+  it("drops backfill UPDATEs on unseeded tables (no publisher ids reach installers)", async () => {
+    writeMigrations({
+      "0001_init.sql": `${INIT}\nCREATE TABLE people (id TEXT PRIMARY KEY, owner TEXT);`,
+      "0002_backfill.sql": "UPDATE people SET owner = 'PUBLISHER' WHERE owner IS NULL;",
+      "0003_settings.sql": "UPDATE settings SET owner = 'PUBLISHER' WHERE owner IS NULL;",
+    });
+    await publishSnapshot(["0001_init.sql", "0002_backfill.sql", "0003_settings.sql"]);
+    const snap = await readSchemaSnapshot(root);
+    expect(snap?.migrations[1].rows).toEqual([]);
+    // settings IS seeded by 0001, so its UPDATE is carried (same as replay).
+    expect(snap?.migrations[2].rows?.map((r) => r.table)).toEqual(["settings"]);
+  });
+
+  it("ignores cached rows built under older extraction rules", async () => {
+    writeMigrations({ "0001_init.sql": INIT });
+    const stale = {
+      formatVersion: 1 as const,
+      generatedAt: "x",
+      schema: [],
+      migrations: [
+        { file: "0001_init.sql", sha256: sha256Of(INIT), rows: [{ table: "stats", sql: "SELECT 'stale'" }] },
+      ],
+    };
+    const next = await buildSchemaSnapshot({
+      migrationRoot: root,
+      schemaRows: [
+        { type: "table", name: "settings", sql: "CREATE TABLE settings (id TEXT)" },
+        { type: "table", name: "stats", sql: "CREATE TABLE stats (id TEXT)" },
+      ],
+      appliedLedgerIds: new Set(["0001_init.sql"]),
+      previous: stale,
+    });
+    expect(next?.migrations[0].rows?.map((r) => r.table)).toEqual(["settings", "stats"]);
   });
 
   it("only parses migrations that are new or changed since the last snapshot", async () => {

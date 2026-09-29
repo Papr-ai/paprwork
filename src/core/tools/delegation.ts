@@ -253,6 +253,17 @@ export const delegateTaskTool = createTool({
     }
 
     const args = parsed.data;
+    // Sub-agents get no workspace files — hand the architect the user's brand so the
+    // plan uses it (or flags that it must be asked for).
+    if (args.useAgentId === PRODUCT_ARCHITECT_DELEGATE_ID) {
+      const { loadBrandDesignContext } = await import(
+        "../../gateway/services/brandDesignContext.js"
+      );
+      const brand = await loadBrandDesignContext();
+      if (brand && !(args.context ?? "").includes("## User Brand")) {
+        args.context = [args.context, brand.block].filter(Boolean).join("\n\n");
+      }
+    }
     const { getSubAgentService } =
       await import("../../gateway/services/SubAgentService.js");
     const { getCurrentChatId } = await import("./context.js");

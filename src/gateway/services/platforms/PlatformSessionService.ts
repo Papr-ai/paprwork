@@ -8,16 +8,16 @@ import { installPlaywrightChromium } from "../../../core/utils/installPlaywright
  * 1. Launch Papr-managed real Chrome for sign-in (passkeys/OAuth work)
  * 2. Poll Papr-managed Chrome only until login completes (no personal Chrome reads)
  * 3. Optional: user-initiated import from personal Google Chrome (Settings)
- * 4. Fall back to embedded Papr tab or Playwright when Chrome is unavailable
+ * 4. Without Chrome: refuse connect — chat with the agent to install Chrome and
+ *    sign in (embedded tab does not support passkeys / fingerprint login).
  */
 
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
-import { isGoogleChromeInstalled } from "./platformChromeEnv.js";
 import {
-  applyRealChromeStealthScripts,
-  buildRealChromePersistentLaunchOptions,
-} from "./platformRealChromeLaunch.js";
+  formatGoogleChromeInstallHint,
+  isGoogleChromeInstalled,
+} from "./platformChromeEnv.js";
 import {
   isPlatformBrowserBridgeAvailable,
   requestPlatformBrowser,
@@ -126,6 +126,8 @@ export interface PlatformSessionState {
   lastRefreshedAt?: string;
   expiresAt?: string;
   error?: string;
+  /** Connect refused because real Google Chrome is not installed (no embedded fallback). */
+  requiresGoogleChrome?: boolean;
 }
 
 interface PlatformSessionStore {
@@ -137,7 +139,6 @@ const STORE_VERSION = 1;
 const CONNECT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes for user to log in
 const REFRESH_TIMEOUT_MS = 60 * 1000; // 60 seconds for headless refresh (some sites are slow)
 const NAVIGATION_TIMEOUT_MS = 60 * 1000; // 60 seconds for page navigation (social sites are slow)
-const POLL_INTERVAL_MS = 1000; // Check URL every second during connect
 const LINKEDIN_LIVE_VALIDATE_TTL_MS = 60 * 1000;
 /** Skip aggressive LinkedIn probes right after a successful connect (avoids false logouts). */
 const CONNECT_VALIDATION_GRACE_MS = 3 * 60 * 1000;
@@ -424,7 +425,7 @@ export class PlatformSessionService {
   /**
    * Connect to a platform.
    * Chrome path: auto-extract if already logged in, otherwise open Chrome and poll.
-   * Fallback: Playwright-controlled browser when Chrome isn't installed.
+   * Without Chrome: return requiresGoogleChrome (agent-assisted install + connect).
    */
   async connect(
     platformId: PlatformId,
@@ -479,12 +480,15 @@ export class PlatformSessionService {
         return await this.connectViaChrome(platformId, config);
       }
 
-      if (isPlatformBrowserBridgeAvailable()) {
-        return await this.connectViaEmbeddedTab(platformId, config);
-      }
-
-      console.log(`[PlatformSessionService] Chrome not installed, using Playwright fallback for ${platformId}`);
-      return await this.connectViaPlaywright(platformId, config);
+      console.log(
+        `[PlatformSessionService] Google Chrome not installed — refusing ${platformId} connect (use agent to install Chrome, then Papr-managed Chrome sign-in)`,
+      );
+      return {
+        platformId,
+        status: "disconnected",
+        requiresGoogleChrome: true,
+        error: `Google Chrome is required to connect ${config.name}. Papr does not use an embedded browser for sign-in (passkeys and fingerprint login need real Chrome). Chat with Pen to install Chrome and connect ${config.name}. ${formatGoogleChromeInstallHint()}`,
+      };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error(`[PlatformSessionService] Connect failed for ${platformId}:`, errorMessage);
@@ -637,70 +641,6 @@ export class PlatformSessionService {
       externalChrome: true,
       chromeWindowOpened: true,
     };
-  }
-
-  private async connectViaPlaywright(
-    platformId: PlatformId,
-    config: PlatformConfig,
-  ): Promise<PlatformSessionState> {
-    const profilePath = this.getProfilePath(platformId);
-    await fs.mkdir(profilePath, { recursive: true });
-
-    const playwright = await loadPlaywright();
-
-    let browserType: "chrome" | "chromium" = "chromium";
-    if (isGoogleChromeInstalled()) {
-      browserType = "chrome";
-    }
-
-    const userDataDir = join(profilePath, "browser-data");
-    await fs.mkdir(userDataDir, { recursive: true });
-
-    this.activeContext = await playwright.chromium.launchPersistentContext(
-      userDataDir,
-      buildRealChromePersistentLaunchOptions({
-        includeCdpPort: false,
-        channel: browserType,
-      }),
-    );
-    await applyRealChromeStealthScripts(this.activeContext);
-
-    const page = this.activeContext.pages()[0] || (await this.activeContext.newPage());
-    await page.goto(config.loginUrl, {
-      waitUntil: "domcontentloaded",
-      timeout: NAVIGATION_TIMEOUT_MS,
-    });
-
-    const startTime = Date.now();
-    let loggedIn = false;
-
-    while (Date.now() - startTime < CONNECT_TIMEOUT_MS) {
-      const currentUrl = page.url();
-      if (config.successUrlPattern.test(currentUrl)) {
-        loggedIn = true;
-        console.log(`[PlatformSessionService] Login detected for ${platformId}`);
-        break;
-      }
-      await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
-    }
-
-    if (!loggedIn) {
-      throw new Error(
-        "Login timed out. Please try again and complete the login within 5 minutes.",
-      );
-    }
-
-    try {
-      await this.extractAndStoreCookies(platformId, config);
-
-      const allCookies = await this.activeContext.cookies();
-      await fs.writeFile(join(profilePath, "cookies.json"), JSON.stringify(allCookies, null, 2));
-
-      this.connectingPlatform = null;
-      return this.markConnected(platformId, config);
-    } finally {
-      await this.closeBrowser();
-    }
   }
 
   private startChromeCookiePolling(
@@ -892,95 +832,6 @@ export class PlatformSessionService {
     if (playwrightCookies.length > 0) {
       await this.writeCookiesJson(platformId, playwrightCookies);
     }
-  }
-
-  private async connectViaEmbeddedTab(
-    platformId: PlatformId,
-    config: PlatformConfig,
-  ): Promise<PlatformSessionState & { waitingForConfirmation?: boolean }> {
-    const stateResponse = await requestPlatformBrowser({
-      action: "get_state",
-      payload: { platformId },
-    });
-    const existingUrl =
-      stateResponse.success && stateResponse.data
-        ? String((stateResponse.data as { url?: string }).url ?? "")
-        : "";
-
-    if (isAuthenticatedPlatformUrl(existingUrl, config)) {
-      await syncEmbeddedCookiesToKeychain(platformId);
-      this.connectingPlatform = null;
-      const state = await this.markConnected(platformId, config);
-      console.log(`[PlatformSessionService] Connected ${platformId} using existing Papr tab session`);
-      return state;
-    }
-
-    await requestPlatformBrowser({
-      action: "ensure",
-      payload: { platformId, url: config.loginUrl },
-    });
-    await requestPlatformBrowser({
-      action: "show_tab",
-      payload: { platformId },
-    });
-
-    console.log(`[PlatformSessionService] Opened ${config.loginUrl} in Papr ${config.name} tab`);
-    this.startEmbeddedLoginPolling(platformId, config);
-
-    return {
-      platformId,
-      status: "connecting",
-      waitingForConfirmation: true,
-    };
-  }
-
-  private startEmbeddedLoginPolling(
-    platformId: PlatformId,
-    config: PlatformConfig,
-  ): void {
-    this.stopChromeCookiePolling(platformId);
-    this.cookiePollStartedAt.set(platformId, Date.now());
-
-    const poll = async (): Promise<void> => {
-      const startedAt = this.cookiePollStartedAt.get(platformId) ?? Date.now();
-      if (Date.now() - startedAt > CONNECT_TIMEOUT_MS) {
-        this.stopChromeCookiePolling(platformId);
-        this.connectingPlatform = null;
-        return;
-      }
-
-      try {
-        const stateResponse = await requestPlatformBrowser({
-          action: "get_state",
-          payload: { platformId },
-        });
-        if (!stateResponse.success || !stateResponse.data) {
-          return;
-        }
-        const url = String((stateResponse.data as { url?: string }).url ?? "");
-        if (!isAuthenticatedPlatformUrl(url, config)) {
-          return;
-        }
-
-        await syncEmbeddedCookiesToKeychain(platformId);
-        this.stopChromeCookiePolling(platformId);
-        this.connectingPlatform = null;
-        const state = await this.markConnected(platformId, config);
-        await this.broadcastStatusChange(state);
-        console.log(`[PlatformSessionService] Auto-detected Papr tab login for ${platformId}`);
-      } catch (error) {
-        console.warn(
-          `[PlatformSessionService] Embedded login poll failed for ${platformId}:`,
-          error,
-        );
-      }
-    };
-
-    void poll();
-    const timer = setInterval(() => {
-      void poll();
-    }, CHROME_COOKIE_POLL_MS);
-    this.cookiePollTimers.set(platformId, timer);
   }
 
   private getChromeCookieUrls(config: PlatformConfig): string[] {

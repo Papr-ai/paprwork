@@ -108,12 +108,23 @@ function stripLineCommentsForLint(content: string): string {
     .join("\n");
 }
 
+/** Blank full-line Python comments (# …) so lint rules only see executable code. */
+export function stripPythonCommentLines(source: string): string {
+  return source
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("#") ? "" : line))
+    .join("\n");
+}
+
 export function checkBackendHandlerPatterns(
   handlerRelativePath: string,
   handlerSource: string,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const file = `${BACKEND_FOLDER}/${handlerRelativePath}`;
+  // Lint code, not guidance: the scaffolded ping.py warns "Never sqlite3.connect(APP_DB)"
+  // in a comment, which used to fail every new app's build.
+  handlerSource = stripPythonCommentLines(handlerSource);
 
   if (BACKEND_STDIN_PATTERN.test(handlerSource)) {
     issues.push({

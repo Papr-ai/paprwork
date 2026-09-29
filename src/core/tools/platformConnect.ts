@@ -20,7 +20,7 @@ export const connectPlatformTool = createTool({
 Use this to:
 - Register a login-required site: action="register" with url — then request_connect
 - Check if connected: action="status"
-- **Automate with agent browser tools: action="prepare_browser"** (desktop: real Chrome window outside Papr when installed; embedded tab fallback)
+- **Automate with agent browser tools: action="prepare_browser"** (desktop: real Google Chrome required — install via bash if missing; no embedded sign-in)
 - Ask user to connect: action="request_connect"
 - Remove a custom site: action="unregister"
 - Open a visible window for the user: action="browse" (NOT for agent automation)

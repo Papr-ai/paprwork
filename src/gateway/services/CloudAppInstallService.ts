@@ -341,8 +341,19 @@ export class CloudAppInstallService {
             `databases: ${linked.health.missingRequiredDbIds.slice(0, 5).join(", ")}`,
           );
         }
-        throw new Error(
-          `Install incomplete — required linked resources missing (${missingParts.join("; ")})`,
+        throw Object.assign(
+          new Error(
+            `Install incomplete — required linked resources missing (${missingParts.join("; ")})`,
+          ),
+          {
+            code: "install_linked_resources_missing",
+            status: 422,
+            detail: JSON.stringify({
+              missingJobIds: linked.health.missingJobIds,
+              missingRequiredDbIds: linked.health.missingRequiredDbIds,
+              warnings: linked.health.warnings,
+            }).slice(0, 4000),
+          },
         );
       }
 

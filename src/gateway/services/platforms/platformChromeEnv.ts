@@ -34,3 +34,14 @@ export function getGoogleChromeExecutablePath(): string | null {
 export function isGoogleChromeInstalled(): boolean {
   return getGoogleChromeExecutablePath() !== null;
 }
+
+/** Actionable install hint when automatic sign-in requires real Google Chrome. */
+export function formatGoogleChromeInstallHint(): string {
+  if (process.platform === "darwin") {
+    return "Install Google Chrome from https://www.google.com/chrome/ or run: brew install --cask google-chrome";
+  }
+  if (process.platform === "win32") {
+    return "Install Google Chrome from https://www.google.com/chrome/ or run: winget install Google.Chrome";
+  }
+  return "Install Google Chrome from https://www.google.com/chrome/ (your distro's google-chrome package on Linux).";
+}

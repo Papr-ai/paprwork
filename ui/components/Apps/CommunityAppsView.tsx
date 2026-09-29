@@ -14,11 +14,7 @@ import { gateway } from "../../src/lib/gateway";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import { useChat } from "../../hooks/useChat";
 import { useTabs } from "../../hooks/useTabs";
-import {
-  ImportSetupWizard,
-  type WizardResult,
-  type HelpRequest,
-} from "./ImportSetupWizard";
+import type { WizardResult } from "./ImportSetupWizard";
 import type { CommunityCatalogEntry, CommunityCatalogScope } from "../../../src/core/types/communityCatalog";
 import { isTeamSharedVisibility } from "../../../src/core/types/communityCatalog";
 import { requiresInstallModeChoice } from "../../../src/core/utils/cloudCatalogInstallPolicy";
@@ -64,18 +60,14 @@ import { shareGlyphForCatalogEntry } from "../../utils/shareGlyph";
 import { shareAudienceShortLabel } from "../../utils/shareAudienceGlyphs";
 import { CloudInstallOptionalDepsNotice } from "./CloudInstallOptionalDepsNotice";
 import {
-  buildCloudInstallBootstrapFailureAgentMessage,
-  buildCloudInstallTimeoutAgentMessage,
-  CLOUD_INSTALL_FETCH_TIMEOUT_MS,
   CLOUD_INSTALL_TIMEOUT_MESSAGE,
+  buildPostInstallAgentMessage,
+  enrichInstallAgentMessageWithRequirements,
   extractOptionalInstallDependencies,
-  isCloudInstallBootstrapError,
-  isCloudInstallTimeoutError,
+  installCloudCatalogApp,
+  planCloudInstallFailureHandoff,
 } from "../../utils/cloudCatalogInstall";
-import {
-  buildCloudInstallWelcomeMessage,
-  openCloudInstalledAppWithChat,
-} from "../../utils/openCloudInstalledAppWithChat";
+import { openCloudInstalledAppWithChat } from "../../utils/openCloudInstalledAppWithChat";
 import type { CloudAppDependenciesFile } from "../../../src/core/types/cloudAppDependencies";
 
 const GATEWAY =
@@ -230,15 +222,6 @@ function installedForkCountForEntry(
   return lineageIndex.bySourceKey[key]?.length ?? 0;
 }
 
-function userProvidedRequirements(
-  reqs: RequirementItem[] | RequiredKeySpec[] | undefined,
-): RequiredKeySpec[] {
-  if (!reqs?.length) return [];
-  return normalizeRequirements(reqs).filter(
-    (spec) => spec.required !== false && spec.credentialScope !== "owner",
-  );
-}
-
 function toOssEntry(entry: CommunityCatalogEntry): OssRegistryEntry {
   return {
     bundleId: entry.bundleId ?? entry.catalogId,
@@ -277,17 +260,11 @@ export function CommunityAppsView({
   const [showAllPlatforms, setShowAllPlatforms] = useState(false);
   const [category, setCategory] = useState<string | null>(null);
   const { snapshot: cats, categorize: categorizeEntries } = useAppCategories();
-  const [wizardEntry, setWizardEntry] = useState<OssRegistryEntry | null>(null);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
   const [installError, setInstallError] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
   const [installModeEntry, setInstallModeEntry] = useState<CommunityCatalogEntry | null>(null);
-  const [cloudInstallWizard, setCloudInstallWizard] = useState<{
-    appId: string;
-    appTitle: string;
-    requirements: RequiredKeySpec[];
-  } | null>(null);
   const [optionalDepsNotice, setOptionalDepsNotice] = useState<{
     appId: string;
     appTitle: string;
@@ -501,13 +478,11 @@ export function CommunityAppsView({
         const skipped = wizard.skipped.map((k) => `${k.service} (${k.keyName})`);
         message += `\n\nNote: These keys were skipped and are not configured: ${skipped.join(", ")}. The app features that depend on them may not work until the user adds them in Settings.`;
       }
-    } else {
-      const reqs = entry.requirements ?? [];
-      if (reqs.length > 0) {
-        const normalized = normalizeRequirements(reqs);
-        const names = normalized.map((r) => r.name);
-        message += ` This app requires: ${names.join(", ")}.`;
-      }
+    } else if (entry.requirements?.length) {
+      message = enrichInstallAgentMessageWithRequirements(
+        message,
+        entry.requirements,
+      );
     }
 
     setTimeout(() => {
@@ -538,60 +513,21 @@ export function CommunityAppsView({
 
     setInstallingId(entry.catalogId);
     setInstallError(null);
-    const controller = new AbortController();
-    const installTimeout = setTimeout(
-      () => controller.abort(),
-      CLOUD_INSTALL_FETCH_TIMEOUT_MS,
-    );
     try {
-      const res = await fetch(`${GATEWAY}/api/cloud/install`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          namespaceId: entry.namespaceId,
-          slug: entry.slug,
-          mode,
-          installDbPolicy,
-          catalogScope: scope,
-          visibility: entry.visibility,
-          communityCatalogListed: entry.communityCatalogListed,
-        }),
-        signal: controller.signal,
+      const result = await installCloudCatalogApp(entry, selection, {
+        catalogScope: scope,
       });
-      const body = (await res.json()) as {
-        app?: { id: string; title?: string };
-        requirements?: RequiredKeySpec[];
-        bootstrap?: {
-          ready?: boolean;
-          needsSeed?: boolean;
-          warnings?: string[];
-        };
-        dependencies?: CloudAppDependenciesFile;
-        installWarnings?: string[];
-        agentSetupMessage?: string;
-        error?: string;
-        code?: string;
-        detail?: string;
-      };
-      if (!res.ok) {
-        const failMessage = body.error ?? `Install failed (${res.status})`;
-        if (isCloudInstallBootstrapError(failMessage, body.code)) {
+      if (!result.ok) {
+        const plan = planCloudInstallFailureHandoff(entry, mode, result);
+        if (plan.kind === "agent") {
           setInstallError(null);
-          setInstallToast(
-            `Couldn't set up "${entry.name}" — opening chat to diagnose…`,
-          );
-          void openAgentDatabaseSetup(
-            buildCloudInstallBootstrapFailureAgentMessage(
-              entry,
-              mode,
-              failMessage,
-              body.detail,
-            ),
-          );
+          setInstallToast(plan.toast);
+          void openAgentDatabaseSetup(plan.agentMessage);
           return;
         }
-        throw new Error(failMessage);
+        throw new Error(plan.message);
       }
+      const body = result.data;
 
       const title = body.app?.title ?? entry.name;
       const modeLabel = mode === "track" ? "Linked" : "Forked";
@@ -608,7 +544,15 @@ export function CommunityAppsView({
           `${modeLabel} "${title}" — finishing database setup in chat…`,
         );
         void openAgentDatabaseSetup(
-          body.agentSetupMessage!,
+          buildPostInstallAgentMessage({
+            appId: body.app?.id ?? "",
+            appTitle: title,
+            mode,
+            needsSeed,
+            catalogDescription: entry.description,
+            requirements: body.requirements ?? entry.requirements,
+            agentSetupMessage: body.agentSetupMessage,
+          }),
           body.app?.id,
           title,
         );
@@ -631,29 +575,17 @@ export function CommunityAppsView({
 
       void loadArtifacts();
       void fetchLineage();
-      if (body.app?.id) {
-        const userReqs = userProvidedRequirements(
-          body.requirements ?? entry.requirements,
-        );
-        if (userReqs.length > 0) {
-          setCloudInstallWizard({
-            appId: body.app.id,
-            appTitle: title,
-            requirements: userReqs,
-          });
-          return;
-        }
-        if (needsAgentSetup) {
-          return;
-        }
+      if (body.app?.id && !needsAgentSetup) {
         await openCloudInstalledAppWithChat(createChat, {
           appId: body.app.id,
           appTitle: title,
-          agentMessage: buildCloudInstallWelcomeMessage({
+          agentMessage: buildPostInstallAgentMessage({
             appId: body.app.id,
             appTitle: title,
             mode,
             needsSeed,
+            catalogDescription: entry.description,
+            requirements: body.requirements ?? entry.requirements,
           }),
         });
       }
@@ -664,28 +596,19 @@ export function CommunityAppsView({
           : err instanceof Error
             ? err.message.slice(0, 240)
             : "Install failed";
-      if (isCloudInstallTimeoutError(message)) {
+      const plan = planCloudInstallFailureHandoff(entry, mode, {
+        ok: false,
+        error: message,
+      });
+      if (plan.kind === "agent") {
         setInstallError(null);
-        setInstallToast(
-          `Install timed out for "${entry.name}" — opening chat for help…`,
-        );
-        void openAgentDatabaseSetup(
-          buildCloudInstallTimeoutAgentMessage(entry, mode),
-        );
-      } else if (isCloudInstallBootstrapError(message)) {
-        setInstallError(null);
-        setInstallToast(
-          `Finishing database setup for "${entry.name}" in chat…`,
-        );
-        void openAgentDatabaseSetup(
-          buildCloudInstallBootstrapFailureAgentMessage(entry, mode, message),
-        );
+        setInstallToast(plan.toast);
+        void openAgentDatabaseSetup(plan.agentMessage);
       } else {
-        setInstallError(message);
-        setInstallToast(`Install failed for "${entry.name}": ${message}`);
+        setInstallError(plan.message);
+        setInstallToast(`Install failed for "${entry.name}": ${plan.message}`);
       }
     } finally {
-      clearTimeout(installTimeout);
       setInstallingId(null);
     }
   };
@@ -780,49 +703,7 @@ export function CommunityAppsView({
 
   const handleOssImportClick = (entry: CommunityCatalogEntry) => {
     const ossEntry = toOssEntry(entry);
-    const reqs = entry.requirements ?? [];
-    if (reqs.length > 0) {
-      setWizardEntry(ossEntry);
-    } else {
-      void startAgentImport(ossEntry, null);
-    }
-  };
-
-  const handleWizardComplete = (result: WizardResult) => {
-    if (!wizardEntry) return;
-    setWizardEntry(null);
-    void startAgentImport(wizardEntry, result);
-  };
-
-  const handleWizardHelp = async (request: HelpRequest) => {
-    const chatId = await createChat();
-    if (!chatId) return;
-
-    const tabId = createTab("chat", chatId, `Help: ${request.service}`);
-    switchToTab(tabId);
-
-    let message =
-      `I need help getting an API key for ${request.service} (key name: ${request.keyName}).`;
-
-    if (request.instructions) {
-      message += ` The instructions say: "${request.instructions}"`;
-    }
-    if (request.signupUrl) {
-      message += ` The signup page is: ${request.signupUrl}`;
-    }
-    if (request.docsUrl) {
-      message += ` Docs: ${request.docsUrl}`;
-    }
-
-    message +=
-      ` Please walk me through the process step by step. ` +
-      `Once I have the key, I'll paste it in the setup wizard and come back here.`;
-
-    setTimeout(() => {
-      window.dispatchEvent(
-        new CustomEvent("papr-onboarding-send", { detail: { message } }),
-      );
-    }, 300);
+    void startAgentImport(ossEntry, null);
   };
 
   const filteredEntries =
@@ -1146,52 +1027,6 @@ export function CommunityAppsView({
         />
       ) : null}
 
-      {wizardEntry && (
-        <ImportSetupWizard
-          appName={wizardEntry.name}
-          appDescription={wizardEntry.description}
-          appIcon={wizardEntry.icon}
-          requirements={wizardEntry.requirements ?? []}
-          onComplete={handleWizardComplete}
-          onCancel={() => setWizardEntry(null)}
-          onRequestHelp={(req) => void handleWizardHelp(req)}
-        />
-      )}
-
-      {cloudInstallWizard ? (
-        <ImportSetupWizard
-          appName={cloudInstallWizard.appTitle}
-          requirements={cloudInstallWizard.requirements}
-          onComplete={() => {
-            const { appId, appTitle } = cloudInstallWizard;
-            setCloudInstallWizard(null);
-            void openCloudInstalledAppWithChat(createChat, {
-              appId,
-              appTitle,
-              agentMessage: buildCloudInstallWelcomeMessage({
-                appId,
-                appTitle,
-                mode: "fork",
-              }),
-            });
-          }}
-          onCancel={() => {
-            const { appId, appTitle } = cloudInstallWizard;
-            setCloudInstallWizard(null);
-            void openCloudInstalledAppWithChat(createChat, {
-              appId,
-              appTitle,
-              agentMessage: buildCloudInstallWelcomeMessage({
-                appId,
-                appTitle,
-                mode: "fork",
-              }),
-            });
-          }}
-          onRequestHelp={(req) => void handleWizardHelp(req)}
-        />
-      ) : null}
-
       {optionalDepsNotice ? (
         <CloudInstallOptionalDepsNotice
           appTitle={optionalDepsNotice.appTitle}
@@ -1207,7 +1042,7 @@ export function CommunityAppsView({
             void openCloudInstalledAppWithChat(createChat, {
               appId,
               appTitle,
-              agentMessage: buildCloudInstallWelcomeMessage({
+              agentMessage: buildPostInstallAgentMessage({
                 appId,
                 appTitle,
                 mode: "fork",

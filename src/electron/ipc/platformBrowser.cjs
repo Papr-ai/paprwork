@@ -470,8 +470,11 @@ async function handleEnsure(payload) {
   }
 
   if (!platformNavigationUrlsMatch(currentUrl, url)) {
-    await webContents.loadURL(url);
-    await waitForLoad(webContents);
+    void webContents.loadURL(url);
+    // Connect flow must return quickly; the renderer has a ~30s gateway timeout.
+    if (payload.awaitNavigation === true) {
+      await waitForLoad(webContents);
+    }
   }
 
   return {
