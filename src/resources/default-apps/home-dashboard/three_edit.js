@@ -27,20 +27,11 @@ const ThreeEdit = {
   /** PUT body for a set of goals — custom ones carry their text, Pen's carry the goal id. */
   picksFrom(goals) {
     return goals.filter((g) => g.title).map((g) => g.origin === 'custom'
-      ? { id: g.id, title: g.title, target: g.target, due: g.due }
-      : { id: g.id, goalId: g.id, title: g.edited || (g.origTitle && g.title !== g.origTitle) ? g.title : undefined, target: g.target, due: g.due });
+      ? { id: g.id, title: g.title, target: g.target, due: g.due, repeat: g.repeat }
+      : { id: g.id, goalId: g.id, title: g.edited || (g.origTitle && g.title !== g.origTitle) ? g.title : undefined, target: g.target, due: g.due, repeat: g.repeat });
   },
   firstRun() { return Three.data?.source === 'pen' && !Three.data?.confirmed; },
-  editor(g, own) {
-    const v = (s) => (own ? '' : this.esc(s || ''));
-    return `<div class="t3edit">
-      <label><span>Outcome</span><input id="te-t" value="${v(g.title)}" placeholder="Close Tranche 2" /></label>
-      <div class="t3pair"><label><span>Done when</span><input id="te-m" value="${v(g.target)}" placeholder="$1.25M raised" /></label>
-        <label><span>By</span><input id="te-d" value="${v(g.due)}" placeholder="Nov 30" /></label></div>
-      <p class="t3tip">Name a result you can count, not an activity. "$1.25M raised" beats "work on the raise".</p>
-      <div class="t3btns"><button type="button" class="t3save" data-three="save" data-gid="${this.esc(g.id)}">Save</button>
-        <button type="button" class="t3cancel" data-three="cancel">Cancel</button></div></div>`;
-  },
+  editor(g, own) { return ThreeForm.html(g, own, (x) => this.esc(x)); },
   swapList(g) {
     const c = this.pool.map((x) => `<button type="button" class="t3cand" data-three="use" data-gid="${this.esc(g.id)}" data-cid="${this.esc(x.id)}">
       <b>${this.esc(x.title)}</b><span>${this.esc(x.why)}</span></button>`).join('');
@@ -91,6 +82,7 @@ const ThreeEdit = {
   async act(act, b) {
     const gid = b.dataset.gid;
     const i = this.draft ? this.draft.findIndex((g) => g.id === gid) : -1;
+    if (act === 'repeat') { ThreeForm.setRepeat(b); return; }
     if (act === 'edit-one') { this.editing = this.editing === gid ? '' : gid; this.swapping = ''; }
     else if (act === 'swap') { this.swapping = this.swapping === gid ? '' : gid; this.editing = ''; }
     else if (act === 'cancel') { this.editing = ''; this.draft = this.draft.filter((g) => g.title); }
@@ -102,11 +94,11 @@ const ThreeEdit = {
       this.swapping = ''; this.promote = '';
     } else if (act === 'save' && i >= 0) {
       const own = this.editing === `own:${gid}`;
-      const f = { title: this.val('te-t'), target: this.val('te-m'), due: this.val('te-d') };
+      const f = ThreeForm.read();
       if (!f.title) return;
       if (own) {
         if (this.draft[i].title) this.pool.unshift(this.draft[i]);
-        this.draft[i] = { id: `F-${Date.now()}`, title: f.title, target: f.target, due: f.due, why: 'Written by you', origin: 'custom', signals: {} };
+        this.draft[i] = { id: `F-${Date.now()}`, ...f, why: 'Written by you', origin: 'custom', signals: {} };
       } else Object.assign(this.draft[i], f);
       this.editing = '';
     } else if (act === 'lock') {
