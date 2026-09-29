@@ -4569,6 +4569,7 @@ ${last15.substring(0, 8_000)}`;
       model,
       apiKey,
       authType,
+      usePaprProxy,
       systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
       contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
@@ -4707,30 +4708,31 @@ ${last15.substring(0, 8_000)}`;
         if (!retryWithApiKey) throw err;
       }
 
-      // Retry with API key if OAuth rate limit was hit
+      // Retry with API key or Papr proxy if OAuth rate limit was hit
       if (retryWithApiKey && authType === "oauth") {
-        // Try to get API key
-        const authProvider = provider === "openai-codex" ? "openai" : provider;
-        const keyName =
-          authProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-        const keys = await getApiKeys([keyName]);
+        const { resolveOAuthRateLimitRetryCredentials } =
+          await import("../utils/resolveJobSessionAuth.js");
+        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
+          provider,
+          model,
+        );
 
-        if (!keys[keyName]) {
+        if (!retryCreds) {
           throw new Error(
-            `OAuth rate limit reached and no API key available for ${provider}. ` +
-              `Add an API key in Settings or wait for rate limit to reset.`,
+            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
+              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
           );
         }
 
         console.log(
-          `[AgentService] Retrying with API key for ${provider} (OAuth rate limited)`,
+          `[AgentService] Retrying after OAuth rate limit for ${provider} (apiKey=${retryCreds.authType === "apiKey"} paprProxy=${Boolean(retryCreds.usePaprProxy)})`,
         );
 
-        // Retry with API key
         const apiKeyConfig: AgentConfigInternal = {
           ...config,
-          apiKey: keys[keyName],
-          authType: "apiKey",
+          apiKey: retryCreds.apiKey,
+          authType: retryCreds.authType,
+          usePaprProxy: retryCreds.usePaprProxy,
         };
 
         // Create new chatId for retry to avoid session cache
@@ -5093,6 +5095,7 @@ ${last15.substring(0, 8_000)}`;
         model: modelId,
         apiKey,
         authType,
+        usePaprProxy,
         systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
         contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
       };
@@ -5134,27 +5137,65 @@ ${last15.substring(0, 8_000)}`;
         if (!retryWithApiKey) throw err;
       }
 
-      // Retry with API key if OAuth rate limit was hit
       if (retryWithApiKey) {
-        const authProvider = provider === "openai-codex" ? "openai" : provider;
-        const keyName =
-          authProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-        const keys = await getApiKeys([keyName]);
-
-        if (!keys[keyName]) {
+        const { resolveOAuthRateLimitRetryCredentials } =
+          await import("../utils/resolveJobSessionAuth.js");
+        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
+          provider,
+          modelId,
+        );
+        if (!retryCreds) {
           throw new Error(
-            `OAuth rate limit reached and no API key available for ${provider}. ` +
-              `Add an API key in Settings or wait for rate limit to reset.`,
+            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
+              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
           );
         }
-
+        apiKey = retryCreds.apiKey;
+        authType = retryCreds.authType;
+        usePaprProxy = retryCreds.usePaprProxy;
+        if (retryCreds.usePaprProxy) {
+          const schemaStr = JSON.stringify(input.outputSchema, null, 2);
+          const jsonPrompt = `${input.prompt}\n\nRespond with ONLY valid JSON matching this schema (no markdown, no explanation):\n${schemaStr}`;
+          const retryConfig: AgentConfigInternal = {
+            provider,
+            model: modelId,
+            apiKey,
+            authType,
+            usePaprProxy,
+            systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
+            contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
+          };
+          let retryText = "";
+          for await (const chunk of this.streamAgent(
+            `${chatId}-retry`,
+            jsonPrompt,
+            retryConfig,
+            { maxSteps: 10 },
+          )) {
+            if (chunk.type === "error") {
+              const errMsg =
+                (chunk.payload as { error?: string })?.error ??
+                "Model API error";
+              throw new Error(
+                `Structured job model error (${provider}/${modelId}) after Papr proxy retry: ${errMsg}`,
+              );
+            }
+            if (chunk.type === "text-delta") {
+              const payload = chunk.payload as { text?: string };
+              if (typeof payload.text === "string") retryText += payload.text;
+            }
+          }
+          const parsed = this.parseJsonFromResponse(retryText);
+          await gradeRunSearchOutcomes({
+            runKey: chatId,
+            answerText: JSON.stringify(parsed),
+            surface: "job:structured",
+          });
+          return { chatId, object: parsed };
+        }
         console.log(
           `[AgentService] Retrying structured job with API key for ${provider} (OAuth rate limited)`,
         );
-
-        // Fall through to API key path below (generateObject)
-        apiKey = keys[keyName];
-        authType = "apiKey";
       } else {
         // No retry needed, parse and return
         const parsed = this.parseJsonFromResponse(text);
