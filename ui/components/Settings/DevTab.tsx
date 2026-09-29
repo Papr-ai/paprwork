@@ -22,6 +22,7 @@ import {
   type OnboardingPhase,
 } from "../../utils/onboardingState";
 import { getGatewayHttpBase } from "../../utils/gatewayHttpBase";
+import { NudgeDevPanel } from "./NudgeDevPanel";
 
 const GATEWAY_PERF_VIEW_PATH = "/api/debug/gateway-performance/view";
 const GATEWAY_PERF_JSON_PATH = "/api/debug/gateway-performance";
@@ -243,6 +244,8 @@ export function DevTab() {
           </button>
         </div>
       </div>
+
+      <NudgeDevPanel />
 
       <h3 className="dev-tab__heading">Pre-auth flow</h3>
       <p className="dev-tab__hint">

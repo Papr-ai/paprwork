@@ -60,6 +60,8 @@ export interface FocusSignals {
   onboarding?: boolean;
 }
 
+export type FocusRepeat = "daily" | "weekly";
+
 export interface FocusGoal {
   id: string;
   title: string;
@@ -72,6 +74,8 @@ export interface FocusGoal {
   /** Done-when, as the user phrased it (set when they edit). */
   target?: string;
   due?: string;
+  /** A habit rather than a finish line ("post on X and LinkedIn every day"). Repeating goals have no due date. */
+  repeat?: FocusRepeat;
   /** Next milestone from IDENTITY.md. */
   nextStep?: string;
   /** One line on why Pen ranked it — evidence, not vibes. */

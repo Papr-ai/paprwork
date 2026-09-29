@@ -20,6 +20,8 @@ import { useRailPeeks } from "./useRailPeeks";
 import { AgentGlyph } from "../Agent/AgentGlyph";
 import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
 import { useAgentWork } from "../Agent/agentWork";
+import { AgentNudge } from "../Agent/AgentNudge";
+import { useAgentNudge, type NudgeAction } from "../Agent/useAgentNudge";
 import { shouldShowOnboarding } from "../../utils/onboardingState";
 import { switchToChatTab, switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
 import "./Sidebar.css";
@@ -157,6 +159,14 @@ export function Sidebar() {
   const agentLook = useAgentIdentity((s) => s.look);
   const work = useAgentWork();
   const workingLabel = `${agentName} is working · ${work.count} ${work.count === 1 ? "chat" : "chats"}`;
+  const nudge = useAgentNudge(work.state, (action: NudgeAction) => {
+    if (action.type === "chat") void handleOnboardingSendMessage(action.prompt);
+    else if (action.type === "app") switchToTab(createTab("app", action.appId, "App"));
+    else {
+      handleNavClick("focus");
+      if (action.goalId) openFocusGoal(action.goalId);
+    }
+  });
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding);
 
   useEffect(() => {
@@ -187,6 +197,18 @@ export function Sidebar() {
         active={activeView === "focus"}
         onClick={() => handleNavClick("focus")}
         icon={<AgentGlyph size={agentLook === "papr" ? 28 : 36} state={work.state} />}
+        className={nudge.phase === "off" ? undefined : `rail-item--nudge-${nudge.phase}`}
+        overlay={
+          <AgentNudge
+            nudge={nudge.nudge}
+            phase={nudge.phase}
+            onGo={nudge.go}
+            onLater={nudge.later}
+            onDismiss={nudge.dismiss}
+            onReopen={nudge.reopen}
+            onHold={nudge.hold}
+          />
+        }
         peek={
           <FocusPeek
             status={work.state === "working" ? workingLabel : <>{agentName}&apos;s picks</>}

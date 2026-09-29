@@ -1,6 +1,6 @@
 /**
  * AgentGlyph — renders the user's agent (Papr mark or a face: Orb / Tile / Hex) in their color.
- * Faces are an outline + two eye pills; the eyes glance and blink via agentLife.ts.
+ * Faces are an outline + one infinity loop for eyes (the Memory mark); it glances and blinks via agentLife.ts.
  * `state="working"` plays Replay: one point of light retraces the mark; `"done"` seals it once.
  */
 import { Fragment, useEffect, useId, type CSSProperties, type ReactNode } from "react";
@@ -16,6 +16,13 @@ import "./AgentGlyph.css";
 
 const PAPR_PATH =
   "M27.9998 101.5C-11.5 158 6.99988 51 43.4008 60.5002C99.2884 75.0861 115.18 20.7781 83.6804 8.27816C40.2693 -8.94844 51.9998 65 27.9998 101.5Z";
+
+/**
+ * The eyes are memory: one infinity loop, the same path as the Memory rail icon (24px grid, centered
+ * on 12,12). Your agent sees through what it remembers. Flat stroke, no fill — blinks squash it to a line.
+ */
+const INFINITY_PATH =
+  "M12 12c-1.9-2.6-3.5-3.8-5.3-3.8a3.8 3.8 0 0 0 0 7.6c1.8 0 3.4-1.2 5.3-3.8zm0 0c1.9 2.6 3.5 3.8 5.3 3.8a3.8 3.8 0 0 0 0-7.6c-1.8 0-3.4 1.2-5.3 3.8z";
 
 type ShapeProps = { className?: string; pathLength?: number };
 
@@ -116,9 +123,14 @@ export function AgentGlyph({ size, look, color, className = "", state = "idle" }
         </g>
         {tracing ? <Trace width={3} stroke={`url(#${gid})`} render={(p) => <Shape look={l} {...p} />} /> : null}
         <g className="agent-glyph__eyes">
-          <g className="agent-glyph__lids" fill={`url(#${gid})`}>
-            <rect x="14.3" y="14.5" width="3.9" height="11" rx="1.95" />
-            <rect x="21.8" y="14.5" width="3.9" height="11" rx="1.95" />
+          <g
+            className="agent-glyph__lids"
+            stroke={`url(#${gid})`}
+            strokeWidth="3"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path transform="translate(20 20) scale(0.88) translate(-12 -12)" d={INFINITY_PATH} />
           </g>
         </g>
       </svg>
