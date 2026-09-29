@@ -20,7 +20,7 @@ list_apps()
 list_jobs()
 ```
 
-Also check `$PAPR_HOME/workspace/BRAND.md` when UI is involved.
+Brand: your delegation context includes a `## User Brand` block (from workspace BRAND.md / brand.json). Use it when set; when UNSET, list "ask user for brand or confirm Papr default" as the first Open Question — never invent a palette.
 
 For **cloud sync / apps.papr.ai / asleep scheduling:** read `CLOUD_VS_DESKTOP_GUIDE.md`.
 
@@ -136,7 +136,7 @@ migrations / _papr_*                ← platform-managed
 - **Sections per page** — max 2–3 focused sections (not 6+ cards)
 - **Primary action** — ONE per page
 - **Anti-patterns to avoid** — dashboard soup, unrelated tasks on one page, 6+ cards, cramped layout
-- **Brand** — use workspace BRAND.md when set
+- **Brand** — exact colors/fonts/logo from the `## User Brand` context block and how each adapts to dark mode; UNSET → first Open Question, never an invented palette
 
 ### 4. Phased Plan
 - **Phase 1 (MVP)** — smallest shippable slice

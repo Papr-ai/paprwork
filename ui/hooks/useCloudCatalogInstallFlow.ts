@@ -8,28 +8,20 @@ import type {
   CommunityCatalogScope,
 } from "../../src/core/types/communityCatalog";
 import { requiresInstallModeChoice } from "../../src/core/utils/cloudCatalogInstallPolicy";
-import type { RequiredKeySpec } from "../../src/core/types/bundles";
-import type { HelpRequest } from "../components/Apps/ImportSetupWizard";
 import { useArtifacts } from "./useArtifacts";
 import { useChat } from "./useChat";
 import { useTabs } from "./useTabs";
 import { trackEvent } from "../lib/telemetry";
 import {
-  buildCloudInstallBootstrapFailureAgentMessage,
-  buildCloudInstallTimeoutAgentMessage,
   fetchCloudLineageIndex,
   extractOptionalInstallDependencies,
+  buildPostInstallAgentMessage,
   installCloudCatalogApp,
-  isCloudInstallBootstrapError,
-  isCloudInstallTimeoutError,
-  userProvidedRequirements,
+  planCloudInstallFailureHandoff,
   type CloudCatalogInstallSelection,
   type CloudInstallMode,
 } from "../utils/cloudCatalogInstall";
-import {
-  buildCloudInstallWelcomeMessage,
-  openCloudInstalledAppWithChat,
-} from "../utils/openCloudInstalledAppWithChat";
+import { openCloudInstalledAppWithChat } from "../utils/openCloudInstalledAppWithChat";
 import type { CloudAppDependenciesFile } from "../../src/core/types/cloudAppDependencies";
 import {
   resolveLocalAppIdForCatalogEntry,
@@ -44,11 +36,6 @@ export function useCloudCatalogInstallFlow() {
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [installToast, setInstallToast] = useState<string | null>(null);
   const [lineageIndex, setLineageIndex] = useState<CloudLineageIndex | null>(null);
-  const [cloudInstallWizard, setCloudInstallWizard] = useState<{
-    appId: string;
-    appTitle: string;
-    requirements: RequiredKeySpec[];
-  } | null>(null);
   const [optionalDepsNotice, setOptionalDepsNotice] = useState<{
     appId: string;
     appTitle: string;
@@ -131,30 +118,13 @@ export function useCloudCatalogInstallFlow() {
           catalogScope,
         });
         if (!result.ok) {
-          if (isCloudInstallTimeoutError(result.error)) {
-            setInstallToast(
-              `Install timed out for "${entry.name}" — opening chat for help…`,
-            );
-            void openAgentDatabaseSetup(
-              buildCloudInstallTimeoutAgentMessage(entry, mode),
-            );
+          const plan = planCloudInstallFailureHandoff(entry, mode, result);
+          if (plan.kind === "agent") {
+            setInstallToast(plan.toast);
+            void openAgentDatabaseSetup(plan.agentMessage);
             return;
           }
-          if (isCloudInstallBootstrapError(result.error, result.code)) {
-            setInstallToast(
-              `Couldn't set up "${entry.name}" — opening chat to diagnose…`,
-            );
-            void openAgentDatabaseSetup(
-              buildCloudInstallBootstrapFailureAgentMessage(
-                entry,
-                mode,
-                result.error,
-                result.detail,
-              ),
-            );
-            return;
-          }
-          throw new Error(result.error);
+          throw new Error(plan.message);
         }
 
         const body = result.data;
@@ -176,7 +146,15 @@ export function useCloudCatalogInstallFlow() {
             `${modeLabel} "${title}" — finishing database setup in chat…`,
           );
           void openAgentDatabaseSetup(
-            body.agentSetupMessage!,
+            buildPostInstallAgentMessage({
+              appId: body.app?.id ?? "",
+              appTitle: title,
+              mode,
+              needsSeed,
+              catalogDescription: entry.description,
+              requirements: body.requirements ?? entry.requirements,
+              agentSetupMessage: body.agentSetupMessage,
+            }),
             body.app?.id,
             title,
           );
@@ -200,51 +178,32 @@ export function useCloudCatalogInstallFlow() {
         void loadArtifacts();
         void refreshLineage();
 
-        if (body.app?.id) {
-          const userReqs = userProvidedRequirements(
-            body.requirements ?? entry.requirements,
-          );
-          if (userReqs.length > 0) {
-            setCloudInstallWizard({
-              appId: body.app.id,
-              appTitle: title,
-              requirements: userReqs,
-            });
-            return;
-          }
-          if (needsAgentSetup) {
-            return;
-          }
+        if (body.app?.id && !needsAgentSetup) {
           await openCloudInstalledAppWithChat(createChat, {
             appId: body.app.id,
             appTitle: title,
-            agentMessage: buildCloudInstallWelcomeMessage({
+            agentMessage: buildPostInstallAgentMessage({
               appId: body.app.id,
               appTitle: title,
               mode,
               needsSeed,
+              catalogDescription: entry.description,
+              requirements: body.requirements ?? entry.requirements,
             }),
           });
         }
       } catch (err) {
         const message =
           err instanceof Error ? err.message.slice(0, 240) : "Install failed";
-        if (isCloudInstallTimeoutError(message)) {
-          setInstallToast(
-            `Install timed out for "${entry.name}" — opening chat for help…`,
-          );
-          void openAgentDatabaseSetup(
-            buildCloudInstallTimeoutAgentMessage(entry, mode),
-          );
-        } else if (isCloudInstallBootstrapError(message)) {
-          setInstallToast(
-            `Finishing database setup for "${entry.name}" in chat…`,
-          );
-          void openAgentDatabaseSetup(
-            buildCloudInstallBootstrapFailureAgentMessage(entry, mode, message),
-          );
+        const plan = planCloudInstallFailureHandoff(entry, mode, {
+          ok: false,
+          error: message,
+        });
+        if (plan.kind === "agent") {
+          setInstallToast(plan.toast);
+          void openAgentDatabaseSetup(plan.agentMessage);
         } else {
-          setInstallToast(`Install failed for "${entry.name}": ${message}`);
+          setInstallToast(`Install failed for "${entry.name}": ${plan.message}`);
         }
       } finally {
         setInstallingId(null);
@@ -292,21 +251,6 @@ export function useCloudCatalogInstallFlow() {
     [installedAppIds, lineageIndex],
   );
 
-  const finishInstallWizard = useCallback(async () => {
-    if (!cloudInstallWizard) return;
-    const { appId, appTitle } = cloudInstallWizard;
-    setCloudInstallWizard(null);
-    await openCloudInstalledAppWithChat(createChat, {
-      appId,
-      appTitle,
-      agentMessage: buildCloudInstallWelcomeMessage({
-        appId,
-        appTitle,
-        mode: "fork",
-      }),
-    });
-  }, [cloudInstallWizard, createChat]);
-
   const continueFromOptionalDeps = useCallback(async () => {
     if (!optionalDepsNotice) return;
     const { appId, appTitle } = optionalDepsNotice;
@@ -314,7 +258,7 @@ export function useCloudCatalogInstallFlow() {
     await openCloudInstalledAppWithChat(createChat, {
       appId,
       appTitle,
-      agentMessage: buildCloudInstallWelcomeMessage({
+      agentMessage: buildPostInstallAgentMessage({
         appId,
         appTitle,
         mode: "fork",
@@ -328,7 +272,13 @@ export function useCloudCatalogInstallFlow() {
   }, []);
 
   const openInstallHelp = useCallback(
-    async (request: HelpRequest) => {
+    async (request: {
+      service: string;
+      keyName: string;
+      instructions?: string;
+      signupUrl?: string;
+      docsUrl?: string;
+    }) => {
       const chatId = await createChat();
       if (!chatId) return;
 
@@ -362,8 +312,6 @@ export function useCloudCatalogInstallFlow() {
     setInstallModeEntry,
     installingId,
     installToast,
-    cloudInstallWizard,
-    setCloudInstallWizard,
     optionalDepsNotice,
     setOptionalDepsNotice,
     continueFromOptionalDeps,
@@ -371,7 +319,6 @@ export function useCloudCatalogInstallFlow() {
     installCloudApp,
     startCloudInstall,
     resolveLocalAppId,
-    finishInstallWizard,
     openInstallHelp,
     openAgentDatabaseSetup,
   };

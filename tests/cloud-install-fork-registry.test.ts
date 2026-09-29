@@ -260,4 +260,45 @@ describe("cloud install fork registry", () => {
     };
     expect(registry.databases[newDbId]?.syncMode).toBeUndefined();
   });
+
+  it("does not inherit a local tombstone when (re)installing a linked DB", async () => {
+    const targetRegistryPath = path.join(targetHome, "data", "databases.json");
+    // Earlier failed install / deleted app left this dbId tombstoned locally.
+    await fs.writeFile(
+      targetRegistryPath,
+      JSON.stringify({
+        version: 1,
+        databases: {
+          [publisherDbId]: {
+            dbId: publisherDbId,
+            localPath: path.join(targetHome, "data/databases/gtm-metrics/data.db"),
+            tursoShortName: "d-7c4c3837",
+            label: "GTM Metrics",
+            isolation: "shared",
+            status: "tombstone",
+            createdAt: "2026-01-01T00:00:00.000Z",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+          },
+        },
+      }),
+    );
+    for (const forkDbIds of [true, false]) {
+      const { registryDbIds } = await mergeDatabaseRegistryForCopy({
+        sourceRegistryPath: path.join(sourceHome, "data", "databases.json"),
+        targetRegistryPath,
+        targetPaprHome: targetHome,
+        copiedJobIds: new Set(),
+        dbIdsFromJobs: new Set([publisherDbId]),
+        appDir: path.join(targetHome, "apps", localAppId),
+        forkDbIds,
+        localAppId: forkDbIds ? localAppId : undefined,
+      });
+      const registry = JSON.parse(await fs.readFile(targetRegistryPath, "utf8")) as {
+        databases: Record<string, { status?: string }>;
+      };
+      for (const id of registryDbIds) {
+        expect(registry.databases[id]?.status).toBe("active");
+      }
+    }
+  });
 });

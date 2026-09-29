@@ -13,9 +13,16 @@ import {
   resolvePlatformConnectDisplay,
   type BuiltinPlatformId,
 } from "../../utils/platformConnectDisplay";
+import { openChatWithPrompt } from "../../utils/openChatWithPrompt";
+import { buildSettingsPlatformSetupChatPrompt } from "../../utils/onboardingPlatformSetupPrompt";
+import {
+  connectResultRequiresGoogleChrome,
+  fetchGoogleChromeInstalled,
+  type PlatformConnectData,
+} from "../../utils/platformHostCapabilities";
 import "./PlatformConnectModal.css";
 
-type ConnectPhase = "idle" | "opening" | "waiting" | "connected";
+type ConnectPhase = "idle" | "opening" | "waiting" | "connected" | "needs_chrome";
 
 // SVG icons for each platform
 const PLATFORM_ICONS: Record<BuiltinPlatformId, React.ReactNode> = {
@@ -80,6 +87,9 @@ function PlatformConnectModalInner() {
   const { activeRequest, clearRequest } = usePlatformConnectStore();
   const [phase, setPhase] = useState<ConnectPhase>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [googleChromeInstalled, setGoogleChromeInstalled] = useState<
+    boolean | null
+  >(null);
 
   const dismissIfConnected = useCallback(
     (platformId: string, status: string) => {
@@ -96,9 +106,11 @@ function PlatformConnectModalInner() {
     if (!activeRequest) {
       setPhase("idle");
       setError(null);
+      setGoogleChromeInstalled(null);
       return;
     }
 
+    let cancelled = false;
     void (async () => {
       try {
         const response = await gateway.send("platform:get-status", {
@@ -111,7 +123,19 @@ function PlatformConnectModalInner() {
       } catch {
         // Show modal — user can connect manually
       }
+
+      const installed = await fetchGoogleChromeInstalled();
+      if (!cancelled) {
+        setGoogleChromeInstalled(installed);
+        if (!installed) {
+          setPhase("needs_chrome");
+        }
+      }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [activeRequest, clearRequest]);
 
   // Listen for connection success (fixes typo: was platform:status-change)
@@ -134,6 +158,19 @@ function PlatformConnectModalInner() {
 
   const platformInfo = resolvePlatformConnectDisplay(activeRequest.platform);
   const isBusy = phase === "opening" || phase === "waiting";
+  const useAgentSetup =
+    phase === "needs_chrome" || googleChromeInstalled === false;
+
+  const handleSetupWithPen = () => {
+    openChatWithPrompt(
+      buildSettingsPlatformSetupChatPrompt(
+        platformInfo.name,
+        activeRequest.platform,
+        { reason: activeRequest.reason },
+      ),
+    );
+    clearRequest();
+  };
 
   const handleConnect = async () => {
     setPhase("opening");
@@ -144,10 +181,17 @@ function PlatformConnectModalInner() {
         platformId: activeRequest.platform,
       });
 
-      const data = response.data as {
-        status?: string;
-        waitingForConfirmation?: boolean;
-      };
+      const data = response.data as PlatformConnectData;
+
+      if (connectResultRequiresGoogleChrome(data)) {
+        setError(
+          data.error ||
+            "Google Chrome is required for sign-in (passkeys and fingerprint login need real Chrome).",
+        );
+        setPhase("needs_chrome");
+        setGoogleChromeInstalled(false);
+        return;
+      }
 
       if (data?.status === "connected") {
         setPhase("connected");
@@ -231,6 +275,14 @@ function PlatformConnectModalInner() {
             </div>
           )}
 
+          {phase === "needs_chrome" && (
+            <div className="platform-waiting-note">
+              Papr needs <strong>Google Chrome</strong> for {platformInfo.name} sign-in
+              (passkeys and fingerprint login). Chat with Pen to install Chrome and connect
+              — we don&apos;t use an embedded browser for this.
+            </div>
+          )}
+
           {phase === "connected" && (
             <div className="platform-success">Connected successfully!</div>
           )}
@@ -247,7 +299,17 @@ function PlatformConnectModalInner() {
             Not now
           </button>
 
-          {phase === "waiting" ? (
+          {useAgentSetup ? (
+            <button
+              type="button"
+              className="btn btn-connect"
+              onClick={handleSetupWithPen}
+              disabled={googleChromeInstalled === null}
+              style={{ backgroundColor: platformInfo.color }}
+            >
+              {googleChromeInstalled === null ? "Checking…" : "Set up with Pen"}
+            </button>
+          ) : phase === "waiting" ? (
             <button
               className="btn btn-connect"
               onClick={handleCheckNow}
@@ -267,7 +329,7 @@ function PlatformConnectModalInner() {
             <button
               className="btn btn-connect"
               onClick={handleConnect}
-              disabled={isBusy || phase === "connected"}
+              disabled={isBusy || phase === "connected" || googleChromeInstalled === null}
               style={{ backgroundColor: platformInfo.color }}
             >
               {phase === "opening" ? (
@@ -277,6 +339,8 @@ function PlatformConnectModalInner() {
                 </>
               ) : phase === "connected" ? (
                 "Connected!"
+              ) : googleChromeInstalled === null ? (
+                "Checking…"
               ) : (
                 <>Connect {platformInfo.name}</>
               )}

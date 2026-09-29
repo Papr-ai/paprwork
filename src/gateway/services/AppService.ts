@@ -3,6 +3,7 @@
  * Reference: Paprwork v1 appManager.js
  */
 
+import { checkHtmlTagBalance } from "../utils/htmlTagBalance.js";
 import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
 
 import { existsSync, promises as fs } from "fs";
@@ -4087,47 +4088,15 @@ export class AppService {
    * Basic HTML syntax validation
    */
   private checkHtmlSyntax(content: string, filename: string): ValidationIssue[] {
-    const issues: ValidationIssue[] = [];
-    const lines = content.split('\n');
-
-    // Check for unclosed tags (basic validation)
-    const tagStack: Array<{ tag: string; line: number }> = [];
-    const selfClosing = new Set(['img', 'br', 'hr', 'input', 'meta', 'link']);
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      
-      // Find opening tags
-      const openingTags = line.matchAll(/<(\w+)[^>]*>/g);
-      for (const match of openingTags) {
-        const tag = match[1].toLowerCase();
-        if (!selfClosing.has(tag) && !line.includes(`</${tag}>`)) {
-          tagStack.push({ tag, line: i + 1 });
-        }
-      }
-      
-      // Find closing tags
-      const closingTags = line.matchAll(/<\/(\w+)>/g);
-      for (const match of closingTags) {
-        const tag = match[1].toLowerCase();
-        if (tagStack.length > 0 && tagStack[tagStack.length - 1].tag === tag) {
-          tagStack.pop();
-        }
-      }
-    }
-
-    // Report unclosed tags
-    for (const { tag, line } of tagStack) {
-      issues.push({
-        file: filename,
-        line,
-        severity: 'warning',
-        message: `Potentially unclosed <${tag}> tag`,
-        rule: 'html-syntax',
-      });
-    }
-
-    return issues;
+    // Whole-document tokenizer: handles self-closing SVG, void elements, optional end
+    // tags, script/style/comment bodies — see utils/htmlTagBalance.ts.
+    return checkHtmlTagBalance(content).map(({ line, message }) => ({
+      file: filename,
+      line,
+      severity: 'warning' as const,
+      message,
+      rule: 'html-syntax',
+    }));
   }
 
   /**

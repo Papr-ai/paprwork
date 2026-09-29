@@ -9,11 +9,12 @@
  */
 
 import type { CommunityCatalogEntry } from "../../src/core/types/communityCatalog";
-import { userProvidedRequirements, type CloudInstallResponse } from "./cloudCatalogInstall";
+import { ONBOARDING_RECOMMENDATIONS } from "../constants/onboardingRecommendations";
 import {
-  buildCloudInstallWelcomeMessage,
-  openCloudInstalledAppWithChat,
-} from "./openCloudInstalledAppWithChat";
+  buildPostInstallAgentMessage,
+  type CloudInstallResponse,
+} from "./cloudCatalogInstall";
+import { openCloudInstalledAppWithChat } from "./openCloudInstalledAppWithChat";
 import { createTempChat, openChatWithPrompt } from "./openChatWithPrompt";
 
 export async function openOnboardingInstall(
@@ -29,18 +30,24 @@ export async function openOnboardingInstall(
     return;
   }
 
-  let message =
-    result.agentSetupMessage ??
-    buildCloudInstallWelcomeMessage({
-      appId,
-      appTitle: title,
-      mode: "fork",
-      needsSeed: result.bootstrap?.needsSeed === true,
-    });
-  const keys = userProvidedRequirements(result.requirements ?? entry.requirements);
-  if (keys.length > 0) {
-    message += `\n- It needs ${keys.map((k) => k.name).join(", ")} before it can run — walk me through adding ${keys.length > 1 ? "them" : "it"}`;
-  }
+  const rec = ONBOARDING_RECOMMENDATIONS.find((r) => r.slug === entry.slug);
+
+  const message = buildPostInstallAgentMessage({
+    appId,
+    appTitle: title,
+    mode: "fork",
+    needsSeed: result.bootstrap?.needsSeed === true,
+    catalogDescription: entry.description || rec?.desc,
+    requirements: result.requirements ?? entry.requirements,
+    agentSetupMessage: result.agentSetupMessage,
+    platformConnect: rec?.connect
+      ? {
+          platformId: rec.connect.platformId,
+          label: rec.connect.label,
+          why: rec.connect.why,
+        }
+      : undefined,
+  });
 
   await openCloudInstalledAppWithChat(async () => createTempChat(), {
     appId,

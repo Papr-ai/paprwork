@@ -63,6 +63,7 @@ import {
   reloadUiForWorkspaceSwitch,
 } from "./lib/workspaceSwitchReload";
 import { WorkspaceSwitchOverlay } from "./components/Layout/WorkspaceSwitchOverlay";
+import { CloudAppInstallOverlay } from "./components/Layout/CloudAppInstallOverlay";
 import { buildWorkspaceUiCacheKey } from "./lib/workspaceUiCache";
 import { useProfileStore } from "./stores/profileStore";
 
@@ -648,6 +649,7 @@ export function App() {
   return (
     <>
       <WorkspaceSwitchOverlay />
+      <CloudAppInstallOverlay />
       <AppLayout
         sidebar={<Sidebar />}
         topBar={<TabBar />}

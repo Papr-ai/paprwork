@@ -458,6 +458,13 @@ async function collectLinkedRegistryDbIds(appDir: string): Promise<Set<string>> 
   return dbIds;
 }
 
+/** Ignore tombstoned registry rows when picking a template for an install. */
+function liveRecordOrUndefined(
+  record: DatabaseRecord | undefined,
+): DatabaseRecord | undefined {
+  return record && record.status !== "tombstone" ? record : undefined;
+}
+
 function stripReplicaSyncFields(
   record: DatabaseRecord,
 ): Omit<
@@ -748,9 +755,12 @@ export async function mergeDatabaseRegistryForCopy(input: {
         input.targetPaprHome,
         input.copiedJobIds,
       );
-      const existing = merged.databases[dbId];
+      const existing = liveRecordOrUndefined(merged.databases[dbId]);
       merged.databases[dbId] = {
         ...(existing ?? record),
+        // An install always (re)provisions this DB — never inherit a tombstone
+        // from an earlier failed install/delete, or integrity rolls it back.
+        status: "active",
         localPath,
         updatedAt: new Date().toISOString(),
       };
@@ -780,7 +790,7 @@ export async function mergeDatabaseRegistryForCopy(input: {
         registry: merged,
       });
     }
-    const existing = merged.databases[dbId];
+    const existing = liveRecordOrUndefined(merged.databases[dbId]);
     const base = stripReplicaSyncFields(existing ?? record);
     // Fork keeps no storage mode from the publisher: provisionInstalledDatabases
     // picks one for THIS device (replica / cloud-direct / local) right after merge.
@@ -789,6 +799,9 @@ export async function mergeDatabaseRegistryForCopy(input: {
       ...(input.forkDbIds ? forkLocalBase : base),
       dbId: targetDbId,
       tursoShortName: dbTursoDatabaseName(targetDbId),
+      // Installed DBs start live. A tombstone on the local or publisher record
+      // (earlier failed install, deleted app) must not carry into this copy.
+      status: "active",
       localPath,
       ...(input.forkDbIds && input.localAppId
         ? { schemaOwnerAppId: input.localAppId }

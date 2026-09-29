@@ -376,3 +376,23 @@ describe("checkOrphanBackendHandlers", () => {
     ).toHaveLength(0);
   });
 });
+
+describe("backend lint ignores Python comments", () => {
+  it("does not flag the scaffold ping.py guidance comment", async () => {
+    const { checkBackendHandlerPatterns } = await import("../src/gateway/utils/miniAppBackendLint.js");
+    const src = [
+      "import json, os, sys",
+      "    # Linked DB: papr_db.connect(). Never sqlite3.connect(APP_DB).",
+      "    #   execute(con, 'INSERT ...')  # or con.lastrowid after INSERT",
+      "json.dump({}, sys.stdout)",
+    ].join("\n");
+    const rules = checkBackendHandlerPatterns("ping.py", src).map((i) => i.rule);
+    expect(rules).not.toContain("backend-no-raw-sqlite3");
+    expect(rules).not.toContain("backend-no-lastrowid");
+  });
+  it("still flags real sqlite3 usage", async () => {
+    const { checkBackendHandlerPatterns } = await import("../src/gateway/utils/miniAppBackendLint.js");
+    const rules = checkBackendHandlerPatterns("h.py", "import sqlite3\ncon = sqlite3.connect('x')").map((i) => i.rule);
+    expect(rules).toContain("backend-no-raw-sqlite3");
+  });
+});

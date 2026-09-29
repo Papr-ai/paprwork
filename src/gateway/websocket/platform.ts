@@ -20,6 +20,10 @@ import {
   getAllPlatformIds,
   type PlatformId,
 } from "../services/platforms/platformRegistry.js";
+import {
+  formatGoogleChromeInstallHint,
+  isGoogleChromeInstalled,
+} from "../services/platforms/platformChromeEnv.js";
 
 interface PlatformConnectPayload {
   platformId: string;
@@ -91,6 +95,18 @@ export async function setupPlatformHandlers(
         break;
       }
 
+      case "platform:get-host-capabilities": {
+        sendResponse(ws, {
+          id: message.id,
+          success: true,
+          data: {
+            googleChromeInstalled: isGoogleChromeInstalled(),
+            chromeInstallHint: formatGoogleChromeInstallHint(),
+          },
+        });
+        break;
+      }
+
       case "platform:get-status": {
         const payload = message.payload as PlatformStatusPayload;
         const sessionService = getPlatformSessionService();
@@ -151,7 +167,10 @@ export async function setupPlatformHandlers(
                   ? result.externalChrome
                     ? `A Chrome window opened for ${config.name}. Log in there (passkeys work), then click Check now.`
                     : `Sign in to ${config.name} in the Papr browser tab — we'll detect it automatically.`
-                  : result.error || `Connecting to ${config.name}`,
+                  : result.requiresGoogleChrome
+                    ? result.error ||
+                      `Install Google Chrome and ask Pen in chat to connect ${config.name}.`
+                    : result.error || `Connecting to ${config.name}`,
           },
         });
         break;

@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "generatedAt": "2026-09-28T23:26:04.102Z",
+  "generatedAt": "2026-09-29T04:17:40.669Z",
   "entryCount": 201,
   "entries": [
     {
@@ -402,7 +402,7 @@
     {
       "id": "agent-tool-connect_platform",
       "title": "connect_platform",
-      "summary": "Check status or manage Platform Connections (built-in social sites + user/agent-registered login sites).\n\nUse this to:\n- Register a login-required site: action=\"register\" with url — then request_connect\n- Check if connected: action=\"status\"\n- **Automate with agent browser tools: action=\"prepare_browser\"** (desktop: real Chrome window outside Papr when installed; embedded tab fallback)\n- Ask user to connect: action=\"request_connect\"\n- Remove a custom site: action=\"unregister\"\n- Open a visible window for the user: action=\"browse\" (NOT for agent automation)\n\nBuilt-in: linkedin, instagram, redd...",
+      "summary": "Check status or manage Platform Connections (built-in social sites + user/agent-registered login sites).\n\nUse this to:\n- Register a login-required site: action=\"register\" with url — then request_connect\n- Check if connected: action=\"status\"\n- **Automate with agent browser tools: action=\"prepare_browser\"** (desktop: real Google Chrome required — install via bash if missing; no embedded sign-in)\n- Ask user to connect: action=\"request_connect\"\n- Remove a custom site: action=\"unregister\"\n- Open a visible window for the user: action=\"browse\" (NOT for agent automation)\n\nBuilt-in: linkedin, instag...",
       "surfaces": [
         "agent-tool"
       ],

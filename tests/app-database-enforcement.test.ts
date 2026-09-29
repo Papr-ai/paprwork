@@ -122,3 +122,12 @@ describe("checkMissingTablesOnPrimaryDb", () => {
     ).toBe(true);
   });
 });
+
+describe("scaffolded db.ts alone is not DB usage", () => {
+  it("ignores unimported db.ts, counts it once imported", async () => {
+    const { appFilesUseDatabaseApi } = await import("../src/gateway/services/appDatabaseEnforcement.js");
+    const dbTs = "export async function query(){ return fetch('/api/db/query', {}); }";
+    expect(appFilesUseDatabaseApi(new Map([["db.ts", dbTs], ["app.ts", "const x = 1;"]]))).toBe(false);
+    expect(appFilesUseDatabaseApi(new Map([["db.ts", dbTs], ["app.ts", "import { query } from './db';"]]))).toBe(true);
+  });
+});

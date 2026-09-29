@@ -2643,7 +2643,8 @@ async function startGateway(): Promise<void> {
           code === "per_user_db" ||
           code === "install_mode_choice_required"
             ? 400
-            : code === "install_db_setup_failed"
+            : code === "install_db_setup_failed" ||
+                code === "install_linked_resources_missing"
               ? 422
               : 500;
         const detail =

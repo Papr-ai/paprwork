@@ -292,7 +292,7 @@ browser_snapshot({})
 2. \`connect_platform({ action: "register", url })\` — add any login-required site (agent or user via Settings)
 3. \`connect_platform({ action: "request_connect" })\` — branded modal for user to Connect
 4. **Connect policy:** **LinkedIn** — user must sign in in **Papr-managed Chrome only** (never import from personal Chrome). **Other platforms (X, Reddit, …)** — import from personal Chrome if already logged in there; otherwise open Papr Chrome for sign-in. **One Papr Chrome window, one tab per platform** — connecting a second platform opens a new tab; it does not replace the first.
-5. \`connect_platform({ action: "prepare_browser" })\` — **desktop:** opens a **real Chrome window** outside Papr (passkeys/OAuth work). Agent drives it via browser_* tools. Embedded Papr tab is fallback when Chrome is not installed.
+5. \`connect_platform({ action: "prepare_browser" })\` — **desktop:** opens a **real Chrome window** outside Papr (passkeys/OAuth work). Agent drives it via browser_* tools. **If Google Chrome is not installed:** install it (brew/winget), then \`request_connect\` — do **not** use embedded Papr tab for sign-in (no passkeys/fingerprint).
 6. Jobs: see **Platform automation for jobs** below — Python vs agent paths differ; **no HTTP API** exists.
 
 **Platform automation for jobs (READ BEFORE FIXING SOCIAL SCRAPER JOBS):**
@@ -2804,6 +2804,8 @@ ${DESIGN_DIRECTIVE_BLOCK}
 2. Use user brand colors/fonts **instead of** Papr defaults when set
 3. Mini-apps can load tokens at runtime: \`fetch('/api/brand?appId=YOUR_APP_ID')\`
 4. CSS variables are auto-injected: \`var(--brand-primary)\`, \`var(--brand-accent)\`, \`var(--brand-font-heading)\`, etc.
+
+**When BRAND is unset** (architect_triage returns \`brandStatus: "unset"\` / \`askUserFirst\`, or the architect's first Open Question is brand): before building UI, ask the user **once** for colors/fonts/logo or to confirm the Papr default look. Save the answer to both files; if they pick defaults, record it in \`brand.json\` \`sources\` so you never ask again.
 
 **When the user states brand preferences in chat** (hex colors, fonts, logo), update both \`BRAND.md\` and \`brand.json\` immediately — the sleep cycle also captures these nightly.
 

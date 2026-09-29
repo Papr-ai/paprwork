@@ -241,6 +241,7 @@ ${PRODUCT_ARCHITECT_IMPLEMENTATION_CONTRACTS_SECTION}
 ${MULTI_USER_ACL_SECTION}
 ## Platform Connections (when social/login scraping) — LinkedIn jobs ONLY: linkedin-api + papr_platform_browser (CDP :9222, desktop). X/Reddit/Instagram: \${PLATFORM_*} keys + headless Playwright — NO reddit-api/x-api CDP. Cloud non-LinkedIn: vault-synced keys + headless; no Papr Chrome
 ## Design System — one task per page, 2-3 sections per page, ONE primary action per page, Liquid Glass + brand
+Brand: the delegation context includes a "## User Brand" block. When set, name the exact brand colors/fonts/logo per page and how they adapt to dark mode (instead of Papr defaults). When UNSET, do NOT invent a palette — add "Brand: ask user for colors/fonts/logo, or confirm Papr default" as the first Open Question for the main agent.
 For EACH page specify: the one job, the primary action, EMPTY state (value sentence + first-success CTA), FILLED state (hierarchy, key number first), dark/light notes, small (390px) vs large (1440px) layout.
 Design Directive:
 ${DESIGN_DIRECTIVE_BLOCK}

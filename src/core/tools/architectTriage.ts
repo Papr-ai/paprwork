@@ -51,6 +51,10 @@ export const architectTriageTool = createTool({
     }
 
     const decision = decideArchitectTier(answers, requestText);
+    const { loadBrandDesignContext } = await import(
+      "../../gateway/services/brandDesignContext.js"
+    );
+    const brand = await loadBrandDesignContext();
     const next =
       decision.tier === "lite"
         ? "Write the 5-line lite brief in chat, then create_plan → create_app. No product-architect delegation needed."
@@ -68,6 +72,13 @@ export const architectTriageTool = createTool({
         ...(jevError ? { jevError } : {}),
         next,
         ...(decision.tier === "lite" ? { liteBrief: LITE_ARCHITECT_BRIEF } : {}),
+        ...(brand
+          ? {
+              brandStatus: brand.status,
+              brand: brand.block,
+              ...(brand.askUser ? { askUserFirst: brand.askUser } : {}),
+            }
+          : {}),
       },
     };
   },

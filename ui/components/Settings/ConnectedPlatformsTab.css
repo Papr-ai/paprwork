@@ -44,6 +44,15 @@
   font-size: 14px;
 }
 
+.connected-platforms-error .connected-platforms-error-banner {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.connected-platforms-pen-cta {
+  margin-top: 4px;
+}
+
 .connected-platforms-chrome-import {
   margin-bottom: 20px;
   padding: 16px 20px;

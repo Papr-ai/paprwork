@@ -130,6 +130,7 @@ export const LITE_ARCHITECT_BRIEF =
   "(3) EMPTY state copy + CTA, (4) FILLED state hierarchy (key number first), (5) dark/light + 390px/1440px notes.\n" +
   "Frontend rules:\n" +
   "- read_skill({ skillId: \"preloaded-paprwork-design-system\" }) before UI code; no emojis; one page unless tabs are truly needed\n" +
+  "- Brand: use the `brand` block in this result (user colors/fonts/logo win over Papr defaults). If brandStatus is \"unset\", ask the user once (askUserFirst) before styling\n" +
   "- Reports/analysis: long prose in content/reports/*.md, rendered by the app — not split across TS files\n" +
   "- If it reads data: /api/db/query with { sourceId, sql, params } on an attached DB; skeleton loading + empty + error states\n" +
   "- validate_app + webview preview in both color schemes after create_app\n" +

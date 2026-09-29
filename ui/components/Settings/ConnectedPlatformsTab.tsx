@@ -5,6 +5,13 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { gateway } from "../../src/lib/gateway";
 import { openPlatformBrowserTab } from "../../lib/openPlatformBrowserTab";
+import { openChatWithPrompt } from "../../utils/openChatWithPrompt";
+import { buildSettingsPlatformSetupChatPrompt } from "../../utils/onboardingPlatformSetupPrompt";
+import {
+  connectResultRequiresGoogleChrome,
+  fetchGoogleChromeInstalled,
+  type PlatformConnectData,
+} from "../../utils/platformHostCapabilities";
 import "./ConnectedPlatformsTab.css";
 
 type PlatformStatus =
@@ -111,6 +118,14 @@ export function ConnectedPlatformsTab() {
   const [chromeImportResults, setChromeImportResults] = useState<
     PlatformSessionState[] | null
   >(null);
+  /** null = still checking host; false = use agent + Chrome install path. */
+  const [googleChromeInstalled, setGoogleChromeInstalled] = useState<
+    boolean | null
+  >(null);
+  /** After Connect fails or when Chrome is missing — offer chat with Pen. */
+  const [penSetupPlatformId, setPenSetupPlatformId] = useState<string | null>(
+    null,
+  );
   const addSiteUrlRef = useRef<HTMLInputElement>(null);
 
   const loadPlatforms = useCallback(async () => {
@@ -131,6 +146,16 @@ export function ConnectedPlatformsTab() {
   useEffect(() => {
     loadPlatforms();
 
+    let cancelled = false;
+    void fetchGoogleChromeInstalled().then((installed) => {
+      if (!cancelled) setGoogleChromeInstalled(installed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loadPlatforms]);
+
+  useEffect(() => {
     // Listen for status changes (broadcast from Gateway via custom event)
     const handleStatusChange = (event: CustomEvent<{ type: string; data?: unknown }>) => {
       const detail = event.detail;
@@ -173,6 +198,17 @@ export function ConnectedPlatformsTab() {
       window.removeEventListener("gateway-broadcast", handleStatusChange as EventListener);
     };
   }, [loadPlatforms]);
+
+  const handleSetupWithPen = useCallback(
+    (platformId: string, platformName: string) => {
+      setError(null);
+      setPenSetupPlatformId(null);
+      openChatWithPrompt(
+        buildSettingsPlatformSetupChatPrompt(platformName, platformId),
+      );
+    },
+    [],
+  );
 
   const handleRegisterSite = useCallback(async () => {
     const url = newSiteUrl.trim();
@@ -234,6 +270,7 @@ export function ConnectedPlatformsTab() {
     setActionLoading(platformId);
     setError(null);
     setConnectNotice(null);
+    setPenSetupPlatformId(null);
 
     try {
       const response = await gateway.send("platform:connect", { platformId });
@@ -241,17 +278,21 @@ export function ConnectedPlatformsTab() {
         throw new Error(response.error || "Failed to connect");
       }
 
-      const data = response.data as {
-        waitingForConfirmation?: boolean;
-        status?: string;
-        externalChrome?: boolean;
-        chromeWindowOpened?: boolean;
-        message?: string;
-        error?: string;
-      };
+      const data = response.data as PlatformConnectData;
+
+      if (connectResultRequiresGoogleChrome(data)) {
+        setError(
+          data.error ||
+            "Google Chrome is required for sign-in (passkeys and fingerprint login need real Chrome).",
+        );
+        setPenSetupPlatformId(platformId);
+        setActionLoading(null);
+        return;
+      }
 
       if (data?.error && data.status === "disconnected") {
         setError(data.error);
+        setPenSetupPlatformId(null);
         setActionLoading(null);
         return;
       }
@@ -439,7 +480,8 @@ export function ConnectedPlatformsTab() {
           <h2 className="settings-section__title">Platform Connections</h2>
           <p className="settings-section__description">
             Connect sites that need login — social platforms and any custom web app.
-            Sessions stay in an in-app tab; the agent reuses them for automation.
+            Sign-in uses Papr-managed Google Chrome (not an embedded browser). Without
+            Chrome installed, use Set up with Pen in chat to install it and connect.
           </p>
         </div>
         <button
@@ -491,8 +533,8 @@ export function ConnectedPlatformsTab() {
             />
           </div>
           <p className="connected-platforms-add-hint">
-            Papr opens Google Chrome outside the app for login and automation. Requires Google
-            Chrome on desktop — without it, an in-app browser is used as fallback.
+            Papr opens Google Chrome outside the app for login and automation. Google Chrome
+            is required on desktop — without it, chat with Pen to install Chrome first.
           </p>
           <div className="key-add-form__actions">
             <button
@@ -517,7 +559,22 @@ export function ConnectedPlatformsTab() {
 
       {error && (
         <div className="connected-platforms-error">
-          {error}
+          <p className="connected-platforms-error-banner">{error}</p>
+          {penSetupPlatformId && (
+            <button
+              type="button"
+              className="settings-btn settings-btn--primary connected-platforms-pen-cta"
+              onClick={() => {
+                const platform = platforms.find((p) => p.id === penSetupPlatformId);
+                handleSetupWithPen(
+                  penSetupPlatformId,
+                  platform?.name ?? penSetupPlatformId,
+                );
+              }}
+            >
+              Set up with Pen
+            </button>
+          )}
         </div>
       )}
 
@@ -627,6 +684,10 @@ export function ConnectedPlatformsTab() {
             status.status === "expired" || status.status === "needs_reauth";
           const isWaitingForLogin = waitingForLogin.has(platform.id);
           const usesExternalChrome = externalChromeLogin.has(platform.id);
+          const useAgentConnect =
+            googleChromeInstalled === false &&
+            !isWaitingForLogin &&
+            (status.status === "disconnected" || needsReauth);
 
           return (
             <div key={platform.id} className="connected-platform-card">
@@ -735,10 +796,20 @@ export function ConnectedPlatformsTab() {
                   <>
                     <button
                       className="connected-platform-btn connected-platform-btn-primary"
-                      onClick={() => handleConnect(platform.id)}
-                      disabled={isLoading}
+                      onClick={() =>
+                        useAgentConnect
+                          ? handleSetupWithPen(platform.id, platform.name)
+                          : void handleConnect(platform.id)
+                      }
+                      disabled={isLoading || googleChromeInstalled === null}
                     >
-                      {isLoading ? "Connecting..." : "Reconnect"}
+                      {isLoading
+                        ? "Connecting..."
+                        : googleChromeInstalled === null
+                          ? "Checking…"
+                          : useAgentConnect
+                            ? "Set up with Pen"
+                            : "Reconnect"}
                     </button>
                     <button
                       className="connected-platform-btn connected-platform-btn-secondary"
@@ -753,10 +824,20 @@ export function ConnectedPlatformsTab() {
                 {status.status === "disconnected" && !isWaitingForLogin && (
                   <button
                     className="connected-platform-btn connected-platform-btn-primary"
-                    onClick={() => handleConnect(platform.id)}
-                    disabled={isLoading}
+                    onClick={() =>
+                      useAgentConnect
+                        ? handleSetupWithPen(platform.id, platform.name)
+                        : void handleConnect(platform.id)
+                    }
+                    disabled={isLoading || googleChromeInstalled === null}
                   >
-                    {isLoading ? "Connecting..." : "Connect"}
+                    {isLoading
+                      ? "Connecting..."
+                      : googleChromeInstalled === null
+                        ? "Checking…"
+                        : useAgentConnect
+                          ? "Set up with Pen"
+                          : "Connect"}
                   </button>
                 )}
 

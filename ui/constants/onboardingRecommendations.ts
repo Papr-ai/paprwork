@@ -17,10 +17,9 @@
  *   - SEO Audit ............... no jobs at all
  * If you swap a pick, re-read its jobs and rewrite `meta` to match.
  *
- * Selection rule: no typing secrets. A pick may need credentials ONLY if they
- * can be obtained by clicking — platform connect writes the keychain keys for
- * us. Check the flags, not requirementsCount: the setup wizard only triggers on
- * specs where `required !== false && credentialScope !== "owner"`.
+ * Selection rule: no typing secrets in onboarding UI. After install, Pen opens
+ * chat with any missing keys / platform connects listed — the user is not
+ * blocked on a setup wizard first.
  */
 
 export interface OnboardingRecommendation {
@@ -34,9 +33,9 @@ export interface OnboardingRecommendation {
   meta: string;
   /**
    * Platform sign-in this app needs before it can do anything.
-   * One click opens Papr Chrome; the session service writes the required
-   * keychain keys (e.g. LINKEDIN_LI_AT), so the install wizard finds them
-   * already satisfied instead of asking for a paste.
+   * With Google Chrome installed: one click opens Papr-managed Chrome for sign-in.
+   * Without Chrome: the tile opens chat so Pen can install Chrome and connect you
+   * (embedded sign-in does not support passkeys / fingerprint login).
    */
   connect?: {
     platformId: string;
@@ -61,7 +60,7 @@ export const ONBOARDING_RECOMMENDATIONS: OnboardingRecommendation[] = [
     connect: {
       platformId: "reddit",
       label: "Connect Reddit",
-      why: "Opens Papr Chrome so you can sign in once. Read-only — it never posts.",
+      why: "Read-only — it never posts. Sign-in uses real Google Chrome (Pen can install it if needed).",
     },
   },
   {
@@ -78,7 +77,7 @@ export const ONBOARDING_RECOMMENDATIONS: OnboardingRecommendation[] = [
     connect: {
       platformId: "linkedin",
       label: "Connect LinkedIn",
-      why: "Opens Papr Chrome so you can sign in once. Nothing is sent without your approval.",
+      why: "Nothing is sent without your approval. Sign-in uses real Google Chrome (Pen can install it if needed).",
     },
   },
 ];
