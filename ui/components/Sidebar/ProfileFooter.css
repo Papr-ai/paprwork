@@ -316,7 +316,7 @@
   opacity: 1;
 }
 
-.rail-org span {
+.rail-org__name {
   flex: 1;
   min-width: 0;
   font-size: 13px;

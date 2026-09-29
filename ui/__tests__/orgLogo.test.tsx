@@ -108,5 +108,10 @@ describe("OrgSection", () => {
     expect(container.querySelector(".rail-orglogo .org-mark")?.getAttribute("data-letter")).toBe("S");
     expect(container.querySelectorAll(".rail-org .org-mark")).toHaveLength(3);
     expect(container.querySelector(".rail-org i")).toBeNull(); // no more color dots
+    // The name is the only flexible child; the logo tile must not share its class (it stretched to a white bar).
+    container.querySelectorAll(".rail-org").forEach((row) => {
+      expect(row.querySelector(".org-mark")?.classList.contains("rail-org__name")).toBe(false);
+      expect(row.querySelector(".rail-org__name b")).toBeTruthy();
+    });
   });
 });

@@ -113,7 +113,7 @@ export function OrgSection({ orgs, activeId, switching, onSwitch, siteFor }: Org
                   onClick={() => onSwitch(org.id)}
                 >
                   <OrgMark name={org.name} src={orgLogoSrc(branding[org.id], siteFor(org))} />
-                  <span>
+                  <span className="rail-org__name">
                     <b>{org.name}</b>
                     {sub ? <small> · {sub}</small> : null}
                   </span>
