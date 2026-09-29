@@ -15,7 +15,10 @@ import type { DatabaseSyncMode } from "../tursoReplica/tursoReplicaTypes.js";
 import { isReplicaManagedDbPath } from "../tursoReplica/tursoReplicaFileGuard.js";
 // One definition, shared: this file's local copy was the only correct one, and
 // keeping it local let the other copy stay too narrow to match engine errors.
-import { isSqliteBusyError } from "../tursoReplica/tursoReplicaErrors.js";
+import {
+  isParkedReplicaError,
+  isSqliteBusyError,
+} from "../tursoReplica/tursoReplicaErrors.js";
 import { isTursoReplicaSyncFeatureEnabled } from "../../utils/tursoReplicaEnabled.js";
 
 export interface RegistryDbSchemaReadInput {
@@ -28,6 +31,7 @@ export interface RegistryDbSchemaReadInput {
 export type RegistryDbSchemaReadErrorCode =
   | "missing"
   | "locked"
+  | "parked"
   | "unopenable"
   | "unreadable";
 
@@ -164,6 +168,9 @@ async function readReplicaRegistrySchema(
     };
   } catch (error) {
     const message = (error as Error).message;
+    if (isParkedReplicaError(message)) {
+      return { ok: false, code: "parked", message };
+    }
     if (isSqliteBusyError(error)) {
       return { ok: false, code: "locked", message };
     }

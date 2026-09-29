@@ -25,6 +25,7 @@ import { resolveCodebaseExplorerProviderModel } from "../../../utils/exploration
 import {
   jobWriteDatabaseEnv,
   jobWriteDatabasePromptLines,
+  isReplicaManagedTarget,
   resolveJobWriteTargets,
 } from "../../jobAppDatabase.js";
 import { STANDALONE_APP_ID } from "../appIds.js";
@@ -440,8 +441,12 @@ export class AgentJobExecutor implements IJobExecutor {
     const writeTargets = await resolveJobWriteTargets(params.job);
     if (writeTargets.length > 0) {
       envLines.push(...jobWriteDatabasePromptLines(writeTargets));
+      // Never tell an agent "or sqlite3" when a target is a replica — the block
+      // above forbids it, and a contradictory prompt is how replicas get corrupted.
       envLines.push(
-        "AGENT JOB: Persist UI-facing rows via papr_db.connect() / papr_db_exec or sqlite3 on PAPR_DB_* / APP_DB — NOT $JOB_DB.",
+        writeTargets.some(isReplicaManagedTarget)
+          ? "AGENT JOB: Persist UI-facing rows via papr_db.connect() / papr_db_exec only (never sqlite3 on a [replica] path) — NOT $JOB_DB."
+          : "AGENT JOB: Persist UI-facing rows via papr_db.connect() / papr_db_exec or sqlite3 on PAPR_DB_* / APP_DB — NOT $JOB_DB.",
       );
     }
 
