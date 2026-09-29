@@ -140,9 +140,11 @@ export function useAgentNudge(workState: AgentWorkState, onGo: (action: NudgeAct
     };
     // Reviewer / QA: window.dispatchEvent(new CustomEvent("papr-nudge-preview", { detail })) plays a nudge
     // without touching the ledger or the policy.
+    // A preview replaces whatever is up, so the Dev tab can step through several in a row.
     const onPreview = (e: Event) => {
       const n = (e as CustomEvent<AgentNudgeData | undefined>).detail ?? PREVIEW_NUDGE;
-      if (phaseRef.current === "off" || phaseRef.current === "rest") play({ ...n, key: `preview:${n.key}` });
+      window.clearTimeout(parkTimer.current);
+      play({ ...n, key: n.key.startsWith("preview:") ? n.key : `preview:${n.key}` });
     };
     window.addEventListener("keydown", onKey, true);
     window.addEventListener("blur", onAway);

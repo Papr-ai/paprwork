@@ -3251,6 +3251,31 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Settings → Dev: what the policy would do right now and why. Read-only, so safe everywhere.
+    app.get("/api/nudge/debug", async (_req, res) => {
+      try {
+        const { nudgeDebug } = await import("./services/nudges.js");
+        res.json(await nudgeDebug());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    // Settings → Dev: wipe shown/mutes/backoff. Never in packaged builds, where it would reset a real user's caps.
+    app.post("/api/nudge/debug/reset", async (_req, res) => {
+      if (process.env.NODE_ENV === "production") {
+        res.status(403).json({ error: "Dev builds only" });
+        return;
+      }
+      try {
+        const { resetNudgeLedger } = await import("./services/nudges.js");
+        await resetNudgeLedger();
+        res.json({ ok: true });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
     app.post("/api/nudge/propose", async (req, res) => {
       try {
         const { proposeNudge } = await import("./services/nudges.js");

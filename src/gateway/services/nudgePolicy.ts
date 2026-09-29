@@ -129,6 +129,51 @@ export function decideNudge(ledger: NudgeLedger, candidates: NudgeCandidate[], n
   return best ? { nudge: best, reason: "ok" } : { nudge: null, reason: "nothing-worth-it" };
 }
 
+export interface NudgeExplain {
+  decision: NudgeDecision;
+  /** Every candidate, with why the policy would skip it (null = eligible). */
+  candidates: Array<NudgeCandidate & { blocked: string | null }>;
+  ledger: {
+    today: number;
+    week: number;
+    unengaged: number;
+    cooldownHours: number;
+    /** When the cooldown lets the next nudge through, if it is still running. */
+    nextAllowedAt: string | null;
+    muted: Record<string, string>;
+    recent: NudgeLedgerEntry[];
+  };
+}
+
+/** The Dev tab's view of the policy: the same decision decideNudge makes, with the reasons laid out. */
+export function explainNudges(ledger: NudgeLedger, candidates: NudgeCandidate[], now: Date): NudgeExplain {
+  const t = now.getTime();
+  const ms = ledger.shown.map((e) => Date.parse(e.at)).filter(Number.isFinite);
+  const last = ms.reduce((m, x) => Math.max(m, x), 0);
+  const cd = cooldownMs(ledger);
+  const seen = new Set(ledger.shown.map((e) => e.key));
+  const blocked = (c: NudgeCandidate): string | null => {
+    if (seen.has(c.key)) return "already shown";
+    const mute = ledger.muted[c.kind];
+    if (mute && Date.parse(mute) > t) return `"${c.kind}" muted until ${mute}`;
+    if (c.expiresAt && Date.parse(c.expiresAt) <= t) return "expired";
+    return null;
+  };
+  return {
+    decision: decideNudge(ledger, candidates, now),
+    candidates: [...candidates].sort((a, b) => b.priority - a.priority).map((c) => ({ ...c, blocked: blocked(c) })),
+    ledger: {
+      today: ms.filter((x) => sameLocalDay(new Date(x), now)).length,
+      week: ms.filter((x) => t - x < 7 * DAY).length,
+      unengaged: ledger.unengaged,
+      cooldownHours: Math.round((cd / HOUR) * 10) / 10,
+      nextAllowedAt: last && last + cd > t ? new Date(last + cd).toISOString() : null,
+      muted: Object.fromEntries(Object.entries(ledger.muted).filter(([, u]) => Date.parse(u) > t)),
+      recent: [...ledger.shown].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).slice(0, 5),
+    },
+  };
+}
+
 export type NudgeEvent = { key: string; kind: string; event: "shown" | NudgeOutcome };
 
 /** Record what happened. "shown" counts as unengaged until the user acts on it with "go". */

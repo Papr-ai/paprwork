@@ -4,6 +4,7 @@ import {
   cooldownMs,
   decideNudge,
   emptyLedger,
+  explainNudges,
   sanitizeCandidate,
   type NudgeCandidate,
 } from "./nudgePolicy";
@@ -133,5 +134,23 @@ describe("shortGoal — one glanceable clause", () => {
     expect(s.length).toBeLessThanOrEqual(49);
     expect(s.endsWith("…")).toBe(true);
     expect(s).toBe("Ship a validated Stage-A pretraining pipeline…");
+  });
+});
+
+describe("explainNudges — the Dev tab sees exactly what the policy sees", () => {
+  it("matches decideNudge and says why each candidate would be skipped", () => {
+    let l = applyNudgeEvent(emptyLedger(), { key: "seen", kind: "due", event: "shown" }, at(28, 17));
+    l = applyNudgeEvent(l, { key: "seen", kind: "due", event: "dismiss" }, at(28, 17));
+    const cands = [cand("seen", 3, "due"), cand("fresh-due", 3, "due"), cand("drift-a", 2)];
+    const x = explainNudges(l, cands, TUE);
+    expect(x.decision).toEqual(decideNudge(l, cands, TUE));
+    expect(x.candidates.map((c) => [c.key, c.blocked?.split(" ")[0] ?? null])).toEqual([
+      ["seen", "already"],
+      ["fresh-due", '"due"'],
+      ["drift-a", null],
+    ]);
+    expect(x.ledger).toMatchObject({ today: 0, week: 1, unengaged: 1, cooldownHours: 20, recent: [{ key: "seen", outcome: "dismiss" }] });
+    expect(x.ledger.nextAllowedAt).toBe(new Date(at(28, 17).getTime() + 20 * 3_600_000).toISOString());
+    expect(Object.keys(x.ledger.muted)).toEqual(["due"]);
   });
 });

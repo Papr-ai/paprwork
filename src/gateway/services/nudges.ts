@@ -20,10 +20,13 @@ import {
   applyNudgeEvent,
   decideNudge,
   emptyLedger,
+  explainNudges,
+  NUDGE_RULES,
   sanitizeCandidate,
   type NudgeCandidate,
   type NudgeDecision,
   type NudgeEvent,
+  type NudgeExplain,
   type NudgeLedger,
 } from "./nudgePolicy.js";
 
@@ -126,9 +129,7 @@ async function readQueue(now: Date): Promise<NudgeCandidate[]> {
   return (Array.isArray(q) ? q : []).filter((c) => c?.expiresAt && Date.parse(c.expiresAt) > now.getTime());
 }
 
-/** The one nudge allowed right now — or null with the reason (logged by the caller, never shown). */
-export async function nextNudge(now = new Date()): Promise<NudgeDecision> {
-  const ledger = await readLedger();
+async function allCandidates(now: Date): Promise<NudgeCandidate[]> {
   let focusCandidates: NudgeCandidate[] = [];
   try {
     const { getFocus } = await import("./focusGoals.js");
@@ -136,7 +137,22 @@ export async function nextNudge(now = new Date()): Promise<NudgeDecision> {
   } catch {
     /* no focus evidence → no focus nudges */
   }
-  return decideNudge(ledger, [...focusCandidates, ...(await readQueue(now))], now);
+  return [...focusCandidates, ...(await readQueue(now))];
+}
+
+/** The one nudge allowed right now — or null with the reason (logged by the caller, never shown). */
+export async function nextNudge(now = new Date()): Promise<NudgeDecision> {
+  return decideNudge(await readLedger(), await allCandidates(now), now);
+}
+
+/** Dev tab: the decision, every candidate and why it would be skipped, plus the ledger. Read-only. */
+export async function nudgeDebug(now = new Date()): Promise<NudgeExplain & { rules: typeof NUDGE_RULES; now: string }> {
+  return { ...explainNudges(await readLedger(), await allCandidates(now), now), rules: NUDGE_RULES, now: now.toISOString() };
+}
+
+/** Dev tab: forget what was shown, the mutes and the backoff. Proposals in the queue stay. */
+export async function resetNudgeLedger(): Promise<void> {
+  await fs.rm(ledgerPath(), { force: true });
 }
 
 export async function recordNudgeEvent(ev: NudgeEvent, now = new Date()): Promise<NudgeLedger> {
