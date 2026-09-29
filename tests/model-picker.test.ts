@@ -24,7 +24,8 @@ describe("modelPicker", () => {
   });
 
   test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.1, and cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(11);
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(12);
+    expect(PICKER_DEFAULT_MODEL_IDS[0]).toBe("auto");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5-5");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-5");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");

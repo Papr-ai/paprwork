@@ -78,6 +78,7 @@ export function migratePickerModelId(modelId: string): string {
 
 /** Flat default list shown to new users (cloud models only). */
 export const PICKER_DEFAULT_MODEL_IDS: readonly string[] = [
+  "auto",
   "claude-sonnet-5-5",
   "claude-opus-5",
   "claude-opus-5-5",

@@ -133,10 +133,12 @@ import {
   recordToolDeferral,
   recordCatalogExperiment,
   recordToolTrimArm,
+  recordAutoRoute,
   recordWidthNudge,
   setToolCallCount,
   summarizeTurnMetrics,
 } from "./agent/turnMetrics.js";
+import { AUTO_MODEL_ID, routeTurn, type AutoRoutePick } from "./agent/jevTurnRouter.js";
 import { decideExperimentArm } from "../../core/utils/experimentArm.js";
 import { experimentRatesFor } from "./experimentSettings.js";
 import {
@@ -607,6 +609,39 @@ export class AgentService {
     // Get or create chat session (supports parallel streaming)
     // Note: chatId should already be permanent (created via chat:create before streaming)
     t = performance.now();
+    // Auto model routing (Jev). Shadow: every user turn gets a pick recorded
+    // in turn_auto_*; applied only when the picker model is `auto`. Must run
+    // before getSession because the session is keyed on config.model.
+    let autoRoute: AutoRoutePick | null = null;
+    const autoRequested = config.model === AUTO_MODEL_ID;
+    if (!options?._isSilentRetry && !options?.isSubAgentTrigger) {
+      autoRoute = await routeTurn(config.provider, {
+        userMessage,
+        hasActiveApp: Boolean(options?.focusContext?.activeApp?.appId),
+      });
+    }
+    if (autoRequested) {
+      const rung = autoRoute?.rung;
+      if (rung) {
+        config.model = rung.model as typeof config.model;
+        if (rung.effort) config.reasoning = { effort: rung.effort };
+        else delete config.reasoning;
+      } else {
+        // No decision (Jev down / provider without ladder): standard rung.
+        const { resolveAutoRung } = await import("./agent/jevTurnRouter.js");
+        const fallback = resolveAutoRung(config.provider, "standard");
+        if (!fallback) {
+          throw new Error(
+            `Auto routing is not available for provider ${config.provider}. Pick a model explicitly.`,
+          );
+        }
+        config.model = fallback.model as typeof config.model;
+        if (fallback.effort) config.reasoning = { effort: fallback.effort };
+      }
+      console.log(
+        `[AgentService] Auto → ${config.model}${config.reasoning?.effort ? "/" + config.reasoning.effort : ""} (tier=${autoRoute?.decision.tier ?? "fallback"})`,
+      );
+    }
     const session = await this.sessionManager.getSession(chatId, config);
     timings.getSession = performance.now() - t;
 
@@ -732,6 +767,18 @@ export class AgentService {
      * report the whole Unix epoch as its duration.
      */
     const turnMetrics = createTurnMetrics();
+    if (autoRoute) {
+      recordAutoRoute(turnMetrics, {
+        tier: autoRoute.decision.tier,
+        rawTier: autoRoute.decision.rawTier,
+        confidence: autoRoute.decision.confidence,
+        needsTools: autoRoute.decision.needsTools,
+        model: autoRoute.rung?.model ?? null,
+        effort: autoRoute.rung?.effort ?? null,
+        applied: autoRequested,
+        jevMs: autoRoute.decision.jevMs,
+      });
+    }
     let turnStartedAt = Date.now();
     let turnMetricsRecorded = false;
 

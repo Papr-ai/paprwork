@@ -20,6 +20,21 @@ export interface AIModel {
 }
 
 export const CHAT_MODELS: AIModel[] = [
+  // Auto — Jev picks the model + effort per turn from the ladder for whichever
+  // provider the chat is authenticated with (see agent/jevTurnRouter.ts).
+  // Cheap turns go to Haiku, ordinary work to Sonnet (low/medium/high), and
+  // architecture/debugging to Opus.
+  {
+    id: "auto",
+    name: "Auto",
+    provider: "anthropic",
+    description: "Picks the best model and effort for each message",
+    group: "Anthropic",
+    supportsThinking: false,
+    defaultThinkingBudget: 0,
+    maxTokens: 128000,
+    requiresApiKey: "ANTHROPIC_API_KEY",
+  },
   // Anthropic — weakest to strongest (Haiku → Sonnet → Opus → Fable 5.1)
   {
     id: "claude-haiku-4-5",

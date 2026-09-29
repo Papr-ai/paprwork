@@ -44,6 +44,16 @@ const TURN_METRIC_COLUMNS = [
   { name: "turn_tooltrim_chars_before", sql: "INTEGER" },
   { name: "turn_tooltrim_chars_after", sql: "INTEGER" },
   { name: "turn_tooltrim_jev_ms", sql: "INTEGER" },
+  // Auto model routing (Jev). Shadow: logged every turn; applied=1 only when
+  // the picker model was `auto`. Compare turn_auto_model to messages.model.
+  { name: "turn_auto_tier", sql: "TEXT" },
+  { name: "turn_auto_raw_tier", sql: "TEXT" },
+  { name: "turn_auto_confidence", sql: "REAL" },
+  { name: "turn_auto_needs_tools", sql: "INTEGER" },
+  { name: "turn_auto_model", sql: "TEXT" },
+  { name: "turn_auto_effort", sql: "TEXT" },
+  { name: "turn_auto_applied", sql: "INTEGER" },
+  { name: "turn_auto_jev_ms", sql: "INTEGER" },
 ] as const;
 
 export function migrateTurnMetricsColumns(db: Database.Database): void {
@@ -91,7 +101,15 @@ export function storeTurnMetrics(
          turn_tooltrim_lookback_yes = ?,
          turn_tooltrim_chars_before = ?,
          turn_tooltrim_chars_after = ?,
-         turn_tooltrim_jev_ms = ?
+         turn_tooltrim_jev_ms = ?,
+         turn_auto_tier = ?,
+         turn_auto_raw_tier = ?,
+         turn_auto_confidence = ?,
+         turn_auto_needs_tools = ?,
+         turn_auto_model = ?,
+         turn_auto_effort = ?,
+         turn_auto_applied = ?,
+         turn_auto_jev_ms = ?
      WHERE id = ?`,
   ).run(
     summary.steps,
@@ -120,6 +138,16 @@ export function storeTurnMetrics(
     summary.toolTrimCharsBefore ?? 0,
     summary.toolTrimCharsAfter ?? 0,
     summary.toolTrimJevMs ?? 0,
+    summary.autoTier ?? null,
+    summary.autoRawTier ?? null,
+    summary.autoConfidence ?? null,
+    summary.autoNeedsTools === null || summary.autoNeedsTools === undefined
+      ? null
+      : summary.autoNeedsTools ? 1 : 0,
+    summary.autoModel ?? null,
+    summary.autoEffort ?? null,
+    summary.autoApplied ? 1 : 0,
+    summary.autoJevMs ?? null,
     messageId,
   );
 }

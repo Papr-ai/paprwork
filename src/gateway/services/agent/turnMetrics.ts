@@ -70,12 +70,48 @@ export interface TurnMetrics {
   catalogJevMs: number | null;
   /** Tool-result trim experiment (Jev). See jevToolResultTrim.ts. */
   toolTrimArm: "treatment" | "control" | null;
+  /**
+   * Auto model routing (Jev). Recorded every turn in shadow mode; `applied`
+   * is 1 only when the picker model was `auto` and the pick replaced config.
+   */
+  autoTier: string | null;
+  autoRawTier: string | null;
+  autoConfidence: number | null;
+  autoNeedsTools: boolean | null;
+  autoModel: string | null;
+  autoEffort: string | null;
+  autoApplied: boolean;
+  autoJevMs: number | null;
   toolTrimApplied: number;
   toolTrimFallbacks: number;
   toolTrimLookbackYes: number;
   toolTrimCharsBefore: number;
   toolTrimCharsAfter: number;
   toolTrimJevMs: number;
+}
+
+export function recordAutoRoute(
+  metrics: TurnMetrics | null | undefined,
+  rec: {
+    tier: string;
+    rawTier: string;
+    confidence: number;
+    needsTools: boolean;
+    model: string | null;
+    effort: string | null;
+    applied: boolean;
+    jevMs: number;
+  },
+): void {
+  if (!metrics) return;
+  metrics.autoTier = rec.tier;
+  metrics.autoRawTier = rec.rawTier;
+  metrics.autoConfidence = rec.confidence;
+  metrics.autoNeedsTools = rec.needsTools;
+  metrics.autoModel = rec.model;
+  metrics.autoEffort = rec.effort;
+  metrics.autoApplied = rec.applied;
+  metrics.autoJevMs = rec.jevMs;
 }
 
 export function recordToolTrimArm(
@@ -142,6 +178,14 @@ export function createTurnMetrics(): TurnMetrics {
     catalogInjectedTokens: null,
     catalogJevMs: null,
     toolTrimArm: null,
+    autoTier: null,
+    autoRawTier: null,
+    autoConfidence: null,
+    autoNeedsTools: null,
+    autoModel: null,
+    autoEffort: null,
+    autoApplied: false,
+    autoJevMs: null,
     toolTrimApplied: 0,
     toolTrimFallbacks: 0,
     toolTrimLookbackYes: 0,
@@ -377,6 +421,14 @@ export interface TurnMetricsSummary {
   catalogInjectedTokens: number | null;
   catalogJevMs: number | null;
   toolTrimArm: "treatment" | "control" | null;
+  autoTier: string | null;
+  autoRawTier: string | null;
+  autoConfidence: number | null;
+  autoNeedsTools: boolean | null;
+  autoModel: string | null;
+  autoEffort: string | null;
+  autoApplied: boolean;
+  autoJevMs: number | null;
   toolTrimApplied: number;
   toolTrimFallbacks: number;
   toolTrimLookbackYes: number;
@@ -439,6 +491,14 @@ export function summarizeTurnMetrics(
     catalogInjectedTokens: metrics.catalogInjectedTokens,
     catalogJevMs: metrics.catalogJevMs,
     toolTrimArm: metrics.toolTrimArm,
+    autoTier: metrics.autoTier,
+    autoRawTier: metrics.autoRawTier,
+    autoConfidence: metrics.autoConfidence,
+    autoNeedsTools: metrics.autoNeedsTools,
+    autoModel: metrics.autoModel,
+    autoEffort: metrics.autoEffort,
+    autoApplied: metrics.autoApplied,
+    autoJevMs: metrics.autoJevMs,
     toolTrimApplied: metrics.toolTrimApplied,
     toolTrimFallbacks: metrics.toolTrimFallbacks,
     toolTrimLookbackYes: metrics.toolTrimLookbackYes,

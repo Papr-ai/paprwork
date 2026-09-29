@@ -15,6 +15,9 @@ export const GLOBAL_INITIAL_DEFAULT_MODEL_ID = "gemini-3.8-flash";
 
 /** Curated order when the user has cloud access (OAuth, API key, or Papr+BYOK). */
 export const CURATED_MODEL_PRIORITY: readonly string[] = [
+  // Auto (Jev-routed) first: it is an Anthropic-auth pseudo-model, so it only
+  // wins when Anthropic OAuth/BYOK is present — otherwise the list falls through.
+  "auto",
   "claude-sonnet-5-5",
   "claude-sonnet-5",
   "gpt-5-6-sol",
