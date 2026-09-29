@@ -5,6 +5,7 @@
  * Legacy-only: log catch-up → schema/row push → log catch-up → writer ops → publish.
  */
 
+import { isParkedReplicaError as isParkedReplicaErrorShared } from "../tursoReplica/tursoReplicaErrors.js";
 import * as path from "path";
 import type { CloudSyncService } from "../CloudSyncService.js";
 import {
@@ -85,15 +86,8 @@ async function catchUpAppLinkedSources(
   }
 }
 
-/**
- * Matches TursoReplicaSyncWorkerClient.assertNotCrashLooping's parked error, in both its
- * session and cross-restart wordings.
- */
 export function isParkedReplicaError(error: string | undefined | null): boolean {
-  return (
-    typeof error === "string" &&
-    /Turso replica .+ is parked(?: for this session)?:/.test(error)
-  );
+  return isParkedReplicaErrorShared(error);
 }
 
 async function pushLinkedSourcesForFlush(
