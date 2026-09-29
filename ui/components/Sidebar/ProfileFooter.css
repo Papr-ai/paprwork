@@ -18,58 +18,152 @@
   transition: transform 0.15s var(--ease);
 }
 
-/* Org-colored outer ring: a gap in the surface color, then the org accent. */
-.rail-account__ring {
-  border-radius: 50%;
-  box-shadow: 0 0 0 2px var(--rail-bg), 0 0 0 4px var(--org, #0161e0);
-  transition: box-shadow 0.2s var(--ease), transform 0.15s var(--ease);
+/* Org logo as a badge on your photo: white tile, like an app icon. Monogram underneath if the image fails. */
+.org-mark {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 28%;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: #fff;
+  color: #1b2a44;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
 }
 
-.rail-account__ring--lg {
+.org-mark::before {
+  content: attr(data-letter);
+}
+
+.org-mark img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 12%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.rail-account__badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 16px;
+  height: 16px;
+  border: none;
+  font-size: 8.5px;
+  box-shadow: 0 0 0 2px var(--rail-bg);
+  pointer-events: none;
+}
+
+.rail-account__photo {
+  position: relative;
   display: grid;
   flex: 0 0 auto;
-  margin: 4px;
-  box-shadow: 0 0 0 2px var(--rail-card), 0 0 0 4px var(--org, #0161e0);
 }
 
-.rail-account__dot {
-  display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 6px;
-  border-radius: 50%;
-  background: var(--org, #0161e0);
-  vertical-align: 1px;
+.rail-account__photo .rail-account__badge {
+  right: -4px;
+  bottom: -4px;
+  width: 18px;
+  height: 18px;
+  box-shadow: 0 0 0 2px var(--rail-card);
 }
 
-.rail-account__swatches {
+/* Org logo row: tap the tile to upload, type the website to pull its icon */
+.rail-orglogo {
   display: flex;
-  gap: 8px;
+  align-items: center;
+  gap: 12px;
   padding: 2px 8px 6px;
 }
 
-.rail-account__swatch {
-  width: 20px;
-  height: 20px;
+.org-mark--lg {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  font-size: 16px;
+}
+
+.rail-orglogo__pick {
+  position: relative;
   padding: 0;
   border: none;
-  border-radius: 50%;
-  background: var(--c);
+  border-radius: 11px;
+  background: transparent;
   cursor: pointer;
-  transition: transform 0.12s var(--ease), box-shadow 0.12s var(--ease);
 }
 
-.rail-account__swatch:hover {
-  transform: scale(1.12);
+.rail-orglogo__pick::after {
+  content: "Change";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease);
 }
 
-.rail-account__swatch.is-on {
-  box-shadow: 0 0 0 2px var(--rail-card), 0 0 0 4px var(--c);
+.rail-orglogo__pick:hover::after,
+.rail-orglogo__pick:focus-visible::after {
+  opacity: 1;
 }
 
-.rail-account__swatch:focus-visible {
-  outline: 2px solid rgba(0, 96, 224, 0.45);
-  outline-offset: 3px;
+.rail-orglogo__field {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.rail-orglogo__field input {
+  width: 100%;
+  padding: 3px 0;
+  border: none;
+  border-bottom: 1px solid var(--rail-line, rgba(127, 127, 127, 0.25));
+  background: transparent;
+  color: var(--rail-ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.rail-orglogo__field input:focus {
+  border-bottom-color: var(--rail-blue);
+}
+
+.rail-orglogo__field b {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rail-ink);
+}
+
+.rail-orglogo__field small {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.rail-orglogo__field small button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--rail-blue);
+  font: inherit;
+  cursor: pointer;
 }
 
 .rail-account__avatar:hover {
@@ -220,14 +314,6 @@
 .rail-org:disabled {
   cursor: default;
   opacity: 1;
-}
-
-.rail-org i {
-  flex: 0 0 auto;
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--c);
 }
 
 .rail-org span {

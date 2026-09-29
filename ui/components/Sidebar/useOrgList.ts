@@ -13,6 +13,8 @@ import { confirmAndAbortStreamsForWorkspaceSwitch } from "../../lib/workspaceSwi
 export interface OrgEntry {
   id: string;
   name: string;
+  /** owner | admin | member — admins may change the org logo. */
+  role?: string;
   organizationId?: string;
   organizationName?: string;
   defaultNamespaceId?: string;
