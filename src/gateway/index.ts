@@ -3225,6 +3225,42 @@ async function startGateway(): Promise<void> {
       }
     });
 
+    // Nudges — at most one sentence a day from your agent, only at a breakpoint the renderer picked.
+    // Policy (caps, quiet hours, backoff, mutes) in services/nudgePolicy.ts; jobs may propose, never force.
+    app.get("/api/nudge/next", async (_req, res) => {
+      try {
+        const { nextNudge } = await import("./services/nudges.js");
+        res.json(await nextNudge());
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.post("/api/nudge/event", async (req, res) => {
+      try {
+        const { key, kind, event } = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof key !== "string" || typeof kind !== "string" || !["shown", "go", "later", "dismiss"].includes(String(event))) {
+          res.status(400).json({ error: "Need key, kind and event: shown | go | later | dismiss" });
+          return;
+        }
+        const { recordNudgeEvent } = await import("./services/nudges.js");
+        const ledger = await recordNudgeEvent({ key, kind, event: event as "shown" | "go" | "later" | "dismiss" });
+        res.json({ ok: true, unengaged: ledger.unengaged });
+      } catch (error) {
+        res.status(500).json({ error: error instanceof Error ? error.message : String(error) });
+      }
+    });
+
+    app.post("/api/nudge/propose", async (req, res) => {
+      try {
+        const { proposeNudge } = await import("./services/nudges.js");
+        res.json({ ok: true, queued: await proposeNudge(req.body) });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res.status(message.startsWith("Invalid nudge") ? 400 : 500).json({ error: message });
+      }
+    });
+
     // Lazy first-run setup for the bundled Home dashboard (job + DB + data-sources).
     app.post("/api/home/ensure-brief-setup", async (req, res) => {
       try {
