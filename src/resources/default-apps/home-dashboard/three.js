@@ -52,7 +52,12 @@ const Three = {
     return Math.max(0, Math.round((d - new Date().setHours(12, 0, 0, 0)) / 86400000));
   },
   hours(h) { return !h ? '0h' : h >= 10 ? `${Math.round(h)}h` : h >= 1 ? `${Math.round(h * 10) / 10}h` : `${Math.max(1, Math.round(h * 60))}m`; },
-  sub(g) { return [g.target, this.fmtDue(g.due)].filter(Boolean).join(' · ') || (g.nextStep ? `Next: ${g.nextStep}` : ''); },
+  /** "Every day" / "Every week" for habit goals, '' for one-time ones. */
+  every(g) { return g.repeat === 'daily' ? 'Every day' : g.repeat === 'weekly' ? 'Every week' : ''; },
+  sub(g) {
+    const when = g.repeat ? this.every(g) : this.fmtDue(g.due);
+    return [g.target, when].filter(Boolean).join(' · ') || (g.nextStep ? `Next: ${g.nextStep}` : '');
+  },
   /** Today: the three rows under "Do this first". */
   section() {
     if (!this.has()) return '';
@@ -73,7 +78,8 @@ const Three = {
   detail(g) {
     const s = g.signals || {};
     const left = this.daysLeft(g.due);
-    const done = [g.target, g.due ? `${this.fmtDue(g.due)}${left != null ? ` · ${left} days left` : ''}` : ''].filter(Boolean).join(' · ');
+    const done = g.repeat ? this.sub(g)
+      : [g.target, g.due ? `${this.fmtDue(g.due)}${left != null ? ` · ${left} days left` : ''}` : ''].filter(Boolean).join(' · ');
     const tasks = ((typeof Tasks !== 'undefined' && Tasks.data?.tasks) || []).filter((t) => t.status === 'open' && t.goal_id && t.goal_id === g.id);
     const [pcls, plabel] = this.pace(s);
     const mine = this.inThree(g.id);
@@ -120,7 +126,8 @@ const Three = {
     Tasks.setView('today');
   },
   chat(g) {
-    const msg = `Help me move my goal "${g.title}" forward today.${g.target ? ` Done when: ${g.target}.` : ''}${g.due ? ` Due ${g.due}.` : ''}${g.nextStep ? ` Next milestone: ${g.nextStep}.` : ''} Look at its open tasks and recent chats, then give me the one next step and do the first part with me.`;
+    const habit = g.repeat ? ` This repeats ${g.repeat === 'daily' ? 'every day' : 'every week'}; help me get ${g.repeat === 'daily' ? "today's" : "this week's"} done.` : '';
+    const msg = `Help me move my goal "${g.title}" forward today.${g.target ? ` ${g.repeat ? (g.repeat === 'daily' ? 'Each day' : 'Each week') : 'Done when'}: ${g.target}.` : ''}${habit}${g.due && !g.repeat ? ` Due ${g.due}.` : ''}${g.nextStep ? ` Next milestone: ${g.nextStep}.` : ''} Look at its open tasks and recent chats, then give me the one next step and do the first part with me.`;
     if (window.paprAPI?.invoke) window.paprAPI.invoke('chat.open', { message: msg });
   },
   bind() {
