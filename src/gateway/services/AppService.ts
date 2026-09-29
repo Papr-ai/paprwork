@@ -320,6 +320,8 @@ export class AppService {
   private debounceTimers: Map<string, NodeJS.Timeout>;
   private reloadBroadcastTimers: Map<string, NodeJS.Timeout>;
   private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
+  /** Apps where a sibling write landed mid-build; the finished build is superseded. */
+  private buildRerunRequested: Set<string>;
   private pendingDefaultJobs: Array<{ sourceDir: string; targetDir: string; appId: string }>;
   private lastBuildResult: Map<string, MiniAppBuildResult>;
   private saveLock: Promise<void> | null = null;
@@ -380,6 +382,7 @@ export class AppService {
     this.debounceTimers = new Map();
     this.reloadBroadcastTimers = new Map();
     this.buildInFlight = new Map();
+    this.buildRerunRequested = new Set();
     this.pendingDefaultJobs = [];
     this.lastBuildResult = new Map();
   }
@@ -3309,6 +3312,7 @@ export class AppService {
       // landed does not include it. Returning that promise made validate report
       // "source newer than dist" on the second file (~50 false BUILD FAILED per
       // month). Wait for the running build, then run one fresh build.
+      this.buildRerunRequested.add(appId);
       await inFlight.catch(() => undefined);
       const again = this.buildInFlight.get(appId);
       if (again) return again;
@@ -3345,8 +3349,17 @@ export class AppService {
     })();
 
     this.buildInFlight.set(appId, run);
+    let superseded = false;
     try {
-      return await run;
+      const result = await run;
+      // A sibling write arrived while this build ran (parallel agent step, e.g.
+      // screen.ts importing from a shell.ts that was still being written). Our
+      // output is already stale — hand back the fresh build so the first
+      // caller does not report "No matching export" for a file that exists now.
+      superseded = this.buildRerunRequested.delete(appId);
+      if (!superseded) return result;
+      this.buildInFlight.delete(appId); // clear before rerun or it returns this stale run
+      return await this.buildApp(appId);
     } finally {
       if (this.buildInFlight.get(appId) === run) {
         this.buildInFlight.delete(appId);
