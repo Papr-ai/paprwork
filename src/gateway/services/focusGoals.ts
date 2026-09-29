@@ -34,6 +34,7 @@ import {
   type ActivityTask,
   type FocusCandidateInput,
   type FocusGoal,
+  type FocusRepeat,
   type ScoredActivity,
 } from "./focusGoalsScoring.js";
 
@@ -46,6 +47,7 @@ export interface FocusPick {
   title?: string;
   target?: string;
   due?: string;
+  repeat?: FocusRepeat;
 }
 
 interface FocusFile {
@@ -260,6 +262,7 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
       title: pick.title,
       target: pick.target,
       due: pick.due,
+      repeat: pick.repeat,
       origin: "custom",
       why: "Written by you",
       score: 0,
@@ -272,7 +275,9 @@ function applyPick(pick: FocusPick, byId: Map<string, FocusGoal>): FocusGoal | n
     title: pick.title || base.title,
     edited: Boolean(pick.title && pick.title !== base.title) || undefined,
     target: pick.target ?? base.target,
-    due: pick.due ?? base.due,
+    // A repeating goal has no finish date, so it never inherits one.
+    due: pick.repeat ? undefined : (pick.due ?? base.due),
+    repeat: pick.repeat,
   };
 }
 
@@ -339,6 +344,19 @@ function pickNext(three: FocusGoal[], scored: ScoredActivity): FocusState["next"
   return g?.nextStep ? { title: g.nextStep, goalId: g.id } : null;
 }
 
+/** Clean one pick from the editor: trim, cap lengths, and drop the due date on repeating goals. */
+export function normalizePick(p: FocusPick, i: number, now: number): FocusPick {
+  const repeat = p.repeat === "daily" || p.repeat === "weekly" ? p.repeat : undefined;
+  return {
+    id: p.goalId?.trim() || (p.id?.startsWith("F-") ? p.id : `F-${now}-${i}`),
+    goalId: p.goalId?.trim() || undefined,
+    title: p.title?.trim().slice(0, 140) || undefined,
+    target: p.target?.trim().slice(0, 140) || undefined,
+    due: repeat ? undefined : p.due?.trim().slice(0, 40) || undefined,
+    repeat,
+  };
+}
+
 export interface SetFocusInput {
   picks: FocusPick[];
   confirm?: boolean;
@@ -349,13 +367,7 @@ export async function setFocus(input: SetFocusInput, now = Date.now()): Promise<
   const picks = (input.picks ?? [])
     .filter((p) => p && (p.goalId || p.title?.trim()))
     .slice(0, MAX_PICKS)
-    .map((p, i) => ({
-      id: p.goalId?.trim() || (p.id?.startsWith("F-") ? p.id : `F-${now}-${i}`),
-      goalId: p.goalId?.trim() || undefined,
-      title: p.title?.trim().slice(0, 140) || undefined,
-      target: p.target?.trim().slice(0, 140) || undefined,
-      due: p.due?.trim().slice(0, 40) || undefined,
-    }));
+    .map((p, i) => normalizePick(p, i, now));
   if (!picks.length) throw new Error("Pick at least one goal");
   const prev = await readFocusFile();
   await writeFocusFile({

@@ -160,3 +160,17 @@ describe("helpers", () => {
     );
   });
 });
+
+describe("focus picks: repeating goals", () => {
+  it("keeps daily/weekly, drops anything else, and never stores a due date on a habit", async () => {
+    const { normalizePick } = await import("../src/gateway/services/focusGoals.js");
+    const daily = normalizePick(
+      { id: "F-1", title: " Post daily on X and LinkedIn ", target: "1 post on X and LinkedIn", due: "2026-11-30", repeat: "daily" },
+      0,
+      1,
+    );
+    expect(daily).toMatchObject({ id: "F-1", title: "Post daily on X and LinkedIn", repeat: "daily", due: undefined });
+    const once = normalizePick({ id: "G1", goalId: "G1", due: "2026-11-30", repeat: "hourly" as never }, 0, 1);
+    expect(once).toMatchObject({ id: "G1", due: "2026-11-30", repeat: undefined });
+  });
+});

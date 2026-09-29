@@ -21,6 +21,10 @@ interface RailItemProps {
   ariaLabel?: string;
   /** Announces background work (e.g. the agent is working) to assistive tech. */
   busy?: boolean;
+  /** Extra classes on the item (e.g. the agent's nudge phase). */
+  className?: string;
+  /** Rendered next to the button, positioned against the item (e.g. the agent's nudge). */
+  overlay?: ReactNode;
 }
 
 export function RailItem({
@@ -36,8 +40,10 @@ export function RailItem({
   testId,
   ariaLabel,
   busy,
+  className,
+  overlay,
 }: RailItemProps) {
-  const classes = ["rail-item", peek ? "rail-item--has-peek" : "", peekFromBottom ? "rail-item--peek-bottom" : ""];
+  const classes = ["rail-item", peek ? "rail-item--has-peek" : "", peekFromBottom ? "rail-item--peek-bottom" : "", className ?? ""];
   return (
     <div className={classes.filter(Boolean).join(" ")} data-agent-hover={variant === "agent" ? "" : undefined}>
       <button
@@ -52,6 +58,7 @@ export function RailItem({
         {icon}
         {badge ? <i className="rail-btn__badge" aria-hidden="true" /> : null}
       </button>
+      {overlay}
       {peek ? (
         <div className="rail-peek" role="menu" aria-label={label}>
           {peek}

@@ -4,6 +4,7 @@
 Usage:
     python3 save_brief.py <brief.json>
     BRIEF_DATE_KEY=2026-08-31 python3 save_brief.py <brief.json>
+    python3 save_brief.py --nudge <nudge.json>   # optional: suggest one rail nudge
 
 Why this script exists
 ----------------------
@@ -146,7 +147,34 @@ def print_tasks():
     print(json.dumps(result.get("rows") or [], ensure_ascii=False, indent=2))
 
 
+def propose_nudge(path):
+    """--nudge: suggest (never force) one rail nudge. The app applies its own caps
+    (max 1/day, working hours, backoff) and may show it later or not at all.
+    Never fails the brief: a rejected nudge only prints a warning."""
+    try:
+        with open(path) as f:
+            nudge = json.load(f)
+        nudge.setdefault("source", "daily-brief")
+        nudge.setdefault("kind", "brief")
+        req = urllib.request.Request(
+            f"{GATEWAY}/api/nudge/propose",
+            data=json.dumps(nudge).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            parsed = json.loads(resp.read())
+        print(f"NUDGE queued: {parsed.get('queued', {}).get('key')}")
+    except urllib.error.HTTPError as e:
+        print(f"WARN: nudge not queued (HTTP {e.code}): {e.read()[:300]!r}", file=sys.stderr)
+    except Exception as e:
+        print(f"WARN: nudge not queued: {e}", file=sys.stderr)
+
+
 def main():
+    if len(sys.argv) >= 3 and sys.argv[1] == "--nudge":
+        propose_nudge(sys.argv[2])
+        return
     if len(sys.argv) >= 2 and sys.argv[1] == "--tasks":
         print_tasks()
         return

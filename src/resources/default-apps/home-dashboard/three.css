@@ -101,3 +101,28 @@
 .t3outside { margin: -6px 0 0; font-size: 12.5px; color: var(--mid); }
 .goal-open { border: none; background: none; padding: 0; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .goal-open:hover { color: var(--blue); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
+
+/* Goal form: How often (One time · Daily · Weekly) and a real date picker. Repeating goals
+   have no end date, so the By field folds away and Each day takes the full row. */
+.t3field { display: grid; gap: 6px; justify-items: start; }
+.t3edit label span, .t3field > span { font-size: 11px; font-weight: 600; color: var(--soft); text-transform: uppercase; letter-spacing: .06em; }
+.t3seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 11px; background: rgba(10,16,32,.05);
+  box-shadow: inset 0 1px 2px rgba(10,16,32,.06); }
+.t3seg button { border: none; background: none; padding: 5px 13px; border-radius: 8px; font: 500 12.5px var(--font); color: var(--mid);
+  cursor: pointer; transition: background .15s, color .15s, box-shadow .15s; }
+.t3seg button:hover { color: var(--ink); }
+.t3seg button[aria-checked="true"] { background: rgba(255,255,255,.92); color: var(--ink); font-weight: 600;
+  box-shadow: 0 1px 3px rgba(10,16,32,.10), inset 0 1px 0 #fff; }
+.t3pair { grid-template-columns: 1fr 156px; }
+.t3edit:not([data-repeat=""]) .t3pair { grid-template-columns: 1fr; }
+.t3edit:not([data-repeat=""]) .t3by { display: none; }
+.t3edit input[type="date"] { color-scheme: light; font-variant-numeric: tabular-nums; min-height: 37px; }
+.t3edit input[type="date"]:invalid, .t3edit input[type="date"][value=""] { color: var(--soft); }
+.t3edit input[type="date"]::-webkit-calendar-picker-indicator { opacity: .5; cursor: pointer; border-radius: 5px; padding: 2px; }
+.t3edit input[type="date"]::-webkit-calendar-picker-indicator:hover { opacity: 1; background: rgba(0,96,224,.08); }
+
+@media (prefers-color-scheme: dark) {
+  .t3seg { background: rgba(255,255,255,.06); box-shadow: none; }
+  .t3seg button[aria-checked="true"] { background: rgba(255,255,255,.14); box-shadow: 0 1px 2px rgba(0,0,0,.3); }
+  .t3edit input[type="date"] { color-scheme: dark; }
+}
