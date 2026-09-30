@@ -239,6 +239,14 @@ export class TursoReplicaSyncWorkerClient {
         );
         return;
       }
+      // A wedged engine (e.g. a replica parked for malformed pages) can hang on close.
+      // send() already SIGKILLs the worker on timeout, so the handle IS released — which
+      // is all close() promises. Rejecting here made repair_cloud_sync(accept_cloud)
+      // abort before it could reseed the very replica that needed it.
+      if (error instanceof Error && /timed out after/.test(error.message)) {
+        this.ownedPaths.delete(path.resolve(localPath));
+        return;
+      }
       throw error;
     }
   }

@@ -62,6 +62,26 @@ describe("TursoReplicaSyncWorkerClient", () => {
     expect(client.ownsPath(localPath)).toBe(false);
   });
 
+  it("treats a close that hangs as released: the worker is killed, repair can proceed", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const client = new TursoReplicaSyncWorkerClient(
+        fakeWorker(`if (req.op !== "close") reply({ id: req.id, ok: true, result: { pulled: true } });`),
+      );
+      vi.useRealTimers();
+      await client.sync(spec(), "pull");
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      const closing = client.close(localPath);
+      await vi.advanceTimersByTimeAsync(10_001);
+      await expect(closing).resolves.toBeUndefined();
+      expect(client.ownsPath(localPath)).toBe(false);
+      vi.useRealTimers();
+      await client.shutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("returns query rows and write metrics through the typed helpers", async () => {
     const client = new TursoReplicaSyncWorkerClient(
       fakeWorker(`

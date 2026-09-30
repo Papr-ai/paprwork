@@ -43,7 +43,7 @@ import {
 import { useCloudPreviewChatBridge } from "../../hooks/useCloudPreviewChatBridge";
 import { resolveMiniAppPreviewOrigin } from "../../utils/miniAppPreviewOrigin";
 import {
-  MINI_APP_SHELL_ANNOUNCE_GRACE_MS,
+  ShellLoadWatch,
   describeIsolationOutcome,
   isShellAnnouncementFor,
   miniAppShellLooksLikeError,
@@ -95,7 +95,6 @@ export function MiniAppView({
   const [runtimeBannerDismissed, setRuntimeBannerDismissed] = useState(false);
   const [appMissingInWorkspace, setAppMissingInWorkspace] = useState(false);
   const iframeRetryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const shellAnnounceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cloud = useCloudPublish(appId, appTitle);
   const { createTab, switchToTab } = useTabs();
   const { isReady: gatewaySupervisorReady, isStarting: gatewaySupervisorStarting } =
@@ -261,17 +260,10 @@ export function MiniAppView({
       if (iframeRetryTimerRef.current) {
         clearTimeout(iframeRetryTimerRef.current);
       }
-      if (shellAnnounceTimerRef.current) {
-        clearTimeout(shellAnnounceTimerRef.current);
-      }
     };
   }, []);
 
   const markShellHealthy = useCallback(() => {
-    if (shellAnnounceTimerRef.current) {
-      clearTimeout(shellAnnounceTimerRef.current);
-      shellAnnounceTimerRef.current = null;
-    }
     setIframeLoadError(null);
     setRuntimeError(null);
     setPreviewShellLoaded(true);
@@ -283,15 +275,19 @@ export function MiniAppView({
    * Bounded, and expiry retries rather than erroring: an unregistered route is
    * "ask again" (Issue 98), not "this app is gone".
    */
+  const shellWatchRef = useRef<ShellLoadWatch | null>(null);
+  shellWatchRef.current ??= new ShellLoadWatch(MINI_APP_SHELL_ANNOUNCE_GRACE_MS);
   const awaitShellAnnouncement = useCallback(() => {
-    if (shellAnnounceTimerRef.current) {
-      clearTimeout(shellAnnounceTimerRef.current);
-    }
-    shellAnnounceTimerRef.current = setTimeout(() => {
-      shellAnnounceTimerRef.current = null;
-      scheduleIframeRetry("App routes not ready yet — retrying…");
-    }, MINI_APP_SHELL_ANNOUNCE_GRACE_MS);
+    // bounded by MINI_APP_SHELL_ANNOUNCE_GRACE_MS; a no-op if this load already announced
+    shellWatchRef.current?.awaitAnnouncement(() =>
+      scheduleIframeRetry("App routes not ready yet — retrying…"),
+    );
   }, [scheduleIframeRetry]);
+  // Each new document gets a fresh race; the unmount path cancels any pending grace timer.
+  useEffect(() => {
+    shellWatchRef.current?.begin();
+  }, [iframeLoadKey, iframeSrc]);
+  useEffect(() => () => shellWatchRef.current?.cancel(), []);
 
   useEffect(() => {
     if (isPublishedPreview) return;
@@ -315,6 +311,7 @@ export function MiniAppView({
           `[MiniAppView] App ${appId} asked for an isolated origin and the browser refused — this preview shares the chat UI's main thread.`,
         );
       }
+      shellWatchRef.current?.markAnnounced();
       markShellHealthy();
     };
 
