@@ -49,6 +49,12 @@ interface RecommendedAppsProps {
   onFreeform: (prompt: string) => void;
   /** User declined everything. */
   onSkip: () => void;
+  /**
+   * Install failed and Pen should take it from here. The gated host must
+   * release first — a chat opened behind the auth gate is invisible, which is
+   * how a failed install used to look like "nothing happened".
+   */
+  onInstallHandoff?: (agentMessage: string) => void;
   /** Ribbon line, e.g. "Connected to Claude." Omitted when unknown. */
   providerLine?: string;
   /**
@@ -75,6 +81,7 @@ export function RecommendedApps({
   onInstalled,
   onFreeform,
   onSkip,
+  onInstallHandoff,
   providerLine,
   hideSkip = false,
   freeformOpen,
@@ -200,7 +207,8 @@ export function RecommendedApps({
       const plan = planCloudInstallFailureHandoff(entry, "fork", result);
       if (plan.kind === "agent") {
         setInstallError(null);
-        openChatWithPrompt(plan.agentMessage);
+        if (onInstallHandoff) onInstallHandoff(plan.agentMessage);
+        else openChatWithPrompt(plan.agentMessage);
         return;
       }
       setInstallError(`Couldn't install ${entry.name}: ${plan.message.slice(0, 200)}`);

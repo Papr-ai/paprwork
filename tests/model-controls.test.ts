@@ -245,6 +245,14 @@ describe("resolveModelSettings", () => {
     expect(resolveModelSettings(glm, {}).effort).toBe("high");
   });
 
+  it("defaults adaptive Claude to medium effort when the model lists none", () => {
+    const opus55 = model({
+      id: "claude-opus-5-5",
+      name: "Claude Opus 5.5",
+    });
+    expect(resolveModelSettings(opus55, {}).effort).toBe("medium");
+  });
+
   it("treats thinking as on unless the user turned it off", () => {
     expect(resolveModelSettings(model(), {}).thinking).toBe(true);
     expect(resolveModelSettings(model(), { thinking: false }).thinking).toBe(

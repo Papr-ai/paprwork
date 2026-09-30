@@ -220,7 +220,7 @@ const TURN_USAGE_SELECT_BASE = `
          turn_peak_context_tokens, turn_estimated_context_tokens,
          turn_context_budget_tokens
   FROM messages
-  WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
+  WHERE chat_id = ? AND +role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
   ORDER BY timestamp DESC, rowid DESC`;
 
 const TURN_USAGE_SELECT = `${TURN_USAGE_SELECT_BASE}
@@ -288,13 +288,16 @@ export function readRecentTurnUsage(
   return rows.map(mapTurnUsageRow);
 }
 
+// Unary + disqualifies the role-only access path without changing TEXT values.
+// Otherwise SQLite can scan all assistant rows via (role, timestamp), even
+// though these reads are for one chat. Keep existing chat indexes; no migration.
 const CHAT_USAGE_TOTALS_SELECT = `SELECT COUNT(*) AS turns,
               COALESCE(SUM(cost), 0) AS cost,
               COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
               COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
               COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens
        FROM messages
-       WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0`;
+       WHERE chat_id = ? AND +role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0`;
 
 /** Whole-chat rollup. Turns are billed assistant rows, not messages. */
 export function readChatUsageTotals(

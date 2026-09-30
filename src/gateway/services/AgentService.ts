@@ -4538,159 +4538,29 @@ ${last15.substring(0, 8_000)}`;
       `[AgentService] Resolved job provider/model: ${provider}/${model}`,
     );
 
-    const { getProviderAuth, getApiKeys } =
-      await import("../utils/keyResolver.js");
+    let usePaprProxy: boolean | undefined;
 
-    let authCheckFailed = false;
-    let originalProvider = provider;
-
-    if (!input.authOverride) {
-      if (
-        provider === "openai" ||
-        provider === "openai-codex" ||
-        provider === "anthropic"
-      ) {
-        const authProvider = provider === "openai-codex" ? "openai" : provider;
-        const auth = await getProviderAuth(authProvider);
-        if (!auth) {
-          authCheckFailed = true;
-          console.warn(
-            `[AgentService] No authentication found for specified provider (${provider}). Falling back to default provider...`,
-          );
-        } else {
-          apiKey = auth.type === "oauth" ? auth.token : auth.key;
-          authType = auth.type;
-          console.log(
-            `[AgentService] runIsolatedJobSession: provider=${provider} authProvider=${authProvider} ` +
-              `authType=${authType} tokenLength=${apiKey.length}`,
-          );
-        }
-      } else {
-        const keyName =
-          provider === "google" ? "GOOGLE_API_KEY" : "OPENAI_API_KEY";
-        const keys = await getApiKeys([keyName]);
-        apiKey = keys[keyName];
-        if (!apiKey) {
-          authCheckFailed = true;
-          console.warn(
-            `[AgentService] Missing API key for specified provider (${provider}): ${keyName}. Falling back to default provider...`,
-          );
-        }
-      }
+    if (!input.authOverride?.apiKey) {
+      const sessionAuth = await (
+        await import("../utils/resolveJobSessionAuth.js")
+      ).resolveJobSessionAuth({
+        provider,
+        model,
+        requestedModel: input.model,
+        fallbackProvider: input.fallbackProvider,
+        fallbackModel: input.fallbackModel,
+      });
+      provider = sessionAuth.provider;
+      model = sessionAuth.model;
+      apiKey = sessionAuth.apiKey;
+      authType = sessionAuth.authType;
+      usePaprProxy = sessionAuth.usePaprProxy;
+      console.log(
+        `[AgentService] runIsolatedJobSession: provider=${provider} model=${model} ` +
+          `authType=${authType} usePaprProxy=${Boolean(usePaprProxy)}`,
+      );
     }
 
-    // If auth check failed, try explicit profile fallback, then smart/default fallback
-    if (authCheckFailed && !input.authOverride) {
-      let resolvedExplicitFallback = false;
-
-      if (input.fallbackProvider && input.fallbackModel) {
-        const fbProvider = input.fallbackProvider;
-        const fbModel = input.fallbackModel;
-
-        if (
-          fbProvider === "openai" ||
-          fbProvider === "openai-codex" ||
-          fbProvider === "anthropic"
-        ) {
-          const authProvider =
-            fbProvider === "openai-codex" ? "openai" : fbProvider;
-          const auth = await getProviderAuth(authProvider);
-          if (auth) {
-            provider = fbProvider;
-            model = fbModel;
-            apiKey = auth.type === "oauth" ? auth.token : auth.key;
-            authType = auth.type;
-            resolvedExplicitFallback = true;
-            console.log(
-              `[AgentService] Explicit fallback: ${originalProvider}/${input.model ?? "default"} → ${provider}/${model}`,
-            );
-          }
-        } else if (fbProvider === "google") {
-          const keys = await getApiKeys(["GOOGLE_API_KEY"]);
-          const fbKey = keys.GOOGLE_API_KEY;
-          if (fbKey) {
-            provider = fbProvider;
-            model = fbModel;
-            apiKey = fbKey;
-            resolvedExplicitFallback = true;
-            console.log(
-              `[AgentService] Explicit fallback: ${originalProvider}/${input.model ?? "default"} → ${provider}/${model}`,
-            );
-          }
-        } else if (fbProvider === "ollama") {
-          provider = fbProvider;
-          model = fbModel;
-          apiKey = "";
-          resolvedExplicitFallback = true;
-          console.log(
-            `[AgentService] Explicit fallback: ${originalProvider}/${input.model ?? "default"} → ${provider}/${model}`,
-          );
-        }
-      }
-
-      if (!resolvedExplicitFallback) {
-        // Try smart fallback based on original model capabilities
-        const { getBestFallbackModel } =
-          await import("../utils/smartFallback.js");
-        const { getAvailableProviders } =
-          await import("../utils/defaultProvider.js");
-
-        const available = await getAvailableProviders();
-        const fallback = await getBestFallbackModel(
-          originalProvider,
-          input.model || "unknown",
-          available,
-        );
-
-        if (fallback) {
-          provider = fallback.provider;
-          model = fallback.model;
-          console.log(
-            `[AgentService] Smart fallback: ${originalProvider}/${input.model || "default"} → ${provider}/${model} (capability-matched)`,
-          );
-        } else {
-          // No smart fallback available, use basic default
-          const { getDefaultProviderAndModel } =
-            await import("../utils/defaultProvider.js");
-          const defaults = await getDefaultProviderAndModel();
-          provider = defaults.provider;
-          model = defaults.model;
-          console.log(
-            `[AgentService] Falling back from ${originalProvider} to ${provider}/${model}`,
-          );
-        }
-
-        // Re-check auth for fallback provider
-        if (provider === "openai" || provider === "anthropic") {
-          const auth = await getProviderAuth(provider);
-          if (!auth) {
-            throw new Error(
-              `No authentication found for fallback provider (${provider}). Please configure at least one provider.`,
-            );
-          }
-          apiKey = auth.type === "oauth" ? auth.token : auth.key;
-          authType = auth.type;
-        } else if (provider === "google") {
-          const keys = await getApiKeys(["GOOGLE_API_KEY"]);
-          apiKey = keys.GOOGLE_API_KEY;
-          if (!apiKey) {
-            throw new Error(
-              `Missing API key for fallback provider: GOOGLE_API_KEY`,
-            );
-          }
-        } else if (provider === "ollama") {
-          // Ollama doesn't need auth
-          apiKey = ""; // Empty string for Ollama
-        } else {
-          // Unexpected provider without auth setup
-          throw new Error(
-            `No authentication configuration found for fallback provider: ${provider}`,
-          );
-        }
-      }
-    }
-
-    // Ensure apiKey is assigned before proceeding
     if (apiKey === undefined) {
       throw new Error(
         `Failed to obtain API key for provider: ${provider}. Please configure authentication.`,
@@ -4703,6 +4573,7 @@ ${last15.substring(0, 8_000)}`;
       model,
       apiKey,
       authType,
+      usePaprProxy,
       systemPrompt: `${this.systemPrompt}\n\n# Isolated Job Run\n- Session: ${chatId}\n- Keep output concise and actionable.`,
       contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
@@ -4841,30 +4712,31 @@ ${last15.substring(0, 8_000)}`;
         if (!retryWithApiKey) throw err;
       }
 
-      // Retry with API key if OAuth rate limit was hit
+      // Retry with API key or Papr proxy if OAuth rate limit was hit
       if (retryWithApiKey && authType === "oauth") {
-        // Try to get API key
-        const authProvider = provider === "openai-codex" ? "openai" : provider;
-        const keyName =
-          authProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-        const keys = await getApiKeys([keyName]);
+        const { resolveOAuthRateLimitRetryCredentials } =
+          await import("../utils/resolveJobSessionAuth.js");
+        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
+          provider,
+          model,
+        );
 
-        if (!keys[keyName]) {
+        if (!retryCreds) {
           throw new Error(
-            `OAuth rate limit reached and no API key available for ${provider}. ` +
-              `Add an API key in Settings or wait for rate limit to reset.`,
+            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
+              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
           );
         }
 
         console.log(
-          `[AgentService] Retrying with API key for ${provider} (OAuth rate limited)`,
+          `[AgentService] Retrying after OAuth rate limit for ${provider} (apiKey=${retryCreds.authType === "apiKey"} paprProxy=${Boolean(retryCreds.usePaprProxy)})`,
         );
 
-        // Retry with API key
         const apiKeyConfig: AgentConfigInternal = {
           ...config,
-          apiKey: keys[keyName],
-          authType: "apiKey",
+          apiKey: retryCreds.apiKey,
+          authType: retryCreds.authType,
+          usePaprProxy: retryCreds.usePaprProxy,
         };
 
         // Create new chatId for retry to avoid session cache
@@ -5198,123 +5070,28 @@ ${last15.substring(0, 8_000)}`;
 
     const chatId = `job:${input.jobId}:${input.runId}`;
 
-    // Use getProviderAuth for openai/anthropic (handles OAuth + API key)
-    let apiKey: string | undefined;
-    let authType: "oauth" | "apiKey" | undefined;
-    const { getProviderAuth, getApiKeys } =
-      await import("../utils/keyResolver.js");
+    const sessionAuth = await (
+      await import("../utils/resolveJobSessionAuth.js")
+    ).resolveJobSessionAuth({
+      provider,
+      model: modelId,
+      requestedModel: input.model,
+    });
+    provider = sessionAuth.provider;
+    modelId = sessionAuth.model;
+    let apiKey = sessionAuth.apiKey;
+    let authType = sessionAuth.authType;
+    let usePaprProxy = sessionAuth.usePaprProxy;
 
-    // Check if the specified provider is available
-    let authCheckFailed = false;
-    let originalProvider = provider;
-
-    if (
-      provider === "openai" ||
-      provider === "openai-codex" ||
-      provider === "anthropic"
-    ) {
-      const authProvider = provider === "openai-codex" ? "openai" : provider;
-      const auth = await getProviderAuth(authProvider);
-      if (!auth) {
-        authCheckFailed = true;
-        console.warn(
-          `[AgentService] No authentication found for specified provider (${provider}). Falling back to default provider...`,
-        );
-      } else {
-        apiKey = auth.type === "oauth" ? auth.token : auth.key;
-        authType = auth.type;
-      }
-    } else {
-      const keyName =
-        provider === "google" ? "GOOGLE_API_KEY" : "OPENAI_API_KEY";
-      const keys = await getApiKeys([keyName]);
-      apiKey = keys[keyName];
-      if (!apiKey) {
-        authCheckFailed = true;
-        console.warn(
-          `[AgentService] Missing API key for specified provider (${provider}): ${keyName}. Falling back to default provider...`,
-        );
-      }
-    }
-
-    // If auth check failed, fall back to default provider
-    if (authCheckFailed) {
-      // Try smart fallback based on original model capabilities
-      const { getBestFallbackModel } =
-        await import("../utils/smartFallback.js");
-      const { getAvailableProviders } =
-        await import("../utils/defaultProvider.js");
-
-      const available = await getAvailableProviders();
-      const fallback = await getBestFallbackModel(
-        originalProvider,
-        input.model || "unknown",
-        available,
-      );
-
-      if (fallback) {
-        provider = fallback.provider;
-        modelId = fallback.model;
-        console.log(
-          `[AgentService] Smart fallback: ${originalProvider}/${input.model || "default"} → ${provider}/${modelId} (capability-matched)`,
-        );
-      } else {
-        // No smart fallback available, use basic default
-        const { getDefaultProviderAndModel } =
-          await import("../utils/defaultProvider.js");
-        const defaults = await getDefaultProviderAndModel();
-        provider = defaults.provider;
-        modelId = defaults.model;
-        console.log(
-          `[AgentService] Falling back from ${originalProvider} to ${provider}/${modelId}`,
-        );
-      }
-
-      // Re-check auth for fallback provider
-      if (provider === "openai" || provider === "anthropic") {
-        const auth = await getProviderAuth(provider);
-        if (!auth) {
-          throw new Error(
-            `No authentication found for fallback provider (${provider}). Please configure at least one provider.`,
-          );
-        }
-        apiKey = auth.type === "oauth" ? auth.token : auth.key;
-        authType = auth.type;
-      } else if (provider === "google") {
-        const keys = await getApiKeys(["GOOGLE_API_KEY"]);
-        apiKey = keys.GOOGLE_API_KEY;
-        if (!apiKey) {
-          throw new Error(
-            `Missing API key for fallback provider: GOOGLE_API_KEY`,
-          );
-        }
-      } else if (provider === "ollama") {
-        // Ollama doesn't need auth
-        apiKey = ""; // Empty string for Ollama
-      } else {
-        // Unexpected provider without auth setup
-        throw new Error(
-          `No authentication configuration found for fallback provider: ${provider}`,
-        );
-      }
-    }
-
-    // Ensure apiKey is assigned before proceeding
-    if (apiKey === undefined) {
-      throw new Error(
-        `Failed to obtain API key for provider: ${provider}. Please configure authentication.`,
-      );
-    }
-
-    // When OAuth: AI SDK generateObject fails (Platform API needs different auth).
-    // Use streamAgent (pi-ai path) with JSON prompt and parse result.
-    const usePiAi =
+    // OAuth and Papr proxy both need streamAgent — generateObject hits Platform APIs directly.
+    const useOAuthPiAi =
       (provider === "openai" ||
         provider === "openai-codex" ||
         provider === "anthropic") &&
       authType === "oauth";
+    const useStreamJsonPath = useOAuthPiAi || Boolean(usePaprProxy);
 
-    if (usePiAi) {
+    if (useStreamJsonPath) {
       const schemaStr = JSON.stringify(input.outputSchema, null, 2);
       const jsonPrompt = `${input.prompt}\n\nRespond with ONLY valid JSON matching this schema (no markdown, no explanation):\n${schemaStr}`;
       const config: AgentConfigInternal = {
@@ -5322,6 +5099,7 @@ ${last15.substring(0, 8_000)}`;
         model: modelId,
         apiKey,
         authType,
+        usePaprProxy,
         systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
         contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
       };
@@ -5363,27 +5141,65 @@ ${last15.substring(0, 8_000)}`;
         if (!retryWithApiKey) throw err;
       }
 
-      // Retry with API key if OAuth rate limit was hit
       if (retryWithApiKey) {
-        const authProvider = provider === "openai-codex" ? "openai" : provider;
-        const keyName =
-          authProvider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
-        const keys = await getApiKeys([keyName]);
-
-        if (!keys[keyName]) {
+        const { resolveOAuthRateLimitRetryCredentials } =
+          await import("../utils/resolveJobSessionAuth.js");
+        const retryCreds = await resolveOAuthRateLimitRetryCredentials(
+          provider,
+          modelId,
+        );
+        if (!retryCreds) {
           throw new Error(
-            `OAuth rate limit reached and no API key available for ${provider}. ` +
-              `Add an API key in Settings or wait for rate limit to reset.`,
+            `OAuth rate limit reached and no API key or Papr proxy available for ${provider}. ` +
+              `Add an API key in Settings, sign in with Papr, or wait for rate limit to reset.`,
           );
         }
-
+        apiKey = retryCreds.apiKey;
+        authType = retryCreds.authType;
+        usePaprProxy = retryCreds.usePaprProxy;
+        if (retryCreds.usePaprProxy) {
+          const schemaStr = JSON.stringify(input.outputSchema, null, 2);
+          const jsonPrompt = `${input.prompt}\n\nRespond with ONLY valid JSON matching this schema (no markdown, no explanation):\n${schemaStr}`;
+          const retryConfig: AgentConfigInternal = {
+            provider,
+            model: modelId,
+            apiKey,
+            authType,
+            usePaprProxy,
+            systemPrompt: `${this.systemPrompt}\n\n# Structured Output Job\n- Session: ${chatId}\n- Return ONLY valid JSON matching the requested schema. No markdown code blocks, no explanation.`,
+            contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
+          };
+          let retryText = "";
+          for await (const chunk of this.streamAgent(
+            `${chatId}-retry`,
+            jsonPrompt,
+            retryConfig,
+            { maxSteps: 10 },
+          )) {
+            if (chunk.type === "error") {
+              const errMsg =
+                (chunk.payload as { error?: string })?.error ??
+                "Model API error";
+              throw new Error(
+                `Structured job model error (${provider}/${modelId}) after Papr proxy retry: ${errMsg}`,
+              );
+            }
+            if (chunk.type === "text-delta") {
+              const payload = chunk.payload as { text?: string };
+              if (typeof payload.text === "string") retryText += payload.text;
+            }
+          }
+          const parsed = this.parseJsonFromResponse(retryText);
+          await gradeRunSearchOutcomes({
+            runKey: chatId,
+            answerText: JSON.stringify(parsed),
+            surface: "job:structured",
+          });
+          return { chatId, object: parsed };
+        }
         console.log(
           `[AgentService] Retrying structured job with API key for ${provider} (OAuth rate limited)`,
         );
-
-        // Fall through to API key path below (generateObject)
-        apiKey = keys[keyName];
-        authType = "apiKey";
       } else {
         // No retry needed, parse and return
         const parsed = this.parseJsonFromResponse(text);

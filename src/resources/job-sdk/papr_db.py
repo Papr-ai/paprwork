@@ -63,6 +63,11 @@ import urllib.request
 _BUSY_TIMEOUT_S = 10.0
 _READ_RETRIES = 3
 
+# The gateway answers 503 for transient replica state (sync lane busy, a Turso
+# hiccup during reopen, a lock). Back off client-side — the sleep happens here,
+# outside the gateway's per-database lane, so waiting holds no lock. Total ~3.5s.
+_TRANSIENT_RETRY_DELAYS_S = (0.5, 1.0, 2.0)
+
 __all__ = ["connect", "query", "execute", "PaprDbError"]
 
 _WRITE_VERBS = ("INSERT", "UPDATE", "DELETE", "REPLACE", "UPSERT")
@@ -155,7 +160,41 @@ def _proxy_post(action, sql, params, alias=""):
     return _send(endpoint, payload, headers, action)
 
 
+def _is_retryable(action, code, body):
+    """503 = transient. Writes are only retried when the failure is known to
+    precede the commit: a TIMED OUT write may still have committed, and a
+    "push failed" error is raised after the local commit — retrying either
+    would apply the statement twice (a duplicate INSERT)."""
+    if code != 503:
+        return False
+    lower = body.lower()
+    if action == "write" and ("timed out" in lower or "push failed" in lower):
+        return False
+    return True
+
+
 def _send(endpoint, payload, headers, action, _retried=False):
+    attempt = 0
+    while True:
+        try:
+            return _send_once(endpoint, payload, headers, action, _retried)
+        except _TransientGatewayError as e:
+            if attempt >= len(_TRANSIENT_RETRY_DELAYS_S):
+                raise PaprDbError(
+                    "gateway %s failed (503) after %d attempts: %s"
+                    % (action, attempt + 1, e.body[:300])
+                )
+            time.sleep(_TRANSIENT_RETRY_DELAYS_S[attempt])
+            attempt += 1
+
+
+class _TransientGatewayError(Exception):
+    def __init__(self, body):
+        super().__init__(body)
+        self.body = body
+
+
+def _send_once(endpoint, payload, headers, action, _retried=False):
     req = urllib.request.Request(
         endpoint, data=json.dumps(payload).encode(), headers=headers
     )
@@ -164,6 +203,8 @@ def _send(endpoint, payload, headers, action, _retried=False):
             return json.load(resp)
     except urllib.error.HTTPError as e:
         body = e.read().decode()
+        if _is_retryable(action, e.code, body):
+            raise _TransientGatewayError(body)
         # The job env alias is the database LABEL ("linkedin-outreach"); the
         # app's sourceId is the ATTACHMENT alias ("outreach"). They are
         # different namespaces and often differ. The gateway's 404 names the
@@ -176,7 +217,7 @@ def _send(endpoint, payload, headers, action, _retried=False):
             ]
             if len(available) == 1:
                 payload["sourceId"] = available[0]
-                return _send(endpoint, payload, headers, action, _retried=True)
+                return _send_once(endpoint, payload, headers, action, _retried=True)
         raise PaprDbError(
             "gateway %s failed (%s): %s" % (action, e.code, body[:300])
         )

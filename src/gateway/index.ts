@@ -1507,7 +1507,9 @@ async function startGateway(): Promise<void> {
           return;
         }
         console.error("[Gateway] /api/db/write error:", err);
-        res.status(e.status ?? 500).json({ error: e.message });
+        const { httpStatusForDbRouteError } =
+          await import("./services/tursoReplica/replicaSchemaQueryErrorMessage.js");
+        res.status(httpStatusForDbRouteError(e)).json({ error: e.message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
@@ -1760,7 +1762,9 @@ async function startGateway(): Promise<void> {
       } catch (err) {
         const e = err as Error & { status?: number };
         console.error("[Gateway] /api/db/exec error:", err);
-        res.status(e.status ?? 500).json({ error: e.message });
+        const { httpStatusForDbRouteError } =
+          await import("./services/tursoReplica/replicaSchemaQueryErrorMessage.js");
+        res.status(httpStatusForDbRouteError(e)).json({ error: e.message });
       }
     });
     // ─────────────────────────────────────────────────────────────────────────
@@ -2959,10 +2963,16 @@ async function startGateway(): Promise<void> {
         const parsed = bodyText
           ? (JSON.parse(bodyText) as Record<string, unknown>)
           : {};
-        const { readSourceAppIdFromApproveBody, followUpContributeApprove } =
-          await import("./services/contributeApproveFollowUp.js");
+        const {
+          readSourceAppIdFromApproveBody,
+          readInstalledAppIdFromResolveBody,
+          followUpContributeApprove,
+        } = await import("./services/contributeApproveFollowUp.js");
         const sourceAppId = readSourceAppIdFromApproveBody(parsed);
-        const pullResult = await followUpContributeApprove(sourceAppId);
+        const pullResult = await followUpContributeApprove(
+          sourceAppId,
+          readInstalledAppIdFromResolveBody(parsed),
+        );
 
         res.json({ ...parsed, pull: pullResult, sourceAppId });
       } catch (err) {
@@ -3037,6 +3047,10 @@ async function startGateway(): Promise<void> {
               ? mergeCloudActingUserBody(req.body as Record<string, unknown>)
               : req.body;
           fetchOpts.body = JSON.stringify(payload);
+          // Some mutating routes (e.g. change request reject) read the acting user
+          // from the query string, not the body. Without it the server resolves the
+          // API key's default user and owner-scoped lookups 404 ("not found").
+          proxiedPath = appendCloudActingUserQuery(cloudPath);
         } else {
           proxiedPath = appendCloudActingUserQuery(cloudPath);
         }

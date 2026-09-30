@@ -80,6 +80,8 @@ export class LocalStorageProvider implements IStorageProvider {
   private db!: Database.Database;
   private dbReady = false;
   private readPool?: DbQueryPool;
+  // In-flight reads only, never a cache: retries share work even if the UI timed out.
+  private turnUsageReads = new Map<string, ReturnType<typeof readTurnUsageAsync>>();
   private dbPath: string;
   private exporter: ChatExporter;
   private contextEfficiencyCache: {
@@ -1160,10 +1162,18 @@ export class LocalStorageProvider implements IStorageProvider {
         totals: { ...EMPTY_CHAT_USAGE_TOTALS },
       };
     }
-    return readTurnUsageAsync(
+    const pending = this.turnUsageReads.get(chatId);
+    if (pending) return pending;
+    const read = readTurnUsageAsync(
       (sql, params) => this.readRows("getTurnUsage", sql, params),
       chatId,
     );
+    this.turnUsageReads.set(chatId, read);
+    try {
+      return await read;
+    } finally {
+      if (this.turnUsageReads.get(chatId) === read) this.turnUsageReads.delete(chatId);
+    }
   }
 
   async readOffloadedToolResult(
@@ -1899,6 +1909,7 @@ export class LocalStorageProvider implements IStorageProvider {
    */
   close(): void {
     this.dbReady = false;
+    this.turnUsageReads.clear();
     this.readPool?.terminate();
     this.readPool = undefined;
     if (this.db) {

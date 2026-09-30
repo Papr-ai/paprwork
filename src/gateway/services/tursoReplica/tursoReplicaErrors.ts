@@ -57,3 +57,25 @@ export function isSqliteBusyError(error: unknown): boolean {
 
   return hasBusyCode || isReplicaBusyError(error);
 }
+
+/**
+ * The remote (Turso) refused or could not be reached: an HTTP status from the
+ * sync protocol, or a fetch that never completed. Nothing local was touched —
+ * the engine fails these before applying anything — so the open handle is
+ * still good and closing it only forces the next caller to reopen, which may
+ * itself need the same failing remote (bootstrap-pending replicas).
+ */
+export function isReplicaRemoteHttpError(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  const lower = msg.toLowerCase();
+  return (
+    lower.includes("remote server returned an error") ||
+    lower.includes("unexpected status code") ||
+    lower.includes("fetch error") ||
+    lower.includes("fetch failed") ||
+    lower.includes("econnrefused") ||
+    lower.includes("econnreset") ||
+    lower.includes("enotfound") ||
+    lower.includes("und_err_connect_timeout")
+  );
+}

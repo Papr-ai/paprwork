@@ -12,6 +12,7 @@
  */
 
 import type { AIModel } from "../constants/models";
+import { AUTO_MODEL_ID } from "../constants/modelPicker";
 import {
   DEFAULT_CONTEXT_LIMIT,
   contextOptionsForModel,
@@ -21,7 +22,10 @@ import {
   modelSupportsThinkingToggle,
   type EffortLevel,
 } from "../constants/modelControls";
+import type { AuthStatus } from "../hooks/useAuthStatus";
 import type { ChatModelSettings } from "./chatModelSettings";
+import { AUTO_MODEL_ID } from "../constants/modelPicker";
+import type { AuthStatus } from "../hooks/useAuthStatus";
 
 export interface ResolvedModelSettings {
   thinking: boolean;
@@ -75,10 +79,18 @@ export function resolveModelSettings(
 
   let effort: EffortLevel | undefined;
   if (modelSupportsEffort(model)) {
-    effort =
-      requestedEffort && allowedEfforts.includes(requestedEffort)
-        ? requestedEffort
-        : modelDefaultEffort;
+    if (requestedEffort && allowedEfforts.includes(requestedEffort)) {
+      effort = requestedEffort;
+    } else if (
+      modelDefaultEffort &&
+      allowedEfforts.includes(modelDefaultEffort)
+    ) {
+      effort = modelDefaultEffort;
+    } else {
+      // Adaptive Claude models ship without a packaged default effort id; the
+      // gateway runs them at medium when unset — match that so Effort is visible.
+      effort = allowedEfforts.includes("medium") ? "medium" : allowedEfforts[0];
+    }
   }
 
   const contextOptions = contextOptionsForModel(model);

@@ -10,7 +10,11 @@ export function isReplicaSchemaMismatchUserError(message: string): boolean {
   return message.startsWith("Schema mismatch for ");
 }
 
-/** HTTP status for mini-app `/api/db/query` failures (500 = fix SQL/migrations, not retry). */
+/**
+ * HTTP status for replica-backed DB failures (500 = fix SQL/migrations, not retry;
+ * 503 = transient sync/lock state — callers such as papr_db retry with backoff).
+ * Used by /api/db/query, /api/db/write, /api/db/exec and /internal/backend-db.
+ */
 export function httpStatusForMiniAppDbQueryError(message: string): 500 | 503 {
   if (isReplicaSchemaMismatchUserError(message)) {
     return 500;
@@ -25,7 +29,11 @@ export function httpStatusForMiniAppDbQueryError(message: string): 500 | 503 {
     message.includes("Database sync in progress") ||
     message.includes("Schema update pending") ||
     lowerMessage.includes("no such table") ||
-    lowerMessage.includes("sync engine operation failed")
+    lowerMessage.includes("sync engine operation failed") ||
+    lowerMessage.includes("sync_engine is busy") ||
+    lowerMessage.includes("replica operation timed out") ||
+    lowerMessage.includes("database is locked") ||
+    lowerMessage.includes("remote server returned an error")
   ) {
     return 503;
   }
@@ -100,5 +108,16 @@ export function buildReplicaSchemaDriftFailureError(options: {
   return new Error(
     `Schema update pending for ${label}. Local replica is catching up — retry in a moment. ` +
       `Original: ${localDetail}.`,
+  );
+}
+
+/** Status for a DB route error: explicit `status` wins, else transient → 503, else 500. */
+export function httpStatusForDbRouteError(error: unknown): number {
+  const e = error as { status?: unknown; message?: unknown };
+  if (typeof e?.status === "number") {
+    return e.status;
+  }
+  return httpStatusForMiniAppDbQueryError(
+    typeof e?.message === "string" ? e.message : String(error),
   );
 }

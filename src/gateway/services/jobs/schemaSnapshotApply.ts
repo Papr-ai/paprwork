@@ -49,8 +49,12 @@ export async function planSnapshotInstall(
         await substituteMigrationPlaceholders(snapshot.seed, migrationRoot),
       )
     : [];
+  // Snapshots published before the builder filtered engine-private objects
+  // can still carry them; drop at apply time so those installs work too.
   const schema = await Promise.all(
-    snapshot.schema.map((sql) => substituteMigrationPlaceholders(sql, migrationRoot)),
+    snapshot.schema
+      .filter((sql) => !isInternalSchemaStatement(sql))
+      .map((sql) => substituteMigrationPlaceholders(sql, migrationRoot)),
   );
   // Row writes carried from covered migrations (e.g. singleton seeds), in
   // migration order, after the DDL and before the publisher's seed.sql.
@@ -65,6 +69,15 @@ export async function planSnapshotInstall(
     coveredFiles,
     coveredIds: coveredFiles.map((file) => file.replace(/\.sql$/, "")),
   };
+}
+
+/** CREATE TABLE/INDEX/TRIGGER/VIEW whose object or target table is engine-internal. */
+export function isInternalSchemaStatement(sql: string): boolean {
+  const m = sql.match(
+    /^\s*CREATE\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|TRIGGER|VIEW)\s+(?:IF\s+NOT\s+EXISTS\s+)?["`\[]?([\w$]+)["`\]]?(?:[\s\S]*?\bON\s+["`\[]?([\w$]+))?/i,
+  );
+  if (!m) return false;
+  return isInternalSchemaObject(m[1]) || (m[2] ? isInternalSchemaObject(m[2]) : false);
 }
 
 /** Table names from sqlite_master → true when no app table exists yet. */

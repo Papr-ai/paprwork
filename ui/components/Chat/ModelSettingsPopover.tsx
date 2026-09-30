@@ -240,7 +240,7 @@ export function ModelSettingsPopover({
               onOpen={() => setView("context")}
             />
           )}
-          {showEffort && resolved.effort && (
+          {showEffort && resolved.effort !== undefined && (
             <ValueRow
               label="Effort"
               value={EFFORT_LABELS[resolved.effort]}

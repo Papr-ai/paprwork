@@ -25,6 +25,22 @@ export type ArchitectTier = "full" | "lite";
 export const ARCHITECT_TRIAGE_TOOL_ID = "architect_triage";
 export const ARCHITECT_TRIAGE_MARKER = "architectTriageTier";
 
+/** Live per-chat record of the latest triage tier (latest wins). */
+const liveTriageTierByChat = new Map<string, ArchitectTier>();
+
+export function recordArchitectTriageTier(chatId: string, tier: ArchitectTier): void {
+  liveTriageTierByChat.set(chatId, tier);
+}
+
+export function getRecordedArchitectTriageTier(chatId: string): ArchitectTier | null {
+  return liveTriageTierByChat.get(chatId) ?? null;
+}
+
+export function clearRecordedArchitectTriageTier(chatId?: string): void {
+  if (chatId) liveTriageTierByChat.delete(chatId);
+  else liveTriageTierByChat.clear();
+}
+
 export const LITE_MIN_PROBABILITY = 0.75;
 export const RISK_MAX_PROBABILITY = 0.5;
 const STATE_MAX_CHARS = 4_000;

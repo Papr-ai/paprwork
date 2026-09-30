@@ -57,7 +57,7 @@ const installCloudAppSchema = z.object({
     .string()
     .optional()
     .describe(
-      "From list_community_apps result (e.g. team, public_read). Required for correct fork vs collaborate rules.",
+      'From the list_community_apps result (e.g. "team", "public_read"). REQUIRED for mode "track" with catalogScope "team": collaborate is refused without it. If the app is not in the listing, pass "team" only when you know it is team-shared (get_cloud_app_publish loginAccess=team).',
     ),
   shareToken: z
     .string()
@@ -92,6 +92,12 @@ const checkContributionsSchema = z.object({
 const resolveChangeSchema = z.object({
   requestId: z.string().uuid(),
   action: z.enum(["approve", "reject"]),
+  mergedManually: z
+    .boolean()
+    .optional()
+    .describe(
+      "approve only. true = you already merged these changes into the owner's app by hand (conflict resolution) AND published — closes the PR and marks the proposal accepted instead of merging it.",
+    ),
 });
 
 const listCommunityAppsSchema = z.object({
@@ -329,6 +335,7 @@ Returns pending/preparing counts and request summaries. If PRs exist, use ${CLOU
           requests: pending.map((r) => ({
             requestId: r.id,
             status: r.status,
+            mergeState: r.mergeState ?? null,
             title: r.title,
             sourceSlug: r.sourceSlug,
             createdAt: r.createdAt,
@@ -388,7 +395,9 @@ export const listCloudAppPrsTool = createTool({
 
 export const resolveCloudAppPrTool = createTool({
   id: CLOUD_APP_PR_TOOL_IDS.resolve,
-  description: `Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with ${CLOUD_APP_PR_TOOL_IDS.review}.`,
+  description: `Approve or reject an incoming contribute-back GitHub PR (OWNER ONLY). Approve merges on GitHub then runs Get updates (pullAppFromCloud) for the source app — do not push local over the merge. Review first with ${CLOUD_APP_PR_TOOL_IDS.review}.
+
+If the proposal has mergeState "conflict" (it was based on an older version and overlaps newer edits), a plain approve fails. Either reject, or resolve it yourself: read the owner's current files (read_file on the local app) and the proposal's versions (${CLOUD_APP_PR_TOOL_IDS.readFile}), write a merged version that keeps both sides' intent, show the owner the result, and only after they confirm publish (push_cloud_sync({ appId })) and call this tool with { action: "approve", mergedManually: true }.`,
   inputSchema: resolveChangeSchema,
   execute: async (input) => {
     const args =
@@ -399,24 +408,34 @@ export const resolveCloudAppPrTool = createTool({
       await requirePaprCloudLogin();
       const path =
         args.action === "approve"
-          ? `/v1/cloud/apps/changes/${args.requestId}/approve`
+          ? `/v1/cloud/apps/changes/${args.requestId}/approve${
+              args.mergedManually ? "?mergedManually=true" : ""
+            }`
           : `/v1/cloud/apps/changes/${args.requestId}/reject`;
       const response = await cloudApiFetch(path, { method: "POST" });
       if (!response.ok) {
         const body = await response.text();
+        // Keep the full structured detail (code, githubMessage, mergeableState,
+        // nextSteps) so the agent can decide: decline, request update, or merge.
         throw new Error(
-          `Resolve change failed (${response.status}): ${body.slice(0, 200)}`,
+          `Resolve change failed (${response.status}): ${body.slice(0, 1500)}`,
         );
       }
       const data = (await response.json()) as Record<string, unknown>;
 
       if (args.action === "approve") {
-        const { readSourceAppIdFromApproveBody, followUpContributeApprove } =
-          await import(
-            "../../gateway/services/contributeApproveFollowUp.js"
-          );
+        const {
+          readSourceAppIdFromApproveBody,
+          readInstalledAppIdFromResolveBody,
+          followUpContributeApprove,
+        } = await import(
+          "../../gateway/services/contributeApproveFollowUp.js"
+        );
         const sourceAppId = readSourceAppIdFromApproveBody(data);
-        const pull = await followUpContributeApprove(sourceAppId);
+        const pull = await followUpContributeApprove(
+          sourceAppId,
+          readInstalledAppIdFromResolveBody(data),
+        );
         return {
           success: true,
           data: { ...data, pull, sourceAppId },
@@ -428,9 +447,14 @@ export const resolveCloudAppPrTool = createTool({
       if (args.action === "reject") {
         const {
           notifyCloudChangeRequestsStale,
+          notifyContributorProposalResolved,
+          readInstalledAppIdFromResolveBody,
           readSourceAppIdFromApproveBody,
         } = await import("../../gateway/services/contributeApproveFollowUp.js");
         notifyCloudChangeRequestsStale(readSourceAppIdFromApproveBody(data));
+        notifyContributorProposalResolved(
+          readInstalledAppIdFromResolveBody(data),
+        );
       }
 
       return {

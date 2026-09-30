@@ -20,6 +20,9 @@ export interface CloudAppChangeRequestDetail {
   stagedPaths?: string[] | null;
   createdAt?: string;
   resolvedAt?: string | null;
+  /** Pending only: "clean" | "conflict" | "unknown" (server GitHub recheck). */
+  mergeState?: string | null;
+  supersededBy?: string | null;
 }
 
 function normalizeDetail(raw: Record<string, unknown>): CloudAppChangeRequestDetail | null {
@@ -50,6 +53,8 @@ function normalizeDetail(raw: Record<string, unknown>): CloudAppChangeRequestDet
     stagedPaths,
     createdAt: typeof raw.createdAt === "string" ? raw.createdAt : undefined,
     resolvedAt: typeof raw.resolvedAt === "string" ? raw.resolvedAt : null,
+    mergeState: typeof raw.mergeState === "string" ? raw.mergeState : null,
+    supersededBy: typeof raw.supersededBy === "string" ? raw.supersededBy : null,
   };
 }
 

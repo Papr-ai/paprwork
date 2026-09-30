@@ -6,6 +6,7 @@ import { useEffect, useMemo, useState } from "react";
 import {
   buildChangeRequestResolveAgentPrompt,
   buildPrReviewAgentPrompt,
+  buildProposalConflictMergeAgentPrompt,
   openCloudSyncAgentChat,
 } from "../../utils/openCloudSyncAgentChat";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../../utils/contributionPanelCopy";
 import {
   buildChangeRequestSummaryParts,
+  changeRequestNeedsUpdate,
   changeRequestStagedPaths,
   changeRequestStatusLabel,
   listActionableIncomingChangeRequests,
@@ -115,7 +117,7 @@ export function CloudChangeRequestsPanel({
         return next;
       });
     } catch (err) {
-      const message = (err as Error).message.slice(0, 200);
+      const message = (err as Error).message.slice(0, 400);
       openCloudSyncAgentChat(
         buildChangeRequestResolveAgentPrompt({
           action,
@@ -174,6 +176,14 @@ export function CloudChangeRequestsPanel({
                     {proposedBy ? (
                       <p className="share-sheet__changes-contributor">{proposedBy}</p>
                     ) : null}
+                    {changeRequestNeedsUpdate(req) ? (
+                      <p className="share-sheet__error" role="status">
+                        Needs update — it was based on an older version and
+                        changes the same lines as edits you accepted since. The
+                        contributor has been asked to update it, or you can
+                        merge it with the agent.
+                      </p>
+                    ) : null}
                     <div className="share-sheet__changes-summary">
                       <p className="share-sheet__changes-summary-label">Summary</p>
                       {summary.narrative ? (
@@ -227,15 +237,37 @@ export function CloudChangeRequestsPanel({
                       >
                         Review with agent
                       </button>
-                      <button
-                        type="button"
-                        className="share-sheet__primary-btn"
-                        disabled={busy || working}
-                        title="Merge this proposal into your app"
-                        onClick={() => void resolve(req, "approve")}
-                      >
-                        {working ? "Accepting…" : "Accept"}
-                      </button>
+                      {changeRequestNeedsUpdate(req) ? (
+                        <button
+                          type="button"
+                          className="share-sheet__primary-btn"
+                          disabled={busy || working}
+                          title="It overlaps changes you accepted since. The agent drafts a combined version for you to approve."
+                          onClick={() =>
+                            openCloudSyncAgentChat(
+                              buildProposalConflictMergeAgentPrompt({
+                                sourceAppId: req.sourceAppId,
+                                requestId: req.id,
+                                title: req.title,
+                                description: req.description,
+                                stagedPaths: changeRequestStagedPaths(req),
+                              }),
+                            )
+                          }
+                        >
+                          Merge with agent
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          className="share-sheet__primary-btn"
+                          disabled={busy || working}
+                          title="Merge this proposal into your app"
+                          onClick={() => void resolve(req, "approve")}
+                        >
+                          {working ? "Accepting…" : "Accept"}
+                        </button>
+                      )}
                       <button
                         type="button"
                         className="share-sheet__secondary-btn"

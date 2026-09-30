@@ -111,3 +111,25 @@ describe("registration", () => {
     expect(MEASURED_CORE_TOOL_IDS).toContain("architect_triage");
   });
 });
+
+describe("live triage record (gate does not depend on persisted messages)", () => {
+  test("latest recorded tier wins per chat", async () => {
+    const m = await import("../src/core/utils/architectTriage.js");
+    m.clearRecordedArchitectTriageTier();
+    expect(m.getRecordedArchitectTriageTier("c1")).toBeNull();
+    m.recordArchitectTriageTier("c1", "lite");
+    expect(m.getRecordedArchitectTriageTier("c1")).toBe("lite");
+    m.recordArchitectTriageTier("c1", "full");
+    expect(m.getRecordedArchitectTriageTier("c1")).toBe("full");
+    expect(m.getRecordedArchitectTriageTier("c2")).toBeNull();
+    m.clearRecordedArchitectTriageTier();
+  });
+
+  test("string context param does not crash triage input handling", async () => {
+    const { architectTriageTool } = await import("../src/core/tools/architectTriage.js");
+    const res: any = await (architectTriageTool as any).execute({ request: "tiny h1 page", context: "none" });
+    expect(res.success).toBe(true);
+    expect(["lite", "full"]).toContain(res.data.tier);
+    expect(res.data.jevError ?? "").not.toContain("slice");
+  });
+});

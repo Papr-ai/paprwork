@@ -21,6 +21,31 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** One retry after 400ms, on 5xx/429 responses only. */
+const TRANSIENT_STATUS_RETRY_DELAY_MS = 400;
+
+/**
+ * Absorb a single transient Turso 5xx/429 inside the engine.
+ *
+ * Kept deliberately small: this runs inside the replica's sync lane, so every
+ * retry delays reads and writes queued on that path. Thrown fetch errors
+ * (offline, DNS) are NOT retried — offline is common and waiting would only
+ * hold the lane; the push scheduler already retries those on its own clock.
+ * Not the SDK's retryFetch for that reason (it retries thrown errors, 3x).
+ */
+export async function retryTransientTursoStatus(
+  input: Parameters<typeof fetch>[0],
+  init?: Parameters<typeof fetch>[1],
+): Promise<Response> {
+  const first = await fetch(input, init);
+  if (first.status < 500 && first.status !== 429) {
+    return first;
+  }
+  await first.body?.cancel().catch(() => undefined);
+  await sleep(TRANSIENT_STATUS_RETRY_DELAY_MS);
+  return fetch(input, init);
+}
+
 export async function connectTursoReplica(
   options: TursoReplicaConnectOptions,
 ): Promise<Database> {
@@ -31,6 +56,7 @@ export async function connectTursoReplica(
     clientName: options.clientName ?? "paprwork-desktop",
     bootstrapIfEmpty: options.bootstrapIfEmpty ?? true,
     remoteWritesExperimental: options.remoteWritesExperimental ?? false,
+    fetch: retryTransientTursoStatus,
   };
 
   let lastError: unknown;

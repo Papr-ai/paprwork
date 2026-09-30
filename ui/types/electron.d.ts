@@ -334,7 +334,8 @@ export interface ElectronAPI {
       apiKey?: string;
       error?: string;
     }>;
-    onNamespaceChanged: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;
+    /** Returns a disposer that removes the subscription. */
+    onNamespaceChanged: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => () => void;
     removeNamespaceChangedListener: (callback: (data: { namespaceId: string; namespaceName: string }) => void) => void;
     listOrganizations: () => Promise<{
       success: boolean;
@@ -370,6 +371,7 @@ export interface ElectronAPI {
       apiKey?: string;
       error?: string;
     }>;
+    /** Returns a disposer that removes the subscription. */
     onOrganizationChanged: (callback: (data: {
       organizationId: string;
       parseOrganizationId?: string;
@@ -377,7 +379,7 @@ export interface ElectronAPI {
       namespaceId?: string;
       namespaceName?: string;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
-    }) => void) => void;
+    }) => void) => () => void;
     removeOrganizationChangedListener: (callback: (data: {
       organizationId: string;
       parseOrganizationId?: string;

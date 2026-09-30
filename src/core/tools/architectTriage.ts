@@ -12,6 +12,7 @@ import {
   LITE_ARCHITECT_BRIEF,
   buildArchitectTriageJevInput,
   decideArchitectTier,
+  recordArchitectTriageTier,
 } from "../utils/architectTriage.js";
 
 const inputSchema = z.object({
@@ -37,7 +38,14 @@ export const architectTriageTool = createTool({
     "A lite pass unlocks create_app only; app-linked/scheduled/agent create_job still requires the full architect.",
   inputSchema,
   execute: async (input) => {
-    const args = ((input as { context?: Args }).context ?? input) as Args;
+    // Mastra may wrap tool input as { context: <args> }. Our own `context`
+    // param is a plain string, so only unwrap when it is an object with `request`.
+    const wrapped = (input as { context?: unknown }).context;
+    const args = (
+      wrapped && typeof wrapped === "object" && "request" in wrapped
+        ? wrapped
+        : input
+    ) as Args;
     const requestText = `${args.request}\n${args.context ?? ""}`;
     let answers: Record<string, unknown> | null = null;
     let jevError: string | undefined;
@@ -51,6 +59,11 @@ export const architectTriageTool = createTool({
     }
 
     const decision = decideArchitectTier(answers, requestText);
+    // Record live so the create_app gate does not depend on the (debounced)
+    // message checkpoint having persisted this tool result yet.
+    const { getCurrentChatId } = await import("./context.js");
+    const triageChatId = getCurrentChatId();
+    if (triageChatId) recordArchitectTriageTier(triageChatId, decision.tier);
     const { loadBrandDesignContext } = await import(
       "../../gateway/services/brandDesignContext.js"
     );
