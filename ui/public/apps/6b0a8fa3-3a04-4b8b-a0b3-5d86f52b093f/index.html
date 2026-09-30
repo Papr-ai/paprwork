@@ -1,23 +1,14 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>LinkedIn Outreach</title>
-<style>
-:root{--fg:#0b1220;--mut:#5b6475;--card:rgba(255,255,255,.72);--line:rgba(15,23,42,.08);--acc:#0a66ff}
-@media (prefers-color-scheme:dark){:root{--fg:#eef2f8;--mut:#9aa4b5;--card:rgba(22,27,38,.72);--line:rgba(255,255,255,.08)}}
-*{box-sizing:border-box}html,body{margin:0;height:100%;font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,sans-serif;color:var(--fg);background:transparent}
-.wrap{min-height:100%;display:grid;place-items:center;padding:32px}
-.card{max-width:520px;width:100%;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:40px 32px;backdrop-filter:blur(20px)}
-.orb{width:88px;height:88px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.9),rgba(10,102,255,.08) 60%);box-shadow:inset 0 0 0 1px var(--line),0 12px 32px rgba(10,102,255,.12)}
-.orb svg,.orb img{width:52px;height:52px}
-h1{font-size:24px;margin:0 0 8px;letter-spacing:-.01em}p{color:var(--mut);margin:0 0 20px}
-.tags{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:24px}.tags span{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--mut)}
-a.btn{display:inline-block;background:var(--acc);color:#fff;text-decoration:none;padding:10px 20px;border-radius:12px;font-weight:600}
-.by{font-size:12px;color:var(--mut);margin-top:16px}
-</style></head><body><div class="wrap"><div class="card">
-<div class="orb"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="loSend" x1="26" y1="30" x2="44" y2="12" gradientUnits="userSpaceOnUse"><stop stop-color="#00FEFE"/><stop offset="1" stop-color="#0161E0"/></linearGradient></defs><path d="M9 22 v16" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/><circle cx="9" cy="13.5" r="2.7" fill="currentColor"/><path d="M20 38 v-16" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/><path d="M20 28 c0 -4.5 3 -7 6.5 -7 c3.5 0 5.5 2.5 5.5 7 v10" stroke="currentColor" stroke-width="4.4" stroke-linecap="round"/><path d="M32 18 L43 7" stroke="url(#loSend)" stroke-width="4" stroke-linecap="round"/><path d="M35 7 h8 v8" stroke="url(#loSend)" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-<h1>LinkedIn Outreach</h1>
-<p>Run multi-step LinkedIn outreach campaigns with automated sequence sending, rate-limit safety, and human-approved replies. Uses your own Papr LinkedIn connection.</p>
-<div class="tags"><span>automation</span><span>gtm</span><span>linkedin</span><span>outreach</span></div>
-<a class="btn" href="https://apps.papr.ai/85ZIB7mD1V/linkedin-outreach/" target="_blank" rel="noopener">Open with your Papr account</a>
-<div class="by">Community app by Amir Kabbara · runs on your own data in Papr Work</div>
-</div></div></body></html>
+<title>LinkedIn Outreach — Demo</title><link rel="stylesheet" href="demo.css"></head>
+<body><div class="app">
+<header><div class="brand"><span class="mark">in<span>↗</span></span><b>LinkedIn Outreach</b><em>Demo workspace</em></div><a href="https://apps.papr.ai/85ZIB7mD1V/linkedin-outreach/" target="_blank">Install in Papr Work</a></header>
+<aside><section class="today"><small>TODAY</small><strong>12 actions</strong><p>Room for 13 more</p><label>Connections <span>12 / 25</span></label><i><b style="width:48%"></b></i><label>Messages <span>8 / 35</span></label><i><b style="width:23%"></b></i><footer>Next send window · 10:40 AM</footer></section>
+<nav><button data-view="recs">Recommendations <span>3</span></button><button data-view="people">All prospects</button><button class="on" data-view="campaign">Campaigns</button></nav>
+<div class="campaigns"><button class="active" data-campaign="enterprise"><b>Enterprise AI leaders</b><small>ACTIVE · 42 PROSPECTS</small></button><button data-campaign="founders"><b>Founder memory network</b><small>PAUSED · 18 PROSPECTS</small></button><button data-campaign="customers"><b>Customer champions</b><small>DRAFT · 11 PROSPECTS</small></button></div>
+<div class="user"><img src="/demo-media/me.jpg"><div><b>Maya Chen</b><small>Papr · Demo data</small></div></div></aside>
+<main><div class="top"><div><small id="status">ACTIVE CAMPAIGN</small><h1 id="title">Enterprise AI leaders</h1></div><div><button id="replies">Replies <span>3</span></button><button aria-label="Options">•••</button></div></div>
+<div class="tabs"><button class="on" data-tab="dashboard">Dashboard</button><button data-tab="messages">Messages</button><button data-tab="prospects">Prospects</button></div><div id="content"></div></main>
+<section class="drawer" id="drawer"><div class="drawer-head"><b>Reply Inbox</b><button id="close">×</button></div><div id="reply-list"></div></section>
+<div class="toast" id="toast"></div>
+</div><script src="demo.js"></script></body></html>
