@@ -18,6 +18,7 @@ import { MEETINGS_ICON, MEETINGS_DESC } from "./demoMeetingIcon";
 import { X_ACTION_ICON, X_ACTION_DESC } from "./demoXIcon";
 // Snapshot of the live Papr Cloud Community catalog (public_read apps).
 import demoCommunityCatalog from "./demoCommunityCatalog.json";
+import demoCommunityInstalled from "./demoCommunityInstalled.json";
 
 /** Real community apps embedded in the demo (served from /apps/{id}/). */
 import { DEFAULT_HOME_APP_ID } from "../../constants/defaultHomeApp";
@@ -63,16 +64,28 @@ const X_ACTION_APP = {
 const HOME_APP = {
   id: DEFAULT_HOME_APP_ID,
   type: "app",
-  title: "Home",
-  name: "Home",
-  description: "Your daily command center — priorities, your three goals and tasks.",
+  title: "Focus",
+  name: "Focus",
+  description: "What matters today — your three goals, daily brief and tasks.",
   status: "active",
   createdAt: now(),
   updatedAt: now(),
 };
 
 /** Only real, fully-working embedded apps ship in the demo. */
-const DEMO_APPS = [X_ACTION_APP, MEETINGS_APP, HOME_APP];
+/** Every other public Community app, "installed" — each opens its live apps.papr.ai build. */
+const COMMUNITY_APPS = (demoCommunityInstalled as Array<{ id: string; title: string; description: string; icon: string }>).map(
+  (a, i) => ({
+    ...a,
+    type: "app",
+    name: a.title,
+    status: "active",
+    createdAt: now(),
+    updatedAt: new Date(Date.now() - (i + 1) * 3_600_000).toISOString(),
+  }),
+);
+
+const DEMO_APPS = [X_ACTION_APP, MEETINGS_APP, HOME_APP, ...COMMUNITY_APPS];
 
 /** Demo persona shown on the rail avatar + profile. */
 const DEMO_PROFILE = {
