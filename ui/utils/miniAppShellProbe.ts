@@ -99,3 +99,46 @@ export function isShellAnnouncementFor(
   const message = data as ShellAnnouncement;
   return message.type === "papr-preview-booted" && message.appId === appId;
 }
+
+/**
+ * One iframe load's announce-vs-load race, in the order it actually happens.
+ *
+ * The bridge posts on DOMContentLoaded, but the frame's `load` event waits for every
+ * image, so on a healthy load the announcement arrives FIRST. The old code started the
+ * grace timer on `load` without remembering that the announcement already came, so every
+ * image-heavy app timed out 2 s later and was remounted — an endless reload loop showing
+ * "App routes not ready yet — retrying…".
+ */
+export class ShellLoadWatch {
+  private announced = false;
+  private timer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(private readonly graceMs = MINI_APP_SHELL_ANNOUNCE_GRACE_MS) {}
+
+  /** A new document is about to load (first mount, retry, or src change). */
+  begin(): void {
+    this.announced = false;
+    this.cancel();
+  }
+
+  /** The bridge announced a healthy shell for this load. */
+  markAnnounced(): void {
+    this.announced = true;
+    this.cancel();
+  }
+
+  /** The frame's `load` fired and its document is unreadable: wait for the bridge. */
+  awaitAnnouncement(onSilent: () => void): void {
+    this.cancel();
+    if (this.announced) return;
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      if (!this.announced) onSilent();
+    }, this.graceMs);
+  }
+
+  cancel(): void {
+    if (this.timer) clearTimeout(this.timer);
+    this.timer = null;
+  }
+}
