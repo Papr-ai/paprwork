@@ -7,6 +7,12 @@ import {
   normalizePreviewConsoleLevel,
   type AppRuntimeLogEntry,
 } from "../services/AppRuntimeLogService.js";
+import {
+  analyzePreviewNetworkLogs,
+  type PreviewNetworkProfile,
+  type WebviewNetworkLogEntry,
+} from "./miniAppPreviewNetworkProfile.js";
+import { syncWebviewPreviewActivityLatch } from "../../core/tools/webviewSessionGuard.js";
 
 export interface PreviewConsoleLog {
   level: number | string;
@@ -25,6 +31,10 @@ export interface MiniAppRuntimePreviewResult {
   consoleLogs: PreviewConsoleLog[];
   /** Human-readable error lines from preview console (level error). */
   previewErrors: string[];
+  /** PNG data URL captured from the hidden preview window. */
+  previewScreenshot?: string;
+  /** DB/API request counts during preview window (Electron webview only). */
+  networkProfile?: PreviewNetworkProfile;
 }
 
 const PREVIEW_WAIT_MS = 2000;
@@ -75,6 +85,39 @@ export async function runMiniAppRuntimePreview(
 
     await new Promise((resolve) => setTimeout(resolve, PREVIEW_WAIT_MS));
 
+    const snapshotRes = await requestWebviewTest({
+      action: "snapshot",
+      payload: { webviewId, includeScreenshot: true },
+    });
+    const snapshotData =
+      snapshotRes.success &&
+      snapshotRes.data !== undefined &&
+      snapshotRes.data !== null &&
+      typeof snapshotRes.data === "object"
+        ? (snapshotRes.data as { screenshot?: string })
+        : undefined;
+    const previewScreenshot =
+      typeof snapshotData?.screenshot === "string"
+        ? snapshotData.screenshot
+        : undefined;
+
+    const networkRes = await requestWebviewTest({
+      action: "get_network",
+      payload: { webviewId, limit: 200, clearAfterRead: true },
+    });
+
+    const networkData = networkRes.data;
+    const networkLogs: WebviewNetworkLogEntry[] =
+      networkRes.success &&
+      networkData !== undefined &&
+      networkData !== null &&
+      typeof networkData === "object" &&
+      "logs" in networkData &&
+      Array.isArray((networkData as { logs: unknown }).logs)
+        ? ((networkData as { logs: WebviewNetworkLogEntry[] }).logs ?? [])
+        : [];
+    const networkProfile = analyzePreviewNetworkLogs(networkLogs);
+
     const consoleRes = await requestWebviewTest({
       action: "get_console",
       payload: { webviewId, limit: 100, clearAfterRead: true },
@@ -104,6 +147,7 @@ export async function runMiniAppRuntimePreview(
     } catch {
       // Non-fatal — preview session may already be closed
     }
+    await syncWebviewPreviewActivityLatch();
 
     const previewErrors = logs
       .filter((log) => normalizePreviewConsoleLevel(log.level) === "error")
@@ -121,6 +165,8 @@ export async function runMiniAppRuntimePreview(
       loadStatus: launchData.status,
       consoleLogs: logs,
       previewErrors,
+      previewScreenshot,
+      networkProfile,
     };
   } catch (error) {
     return {
@@ -142,6 +188,7 @@ export interface PostValidationRuntimeCheck {
   preview: MiniAppRuntimePreviewResult;
   iframeErrors: string[];
   allErrors: string[];
+  loadWarnings: string[];
 }
 
 /** After esbuild validation passes: auto-launch preview + merge iframe error buffer. */
@@ -151,5 +198,6 @@ export async function runPostValidationRuntimeCheck(
   const preview = await runMiniAppRuntimePreview(appId);
   const iframeErrors = collectRecentRuntimeErrors(appId);
   const allErrors = [...new Set([...preview.previewErrors, ...iframeErrors])];
-  return { preview, iframeErrors, allErrors };
+  const loadWarnings = preview.networkProfile?.warnings ?? [];
+  return { preview, iframeErrors, allErrors, loadWarnings };
 }

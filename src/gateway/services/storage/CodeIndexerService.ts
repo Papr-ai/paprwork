@@ -7,11 +7,47 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { createHash } from 'crypto';
+import { normalizeForDedupe } from '../../../core/utils/resultSetShape.js';
 import { getPaprRoot } from '../../../core/utils/paprRoot.js';
 import { Papr } from '@papr/memory';
 import { buildCodeIndexAddPolicy } from '../../utils/paprMemoryPolicy.js';
 import { paprMemoryScopeSpread } from '../../utils/memoryScopeResolver.js';
 import { getProjectPathInfo } from './codeIndexPaths.js';
+import { reserveMemoryWrite } from '../memoryWriteGuard.js';
+import {
+  isRawCodeMemoryIndexEnabled,
+  announceRawCodeIndexPolicyOnce,
+} from './codeIndexPolicy.js';
+import type { CodeIndexTracker } from './CodeIndexTracker.js';
+import { isMemoryNotFound } from './CodeSummaryMemoryStore.js';
+import { resolveMiniAppDisplayName } from './codeIndexMetadata.js';
+import { parseJsonTolerant } from '../../../core/utils/atomicJsonWrite.js';
+
+/** Short content digest for duplicate detection. Not security-sensitive. */
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
+interface JobJsonMetadata {
+  id?: string;
+  name?: string;
+  type?: "python" | "node" | "subagent";
+  status?: string;
+  folder?: string;
+  command?: string;
+  retries?: { maxAttempts?: number };
+  maxAttempts?: number;
+  retentionDays?: number;
+  outputMode?: string;
+  memoryPolicy?: string;
+  maxTurns?: number;
+  exitCode?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  lastRunAt?: string;
+  dependsOn?: Array<{ jobId: string; onStatus?: string }>;
+}
 
 export interface CodeFileMetadata {
   file_path: string;
@@ -71,7 +107,13 @@ export class CodeIndexerService {
   constructor(
     private client: Papr,
     schemaId: string,
-    paprDir?: string
+    paprDir?: string,
+    /**
+     * Optional so existing call sites keep working. When supplied, raw code
+     * files are UPDATED in place on re-index instead of re-added — without it
+     * every re-index inserts another Memory document sharing one memoryId.
+     */
+    private tracker?: CodeIndexTracker,
   ) {
     this.paprDir = paprDir || getPaprRoot();
     this.schemaId = schemaId;
@@ -130,7 +172,10 @@ export class CodeIndexerService {
   /**
    * Index one code file to PAPR (used by incremental queue processing).
    */
-  async indexSingleCodeFile(filePath: string): Promise<void> {
+  async indexSingleCodeFile(
+    filePath: string,
+    snapshot?: { content: string; hash: string; lineCount: number },
+  ): Promise<void> {
     const projectInfo = getProjectPathInfo(filePath, this.paprDir);
     if (!projectInfo) {
       throw new Error(`File is not indexable — must be inside apps/{id}/ or Jobs/{id}/`);
@@ -141,8 +186,10 @@ export class CodeIndexerService {
         ? await this.extractMiniAppMetadata(projectInfo.projectDir, projectInfo.projectId)
         : await this.extractJobMetadata(projectInfo.projectDir, projectInfo.projectId);
 
-    const fileMetadata = this.extractCodeFileMetadata(filePath, metadata);
-    await this.indexCodeFile(fileMetadata, metadata);
+    const fileMetadata = snapshot
+      ? this.extractCodeFileMetadataWithContent(filePath, metadata, snapshot)
+      : this.extractCodeFileMetadata(filePath, metadata);
+    await this.indexCodeFile(fileMetadata, metadata, snapshot?.content);
   }
 
   /**
@@ -285,7 +332,7 @@ export class CodeIndexerService {
   private async extractMiniAppMetadata(appPath: string, appId: string): Promise<ProjectMetadata> {
     const metadata: ProjectMetadata = {
       project_id: appId,
-      name: appId,
+      name: resolveMiniAppDisplayName(appId, appPath),
       type: 'mini_app'
     };
     
@@ -317,7 +364,15 @@ export class CodeIndexerService {
       };
     }
     
-    const jobJson = JSON.parse(fs.readFileSync(jobJsonPath, 'utf-8'));
+    const jobJsonRaw = fs.readFileSync(jobJsonPath, 'utf-8');
+    const jobJson = parseJsonTolerant<JobJsonMetadata>(jobJsonRaw);
+    if (!jobJson) {
+      return {
+        project_id: jobId,
+        name: jobId,
+        type: 'job',
+      };
+    }
     
     const metadata: ProjectMetadata = {
       project_id: jobJson.id || jobId,
@@ -400,18 +455,39 @@ export class CodeIndexerService {
     projectMetadata: ProjectMetadata
   ): CodeFileMetadata {
     const content = fs.readFileSync(filePath, 'utf-8');
+    return this.buildCodeFileMetadata(filePath, projectMetadata, content);
+  }
+
+  private extractCodeFileMetadataWithContent(
+    filePath: string,
+    projectMetadata: ProjectMetadata,
+    snapshot: { content: string; lineCount: number },
+  ): CodeFileMetadata {
+    return this.buildCodeFileMetadata(
+      filePath,
+      projectMetadata,
+      snapshot.content,
+      snapshot.lineCount,
+    );
+  }
+
+  private buildCodeFileMetadata(
+    filePath: string,
+    projectMetadata: ProjectMetadata,
+    content: string,
+    lineCountOverride?: number,
+  ): CodeFileMetadata {
     const stat = fs.statSync(filePath);
     const ext = path.extname(filePath);
-    
+
     const metadata: CodeFileMetadata = {
       file_path: filePath,
       file_name: path.basename(filePath),
       language: this.detectLanguage(ext),
-      lines_of_code: content.split('\n').length,
-      last_modified: stat.mtime
+      lines_of_code: lineCountOverride ?? content.split("\n").length,
+      last_modified: stat.mtime,
     };
-    
-    // Check if file accesses data sources
+
     if (projectMetadata.data_sources && projectMetadata.data_sources.length > 0) {
       for (const ds of projectMetadata.data_sources) {
         if (content.includes(ds.dbPath) || content.includes(ds.alias)) {
@@ -420,7 +496,7 @@ export class CodeIndexerService {
         }
       }
     }
-    
+
     return metadata;
   }
   
@@ -443,6 +519,17 @@ export class CodeIndexerService {
    * Index a project to PAPR
    */
   private async indexProject(metadata: ProjectMetadata): Promise<void> {
+    // Same policy as indexCodeFile. This write had no gate of any kind and
+    // stable content ("Project: X / Type: Y / ID: Z"), so it re-added an
+    // identical row on every index pass.
+    //
+    // The richer replacement already exists: CodeSummaryIndexPipeline's
+    // project overview, which upserts and reflects what the project DOES.
+    announceRawCodeIndexPolicyOnce();
+    if (!isRawCodeMemoryIndexEnabled()) {
+      return;
+    }
+
     // Create a memory entry for the project
     // Convert project metadata for PAPR (only primitives allowed in customMetadata)
     const paprMetadata: Record<string, string | number | boolean> = {
@@ -466,19 +553,34 @@ export class CodeIndexerService {
     if (metadata.created_at) paprMetadata.created_at = metadata.created_at.toISOString();
     if (metadata.updated_at) paprMetadata.updated_at = metadata.updated_at.toISOString();
     
+    // Project metadata content is stable ("Project: X / Type: Y / ID: Z"), so
+    // every full index pass produced another identical row. This is the same
+    // defect as indexCodeFile() and had no gate of any kind.
+    const projectContent = `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`;
+    const reservation = reserveMemoryWrite(projectContent, 'code_indexer_project');
+    if (!reservation.proceed) {
+      return;
+    }
+
     const memoryScope = await paprMemoryScopeSpread({
       addPolicy: buildCodeIndexAddPolicy(this.schemaId),
     });
 
-    await this.client.memory.add({
-      content: `Project: ${metadata.name}\nType: ${metadata.type}\nID: ${metadata.project_id}`,
-      ...memoryScope,
-      metadata: {
-        role: 'assistant',
-        category: 'learning',
-        customMetadata: paprMetadata
-      },
-    });
+    try {
+      await this.client.memory.add({
+        content: projectContent,
+        ...memoryScope,
+        metadata: {
+          role: 'assistant',
+          category: 'learning',
+          customMetadata: paprMetadata
+        },
+      });
+      reservation.commit();
+    } catch (error) {
+      reservation.release();
+      throw error;
+    }
   }
   
   /**
@@ -486,9 +588,25 @@ export class CodeIndexerService {
    */
   private async indexCodeFile(
     fileMetadata: CodeFileMetadata,
-    projectMetadata: ProjectMetadata
+    projectMetadata: ProjectMetadata,
+    prefetchedContent?: string,
   ): Promise<void> {
-    const content = fs.readFileSync(fileMetadata.file_path, 'utf-8');
+    // Raw file bodies are OFF by default. See codeIndexPolicy.ts.
+    //
+    // This is the write that produced 29,315 duplicate code_indexer rows and
+    // that the agent reads in 1.3% of searches. LLM summaries of the same
+    // files still sync via CodeSummaryIndexPipeline, which is a real upsert
+    // (deletes previousMemoryId before adding), so disabling this does not
+    // blind code search — it removes the raw, duplicated half.
+    //
+    // Returning before readFileSync keeps a disabled indexer free.
+    announceRawCodeIndexPolicyOnce();
+    if (!isRawCodeMemoryIndexEnabled()) {
+      return;
+    }
+
+    const content =
+      prefetchedContent ?? fs.readFileSync(fileMetadata.file_path, "utf-8");
     
     // Truncate very long files for indexing
     const maxContentLength = 50000; // ~50KB
@@ -508,26 +626,28 @@ export class CodeIndexerService {
       project_type: projectMetadata.type,
       source: 'code_indexer',
       indexed_at: new Date().toISOString(),
-      entity_type: 'code_file'
+      entity_type: 'code_file',
+      // Exact hash identifies re-indexes of unchanged files. `boilerplate_hash`
+      // ignores UUIDs/hex/integers so generated scaffolding shares one value:
+      // 98 of 110 `db.ts` files in this workspace are identical apart from
+      // their APP_ID constant, which is why exact hashing alone cannot see the
+      // duplication. Recorded (not filtered) so search can collapse groups
+      // without the indexer having to decide which project "owns" a copy.
+      content_hash: sha256(content),
+      boilerplate_hash: sha256(normalizeForDedupe(content)),
     };
     
     if (fileMetadata.data_source_path) {
       paprMetadata.data_source_path = fileMetadata.data_source_path;
     }
     
-    const fileMemoryScope = await paprMemoryScopeSpread({
-      addPolicy: buildCodeIndexAddPolicy(this.schemaId),
-    });
+    const fileMetadataForPapr = {
+      role: 'assistant' as const,
+      category: 'learning' as const,
+      customMetadata: paprMetadata,
+    };
 
-    await this.client.memory.add({
-      content: truncatedContent,
-      ...fileMemoryScope,
-      metadata: {
-        role: 'assistant',
-        category: 'learning',
-        customMetadata: paprMetadata
-      },
-    }).catch((error: unknown) => {
+    const rethrow = (error: unknown): never => {
       const err = error as {
         statusCode?: number;
         code?: number;
@@ -537,6 +657,101 @@ export class CodeIndexerService {
       throw new Error(
         `${err.statusCode ?? err.code ?? 'Unknown'} ${JSON.stringify(err.body ?? err.message ?? error)}`,
       );
-    });
+    };
+
+    // Content-hash guard, above the update/add split. `needsIndexing()` gates
+    // the two QUEUE paths (SmartCodeIndexManager:169, :393) but not the four
+    // direct call sites — full re-index and single-project index reach
+    // indexCodeFile() with no gate at all, so every full pass re-wrote every
+    // file. It also catches what no per-path check can: measured group
+    // 05a6d704 is render.ts AND drawer.ts with byte-identical content, so two
+    // paths share one memoryId. Identical bytes need neither an add nor an
+    // update, which is why this sits above both rather than beside them.
+    const reservation = reserveMemoryWrite(truncatedContent, 'code_indexer');
+    if (!reservation.proceed) {
+      return;
+    }
+
+    try {
+      // UPDATE IN PLACE on re-index.
+      //
+      // This path was an unconditional `memory.add()`, so every re-index of a
+      // file inserted ANOTHER Memory document. Because the server derives
+      // memoryId from content, those documents all share one memoryId, and the
+      // search pipeline dedups ids rather than documents — so a single logical
+      // memory expands to fill every result slot. Measured live: one memoryId
+      // returned 25/25 times across 16 distinct file_paths, with 25 distinct
+      // created_at values proving 25 separate inserts.
+      //
+      // The content guard cannot stand in for this: changed content hashes
+      // differently, so it proceeds, and proceeding without an update means an
+      // insert.
+      const knownMemoryId = this.tracker?.getIndexedFileMemoryId(
+        fileMetadata.file_path,
+      );
+      if (knownMemoryId) {
+        try {
+          await this.client.memory.update(knownMemoryId, {
+            content: truncatedContent,
+            metadata: fileMetadataForPapr,
+          });
+          reservation.commit();
+          return;
+        } catch (error) {
+          // Only a genuine 404 may fall through to `add`. Retrying any other
+          // failure as an insert is precisely what produced the duplicates.
+          if (!isMemoryNotFound(error)) {
+            rethrow(error);
+          }
+          console.warn(
+            `[CodeIndexer] memory ${knownMemoryId} for ${fileMetadata.file_name} ` +
+              `not found (404) — recreating.`,
+          );
+        }
+      }
+
+      const fileMemoryScope = await paprMemoryScopeSpread({
+        addPolicy: buildCodeIndexAddPolicy(this.schemaId),
+      });
+
+      const response = await this.client.memory.add({
+        content: truncatedContent,
+        ...fileMemoryScope,
+        metadata: fileMetadataForPapr,
+      }).catch(rethrow);
+
+      reservation.commit();
+
+      // Persist the id so the NEXT run updates instead of inserting. Without
+      // this the column stays NULL and the duplication repeats indefinitely.
+      const newMemoryId = extractAddedMemoryId(response);
+      if (newMemoryId && this.tracker) {
+        this.tracker.setIndexedFileMemoryId(fileMetadata.file_path, newMemoryId);
+      }
+    } catch (error) {
+      // Release so a retry is not blocked by our own reservation.
+      reservation.release();
+      throw error;
+    }
   }
+}
+
+/** Read the memory id out of an `add` response across known payload shapes. */
+function extractAddedMemoryId(response: unknown): string | undefined {
+  if (!response || typeof response !== 'object') return undefined;
+  const record = response as Record<string, unknown>;
+  if (typeof record.id === 'string') return record.id;
+
+  const data = record.data;
+  if (Array.isArray(data)) {
+    const first = data[0] as Record<string, unknown> | undefined;
+    const id = first?.memoryId ?? first?.memory_id ?? first?.id;
+    return typeof id === 'string' ? id : undefined;
+  }
+  if (data && typeof data === 'object') {
+    const inner = data as Record<string, unknown>;
+    const id = inner.id ?? inner.memory_id ?? inner.memoryId;
+    return typeof id === 'string' ? id : undefined;
+  }
+  return undefined;
 }

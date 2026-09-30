@@ -2,6 +2,16 @@
 
 This guide helps the agent decide which tool or approach to use for different user requests.
 
+## Three AI execution paths (read this first)
+
+| Path | Who uses it | Invoke | Result |
+|------|-------------|--------|--------|
+| **1. Agent job + DB + UI refresh** | End users / schedules | `create_job` + app calls `/api/jobs/run`; app reads `/api/db/query`; `onDbChange` / job events refresh UI | Background automation, structured data in linked SQLite |
+| **2. `delegate_task`** | **Pen in main chat only** | `delegate_task({ useAgentId, task, context })` | DelegationCard + MiniChat in Working section |
+| **3. Embedded app chat** | **End users inside mini-app** | `enable_app_agent_chat` + bubble → `/api/app-agent/sessions` | Multi-turn in-app assistant (desktop overlay + published web) |
+
+**Do not test path 3 with path 2.** Scoring a deck from the app bubble is embedded chat, not `delegate_task`.
+
 ## Quick Decision Tree
 
 ```
@@ -103,19 +113,29 @@ Examples:
 - "Sync data from API endpoint"
 - "Compress and archive old files"
 
-### Sub-Agent / delegate_task (immediate, one-time)
-- User needs help **right now** in conversation
-- Task is **one-time or ad-hoc**
-- Result should appear **in chat**
+### Sub-Agent / delegate_task (Pen chat — path 2)
+- **Pen (main agent)** needs help **right now** in a Paprwork chat tab
+- Task is **one-time or ad-hoc** during building
+- Result should appear **in chat** (DelegationCard)
 - Task is complex enough to warrant delegation
 
 Examples:
 - "Review this code for bugs"
-- "Write a blog post about X"
+- "Product brief before I build this app"
 - "Help me debug this error"
-- "Summarize these 10 documents"
 
-### Mini-App + Job + SQLite (complete system)
+**NOT for:** End-user features in a published app (use embedded app chat). **NOT for:** Recurring automation (use agent jobs).
+
+### Embedded app assistant (path 3)
+- End users need **conversational AI inside the mini-app**
+- Assistant reads/edits app files and linked DBs in context
+- Multi-turn: score deck, edit slides, explain data
+
+Setup: `create_sub_agent` → `enable_app_agent_chat` → test via **app bubble**, not `delegate_task`.
+
+Default tools: `read_app_file`, `edit_app_file`, `list_app_files`, `read_app_data_sources`. Add `bash` when the agent must run sqlite or curl against `/api/db/write`. See `docs/APP_AGENT_CHAT.md`.
+
+### Mini-App + Job + SQLite (path 1 — complete system)
 - User wants **complete system** with UI
 - Background job **collects/processes data**
 - App **displays** data with filtering/search
@@ -140,7 +160,13 @@ Paprwork has built-in agent jobs with OAuth/API routing. Use `type: "agent"` ins
 Built-in routing handles OpenAI, Anthropic, Google, and Ollama. Agent jobs use the user's configured auth automatically.
 
 ### Do NOT create sub-agent for recurring tasks
-`delegate_task` executes once in the current conversation. For recurring tasks, use Agent Job with schedule.
+`delegate_task` executes once in the current Pen chat. For recurring tasks, use Agent Job with schedule.
+
+### Do NOT use delegate_task to test embedded app chat
+Open the mini-app bubble (or published web panel) for path 3. `delegate_task` is a different harness (path 2).
+
+### Do NOT use delegate_task for end-user in-app features
+Users hit the bubble / `/api/app-agent/*`, not Pen's sidebar delegation.
 
 ### Do NOT use Python + LLM when an agent job would work
 If the task needs tools, browsing, multi-step reasoning, or you are unsure of the exact steps → Agent Job. Python + LLM is only for rigid batch pipelines.

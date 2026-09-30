@@ -50,6 +50,20 @@ export const label = "Revenue";`,
     expect(issues).toHaveLength(0);
   });
 
+  test("passes typography arrows used in documentation table cells", () => {
+    const files = new Map<string, string>([
+      [
+        "today.ts",
+        `export const rows = [
+  ["Renderer ↔ Gateway", "IPC over WebSocket"],
+  ["Gateway ↔ Jobs", "POST /api/jobs/run"],
+];`,
+      ],
+    ]);
+    const issues = checkMiniAppEmojiPatterns(files);
+    expect(issues).toHaveLength(0);
+  });
+
   test("skips non-source files", () => {
     const files = new Map<string, string>([
       ["metadata.json", '{"icon":"📊"}'],

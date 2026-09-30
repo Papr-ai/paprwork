@@ -4,6 +4,25 @@
 
 import type { SyncItemsResponse } from "../components/Settings/CloudSyncDetails";
 
+/** True when remote git log is cloud job status writebacks only (metadata, not app code). */
+export function isRemoteJobStatusWritebackSummary(
+  summary: string | null | undefined,
+): boolean {
+  if (!summary?.trim()) {
+    return false;
+  }
+  const lines = summary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return false;
+  }
+  return lines.every((line) =>
+    /^[0-9a-f]{7,40}\s+cloud:\s+update job .+ status$/i.test(line),
+  );
+}
+
 export type AppCloudSyncOverall =
   | "synced"
   | "uploading"
@@ -14,7 +33,13 @@ export type AppCloudSyncOverall =
 /** @deprecated Use AppCloudSyncOverall — kept for gradual migration */
 export type AppCloudSyncOverallLegacy = AppCloudSyncOverall | "syncing" | "outdated";
 
-export type AppCloudCodeStatus = "synced" | "pending" | "outdated" | "unknown";
+export type AppCloudCodeStatus =
+  | "synced"
+  | "pending"
+  | "outdated"
+  | "failed"
+  | "updates_available"
+  | "unknown";
 
 export type AppCloudItemPhase =
   | "synced"
@@ -28,32 +53,158 @@ export interface AppCloudJobStatus {
   status: AppCloudCodeStatus;
   phase: AppCloudItemPhase;
   detail: string;
+  lastError?: string | null;
+  manualUploadHold?: boolean;
 }
 
 export interface AppCloudDatabaseStatus {
   alias: string;
   jobId: string;
-  status: "synced" | "pending" | "empty" | "unavailable";
+  status: "synced" | "pending" | "empty" | "unavailable" | "quarantined";
   phase: AppCloudItemPhase;
   detail: string;
+  manualUploadHold?: boolean;
+  /** Local SQLite schema differs from Turso — blocks web-ready until healed. */
+  schemaDrift?: boolean;
+  /** True when row-level CDC is catching up but replica already exists. */
+  rowsSyncing?: boolean;
+  /** Plan A Turso Sync replica path. */
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
+}
+
+/** Pending DB work that should block the green "Synced" chip. */
+function databaseBlocksOverallSync(input: {
+  status: AppCloudDatabaseStatus["status"];
+  schemaDrift?: boolean;
+  remoteTableCount?: number;
+  manualUploadHold?: boolean;
+  syncMode?: "legacy" | "replica";
+  pendingPush?: boolean;
+  migrationConflict?: boolean;
+  cutoverBlocked?: boolean;
+}): boolean {
+  if (input.status === "quarantined" || input.status === "unavailable") {
+    return true;
+  }
+  if (input.syncMode === "replica") {
+    if (input.migrationConflict || input.cutoverBlocked) {
+      return true;
+    }
+    if (input.pendingPush) {
+      return true;
+    }
+    if (input.manualUploadHold) {
+      return true;
+    }
+    return false;
+  }
+  if (input.status !== "pending") {
+    return false;
+  }
+  if (input.manualUploadHold) {
+    return true;
+  }
+  if (input.schemaDrift) {
+    return true;
+  }
+  // Row-level dirty with an existing Turso replica — background CDC, not a chip blocker.
+  if ((input.remoteTableCount ?? 0) > 0) {
+    return false;
+  }
+  return true;
+}
+
+export type AppCloudPublishStatus =
+  | "synced"
+  | "republishing"
+  | "not_web_ready"
+  | "drift"
+  | "error";
+
+export function formatLastUploadedAt(isoStr: string | null | undefined): string | null {
+  if (!isoStr) {
+    return null;
+  }
+  const diff = Date.now() - new Date(isoStr).getTime();
+  if (Number.isNaN(diff)) {
+    return null;
+  }
+  if (diff < 60_000) {
+    return "just now";
+  }
+  if (diff < 3_600_000) {
+    return `${Math.floor(diff / 60_000)}m ago`;
+  }
+  if (diff < 86_400_000) {
+    return `${Math.floor(diff / 3_600_000)}h ago`;
+  }
+  return `${Math.floor(diff / 86_400_000)}d ago`;
 }
 
 export interface AppCloudSyncStatus {
+  /** Remote update held back because these files changed on both sides. */
+  updateConflictFiles?: string[];
   overall: AppCloudSyncOverall;
   codeStatus: AppCloudCodeStatus;
   codePhase: AppCloudItemPhase;
   codeLabel: string;
+  /** Most recent git upload timestamp for this app's code folder. */
+  lastUploadedAt: string | null;
   dependentJobs: AppCloudJobStatus[];
   hasDependentJobs: boolean;
   syncedJobCount: number;
   totalJobCount: number;
   summaryLine: string;
   databases: AppCloudDatabaseStatus[];
+  /** True when any linked DB has local/remote schema drift blocking web sync. */
+  hasSchemaDrift: boolean;
   hasLinkedDatabases: boolean;
+  hasRegistryDatabases: boolean;
+  registryPhase: AppCloudItemPhase;
+  registryLabel: string;
   chipLabel: string;
   globallySyncing: boolean;
   /** Auto-republish after git push (publish catalog / vault allowlist). */
-  cloudPublishing: boolean;
+  cloudUploading: boolean;
+  /** Cross-layer publish readiness (git + Turso + verify + convergence). */
+  publishStatus: AppCloudPublishStatus;
+  publishLabel: string;
+  publishDetail: string | null;
+  /** Coordinator upload progress (database → code → web check). */
+  uploadStatus?: "idle" | "uploading" | "waiting" | "failed";
+  uploadLabel?: string | null;
+  uploadDetail?: string | null;
+  uploadRetryPending?: boolean;
+  /** Waiting in global flush queue (not actively uploading yet). */
+  uploadQueued?: boolean;
+  uploadQueuePosition?: number | null;
+  uploadQueueDepth?: number | null;
+  /** Remote git commits exist that local has not merged yet. */
+  gitUpdatesAvailable: boolean;
+  gitUpdatesSummary: string | null;
+  /** App-repo writer 409 — parentHash mismatch; merge or reconcile before re-upload. */
+  writerConflict: boolean;
+  /** App/job source on remote — user must tap Merge remote changes. */
+  gitRemoteRequiresReview: boolean;
+  /** Cloud job status writebacks only — auto-integrating, no approval needed. */
+  gitRemoteMetadataSync: boolean;
+  /** e.g. "1 contributed code merge + 8 cloud job status updates" */
+  gitRemoteReviewHeadline: string | null;
+  codeLastError?: string | null;
+  /** App has an active Papr cloud share link — local git/Turso lag should not block UI. */
+  publishLive?: boolean;
+  /** Files in the app folder over 10MB — git sync skips them; use App Files. */
+  oversizedAppFilesMessage?: string | null;
+  oversizedAppFilesCount?: number;
+  /** Local app source differs from last cloud upload (Sync V3 fingerprint / git). */
+  hasLocalChanges?: boolean;
 }
 
 const GIT_ACTIVE_STATUSES = new Set([
@@ -63,6 +214,43 @@ const GIT_ACTIVE_STATUSES = new Set([
   "pulling",
 ]);
 
+function mapAppSyncV3ToCodeStatus(
+  status: NonNullable<SyncItemsResponse["appSync"]>["status"],
+): AppCloudCodeStatus {
+  switch (status) {
+    case "synced":
+      return "synced";
+    case "uploading":
+    case "pending":
+    case "not_uploaded":
+      return "pending";
+    case "failed":
+    case "conflict":
+      return "failed";
+    default:
+      return "unknown";
+  }
+}
+
+function registryLabelForAppSync(
+  hasRegistryDatabases: boolean,
+  codePhase: AppCloudItemPhase,
+): string {
+  if (!hasRegistryDatabases) {
+    return "No registry databases";
+  }
+  if (codePhase === "synced") {
+    return "Registry on the web";
+  }
+  if (codePhase === "not_uploaded") {
+    return "Registry not on web yet";
+  }
+  if (codePhase === "uploading") {
+    return "Registry publishing with app code";
+  }
+  return "Registry publishes with app code";
+}
+
 function resolveItemPhase(
   status: AppCloudCodeStatus,
   _relativePath: string,
@@ -70,33 +258,67 @@ function resolveItemPhase(
   lastSyncAt: string | null,
 ): AppCloudItemPhase {
   if (status === "synced") return "synced";
+  if (status === "updates_available") return "changed";
+  if (status === "failed") return "changed";
   if (status === "outdated") return "changed";
   if (status === "pending" && !lastSyncAt) return "not_uploaded";
   if (status === "pending") return "changed";
   return "changed";
 }
 
-function codeDetail(phase: AppCloudItemPhase): string {
+function codeDetail(
+  phase: AppCloudItemPhase,
+  status: AppCloudCodeStatus,
+  manualUploadHold?: boolean,
+  lastError?: string | null,
+): string {
+  if (status === "failed") {
+    return lastError
+      ? `Publish failed — ${lastError.slice(0, 120)}`
+      : "Publish failed — retry in Settings → Cloud Sync";
+  }
+  if (status === "updates_available") {
+    return "Cloud has newer app or job code — merge before publishing";
+  }
+  if (manualUploadHold && phase === "changed") {
+    return "Local changes waiting — manual publish mode (click Publish changes)";
+  }
   switch (phase) {
     case "synced":
       return "App code is on the web";
     case "uploading":
-      return "Uploading app code…";
+      return "Publishing app code…";
     case "not_uploaded":
-      return "App code not uploaded yet";
+      return "App code not published yet";
     case "changed":
       return "App code changed locally";
   }
 }
 
-function jobDetail(phase: AppCloudItemPhase): string {
+function jobDetail(
+  phase: AppCloudItemPhase,
+  status: AppCloudCodeStatus,
+  manualUploadHold?: boolean,
+  lastError?: string | null,
+): string {
+  if (status === "failed") {
+    return lastError
+      ? `Failed — ${lastError.slice(0, 80)}`
+      : "Publish failed";
+  }
+  if (status === "updates_available") {
+    return "Cloud job status updating";
+  }
+  if (manualUploadHold && phase === "changed") {
+    return "Waiting — manual publish mode";
+  }
   switch (phase) {
     case "synced":
       return "On the web";
     case "uploading":
-      return "Uploading…";
+      return "Publishing…";
     case "not_uploaded":
-      return "Not uploaded yet";
+      return "Not published yet";
     case "changed":
       return "Changed locally";
   }
@@ -107,18 +329,65 @@ function databaseDetail(item: {
   status: AppCloudDatabaseStatus["status"];
   localTableCount: number;
   remoteTableCount: number;
+  schemaDrift?: boolean;
+  quarantineReason?: string | null;
+  manualUploadHold?: boolean;
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }): string {
+  // Primary copy is for non-technical users: no Turso / replica / migration /
+  // ledger / cutover / CDC. Raw reasons stay on lastReplicaPushError and
+  // cutoverBlockReason for a Details line.
+  const pendingCount = item.pendingOps ?? 0;
+  const changes = pendingCount === 1 ? "change" : "changes";
+  if (item.syncMode === "replica") {
+    if (item.migrationConflict) {
+      return "Your local database and the web version have different structures — ask the agent to reconcile them, then publish again";
+    }
+    if (item.cutoverBlocked) {
+      return "This database can't publish until its structure is fixed — ask the agent to repair it";
+    }
+    if (item.status === "pending" && item.pendingPush) {
+      if (item.online === false) {
+        return `Offline — ${pendingCount} local ${changes} will publish when you're back online`;
+      }
+      // Only tell users to click when clicking is actually what's needed.
+      return item.manualUploadHold
+        ? `${pendingCount} local ${changes} not on the web yet — click Publish changes`
+        : `${pendingCount} local ${changes} publishing in the background`;
+    }
+    if (item.status === "synced") {
+      return `${item.remoteTableCount} table(s) on the web`;
+    }
+  }
   switch (item.status) {
     case "synced":
-      return `${item.remoteTableCount} table(s) on Turso`;
+      return `${item.remoteTableCount} table(s) on the web`;
     case "pending":
-      return item.remoteTableCount > 0
-        ? "Local DB changes not on Turso yet"
-        : `${item.localTableCount} local table(s) not on Turso yet`;
+      if (item.manualUploadHold) {
+        return "Local data changes not on the web yet — click Publish changes";
+      }
+      if (item.schemaDrift) {
+        return "The database structure changed locally — click Publish changes to update the web";
+      }
+      if (item.remoteTableCount > 0) {
+        return "Data changes publishing in the background";
+      }
+      return `${item.localTableCount} local table(s) not on the web yet — click Publish changes`;
     case "empty":
       return "No data tables yet";
     case "unavailable":
-      return "Database unavailable";
+      return "Database file missing or unreadable";
+    case "quarantined":
+      return item.quarantineReason
+        ? `Publishing paused: ${item.quarantineReason.slice(0, 100)}`
+        : "Publishing paused — ask the agent to repair this database";
     default:
       return item.status;
   }
@@ -133,6 +402,7 @@ function databasePhase(
       return "synced";
     case "pending":
       return "changed";
+    case "quarantined":
     case "unavailable":
       return "changed";
     default:
@@ -140,35 +410,156 @@ function databasePhase(
   }
 }
 
+function publishDetailLabel(
+  status: AppCloudPublishStatus,
+  detail: string | null,
+): string {
+  switch (status) {
+    case "synced":
+      return detail ?? "Live app matches local code and databases";
+    case "republishing":
+      return detail ?? "Updating publish catalog…";
+    case "not_web_ready":
+      return detail ?? "Still publishing — the web app may show older data until it finishes";
+    case "drift":
+      return detail ?? "The web has older data than your local copy — click Publish changes";
+    case "error":
+      return detail ?? "Couldn't check whether the web app is up to date";
+    default:
+      return detail ?? "Publish status unknown";
+  }
+}
+
+function publishChipLabel(status: AppCloudPublishStatus): string | null {
+  switch (status) {
+    case "not_web_ready":
+      return "Still publishing";
+    case "drift":
+      return "Web data out of date";
+    case "error":
+      return "Publish check failed";
+    default:
+      return null;
+  }
+}
+
 function buildSummaryLine(opts: {
   codePhase: AppCloudItemPhase;
   syncedJobCount: number;
   totalJobCount: number;
-  dbPending: number;
-  isUploading: boolean;
+  dbBlockingPending: number;
+  dbRowsSyncing: number;
+  registryNeedsSync: boolean;
+  isActivelyUploading: boolean;
+  isQueuedForUpload: boolean;
+  uploadQueuePosition?: number | null;
+  uploadQueueDepth?: number | null;
+  overall: AppCloudSyncOverall;
+  lastUploadedAt: string | null;
+  publishStatus?: AppCloudPublishStatus;
+  publishDetail?: string | null;
+  publishNotConfigured?: boolean;
+  gitRemoteRequiresReview?: boolean;
+  gitRemoteMetadataSync?: boolean;
+  uploadLabel?: string | null;
 }): string {
-  const { codePhase, syncedJobCount, totalJobCount, dbPending, isUploading } =
-    opts;
+  const {
+    codePhase,
+    syncedJobCount,
+    totalJobCount,
+    dbBlockingPending,
+    dbRowsSyncing,
+    registryNeedsSync,
+    isActivelyUploading,
+    isQueuedForUpload,
+    uploadQueuePosition,
+    uploadQueueDepth,
+    overall,
+    lastUploadedAt,
+    publishStatus,
+    publishDetail,
+    publishNotConfigured,
+    gitRemoteRequiresReview,
+    gitRemoteMetadataSync,
+    uploadLabel,
+  } = opts;
 
-  if (isUploading) {
-    if (totalJobCount > 0) {
-      return `Uploading app and jobs (${syncedJobCount}/${totalJobCount} already on web)…`;
+  if (gitRemoteMetadataSync) {
+    return "Syncing cloud job status…";
+  }
+  if (gitRemoteRequiresReview) {
+    return "Merge cloud changes before publishing";
+  }
+
+  if (isQueuedForUpload) {
+    if (uploadLabel?.trim()) {
+      return uploadLabel;
     }
-    return "Uploading app to the web…";
+    if (
+      uploadQueuePosition != null &&
+      uploadQueueDepth != null &&
+      uploadQueueDepth > 1
+    ) {
+      return `In publish queue (${uploadQueuePosition} of ${uploadQueueDepth})…`;
+    }
+    return "Waiting in publish queue…";
+  }
+
+  if (isActivelyUploading) {
+    if (totalJobCount > 0) {
+      return `Publishing app and jobs (${syncedJobCount}/${totalJobCount} already on web)…`;
+    }
+    return "Publishing app to the web…";
   }
 
   const parts: string[] = [];
   if (totalJobCount > 0) {
     parts.push(`${syncedJobCount} of ${totalJobCount} jobs on the web`);
   }
-  if (codePhase === "changed" || codePhase === "not_uploaded") {
-    parts.push("app code not on web yet");
+  if (codePhase === "not_uploaded") {
+    parts.push("app code not published yet");
+  } else if (codePhase === "changed") {
+    parts.push("local app changes not on web yet");
   }
-  if (dbPending > 0) {
-    parts.push(`${dbPending} database(s) need Turso sync`);
+  if (registryNeedsSync) {
+    parts.push(
+      codePhase === "not_uploaded"
+        ? "database registry not on web yet"
+        : "database registry will publish with app code",
+    );
+  }
+  if (dbBlockingPending > 0) {
+    parts.push(`${dbBlockingPending} database(s) not on the web yet`);
+  } else if (dbRowsSyncing > 0) {
+    parts.push(`${dbRowsSyncing} database(s) publishing data in the background`);
+  }
+  if (publishStatus === "not_web_ready" || publishStatus === "drift") {
+    parts.push(publishDetailLabel(publishStatus, publishDetail ?? null));
   }
   if (parts.length === 0) {
-    return "Everything for this app matches the web";
+    if (overall === "synced") {
+      const relative = formatLastUploadedAt(lastUploadedAt);
+      // Published but never published: say so, so "synced" is not misread as
+      // "shared with people".
+      if (publishNotConfigured) {
+        return relative
+          ? `Published ${relative} · not shared yet`
+          : "Published to your private cloud repo · not shared yet";
+      }
+      return relative
+        ? `Last published ${relative}`
+        : "Everything for this app matches the web";
+    }
+    if (overall === "uploading") {
+      return "Publishing app to the web…";
+    }
+    if (overall === "needs_sync") {
+      if (publishStatus === "error") {
+        return publishDetailLabel("error", publishDetail ?? null);
+      }
+      return "Some changes aren't on the web yet — click Publish changes";
+    }
+    return "Checking web sync status…";
   }
   return parts.join(" · ");
 }
@@ -179,12 +570,13 @@ export function deriveAppCloudSyncStatus(
   gitGlobalStatus?: string | null,
   options?: {
     dependentJobIds?: readonly string[];
+    registryDbIds?: readonly string[];
     isUploading?: boolean;
-    cloudPublishing?: boolean;
+    refreshing?: boolean;
   },
 ): AppCloudSyncStatus {
   const isUploading = options?.isUploading === true;
-  const cloudPublishing = options?.cloudPublishing === true;
+  const refreshing = options?.refreshing === true;
 
   if (!items?.enabled) {
     return {
@@ -192,45 +584,96 @@ export function deriveAppCloudSyncStatus(
       codeStatus: "unknown",
       codePhase: "changed",
       codeLabel: "Cloud sync is off",
+      lastUploadedAt: null,
       dependentJobs: [],
       hasDependentJobs: false,
       syncedJobCount: 0,
       totalJobCount: 0,
       summaryLine: "Cloud sync is off",
       databases: [],
+      hasSchemaDrift: false,
       hasLinkedDatabases: false,
+      hasRegistryDatabases: false,
+      registryPhase: "changed",
+      registryLabel: "Database registry not checked",
       chipLabel: "Cloud off",
       globallySyncing: false,
-      cloudPublishing: false,
+      cloudUploading: false,
+      publishStatus: "synced",
+      publishLabel: "Cloud sync is off",
+      publishDetail: null,
+      gitUpdatesAvailable: false,
+      gitUpdatesSummary: null,
+      gitRemoteRequiresReview: false,
+      gitRemoteMetadataSync: false,
+      gitRemoteReviewHeadline: null,
+      oversizedAppFilesMessage: null,
+      oversizedAppFilesCount: 0,
+      hasLocalChanges: false,
     };
   }
 
+  const gitUpdatesAvailable = items.github?.gitUpdatesAvailable === true;
+  const gitUpdatesSummary = items.github?.gitUpdatesSummary ?? null;
+  const gitRemoteRequiresReview =
+    items.github?.gitRemoteRequiresReview === true;
+  const gitRemoteMetadataSync = items.github?.gitRemoteMetadataSync === true;
+  const gitRemoteReviewHeadline =
+    items.github?.gitRemoteReviewHeadline ?? null;
   const globallySyncing = GIT_ACTIVE_STATUSES.has(gitGlobalStatus ?? "");
   const queuedPaths = new Set(items.github?.queuedPaths ?? []);
+  const uploadQueuedEarly = items.upload?.waitingReason === "queued";
+  const clientPushActive = isUploading && !uploadQueuedEarly;
   const appPath = `apps/${appId}`;
+  const appSync = items.appSync ?? null;
+  const writerConflict = appSync?.status === "conflict";
   const githubItem = items.github?.apps.find(
     (item) => item.relativePath === appPath,
   );
 
   let codeStatus: AppCloudCodeStatus = "unknown";
-  if (githubItem) {
+  let codePhase: AppCloudItemPhase = "changed";
+  let codeLabel = "Sync status unknown";
+  let codeLastError: string | null | undefined;
+
+  if (appSync) {
+    codeStatus = mapAppSyncV3ToCodeStatus(appSync.status);
+    codePhase = appSync.phase;
+    codeLabel = appSync.detail;
+    codeLastError = appSync.lastError ?? null;
+    if (clientPushActive && codePhase !== "synced" && appSync.status === "uploading") {
+      codePhase = "uploading";
+    }
+  } else if (githubItem) {
     codeStatus = githubItem.status;
-  }
-  const codePhase = resolveItemPhase(
-    codeStatus,
-    appPath,
-    queuedPaths,
-    githubItem?.lastSyncAt ?? null,
-  );
-  if (isUploading && codePhase !== "synced") {
-    // Client-side push in flight — show active upload for non-synced items.
+    codePhase = resolveItemPhase(
+      codeStatus,
+      appPath,
+      queuedPaths,
+      githubItem.lastSyncAt ?? null,
+    );
+    codeLabel = codeDetail(
+      codePhase,
+      codeStatus,
+      githubItem.manualUploadHold,
+      githubItem.lastError,
+    );
+    codeLastError = githubItem.lastError;
   }
 
   const jobIdSet = new Set(
     options?.dependentJobIds ?? items.appContext?.dependentJobIds ?? [],
   );
-  const dependentJobs: AppCloudJobStatus[] = (items.github?.jobs ?? [])
+  const seenDependentJobIds = new Set<string>();
+  const dependentJobsRaw: AppCloudJobStatus[] = (items.github?.jobs ?? [])
     .filter((job) => jobIdSet.has(job.id))
+    .filter((job) => {
+      if (seenDependentJobIds.has(job.id)) {
+        return false;
+      }
+      seenDependentJobIds.add(job.id);
+      return true;
+    })
     .map((job) => {
       let phase = resolveItemPhase(
         job.status,
@@ -238,126 +681,570 @@ export function deriveAppCloudSyncStatus(
         queuedPaths,
         job.lastSyncAt,
       );
+      if (appSync && appSync.phase !== "synced" && phase === "synced") {
+        phase = appSync.phase === "not_uploaded" ? "not_uploaded" : "changed";
+      }
       if (isUploading && phase !== "synced") {
         phase = "uploading";
       }
+      const detail =
+        appSync && appSync.phase !== "synced" && phase !== "synced"
+          ? "Uploads with app code via cloud repo"
+          : gitRemoteMetadataSync && job.status === "updates_available"
+            ? "Integrating cloud job status…"
+            : jobDetail(phase, job.status, job.manualUploadHold, job.lastError);
       return {
         jobId: job.id,
         label: job.label,
         status: job.status,
         phase,
-        detail: jobDetail(phase),
+        detail,
+        lastError: job.lastError,
+        manualUploadHold: job.manualUploadHold,
       };
     })
     .sort((a, b) => a.label.localeCompare(b.label));
 
+  const labelCounts = new Map<string, number>();
+  for (const job of dependentJobsRaw) {
+    labelCounts.set(job.label, (labelCounts.get(job.label) ?? 0) + 1);
+  }
+  const dependentJobs = dependentJobsRaw.map((job) => {
+    if ((labelCounts.get(job.label) ?? 0) <= 1) {
+      return job;
+    }
+    return {
+      ...job,
+      label: `${job.label} (${job.jobId.slice(0, 8)})`,
+    };
+  });
+
   const databases: AppCloudDatabaseStatus[] = (items.turso?.sources ?? [])
     .filter((source) => source.appId === appId)
     .map((source) => {
-      const phase = databasePhase(source.status);
+      const isReplica = source.syncMode === "replica";
+      const blocksOverall = databaseBlocksOverallSync({
+        status: source.status,
+        schemaDrift: source.schemaDrift,
+        remoteTableCount: source.remoteTableCount,
+        manualUploadHold: source.manualUploadHold,
+        syncMode: source.syncMode,
+        pendingPush: source.pendingPush,
+        migrationConflict: source.migrationConflict,
+        cutoverBlocked: source.cutoverBlocked,
+      });
+      const rowsSyncing =
+        !isReplica &&
+        source.status === "pending" &&
+        !blocksOverall &&
+        (source.remoteTableCount ?? 0) > 0;
+      const phase = rowsSyncing ? "synced" : databasePhase(source.status);
       return {
         alias: source.alias,
         jobId: source.jobId,
         status: source.status,
         phase,
-        detail: databaseDetail(source),
+        detail: databaseDetail({
+          alias: source.alias,
+          status: source.status,
+          localTableCount: source.localTableCount,
+          remoteTableCount: source.remoteTableCount,
+          schemaDrift: source.schemaDrift,
+          quarantineReason: source.quarantineReason,
+          manualUploadHold: source.manualUploadHold,
+          syncMode: source.syncMode,
+          online: source.online,
+          pendingPush: source.pendingPush,
+          pendingOps: source.pendingOps,
+          migrationConflict: source.migrationConflict,
+          lastReplicaPushError: source.lastReplicaPushError,
+          cutoverBlocked: source.cutoverBlocked,
+          cutoverBlockReason: source.cutoverBlockReason,
+        }),
+        manualUploadHold: source.manualUploadHold,
+        schemaDrift: source.schemaDrift,
+        rowsSyncing: rowsSyncing || undefined,
+        syncMode: source.syncMode,
+        online: source.online,
+        pendingPush: source.pendingPush,
+        pendingOps: source.pendingOps,
+        migrationConflict: source.migrationConflict,
+        lastReplicaPushError: source.lastReplicaPushError,
+        cutoverBlocked: source.cutoverBlocked,
+        cutoverBlockReason: source.cutoverBlockReason,
       };
     });
 
+  const hasSchemaDrift = databases.some((db) => db.schemaDrift === true);
   const hasLinkedDatabases = databases.length > 0;
   const hasDependentJobs = dependentJobs.length > 0;
   const syncedJobCount = dependentJobs.filter((job) => job.phase === "synced").length;
   const totalJobCount = dependentJobs.length;
-  const dbPending = databases.filter((db) => db.status === "pending").length;
+  const dbBlockingPending = databases.filter((db) => {
+    const source = (items.turso?.sources ?? []).find(
+      (s) => s.appId === appId && s.alias === db.alias,
+    );
+    return databaseBlocksOverallSync({
+      status: db.status,
+      schemaDrift: source?.schemaDrift,
+      remoteTableCount: source?.remoteTableCount,
+      manualUploadHold: db.manualUploadHold,
+      syncMode: source?.syncMode,
+      pendingPush: source?.pendingPush,
+      migrationConflict: source?.migrationConflict,
+      cutoverBlocked: source?.cutoverBlocked,
+    });
+  }).length;
+  const dbRowsSyncing = databases.filter((db) => db.rowsSyncing).length;
+
+  const registryDbIds =
+    options?.registryDbIds ?? items.appContext?.registryDbIds ?? [];
+  const hasRegistryDatabases = registryDbIds.length > 0;
+  // Registry ships beside data-sources.json as apps/{id}/linked-databases.json.
+  let registryPhase: AppCloudItemPhase = "synced";
+  if (!hasRegistryDatabases) {
+    registryPhase = "synced";
+  } else if (codePhase === "synced") {
+    registryPhase = "synced";
+  } else if (
+    (isUploading || codePhase === "uploading") &&
+    !uploadQueuedEarly
+  ) {
+    registryPhase = "uploading";
+  } else if (codePhase === "not_uploaded") {
+    registryPhase = "not_uploaded";
+  } else {
+    registryPhase = "changed";
+  }
+  const registryNeedsSync = hasRegistryDatabases && registryPhase !== "synced";
+  const registryLabel = appSync
+    ? registryLabelForAppSync(hasRegistryDatabases, registryPhase)
+    : !hasRegistryDatabases
+      ? "No registry databases"
+      : registryPhase === "synced"
+        ? "Registry on the web"
+        : codePhase === "not_uploaded"
+          ? "Registry not on web yet"
+          : "Registry publishes with app code";
 
   const codePhaseDisplay =
-    isUploading && codePhase !== "synced" ? "uploading" : codePhase;
-  const codeLabel = codeDetail(codePhaseDisplay);
+    clientPushActive && codePhase !== "synced"
+      ? "uploading"
+      : codePhase;
+  if (!appSync) {
+    codeLabel = codeDetail(
+      codePhaseDisplay,
+      codeStatus,
+      githubItem?.manualUploadHold,
+      githubItem?.lastError,
+    );
+  } else if (codePhaseDisplay === "uploading" && codePhase !== "uploading") {
+    codeLabel = "Publishing app code to cloud repo…";
+  }
 
-  const anyUploading =
-    isUploading ||
-    codePhaseDisplay === "uploading" ||
-    dependentJobs.some((job) => job.phase === "uploading");
+  const publishLive = items.appContext?.publishLive === true;
+  const oversizedAppFilesMessage = items.oversizedAppFiles?.message ?? null;
+  const oversizedAppFilesCount = items.oversizedAppFiles?.paths.length ?? 0;
+  const publishedAt = items.appContext?.publishedAt ?? null;
+
+  const publishStatus: AppCloudPublishStatus =
+    items.publish?.status ?? "synced";
+  const publishDetail = items.publish?.detail ?? null;
+  const publishLabel = publishDetailLabel(publishStatus, publishDetail);
+  const cloudUploading = publishStatus === "republishing";
+  // Never published: there is no web layer to keep in sync, so publish state
+  // must not hold the app at "needs sync". Publish changes puts code in the cloud
+  // repo; publishing is a separate, explicit action.
+  const publishNotConfigured = !publishLive && publishedAt == null;
+  const publishLayerSynced =
+    publishNotConfigured ||
+    (publishLive && publishStatus === "synced" && !cloudUploading);
+  const publishBlocksWeb =
+    !publishNotConfigured &&
+    (publishStatus === "drift" ||
+      publishStatus === "error" ||
+      (publishStatus === "not_web_ready" && !publishLive));
+
+  const uploadStatus = items.upload?.status;
+  const uploadLabel = items.upload?.label ?? null;
+  const uploadDetail = items.upload?.detail ?? null;
+  const uploadRetryPending = items.upload?.retryPending ?? false;
+  const uploadQueued = items.upload?.waitingReason === "queued";
+  const uploadQueuePosition = items.upload?.queuePosition ?? null;
+  const uploadQueueDepth = items.upload?.queueDepth ?? null;
+  const coordinatorUploading = uploadStatus === "uploading";
+  const coordinatorWaiting = uploadStatus === "waiting";
+  const coordinatorFailed = uploadStatus === "failed";
+
+  const isQueuedForUpload = uploadQueued;
+  const syncedOnWebNoLocalWork =
+    (codePhase === "synced" ||
+      (publishLive && codePhase === "not_uploaded" && codeStatus === "pending")) &&
+    (appSync == null ||
+      (appSync.phase === "synced" && appSync.hasLocalChanges !== true)) &&
+    dbBlockingPending === 0 &&
+    dependentJobs.every((job) => job.phase === "synced") &&
+    !registryNeedsSync;
+  const effectiveQueuedForUpload =
+    isQueuedForUpload && !syncedOnWebNoLocalWork;
+  const coordinatorAffectsUi =
+    !publishLayerSynced &&
+    !(isQueuedForUpload && syncedOnWebNoLocalWork) &&
+    (coordinatorUploading || coordinatorWaiting || coordinatorFailed);
+  const isActivelyUploading =
+    !effectiveQueuedForUpload &&
+    (clientPushActive ||
+      (coordinatorUploading && !publishLayerSynced) ||
+      (codePhaseDisplay === "uploading" && !publishLayerSynced) ||
+      dependentJobs.some((job) => job.phase === "uploading"));
+
+  let displayCodePhase = codePhaseDisplay;
+  let displayRegistryPhase = registryPhase;
+  let displayRegistryLabel = registryLabel;
+  let displayRegistryNeedsSync = registryNeedsSync;
+
+  if (publishLive && !isActivelyUploading) {
+    if (codePhase === "not_uploaded" && codeStatus === "pending") {
+      displayCodePhase = "synced";
+      codeLabel = appSync?.label ?? "App code on the web";
+    }
+    if (registryPhase === "not_uploaded") {
+      displayRegistryPhase = "synced";
+      displayRegistryLabel = "Registry on the web";
+      displayRegistryNeedsSync = false;
+    }
+  }
+
+  const lastUploadedAt =
+    appSync?.lastUploadedAt ??
+    githubItem?.lastSyncAt ??
+    publishedAt ??
+    null;
 
   const needsSync =
     codePhase === "changed" ||
-    codePhase === "not_uploaded" ||
+    (codePhase === "not_uploaded" && !publishLive) ||
+    codeStatus === "failed" ||
+    (coordinatorFailed && !publishLayerSynced) ||
+    (coordinatorWaiting &&
+      !publishLayerSynced &&
+      !(isQueuedForUpload && syncedOnWebNoLocalWork)) ||
     dependentJobs.some(
-      (job) => job.phase === "changed" || job.phase === "not_uploaded",
+      (job) =>
+        job.phase === "changed" ||
+        job.phase === "not_uploaded" ||
+        job.status === "failed",
     ) ||
-    dbPending > 0;
+    dbBlockingPending > 0 ||
+    displayRegistryNeedsSync ||
+    (!publishLayerSynced &&
+      displayCodePhase === "synced" &&
+      dbBlockingPending === 0 &&
+      !displayRegistryNeedsSync);
 
   let overall: AppCloudSyncOverall = "unknown";
-  if (anyUploading) {
+  if (effectiveQueuedForUpload) {
+    overall = "needs_sync";
+  } else if (isActivelyUploading) {
     overall = "uploading";
   } else if (
+    gitRemoteRequiresReview ||
     needsSync ||
-    codePhase === "changed" ||
-    codePhase === "not_uploaded"
+    publishBlocksWeb ||
+    displayCodePhase === "changed" ||
+    (displayCodePhase === "not_uploaded" && !publishLive)
   ) {
     overall = "needs_sync";
   } else if (
-    codePhase === "synced" &&
+    displayCodePhase === "synced" &&
     dependentJobs.every((job) => job.phase === "synced") &&
-    dbPending === 0
+    dbBlockingPending === 0 &&
+    !displayRegistryNeedsSync &&
+    publishLayerSynced &&
+    (!coordinatorWaiting ||
+      publishLayerSynced ||
+      (isQueuedForUpload && syncedOnWebNoLocalWork)) &&
+    (!(coordinatorFailed && !uploadRetryPending) || publishLayerSynced)
   ) {
     overall = "synced";
-  } else if (needsSync) {
-    overall = "needs_sync";
   }
 
   let chipLabel = "Sync status";
-  if (cloudPublishing && overall === "synced") {
+  if (coordinatorFailed && !uploadRetryPending) {
+    chipLabel = "Publish failed";
+  } else if (codeStatus === "failed") {
+    chipLabel = "Publish failed";
+  } else if (writerConflict) {
+    chipLabel = "Needs review";
+  } else if (gitRemoteRequiresReview) {
+    chipLabel = "Needs review";
+  } else if (gitRemoteMetadataSync) {
+    chipLabel = "Syncing job status…";
+  } else if (cloudUploading || publishStatus === "republishing") {
     chipLabel = "Updating cloud…";
-  } else if (overall === "synced") chipLabel = "Synced";
-  else if (overall === "uploading") {
+  } else if (coordinatorUploading && uploadLabel) {
+    chipLabel = uploadLabel;
+  } else if (effectiveQueuedForUpload && uploadLabel) {
+    chipLabel = uploadLabel;
+  } else if (overall === "synced") {
+    const publishChip = publishChipLabel(publishStatus);
+    chipLabel = publishChip ?? "Synced";
+  } else if (overall === "uploading") {
     chipLabel =
       totalJobCount > 0
-        ? `Uploading ${syncedJobCount}/${totalJobCount}…`
-        : "Uploading…";
+        ? `Publishing ${syncedJobCount}/${totalJobCount}…`
+        : "Publishing…";
   } else if (overall === "needs_sync") {
+    const publishChip = publishChipLabel(publishStatus);
+    // "Not published" names the direction and the verb; "Needs sync" told users
+    // neither. Job count reads as "N of M jobs already on the web".
     chipLabel =
-      totalJobCount > 0
-        ? `Needs sync (${syncedJobCount}/${totalJobCount})`
-        : "Needs sync";
-  } else if (overall === "disabled") chipLabel = "Cloud off";
+      publishChip ??
+      (totalJobCount > 0
+        ? `Not published (${syncedJobCount}/${totalJobCount} jobs)`
+        : "Not published");
+  } else if (overall === "unknown") {
+    chipLabel = "Sync status unknown";
+  }
 
-  const summaryLine = buildSummaryLine({
-    codePhase: codePhaseDisplay,
-    syncedJobCount,
-    totalJobCount,
-    dbPending,
-    isUploading: anyUploading,
-  });
+  const hasLocalChanges =
+    appSync?.hasLocalChanges === true ||
+    (appSync == null && displayCodePhase === "changed");
+
+  const summaryLine =
+    overall === "unknown"
+      ? "Could not determine web sync status — open for details"
+      : buildSummaryLine({
+          codePhase: displayCodePhase,
+          syncedJobCount,
+          totalJobCount,
+          dbBlockingPending,
+          dbRowsSyncing,
+          registryNeedsSync: displayRegistryNeedsSync,
+          isActivelyUploading,
+          isQueuedForUpload: effectiveQueuedForUpload,
+          uploadQueuePosition,
+          uploadQueueDepth,
+          overall,
+          lastUploadedAt,
+          publishStatus,
+          publishDetail,
+          publishNotConfigured,
+          gitRemoteRequiresReview,
+          gitRemoteMetadataSync,
+          uploadLabel,
+        });
 
   return {
     overall,
     codeStatus,
-    codePhase: codePhaseDisplay,
+    codePhase: displayCodePhase,
     codeLabel,
+    lastUploadedAt,
     dependentJobs,
     hasDependentJobs,
     syncedJobCount,
     totalJobCount,
     summaryLine,
     databases,
+    hasSchemaDrift,
     hasLinkedDatabases,
+    hasRegistryDatabases,
+    registryPhase: displayRegistryPhase,
+    registryLabel: displayRegistryLabel,
     chipLabel,
     globallySyncing,
-    cloudPublishing,
+    cloudUploading,
+    publishStatus,
+    publishLabel,
+    publishDetail,
+    uploadStatus: coordinatorAffectsUi ? uploadStatus : undefined,
+    uploadLabel: coordinatorAffectsUi ? uploadLabel : null,
+    uploadDetail: coordinatorAffectsUi ? uploadDetail : null,
+    uploadRetryPending: coordinatorAffectsUi ? uploadRetryPending : undefined,
+    uploadQueued: coordinatorAffectsUi ? effectiveQueuedForUpload : undefined,
+    uploadQueuePosition: coordinatorAffectsUi ? uploadQueuePosition : null,
+    uploadQueueDepth: coordinatorAffectsUi ? uploadQueueDepth : null,
+    gitUpdatesAvailable,
+    gitUpdatesSummary,
+    writerConflict,
+    gitRemoteRequiresReview,
+    gitRemoteMetadataSync,
+    gitRemoteReviewHeadline,
+    codeLastError: codeLastError ?? githubItem?.lastError ?? null,
+    publishLive,
+    oversizedAppFilesMessage,
+    oversizedAppFilesCount,
+    hasLocalChanges,
   };
 }
 
-export type WebSyncVisualState = "loading" | "synced" | "syncing" | "warn" | "neutral";
+export interface RemoteCodeCheckSnapshot {
+  upToDate: boolean;
+  remoteCommitSha?: string | null;
+  checkFailed?: boolean;
+  publisherUpdatesAvailable?: boolean;
+  publisherLiveRevision?: string | null;
+  storedUpstreamRevision?: string | null;
+  /** Remote commit arrived but auto-pull is deferred (gateway appRepoPendingUpdate). */
+  pendingUpdate?: {
+    commitSha: string;
+    reason: string;
+    conflictFiles?: string[];
+  } | null;
+}
+
+/** Short share-bar copy for a deferred remote update. */
+export function describePendingUpdate(
+  pending: NonNullable<RemoteCodeCheckSnapshot["pendingUpdate"]>,
+): { chipLabel: string; summaryLine: string } {
+  const conflicts = pending.conflictFiles?.length ?? 0;
+  if (conflicts > 0) {
+    return {
+      chipLabel: "Update conflicts",
+      summaryLine: "Update conflicts with your edits",
+    };
+  }
+  if (pending.reason === "local changes pending upload") {
+    return {
+      chipLabel: "Update waiting",
+      summaryLine: "Syncing your changes first, then updating",
+    };
+  }
+  return { chipLabel: "Update waiting", summaryLine: "Update waiting — click Get updates" };
+}
+
+/** Hide cached namespace-git "updates available" until live sync checks finish. */
+export function suppressStaleGitUpdatesAvailable(
+  status: AppCloudSyncStatus,
+  liveCheckPending: boolean,
+): AppCloudSyncStatus {
+  if (!liveCheckPending || !status.gitUpdatesAvailable) {
+    return status;
+  }
+  return {
+    ...status,
+    gitUpdatesAvailable: false,
+  };
+}
+
+/** Merge writer HEAD check (MongoDB metadata) into publish-bar sync status — notify-only, no pull. */
+export function mergeRemoteCodeCheckIntoStatus(
+  status: AppCloudSyncStatus,
+  remote: RemoteCodeCheckSnapshot | null,
+): AppCloudSyncStatus {
+  if (remote?.pendingUpdate && status.overall !== "disabled") {
+    const copy = describePendingUpdate(remote.pendingUpdate);
+    return {
+      ...status,
+      gitUpdatesAvailable: true,
+      codeStatus: "updates_available",
+      chipLabel: copy.chipLabel,
+      summaryLine: copy.summaryLine,
+      updateConflictFiles: remote.pendingUpdate.conflictFiles ?? [],
+    };
+  }
+  if (remote?.upToDate) {
+    if (
+      !status.gitUpdatesAvailable &&
+      status.codeStatus !== "updates_available"
+    ) {
+      return status;
+    }
+    const cleared: AppCloudSyncStatus = {
+      ...status,
+      gitUpdatesAvailable: false,
+    };
+    if (
+      status.codeStatus === "updates_available" &&
+      !status.gitRemoteRequiresReview &&
+      !status.writerConflict &&
+      !status.hasLocalChanges
+    ) {
+      return {
+        ...cleared,
+        codeStatus: "synced",
+        chipLabel: "Synced",
+        summaryLine: "Everything matches the web.",
+        overall: status.overall === "needs_sync" ? "synced" : status.overall,
+      };
+    }
+    return cleared;
+  }
+
+  if (
+    !remote ||
+    remote.checkFailed ||
+    status.overall === "disabled" ||
+    status.gitRemoteRequiresReview ||
+    status.writerConflict
+  ) {
+    return status;
+  }
+
+  const cloudAheadSummary = status.hasLocalChanges
+    ? "Cloud has newer approved changes — get updates before publishing local edits"
+    : "The web has newer changes — click Get updates";
+
+  return {
+    ...status,
+    gitUpdatesAvailable: true,
+    codeStatus:
+      status.codeStatus === "synced" ||
+      status.codeStatus === "unknown" ||
+      status.codeStatus === "changed"
+        ? "updates_available"
+        : status.codeStatus,
+    chipLabel: "Updates available",
+    summaryLine: cloudAheadSummary,
+    overall: status.overall === "needs_sync" ? "needs_sync" : status.overall,
+  };
+}
+
+export type WebSyncVisualState =
+  | "loading"
+  | "synced"
+  | "syncing"
+  | "warn"
+  | "updates_available"
+  | "action_required"
+  | "disabled"
+  | "error";
 
 /** Hover tooltip for the web sync status dot. */
 export function formatWebSyncStatusTooltip(
   status: AppCloudSyncStatus | null,
-  options: { loading?: boolean; error?: string | null } = {},
+  options: { loading?: boolean; error?: string | null; refreshing?: boolean } = {},
 ): string {
-  if (options.error) return "Web sync unavailable";
-  if (options.loading || !status) return "Checking web sync status…";
-  if (status.overall === "disabled") return "Cloud sync is off";
+  if (options.error) {
+    return options.error.length > 0
+      ? `Web sync unavailable — ${options.error}`
+      : "Web sync unavailable";
+  }
+  if (options.refreshing) {
+    return "Checking what's on the web…";
+  }
+  if (!status) {
+    return "Web sync not checked yet — open web sync and click Check status.";
+  }
+  if (status.gitUpdatesAvailable && !status.gitRemoteRequiresReview) {
+    return (
+      status.summaryLine ||
+      "Cloud has newer app code — open web sync and click Get updates"
+    );
+  }
+  if (status.gitRemoteRequiresReview) {
+    return "Action needed — merge cloud changes before publishing";
+  }
+  if (status.gitRemoteMetadataSync) {
+    return "Integrating cloud job status — no action needed";
+  }
+  if (status.overall === "disabled") {
+    return "Cloud sync is off — turn on in Settings → Cloud Sync";
+  }
+  if (status.overall === "unknown") {
+    return status.summaryLine || "Sync status unknown — click for details";
+  }
   return status.summaryLine || status.chipLabel;
 }
 
@@ -367,13 +1254,525 @@ export function webSyncVisualState(
     loading?: boolean;
     error?: string | null;
     pushing?: boolean;
+    pulling?: boolean;
     refreshing?: boolean;
   } = {},
 ): WebSyncVisualState {
-  if (options.error || options.loading || !status) return "loading";
-  if (status.overall === "disabled") return "neutral";
+  if (options.error) return "error";
+  if (options.pulling) {
+    return status ? "syncing" : "loading";
+  }
+  // Only an active refresh (or known status + legacy loading) is "busy".
+  // Hook `loading` on tab open before the first items fetch is not — chip stays calm.
+  if (options.refreshing) {
+    return status ? "syncing" : "loading";
+  }
+  if (options.loading && status) {
+    return "syncing";
+  }
+  if (!status) return "synced";
+  if (status.overall === "disabled") return "disabled";
+  if (status.codeStatus === "failed" && !status.writerConflict) return "error";
+  if (status.writerConflict || status.gitRemoteRequiresReview) {
+    return "action_required";
+  }
+  if (
+    status.gitUpdatesAvailable &&
+    !status.gitRemoteRequiresReview &&
+    !status.writerConflict
+  ) {
+    return "updates_available";
+  }
   if (options.pushing || status.overall === "uploading") return "syncing";
+  if (status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0) {
+    return "warn";
+  }
   if (status.overall === "synced") return "synced";
-  if (status.overall === "needs_sync") return "warn";
-  return "neutral";
+  if (
+    status.publishStatus === "not_web_ready" ||
+    status.publishStatus === "drift" ||
+    status.publishStatus === "error"
+  ) {
+    return "warn";
+  }
+  if (status.overall === "needs_sync" || status.overall === "unknown") {
+    return "warn";
+  }
+  return "warn";
+}
+
+/**
+ * Chip label for the publish bar, ranked worst-first: whatever needs the user
+ * is what the chip says. The age is appended only in the calm state, because
+ * that is the only state where "when did we last ask the web?" is the question
+ * the user actually has. Local dirty is watched, never stale, so it never
+ * carries an age.
+ */
+export type PublishBarChipTone = "ok" | "warn" | "bad" | "info" | "idle" | "busy";
+
+export function resolvePublishBarChipLabel(input: {
+  state: WebSyncVisualState;
+  live: boolean;
+  syncEnabled: boolean;
+  lastCheckedAt: number | null;
+  /** ISO time of the last successful publish — drives "just published". */
+  lastPublishedAt?: string | null;
+  cloudPublishFailed?: boolean;
+  pulling?: boolean;
+}): { label: string; showRefresh: boolean; tone: PublishBarChipTone } {
+  const {
+    state,
+    live,
+    syncEnabled,
+    lastCheckedAt,
+    lastPublishedAt,
+    cloudPublishFailed,
+    pulling = false,
+  } = input;
+  if (cloudPublishFailed || state === "error") {
+    return { label: "Last publish failed", showRefresh: false, tone: "bad" };
+  }
+  if (state === "loading") {
+    return { label: "Checking…", showRefresh: false, tone: "busy" };
+  }
+  if (!live) return { label: "Draft", showRefresh: false, tone: "idle" };
+  if (state === "syncing")
+    return {
+      label: pulling ? "Getting updates…" : "Publishing…",
+      showRefresh: false,
+      tone: "busy",
+    };
+  if (state === "updates_available")
+    return { label: "Newer version on web", showRefresh: false, tone: "info" };
+  if (state === "action_required")
+    return { label: "Update conflicts", showRefresh: false, tone: "bad" };
+  if (state === "warn")
+    return { label: "Unpublished changes", showRefresh: false, tone: "warn" };
+  if (state === "disabled" || !syncEnabled)
+    return { label: "Live, sync off", showRefresh: false, tone: "idle" };
+
+  // A fresh publish is the write we just made, so confirm THAT — not the age of
+  // the last web check, which can be hours old at the moment we publish.
+  const publishedMsAgo = lastPublishedAt
+    ? Date.now() - new Date(lastPublishedAt).getTime()
+    : Number.POSITIVE_INFINITY;
+  if (publishedMsAgo >= 0 && publishedMsAgo < 120_000) {
+    return { label: "Live, just updated", showRefresh: false, tone: "ok" };
+  }
+
+  return resolveCalmLivePublishBarChip(lastCheckedAt);
+}
+
+function resolveCalmLivePublishBarChip(lastCheckedAt: number | null): {
+  label: string;
+  showRefresh: boolean;
+  tone: PublishBarChipTone;
+} {
+  if (lastCheckedAt == null) {
+    return { label: "Live", showRefresh: false, tone: "ok" };
+  }
+  const age = formatLastUploadedAt(new Date(lastCheckedAt).toISOString());
+  if (!age || age === "just now") {
+    return { label: "Live", showRefresh: false, tone: "ok" };
+  }
+  return {
+    label: `Live · last checked ${age}`,
+    showRefresh: true,
+    tone: "ok",
+  };
+}
+
+/**
+ * The primary slot only ever pushes, and never disappears while web sync is on.
+ *
+ * It used to render six verbs across two opposite directions — Publish and
+ * Publish changes send work up, Get updates and Update pull the web copy down,
+ * Review changes did neither — and returned null in three unrelated situations.
+ * People build muscle memory for position, not wording, so one pixel that flips
+ * between "send mine up" and "pull theirs down" eventually gets clicked in the
+ * wrong state, and the failure mode is losing your own edits. Pull and review
+ * now live on the status chip (resolvePublishBarChipAction), which already
+ * names those conditions.
+ *
+ * Absence cannot explain itself, so states with nothing to send return
+ * disabled: true with the reason in `title` rather than returning null.
+ */
+export function resolvePublishBarPrimaryAction(input: {
+  state: WebSyncVisualState;
+  live: boolean;
+  syncEnabled: boolean;
+  pushing: boolean;
+  pulling: boolean;
+  pullingUpstream?: boolean;
+  publisherUpdatesAvailable?: boolean;
+  forkWebPreview?: boolean;
+  /** Local edits waiting while the web copy is also ahead (v4: pull, then publish). */
+  hasLocalChanges?: boolean;
+}): {
+  label: string;
+  kind: "publish" | "retry";
+  disabled?: boolean;
+  title: string;
+  /** Click runs Get updates first, then publishes. */
+  pullFirst?: boolean;
+} | null {
+  const { state, live, syncEnabled, pushing, pulling, hasLocalChanges = false } = input;
+  // Files mode hides the whole web-sync lane — chip included — so there is no
+  // slot for this button to persist in.
+  if (!syncEnabled) return null;
+  // One verb in every state. What happens after the click shows as progress
+  // (Updating… then Publishing…); the chip explains the state, the button
+  // never does.
+  if (!live) {
+    return {
+      label: pushing ? "Publishing…" : "Publish",
+      kind: "publish",
+      disabled: pushing,
+      title: pushing ? "Upload in progress" : "Put this app on the web",
+    };
+  }
+  // Unknown, not idle: say so and stay put rather than blinking out and back.
+  if (state === "loading") {
+    return { label: "Publish", kind: "publish", disabled: true, title: "Checking the web copy…" };
+  }
+  if (state === "syncing" || pushing || pulling) {
+    return {
+      label: pulling ? "Updating…" : "Publishing…",
+      kind: "publish",
+      disabled: true,
+      title: pulling ? "Getting the latest web version" : "Upload in progress",
+    };
+  }
+  if (state === "error") {
+    return { label: "Publish", kind: "retry", title: "Last publish failed. Try again" };
+  }
+  if (state === "warn") {
+    return { label: "Publish", kind: "publish", title: "Send your local edits to the web" };
+  }
+  if (state === "updates_available" && hasLocalChanges) {
+    return {
+      label: "Publish",
+      kind: "publish",
+      pullFirst: true,
+      title: "Gets the newer web version first, then publishes your edits. Stops if they conflict.",
+    };
+  }
+  // Up to date, web ahead with nothing local, or conflicts: nothing of yours
+  // is waiting to go up. Same slot, same word, greyed, with the reason on hover.
+  return {
+    label: "Publish",
+    kind: "publish",
+    disabled: true,
+    title:
+      state === "updates_available"
+        ? "Nothing local to publish. Get the newer version from the status chip"
+        : state === "action_required"
+          ? "Resolve the update conflicts on the status chip first"
+          : "Everything here is already on the web",
+  };
+}
+
+/**
+ * Pull and review, carried by the status chip instead of the primary slot.
+ *
+ * The chip already said "Updates on web" and "Needs review", so putting the
+ * same condition in a button restated one fact twice with two different
+ * affordances. Rendered as a glyph at rest — the label next to it already names
+ * the condition — with `verb` sliding open on hover so nobody has to guess what
+ * the arrow does.
+ */
+export function resolvePublishBarChipAction(input: {
+  state: WebSyncVisualState;
+  live: boolean;
+  syncEnabled: boolean;
+  pushing: boolean;
+  pulling: boolean;
+  pullingUpstream?: boolean;
+  publisherUpdatesAvailable?: boolean;
+  forkWebPreview?: boolean;
+}): {
+  kind: "updates" | "upstream" | "review";
+  glyph: "down" | "open";
+  verb: string;
+  busy?: boolean;
+} | null {
+  const {
+    state,
+    live,
+    syncEnabled,
+    pushing,
+    pulling,
+    pullingUpstream = false,
+    publisherUpdatesAvailable = false,
+    forkWebPreview = false,
+  } = input;
+  if (!syncEnabled || !live) return null;
+  if (state === "loading") return null;
+  // Mid-flight work owns the primary slot's label; a second spinner on the chip
+  // would imply a second operation.
+  if (state === "syncing" || pushing || pulling || pullingUpstream) return null;
+  if (state === "action_required") {
+    return { kind: "review", glyph: "open", verb: "Review" };
+  }
+  if (forkWebPreview && publisherUpdatesAvailable) {
+    return { kind: "upstream", glyph: "down", verb: "Update from publisher" };
+  }
+  if (state === "updates_available") {
+    return { kind: "updates", glyph: "down", verb: "Get updates" };
+  }
+  return null;
+}
+
+/**
+ * Web writer HEAD is ahead of this Mac's last ack — publish before pulling risks
+ * 409 / file conflicts. Matches the compact bar's pull-first primary action.
+ */
+export function webSyncShouldPullBeforePublish(status: AppCloudSyncStatus): boolean {
+  return (
+    status.gitUpdatesAvailable &&
+    !status.gitRemoteRequiresReview &&
+    !status.writerConflict &&
+    !status.gitRemoteMetadataSync
+  );
+}
+
+/** Fork/track on Web preview: publisher revision ahead of stored upstream cursor. */
+export function resolvePublishBarChipForForkUpstream(input: {
+  publisherUpdatesAvailable: boolean;
+  forkWebPreview: boolean;
+}): { label: string; tone: PublishBarChipTone; state: WebSyncVisualState } | null {
+  if (!input.forkWebPreview || !input.publisherUpdatesAvailable) {
+    return null;
+  }
+  return {
+    label: "Publisher has updates",
+    tone: "info",
+    state: "updates_available",
+  };
+}
+
+export interface PublishBarStatusInput {
+  live: boolean;
+  loading: boolean;
+  refreshing: boolean;
+  syncEnabled: boolean;
+  webSyncState: WebSyncVisualState;
+  webSyncSpinning: boolean;
+  webSyncTooltip: string;
+  /** Settings / cloud API publish failed (distinct from web-sync upload failure). */
+  cloudPublishFailed?: boolean;
+  cloudPublishErrorDetail?: string | null;
+}
+
+/** Single publish-bar status: combines live/publish state with web sync when previewing. */
+export function resolvePublishBarStatus(input: PublishBarStatusInput): {
+  state: WebSyncVisualState;
+  spinning: boolean;
+  tooltip: string;
+  interactive: boolean;
+} {
+  const {
+    live,
+    loading,
+    refreshing,
+    syncEnabled,
+    webSyncState,
+    webSyncSpinning,
+    webSyncTooltip,
+    cloudPublishFailed,
+    cloudPublishErrorDetail,
+  } = input;
+
+  if (cloudPublishFailed) {
+    const detail =
+      cloudPublishErrorDetail?.trim() ||
+      "Publishing to the web did not complete. Click for details.";
+    return {
+      state: "error",
+      spinning: false,
+      tooltip: detail,
+      interactive: true,
+    };
+  }
+
+  if (loading && !live) {
+    return {
+      state: "loading",
+      spinning: false,
+      tooltip: "Checking publish status…",
+      interactive: false,
+    };
+  }
+
+  if (!syncEnabled) {
+    if (!live) {
+      return {
+        state: "disabled",
+        spinning: false,
+        tooltip: "Draft — not published to the web",
+        interactive: false,
+      };
+    }
+    if (refreshing) {
+      return {
+        state: "syncing",
+        spinning: true,
+        tooltip: "Updating live app…",
+        interactive: false,
+      };
+    }
+    return {
+      state: "synced",
+      spinning: false,
+      tooltip: "Live on the web",
+      interactive: false,
+    };
+  }
+
+  if (!live) {
+    return {
+      state: "disabled",
+      spinning: false,
+      tooltip: "Draft — publish to the web to sync",
+      interactive: true,
+    };
+  }
+
+  const spinning = webSyncSpinning || refreshing;
+  const tooltip =
+    refreshing && webSyncState === "synced"
+      ? "Updating live app…"
+      : webSyncTooltip;
+
+  return {
+    state: webSyncState,
+    spinning,
+    tooltip,
+    interactive: true,
+  };
+}
+
+/**
+ * Collaborator (track install) bar, v4. The primary is always Propose; the
+ * chip explains the state. Code only leaves as a proposal, so there is no
+ * Publish here, and Propose greys out when nothing differs from the
+ * publisher's last synced code.
+ */
+export type CollaboratorLatestProposalStatus = "pending" | "approved" | "rejected";
+
+export function resolveCollaboratorBar(input: {
+  /** true/false from the local-edits check; null = unknown (keep Propose enabled). */
+  hasLocalEdits: boolean | null;
+  /** Edits not yet sent in a proposal. Omitted = same as hasLocalEdits. */
+  hasUnproposedEdits?: boolean | null;
+  /** Newest outgoing proposal status (collaborator install). */
+  latestProposalStatus?: CollaboratorLatestProposalStatus | null;
+  publisherAhead: boolean;
+  pullingUpstream: boolean;
+  busy: boolean;
+  sourceSlug: string;
+}): {
+  chip: { label: string; tone: PublishBarChipTone; state: WebSyncVisualState };
+  chipAction: { kind: "upstream" | "propose"; glyph: "down" | "up"; verb: string } | null;
+  primary: { label: string; disabled: boolean; title: string; pullFirst: boolean };
+  /** Status chip should open the Propose sheet (history + owner decision). */
+  openProposeSheetOnChipClick: boolean;
+} {
+  const { hasLocalEdits, publisherAhead, pullingUpstream, busy, sourceSlug } = input;
+  // Everything edited was already proposed: waiting on the owner, nothing new to send.
+  const allProposed = hasLocalEdits === true && input.hasUnproposedEdits === false;
+  const edits = hasLocalEdits !== false && !allProposed;
+  if (pullingUpstream) {
+    return {
+      chip: { label: "Updating…", tone: "busy", state: "syncing" },
+      chipAction: null,
+      primary: { label: "Updating…", disabled: true, title: "Getting the publisher's latest code", pullFirst: false },
+      openProposeSheetOnChipClick: false,
+    };
+  }
+  const proposalChip = ((): {
+    label: string;
+    tone: PublishBarChipTone;
+    state: WebSyncVisualState;
+  } | null => {
+    if (!allProposed || !input.latestProposalStatus) {
+      return null;
+    }
+    switch (input.latestProposalStatus) {
+      case "pending":
+        return { label: "Waiting for review", tone: "info", state: "syncing" };
+      case "approved":
+        return publisherAhead
+          ? { label: "Accepted — pull updates", tone: "ok", state: "updates_available" }
+          : { label: "Accepted by owner", tone: "ok", state: "synced" };
+      case "rejected":
+        return { label: "Declined — propose again", tone: "warn", state: "warn" };
+      default:
+        return null;
+    }
+  })();
+
+  const chip = publisherAhead && input.latestProposalStatus !== "approved"
+    ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
+    : proposalChip ??
+      (publisherAhead
+        ? { label: "Publisher has updates", tone: "info" as const, state: "updates_available" as const }
+        : allProposed
+          ? { label: "Proposal sent", tone: "info" as const, state: "synced" as const }
+          : hasLocalEdits
+            ? { label: "Edits not proposed", tone: "warn" as const, state: "warn" as const }
+            : { label: "In sync with publisher", tone: "ok" as const, state: "synced" as const });
+  const chipAction = publisherAhead
+    ? { kind: "upstream" as const, glyph: "down" as const, verb: "Update" }
+    : hasLocalEdits && !allProposed
+      ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }
+      : input.latestProposalStatus === "rejected"
+        ? { kind: "propose" as const, glyph: "up" as const, verb: "Propose" }
+        : null;
+  const pullFirst = publisherAhead && edits;
+  const openProposeSheetOnChipClick =
+    allProposed ||
+    input.latestProposalStatus === "pending" ||
+    input.latestProposalStatus === "approved" ||
+    input.latestProposalStatus === "rejected";
+  return {
+    chip,
+    chipAction,
+    openProposeSheetOnChipClick,
+    primary: {
+      label: "Propose",
+      disabled:
+        busy ||
+        (input.latestProposalStatus === "rejected" && input.hasUnproposedEdits === false) ||
+        (!edits &&
+          input.latestProposalStatus !== "rejected" &&
+          !(allProposed && input.latestProposalStatus === "pending")),
+      pullFirst,
+      title: allProposed
+        ? input.latestProposalStatus === "approved"
+          ? publisherAhead
+            ? `${sourceSlug} accepted your proposal. Pull their latest code to match the live app.`
+            : `${sourceSlug} accepted your proposal. You're aligned with the live app.`
+          : input.latestProposalStatus === "rejected"
+            ? `${sourceSlug} declined your last proposal. Edit and send a new one.`
+            : input.latestProposalStatus === "pending"
+              ? `Waiting for ${sourceSlug} to review your proposal.`
+              : `Your edits were sent to ${sourceSlug}. Edit again to propose more.`
+        : !edits
+          ? "No code edits to propose"
+          : pullFirst
+            ? `Gets ${sourceSlug}'s latest code first, then proposes your edits. Stops if they conflict.`
+            : `Send your code edits to ${sourceSlug} for review`,
+    },
+  };
+}
+
+/** @deprecated Prefer `openProposeSheetOnChipClick` from resolveCollaboratorBar. */
+export function collaboratorChipOpensProposeSheet(chipLabel: string): boolean {
+  return (
+    chipLabel === "Proposal sent" ||
+    chipLabel === "Waiting for review" ||
+    chipLabel.startsWith("Accepted") ||
+    chipLabel.startsWith("Declined")
+  );
 }

@@ -4,7 +4,14 @@
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { gateway } from "../../src/lib/gateway";
+import {
+  checkPaprCloudFeature,
+  requestPaprCloudFeature,
+  usePaprCloudFeatureStore,
+} from "../../stores/paprCloudFeatureStore";
+import { PaprCloudRequirementsPanel } from "../common/PaprCloudRequirementsPanel";
 import { CloudSyncDetails, type SyncItemsResponse } from "./CloudSyncDetails";
+import { ReplicaE2ePanel } from "./ReplicaE2ePanel";
 import {
   readCloudSyncTabSnapshot,
   writeCloudSyncTabSnapshot,
@@ -57,11 +64,21 @@ function statusMeta(s?: string): { color: string; label: string } {
 }
 
 export function CloudSyncTab() {
+  const paprCloudContext = usePaprCloudFeatureStore((state) => state.context);
+  const cloudSyncAccess = paprCloudContext
+    ? checkPaprCloudFeature("cloud_sync")
+    : null;
+  const cloudSyncBlocked =
+    cloudSyncAccess !== null && cloudSyncAccess.allowed === false;
   const cached = readCloudSyncTabSnapshot();
   const [cloudSyncEnabled, setCloudSyncEnabled] = useState(true);
   const [cloudAutoPublishEnabled, setCloudAutoPublishEnabled] = useState(true);
+  const [cloudAutoUploadEnabled, setCloudAutoUploadEnabled] = useState(true);
   const [loaded, setLoaded] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Any in-flight fetch (initial load or background poll). */
+  const [loading, setLoading] = useState(false);
+  /** User-triggered force refresh (?refresh=1). */
   const [refreshing, setRefreshing] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitSyncStatus | null>(
     (cached?.gitStatus as GitSyncStatus | null) ?? null,
@@ -77,6 +94,7 @@ export function CloudSyncTab() {
   const fetchStatus = useCallback(async (forceRefresh = false) => {
     if (fetchInFlightRef.current) return;
     fetchInFlightRef.current = true;
+    setLoading(true);
     if (forceRefresh) {
       setRefreshing(true);
     }
@@ -104,6 +122,7 @@ export function CloudSyncTab() {
       /* gateway unavailable */
     } finally {
       fetchInFlightRef.current = false;
+      setLoading(false);
       setRefreshing(false);
     }
   }, []);
@@ -141,6 +160,7 @@ export function CloudSyncTab() {
             preferences?: {
               cloudSyncEnabled?: boolean;
               cloudAutoPublishEnabled?: boolean;
+              cloudAutoUploadEnabled?: boolean;
             };
           }
         )?.preferences;
@@ -149,6 +169,9 @@ export function CloudSyncTab() {
         }
         if (prefs?.cloudAutoPublishEnabled !== undefined) {
           setCloudAutoPublishEnabled(prefs.cloudAutoPublishEnabled);
+        }
+        if (prefs?.cloudAutoUploadEnabled !== undefined) {
+          setCloudAutoUploadEnabled(prefs.cloudAutoUploadEnabled);
         }
       } catch {
         /* defaults */
@@ -187,14 +210,20 @@ export function CloudSyncTab() {
     );
   }
 
-  const showInitialSyncSkeleton =
-    cloudSyncEnabled && !syncItems && !gitStatus && !vaultStatus;
-
   const gitDot = statusMeta(gitStatus?.status);
   const vaultDot = statusMeta(vaultStatus?.status);
   const liveLinks = syncItems?.cloudLinks?.summary.live ?? 0;
   const totalLinks = syncItems?.cloudLinks?.summary.total ?? 0;
   const appsHost = syncItems?.cloudLinks?.appsHost ?? "apps.papr.ai";
+  const cloudAppsUpdating = loading || refreshing;
+  const cloudAppsMeta =
+    totalLinks > 0
+      ? `${liveLinks} live · ${totalLinks} total${cloudAppsUpdating ? " · updating…" : ""}`
+      : cloudAppsUpdating
+        ? "Updating…"
+        : "No apps published yet";
+  const cloudAppsDotColor =
+    liveLinks > 0 ? "#34c759" : cloudAppsUpdating ? "#ff9500" : "#8e8e93";
 
   return (
     <div className="settings-content settings-content--full-width cloud-sync-tab">
@@ -208,6 +237,18 @@ export function CloudSyncTab() {
           independently for each app.
         </p>
 
+        <div className="cloud-sync-tab__requirements">
+          <PaprCloudRequirementsPanel featureId="cloud_sync" />
+        </div>
+
+        {cloudSyncEnabled && cloudSyncBlocked ? (
+          <div className="cloud-sync-tab__paused-note" role="status">
+            <strong>Cloud sync paused.</strong> Preferences stay on, but uploads,
+            vault sync, and publish will not run until Papr Cloud billing is
+            restored. Local apps and chat on this device still work.
+          </div>
+        ) : null}
+
         <div className="cloud-sync-tab__panel">
           <h3 className="cloud-sync-tab__panel-title">Preferences</h3>
           <p className="cloud-sync-tab__panel-desc">
@@ -220,10 +261,14 @@ export function CloudSyncTab() {
               checked={cloudSyncEnabled}
               disabled={saving}
               onChange={(e) => {
+                const enabled = e.target.checked;
+                if (enabled && !requestPaprCloudFeature("cloud_sync")) {
+                  return;
+                }
                 void savePreference(
-                  { cloudSyncEnabled: e.target.checked },
+                  { cloudSyncEnabled: enabled },
                   setCloudSyncEnabled,
-                  e.target.checked,
+                  enabled,
                 );
               }}
             />
@@ -237,6 +282,29 @@ export function CloudSyncTab() {
           </label>
 
           {cloudSyncEnabled ? (
+            <>
+            <label className="cloud-sync-tab__toggle">
+              <input
+                type="checkbox"
+                checked={cloudAutoUploadEnabled}
+                disabled={saving}
+                onChange={(e) => {
+                  void savePreference(
+                    { cloudAutoUploadEnabled: e.target.checked },
+                    setCloudAutoUploadEnabled,
+                    e.target.checked,
+                  );
+                }}
+              />
+              <div>
+                <h4>Auto-upload to cloud</h4>
+                <p>
+                  When on, local app/job/git and Turso changes upload automatically.
+                  When off, use <strong>Publish changes</strong> on each app or agent{" "}
+                  <code>push_cloud_sync</code>.
+                </p>
+              </div>
+            </label>
             <label className="cloud-sync-tab__toggle">
               <input
                 type="checkbox"
@@ -259,6 +327,7 @@ export function CloudSyncTab() {
                 </p>
               </div>
             </label>
+            </>
           ) : null}
         </div>
 
@@ -312,16 +381,18 @@ export function CloudSyncTab() {
                 <div className="cloud-sync-tab__stat-label">
                   <span
                     className="cloud-sync-tab__stat-dot"
-                    style={{
-                      background: liveLinks > 0 ? "#34c759" : "#8e8e93",
-                    }}
+                    style={{ background: cloudAppsDotColor }}
                   />
                   Cloud apps
                 </div>
-                <div className="cloud-sync-tab__stat-meta">
-                  {totalLinks > 0
-                    ? `${liveLinks} live · ${totalLinks} total`
-                    : "No apps published yet"}
+                <div
+                  className={
+                    cloudAppsUpdating
+                      ? "cloud-sync-tab__stat-meta cloud-sync-tab__stat-meta--updating"
+                      : "cloud-sync-tab__stat-meta"
+                  }
+                >
+                  {cloudAppsMeta}
                 </div>
               </div>
             </div>
@@ -342,13 +413,11 @@ export function CloudSyncTab() {
               onRefresh={() => void fetchStatus(true)}
               onItemUpdated={patchCloudLinkItem}
               globalAutoPublishEnabled={cloudAutoPublishEnabled}
+              loading={loading}
               refreshing={refreshing}
             />
-            {showInitialSyncSkeleton ? (
-              <div className="cloud-sync-tab__disabled-note">
-                Refreshing cloud sync status…
-              </div>
-            ) : null}
+
+            <ReplicaE2ePanel />
           </>
         )}
       </div>

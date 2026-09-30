@@ -10,7 +10,7 @@
  *   - Auth0 callback: https://apps.papr.ai/auth/callback
  *
  * Usage:
- *   node scripts/deploy-cloud-app-host.mjs --project=papr-apps-prod --region=us-west1
+ *   node scripts/deploy-cloud-app-host.mjs --project=gen-lang-client-0873281406 --region=us-west1
  *
  * Options:
  *   --project=ID          GCP project (required)
@@ -21,6 +21,8 @@
  *   --tag=TAG             Image tag (default: git short sha or timestamp)
  *   --memory-url=URL      Memory server URL (default: https://memory.papr.ai)
  *   --public-url=URL      Public URL for Auth0 redirect (default: https://apps.papr.ai)
+ *   --cloud-build         Build on GCP (faster on Apple Silicon vs local linux/amd64)
+ *   --fast                Shorthand: --cloud-build (repeat deploys)
  *   --dry-run             Print commands without executing
  */
 
@@ -51,8 +53,13 @@ const getArg = (name, fallback) => {
   return hit ? hit.split("=").slice(1).join("=") : fallback;
 };
 const dryRun = args.includes("--dry-run");
+const fastDeploy = args.includes("--fast");
 
-const project = getArg("project", process.env.GCP_APPS_PROJECT_ID);
+const DEFAULT_APPS_GCP_PROJECT = "gen-lang-client-0873281406";
+const project = getArg(
+  "project",
+  process.env.GCP_APPS_PROJECT_ID ?? DEFAULT_APPS_GCP_PROJECT,
+);
 const region = getArg("region", process.env.GCP_APPS_REGION ?? "us-west1");
 const service = getArg("service", "papr-cloud-app-host");
 const repo = getArg("repo", "papr-apps");
@@ -89,7 +96,9 @@ function fail(msg) {
 }
 
 if (!project) {
-  fail("Missing --project=YOUR_GCP_PROJECT (or GCP_APPS_PROJECT_ID env var)");
+  fail(
+    "Missing --project=gen-lang-client-0873281406 (or GCP_APPS_PROJECT_ID in .env.local)",
+  );
 }
 
 console.log("Cloud App Host — production deploy");
@@ -100,6 +109,7 @@ console.log(`Service:     ${service}`);
 console.log(`Image:       ${fullImage}`);
 console.log(`Memory URL:  ${memoryUrl}`);
 console.log(`Public URL:  ${publicUrl}`);
+if (fastDeploy) console.log("Mode:        FAST (cloud-build)");
 if (dryRun) console.log("Mode:        DRY RUN");
 
 console.log("\n--- Pre-flight checklist ---");
@@ -156,8 +166,48 @@ if (secretCheck.status !== 0) {
   console.log(`Secret ${secretName} exists — ensure value matches memory Cloud Run`);
 }
 
+const gcsCacheBucket =
+  getArg("gcs-cache-bucket", process.env.CLOUD_APP_HOST_GCS_BUCKET) ??
+  `${project}-cloud-app-host-cache`;
+
+console.log("\n--- Step 3b: GCS shared repo-file cache ---");
+console.log(`Bucket: ${gcsCacheBucket}`);
+run(
+  `gcloud services enable storage.googleapis.com storage-api.googleapis.com --project=${project}`,
+);
+const bucketUri = `gs://${gcsCacheBucket}`;
+const bucketCheck = spawnSync(
+  "gcloud",
+  ["storage", "buckets", "describe", bucketUri, `--project=${project}`],
+  { encoding: "utf8" },
+);
+if (bucketCheck.status !== 0) {
+  run(
+    `gcloud storage buckets create ${bucketUri} --project=${project} --location=${region} --uniform-bucket-level-access`,
+  );
+} else {
+  console.log(`Bucket ${gcsCacheBucket} already exists`);
+}
+if (!dryRun) {
+  const projectNumber = runCapture(
+    `gcloud projects describe ${project} --format='value(projectNumber)'`,
+  );
+  const runSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
+  run(
+    `gcloud storage buckets add-iam-policy-binding ${bucketUri} --member=serviceAccount:${runSa} --role=roles/storage.objectAdmin --project=${project}`,
+  );
+  const lifecycleFile = resolve(process.cwd(), "scripts/cloud-app-host-gcs-lifecycle.json");
+  run(
+    `gcloud storage buckets update ${bucketUri} --lifecycle-file=${lifecycleFile} --project=${project}`,
+  );
+  console.log("Lifecycle: delete objects older than 7 days (orphan safety net)");
+}
+
 console.log("\n--- Step 4: Build & push Docker image ---");
-const useCloudBuild = args.includes("--cloud-build") || process.env.CLOUD_APP_HOST_CLOUD_BUILD === "1";
+const useCloudBuild =
+  args.includes("--cloud-build") ||
+  fastDeploy ||
+  process.env.CLOUD_APP_HOST_CLOUD_BUILD === "1";
 if (useCloudBuild) {
   run(
     `gcloud builds submit --project=${project} --region=${region} --config=cloudbuild-cloud-app-host.yaml --substitutions=_IMAGE=${fullImage} .`,
@@ -185,9 +235,9 @@ const deployCmd = [
   "--cpu=1",
   "--min-instances=1",
   "--max-instances=20",
-  "--timeout=60",
+  "--timeout=120",
   `--set-secrets=PAPR_CLOUD_APP_HOST_KEY=${secretName}:latest`,
-  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production`,
+  `--set-env-vars=PAPR_MEMORY_SERVER_URL=${memoryUrl},PAPR_CLOUD_APP_PUBLIC_URL=${publicUrl},CLOUD_APP_HOST_MEMORY_TIMEOUT_MS=90000,CLOUD_APP_HOST_GCS_BUCKET=${gcsCacheBucket},AUTH0_DOMAIN=papr.auth0.com,AUTH0_CLIENT_ID=asVGkVRkRAxYvtQadqivntIRjB4D1Iur,NODE_ENV=production,PAPR_TURSO_REPLICA_SYNC=replica-records`,
 ].join(" ");
 
 run(deployCmd);
@@ -225,3 +275,5 @@ console.log(`   ${publicUrl}/auth/callback`);
 console.log(`\n4. Smoke test from paprwork-v2:`);
 console.log(`   npm run test:cloud-app-host -- --host=${serviceUrl}`);
 console.log(`\n5. Enable cloud link on an app in Paprwork → open share URL → sign in`);
+console.log(`\n6. Optional Phase 4 CDN (edge cache for dist/*):`);
+console.log(`   node scripts/setup-apps-papr-ai-cdn.mjs --project=${project} --region=${region}`);

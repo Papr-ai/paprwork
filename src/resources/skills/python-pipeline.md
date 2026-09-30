@@ -10,7 +10,7 @@ Create robust, production-quality Python data pipelines for Papr jobs.
 ## Job Structure
 
 ```
-~/Papr/jobs/{jobId}/
+$PAPR_HOME/Jobs/{jobId}/
   code/
     main.py              # Entry point
     requirements.txt     # Dependencies

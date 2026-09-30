@@ -6,34 +6,51 @@
   <title>Home</title>
   <link rel="icon" href="data:image/svg+xml,<svg width='24' height='24' viewBox='0 0 24 24' fill='none' xmlns='http://www.w3.org/2000/svg'><path d='M3 9l9-7 9 7v11a2 2 0 01-2 2H5a2 2 0 01-2-2z' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/><polyline points='9 22 9 12 15 12 15 22' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/></svg>">
   <link rel="stylesheet" href="styles.css">
-  <link rel="stylesheet" href="fold.css">
   <link rel="stylesheet" href="cards.css">
+  <link rel="stylesheet" href="focus.css">
+  <link rel="stylesheet" href="three.css">
+  <link rel="stylesheet" href="week_review.css">
 </head>
 <body>
-  <div class="ambient">
-    <div class="orb orb-1"></div><div class="orb orb-2"></div><div class="orb orb-3"></div>
-  </div>
-  <button id="fold-prev" class="papr-fold fold-left" aria-label="Previous day">
-    <svg viewBox="0 0 165 155" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <path fill-rule="evenodd" clip-rule="evenodd" d="M0 126L98 153L140 0L0 126Z" fill="#293644"></path>
-      <path fill-rule="evenodd" clip-rule="evenodd" d="M0 0L140 0L0 126V0Z" fill="#0080FF"></path>
-    </svg><span class="fold-peek" id="peek-prev"></span>
-  </button>
-  <button id="fold-next" class="papr-fold fold-right" aria-label="Next day">
-    <svg viewBox="0 0 165 155" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-      <g transform="translate(165 0) scale(-1 1)">
-        <path fill-rule="evenodd" clip-rule="evenodd" d="M0 126L98 153L140 0L0 126Z" fill="#293644"></path>
-        <path fill-rule="evenodd" clip-rule="evenodd" d="M0 0L140 0L0 126V0Z" fill="#0080FF"></path>
-      </g>
-    </svg><span class="fold-peek" id="peek-next"></span>
-  </button>
-  <span id="nav-label" class="nav-label-float"></span>
-  <main id="app">
-    <header id="hero" class="hero"></header>
-    <div id="sections"></div>
+  <main id="app" class="home">
+    <div class="htop">
+      <div class="hday" aria-label="Brief day">
+        <button id="fold-prev" class="hday-btn" aria-label="Previous day">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M10 3.5 5.5 8l4.5 4.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="fold-peek" id="peek-prev"></span>
+        </button>
+        <span id="nav-label" class="hday-label">Today</span>
+        <button id="fold-next" class="hday-btn" aria-label="Next day">
+          <svg viewBox="0 0 16 16" fill="none" aria-hidden="true"><path d="M6 3.5 10.5 8 6 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span class="fold-peek" id="peek-next"></span>
+        </button>
+      </div>
+      <div class="hseg" id="hseg" role="tablist" aria-label="Home view">
+        <button type="button" role="tab" data-view="today" class="on" aria-selected="true">Today</button>
+        <button type="button" role="tab" data-view="tasks" aria-selected="false">All tasks <em id="task-count"></em></button>
+      </div>
+    </div>
+    <div id="view-today">
+      <header id="hero" class="hero"></header>
+      <div id="focus"></div>
+      <div id="three"></div>
+      <div id="sections"></div>
+      <div id="goals"></div>
+    </div>
+    <div id="view-tasks" hidden></div>
+    <div id="view-three" hidden></div>
   </main>
+  <script src="preview_lifecycle.js"></script>
   <script src="data.js"></script>
   <script src="render.js"></script>
+  <script src="goals.js"></script>
+  <script src="three.js"></script>
+  <script src="three_form.js"></script>
+  <script src="three_edit.js"></script>
+  <script src="focus_start.js"></script>
+  <script src="week_review.js"></script>
+  <script src="reviews.js"></script>
+  <script src="tasks.js"></script>
   <script src="fold_nav.js"></script>
   <script src="app.js"></script>
 </body>

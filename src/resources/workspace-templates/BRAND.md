@@ -20,7 +20,7 @@ Visual identity for mini-apps and agent-built UI. The sleep cycle updates this f
 
 ## Logo
 
-- Light mode: `brand/logo.svg` (under `~/Papr/workspace/`)
+- Light mode: `brand/logo.svg` (under `$PAPR_HOME/workspace/`)
 - Dark mode: `brand/logo-dark.svg`
 
 ## Voice & Tone
@@ -33,4 +33,4 @@ Visual identity for mini-apps and agent-built UI. The sleep cycle updates this f
 
 ## App-Specific Overrides
 
-When brand is discussed for a specific mini-app, overrides are stored at `~/Papr/apps/{appId}/brand.json`. Mini-apps load app brand first, then fall back to this file and `brand.json`.
+When brand is discussed for a specific mini-app, overrides are stored at `$PAPR_HOME/apps/{appId}/brand.json`. Mini-apps load app brand first, then fall back to this file and `brand.json`.

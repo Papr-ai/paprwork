@@ -6,8 +6,12 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { getJobsService } from "../src/gateway/services/JobsService.js";
 import type { JobRecord } from "../src/gateway/services/JobsService.js";
 import { SubAgentService, toSubAgentListSummaries } from "../src/gateway/services/SubAgentService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 describe("SubAgentService", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("sub-agent-service");
+
   const root = path.join(os.tmpdir(), `paprwork-v2-subagents-${Date.now()}`);
   const home = path.join(root, "home");
   const originalHome = process.env.HOME;

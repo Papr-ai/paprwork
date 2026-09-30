@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Agent Setup & Onboarding Workflow (V2)
 
 ## Overview
@@ -57,19 +59,30 @@ register_schema({
 
 Use `read_skill()` (no arguments) to list all installed skills. Scan for skills relevant to the user's domain.
 
-**Step B: Browse the skills catalog**
+**Step B: Search the marketplace catalog**
 
-Read the cached skills catalog to find additional skills for the user:
+800+ skills from skills.sh, ClawHub, gtmskills.com, and gtm-skills.com are cached at `$PAPR_HOME/skills-catalog.json`. **Never read the whole file** (~340KB).
+
+Search by keyword with bash:
 
 ```javascript
-read_file({ path: "~/Papr/skills-catalog.json" })
+bash({ command: 'grep -iE "marketing|seo|copywriting" "$PAPR_HOME/skills-catalog.json" | head -20' })
 ```
 
-This file contains popular skills from skills.sh and ClawHub, organized by category. Search it for skills matching the user's industry and needs. Do NOT browse the web for skills — everything is in this catalog.
+Narrow by source:
+
+```javascript
+bash({ command: 'grep -i "gtm-skills.com" "$PAPR_HOME/skills-catalog.json" | grep -i "outbound" | head -15' })
+```
+
+Each hit is one JSON object with `id`, `name`, `description`, `category`, `source`. Do NOT browse the web for skills — search this catalog first.
 
 **Step C: Install discovered skills**
 
-For each useful skill found in the catalog, create it locally:
+Best: ask the user to install from the **Skills** tab (fetches full content automatically).
+
+For onboarding setup, create a local copy:
+
 ```javascript
 create_skill({
   name: "Discovered Skill Name",
@@ -118,23 +131,33 @@ create_job({
 
 ### 5. Import Community Apps or Create Starter Apps
 
-**Step A: Check the community app registry for relevant pre-built apps**
+**Step A: Browse forkable Papr Cloud apps (Community Apps tab)**
 
-Before building apps from scratch, check if a community bundle already solves the user's need. Browse available bundles:
+Requires Papr login. Returns only apps others can **Customize** (fork) — same catalog as the in-app Community Apps tab:
 
 ```javascript
-list_app_bundles()
+list_community_apps()
+// Optional: list_community_apps({ scope: "team" })  // Team Apps tab
+// Optional: list_community_apps({ query: "dashboard" })
 ```
 
-If a relevant community app exists (e.g., expense tracker for finance users), import it directly:
+Install a match with the `namespaceId` and `slug` from the result:
+
+```javascript
+install_cloud_app({ namespaceId: "...", slug: "...", mode: "fork" })
+```
+
+**Do NOT** use `list_app_bundles()`, `paprwork-community-apps/registry.json`, or curl to `apps.papr.ai` for discovery — those are wrong or deprecated.
+
+**Step B (fallback only): OSS bundles when Papr login / Cloud Sync is unavailable**
 
 ```javascript
 import_app_bundle({ source: "https://github.com/Papr-ai/paprwork-community-apps/bundles/expense-tracker" })
 ```
 
-The community repo at `https://github.com/Papr-ai/paprwork-community-apps` contains curated app bundles organized by category. Each bundle includes the app, optional jobs, and database schemas — ready to use immediately.
+The GitHub repo is a **legacy export path**, not what powers the Community Apps tab. Prefer `list_community_apps` + `install_cloud_app` whenever the user is signed in.
 
-**Step B: Create custom apps for needs not covered by community bundles**
+**Step C: Create custom apps for needs not covered by the catalog**
 
 ```javascript
 create_app({
@@ -143,7 +166,7 @@ create_app({
 })
 ```
 
-Prefer importing community apps over building from scratch — they're tested, well-designed, and ready to use. Only create custom apps when the user's needs aren't met by existing community bundles.
+Prefer importing from the cloud catalog over building from scratch. Only create custom apps when nothing in Community / Team Apps fits.
 
 ### 6. Create Initial Documents
 
@@ -197,8 +220,8 @@ Let me get started..."
 
 Then execute:
 ```javascript
-// 1. Read the skills catalog to find relevant skills
-read_file({ path: "~/Papr/skills-catalog.json" })
+// 1. Search catalog for relevant skills (never read the whole file)
+bash({ command: 'grep -iE "real estate|property|crm" "$PAPR_HOME/skills-catalog.json" | head -20' })
 
 // 2. Create schema
 register_schema({
@@ -223,10 +246,9 @@ create_job({
   deliver: { channel: "chat", targetId: "main" }
 })
 
-// 5. Check community apps first, then create custom ones
-list_app_bundles()  // See what's available
-// Import relevant community apps if they match user needs
-// Then create custom apps for anything not covered:
+// 5. Community apps first, then custom apps
+list_community_apps({ query: "property" })
+// install_cloud_app({ namespaceId, slug, mode: "fork" }) when a match fits
 create_app({
   title: "Property Dashboard",
   description: "Track properties and leads in one place"
@@ -244,9 +266,9 @@ create_document({
 ## Best Practices
 
 1. **Be thorough in the interview** — Don't skip questions. Understand their workflow deeply
-2. **Read the skills catalog** — Use `read_file("~/Papr/skills-catalog.json")` to find relevant skills. Never browse the web for skills
+2. **Search the skills catalog** — Grep `$PAPR_HOME/skills-catalog.json` by keyword (`head -20` to limit results). Never read the whole file or browse the web for skills
 3. **Match skills to their domain** — Install only what's relevant to what they told you
-4. **Community apps first** — Check community bundles at `https://github.com/Papr-ai/paprwork-community-apps` before building apps from scratch. Import pre-built apps when they fit the user's needs, create custom apps only for unmet needs
+4. **Community apps first** — Call `list_community_apps()` (requires Papr login), then `install_cloud_app`. Use `import_app_bundle` + `paprwork-community-apps` only when Cloud Sync / Papr login is unavailable.
 5. **Always use create_document** — Never create DOCX files directly
 6. **Test everything** — Walk them through each feature you configured
 7. **Provide a summary** — Create a document summarizing what was configured

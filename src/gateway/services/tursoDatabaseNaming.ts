@@ -8,6 +8,9 @@
 /** Legacy shared user database (prefixed tables). Read-only during migration. */
 export const LEGACY_USER_TURSO_DATABASE = "data";
 
+/** Workspace index DB — one row per linked data replica short name. */
+export const SYNC_INDEX_TURSO_SHORT_NAME = "sync-index";
+
 /** Short Turso database name for a linked job's data.db replica. */
 export function jobTursoDatabaseName(jobId: string): string {
   const hex = jobId.replace(/-/g, "").slice(0, 8).toLowerCase();
@@ -30,6 +33,27 @@ export function dbTursoDatabaseName(dbId: string): string {
 
 export function isDbTursoDatabaseName(name: string): boolean {
   return /^d-[a-f0-9]{8}$/.test(name);
+}
+
+/** Resolve Turso short name from job/db change notification fields. */
+export function tursoShortNameForChangeInput(input: {
+  jobId?: string;
+  dbId?: string;
+  tursoShortName?: string;
+}): string | undefined {
+  const explicit = input.tursoShortName?.trim();
+  if (explicit) {
+    return explicit;
+  }
+  const dbId = input.dbId?.trim();
+  if (dbId) {
+    return dbTursoDatabaseName(dbId);
+  }
+  const jobId = input.jobId?.trim();
+  if (jobId) {
+    return jobTursoDatabaseName(jobId);
+  }
+  return undefined;
 }
 
 export interface TursoShortNameInput {

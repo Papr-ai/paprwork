@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import {
+  compactSyncLogEntries,
   ensureLocalSyncInfrastructure,
   ensureLocalTableSyncTriggers,
+  isSqliteTriggerAlreadyExistsError,
   maxSyncLogId,
   pruneSyncLogThrough,
   readSyncLogSince,
@@ -19,6 +21,25 @@ try {
 }
 
 describe("tursoSyncLog", () => {
+  it("isSqliteTriggerAlreadyExistsError detects duplicate trigger messages", () => {
+    expect(
+      isSqliteTriggerAlreadyExistsError(
+        'trigger "_papr_tr_audit_moves_au" already exists',
+      ),
+    ).toBe(true);
+    expect(isSqliteTriggerAlreadyExistsError("no such table: foo")).toBe(false);
+  });
+
+  it("compactSyncLogEntries keeps the last op per table and primary key", () => {
+    const compacted = compactSyncLogEntries([
+      { id: 1, tableName: "events", op: "insert", rowPk: [1] },
+      { id: 2, tableName: "events", op: "update", rowPk: [1] },
+      { id: 3, tableName: "events", op: "delete", rowPk: [1] },
+    ]);
+    expect(compacted).toHaveLength(1);
+    expect(compacted[0]?.op).toBe("delete");
+  });
+
   it.skipIf(!canUseBetterSqlite)(
     "records insert/update/delete in changelog when triggers installed",
     () => {
@@ -116,6 +137,29 @@ describe("tursoSyncLog", () => {
       expect(delta).toHaveLength(1);
       expect(delta[0]?.op).toBe("update");
       expect(delta[0]?.rowPk).toEqual([2500]);
+      db.close();
+    },
+  );
+
+  it.skipIf(!canUseBetterSqlite)(
+    "update logs one changelog entry (metadata bump excluded)",
+    () => {
+      const db = new Database(":memory:");
+      db.exec(`
+        CREATE TABLE records (
+          id INTEGER PRIMARY KEY,
+          label TEXT NOT NULL
+        );
+      `);
+      ensureLocalTableSyncTriggers(db, "records");
+      db.prepare("INSERT INTO records (label) VALUES (?)").run("alpha");
+      const afterInsert = readSyncLogSince(db, 0);
+      expect(afterInsert).toHaveLength(1);
+
+      db.prepare("UPDATE records SET label = ? WHERE id = 1").run("beta");
+      const afterUpdate = readSyncLogSince(db, afterInsert[0]!.id);
+      expect(afterUpdate).toHaveLength(1);
+      expect(afterUpdate[0]?.op).toBe("update");
       db.close();
     },
   );

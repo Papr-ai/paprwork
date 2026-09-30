@@ -2,6 +2,7 @@
  * Unified Community Apps catalog — open-source bundles + Papr Cloud public apps.
  */
 
+import type { CatalogAutomation } from "./catalogAutomation.js";
 import type { RequirementItem } from "./bundles.js";
 
 export type CommunityCatalogSource = "opensource" | "cloud";
@@ -12,6 +13,11 @@ export type CommunityCatalogScope = "global" | "namespace";
 export function isTeamSharedVisibility(visibility: string | undefined): boolean {
   if (!visibility) return false;
   return visibility === "team" || visibility.startsWith("team_");
+}
+
+/** Unlisted invite-link modes — never in Community Apps catalog. */
+export function isLinkOnlyVisibility(visibility: string | undefined): boolean {
+  return visibility === "link_read" || visibility === "link_read_write";
 }
 
 /** Only `public_read` apps belong in the global Community catalog. */
@@ -30,6 +36,8 @@ export interface CommunityCatalogEntry {
   tags: string[];
   icon?: string;
   platform?: string[];
+  /** True when full functionality needs Paprwork desktop (not just apps.papr.ai preview). */
+  requiresDesktopForFullFunctionality?: boolean;
   requirements?: RequirementItem[];
   minPaprworkVersion?: string;
   /** Open-source bundle fields */
@@ -44,14 +52,26 @@ export interface CommunityCatalogEntry {
   codeInstallable: boolean;
   /** Has a live web app URL */
   liveViewable: boolean;
-  /** Local user already owns the publisher app ID */
+  /** Current user published this app (not merely installed a teammate copy) */
   isOwned?: boolean;
   /** Number of local fork/track copies installed from this catalog entry */
   installedForkCount?: number;
+  /** Everyone who installed it (fork or collaborate), from Papr Cloud. */
+  installCount?: number;
+  /** Last time the publisher published this app (ISO 8601). */
+  updatedAt?: string;
   /** Cloud publish visibility (team, public_read, …) when known */
   visibility?: string;
+  /** External invite link enabled (unlisted — not Community Apps listed) */
+  shareLinkEnabled?: boolean;
+  /** Memory server: false for specific-people / team shares not in global Community */
+  communityCatalogListed?: boolean;
   /** Publisher Papr user id — used to hide own apps from Shared with me */
   publisherUserId?: string;
+  /** Broad category the publisher's app was sorted into (set at publish). */
+  category?: string;
+  /** Scheduled job summary (denormalized at publish time) */
+  catalogAutomation?: CatalogAutomation;
 }
 
 export interface CommunityCatalog {
@@ -65,4 +85,6 @@ export interface CommunityCatalog {
   /** When namespace workspace catalog used client-side fallback (no dedicated memory route) */
   fallbackUsed?: boolean;
   namespaceId?: string;
+  /** True when served from an in-process cache (may be stale). */
+  fromCache?: boolean;
 }

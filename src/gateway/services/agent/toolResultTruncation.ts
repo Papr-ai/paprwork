@@ -12,6 +12,8 @@ import {
   getToolResultTruncationSettings,
   isToolResultTruncationDisabled,
 } from "./toolResultTruncationSettings.js";
+import { resolvePaprUserDataPath } from "../../../core/utils/paprWorkspace.js";
+import path from "path";
 
 /** Default hard ceiling (~10K tokens at ~4 chars/token). Overridable in settings. */
 export const ABSOLUTE_TOOL_RESULT_MAX_CHARS = 40_000;
@@ -75,6 +77,7 @@ const DIRECTORY_LIST_TOOLS = new Set([
   "list_app_files",
   "list_job_files",
   "search_files",
+  "search_app_files",
 ]);
 
 const MEMORY_SEARCH_TOOLS = new Set([
@@ -117,16 +120,46 @@ const SMALL_CRUD_TOOLS = new Set([
   "list_skills",
   "read_skill",
   "list_sub_agents",
+  "generate_media",
+  "list_media_models",
+  "query_cloud_turso",
+  "papr_db_sync_status",
+  "read_app_data_health",
 ]);
 
-/** Recovery + delegation status tools — never truncate (full payload must survive). */
-export const FULL_RETENTION_TOOLS = new Set([
-  "get_full_tool_result",
-  "get_delegation_run",
-]);
+/** Delegation status — never truncate, in any turn (full payload must survive). */
+export const FULL_RETENTION_TOOLS = new Set(["get_delegation_run"]);
 
+/**
+ * Full while the turn that fetched it is still recent, then truncatable.
+ *
+ * `get_full_tool_result` exists to recover a payload that was truncated, so capping
+ * it in the turn that asked for it would defeat the tool. But it was exempt
+ * *permanently*, in history as well as mid-turn — so every recovery fetch stayed
+ * resident at full size for the life of the chat, and the exemption compounded with
+ * use. Over six weeks it became the second-largest tool payload in the corpus
+ * (7,559 calls, ~8M tokens) having previously been negligible.
+ *
+ * Recent-turn retention keeps the recovery genuinely useful and lets it decay, and
+ * the truncation notice it decays into points back at this same tool.
+ */
+export const RECENT_TURN_FULL_RETENTION_TOOLS = new Set(["get_full_tool_result"]);
+
+/** Exempt from truncation everywhere, including cross-turn history. */
 export function isFullRetentionTool(toolName: string): boolean {
   return FULL_RETENTION_TOOLS.has(toolName);
+}
+
+/**
+ * Exempt while the turn is in flight. Wider than {@link isFullRetentionTool}: a
+ * recovery fetch must arrive whole in the turn that requested it, but need not stay
+ * whole forever.
+ */
+export function isMidTurnUncappedTool(toolName: string): boolean {
+  return (
+    FULL_RETENTION_TOOLS.has(toolName) ||
+    RECENT_TURN_FULL_RETENTION_TOOLS.has(toolName)
+  );
 }
 
 /**
@@ -140,6 +173,7 @@ const RECENT_TURN_DISCOVERY_TOOLS = new Set([
   "list_app_files",
   "list_directory",
   "search_files",
+  "search_app_files",
   "list_sub_agents",
   "introspect_memory_graph",
   "query_memory_graph",
@@ -190,6 +224,15 @@ function getConfiguredCategoryCharLimit(
     return moderateMaxChars;
   }
 
+  // A recovery fetch is something the agent explicitly asked for, so it decays to
+  // the moderate limit rather than the aggressive one its category would give. At
+  // 800 chars a re-fetch costs the whole payload again, which is the re-read loop
+  // that category-based truncation was introduced to stop; head+tail at this size
+  // leaves enough for the agent to tell whether it still needs the rest.
+  if (toolName === "get_full_tool_result") {
+    return moderateMaxChars;
+  }
+
   switch (category) {
     case "file_read":
     case "file_edit":
@@ -200,10 +243,11 @@ function getConfiguredCategoryCharLimit(
       return moderateMaxChars;
     case "memory_search":
       return memorySearchMaxChars;
+    case "job_run":
+      return moderateMaxChars;
     case "bash":
     case "directory_list":
     case "validation_preview":
-    case "job_run":
     default:
       return aggressiveMaxChars;
   }
@@ -221,15 +265,16 @@ export function getDefaultHistoryCharLimit(
   return getConfiguredCategoryCharLimit(category, toolName);
 }
 
-function buildTruncationSuffix(
+export function buildTruncationSuffix(
   omitted: number,
   toolCallId: string,
   toolName: string,
 ): string {
+  const chatsDbPath = path.join(resolvePaprUserDataPath(), "chats.db");
   return (
     `\n[... ${omitted} chars truncated. ` +
     `Tool: get_full_tool_result({ toolCallId: "${toolCallId}", toolName: "${toolName}" }) ` +
-    `OR query: ~/.paprwork-v2/chats.db → messages.parts (JSONL)]`
+    `OR query: ${chatsDbPath} → messages.parts (JSONL)]`
   );
 }
 
@@ -350,7 +395,10 @@ function isRecentTurnDiscoveryRetentionEligible(
   if (isFullRetentionTool(toolName)) {
     return false;
   }
-  if (RECENT_TURN_DISCOVERY_TOOLS.has(toolName)) {
+  if (
+    RECENT_TURN_DISCOVERY_TOOLS.has(toolName) ||
+    RECENT_TURN_FULL_RETENTION_TOOLS.has(toolName)
+  ) {
     return true;
   }
   return category === "bash" || category === "directory_list";
@@ -404,7 +452,7 @@ export function truncateToolResultForModelContext(
   toolCallId: string,
   toolName: string,
 ): string {
-  if (isToolResultTruncationDisabled() || isFullRetentionTool(toolName)) {
+  if (isToolResultTruncationDisabled() || isMidTurnUncappedTool(toolName)) {
     return resultStr;
   }
   return truncateToCharLimit(
@@ -435,7 +483,7 @@ export function resolveMidTurnToolResultCharLimit(
   toolName: string | undefined,
   batchCeiling: number,
 ): number {
-  if (toolName && isFullRetentionTool(toolName)) {
+  if (toolName && isMidTurnUncappedTool(toolName)) {
     return Number.MAX_SAFE_INTEGER;
   }
 

@@ -19,8 +19,13 @@ import {
   MemoryServerPublishResolver,
   MemoryServerTursoCredentials,
 } from "./services/appRuntime/CloudAppHostService.js";
+import { shutdownBackendPythonWorker } from "./services/appRuntime/appBackendPythonWorker.js";
 
+// `.env.local` before `.env`: dotenv never overwrites an already-set
+// variable, so the first file to define a key wins. Both are gitignored, so
+// in Cloud Run neither exists and these calls no-op.
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 const PORT = Number(process.env.PORT ?? process.env.CLOUD_APP_HOST_PORT ?? 8787);
 
@@ -49,6 +54,13 @@ async function main(): Promise<void> {
       `[CloudAppHost] Memory server: ${process.env.PAPR_MEMORY_SERVER_URL ?? "https://memory.papr.ai"}`,
     );
   });
+
+  const shutdown = (): void => {
+    shutdownBackendPythonWorker();
+    process.exit(0);
+  };
+  process.on("SIGTERM", shutdown);
+  process.on("SIGINT", shutdown);
 }
 
 main().catch((err) => {

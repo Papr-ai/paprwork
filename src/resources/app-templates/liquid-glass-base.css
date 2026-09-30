@@ -373,6 +373,10 @@ p { margin-bottom: var(--space-4); color: var(--text); }
 }
 
 /* --- Utility --- */
+.hidden {
+  display: none !important;
+}
+
 .sr-only {
   position: absolute;
   width: 1px;

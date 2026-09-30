@@ -5,11 +5,22 @@
  * and returns Turso/repo credentials for the app owner — not the host key identity.
  */
 
-import type { AppRuntimeRouteAuth } from "./types.js";
+import type { AppRuntimeRouteAuth, AppRuntimeRepoCredentials } from "./types.js";
+import type {
+  WorkspaceLogAppendBatchRequest,
+  WorkspaceLogAppendBatchResponse,
+  WorkspaceLogAppendRequest,
+  WorkspaceLogAppendResponse,
+  WorkspaceLogHostScope,
+} from "../../../core/types/workspaceLog.js";
 import { getMemoryServerBaseUrl, cloudApiFetch } from "../../utils/cloudApiClient.js";
 import { buildCloudVaultRequestBody } from "../../../core/utils/cloudReposScope.js";
+import {
+  mergeRuntimeVaultKeyNames,
+  runtimeVaultKeyLookupScopes,
+} from "./runtimeVaultKeyScopes.js";
 
-function getCloudAppHostKey(): string {
+export function getCloudAppHostKey(): string {
   const key = process.env.PAPR_CLOUD_APP_HOST_KEY;
   if (!key) {
     throw new Error(
@@ -17,6 +28,32 @@ function getCloudAppHostKey(): string {
     );
   }
   return key;
+}
+
+const DEFAULT_RUNTIME_FETCH_TIMEOUT_MS = Number(
+  process.env.CLOUD_APP_HOST_MEMORY_TIMEOUT_MS ?? 90_000,
+);
+
+/** Abort hung memory.papr.ai calls before Cloud Run's 120s request limit. */
+export async function runtimeFetch(
+  url: string,
+  init: RequestInit,
+  timeoutMs = DEFAULT_RUNTIME_FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new Error(
+        `Memory server request timed out after ${timeoutMs}ms`,
+      );
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function runtimeHeaders(auth: AppRuntimeRouteAuth): Record<string, string> {
@@ -33,20 +70,46 @@ function runtimeHeaders(auth: AppRuntimeRouteAuth): Record<string, string> {
   return headers;
 }
 
+/** Common auth fields for memory runtime POST bodies (session + key + share link). */
+export function runtimeAuthPayload(
+  auth: AppRuntimeRouteAuth,
+): Record<string, string> {
+  const payload: Record<string, string> = {
+    namespaceId: auth.namespaceId,
+    slug: auth.slug,
+  };
+  if (auth.paprApiKey) payload.paprApiKey = auth.paprApiKey;
+  if (auth.shareToken) payload.shareToken = auth.shareToken;
+  if (auth.sessionToken) payload.sessionToken = auth.sessionToken;
+  if (auth.externalUserId) payload.external_user_id = auth.externalUserId;
+  return payload;
+}
+
+import {
+  dbTokenCacheExpiresAt,
+  dbTokenCacheKey,
+  readDbTokenCache,
+  writeDbTokenCache,
+} from "./dbTokenRuntimeCache.js";
+
 export async function fetchRuntimeDbToken(
   auth: AppRuntimeRouteAuth,
   database: string,
-): Promise<{ tursoUrl: string; authToken: string }> {
-  const res = await fetch(
+): Promise<{ tursoUrl: string; authToken: string; expiresAt?: string }> {
+  const cacheKey = dbTokenCacheKey(auth, database);
+  const now = Date.now();
+  const cached = readDbTokenCache(cacheKey, now);
+  if (cached) {
+    return cached;
+  }
+
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/db-token`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         database,
       }),
     },
@@ -56,24 +119,49 @@ export async function fetchRuntimeDbToken(
       `Runtime db-token failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
     );
   }
-  const json = (await res.json()) as { tursoUrl: string; authToken: string };
-  return { tursoUrl: json.tursoUrl, authToken: json.authToken };
+  const json = (await res.json()) as {
+    tursoUrl: string;
+    authToken: string;
+    expiresAt?: string;
+  };
+  writeDbTokenCache(cacheKey, {
+    tursoUrl: json.tursoUrl,
+    authToken: json.authToken,
+    expiresAt: dbTokenCacheExpiresAt(json.expiresAt, now),
+  });
+  return { tursoUrl: json.tursoUrl, authToken: json.authToken, expiresAt: json.expiresAt };
+}
+
+export async function fetchRuntimeRepoCredentials(
+  auth: AppRuntimeRouteAuth,
+): Promise<AppRuntimeRepoCredentials> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/repo-credentials`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify(runtimeAuthPayload(auth)),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime repo-credentials failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as AppRuntimeRepoCredentials;
 }
 
 export async function fetchRuntimeRepoFile(
   auth: AppRuntimeRouteAuth,
   relativePath: string,
 ): Promise<{ content: string; contentType: string } | null> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/repo-file`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         relativePath,
       }),
     },
@@ -97,40 +185,88 @@ export async function fetchRuntimeVaultKeyNames(
     return [];
   }
   try {
-    const scope = auth.namespaceId ? "namespace" : "user";
-    const query = scope === "namespace"
-      ? `scope=namespace&namespace_id=${encodeURIComponent(auth.namespaceId)}`
-      : "scope=user";
-    const res = await fetch(
-      `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?${query}`,
-      {
-        method: "GET",
-        headers: runtimeHeaders(auth),
-      },
+    const lookups = runtimeVaultKeyLookupScopes(auth.namespaceId);
+    const lists = await Promise.all(
+      lookups.map(async ({ scope, query }) => {
+        const res = await runtimeFetch(
+          `${getMemoryServerBaseUrl()}/v1/cloud/vault/keys?${query}`,
+          {
+            method: "GET",
+            headers: runtimeHeaders(auth),
+          },
+        );
+        if (!res.ok) {
+          console.warn(
+            `[RuntimeVault] vault/keys ${scope} failed (${res.status}) for ${auth.namespaceId}/${auth.slug}`,
+          );
+          return [] as string[];
+        }
+        const json = (await res.json()) as { keys?: Array<{ name: string }> };
+        return (json.keys ?? []).map((entry) => entry.name);
+      }),
     );
-    if (!res.ok) {
-      return [];
-    }
-    const json = (await res.json()) as { keys?: Array<{ name: string }> };
-    return (json.keys ?? []).map((entry) => entry.name);
-  } catch {
+    return mergeRuntimeVaultKeyNames(...lists);
+  } catch (err) {
+    console.warn(
+      `[RuntimeVault] vault/keys list failed for ${auth.namespaceId}/${auth.slug}:`,
+      (err as Error).message,
+    );
     return [];
+  }
+}
+
+/** Same resolution path as cloud bash/jobs — accurate per-app namespace context. */
+export async function resolveMissingRuntimeVaultKeyNames(
+  auth: AppRuntimeRouteAuth,
+  keyNames: readonly string[],
+): Promise<string[]> {
+  const required = keyNames.map((name) => name.trim()).filter((name) => name.length > 0);
+  if (required.length === 0) {
+    return [];
+  }
+  if (!auth.sessionToken) {
+    return required;
+  }
+  try {
+    const { missing } = await resolveRuntimeVaultEnv(auth, { keyNames: required });
+    return missing;
+  } catch (err) {
+    console.warn(
+      `[RuntimeVault] vault-resolve failed for ${auth.namespaceId}/${auth.slug}, falling back to key list:`,
+      (err as Error).message,
+    );
+    const present = new Set(await fetchRuntimeVaultKeyNames(auth));
+    return required.filter((name) => !present.has(name));
   }
 }
 
 export async function syncRuntimeVaultKeys(
   auth: AppRuntimeRouteAuth,
-  keys: Array<{ name: string; value: string }>,
+  keys: Array<{
+    name: string;
+    value: string;
+    shareScope?: "user" | "namespace" | "org";
+    clientAccess?: "server" | "client";
+    permission?: string;
+  }>,
 ): Promise<{ synced: number }> {
   if (!auth.sessionToken) {
     throw new Error("Sign in required to save credentials");
   }
-  const res = await fetch(
+  const vaultKeys = keys.map((key) => ({
+    name: key.name,
+    value: key.value,
+    shareScope: key.shareScope ?? "user",
+    clientAccess: key.clientAccess ?? "server",
+    permission: key.permission ?? "always_allow",
+    source: "manual",
+  }));
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/vault/sync`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
-      body: JSON.stringify(buildCloudVaultRequestBody(keys, auth.namespaceId ? "namespace" : "user")),
+      body: JSON.stringify(buildCloudVaultRequestBody(vaultKeys, "user")),
     },
   );
   if (!res.ok) {
@@ -151,16 +287,13 @@ export async function resolveRuntimeVaultEnv(
   auth: AppRuntimeRouteAuth,
   options?: { keyNames?: string[] },
 ): Promise<RuntimeVaultResolveResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/vault-resolve`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         keyNames: options?.keyNames,
       }),
     },
@@ -185,16 +318,13 @@ export async function resolveRuntimeVaultClientKeys(
   auth: AppRuntimeRouteAuth,
   options?: { keyNames?: string[] },
 ): Promise<RuntimeVaultClientResolveResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/vault-client-resolve`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         keyNames: options?.keyNames,
       }),
     },
@@ -239,6 +369,7 @@ export interface RuntimeJobSummary {
   status?: string;
   lastRunAt?: string;
   completedAt?: string;
+  lastOutput?: string;
 }
 
 /** Run a synced job in cloud sandbox (GKE or process fallback on memory server). */
@@ -251,22 +382,20 @@ export async function runRuntimeJob(
     tier?: "sandbox" | "ephemeral";
   },
 ): Promise<RuntimeJobRunResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/job-run`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         jobId: input.jobId,
         params: input.params,
         timeoutMs: input.timeoutMs,
         tier: input.tier ?? "sandbox",
       }),
     },
+    Math.max(DEFAULT_RUNTIME_FETCH_TIMEOUT_MS, (input.timeoutMs ?? 60_000) + 5_000),
   );
   if (!res.ok) {
     throw new Error(
@@ -280,16 +409,13 @@ export async function runRuntimeJob(
 export async function listRuntimeJobs(
   auth: AppRuntimeRouteAuth,
 ): Promise<{ jobs: RuntimeJobSummary[]; count: number }> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/jobs-list`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
       }),
     },
   );
@@ -301,11 +427,41 @@ export async function listRuntimeJobs(
   return (await res.json()) as { jobs: RuntimeJobSummary[]; count: number };
 }
 
+/** Fetch one job status from the app owner's git-synced workspace. */
+export async function getRuntimeJobStatus(
+  auth: AppRuntimeRouteAuth,
+  jobId: string,
+): Promise<RuntimeJobSummary | null> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/job-status`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        jobId,
+      }),
+    },
+  );
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(
+      `Runtime job-status failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  const payload = (await res.json()) as { job: RuntimeJobSummary };
+  return payload.job;
+}
+
 /** Desktop gateway alive ping — cloud scheduler defers when heartbeat is fresh. */
 export async function sendDesktopHeartbeat(): Promise<void> {
+  const { buildDesktopHeartbeatBody } = await import("../syncV3/buildDesktopHeartbeatBody.js");
+  const appVersion = process.env.PAPRWORK_APP_VERSION?.trim() || undefined;
   const res = await cloudApiFetch("/v1/cloud/runtime/heartbeat", {
     method: "POST",
-    body: {},
+    body: buildDesktopHeartbeatBody(appVersion),
     timeoutMs: 15_000,
   });
   if (!res.ok) {
@@ -320,16 +476,13 @@ export async function runRuntimeBash(
   auth: AppRuntimeRouteAuth,
   input: { command: string; timeoutMs?: number; keyNames?: string[] },
 ): Promise<RuntimeBashRunResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/bash-run`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         command: input.command,
         timeoutMs: input.timeoutMs,
         keyNames: input.keyNames,
@@ -366,16 +519,13 @@ export async function warmRuntimeAppAgentChat(
     jobId: string;
   },
 ): Promise<RuntimeAppAgentWarmResult> {
-  const res = await fetch(
+  const res = await runtimeFetch(
     `${getMemoryServerBaseUrl()}/v1/cloud/apps/runtime/app-agent/warm`,
     {
       method: "POST",
       headers: runtimeHeaders(auth),
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         sessionId: input.sessionId,
         appId: input.appId,
         subAgentId: input.subAgentId,
@@ -413,6 +563,7 @@ export async function streamRuntimeAppAgentChat(
     prompt: string;
     jobId: string;
     history?: Array<{ role: "user" | "assistant"; content: string }>;
+    signal?: AbortSignal;
   },
 ): Promise<AsyncIterable<GatewayStreamRawEvent>> {
   const res = await fetch(
@@ -420,11 +571,9 @@ export async function streamRuntimeAppAgentChat(
     {
       method: "POST",
       headers: runtimeHeaders(auth),
+      signal: input.signal,
       body: JSON.stringify({
-        namespaceId: auth.namespaceId,
-        slug: auth.slug,
-        paprApiKey: auth.paprApiKey,
-        shareToken: auth.shareToken,
+        ...runtimeAuthPayload(auth),
         sessionId: input.sessionId,
         appId: input.appId,
         subAgentId: input.subAgentId,
@@ -450,4 +599,123 @@ export async function streamRuntimeAppAgentChat(
     throw new Error("Runtime app-agent stream returned empty body");
   }
   return parseRuntimeSseStream(res.body);
+}
+
+export interface RuntimeTursoDbChangedInput {
+  jobId?: string;
+  dbId?: string;
+  tursoShortName?: string;
+  tables?: string[];
+  source?: string;
+}
+
+function workspaceLogHostScopePayload(
+  hostScope: WorkspaceLogHostScope | undefined,
+): Record<string, string> {
+  if (!hostScope) {
+    return {};
+  }
+  return {
+    orgId: hostScope.orgId,
+    ownerUserId: hostScope.ownerUserId,
+    appId: hostScope.appId,
+  };
+}
+
+/** Cloud app host → memory workspace log append (Turso materialization on server). */
+export async function appendRuntimeWorkspaceLogEntry(
+  auth: AppRuntimeRouteAuth,
+  request: WorkspaceLogAppendRequest,
+  hostScope?: WorkspaceLogHostScope,
+): Promise<WorkspaceLogAppendResponse> {
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/workspace/log/append`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        ...workspaceLogHostScopePayload(hostScope),
+        replicaId: request.replicaId,
+        kind: request.kind,
+        dbSourceId: request.dbSourceId,
+        payload: request.payload,
+      }),
+    },
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime workspace log append failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as WorkspaceLogAppendResponse;
+}
+
+/** Cloud app host → memory workspace log append-batch (one round-trip for N row ops). */
+export async function appendRuntimeWorkspaceLogBatch(
+  auth: AppRuntimeRouteAuth,
+  request: WorkspaceLogAppendBatchRequest,
+  hostScope?: WorkspaceLogHostScope,
+): Promise<WorkspaceLogAppendBatchResponse> {
+  const timeoutMs = Math.min(
+    180_000,
+    45_000 + request.entries.length * 250,
+  );
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/workspace/log/append-batch`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        ...workspaceLogHostScopePayload(hostScope),
+        replicaId: request.replicaId,
+        entries: request.entries.map((entry) => ({
+          kind: entry.kind,
+          dbSourceId: entry.dbSourceId,
+          payload: entry.payload,
+        })),
+      }),
+    },
+    timeoutMs,
+  );
+  if (!res.ok) {
+    throw new Error(
+      `Runtime workspace log append-batch failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
+  return (await res.json()) as WorkspaceLogAppendBatchResponse;
+}
+
+/** Record Turso write — memory server bumps workspace sync-index. */
+export async function recordRuntimeTursoDbChanged(
+  auth: AppRuntimeRouteAuth,
+  input: RuntimeTursoDbChangedInput,
+): Promise<void> {
+  if (!input.jobId?.trim() && !input.dbId?.trim()) {
+    return;
+  }
+
+  const res = await runtimeFetch(
+    `${getMemoryServerBaseUrl()}/v1/cloud/runtime/turso-db-changed`,
+    {
+      method: "POST",
+      headers: runtimeHeaders(auth),
+      body: JSON.stringify({
+        ...runtimeAuthPayload(auth),
+        ...(input.jobId ? { jobId: input.jobId } : {}),
+        ...(input.dbId ? { dbId: input.dbId } : {}),
+        ...(input.tursoShortName ? { tursoShortName: input.tursoShortName } : {}),
+        ...(input.tables ? { tables: input.tables } : {}),
+        ...(input.source ? { source: input.source } : {}),
+      }),
+    },
+    15_000,
+  );
+
+  if (!res.ok) {
+    throw new Error(
+      `Runtime turso-db-changed failed (${res.status}): ${(await res.text()).slice(0, 200)}`,
+    );
+  }
 }

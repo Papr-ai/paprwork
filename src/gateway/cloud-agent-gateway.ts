@@ -13,13 +13,19 @@
 import dotenv from "dotenv";
 import { resolve } from "path";
 import express, { type NextFunction, type Request, type Response } from "express";
-import {
-  getCloudAgentGatewayService,
-  newCloudAgentRunId,
-} from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
+import { getCloudAgentGatewayService } from "./services/cloudAgentGateway/CloudAgentGatewayService.js";
+import { handleCloudAgentAppRepoCommitted } from "./services/cloudAgentGateway/handleAppRepoCommitted.js";
+import { resolveCloudAgentRunId } from "./services/cloudAgentGateway/cloudAgentRunId.js";
 import type { CloudAgentRunRequest } from "./services/cloudAgentGateway/types.js";
+import {
+  parseAppRepoCommittedPayload,
+} from "./services/syncV3/appRepoCommittedInbound.js";
 
+// `.env.local` before `.env`: dotenv never overwrites an already-set
+// variable, so the first file to define a key wins. Both are gitignored, so
+// in Cloud Run neither exists and these calls no-op.
 dotenv.config({ path: resolve(process.cwd(), ".env.local") });
+dotenv.config({ path: resolve(process.cwd(), ".env") });
 
 process.env.GATEWAY_MODE = process.env.GATEWAY_MODE ?? "cloud_agent";
 process.env.CLOUD_SYNC_ENABLED = process.env.CLOUD_SYNC_ENABLED ?? "false";
@@ -67,13 +73,20 @@ function parseCloudAgentRunRequest(
     return { error: "llmAuth must include provider, authType, token" };
   }
 
-  const runId = body.runId ?? newCloudAgentRunId();
+  const jobId = body.jobId as string;
+  const scheduledDueAt = body.scheduledDueAt?.trim() || undefined;
+  const runId = resolveCloudAgentRunId({
+    jobId,
+    runId: body.runId,
+    scheduledDueAt,
+  });
   return {
     orgId: body.orgId as string,
     namespaceId: body.namespaceId,
     userId: body.userId as string,
-    jobId: body.jobId as string,
+    jobId,
     runId,
+    scheduledDueAt,
     provider: body.llmAuth.provider,
     model: body.model,
     runtimeParams: body.runtimeParams,
@@ -222,6 +235,16 @@ async function main(): Promise<void> {
     const service = getCloudAgentGatewayService();
     await service.endAgentSession(sessionId);
     res.json({ ok: true, sessionId });
+  });
+
+  app.post("/internal/app-repo-committed", requireGatewayAuth, async (req, res) => {
+    const event = parseAppRepoCommittedPayload(req.body);
+    if (!event) {
+      res.status(400).json({ error: "Invalid app-repo-committed payload" });
+      return;
+    }
+    const result = await handleCloudAgentAppRepoCommitted(event);
+    res.json({ ok: true, ...result });
   });
 
   app.listen(PORT, "0.0.0.0", () => {

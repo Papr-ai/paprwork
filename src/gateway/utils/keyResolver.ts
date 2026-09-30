@@ -17,8 +17,16 @@ import {
   isKeysResponseMessage,
   isInvalidateKeyCacheMessage,
 } from "../../core/types/gateway-ipc.js";
+import {
+  getActivePaprWorkspacePointer,
+  paprApiKeyMatchesActiveWorkspace,
+  paprApiKeyMatchesNamespaceBound,
+} from "../../core/utils/paprApiKey.js";
+import { readActiveWorkspacePointer } from "../../core/utils/paprWorkspace.js";
 
 let keyCache: Record<string, string> = {};
+/** Names already asked of main this session, including misses — don't re-IPC. */
+const ipcAskedNames = new Set<string>();
 let oauthTokenCache: {
   openai?: { accessToken: string; expiresAt: string };
   anthropic?: { accessToken: string; expiresAt: string };
@@ -32,6 +40,75 @@ interface IpcProcessLike {
 }
 
 const IPC_KEY_RESOLVE_TIMEOUT_MS = 15_000;
+/**
+ * Above this, a key IPC round trip is worth a line in the log. A local pipe hop
+ * plus a keychain read is microseconds (measured: ~0.6µs per safeStorage decrypt),
+ * so anything near a second means time was spent somewhere other than the work.
+ */
+const SLOW_IPC_ROUND_TRIP_MS = 1_000;
+const PAPR_API_KEY_RETRY_COOLDOWN_MS = 3_000;
+/** Re-read OAuth vs API-key decision from main without keychain on every agent turn. */
+const OAUTH_IPC_REFRESH_TTL_MS = 8_000;
+let oauthIpcLastRefreshAtMs = 0;
+
+/** Coalesce concurrent IPC key requests (tab switch can fan out several getProviderAuth calls). */
+const inFlightKeyRequests = new Map<string, Promise<Record<string, string>>>();
+
+/**
+ * Real Platform keys that the OAuth path overwrote in process.env.
+ *
+ * pi-ai reads its credential from process.env, so an OAuth turn assigns the
+ * OAuth token to ANTHROPIC_API_KEY / OPENAI_API_KEY for the rest of the process.
+ * Without the original stashed here, switching a provider back to its API key
+ * would resolve that OAuth token instead of the user's real key.
+ */
+const overwrittenEnvKeys: Record<string, string> = {};
+
+/**
+ * Bumped whenever the cached credentials change — auth-mode switch, key edit,
+ * re-auth. Chat sessions keep the credential they resolved at creation for their
+ * whole lifetime, so they compare epochs to notice theirs went stale.
+ */
+let authEpoch = 0;
+
+export function getAuthEpoch(): number {
+  return authEpoch;
+}
+
+/**
+ * OAuth access tokens are not Platform API keys — sending one to the Platform
+ * API fails or bills against the wrong quota, so never resolve one as a key.
+ */
+function isOAuthShapedToken(value: string): boolean {
+  return value.startsWith("sk-ant-oat") || value.startsWith("sk-ant-ort");
+}
+
+/**
+ * Call before assigning an OAuth token to a provider's API-key env var so the
+ * real key stays resolvable. No-op unless it would discard a genuine key.
+ */
+export function preserveEnvKeyBeforeOverwrite(keyName: string): void {
+  const current = process.env[keyName];
+  if (!current || isOAuthShapedToken(current)) return;
+  if (overwrittenEnvKeys[keyName]) return;
+  overwrittenEnvKeys[keyName] = current;
+}
+
+let paprApiKeyIpcInFlight: Promise<string | undefined> | null = null;
+let paprApiKeyUnavailableUntil = 0;
+
+function paprApiKeyMatchesBoundActiveWorkspace(apiKey: string): boolean {
+  const pointer =
+    getActivePaprWorkspacePointer() ?? readActiveWorkspacePointer();
+  if (!pointer) {
+    return true;
+  }
+  return paprApiKeyMatchesNamespaceBound(
+    apiKey,
+    pointer.organizationId,
+    pointer.namespaceId,
+  );
+}
 
 /**
  * Request keys from main process via IPC.
@@ -51,13 +128,38 @@ async function requestKeysViaIPC(
   keyNames: string[],
   ipcProcess: IpcProcessLike,
 ): Promise<Record<string, string>> {
-  return new Promise((resolve, reject) => {
+  const dedupeKey = [...keyNames].sort().join(",");
+  const inFlight = inFlightKeyRequests.get(dedupeKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const promise = new Promise<Record<string, string>>((resolve, reject) => {
     if (!ipcProcess.send) {
       reject(new Error("IPC not available - not running as child process"));
       return;
     }
 
+    // A live IPC channel does not mean the parent is the Electron main process.
+    // Vitest's forks pool connects one too, and routes anything we post into its
+    // own RPC deserializer, which calls Buffer.from() on our plain object,
+    // throws ERR_INVALID_ARG_TYPE, and kills the whole run with a stack that
+    // names vitest internals rather than this line.
+    //
+    // Only refuse when we would post to the REAL process — that is vitest's
+    // channel. An injected ipcProcess is a test double with its own send/on,
+    // which is how the IPC flow itself is tested; blocking that made those
+    // tests resolve undefined instead of exercising the path they cover.
+    if (
+      ipcProcess === process &&
+      (process.env.VITEST || process.env.NODE_ENV === "test")
+    ) {
+      reject(new Error("IPC not available - running under test"));
+      return;
+    }
+
     const reqId = `keys-${++requestId}`;
+    const sentAt = Date.now();
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("Key resolution timeout"));
@@ -66,12 +168,37 @@ async function requestKeysViaIPC(
     const messageHandler = (message: unknown) => {
       if (isKeysResponseMessage(message) && message.requestId === reqId) {
         cleanup();
+        // Round trip for a local IPC hop and a keychain read should be single-digit
+        // milliseconds. When it is not, this plus main's own "handled in Xms" line
+        // says which side the time went: a long round trip against a short handler
+        // means the message sat in main's queue, i.e. its event loop was blocked.
+        const elapsedMs = Date.now() - sentAt;
+        if (elapsedMs >= SLOW_IPC_ROUND_TRIP_MS) {
+          console.warn(
+            `[KeyResolver] Slow key IPC: ${elapsedMs}ms round trip for ` +
+              `${keyNames.join(",")} (${reqId})`,
+          );
+        }
         // Main is authoritative: when it includes `oauthTokens`, replace cache (including `{}`
         // when no valid subscription tokens) so we never keep a stale accessToken after re-auth.
         if ("oauthTokens" in message) {
           oauthTokenCache = message.oauthTokens ?? {};
         }
-        resolve(message.keys || {});
+        const received = message.keys || {};
+        for (const name of keyNames) {
+          ipcAskedNames.add(name);
+        }
+        for (const [keyName, value] of Object.entries(received)) {
+          if (!value || isOAuthShapedToken(value)) continue;
+          if (
+            keyName === "PAPR_API_KEY" &&
+            !paprApiKeyMatchesBoundActiveWorkspace(value)
+          ) {
+            continue;
+          }
+          keyCache[keyName] = value;
+        }
+        resolve(received);
       }
     };
 
@@ -87,7 +214,12 @@ async function requestKeysViaIPC(
       keys: keyNames,
     };
     ipcProcess.send(payload);
+  }).finally(() => {
+    inFlightKeyRequests.delete(dedupeKey);
   });
+
+  inFlightKeyRequests.set(dedupeKey, promise);
+  return promise;
 }
 
 /**
@@ -100,37 +232,43 @@ export async function getApiKeys(
   keyNames: string[],
   ipcProcess: IpcProcessLike = process,
 ): Promise<Record<string, string>> {
-  const isDev = process.env.NODE_ENV === "development";
   const keys: Record<string, string> = {};
 
-  if (isDev) {
-    // Development: use process.env (from .env.local)
-    console.log("[KeyResolver] Development mode - using process.env");
-    for (const keyName of keyNames) {
-      const value = process.env[keyName];
-      if (value) {
-        keys[keyName] = value;
-        console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
-      }
-    }
-    return keys;
-  }
-
-  // Production: check cache first
-  const uncachedKeys = keyNames.filter((name) => !keyCache[name]);
+  // Settings / keychain via IPC wins over process.env in both dev and prod.
+  // `npm start` sets NODE_ENV=development, so the old env-only shortcut meant
+  // a key pasted in Settings was never the one sent to Anthropic — .env was.
+  const uncachedKeys = keyNames.filter(
+    (name) => !keyCache[name] && !ipcAskedNames.has(name),
+  );
 
   if (uncachedKeys.length > 0) {
     console.log(
       `[KeyResolver] Requesting ${uncachedKeys.length} keys from main process`,
     );
 
-    let missingAfterIpc = uncachedKeys;
     try {
       const resolved = await requestKeysViaIPC(uncachedKeys, ipcProcess);
-      Object.assign(keyCache, resolved);
-      missingAfterIpc = uncachedKeys.filter((keyName) => !resolved[keyName]);
+      for (const [keyName, value] of Object.entries(resolved)) {
+        if (!value) continue;
+        if (isOAuthShapedToken(value)) {
+          console.warn(
+            `[KeyResolver]   ✗ Ignoring IPC ${keyName} — holds an OAuth token, not a Platform API key`,
+          );
+          continue;
+        }
+        if (
+          keyName === "PAPR_API_KEY" &&
+          !paprApiKeyMatchesBoundActiveWorkspace(value)
+        ) {
+          console.warn(
+            "[KeyResolver] Ignoring IPC PAPR_API_KEY — wrong org/namespace for active workspace",
+          );
+          continue;
+        }
+        keyCache[keyName] = value;
+      }
       console.log(
-        `[KeyResolver] Received ${Object.keys(resolved).length} keys`,
+        `[KeyResolver] Received ${Object.keys(resolved).length} keys from Settings`,
       );
       
       // Trigger lazy code indexing if PAPR_API_KEY was just resolved
@@ -145,21 +283,35 @@ export async function getApiKeys(
       console.error("[KeyResolver] Failed to resolve keys via IPC:", error);
     }
 
-    // Fall back to env vars for unresolved keys.
-    // This keeps development usable while still preferring secure IPC lookups.
-    for (const keyName of missingAfterIpc) {
-      const value = process.env[keyName];
-      if (value) {
-        keyCache[keyName] = value;
-      }
-    }
   }
 
-  // Return requested keys from cache
+  // Env is fallback only — never overrides a Settings key already in cache.
+  // Also runs when IPC already answered "not present" (ipcAskedNames).
   for (const keyName of keyNames) {
     if (keyCache[keyName]) {
       keys[keyName] = keyCache[keyName];
+      continue;
     }
+    const value = overwrittenEnvKeys[keyName] ?? process.env[keyName];
+    if (!value) continue;
+    if (isOAuthShapedToken(value)) {
+      console.warn(
+        `[KeyResolver]   ✗ Ignoring ${keyName} — holds an OAuth token, not a Platform API key`,
+      );
+      continue;
+    }
+    if (
+      keyName === "PAPR_API_KEY" &&
+      !paprApiKeyMatchesActiveWorkspace(value)
+    ) {
+      console.warn(
+        "[KeyResolver] Ignoring PAPR_API_KEY env fallback — wrong org/namespace for active workspace",
+      );
+      continue;
+    }
+    keyCache[keyName] = value;
+    keys[keyName] = value;
+    console.log(`[KeyResolver]   ✓ ${keyName} found in env`);
   }
 
   return keys;
@@ -177,29 +329,95 @@ export async function getApiKey(keyName: string): Promise<string | undefined> {
  * Papr cloud identity key — always prefer Papr login (keychain via IPC) over .env.local.
  * Used for cloud sync, Turso, memory server proxy, Composer.
  */
+async function resolvePaprApiKeyViaIpc(
+  ipcProcess: IpcProcessLike,
+): Promise<string | undefined> {
+  try {
+      const keys = await requestKeysViaIPC(["PAPR_API_KEY"], ipcProcess);
+      if (keys.PAPR_API_KEY?.trim()) {
+        const resolved = keys.PAPR_API_KEY.trim();
+        if (!paprApiKeyMatchesBoundActiveWorkspace(resolved)) {
+          console.warn(
+            "[KeyResolver] IPC returned PAPR_API_KEY for wrong org/namespace — omitting until namespace key sync completes",
+          );
+          return undefined;
+        }
+        keyCache.PAPR_API_KEY = resolved;
+        paprApiKeyUnavailableUntil = 0;
+        return resolved;
+      }
+  } catch (error) {
+    console.warn(
+      "[KeyResolver] PAPR_API_KEY IPC lookup failed:",
+      (error as Error).message,
+    );
+    paprApiKeyUnavailableUntil = Date.now() + PAPR_API_KEY_RETRY_COOLDOWN_MS;
+  }
+
+  return undefined;
+}
+
+/** Shown when chat needs cloud access but no BYOK/OAuth and no Papr login key. */
+export const PAPR_PROXY_SIGN_IN_MESSAGE =
+  "Sign in with Papr to use cloud models without your own API keys (Settings → AI Models → Login with Papr), or add a provider API key / connect OAuth.";
+
+/**
+ * Resolve Papr AI proxy credentials (keychain in prod, IPC + env in dev).
+ * Prefer this over getApiKeys(["PAPR_API_KEY"]) — it validates the key against
+ * the active workspace before returning.
+ */
+export async function resolvePaprProxyAuth(
+  ipcProcess: IpcProcessLike = process,
+): Promise<{ apiKey: string; usePaprProxy: true } | null> {
+  const paprApiKey = await getPaprApiKey(ipcProcess);
+  if (!paprApiKey) {
+    return null;
+  }
+  return { apiKey: paprApiKey, usePaprProxy: true };
+}
+
 export async function getPaprApiKey(
   ipcProcess: IpcProcessLike = process,
 ): Promise<string | undefined> {
+  // Main process is authoritative for Papr login keys (namespace vault slots).
+  const cached = keyCache.PAPR_API_KEY?.trim();
+  if (cached) {
+    if (paprApiKeyMatchesBoundActiveWorkspace(cached)) {
+      return cached;
+    }
+    console.warn(
+      "[KeyResolver] Clearing stale cached PAPR_API_KEY — wrong org/namespace for active workspace",
+    );
+    delete keyCache.PAPR_API_KEY;
+  }
+
+  if (Date.now() < paprApiKeyUnavailableUntil) {
+    return undefined;
+  }
+
   if (ipcProcess.send) {
-    try {
-      const keys = await requestKeysViaIPC(["PAPR_API_KEY"], ipcProcess);
-      if (keys.PAPR_API_KEY) {
-        keyCache.PAPR_API_KEY = keys.PAPR_API_KEY;
-        return keys.PAPR_API_KEY;
-      }
-    } catch (error) {
-      console.warn(
-        "[KeyResolver] PAPR_API_KEY IPC lookup failed:",
-        (error as Error).message,
-      );
+    if (!paprApiKeyIpcInFlight) {
+      paprApiKeyIpcInFlight = resolvePaprApiKeyViaIpc(ipcProcess).finally(() => {
+        paprApiKeyIpcInFlight = null;
+      });
+    }
+    const fromIpc = await paprApiKeyIpcInFlight;
+    if (fromIpc) {
+      return fromIpc;
     }
   }
 
-  if (keyCache.PAPR_API_KEY) {
-    return keyCache.PAPR_API_KEY;
+  const envKey = process.env.PAPR_API_KEY?.trim();
+  if (envKey && paprApiKeyMatchesActiveWorkspace(envKey)) {
+    return envKey;
+  }
+  if (envKey) {
+    console.warn(
+      "[KeyResolver] Ignoring PAPR_API_KEY from env — scoped to a different org/namespace than the active workspace",
+    );
   }
 
-  return process.env.PAPR_API_KEY;
+  return undefined;
 }
 
 /**
@@ -207,8 +425,19 @@ export async function getPaprApiKey(
  * @param keyName - Optional specific key to clear, or undefined to clear all
  */
 export function clearKeyCache(keyName?: string): void {
+  authEpoch += 1;
+  oauthIpcLastRefreshAtMs = 0;
+  void import("./cloudSchedulerAuthority.js")
+    .then(({ clearCloudSchedulerAuthorityCache }) => {
+      clearCloudSchedulerAuthorityCache();
+    })
+    .catch(() => undefined);
   if (keyName) {
     delete keyCache[keyName];
+    ipcAskedNames.delete(keyName);
+    if (keyName === "PAPR_API_KEY") {
+      paprApiKeyUnavailableUntil = 0;
+    }
     if (keyName === "OPENAI_API_KEY") {
       delete oauthTokenCache.openai;
     } else if (keyName === "ANTHROPIC_API_KEY") {
@@ -217,6 +446,7 @@ export function clearKeyCache(keyName?: string): void {
     console.log(`[KeyResolver] Cleared cache for key: ${keyName}`);
   } else {
     keyCache = {};
+    ipcAskedNames.clear();
     oauthTokenCache = {};
     console.log("[KeyResolver] Cleared entire key cache");
   }
@@ -267,6 +497,22 @@ export function hasValidOAuthToken(provider: "openai" | "anthropic"): boolean {
 }
 
 /**
+ * Do we already hold something this provider could authenticate with?
+ *
+ * The distinction this draws is "re-checking what main thinks" versus "we have no
+ * credential at all", and only the second is worth making a caller wait for. Both
+ * shapes count: on the OAuth route main withholds the API key entirely, so
+ * keyCache is empty and the token is the credential; on the API-key route the
+ * reverse.
+ */
+function hasCachedCredentialFor(
+  provider: "openai" | "anthropic",
+  keyName: string,
+): boolean {
+  return hasValidOAuthToken(provider) || Boolean(keyCache[keyName]);
+}
+
+/**
  * Get authentication for a provider (prioritizes OAuth over API key)
  * Returns { type: 'oauth', token } or { type: 'apiKey', key } or null
  */
@@ -274,7 +520,9 @@ export async function getProviderAuth(
   provider: "openai" | "anthropic",
   ipcProcess: IpcProcessLike = process,
 ): Promise<
-  { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
+  | { type: "oauth"; token: string }
+  | { type: "apiKey"; key: string; oauthExpired?: boolean }
+  | null
 > {
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
@@ -282,14 +530,46 @@ export async function getProviderAuth(
   // Populate OAuth cache from Electron main process when available.
   // In dev mode getApiKeys() reads process.env only, but the gateway still runs
   // as an Electron child with IPC — so OAuth tokens from Settings must be loaded here.
-  if (ipcProcess.send && !hasValidOAuthToken(provider)) {
-    try {
-      await requestKeysViaIPC([keyName], ipcProcess);
-    } catch (error) {
-      console.warn(
-        `[KeyResolver] OAuth IPC lookup failed for ${provider}:`,
-        (error as Error).message,
-      );
+  //
+  // Main decides which credentials the gateway may see (withholds OAuth when the
+  // user picked API key), so the gateway re-asks on a short TTL.
+  //
+  // That refresh is a BACKSTOP, not the mechanism. Main pushes
+  // INVALIDATE_KEY_CACHE on every credential change — auth-mode toggle, OAuth
+  // refresh, key add/edit/delete — and clearKeyCache drops the cached token and
+  // zeroes this TTL, so a switch always lands on the cold path below with nothing
+  // in hand. The TTL only catches whatever a push missed.
+  //
+  // Which is why a caller already holding a usable credential must not *wait* for
+  // it. Blocking up to IPC_KEY_RESOLVE_TIMEOUT_MS to re-learn something we already
+  // have, and then falling back to that same cached value when the wait fails, is
+  // pure dead time — and it sits on the hot path of every agent turn and every
+  // file the code indexer summarizes.
+  const oauthIpcStale =
+    Date.now() - oauthIpcLastRefreshAtMs >= OAUTH_IPC_REFRESH_TTL_MS;
+  if (ipcProcess.send && oauthIpcStale) {
+    // Stamp the attempt, not the success. This used to be advanced only after a
+    // resolved request, so while main was slow every subsequent call still found
+    // the TTL stale and paid the full timeout again, back to back, for as long as
+    // main stayed slow. An attempt that failed is still an attempt.
+    oauthIpcLastRefreshAtMs = Date.now();
+
+    const refresh = requestKeysViaIPC([keyName], ipcProcess).catch(
+      (error: unknown) => {
+        console.warn(
+          `[KeyResolver] OAuth IPC lookup failed for ${provider}:`,
+          error instanceof Error ? error.message : error,
+        );
+        return undefined;
+      },
+    );
+
+    if (hasCachedCredentialFor(provider, keyName)) {
+      // Let it land in the cache behind us; the next call picks it up.
+      void refresh;
+    } else {
+      // Nothing cached: this call genuinely has no answer without main.
+      await refresh;
     }
   }
 
@@ -308,13 +588,57 @@ export async function getProviderAuth(
     }
   }
 
-  // Fall back to API key
+  // Fall back to API key (or vault OAuth token on cloud agent gateway).
+  //
+  // When an OAuth token exists but has expired, this is a downgrade rather
+  // than a plain fallback: it moves the request off the user's subscription
+  // and onto their platform API organisation, which bills separately and
+  // carries its own spend caps. Say so out loud. Doing it silently is how a
+  // subscription sitting at 11% usage produced "you have reached your usage
+  // limits" — the cap being reported belonged to an account the user had not
+  // chosen to spend from.
+  const oauthExpired = oauthTokenCache[provider] !== undefined;
+
   if (keys[keyName]) {
+    if (process.env.GATEWAY_MODE === "cloud_agent") {
+      const { resolveCloudGatewayProviderAuthFromEnvToken } = await import(
+        "../services/cloudAgentGateway/resolveCloudProviderAuth.js"
+      );
+      const reconciled = resolveCloudGatewayProviderAuthFromEnvToken({
+        provider,
+        token: keys[keyName],
+      });
+      if (reconciled.authType === "oauth") {
+        console.log(
+          `[KeyResolver] Cloud vault auth for ${provider}: oauth ` +
+            `(length: ${reconciled.token.length}, prefix: ${reconciled.token.substring(0, 20)}...)`,
+        );
+        return { type: "oauth", token: reconciled.token };
+      }
+      console.log(
+        `[KeyResolver] Cloud vault auth for ${provider}: apiKey ` +
+          `(length: ${reconciled.token.length}, prefix: ${reconciled.token.substring(0, 20)}...)`,
+      );
+      return { type: "apiKey", key: reconciled.token };
+    }
+
+    if (oauthExpired) {
+      console.warn(
+        `[KeyResolver] ${provider} OAuth token is expired — falling back to the ` +
+          `platform API key. Requests will bill the platform API account, not ` +
+          `the subscription. Reconnect ${provider} in Settings to go back to ` +
+          `the subscription.`
+      );
+    }
     console.log(
       `[KeyResolver] Using API key for ${provider} ` +
-      `(length: ${keys[keyName].length}, prefix: ${keys[keyName].substring(0, 20)}...)`
+        `(length: ${keys[keyName].length}, prefix: ${keys[keyName].substring(0, 20)}...)`,
     );
-    return { type: "apiKey", key: keys[keyName] };
+    return {
+      type: "apiKey",
+      key: keys[keyName],
+      ...(oauthExpired ? { oauthExpired: true } : {}),
+    };
   }
 
   console.log(`[KeyResolver] No authentication found for ${provider}`);
@@ -330,7 +654,9 @@ export async function getProviderAuthForModel(
   options: { modelId: string; modelProvider: string },
   ipcProcess: IpcProcessLike = process,
 ): Promise<
-  { type: "oauth"; token: string } | { type: "apiKey"; key: string } | null
+  | { type: "oauth"; token: string }
+  | { type: "apiKey"; key: string; oauthExpired?: boolean }
+  | null
 > {
   const { modelId, modelProvider } = options;
 

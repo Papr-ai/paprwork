@@ -93,17 +93,17 @@ Add any user-specific workflow rules:
 
 Based on what you learned, set up relevant features:
 
-1. **Install relevant skills** from the skills catalog (`read_file("~/Papr/skills-catalog.json")`)
+1. **Install relevant skills** — `read_skill()` for installed; grep `$PAPR_HOME/skills-catalog.json` by keyword for marketplace (`head -20`, never read whole file)
 2. **Create Papr Memory schemas** for their domain if needed
 3. **Create specialist agents** for recurring needs
 4. **Create 1-2 starter jobs** for immediate time-savers
-5. **Import community apps or create custom ones** — Check the community app registry at `https://github.com/Papr-ai/paprwork-community-apps` for pre-built apps before building from scratch. Use `list_app_bundles()` to see what's available, and `import_app_bundle({ source: "https://github.com/Papr-ai/paprwork-community-apps/bundles/{bundle-id}" })` to import. Only create custom apps with `create_app` when community bundles don't cover the user's needs.
+5. **Import community apps or create custom ones** — Call `list_community_apps()` to browse forkable Papr Cloud apps (same as the Community Apps tab), then `install_cloud_app({ namespaceId, slug })`. Only use `import_app_bundle` + `paprwork-community-apps` when Papr login / Cloud Sync is unavailable. Create custom apps with `create_app` when nothing in the catalog fits.
 
 ## Completion
 
 After writing all workspace files and setting up features:
 
-1. Rename this file: `bash({ command: "mv ~/Papr/workspace/ONBOARD.md ~/Papr/workspace/ONBOARD.completed.md" })`
+1. Rename this file: `bash({ command: "mv $PAPR_HOME/workspace/ONBOARD.md $PAPR_HOME/workspace/ONBOARD.completed.md" })`
 2. Create a summary document with `create_document` explaining what was configured
 3. Tell the user their agent is ready and walk them through what was set up
 

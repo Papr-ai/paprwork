@@ -1,0 +1,35 @@
+.home-today {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.home-today--loading,
+.home-today--empty {
+  align-items: center;
+  justify-content: center;
+  padding: 32px 24px;
+  text-align: center;
+  color: var(--text-mute);
+}
+
+.home-today--empty h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.home-today--empty p {
+  margin: 0;
+  max-width: 420px;
+  line-height: 1.5;
+}
+
+.home-today .mini-app-view--embedded {
+  flex: 1 1 auto;
+  min-height: 0;
+}

@@ -48,7 +48,7 @@ But in packaged builds, this directory didn't exist because `electron-builder` n
    - `AppService.initialize()` calls `installDefaultApps()`
    - Checks if `dist/resources/default-apps/` exists (now included in ASAR)
    - Reads `app-id.txt` from each default app: `bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
-   - Checks if app already installed in `~/Papr/apps/{appId}/`
+   - Checks if app already installed in `$PAPR_HOME/apps/{appId}/`
    - If not installed, copies all files to user directory
    - Logs: `[AppService] Installed default app: bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c (home-dashboard)`
 
@@ -123,13 +123,13 @@ This verifies:
 
 2. **Install Fresh:**
    - Uninstall existing Paprwork
-   - Delete `~/Papr/` directory (fresh state)
+   - Delete active workspace under `~/Papr/orgs/.../namespaces/.../` (fresh state)
    - Install newly built package
 
 3. **Verify Installation:**
    - Launch app
    - Check console logs: `[AppService] Installed default app: bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c`
-   - Verify files exist: `~/Papr/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
+   - Verify files exist: `$PAPR_HOME/apps/bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c/`
 
 4. **Test Home Button:**
    - Click home button (house icon) in tab bar

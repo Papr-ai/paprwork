@@ -2,12 +2,12 @@
  * Read-only attachment chips shown on sent user messages.
  */
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { MessageAttachment } from "../../types/chat";
 import {
-  attachmentFileSrc,
   attachmentKindLabel,
   isImageAttachment,
+  loadAttachmentPreviewSrc,
 } from "../../utils/messageAttachments";
 import "./MessageAttachments.css";
 
@@ -73,6 +73,53 @@ function AttachmentIcon({ attachment }: { attachment: MessageAttachment }) {
   );
 }
 
+function AttachmentImageThumb({ attachment }: { attachment: MessageAttachment }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!attachment.filePath) return;
+
+    let cancelled = false;
+    setSrc(null);
+    setFailed(false);
+
+    void loadAttachmentPreviewSrc(attachment.filePath, attachment.mimeType)
+      .then((previewSrc) => {
+        if (cancelled) return;
+        if (previewSrc) {
+          setSrc(previewSrc);
+        } else {
+          setFailed(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFailed(true);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [attachment.filePath, attachment.mimeType]);
+
+  if (failed || !src) {
+    return (
+      <span className="message-attachment__icon">
+        <AttachmentIcon attachment={attachment} />
+      </span>
+    );
+  }
+
+  return (
+    <img
+      className="message-attachment__thumb"
+      src={src}
+      alt={attachment.name}
+      onError={() => setFailed(true)}
+    />
+  );
+}
+
 export function MessageAttachments({ attachments }: MessageAttachmentsProps) {
   if (attachments.length === 0) return null;
 
@@ -84,12 +131,8 @@ export function MessageAttachments({ attachments }: MessageAttachmentsProps) {
 
         return (
           <div key={attachment.id} className="message-attachment">
-            {showPreview && attachment.filePath ? (
-              <img
-                className="message-attachment__thumb"
-                src={attachmentFileSrc(attachment.filePath)}
-                alt={attachment.name}
-              />
+            {showPreview ? (
+              <AttachmentImageThumb attachment={attachment} />
             ) : (
               <span className="message-attachment__icon">
                 <AttachmentIcon attachment={attachment} />

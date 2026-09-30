@@ -2,14 +2,18 @@
  * CustomKeysStorage - Secure storage for custom API keys
  * Uses Electron safeStorage (macOS Keychain / Windows DPAPI)
  *
- * Integration keys are scoped per organization. Session/auth tokens stay global.
+ * Integration keys default to the shared vault (all organizations). Session/auth tokens stay global.
  */
 
 import fs from "fs/promises";
 import path from "path";
 import type { KeyClientAccess } from "../types/customKeys.js";
 import { DEFAULT_KEY_CLIENT_ACCESS, normalizeKeyClientAccess } from "../types/customKeys.js";
-import { isGlobalCustomKeyName } from "./customKeysScope.js";
+import {
+  isGlobalCustomKeyName,
+  isPaprPlatformApiKeyName,
+} from "./customKeysScope.js";
+import { isInternalPaprNamespaceApiKeyName } from "../utils/paprApiKey.js";
 import {
   LOCAL_ORG_ID,
   SHARED_ORG_ID,
@@ -23,6 +27,12 @@ import {
   pickNewestCustomKeyByName,
   pickNewestCustomKeyEntryByName,
 } from "./customKeysDedupe.js";
+import {
+  sharedMirrorKeyId,
+  sharedNamesToPrune,
+  type SharedVaultKeyInput,
+  type VaultOrigin,
+} from "./sharedVaultMirror.js";
 import electron from "electron";
 const { app, safeStorage } = electron;
 
@@ -37,8 +47,27 @@ export interface CustomKey {
   updatedAt: string;
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
   vaultAudience?: IntegrationKeyVaultAudience;
+  vaultOrigin?: VaultOrigin;
+  sharedShareScope?: Extract<
+    IntegrationKeyVaultAudience,
+    "namespace" | "org" | "members"
+  >;
+  sharedOwnerUserId?: string;
+  sharedSyncedAt?: string;
+  /** Set when a teammate shared the same key name but this local key wins. */
+  vaultSharedNameCollision?: boolean;
+  vaultAudienceMemberIds?: string[];
+  vaultShareBlocked?: boolean;
+  vaultShareBlockedOwnerUserId?: string;
+}
+
+export interface VaultShareConflictInput {
+  name: string;
+  ownerUserId?: string;
+  shareScope?: string;
+  reason?: string;
 }
 
 export interface CustomKeyInput {
@@ -47,12 +76,16 @@ export interface CustomKeyInput {
   description?: string;
   permission?: "always" | "ask";
   clientAccess?: KeyClientAccess;
-  /** Default: organization (active workspace). Use "all" for cross-org keys. */
+  /** Default: all organizations (shared vault). Use "organization" for one org only. */
   orgScope?: IntegrationKeyOrgScope;
   /** Parse org id when orgScope is organization (defaults to active org). */
   organizationId?: string;
   /** Who can use this key in cloud vault: user, team (namespace), or organization. */
   vaultAudience?: IntegrationKeyVaultAudience;
+  vaultAudienceMemberIds?: string[];
+  source?: "manual" | "oauth";
+  managedBy?: "oauth";
+  oauthProvider?: "openai" | "anthropic" | "google";
 }
 
 export type CustomKeyStorageScope = "global" | "shared" | "org";
@@ -67,11 +100,22 @@ export interface CustomKeyMetadata {
   updatedAt: string;
   source?: "manual" | "oauth";
   managedBy?: "oauth";
-  oauthProvider?: "openai" | "anthropic";
+  oauthProvider?: "openai" | "anthropic" | "google";
   scope: CustomKeyStorageScope;
   orgScope: IntegrationKeyOrgScope | "global";
   organizationId?: string;
   vaultAudience: IntegrationKeyVaultAudience;
+  vaultOrigin?: VaultOrigin;
+  sharedShareScope?: Extract<
+    IntegrationKeyVaultAudience,
+    "namespace" | "org" | "members"
+  >;
+  sharedOwnerUserId?: string;
+  sharedSyncedAt?: string;
+  vaultSharedNameCollision?: boolean;
+  vaultAudienceMemberIds?: string[];
+  vaultShareBlocked?: boolean;
+  vaultShareBlockedOwnerUserId?: string;
 }
 
 export interface CustomKeysVaultContext {
@@ -102,7 +146,7 @@ export class CustomKeysStorage {
     await fs.mkdir(this.dataDir, { recursive: true });
     await this.loadGlobalKeys();
     await this.loadSharedKeys();
-    await this.migrateLegacyKeysFileIfNeeded(CustomKeysStorage.LOCAL_ORG_ID);
+    await this.migrateLegacyKeysFileIfNeeded();
     await this.loadOrgKeys(CustomKeysStorage.LOCAL_ORG_ID);
   }
 
@@ -126,7 +170,7 @@ export class CustomKeysStorage {
     }
 
     this.activeOrganizationId = normalizedOrgId;
-    await this.migrateLegacyKeysFileIfNeeded(normalizedOrgId);
+    await this.migrateLegacyKeysFileIfNeeded();
     await fs.mkdir(path.dirname(this.orgKeysFile(normalizedOrgId)), {
       recursive: true,
     });
@@ -289,9 +333,7 @@ export class CustomKeysStorage {
     await this.writeKeysFile(this.orgKeysFile(organizationId), this.orgKeys);
   }
 
-  private async migrateLegacyKeysFileIfNeeded(
-    organizationId: string,
-  ): Promise<void> {
+  private async migrateLegacyKeysFileIfNeeded(): Promise<void> {
     if (this.legacyMigrationComplete) {
       return;
     }
@@ -307,26 +349,26 @@ export class CustomKeysStorage {
 
     const legacyKeys = await this.readKeysFile(this.legacyKeysFile);
     const globalKeys = new Map(this.globalKeys);
-    const orgKeys = new Map(this.orgKeys);
+    const sharedKeys = new Map(this.sharedKeys);
 
     for (const [id, key] of legacyKeys) {
       if (isGlobalCustomKeyName(key.name)) {
         globalKeys.set(id, key);
       } else {
-        orgKeys.set(id, key);
+        sharedKeys.set(id, key);
       }
     }
 
     this.globalKeys = globalKeys;
-    this.orgKeys = orgKeys;
+    this.sharedKeys = sharedKeys;
     await this.saveGlobalKeys();
-    await this.saveOrgKeys(organizationId);
+    await this.saveSharedKeys();
 
     const backupPath = `${this.legacyKeysFile}.migrated`;
     await fs.rename(this.legacyKeysFile, backupPath).catch(() => undefined);
     this.legacyMigrationComplete = true;
     console.log(
-      `[CustomKeys] Migrated legacy keys into org ${organizationId} + global vault`,
+      `[CustomKeys] Migrated legacy keys into shared vault + global vault`,
     );
   }
 
@@ -349,6 +391,14 @@ export class CustomKeysStorage {
   } {
     if (isGlobalCustomKeyName(input.name)) {
       return { scope: "global" };
+    }
+    if (isPaprPlatformApiKeyName(input.name)) {
+      const organizationId = resolveIntegrationKeyOrganizationId({
+        orgScope: "organization",
+        organizationId: input.organizationId,
+        activeOrganizationId: this.activeOrganizationId,
+      });
+      return { scope: "org", organizationId };
     }
     if (input.orgScope === "all") {
       return { scope: "shared", organizationId: CustomKeysStorage.SHARED_ORG_ID };
@@ -528,10 +578,190 @@ export class CustomKeysStorage {
       orgScope,
       organizationId,
       vaultAudience: normalizeIntegrationKeyVaultAudience(key.vaultAudience),
+      ...(key.vaultOrigin ? { vaultOrigin: key.vaultOrigin } : {}),
+      ...(key.sharedShareScope ? { sharedShareScope: key.sharedShareScope } : {}),
+      ...(key.sharedOwnerUserId
+        ? { sharedOwnerUserId: key.sharedOwnerUserId }
+        : {}),
+      ...(key.sharedSyncedAt ? { sharedSyncedAt: key.sharedSyncedAt } : {}),
+      ...(key.vaultSharedNameCollision
+        ? { vaultSharedNameCollision: key.vaultSharedNameCollision }
+        : {}),
+      ...(key.vaultAudienceMemberIds?.length
+        ? { vaultAudienceMemberIds: key.vaultAudienceMemberIds }
+        : {}),
+      ...(key.vaultShareBlocked ? { vaultShareBlocked: key.vaultShareBlocked } : {}),
+      ...(key.vaultShareBlockedOwnerUserId
+        ? { vaultShareBlockedOwnerUserId: key.vaultShareBlockedOwnerUserId }
+        : {}),
     };
   }
 
+  async reconcileShareSyncResult(input: {
+    conflicts: VaultShareConflictInput[];
+    syncedNames: string[];
+  }): Promise<{ blocked: number; cleared: number }> {
+    const activeOrgId =
+      this.activeOrganizationId ?? CustomKeysStorage.LOCAL_ORG_ID;
+    const now = new Date().toISOString();
+    let blocked = 0;
+    let cleared = 0;
+    const syncedNames = new Set(
+      input.syncedNames.map((name) => this.normalizeKeyName(name)),
+    );
+
+    for (const conflict of input.conflicts) {
+      const entry = this.findKeyEntryByName(conflict.name);
+      if (!entry || entry.key.vaultOrigin === "shared") {
+        continue;
+      }
+      if (entry.scope !== "org") {
+        continue;
+      }
+      this.orgKeys.set(entry.id, {
+        ...entry.key,
+        vaultShareBlocked: true,
+        ...(conflict.ownerUserId
+          ? { vaultShareBlockedOwnerUserId: conflict.ownerUserId }
+          : {}),
+        updatedAt: now,
+      });
+      blocked += 1;
+    }
+
+    for (const [id, key] of this.orgKeys.entries()) {
+      if (key.vaultOrigin === "shared") {
+        continue;
+      }
+      if (!syncedNames.has(this.normalizeKeyName(key.name))) {
+        continue;
+      }
+      if (!key.vaultShareBlocked && !key.vaultShareBlockedOwnerUserId) {
+        continue;
+      }
+      const nextKey: CustomKey = { ...key, updatedAt: now };
+      delete nextKey.vaultShareBlocked;
+      delete nextKey.vaultShareBlockedOwnerUserId;
+      this.orgKeys.set(id, nextKey);
+      cleared += 1;
+    }
+
+    if (blocked > 0 || cleared > 0) {
+      await this.persistOrgKeysForOrganization(activeOrgId, this.orgKeys);
+      console.log(
+        `[CustomKeys] Share sync reconciled (blocked=${blocked}, cleared=${cleared})`,
+      );
+    }
+
+    return { blocked, cleared };
+  }
+
+  async syncSharedMirrors(
+    keys: SharedVaultKeyInput[],
+  ): Promise<{ upserted: number; pruned: number }> {
+    const activeOrgId =
+      this.activeOrganizationId ?? CustomKeysStorage.LOCAL_ORG_ID;
+    let upserted = 0;
+    const now = new Date().toISOString();
+    const remoteNames: string[] = [];
+    const remoteNameSet = new Set<string>();
+
+    for (const input of keys) {
+      const normalizedName = this.normalizeKeyName(input.name);
+      remoteNames.push(normalizedName);
+      remoteNameSet.add(normalizedName);
+
+      const existing = this.findKeyByName(normalizedName);
+      if (existing && existing.vaultOrigin !== "shared") {
+        for (const [id, key] of this.orgKeys.entries()) {
+          if (
+            key.vaultOrigin === "shared" &&
+            this.normalizeKeyName(key.name) === normalizedName
+          ) {
+            this.orgKeys.delete(id);
+          }
+        }
+        const localEntry = this.findKeyEntryByName(normalizedName);
+        if (localEntry && localEntry.scope === "org") {
+          this.orgKeys.set(localEntry.id, {
+            ...localEntry.key,
+            vaultSharedNameCollision: true,
+            updatedAt: now,
+          });
+        }
+        continue;
+      }
+
+      const mirrorId = sharedMirrorKeyId(normalizedName);
+      const mirror: CustomKey = {
+        id: mirrorId,
+        name: normalizedName,
+        description: input.description,
+        permission: input.permission ?? "always",
+        clientAccess: normalizeKeyClientAccess(input.clientAccess),
+        encryptedValue: this.encryptValue(input.value),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+        vaultAudience: input.vaultAudience,
+        vaultOrigin: "shared",
+        sharedShareScope: input.vaultAudience,
+        ...(input.sharedOwnerUserId
+          ? { sharedOwnerUserId: input.sharedOwnerUserId }
+          : {}),
+        ...(input.sharedSyncedAt ? { sharedSyncedAt: input.sharedSyncedAt } : {}),
+        ...(input.source ? { source: input.source } : {}),
+      };
+
+      this.orgKeys.set(mirrorId, mirror);
+      upserted += 1;
+    }
+
+    dedupeCustomKeysByName(this.orgKeys);
+
+    for (const [id, key] of this.orgKeys.entries()) {
+      if (key.vaultOrigin === "shared" || !key.vaultSharedNameCollision) {
+        continue;
+      }
+      const normalized = this.normalizeKeyName(key.name);
+      if (!remoteNameSet.has(normalized)) {
+        const { vaultSharedNameCollision: _removed, ...rest } = key;
+        this.orgKeys.set(id, rest);
+      }
+    }
+
+    const staleNames = sharedNamesToPrune(
+      Array.from(this.orgKeys.values())
+        .filter((key) => key.vaultOrigin === "shared")
+        .map((key) => key.name),
+      remoteNames,
+    );
+
+    let pruned = 0;
+    for (const [id, key] of this.orgKeys.entries()) {
+      if (key.vaultOrigin !== "shared") {
+        continue;
+      }
+      if (!staleNames.includes(key.name)) {
+        continue;
+      }
+      this.orgKeys.delete(id);
+      pruned += 1;
+    }
+
+    await this.persistOrgKeysForOrganization(activeOrgId, this.orgKeys);
+    if (upserted > 0 || pruned > 0) {
+      console.log(
+        `[CustomKeys] Shared vault mirrors synced (org: ${activeOrgId}, upserted: ${upserted}, pruned: ${pruned})`,
+      );
+    }
+
+    return { upserted, pruned };
+  }
+
   async listKeys(options?: { orgOnly?: boolean }): Promise<CustomKeyMetadata[]> {
+    const hideInternalNamespaceKeys = (keys: CustomKeyMetadata[]) =>
+      keys.filter((key) => !isInternalPaprNamespaceApiKeyName(key.name));
+
     if (options?.orgOnly) {
       const activeOrgId =
         this.activeOrganizationId ?? CustomKeysStorage.LOCAL_ORG_ID;
@@ -541,7 +771,7 @@ export class CustomKeysStorage {
       const sharedList = Array.from(this.sharedKeys.values()).map((key) =>
         this.mapKeyMetadata(key, "shared", CustomKeysStorage.SHARED_ORG_ID),
       );
-      return [...orgList, ...sharedList];
+      return hideInternalNamespaceKeys([...orgList, ...sharedList]);
     }
 
     const merged: CustomKeyMetadata[] = [];
@@ -562,7 +792,7 @@ export class CustomKeysStorage {
         ),
       );
     }
-    return merged;
+    return hideInternalNamespaceKeys(merged);
   }
 
   async getKey(keyId: string): Promise<string | null> {
@@ -616,7 +846,16 @@ export class CustomKeysStorage {
   async addKey(input: CustomKeyInput): Promise<CustomKey> {
     const now = new Date().toISOString();
     const target = this.resolveStorageTarget(input);
-    const existing = this.findKeyEntryByName(input.name);
+    let existing = this.findKeyEntryByName(input.name);
+
+    if (
+      existing &&
+      isPaprPlatformApiKeyName(input.name) &&
+      existing.scope !== target.scope
+    ) {
+      await this.deleteKey(existing.id);
+      existing = null;
+    }
 
     if (existing) {
       const updatedKey: CustomKey = {
@@ -629,6 +868,14 @@ export class CustomKeysStorage {
         }),
         ...(input.vaultAudience !== undefined && {
           vaultAudience: normalizeIntegrationKeyVaultAudience(input.vaultAudience),
+        }),
+        ...(input.vaultAudienceMemberIds !== undefined && {
+          vaultAudienceMemberIds: input.vaultAudienceMemberIds,
+        }),
+        ...(input.source !== undefined && { source: input.source }),
+        ...(input.managedBy !== undefined && { managedBy: input.managedBy }),
+        ...(input.oauthProvider !== undefined && {
+          oauthProvider: input.oauthProvider,
         }),
         updatedAt: now,
       };
@@ -670,16 +917,32 @@ export class CustomKeysStorage {
       createdAt: now,
       updatedAt: now,
       vaultAudience: normalizeIntegrationKeyVaultAudience(input.vaultAudience),
+      ...(input.vaultAudienceMemberIds?.length
+        ? { vaultAudienceMemberIds: input.vaultAudienceMemberIds }
+        : {}),
+      ...(input.source !== undefined && { source: input.source }),
+      ...(input.managedBy !== undefined && { managedBy: input.managedBy }),
+      ...(input.oauthProvider !== undefined && {
+        oauthProvider: input.oauthProvider,
+      }),
     };
 
     if (target.scope === "org" && target.organizationId !== this.activeOrganizationId) {
-      await fs.mkdir(path.dirname(this.orgKeysFile(target.organizationId!)), {
-        recursive: true,
-      });
-      const orgKeys = await this.loadOrgKeysForOrganization(target.organizationId!);
-      orgKeys.set(id, key);
-      dedupeCustomKeysByName(orgKeys);
-      await this.persistOrgKeysForOrganization(target.organizationId!, orgKeys);
+      // Special case: if storing to _shared org vault (but not active org),
+      // also update this.sharedKeys so findKeyByName can find it
+      if (target.organizationId === CustomKeysStorage.SHARED_ORG_ID) {
+        this.sharedKeys.set(id, key);
+        dedupeCustomKeysByName(this.sharedKeys);
+        await this.saveSharedKeys();
+      } else {
+        await fs.mkdir(path.dirname(this.orgKeysFile(target.organizationId!)), {
+          recursive: true,
+        });
+        const orgKeys = await this.loadOrgKeysForOrganization(target.organizationId!);
+        orgKeys.set(id, key);
+        dedupeCustomKeysByName(orgKeys);
+        await this.persistOrgKeysForOrganization(target.organizationId!, orgKeys);
+      }
     } else {
       const targetMap = this.getTargetMap(target.scope, target.organizationId);
       targetMap.set(id, key);
@@ -698,6 +961,12 @@ export class CustomKeysStorage {
   ): Promise<CustomKey | null> {
     const entry = this.findKeyEntryById(keyId);
     if (!entry) return null;
+
+    if (entry.key.vaultOrigin === "shared") {
+      throw new Error(
+        "Shared integration keys are read-only on this device. Remove the local copy instead.",
+      );
+    }
 
     const nextTarget =
       updates.orgScope !== undefined || updates.organizationId !== undefined
@@ -728,6 +997,14 @@ export class CustomKeysStorage {
       ...(updates.vaultAudience !== undefined && {
         vaultAudience: normalizeIntegrationKeyVaultAudience(updates.vaultAudience),
       }),
+      ...(updates.vaultAudienceMemberIds !== undefined && {
+        vaultAudienceMemberIds: updates.vaultAudienceMemberIds,
+      }),
+      ...(updates.source !== undefined && { source: updates.source }),
+      ...(updates.managedBy !== undefined && { managedBy: updates.managedBy }),
+      ...(updates.oauthProvider !== undefined && {
+        oauthProvider: updates.oauthProvider,
+      }),
       updatedAt: new Date().toISOString(),
     };
 
@@ -753,6 +1030,8 @@ export class CustomKeysStorage {
         organizationId: nextTarget.organizationId,
         vaultAudience:
           updates.vaultAudience ?? updatedKey.vaultAudience ?? "user",
+        vaultAudienceMemberIds:
+          updates.vaultAudienceMemberIds ?? updatedKey.vaultAudienceMemberIds,
       });
     }
 

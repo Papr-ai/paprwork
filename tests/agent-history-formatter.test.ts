@@ -264,12 +264,33 @@ describe("agent history formatter", () => {
 
     const messages = formatHistoryMessagesForModel(history);
     const { streamText, tool } = await import("ai");
+    const { MockLanguageModelV3 } = await import("ai/test");
     const { z } = await import("zod");
-    const { createOpenAI } = await import("@ai-sdk/openai");
+
+    const mockModel = new MockLanguageModelV3({
+      doStream: {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({
+              type: "text-delta",
+              id: "text-1",
+              delta: "ok",
+            });
+            controller.enqueue({
+              type: "finish",
+              finishReason: "stop",
+              usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+            });
+            controller.close();
+          },
+        }),
+        rawCall: { rawPrompt: null, rawSettings: {} },
+      },
+    });
 
     try {
       await streamText({
-        model: createOpenAI({ apiKey: "sk-test" })("gpt-4o"),
+        model: mockModel,
         messages,
         tools: {
           bash: tool({

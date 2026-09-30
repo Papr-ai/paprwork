@@ -5,6 +5,40 @@
 import { useCallback, useEffect } from "react";
 import { useArtifactsStore, type Artifact } from "../stores/artifactsStore";
 import { gateway } from "../src/lib/gateway";
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
+import {
+  getActiveWorkspaceUiCacheKey,
+  writeWorkspaceUiCache,
+} from "../lib/workspaceUiCache";
+import { normalizeTabHierarchy } from "../lib/persistedAppState";
+import { useTabStore } from "../stores/tabStore";
+import type { Tab } from "../types/tabs";
+
+function syncAppTabTitlesFromArtifacts(apps: Artifact[]): void {
+  const titleByAppId = new Map(
+    apps
+      .filter((item) => item.type === "app" && item.id && item.title?.trim())
+      .map((item) => [item.id, item.title.trim()]),
+  );
+  if (titleByAppId.size === 0) {
+    return;
+  }
+
+  const { tabs, updateTabTitle } = useTabStore.getState();
+  const visitTab = (tab: Tab) => {
+    if (tab.type !== "app") {
+      return;
+    }
+    const nextTitle = titleByAppId.get(tab.entityId);
+    if (nextTitle && tab.title !== nextTitle) {
+      updateTabTitle(tab.id, nextTitle);
+    }
+  };
+
+  for (const tab of tabs) {
+    visitTab(tab);
+  }
+}
 
 export function useArtifacts(scope: "all" | "apps" = "all") {
   const {
@@ -25,8 +59,41 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     getFilteredArtifacts,
   } = useArtifactsStore();
 
+  const persistArtifactsToWorkspaceCache = useCallback((apps: Artifact[]) => {
+    const key = getActiveWorkspaceUiCacheKey();
+    if (!key) {
+      return;
+    }
+    const {
+      tabs,
+      activeTabId,
+      splitRatio,
+      splitRatios,
+      history,
+      historyIndex,
+    } = useTabStore.getState();
+    const current = useArtifactsStore.getState().artifacts;
+    writeWorkspaceUiCache(key, {
+      tabs: normalizeTabHierarchy(tabs),
+      activeTabId,
+      splitRatio,
+      splitRatios,
+      history,
+      historyIndex,
+      artifacts: [
+        ...current.filter((item) => item.type !== "app"),
+        ...apps,
+      ],
+    });
+  }, []);
+
   // Apps use a fast stale-while-refresh path; other views load both kinds.
-  const loadArtifacts = useCallback(async () => {
+  const loadArtifacts = useCallback(async (options?: { forceRefresh?: boolean }) => {
+    const forceRefresh = options?.forceRefresh === true;
+    if (!forceRefresh && isWorkspaceSwitchReloading()) {
+      return;
+    }
+
     const cached = useArtifactsStore.getState().artifacts;
     const hasCachedApps = cached.some((item) => item.type === "app");
     const blockForLoad = scope === "all" || !hasCachedApps;
@@ -35,31 +102,80 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
 
     try {
       if (scope === "apps") {
-        const response = await gateway.send("app:list");
+        const response = await gateway.send("app:list", {}, { timeoutMs: 90_000 });
         const apps = (response.data as Artifact[]) || [];
         const current = useArtifactsStore.getState().artifacts;
         setArtifacts([
           ...current.filter((item) => item.type !== "app"),
           ...apps,
         ]);
+        persistArtifactsToWorkspaceCache(apps);
       } else {
-        const [docsResponse, appsResponse] = await Promise.all([
+        const [docsResult, appsResult] = await Promise.allSettled([
           gateway.send("document:list"),
-          gateway.send("app:list"),
+          gateway.send("app:list", {}, { timeoutMs: 90_000 }),
         ]);
-        const documents = (docsResponse.data as Artifact[]) || [];
-        const apps = (appsResponse.data as Artifact[]) || [];
-        setArtifacts([...documents, ...apps]);
+
+        const documents =
+          docsResult.status === "fulfilled"
+            ? (docsResult.value.data as Artifact[]) || []
+            : [];
+        const apps =
+          appsResult.status === "fulfilled"
+            ? (appsResult.value.data as Artifact[]) || []
+            : [];
+
+        if (docsResult.status === "rejected") {
+          console.error("[useArtifacts] document:list failed:", docsResult.reason);
+          if (blockForLoad) setError("Failed to load documents");
+        }
+        if (appsResult.status === "rejected") {
+          console.error("[useArtifacts] app:list failed:", appsResult.reason);
+          const message =
+            appsResult.reason instanceof Error
+              ? appsResult.reason.message
+              : "Failed to load apps";
+          setError(
+            message.includes("timeout")
+              ? "Could not refresh apps — gateway is busy. Your apps are still on disk; try again in a moment."
+              : message,
+          );
+        }
+
+        // A rejected app:list leaves `apps` empty, which is not the same fact
+        // as "there are no apps" — keep what we already had rather than
+        // replacing a good list with the shape of a failure, and above all do
+        // not write that emptiness to the cache the next launch hydrates from.
+        const keepExistingApps = appsResult.status === "rejected";
+        const existingApps = useArtifactsStore
+          .getState()
+          .artifacts.filter((item) => item.type === "app");
+        const nextApps = keepExistingApps ? existingApps : apps;
+
+        setArtifacts([...documents, ...nextApps]);
+        if (!keepExistingApps) {
+          persistArtifactsToWorkspaceCache(nextApps);
+        }
       }
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Failed to load artifacts";
-      if (blockForLoad) setError(message);
+      const isAppListTimeout =
+        scope === "apps" &&
+        err instanceof Error &&
+        message.toLowerCase().includes("timeout");
+      if (blockForLoad || isAppListTimeout) {
+        setError(
+          isAppListTimeout
+            ? "Could not refresh apps — gateway is busy. Your apps are still on disk; try again in a moment."
+            : message,
+        );
+      }
       console.error("[useArtifacts] Load error:", err);
     } finally {
       if (blockForLoad) setLoading(false);
     }
-  }, [scope, setArtifacts, setLoading, setError]);
+  }, [scope, setArtifacts, setLoading, setError, persistArtifactsToWorkspaceCache]);
 
   // Create document
   const createDocument = useCallback(
@@ -116,7 +232,18 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
 
   // Delete artifact
   const deleteArtifact = useCallback(
-    async (id: string, type: "document" | "app") => {
+    async (
+      id: string,
+      type: "document" | "app",
+      options?: {
+        unpublishFromCloud?: boolean;
+        deleteLinkedJobs?: boolean;
+        deleteTursoDatabases?: boolean;
+        deleteRegistryDbIds?: string[];
+        deleteRegistryTurso?: boolean;
+        confirmed?: boolean;
+      },
+    ) => {
       setError(null);
 
       try {
@@ -124,13 +251,72 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
           type === "document" ? "document:delete" : "app:delete";
         const payloadKey = type === "document" ? "documentId" : "appId";
 
-        await gateway.send(messageType, { [payloadKey]: id });
+        // Deleting an app is not a local-only operation: the server checks
+        // cloud publish status, and an unpublish additionally flips every
+        // published App Files object to private one-by-one, then calls
+        // DELETE /v1/cloud/apps/publish. Each of those uses cloudApiFetch,
+        // whose own timeout is 60s — already twice the 30s default here, so
+        // a single slow request guaranteed a spurious "Request timeout" in
+        // the UI while the delete kept running server-side.
+        // Matches the 90s budget app:list already uses.
+        const response = await gateway.send(
+          messageType,
+          {
+            [payloadKey]: id,
+            ...(type === "app" ? {
+              unpublishFromCloud: options?.unpublishFromCloud ?? false,
+              deleteLinkedJobs: options?.deleteLinkedJobs ?? false,
+              deleteTursoDatabases: options?.deleteTursoDatabases ?? false,
+              deleteRegistryDbIds: options?.deleteRegistryDbIds ?? [],
+              deleteRegistryTurso: options?.deleteRegistryTurso ?? false,
+              confirmed: options?.confirmed ?? false,
+            } : {}),
+          },
+          { timeoutMs: 90_000 },
+        );
+        const data = response.data as {
+          deleted?: boolean;
+          preview?: {
+            appId: string;
+            appTitle: string;
+            isPublished: boolean;
+            shareUrl?: string | null;
+            linkedJobs: Array<{ id: string; name: string; type: string; hasTursoDb?: boolean }>;
+            tursoDbCount: number;
+            linkedRegistryDatabases: Array<{
+              dbId: string;
+              alias: string;
+              label: string;
+              tursoShortName: string;
+              sharedWithApps: Array<{ appId: string; title: string }>;
+              soleLinker: boolean;
+            }>;
+          };
+          deletedJobCount?: number;
+          deletedTursoDbCount?: number;
+        };
+        // Server returned a preview for the deletion modal
+        if (data?.preview) {
+          return {
+            deleted: false,
+            preview: data.preview,
+          };
+        }
+        if (data?.deleted === false) {
+          throw new Error(`Failed to delete ${type}`);
+        }
         removeArtifact(id);
+        return { 
+          deleted: true, 
+          deletedJobCount: data.deletedJobCount,
+          deletedTursoDbCount: data.deletedTursoDbCount,
+        };
       } catch (err) {
         const message =
           err instanceof Error ? err.message : `Failed to delete ${type}`;
         setError(message);
         console.error(`[useArtifacts] Delete ${type} error:`, err);
+        throw err;
       }
     },
     [removeArtifact, setError],
@@ -186,9 +372,55 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     [updateArtifact, toggleFavoriteLocal, setError, artifacts],
   );
 
+  // Archive / restore a document.
+  //
+  // Optimistic on purpose: the gateway write is local-first (meta.json) and the
+  // Post flip is explicitly best-effort, so showing the new state immediately
+  // matches what actually happened rather than waiting on a network round-trip
+  // that is not the source of truth. On failure the flag is put back, because a
+  // card must never claim a state the disk disagrees with.
+  //
+  // Favourites are deliberately left alone: archiving is not unfavouriting, and
+  // silently doing both would make the undo incomplete.
+  const archiveArtifact = useCallback(
+    async (id: string, archived: boolean) => {
+      setError(null);
+      updateArtifact(id, { archived });
+
+      try {
+        await gateway.send("document:archive", { documentId: id, archived });
+      } catch (err) {
+        updateArtifact(id, { archived: !archived });
+        const message =
+          err instanceof Error
+            ? err.message
+            : `Failed to ${archived ? "archive" : "restore"} document`;
+        setError(message);
+        console.error("[useArtifacts] Archive error:", err);
+      }
+    },
+    [updateArtifact, setError],
+  );
+
   // Load artifacts on mount
   useEffect(() => {
     loadArtifacts();
+  }, [loadArtifacts]);
+
+  // Background refresh after workspace switch (cache already hydrated).
+  useEffect(() => {
+    const onArtifactsReady = () => {
+      void loadArtifacts({ forceRefresh: true });
+    };
+    window.addEventListener("papr-workspace-artifacts-ready", onArtifactsReady);
+    window.addEventListener("papr-workspace-switch-complete", onArtifactsReady);
+    return () => {
+      window.removeEventListener("papr-workspace-artifacts-ready", onArtifactsReady);
+      window.removeEventListener(
+        "papr-workspace-switch-complete",
+        onArtifactsReady,
+      );
+    };
   }, [loadArtifacts]);
 
   // Agent/bash can change apps on disk; gateway prunes stale entries and broadcasts
@@ -198,7 +430,12 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
         | { type?: string }
         | undefined;
       if (detail?.type === "app:list-updated") {
-        void loadArtifacts();
+        void loadArtifacts({ forceRefresh: true }).then(() => {
+          const apps = useArtifactsStore
+            .getState()
+            .artifacts.filter((item) => item.type === "app");
+          syncAppTabTitlesFromArtifacts(apps);
+        });
       }
     };
     window.addEventListener("gateway-broadcast", handler);
@@ -216,6 +453,7 @@ export function useArtifacts(scope: "all" | "apps" = "all") {
     createDocument,
     createApp,
     deleteArtifact,
+    archiveArtifact,
     toggleFavorite,
     setFilter,
     setSearchQuery,

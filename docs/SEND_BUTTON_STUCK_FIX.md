@@ -55,7 +55,7 @@ yield {
   timestamp: new Date().toISOString(),
 } as StreamChunk & { chatId: string };
 
-// 5. Export chat to ~/Papr/ folder
+// 5. Export chat to $PAPR_HOME/Chats/ folder
 ```
 
 This ensures the frontend always receives a `done` chunk to:

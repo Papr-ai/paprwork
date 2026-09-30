@@ -1,4 +1,18 @@
 import { sanitizeToolOutput } from "../../../core/tools/index.js";
+import { isFailedToolResult } from "../../../core/utils/interruptedToolResult.js";
+import {
+  describeUsageLimitError,
+  extractProviderErrorPayload,
+  formatProviderErrorPayload,
+  providerFromRequestUrl,
+  type ProviderErrorPayload,
+} from "./providerErrorMessage.js";
+import {
+  describeProviderRateLimit,
+  describeQuotaExhaustion,
+  detectProviderQuotaExhaustion,
+  PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE,
+} from "../../utils/providerRateLimitRetry.js";
 import {
   createChatStreamChunk,
   parseToolCallChunk,
@@ -8,6 +22,14 @@ import {
   type ToolCallEvent,
   type ToolResultEvent,
 } from "./streamChunks.js";
+import {
+  addStreamUsage,
+  EMPTY_STREAM_USAGE,
+  readAiSdkStepUsage,
+  readAiSdkTotalUsage,
+  readPiAiStreamUsage,
+  type StreamUsageTotals,
+} from "./streamUsageReport.js";
 
 export interface StreamOrchestratorResult {
   assistantText: string;
@@ -15,12 +37,55 @@ export interface StreamOrchestratorResult {
   toolCalls: ToolCallEvent[];
   toolResults: ToolResultEvent[];
   sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }>; // V1-style sequence for interleaving
+  /**
+   * The stream ended on a retryable transport failure rather than on the model
+   * finishing. Callers must not treat such a turn as complete — see
+   * {@link isRetryableProviderStreamFailure}.
+   */
+  providerStreamFailed?: boolean;
+}
+
+/** True when the turn ends on tool call(s) with no user-visible text after them. */
+export function sequenceEndsWithToolWithoutTrailingText(
+  sequence: Array<{ type: string; data: unknown }>,
+): boolean {
+  if (sequence.length === 0) {
+    return false;
+  }
+
+  let lastToolIndex = -1;
+  for (let i = sequence.length - 1; i >= 0; i--) {
+    if (sequence[i]?.type === "tool") {
+      lastToolIndex = i;
+      break;
+    }
+  }
+  if (lastToolIndex < 0) {
+    return false;
+  }
+
+  for (let i = lastToolIndex + 1; i < sequence.length; i++) {
+    const item = sequence[i];
+    if (
+      item?.type === "text" &&
+      typeof item.data === "string" &&
+      item.data.trim().length > 0
+    ) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 const NETWORK_ERROR_CODES = new Set([
   "UND_ERR_CONNECT_TIMEOUT",
   "UND_ERR_HEADERS_TIMEOUT",
   "UND_ERR_BODY_TIMEOUT",
+  // The peer closing a streaming connection mid-flight. Large requests hit
+  // this most: a turn carrying ~384K tokens of context spends long enough
+  // uploading that a reset lands before any response byte arrives.
+  "UND_ERR_SOCKET",
   "ECONNREFUSED",
   "ECONNRESET",
   "ETIMEDOUT",
@@ -101,8 +166,45 @@ function isNetworkConnectivityError(error: unknown): boolean {
       message.includes("fetch failed") ||
       message.includes("request timed out") ||
       message.includes("api connection timeout") ||
-      message.includes("network error")
+      message.includes("network error") ||
+      message.includes("other side closed") ||
+      message.includes("socket hang up")
     ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * True when the stream ended because the connection to the provider failed,
+ * rather than because the model finished speaking.
+ *
+ * This is the distinction the post-stream wrap-up needs and never had. The
+ * wrap-up exists for a turn that ran tools and then went quiet: it asks the
+ * model for the closing message it never wrote. A dropped connection produces
+ * the identical shape — tools completed, no trailing text — but a different
+ * fact: the model never got the chance to finish. Asking for a summary there
+ * answers a question the user did not ask, and it overwrites the turn with a
+ * recap of tool calls. The renderer already marks such a turn interrupted for
+ * auto-continue, so resuming is what should happen instead.
+ *
+ * Deliberately narrower than "the stream errored". A provider refusal
+ * (quota, auth, an invalid request) is not retryable, so treating it as one
+ * would promise a resume that cannot happen.
+ */
+export function isRetryableProviderStreamFailure(error: unknown): boolean {
+  if (isNetworkConnectivityError(error)) {
+    return true;
+  }
+  for (const node of walkErrorChain(error)) {
+    if (typeof node !== "object" || node === null) continue;
+    const record = node as Record<string, unknown>;
+    // The AI SDK marks transport-level failures retryable and exhausts its own
+    // budget (3 attempts, seconds apart) before handing the error up. A request
+    // that takes ~47s to first byte is not served by that, so the turn arrives
+    // here mid-work with more attempts still worth making.
+    if (record.isRetryable === true && record.statusCode === undefined) {
       return true;
     }
   }
@@ -119,10 +221,52 @@ function formatNetworkConnectivityMessage(error: unknown): string {
 }
 
 /**
+ * A 401 is the one provider refusal whose cause the status cannot narrow: a
+ * revoked key, a key that never reached the request, and an expired OAuth
+ * token are indistinguishable here, and all three send the user to Settings to
+ * check a key that may be fine. Record what does discriminate — the host
+ * actually called, and the provider's own wording. No credential is read.
+ */
+function logProviderAuthRejection(
+  url: string | undefined,
+  payload: ProviderErrorPayload | undefined,
+): void {
+  let host = "unknown host";
+  if (url) {
+    try {
+      host = new URL(url).host;
+    } catch {
+      host = url.slice(0, 80);
+    }
+  }
+  console.warn(
+    `[StreamOrchestrator] Provider rejected credentials (401) at ${host} — ` +
+      `type=${payload?.type ?? "(none)"} ` +
+      `message=${payload?.message ?? "(empty)"}`,
+  );
+}
+
+/**
  * Extract the underlying error from an AI SDK RetryError.
  * RetryError wraps an array of APICallError instances from each retry attempt.
  * We extract the last (most relevant) error's status code and message.
  */
+/**
+ * A 429 that is not spent allowance, described with the provider's own words.
+ *
+ * This route only ever runs on an API key — OAuth goes to pi-ai — so the
+ * credential needs no naming here; its sibling branches already say "API key".
+ * What was missing is the sentence, which is the only thing separating an
+ * organization per-minute ceiling from every other 429.
+ */
+function describeTransientRateLimit(error: unknown): string {
+  return describeProviderRateLimit(
+    error,
+    { kind: "apiKey", provider: providerFromRequestUrl(extractRequestUrl(error)) },
+    { resumable: false },
+  );
+}
+
 function extractFromRetryError(error: Record<string, unknown>): string | null {
   if (isNetworkConnectivityError(error)) {
     return formatNetworkConnectivityMessage(error);
@@ -141,32 +285,26 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
   const err = underlying as Record<string, unknown>;
   const statusCode = err.statusCode as number | undefined;
   const message = typeof err.message === "string" ? err.message : undefined;
-  const responseBody = typeof err.responseBody === "string" ? err.responseBody : undefined;
-
-  // Try to extract Anthropic's error type from response body (e.g. "overloaded_error")
-  let apiErrorType: string | undefined;
-  if (responseBody) {
-    try {
-      const body = JSON.parse(responseBody) as Record<string, unknown>;
-      const bodyError = body.error as Record<string, unknown> | undefined;
-      if (bodyError && typeof bodyError.type === "string") {
-        apiErrorType = bodyError.type;
-      }
-      if (bodyError && typeof bodyError.message === "string" && !message) {
-        return `API error${statusCode ? ` (${statusCode})` : ""}: ${bodyError.message}`;
-      }
-    } catch {
-      // Response body not JSON
-    }
-  }
+  const payload = extractProviderErrorPayload(err);
+  const apiErrorType = payload?.type;
 
   if (statusCode === 529 || apiErrorType === "overloaded_error") {
     return "Claude servers are temporarily overloaded. Please wait a moment and try again, or switch to a different model.";
   }
+  const quota = detectProviderQuotaExhaustion(err);
+  if (quota) return describeQuotaExhaustion(quota);
   if (statusCode === 429) {
-    return "Rate limit exceeded. Please wait a moment and try again.";
+    return describeTransientRateLimit(err);
+  }
+  if (payload) {
+    const limitMessage = describeUsageLimitError(
+      payload,
+      providerFromRequestUrl(extractRequestUrl(err)),
+    );
+    if (limitMessage) return limitMessage;
   }
   if (statusCode === 401) {
+    logProviderAuthRejection(extractRequestUrl(err), payload);
     return "Invalid API key. Please check your Anthropic API key in Settings.";
   }
   if (statusCode === 403) {
@@ -178,6 +316,12 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
   if (statusCode && statusCode >= 500) {
     return `Anthropic server error (${statusCode}). Please try again in a moment.`;
   }
+  // Provider body before SDK message: the body describes this request, and the
+  // SDK leaves `message` empty for whole classes of error.
+  const fromPayload = payload
+    ? formatProviderErrorPayload(payload, statusCode)
+    : undefined;
+  if (fromPayload) return fromPayload;
   if (message) {
     return `API error${statusCode ? ` (${statusCode})` : ""}: ${message}`;
   }
@@ -187,7 +331,11 @@ function extractFromRetryError(error: Record<string, unknown>): string | null {
 /**
  * Extract a machine-readable error code when present (e.g. rate_limit_exhausted).
  */
-function extractErrorCode(error: unknown): string | undefined {
+export function extractErrorCode(error: unknown): string | undefined {
+  if (detectProviderQuotaExhaustion(error)) {
+    return PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE;
+  }
+
   if (typeof error !== "object" || error === null) return undefined;
   const errorObj = error as Record<string, unknown>;
 
@@ -205,12 +353,49 @@ function extractErrorCode(error: unknown): string | undefined {
   return undefined;
 }
 
+function formatNoModelOutputMessage(): string {
+  return (
+    "The model returned an empty response. If you don't have your own API keys, " +
+    "sign in with Papr under Settings → AI Models — cloud models route through the Papr proxy. " +
+    "Otherwise try a different model or check the gateway logs for details."
+  );
+}
+
+function isNoModelOutputError(error: unknown): boolean {
+  if (typeof error === "string") {
+    return error.includes("No output generated");
+  }
+  if (typeof error === "object" && error !== null) {
+    const record = error as Record<string, unknown>;
+    if (record.name === "AI_NoOutputGeneratedError") {
+      return true;
+    }
+    if (
+      typeof record.message === "string" &&
+      record.message.includes("No output generated")
+    ) {
+      return true;
+    }
+  }
+  if (error instanceof Error) {
+    return (
+      error.name === "AI_NoOutputGeneratedError" ||
+      error.message.includes("No output generated")
+    );
+  }
+  return false;
+}
+
 /**
  * Extract a user-friendly error message from API errors.
  * Handles AI SDK RetryError (with nested APICallError), plain Error objects,
  * and common API error response shapes.
  */
-function extractErrorMessage(error: unknown): string {
+export function extractErrorMessage(error: unknown): string {
+  if (isNoModelOutputError(error)) {
+    return formatNoModelOutputMessage();
+  }
+
   if (typeof error === "string") {
     return error;
   }
@@ -257,15 +442,36 @@ function extractErrorMessage(error: unknown): string {
     if (typeof errorObj.statusCode === "number" && typeof errorObj.url === "string") {
       const statusCode = errorObj.statusCode as number;
       const message = typeof errorObj.message === "string" ? errorObj.message : "";
+      // The provider's own payload, which this branch used to skip entirely —
+      // hence "API error (400): " with nothing after the colon on a response
+      // whose body explained the problem in full.
+      const payload = extractProviderErrorPayload(errorObj);
       if (statusCode === 529) {
         return "Claude servers are temporarily overloaded. Please wait a moment and try again.";
       }
+      const quota = detectProviderQuotaExhaustion(errorObj);
+      if (quota) return describeQuotaExhaustion(quota);
       if (statusCode === 429) {
-        return "Rate limit exceeded. Please wait a moment and try again.";
+        // Quote the provider. A bare "rate limit exceeded" is indistinguishable
+        // between an org per-minute ceiling and any other 429, and the sentence
+        // is the only thing that tells them apart.
+        return describeTransientRateLimit(errorObj);
+      }
+      if (payload) {
+        const limitMessage = describeUsageLimitError(
+          payload,
+          providerFromRequestUrl(errorObj.url as string),
+        );
+        if (limitMessage) return limitMessage;
       }
       if (statusCode === 401) {
+        logProviderAuthRejection(errorObj.url as string, payload);
         return "Invalid API key. Please check your API key in Settings.";
       }
+      const fromPayload = payload
+        ? formatProviderErrorPayload(payload, statusCode)
+        : undefined;
+      if (fromPayload) return fromPayload;
       return `API error (${statusCode}): ${message}`;
     }
 
@@ -307,11 +513,17 @@ function extractErrorMessage(error: unknown): string {
         const extracted = extractFromRetryError(errorObj);
         if (extracted) return extracted;
       }
+      if (isNoModelOutputError(error)) {
+        return formatNoModelOutputMessage();
+      }
       return error.message;
     }
 
     // { message: "..." }
     if (typeof errorObj.message === "string") {
+      if (isNoModelOutputError(errorObj.message)) {
+        return formatNoModelOutputMessage();
+      }
       return errorObj.message;
     }
 
@@ -355,7 +567,17 @@ export async function* orchestrateModelStream(
   fullStream: AsyncIterable<unknown>,
   chatId: string,
   apiKeys: string[],
-  streamOptions?: { textBufferMin?: number },
+  streamOptions?: {
+    textBufferMin?: number;
+    /**
+     * Caller-owned sequence array. When provided the orchestrator pushes into
+     * it directly so abort/checkpoint paths see the live interleaved order
+     * even if the generator never returns (user stop, new message, crash).
+     * Without this, an interrupted message persisted with sequence=[] and the
+     * UI fell back to the legacy layout (narration duplicated).
+     */
+    sequence?: Array<{ type: "text" | "tool" | "thinking"; data: any }>;
+  },
 ): AsyncGenerator<ChatStreamChunk, StreamOrchestratorResult> {
   const TEXT_BUFFER_MIN = streamOptions?.textBufferMin ?? 50;
   const REASONING_BUFFER_MIN = 1; // Stream reasoning in real-time (no batching)
@@ -369,8 +591,16 @@ export async function* orchestrateModelStream(
   const MAX_REASONING_SIZE = 100_000; // 100KB max reasoning per stream (enough for most cases)
   const MAX_TEXT_SIZE = 500_000; // 500KB max assistant text per stream
   
+  /**
+   * Running usage total for this stream. Held here because the scope of this
+   * generator *is* one stream, which is the boundary the total has to respect.
+   */
+  let streamUsage: StreamUsageTotals = EMPTY_STREAM_USAGE;
+
   const toolCalls: ToolCallEvent[] = [];
   const toolResults: ToolResultEvent[] = [];
+
+  let providerStreamFailed = false;
 
   // Buffer tool results so we can flush them together at turn boundaries.
   // NOTE: Results are yielded at FULL size — truncation of stale results across
@@ -384,7 +614,8 @@ export async function* orchestrateModelStream(
   }> = [];
 
   // Build V1-style sequence for interleaving text and tool calls
-  const sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> = [];
+  const sequence: Array<{ type: "text" | "tool" | "thinking"; data: any }> =
+    streamOptions?.sequence ?? [];
   let currentTextSegment = ""; // Accumulate text between tool calls
 
   function* flushToolResultBuffer(): Generator<ChatStreamChunk> {
@@ -392,6 +623,7 @@ export async function* orchestrateModelStream(
     for (let i = 0; i < toolResultBuffer.length; i++) {
       const item = toolResultBuffer[i];
       const result = item.result;
+      const failed = isFailedToolResult(result);
       const toolResult: ToolResultEvent = {
         toolCallId: item.toolCallId,
         toolName: item.toolName,
@@ -413,7 +645,7 @@ export async function* orchestrateModelStream(
             name: toolCall.toolName,
             input: toolCall.args,
             output: toolResult.result,
-            status: "success",
+            status: failed ? "error" : "success",
             toolCallId: toolResult.toolCallId,
           };
         }
@@ -424,7 +656,15 @@ export async function* orchestrateModelStream(
           toolCallId: toolResult.toolCallId,
           toolName: toolResult.toolName,
           result: toolResult.result,
-          success: true,
+          success: !failed,
+          ...(failed && typeof result === "object" && result !== null
+            ? {
+                error:
+                  typeof (result as Record<string, unknown>).error === "string"
+                    ? ((result as Record<string, unknown>).error as string)
+                    : "Tool call failed",
+              }
+            : {}),
         },
         chatId,
       );
@@ -700,6 +940,12 @@ export async function* orchestrateModelStream(
         const sanitizedError = sanitizeToolOutput(chunk.error, apiKeys);
         const errorMessage = extractErrorMessage(sanitizedError);
         const errorCode = extractErrorCode(sanitizedError);
+        // Classify against the raw error: by the time this reaches AgentService
+        // it is a formatted string, and the cause chain that decides whether a
+        // resume is possible is gone.
+        if (isRetryableProviderStreamFailure(chunk.error)) {
+          providerStreamFailed = true;
+        }
         console.error(
           `[StreamOrchestrator] Model error for chat ${chatId}: ${errorMessage}`,
         );
@@ -760,39 +1006,28 @@ export async function* orchestrateModelStream(
           finishReason?: string;
         };
 
-        if (finishStepChunk.usage) {
-          const usage = finishStepChunk.usage;
-          const { extractCacheUsageFromUsage } = await import(
-            "./promptCacheControl.js"
-          );
-          const cache = extractCacheUsageFromUsage({
-            inputTokenDetails: usage.inputTokenDetails,
-            cachedInputTokens: usage.cachedInputTokens,
-            providerMetadata: finishStepChunk.providerMetadata,
-          });
+        const stepUsage = readAiSdkStepUsage(finishStepChunk);
+        if (stepUsage) {
+          // Fold into the stream total before reporting. The AI SDK reports per
+          // step, and the consumer reads each report as the stream's running
+          // total, so reporting the step alone discarded every earlier one.
+          streamUsage = addStreamUsage(streamUsage, stepUsage);
+
           console.log(
             `[StreamOrchestrator] 💰 Usage from finish-step: ` +
-              `${usage.totalTokens || 0} total ` +
-              `(${usage.inputTokens || 0} input + ${usage.outputTokens || 0} output` +
-              (cache.cacheReadTokens || cache.cacheWriteTokens
-                ? `, cache read ${cache.cacheReadTokens} / write ${cache.cacheWriteTokens}`
+              `${stepUsage.totalTokens} total ` +
+              `(${stepUsage.promptTokens} input + ${stepUsage.completionTokens} output` +
+              (stepUsage.cacheReadTokens || stepUsage.cacheWriteTokens
+                ? `, cache read ${stepUsage.cacheReadTokens} / write ${stepUsage.cacheWriteTokens}`
                 : "") +
-              `)`,
+              `) — stream so far ${streamUsage.totalTokens} total`,
           );
 
           // Yield a step-usage chunk (NOT "done") for AgentService to capture
           // This prevents frontend from finalizing prematurely
           yield createChatStreamChunk(
             "step-usage",
-            {
-              usage: {
-                promptTokens: usage.inputTokens || 0,
-                completionTokens: usage.outputTokens || 0,
-                totalTokens: usage.totalTokens || 0,
-                cacheReadTokens: cache.cacheReadTokens,
-                cacheWriteTokens: cache.cacheWriteTokens,
-              },
-            },
+            { usage: { ...streamUsage } },
             chatId,
           );
         }
@@ -809,38 +1044,34 @@ export async function* orchestrateModelStream(
       case "finish": {
         const finishChunk = rawChunk as any;
         const finishReason = finishChunk.finishReason;
-        const usage = finishChunk.usage;
-        
+
         console.log(
           `[StreamOrchestrator] 🏁 Finish chunk received, reason: ${finishReason || "unknown"}`,
         );
         
-        // If we have token usage from the model, yield it as a step-usage chunk
-        // so AgentService can use it for summarization decisions
-        if (usage?.promptTokens || usage?.contextTokens) {
+        // The AI SDK's `totalUsage` is its own sum across every step of this
+        // stream, cache figures included, so it is preferred over the total we
+        // folded from the step reports. pi-ai puts its already-accumulated
+        // figures on `usage` instead.
+        const finalUsage =
+          readAiSdkTotalUsage(finishChunk) ?? readPiAiStreamUsage(finishChunk);
+
+        if (finalUsage) {
+          const contextTokens = finishChunk.usage?.contextTokens as
+            | number
+            | undefined;
           console.log(
-            `[StreamOrchestrator] 💰 Token usage from model: ${usage.totalTokens || 0} total ` +
-              `(${usage.promptTokens} prompt + ${usage.completionTokens || 0} completion` +
-              (usage.cacheReadTokens || usage.cacheWriteTokens
-                ? `, cache read ${usage.cacheReadTokens ?? 0} / write ${usage.cacheWriteTokens ?? 0}`
+            `[StreamOrchestrator] 💰 Stream total: ${finalUsage.totalTokens} total ` +
+              `(${finalUsage.promptTokens} prompt + ${finalUsage.completionTokens} completion` +
+              (finalUsage.cacheReadTokens || finalUsage.cacheWriteTokens
+                ? `, cache read ${finalUsage.cacheReadTokens} / write ${finalUsage.cacheWriteTokens}`
                 : "") +
-              (usage.contextTokens
-                ? `, context window: ${usage.contextTokens}`
-                : "") +
+              (contextTokens ? `, context window: ${contextTokens}` : "") +
               `)`,
           );
           yield createChatStreamChunk(
             "step-usage",
-            {
-              usage: {
-                promptTokens: usage.promptTokens,
-                completionTokens: usage.completionTokens ?? 0,
-                totalTokens: usage.totalTokens ?? 0,
-                cacheReadTokens: usage.cacheReadTokens,
-                cacheWriteTokens: usage.cacheWriteTokens,
-                contextTokens: usage.contextTokens,
-              },
-            },
+            { usage: { ...finalUsage, contextTokens } },
             chatId,
           );
         }
@@ -856,6 +1087,13 @@ export async function* orchestrateModelStream(
     // catch/saveMessage path persists them. Yields are not safe in finally
     // (would re-enter the generator), so we just push to the result array.
     drainBufferIntoToolResults();
+    // Same for the trailing narration segment: on abort the normal post-loop
+    // push below never runs, so flush it here so the caller-owned sequence
+    // holds the text that streamed after the last tool call.
+    if (currentTextSegment.trim()) {
+      sequence.push({ type: "text", data: currentTextSegment.trim() });
+      currentTextSegment = "";
+    }
   }
 
   // Flush any remaining tool results (e.g. stream ended after last tool-result)
@@ -942,5 +1180,6 @@ export async function* orchestrateModelStream(
     toolCalls,
     toolResults,
     sequence, // Return V1-style sequence for interleaving
+    providerStreamFailed,
   };
 }

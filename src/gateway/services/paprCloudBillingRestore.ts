@@ -1,0 +1,63 @@
+/**
+ * Clears gateway Papr Cloud pause after billing is restored (active/trialing).
+ * Heavy vault sync is scheduled when the interactive path is quiet (Phase A).
+ */
+
+import { isPaprCloudPaused, setPaprCloudPaused } from "../../core/utils/paprQuota.js";
+import { resumeCodeIndexingAfterBillingRestore } from "./CodeIndexingService.js";
+import { getVaultSyncService } from "./VaultSyncService.js";
+import {
+  isCoalescedBackgroundTaskInFlight,
+  scheduleCoalescedBackgroundWork,
+} from "./gatewayBackgroundWork.js";
+
+const PAPR_RESUME_CLOUD_TASK = "papr:resume-cloud";
+
+/**
+ * Immediate: unpause cloud features and allow code index to resume scheduling.
+ * Deferred: full vault push/pull when chat/apps are not busy.
+ */
+export function schedulePaprCloudResumeAfterBillingRestore(): { resumed: boolean; scheduled: boolean } {
+  // Billing refresh is a reconciliation signal, not a periodic vault-sync trigger.
+  if (!isPaprCloudPaused()) return { resumed: false, scheduled: false };
+  setPaprCloudPaused(false);
+  resumeCodeIndexingAfterBillingRestore();
+
+  if (
+    isCoalescedBackgroundTaskInFlight("vault:workspace-switch") ||
+    isCoalescedBackgroundTaskInFlight(PAPR_RESUME_CLOUD_TASK)
+  ) {
+    console.log(
+      "[PaprCloud] Skipping papr:resume-cloud schedule — vault full sync already queued",
+    );
+    return { resumed: true, scheduled: false };
+  }
+
+  const vault = getVaultSyncService();
+  if (vault?.isSyncBusy()) {
+    console.log(
+      "[PaprCloud] Skipping papr:resume-cloud schedule — VaultSync.initialize or runFullSync in progress",
+    );
+    return { resumed: true, scheduled: false };
+  }
+
+  scheduleCoalescedBackgroundWork(PAPR_RESUME_CLOUD_TASK, async () => {
+    if (isCoalescedBackgroundTaskInFlight("vault:workspace-switch")) {
+      console.log(
+        "[PaprCloud] Skipping papr:resume-cloud body — workspace vault sync in progress",
+      );
+      return;
+    }
+    const activeVault = getVaultSyncService();
+    if (!activeVault) {
+      return;
+    }
+    await activeVault.runFullSync();
+  });
+  return { resumed: true, scheduled: true };
+}
+
+/** @deprecated Prefer schedulePaprCloudResumeAfterBillingRestore — kept for direct calls. */
+export async function resumePaprCloudAfterBillingRestore(): Promise<void> {
+  schedulePaprCloudResumeAfterBillingRestore();
+}

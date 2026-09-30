@@ -1,5 +1,7 @@
 # Testing the LinkedIn Autopilot Filter Fix
 
+> **DEPRECATED (2026-09):** References legacy Chrome Manager jobs. Current LinkedIn automation uses Platform Connections + `linkedin-api` CDP (see `social-media-auth.md`).
+
 ## Current State
 
 **Job Graph (stale):**
@@ -44,7 +46,7 @@ After restart:
 
 ```bash
 # Check the updated job graph
-cat ~/Papr/data/job-graph.json | jq '.appLinks."a595958d-2a94-4565-ad6d-34feea6db456".jobIds | length'
+cat $PAPR_HOME/data/job-graph.json | jq '.appLinks."a595958d-2a94-4565-ad6d-34feea6db456".jobIds | length'
 # Should show: 12 (not 2)
 
 # Check console logs for auto-discovery

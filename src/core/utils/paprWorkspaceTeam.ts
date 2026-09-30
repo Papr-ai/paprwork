@@ -2,9 +2,7 @@
  * Workspace team APIs shared by Electron IPC and the gateway agent tools.
  */
 
-const PAPR_PLATFORM_URL = (
-  process.env.PAPR_PLATFORM_URL || "https://dashboard.papr.ai"
-).replace(/\/$/, "");
+import { getPaprTeamPlatformUrl } from "./paprPlatformUrl.js";
 
 export interface WorkspaceMemberUser {
   objectId: string;
@@ -106,7 +104,7 @@ export async function fetchWorkspaceMembers(
   sessionToken: string,
   workspaceId: string,
 ): Promise<WorkspaceMember[]> {
-  const url = new URL(`${PAPR_PLATFORM_URL}/api/workspace/members`);
+  const url = new URL(`${getPaprTeamPlatformUrl()}/api/workspace/members`);
   url.searchParams.set("workspaceId", workspaceId);
 
   const response = await fetch(url.toString(), {
@@ -126,4 +124,110 @@ export async function fetchWorkspaceMembers(
   return members
     .map(normalizeMember)
     .filter((member): member is WorkspaceMember => member !== null);
+}
+
+const PARSE_GRAPHQL_URL =
+  process.env.PARSE_GRAPHQL_URL ?? "https://server.papr.ai/graphql";
+const PARSE_APP_ID =
+  process.env.PARSE_APP_ID ?? "671e705a-f735-4ec0-8474-15899a475440";
+
+interface NamespaceWorkspaceGraphQLResponse {
+  data?: {
+    namespace?: {
+      objectId?: string;
+      organization?: {
+        workspace?: { objectId?: string };
+      };
+    };
+  };
+  errors?: unknown[];
+}
+
+export class WorkspaceContextResolutionError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "WorkspaceContextResolutionError";
+  }
+}
+
+/**
+ * Resolve the Papr workspace id for the active org/namespace context.
+ * Namespace wins over explicit workspaceId — env/profile workspace ids are
+ * not updated on every org switch, so they can be stale after workspace switch.
+ */
+export async function resolveWorkspaceIdForContext(
+  sessionToken: string,
+  options: {
+    workspaceId?: string;
+    namespaceId?: string;
+  },
+): Promise<string> {
+  const namespaceId = options.namespaceId?.trim();
+  if (namespaceId) {
+    const fromNamespace = await resolveWorkspaceIdForNamespace(
+      sessionToken,
+      namespaceId,
+    );
+    if (fromNamespace) {
+      return fromNamespace;
+    }
+    throw new WorkspaceContextResolutionError(
+      "Could not resolve workspace for this namespace. Sign in again or contact support.",
+    );
+  }
+
+  const explicitWorkspaceId = options.workspaceId?.trim();
+  if (explicitWorkspaceId) {
+    return explicitWorkspaceId;
+  }
+
+  throw new WorkspaceContextResolutionError(
+    "No workspace context is available for this app.",
+  );
+}
+
+/** Resolve Papr workspace id from a namespace id (cloud app host + team apps). */
+export async function resolveWorkspaceIdForNamespace(
+  sessionToken: string,
+  namespaceId: string,
+): Promise<string | null> {
+  const trimmedNamespaceId = namespaceId.trim();
+  if (!trimmedNamespaceId) {
+    return null;
+  }
+
+  const response = await fetch(PARSE_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Parse-Application-Id": PARSE_APP_ID,
+      "X-Parse-Session-Token": sessionToken,
+    },
+    body: JSON.stringify({
+      query: `
+        query GetNamespaceWorkspace($namespaceId: ID!) {
+          namespace(id: $namespaceId) {
+            objectId
+            organization {
+              workspace { objectId }
+            }
+          }
+        }
+      `,
+      variables: { namespaceId: trimmedNamespaceId },
+    }),
+  });
+
+  if (!response.ok) {
+    return null;
+  }
+
+  const json = (await response.json()) as NamespaceWorkspaceGraphQLResponse;
+  if (json.errors?.length) {
+    return null;
+  }
+
+  const org = json.data?.namespace?.organization;
+  const workspaceId = org?.workspace?.objectId?.trim();
+  return workspaceId || null;
 }

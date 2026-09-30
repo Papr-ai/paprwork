@@ -1,0 +1,334 @@
+/**
+ * Per-turn metrics as columns on `messages`.
+ *
+ * Columns rather than a JSON blob because the whole point of collecting these
+ * is to aggregate them — `AVG(turn_steps)` and `SUM(turn_redundant_recoveries)`
+ * against a 3GB database should not have to parse JSON per row, and the
+ * `json_extract` route already needs a `json_valid()` guard here because a
+ * fraction of stored payloads are malformed.
+ *
+ * Every column is a nullable INTEGER, so the migration is metadata-only and
+ * turns recorded before this shipped simply read NULL.
+ */
+
+import type Database from "better-sqlite3";
+import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
+
+const TURN_METRIC_COLUMNS = [
+  { name: "turn_steps", sql: "INTEGER" },
+  { name: "turn_tool_calls", sql: "INTEGER" },
+  { name: "turn_compaction_runs", sql: "INTEGER" },
+  { name: "turn_compaction_skips", sql: "INTEGER" },
+  { name: "turn_stale_truncated", sql: "INTEGER" },
+  { name: "turn_stale_inline", sql: "INTEGER" },
+  { name: "turn_recovery_fetches", sql: "INTEGER" },
+  { name: "turn_redundant_recoveries", sql: "INTEGER" },
+  { name: "turn_recovered_chars", sql: "INTEGER" },
+  { name: "turn_peak_context_tokens", sql: "INTEGER" },
+  { name: "turn_estimated_context_tokens", sql: "INTEGER" },
+  { name: "turn_context_budget_tokens", sql: "INTEGER" },
+  { name: "turn_plan_total_steps", sql: "INTEGER" },
+  { name: "turn_plan_completed_steps", sql: "INTEGER" },
+  { name: "turn_duration_ms", sql: "INTEGER" },
+  // Memory-catalog experiment (Jev gate). TEXT arm so `WHERE arm='treatment'`
+  // reads naturally; NULL = not assigned, which is NOT the control group.
+  { name: "turn_catalog_arm", sql: "TEXT" },
+  { name: "turn_catalog_positional_tokens", sql: "INTEGER" },
+  { name: "turn_catalog_injected_tokens", sql: "INTEGER" },
+  { name: "turn_catalog_jev_ms", sql: "INTEGER" },
+  // Tool-result trim experiment (Jev). Same arm semantics as catalog.
+  { name: "turn_tooltrim_arm", sql: "TEXT" },
+  { name: "turn_tooltrim_applied", sql: "INTEGER" },
+  { name: "turn_tooltrim_fallbacks", sql: "INTEGER" },
+  { name: "turn_tooltrim_lookback_yes", sql: "INTEGER" },
+  { name: "turn_tooltrim_chars_before", sql: "INTEGER" },
+  { name: "turn_tooltrim_chars_after", sql: "INTEGER" },
+  { name: "turn_tooltrim_jev_ms", sql: "INTEGER" },
+  // Auto model routing (Jev). Shadow: logged every turn; applied=1 only when
+  // the picker model was `auto`. Compare turn_auto_model to messages.model.
+  { name: "turn_auto_tier", sql: "TEXT" },
+  { name: "turn_auto_raw_tier", sql: "TEXT" },
+  { name: "turn_auto_confidence", sql: "REAL" },
+  { name: "turn_auto_needs_tools", sql: "INTEGER" },
+  { name: "turn_auto_model", sql: "TEXT" },
+  { name: "turn_auto_effort", sql: "TEXT" },
+  { name: "turn_auto_applied", sql: "INTEGER" },
+  { name: "turn_auto_jev_ms", sql: "INTEGER" },
+] as const;
+
+export function migrateTurnMetricsColumns(db: Database.Database): void {
+  const columns = db.pragma("table_info(messages)") as Array<{ name: string }>;
+  const names = new Set(columns.map((column) => column.name));
+
+  for (const column of TURN_METRIC_COLUMNS) {
+    if (!names.has(column.name)) {
+      console.log(`[TurnMetrics] Adding "${column.name}" column to messages...`);
+      db.exec(`ALTER TABLE messages ADD COLUMN ${column.name} ${column.sql}`);
+    }
+  }
+}
+
+export function storeTurnMetrics(
+  db: Database.Database,
+  messageId: string,
+  summary: TurnMetricsSummary,
+  durationMs?: number,
+): void {
+  db.prepare(
+    `UPDATE messages
+     SET turn_steps = ?,
+         turn_tool_calls = ?,
+         turn_compaction_runs = ?,
+         turn_compaction_skips = ?,
+         turn_stale_truncated = ?,
+         turn_stale_inline = ?,
+         turn_recovery_fetches = ?,
+         turn_redundant_recoveries = ?,
+         turn_recovered_chars = ?,
+         turn_peak_context_tokens = ?,
+         turn_estimated_context_tokens = ?,
+         turn_context_budget_tokens = ?,
+         turn_plan_total_steps = ?,
+         turn_plan_completed_steps = ?,
+         turn_duration_ms = ?,
+         turn_catalog_arm = ?,
+         turn_catalog_positional_tokens = ?,
+         turn_catalog_injected_tokens = ?,
+         turn_catalog_jev_ms = ?,
+         turn_tooltrim_arm = ?,
+         turn_tooltrim_applied = ?,
+         turn_tooltrim_fallbacks = ?,
+         turn_tooltrim_lookback_yes = ?,
+         turn_tooltrim_chars_before = ?,
+         turn_tooltrim_chars_after = ?,
+         turn_tooltrim_jev_ms = ?,
+         turn_auto_tier = ?,
+         turn_auto_raw_tier = ?,
+         turn_auto_confidence = ?,
+         turn_auto_needs_tools = ?,
+         turn_auto_model = ?,
+         turn_auto_effort = ?,
+         turn_auto_applied = ?,
+         turn_auto_jev_ms = ?
+     WHERE id = ?`,
+  ).run(
+    summary.steps,
+    summary.toolCalls,
+    summary.compactionRuns,
+    summary.compactionSkips,
+    summary.staleResultsTruncated,
+    summary.staleResultsLeftInline,
+    summary.recoveryFetches,
+    summary.redundantRecoveries,
+    summary.recoveredChars,
+    summary.peakContextTokens,
+    summary.estimatedContextTokens,
+    summary.historyTokenBudget,
+    summary.planTotalSteps,
+    summary.planCompletedSteps,
+    durationMs ?? null,
+    summary.catalogExperimentArm ?? null,
+    summary.catalogPositionalTokens ?? null,
+    summary.catalogInjectedTokens ?? null,
+    summary.catalogJevMs ?? null,
+    summary.toolTrimArm ?? null,
+    summary.toolTrimApplied ?? 0,
+    summary.toolTrimFallbacks ?? 0,
+    summary.toolTrimLookbackYes ?? 0,
+    summary.toolTrimCharsBefore ?? 0,
+    summary.toolTrimCharsAfter ?? 0,
+    summary.toolTrimJevMs ?? 0,
+    summary.autoTier ?? null,
+    summary.autoRawTier ?? null,
+    summary.autoConfidence ?? null,
+    summary.autoNeedsTools === null || summary.autoNeedsTools === undefined
+      ? null
+      : summary.autoNeedsTools ? 1 : 0,
+    summary.autoModel ?? null,
+    summary.autoEffort ?? null,
+    summary.autoApplied ? 1 : 0,
+    summary.autoJevMs ?? null,
+    messageId,
+  );
+}
+
+/**
+ * One turn's measured usage, for the context meter.
+ *
+ * Two different quantities live on this row and must not be confused:
+ * `promptTokens` is the turn's billed total across every step, and
+ * `peakContextTokens` is the largest single request inside it. Window fill is
+ * the second one; the invoice is the first.
+ */
+export interface TurnUsageRow {
+  messageId: string;
+  model: string | null;
+  timestamp: string | null;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  cost: number;
+  steps: number | null;
+  toolCalls: number | null;
+  durationMs: number | null;
+  compactionRuns: number | null;
+  compactionSkips: number | null;
+  recoveryFetches: number | null;
+  redundantRecoveries: number | null;
+  /**
+   * Largest single-request context the provider reported for this turn.
+   *
+   * This — not `promptTokens` — is how full the window got. Since the turn
+   * total was fixed to sum every step, `prompt_tokens` grows with step count
+   * and is a billing figure, not a context size.
+   */
+  peakContextTokens: number | null;
+  /** What the chars/4 estimator believed, for measuring its drift. */
+  estimatedContextTokens: number | null;
+  contextBudgetTokens: number | null;
+}
+
+export interface ChatUsageTotals {
+  turns: number;
+  cost: number;
+  promptTokens: number;
+  completionTokens: number;
+  cacheReadTokens: number;
+}
+
+export const EMPTY_CHAT_USAGE_TOTALS: ChatUsageTotals = {
+  turns: 0,
+  cost: 0,
+  promptTokens: 0,
+  completionTokens: 0,
+  cacheReadTokens: 0,
+};
+
+export const RECENT_TURN_USAGE_LIMIT = 12;
+
+const TURN_USAGE_SELECT_BASE = `
+  SELECT id, model, timestamp,
+         COALESCE(prompt_tokens, 0) AS prompt_tokens,
+         COALESCE(completion_tokens, 0) AS completion_tokens,
+         COALESCE(cache_read_tokens, 0) AS cache_read_tokens,
+         COALESCE(cache_write_tokens, 0) AS cache_write_tokens,
+         COALESCE(cost, 0) AS cost,
+         turn_steps, turn_tool_calls, turn_duration_ms,
+         turn_compaction_runs, turn_compaction_skips,
+         turn_recovery_fetches, turn_redundant_recoveries,
+         turn_peak_context_tokens, turn_estimated_context_tokens,
+         turn_context_budget_tokens
+  FROM messages
+  WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0
+  ORDER BY timestamp DESC, rowid DESC`;
+
+const TURN_USAGE_SELECT = `${TURN_USAGE_SELECT_BASE}
+  LIMIT 1`;
+
+function mapTurnUsageRow(row: Record<string, unknown>): TurnUsageRow {
+  const int = (key: string): number | null => {
+    const value = row[key];
+    return typeof value === "number" ? value : null;
+  };
+
+  return {
+    messageId: String(row.id),
+    model: typeof row.model === "string" ? row.model : null,
+    timestamp: typeof row.timestamp === "string" ? row.timestamp : null,
+    promptTokens: Number(row.prompt_tokens ?? 0),
+    completionTokens: Number(row.completion_tokens ?? 0),
+    cacheReadTokens: Number(row.cache_read_tokens ?? 0),
+    cacheWriteTokens: Number(row.cache_write_tokens ?? 0),
+    cost: Number(row.cost ?? 0),
+    steps: int("turn_steps"),
+    toolCalls: int("turn_tool_calls"),
+    durationMs: int("turn_duration_ms"),
+    compactionRuns: int("turn_compaction_runs"),
+    compactionSkips: int("turn_compaction_skips"),
+    recoveryFetches: int("turn_recovery_fetches"),
+    redundantRecoveries: int("turn_redundant_recoveries"),
+    peakContextTokens: int("turn_peak_context_tokens"),
+    estimatedContextTokens: int("turn_estimated_context_tokens"),
+    contextBudgetTokens: int("turn_context_budget_tokens"),
+  };
+}
+// `sequence` looks like an ordinal and is not one: the column holds the turn's
+// parts array as JSON (`[{"type":"thinking",...}]`, ~100-300KB a row). Sorting
+// by it compared those blobs as text, so "last turn" was whichever turn began
+// with the alphabetically largest thinking block — in this workspace a turn
+// from nine days earlier, which is why the meter read 32 tokens and 0% while
+// showing a $2.74 cost from a different turn. Timestamps are ISO-8601, so
+// lexical DESC is chronological; rowid breaks ties inside the same second.
+
+/** Last billed assistant turn in a chat, or null before the first reply. */
+export function readLastTurnUsage(
+  db: Database.Database | undefined,
+  chatId: string,
+): TurnUsageRow | null {
+  if (!db) return null;
+  const row = db.prepare(TURN_USAGE_SELECT).get(chatId) as
+    | Record<string, unknown>
+    | undefined;
+  if (!row) return null;
+
+  return mapTurnUsageRow(row);
+}
+
+/** Recent billed turns, newest first — for per-turn context % in the meter panel. */
+export function readRecentTurnUsage(
+  db: Database.Database | undefined,
+  chatId: string,
+  limit: number = RECENT_TURN_USAGE_LIMIT,
+): TurnUsageRow[] {
+  if (!db || limit <= 0) return [];
+  const rows = db
+    .prepare(`${TURN_USAGE_SELECT_BASE}\n  LIMIT ?`)
+    .all(chatId, limit) as Record<string, unknown>[];
+  return rows.map(mapTurnUsageRow);
+}
+
+const CHAT_USAGE_TOTALS_SELECT = `SELECT COUNT(*) AS turns,
+              COALESCE(SUM(cost), 0) AS cost,
+              COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+              COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens
+       FROM messages
+       WHERE chat_id = ? AND role = 'assistant' AND COALESCE(prompt_tokens, 0) > 0`;
+
+/** Whole-chat rollup. Turns are billed assistant rows, not messages. */
+export function readChatUsageTotals(
+  db: Database.Database | undefined,
+  chatId: string,
+): ChatUsageTotals {
+  if (!db) return { ...EMPTY_CHAT_USAGE_TOTALS };
+  const row = db
+    .prepare(
+      CHAT_USAGE_TOTALS_SELECT,
+    )
+    .get(chatId) as Record<string, unknown> | undefined;
+
+  return mapChatUsageTotals(row);
+}
+
+function mapChatUsageTotals(row: Record<string, unknown> | undefined): ChatUsageTotals {
+  return {
+    turns: Number(row?.turns ?? 0),
+    cost: Number(row?.cost ?? 0),
+    promptTokens: Number(row?.prompt_tokens ?? 0),
+    completionTokens: Number(row?.completion_tokens ?? 0),
+    cacheReadTokens: Number(row?.cache_read_tokens ?? 0),
+  };
+}
+
+
+/** Worker-compatible reader; avoids three main-thread scans on every context refresh. */
+export async function readTurnUsageAsync(
+  query: (sql: string, params: unknown[]) => Promise<Record<string, unknown>[]>,
+  chatId: string,
+): Promise<{ lastTurn: TurnUsageRow | null; recentTurns: TurnUsageRow[]; totals: ChatUsageTotals }> {
+  const rows = await query(`${TURN_USAGE_SELECT_BASE}\n  LIMIT ?`, [chatId, RECENT_TURN_USAGE_LIMIT]);
+  const recentTurns = rows.map(mapTurnUsageRow);
+  const totals = await query(CHAT_USAGE_TOTALS_SELECT, [chatId]);
+  return { lastTurn: recentTurns[0] ?? null, recentTurns, totals: mapChatUsageTotals(totals[0]) };
+}

@@ -31,6 +31,12 @@ import {
   isWikiGraphCatalogBlock,
   type PaprCatalogSnapshot,
 } from "./memoryGraphCatalog.js";
+import {
+  fetchSyncTiersThrottled,
+  seedSyncTiersFailureFromCache,
+  SyncTiersBackoffError,
+} from "./syncTiersClient.js";
+import { shouldQueueMemoryPreviewRefresh } from "./MemoryPreviewCache.js";
 
 export const IDLE_THRESHOLD_MS = 2 * 60 * 60 * 1000;
 export const MAX_TIER0 = 20;
@@ -63,6 +69,20 @@ interface ChatBootstrapState {
 
 function createEmptyBootstrapState(): ChatBootstrapState {
   return { blocks: null, fetchPromise: null, injected: false, wikiInjected: false };
+}
+
+export const JEV_CATALOG_EXPERIMENT = "JEV_CATALOG";
+
+export interface CatalogExperimentRecord {
+  arm: "treatment" | "control" | null;
+  positionalTokens: number;
+  /** Null when not in treatment or when Jev fell back. */
+  gatedTokens: number | null;
+  jevMs: number | null;
+}
+
+function estimateTokens(text: string | undefined): number {
+  return Math.ceil((text ?? "").length / 4);
 }
 
 function extractRole(message: HistoryMessageLike): string | null {
@@ -293,9 +313,12 @@ export class UserMemoryContextService {
   private static instance: UserMemoryContextService | null = null;
   private readonly chatBootstrap = new Map<string, ChatBootstrapState>();
   private paprSnapshotCache: PaprCatalogSnapshot | null = null;
+  private catalogExperiment = new Map<string, CatalogExperimentRecord>();
+  private snapshotRefreshInFlight = false;
   private wikiHomeCache: Awaited<ReturnType<typeof fetchLocalWikiHome>> | null =
     null;
   private wikiHomeCacheAt = 0;
+  private previewRefreshInFlight = false;
 
   static getInstance(): UserMemoryContextService {
     if (!UserMemoryContextService.instance) {
@@ -363,9 +386,64 @@ export class UserMemoryContextService {
   }
 
   /**
+   * Tiers snapshot, stale-while-revalidate.
+   *
+   * Order: in-memory (fresh) → disk (any age ≤ 7d, refresh in background if
+   * past TTL) → network (only when nothing cached). sync.getTiers takes
+   * 20–90s, so a blocking fetch is reserved for a cold install.
+   */
+  private async resolvePaprSnapshot(
+    client: Papr,
+    userId: string,
+  ): Promise<PaprCatalogSnapshot | null> {
+    const now = Date.now();
+    const isFresh = (s: PaprCatalogSnapshot | null): s is PaprCatalogSnapshot =>
+      !!s && now - s.fetchedAt <= CATALOG_SNAPSHOT_TTL_MS;
+
+    if (isFresh(this.paprSnapshotCache)) {
+      return this.paprSnapshotCache;
+    }
+
+    const { readPaprCatalogSnapshotCache, writePaprCatalogSnapshotCache } =
+      await import("./paprCatalogSnapshotCache.js");
+
+    const stale = this.paprSnapshotCache ?? (await readPaprCatalogSnapshotCache(userId, now));
+    if (stale) {
+      this.paprSnapshotCache = stale;
+      const staleAgeMin = Math.round((now - stale.fetchedAt) / 60000);
+      if (!isFresh(stale) && !this.snapshotRefreshInFlight) {
+        this.snapshotRefreshInFlight = true;
+        void fetchPaprCatalogSnapshot(client, userId)
+          .then(async (fresh) => {
+            if (fresh) {
+              this.paprSnapshotCache = fresh;
+              await writePaprCatalogSnapshotCache(userId, fresh);
+              console.log(
+                `[UserMemoryContext] Tiers snapshot refreshed in background (was ${staleAgeMin}m old)`,
+              );
+            }
+          })
+          .catch(() => undefined)
+          .finally(() => {
+            this.snapshotRefreshInFlight = false;
+          });
+      }
+      return stale;
+    }
+
+    const fresh = await fetchPaprCatalogSnapshot(client, userId);
+    if (fresh) {
+      this.paprSnapshotCache = fresh;
+      await writePaprCatalogSnapshotCache(userId, fresh);
+    }
+    return fresh;
+  }
+
+  /**
    * Papr tiers + message-scoped search — background only, injects turn 2.
    */
   private async fetchPaprMemoryCatalogBlock(
+    chatId: string,
     userMessage: string,
   ): Promise<string | undefined> {
     const papr = await createPaprClientForCatalog();
@@ -373,15 +451,7 @@ export class UserMemoryContextService {
       return undefined;
     }
 
-    const now = Date.now();
-    let snapshot = this.paprSnapshotCache;
-    if (!snapshot || now - snapshot.fetchedAt > CATALOG_SNAPSHOT_TTL_MS) {
-      const fresh = await fetchPaprCatalogSnapshot(papr.client, papr.userId);
-      if (fresh) {
-        snapshot = fresh;
-        this.paprSnapshotCache = fresh;
-      }
-    }
+    const snapshot = await this.resolvePaprSnapshot(papr.client, papr.userId);
 
     let relatedMemories: MemoryObject[] = [];
     try {
@@ -401,11 +471,69 @@ export class UserMemoryContextService {
       return undefined;
     }
 
-    return buildPaprMemoryCatalogBlock({
-      tier0: snapshot?.tier0 ?? [],
-      tier1: snapshot?.tier1 ?? [],
-      relatedMemories,
+    const tier0 = snapshot?.tier0 ?? [];
+    const tier1 = snapshot?.tier1 ?? [];
+    const positional = buildPaprMemoryCatalogBlock({ tier0, tier1, relatedMemories });
+
+    // Experiment: Jev-gated catalog (see jevMemoryCatalogGate.ts). Arm is
+    // recorded per chat so the turn that injects it can log it.
+    const { decideExperimentArm } = await import("../../core/utils/experimentArm.js");
+    const { experimentRatesFor } = await import("./experimentSettings.js");
+    const rates = experimentRatesFor(JEV_CATALOG_EXPERIMENT);
+    const arm = decideExperimentArm({
+      name: JEV_CATALOG_EXPERIMENT,
+      defaultTreatmentRate: rates.treatmentRate,
+      defaultControlRate: rates.controlRate,
     });
+    this.catalogExperiment.set(chatId, {
+      arm,
+      positionalTokens: estimateTokens(positional),
+      gatedTokens: null,
+      jevMs: null,
+    });
+    if (arm !== "treatment") {
+      return positional;
+    }
+
+    const { gateCatalogWithJev } = await import("./jevMemoryCatalogGate.js");
+    const gated = await gateCatalogWithJev(userMessage, [
+      ...tier0,
+      ...tier1,
+      ...relatedMemories,
+    ]);
+    if (!gated) {
+      return positional; // Jev failed — measure as fallback, keep old behaviour
+    }
+
+    const tierIds = new Set([...tier0, ...tier1].map((m) => m.id));
+    const block =
+      gated.kept.length === 0
+        ? undefined
+        : buildPaprMemoryCatalogBlock({
+            tier0: gated.kept.filter((m) => tierIds.has(m.id)),
+            tier1: [],
+            relatedMemories: gated.kept.filter((m) => !tierIds.has(m.id)),
+          });
+    const rec = this.catalogExperiment.get(chatId);
+    if (rec) {
+      rec.gatedTokens = estimateTokens(block);
+      rec.jevMs = gated.jevMs;
+    }
+    console.log(
+      `[UserMemoryContext] Jev catalog gate kept ${gated.kept.length}/${gated.candidates} in ${gated.jevMs}ms (${estimateTokens(positional)}→${estimateTokens(block)} tok)`,
+    );
+    return block;
+  }
+
+  /**
+   * One-shot read of the catalog experiment record for a chat. Consumed by
+   * the turn that injects the deferred block so it can be logged with the
+   * turn's cost and latency.
+   */
+  takeCatalogExperiment(chatId: string): CatalogExperimentRecord | null {
+    const rec = this.catalogExperiment.get(chatId) ?? null;
+    this.catalogExperiment.delete(chatId);
+    return rec;
   }
 
   private handleBootstrapTriggerTurn(
@@ -543,7 +671,7 @@ export class UserMemoryContextService {
 
     const [catalogSettled, goalsSettled, usecasesSettled] =
       await Promise.allSettled([
-        this.fetchPaprMemoryCatalogBlock(userMessage),
+        this.fetchPaprMemoryCatalogBlock(chatId, userMessage),
         sessionToken
           ? fetchParseGoalsForUser(sessionToken, userId)
           : Promise.resolve([]),
@@ -654,7 +782,12 @@ export class UserMemoryContextService {
       );
       await writeMemoryPreviewCache({
         paprMemory: { goalsOkrs, useCases, syncTiers },
-        status: { ...statusBase, errors: {} },
+        status: {
+          ...statusBase,
+          errors: {},
+          syncTiersFetched: Boolean(syncTiers || catalogSnapshot),
+        },
+        syncTiersFailedAt: syncTiers || catalogSnapshot ? null : undefined,
       });
     } catch (error) {
       console.warn(
@@ -705,7 +838,9 @@ export class UserMemoryContextService {
    * Fetch Papr memory context for Settings preview (goals/OKRs, use cases, sync tiers).
    * Same sources as chat bootstrap, without message-scoped search.
    */
-  async fetchMemoryPreviewForSettings(): Promise<{
+  async fetchMemoryPreviewForSettings(options?: {
+    forceSyncTiers?: boolean;
+  }): Promise<{
     goalsOkrs: string | null;
     useCases: string | null;
     syncTiers: string | null;
@@ -798,21 +933,36 @@ export class UserMemoryContextService {
     ]);
 
     const tiersStarted = performance.now();
-    const tiersResult = await Promise.allSettled([
-      client.sync.getTiers(
+    let tiersResult:
+      | { status: "fulfilled"; value: { tier0: MemoryObject[]; tier1: MemoryObject[] } }
+      | { status: "rejected"; reason: unknown };
+
+    try {
+      const tiersValue = await fetchSyncTiersThrottled(
+        client,
+        userId,
         {
-          external_user_id: userId,
           max_tier0: SETTINGS_MAX_TIER0,
           max_tier1: SETTINGS_MAX_TIER1,
           include_embeddings: false,
         },
-        { timeout: SYNC_TIERS_SDK_TIMEOUT_MS },
-      ),
-    ]).then((results) => results[0]);
+        {
+          timeout: SYNC_TIERS_SDK_TIMEOUT_MS,
+          force: options?.forceSyncTiers,
+        },
+      );
+      tiersResult = { status: "fulfilled", value: tiersValue };
+    } catch (reason) {
+      tiersResult = { status: "rejected", reason };
+    }
 
     if (tiersResult.status === "fulfilled") {
       console.log(
-        `[UserMemoryContext] sync.getTiers OK in ${Math.round(performance.now() - tiersStarted)}ms (tier0=${tiersResult.value.tier0?.length ?? 0}, tier1=${tiersResult.value.tier1?.length ?? 0})`,
+        `[UserMemoryContext] sync.getTiers OK in ${Math.round(performance.now() - tiersStarted)}ms (tier0=${tiersResult.value.tier0.length}, tier1=${tiersResult.value.tier1.length})`,
+      );
+    } else if (tiersResult.reason instanceof SyncTiersBackoffError) {
+      console.warn(
+        `[UserMemoryContext] sync.getTiers skipped (backoff active, retry in ${Math.ceil(tiersResult.reason.retryAfterMs / 1000)}s)`,
       );
     } else {
       console.warn(
@@ -847,8 +997,8 @@ export class UserMemoryContextService {
       status.syncTiersFetched = true;
       syncTiers =
         formatSyncTiersBlock(
-          tiersResult.value.tier0 ?? [],
-          tiersResult.value.tier1 ?? [],
+          tiersResult.value.tier0,
+          tiersResult.value.tier1,
         ) ?? null;
     } else {
       status.errors.syncTiers =
@@ -860,13 +1010,42 @@ export class UserMemoryContextService {
     return { goalsOkrs, useCases, syncTiers, status };
   }
 
-  /** Refresh Settings preview cache in background (fire-and-forget). */
-  refreshMemoryPreviewCacheInBackground(): void {
+  /** Queue a background Settings preview refresh when cache is stale/incomplete. */
+  maybeRefreshMemoryPreviewCacheInBackground(cached?: {
+    isFresh: boolean;
+    isIncomplete: boolean;
+    syncTiersFailedAt?: string;
+  }): void {
+    if (
+      cached &&
+      !shouldQueueMemoryPreviewRefresh({
+        isFresh: cached.isFresh,
+        isIncomplete: cached.isIncomplete,
+        syncTiersFailedAt: cached.syncTiersFailedAt,
+        previewRefreshInFlight: this.previewRefreshInFlight,
+      })
+    ) {
+      return;
+    }
+    if (this.previewRefreshInFlight) {
+      return;
+    }
+
+    const userId = getPaprUserId();
+    if (userId && cached?.syncTiersFailedAt) {
+      seedSyncTiersFailureFromCache(userId, cached.syncTiersFailedAt);
+    }
+
+    this.previewRefreshInFlight = true;
     void this.fetchMemoryPreviewForSettings()
       .then(async (fresh) => {
         const { writeMemoryPreviewCache } = await import(
           "./MemoryPreviewCache.js"
         );
+        const syncTiersFailedAt =
+          fresh.status.errors.syncTiers !== undefined
+            ? new Date().toISOString()
+            : null;
         await writeMemoryPreviewCache({
           paprMemory: {
             goalsOkrs: fresh.goalsOkrs,
@@ -874,6 +1053,7 @@ export class UserMemoryContextService {
             syncTiers: fresh.syncTiers,
           },
           status: fresh.status,
+          syncTiersFailedAt,
         });
         console.log("[UserMemoryContext] Memory preview cache refreshed");
       })
@@ -882,7 +1062,15 @@ export class UserMemoryContextService {
           "[UserMemoryContext] Background memory preview refresh failed:",
           error,
         );
+      })
+      .finally(() => {
+        this.previewRefreshInFlight = false;
       });
+  }
+
+  /** @deprecated Use maybeRefreshMemoryPreviewCacheInBackground instead. */
+  refreshMemoryPreviewCacheInBackground(): void {
+    this.maybeRefreshMemoryPreviewCacheInBackground();
   }
 }
 

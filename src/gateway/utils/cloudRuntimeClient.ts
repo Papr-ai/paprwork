@@ -8,7 +8,8 @@ import type {
   CloudRuntimeStreamRequest,
   DesktopHeartbeatResponse,
 } from "../types/cloudRuntime.js";
-import { getMemoryServerBaseUrl } from "./cloudApiClient.js";
+import { cloudApiFetch, getMemoryServerBaseUrl } from "./cloudApiClient.js";
+import { cloudActingUserFields } from "./cloudActingUser.js";
 
 function parseErrorMessage(
   status: number,
@@ -73,6 +74,7 @@ export class CloudRuntimeClient {
         agentId: request.agentId,
         tier: request.tier ?? "sandbox",
         runtime: request.runtime ?? "cloud",
+        ...cloudActingUserFields(),
       }),
       signal,
     });
@@ -129,17 +131,13 @@ export class CloudRuntimeClient {
   }
 
   async sendDesktopHeartbeat(
-    paprApiKey: string,
-    signal?: AbortSignal,
+    _paprApiKey: string,
+    _signal?: AbortSignal,
   ): Promise<DesktopHeartbeatResponse> {
-    const response = await fetch(`${this.baseUrl}/heartbeat`, {
+    const response = await cloudApiFetch("/v1/cloud/runtime/heartbeat", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": paprApiKey,
-      },
-      body: "{}",
-      signal,
+      body: {},
+      timeoutMs: 15_000,
     });
 
     if (!response.ok) {

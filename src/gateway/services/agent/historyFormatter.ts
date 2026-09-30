@@ -30,6 +30,15 @@ interface TextContentPart {
   text: string;
 }
 
+/** AI SDK ImagePart — base64 or URL in `image`. */
+export interface ImageContentPart {
+  type: "image";
+  image: string;
+  mediaType?: string;
+}
+
+export type UserContentPart = TextContentPart | ImageContentPart;
+
 interface ToolCallContentPart {
   type: "tool-call";
   toolCallId: string;
@@ -94,7 +103,12 @@ type ToolContent = Array<ToolResultContentPart>;
 
 export type AIModelMessage =
   | { role: "system"; content: string }
-  | { role: "user"; content: string }
+  | {
+      role: "user";
+      content: string | UserContentPart[];
+      /** Stripped after attachmentVision injects image parts. */
+      attachments?: import("../storage/IStorageProvider.js").StoredMessageAttachment[];
+    }
   | { role: "assistant"; content: string | AssistantContent }
   | { role: "tool"; content: ToolContent };
 
@@ -395,7 +409,16 @@ export function formatHistoryMessagesForModel(
         }
       }
     } else if (role === "user") {
-      messages.push({ role: "user", content });
+      const rawAttachments = (candidate as { attachments?: unknown }).attachments;
+      const attachments =
+        Array.isArray(rawAttachments) && rawAttachments.length > 0
+          ? (rawAttachments as import("../storage/IStorageProvider.js").StoredMessageAttachment[])
+          : undefined;
+      messages.push({
+        role: "user",
+        content,
+        ...(attachments ? { attachments } : {}),
+      });
     } else if (role === "system") {
       messages.push({ role: "system", content });
     }
@@ -420,6 +443,7 @@ export function buildModelMessages(
   memoryContextBlocks?: string[],
   activePlansContext?: string,
   focusContext?: string,
+  currentAttachments?: import("../storage/IStorageProvider.js").StoredMessageAttachment[],
 ): AIModelMessage[] {
   const messages = formatHistoryMessagesForModel(history);
 
@@ -489,6 +513,9 @@ ${conversationSummary}
     messages.push({
       role: "user",
       content: userMessage,
+      ...(currentAttachments && currentAttachments.length > 0
+        ? { attachments: currentAttachments }
+        : {}),
     });
   }
 

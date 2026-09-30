@@ -1,11 +1,71 @@
 /**
- * Tell apps.papr.ai to invalidate repo caches and push a revision event to open tabs.
- * Called from desktop gateway after a successful git sync push.
+ * Tell apps.papr.ai to invalidate repo caches after a successful git sync push.
+ * Open browser tabs refresh manually (F5) — same model as Vercel/static hosting.
  */
 
 export interface NotifyCloudAppRevisionInput {
   namespaceId: string;
   slug: string;
+}
+
+export interface NotifyCloudAppAccessUpdatedInput extends NotifyCloudAppRevisionInput {
+  appId?: string;
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
+}
+
+export function resolvePublishRouteForNotify(input: {
+  shareUrl?: string | null;
+  slug?: string | null;
+  namespaceId?: string | null;
+}): NotifyCloudAppRevisionInput | null {
+  const fromUrl = parsePublishedAppRoute(input.shareUrl);
+  if (fromUrl) {
+    return fromUrl;
+  }
+  const slug = input.slug?.trim();
+  const namespaceId = input.namespaceId?.trim();
+  if (slug && namespaceId) {
+    return { namespaceId, slug };
+  }
+  return null;
+}
+
+/** Bust cloud app host access cache after publish ACL changes (no repo snapshot warm). */
+export async function notifyCloudAppAccessUpdated(
+  input: NotifyCloudAppAccessUpdatedInput,
+): Promise<void> {
+  const hostKey = process.env.PAPR_CLOUD_APP_HOST_KEY?.trim();
+  if (!hostKey) {
+    return;
+  }
+
+  const host =
+    process.env.PAPR_CLOUD_APPS_HOST?.replace(/\/$/, "") ?? "https://apps.papr.ai";
+
+  try {
+    const response = await fetch(`${host}/internal/app-access-updated`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Cloud-App-Host-Key": hostKey,
+      },
+      body: JSON.stringify(input),
+    });
+    if (!response.ok) {
+      const text = await response.text().catch(() => "");
+      console.warn(
+        `[CloudPublish] App access notify failed (${response.status}) for ${input.namespaceId}/${input.slug}` +
+          (text ? `: ${text.slice(0, 200)}` : ""),
+      );
+    }
+  } catch (error) {
+    console.warn(
+      `[CloudPublish] App access notify error for ${input.namespaceId}/${input.slug}:`,
+      (error as Error).message.slice(0, 120),
+    );
+  }
 }
 
 export async function notifyCloudAppRevisionUpdated(
@@ -29,9 +89,12 @@ export async function notifyCloudAppRevisionUpdated(
       body: JSON.stringify(input),
     });
     if (!response.ok) {
+      const text = await response.text().catch(() => "");
       console.warn(
-        `[CloudSync] App revision notify failed (${response.status}) for ${input.namespaceId}/${input.slug}`,
+        `[CloudSync] App revision notify failed (${response.status}) for ${input.namespaceId}/${input.slug}` +
+          (text ? `: ${text.slice(0, 200)}` : ""),
       );
+      return;
     }
   } catch (error) {
     console.warn(

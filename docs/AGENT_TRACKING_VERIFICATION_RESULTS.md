@@ -12,7 +12,7 @@
 The app is currently running in **PAPR Memory (Cloud) storage mode**, not Local SQLite mode. We know this because:
 
 - ❌ No `chats.db` file exists in any expected location:
-  - `~/Papr/data/chats.db`
+  - `$PAPR_HOME/data/chats.db`
   - `~/Library/Application Support/paprwork-v2/data/chats.db`
   - `~/.paprwork-v2/data/chats.db`
 - ✅ The app is running and has messages (per user confirmation)

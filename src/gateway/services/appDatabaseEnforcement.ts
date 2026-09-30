@@ -3,22 +3,42 @@
  * no job database is linked via data-sources.json.
  */
 
-import Database from "better-sqlite3";
 import { existsSync } from "fs";
+import {
+  readRegistryDatabaseSchema,
+  type RegistryDbSchemaReadInput,
+} from "./jobs/registryDbSchemaReader.js";
 import {
   extractPrimaryTable,
   JOB_BASELINE_TABLES,
 } from "./appDataSources.js";
 import type { ValidationIssue } from "./AppService.js";
 
-const DB_API_PATTERNS: readonly RegExp[] = [
-  /\/api\/db\/query\b/i,
-  /\/api\/db\/write\b/i,
-  /\/api\/db\/exec\b/i,
-  /\/api\/db\/schema\b/i,
+/** Actual HTTP/import usage — not bare mentions in docs, table cells, or comments. */
+const DB_API_USAGE_PATTERNS: readonly RegExp[] = [
+  /fetch\s*\(\s*[`'"]\/api\/db\/(query|write|exec|schema)/i,
+  /fetch\s*\([^)]{0,400}?\/api\/db\/(query|write|exec|schema)/i,
   /from\s+['"]\.\/db['"]/i,
   /from\s+['"]\.\/db\.ts['"]/i,
 ];
+
+function stripLineComments(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*")
+      ) {
+        return "";
+      }
+      const slash = line.indexOf("//");
+      return slash >= 0 ? line.slice(0, slash) : line;
+    })
+    .join("\n");
+}
 
 const MUTATION_KEYWORDS =
   /\b(INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE\s+|DELETE\s+FROM|REPLACE\s+INTO|UPSERT\s+INTO)\b/i;
@@ -31,13 +51,21 @@ const SQL_TABLE_REFERENCE =
   /\b(?:FROM|INTO|UPDATE|JOIN)\s+["'`]?([a-z_][a-z0-9_]*)["'`]?/gi;
 
 export function appCodeUsesDatabaseApi(content: string): boolean {
-  return DB_API_PATTERNS.some((pattern) => pattern.test(content));
+  const code = stripLineComments(content);
+  return DB_API_USAGE_PATTERNS.some((pattern) => pattern.test(code));
+}
+
+function isScaffoldDbHelper(filename: string): boolean {
+  return filename.replace(/\\/g, "/").replace(/^\.\//, "") === "db.ts";
 }
 
 export function appFilesUseDatabaseApi(
   fileContents: Map<string, string>,
 ): boolean {
-  for (const content of fileContents.values()) {
+  for (const [filename, content] of fileContents.entries()) {
+    // db.ts is auto-scaffolded into every app; it only counts as DB usage when
+    // another file imports it (matched by the `from './db'` patterns).
+    if (isScaffoldDbHelper(filename)) continue;
     if (appCodeUsesDatabaseApi(content)) {
       return true;
     }
@@ -46,10 +74,9 @@ export function appFilesUseDatabaseApi(
 }
 
 export function buildMissingDataSourceMessage(appId: string): string {
-  return (
+    return (
     `App uses /api/db/* but no database is linked in data-sources.json. ` +
-    `Create a database with create_database, attach via attach_database({ appId: "${appId}", dbId, setPrimary: true }), ` +
-    `or link a job DB with link_app_data_source({ appId: "${appId}", jobId, setPrimary: true }). ` +
+    `Create a database with create_database, then attach_database({ appId: "${appId}", dbId, alias }). ` +
     `Cloud and desktop DB APIs fail without a linked source.`
   );
 }
@@ -177,36 +204,39 @@ export function extractReferencedAppTables(
   return byFile;
 }
 
-function listTablesOnDb(dbPath: string): Set<string> {
+async function listTablesOnDb(
+  dbPath: string,
+  context?: Omit<RegistryDbSchemaReadInput, "dbPath">,
+): Promise<Set<string>> {
   if (!existsSync(dbPath)) {
     return new Set();
   }
-  const db = new Database(dbPath, { readonly: true });
-  try {
-    const rows = db
-      .prepare(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'",
-      )
-      .all() as Array<{ name: string }>;
-    return new Set(rows.map((row) => row.name));
-  } finally {
-    db.close();
+  const read = await readRegistryDatabaseSchema({
+    dbPath,
+    ...context,
+  });
+  if (!read.ok) {
+    return new Set();
   }
+  return new Set(
+    [...read.schema.tables].filter((name) => !name.startsWith("sqlite_")),
+  );
 }
 
 /**
  * Warn when app SQL references tables missing from the primary linked DB.
  */
-export function checkMissingTablesOnPrimaryDb(
+export async function checkMissingTablesOnPrimaryDb(
   primaryDbPath: string,
   fileContents: Map<string, string>,
-): ValidationIssue[] {
+  context?: Omit<RegistryDbSchemaReadInput, "dbPath">,
+): Promise<ValidationIssue[]> {
   const referenced = extractReferencedAppTables(fileContents);
   if (referenced.size === 0) {
     return [];
   }
 
-  const existing = listTablesOnDb(primaryDbPath);
+  const existing = await listTablesOnDb(primaryDbPath, context);
   const issues: ValidationIssue[] = [];
   const missingGlobal = new Set<string>();
 

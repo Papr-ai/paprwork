@@ -26,7 +26,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     telemetryEnabled: false,
     defaultHomeAppId: "bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c", // Weekly War Room
     cloudSyncEnabled: true,
-    cloudAutoPublishEnabled: true,
+    cloudAutoPublishEnabled: false,
+    cloudAutoUploadEnabled: false,
     defaultMemoryScope: "user",
   },
   telemetry: {},
@@ -174,6 +175,37 @@ export class SettingsStorage {
 
   setTelemetryEnabled(enabled: boolean): void {
     this.store.set("preferences.telemetryEnabled", enabled);
+  }
+
+  getWeatherLocationMode(): "precise" | "approximate" | undefined {
+    return this.store.get("preferences.weatherLocationMode");
+  }
+
+  setWeatherLocationMode(mode: "precise" | "approximate"): void {
+    this.store.set("preferences.weatherLocationMode", mode);
+  }
+
+  /**
+   * Which credential the user picked for a provider that has both OAuth and an
+   * API key. Defaults to "oauth" because key resolution has always preferred it.
+   */
+  getProviderAuthPreference(
+    provider: "openai" | "anthropic",
+  ): "oauth" | "apiKey" {
+    return this.store.get(
+      `preferences.providerAuthPreference.${provider}`,
+      "oauth",
+    ) as "oauth" | "apiKey";
+  }
+
+  setProviderAuthPreference(
+    provider: "openai" | "anthropic",
+    preference: "oauth" | "apiKey",
+  ): void {
+    this.store.set(
+      `preferences.providerAuthPreference.${provider}`,
+      preference,
+    );
   }
 
   /**

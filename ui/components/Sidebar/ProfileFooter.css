@@ -1,99 +1,346 @@
-/* ProfileFooter — sidebar identity row */
-.profile-footer {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 10px;
-  border-radius: 10px;
-  transition: background-color 0.15s var(--ease);
-}
+/**
+ * Rail account — avatar at the bottom of the rail; hover card with identity, your agent,
+ * Edit profile and Settings. Shares peek styles with Sidebar.css.
+ */
 
-.profile-footer:hover {
-  background: var(--hover-bg);
-}
-
-/* Avatar */
-.profile-footer__avatar {
-  flex-shrink: 0;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  border: 1px solid var(--border-color);
-  padding: 0;
-  overflow: hidden;
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  background: linear-gradient(135deg, #d4e4ff, #c8b6ff);
-  color: #2c2c2e;
-  transition: transform 0.15s var(--ease), box-shadow 0.15s var(--ease);
-}
-
-.profile-footer__avatar:hover {
-  transform: scale(1.05);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
-}
-
-.profile-footer__avatar img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-}
-
-.profile-footer__initials {
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-}
-
-/* Name + plan */
-.profile-footer__id {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 1px;
+.rail-account__avatar {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  margin-top: 6px;
   padding: 0;
   border: none;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  transition: transform 0.15s var(--ease);
+}
+
+/* Org logo as a badge on your photo: white tile, like an app icon. Monogram underneath if the image fails. */
+.org-mark {
+  position: relative;
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  overflow: hidden;
+  border-radius: 28%;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  background: #fff;
+  color: #1b2a44;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.org-mark::before {
+  content: attr(data-letter);
+}
+
+.org-mark img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  padding: 12%;
+  object-fit: contain;
+  background: #fff;
+}
+
+.rail-account__badge {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 16px;
+  height: 16px;
+  border: none;
+  font-size: 8.5px;
+  box-shadow: 0 0 0 2px var(--rail-bg);
+  pointer-events: none;
+}
+
+.rail-account__photo {
+  position: relative;
+  display: grid;
+  flex: 0 0 auto;
+}
+
+.rail-account__photo .rail-account__badge {
+  right: -4px;
+  bottom: -4px;
+  width: 18px;
+  height: 18px;
+  box-shadow: 0 0 0 2px var(--rail-card);
+}
+
+/* Org logo row: tap the tile to upload, type the website to pull its icon */
+.rail-orglogo {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 8px 6px;
+}
+
+.org-mark--lg {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  font-size: 16px;
+}
+
+.rail-orglogo__pick {
+  position: relative;
+  padding: 0;
+  border: none;
+  border-radius: 11px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.rail-orglogo__pick::after {
+  content: "Change";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(15, 23, 42, 0.5);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 600;
+  opacity: 0;
+  transition: opacity 0.15s var(--ease);
+}
+
+.rail-orglogo__pick:hover::after,
+.rail-orglogo__pick:focus-visible::after {
+  opacity: 1;
+}
+
+.rail-orglogo__field {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.rail-orglogo__field input {
+  width: 100%;
+  padding: 3px 0;
+  border: none;
+  border-bottom: 1px solid var(--rail-line, rgba(127, 127, 127, 0.25));
+  background: transparent;
+  color: var(--rail-ink);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.rail-orglogo__field input:focus {
+  border-bottom-color: var(--rail-blue);
+}
+
+.rail-orglogo__field b {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rail-ink);
+}
+
+.rail-orglogo__field small {
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--text-secondary);
+}
+
+.rail-orglogo__field small button {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--rail-blue);
+  font: inherit;
+  cursor: pointer;
+}
+
+.rail-account__avatar:hover {
+  transform: scale(1.05);
+}
+
+.rail-account__avatar:focus-visible {
+  outline: 2px solid rgba(0, 96, 224, 0.45);
+  outline-offset: 2px;
+}
+
+.rail-account__card {
+  width: 280px;
+}
+
+.rail-account__head {
+  width: 100%;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 8px 12px;
+  margin-bottom: 2px;
+  border: none;
+  border-bottom: 1px solid var(--rail-line);
   background: transparent;
   cursor: pointer;
   text-align: left;
+  font: inherit;
 }
 
-.profile-footer__name {
-  max-width: 100%;
-  font-family: var(--font-body);
-  font-size: 13px;
+.rail-account__head span {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.rail-account__head b {
+  font-size: 14px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--rail-ink);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.profile-footer__plan {
+.rail-account__head small {
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-account__card h6 {
+  margin: 10px 8px 6px;
   font-size: 11px;
-  font-weight: 500;
-  color: var(--text-secondary);
+  font-weight: 600;
+  color: var(--rail-soft);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 
-/* More (…) */
-.profile-footer__more {
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  display: grid;
-  place-items: center;
+.rail-account__row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
   border: none;
-  border-radius: 7px;
+  border-radius: 10px;
   background: transparent;
-  color: var(--text-secondary);
   cursor: pointer;
-  transition: background-color 0.15s var(--ease), color 0.15s var(--ease);
+  text-align: left;
+  font: inherit;
 }
 
-.profile-footer__more:hover {
-  background: var(--hover-bg);
-  color: var(--text-primary);
+.rail-account__row:hover {
+  background: var(--rail-row-hover);
+}
+
+.rail-account__label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--rail-ink);
+}
+
+.rail-account__row em {
+  font-style: normal;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--rail-blue);
+}
+
+.rail-account__attention {
+  margin: 8px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #9a5b00;
+  background: rgba(240, 167, 66, 0.12);
+}
+
+.rail-account__footer button {
+  color: var(--rail-ink);
+  font-weight: 500;
+}
+
+.rail-account__footer button:hover {
+  background: var(--rail-hover);
+}
+
+@media (prefers-color-scheme: dark) {
+  .rail-account__attention {
+    color: #f6b54a;
+  }
+}
+
+/* Switch org: each org in its own color; tap to switch. Active org is bold with a check. */
+.rail-orgs {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.rail-org {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: var(--rail-ink);
+}
+
+.rail-org:hover:not(:disabled) {
+  background: var(--rail-row-hover);
+}
+
+.rail-org:disabled {
+  cursor: default;
+  opacity: 1;
+}
+
+.rail-org__name {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rail-org b {
+  font-weight: 500;
+}
+
+.rail-org.is-active b {
+  font-weight: 600;
+}
+
+.rail-org small {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rail-org svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  color: var(--rail-blue);
 }

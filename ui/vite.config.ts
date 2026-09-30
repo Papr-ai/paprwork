@@ -11,7 +11,10 @@ const appVersion = packageJson.version;
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
-  const env = loadEnv(mode, process.cwd(), '');
+  const repoRoot = resolve(__dirname, "..");
+  const rootEnv = loadEnv(mode, repoRoot, "");
+  const uiEnv = loadEnv(mode, process.cwd(), "");
+  const env = { ...rootEnv, ...uiEnv };
   
   return {
   plugins: [
@@ -28,7 +31,26 @@ export default defineConfig(({ mode }) => {
   ],
   define: {
     'import.meta.env.VITE_REQUIRE_PAPR_AUTH': JSON.stringify(
-      env.VITE_REQUIRE_PAPR_AUTH || 'false'
+      env.VITE_REQUIRE_PAPR_AUTH || env.REQUIRE_PAPR_AUTH || 'false'
+    ),
+    'import.meta.env.VITE_PAPR_STREAM_PROFILE': JSON.stringify(
+      env.VITE_PAPR_STREAM_PROFILE || env.PAPR_STREAM_PROFILE || 'false'
+    ),
+    // Mirrors PAPR_MINI_APP_ISOLATION, which the main process and gateway read
+    // directly. Vite only exposes VITE_-prefixed vars to client code (Issue 64),
+    // so the unprefixed name has to be mapped here or the renderer keeps
+    // building same-origin iframe srcs while the gateway serves isolated ones.
+    //
+    // process.env is read as well as loadEnv: loadEnv covers .env files only, so
+    // without this a shell `PAPR_MINI_APP_ISOLATION=1 npm run dev` enables the
+    // flag in the main process and gateway and silently leaves the renderer on
+    // the shared origin — the half-on state this mapping exists to prevent.
+    'import.meta.env.VITE_PAPR_MINI_APP_ISOLATION': JSON.stringify(
+      env.VITE_PAPR_MINI_APP_ISOLATION ||
+        env.PAPR_MINI_APP_ISOLATION ||
+        process.env.VITE_PAPR_MINI_APP_ISOLATION ||
+        process.env.PAPR_MINI_APP_ISOLATION ||
+        '0'
     ),
   },
   base: "./",

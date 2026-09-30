@@ -9,6 +9,11 @@ import { useArtifactsStore } from "../../stores/artifactsStore";
 import { useArtifacts } from "../../hooks/useArtifacts";
 import type { TabType } from "../../types/tabs";
 import { MemoryIcon } from "../Memory/MemoryIcon";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { switchToFocusTab, switchToMemoryTab } from "../../lib/ensureDefaultChatTab";
+import { requestMemoryEntity } from "../../lib/memoryNav";
+import { wikiTypeMeta, type WikiNode } from "../../types/wiki";
+import { scopeForActiveTab, useScopedMemorySearch, type PaletteScope } from "./usePaletteScope";
 import "./CommandPalette.css";
 
 // Platform-aware modifier key detection
@@ -24,6 +29,8 @@ interface CommandItem {
   entityId: string;
   shortcut?: string;
   icon: React.ReactNode;
+  /** Memory result — opens the entity on the Memory page. */
+  node?: WikiNode;
 }
 
 interface CommandPaletteProps {
@@ -106,11 +113,19 @@ const COMMANDS: CommandItem[] = [
     ),
   },
   {
+    id: "focus",
+    label: "Focus",
+    description: "Today's brief, your three, and tasks",
+    tabType: "focus",
+    entityId: "focus",
+    icon: <AgentGlyph size={20} />,
+  },
+  {
     id: "memory",
-    label: "Memory Wiki",
-    description: "Browse your personal knowledge graph",
+    label: "Memory",
+    description: "People, projects, and context your agent knows",
     tabType: "memory",
-    entityId: "memory",
+    entityId: "wiki",
     shortcut: `${modKey}Shift+M`,
     icon: <MemoryIcon size={20} />,
   },
@@ -133,6 +148,8 @@ const COMMANDS: CommandItem[] = [
 export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
   const [query, setQuery] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [scope, setScope] = useState<PaletteScope | null>(null);
+  const memory = useScopedMemorySearch(scope, query);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const { createTab, switchToTab } = useTabs();
@@ -143,6 +160,54 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
   useEffect(() => {
     if (isOpen) loadArtifacts();
   }, [isOpen, loadArtifacts]);
+
+  // Helper to render app icon based on type (data URL, SVG, emoji, or fallback)
+  const renderAppIcon = useCallback((icon: string | undefined, title: string) => {
+    const fallbackIcon = (
+      <svg className="cmd-palette__app-orb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none">
+        <defs>
+          <linearGradient id="cmd-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#00D4FF" />
+            <stop offset="100%" stopColor="#0066FF" />
+          </linearGradient>
+        </defs>
+        <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+        <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+        <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+        <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
+      </svg>
+    );
+
+    if (!icon) return fallbackIcon;
+
+    const trimmed = icon.trim();
+
+    // Data URLs or HTTP URLs — render as <img>
+    if (trimmed.startsWith("data:image/") || trimmed.startsWith("http")) {
+      return (
+        <img
+          className="cmd-palette__app-orb-icon cmd-palette__app-orb-icon--image"
+          src={icon}
+          alt={title}
+          draggable={false}
+        />
+      );
+    }
+
+    // SVG markup — use dangerouslySetInnerHTML
+    if (trimmed.startsWith("<svg") || trimmed.startsWith("<")) {
+      return <span className="cmd-palette__app-orb-icon" dangerouslySetInnerHTML={{ __html: icon }} />;
+    }
+
+    // Check if it's a valid emoji
+    const isEmoji = trimmed.length <= 4 && /[\p{Emoji}]/u.test(trimmed);
+    if (isEmoji) {
+      return <span className="cmd-palette__app-orb-icon" style={{ fontSize: "14px" }}>{icon}</span>;
+    }
+
+    // Plain text or invalid — use fallback
+    return fallbackIcon;
+  }, []);
 
   // Build dynamic app commands from artifacts store
   const appCommands: CommandItem[] = useMemo(
@@ -157,26 +222,11 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
           entityId: app.id,
           icon: (
             <span className="cmd-palette__app-orb">
-              {app.icon ? (
-                <span className="cmd-palette__app-orb-icon" dangerouslySetInnerHTML={{ __html: app.icon }} />
-              ) : (
-                <svg className="cmd-palette__app-orb-icon" width="12" height="12" viewBox="0 0 24 24" fill="none">
-                  <defs>
-                    <linearGradient id="cmd-papr-blue-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
-                      <stop offset="0%" stopColor="#00D4FF" />
-                      <stop offset="100%" stopColor="#0066FF" />
-                    </linearGradient>
-                  </defs>
-                  <rect x="3" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                  <rect x="14" y="3" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                  <rect x="3" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                  <rect x="14" y="14" width="7" height="7" rx="2" stroke="url(#cmd-papr-blue-gradient)" strokeWidth="1.5"/>
-                </svg>
-              )}
+              {renderAppIcon(app.icon, app.title || "Untitled App")}
             </span>
           ),
         })),
-    [artifacts],
+    [artifacts, renderAppIcon],
   );
 
   // Filter commands + apps based on query
@@ -199,10 +249,30 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     return { commands: filteredCommands, apps: filteredApps };
   }, [query, appCommands]);
 
-  // Flat list for keyboard navigation
+  // Memory results first (when scoped), then commands, then apps — one flat list for the keyboard.
+  const memoryItems: CommandItem[] = useMemo(
+    () =>
+      memory.results.map((node) => {
+        const meta = wikiTypeMeta(node.type);
+        return {
+          id: `wiki-${node.type}-${node.id}`,
+          label: node.label,
+          description: meta.label,
+          tabType: "memory" as TabType,
+          entityId: "wiki",
+          node,
+          icon: (
+            <span className="cmd-palette__wiki-glyph" style={{ color: meta.color }}>
+              {meta.glyph}
+            </span>
+          ),
+        };
+      }),
+    [memory.results],
+  );
   const allItems = useMemo(
-    () => [...filtered.commands, ...filtered.apps],
-    [filtered],
+    () => [...memoryItems, ...filtered.commands, ...filtered.apps],
+    [memoryItems, filtered],
   );
 
   // Reset state when opened
@@ -210,6 +280,7 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
     if (isOpen) {
       setQuery("");
       setSelectedIndex(0);
+      setScope(scopeForActiveTab());
       setTimeout(() => inputRef.current?.focus(), 50);
     }
   }, [isOpen]);
@@ -223,8 +294,16 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
 
   const executeCommand = useCallback(
     (cmd: CommandItem) => {
-      const tabId = createTab(cmd.tabType, cmd.entityId, cmd.label);
-      switchToTab(tabId);
+      if (cmd.node) {
+        switchToMemoryTab();
+        requestMemoryEntity(cmd.node);
+      } else if (cmd.tabType === "focus") {
+        switchToFocusTab();
+      } else if (cmd.tabType === "memory") {
+        switchToMemoryTab();
+      } else {
+        switchToTab(createTab(cmd.tabType, cmd.entityId, cmd.label));
+      }
       onClose();
     },
     [createTab, switchToTab, onClose],
@@ -249,11 +328,18 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
           break;
         case "Escape":
           e.preventDefault();
+          e.stopPropagation(); // don't also back out of the page underneath
           onClose();
+          break;
+        case "Backspace":
+          if (scope && !query) {
+            e.preventDefault();
+            setScope(null);
+          }
           break;
       }
     },
-    [allItems, selectedIndex, executeCommand, onClose],
+    [allItems, selectedIndex, executeCommand, onClose, scope, query],
   );
 
   // Scroll selected item into view
@@ -287,11 +373,28 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
             <circle cx="11" cy="11" r="8" stroke="currentColor" strokeWidth="1.5" />
             <path d="M21 21l-4.35-4.35" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
           </svg>
+          {scope && (
+            <span className="cmd-palette__scope">
+              {scope.label}
+              <button
+                type="button"
+                className="cmd-palette__scope-clear"
+                aria-label={`Search everywhere instead of ${scope.label}`}
+                onClick={() => {
+                  setScope(null);
+                  inputRef.current?.focus();
+                }}
+              >
+                ×
+              </button>
+            </span>
+          )}
           <input
             ref={inputRef}
             className="cmd-palette__input"
             type="text"
-            placeholder="Search commands..."
+            aria-label="Search"
+            placeholder={scope ? "Search goals, people, projects…" : "Search commands and apps…"}
             value={query}
             onChange={(e) => {
               setQuery(e.target.value);
@@ -304,7 +407,33 @@ export function CommandPalette({ isOpen, onClose }: CommandPaletteProps) {
         {/* Commands list */}
         <div className="cmd-palette__list" ref={listRef}>
           {allItems.length === 0 && (
-            <div className="cmd-palette__empty">No results found</div>
+            <div className="cmd-palette__empty">
+              {memory.loading ? "Searching…" : "No results found"}
+            </div>
+          )}
+          {memoryItems.length > 0 && scope && (
+            <div className="cmd-palette__section-label">In {scope.label}</div>
+          )}
+          {memoryItems.map((cmd) => {
+            const flatIndex = allItems.indexOf(cmd);
+            return (
+              <button
+                key={cmd.id}
+                data-cmd-index={flatIndex}
+                className={`cmd-palette__item ${flatIndex === selectedIndex ? "cmd-palette__item--selected" : ""}`}
+                onClick={() => executeCommand(cmd)}
+                onMouseEnter={() => setSelectedIndex(flatIndex)}
+              >
+                <span className="cmd-palette__item-icon">{cmd.icon}</span>
+                <div className="cmd-palette__item-text">
+                  <span className="cmd-palette__item-label">{cmd.label}</span>
+                  <span className="cmd-palette__item-desc">{cmd.description}</span>
+                </div>
+              </button>
+            );
+          })}
+          {memoryItems.length > 0 && filtered.commands.length > 0 && (
+            <div className="cmd-palette__section-label">Go to</div>
           )}
           {filtered.commands.map((cmd) => {
             const flatIndex = allItems.indexOf(cmd);

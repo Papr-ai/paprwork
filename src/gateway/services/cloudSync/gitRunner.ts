@@ -10,6 +10,9 @@
 
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { destroyChildProcessStreams } from "../../../core/utils/destroyChildProcessStreams.js";
+import { notifySpawnResourceError } from "../../../core/utils/spawnResourceErrorHandler.js";
+import { ephemeralGitEnv } from "../../utils/ephemeralGitEnv.js";
 
 export interface RunGitOptions {
   cwd?: string;
@@ -44,6 +47,14 @@ export async function probeGitInstalled(): Promise<boolean> {
 }
 
 function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
+  return runGitOnceWithStdin(args, undefined, opts);
+}
+
+function runGitOnceWithStdin(
+  args: string[],
+  stdin: string | undefined,
+  opts: RunGitOptions = {},
+): Promise<string> {
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT_MS;
   const maxBuffer = opts.maxBuffer ?? DEFAULT_MAX_BUFFER;
   const cwd = opts.cwd;
@@ -51,9 +62,14 @@ function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn("git", args, {
       cwd,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-      stdio: ["ignore", "pipe", "pipe"],
+      env: ephemeralGitEnv(),
+      stdio: [stdin !== undefined ? "pipe" : "ignore", "pipe", "pipe"],
     });
+
+    if (stdin !== undefined) {
+      child.stdin?.write(stdin);
+      child.stdin?.end();
+    }
 
     let stdout = "";
     let stderr = "";
@@ -80,7 +96,15 @@ function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
     child.stderr?.on("data", (chunk: Buffer) => onData(chunk, "stderr"));
 
     const timer = setTimeout(() => {
+      // SIGTERM lets git unlink its temp packs; SIGKILL strands them. A killed
+      // `repack` previously left 18 orphaned tmp_pack_* files totalling 207 GB
+      // in one user's repo, so we give git a grace period to clean up itself
+      // and only escalate if it ignores the term.
       child.kill("SIGTERM");
+      const escalate = setTimeout(() => {
+        try { child.kill("SIGKILL"); } catch { /* already gone */ }
+      }, 10_000);
+      child.once("close", () => clearTimeout(escalate));
       reject(
         new Error(
           `git ${args.join(" ")} timed out after ${timeout}ms`,
@@ -90,11 +114,14 @@ function runGitOnce(args: string[], opts: RunGitOptions = {}): Promise<string> {
 
     child.on("error", (err) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(child);
+      notifySpawnResourceError(err, "git spawn");
       reject(err);
     });
 
     child.on("close", (code) => {
       clearTimeout(timer);
+      destroyChildProcessStreams(child);
       if (killedForSize) {
         reject(
           new Error(

@@ -240,7 +240,7 @@ Agent jobs and restart scenarios verified successfully.
 **Answer:** YES
 - Jobs persist in `~/papr-jobs/{jobId}/job.json`
 - Schedule state (`nextRunAt`, `enabled`) preserved across restart
-- Run history survives restart (`~/Papr/data/job-runs.jsonl`)
+- Run history survives restart (`$PAPR_HOME/data/job-runs.jsonl`)
 - Data integrity verified (all runIds match before/after restart)
 
 ### ✅ Do schedules work properly after restart?
@@ -389,7 +389,7 @@ Full job execution tests in Vitest skip due to worker serialization issues. Manu
 - [x] Error message: "Job is already running"
 
 ### ✅ Observability
-- [x] Run history in `~/Papr/data/job-runs.jsonl`
+- [x] Run history in `$PAPR_HOME/data/job-runs.jsonl`
 - [x] Statistics computed (totalRuns, completedRuns, failedRuns, avgDuration)
 - [x] Job logs in `~/papr-jobs/{jobId}/logs/run.log`
 - [x] Scheduler verbose logging (enabled/due/launched/skipped)
@@ -528,7 +528,7 @@ npm test
 1. Restart the app to load the scheduler fix
 2. Run `npm run test:jobs-e2e && npm run test:jobs-advanced` to verify on your machine
 3. Check the Jobs page for scheduled jobs
-4. Monitor `~/Papr/data/job-runs.jsonl` for run history
+4. Monitor `$PAPR_HOME/data/job-runs.jsonl` for run history
 
 ### Future Enhancements
 - Add timezone-specific tests (DST transitions)

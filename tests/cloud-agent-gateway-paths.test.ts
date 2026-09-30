@@ -12,10 +12,13 @@ import {
 describe("cloud agent gateway path resolution", () => {
   const previousPaprHome = process.env.PAPR_HOME;
   const previousGatewayMode = process.env.GATEWAY_MODE;
+  const previousHome = process.env.HOME;
   let tempRoot = "";
 
   beforeEach(async () => {
     tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-cloud-path-"));
+    process.env.HOME = tempRoot;
+    process.env.GATEWAY_MODE = "cloud_agent";
     process.env.PAPR_HOME = path.join(tempRoot, "Papr");
     await fs.mkdir(path.join(process.env.PAPR_HOME, "Jobs", "job-1", "data"), {
       recursive: true,
@@ -33,6 +36,8 @@ describe("cloud agent gateway path resolution", () => {
     else process.env.PAPR_HOME = previousPaprHome;
     if (previousGatewayMode === undefined) delete process.env.GATEWAY_MODE;
     else process.env.GATEWAY_MODE = previousGatewayMode;
+    if (previousHome === undefined) delete process.env.HOME;
+    else process.env.HOME = previousHome;
     await fs.rm(tempRoot, { recursive: true, force: true });
   });
 

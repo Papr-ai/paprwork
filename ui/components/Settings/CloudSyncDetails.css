@@ -116,6 +116,10 @@
   line-height: 1.45;
 }
 
+.cloud-sync-details__empty--loading {
+  color: var(--text-primary);
+}
+
 .cloud-sync-details__error {
   margin-bottom: 10px;
   padding: 10px 12px;

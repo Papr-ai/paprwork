@@ -5,6 +5,7 @@
 import type { CloudExternalLink, CloudLoginAccess } from "./cloudShareLink";
 import type { CodeAccess } from "../../src/core/utils/shareAudienceModel";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
+import type { CloudPublishReadinessReport } from "../../src/core/types/cloudAppDependencies";
 
 const GATEWAY =
   typeof import.meta !== "undefined" &&
@@ -14,10 +15,20 @@ const GATEWAY =
 
 export interface CloudPublishPrefs {
   autoPublish?: boolean;
+  uploadMode?: "auto" | "manual" | "inherit";
+  cloudEnabled?: true | false | "inherit";
   accessMode?: string;
   loginAccess?: CloudLoginAccess;
   externalLink?: CloudExternalLink;
   codeAccess?: CodeAccess;
+  requireSignIn?: boolean;
+  perUserIsolation?: boolean;
+  /** Audience "people": Parse _User.objectId values allowed to open the app. */
+  allowedUserIds?: string[];
+  /** Audience "people": signed-in guests by exact email (lowercase). */
+  allowedEmails?: string[];
+  /** Audience "people": signed-in guests by email domain (e.g. acme.com). */
+  allowedEmailDomains?: string[];
 }
 
 export interface CloudPublishState {
@@ -73,12 +84,31 @@ export async function fetchCloudCompatibility(
   return (await res.json()) as CloudCompatibilityReport;
 }
 
+export async function fetchCloudPublishReadiness(
+  appId: string,
+): Promise<CloudPublishReadinessReport> {
+  const res = await fetch(
+    `${GATEWAY}/api/cloud/publish/${encodeURIComponent(appId)}/readiness`,
+  );
+  if (!res.ok) {
+    const body = (await res.json()) as { error?: string };
+    throw new Error(body.error ?? `Publish readiness failed (${res.status})`);
+  }
+  return (await res.json()) as CloudPublishReadinessReport;
+}
+
 export async function publishCloudApp(
   appId: string,
   input: {
     loginAccess?: CloudLoginAccess;
     externalLink?: CloudExternalLink;
     codeAccess?: CodeAccess;
+    requireSignIn?: boolean;
+    perUserIsolation?: boolean;
+    /** Audience "people" allowlist — must survive first publish, not just PATCH. */
+    allowedUserIds?: string[];
+    allowedEmails?: string[];
+    allowedEmailDomains?: string[];
     autoPublish?: boolean;
     acknowledgeDesktopOnly?: boolean;
   },
@@ -110,10 +140,15 @@ export async function publishCloudApp(
   return body;
 }
 
+export interface PatchCloudPublishPrefsResult {
+  prefs: CloudPublishPrefs;
+  config: CloudPublishState | null;
+}
+
 export async function patchCloudPublishPrefs(
   appId: string,
   input: Partial<CloudPublishPrefs>,
-): Promise<CloudPublishPrefs> {
+): Promise<PatchCloudPublishPrefsResult> {
   const res = await fetch(
     `${GATEWAY}/api/cloud/publish/${encodeURIComponent(appId)}/prefs`,
     {
@@ -122,11 +157,18 @@ export async function patchCloudPublishPrefs(
       body: JSON.stringify(input),
     },
   );
-  const body = (await res.json()) as { prefs?: CloudPublishPrefs; error?: string };
+  const body = (await res.json()) as {
+    prefs?: CloudPublishPrefs;
+    config?: CloudPublishState;
+    error?: string;
+  };
   if (!res.ok) {
     throw new Error(body.error ?? `Prefs update failed (${res.status})`);
   }
-  return body.prefs ?? {};
+  return {
+    prefs: body.prefs ?? {},
+    config: body.config ?? null,
+  };
 }
 
 export async function unpublishCloudApp(appId: string): Promise<void> {

@@ -106,9 +106,9 @@ allowedToolIds: ["bash", "create_job", "run_job", "read_job_logs"]
 create_sub_agent({
   name: "reddit-thread-selector",
   description: "Scores Reddit threads for outreach relevance",
-  systemPrompt: `Read threads from ~/Papr/jobs/reddit-scraper-rag-llm/data/scraper.db
+  systemPrompt: `Read threads from $PAPR_HOME/Jobs/reddit-scraper-rag-llm/data/scraper.db
                  Score each thread 0-5 based on relevance
-                 Write results to ~/Papr/jobs/reddit-thread-selector/data/selector.db`,
+                 Write results to $PAPR_HOME/Jobs/reddit-thread-selector/data/selector.db`,
   allowedToolIds: ["bash", "read_file", "write_file"],  // ← Can access files/DBs
   model: "gpt-5-mini",
   maxTurns: 15
@@ -120,17 +120,17 @@ Then when you delegate:
 delegate_task({
   task: "Score all threads in the scraper database",
   useAgentId: "reddit-thread-selector",
-  context: "Database path: ~/Papr/jobs/reddit-scraper-rag-llm/data/scraper.db"
+  context: "Database path: $PAPR_HOME/Jobs/reddit-scraper-rag-llm/data/scraper.db"
 })
 ```
 
 The agent can now:
 ```bash
 # Read from database
-bash({ command: "sqlite3 ~/Papr/jobs/reddit-scraper-rag-llm/data/scraper.db 'SELECT * FROM threads LIMIT 10'" })
+bash({ command: "sqlite3 $PAPR_HOME/Jobs/reddit-scraper-rag-llm/data/scraper.db 'SELECT * FROM threads LIMIT 10'" })
 
 # Or use read_file for schema
-read_file({ path: "~/Papr/jobs/reddit-scraper-rag-llm/data/scraper.db" })
+read_file({ path: "$PAPR_HOME/Jobs/reddit-scraper-rag-llm/data/scraper.db" })
 ```
 
 ## Why This Design?
@@ -216,7 +216,7 @@ To verify tool access works:
 2. Delegate a file-reading task:
    ```javascript
    delegate_task({
-     task: "List files in ~/Papr/jobs",
+     task: "List files in $PAPR_HOME/Jobs",
      useAgentId: "test-agent"
    })
    ```

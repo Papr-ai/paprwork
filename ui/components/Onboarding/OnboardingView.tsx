@@ -1,7 +1,7 @@
 /**
  * OnboardingView - PLG onboarding experience
  * 
- * Flow: Welcome → Connect AI Model → Choose Intent → First Value
+ * Flow: Welcome → Connect Papr → Connect AI Model → Choose Intent → First Value
  * 
  * Key principles:
  * - Model connection is a prerequisite (ChatGPT/Claude accounts)
@@ -10,7 +10,7 @@
  * - Users can skip/dismiss at any point
  */
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { INTENT_PROMPTS, INTENT_LABELS } from "../../constants/onboardingMessages";
 import { useTabs } from "../../hooks/useTabs";
 import { useChat } from "../../hooks/useChat";
@@ -21,12 +21,38 @@ import {
   transitionTo,
   dismissOnboarding,
   markModelConnected,
+  markPaprConnected,
   markFirstChatSent,
-  type OnboardingPhase,
   type OnboardingIntent,
   type OnboardingState,
 } from "../../utils/onboardingState";
+import { ProviderBrandIcon } from "../Settings/ProviderBrandIcon";
+import { RecommendStep } from "../Auth/RecommendStep";
 import "./OnboardingView.css";
+
+function countOnboardingProgress(state: OnboardingState): number {
+  let count = 0;
+  if (state.paprConnected) count++;
+  if (state.modelConnected) count++;
+  if (state.intent) count++;
+  if (state.firstChatSent) count++;
+  if (state.firstResultCreated) count++;
+  return count;
+}
+
+function trackOnboardingCompleted(
+  state: OnboardingState,
+  startedAtMs: number,
+  reason: "skipped" | "intent_selected" | "explore",
+): void {
+  trackEvent("paprwork_onboarding_completed", {
+    reason,
+    phase_at_exit: state.phase,
+    intent: state.intent,
+    time_spent_seconds: Math.max(0, Math.round((Date.now() - startedAtMs) / 1000)),
+    steps_completed: countOnboardingProgress(state),
+  } as Record<string, unknown>);
+}
 
 const INTENT_ICONS: Record<string, React.ReactNode> = {
   explore: (
@@ -64,30 +90,120 @@ export function OnboardingView() {
   const { keys, loading: keysLoading } = useCustomKeys();
   const [state, setState] = useState<OnboardingState>(getOnboardingState);
   const [checkingKeys, setCheckingKeys] = useState(true);
+  const [paprLoggedIn, setPaprLoggedIn] = useState(false);
+  const [checkingPapr, setCheckingPapr] = useState(true);
+  const [hasOAuthConnection, setHasOAuthConnection] = useState(false);
+  const onboardingStartedAtRef = useRef(Date.now());
 
   // Check if user has any AI model key configured
-  const hasModelKey = keys.some(
+  const hasModelApiKey = keys.some(
     (k) =>
       k.name === "OPENAI_API_KEY" ||
       k.name === "ANTHROPIC_API_KEY" ||
       k.name === "GOOGLE_API_KEY",
   );
 
+  // A subscription connected via OAuth (Claude Max, ChatGPT Plus) is a real
+  // model connection and leaves no API key behind. Without this, anyone who
+  // connected through OAuth was stuck on connect_model forever.
+  const hasModelKey = hasModelApiKey || hasOAuthConnection;
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshOAuthStatus = async () => {
+      const [claude, openai] = await Promise.all([
+        window.electronAPI.oauth.claude.getStatus().catch(() => null),
+        window.electronAPI.oauth.openai.getStatus().catch(() => null),
+      ]);
+      if (cancelled) return;
+      setHasOAuthConnection(
+        Boolean(
+          (claude?.connected && !claude.isExpired) ||
+            (openai?.connected && !openai.isExpired),
+        ),
+      );
+    };
+
+    void refreshOAuthStatus();
+
+    // Settings can connect a provider while this view is open.
+    const unsubscribe = window.electronAPI.oauth.onAuthStatus?.(() => {
+      void refreshOAuthStatus();
+    });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+    };
+  }, []);
+
+  // Check Papr login status on mount and after auth events
+  useEffect(() => {
+    let cancelled = false;
+
+    const refreshPaprStatus = async () => {
+      try {
+        const result = await window.electronAPI.papr.checkLoginStatus();
+        if (cancelled) return;
+        const loggedIn = result.success && result.isLoggedIn === true;
+        setPaprLoggedIn(loggedIn);
+        if (loggedIn) {
+          const next = markPaprConnected();
+          setState(next);
+        }
+      } catch {
+        if (!cancelled) setPaprLoggedIn(false);
+      } finally {
+        if (!cancelled) setCheckingPapr(false);
+      }
+    };
+
+    void refreshPaprStatus();
+
+    const onAuthSuccess = () => {
+      void refreshPaprStatus();
+    };
+    window.addEventListener("papr-auth-success", onAuthSuccess);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("papr-auth-success", onAuthSuccess);
+    };
+  }, []);
+
   // When keys load, detect model connection and advance phase
   useEffect(() => {
-    if (keysLoading) return;
+    if (keysLoading || checkingPapr) return;
     setCheckingKeys(false);
 
     if (hasModelKey && state.phase === "connect_model") {
       const next = markModelConnected();
       setState(next);
     }
-    // If user already has keys, skip connect_model
-    if (hasModelKey && state.phase === "welcome") {
-      const next = transitionTo("choose_intent", { modelConnected: true });
+    // connect_papr is retired — <AuthFlow> owns sign-in. Anyone left parked on
+    // that phase from a previous build gets moved on rather than stranded.
+    if (state.phase === "connect_papr") {
+      const next = transitionTo(hasModelKey ? "choose_intent" : "connect_model", {
+        paprConnected: paprLoggedIn,
+        modelConnected: hasModelKey,
+      });
       setState(next);
+      return;
     }
-  }, [keysLoading, hasModelKey, state.phase]);
+
+    // Skip straight past welcome if already logged in
+    if (paprLoggedIn && state.phase === "welcome") {
+      if (hasModelKey) {
+        const next = transitionTo("choose_intent", {
+          paprConnected: true,
+          modelConnected: true,
+        });
+        setState(next);
+      } else {
+        const next = transitionTo("connect_model", { paprConnected: true });
+        setState(next);
+      }
+    }
+  }, [keysLoading, checkingPapr, hasModelKey, paprLoggedIn, state.phase]);
 
   // Listen for key changes (user adds key in Settings while onboarding is open)
   useEffect(() => {
@@ -101,6 +217,12 @@ export function OnboardingView() {
   useEffect(() => {
     trackEvent("paprwork_onboarding_started", { phase: state.phase } as Record<string, unknown>);
   }, []);
+
+  useEffect(() => {
+    trackEvent("paprwork_onboarding_step_viewed", {
+      step_name: state.phase,
+    } as Record<string, unknown>);
+  }, [state.phase]);
 
   const sendInNewChat = useCallback(
     async (message: string): Promise<boolean> => {
@@ -121,11 +243,16 @@ export function OnboardingView() {
   );
 
   const handleGetStarted = () => {
-    if (hasModelKey) {
-      const next = transitionTo("choose_intent", { modelConnected: true });
+    if (paprLoggedIn && hasModelKey) {
+      const next = transitionTo("choose_intent", {
+        paprConnected: true,
+        modelConnected: true,
+      });
       setState(next);
     } else {
-      const next = transitionTo("connect_model");
+      // Sign-in is owned by <AuthFlow> before the app renders, so there is no
+      // connect_papr step to send anyone to.
+      const next = transitionTo("connect_model", { paprConnected: paprLoggedIn });
       setState(next);
     }
     trackEvent("paprwork_onboarding_step_completed", { step_name: "welcome" } as Record<string, unknown>);
@@ -169,6 +296,7 @@ export function OnboardingView() {
         step_name: "choose_intent",
         intent: intentKey,
       } as Record<string, unknown>);
+      trackOnboardingCompleted(next, onboardingStartedAtRef.current, "explore");
 
       setTimeout(() => {
         dismissOnboarding();
@@ -188,6 +316,7 @@ export function OnboardingView() {
       step_name: "choose_intent",
       intent: intentKey,
     } as Record<string, unknown>);
+    trackOnboardingCompleted(next, onboardingStartedAtRef.current, "intent_selected");
 
     // Auto-dismiss after sending — user is now in the chat doing real work
     setTimeout(() => {
@@ -198,11 +327,12 @@ export function OnboardingView() {
 
   const handleSkip = () => {
     trackEvent("paprwork_onboarding_skipped", { phase: state.phase } as Record<string, unknown>);
+    trackOnboardingCompleted(state, onboardingStartedAtRef.current, "skipped");
     dismissOnboarding();
     window.dispatchEvent(new CustomEvent("papr-onboarding-changed"));
   };
 
-  if (checkingKeys) {
+  if (checkingKeys || checkingPapr) {
     return (
       <div className="onboarding-view">
         <div className="onboarding-view-content onboarding-view-content--loading">
@@ -235,6 +365,9 @@ export function OnboardingView() {
           </>
         )}
 
+        {/* connect_papr retired — <AuthFlow> owns sign-in before the app loads.
+            Stale states are migrated forward in the effect above. */}
+
         {/* ---- CONNECT MODEL PHASE ---- */}
         {state.phase === "connect_model" && (
           <>
@@ -252,11 +385,17 @@ export function OnboardingView() {
 
             <div className="onboarding-model-cards">
               <button className="onboarding-model-card" onClick={handleOpenModels}>
+                <span className="onboarding-model-card__brand">
+                  <ProviderBrandIcon providerId="openai" size={20} onLightSurface />
+                </span>
                 <div className="onboarding-model-card__name">OpenAI (ChatGPT)</div>
                 <div className="onboarding-model-card__hint">GPT-5.4, GPT-5.3 Codex</div>
                 <div className="onboarding-model-card__action">Connect →</div>
               </button>
               <button className="onboarding-model-card" onClick={handleOpenModels}>
+                <span className="onboarding-model-card__brand">
+                  <ProviderBrandIcon providerId="anthropic" size={20} />
+                </span>
                 <div className="onboarding-model-card__name">Anthropic (Claude)</div>
                 <div className="onboarding-model-card__hint">Claude Opus 4, Sonnet 4</div>
                 <div className="onboarding-model-card__action">Connect →</div>
@@ -278,6 +417,16 @@ export function OnboardingView() {
               </button>
             </div>
           </>
+        )}
+
+        {/* ---- RECOMMENDED APPS PHASE ---- */}
+        {state.phase === "recommend" && (
+          // Legacy fallback for users parked at this phase before the step moved
+          // into the auth gate. Renders the SAME screen as the gate so there is
+          // one recommend experience. RecommendStep advances the phase itself
+          // (localStorage + papr-onboarding-changed, which this view listens
+          // to), so there is nothing to release here.
+          <RecommendStep onComplete={() => undefined} />
         )}
 
         {/* ---- CHOOSE INTENT PHASE (also shown when reopening after completion) ---- */}

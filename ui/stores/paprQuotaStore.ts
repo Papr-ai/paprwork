@@ -1,0 +1,81 @@
+import { create } from "zustand";
+
+export type PaprQuotaKind =
+  | "operations"
+  | "memories"
+  | "storage"
+  | "rate_limit"
+  | "subscription"
+  | "unknown";
+
+export interface PaprQuotaBannerState {
+  kind: PaprQuotaKind;
+  severity: "warning" | "exceeded";
+  title: string;
+  detail: string;
+  suggestMeteredBilling: boolean;
+  billingUrl: string;
+  source?: string;
+  reportedAt: string;
+}
+
+interface PaprQuotaStore {
+  active: PaprQuotaBannerState | null;
+  dismissedKey: string | null;
+  setQuotaStatus: (status: PaprQuotaBannerState) => void;
+  dismiss: (status: PaprQuotaBannerState) => void;
+  clearIfDismissed: () => void;
+  resetForWorkspaceSwitch: () => void;
+}
+
+function statusKey(status: PaprQuotaBannerState): string {
+  return `${status.kind}:${status.severity}:${status.title}`;
+}
+
+export const usePaprQuotaStore = create<PaprQuotaStore>((set, get) => ({
+  active: null,
+  dismissedKey: null,
+  setQuotaStatus: (status) => {
+    const key = statusKey(status);
+    if (get().dismissedKey === key) return;
+    set({ active: status });
+  },
+  dismiss: (status) => {
+    set({ active: null, dismissedKey: statusKey(status) });
+  },
+  clearIfDismissed: () => {
+    const { active, dismissedKey } = get();
+    if (active && dismissedKey === statusKey(active)) {
+      set({ active: null });
+    }
+  },
+  resetForWorkspaceSwitch: () => set({ active: null, dismissedKey: null }),
+}));
+
+const WORKSPACE_SWITCH_EVENTS = [
+  "papr-workspace-switch-starting",
+  "papr-organization-changed",
+  "papr-namespace-changed",
+] as const;
+
+export function resetPaprQuotaForWorkspaceSwitch(): void {
+  usePaprQuotaStore.getState().resetForWorkspaceSwitch();
+}
+
+export function initPaprQuotaListener(): void {
+  const handler = (event: Event) => {
+    const ev = event as CustomEvent<{ type?: string; data?: PaprQuotaBannerState }>;
+    const { type, data } = ev.detail ?? {};
+    if (type !== "papr:quota-status" || !data?.title) return;
+    usePaprQuotaStore.getState().setQuotaStatus(data);
+  };
+
+  const workspaceSwitchHandler = () => {
+    resetPaprQuotaForWorkspaceSwitch();
+  };
+
+  window.addEventListener("gateway-broadcast", handler as EventListener);
+  for (const eventName of WORKSPACE_SWITCH_EVENTS) {
+    window.addEventListener(eventName, workspaceSwitchHandler);
+  }
+}

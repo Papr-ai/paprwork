@@ -1,7 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { promises as fs } from "fs";
-import path from "path";
-import os from "os";
+import { describe, it, expect } from "vitest";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 import {
   applyExactStringReplacement,
   countOccurrences,
@@ -50,22 +48,56 @@ describe("exactStringReplace", () => {
     expect(result.occurrencesFound).toBe(2);
     expect(result.occurrenceReplaced).toBe(2);
   });
+
+  it("allows newString that contains oldString (expanded function body)", () => {
+    const content = `def main():\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`;
+    const oldBlock = `def main():\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`;
+    const newBlock = `def main():\n    COLS = ("id", "name")\n    cur.execute(f"INSERT INTO t ({','.join(COLS)}) VALUES (?)", row)\n`;
+    const result = applyExactStringReplacement({
+      content,
+      filename: "main.py",
+      oldString: oldBlock,
+      newString: newBlock,
+    });
+    expect(result.newContent).toBe(newBlock);
+    expect(result.occurrencesFound).toBe(1);
+  });
+
+  it("allows newString that embeds oldString prefix when replacing a single line", () => {
+    const content = `def main():\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`;
+    const newMain = `def main():\n    COLS = ("id", "name")\n    cur.execute(f"INSERT INTO t ({','.join(COLS)}) VALUES (?)", row)\n`;
+    const result = applyExactStringReplacement({
+      content,
+      filename: "main.py",
+      oldString: "def main():",
+      newString: newMain,
+    });
+    expect(result.newContent).toBe(
+      `${newMain}\n    cur.execute("INSERT INTO t VALUES (?)", row)\n`,
+    );
+    expect(result.occurrencesFound).toBe(1);
+  });
+
+  it("allows newString that embeds oldString when replacing ambiguous match", () => {
+    const content = 'class="section-body"></div><div class="section-body"></div>';
+    const result = applyExactStringReplacement({
+      content,
+      filename: "render.js",
+      oldString: 'class="section-body"',
+      newString: 'class="section-body expanded"',
+      occurrence: 1,
+    });
+    expect(result.newContent).toContain('class="section-body expanded"');
+    expect(result.occurrencesFound).toBe(2);
+  });
 });
 
 describe("AppService.updateAppFile", () => {
-  let tmpDir: string;
-  let origHome: string;
-
-  beforeEach(async () => {
-    tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "papr-app-edit-test-"));
-    origHome = os.homedir;
-    (os as { homedir: () => string }).homedir = () => tmpDir;
-  });
-
-  afterEach(async () => {
-    (os as { homedir: () => string }).homedir = () => origHome;
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  });
+  // Patching os.homedir alone is NOT enough — getPaprRoot() prefers
+  // ~/Papr/.active-workspace.json from the REAL home and re-syncs PAPR_HOME
+  // from it, so this suite used to create "Concurrent Edit App_N" fixtures in
+  // the developer's live workspace.
+  useIsolatedPaprWorkspace("papr-app-edit-test");
 
   it("serializes concurrent edits to the same file", async () => {
     const { AppService } = await import(

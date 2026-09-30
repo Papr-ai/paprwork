@@ -3,9 +3,10 @@
  * Reference: Paprwork v1 split view implementation
  */
 
-import React, { useRef, useCallback, useEffect, useState } from "react";
+import React, { useRef, useCallback, useEffect, useState, useMemo } from "react";
 import { useTabs } from "../../hooks/useTabs";
-import { ensureDefaultChatTab } from "../../lib/ensureDefaultChatTab";
+import { ensureWorkspaceLandingTab } from "../../lib/ensureWorkspaceLandingTab";
+import { isWorkspaceSwitchReloading } from "../../lib/workspaceSwitchReload";
 import { useTabStore } from "../../stores/tabStore";
 import { ChatContainer } from "../Chat/ChatContainer";
 import { ArtifactsView } from "../Artifacts/ArtifactsView";
@@ -14,7 +15,10 @@ import { DocumentsView } from "../Documents/DocumentsView";
 import { DocumentView } from "../Documents/DocumentView";
 import { SettingsView } from "../Settings/SettingsView";
 import { JobsView } from "../Jobs/JobsView";
-import { MiniAppView } from "../Apps/MiniAppView";
+import type { Tab } from "../../types/tabs";
+import { AppTabKeepAliveHost, type AppTabKeepAlivePlacement } from "./AppTabKeepAliveHost";
+import { selectMountedAppTabIds } from "../../utils/appPreviewMemoryPolicy";
+import "./AppTabKeepAliveHost.css";
 import { SkillsView } from "../Skills/SkillsView";
 import { AgentsView } from "../Agents/AgentsViewCards";
 import { ViewsView } from "../Views/ViewsView";
@@ -22,8 +26,17 @@ import { TableView } from "../Views/TableView";
 import { ChatGPTConvHistoryView } from "../ChatGPT/ChatGPTConvHistoryView";
 import { OnboardingView } from "../Onboarding/OnboardingView";
 import { MemoryView } from "../Memory/MemoryView";
+import { FocusView } from "../Focus/FocusView";
+import { PlatformBrowserTab } from "../Platform/PlatformBrowserTab";
 import { gateway } from "../../src/lib/gateway";
+import { PaneErrorBoundary } from "./PaneErrorBoundary";
 import "./ContentArea.css";
+
+const MemoChatContainer = React.memo(ChatContainer);
+
+function isAppTab(tab: Tab | undefined): tab is Tab {
+  return tab?.type === "app";
+}
 
 // Component that redirects home tab to default app if configured
 function HomeRedirect() {
@@ -84,6 +97,7 @@ export function ContentArea() {
     getTab,
     setSplitRatio,
     getSplitRatio,
+    tabs,
   } = useTabs();
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -109,7 +123,9 @@ export function ContentArea() {
       const { activeTabId: currentActiveId, getTab: resolveTab } =
         useTabStore.getState();
       if (!currentActiveId || !resolveTab(currentActiveId)) {
-        ensureDefaultChatTab();
+        if (!isWorkspaceSwitchReloading()) {
+          ensureWorkspaceLandingTab();
+        }
       }
     };
 
@@ -118,10 +134,8 @@ export function ContentArea() {
     }
 
     window.addEventListener("papr-sqlite-loaded", ensureActiveTab);
-    window.addEventListener("papr-workspace-reload", ensureActiveTab);
     return () => {
       window.removeEventListener("papr-sqlite-loaded", ensureActiveTab);
-      window.removeEventListener("papr-workspace-reload", ensureActiveTab);
     };
   }, [activeTabId, activeLeftTab]);
 
@@ -246,8 +260,119 @@ export function ContentArea() {
     }
   }, [isAgentsInLeft, isAgentsInRight]);
 
-  // Render view based on tab type
+  const visiblePaneTabIds = useMemo(
+    () =>
+      new Set(
+        [leftPaneTabId, rightPaneTabId].filter(
+          (tabId): tabId is string => Boolean(tabId),
+        ),
+      ),
+    [leftPaneTabId, rightPaneTabId],
+  );
+
+  const lastActiveAtRef = useRef<Map<string, number>>(new Map());
+  const [lastActiveTick, setLastActiveTick] = useState(0);
+
+  useEffect(() => {
+    let touched = false;
+    for (const tabId of visiblePaneTabIds) {
+      const tab = getTab(tabId);
+      if (tab?.type === "app") {
+        lastActiveAtRef.current.set(tabId, Date.now());
+        touched = true;
+      }
+    }
+    if (touched) {
+      setLastActiveTick((tick) => tick + 1);
+    }
+  }, [visiblePaneTabIds, getTab]);
+
+  const appTabs = useMemo(
+    () => tabs.filter((tab) => tab.type === "app"),
+    [tabs],
+  );
+
+  // Always keep the LRU warm set — including in split view. Passing
+  // { visibleOnly: true } here evicted every hidden app iframe whenever a
+  // parent chat with child tabs became active, so returning to a standalone
+  // app tab paid a full cold reload (queries, Turso pulls).
+  //
+  // One cap in both hosting modes: a hidden preview is held at its boot phase
+  // by iframe.name, so it is quiet whether or not it has its own process.
+  const mountedAppTabIds = useMemo(
+    () =>
+      selectMountedAppTabIds(
+        appTabs,
+        visiblePaneTabIds,
+        lastActiveAtRef.current,
+      ),
+    [appTabs, visiblePaneTabIds, lastActiveTick],
+  );
+
+  const [documentVisible, setDocumentVisible] = useState(
+    () => typeof document === "undefined" || !document.hidden,
+  );
+  useEffect(() => {
+    const sync = () => setDocumentVisible(!document.hidden);
+    document.addEventListener("visibilitychange", sync);
+    return () => document.removeEventListener("visibilitychange", sync);
+  }, []);
+
+  const resolveAppTabPlacement = useCallback(
+    (tabId: string): AppTabKeepAlivePlacement => {
+      if (!visiblePaneTabIds.has(tabId)) {
+        return "hidden";
+      }
+      if (!showSplitView) {
+        return "full";
+      }
+      if (tabId === leftPaneTabId) {
+        return "left";
+      }
+      if (tabId === rightPaneTabId) {
+        return "right";
+      }
+      return "hidden";
+    },
+    [visiblePaneTabIds, showSplitView, leftPaneTabId, rightPaneTabId],
+  );
+
+  const appTabLayer = (
+    <div
+      className="content-area__app-tab-layer"
+      aria-hidden={
+        !appTabs.some(
+          (tab) =>
+            mountedAppTabIds.has(tab.id) && visiblePaneTabIds.has(tab.id),
+        )
+      }
+    >
+      {appTabs
+        .filter((tab) => mountedAppTabIds.has(tab.id))
+        .map((tab) => (
+          <AppTabKeepAliveHost
+            key={tab.id}
+            tab={tab}
+            placement={resolveAppTabPlacement(tab.id)}
+            documentVisible={documentVisible}
+          />
+        ))}
+    </div>
+  );
+
+  // Every pane is wrapped, so a render-time throw in one tab shows a recoverable
+  // card in that tab instead of unmounting the whole React tree — which is what
+  // made a single bad render look like the app reloading.
   const renderView = (tabId: string | null, skipAgents = false) => {
+    const view = renderViewForTab(tabId, skipAgents);
+    if (view === null) return null;
+    return (
+      <PaneErrorBoundary paneKey={tabId ?? "unknown"}>{view}</PaneErrorBoundary>
+    );
+  };
+
+  // Render view based on tab type
+  const renderViewForTab = (tabId: string | null, skipAgents = false) => {
     if (!tabId) return null;
 
     const tab = getTab(tabId);
@@ -259,7 +384,7 @@ export function ContentArea() {
 
     switch (tab.type) {
       case "chat":
-        return <ChatContainer chatId={tab.entityId} />;
+        return <MemoChatContainer chatId={tab.entityId} />;
       case "document":
         return <DocumentView documentId={tab.entityId} />;
       case "documents":
@@ -272,8 +397,9 @@ export function ContentArea() {
         return <ViewsView />;
       case "view":
         return <TableView entityId={tab.entityId} />;
-      case "app":
-        return <MiniAppView appId={tab.entityId} />;
+      case "app": {
+        return null;
+      }
       case "getting-started":
         return <OnboardingView />;
       case "home":
@@ -284,10 +410,19 @@ export function ContentArea() {
         return <AgentsView />;
       case "skills":
         return <SkillsView />;
+      case "focus":
+        return <FocusView />;
       case "memory":
         return <MemoryView />;
       case "settings":
         return <SettingsView />;
+      case "platform":
+        return (
+          <PlatformBrowserTab
+            platformId={tab.entityId}
+            isActive={visiblePaneTabIds.has(tabId)}
+          />
+        );
       case "chatgpt-conv-history":
         return <ChatGPTConvHistoryView />;
       default:
@@ -300,6 +435,7 @@ export function ContentArea() {
     pane: "left" | "right",
     isAgentsActive: boolean,
   ) => {
+    const tab = tabId ? getTab(tabId) : null;
     const hostsAgentsCache = agentsKeepAlive && agentsHostPane === pane;
     const useKeepAlive = hostsAgentsCache && isAgentsActive;
 
@@ -311,10 +447,22 @@ export function ContentArea() {
               isAgentsActive ? " content-pane__keep-alive--visible" : ""
             }`}
           >
-            <AgentsView />
+            <PaneErrorBoundary paneKey={`agents-keep-alive-${pane}`}>
+              <AgentsView />
+            </PaneErrorBoundary>
           </div>
         )}
-        {useKeepAlive ? null : renderView(tabId, agentsKeepAlive)}
+        {isAppTab(tab) && mountedAppTabIds.has(tab.id) ? null : isAppTab(tab) ? (
+          <div className="app-tab-preview-suspended">
+            <p className="app-tab-preview-suspended__title">Preview unloaded</p>
+            <p className="app-tab-preview-suspended__hint">
+              Too many previews were open — this one was freed to save memory.
+              It will reload when selected.
+            </p>
+          </div>
+        ) : useKeepAlive ? null : (
+          renderView(tabId, agentsKeepAlive)
+        )}
       </>
     );
   };
@@ -326,6 +474,7 @@ export function ContentArea() {
         <div className="content-pane content-pane--full">
           {renderPaneContent(leftPaneTabId, "left", isAgentsInLeft)}
         </div>
+        {appTabLayer}
       </div>
     );
   }
@@ -348,6 +497,7 @@ export function ContentArea() {
       <div className="content-pane content-pane--right">
         {renderPaneContent(rightPaneTabId, "right", isAgentsInRight)}
       </div>
+      {appTabLayer}
     </div>
   );
 }

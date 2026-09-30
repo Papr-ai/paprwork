@@ -2,6 +2,10 @@ import { describe, expect, test } from "vitest";
 import {
   CHAT_PICKER_EXCLUDED_MODEL_IDS,
   PICKER_DEFAULT_MODEL_IDS,
+  PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS,
+  PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS,
+  PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS,
+  PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS,
   getAllPickerToggleModelIds,
   getPickerModels,
   isChatPickerModelId,
@@ -19,19 +23,25 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("default list includes Sonnet 5 and eight cloud models", () => {
-    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(8);
-    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5");
+  test("default list includes Sonnet 5.5, Opus 5.5, Fable 5.1, and cloud models", () => {
+    expect(PICKER_DEFAULT_MODEL_IDS).toHaveLength(12);
+    expect(PICKER_DEFAULT_MODEL_IDS[0]).toBe("auto");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-sonnet-5-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-opus-5-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).toContain("claude-fable-5-1");
     expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-sonnet-4-6");
-    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-5");
+    expect(PICKER_DEFAULT_MODEL_IDS).not.toContain("claude-opus-4-6");
     expect(PICKER_DEFAULT_MODEL_IDS).toContain("gpt-5-6-sol");
   });
 
   test("getPickerModels resolves known model metadata", () => {
-    const models = getPickerModels(["claude-sonnet-5", "gpt-5-6-sol"]);
-    expect(models).toHaveLength(2);
-    expect(models[0]?.id).toBe("claude-sonnet-5");
-    expect(models[1]?.name).toBe("GPT-5.6 Sol");
+    const models = getPickerModels(["claude-sonnet-5-5", "gpt-5-6-sol"]);
+    // Auto is always pinned first, on top of whatever the user enabled.
+    expect(models).toHaveLength(3);
+    expect(models[0]?.id).toBe("auto");
+    expect(models[1]?.id).toBe("claude-sonnet-5-5");
+    expect(models[2]?.name).toBe("GPT-5.6 Sol");
   });
 
   test("filters unknown ids and migrates retired gpt-5.5 from user override", () => {
@@ -40,7 +50,7 @@ describe("modelPicker", () => {
       "gpt-5.5",
       "not-a-real-model",
     ]);
-    expect(ids).toEqual(["claude-sonnet-5", "gpt-5-6-sol"]);
+    expect(ids).toEqual(["claude-sonnet-5-5", "gpt-5-6-sol"]);
   });
 
   test("upgrades exact legacy default picker list to Sonnet 5 defaults", () => {
@@ -56,7 +66,18 @@ describe("modelPicker", () => {
         "gemini-3.5-flash",
         "gemini-3.1-pro-preview",
       ]),
-    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+    ).toEqual([
+      "claude-sonnet-5-5",
+      "claude-opus-4-6",
+      "claude-opus-5-5",
+      "gpt-5-6-sol",
+      // Collapsed: max reasoning is now an Effort choice on glm-5.2, not a row.
+      "glm-5.2",
+      "qwen/qwen3-32b",
+      "gemini-3.5-flash-lite",
+      "gemini-3.8-flash",
+      "gemini-3.1-pro-preview",
+    ]);
   });
 
   test("swaps Sonnet 4.6 for Sonnet 5 in customized picker lists", () => {
@@ -68,7 +89,7 @@ describe("modelPicker", () => {
         "gpt-5-6-luna",
       ]),
     ).toEqual([
-      "claude-sonnet-5",
+      "claude-sonnet-5-5",
       "claude-opus-4-6",
       "gpt-5-6-sol",
       "gpt-5-6-luna",
@@ -81,20 +102,117 @@ describe("modelPicker", () => {
     ]);
   });
 
-  test("migrates retired Opus 4.8 picker id to Opus 5", () => {
+  test("migrates retired Opus 4.8 picker id to Opus 5.5", () => {
     expect(resolveEnabledPickerModelIds(["claude-opus-4-8"])).toEqual([
-      "claude-opus-5",
+      "claude-opus-5-5",
     ]);
   });
 
-  test("legacy Sonnet 4.6 and Opus 5 remain available in settings catalog", () => {
+  test("migrates retired Opus 5 picker id to Opus 5.5", () => {
+    expect(resolveEnabledPickerModelIds(["claude-opus-5"])).toEqual([
+      "claude-opus-5-5",
+    ]);
+  });
+
+  test("migrates retired Fable 5 picker id to Fable 5.1", () => {
+    expect(resolveEnabledPickerModelIds(["claude-fable-5"])).toEqual([
+      "claude-fable-5-1",
+    ]);
+  });
+
+  test("migrates retired Gemini picker ids to latest Flash defaults", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+      ]),
+    ).toEqual(["gemini-3.5-flash-lite", "gemini-3.8-flash"]);
+  });
+
+  test("migrates Gemini 3.6 and 3.7 picker ids to 3.8 Flash", () => {
+    expect(
+      resolveEnabledPickerModelIds(["gemini-3.6-flash", "gemini-3.7-flash"]),
+    ).toEqual(["gemini-3.8-flash"]);
+  });
+
+  test("upgrades exact pre-Sonnet-5.5 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_SONNET_55_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("upgrades exact pre-Opus-5.5 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_OPUS_55_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("migrates retired Sonnet 5 picker id to Sonnet 5.5", () => {
+    expect(resolveEnabledPickerModelIds(["claude-sonnet-5"])).toEqual([
+      "claude-sonnet-5-5",
+    ]);
+  });
+
+  test("upgrades exact pre-Gemini-3.8 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_GEMINI_38_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("upgrades exact pre-Gemini-3.6 default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([...PRE_GEMINI_36_PICKER_DEFAULT_MODEL_IDS]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("upgrades exact pre-Fable default picker list", () => {
+    expect(
+      resolveEnabledPickerModelIds([
+        "claude-sonnet-5",
+        "claude-opus-4-6",
+        "gpt-5-6-sol",
+        "glm-5.2-max",
+        "qwen/qwen3-32b",
+        "gemini-3.1-flash-lite",
+        "gemini-3.5-flash",
+        "gemini-3.1-pro-preview",
+      ]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("preserves user-enabled models while migrating retired defaults", () => {
+    const resolved = resolveEnabledPickerModelIds([
+      ...PICKER_DEFAULT_MODEL_IDS,
+      "claude-haiku-4-5",
+    ]);
+
+    expect(resolved).toContain("claude-haiku-4-5");
+    expect(resolved).toContain("claude-opus-5-5");
+    expect(resolved).not.toContain("claude-opus-5");
+  });
+
+  test("heals truncated Anthropic-only lists from clobbered settings saves", () => {
+    expect(
+      resolveEnabledPickerModelIds(["claude-sonnet-5", "claude-fable-5-1"]),
+    ).toEqual([...PICKER_DEFAULT_MODEL_IDS]);
+  });
+
+  test("does not heal intentional short lists that include cross-provider models", () => {
+    expect(
+      resolveEnabledPickerModelIds(["claude-sonnet-5-5", "gpt-5-6-sol"]),
+    ).toEqual(["claude-sonnet-5-5", "gpt-5-6-sol"]);
+  });
+
+  test("legacy Sonnet 4.6 remains available in settings catalog", () => {
     const toggleIds = getAllPickerToggleModelIds();
     expect(toggleIds).toContain("claude-sonnet-4-6");
-    expect(toggleIds).toContain("claude-opus-5");
     expect(isPickerDefaultModelId("claude-sonnet-4-6")).toBe(false);
-    expect(isPickerDefaultModelId("claude-opus-5")).toBe(false);
-    expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(true);
-    expect(isPickerDefaultModelId("glm-5.2-max")).toBe(true);
+    expect(isPickerDefaultModelId("claude-opus-5-5")).toBe(true);
+    expect(isPickerDefaultModelId("claude-fable-5-1")).toBe(true);
+    expect(isPickerDefaultModelId("claude-sonnet-5-5")).toBe(true);
+    expect(isPickerDefaultModelId("claude-sonnet-5")).toBe(false);
+    expect(isPickerDefaultModelId("glm-5.2")).toBe(true);
+    expect(isPickerDefaultModelId("glm-5.2-max")).toBe(false);
     expect(isPickerDefaultModelId("claude-haiku-4-5")).toBe(false);
   });
 
@@ -103,6 +221,7 @@ describe("modelPicker", () => {
     expect(isChatPickerModelId("gpt-5.5")).toBe(false);
     expect(getAllPickerToggleModelIds()).not.toContain("gpt-5.5");
     expect(getPickerModels(["gpt-5.5", "gpt-5-6-sol"]).map((m) => m.id)).toEqual([
+      "auto",
       "gpt-5-6-sol",
     ]);
   });
@@ -110,16 +229,17 @@ describe("modelPicker", () => {
   test("getPickerModels groups enabled models by catalog provider order", () => {
     const models = getPickerModels([
       "gpt-5-6-sol",
-      "claude-fable-5",
-      "claude-sonnet-5",
-      "claude-opus-5",
+      "claude-fable-5-1",
+      "claude-sonnet-5-5",
+      "claude-opus-5-5",
       "claude-opus-4-6",
     ]);
     expect(models.map((m) => m.id)).toEqual([
-      "claude-sonnet-5",
+      "auto",
+      "claude-sonnet-5-5",
       "claude-opus-4-6",
-      "claude-opus-5",
-      "claude-fable-5",
+      "claude-opus-5-5",
+      "claude-fable-5-1",
       "gpt-5-6-sol",
     ]);
   });

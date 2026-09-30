@@ -10,21 +10,28 @@
  */
 
 import fs from "fs/promises";
-import os from "os";
 import path from "path";
 import { z } from "zod";
 import { createTool } from "@mastra/core/tools";
 import type { ToolResult } from "../types/tools.js";
 import { autoStageFile } from "../utils/gitAutoStage.js";
-import { getMiniAppWriteBlockReason } from "../utils/paprRoot.js";
+import {
+  getLegacyPaprMisrouteBlockReason,
+  resolvePaprAgentPath,
+} from "../utils/paprAgentPaths.js";
+import { resolveBundledResourceReadPath } from "../utils/resolveBundledResourcePath.js";
+import { resolveEditFileTarget } from "../utils/resolveEditFileTarget.js";
+import { getActiveAppIdForTools } from "./context.js";
+import {
+  runGuardedFileSearch,
+  type FileSearchResult,
+  type SearchMatch,
+} from "./fileSearch.js";
+import { getPaprAppsRoot } from "../utils/paprRoot.js";
 
-/** Expand a leading `~` to the user's home directory. */
+/** Resolve ~, Papr workspace paths, and cloud bundled agent-docs (src/resources → dist/resources). */
 function expandPath(filePath: string): string {
-  if (filePath === "~") return os.homedir();
-  if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
-    return path.join(os.homedir(), filePath.slice(2));
-  }
-  return filePath;
+  return resolveBundledResourceReadPath(resolvePaprAgentPath(filePath));
 }
 
 // ========================================
@@ -66,6 +73,8 @@ export interface ReadFileOutput {
   content: string;
   size: number;
   encoding: string;
+  /** True when only the first maxSize bytes were returned for an oversized file. */
+  truncated?: boolean;
 }
 
 async function readFile(
@@ -86,19 +95,37 @@ async function readFile(
       };
     }
 
-    // Check file size
-    if (stats.size > maxSize) {
+    // Read file (partial when oversized and no line-based slice requested)
+    let content: string | Buffer;
+    let truncated = false;
+    if (
+      stats.size > maxSize &&
+      offset === undefined &&
+      limit === undefined
+    ) {
+      const handle = await fs.open(filePath, "r");
+      try {
+        const buffer = Buffer.alloc(maxSize);
+        const { bytesRead } = await handle.read(buffer, 0, maxSize, 0);
+        content =
+          encoding === "utf8"
+            ? buffer.subarray(0, bytesRead).toString("utf8")
+            : buffer.subarray(0, bytesRead);
+        truncated = true;
+      } finally {
+        await handle.close();
+      }
+    } else if (stats.size > maxSize) {
       const sizeKB = Math.round(stats.size / 1024);
       const maxKB = Math.round(maxSize / 1024);
       return {
         success: false,
-        error: `File too large: ${sizeKB}KB (max ${maxKB}KB). Use bash with head/tail/grep, or read_file with offset/limit to read in chunks.`,
+        error: `File too large: ${sizeKB}KB (max ${maxKB}KB). Use read_file with offset/limit for line chunks, or bash head/tail for byte ranges.`,
         type: "size_error",
       };
+    } else {
+      content = await fs.readFile(filePath, encoding as BufferEncoding);
     }
-
-    // Read file
-    let content = await fs.readFile(filePath, encoding as BufferEncoding);
 
     // Apply line-based offset/limit if requested
     if (offset !== undefined || limit !== undefined) {
@@ -115,7 +142,14 @@ async function readFile(
       content = (content + metadata) as any;
     }
 
-    const contentStr = content.toString();
+    let contentStr = content.toString();
+    if (truncated) {
+      const sizeKB = Math.round(stats.size / 1024);
+      const maxKB = Math.round(maxSize / 1024);
+      contentStr +=
+        `\n\n[Partial read: first ${maxKB}KB of ${sizeKB}KB total. ` +
+        `Use bash head/tail or read_file offset/limit for more.]`;
+    }
 
     // Return content — cross-turn history keeps file reads full (toolResultTruncation.ts).
     // maxSize already caps disk reads; do not block here or the model never sees content.
@@ -126,6 +160,7 @@ async function readFile(
         content: contentStr,
         size: stats.size,
         encoding,
+        ...(truncated ? { truncated: true } : {}),
       },
     };
   } catch (error) {
@@ -166,15 +201,58 @@ async function writeFile(
 ): Promise<ToolResult<WriteFileOutput>> {
   try {
     const { path: rawPath, content, encoding, backup, createDirs } = input;
-    const filePath = expandPath(rawPath);
+    const expanded = expandPath(rawPath);
 
-    const miniAppBlock = getMiniAppWriteBlockReason(filePath);
-    if (miniAppBlock) {
+    const legacyMisroute = getLegacyPaprMisrouteBlockReason(expanded);
+    if (legacyMisroute) {
       return {
         success: false,
-        error: miniAppBlock,
+        error: legacyMisroute,
+        type: "legacy_papr_path_guard",
+      };
+    }
+
+    const filePath = expanded;
+
+    const editTarget = resolveEditFileTarget(filePath);
+    if (editTarget.kind === "blocked") {
+      return {
+        success: false,
+        error: editTarget.reason,
         type: "mini_app_edit_guard",
       };
+    }
+
+    if (editTarget.kind === "mini_app") {
+      const { runWriteAppFile } = await import("./appJobs.js");
+      const miniAppResult = await runWriteAppFile({
+        appId: editTarget.appId,
+        filename: editTarget.filename,
+        content,
+      });
+      return {
+        success: miniAppResult.success,
+        data: {
+          path: filePath,
+          appId: editTarget.appId,
+          size: Buffer.byteLength(content, encoding as BufferEncoding),
+          backed_up: false,
+          ...miniAppResult.data,
+        },
+        error: miniAppResult.error,
+        type: miniAppResult.success ? undefined : "mini_app_validation_error",
+        _verifyReminder: miniAppResult._verifyReminder,
+        _emojiReminder: miniAppResult._emojiReminder,
+        ...(miniAppResult._backendKeysReminder
+          ? { _backendKeysReminder: miniAppResult._backendKeysReminder }
+          : {}),
+        ...(miniAppResult._jobEventsReminder
+          ? { _jobEventsReminder: miniAppResult._jobEventsReminder }
+          : {}),
+        ...(miniAppResult._largeFileReminder
+          ? { _largeFileReminder: miniAppResult._largeFileReminder }
+          : {}),
+      } as unknown as ToolResult<WriteFileOutput>;
     }
 
     // Create parent directories if needed
@@ -200,6 +278,13 @@ async function writeFile(
     }
 
     // Write file
+    let isNewFile = false;
+    try {
+      await fs.access(filePath);
+    } catch {
+      isNewFile = true;
+    }
+
     await fs.writeFile(filePath, content, encoding as BufferEncoding);
 
     // Get size
@@ -208,6 +293,20 @@ async function writeFile(
     // Auto-stage file in git if in a repo
     const gitResult = await autoStageFile(filePath);
 
+    if (isNewFile) {
+      void import("../../gateway/services/wikiLocalEntityGraphSync.js")
+        .then(({ syncWikiEntityFileToGraph }) =>
+          syncWikiEntityFileToGraph({
+            filePath,
+            content,
+            source: "write_file",
+          }),
+        )
+        .catch(() => {
+          // Best-effort — entity graph sync must not block writes
+        });
+    }
+
     try {
       const { getAgentFocusContextService } = await import(
         "../../gateway/services/AgentFocusContextService.js"
@@ -215,6 +314,25 @@ async function writeFile(
       getAgentFocusContextService().recordAbsolutePathEdit(filePath);
     } catch {
       // Focus tracking is best-effort
+    }
+
+    const {
+      extractAppIdFromAppsPath,
+      buildAppRelativePath,
+      buildLargeContentWriteReminder,
+      buildLargeFileWriteReminder,
+    } = await import("../utils/oversizedAppFileWarnings.js");
+    const { isTooLargeForGitSync } = await import(
+      "../../gateway/services/cloudSync/gitSyncLimits.js"
+    );
+
+    let largeFileReminder: string | undefined;
+    const appIdFromPath = extractAppIdFromAppsPath(filePath);
+    if (appIdFromPath && isTooLargeForGitSync(stats.size)) {
+      const appRelative = buildAppRelativePath(filePath, appIdFromPath);
+      largeFileReminder = appRelative
+        ? buildLargeContentWriteReminder(appRelative)
+        : buildLargeFileWriteReminder([filePath]);
     }
 
     return {
@@ -227,6 +345,7 @@ async function writeFile(
         git_staged: gitResult.staged,
         git_status: gitResult.staged ? "staged" : "untracked",
       },
+      ...(largeFileReminder ? { _largeFileReminder: largeFileReminder } : {}),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -244,11 +363,21 @@ async function writeFile(
 
 const ListDirectorySchema = z.object({
   path: z.string().describe("Path to directory"),
-  recursive: z.boolean().describe("Whether to scan recursively"),
+  recursive: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe("Whether to scan recursively"),
   pattern: z
     .string()
+    .optional()
+    .default("")
     .describe("Glob pattern to filter files (use empty string for no filter)"),
-  maxDepth: z.number().describe("Max recursion depth"),
+  maxDepth: z
+    .number()
+    .optional()
+    .default(3)
+    .describe("Max recursion depth when recursive is true"),
 });
 
 export type ListDirectoryInput = z.infer<typeof ListDirectorySchema>;
@@ -354,119 +483,64 @@ async function listDirectory(
 // ========================================
 
 const SearchFilesSchema = z.object({
-  path: z.string().describe("Directory to search in"),
+  path: z
+    .string()
+    .describe(
+      "Directory to search. Do NOT pass $PAPR_HOME, all of apps/, or all Jobs/ — use search_app_files or bash rg on one app/job.",
+    ),
   query: z.string().describe("Text to search for (regex supported)"),
   filePattern: z
     .string()
-    .describe("File pattern (use empty string for all files)"),
+    .describe("File pattern such as *.ts (use empty string for all files)"),
   caseSensitive: z.boolean().describe("Whether search is case sensitive"),
   maxResults: z.number().describe("Maximum number of results"),
+  appId: z
+    .string()
+    .optional()
+    .describe(
+      "Optional mini-app id — auto-scopes broad Papr paths to $PAPR_HOME/apps/{appId}/",
+    ),
 });
 
 export type SearchFilesInput = z.infer<typeof SearchFilesSchema>;
 
-export interface SearchMatch {
-  file: string;
-  line: number;
-  content: string;
-  match: string;
+export type { SearchMatch };
+
+export interface SearchFilesOutput extends FileSearchResult {}
+
+function fileSearchResultToToolData(result: FileSearchResult): SearchFilesOutput {
+  return result;
 }
 
-export interface SearchFilesOutput {
-  path: string;
-  query: string;
-  matches: SearchMatch[];
-  count: number;
-  truncated: boolean;
-}
-
-async function searchFiles(
-  input: SearchFilesInput,
+async function executeGuardedSearch(
+  searchPath: string,
+  input: Pick<
+    SearchFilesInput,
+    "query" | "filePattern" | "caseSensitive" | "maxResults" | "appId"
+  >,
 ): Promise<ToolResult<SearchFilesOutput>> {
   try {
-    const {
-      path: rawPath,
-      query,
-      filePattern,
-      caseSensitive,
-      maxResults,
-    } = input;
-    const searchPath = expandPath(rawPath);
+    const appId = input.appId?.trim() || getActiveAppIdForTools();
+    const outcome = await runGuardedFileSearch({
+      searchPath,
+      query: input.query,
+      filePattern: input.filePattern,
+      caseSensitive: input.caseSensitive,
+      maxResults: input.maxResults,
+      appId,
+    });
 
-    const regex = new RegExp(query, caseSensitive ? "g" : "gi");
-    const matches: SearchMatch[] = [];
-    let truncated = false;
-
-    async function searchInFile(filePath: string): Promise<void> {
-      if (matches.length >= maxResults) {
-        truncated = true;
-        return;
-      }
-
-      try {
-        const content = await fs.readFile(filePath, "utf8");
-        const lines = content.split("\n");
-
-        for (let i = 0; i < lines.length; i++) {
-          const line = lines[i];
-          const match = line.match(regex);
-
-          if (match) {
-            matches.push({
-              file: filePath,
-              line: i + 1,
-              content: line.trim(),
-              match: match[0],
-            });
-
-            if (matches.length >= maxResults) {
-              truncated = true;
-              return;
-            }
-          }
-        }
-      } catch {
-        // Skip files that can't be read
-      }
+    if ("blocked" in outcome) {
+      return {
+        success: false,
+        error: outcome.error,
+        type: "search_error",
+      };
     }
-
-    async function scanDir(currentPath: string): Promise<void> {
-      if (truncated) return;
-
-      const entries = await fs.readdir(currentPath, { withFileTypes: true });
-
-      for (const entry of entries) {
-        if (truncated) return;
-
-        const fullPath = path.join(currentPath, entry.name);
-
-        if (entry.isDirectory()) {
-          await scanDir(fullPath);
-        } else if (entry.isFile()) {
-          // Check file pattern
-          if (filePattern && filePattern.length > 0) {
-            const regex = new RegExp(
-              filePattern.replace(/\*/g, ".*").replace(/\?/g, "."),
-            );
-            if (!regex.test(entry.name)) continue;
-          }
-
-          await searchInFile(fullPath);
-        }
-      }
-    }
-
-    await scanDir(searchPath);
 
     return {
       success: true,
-      data: {
-        path: searchPath,
-        query,
-        matches,
-        count: matches.length,
-        truncated,
-      },
+      data: fileSearchResultToToolData(outcome),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -476,6 +550,32 @@ async function searchFiles(
       type: "search_error",
     };
   }
+}
+
+async function searchFiles(
+  input: SearchFilesInput,
+): Promise<ToolResult<SearchFilesOutput>> {
+  const searchPath = expandPath(input.path);
+  return executeGuardedSearch(searchPath, input);
+}
+
+export const SearchAppFilesSchema = z.object({
+  appId: z.string().describe("Mini-app id (UUID from list_apps or focus context)"),
+  query: z.string().describe("Text to search for (regex supported)"),
+  filePattern: z
+    .string()
+    .describe("File pattern such as *.tsx (empty string = all files)"),
+  caseSensitive: z.boolean().describe("Whether search is case sensitive"),
+  maxResults: z.number().describe("Maximum number of match lines to return"),
+});
+
+export type SearchAppFilesInput = z.infer<typeof SearchAppFilesSchema>;
+
+async function searchAppFiles(
+  input: SearchAppFilesInput,
+): Promise<ToolResult<SearchFilesOutput>> {
+  const appRoot = path.join(getPaprAppsRoot(), input.appId.trim());
+  return executeGuardedSearch(appRoot, input);
 }
 
 // ========================================
@@ -495,7 +595,8 @@ export const writeFileTool = createTool({
   description:
     "Write content to a file. OVERWRITES existing files in place — you do NOT need to delete a file before recreating it. " +
     "Creates parent directories if needed. Creates backup if specified. " +
-    "BLOCKED for ~/Papr/apps/* — use edit_file instead (runs esbuild + validation). " +
+    "For $PAPR_HOME/apps/{appId}/… paths: creates or overwrites mini-app files and auto-runs esbuild + validate_app (same as edit_file). " +
+    "Use edit_file for surgical patches (oldString/newString); use write_file to create new mini-app files or replace a whole file. " +
     "ANTI-PATTERN: Never run `rm <file>` followed by `write_file({ path: <file> })` in the same turn — if the stream is interrupted between the two, the file is lost. Just call write_file directly; it overwrites.",
   inputSchema: WriteFileSchema,
   execute: writeFile,
@@ -512,9 +613,21 @@ export const listDirectoryTool = createTool({
 export const searchFilesTool = createTool({
   id: "search_files",
   description:
-    "Search for text in files (grep-like). Supports regex and file patterns.",
+    "Slow grep-like search over a directory tree (30s max, skips node_modules/dist/venv). " +
+    "For Papr mini-apps prefer search_app_files or bash rg on $PAPR_HOME/apps/{appId}/. " +
+    "For meaning-based code discovery prefer search_agent_memory({ category: \"code\", projectId, query }). " +
+    "Refuses whole $PAPR_HOME, apps/, or Jobs/ roots.",
   inputSchema: SearchFilesSchema,
   execute: searchFiles,
+});
+
+export const searchAppFilesTool = createTool({
+  id: "search_app_files",
+  description:
+    "Search text under one mini-app directory ($PAPR_HOME/apps/{appId}/). " +
+    "Uses ripgrep when available. Prefer search_agent_memory for semantic code search; use this for exact symbol matches.",
+  inputSchema: SearchAppFilesSchema,
+  execute: searchAppFiles,
 });
 
 // Export all filesystem tools
@@ -523,4 +636,5 @@ export const filesystemTools = [
   writeFileTool,
   listDirectoryTool,
   searchFilesTool,
+  searchAppFilesTool,
 ];

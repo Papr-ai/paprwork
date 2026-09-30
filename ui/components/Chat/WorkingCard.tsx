@@ -4,6 +4,7 @@
  */
 
 import React, { useState, useEffect, useRef } from "react";
+import { useFollowScroll } from "../../hooks/useFollowScroll";
 import "./WorkingCard.css";
 
 const SHIMMER_DELAY_MS = 3000;
@@ -14,6 +15,10 @@ interface WorkingCardProps {
   lastActivity?: string; // Last tool call or response text
   wasStopped?: boolean; // Whether the agent was manually stopped
   connectionPaused?: boolean; // Gateway disconnected mid-stream
+  wasInterrupted?: boolean; // Turn ended without the agent finishing
+  isFinishingWork?: boolean; // Post-tool text wrap-up in progress
+  /** Bumps when inner content grows (tool rows, jobs, etc.). */
+  contentRevision?: number;
 }
 
 export const WorkingCard: React.FC<WorkingCardProps> = ({
@@ -22,10 +27,24 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
   lastActivity,
   wasStopped = false,
   connectionPaused = false,
+  wasInterrupted = false,
+  isFinishingWork = false,
+  contentRevision = 0,
 }) => {
   const [isCollapsed, setIsCollapsed] = useState(true);
   const [showShimmer, setShowShimmer] = useState(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const shouldFollowScroll = isExploring && !isCollapsed;
+
+  useFollowScroll(
+    contentRef,
+    [lastActivity, contentRevision, isCollapsed],
+    {
+      enabled: shouldFollowScroll,
+      resetFollow: isExploring,
+    },
+  );
 
   useEffect(() => {
     setShowShimmer(false);
@@ -40,6 +59,12 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
       if (timerRef.current) clearTimeout(timerRef.current);
     };
   }, [lastActivity, isExploring]);
+
+  useEffect(() => {
+    if (isExploring) {
+      setIsCollapsed(false);
+    }
+  }, [isExploring]);
 
   const shimmerActive = isExploring && showShimmer;
 
@@ -61,22 +86,35 @@ export const WorkingCard: React.FC<WorkingCardProps> = ({
           <span className={`working-label-primary${shimmerActive ? " working-label-shimmer" : ""}`}>
             {connectionPaused
               ? "Reconnecting"
-              : isExploring
-                ? "Working"
-                : wasStopped
-                  ? "Stopped"
-                  : "Finished Working"}
+              : isFinishingWork
+                ? "Finishing work"
+                : isExploring
+                  ? "Working"
+                  : wasStopped
+                    ? "Stopped"
+                    : wasInterrupted
+                      ? "Interrupted"
+                      : "Finished Working"}
           </span>
-          {isCollapsed && (connectionPaused || lastActivity) && (
+          {isCollapsed &&
+            (connectionPaused ||
+              isFinishingWork ||
+              wasInterrupted ||
+              lastActivity) && (
             <span className={`working-label-secondary${shimmerActive ? " working-secondary-shimmer" : ""}`}>
               {connectionPaused
                 ? "Connection paused — resuming when back online"
-                : lastActivity}
+                : isFinishingWork
+                  ? "Writing final summary for you"
+                  : wasInterrupted
+                    ? "Agent stopped before finishing — send a message to continue"
+                    : lastActivity}
             </span>
           )}
         </div>
       </div>
       <div
+        ref={contentRef}
         className={`working-card-content ${isCollapsed ? "working-card-content--collapsed" : ""}`}
         style={{
           maxHeight: isCollapsed ? "0px" : "420px",

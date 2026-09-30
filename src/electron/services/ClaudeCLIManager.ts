@@ -258,8 +258,11 @@ export class ClaudeCLIManager {
   async getVersion(): Promise<string | null> {
     try {
       const cliPath = await this.ensureCLI();
-      const { stdout } = await execAsync(`node "${cliPath}" --version`, { timeout: 5000 });
-      return stdout.trim();
+      const versionCmd = cliPath.endsWith(".js")
+        ? `node "${cliPath}" --version`
+        : `"${cliPath}" --version`;
+      const { stdout } = await execAsync(versionCmd, { timeout: 5000 });
+      return stdout.trim().split(/\r?\n/)[0]?.trim() ?? null;
     } catch {
       return null;
     }

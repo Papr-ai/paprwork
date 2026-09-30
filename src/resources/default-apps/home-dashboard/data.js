@@ -1,32 +1,208 @@
 const Data = {
   APP_ID: 'bbb7e17e-c810-47ef-b9ce-c8a83c0cd16c',
-  DEFAULT_JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
-  getSrcId() {
-    const jobId = (typeof App !== 'undefined' && App.JOB_ID) ? App.JOB_ID : this.DEFAULT_JOB_ID;
-    const short = jobId.slice(0, 8);
-    return `${jobId}:Daily Brief Generator (${short})`;
+  LEGACY_JOB_ID: '2cafb2e9-696b-42db-98fa-5d605977123c',
+  _jobId: null,
+  todayKey() {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  },
+  async resolveJobId() {
+    if (this._jobId) return this._jobId;
+    if (typeof App !== 'undefined' && App.JOB_ID) {
+      this._jobId = App.JOB_ID;
+      return this._jobId;
+    }
+    try {
+      const r = await fetch('default-job-id.txt');
+      if (r.ok) {
+        const id = (await r.text()).trim();
+        if (id) {
+          this._jobId = id;
+          return id;
+        }
+      }
+    } catch (e) { /* bundled file added on install */ }
+    this._jobId = this.LEGACY_JOB_ID;
+    return this._jobId;
+  },
+  isTemplateModeError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return (
+      message.includes('No data sources linked') ||
+      message.includes('no dbPath configured') ||
+      message.includes('Local database not found')
+    );
   },
   async query(sql) {
     const r = await fetch('/api/db/query', { method:'POST',
       headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({appId:this.APP_ID, sourceId:this.getSrcId(), sql})
+      body: JSON.stringify({ appId: this.APP_ID, sql })
     });
-    return (await r.json())?.rows || [];
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || 'Database query failed');
+    return data?.rows || [];
+  },
+  async queryBatch(statements) {
+    const r = await fetch('/api/db/query-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appId: this.APP_ID, statements }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data?.error || 'Database batch query failed');
+    return data?.results || [];
+  },
+  withBriefMeta(brief, briefDate) {
+    if (!brief) return null;
+    const today = this.todayKey();
+    return {
+      ...brief,
+      _briefDate: briefDate,
+      _isStale: briefDate !== today,
+    };
+  },
+  mostRecentBriefFromRows(rows) {
+    for (const entry of rows) {
+      if (!this.isBriefDateKey(entry.date)) continue;
+      const brief = this.parseBriefJson(entry.brief_json);
+      if (brief) return this.withBriefMeta(brief, entry.date);
+    }
+    return null;
+  },
+  briefFromRows(rows, date) {
+    const targetDate = date ?? this.todayKey();
+    if (!this.isBriefDateKey(targetDate)) return Data.sample();
+    const row = rows.find((entry) => entry.date === targetDate);
+    const brief = this.parseBriefJson(row?.brief_json);
+    if (brief) return this.withBriefMeta(brief, targetDate);
+    if (!date || targetDate === this.todayKey()) {
+      const recent = this.mostRecentBriefFromRows(rows);
+      if (recent) return recent;
+    }
+    return Data.sample();
+  },
+  datesFromRows(rows) {
+    return rows
+      .filter((row) => this.isBriefDateKey(row.date) && this.parseBriefJson(row.brief_json))
+      .map((row) => row.date);
+  },
+  async loadInitData() {
+    try {
+      const results = await this.queryBatch([
+        {
+          sql: 'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30',
+        },
+        {
+          sql: 'SELECT item_key, status, note, updated_at FROM brief_reviews',
+        },
+      ]);
+      const briefResult = results[0];
+      const reviewResult = results[1];
+      if (!briefResult?.ok) {
+        throw new Error(briefResult?.error || 'Failed to load briefs');
+      }
+      const briefRows = briefResult.rows || [];
+      const reviewRows = reviewResult?.ok ? (reviewResult.rows || []) : [];
+      return {
+        dates: this.datesFromRows(briefRows),
+        brief: this.briefFromRows(briefRows),
+        reviewRows,
+      };
+    } catch (error) {
+      if (this.isTemplateModeError(error)) {
+        return {
+          dates: [this.todayKey()],
+          brief: this.sample(),
+          reviewRows: [],
+        };
+      }
+      throw error;
+    }
+  },
+  isBriefDateKey(date) {
+    return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+  },
+  parseBriefJson(raw) {
+    if (!raw || typeof raw !== 'string') return null;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed === '{}') return null;
+    try {
+      const brief = JSON.parse(trimmed);
+      if (!brief || typeof brief !== 'object') return null;
+      if (!brief.hero || typeof brief.hero !== 'object' || !brief.hero.title) return null;
+      if (!Array.isArray(brief.sections) || brief.sections.length === 0) return null;
+      return brief;
+    } catch {
+      return null;
+    }
+  },
+  loadError(message) {
+    return {
+      _loadError: true,
+      _errorMessage: message,
+      hero: {
+        date: new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+        title: 'Could not load your brief',
+        subtitle: 'The database query failed — your data may still be there.',
+        stats: [],
+      },
+      sections: [{
+        type: 'alerts',
+        title: 'What happened',
+        items: [{
+          severity: 'high',
+          message,
+          action: 'Click "Ask Agent to fix" below, or open chat and say your Home dashboard cannot load briefs.',
+        }],
+      }],
+    };
+  },
+  async loadMostRecentBrief() {
+    const rows = await this.query(
+      'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1',
+    );
+    return this.mostRecentBriefFromRows(rows) ?? Data.sample();
   },
   async load(date) {
     try {
-      const sql = date
-        ? `SELECT brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`
-        : `SELECT brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 1`;
-      const rows = await this.query(sql);
-      if (rows[0]?.brief_json) return JSON.parse(rows[0].brief_json);
-    } catch(e) {}
-    return Data.sample();
+      if (date) {
+        if (!this.isBriefDateKey(date)) return Data.sample();
+        const rows = await this.query(
+          `SELECT date, brief_json FROM briefs WHERE date='${date}' AND brief_json IS NOT NULL LIMIT 1`,
+        );
+        const brief = this.parseBriefJson(rows[0]?.brief_json);
+        if (brief) return this.withBriefMeta(brief, date);
+        if (date === this.todayKey()) return await this.loadMostRecentBrief();
+        return Data.sample();
+      }
+
+      const today = this.todayKey();
+      const rows = await this.query(
+        `SELECT date, brief_json FROM briefs WHERE date='${today}' AND brief_json IS NOT NULL LIMIT 1`,
+      );
+      const brief = this.parseBriefJson(rows[0]?.brief_json);
+      if (brief) return this.withBriefMeta(brief, today);
+      return await this.loadMostRecentBrief();
+    } catch (e) {
+      if (this.isTemplateModeError(e)) {
+        return Data.sample();
+      }
+      const message = e instanceof Error ? e.message : String(e);
+      console.error('[Home] Failed to load brief:', message);
+      return Data.loadError(message);
+    }
   },
   async dates() {
     try {
-      const rows = await this.query('SELECT DISTINCT date FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30');
-      return rows.map(r => r.date);
+      const rows = await this.query(
+        'SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL ORDER BY date DESC LIMIT 30',
+      );
+      return rows
+        .filter((row) => this.isBriefDateKey(row.date) && this.parseBriefJson(row.brief_json))
+        .map((row) => row.date);
     } catch(e) { return []; }
   },
   sample() {

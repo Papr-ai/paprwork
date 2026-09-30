@@ -1,9 +1,18 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Cloud vs Desktop — Agent Guide
 
 **Audience:** Paprwork agent (system context)  
-**Last updated:** 2026-07-01
+**Last updated:** 2026-08-26
 
 Use this guide when users ask about running jobs while their Mac is asleep, what syncs automatically, and what still requires the local app.
+
+**Canonical terms (use consistently):**
+- **Cloud Sync** — Settings toggle; enables git push, Turso replica sync, vault push, and auto-publish
+- **Publish / Publish changes** — UI button in the app tab; same engine as `push_cloud_sync({ appId })` (git **+** Turso ordered flush)
+- **Cloud vault** — Integration Keys + platform cookies on the memory server; cloud jobs read vault, **not** desktop keychain
+- **Plan A replica** — Registry DB sync mode (`syncMode: "replica"`); Turso primary is authority; desktop tails frames via `papr_db_pull`
+- **Sync V3** — Per-app GitHub writer repo for app source (not namespace monorepo `apps/` paths)
 
 ---
 
@@ -17,11 +26,32 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 
 | Lane | What moves | Cloud writes | Desktop reads (on wake) |
 |------|------------|--------------|-------------------------|
-| **Git** | Apps, `Jobs/`, `data/jobs.json`, `workspace/` | Memory server git writeback after runs | `CloudSync.pullNow()` via heartbeat |
-| **Turso** | Job/app `data.db` user tables | Gateway pull → run → push bookends | `syncTursoAfterCloudRun()` on wake (default **on**; set `TURSO_PULL_AFTER_CLOUD_RUN=false` to disable) |
+| **Git (app code — Sync V3)** | App source + linked `jobs/{id}/` at **per-app repo root** | Writer ops via [`finalizeAppRepoMutation`](../src/gateway/services/syncV3/finalizeAppRepoMutation.ts) — desktop flush **and** cloud sandbox debounced push | Revision subscriber + `pullAppCodeFromRepo` |
+| **Git (legacy namespace)** | `data/jobs.json`, `workspace/` scaffold | Memory server git writeback for workspace-chat bootstrap only — **not** app source | Heartbeat pull |
+| **Turso (Plan A replica)** | Registry + linked job DB user tables | Turso **primary** authority; cloud gateway writes primary directly | Desktop embedded replica: `papr_db_pull` / heartbeat → `pull()` tails frames; offline writes queue → `papr_db_push` on reconnect |
 | **Chat** | Main chat history | Ephemeral job sessions in cloud | `~/.paprwork-v2/chats.db` (local-first, not in git) |
 
+**Agent trap — namespace git vs per-app repo:** Local `git ls-files apps/{appId}/` reads the **legacy namespace monorepo**. Sync V3 app code is **not** uploaded there. Always use `get_cloud_sync_status({ appId })` → `appWriterRepo` (clone URL, last commit, Sync V3 status) or `inspect_cloud_repo({ appId, action: "list"|"read" })` to verify cloud app files.
+
 **Published mini-apps** on `apps.papr.ai` read Turso directly — they see DB changes as soon as cloud pushes Turso, without waiting for desktop pull.
+
+---
+
+## Q: Published app "Run now" — does desktop need to be awake?
+
+**No.** When a visitor or owner clicks **Run now** in a published mini-app (or share link), the app calls `POST /api/jobs/run` on **Cloud App Host** (`apps.papr.ai`). That runs python/node/bash/agent jobs in a **cloud sandbox** — same job types as desktop, different runtime.
+
+| Requirement | Why |
+|-------------|-----|
+| Job code in **per-app GitHub repo** (`jobs/{jobId}/`) | Cloud reads from synced repo, not local `$PAPR_HOME/Jobs/` |
+| Integration keys in **cloud vault** | Desktop keychain is unavailable when Mac is asleep |
+| Job not `local-only` / LinkedIn CDP | Requires desktop browser session |
+
+**Do not** tell users to wake Paprwork for published-app Run now failures — debug with `inspect_cloud_repo`, vault/catalog keys, and `query_cloud_turso`.
+
+**Different path — scheduled jobs:** Memory scheduler + `desktopHeartbeat` / `pendingCloudRuns` applies when **cron/interval** jobs defer to desktop or queue while asleep. See scheduler section below.
+
+**Bulk DB from mini-apps (desktop + cloud):** `POST /api/db/batch` = reads only; `POST /api/db/write-batch` = up to 25 writes (optional `atomic: true`). Same endpoints on `apps.papr.ai`.
 
 ---
 
@@ -43,7 +73,7 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 **Prerequisites (one-time / while awake):**
 
 - Cloud Sync enabled; workspace pushed to GitHub cloud repo
-- Vault sync: LLM keys + Papr API key available in cloud vault
+- **Vault sync:** Integration Keys and Platform Connection cookies push to the **cloud vault** when desktop syncs while awake — cloud jobs cannot read local keychain directly
 - Production: `CLOUD_AGENT_GATEWAY_URL` + matching `PAPR_CLOUD_AGENT_GATEWAY_KEY` on memory server; gateway deployed to Cloud Run
 - Job definition + code already in cloud git repo (not only on local disk)
 
@@ -72,20 +102,22 @@ Use this guide when users ask about running jobs while their Mac is asleep, what
 
 ## Q: Turso updated in cloud — does local SQLite update?
 
-**Yes, on wake — but not automatic by default today.**
+**Yes, on wake — via Plan A embedded replica pull (not legacy sync-index CDC).**
 
-Flow:
+Flow (registry DBs with `syncMode: "replica"`):
 
-1. Cloud gateway: Turso **pull** before run → local `data.db` in temp workspace
-2. Agent/job writes SQLite during run
-3. Cloud gateway: Turso **push** after run
-4. Desktop wake: `handlePendingCloudRuns()` → `syncTursoAfterCloudRun()` → pulls linked sources into local `~/Papr/Jobs/{id}/data/data.db`
+1. Cloud gateway: writes go to Turso **primary** (direct adapter or replica service online path)
+2. Agent/job writes during cloud run land on primary
+3. Desktop on wake: heartbeat / manual sync runs **`papr_db_pull`** (or app Publish changes / `push_cloud_sync` pull-before-push bookends) → local embedded replica tails new frames
+4. Agent tools: `papr_db_sync_status` shows `online`, `pendingPush`, `migrationConflict` — use `papr_db_push` / `repair_cloud_sync` when blocked
 
-**Default:** Turso pull on wake is **enabled**. Set `TURSO_PULL_AFTER_CLOUD_RUN=false` on the desktop gateway to disable.
+**Legacy path (`syncMode: "legacy"`):** still uses Papr's old workspace-log CDC + optional `sync-index` polling until cutover. Prefer replica tools when status shows `syncMode: "replica"`.
 
-**Published cloud apps:** read Turso live — no desktop pull needed for those UIs.
+**Replica `pendingOps` / `cdcOperations` is not legacy CDC:** On `syncMode: "replica"` (including new post-replica apps), those fields are Turso Sync's normal pending-push counter. Run Publish changes or `papr_db_push` — do not assume cutover or legacy sync is needed.
 
-**Unpublished local mini-apps:** need Turso pull on desktop to see cloud-written rows.
+**Published cloud apps:** read Turso primary live — no desktop pull needed for those UIs.
+
+**Unpublished local mini-apps:** need desktop replica pull (or open app after sync) to see cloud-written rows in local SQLite.
 
 ---
 
@@ -109,7 +141,7 @@ Flow:
 |----------|-----|
 | **Sleep / Wiki preflight** | Desktop `AgentJobExecutor` injects chat summaries + job activity before run. Cloud gateway receives prompt from memory server **without** that preflight unless memory adds it. Sleep job may miss recent chat context in cloud. |
 | **Main chat history** | Lives in `~/.paprwork-v2/chats.db` — **not** in git. Cloud job sessions are isolated `job:{id}:{runId}`. No access to desktop chat threads unless via Papr Memory search tools. |
-| **Plans** | `~/Papr/data/plans.db` — local SQLite, not in cloud git repo |
+| **Plans** | `$PAPR_HOME/data/plans.db` — local SQLite, not in cloud git repo |
 | **Subagent profiles** | From repo — planned, not fully wired in cloud prep |
 | **Code index / hybrid grep** | Desktop file watcher + Papr Memory code schema — not in cloud gateway |
 | **Custom keys at runtime** | Only keys already in vault; no keychain / no new `request_key` UI |
@@ -131,7 +163,7 @@ Flow:
 
 1. **Deploy Cloud Agent Gateway** + set `CLOUD_AGENT_GATEWAY_URL` on memory server
 2. ~~**Playwright in gateway container**~~ — ✅ `Dockerfile.cloud-agent-gateway` (bookworm + Chromium)
-3. ~~**`TURSO_PULL_AFTER_CLOUD_RUN` by default**~~ — ✅ enabled unless `false`
+3. ~~**Turso pull on cloud run wake**~~ — ✅ Plan A replica pull on heartbeat + `papr_db_pull` (legacy sync-index still for `syncMode: "legacy"`)
 4. **Sleep/Wiki preflight in cloud path** — memory or gateway must inject same context as `AgentJobExecutor`
 
 ### P1 — Important gaps
@@ -171,6 +203,18 @@ User asks to run something while Mac might be asleep
 └─ Published app should show new data?
     └─ YES → Turso push is enough; app reads cloud DB directly
 ```
+
+---
+
+## Fork install and contribute-back
+
+| Role | Action | Tools |
+|------|--------|-------|
+| **Publisher** | Share with `codeAccess=install` via `publish_cloud_app` | Others install with `install_cloud_app` |
+| **Contributor** | Edit local fork; propose changes | `submit_cloud_app_pr` → GitHub PR on owner's papr-work repo |
+| **Owner** | Review incoming PRs | `check_cloud_app_contributions` / `list_cloud_app_prs` → `get_cloud_app_pr_review` → `resolve_cloud_app_pr({ action: "approve"|"reject" })` |
+
+Approve **merges the PR on GitHub** (via Papr GitHub App), then the owner's desktop runs `pullNow()` — there is no copy-from-contributor-folder merge on the owner's machine. Details: `docs/SYNC_CONTRACT.md` §6.
 
 ---
 

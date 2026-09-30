@@ -2,11 +2,29 @@
  * Mini-app embedded sub-agent chat (floating bubble).
  *
  * Desktop (Paprwork iframe): uses window.paprAPI.invoke('chat.open', { subAgentId, appId, message })
+ *   → opens a full Pen chat tab (merged with the app when its tab is open), not an overlay modal.
  * Published web: live SSE chat via /api/app-agent/*
  *
  * Usage (auto-injected by enable_app_agent_chat):
  *   <script type="module" src="/__papr__/papr-agent-chat.js"></script>
  */
+
+import { renderMarkdownToHtml } from "./papr-markdown.js";
+import {
+  parsePlanFromToolResult,
+  type PlanData,
+} from "./papr-agent-chat-plan.js";
+import { renderTurnActivityDom } from "./papr-agent-chat-activity.js";
+import {
+  computeSdkLastActivity,
+  createSdkTurnActivity,
+  flushTextSegment,
+  finalizeSdkTurnActivity,
+  getFinalTextAfterTools,
+  isSdkExploring,
+  pickThinkingPhrase,
+  type SdkTurnActivity,
+} from "./papr-agent-chat-sequence.js";
 
 export interface PublicAppAgentChatConfig {
   enabled: boolean;
@@ -22,18 +40,6 @@ interface ChatMessage {
   content: string;
 }
 
-interface ToolCallActivity {
-  toolCallId?: string;
-  name: string;
-  args?: Record<string, unknown>;
-  status?: "pending" | "success" | "error";
-}
-
-interface TurnActivity {
-  thinking: string;
-  thinkingStreaming: boolean;
-  toolCalls: ToolCallActivity[];
-}
 
 export interface OpenAppAgentChatOptions {
   message?: string;
@@ -41,32 +47,16 @@ export interface OpenAppAgentChatOptions {
 
 let openPanelHandler: ((options?: OpenAppAgentChatOptions) => void) | null = null;
 
-function formatToolLabel(toolName: string, args?: Record<string, unknown>, running = true): string {
-  const prefix = running ? "Using" : "Used";
-  if (toolName === "read_app_file" && typeof args?.path === "string") {
-    const path = args.path.split("/").pop() ?? args.path;
-    return `${prefix} ${path}`;
-  }
-  if (toolName === "edit_app_file" && typeof args?.path === "string") {
-    const path = args.path.split("/").pop() ?? args.path;
-    return `${running ? "Editing" : "Edited"} ${path}`;
-  }
-  if (toolName === "edit_app_file_lines" && typeof args?.path === "string") {
-    const path = args.path.split("/").pop() ?? args.path;
-    return `${running ? "Editing" : "Edited"} ${path}`;
-  }
-  if (toolName === "list_app_files") {
-    return running ? "Listing app files" : "Listed app files";
-  }
-  if (toolName === "bash" && typeof args?.command === "string") {
-    const cmd = args.command.trim().slice(0, 40);
-    return `${prefix} bash: ${cmd}${args.command.length > 40 ? "…" : ""}`;
-  }
-  const readable = toolName.replace(/_/g, " ");
-  return `${prefix} ${readable}`;
-}
+const SESSION_STORAGE_KEY = "papr-agent-chat-session";
 
-const SESSION_STORAGE_KEY = "papr-app-agent-session";
+function setMessageMarkdown(el: HTMLElement, content: string): void {
+  const contentEl = el.querySelector(".papr-agent-chat-msg__content");
+  if (contentEl) {
+    contentEl.innerHTML = renderMarkdownToHtml(content);
+    return;
+  }
+  el.innerHTML = `<div class="papr-agent-chat-msg__content">${renderMarkdownToHtml(content)}</div>`;
+}
 
 function resolveAppIdFromPath(): string | null {
   const match = window.location.pathname.match(/\/apps\/([0-9a-f-]{36})\//i);
@@ -153,6 +143,29 @@ async function ensureSession(appId: string): Promise<string> {
   return data.sessionId;
 }
 
+async function loadSessionMessages(sessionId: string): Promise<ChatMessage[]> {
+  try {
+    const res = await fetch(`/api/app-agent/sessions/${sessionId}`, {
+      credentials: "same-origin",
+    });
+    if (!res.ok) {
+      return [];
+    }
+    const data = (await res.json()) as {
+      messages?: Array<{ id: string; role: string; content: string }>;
+    };
+    return (data.messages ?? [])
+      .filter((msg) => msg.role === "user" || msg.role === "assistant")
+      .map((msg) => ({
+        id: msg.id,
+        role: msg.role as "user" | "assistant",
+        content: msg.content,
+      }));
+  } catch {
+    return [];
+  }
+}
+
 type WarmStatus = "idle" | "warming" | "ready" | "unavailable" | "failed";
 
 async function warmSession(sessionId: string): Promise<{ status: WarmStatus; message?: string }> {
@@ -210,6 +223,7 @@ function createBubbleStyles(): void {
     }
     .papr-agent-chat-bubble--left { left: 24px; }
     .papr-agent-chat-bubble--right { right: 24px; }
+    .papr-agent-chat-bubble--hidden { display: none !important; }
     .papr-agent-chat-panel {
       position: fixed;
       z-index: 99998;
@@ -230,6 +244,21 @@ function createBubbleStyles(): void {
     .papr-agent-chat-panel--left { left: 24px; }
     .papr-agent-chat-panel--right { right: 24px; }
     .papr-agent-chat-panel--open { display: flex; }
+    .papr-agent-chat-panel--expanded {
+      top: 0;
+      bottom: 0;
+      max-height: 100vh;
+      width: min(440px, 42vw);
+      border-radius: 0;
+    }
+    .papr-agent-chat-panel--expanded.papr-agent-chat-panel--right {
+      right: 0;
+      left: auto;
+    }
+    .papr-agent-chat-panel--expanded.papr-agent-chat-panel--left {
+      left: 0;
+      right: auto;
+    }
     .papr-agent-chat-panel__header {
       padding: 12px 14px;
       font-weight: 600;
@@ -238,7 +267,33 @@ function createBubbleStyles(): void {
       justify-content: space-between;
       align-items: center;
       flex-shrink: 0;
+      gap: 8px;
     }
+    .papr-agent-chat-panel__header-title {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .papr-agent-chat-panel__header-actions {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .papr-agent-chat-panel__icon-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      line-height: 1;
+      color: inherit;
+      opacity: 0.7;
+      padding: 4px 6px;
+      border-radius: 6px;
+    }
+    .papr-agent-chat-panel__icon-btn:hover { opacity: 1; background: rgba(0,0,0,0.05); }
     .papr-agent-chat-panel__messages {
       flex: 1;
       overflow-y: auto;
@@ -251,9 +306,114 @@ function createBubbleStyles(): void {
       max-width: 92%;
       padding: 8px 12px;
       border-radius: 12px;
-      white-space: pre-wrap;
       word-break: break-word;
     }
+    .papr-agent-chat-msg__content {
+      font-size: 14px;
+      line-height: 1.55;
+    }
+    .papr-agent-chat-msg__content p {
+      margin: 0 0 0.65em;
+    }
+    .papr-agent-chat-msg__content p:last-child {
+      margin-bottom: 0;
+    }
+    .papr-agent-chat-msg__content h1,
+    .papr-agent-chat-msg__content h2,
+    .papr-agent-chat-msg__content h3 {
+      margin: 0.75em 0 0.35em;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+    .papr-agent-chat-msg__content h1 { font-size: 1.25rem; }
+    .papr-agent-chat-msg__content h2 { font-size: 1.1rem; }
+    .papr-agent-chat-msg__content h3 { font-size: 1rem; }
+    .papr-agent-chat-msg__content ul,
+    .papr-agent-chat-msg__content ol {
+      margin: 0.35em 0 0.65em;
+      padding-left: 1.25rem;
+    }
+    .papr-agent-chat-msg__content li {
+      margin: 0.2em 0;
+    }
+    .papr-agent-chat-msg__content strong {
+      font-weight: 600;
+    }
+    .papr-agent-chat-msg__content code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.9em;
+      padding: 0.1em 0.35em;
+      border-radius: 4px;
+      background: rgba(0,0,0,0.06);
+    }
+    .papr-agent-chat-msg__content a {
+      color: #007aff;
+      text-decoration: none;
+    }
+    .papr-agent-chat-msg__content a:hover {
+      text-decoration: underline;
+    }
+    .papr-agent-chat-msg__content blockquote {
+      margin: 0.5em 0;
+      padding-left: 0.75em;
+      border-left: 3px solid rgba(0,0,0,0.12);
+      color: #555;
+    }
+    .papr-md-pre {
+      margin: 0.5em 0;
+      padding: 10px 12px;
+      border-radius: 8px;
+      background: rgba(0,0,0,0.06);
+      overflow-x: auto;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .papr-md-pre code { background: none; padding: 0; }
+    .papr-md-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 0.5em 0;
+      font-size: 12px;
+    }
+    .papr-md-table th, .papr-md-table td {
+      border: 1px solid rgba(0,0,0,0.1);
+      padding: 6px 8px;
+      text-align: left;
+    }
+    .papr-md-table th { background: rgba(0,0,0,0.04); font-weight: 600; }
+    .papr-agent-chat-plan {
+      border: 1px solid rgba(0,0,0,0.08);
+      border-radius: 10px;
+      overflow: hidden;
+      margin: 6px 0;
+      background: rgba(0,0,0,0.02);
+    }
+    .papr-agent-chat-plan__header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 10px;
+      border: none;
+      background: transparent;
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      text-align: left;
+    }
+    .papr-agent-chat-plan__chevron { font-size: 10px; transition: transform 0.2s; }
+    .papr-agent-chat-plan__chevron--collapsed { transform: rotate(-90deg); }
+    .papr-agent-chat-plan__title { flex: 1; font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .papr-agent-chat-plan__progress { font-size: 11px; color: #666; }
+    .papr-agent-chat-plan__bar { width: 48px; height: 4px; background: rgba(0,0,0,0.08); border-radius: 2px; overflow: hidden; }
+    .papr-agent-chat-plan__bar span { display: block; height: 100%; background: #007aff; }
+    .papr-agent-chat-plan__steps { padding: 0 10px 8px; }
+    .papr-agent-chat-plan__steps--collapsed { display: none; }
+    .papr-agent-chat-plan__step { display: flex; gap: 8px; font-size: 12px; padding: 3px 0; }
+    .papr-agent-chat-plan__step-icon { width: 14px; flex-shrink: 0; text-align: center; }
+    .papr-agent-chat-plan__step--completed .papr-agent-chat-plan__step-desc { opacity: 0.6; text-decoration: line-through; }
+    .papr-agent-chat-working__timer { margin-left: auto; font-size: 11px; color: #888; font-weight: 400; }
+    .papr-agent-chat-panel__send--stop { background: #ff3b30; }
     .papr-agent-chat-msg--user {
       align-self: flex-end;
       background: #007aff;
@@ -291,11 +451,19 @@ function createBubbleStyles(): void {
       border: none;
       background: transparent;
       font: inherit;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
       color: #555;
       cursor: pointer;
       text-align: left;
+    }
+    .papr-agent-chat-thinking__chevron {
+      font-size: 10px;
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    .papr-agent-chat-thinking__chevron--collapsed {
+      transform: rotate(-90deg);
     }
     .papr-agent-chat-thinking__header--streaming {
       background: linear-gradient(90deg, rgba(0,122,255,0.08), rgba(88,86,214,0.08));
@@ -309,6 +477,55 @@ function createBubbleStyles(): void {
       word-break: break-word;
       max-height: 120px;
       overflow-y: auto;
+      transition: max-height 0.3s ease, opacity 0.3s ease;
+    }
+    .papr-agent-chat-thinking__preview {
+      font-weight: 400;
+      color: #777;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+      min-width: 0;
+    }
+    .papr-agent-chat-thinking__cursor {
+      animation: papr-blink 1s step-end infinite;
+    }
+    @keyframes papr-blink { 50% { opacity: 0; } }
+    .papr-agent-chat-working__labels {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-start;
+      gap: 8px;
+      flex: 1;
+      min-width: 0;
+    }
+    .papr-agent-chat-working__primary { font-weight: 600; white-space: nowrap; }
+    .papr-agent-chat-working__primary--shimmer,
+    .papr-agent-chat-working__secondary--shimmer {
+      background: linear-gradient(90deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.35) 35%, #333 50%, rgba(0,0,0,0.35) 65%, rgba(0,0,0,0.35) 100%);
+      background-size: 300% 100%;
+      -webkit-background-clip: text;
+      background-clip: text;
+      -webkit-text-fill-color: transparent;
+      animation: papr-working-shimmer 2s ease-in-out infinite;
+    }
+    @keyframes papr-working-shimmer {
+      0% { background-position: 100% 0; }
+      100% { background-position: -100% 0; }
+    }
+    .papr-agent-chat-working__narration {
+      padding: 8px 10px;
+      font-size: 12px;
+      line-height: 1.45;
+      color: #444;
+      border-top: 1px solid rgba(0,0,0,0.04);
+    }
+    .papr-agent-chat-working__list {
+      max-height: 420px;
+      overflow-y: auto;
+      transition: max-height 0.3s ease, opacity 0.3s ease;
     }
     .papr-agent-chat-working {
       border: 1px solid rgba(0,0,0,0.08);
@@ -317,11 +534,35 @@ function createBubbleStyles(): void {
       overflow: hidden;
     }
     .papr-agent-chat-working__header {
+      display: flex;
+      align-items: center;
+      gap: 6px;
       padding: 8px 10px;
-      font-size: 12px;
+      font-size: 13px;
       font-weight: 600;
       color: #555;
       border-bottom: 1px solid rgba(0,0,0,0.06);
+      cursor: pointer;
+      user-select: none;
+    }
+    .papr-agent-chat-working__chevron {
+      font-size: 10px;
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+    }
+    .papr-agent-chat-working__chevron--collapsed {
+      transform: rotate(-90deg);
+    }
+    .papr-agent-chat-working__label-secondary {
+      font-weight: 400;
+      color: #777;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .papr-agent-chat-working__body--collapsed,
+    .papr-agent-chat-working__list--collapsed {
+      display: none !important;
     }
     .papr-agent-chat-working__list {
       display: flex;
@@ -389,7 +630,16 @@ function createBubbleStyles(): void {
       .papr-agent-chat-thinking__header,
       .papr-agent-chat-working__header { color: #bbb; }
       .papr-agent-chat-thinking__body { color: #ccc; }
+      .papr-agent-chat-working__label-secondary { color: #999; }
       .papr-agent-chat-tool { color: #ddd; border-color: rgba(255,255,255,0.06); }
+      .papr-agent-chat-msg__content code {
+        background: rgba(255,255,255,0.08);
+      }
+      .papr-agent-chat-msg__content blockquote {
+        border-color: rgba(255,255,255,0.15);
+        color: #bbb;
+      }
+      .papr-agent-chat-msg__content a { color: #64b5ff; }
       .papr-agent-chat-panel__input {
         background: rgba(255,255,255,0.06);
         color: #f5f5f7;
@@ -412,7 +662,10 @@ function openDesktopChat(
     mode: "app-agent",
     appId,
     subAgentId: config.subAgentId,
-    message: message ?? config.welcomeMessage ?? "",
+    ...(message?.trim() ? { message: message.trim() } : {}),
+    ...(config.welcomeMessage?.trim()
+      ? { welcomeMessage: config.welcomeMessage.trim() }
+      : {}),
   });
 }
 
@@ -421,6 +674,8 @@ async function streamTurn(
   message: string,
   handlers: {
     onTurnStart?: () => void;
+    onTurnId?: (turnId: string) => void;
+    onStatus?: (message: string) => void;
     onThinkingDelta: (text: string) => void;
     onDelta: (text: string) => void;
     onToolCall: (input: {
@@ -432,8 +687,9 @@ async function streamTurn(
       toolCallId?: string;
       toolName: string;
       success: boolean;
+      result?: unknown;
     }) => void;
-    onDone: (input: { shouldRefreshApp: boolean }) => void;
+    onDone: (input: { shouldRefreshApp: boolean; stopped?: boolean }) => void;
     onError: (error: string) => void;
   },
 ): Promise<void> {
@@ -448,14 +704,31 @@ async function streamTurn(
     throw new Error(body.error ?? `Send failed (${postRes.status})`);
   }
   const { turnId } = (await postRes.json()) as { turnId: string };
+  handlers.onTurnId?.(turnId);
 
   await new Promise<void>((resolve, reject) => {
     const source = new EventSource(
       `/api/app-agent/sessions/${sessionId}/stream?turnId=${encodeURIComponent(turnId)}`,
     );
 
+    const finish = (): void => {
+      source.close();
+      resolve();
+    };
+
     source.addEventListener("app-agent:turn-start", () => {
       handlers.onTurnStart?.();
+    });
+
+    source.addEventListener("app-agent:status", (event) => {
+      try {
+        const data = JSON.parse((event as MessageEvent).data) as { message?: string };
+        if (typeof data.message === "string" && data.message.length > 0) {
+          handlers.onStatus?.(data.message);
+        }
+      } catch {
+        /* ignore */
+      }
     });
 
     source.addEventListener("app-agent:thinking-delta", (event) => {
@@ -504,12 +777,14 @@ async function streamTurn(
         const data = JSON.parse((event as MessageEvent).data) as {
           toolCallId?: string;
           toolName?: string;
+          result?: unknown;
         };
         if (data.toolName) {
           handlers.onToolResult({
             toolCallId: data.toolCallId,
             toolName: data.toolName,
             success: true,
+            result: data.result,
           });
         }
       } catch {
@@ -539,13 +814,16 @@ async function streamTurn(
       try {
         const data = JSON.parse((event as MessageEvent).data) as {
           shouldRefreshApp?: boolean;
+          stopped?: boolean;
         };
-        handlers.onDone({ shouldRefreshApp: Boolean(data.shouldRefreshApp) });
+        handlers.onDone({
+          shouldRefreshApp: Boolean(data.shouldRefreshApp),
+          stopped: Boolean(data.stopped),
+        });
       } catch {
         handlers.onDone({ shouldRefreshApp: false });
       }
-      source.close();
-      resolve();
+      finish();
     });
 
     source.addEventListener("app-agent:error", (event) => {
@@ -555,14 +833,22 @@ async function streamTurn(
       } catch {
         handlers.onError("Assistant error");
       }
-      source.close();
+      finish();
       reject(new Error("Assistant error"));
     });
 
     source.onerror = () => {
-      source.close();
-      resolve();
+      finish();
     };
+  });
+
+  return turnId;
+}
+
+async function cancelTurn(sessionId: string, turnId: string): Promise<void> {
+  await fetch(`/api/app-agent/sessions/${sessionId}/turns/${turnId}/cancel`, {
+    method: "POST",
+    credentials: "same-origin",
   });
 }
 
@@ -588,8 +874,11 @@ function mountWidget(
   panel.className = `papr-agent-chat-panel papr-agent-chat-panel--${side}`;
   panel.innerHTML = `
     <div class="papr-agent-chat-panel__header">
-      <span>${config.bubbleLabel ?? "App assistant"}</span>
-      <button type="button" aria-label="Close" style="background:none;border:none;cursor:pointer;font-size:18px;line-height:1;color:inherit;">×</button>
+      <span class="papr-agent-chat-panel__header-title">${config.bubbleLabel ?? "App assistant"}</span>
+      <div class="papr-agent-chat-panel__header-actions">
+        <button type="button" class="papr-agent-chat-panel__icon-btn papr-agent-chat-panel__expand" aria-label="Expand panel" title="Expand">⤢</button>
+        <button type="button" class="papr-agent-chat-panel__icon-btn papr-agent-chat-panel__close" aria-label="Close">×</button>
+      </div>
     </div>
     <div class="papr-agent-chat-panel__messages"></div>
     <div class="papr-agent-chat-panel__composer">
@@ -601,97 +890,120 @@ function mountWidget(
   const messagesEl = panel.querySelector(".papr-agent-chat-panel__messages") as HTMLDivElement;
   const inputEl = panel.querySelector(".papr-agent-chat-panel__input") as HTMLTextAreaElement;
   const sendBtn = panel.querySelector(".papr-agent-chat-panel__send") as HTMLButtonElement;
-  const closeBtn = panel.querySelector("button");
+  const closeBtn = panel.querySelector(".papr-agent-chat-panel__close") as HTMLButtonElement;
+  const expandBtn = panel.querySelector(".papr-agent-chat-panel__expand") as HTMLButtonElement;
 
-  let turnActivity: TurnActivity | null = null;
+  let expanded = false;
+  let activeTurnId: string | null = null;
+  let turnTimerInterval: ReturnType<typeof setInterval> | null = null;
+  let elapsedSeconds = 0;
+
+  expandBtn.addEventListener("click", () => {
+    expanded = !expanded;
+    panel.classList.toggle("papr-agent-chat-panel--expanded", expanded);
+    expandBtn.textContent = expanded ? "⤡" : "⤢";
+    expandBtn.title = expanded ? "Collapse" : "Expand";
+    expandBtn.setAttribute("aria-label", expanded ? "Collapse panel" : "Expand panel");
+  });
+
+  let turnActivity: SdkTurnActivity | null = null;
+  let completedActivity: SdkTurnActivity | null = null;
+  let streamingAssistantId: string | null = null;
   let thinkingCollapsed = true;
-  const thinkingPhrase = "Thinking…";
+  let workingCollapsed = true;
+  let completedWorkingCollapsed = true;
+  let thinkingPhrase = pickThinkingPhrase();
+  let showWorkingShimmer = false;
+  let shimmerTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastShimmerKey = "";
 
-  const renderActivity = (container: HTMLElement): void => {
-    if (!turnActivity) return;
-    const hasThinking = turnActivity.thinking.length > 0;
-    const hasTools = turnActivity.toolCalls.length > 0;
-    if (!hasThinking && !hasTools) return;
-
-    const activityEl = document.createElement("div");
-    activityEl.className = "papr-agent-chat-activity";
-
-    if (hasThinking) {
-      const thinkingEl = document.createElement("div");
-      thinkingEl.className = "papr-agent-chat-thinking";
-
-      const headerBtn = document.createElement("button");
-      headerBtn.type = "button";
-      headerBtn.className = `papr-agent-chat-thinking__header${
-        turnActivity.thinkingStreaming ? " papr-agent-chat-thinking__header--streaming" : ""
-      }`;
-      headerBtn.textContent = turnActivity.thinkingStreaming
-        ? thinkingPhrase
-        : `Thought process (${turnActivity.thinking.length > 80 ? "…" : ""})`;
-      headerBtn.addEventListener("click", () => {
-        thinkingCollapsed = !thinkingCollapsed;
-        bodyEl.hidden = thinkingCollapsed;
-      });
-
-      const bodyEl = document.createElement("div");
-      bodyEl.className = "papr-agent-chat-thinking__body";
-      bodyEl.textContent = turnActivity.thinking;
-      bodyEl.hidden = thinkingCollapsed;
-
-      thinkingEl.appendChild(headerBtn);
-      thinkingEl.appendChild(bodyEl);
-      activityEl.appendChild(thinkingEl);
-    }
-
-    if (hasTools) {
-      const workingEl = document.createElement("div");
-      workingEl.className = "papr-agent-chat-working";
-      const header = document.createElement("div");
-      header.className = "papr-agent-chat-working__header";
-      header.textContent = "Working";
-      workingEl.appendChild(header);
-
-      const list = document.createElement("div");
-      list.className = "papr-agent-chat-working__list";
-      for (const tool of turnActivity.toolCalls) {
-        const row = document.createElement("div");
-        const status = tool.status ?? "pending";
-        row.className = `papr-agent-chat-tool papr-agent-chat-tool--${status}`;
-        const label = document.createElement("span");
-        label.textContent = formatToolLabel(
-          tool.name,
-          tool.args,
-          status === "pending",
-        );
-        const badge = document.createElement("span");
-        badge.className = "papr-agent-chat-tool__status";
-        badge.textContent = status === "success" ? "✓" : status === "error" ? "✗" : "…";
-        row.appendChild(label);
-        row.appendChild(badge);
-        list.appendChild(row);
+  const scheduleWorkingShimmer = (activity: SdkTurnActivity, exploring: boolean): void => {
+    const key = computeSdkLastActivity(activity);
+    if (!exploring) {
+      showWorkingShimmer = false;
+      lastShimmerKey = "";
+      if (shimmerTimer) {
+        clearTimeout(shimmerTimer);
+        shimmerTimer = null;
       }
-      workingEl.appendChild(list);
-      activityEl.appendChild(workingEl);
+      return;
     }
+    if (key !== lastShimmerKey) {
+      lastShimmerKey = key;
+      showWorkingShimmer = false;
+      if (shimmerTimer) clearTimeout(shimmerTimer);
+      shimmerTimer = setTimeout(() => {
+        showWorkingShimmer = true;
+        renderMessages();
+      }, 3000);
+    }
+  };
 
-    container.appendChild(activityEl);
+  const pruneEmptyAssistantMessages = (): void => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.role === "assistant" && !msg.content.trim()) {
+        messages.splice(i, 1);
+      }
+    }
   };
 
   const renderMessages = (): void => {
     messagesEl.innerHTML = "";
-    if (messages.length === 0 && config.welcomeMessage) {
-      const welcome = document.createElement("div");
-      welcome.className = "papr-agent-chat-msg papr-agent-chat-msg--assistant";
-      welcome.textContent = config.welcomeMessage;
-      messagesEl.appendChild(welcome);
-    }
     for (const msg of messages) {
+      if (msg.role === "assistant" && !msg.content.trim()) {
+        if (msg.id === streamingAssistantId && sending) {
+          continue;
+        }
+        continue;
+      }
       const el = document.createElement("div");
       el.className = `papr-agent-chat-msg papr-agent-chat-msg--${msg.role}`;
-      el.textContent = msg.content;
+      setMessageMarkdown(el, msg.content);
       messagesEl.appendChild(el);
     }
-    renderActivity(messagesEl);
+
+    const liveActivity = turnActivity;
+    const doneActivity = !sending ? completedActivity : null;
+    const activity = liveActivity ?? doneActivity;
+
+    if (activity) {
+      const exploring = isSdkExploring(activity, Boolean(liveActivity && sending));
+      if (exploring && liveActivity) {
+        workingCollapsed = false;
+      }
+      scheduleWorkingShimmer(activity, exploring);
+
+      const finalText = renderTurnActivityDom(messagesEl, activity, {
+        live: Boolean(liveActivity),
+        sendingNow: sending,
+        workingCollapsed: liveActivity ? workingCollapsed : completedWorkingCollapsed,
+        thinkingCollapsed,
+        thinkingPhrase,
+        elapsedSeconds,
+        showWorkingShimmer,
+        onToggleWorking: () => {
+          if (liveActivity) {
+            workingCollapsed = !workingCollapsed;
+          } else {
+            completedWorkingCollapsed = !completedWorkingCollapsed;
+          }
+          renderMessages();
+        },
+        onToggleThinking: () => {
+          thinkingCollapsed = !thinkingCollapsed;
+          renderMessages();
+        },
+      });
+
+      if (finalText.trim()) {
+        const el = document.createElement("div");
+        el.className = "papr-agent-chat-msg papr-agent-chat-msg--assistant";
+        setMessageMarkdown(el, finalText);
+        messagesEl.appendChild(el);
+      }
+    }
+
     messagesEl.scrollTop = messagesEl.scrollHeight;
   };
 
@@ -708,6 +1020,20 @@ function mountWidget(
   let warmStatusEl: HTMLDivElement | null = null;
   let warmingInFlight = false;
 
+  const hydrateSessionHistory = async (): Promise<void> => {
+    if (!sessionId) {
+      sessionId = await ensureSession(appId);
+    }
+    const history = await loadSessionMessages(sessionId);
+    if (history.length > 0) {
+      const welcome = messages.find((m) => m.id === "welcome");
+      messages.splice(0, messages.length, ...history);
+      if (welcome && !messages.some((m) => m.id === "welcome")) {
+        messages.unshift(welcome);
+      }
+    }
+  };
+
   const startWarmOnIntent = (): void => {
     if ((window as Window & { paprAPI?: unknown }).paprAPI) {
       return;
@@ -722,12 +1048,12 @@ function mountWidget(
         if (!sessionId) {
           sessionId = await ensureSession(appId);
         }
-        if (!open || !sessionId) {
+        if (!sessionId) {
           return;
         }
 
-        if (!warmStatusEl) {
-          warmStatusEl = appendStatus("Starting assistant…");
+        if (open && !warmStatusEl) {
+          warmStatusEl = appendStatus("Preparing assistant workspace…");
         }
 
         const result = await warmSession(sessionId);
@@ -756,16 +1082,72 @@ function mountWidget(
   const setOpen = (next: boolean) => {
     open = next;
     panel.classList.toggle("papr-agent-chat-panel--open", open);
+    bubble.classList.toggle("papr-agent-chat-bubble--hidden", open);
     if (open) {
-      renderMessages();
-      startWarmOnIntent();
+      void hydrateSessionHistory()
+        .catch(() => undefined)
+        .finally(() => {
+          renderMessages();
+          startWarmOnIntent();
+        });
     } else if (warmStatusEl) {
       warmStatusEl.remove();
       warmStatusEl = null;
     }
   };
 
+  const setSendingUi = (active: boolean): void => {
+    sending = active;
+    sendBtn.disabled = false;
+    sendBtn.textContent = active ? "Stop" : "Send";
+    sendBtn.classList.toggle("papr-agent-chat-panel__send--stop", active);
+    inputEl.disabled = active;
+  };
+
+  const startTurnTimer = (): void => {
+    elapsedSeconds = 0;
+    if (turnTimerInterval) clearInterval(turnTimerInterval);
+    turnTimerInterval = setInterval(() => {
+      elapsedSeconds += 1;
+      const timerEl = messagesEl.querySelector(".papr-agent-chat-working__timer");
+      if (timerEl) {
+        timerEl.textContent = `${elapsedSeconds}s`;
+      } else if (turnActivity) {
+        renderMessages();
+      }
+    }, 1000);
+  };
+
+  const stopTurnTimer = (): void => {
+    if (turnTimerInterval) {
+      clearInterval(turnTimerInterval);
+      turnTimerInterval = null;
+    }
+  };
+
+  const upsertPlan = (plan: PlanData): void => {
+    if (!turnActivity) return;
+    const idx = turnActivity.plans.findIndex((p) => p.planId === plan.planId);
+    if (idx >= 0) {
+      turnActivity.plans[idx] = plan;
+    } else {
+      turnActivity.plans.push(plan);
+    }
+  };
+
   const sendMessage = async (prefilled?: string): Promise<void> => {
+    if (sending && activeTurnId && sessionId) {
+      await cancelTurn(sessionId, activeTurnId);
+      activeTurnId = null;
+      stopTurnTimer();
+      setSendingUi(false);
+      turnActivity = null;
+      streamingAssistantId = null;
+      pruneEmptyAssistantMessages();
+      renderMessages();
+      return;
+    }
+
     const text = (prefilled ?? inputEl.value).trim();
     if (!text || sending) return;
 
@@ -776,8 +1158,9 @@ function mountWidget(
     }
 
     sending = true;
-    sendBtn.disabled = true;
+    setSendingUi(true);
     inputEl.value = "";
+    completedActivity = null;
 
     try {
       if (!sessionId) {
@@ -788,79 +1171,166 @@ function mountWidget(
       renderMessages();
 
       const assistantId = `a-${Date.now()}`;
+      streamingAssistantId = assistantId;
       messages.push({ id: assistantId, role: "assistant", content: "" });
-      turnActivity = { thinking: "", thinkingStreaming: false, toolCalls: [] };
+      turnActivity = createSdkTurnActivity();
+      turnActivity.thinkingStreaming = true;
+      turnActivity.statusMessage = "Connecting…";
       thinkingCollapsed = true;
+      workingCollapsed = true;
+      completedWorkingCollapsed = true;
+      thinkingPhrase = pickThinkingPhrase();
+      showWorkingShimmer = false;
+      lastShimmerKey = "";
+      startTurnTimer();
       renderMessages();
 
       const assistantIndex = messages.findIndex((m) => m.id === assistantId);
 
-      const findToolIndex = (toolCallId?: string, toolName?: string): number => {
+      const findSequenceToolIndex = (toolCallId?: string, toolName?: string): number => {
         if (!turnActivity) return -1;
         if (toolCallId) {
-          const byId = turnActivity.toolCalls.findIndex((t) => t.toolCallId === toolCallId);
+          const byId = turnActivity.sequence.findIndex(
+            (item) => item.type === "tool" && item.data.toolCallId === toolCallId,
+          );
           if (byId >= 0) return byId;
         }
-        return turnActivity.toolCalls.findIndex(
-          (t) => t.status === undefined && (!toolName || t.name === toolName),
+        return turnActivity.sequence.findIndex(
+          (item) =>
+            item.type === "tool" &&
+            item.data.status === "calling" &&
+            (!toolName || item.data.name === toolName),
         );
       };
 
       await streamTurn(sessionId, text, {
+        onTurnId: (id) => {
+          activeTurnId = id;
+        },
         onTurnStart: () => {
-          turnActivity = { thinking: "", thinkingStreaming: false, toolCalls: [] };
+          if (!turnActivity) {
+            turnActivity = createSdkTurnActivity();
+            turnActivity.thinkingStreaming = true;
+            renderMessages();
+          }
+        },
+        onStatus: (message) => {
+          if (!turnActivity) return;
+          turnActivity.statusMessage = message;
+          turnActivity.isFinishingWork =
+            message.includes("Summarizing") || message.includes("Finishing");
           renderMessages();
         },
         onThinkingDelta: (delta) => {
           if (!turnActivity) return;
           turnActivity.thinking += delta;
           turnActivity.thinkingStreaming = true;
+          turnActivity.statusMessage = undefined;
+          turnActivity.isFinishingWork = false;
           renderMessages();
         },
         onDelta: (delta) => {
-          if (turnActivity?.thinking) {
-            turnActivity.thinkingStreaming = false;
-          }
-          if (assistantIndex >= 0) {
-            messages[assistantIndex].content += delta;
-            renderMessages();
-          }
+          if (!turnActivity) return;
+          turnActivity.textSegment += delta;
+          turnActivity.statusMessage = undefined;
+          renderMessages();
         },
         onToolCall: ({ toolCallId, toolName, args }) => {
           if (!turnActivity) return;
-          turnActivity.thinking = "";
+          flushTextSegment(turnActivity);
           turnActivity.thinkingStreaming = false;
-          turnActivity.toolCalls.push({
-            toolCallId,
-            name: toolName,
-            args,
-            status: "pending",
-          });
+          turnActivity.statusMessage = undefined;
+          turnActivity.isFinishingWork = false;
+          const existingIdx = toolCallId
+            ? turnActivity.sequence.findIndex(
+                (item) => item.type === "tool" && item.data.toolCallId === toolCallId,
+              )
+            : -1;
+          if (existingIdx >= 0) {
+            const item = turnActivity.sequence[existingIdx];
+            if (item?.type === "tool") {
+              item.data.name = toolName;
+              item.data.args = args;
+              item.data.status = "calling";
+            }
+          } else {
+            turnActivity.sequence.push({
+              type: "tool",
+              data: { toolCallId, name: toolName, args, status: "calling" },
+            });
+          }
           renderMessages();
         },
-        onToolResult: ({ toolCallId, toolName, success }) => {
+        onToolResult: ({ toolCallId, toolName, success, result }) => {
           if (!turnActivity) return;
-          const idx = findToolIndex(toolCallId, toolName);
+          const idx = findSequenceToolIndex(toolCallId, toolName);
           if (idx >= 0) {
-            turnActivity.toolCalls[idx] = {
-              ...turnActivity.toolCalls[idx],
-              status: success ? "success" : "error",
-            };
-            renderMessages();
+            const item = turnActivity.sequence[idx];
+            if (item?.type === "tool") {
+              item.data.status = success ? "success" : "error";
+              item.data.result = result;
+            }
           }
+          const plan = parsePlanFromToolResult(toolName, result);
+          if (plan) {
+            upsertPlan(plan);
+          }
+          renderMessages();
         },
-        onDone: ({ shouldRefreshApp }) => {
+        onDone: ({ shouldRefreshApp, stopped }) => {
           if (turnActivity) {
+            finalizeSdkTurnActivity(turnActivity);
+            turnActivity.wasStopped = Boolean(stopped);
             turnActivity.thinkingStreaming = false;
+            turnActivity.isFinishingWork = false;
+            completedActivity = {
+              sequence: [...turnActivity.sequence],
+              thinking: turnActivity.thinking,
+              thinkingStreaming: false,
+              textSegment: "",
+              plans: [...turnActivity.plans],
+              startedAt: turnActivity.startedAt,
+              wasStopped: turnActivity.wasStopped,
+            };
+            completedWorkingCollapsed = true;
+            thinkingCollapsed = true;
+            const finalText = getFinalTextAfterTools(turnActivity);
+            if (assistantIndex >= 0 && finalText.trim()) {
+              messages[assistantIndex].content = finalText;
+            }
           }
           turnActivity = null;
+          streamingAssistantId = null;
+          activeTurnId = null;
+          stopTurnTimer();
+          setSendingUi(false);
+          showWorkingShimmer = false;
+          pruneEmptyAssistantMessages();
           renderMessages();
-          if (shouldRefreshApp) {
+          if (sessionId) {
+            void loadSessionMessages(sessionId)
+              .then((history) => {
+                if (history.length > 0) {
+                  const welcome = messages.find((m) => m.id === "welcome");
+                  messages.splice(0, messages.length, ...history);
+                  if (welcome && !messages.some((m) => m.id === "welcome")) {
+                    messages.unshift(welcome);
+                  }
+                  renderMessages();
+                }
+              })
+              .catch(() => undefined);
+          }
+          if (shouldRefreshApp && !stopped) {
             window.setTimeout(() => location.reload(), 1500);
           }
         },
         onError: (error) => {
           turnActivity = null;
+          streamingAssistantId = null;
+          activeTurnId = null;
+          stopTurnTimer();
+          setSendingUi(false);
           if (assistantIndex >= 0 && !messages[assistantIndex].content) {
             messages[assistantIndex].content = error;
             renderMessages();
@@ -871,10 +1341,10 @@ function mountWidget(
       });
     } catch (err) {
       turnActivity = null;
+      activeTurnId = null;
+      stopTurnTimer();
+      setSendingUi(false);
       appendStatus((err as Error).message);
-    } finally {
-      sending = false;
-      sendBtn.disabled = false;
     }
   };
 
@@ -912,7 +1382,22 @@ function mountWidget(
 
   document.body.appendChild(panel);
   document.body.appendChild(bubble);
+
+  if (config.welcomeMessage?.trim()) {
+    messages.push({
+      id: "welcome",
+      role: "assistant",
+      content: config.welcomeMessage.trim(),
+    });
+  }
   renderMessages();
+
+  void ensureSession(appId)
+    .then((sid) => {
+      sessionId = sid;
+      startWarmOnIntent();
+    })
+    .catch(() => undefined);
 
   return () => {
     if (openPanelHandler === openPanel) {

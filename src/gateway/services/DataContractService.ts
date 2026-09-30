@@ -112,10 +112,18 @@ export class DataContractService {
 
     return {
       enforceOnFailure: contract.enforceOnFailure === true,
-      result: validateDatabaseAgainstContract(primary.dbPath, contract, {
-        jobId: job.id,
-        jobName: job.name,
-      }),
+      result: await validateDatabaseAgainstContract(
+        {
+          dbPath: primary.dbPath,
+          dbId: primary.dbId,
+          alias: primary.alias,
+        },
+        contract,
+        {
+          jobId: job.id,
+          jobName: job.name,
+        },
+      ),
     };
   }
 
@@ -136,18 +144,35 @@ export class DataContractService {
     const primaryPath = primary?.dbPath ?? null;
 
     const tableCounts = primaryPath
-      ? listUserTablesWithCounts(primaryPath)
+      ? await listUserTablesWithCounts({
+          dbPath: primaryPath,
+          dbId: primary?.dbId,
+          alias: primary?.alias,
+        })
       : [];
 
     const contractValidation =
       contract && primaryPath
-        ? validateDatabaseAgainstContract(primaryPath, contract)
+        ? await validateDatabaseAgainstContract(
+            {
+              dbPath: primaryPath,
+              dbId: primary?.dbId,
+              alias: primary?.alias,
+            },
+            contract,
+          )
         : null;
 
     const linkedSources = await Promise.all(
       config.sources.map(async (source) => {
         const exists = existsSync(source.dbPath);
-        const counts = exists ? listUserTablesWithCounts(source.dbPath) : [];
+        const counts = exists
+          ? await listUserTablesWithCounts({
+              dbPath: source.dbPath,
+              dbId: source.dbId,
+              alias: source.alias,
+            })
+          : [];
         return {
           alias: source.alias,
           ...(source.jobId ? { jobId: source.jobId } : {}),

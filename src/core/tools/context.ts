@@ -8,11 +8,29 @@
  */
 
 import { AsyncLocalStorage } from "async_hooks";
+import type { TurnMetrics } from "../../gateway/services/agent/turnMetrics.js";
 
 interface ToolContext {
   chatId: string;
+  /** Open mini-app tab from UI focus context (scoped file search). */
+  activeAppId?: string;
   /** Set when a sub-agent job is executing tools (delegate_task job id). */
   delegationJobId?: string;
+  /** Injected for agent jobs — APP_DB, PAPR_DB_*, JOB_DIR, etc. */
+  jobEnv?: Record<string, string>;
+  /**
+   * Measurement sink for the turn a tool is running inside. Ambient because a
+   * tool cannot otherwise know which turn it belongs to. Absent for jobs and
+   * sub-agents, where recording is a no-op.
+   */
+  turnMetrics?: TurnMetrics;
+}
+
+interface ToolContextOptions {
+  activeAppId?: string;
+  delegationJobId?: string;
+  jobEnv?: Record<string, string>;
+  turnMetrics?: TurnMetrics;
 }
 
 const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
@@ -24,10 +42,16 @@ const asyncLocalStorage = new AsyncLocalStorage<ToolContext>();
 export function runWithToolContext<T>(
   chatId: string,
   fn: () => T | Promise<T>,
-  options?: { delegationJobId?: string },
+  options?: ToolContextOptions,
 ): T | Promise<T> {
   return asyncLocalStorage.run(
-    { chatId, delegationJobId: options?.delegationJobId },
+    {
+      chatId,
+      activeAppId: options?.activeAppId,
+      delegationJobId: options?.delegationJobId,
+      jobEnv: options?.jobEnv,
+      turnMetrics: options?.turnMetrics,
+    },
     fn,
   );
 }
@@ -38,12 +62,56 @@ export function runWithToolContext<T>(
  */
 export function setToolContext(
   chatId: string,
-  options?: { delegationJobId?: string },
+  options?: ToolContextOptions,
 ): void {
   asyncLocalStorage.enterWith({
     chatId,
+    activeAppId: options?.activeAppId,
     delegationJobId: options?.delegationJobId,
+    jobEnv: options?.jobEnv,
+    turnMetrics: options?.turnMetrics,
   });
+}
+
+/** Mini-app id from the open app tab (UI focus), when available. */
+export function getActiveAppIdForTools(): string | undefined {
+  return asyncLocalStorage.getStore()?.activeAppId;
+}
+
+/** Job-scoped env vars (APP_DB, JOB_DIR, …) for agent job bash calls. */
+export function getJobToolEnv(): Record<string, string> {
+  const context = asyncLocalStorage.getStore();
+  return context?.jobEnv ?? {};
+}
+
+const JOB_ENV_KEYS = [
+  "PAPR_HOME",
+  "JOB_DIR",
+  "JOB_DB",
+  "APP_DB",
+  "APP_DB_ALIAS",
+  "APP_DB_ID",
+  "PAPR_WRITE_DB_IDS",
+  "BRIEF_DATE_KEY",
+] as const;
+
+/** Collect job-scoped env vars from process.env (cloud sandbox after prepareCloudJobEnvironment). */
+export function collectJobEnvFromProcess(
+  env: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+  for (const key of JOB_ENV_KEYS) {
+    const value = env[key];
+    if (value) {
+      result[key] = value;
+    }
+  }
+  for (const [key, value] of Object.entries(env)) {
+    if (key.startsWith("PAPR_DB_") && value) {
+      result[key] = value;
+    }
+  }
+  return result;
 }
 
 /**
@@ -52,6 +120,15 @@ export function setToolContext(
 export function getCurrentChatId(): string | null {
   const context = asyncLocalStorage.getStore();
   return context?.chatId ?? null;
+}
+
+/**
+ * Measurement sink for the turn the calling tool is running inside, when one
+ * exists. Null for jobs and sub-agents, where recording is a no-op.
+ */
+export function getCurrentTurnMetrics(): TurnMetrics | null {
+  const context = asyncLocalStorage.getStore();
+  return context?.turnMetrics ?? null;
 }
 
 /**

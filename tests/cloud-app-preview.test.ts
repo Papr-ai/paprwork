@@ -6,7 +6,11 @@ import {
 } from "../src/core/utils/cloudAppMetadata.js";
 import {
   buildPreviewHeadTags,
+  buildPreviewLandingHtml,
   buildPreviewMetaFromSlug,
+  CLOUD_APP_LOGIN_BUTTON_LABEL,
+  CLOUD_APP_SIGNUP_BUTTON_LABEL,
+  CLOUD_APP_SIGN_IN_HEADLINE,
   injectPreviewHeadTags,
   isLinkPreviewCrawler,
 } from "../src/core/utils/cloudAppPreview.js";
@@ -63,5 +67,27 @@ describe("cloudAppPreview", () => {
       "<meta property=\"og:title\" content=\"New Title\">",
     );
     expect(html).toContain('content="New Title"');
+  });
+
+  it("builds centered sign-in gate landing with app branding", () => {
+    const meta = buildPreviewMetaFromSlug(
+      "talent-assessment",
+      "https://apps.papr.ai/ns/talent-assessment/",
+      "https://apps.papr.ai/ns/talent-assessment/opengraph-icon",
+      "https://apps.papr.ai/ns/talent-assessment/opengraph-icon",
+    );
+    const html = buildPreviewLandingHtml(meta, "", {
+      loginUrl: "/auth/login?returnTo=%2F",
+      signupUrl: "/auth/login?returnTo=%2F&mode=signup",
+      headline: CLOUD_APP_SIGN_IN_HEADLINE,
+      iconSvg: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/></svg>',
+    });
+    expect(html).toContain('class="app-brand"');
+    expect(html).toContain('class="app-description"');
+    expect(html).toContain(CLOUD_APP_SIGN_IN_HEADLINE);
+    expect(html).toContain(CLOUD_APP_LOGIN_BUTTON_LABEL);
+    expect(html).toContain(CLOUD_APP_SIGNUP_BUTTON_LABEL);
+    expect(html).toContain("mode=signup");
+    expect(html).toContain("font-style: italic");
   });
 });

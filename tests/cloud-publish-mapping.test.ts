@@ -14,13 +14,18 @@ describe("cloudPublishMapping", () => {
   it("maps accessMode to memory visibility + linkPermission", () => {
     expect(accessModeToPublishFields("private")).toEqual({
       visibility: "private",
-      linkPermission: "read",
+      linkPermission: "read_write",
       shareLinkEnabled: false,
     });
     expect(accessModeToPublishFields("link_read_write")).toEqual({
       visibility: "link_read_write",
       linkPermission: "read_write",
       shareLinkEnabled: true,
+    });
+    expect(accessModeToPublishFields("public_read")).toEqual({
+      visibility: "public_read",
+      linkPermission: "read_write",
+      shareLinkEnabled: false,
     });
   });
 

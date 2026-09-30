@@ -3,9 +3,14 @@
  * Reference: Paprwork v1 appManager.js
  */
 
-import { promises as fs } from "fs";
-import chokidar, { type FSWatcher } from "chokidar";
+import { checkHtmlTagBalance } from "../utils/htmlTagBalance.js";
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
+import { existsSync, promises as fs } from "fs";
+import { TreeWatcher } from "./TreeWatcher.js";
 import path from "path";
+import { shouldIgnoreAppWatchPath } from "./appWatchIgnore.js";
+import { isCloudPrepGitSyncArtifact } from "./cloudSync/syncState.js";
 import os from "os";
 import { v4 as uuidv4 } from "uuid";
 import { fileURLToPath } from "url";
@@ -17,11 +22,12 @@ import {
   type AppDataSourcesFile,
   buildAppDbTsContent,
   dbHasOnlyBaselineTables,
-  inferPrimaryAlias,
+  isUnlinkedDataSource,
+  omitUnlinkedDataSources,
   parseDataSourcesFile,
+  resolveDataSourcesForWorkspace,
   serializeDataSourcesFile,
 } from "./appDataSources.js";
-import { jobBelongsToApp } from "./jobs/appIds.js";
 import {
   BACKEND_FOLDER,
   DEFAULT_BACKEND_MANIFEST,
@@ -29,17 +35,134 @@ import {
   hasBackendFiles,
 } from "../utils/appBackendScaffold.js";
 import { writeCloudAppMetadataFile } from "./cloudAppMetadataFile.js";
+import { writeAgentChatSidecar } from "./appAgentChatSidecar.js";
+import {
+  hydrateAppAgentChatFromDisk,
+  resolveAppAgentChatConfig,
+} from "./appAgentChat/appAgentChatPersistence.js";
+import { parseCloudAppMetadataFile } from "../../core/utils/cloudAppMetadata.js";
 import {
   getPaprAppsRoot,
   getPaprDataDir,
+  getPaprJobsRoot,
   getPaprRoot,
 } from "../../core/utils/paprRoot.js";
+import { notifyJobOwnershipChanged } from "./cloudSync/jobOwnershipInvalidation.js";
+import { scanAppCodeForJobDatabaseReferences } from "./appCodeDataSourceDiscovery.js";
+import {
+  sanitizeMiniAppIcon,
+  validateMiniAppIcon,
+} from "../../core/utils/miniAppIconValidation.js";
+import {
+  isAppAssignedToWorkspace,
+  isAppAwaitingAssignmentInWorkspace,
+  isAppWorkspaceUnassigned,
+  isBundledDefaultAppId,
+  mergeAppWorkspaceFields,
+  readActiveAppWorkspaceScope,
+  readAppWorkspaceFieldsFromDisk,
+  shouldPruneStrayWorkspaceAppCopy,
+  shouldShowAppInMyApps,
+  withWorkspaceScope,
+} from "../../core/utils/appWorkspaceScope.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
+import {
+  assertPaprIdentityResolved,
+  fetchForeignPublisherAppIds,
+  isAppOwnedByCurrentUser,
+  readAppDiskOwnershipHints,
+  resolveActiveNamespaceId,
+  shouldIndexAppFolderForCurrentUser,
+} from "./appOwnership.js";
+import {
+  copyAppToNamespace as copyAppToNamespaceCore,
+  CopyAppError,
+  type CopyAppToNamespaceResult,
+} from "./copyAppToNamespace.js";
+import {
+  assignAppToWorkspace as assignAppToWorkspaceCore,
+  AppWorkspaceAssignError,
+  type AssignAppToWorkspaceResult,
+} from "./appWorkspaceAssignment.js";
+import { resolveBundledResourcesDir } from "../../core/utils/bundledResourcesPath.js";
+import {
+  mergeDailyBriefDataSource,
+  dailyBriefDataSourceNeedsUpdate,
+  DEFAULT_HOME_APP_ID,
+  DEFAULT_HOME_BRIEFS_DB_ISOLATION,
+  DEFAULT_HOME_BRIEFS_DB_LABEL,
+  DEFAULT_HOME_BRIEFS_DB_SLUG,
+  cleanupLegacyHomeJobArtifacts,
+  DEFAULT_HOME_DB_MIGRATIONS_DIR,
+  DEFAULT_HOME_JOB_ASSETS_DIR,
+  findHomeDailyBriefJobIdInRegistry,
+  readHomeDailyBriefJobIdFromAppDir,
+  resolveHomeBriefsRegistryDbPath,
+  resolveHomeDailyBriefJobId,
+  resolveOrAllocateHomeDailyBriefJobId,
+  writeHomeDailyBriefJobIdToAppDir,
+  type BundledDefaultJobDef,
+} from "./defaultHomeBundle.js";
+import type { JobRecord } from "./jobs/types.js";
+import {
+  canPerformWorkspaceWrite,
+  getWorkspaceWriteGeneration,
+} from "./workspaceWriteGuard.js";
+
+export { CopyAppError, type CopyAppToNamespaceResult, AppWorkspaceAssignError, type AssignAppToWorkspaceResult };
 
 export type { AppDataSource, AppDataSourceRole, AppDataSourcesFile };
+
+/** Written by rebuildIndexIfCorrupted when metadata.json was not read (legacy). */
+export const RECOVERED_INDEX_DESCRIPTION = "Recovered app (index was corrupted)";
+
+export { DEFAULT_HOME_APP_ID };
 
 // ESM compatibility: get __dirname equivalent
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+/**
+ * Budget for the pre-delete cloud publish check. cloudApiFetch allows itself
+ * 60s, which exceeded the client's request timeout and surfaced as a bogus
+ * "Request timeout" in the Apps UI. Deleting must stay responsive, so give the
+ * check a short window and fall back to "not published".
+ */
+const CLOUD_PUBLISH_STATUS_TIMEOUT_MS = 8_000;
+
+/** Reject with a descriptive error if `promise` outlives `ms`. */
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`Timed out after ${ms}ms: ${label}`)),
+          ms,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Who originated an app creation, for analytics.
+ *
+ * "user"     — a person authored it in the UI
+ * "agent"    — a main-agent or sub-agent tool call (bulk-capable)
+ * "install"  — forked/tracked from the Papr Cloud catalog
+ * "template" — scaffolded from a starter template
+ *
+ * Only "user" counts as builder activity; the rest inflate app-count metrics.
+ */
+export type AppCreationSource = "user" | "agent" | "install" | "template";
 
 export interface MiniAppCloudLineage {
   mode: "fork" | "track";
@@ -48,6 +171,8 @@ export interface MiniAppCloudLineage {
   sourceNamespaceId: string;
   installedAt: string;
   lastSyncedAt?: string;
+  databasePolicy?: "shared" | "forked";
+  sourceAudience?: "team" | "people" | "community";
 }
 
 import type { AppAgentChatConfig } from "../../core/types/appAgentChat.js";
@@ -72,8 +197,16 @@ export interface MiniApp {
   createdByAgentName?: string;
   /** Set when app was installed from Papr Cloud (fork or track). */
   cloudLineage?: MiniAppCloudLineage;
+  /** Papr user id that owns this local app copy (My Apps). */
+  ownerUserId?: string;
+  /** Org that owns this app in My Apps (required for legacy apps to appear). */
+  organizationId?: string;
+  /** Namespace that owns this app in My Apps (required for legacy apps to appear). */
+  namespaceId?: string;
   /** Embedded sub-agent chat bubble (desktop + published web). */
   agentChat?: AppAgentChatConfig;
+  /** Topic tags for Community / Team catalog cards (not API integrations). */
+  tags?: string[];
 }
 
 export interface AppFile {
@@ -102,6 +235,65 @@ export interface ValidationIssue {
   rule?: string;
 }
 
+export interface DeleteAppOptions {
+  /** When true, unpublish from cloud before deleting local files. Required if app is live on apps.papr.ai. */
+  unpublishFromCloud?: boolean;
+  /** When true, also delete jobs that are exclusively linked to this app. */
+  deleteLinkedJobs?: boolean;
+  /** When true, also delete Turso cloud databases for deleted jobs. */
+  deleteTursoDatabases?: boolean;
+  /** Registry dbIds to delete (must be sole-linker — only this app references them). */
+  deleteRegistryDbIds?: string[];
+  /** When true, delete Turso replicas for registry DBs in deleteRegistryDbIds. */
+  deleteRegistryTurso?: boolean;
+  /** When true, user has reviewed all deletion details and confirmed. */
+  confirmed?: boolean;
+}
+
+export interface LinkedJobInfo {
+  id: string;
+  name: string;
+  type: string; // JobType at runtime, but we use string for flexibility
+  hasTursoDb?: boolean;
+}
+
+export type { LinkedRegistryDbPreview } from "./deleteAppLinkedDatabases.js";
+import type { LinkedRegistryDbPreview } from "./deleteAppLinkedDatabases.js";
+
+export interface DeleteAppPreview {
+  appId: string;
+  appTitle: string;
+  /** Whether app is published to the web */
+  isPublished: boolean;
+  shareUrl?: string | null;
+  /** Jobs that are exclusively linked to this app */
+  linkedJobs: LinkedJobInfo[];
+  /** Number of Turso cloud databases that would be deleted with linked jobs */
+  tursoDbCount: number;
+  /** Registry databases linked via data-sources.json */
+  linkedRegistryDatabases: LinkedRegistryDbPreview[];
+  /** Collaborator copy: remove locally only (no cloud / shared Turso). */
+  localUninstallOnly?: boolean;
+  /** Publisher removing a shared live app — warn collaborators will break. */
+  publisherSharedDeprecation?: boolean;
+  sourceSlug?: string | null;
+}
+
+export interface DeleteAppResult {
+  deleted: boolean;
+  unpublished?: boolean;
+  /** Preview info for deletion confirmation UI */
+  preview?: DeleteAppPreview;
+  /** Number of jobs that were deleted */
+  deletedJobCount?: number;
+  /** Number of Turso databases that were deleted */
+  deletedTursoDbCount?: number;
+  /** Number of registry databases tombstoned + removed locally */
+  deletedRegistryDbCount?: number;
+  /** Number of Turso replicas deleted for registry databases */
+  deletedRegistryTursoCount?: number;
+}
+
 export interface ValidationResult {
   appId: string;
   timestamp: string;
@@ -117,12 +309,35 @@ export class AppService {
   private legacyAppsIndexPath: string;
   private apps: Map<string, MiniApp>;
   private initialized: boolean;
-  private watchers: Map<string, FSWatcher>;
+  /**
+   * App ids whose directories are routed for hot-reload. One recursive
+   * TreeWatcher on appsDir serves all of them — never one fd per file/app
+   * (per-file kqueue watchers pushed fd numbers past OPEN_MAX and broke
+   * posix_spawn with EBADF).
+   */
+  private watchedAppIds: Set<string>;
+  private treeWatcher: TreeWatcher | null = null;
   private debounceTimers: Map<string, NodeJS.Timeout>;
   private reloadBroadcastTimers: Map<string, NodeJS.Timeout>;
   private buildInFlight: Map<string, Promise<MiniAppBuildResult>>;
+  /** Apps where a sibling write landed mid-build; the finished build is superseded. */
+  private buildRerunRequested: Set<string>;
   private pendingDefaultJobs: Array<{ sourceDir: string; targetDir: string; appId: string }>;
   private lastBuildResult: Map<string, MiniAppBuildResult>;
+  private saveLock: Promise<void> | null = null;
+  private initPromise: Promise<void> | null = null;
+  /** PAPR_HOME at last successful initialize — prune must not run after env drift. */
+  private loadedPaprRoot: string | null = null;
+  private boundPaprDir: string | null = null;
+  private boundWriteGeneration: number | null = null;
+  /** Dedupes the prune-skip warning, which listApps() would otherwise repeat. */
+  private lastPruneSkipWarnKey: string | null = null;
+  /**
+   * Set by cleanup(). Watcher startup is fire-and-forget, so without this a
+   * shutdown that lands mid-startup creates watchers *after* cleanup already
+   * closed the set — they then outlive the service with nothing tracking them.
+   */
+  private disposed = false;
 
   /** Coalesce rapid multi-file agent edits into one rebuild + reload. */
   private static readonly FILE_CHANGE_DEBOUNCE_MS = 800;
@@ -147,6 +362,11 @@ export class AppService {
     ".txt",
   ]);
 
+  /** System-provided scaffold files — not subject to the 100-line agent limit. */
+  private static readonly MINI_APP_LOC_EXEMPT_BASENAMES = new Set([
+    "base.css",
+  ]);
+
   constructor() {
     const homeDir = os.homedir();
     this.legacyAppsDir = path.join(homeDir, ".paprwork", "apps");
@@ -158,10 +378,11 @@ export class AppService {
     );
     this.apps = new Map();
     this.initialized = false;
-    this.watchers = new Map();
+    this.watchedAppIds = new Set();
     this.debounceTimers = new Map();
     this.reloadBroadcastTimers = new Map();
     this.buildInFlight = new Map();
+    this.buildRerunRequested = new Set();
     this.pendingDefaultJobs = [];
     this.lastBuildResult = new Map();
   }
@@ -178,6 +399,22 @@ export class AppService {
     return path.join(getPaprDataDir(), "apps.json");
   }
 
+  private bindWorkspaceWriteContext(): void {
+    this.boundPaprDir = getPaprRoot();
+    this.boundWriteGeneration = getWorkspaceWriteGeneration();
+  }
+
+  private isWriteContextValid(context: string): boolean {
+    if (this.boundPaprDir === null || this.boundWriteGeneration === null) {
+      return true;
+    }
+    return canPerformWorkspaceWrite(
+      this.boundWriteGeneration,
+      this.boundPaprDir,
+      context,
+    );
+  }
+
   /** Reload index from disk after PAPR_HOME changes (cloud agent gateway). */
   async resetForWorkspaceReload(): Promise<void> {
     for (const timer of this.debounceTimers.values()) {
@@ -185,11 +422,11 @@ export class AppService {
     }
     this.debounceTimers.clear();
     this.buildInFlight.clear();
-    for (const watcher of this.watchers.values()) {
-      await watcher.close();
-    }
-    this.watchers.clear();
+    await this.closeTreeWatcher();
     this.initialized = false;
+    this.loadedPaprRoot = null;
+    this.boundPaprDir = null;
+    this.boundWriteGeneration = null;
     this.apps.clear();
     this.pendingDefaultJobs = [];
     this.lastBuildResult.clear();
@@ -241,14 +478,11 @@ export class AppService {
    */
   private async installDefaultApps(): Promise<void> {
     try {
-      // Path to bundled default apps (in dist after build)
-      // __dirname is dist/gateway/services/ so we need to go up 2 levels to reach dist/
-      const defaultAppsDir = path.join(__dirname, "..", "..", "resources", "default-apps");
-      
-      // Check if default apps directory exists (may not exist in dev mode before first build)
-      try {
-        await fs.access(defaultAppsDir);
-      } catch {
+      const defaultAppsDir = await resolveBundledResourcesDir(
+        __dirname,
+        "resources/default-apps",
+      );
+      if (!defaultAppsDir) {
         console.log("[AppService] No default apps directory found, skipping installation");
         return;
       }
@@ -330,6 +564,7 @@ export class AppService {
 
         // Create app entry in registry
         const now = new Date().toISOString();
+        const scope = readActiveAppWorkspaceScope();
         const app: MiniApp = {
           id: appId,
           title: metadata.title || appDirName,
@@ -338,6 +573,10 @@ export class AppService {
           createdAt: metadata.createdAt || now,
           updatedAt: now,
           favorite: metadata.favorite || false,
+          ...(getPaprUserId()?.trim()
+            ? { ownerUserId: getPaprUserId()!.trim() }
+            : {}),
+          ...(scope ? withWorkspaceScope({}, scope) : {}),
           ...(icon ? { icon } : {}),
         };
 
@@ -392,7 +631,9 @@ export class AppService {
    * JobsService has been fully initialized.
    */
   async installPendingDefaultJobs(): Promise<void> {
-    if (this.pendingDefaultJobs.length === 0) return;
+    if (this.pendingDefaultJobs.length === 0) {
+      return;
+    }
 
     const pending = [...this.pendingDefaultJobs];
     this.pendingDefaultJobs = [];
@@ -406,6 +647,122 @@ export class AppService {
     }
   }
 
+  /** Cheap Home data-source checks — no replica migrations. */
+  async homeLinkedSourcesInvariantsOk(): Promise<boolean> {
+    try {
+      const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      const { homeLinkedSourcesInvariantsOk } = await import(
+        "./homeWorkspaceBootInvariants.js"
+      );
+      return homeLinkedSourcesInvariantsOk({
+        appsDir: this.appsDir,
+        jobExists: (jobId) => jobsService.hasJob(jobId),
+        resolveBriefReadTarget: async (jobId) => {
+          const registryPath = resolveHomeBriefsRegistryDbPath(getPaprDataDir());
+          const { initializeDatabaseRegistry } = await import(
+            "./DatabaseRegistryService.js"
+          );
+          if (existsSync(registryPath)) {
+            const registry = await initializeDatabaseRegistry();
+            const record = registry.getByPath(registryPath);
+            return { dbPath: registryPath, dbId: record?.dbId };
+          }
+          const job = await jobsService.getJob(jobId);
+          const writeDbId = job?.writeDbIds?.[0]?.trim();
+          if (writeDbId) {
+            const registry = await initializeDatabaseRegistry();
+            const record = registry.getById(writeDbId);
+            if (record?.localPath && existsSync(record.localPath)) {
+              return { dbPath: record.localPath, dbId: writeDbId };
+            }
+          }
+          const jobDbPath = path.join(
+            jobsService.getJobsRootPath(),
+            jobId,
+            "data",
+            "data.db",
+          );
+          return { dbPath: existsSync(jobDbPath) ? jobDbPath : "" };
+        },
+      });
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Idempotent startup repair for the bundled Home app in the active namespace.
+   * Rewrites foreign dbPath pointers and persists default-job-id.txt — no file copies.
+   */
+  async repairHomeAndWorkspaceOnStartup(): Promise<void> {
+    try {
+      const { getJobsService } = await import("./JobsService.js");
+      const jobsService = getJobsService();
+      const allJobs = await jobsService.listJobs();
+
+      const homeAppDir = path.join(this.appsDir, DEFAULT_HOME_APP_ID);
+      const preferJobId = await readHomeDailyBriefJobIdFromAppDir(homeAppDir);
+
+      const { repairDefaultHomeAppLinkedSources } = await import(
+        "./defaultHomeAppRepair.js"
+      );
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
+      const homeRepair = await repairDefaultHomeAppLinkedSources({
+        appsDir: this.appsDir,
+        workspaceRoot: getPaprRoot(),
+        jobExists: (jobId) => jobsService.hasJob(jobId),
+        resolveJobDbPath: (jobId) =>
+          path.join(jobsService.getJobsRootPath(), jobId, "data", "data.db"),
+        findLinkedDailyBriefJobId: () =>
+          findHomeDailyBriefJobIdInRegistry(allJobs, { preferJobId }),
+        resolveBriefReadTarget: async (jobId) => {
+          const registryPath = resolveHomeBriefsRegistryDbPath(getPaprDataDir());
+          const registry = await initializeDatabaseRegistry();
+
+          if (existsSync(registryPath)) {
+            const record = registry.getByPath(registryPath);
+            return { dbPath: registryPath, dbId: record?.dbId };
+          }
+
+          const job = await jobsService.getJob(jobId);
+          const writeDbId = job?.writeDbIds?.[0]?.trim();
+          if (writeDbId) {
+            const record = registry.getById(writeDbId);
+            if (record?.localPath && existsSync(record.localPath)) {
+              return { dbPath: record.localPath, dbId: writeDbId };
+            }
+          }
+
+          const jobDbPath = path.join(
+            jobsService.getJobsRootPath(),
+            jobId,
+            "data",
+            "data.db",
+          );
+          return { dbPath: existsSync(jobDbPath) ? jobDbPath : "" };
+        },
+      });
+
+      const totalRepairs =
+        homeRepair.prunedSources +
+        homeRepair.schemaRepaired +
+        homeRepair.dbPathsUpdated +
+        homeRepair.jobIdPersisted +
+        homeRepair.registryUpgraded;
+
+      if (totalRepairs > 0) {
+        console.log(
+          `[AppService] Startup home repair: dbPaths=${homeRepair.dbPathsUpdated} registry=${homeRepair.registryUpgraded} jobId=${homeRepair.jobIdPersisted} pruned=${homeRepair.prunedSources} schema=${homeRepair.schemaRepaired}`,
+        );
+      }
+    } catch (err) {
+      console.warn("[AppService] Startup home repair failed:", err);
+    }
+  }
+
   private async doInstallDefaultJobForApp(
     sourceDir: string,
     targetDir: string,
@@ -413,24 +770,31 @@ export class AppService {
   ): Promise<void> {
     const jobDefPath = path.join(sourceDir, "default-job.json");
     const jobDefContent = await fs.readFile(jobDefPath, "utf-8");
-    const jobDef = JSON.parse(jobDefContent) as {
-      id: string;
-      name: string;
-      type: string;
-      command?: string;
-      schedule?: Record<string, unknown>;
-      retries?: Record<string, unknown>;
-      outputMode?: string;
-      memoryPolicy?: string;
-    };
+    const jobDef = JSON.parse(jobDefContent) as BundledDefaultJobDef;
 
     const { getJobsService } = await import("./JobsService.js");
     const jobsService = getJobsService();
     await jobsService.initialize();
 
+    const allJobs = await jobsService.listJobs();
+    const jobId = await resolveOrAllocateHomeDailyBriefJobId({
+      appDir: targetDir,
+      jobExists: (id) => jobsService.hasJob(id),
+      findLinkedJobId: () => findHomeDailyBriefJobIdInRegistry(allJobs),
+    });
+
     const { installed, dbPath } = await jobsService.installDefaultJob(
       {
-        ...(jobDef as Parameters<typeof jobsService.installDefaultJob>[0]),
+        id: jobId,
+        name: jobDef.name,
+        type: jobDef.type,
+        command: jobDef.command,
+        schedule: jobDef.schedule,
+        retries: jobDef.retries,
+        outputMode: jobDef.outputMode as JobRecord["outputMode"] | undefined,
+        memoryPolicy: jobDef.memoryPolicy as JobRecord["memoryPolicy"] | undefined,
+        provider: jobDef.provider,
+        model: jobDef.model,
         appIds: [appId],
       },
       [
@@ -442,37 +806,364 @@ export class AppService {
       ],
     );
 
-    // Update data-sources.json with the resolved dbPath
+    await this.installHomeJobAssets(sourceDir, jobId, dbPath);
+
+    // Briefs live in a real registry database (data/databases/{slug}/data.db),
+    // not the job's scratch data.db: job writes it via writeDbIds, app reads it
+    // as an attached source. Falls back to the job DB if provisioning fails so
+    // Home still installs.
+    const briefsDb = await this.provisionHomeBriefsRegistryDb(
+      sourceDir,
+      jobId,
+      dbPath,
+      appId,
+    );
+    const briefsDbId = briefsDb?.dbId;
+    const briefsDbPath = briefsDb?.dbPath ?? dbPath;
+
+    if (briefsDb) {
+      try {
+        // writeDbIds injects PAPR_DB_* (and APP_DB for a single target) so the
+        // job writes the registry DB instead of its own scratch database.
+        const existingJob = await jobsService.getJob(jobId);
+        if (!existingJob?.writeDbIds?.includes(briefsDb.dbId)) {
+          await jobsService.updateJob(jobId, { writeDbIds: [briefsDb.dbId] });
+        }
+      } catch (writeDbErr) {
+        console.warn(
+          `[AppService] Could not set writeDbIds for Home job ${jobId}:`,
+          writeDbErr instanceof Error ? writeDbErr.message : writeDbErr,
+        );
+      }
+    }
+
     const dataSourcesPath = path.join(targetDir, "data-sources.json");
     try {
       const dsContent = await fs.readFile(dataSourcesPath, "utf-8");
       const config = parseDataSourcesFile(dsContent);
-
       let updated = false;
-      for (const ds of config.sources) {
-        if (ds.jobId === jobDef.id && (!ds.dbPath || ds.dbPath === "")) {
-          ds.dbPath = dbPath;
+      const kept = (config.sources ?? []).filter((ds) => {
+        if (!ds.tables?.includes("briefs")) {
+          return true;
+        }
+        if (ds.jobId && ds.jobId !== jobId) {
+          updated = true;
+          return false;
+        }
+        return true;
+      });
+
+      const briefIndex = kept.findIndex(
+        (ds) => ds.jobId === jobId || ds.tables?.includes("briefs"),
+      );
+      if (briefIndex >= 0) {
+        const existing = kept[briefIndex];
+        const merged = mergeDailyBriefDataSource(
+          existing,
+          jobId,
+          briefsDbPath,
+          briefsDbId,
+        );
+        if (dailyBriefDataSourceNeedsUpdate(existing, merged)) {
+          kept[briefIndex] = merged;
           updated = true;
         }
+      } else {
+        kept.unshift(
+          mergeDailyBriefDataSource(undefined, jobId, briefsDbPath, briefsDbId),
+        );
+        updated = true;
       }
 
       if (updated) {
-        if (!config.primary && config.sources.length > 0) {
-          config.primary = inferPrimaryAlias(config.sources);
-        }
         await fs.writeFile(
           dataSourcesPath,
-          serializeDataSourcesFile(config),
+          serializeDataSourcesFile({ ...config, sources: kept }),
           "utf8",
         );
-        console.log(`[AppService] Linked data-source dbPath for app ${appId} → ${dbPath}`);
+        console.log(
+          `[AppService] Linked Daily Brief data-source for app ${appId} → ${briefsDbPath}` +
+            (briefsDbId ? ` (registry ${briefsDbId})` : " (legacy job DB)"),
+        );
       }
     } catch (dsErr) {
       console.warn(`[AppService] Could not update data-sources.json for ${appId}:`, dsErr);
     }
 
     if (installed) {
-      console.log(`[AppService] Installed default job ${jobDef.id} for app ${appId}`);
+      console.log(`[AppService] Installed default job ${jobId} for app ${appId}`);
+    }
+
+    const bundledRecipePath = path.join(sourceDir, "recipe.md");
+    try {
+      const markdown = await fs.readFile(bundledRecipePath, "utf8");
+      const { getRecipeService } = await import("./jobs/RecipeService.js");
+      await getRecipeService().writeRecipe(jobId, markdown);
+      if (jobDef.recipe?.enabled) {
+        await jobsService.updateJob(jobId, { recipe: jobDef.recipe });
+      }
+    } catch (recipeErr) {
+      const code = (recipeErr as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `[AppService] Could not install bundled recipe for ${jobId}:`,
+          recipeErr instanceof Error ? recipeErr.message : recipeErr,
+        );
+      }
+    }
+  }
+
+  /**
+   * Install bundled job assets (save_brief.py) into the job directory.
+   *
+   * save_brief.py is the ONLY supported write path for the briefs table; the
+   * job prompt invokes "$JOB_DIR/save_brief.py". Refreshed on every boot so
+   * the prompt and the script can never drift apart across app updates.
+   */
+  private async installHomeJobAssets(
+    sourceDir: string,
+    jobId: string,
+    jobDbPath: string,
+  ): Promise<void> {
+    // jobDbPath is "{jobDir}/data/data.db" (canonicalJobDatabasePath).
+    const jobDir = path.dirname(path.dirname(jobDbPath));
+    const assetsDir = path.join(sourceDir, DEFAULT_HOME_JOB_ASSETS_DIR);
+    try {
+      const assets = await fs.readdir(assetsDir);
+      for (const asset of assets) {
+        await fs.copyFile(
+          path.join(assetsDir, asset),
+          path.join(jobDir, asset),
+        );
+      }
+      if (assets.length > 0) {
+        console.log(
+          `[AppService] Installed ${assets.length} Home job asset(s) for ${jobId}`,
+        );
+      }
+
+      const removed = await cleanupLegacyHomeJobArtifacts(jobDir);
+      if (removed.length > 0) {
+        console.log(
+          `[AppService] Removed ${removed.length} legacy Home job artifact(s) for ${jobId}: ${removed.join(", ")}`,
+        );
+      }
+    } catch (assetErr) {
+      const code = (assetErr as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT") {
+        console.warn(
+          `[AppService] Could not install Home job assets for ${jobId}:`,
+          assetErr instanceof Error ? assetErr.message : assetErr,
+        );
+      }
+    }
+  }
+
+  /**
+   * Provision the Home briefs database as a real registry database.
+   *
+   * Path is `$PAPR_HOME/data/databases/home-daily-briefs/data.db` — NOT the
+   * job's `data/data.db`. That distinction is load-bearing:
+   * registrySlugFromLocalPath() only matches `/data/databases/{slug}/data.db`,
+   * and register() derives the Turso instance from ownerJobId when set. A job
+   * path therefore yields a `j-*` instance with no migrations dir; only this
+   * layout yields a `d-*` replica-synced registry DB.
+   *
+   * Ownership after this runs: job writes (writeDbIds → PAPR_DB_* env), app
+   * reads (attached data source). The job's own data.db stays scratch.
+   *
+   * Existing users: rows are backfilled once from the legacy job DB, and only
+   * into dates the registry DB does not already have — never overwriting newer
+   * data. The legacy DB is left untouched as a safety net.
+   *
+   * Best-effort: on failure we return undefined and the caller falls back to
+   * linking the job DB, so Home still installs.
+   *
+   * @returns the registry dbId and its local path when available.
+   */
+  private async provisionHomeBriefsRegistryDb(
+    sourceDir: string,
+    jobId: string,
+    legacyJobDbPath: string,
+    appId: string,
+  ): Promise<{ dbId: string; dbPath: string } | undefined> {
+    try {
+      const dbDir = path.join(
+        getPaprDataDir(),
+        "databases",
+        DEFAULT_HOME_BRIEFS_DB_SLUG,
+      );
+      const dbPath = path.join(dbDir, "data.db");
+
+      const { syncBundledHomeMigrationsToRegistry } = await import(
+        "./defaultHomeAppRepair.js"
+      );
+      await syncBundledHomeMigrationsToRegistry(dbPath, {
+        bundledMigrationsDir: path.join(
+          sourceDir,
+          DEFAULT_HOME_DB_MIGRATIONS_DIR,
+        ),
+      });
+
+      const { ensureRegistryDatabase, applyRegistryDatabaseMigrations } =
+        await import("./jobs/databaseMigrations.js");
+      const { shouldDeferRegistrySqliteFileForReplica } = await import(
+        "../utils/tursoReplicaEnabled.js"
+      );
+      await ensureRegistryDatabase(dbPath, {
+        deferSqliteFile: shouldDeferRegistrySqliteFileForReplica(),
+      });
+
+      const { initializeDatabaseRegistry } = await import(
+        "./DatabaseRegistryService.js"
+      );
+      const registry = await initializeDatabaseRegistry();
+      let record = await registry.register({
+        localPath: dbPath,
+        label: DEFAULT_HOME_BRIEFS_DB_LABEL,
+        schemaOwnerAppId: appId,
+        isolation: DEFAULT_HOME_BRIEFS_DB_ISOLATION,
+        // No ownerJobId: that would name the Turso instance j-{jobId} and tie
+        // a shared registry DB to one job. This DB outlives the job.
+      });
+
+      if (record.isolation !== DEFAULT_HOME_BRIEFS_DB_ISOLATION) {
+        record = await registry.setIsolation(
+          record.dbId,
+          DEFAULT_HOME_BRIEFS_DB_ISOLATION,
+        );
+      }
+
+      await applyRegistryDatabaseMigrations(dbPath);
+      await this.backfillHomeBriefsFromLegacyDb(
+        legacyJobDbPath,
+        record.dbId,
+        record.localPath,
+      );
+
+      return { dbId: record.dbId, dbPath: record.localPath };
+    } catch (registryErr) {
+      console.warn(
+        `[AppService] Could not provision Home briefs registry DB for ${jobId}:`,
+        registryErr instanceof Error ? registryErr.message : registryErr,
+      );
+      return undefined;
+    }
+  }
+
+  /**
+   * One-time backfill of briefs from a legacy job database.
+   *
+   * Uses INSERT OR IGNORE so existing rows always win — a re-run can never
+   * overwrite a newer brief with a stale one. Opens the legacy file read-only:
+   * it may be replica-managed, where a read-write handle truncates the WAL on
+   * close and wedges sync in both directions.
+   */
+  private async backfillHomeBriefsFromLegacyDb(
+    legacyJobDbPath: string,
+    dbId: string,
+    registryDbPath: string,
+  ): Promise<void> {
+    if (!existsSync(legacyJobDbPath)) {
+      return;
+    }
+    if (path.resolve(legacyJobDbPath) === path.resolve(registryDbPath)) {
+      return;
+    }
+
+    let rows: Array<{ date: string; brief_json: string }> = [];
+    try {
+      const { default: Database } = await import("better-sqlite3");
+      // better-sqlite3 takes a plain path — it does NOT parse file: URIs, so
+      // `file:...?mode=ro` throws "unable to open database file". readonly:true
+      // is the real guard, and it matters: the legacy DB may be
+      // replica-managed, where a read-write handle truncates the WAL on close
+      // and wedges sync in both directions.
+      const legacy = openDiagnosticDatabase(Database, "services/AppService", legacyJobDbPath, { readonly: true });
+      try {
+        const hasTable = legacy
+          .prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='briefs' LIMIT 1",
+          )
+          .get();
+        if (!hasTable) {
+          return;
+        }
+        rows = legacy
+          .prepare(
+            "SELECT date, brief_json FROM briefs WHERE brief_json IS NOT NULL",
+          )
+          .all() as Array<{ date: string; brief_json: string }>;
+      } finally {
+        legacy.close();
+      }
+    } catch (readErr) {
+      console.warn(
+        "[AppService] Could not read legacy Home briefs for backfill:",
+        readErr instanceof Error ? readErr.message : readErr,
+      );
+      return;
+    }
+
+    if (rows.length === 0) {
+      return;
+    }
+
+    const sql =
+      "INSERT OR IGNORE INTO briefs (date, brief_json, created_at) " +
+      "VALUES (?, ?, datetime('now'))";
+
+    try {
+      const { isTursoReplicaSyncFeatureEnabled } = await import(
+        "../utils/tursoReplicaEnabled.js"
+      );
+      let migrated = 0;
+
+      if (isTursoReplicaSyncFeatureEnabled()) {
+        // Replica-managed: must route through paprDbExec. Opening the file
+        // directly would truncate the WAL and wedge sync.
+        const { paprDbExec } = await import(
+          "./tursoReplica/PaprDbService.js"
+        );
+        for (const row of rows) {
+          const result = await paprDbExec({
+            dbId,
+            sql,
+            params: [row.date, row.brief_json],
+          });
+          migrated += result.changes ?? 0;
+        }
+      } else {
+        // Legacy sync: plain local write is safe and much faster.
+        const { default: Database } = await import("better-sqlite3");
+        const target = openDiagnosticDatabase(Database, "services/AppService", registryDbPath);
+        try {
+          const stmt = target.prepare(sql);
+          const insertAll = target.transaction(
+            (items: Array<{ date: string; brief_json: string }>) => {
+              let count = 0;
+              for (const row of items) {
+                count += stmt.run(row.date, row.brief_json).changes;
+              }
+              return count;
+            },
+          );
+          migrated = insertAll(rows);
+        } finally {
+          target.close();
+        }
+      }
+
+      if (migrated > 0) {
+        console.log(
+          `[AppService] Backfilled ${migrated} Home brief(s) from legacy job DB into ${dbId}`,
+        );
+      }
+    } catch (writeErr) {
+      console.warn(
+        "[AppService] Could not backfill Home briefs into registry DB:",
+        writeErr instanceof Error ? writeErr.message : writeErr,
+      );
     }
   }
 
@@ -513,9 +1204,22 @@ export class AppService {
 
       await fs.cp(sourceDir, targetDir, { recursive: true });
 
-      // Restore user's data-sources.json (may have custom dbPath)
+      // Restore user's dbPath values for bundled default apps; full restore for others
       if (savedDataSources) {
-        await fs.writeFile(dsPath, savedDataSources);
+        const bundledMeta = await this.readBundledDefaultAppMetadata(sourceDir);
+        if (
+          bundledMeta?.isDefault ||
+          bundledMeta?.defaultHomeApp ||
+          appId === DEFAULT_HOME_APP_ID
+        ) {
+          await this.mergeBundledDefaultAppDataSources(
+            targetDir,
+            sourceDir,
+            savedDataSources,
+          );
+        } else {
+          await fs.writeFile(dsPath, savedDataSources);
+        }
       }
 
       console.log(
@@ -528,22 +1232,58 @@ export class AppService {
 
   async initialize(): Promise<void> {
     if (this.initialized) return;
+    if (this.initPromise) {
+      await this.initPromise;
+      return;
+    }
 
+    this.initPromise = this.runInitialize();
+    try {
+      await this.initPromise;
+    } finally {
+      this.initPromise = null;
+    }
+  }
+
+  private async runInitialize(): Promise<void> {
+    if (this.initialized) return;
+
+    this.bindWorkspaceWriteContext();
     await this.migrateLegacyIfNeeded();
     await fs.mkdir(this.appsDir, { recursive: true });
     await fs.mkdir(path.dirname(this.appsIndexPath), { recursive: true });
     await this.loadApps(); // Load existing apps FIRST
+    await this.enforceAppOwnershipIndex(); // Drop foreign apps before recovery
     await this.rebuildIndexIfCorrupted(); // Safety net: check for missing apps
+    await this.pruneStrayWorkspaceAppCopies(); // Drop migration copies assigned elsewhere
+    await this.backfillAppAgentChatFromDisk(); // Sidecar + registry from metadata/registry
+    await this.backfillAppWorkspaceScope(); // Stamp org/ns only for truly unassigned apps
+    await this.repairRecoveredAppEntries(); // Fix legacy "Recovered" labels from metadata.json
+    await this.syncBundledDefaultAppRegistry(); // Keep prebuilt apps (Home) in sync with bundled metadata
     await this.pruneStaleAppEntries(); // Index entries whose folders were removed (e.g. bash rm)
     await this.installDefaultApps(); // Then install defaults (won't overwrite existing)
     const { initializeDatabaseRegistry } = await import(
       "./DatabaseRegistryService.js"
     );
     await initializeDatabaseRegistry();
-    await this.repairDataSourceDbIds();
-    await this.startWatchingApps();
+    this.loadedPaprRoot = this.paprRootDir;
     this.initialized = true;
-    console.log(`[AppService] Initialized with ${this.apps.size} apps`);
+    console.log(`[AppService] Initialized with ${this.apps.size} apps (watchers starting in background)`);
+    this.scheduleWatchingApps();
+  }
+
+  /** File watchers are not needed to serve list/open/build — start after init returns. */
+  private scheduleWatchingApps(): void {
+    void this.startWatchingApps().catch((error: unknown) => {
+      console.warn(
+        "[AppService] Background watcher startup failed:",
+        error instanceof Error ? error.message : error,
+      );
+    });
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
   }
 
 
@@ -553,6 +1293,346 @@ export class AppService {
    * installDefaultApps() could overwrite apps.json before loadApps() ran.
    * Scans ~/Papr/apps/ for app directories not in the index and re-adds them.
    */
+  /** Remove teammate / team-catalog apps from local index; stamp owner on legacy entries. */
+  async enforceAppOwnershipIndex(): Promise<void> {
+    const currentUserId = getPaprUserId()?.trim();
+    if (!currentUserId) {
+      return;
+    }
+
+    const namespaceId = resolveActiveNamespaceId();
+    const foreignPublisherAppIds = namespaceId
+      ? await fetchForeignPublisherAppIds(namespaceId)
+      : new Map<string, string>();
+
+    let dirty = false;
+    const toRemove: string[] = [];
+
+    for (const [appId, app] of this.apps.entries()) {
+      const appDir = path.join(this.appsDir, appId);
+      const hints = await readAppDiskOwnershipHints(appDir, appId);
+
+      // Team catalog may list the same appId under a teammate's cloud publish on
+      // shared git disk — keep it in My Apps when this user owns the local copy.
+      if (
+        foreignPublisherAppIds.has(appId) &&
+        !isAppOwnedByCurrentUser(app, hints)
+      ) {
+        toRemove.push(appId);
+        continue;
+      }
+
+      if (!isAppOwnedByCurrentUser(app, hints)) {
+        toRemove.push(appId);
+        continue;
+      }
+
+      if (!app.ownerUserId) {
+        app.ownerUserId = currentUserId;
+        dirty = true;
+      }
+    }
+
+    for (const appId of toRemove) {
+      this.apps.delete(appId);
+      dirty = true;
+      console.log(
+        `[AppService] Removed foreign app from My Apps index: ${appId}`,
+      );
+    }
+
+    if (dirty) {
+      await this.saveApps();
+    }
+  }
+
+  private async readMetadataHintsFromAppDir(
+    appDir: string,
+  ): Promise<{
+    title?: string;
+    description?: string;
+    icon?: string;
+    updatedAt?: string;
+  }> {
+    try {
+      const raw = await fs.readFile(path.join(appDir, "metadata.json"), "utf-8");
+      const metadata = parseCloudAppMetadataFile(raw);
+      if (metadata) {
+        return {
+          title: metadata.title,
+          description: metadata.description,
+          icon: metadata.icon,
+          updatedAt: metadata.updatedAt,
+        };
+      }
+    } catch {
+      // fall through to index.html
+    }
+
+    try {
+      const indexHtml = await fs.readFile(path.join(appDir, "index.html"), "utf-8");
+      const titleMatch = indexHtml.match(/<title>([^<]+)<\/title>/i);
+      const favicon = this.extractFaviconFromHTML(indexHtml);
+      return {
+        ...(titleMatch ? { title: titleMatch[1].trim() } : {}),
+        ...(favicon ? { icon: favicon } : {}),
+      };
+    } catch {
+      return {};
+    }
+  }
+
+  /**
+   * Mirror title/description/icon/tags from metadata.json into the in-memory
+   * registry (apps.json). Registry → metadata is handled by updateApp /
+   * writeCloudAppMetadataFile; this covers the reverse path when agents or
+   * cloud pull edit metadata.json directly.
+   */
+  private syncRegistryFromMetadataContent(
+    appId: string,
+    rawContent: string,
+  ): boolean {
+    const metadata = parseCloudAppMetadataFile(rawContent);
+    if (!metadata || metadata.appId !== appId) {
+      return false;
+    }
+
+    const app = this.apps.get(appId);
+    if (!app) {
+      return false;
+    }
+
+    let changed = false;
+    const title = metadata.title.trim();
+    if (title && app.title !== title) {
+      app.title = title;
+      changed = true;
+    }
+    if (metadata.description && app.description !== metadata.description) {
+      app.description = metadata.description;
+      changed = true;
+    }
+    if (metadata.icon && app.icon !== metadata.icon) {
+      app.icon = metadata.icon;
+      changed = true;
+    }
+    const nextTags = metadata.tags?.length ? metadata.tags : undefined;
+    const tagsEqual =
+      JSON.stringify(app.tags ?? []) === JSON.stringify(nextTags ?? []);
+    if (!tagsEqual) {
+      app.tags = nextTags;
+      changed = true;
+    }
+
+    if (changed) {
+      app.updatedAt = metadata.updatedAt ?? new Date().toISOString();
+      console.log(
+        `[AppService] Synced registry from metadata.json: ${appId} - ${app.title}`,
+      );
+    }
+
+    return changed;
+  }
+
+  /** Fix apps index entries that still carry the legacy recovered placeholder. */
+  private async repairRecoveredAppEntries(): Promise<void> {
+    let dirty = false;
+
+    for (const app of this.apps.values()) {
+      const appDir = path.join(this.appsDir, app.id);
+      const hints = await this.readMetadataHintsFromAppDir(appDir);
+      const titleIsPlaceholder =
+        !app.title ||
+        app.title === app.id ||
+        app.title.startsWith(app.id.slice(0, 8));
+      const needsRepair =
+        app.description === RECOVERED_INDEX_DESCRIPTION ||
+        (titleIsPlaceholder && Boolean(hints.title));
+      if (!needsRepair) continue;
+
+      if (!hints.title && !hints.description) continue;
+
+      if (hints.title && titleIsPlaceholder) {
+        app.title = hints.title;
+      }
+      if (
+        hints.description &&
+        hints.description !== RECOVERED_INDEX_DESCRIPTION
+      ) {
+        app.description = hints.description;
+      }
+      if (hints.icon && !app.icon) {
+        app.icon = hints.icon;
+      }
+      if (hints.updatedAt) {
+        app.updatedAt = hints.updatedAt;
+      }
+      dirty = true;
+      console.log(
+        `[AppService] Repaired recovered app metadata: ${app.id} - ${app.title}`,
+      );
+    }
+
+    if (dirty) {
+      await this.saveApps();
+    }
+  }
+
+  private async readBundledDefaultAppMetadata(
+    sourceDir: string,
+  ): Promise<{
+    isDefault?: boolean;
+    defaultHomeApp?: boolean;
+    version?: number;
+  } | null> {
+    try {
+      const raw = await fs.readFile(
+        path.join(sourceDir, "metadata.json"),
+        "utf-8",
+      );
+      return JSON.parse(raw) as {
+        isDefault?: boolean;
+        defaultHomeApp?: boolean;
+        version?: number;
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** Sync registry title/description for prebuilt apps from on-disk metadata.json. */
+  private async syncBundledDefaultAppRegistry(): Promise<void> {
+    let dirty = false;
+
+    for (const app of this.apps.values()) {
+      const appDir = path.join(this.appsDir, app.id);
+      let metadata: {
+        isDefault?: boolean;
+        defaultHomeApp?: boolean;
+        title?: string;
+        description?: string;
+        icon?: string;
+        updatedAt?: string;
+      };
+      try {
+        const raw = await fs.readFile(
+          path.join(appDir, "metadata.json"),
+          "utf-8",
+        );
+        metadata = JSON.parse(raw) as typeof metadata;
+      } catch {
+        continue;
+      }
+
+      if (!metadata.isDefault && !metadata.defaultHomeApp) {
+        continue;
+      }
+
+      let appDirty = false;
+      if (metadata.title && app.title !== metadata.title) {
+        app.title = metadata.title;
+        appDirty = true;
+      }
+      if (
+        metadata.description &&
+        (app.description === RECOVERED_INDEX_DESCRIPTION ||
+          app.description !== metadata.description)
+      ) {
+        app.description = metadata.description;
+        appDirty = true;
+      }
+      if (metadata.icon && !app.icon) {
+        app.icon = metadata.icon;
+        appDirty = true;
+      }
+      if (metadata.updatedAt && app.updatedAt !== metadata.updatedAt) {
+        app.updatedAt = metadata.updatedAt;
+        appDirty = true;
+      }
+
+      const scope = readActiveAppWorkspaceScope();
+      if (
+        scope &&
+        (app.organizationId !== scope.organizationId ||
+          app.namespaceId !== scope.namespaceId)
+      ) {
+        app.organizationId = scope.organizationId;
+        app.namespaceId = scope.namespaceId;
+        appDirty = true;
+      }
+
+      if (appDirty) {
+        dirty = true;
+        console.log(
+          `[AppService] Synced bundled default app registry: ${app.id} - ${app.title}`,
+        );
+      }
+    }
+
+    if (dirty) {
+      await this.saveApps();
+    }
+  }
+
+  private async mergeBundledDefaultAppDataSources(
+    targetDir: string,
+    sourceDir: string,
+    savedDataSources: string,
+  ): Promise<void> {
+    const bundledPath = path.join(sourceDir, "data-sources.json");
+    const targetPath = path.join(targetDir, "data-sources.json");
+
+    let bundledConfig: AppDataSourcesFile;
+    try {
+      bundledConfig = parseDataSourcesFile(
+        await fs.readFile(bundledPath, "utf-8"),
+      );
+    } catch {
+      await fs.writeFile(targetPath, savedDataSources);
+      return;
+    }
+
+    const savedDbPaths = new Map<string, string>();
+    try {
+      const savedConfig = parseDataSourcesFile(savedDataSources);
+      for (const source of savedConfig.sources ?? []) {
+        if (source.jobId && source.dbPath?.trim()) {
+          savedDbPaths.set(source.jobId, source.dbPath.trim());
+        }
+      }
+    } catch {
+      // Use bundled template as-is
+    }
+
+    const activeHome = path.resolve(getPaprRoot());
+    for (const source of bundledConfig.sources ?? []) {
+      const savedPath = source.jobId
+        ? savedDbPaths.get(source.jobId)
+        : undefined;
+      if (!savedPath) {
+        continue;
+      }
+      // Same app id is installed in every org/namespace — only keep dbPath values
+      // that belong to the active workspace (not a sibling namespace copy).
+      const normalizedSaved = path.resolve(savedPath);
+      if (
+        normalizedSaved.startsWith(`${activeHome}${path.sep}`) ||
+        normalizedSaved === activeHome
+      ) {
+        source.dbPath = savedPath;
+      }
+    }
+
+    await fs.writeFile(
+      targetPath,
+      serializeDataSourcesFile(bundledConfig),
+      "utf8",
+    );
+    console.log(
+      `[AppService] Merged bundled data-sources for default app in ${path.basename(targetDir)}`,
+    );
+  }
+
   private async rebuildIndexIfCorrupted(): Promise<void> {
     try {
       const dirsOnDisk = await fs.readdir(this.appsDir);
@@ -577,8 +1657,32 @@ export class AppService {
 
       if (missingAppIds.length === 0) return;
 
+      const namespaceId = resolveActiveNamespaceId();
+      const foreignPublisherAppIds = namespaceId
+        ? await fetchForeignPublisherAppIds(namespaceId)
+        : new Map<string, string>();
+
+      const recoverableAppIds: string[] = [];
+      for (const appId of missingAppIds) {
+        const appDir = path.join(this.appsDir, appId);
+        const allowed = await shouldIndexAppFolderForCurrentUser(
+          appId,
+          appDir,
+          foreignPublisherAppIds,
+        );
+        if (allowed) {
+          recoverableAppIds.push(appId);
+        } else {
+          console.warn(
+            `[AppService] Skipped foreign app folder during index rebuild: ${appId}`,
+          );
+        }
+      }
+
+      if (recoverableAppIds.length === 0) return;
+
       console.warn(
-        `[AppService] INDEX CORRUPTION DETECTED: ${missingAppIds.length} apps on disk but missing from apps.json. Rebuilding...`
+        `[AppService] INDEX CORRUPTION DETECTED: ${recoverableAppIds.length} apps on disk but missing from apps.json. Rebuilding...`
       );
 
       // Back up the corrupted index before fixing
@@ -590,29 +1694,21 @@ export class AppService {
         // No existing file to back up — that's fine
       }
 
-      for (const appId of missingAppIds) {
+      for (const appId of recoverableAppIds) {
         const appDir = path.join(this.appsDir, appId);
+        const hints = await this.readMetadataHintsFromAppDir(appDir);
 
-        // Try to recover metadata from files
-        let title = appId;
-        let description = "Recovered app (index was corrupted)";
-        let icon: string | undefined;
+        let title = hints.title ?? appId;
+        let description =
+          hints.description ?? RECOVERED_INDEX_DESCRIPTION;
+        let icon: string | undefined = hints.icon;
         let createdAt = new Date().toISOString();
 
-        // Try reading index.html for <title> tag
-        try {
-          const indexHtml = await fs.readFile(path.join(appDir, "index.html"), "utf-8");
-          const titleMatch = indexHtml.match(/<title>([^<]+)<\/title>/i);
-          if (titleMatch) {
-            title = titleMatch[1].trim();
+        if (!icon) {
+          const resolvedIcon = await this.resolveIconFromAppDir(appDir);
+          if (resolvedIcon) {
+            icon = resolvedIcon;
           }
-          // Try extracting favicon
-          const favicon = this.extractFaviconFromHTML(indexHtml);
-          if (favicon) {
-            icon = favicon;
-          }
-        } catch {
-          // No index.html, try other files for hints
         }
 
         // Try to get actual creation date from filesystem
@@ -623,13 +1719,30 @@ export class AppService {
           // Use current time
         }
 
-        // Try resolving icon from logo files
-        if (!icon) {
-          const resolvedIcon = await this.resolveIconFromAppDir(appDir);
-          if (resolvedIcon) {
-            icon = resolvedIcon;
-          }
+        const hydration = await hydrateAppAgentChatFromDisk(
+          this.paprRootDir,
+          appId,
+        );
+
+        const diskFields = await readAppWorkspaceFieldsFromDisk(appDir);
+        const activeScope = readActiveAppWorkspaceScope();
+        if (
+          activeScope &&
+          !isAppWorkspaceUnassigned(diskFields) &&
+          !isAppAssignedToWorkspace(diskFields, activeScope)
+        ) {
+          console.warn(
+            `[AppService] Skipped recovering app assigned to another workspace: ${appId}`,
+          );
+          continue;
         }
+
+        const recoveryScope = !isAppWorkspaceUnassigned(diskFields)
+          ? {
+              organizationId: diskFields.organizationId!.trim(),
+              namespaceId: diskFields.namespaceId!.trim(),
+            }
+          : activeScope;
 
         const recoveredApp: MiniApp = {
           id: appId,
@@ -637,8 +1750,13 @@ export class AppService {
           description,
           type: "app",
           createdAt,
-          updatedAt: new Date().toISOString(),
+          updatedAt: hints.updatedAt ?? new Date().toISOString(),
+          ...(getPaprUserId()?.trim()
+            ? { ownerUserId: getPaprUserId()!.trim() }
+            : {}),
+          ...(recoveryScope ? withWorkspaceScope({}, recoveryScope) : {}),
           ...(icon ? { icon } : {}),
+          ...(hydration.agentChat ? { agentChat: hydration.agentChat } : {}),
         };
 
         this.apps.set(appId, recoveredApp);
@@ -647,7 +1765,7 @@ export class AppService {
 
       await this.saveApps();
       console.log(
-        `[AppService] Index rebuilt: recovered ${missingAppIds.length} apps. Total: ${this.apps.size}`
+        `[AppService] Index rebuilt: recovered ${recoverableAppIds.length} apps. Total: ${this.apps.size}`
       );
     } catch (error) {
       console.error("[AppService] Failed to rebuild index:", error);
@@ -693,14 +1811,232 @@ export class AppService {
     if (dirty) {
       await this.saveApps();
     }
+
+    let agentChatHydrated = false;
+    for (const app of this.apps.values()) {
+      const hydration = await hydrateAppAgentChatFromDisk(
+        this.paprRootDir,
+        app.id,
+        app.agentChat,
+      );
+      if (!hydration.agentChat) continue;
+      if (
+        !app.agentChat?.enabled ||
+        hydration.registryNeedsUpdate ||
+        hydration.sidecarBackfilled
+      ) {
+        app.agentChat = hydration.agentChat;
+        agentChatHydrated = true;
+        console.log(
+          `[AppService] Restored app agent chat for ${app.id}` +
+            (hydration.sidecarBackfilled ? " (sidecar backfilled)" : ""),
+        );
+      }
+    }
+    if (agentChatHydrated) {
+      await this.saveApps();
+      for (const app of this.apps.values()) {
+        if (app.agentChat?.enabled) {
+          void writeCloudAppMetadataFile(this.paprRootDir, app.id).catch(() => {});
+        }
+      }
+    }
+  }
+
+  /** Backfill agent-chat.json + registry after rebuild or cloud sync pull. */
+  private async backfillAppAgentChatFromDisk(): Promise<void> {
+    let dirty = false;
+    for (const app of this.apps.values()) {
+      const hydration = await hydrateAppAgentChatFromDisk(
+        this.paprRootDir,
+        app.id,
+        app.agentChat,
+      );
+      if (!hydration.agentChat) continue;
+      if (
+        !app.agentChat?.enabled ||
+        hydration.registryNeedsUpdate ||
+        hydration.sidecarBackfilled
+      ) {
+        app.agentChat = hydration.agentChat;
+        dirty = true;
+      }
+    }
+    if (!dirty) return;
+
+    await this.saveApps();
+    for (const app of this.apps.values()) {
+      if (app.agentChat?.enabled) {
+        await writeCloudAppMetadataFile(this.paprRootDir, app.id).catch((err) => {
+          console.warn(
+            `[AppService] Failed to write metadata.json for ${app.id}:`,
+            (err as Error).message,
+          );
+        });
+      }
+    }
+  }
+
+  /**
+   * Apps stored under the active org/namespace workspace belong to that workspace.
+   * Only stamp org/ns when both index and metadata are unassigned.
+   */
+  private async backfillAppWorkspaceScope(): Promise<void> {
+    const scope = readActiveAppWorkspaceScope();
+    if (!scope) {
+      return;
+    }
+
+    let dirty = false;
+    for (const app of this.apps.values()) {
+      if (!(await this.appDirHasContent(app.id))) {
+        continue;
+      }
+
+      const diskFields = await readAppWorkspaceFieldsFromDisk(
+        path.join(this.appsDir, app.id),
+      );
+      const merged = mergeAppWorkspaceFields(app, diskFields);
+      if (!isAppWorkspaceUnassigned(merged)) {
+        continue;
+      }
+
+      const scoped = withWorkspaceScope(app, scope);
+      scoped.updatedAt = new Date().toISOString();
+      this.apps.set(app.id, scoped);
+      dirty = true;
+      console.log(
+        `[AppService] Restored workspace scope for app: ${app.id} → ${scope.organizationId}/${scope.namespaceId}`,
+      );
+    }
+
+    if (!dirty) {
+      return;
+    }
+
+    await this.saveApps();
+    for (const app of this.apps.values()) {
+      if (
+        app.organizationId === scope.organizationId &&
+        app.namespaceId === scope.namespaceId
+      ) {
+        await writeCloudAppMetadataFile(this.paprRootDir, app.id).catch(() => {});
+      }
+    }
+  }
+
+  /**
+   * Remove app folders/index rows that belong to another org/namespace but were
+   * copied into this workspace during legacy migration.
+   */
+  private async pruneStrayWorkspaceAppCopies(): Promise<void> {
+    const scope = readActiveAppWorkspaceScope();
+    if (!scope) {
+      return;
+    }
+
+    const toRemove: string[] = [];
+    for (const [appId, app] of this.apps.entries()) {
+      if (isBundledDefaultAppId(appId)) {
+        continue;
+      }
+      if (!(await this.appDirHasContent(appId))) {
+        continue;
+      }
+
+      const appDir = path.join(this.appsDir, appId);
+      const diskFields = await readAppWorkspaceFieldsFromDisk(appDir);
+
+      if (isAppAssignedToWorkspace(app, scope)) {
+        const merged = mergeAppWorkspaceFields(app, diskFields);
+        if (!isAppAssignedToWorkspace(merged, scope)) {
+          console.warn(
+            `[AppService] Repairing stale workspace metadata for ${appId} (cloud pull wrote foreign org/namespace)`,
+          );
+          await writeCloudAppMetadataFile(this.paprRootDir, appId).catch(
+            (err: unknown) => {
+              console.warn(
+                `[AppService] Failed to repair metadata.json for ${appId}:`,
+                err instanceof Error ? err.message : err,
+              );
+            },
+          );
+        }
+        continue;
+      }
+
+      if (
+        !shouldPruneStrayWorkspaceAppCopy(app, diskFields, scope)
+      ) {
+        continue;
+      }
+
+      toRemove.push(appId);
+    }
+
+    if (toRemove.length === 0) {
+      return;
+    }
+
+    for (const appId of toRemove) {
+      this.apps.delete(appId);
+      this.unwatchApp(appId);
+      const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
+      removeAppPublishPrefs(appId, this.paprRootDir);
+      try {
+        await fs.rm(path.join(this.appsDir, appId), { recursive: true, force: true });
+      } catch (error) {
+        console.warn(
+          `[AppService] Failed to delete stray app folder ${appId}:`,
+          (error as Error).message,
+        );
+      }
+      console.log(
+        `[AppService] Removed stray app copy from workspace ${scope.organizationId}/${scope.namespaceId}: ${appId}`,
+      );
+    }
+
+    await this.saveApps();
+    this.broadcastAppListUpdated();
   }
 
   private async saveApps(): Promise<void> {
-    const appsArray = Array.from(this.apps.values());
-    const data = JSON.stringify(appsArray, null, 2);
-    const tmpPath = this.appsIndexPath + `.tmp-${process.pid}`;
-    await fs.writeFile(tmpPath, data, "utf8");
-    await fs.rename(tmpPath, this.appsIndexPath);
+    if (!this.isWriteContextValid("apps.json save")) {
+      return;
+    }
+    if (this.saveLock) {
+      await this.saveLock;
+    }
+
+    this.saveLock = (async () => {
+      try {
+        for (const app of this.apps.values()) {
+          if (app.agentChat?.enabled) continue;
+          const resolved = await resolveAppAgentChatConfig(
+            this.paprRootDir,
+            app.id,
+            app.agentChat,
+          );
+          if (!resolved?.enabled) continue;
+          app.agentChat = resolved;
+          console.warn(
+            `[AppService] Prevented agentChat strip on save for app: ${app.id}`,
+          );
+        }
+
+        const appsArray = Array.from(this.apps.values());
+        const data = JSON.stringify(appsArray, null, 2);
+        const tmpPath =
+          this.appsIndexPath +
+          `.tmp-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+        await fs.writeFile(tmpPath, data, "utf8");
+        await fs.rename(tmpPath, this.appsIndexPath);
+      } finally {
+        this.saveLock = null;
+      }
+    })();
+
+    await this.saveLock;
   }
 
   /**
@@ -803,6 +2139,8 @@ export class AppService {
     icon?: string,
     createdByAgentId?: string,
     createdByAgentName?: string,
+    tags?: string[],
+    options?: { creationSource?: AppCreationSource },
   ): Promise<MiniApp> {
     const now = new Date().toISOString();
     const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
@@ -824,7 +2162,23 @@ export class AppService {
         resolvedIcon = this.extractFaviconFromHTML(indexFile.content);
       }
     }
+    if (resolvedIcon) {
+      const sanitizedIcon = sanitizeMiniAppIcon(resolvedIcon);
+      if (!sanitizedIcon) {
+        const iconResult = validateMiniAppIcon(resolvedIcon);
+        console.warn(
+          `[AppService] Dropping invalid icon for ${JSON.stringify(uniqueTitle)}` +
+            (iconResult.ok ? "" : `: ${iconResult.message}`),
+        );
+        resolvedIcon = null;
+      } else {
+        resolvedIcon = sanitizedIcon;
+      }
+    }
 
+    const scope = readActiveAppWorkspaceScope();
+    const { normalizeCatalogTags } = await import("../../core/utils/catalogTags.js");
+    const normalizedTags = normalizeCatalogTags(tags);
     const app: MiniApp = {
       id: uuidv4(),
       title: uniqueTitle,
@@ -833,7 +2187,12 @@ export class AppService {
       createdAt: now,
       updatedAt: now,
       favorite: false,
+      ...(getPaprUserId()?.trim()
+        ? { ownerUserId: getPaprUserId()!.trim() }
+        : {}),
+      ...(scope ? withWorkspaceScope({}, scope) : {}),
       ...(resolvedIcon ? { icon: resolvedIcon } : {}),
+      ...(normalizedTags.length > 0 ? { tags: normalizedTags } : {}),
       createdByAgentId,
       createdByAgentName,
     };
@@ -859,7 +2218,7 @@ export class AppService {
     if (!hasDbTs) {
       await fs.writeFile(
         path.join(appPath, "db.ts"),
-        buildAppDbTsContent(app.id, "primary"),
+        buildAppDbTsContent(app.id, []),
         "utf8",
       );
     }
@@ -878,7 +2237,7 @@ export class AppService {
 
     // If still no icon, try to read a logo SVG from the app directory
     if (!app.icon) {
-      const dirIcon = await this.resolveIconFromAppDir(appPath);
+      const dirIcon = sanitizeMiniAppIcon(await this.resolveIconFromAppDir(appPath));
       if (dirIcon) {
         app.icon = dirIcon;
       }
@@ -886,6 +2245,7 @@ export class AppService {
 
     this.apps.set(app.id, app);
     await this.saveApps();
+    notifyJobOwnershipChanged(this.paprRootDir);
 
     // Start watching the new app directory for changes
     await this.watchApp(app.id);
@@ -896,6 +2256,13 @@ export class AppService {
         app_name: uniqueTitle.length > 80 ? `${uniqueTitle.slice(0, 79)}…` : uniqueTitle,
         has_icon: !!app.icon,
         file_count: files.length,
+        // Separates real builder activity from agent/automation output, which
+        // can create apps in bulk and otherwise inflates app-count metrics.
+        // Callers declare their origin explicitly; createdByAgentId only
+        // covers sub-agent runs, so inferring from it alone mislabelled every
+        // main-agent create_app call as "user".
+        creation_source:
+          options?.creationSource ?? (createdByAgentId ? "agent" : "user"),
       });
     }).catch(() => {});
 
@@ -903,10 +2270,7 @@ export class AppService {
       `[AppService] Created app: ${app.id} - ${uniqueTitle} (verified files on disk)`,
     );
 
-    void (process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true"
-      ? this.autoDiscoverDataSources(app.id)
-      : Promise.resolve()
-    ).catch((err) => {
+    void this.autoDiscoverDataSources(app.id).catch((err) => {
       console.warn(
         `[AppService] Auto-discovery failed for new app ${app.id}:`,
         err,
@@ -923,6 +2287,11 @@ export class AppService {
     if (!hasBackendFiles(files)) {
       await this.scaffoldAppBackend(appPath);
     }
+
+    // Sort into a broad category now, not the next time Apps is opened.
+    void import("./AppCategoryService.js")
+      .then(({ getAppCategoryService }) => getAppCategoryService().categorizeAppInBackground(app))
+      .catch(() => undefined);
 
     return app;
   }
@@ -962,17 +2331,97 @@ export class AppService {
   }
 
   async getApp(id: string): Promise<MiniApp | null> {
-    return this.apps.get(id) || null;
+    // Every other read path awaits this. Without it the map is empty until
+    // initialize() happens to have run, so during boot a present app answers
+    // "not found" — which the caller reports as the app not being here.
+    await this.initialize();
+
+    const app = this.apps.get(id);
+    if (!app) {
+      return null;
+    }
+
+    // After the existence check above, so a genuinely missing app still
+    // answers null, and before the ownership filter below, whose null is
+    // reported to the user as "this app is not in the current workspace" —
+    // a specific, alarming claim to make on the strength of a read that
+    // failed.
+    assertPaprIdentityResolved();
+
+    const hints = await readAppDiskOwnershipHints(
+      path.join(this.appsDir, id),
+      id,
+    );
+    if (!isAppOwnedByCurrentUser(app, hints)) {
+      return null;
+    }
+
+    if (!app.agentChat?.enabled) {
+      const hydration = await hydrateAppAgentChatFromDisk(
+        this.paprRootDir,
+        id,
+        app.agentChat,
+      );
+      if (hydration.agentChat) {
+        const hydrated = { ...app, agentChat: hydration.agentChat };
+        this.apps.set(id, hydrated);
+        void this.saveApps().catch(() => {});
+        void writeCloudAppMetadataFile(this.paprRootDir, id).catch(() => {});
+        return hydrated;
+      }
+    }
+
+    return app;
+  }
+
+  /**
+   * Persist embedded app-agent chat (enable_app_agent_chat entry point).
+   * Writes agent-chat.json sidecar, registry, and metadata.json in one flow.
+   */
+  async setAppAgentChat(
+    appId: string,
+    agentChat: AppAgentChatConfig | undefined,
+  ): Promise<MiniApp | null> {
+    const app = await this.getApp(appId);
+    if (!app) return null;
+
+    await writeAgentChatSidecar(this.paprRootDir, appId, agentChat);
+
+    const updated = await this.updateApp(appId, { agentChat });
+    if (!updated) return null;
+
+    await writeCloudAppMetadataFile(this.paprRootDir, appId).catch((err) => {
+      console.warn(
+        `[AppService] Failed to write metadata.json after setAppAgentChat for ${appId}:`,
+        (err as Error).message,
+      );
+    });
+
+    return updated;
   }
 
   async updateApp(
     id: string,
     updates: Partial<Omit<MiniApp, "id" | "type" | "createdAt">>,
   ): Promise<MiniApp | null> {
-    const app = this.apps.get(id);
+    const app = await this.getApp(id);
     if (!app) return null;
 
     let nextUpdates = updates;
+    if (updates.icon !== undefined && updates.icon.trim()) {
+      const sanitizedIcon = sanitizeMiniAppIcon(updates.icon);
+      if (!sanitizedIcon) {
+        const iconResult = validateMiniAppIcon(updates.icon);
+        console.warn(
+          `[AppService] Ignoring invalid icon update for ${id}` +
+            (iconResult.ok ? "" : `: ${iconResult.message}`),
+        );
+        const { icon: _dropped, ...withoutIcon } = nextUpdates;
+        nextUpdates = withoutIcon;
+      } else if (sanitizedIcon !== updates.icon.trim()) {
+        nextUpdates = { ...nextUpdates, icon: sanitizedIcon };
+      }
+    }
     if (updates.title !== undefined) {
       const { ensureUniqueAppTitle } = await import("../utils/uniqueAppNaming.js");
       const uniqueTitle = ensureUniqueAppTitle(
@@ -997,6 +2446,34 @@ export class AppService {
     this.apps.set(id, updatedApp);
     await this.saveApps();
 
+    // Rename: the page <title> follows the app name when it matched the old
+    // one. A custom <title> (e.g. a shorter in-app heading) is left alone.
+    if (nextUpdates.title !== undefined && updatedApp.title !== app.title) {
+      const escapeTitle = (value: string) =>
+        value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      const candidates = [app.title, escapeTitle(app.title)];
+      void this.updateAppFile(id, "index.html", (content) => {
+        for (const oldTitle of candidates) {
+          const tag = `<title>${oldTitle}</title>`;
+          if (content.includes(tag)) {
+            return content.replace(tag, `<title>${escapeTitle(updatedApp.title)}</title>`);
+          }
+        }
+        return content;
+      }).catch(() => undefined);
+    }
+
+    if ("agentChat" in nextUpdates) {
+      await writeAgentChatSidecar(this.paprRootDir, id, updatedApp.agentChat);
+    }
+
+    // Name or description changed: re-sort in the background (no-op if unchanged).
+    if (updatedApp.title !== app.title || updatedApp.description !== app.description) {
+      void import("./AppCategoryService.js")
+        .then(({ getAppCategoryService }) => getAppCategoryService().categorizeAppInBackground(updatedApp))
+        .catch(() => undefined);
+    }
+
     import("./gatewayTelemetry.js").then(({ getGatewayTelemetry }) => {
       getGatewayTelemetry().trackFireAndForget("paprwork_app_edited", {
         app_id: id,
@@ -1005,6 +2482,15 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Updated app: ${id}`);
+
+    if (
+      "title" in nextUpdates ||
+      "description" in nextUpdates ||
+      "icon" in nextUpdates ||
+      "tags" in nextUpdates
+    ) {
+      this.broadcastAppListUpdated();
+    }
 
     void writeCloudAppMetadataFile(this.paprRootDir, id).catch((err) => {
       console.warn(
@@ -1016,9 +2502,269 @@ export class AppService {
     return updatedApp;
   }
 
-  async deleteApp(id: string): Promise<boolean> {
-    const app = this.apps.get(id);
-    if (!app) return false;
+  async deleteApp(id: string, options?: DeleteAppOptions): Promise<DeleteAppResult> {
+    const app = await this.getApp(id);
+    if (!app) {
+      return { deleted: false };
+    }
+
+    const confirmed = options?.confirmed === true;
+    if (confirmed) {
+      console.log(`[AppService] Delete confirmed for app ${id} (${app.title})`);
+    }
+
+    const needsCloudStatus =
+      !confirmed || options?.unpublishFromCloud === true;
+    const needsExclusiveJobs =
+      !confirmed || options?.deleteLinkedJobs === true;
+
+    // Check cloud publish status (preview always; confirm only when unpublishing)
+    let cloudStatus: { published: boolean; shareUrl: string | null } = {
+      published: false,
+      shareUrl: null,
+    };
+    if (needsCloudStatus) {
+      try {
+        const { getCloudAppPublishService } = await import(
+          "./CloudAppPublishService.js"
+        );
+        cloudStatus = await withTimeout(
+          getCloudAppPublishService().getCloudPublishStatus(id),
+          CLOUD_PUBLISH_STATUS_TIMEOUT_MS,
+          `cloud publish status for ${id}`,
+        );
+      } catch (error) {
+        console.warn(
+          `[AppService] Could not check cloud publish status for ${id}:`,
+          (error as Error).message.slice(0, 120),
+        );
+      }
+    }
+
+    // Check for exclusively linked jobs and Turso databases
+    let exclusiveJobs: LinkedJobInfo[] = [];
+    let tursoDbCount = 0;
+    let linkedRegistryDatabases: LinkedRegistryDbPreview[] = [];
+    if (needsExclusiveJobs) {
+      try {
+        const { getJobsService } = await import("./JobsService.js");
+        const jobsService = getJobsService();
+        const graph = await jobsService.getJobGraph();
+
+        if (graph) {
+          const thisAppJobIds = new Set(graph.appLinks[id]?.jobIds ?? []);
+
+          // Find jobs that are ONLY linked to this app
+          const jobIdsInOtherApps = new Set<string>();
+          for (const [appId, link] of Object.entries(graph.appLinks)) {
+            if (appId !== id) {
+              for (const jobId of link.jobIds) {
+                jobIdsInOtherApps.add(jobId);
+              }
+            }
+          }
+
+          const exclusiveJobIds = [...thisAppJobIds].filter(
+            (jobId) => !jobIdsInOtherApps.has(jobId),
+          );
+
+          if (exclusiveJobIds.length > 0) {
+            const allJobs = await jobsService.listJobs();
+
+            // Check for Turso databases
+            let tursoLinkedJobIds: string[] = [];
+            try {
+              const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+              const bridge = getTursoSyncBridge();
+              if (bridge) {
+                tursoLinkedJobIds = await bridge.listJobIdsForTursoSync();
+              }
+            } catch {
+              // Turso not configured
+            }
+
+            exclusiveJobs = exclusiveJobIds
+              .map((jobId): LinkedJobInfo | null => {
+                const job = allJobs.find((j) => j.id === jobId);
+                if (!job) return null;
+                const hasTursoDb = tursoLinkedJobIds.includes(jobId);
+                if (hasTursoDb) tursoDbCount++;
+                return {
+                  id: job.id,
+                  name: job.name,
+                  type: job.type as string,
+                  hasTursoDb,
+                };
+              })
+              .filter((j): j is LinkedJobInfo => j !== null);
+          }
+        }
+      } catch (error) {
+        console.warn(
+          `[AppService] Could not check linked jobs for ${id}:`,
+          (error as Error).message,
+        );
+      }
+    }
+
+    if (!confirmed) {
+      try {
+        const { buildLinkedRegistryDbPreview } = await import(
+          "./deleteAppLinkedDatabases.js"
+        );
+        linkedRegistryDatabases = await buildLinkedRegistryDbPreview(
+          id,
+          this.appsDir,
+          (otherAppId) => this.apps.get(otherAppId)?.title ?? otherAppId.slice(0, 8),
+        );
+      } catch (error) {
+        console.warn(
+          `[AppService] Could not check linked registry DBs for ${id}:`,
+          (error as Error).message,
+        );
+      }
+    }
+
+    const { resolveAppDeleteScope, sanitizeDeleteAppOptionsForScope } =
+      await import("./appDeleteScope.js");
+    const deleteScope = await resolveAppDeleteScope(
+      id,
+      this.appsDir,
+      cloudStatus.published,
+    );
+
+    // If user hasn't confirmed, return preview for the deletion modal
+    if (!confirmed) {
+      return {
+        deleted: false,
+        preview: {
+          appId: id,
+          appTitle: app.title,
+          isPublished: cloudStatus.published,
+          shareUrl: cloudStatus.shareUrl,
+          linkedJobs: exclusiveJobs,
+          tursoDbCount,
+          linkedRegistryDatabases,
+          localUninstallOnly: deleteScope.localUninstallOnly,
+          publisherSharedDeprecation: deleteScope.publisherSharedDeprecation,
+          sourceSlug: deleteScope.sourceSlug,
+        },
+      };
+    }
+
+    // --- User has confirmed, proceed with deletion ---
+
+    const safeOptions = sanitizeDeleteAppOptionsForScope(deleteScope, {
+      unpublishFromCloud: options?.unpublishFromCloud,
+      deleteLinkedJobs: options?.deleteLinkedJobs,
+      deleteTursoDatabases: options?.deleteTursoDatabases,
+      deleteRegistryDbIds: options?.deleteRegistryDbIds,
+      deleteRegistryTurso: options?.deleteRegistryTurso,
+    });
+    if (deleteScope.localUninstallOnly) {
+      console.log(
+        `[AppService] Collaborator uninstall for ${id} — skipping cloud/shared deletes`,
+      );
+    }
+
+    let unpublished = false;
+    if (cloudStatus.published && safeOptions.unpublishFromCloud) {
+      const { getCloudAppPublishService } = await import(
+        "./CloudAppPublishService.js"
+      );
+      await getCloudAppPublishService().unpublishApp(id);
+      unpublished = true;
+    }
+
+    // Delete linked jobs and their Turso databases if requested
+    let deletedJobCount = 0;
+    let deletedTursoDbCount = 0;
+    if (safeOptions.deleteLinkedJobs && exclusiveJobs.length > 0) {
+      try {
+        const { getJobsService } = await import("./JobsService.js");
+        const jobsService = getJobsService();
+        
+        // Get Turso bridge for database cleanup
+        let tursoSyncBridge: Awaited<ReturnType<typeof import("./TursoSyncBridge.js").getTursoSyncBridge>> | null = null;
+        if (safeOptions.deleteTursoDatabases) {
+          try {
+            const { getTursoSyncBridge } = await import("./TursoSyncBridge.js");
+            tursoSyncBridge = getTursoSyncBridge();
+          } catch {
+            // Turso not configured
+          }
+        }
+        
+        for (const job of exclusiveJobs) {
+          // Delete Turso database first (if requested and exists)
+          if (safeOptions.deleteTursoDatabases && job.hasTursoDb && tursoSyncBridge) {
+            try {
+              const deleted = await tursoSyncBridge.deleteJobTursoDatabase(job.id);
+              if (deleted) deletedTursoDbCount++;
+            } catch (error) {
+              console.warn(`[AppService] Could not delete Turso DB for job ${job.id}:`, error);
+            }
+          }
+          
+          // Delete the job
+          await jobsService.deleteJob(job.id, true);
+          deletedJobCount++;
+        }
+        console.log(`[AppService] Deleted ${deletedJobCount} jobs and ${deletedTursoDbCount} Turso DBs for app: ${id}`);
+      } catch (error) {
+        console.error(
+          `[AppService] Error deleting linked jobs for ${id}:`,
+          error,
+        );
+      }
+    }
+
+    let deletedRegistryDbCount = 0;
+    let deletedRegistryTursoCount = 0;
+    if (safeOptions.deleteRegistryDbIds.length > 0) {
+      try {
+        const { deleteSoleLinkerRegistryDatabases } = await import(
+          "./deleteAppLinkedDatabases.js"
+        );
+        const registryResult = await deleteSoleLinkerRegistryDatabases(
+          id,
+          safeOptions.deleteRegistryDbIds,
+          safeOptions.deleteRegistryTurso,
+        );
+        deletedRegistryDbCount = registryResult.deletedRegistryDbCount;
+        deletedRegistryTursoCount = registryResult.deletedRegistryTursoCount;
+      } catch (error) {
+        console.error(
+          `[AppService] Error deleting registry databases for ${id}:`,
+          error,
+        );
+      }
+    }
+
+    const { removeAppPublishPrefs } = await import("./cloudPublishPrefs.js");
+    removeAppPublishPrefs(id, this.paprRootDir);
+
+    try {
+      const { removeSharedPrimaryTursoEntriesForApp } = await import(
+        "./sharedPrimaryTursoStore.js"
+      );
+      removeSharedPrimaryTursoEntriesForApp(id, this.paprRootDir);
+    } catch {
+      /* optional */
+    }
+
+    // Stop cloud sync / writer state before removing files (prevents ghost __papr__ rebuild).
+    try {
+      const { deleteAppSyncArtifacts } = await import("./deleteAppSyncArtifacts.js");
+      await deleteAppSyncArtifacts(id, this.paprRootDir, {
+        skipSchemaOwnerRegistryTombstone: deleteScope.localUninstallOnly,
+      });
+    } catch (error) {
+      console.warn(
+        `[AppService] Sync artifact cleanup failed for ${id}:`,
+        error instanceof Error ? error.message : error,
+      );
+    }
 
     // Stop watching the app directory
     this.unwatchApp(id);
@@ -1036,6 +2782,7 @@ export class AppService {
 
     this.apps.delete(id);
     await this.saveApps();
+    notifyJobOwnershipChanged(this.paprRootDir);
 
     this.broadcastAppListUpdated();
 
@@ -1047,7 +2794,44 @@ export class AppService {
     }).catch(() => {});
 
     console.log(`[AppService] Deleted app: ${id}`);
-    return true;
+    return {
+      deleted: true,
+      unpublished,
+      deletedJobCount,
+      deletedTursoDbCount,
+      deletedRegistryDbCount,
+      deletedRegistryTursoCount,
+    };
+  }
+
+  /**
+   * Copy app bundle (linked jobs + DB registry) into another namespace.
+   * Source is unchanged — delete locally if you no longer want it there.
+   */
+  async copyAppToNamespace(
+    appId: string,
+    targetOrganizationId: string,
+    targetNamespaceId: string,
+  ): Promise<CopyAppToNamespaceResult> {
+    await this.initialize();
+    const app = await this.getApp(appId);
+    if (!app) {
+      throw new CopyAppError("app_not_found", "App not found");
+    }
+
+    const result = await copyAppToNamespaceCore({
+      appId,
+      targetOrganizationId,
+      targetNamespaceId,
+      sourcePaprHome: this.paprRootDir,
+    });
+
+    console.log(
+      `[AppService] Copied app ${appId} to namespace ${targetNamespaceId} ` +
+        `(${result.copiedJobIds.length} job(s), ${result.skippedJobIds.length} already in target)`,
+    );
+
+    return result;
   }
 
   /**
@@ -1070,6 +2854,22 @@ export class AppService {
    * Persists apps.json and optionally notifies clients.
    */
   private async pruneStaleAppEntries(): Promise<boolean> {
+    const currentRoot = this.paprRootDir;
+    if (this.loadedPaprRoot && currentRoot !== this.loadedPaprRoot) {
+      // Warn once per root pair. This used to fire only at startup; now that
+      // listApps() prunes too, an unchanged mismatch would repeat on every
+      // call and bury the rest of the output — in CI it truncated the log
+      // before the test summary was printed.
+      const key = `${this.loadedPaprRoot}→${currentRoot}`;
+      if (this.lastPruneSkipWarnKey !== key) {
+        this.lastPruneSkipWarnKey = key;
+        console.warn(
+          `[AppService] Skipping stale-app prune — PAPR_HOME changed (${this.loadedPaprRoot} → ${currentRoot})`,
+        );
+      }
+      return false;
+    }
+
     const staleIds: string[] = [];
     for (const id of this.apps.keys()) {
       if (!(await this.appDirHasContent(id))) {
@@ -1093,6 +2893,7 @@ export class AppService {
   private broadcastAppListUpdated(): void {
     import("../websocket/index.js")
       .then(({ broadcast }) => {
+        if (typeof broadcast !== "function") return;
         broadcast({ type: "app:list-updated" });
       })
       .catch(() => {
@@ -1102,18 +2903,154 @@ export class AppService {
 
   async listApps(): Promise<MiniApp[]> {
     await this.initialize();
+
+    // Before filtering, not after: every owned app carries an ownerUserId, so
+    // running this loop against an identity we could not read removes all of
+    // them and returns [] with success — which the renderer caches as "you
+    // have no apps" and carries into the next launch.
+    assertPaprIdentityResolved();
+
+    // Prune here, not only at startup. initialize() early-returns once it has
+    // run, so a folder removed after boot (agent `rm -rf`, external delete,
+    // failed sync) stayed listed until the app restarted — the user clicks a
+    // mini-app that no longer exists. listApps is the read path where that
+    // ghost entry surfaces, so it is where the index gets reconciled.
     await this.pruneStaleAppEntries();
-    return Array.from(this.apps.values()).sort(
+
+    const activeScope = readActiveAppWorkspaceScope();
+    const owned: MiniApp[] = [];
+    for (const app of this.apps.values()) {
+      const appDir = path.join(this.appsDir, app.id);
+      const needsDiskOwnership = !app.ownerUserId?.trim();
+      const hints = needsDiskOwnership
+        ? await readAppDiskOwnershipHints(appDir, app.id)
+        : undefined;
+      if (!isAppOwnedByCurrentUser(app, hints)) {
+        continue;
+      }
+
+      const workspaceFields = mergeAppWorkspaceFields(
+        app,
+        await readAppWorkspaceFieldsFromDisk(appDir),
+      );
+      if (!shouldShowAppInMyApps(app.id, workspaceFields, activeScope)) {
+        continue;
+      }
+
+      owned.push({ ...app, ...workspaceFields });
+    }
+
+    return owned.sort(
       (a, b) =>
         new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
     );
+  }
+
+  /** Apps on disk in this namespace with no workspace assignment (org/namespace missing). */
+  async listUnassignedApps(): Promise<MiniApp[]> {
+    await this.initialize();
+
+    const activeScope = readActiveAppWorkspaceScope();
+    if (!activeScope) {
+      return [];
+    }
+
+    const unassigned: MiniApp[] = [];
+    for (const app of this.apps.values()) {
+      if (!(await this.appDirHasContent(app.id))) {
+        continue;
+      }
+
+      const appDir = path.join(this.appsDir, app.id);
+      const hints = await readAppDiskOwnershipHints(appDir, app.id);
+      if (!isAppOwnedByCurrentUser(app, hints)) {
+        continue;
+      }
+
+      const merged = {
+        ...app,
+        ...mergeAppWorkspaceFields(app, await readAppWorkspaceFieldsFromDisk(appDir)),
+      };
+
+      if (!isAppAwaitingAssignmentInWorkspace(app.id, merged, activeScope)) {
+        continue;
+      }
+
+      unassigned.push(merged);
+    }
+
+    return unassigned.sort(
+      (a, b) =>
+        new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+    );
+  }
+
+  async assignAppToWorkspace(
+    appId: string,
+    targetOrganizationId: string,
+    targetNamespaceId: string,
+  ): Promise<AssignAppToWorkspaceResult> {
+    await this.initialize();
+    const app = this.apps.get(appId);
+    if (!app) {
+      throw new AppWorkspaceAssignError("app_not_found", "App not found");
+    }
+
+    const appDir = path.join(this.appsDir, appId);
+    const hints = await readAppDiskOwnershipHints(appDir, appId);
+    if (!isAppOwnedByCurrentUser(app, hints)) {
+      throw new AppWorkspaceAssignError("not_owner", "App is not owned by the signed-in user");
+    }
+
+    const merged = {
+      ...app,
+      ...mergeAppWorkspaceFields(app, await readAppWorkspaceFieldsFromDisk(appDir)),
+    };
+
+    const result = await assignAppToWorkspaceCore({
+      appId,
+      targetOrganizationId,
+      targetNamespaceId,
+      sourcePaprHome: this.paprRootDir,
+      sourceApp: merged,
+    });
+
+    const activeScope = readActiveAppWorkspaceScope();
+    const assignedHere =
+      activeScope &&
+      activeScope.organizationId === targetOrganizationId &&
+      activeScope.namespaceId === targetNamespaceId;
+
+    if (assignedHere) {
+      const scoped = withWorkspaceScope(merged, {
+        organizationId: targetOrganizationId,
+        namespaceId: targetNamespaceId,
+      });
+      scoped.updatedAt = new Date().toISOString();
+      this.apps.set(appId, scoped);
+      await this.saveApps();
+      void this.autoDiscoverDataSources(appId).catch((err) => {
+        console.warn(
+          `[AppService] Code-based data source discovery failed for ${appId}:`,
+          err,
+        );
+      });
+    } else {
+      this.unwatchApp(appId);
+      this.apps.delete(appId);
+      await this.saveApps();
+    }
+
+    this.broadcastAppListUpdated();
+
+    return result;
   }
 
   async resolveAppFilePath(
     appId: string,
     filename: string,
   ): Promise<string | null> {
-    const app = this.apps.get(appId);
+    const app = await this.getApp(appId);
     if (!app) return null;
 
     const filePath = path.join(this.appsDir, appId, filename);
@@ -1139,7 +3076,7 @@ export class AppService {
 
   /** Recursive source file listing (excludes dist/, backend/, node_modules). */
   async listAppFiles(appId: string): Promise<string[]> {
-    const app = this.apps.get(appId);
+    const app = await this.getApp(appId);
     if (!app) return [];
 
     const appPath = path.join(this.appsDir, appId);
@@ -1147,6 +3084,23 @@ export class AppService {
     return absoluteFiles
       .map((file) => path.relative(appPath, file))
       .sort((a, b) => a.localeCompare(b));
+  }
+
+  /** backend/ manifest + handlers (excluded from listAppFiles browser bundle listing). */
+  async listAppBackendFiles(appId: string): Promise<string[]> {
+    const app = await this.getApp(appId);
+    if (!app) return [];
+
+    const backendDir = path.join(this.appsDir, appId, "backend");
+    try {
+      const entries = await fs.readdir(backendDir);
+      return entries
+        .filter((name) => !name.startsWith("."))
+        .map((name) => `backend/${name}`)
+        .sort((a, b) => a.localeCompare(b));
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -1179,8 +3133,68 @@ export class AppService {
     filename: string,
     content: string,
   ): Promise<boolean> {
-    const app = this.apps.get(appId);
+    const app = await this.getApp(appId);
     if (!app) return false;
+
+    const normalizedFilename = filename.replace(/\\/g, "/");
+    try {
+      const {
+        parseAppRelativeSchemaMigrationPath,
+        mirrorSchemaMigrationToRegistry,
+        schemaOwnerSlugMapForApp,
+      } = await import("./syncV3/syncPulledSchemaOwnerMigrations.js");
+      const { applyRegistryDatabaseMigrations } = await import(
+        "./jobs/databaseMigrations.js"
+      );
+      const migrationPath = parseAppRelativeSchemaMigrationPath(normalizedFilename);
+      if (migrationPath) {
+        const outcome = await mirrorSchemaMigrationToRegistry({
+          appId,
+          repoPath: migrationPath.repoStylePath,
+          content,
+          paprRoot: this.paprRootDir,
+        });
+        if (outcome.kind === "written") {
+          const dbPath = schemaOwnerSlugMapForApp(appId).get(migrationPath.slug);
+          if (dbPath) {
+            await applyRegistryDatabaseMigrations(dbPath);
+          }
+          console.log(
+            `[AppService] Redirected migration write to registry: ${outcome.registryRelativePath} (not ${normalizedFilename} under app)`,
+          );
+          return true;
+        }
+        if (outcome.kind === "unchanged") {
+          return true;
+        }
+        if (outcome.kind === "conflict") {
+          throw new Error(
+            `Registry migration for "${migrationPath.slug}" conflicts with upstream. Edit data/databases/${migrationPath.slug}/migrations/ directly.`,
+          );
+        }
+        if (outcome.kind === "skipped") {
+          if (outcome.reason === "not schema owner for slug") {
+            throw new Error(
+              `App folder path databases/${migrationPath.slug}/migrations/ is not applied. ` +
+                `Write migrations under data/databases/${migrationPath.slug}/migrations/ instead.`,
+            );
+          }
+          throw new Error(
+            `Registry migration data/databases/${migrationPath.slug}/migrations/${migrationPath.fileName} already exists. Edit that file instead of apps/.../databases/.`,
+          );
+        }
+      }
+    } catch (redirectError) {
+      if (
+        redirectError instanceof Error &&
+        (redirectError.message.includes("data/databases/") ||
+          redirectError.message.includes("Registry migration"))
+      ) {
+        console.error(`[AppService] Migration redirect failed:`, redirectError.message);
+        return false;
+      }
+      throw redirectError;
+    }
 
     const filePath = path.join(this.appsDir, appId, filename);
     try {
@@ -1197,6 +3211,52 @@ export class AppService {
       await fs.mkdir(dir, { recursive: true });
       // Flush to disk immediately to prevent race conditions
       await fs.writeFile(filePath, content, { flush: true });
+
+      if (filename.replace(/\\/g, "/").startsWith("backend/")) {
+        try {
+          const { syncBackendManifestVaultKeys } = await import(
+            "../utils/backendManifestKeySync.js"
+          );
+          const syncResult = await syncBackendManifestVaultKeys(
+            path.join(this.appsDir, appId),
+            filename,
+            content,
+          );
+          if (syncResult.updated) {
+            console.log(
+              `[AppService] Auto-synced backend manifest keys for ${appId}/${filename}: ` +
+                `${syncResult.addedKeys.join(", ")} on action(s) ${syncResult.actionNames.join(", ")}`,
+            );
+            try {
+              const { ensureAppRequirementsSyncedWithBackend } = await import(
+                "./cloudAppRequirements.js"
+              );
+              await ensureAppRequirementsSyncedWithBackend(
+                this.paprRootDir,
+                appId,
+              );
+            } catch (reqSyncError) {
+              console.warn(
+                `[AppService] requirements.json sync after manifest keys failed for ${appId}:`,
+                reqSyncError,
+              );
+            }
+          }
+        } catch (syncError) {
+          console.warn(
+            `[AppService] Backend manifest key auto-sync failed for ${appId}/${filename}:`,
+            syncError,
+          );
+        }
+      }
+
+      let registrySyncedFromMetadata = false;
+      if (normalizedFilename === "metadata.json") {
+        registrySyncedFromMetadata = this.syncRegistryFromMetadataContent(
+          appId,
+          content,
+        );
+      }
 
       // Sync icon to registry when icon-bearing files are written
       const basename = path.basename(filename);
@@ -1221,9 +3281,14 @@ export class AppService {
         }
       }
 
-      // Update app's updatedAt
-      app.updatedAt = new Date().toISOString();
+      if (!registrySyncedFromMetadata) {
+        app.updatedAt = new Date().toISOString();
+      }
       await this.saveApps();
+
+      if (registrySyncedFromMetadata) {
+        this.broadcastAppListUpdated();
+      }
 
       // Rebuild + iframe reload are handled by the filesystem watcher (debounced)
       // so multi-file agent edits coalesce into a single build/reload cycle.
@@ -1243,7 +3308,14 @@ export class AppService {
   async buildApp(appId: string): Promise<MiniAppBuildResult> {
     const inFlight = this.buildInFlight.get(appId);
     if (inFlight) {
-      return inFlight;
+      // Parallel agent writes: a build that started before this caller's file
+      // landed does not include it. Returning that promise made validate report
+      // "source newer than dist" on the second file (~50 false BUILD FAILED per
+      // month). Wait for the running build, then run one fresh build.
+      this.buildRerunRequested.add(appId);
+      await inFlight.catch(() => undefined);
+      const again = this.buildInFlight.get(appId);
+      if (again) return again;
     }
 
     const run = (async (): Promise<MiniAppBuildResult> => {
@@ -1277,8 +3349,17 @@ export class AppService {
     })();
 
     this.buildInFlight.set(appId, run);
+    let superseded = false;
     try {
-      return await run;
+      const result = await run;
+      // A sibling write arrived while this build ran (parallel agent step, e.g.
+      // screen.ts importing from a shell.ts that was still being written). Our
+      // output is already stale — hand back the fresh build so the first
+      // caller does not report "No matching export" for a file that exists now.
+      superseded = this.buildRerunRequested.delete(appId);
+      if (!superseded) return result;
+      this.buildInFlight.delete(appId); // clear before rerun or it returns this stale run
+      return await this.buildApp(appId);
     } finally {
       if (this.buildInFlight.get(appId) === run) {
         this.buildInFlight.delete(appId);
@@ -1294,19 +3375,78 @@ export class AppService {
   }
 
   /**
-   * Start watching all app directories for file changes
+   * Start routing file changes for all known apps.
+   *
+   * Opens ONE recursive OS watch on appsDir (FSEvents on macOS) and routes each
+   * event to the owning app by its first path segment. Per-app semantics
+   * (debounce, build, validate, reload broadcast, Sync V3 flush) are unchanged
+   * — they were always keyed on appId in handleFileChange, never on the watcher.
    */
   private async startWatchingApps(): Promise<void> {
     for (const app of this.apps.values()) {
       await this.watchApp(app.id);
     }
-    console.log(`[AppService] Started watching ${this.watchers.size} app directories`);
+    console.log(
+      `[AppService] Routing file changes for ${this.watchedAppIds.size} app directories (1 tree watcher)`,
+    );
+  }
+
+  private ensureTreeWatcher(): boolean {
+    if (this.disposed) return false;
+    if (this.treeWatcher) return true;
+    if (!existsSync(this.appsDir)) return false;
+
+    try {
+      this.treeWatcher = new TreeWatcher({
+        roots: [this.appsDir],
+        recursive: true,
+        settleMs: 200, // was chokidar awaitWriteFinish.stabilityThreshold
+        ignore: shouldIgnoreAppWatchPath,
+        onEvent: (event) => {
+          // unlink is not routed: the old per-app watcher only subscribed to
+          // add/change, and a rebuild on delete would race the deleteApp rm.
+          if (event.type === "unlink") return;
+          const rel = path.relative(this.appsDir, event.path);
+          const sep = rel.indexOf(path.sep);
+          if (sep <= 0) return;
+          const appId = rel.slice(0, sep);
+          if (!this.watchedAppIds.has(appId)) return;
+          this.handleFileChange(appId, rel.slice(sep + 1));
+        },
+        onError: (error) => {
+          // Log the message, not the object. Watcher errors carry non-cloneable
+          // fields (fs handles, syscall metadata); passing the raw object to a
+          // reporter that serializes stdout across a process boundary throws
+          // inside the serializer and takes down the whole run.
+          console.error("[AppService] Tree watcher error:", error?.message ?? String(error));
+        },
+      });
+      if (this.treeWatcher.rootCount === 0) {
+        this.treeWatcher = null;
+        return false;
+      }
+      return true;
+    } catch (error) {
+      console.error("[AppService] Failed to start tree watcher:", (error as Error)?.message);
+      this.treeWatcher = null;
+      return false;
+    }
+  }
+
+  private async closeTreeWatcher(): Promise<void> {
+    const watcher = this.treeWatcher;
+    this.treeWatcher = null;
+    if (watcher) {
+      await watcher.close();
+    }
   }
 
   /**
-   * Watch a specific app directory for file changes
+   * Route file changes for a specific app. Idempotent and fd-free: the tree
+   * watcher already covers new subdirectories, so this only registers the id.
    */
   private async watchApp(appId: string): Promise<void> {
+    if (this.disposed) return;
     const appPath = path.join(this.appsDir, appId);
 
     // Check if directory exists before watching
@@ -1315,63 +3455,22 @@ export class AppService {
     } catch {
       return; // Directory doesn't exist yet
     }
+    // Re-check after the await: cleanup() may have run while we were resolving.
+    if (this.disposed) return;
 
-    // Don't create duplicate watchers
-    if (this.watchers.has(appId)) {
-      return;
-    }
-
-    try {
-      const watcher = chokidar.watch(appPath, {
-        persistent: true,
-        ignoreInitial: true,
-        ignored: [
-          "**/.versions/**",
-          "**/data-sources.json",
-          "**/dist/**",
-          "**/.dist-staging/**",
-          "**/.*", // Hidden files
-        ],
-        awaitWriteFinish: {
-          stabilityThreshold: 200, // Wait 200ms after last change
-          pollInterval: 100,
-        },
-      });
-
-      watcher.on("change", (filePath) => {
-        const filename = path.relative(appPath, filePath);
-        this.handleFileChange(appId, filename);
-      });
-
-      watcher.on("add", (filePath) => {
-        const filename = path.relative(appPath, filePath);
-        this.handleFileChange(appId, filename);
-      });
-
-      watcher.on("error", (error) => {
-        console.error(`[AppService] Watcher error for app ${appId}:`, error);
-        this.watchers.delete(appId);
-      });
-
-      this.watchers.set(appId, watcher);
-    } catch (error) {
-      console.error(`[AppService] Failed to watch app ${appId}:`, error);
-    }
+    if (!this.ensureTreeWatcher()) return;
+    this.watchedAppIds.add(appId);
   }
 
   /**
-   * Stop watching a specific app directory
+   * Stop routing changes for a specific app
    */
   private unwatchApp(appId: string): void {
-    const watcher = this.watchers.get(appId);
-    if (watcher) {
-      watcher.close();
-      this.watchers.delete(appId);
-    }
+    this.watchedAppIds.delete(appId);
 
     // Clear any pending debounce timers for this app
     for (const [key, timer] of this.debounceTimers.entries()) {
-      if (key.startsWith(`${appId}:`)) {
+      if (key === appId || key.startsWith(`${appId}:`)) {
         clearTimeout(timer);
         this.debounceTimers.delete(key);
       }
@@ -1382,10 +3481,17 @@ export class AppService {
    * Handle file change detected by filesystem watcher
    */
   private handleFileChange(appId: string, filename: string): void {
+    const normalized = filename.replace(/\\/g, "/");
+
+    // Cloud-prep outputs (bundle.json, linked-databases.json, …) — no reload or auto flush
+    if (isCloudPrepGitSyncArtifact(normalized)) {
+      return;
+    }
+
     console.log(`[AppService] File changed on disk: ${appId}/${filename}`);
 
     // Skip rebuild for dist/ output files (avoids infinite loop)
-    if (filename.startsWith("dist/") || filename.startsWith("dist\\")) {
+    if (normalized.startsWith("dist/")) {
       return;
     }
 
@@ -1404,6 +3510,18 @@ export class AppService {
   }
 
   private async processFileChange(appId: string, filename: string): Promise<void> {
+    const normalizedFilename = filename.replace(/\\/g, "/");
+    if (normalizedFilename === "metadata.json") {
+      const metadataContent = await this.readAppFile(appId, "metadata.json");
+      if (
+        metadataContent &&
+        this.syncRegistryFromMetadataContent(appId, metadataContent)
+      ) {
+        await this.saveApps();
+        this.broadcastAppListUpdated();
+      }
+    }
+
     try {
       await this.buildApp(appId);
       await this.runValidation(appId);
@@ -1412,6 +3530,29 @@ export class AppService {
       console.error(`[AppService] Build/validation error for app ${appId}:`, error);
       // Still broadcast on error so UI shows the latest source/build state
       this.scheduleReloadBroadcast(appId, filename);
+    } finally {
+      try {
+        const { getSyncCoordinator } = await import("./cloudSync/SyncCoordinator.js");
+        const { notifyAppSaveForWriterOps } = await import("./syncV3/AppSaveWatcher.js");
+        const coordinator = getSyncCoordinator();
+        if (coordinator) {
+          await notifyAppSaveForWriterOps(
+            appId,
+            (id) => coordinator.scheduleAutoFlush(id),
+            this.paprRootDir,
+          );
+        } else if (process.env.GATEWAY_MODE === "cloud_agent") {
+          const { notifyCloudSandboxAppSave } = await import(
+            "./cloudAgentGateway/cloudAppWriterDebouncedPush.js"
+          );
+          notifyCloudSandboxAppSave(appId);
+        }
+      } catch (syncError) {
+        console.warn(
+          `[AppService] Writer sync notify failed for ${appId}:`,
+          syncError,
+        );
+      }
     }
   }
 
@@ -1465,10 +3606,40 @@ export class AppService {
     const issues: ValidationIssue[] = [];
     const filesToCheck: string[] = [];
 
+    if (app.icon) {
+      const { validateMiniAppIcon } = await import(
+        "../../core/utils/miniAppIconValidation.js"
+      );
+      const iconResult = validateMiniAppIcon(app.icon);
+      if (!iconResult.ok) {
+        issues.push({
+          file: "app",
+          severity: "warning",
+          rule: iconResult.rule,
+          message: iconResult.message,
+        });
+      }
+    }
+
     // Find all files to validate
     try {
       const files = await this.getAllAppFiles(appPath);
       filesToCheck.push(...files);
+
+      const { listOversizedFilesInAppDir } = await import(
+        "./syncV3/collectAppOpFiles.js"
+      );
+      for (const entry of await listOversizedFilesInAppDir(appPath)) {
+        issues.push({
+          file: entry.path,
+          severity: "warning",
+          rule: "oversized-for-git-sync",
+          message:
+            entry.reason.includes("never tracked")
+              ? `${entry.path}: ${entry.reason}. Move to App Files and store the file id. See src/resources/agent-docs/APP_FILES_GUIDE.md.`
+              : `File is ${entry.reason} and will not sync to the web. Move it to App Files (object storage) and store the file id in your database. See src/resources/agent-docs/APP_FILES_GUIDE.md.`,
+        });
+      }
     } catch (error) {
       console.error(`[AppService] Failed to list app files:`, error);
       return {
@@ -1525,7 +3696,10 @@ export class AppService {
         fileContents.set(relativePath, content);
 
         // LOC check (100 lines max for code — not .md/.json content assets)
-        const locIssues = this.checkLineLimit(content, relativePath, 100);
+        const basename = path.basename(relativePath);
+        const locIssues = AppService.MINI_APP_LOC_EXEMPT_BASENAMES.has(basename)
+          ? []
+          : this.checkLineLimit(content, relativePath, 100);
         issues.push(...locIssues);
 
         // HTML checks always run
@@ -1561,13 +3735,26 @@ export class AppService {
 
     issues.push(...this.checkMiniAppRuntimePatterns(fileContents));
     try {
-      const { checkMiniAppBashPatterns, checkBackendManifestIntegrity, checkOrphanBackendHandlers } =
-        await import("../utils/miniAppBackendLint.js");
+      const {
+        checkMiniAppBashPatterns,
+        checkBackendManifestIntegrity,
+        checkOrphanBackendHandlers,
+        checkMiniAppBackendFetchPatterns,
+      } = await import("../utils/miniAppBackendLint.js");
       issues.push(...checkMiniAppBashPatterns(fileContents));
+      issues.push(...checkMiniAppBackendFetchPatterns(fileContents));
       issues.push(...(await checkBackendManifestIntegrity(appPath)));
       issues.push(...(await checkOrphanBackendHandlers(appPath)));
     } catch (lintError) {
       console.warn("[AppService] Backend lint failed:", lintError);
+    }
+    try {
+      const { checkBackendActionSmokeTest } = await import(
+        "../utils/miniAppBackendSmokeTest.js"
+      );
+      issues.push(...(await checkBackendActionSmokeTest(appId)));
+    } catch (smokeError) {
+      console.warn("[AppService] Backend smoke test failed:", smokeError);
     }
     try {
       const { checkMiniAppJobEventPatterns } = await import(
@@ -1586,12 +3773,44 @@ export class AppService {
       console.warn("[AppService] Emoji lint failed:", lintError);
     }
     try {
+      const { checkMiniAppNativeDialogPatterns } = await import(
+        "../utils/miniAppNativeDialogLint.js"
+      );
+      issues.push(...checkMiniAppNativeDialogPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Native dialog lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppCssCoverageAndShrink } = await import(
+        "../utils/miniAppCssCoverageLint.js"
+      );
+      issues.push(...checkMiniAppCssCoverageAndShrink(appId, fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] CSS coverage lint failed:", lintError);
+    }
+    try {
       const { checkFrontendSqlOveruse } = await import(
         "../utils/miniAppFrontendSqlLint.js"
       );
       issues.push(...checkFrontendSqlOveruse(fileContents));
     } catch (lintError) {
       console.warn("[AppService] Frontend SQL lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppCloudReadPatterns } = await import(
+        "../utils/miniAppCloudReadLint.js"
+      );
+      issues.push(...checkMiniAppCloudReadPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Cloud read lint failed:", lintError);
+    }
+    try {
+      const { checkMiniAppLoadEfficiencyPatterns } = await import(
+        "../utils/miniAppLoadEfficiencyLint.js"
+      );
+      issues.push(...checkMiniAppLoadEfficiencyPatterns(fileContents));
+    } catch (lintError) {
+      console.warn("[AppService] Load efficiency lint failed:", lintError);
     }
     try {
       const {
@@ -1616,6 +3835,15 @@ export class AppService {
       console.warn("[AppService] Cloud compatibility lint failed:", lintError);
     }
     issues.push(...(await this.checkLinkedDataSources(appId, fileContents)));
+
+    try {
+      const { checkLinkedJobPublishCatalogGapsForApp } = await import(
+        "../utils/miniAppPublishCatalogLint.js"
+      );
+      issues.push(...checkLinkedJobPublishCatalogGapsForApp(appId));
+    } catch (lintError) {
+      console.warn("[AppService] Publish catalog lint failed:", lintError);
+    }
 
     // Startup health: heavy eager import graphs, render-blocking CSS count,
     // selector drift, and stale dist bundles (all warnings; stale-missing
@@ -1652,8 +3880,17 @@ export class AppService {
             // ignore unreadable files
           }
         }
+        // validateApp rebuilt dist moments ago. If that build passed, a newer
+        // source mtime is a sibling write racing this check, not stale code —
+        // only a failed build leaves the iframe on old output.
+        const lastBuild = this.lastBuildResult.get(appId);
+        const buildJustPassed = lastBuild?.success === true && !lastBuild.legacy;
         issues.push(
-          ...checkStaleBundle(indexHtmlContent, distMtimeMs, newestSourceMtimeMs),
+          ...checkStaleBundle(
+            indexHtmlContent,
+            distMtimeMs,
+            buildJustPassed ? null : newestSourceMtimeMs,
+          ),
         );
       }
     } catch (healthError) {
@@ -1664,7 +3901,7 @@ export class AppService {
     const result: ValidationResult = {
       appId,
       timestamp: new Date().toISOString(),
-      valid: issues.length === 0,
+      valid: !issues.some((issue) => issue.severity === "error"),
       issues,
       filesChecked: filesToCheck.length,
     };
@@ -1748,7 +3985,7 @@ export class AppService {
       const excess = significantLines - maxLines;
       return [{
         file: filename,
-        severity: 'error',
+        severity: 'warning',
         message: `File has ${significantLines} lines (${excess} over the ${maxLines} line limit). Break into smaller components.`,
         rule: 'max-lines',
       }];
@@ -1787,7 +4024,10 @@ export class AppService {
     const primary = await this.getPrimaryDataSource(appId);
     if (primary?.dbPath) {
       issues.push(
-        ...checkMissingTablesOnPrimaryDb(primary.dbPath, fileContents),
+        ...(await checkMissingTablesOnPrimaryDb(primary.dbPath, fileContents, {
+          dbId: primary.dbId,
+          alias: primary.alias,
+        })),
       );
     }
 
@@ -1861,47 +4101,15 @@ export class AppService {
    * Basic HTML syntax validation
    */
   private checkHtmlSyntax(content: string, filename: string): ValidationIssue[] {
-    const issues: ValidationIssue[] = [];
-    const lines = content.split('\n');
-
-    // Check for unclosed tags (basic validation)
-    const tagStack: Array<{ tag: string; line: number }> = [];
-    const selfClosing = new Set(['img', 'br', 'hr', 'input', 'meta', 'link']);
-
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i];
-      
-      // Find opening tags
-      const openingTags = line.matchAll(/<(\w+)[^>]*>/g);
-      for (const match of openingTags) {
-        const tag = match[1].toLowerCase();
-        if (!selfClosing.has(tag) && !line.includes(`</${tag}>`)) {
-          tagStack.push({ tag, line: i + 1 });
-        }
-      }
-      
-      // Find closing tags
-      const closingTags = line.matchAll(/<\/(\w+)>/g);
-      for (const match of closingTags) {
-        const tag = match[1].toLowerCase();
-        if (tagStack.length > 0 && tagStack[tagStack.length - 1].tag === tag) {
-          tagStack.pop();
-        }
-      }
-    }
-
-    // Report unclosed tags
-    for (const { tag, line } of tagStack) {
-      issues.push({
-        file: filename,
-        line,
-        severity: 'warning',
-        message: `Potentially unclosed <${tag}> tag`,
-        rule: 'html-syntax',
-      });
-    }
-
-    return issues;
+    // Whole-document tokenizer: handles self-closing SVG, void elements, optional end
+    // tags, script/style/comment bodies — see utils/htmlTagBalance.ts.
+    return checkHtmlTagBalance(content).map(({ line, message }) => ({
+      file: filename,
+      line,
+      severity: 'warning' as const,
+      message,
+      rule: 'html-syntax',
+    }));
   }
 
   /**
@@ -2034,27 +4242,36 @@ export class AppService {
    */
   private broadcastValidation(result: ValidationResult): void {
     if (result.issues.length > 0) {
+      const errorCount = result.issues.filter((i) => i.severity === "error").length;
+      const warningCount = result.issues.length - errorCount;
       console.log(
-        `[AppService] Validation found ${result.issues.length} issue(s) in app ${result.appId}`,
+        `[AppService] Validation: app ${result.appId} — ${errorCount} error(s), ${warningCount} warning(s)`,
       );
-      
-      // Log errors to console for agent visibility
-      for (const issue of result.issues) {
-        const prefix = issue.severity === 'error' ? '❌' : '⚠️';
-        const location = issue.line ? `:${issue.line}` : '';
-        console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
+
+      // Full per-issue lines are noisy when cloud sync touches many apps at once.
+      // Agents can call validate_app for details; websocket still carries full results.
+      if (process.env.PAPR_VERBOSE_APP_VALIDATION === "1") {
+        for (const issue of result.issues) {
+          const prefix = issue.severity === "error" ? "❌" : "⚠️";
+          const location = issue.line ? `:${issue.line}` : "";
+          console.log(`${prefix} ${issue.file}${location} - ${issue.message}`);
+        }
       }
     }
 
     import("../websocket/index.js")
       .then(({ broadcast }) => {
+        if (typeof broadcast !== "function") return;
         broadcast({
           type: "app:validation-result",
           data: result,
         });
       })
       .catch((error) => {
-        console.warn("[AppService] Failed to broadcast validation:", error);
+        console.warn(
+          "[AppService] Failed to broadcast validation:",
+          (error as Error)?.message ?? String(error),
+        );
       });
   }
 
@@ -2064,6 +4281,7 @@ export class AppService {
   private broadcastFileChange(appId: string, filename: string): void {
     import("../websocket/index.js")
       .then(({ broadcast }) => {
+        if (typeof broadcast !== "function") return;
         broadcast({
           type: "app:file-changed",
           data: { appId, filename, timestamp: Date.now() },
@@ -2073,7 +4291,10 @@ export class AppService {
         );
       })
       .catch((error) => {
-        console.warn("[AppService] Failed to broadcast file change:", error);
+        console.warn(
+          "[AppService] Failed to broadcast file change:",
+          (error as Error)?.message ?? String(error),
+        );
         // Non-fatal - file was still written successfully
       });
   }
@@ -2228,11 +4449,9 @@ export class AppService {
     return path.join(this.appsDir, appId, "data-sources.json");
   }
 
-  async getDataSourcesConfig(appId: string): Promise<AppDataSourcesFile> {
-    const app = this.apps.get(appId);
-    if (!app) {
-      throw new Error(`App not found: ${appId}`);
-    }
+  private async readDataSourcesConfigFromDisk(
+    appId: string,
+  ): Promise<AppDataSourcesFile> {
     const dataSourcesPath = this.getDataSourcesPath(appId);
     try {
       const raw = await fs.readFile(dataSourcesPath, "utf8");
@@ -2244,6 +4463,193 @@ export class AppService {
       }
       throw error;
     }
+  }
+
+  async getDataSourcesConfig(appId: string): Promise<AppDataSourcesFile> {
+    const app = this.apps.get(appId);
+    if (!app) {
+      throw new Error(`App not found: ${appId}`);
+    }
+
+    const { getDatabaseRegistryService } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const registry = getDatabaseRegistryService();
+    const jobsRoot = getPaprJobsRoot();
+    const paprRoot = this.paprRootDir;
+
+    const {
+      buildAppDataSourcesCacheSignature,
+      getCachedAppDataSourcesResolvedConfig,
+      setCachedAppDataSourcesResolvedConfig,
+      recordAppDataSourcesConfigCacheMiss,
+    } = await import("./appDataSourcesResolvedCache.js");
+
+    const signatureInput = {
+      appId,
+      appsDir: this.appsDir,
+      paprRoot,
+      jobsRoot,
+      registryPath: registry.getRegistryPath(),
+    };
+    const signature = buildAppDataSourcesCacheSignature(signatureInput);
+    const cached = getCachedAppDataSourcesResolvedConfig(appId, signature);
+    if (cached) {
+      return cached;
+    }
+
+    recordAppDataSourcesConfigCacheMiss(appId);
+    const resolved = await this.resolveDataSourcesConfigUncached(appId);
+
+    const postSignature = buildAppDataSourcesCacheSignature({
+      ...signatureInput,
+      registryPath: registry.getRegistryPath(),
+    });
+    setCachedAppDataSourcesResolvedConfig(appId, postSignature, resolved);
+    return resolved;
+  }
+
+  private async resolveDataSourcesConfigUncached(
+    appId: string,
+  ): Promise<AppDataSourcesFile> {
+    const config = await this.readDataSourcesConfigFromDisk(appId);
+    const workspaceConfig = resolveDataSourcesForWorkspace(
+      config,
+      getPaprJobsRoot(),
+    );
+
+    const { getDatabaseRegistryService } = await import(
+      "./DatabaseRegistryService.js"
+    );
+    const { isReadableDbFile } = await import("./resolveRegistryDbPath.js");
+    const { resolveLinkedSourceDbPath } = await import(
+      "./portableDataSources.js"
+    );
+    const registry = getDatabaseRegistryService();
+    const jobsRoot = getPaprJobsRoot();
+    const appDir = path.join(this.appsDir, appId);
+
+    try {
+      const linkedRaw = await fs.readFile(
+        path.join(appDir, "linked-databases.json"),
+        "utf8",
+      );
+      registry.mergeFromRegistryFile(linkedRaw);
+    } catch {
+      /* app may predate linked-databases.json */
+    }
+
+    const sources = await Promise.all(
+      workspaceConfig.sources.map(async (source) => {
+        const registryRecord = source.dbId
+          ? registry.getById(source.dbId)
+          : undefined;
+        const resolvedPath = await resolveLinkedSourceDbPath({
+          dbPath: source.dbPath,
+          dbId: source.dbId,
+          jobId: source.jobId,
+          jobsRoot,
+          registryLabel: registryRecord?.label ?? source.alias,
+        });
+
+        if (!resolvedPath?.trim()) {
+          return source;
+        }
+
+        if (source.dbId && isReadableDbFile(resolvedPath)) {
+          const existing = registry.getById(source.dbId);
+          if (existing && !isReadableDbFile(existing.localPath)) {
+            await registry.updateLocalPath(source.dbId, resolvedPath);
+          } else if (!existing) {
+            await registry.register({
+              dbId: source.dbId,
+              localPath: resolvedPath,
+              label: registryRecord?.label ?? source.alias,
+              tursoShortName: registryRecord?.tursoShortName,
+            });
+          }
+        }
+
+        return source.dbPath?.trim() === resolvedPath
+          ? source
+          : { ...source, dbPath: resolvedPath };
+      }),
+    );
+
+    return omitUnlinkedDataSources({
+      ...workspaceConfig,
+      sources,
+    });
+  }
+
+  /**
+   * Lazy first-run setup for the bundled Home dashboard: install Daily Brief job,
+   * provision the briefs database, and link data-sources.json on demand.
+   */
+  async ensureHomeDailyBriefReady(
+    appId: string,
+  ): Promise<{ jobId: string; created: boolean }> {
+    const targetDir = path.join(this.appsDir, appId);
+    try {
+      await fs.access(path.join(targetDir, "default-job.json"));
+    } catch {
+      throw new Error(
+        `App ${appId} does not support on-demand Daily Brief setup`,
+      );
+    }
+
+    const { getJobsService } = await import("./JobsService.js");
+    const jobsService = getJobsService();
+    await jobsService.initialize();
+
+    const jobIdFromFile = await readHomeDailyBriefJobIdFromAppDir(targetDir);
+    const allJobs = await jobsService.listJobs();
+    const existingJobId = resolveHomeDailyBriefJobId({
+      appDir: targetDir,
+      jobIdFromFile,
+      jobExists: (id) => jobsService.hasJob(id),
+      findLinkedJobId: () =>
+        findHomeDailyBriefJobIdInRegistry(allJobs, {
+          preferJobId: jobIdFromFile,
+        }),
+    });
+
+    const config = await this.readDataSourcesConfigFromDisk(appId);
+    const hasBriefLink = config.sources.some(
+      (source) =>
+        !isUnlinkedDataSource(source) &&
+        source.tables?.includes("briefs") &&
+        Boolean(
+          source.jobId?.trim() || source.dbPath?.trim() || source.dbId?.trim(),
+        ),
+    );
+
+    if (existingJobId && hasBriefLink) {
+      if (!jobIdFromFile) {
+        await writeHomeDailyBriefJobIdToAppDir(targetDir, existingJobId);
+      }
+      return { jobId: existingJobId, created: false };
+    }
+
+    await this.doInstallDefaultJobForApp(targetDir, targetDir, appId);
+
+    const refreshedJobs = await jobsService.listJobs();
+    const jobId =
+      (await readHomeDailyBriefJobIdFromAppDir(targetDir)) ??
+      resolveHomeDailyBriefJobId({
+        appDir: targetDir,
+        jobExists: (id) => jobsService.hasJob(id),
+        findLinkedJobId: () =>
+          findHomeDailyBriefJobIdInRegistry(refreshedJobs, {
+            preferJobId: jobIdFromFile,
+          }),
+      });
+
+    if (!jobId) {
+      throw new Error("Daily Brief Generator job could not be created");
+    }
+
+    return { jobId, created: true };
   }
 
   async listAppDataSources(appId: string): Promise<AppDataSource[]> {
@@ -2274,9 +4680,9 @@ export class AppService {
   }
 
   async getPrimaryDataSource(appId: string): Promise<AppDataSource | undefined> {
-    const { getPrimarySource } = await import("./appDataSources.js");
+    const { getLegacyDefaultSource } = await import("./appDataSources.js");
     const config = await this.getDataSourcesConfig(appId);
-    return getPrimarySource(config);
+    return getLegacyDefaultSource(config);
   }
 
   private async writeDataSourcesConfig(
@@ -2284,11 +4690,17 @@ export class AppService {
     config: AppDataSourcesFile,
     previousSources?: AppDataSource[],
   ): Promise<void> {
+    const { assertDataSourcesEligibleForRegistry } = await import(
+      "./registryDatabaseEligibility.js"
+    );
+    assertDataSourcesEligibleForRegistry(config.sources);
+
     await fs.writeFile(
       this.getDataSourcesPath(appId),
       serializeDataSourcesFile(config),
       "utf8",
     );
+    notifyJobOwnershipChanged(this.paprRootDir);
 
     if (previousSources) {
       const normalizePath = (p: string) => path.normalize(p);
@@ -2331,68 +4743,32 @@ export class AppService {
     const app = this.apps.get(appId);
     if (!app) return;
 
-    const primary = await this.getPrimaryDataSource(appId);
-    if (!primary) return;
+    const config = await this.getDataSourcesConfig(appId);
+    if (config.sources.length === 0) return;
 
-    const alias = primary.alias;
     const appPath = path.join(this.appsDir, appId);
     const dbTsPath = path.join(appPath, "db.ts");
+    const content = buildAppDbTsContent(
+      appId,
+      config.sources.map((s) => ({ alias: s.alias })),
+    );
 
     try {
       await fs.access(dbTsPath);
       const existing = await fs.readFile(dbTsPath, "utf8");
-      if (existing.includes("PRIMARY_SOURCE") && existing.includes(appId)) {
-        if (primary && !existing.includes(`PRIMARY_SOURCE = '${alias}'`)) {
-          await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
-        }
+      if (existing.includes("APP_ID") && existing.includes(appId) && existing === content) {
         return;
       }
     } catch {
       // create below
     }
 
-    await fs.writeFile(dbTsPath, buildAppDbTsContent(appId, alias), "utf8");
-  }
-
-  /**
-   * Fix data-sources.json entries whose dbId drifted from the registry (path hash).
-   * Prevents cloud "No registry record for dbId" after promotion or manual edits.
-   */
-  private async repairDataSourceDbIds(): Promise<void> {
-    const { getDatabaseRegistryService } = await import(
-      "./DatabaseRegistryService.js"
-    );
-    const registry = getDatabaseRegistryService();
-
-    for (const appId of this.apps.keys()) {
-      const config = await this.getDataSourcesConfig(appId);
-      let changed = false;
-      const sources = config.sources.map((source) => {
-        if (!source.dbPath) {
-          return source;
-        }
-        const repaired = registry.enrichSource(source);
-        if (repaired.dbId !== source.dbId) {
-          changed = true;
-        }
-        return repaired;
-      });
-
-      if (changed) {
-        await this.writeDataSourcesConfig(appId, { ...config, sources });
-        console.log(
-          `[AppService] Repaired data-sources dbId for app ${appId}`,
-        );
-      }
-    }
+    await fs.writeFile(dbTsPath, content, "utf8");
   }
 
   async linkAppDataSource(
     appId: string,
-    source: Omit<AppDataSource, "linkedAt"> & {
-      role?: AppDataSourceRole;
-      setPrimary?: boolean;
-    },
+    source: Omit<AppDataSource, "linkedAt">,
   ): Promise<AppDataSource[]> {
     const app = this.apps.get(appId);
     if (!app) {
@@ -2401,46 +4777,33 @@ export class AppService {
 
     const config = await this.getDataSourcesConfig(appId);
     const previousSources = config.sources;
-    const { setPrimary, ...sourceFields } = source;
 
-    const isUpdate = config.sources.some((entry) => entry.id === sourceFields.id);
-    if (config.sources.length >= 1 && !isUpdate && !setPrimary) {
-      const existing = config.primary ?? config.sources[0]?.alias ?? "primary";
-      throw new Error(
-        `App "${app.title}" already has database "${existing}". ` +
-          `One database per mini-app — additional jobs must write to $APP_DB, not link another source. ` +
-          `Pass setPrimary: true only when intentionally replacing the app's database.`,
-      );
-    }
+    const isUpdate = config.sources.some((entry) => entry.id === source.id);
 
-    let role = sourceFields.role;
-    if (!role && (config.sources.length === 0 || setPrimary)) {
-      role = "primary";
-    }
-
-    let dbPath = sourceFields.dbPath;
+    let dbPath = source.dbPath;
     let jobDirForScratch: string | undefined;
 
-    if (sourceFields.jobId) {
+    if (source.jobId) {
       const { getJobsService } = await import("./JobsService.js");
       const jobsService = getJobsService();
       await jobsService.initialize();
       jobDirForScratch =
-        (await jobsService.getJobPath(sourceFields.jobId)) ?? undefined;
+        (await jobsService.getJobPath(source.jobId)) ?? undefined;
+      const workspaceDbPath = await jobsService.getJobDatabasePath(source.jobId);
+      if (workspaceDbPath) {
+        dbPath = workspaceDbPath;
+      }
     }
 
-    const willBePrimary =
-      setPrimary ||
-      role === "primary" ||
-      config.sources.length === 0;
+    const willPromoteJobDb = Boolean(source.jobId);
 
-    if (willBePrimary) {
+    if (willPromoteJobDb) {
       const { isJobOwnedDatabasePath, promoteJobDatabaseToRegistry } =
         await import("./databasePromotion.js");
       if (isJobOwnedDatabasePath(dbPath)) {
         const promoted = await promoteJobDatabaseToRegistry({
           sourcePath: dbPath,
-          label: sourceFields.alias || app.title,
+          label: source.alias || app.title,
           moveFromJobFolder: true,
           jobDirForScratchReset: jobDirForScratch,
         });
@@ -2451,20 +4814,30 @@ export class AppService {
       }
     }
 
+    const { isJobScratchDatabasePath } = await import(
+      "./jobs/jobScratchDatabasePath.js"
+    );
+    if (isJobScratchDatabasePath(dbPath)) {
+      throw new Error(
+        "Cannot link job scratch to an app for Turso sync. " +
+          "Use create_database → attach_database({ dbId }) and set writeDbIds on the job.",
+      );
+    }
+
     const { initializeDatabaseRegistry } = await import(
       "./DatabaseRegistryService.js"
     );
     const registry = await initializeDatabaseRegistry();
     const record = await registry.ensureForPath(dbPath, {
-      label: sourceFields.alias,
-      ownerJobId: sourceFields.jobId,
+      label: source.alias,
+      ownerJobId: source.jobId,
+      schemaOwnerAppId: appId,
     });
 
     const linked: AppDataSource = {
-      ...sourceFields,
+      ...source,
       dbPath,
       dbId: record.dbId,
-      ...(role ? { role } : {}),
       linkedAt: new Date().toISOString(),
     };
 
@@ -2472,17 +4845,11 @@ export class AppService {
       ? config.sources.map((entry) =>
           entry.id === linked.id ? linked : entry,
         )
-      : [linked];
-
-    let primary = config.primary;
-    if (setPrimary || linked.role === "primary" || config.sources.length === 0) {
-      primary = linked.alias;
-    }
+      : [...config.sources, linked];
 
     await this.writeDataSourcesConfig(
       appId,
       {
-        primary,
         sources: nextSources,
       },
       previousSources,
@@ -2497,7 +4864,7 @@ export class AppService {
     if (linked.jobId) {
       void import("./tursoPushScheduler.js")
         .then(({ scheduleTursoPushForJob }) =>
-          scheduleTursoPushForJob(linked.jobId!, "completion"),
+          scheduleTursoPushForJob(linked.jobId!, "completion", "completion"),
         )
         .catch(() => undefined);
     }
@@ -2509,81 +4876,13 @@ export class AppService {
   }
 
   /**
-   * Link a job's data.db to every app in job.appIds (skips STANDALONE).
-   * Called after createJob (allowBaseline) and after job completion (data populated).
+   * @deprecated Jobs no longer auto-link scratch data.db to apps. Use create_database + attach_database.
    */
   async autoLinkJobToApps(
-    jobId: string,
-    options?: { allowBaseline?: boolean },
+    _jobId: string,
+    _options?: { allowBaseline?: boolean },
   ): Promise<AppDataSource[]> {
-    const { getJobsService } = await import("./JobsService.js");
-    const { STANDALONE_APP_ID } = await import("./jobs/appIds.js");
-    const jobsService = getJobsService();
-    await jobsService.initialize();
-
-    const job = await jobsService.getJob(jobId);
-    if (!job) {
-      return [];
-    }
-
-    const appIds = (job.appIds ?? []).filter((id) => id !== STANDALONE_APP_ID);
-    if (appIds.length === 0) {
-      return [];
-    }
-
-    const dbPath = await jobsService.getJobDatabasePath(jobId);
-    if (!dbPath) {
-      return [];
-    }
-
-    if (!options?.allowBaseline && dbHasOnlyBaselineTables(dbPath)) {
-      return [];
-    }
-
-    const linked: AppDataSource[] = [];
-    for (const appId of appIds) {
-      const app = this.apps.get(appId);
-      if (!app) {
-        continue;
-      }
-
-      const config = await this.getDataSourcesConfig(appId);
-      if (config.sources.some((entry) => entry.jobId === jobId)) {
-        continue;
-      }
-
-      if (config.sources.length > 0) {
-        console.log(
-          `[AppService] Skipping auto-link for job ${job.name} → app ${app.title}: ` +
-            `app already has primary database "${config.primary ?? config.sources[0]?.alias}". ` +
-            `Job should write UI data to $APP_DB.`,
-        );
-        continue;
-      }
-
-      const source: Omit<AppDataSource, "linkedAt"> & {
-        role?: AppDataSourceRole;
-      } = {
-        id: `${jobId}:auto-linked`,
-        type: "sqlite",
-        jobId,
-        alias: job.name,
-        dbPath,
-        tables: [],
-        role: config.sources.length === 0 ? "primary" : undefined,
-      };
-
-      const nextSources = await this.linkAppDataSource(appId, source);
-      const entry = nextSources.find((s) => s.jobId === jobId);
-      if (entry) {
-        linked.push(entry);
-        console.log(
-          `[AppService] Auto-linked job ${job.name} → app ${app.title}`,
-        );
-      }
-    }
-
-    return linked;
+    return [];
   }
 
   /**
@@ -2609,130 +4908,64 @@ export class AppService {
 
     const allJobs = await jobsService.listJobs();
     const config = await this.getDataSourcesConfig(appId);
-    if (config.sources.length > 0) {
+    const existingJobIds = new Set(
+      config.sources
+        .map((source) => source.jobId)
+        .filter((jobId): jobId is string => Boolean(jobId)),
+    );
+
+    const augmentExisting =
+      process.env.PAPR_AUTO_DISCOVER_DATA_SOURCES === "true";
+    if (config.sources.length > 0 && !augmentExisting) {
       return [];
     }
 
-    const existingJobIds = new Set(config.sources.map((ds) => ds.jobId));
-
-    const appLinkedJobIds = new Set(
-      allJobs.filter((j) => jobBelongsToApp(j.appIds, appId)).map((j) => j.id),
-    );
-
-    // Build map of database paths to jobs (app-linked jobs only)
-    const dbPathToJob = new Map<string, (typeof allJobs)[0]>();
-    for (const job of allJobs) {
-      if (!appLinkedJobIds.has(job.id)) continue;
-      const dbPath = await jobsService.getJobDatabasePath(job.id);
-      if (dbPath) {
-        dbPathToJob.set(dbPath, job);
-      }
-    }
-
-    // Scan app code for database references
     const appDir = path.join(this.appsDir, appId);
-    const referencedDbPaths = await this.scanAppCodeForDatabasePaths(appDir);
+    const discovered = await scanAppCodeForJobDatabaseReferences({
+      appDir,
+      jobsRoot: getPaprJobsRoot(),
+    });
 
     const newSources: AppDataSource[] = [];
-    for (const dbPath of referencedDbPaths) {
-      const job = dbPathToJob.get(dbPath);
-      if (!job || existingJobIds.has(job.id)) continue;
-      if (dbHasOnlyBaselineTables(dbPath)) {
+    for (const reference of discovered) {
+      if (existingJobIds.has(reference.jobId)) {
+        continue;
+      }
+
+      const job = allJobs.find((entry) => entry.id === reference.jobId);
+      if (!job) {
+        continue;
+      }
+
+      if (dbHasOnlyBaselineTables(reference.dbPath)) {
         console.log(
           `[AppService] Skipping auto-link for ${job.name}: DB has only job infrastructure tables`,
         );
         continue;
       }
 
-      const source: Omit<AppDataSource, "linkedAt"> & {
-        role?: AppDataSourceRole;
-      } = {
+      await jobsService.ensureJobLinkedToApp(reference.jobId, appId);
+
+      const source: Omit<AppDataSource, "linkedAt"> = {
         id: `${job.id}:auto-discovered`,
         type: "sqlite",
         jobId: job.id,
         alias: job.name,
-        dbPath,
+        dbPath: reference.dbPath,
         tables: [],
-        role: config.sources.length === 0 ? "primary" : undefined,
       };
 
       const linked = await this.linkAppDataSource(appId, source);
-      newSources.push(linked.find((s) => s.jobId === job.id)!);
-      console.log(`[AppService] Auto-linked data source: ${job.name} → ${app.title}`);
+      const created = linked.find((entry) => entry.jobId === job.id);
+      if (created) {
+        newSources.push(created);
+        console.log(
+          `[AppService] Auto-linked data source from code (${reference.matchedBy}): ${job.name} → ${app.title}`,
+        );
+      }
     }
 
     return newSources;
-  }
-
-  /**
-   * Scan mini-app code files for database path references.
-   * Looks for:
-   * - fetch('/api/db/query', ...) calls with specific database paths
-   * - Direct database file references in code
-   * 
-   * @param appDir - App directory to scan
-   * @returns Set of database paths referenced in the app code
-   */
-  private async scanAppCodeForDatabasePaths(appDir: string): Promise<Set<string>> {
-    const dbPaths = new Set<string>();
-    
-    try {
-      let files: string[];
-      try {
-        files = await fs.readdir(appDir);
-      } catch {
-        return dbPaths;
-      }
-      const codeFiles = files.filter(f => 
-        f.endsWith('.js') || 
-        f.endsWith('.ts') || 
-        f.endsWith('.html')
-      );
-
-      for (const file of codeFiles) {
-        const filePath = path.join(appDir, file);
-        let content: string;
-        try {
-          content = await fs.readFile(filePath, 'utf8');
-        } catch {
-          continue;
-        }
-        
-        // Look for database paths in the code
-        // Pattern 1: Explicit db paths: /Users/.../Papr/jobs/{jobId}/data/*.db
-        const dbPathPattern = /\/Papr\/jobs\/([a-f0-9-]+)\/data\/[^'"]+\.db/gi;
-        let match;
-        while ((match = dbPathPattern.exec(content)) !== null) {
-          dbPaths.add(match[0]);
-        }
-        
-        // Pattern 2: Job ID references that imply database usage
-        // If app code references a job ID, it's likely querying that job's database
-        const jobIdPattern = /['"]([a-f0-9-]{36})['"]/g;
-        const homeDir = os.homedir();
-        while ((match = jobIdPattern.exec(content)) !== null) {
-          const jobId = match[1];
-          // Try both standard paths
-          const possiblePaths = [
-            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
-            path.join(homeDir, 'Papr', 'jobs', jobId, 'data', 'data.db'),
-          ];
-          for (const p of possiblePaths) {
-            try {
-              await fs.access(p);
-              dbPaths.add(p);
-              break;
-            } catch {
-              // Path doesn't exist, try next
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`[AppService] Failed to scan app code for db paths:`, err);
-    }
-
-    return dbPaths;
   }
 
   getAppsRootPath(): string {
@@ -2776,21 +5009,70 @@ export class AppService {
     return app;
   }
 
+  /** Apps routed for hot-reload (for diagnostics). OS watch handles: 1. */
+  getActiveWatcherCount(): number {
+    return this.treeWatcher ? this.watchedAppIds.size : 0;
+  }
+
+  /** OS-level watch handles held by AppService (constant, not per app/file). */
+  getTreeWatcherRootCount(): number {
+    return this.treeWatcher?.rootCount ?? 0;
+  }
+
   /**
-   * Cleanup: stop all file watchers
+   * Close per-app watchers to reclaim fds during internal fd-pressure recovery.
+   * Watchers are re-established by {@link reestablishAppWatchers}.
    */
-  cleanup(): void {
-    console.log(`[AppService] Cleaning up ${this.watchers.size} watchers`);
-    
-    for (const [_appId, watcher] of this.watchers.entries()) {
-      watcher.close();
+  async releaseWatchersForFdRecovery(): Promise<number> {
+    const count = this.getActiveWatcherCount();
+    if (count === 0) {
+      return 0;
     }
-    this.watchers.clear();
 
     for (const timer of this.debounceTimers.values()) {
       clearTimeout(timer);
     }
     this.debounceTimers.clear();
+
+    await this.closeTreeWatcher();
+    this.watchedAppIds.clear();
+    return count;
+  }
+
+  /** Re-open watchers after fd recovery (only when AppService is initialized). */
+  async reestablishAppWatchers(): Promise<void> {
+    if (this.disposed || !this.initialized) {
+      return;
+    }
+
+    const appIds = [...this.apps.keys()];
+    await Promise.all(appIds.map((appId) => this.watchApp(appId)));
+  }
+
+  /**
+   * Cleanup: stop all file watchers
+   */
+  cleanup(): void {
+    this.disposed = true;
+    console.log(
+      `[AppService] Cleaning up watcher (${this.watchedAppIds.size} apps routed)`,
+    );
+
+    void this.closeTreeWatcher();
+    this.watchedAppIds.clear();
+
+    for (const timer of this.debounceTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.debounceTimers.clear();
+
+    // Reload broadcasts fire up to 1.5s after the last edit. Leaving them armed
+    // kept the process alive past shutdown and, under vitest, let a worker post
+    // messages after the pool closed — surfacing as an unrelated IPC crash.
+    for (const timer of this.reloadBroadcastTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.reloadBroadcastTimers.clear();
   }
 }
 
@@ -2817,6 +5099,15 @@ export function getAppService(): AppService {
 /** Reset singleton between unit tests (avoids stale HOME paths). */
 export function resetAppServiceSingletonForTests(): void {
   appServiceInstance?.cleanup();
+  appServiceInstance = null;
+}
+
+/** Await watcher teardown during org/namespace workspace switch. */
+export async function resetAppServiceForWorkspaceSwitch(): Promise<void> {
+  if (!appServiceInstance) {
+    return;
+  }
+  await appServiceInstance.resetForWorkspaceReload();
   appServiceInstance = null;
 }
 

@@ -96,6 +96,15 @@ describe("mapGatewayStreamToAppAgentEvents", () => {
       data: { assistantText: "Done", shouldRefreshApp: true, turnId },
     });
   });
+
+  it("maps compression-start to status event", () => {
+    const events = mapGatewayStreamToAppAgentEvents(
+      { type: "compression-start", payload: {} },
+      turnId,
+    );
+    expect(events[0]?.type).toBe("app-agent:status");
+    expect(events[0]?.data.message).toBe("Compressing context…");
+  });
 });
 
 describe("MemoryAppAgentChatSessionStore", () => {

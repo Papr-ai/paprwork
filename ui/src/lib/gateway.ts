@@ -6,6 +6,15 @@
  */
 
 import { isExpectedStreamCancellation } from "../../../src/core/constants/streamCancellation.js";
+import {
+  getUiStreamProfiler,
+  isUiStreamProfilingEnabled,
+} from "../../lib/streamProfiler";
+import {
+  resolveGatewayConnectionState,
+  type GatewayConnectionState,
+} from "../../utils/gatewayConnectionState";
+import { scheduleSuspendAwareTimeout } from "../../utils/suspendAwareDeadline";
 
 export interface GatewayMessage {
   id: string;
@@ -26,6 +35,15 @@ type ConnectionStatusHandler = (connected: boolean) => void;
 
 export const GATEWAY_DISCONNECTED_ERROR = "Gateway disconnected";
 
+export type { GatewayConnectionState };
+
+const HEARTBEAT_INTERVAL_MS = 15_000;
+const HEARTBEAT_INTERVAL_ACTIVE_STREAM_MS = 20_000;
+const MAX_MISSED_HEARTBEATS_DEFAULT = 3;
+const MAX_MISSED_HEARTBEATS_ACTIVE_STREAM = 12;
+const PONG_WAIT_MS = 8_000;
+const DEGRADED_AFTER_MISSED = 2;
+
 class GatewayClient {
   private ws: WebSocket | null = null;
   private handlers: Map<string, MessageHandler> = new Map();
@@ -39,9 +57,20 @@ class GatewayClient {
   private heartbeatInterval: ReturnType<typeof setInterval> | null = null;
   private heartbeatTimeout: ReturnType<typeof setTimeout> | null = null;
   private missedHeartbeats = 0;
-  private maxMissedHeartbeats = 3;
+  private activeAgentStreams = 0;
+  private connectionDegraded = false;
+  /**
+   * Whether a socket has ever opened this session. Distinguishes a reconnect
+   * from the initial connect, which the backoff counter cannot do once it has
+   * been reset (see resolveGatewayConnectionState).
+   */
+  private hasEverConnected = false;
+  /** Epoch ms of the last `system:resume`, read by suspend-aware deadlines. */
+  private lastResumeAtMs = 0;
   /** Resolvers waiting for the first successful connection */
   private connectionWaiters: Array<() => void> = [];
+  /** Resolvers waiting on a one-shot liveness probe (see probeConnection) */
+  private pongWaiters = new Set<() => void>();
 
   constructor() {
     // Use localhost (which resolves to 127.0.0.1) for WebSocket connections
@@ -51,17 +80,69 @@ class GatewayClient {
     this.url = `ws://${host}:${port}`;
 
     this.connect();
-    
+
     // Listen for system resume events from Electron
-    if (typeof window !== 'undefined') {
-      window.addEventListener('system:resume', () => {
-        console.log('[Gateway] System resumed - reconnecting immediately');
-        this.reconnectAttempts = 0; // Reset backoff on system resume
-        if (!this.isConnected()) {
-          this.connect();
+    if (typeof window !== "undefined") {
+      window.addEventListener("system:resume", () => {
+        this.lastResumeAtMs = Date.now();
+        // Reset backoff: a long sleep should not leave us waiting out a 30s
+        // delay. The connection state no longer reads "am I reconnecting" off
+        // this counter, so zeroing it cannot mislabel the indicator.
+        this.reconnectAttempts = 0;
+
+        if (this.ws?.readyState === WebSocket.OPEN) {
+          // After sleep the socket often still reports OPEN while TCP/streams are
+          // dead. Ping can succeed on a half-open link while agent state is broken,
+          // so always tear down and reconnect on wake (see reconnectAfterSystemWake).
+          this.reconnectAfterSystemWake("resume");
+          return;
         }
+
+        console.log("[Gateway] System resumed - reconnecting immediately");
+        this.connect();
       });
     }
+  }
+
+  /**
+   * After OS sleep the WebSocket often stays OPEN while the TCP session is dead
+   * ("zombie"). Heartbeats can take 45s+ to notice; force a fresh socket on wake.
+   */
+  private reconnectAfterSystemWake(source: "resume"): void {
+    console.log(
+      `[Gateway] System ${source} — forcing WebSocket reconnect (stale OPEN sockets are common after sleep)`,
+    );
+    this.reconnectAttempts = 0;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.stopHeartbeat();
+    this.teardownWebSocketForWake();
+    this.rejectActiveStreamHandlers();
+    this.notifyConnectionStatus(false);
+    this.connect();
+  }
+
+  /** Close the current socket without triggering exponential backoff reconnect. */
+  private teardownWebSocketForWake(): void {
+    const sock = this.ws;
+    if (!sock) {
+      return;
+    }
+    sock.onclose = () => {};
+    sock.onerror = () => {};
+    try {
+      if (
+        sock.readyState === WebSocket.OPEN ||
+        sock.readyState === WebSocket.CONNECTING
+      ) {
+        sock.close(4000, "system wake");
+      }
+    } catch {
+      // ignore
+    }
+    this.ws = null;
   }
 
   /**
@@ -82,6 +163,7 @@ class GatewayClient {
         console.log("[Gateway] Connected");
         this.reconnectAttempts = 0;
         this.missedHeartbeats = 0;
+        this.hasEverConnected = true;
         this.notifyConnectionStatus(true);
         this.startHeartbeat();
         
@@ -98,10 +180,15 @@ class GatewayClient {
           // Heartbeat response (pong)
           if (response.type === 'pong') {
             this.missedHeartbeats = 0;
+            this.setConnectionDegraded(false);
             if (this.heartbeatTimeout) {
               clearTimeout(this.heartbeatTimeout);
               this.heartbeatTimeout = null;
             }
+            for (const resolve of [...this.pongWaiters]) {
+              resolve();
+            }
+            this.pongWaiters.clear();
             return;
           }
 
@@ -137,6 +224,7 @@ class GatewayClient {
 
       this.ws.onclose = () => {
         console.log("[Gateway] Disconnected");
+        this.activeAgentStreams = 0;
         this.stopHeartbeat();
         this.rejectActiveStreamHandlers();
         this.notifyConnectionStatus(false);
@@ -148,39 +236,134 @@ class GatewayClient {
     }
   }
 
+  private maxMissedHeartbeats(): number {
+    return this.activeAgentStreams > 0
+      ? MAX_MISSED_HEARTBEATS_ACTIVE_STREAM
+      : MAX_MISSED_HEARTBEATS_DEFAULT;
+  }
+
+  private heartbeatIntervalMs(): number {
+    return this.activeAgentStreams > 0
+      ? HEARTBEAT_INTERVAL_ACTIVE_STREAM_MS
+      : HEARTBEAT_INTERVAL_MS;
+  }
+
+  private beginAgentStreamActivity(): void {
+    this.activeAgentStreams += 1;
+    this.restartHeartbeat();
+  }
+
+  private endAgentStreamActivity(): void {
+    this.activeAgentStreams = Math.max(0, this.activeAgentStreams - 1);
+    this.restartHeartbeat();
+  }
+
+  private restartHeartbeat(): void {
+    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+      this.startHeartbeat();
+    }
+  }
+
+  private setConnectionDegraded(degraded: boolean): void {
+    if (this.connectionDegraded === degraded) {
+      return;
+    }
+    this.connectionDegraded = degraded;
+    this.notifyConnectionStatus(this.isConnected());
+  }
+
   /**
    * Start heartbeat mechanism to detect dead connections
    */
   private startHeartbeat(): void {
     this.stopHeartbeat();
-    
-    // Send ping every 15 seconds
+    const intervalMs = this.heartbeatIntervalMs();
+
     this.heartbeatInterval = setInterval(() => {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
         this.missedHeartbeats++;
-        
-        if (this.missedHeartbeats >= this.maxMissedHeartbeats) {
-          console.warn('[Gateway] Too many missed heartbeats, reconnecting');
+
+        const maxMissed = this.maxMissedHeartbeats();
+        if (
+          this.missedHeartbeats >= DEGRADED_AFTER_MISSED &&
+          this.activeAgentStreams > 0 &&
+          this.missedHeartbeats < maxMissed
+        ) {
+          this.setConnectionDegraded(true);
+        }
+
+        if (this.missedHeartbeats >= maxMissed) {
+          console.warn(
+            `[Gateway] Too many missed heartbeats (${this.missedHeartbeats}/${maxMissed}, ` +
+              `activeStreams=${this.activeAgentStreams}), reconnecting`,
+          );
           this.ws.close();
           return;
         }
-        
-        // Send ping
+
         try {
           this.ws.send(JSON.stringify({ type: 'ping', id: 'heartbeat' }));
-          
-          // Expect pong within 5 seconds
+
           this.heartbeatTimeout = setTimeout(() => {
-            if (this.missedHeartbeats >= this.maxMissedHeartbeats) {
+            if (this.missedHeartbeats >= this.maxMissedHeartbeats()) {
               console.warn('[Gateway] Heartbeat timeout, reconnecting');
               this.ws?.close();
             }
-          }, 5000);
+          }, PONG_WAIT_MS);
         } catch (err) {
           console.error('[Gateway] Failed to send heartbeat:', err);
         }
       }
-    }, 15000);
+    }, intervalMs);
+  }
+
+  /**
+   * One-shot liveness probe, for callers that have their own reason to suspect
+   * the socket is dead before the heartbeat would say so.
+   *
+   * The heartbeat is deliberately lax while a stream is active (12 missed beats
+   * × 20s = 240s) so a heavy turn is never interrupted. That is the right
+   * trade-off for the heartbeat, which cannot tell a slow turn from a dead
+   * socket — but a caller that already knows a turn has delivered *nothing*
+   * has evidence the heartbeat does not, and should not have to wait out that
+   * budget.
+   *
+   * Resolves true if a pong arrives in time. Otherwise closes the socket, which
+   * runs the existing `onclose` path (reject in-flight handlers → reconnect →
+   * resume tracked streams) rather than adding a second recovery mechanism.
+   */
+  async probeConnection(timeoutMs = PONG_WAIT_MS): Promise<boolean> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    try {
+      this.ws.send(JSON.stringify({ type: "ping", id: "heartbeat" }));
+    } catch (err) {
+      console.warn("[Gateway] Liveness probe could not send — closing:", err);
+      this.ws.close();
+      return false;
+    }
+
+    const alive = await new Promise<boolean>((resolve) => {
+      const onPong = () => {
+        clearTimeout(timer);
+        resolve(true);
+      };
+      const timer = setTimeout(() => {
+        this.pongWaiters.delete(onPong);
+        resolve(false);
+      }, timeoutMs);
+      this.pongWaiters.add(onPong);
+    });
+
+    if (!alive) {
+      console.warn(
+        `[Gateway] Liveness probe got no pong in ${timeoutMs}ms — closing socket to force reconnect`,
+      );
+      this.ws?.close();
+    }
+    return alive;
   }
 
   /**
@@ -196,6 +379,10 @@ class GatewayClient {
       this.heartbeatTimeout = null;
     }
     this.missedHeartbeats = 0;
+    this.setConnectionDegraded(false);
+    // A probe in flight when the socket closes will never see a pong; let it
+    // fall through to its own timeout rather than resolving it as alive.
+    this.pongWaiters.clear();
   }
 
   /**
@@ -250,21 +437,33 @@ class GatewayClient {
   /**
    * Wait until the WebSocket connection is open.
    * Resolves immediately if already connected.
-   * Times out after `timeoutMs` (default 10 s).
+   * Times out after `timeoutMs` (default 30 s — Gateway needs ~12-15s in dev).
    */
-  waitForConnection(timeoutMs = 10_000): Promise<void> {
+  waitForConnection(timeoutMs = 30_000): Promise<void> {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
       this.connectionWaiters.push(resolve);
-      setTimeout(() => {
-        const idx = this.connectionWaiters.indexOf(resolve);
-        if (idx !== -1) {
-          this.connectionWaiters.splice(idx, 1);
-          reject(new Error("Gateway connection timeout"));
-        }
-      }, timeoutMs);
+      // Suspend-aware: this deadline is the one users hit on wake, because the
+      // frozen renderer fires it overdue the instant the lid opens.
+      scheduleSuspendAwareTimeout({
+        delayMs: timeoutMs,
+        getLastResumeAtMs: () => this.lastResumeAtMs,
+        onRearm: ({ attempt, elapsedMs }) =>
+          console.warn(
+            `[Gateway] waitForConnection deadline spanned a suspend ` +
+              `(${Math.round(elapsedMs / 1000)}s elapsed for a ${timeoutMs}ms budget) — ` +
+              `re-arming (${attempt}/2) instead of reporting a timeout`,
+          ),
+        onExpire: () => {
+          const idx = this.connectionWaiters.indexOf(resolve);
+          if (idx !== -1) {
+            this.connectionWaiters.splice(idx, 1);
+            reject(new Error("Gateway connection timeout"));
+          }
+        },
+      });
     });
   }
 
@@ -277,8 +476,8 @@ class GatewayClient {
     payload?: unknown,
     options?: { timeoutMs?: number },
   ): Promise<GatewayResponse> {
-    // Wait up to 10 s for the WebSocket to connect
-    await this.waitForConnection();
+    // Wait for the WebSocket to connect (default 30s — Gateway needs ~12-15s in dev)
+    await this.waitForConnection(options?.timeoutMs ?? 30_000);
 
     const timeoutMs = options?.timeoutMs ?? 30_000;
 
@@ -296,7 +495,16 @@ class GatewayClient {
         if (response.success) {
           resolve(response);
         } else {
-          const error = new Error(response.error || "Unknown error");
+          // A handler that sets success: false without an error string used to
+          // surface as a bare "Unknown error" with no way to tell which
+          // request failed. Include the message type and any response data.
+          const error = new Error(
+            response.error ||
+              `Request "${type}" failed without an error message` +
+                (response.data
+                  ? ` (data: ${JSON.stringify(response.data).slice(0, 200)})`
+                  : ""),
+          );
           console.error(
             `[Gateway] Request failed - Type: ${type}, Error:`,
             error,
@@ -308,12 +516,22 @@ class GatewayClient {
       // Send message
       this.ws.send(JSON.stringify(message));
 
-      setTimeout(() => {
-        if (this.handlers.has(id)) {
-          this.handlers.delete(id);
-          reject(new Error("Request timeout"));
-        }
-      }, timeoutMs);
+      scheduleSuspendAwareTimeout({
+        delayMs: timeoutMs,
+        getLastResumeAtMs: () => this.lastResumeAtMs,
+        onRearm: ({ attempt, elapsedMs }) =>
+          console.warn(
+            `[Gateway] Request "${type}" deadline spanned a suspend ` +
+              `(${Math.round(elapsedMs / 1000)}s elapsed for a ${timeoutMs}ms budget) — ` +
+              `re-arming (${attempt}/2) instead of reporting a timeout`,
+          ),
+        onExpire: () => {
+          if (this.handlers.has(id)) {
+            this.handlers.delete(id);
+            reject(new Error("Request timeout"));
+          }
+        },
+      });
     });
   }
 
@@ -329,8 +547,10 @@ class GatewayClient {
   ): Promise<void> {
     console.log("[Gateway.stream] START", { type, payload });
 
-    // Wait up to 10 s for the WebSocket to connect
+    // Wait for the WebSocket to connect (default 30s — Gateway needs ~12-15s in dev)
     await this.waitForConnection();
+
+    this.beginAgentStreamActivity();
 
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -349,6 +569,7 @@ class GatewayClient {
       this.handlers.set(id, (response) => {
         if (response.type === "agent:disconnect") {
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           reject(new Error(GATEWAY_DISCONNECTED_ERROR));
           return;
         }
@@ -359,10 +580,31 @@ class GatewayClient {
             typeof response.data === "object" && response.data !== null
               ? { ...(response.data as Record<string, unknown>), requestId: id }
               : { payload: response.data, requestId: id };
+          if (isUiStreamProfilingEnabled()) {
+            const chunkType =
+              typeof payloadData === "object" &&
+              payloadData !== null &&
+              typeof (payloadData as { type?: unknown }).type === "string"
+                ? (payloadData as { type: string }).type
+                : "unknown";
+            const chunkChatId =
+              typeof payloadData === "object" &&
+              payloadData !== null &&
+              typeof (payloadData as { chatId?: unknown }).chatId === "string"
+                ? (payloadData as { chatId: string }).chatId
+                : undefined;
+            if (chunkChatId) {
+              getUiStreamProfiler(chunkChatId)?.mark(
+                `ui.ws.agentChunk.${chunkType}`,
+              );
+            }
+          }
           if (
             typeof payloadData === "object" &&
             payloadData !== null &&
-            (payloadData as { type?: string }).type === "done"
+            (payloadData as { type?: string }).type === "done" &&
+            typeof (payloadData as { chatId?: unknown }).chatId === "string" &&
+            ((payloadData as { chatId: string }).chatId.length > 0)
           ) {
             receivedDoneChunk = true;
           }
@@ -385,9 +627,11 @@ class GatewayClient {
             });
           }
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           resolve();
         } else if (response.type === "agent:cancelled") {
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           resolve();
         } else if (response.type === "agent:error") {
           // Stream error
@@ -407,6 +651,7 @@ class GatewayClient {
             requestId: id,
           });
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           reject(
             new Error(
               typeof errorData.error === "string"
@@ -417,6 +662,7 @@ class GatewayClient {
         } else if (response.error) {
           // Generic error
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           reject(new Error(response.error || "Unknown error"));
         }
       });
@@ -427,6 +673,7 @@ class GatewayClient {
         this.ws.send(JSON.stringify(message));
         console.log("[Gateway.stream] Message sent successfully");
       } catch (err) {
+        this.endAgentStreamActivity();
         console.error("[Gateway.stream] Error sending message:", err);
         throw err;
       }
@@ -436,6 +683,9 @@ class GatewayClient {
       // 2. User can abort via UI anytime
       // 3. Backend monitors progress and can warn if needed
       // Let agents work as long as they need to complete their task!
+    }).catch((error) => {
+      this.endAgentStreamActivity();
+      throw error;
     });
   }
 
@@ -479,6 +729,8 @@ class GatewayClient {
   ): Promise<void> {
     await this.waitForConnection();
 
+    this.beginAgentStreamActivity();
+
     return new Promise((resolve, reject) => {
       if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
         reject(new Error("Gateway not connected"));
@@ -492,6 +744,7 @@ class GatewayClient {
       this.handlers.set(id, (response) => {
         if (response.type === "agent:disconnect") {
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           reject(new Error(GATEWAY_DISCONNECTED_ERROR));
           return;
         }
@@ -507,7 +760,9 @@ class GatewayClient {
           if (
             typeof payloadData === "object" &&
             payloadData !== null &&
-            (payloadData as { type?: string }).type === "done"
+            (payloadData as { type?: string }).type === "done" &&
+            typeof (payloadData as { chatId?: unknown }).chatId === "string" &&
+            ((payloadData as { chatId: string }).chatId.length > 0)
           ) {
             receivedDoneChunk = true;
           }
@@ -531,6 +786,7 @@ class GatewayClient {
             });
           }
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           resolve();
           return;
         }
@@ -552,6 +808,7 @@ class GatewayClient {
             requestId: streamRequestId,
           });
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           reject(
             new Error(
               typeof errorData.error === "string"
@@ -564,6 +821,7 @@ class GatewayClient {
 
         if (response.error) {
           this.handlers.delete(id);
+          this.endAgentStreamActivity();
           reject(new Error(response.error || "Unknown error"));
         }
       });
@@ -579,6 +837,9 @@ class GatewayClient {
           },
         }),
       );
+    }).catch((error) => {
+      this.endAgentStreamActivity();
+      throw error;
     });
   }
 
@@ -592,14 +853,14 @@ class GatewayClient {
   /**
    * Get connection state for UI indicator
    */
-  getConnectionState(): 'connected' | 'reconnecting' | 'disconnected' {
-    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-      return 'connected';
-    } else if (this.reconnectAttempts > 0 && this.reconnectAttempts < this.maxReconnectAttempts) {
-      return 'reconnecting';
-    } else {
-      return 'disconnected';
-    }
+  getConnectionState(): GatewayConnectionState {
+    return resolveGatewayConnectionState({
+      readyState: this.ws?.readyState ?? null,
+      degraded: this.connectionDegraded,
+      reconnectAttempts: this.reconnectAttempts,
+      maxReconnectAttempts: this.maxReconnectAttempts,
+      hasEverConnected: this.hasEverConnected,
+    });
   }
 
   /**

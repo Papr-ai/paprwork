@@ -2,15 +2,25 @@
  * MessageList Component - Scrollable list of messages
  */
 
-import React, { useLayoutEffect, useRef, useEffect } from "react";
+import React, {
+  useLayoutEffect,
+  useRef,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
 import { MessageItem } from "./MessageItem";
 import { WelcomeMessage } from "./WelcomeMessage";
+import { HistoryUnavailable } from "./HistoryUnavailable";
+import { resolveEmptyChatPaneReason } from "../../utils/emptyChatPaneReason";
 import { PermissionCard } from "./PermissionCard";
 import { usePermissionStore } from "../../stores/permissionStore";
 import { useChatStore } from "../../stores/chatStore";
 import type { ChatMessage } from "../../stores/chatStore";
-import { extractFilesFromDataTransfer } from "../../utils/chatAttachmentFiles";
+import { readIncomingFiles } from "../../utils/chatAttachmentFiles";
 import { isHiddenContinueUserMessage } from "../../lib/agentStreamRecovery";
+import { groupDelegationFollowUpMessages } from "../../utils/delegationMessageGrouping";
+import { AgentLoadingDots } from "./AgentLoadingDots";
 import "./MessageList.css";
 
 interface MessageListProps {
@@ -18,10 +28,20 @@ interface MessageListProps {
   messages: ChatMessage[];
   isLoading?: boolean;
   isSending?: boolean;
+  isWaitingForAgentSlot?: boolean;
   /** When set, file drops on the list attach the same way as Add context → file upload */
   onFilesDropped?: (files: File[]) => void;
   /** Called when user scrolls to the top (for loading older messages) */
   onLoadOlder?: () => void;
+  /** Re-fetch history after a failed load. See `historyLoadFailed`. */
+  onRetryHistory?: () => void;
+}
+
+/** Job auto-deliver placeholders — SubAgentResponseTrigger handles user-facing updates instead */
+function isSubAgentDeliveryPlaceholder(content: string): boolean {
+  return /^Agent job Delegation: .+ finished with no textual output\.$/.test(
+    content.trim(),
+  );
 }
 
 export const MessageList: React.FC<MessageListProps> = ({
@@ -29,25 +49,44 @@ export const MessageList: React.FC<MessageListProps> = ({
   messages,
   isLoading,
   isSending,
+  isWaitingForAgentSlot,
   onFilesDropped,
   onLoadOlder,
+  onRetryHistory,
 }) => {
   const listRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const activeRequest = usePermissionStore((s) => s.activeRequest);
   const autoScrollEnabled = useRef(true);
   const lastScrollHeight = useRef(0);
-  const hasLoadedOnce = useRef(false);
   const previousMessageCount = useRef(messages.length);
-  const scrollBottomBeforeLoad = useRef(0);
-  
+  /** True when the viewport is at the start of loaded history (older pages not yet shown). */
+  const [nearHistoryStart, setNearHistoryStart] = useState(false);
+  const historyStartThresholdPx = 200;
+
   // Get pagination state from chat store
   const chatState = useChatStore((state) => state.chatStates.get(chatId));
   const hasMoreMessages = chatState?.hasMoreMessages ?? false;
   const isLoadingMore = chatState?.isLoadingMore ?? false;
+  const knownMessageCount = useChatStore(
+    (state) => state.chats.find((chat) => chat.id === chatId)?.messageCount,
+  );
+  const emptyPaneReason = resolveEmptyChatPaneReason({
+    historyLoadFailed: chatState?.historyLoadFailed ?? false,
+    knownMessageCount,
+  });
+  const earlierMessageCount =
+    knownMessageCount !== undefined
+      ? Math.max(0, knownMessageCount - messages.length)
+      : undefined;
+
+  const groupedMessages = useMemo(
+    () => groupDelegationFollowUpMessages(messages),
+    [messages],
+  );
 
   // Filter out sub-agent trigger messages from main chat (they appear in MiniChatCard)
-  const filteredMessages = messages.filter((msg) => {
+  const filteredMessages = groupedMessages.filter((msg) => {
     // Hide synthetic sub-agent user messages
     if (msg.role === "user" && isHiddenContinueUserMessage(msg.content)) {
       return false;
@@ -68,8 +107,22 @@ export const MessageList: React.FC<MessageListProps> = ({
     ) {
       return false;
     }
+    if (
+      msg.role === "assistant" &&
+      isSubAgentDeliveryPlaceholder(msg.content)
+    ) {
+      return false;
+    }
     return true;
   });
+
+  const hasStreamingAssistantMessage = filteredMessages.some(
+    (m) => m.isStreaming,
+  );
+
+  /** History reload dots — hide while the agent turn placeholder or streaming row is shown. */
+  const showHistoryLoadingIndicator =
+    isLoading && !isSending && !hasStreamingAssistantMessage;
 
   // Detect scroll position for auto-scroll and load-more triggers
   useEffect(() => {
@@ -79,28 +132,18 @@ export const MessageList: React.FC<MessageListProps> = ({
     const handleScroll = () => {
       const { scrollTop, scrollHeight, clientHeight } = listElement;
       const distanceFromBottom = scrollHeight - (scrollTop + clientHeight);
+      const atHistoryStart = scrollTop < historyStartThresholdPx;
+
+      setNearHistoryStart(atHistoryStart);
 
       // If user scrolled more than 100px from bottom, disable auto-scroll
       // If they scroll back to within 100px of bottom, re-enable
       autoScrollEnabled.current = distanceFromBottom < 100;
-
-      // Load older messages when user scrolls near the top (within 200px)
-      if (scrollTop < 200 && hasMoreMessages && !isLoadingMore && onLoadOlder && hasLoadedOnce.current) {
-        console.log("[MessageList] User scrolled near top, loading older messages...");
-        onLoadOlder();
-      }
     };
 
     listElement.addEventListener("scroll", handleScroll);
     return () => listElement.removeEventListener("scroll", handleScroll);
-  }, [hasMoreMessages, isLoadingMore, onLoadOlder]);
-
-  // Mark as loaded once messages appear (to avoid triggering on mount)
-  useEffect(() => {
-    if (messages.length > 0) {
-      hasLoadedOnce.current = true;
-    }
-  }, [messages.length]);
+  }, []);
 
   // Preserve scroll position when older messages are loaded (prepended to top)
   useEffect(() => {
@@ -109,7 +152,6 @@ export const MessageList: React.FC<MessageListProps> = ({
 
     // If messages were added to the beginning (count increased), restore scroll position
     if (messages.length > previousMessageCount.current) {
-      const addedCount = messages.length - previousMessageCount.current;
       // Only adjust scroll if we're not at the bottom (i.e., loading older messages)
       const distanceFromBottom = listElement.scrollHeight - (listElement.scrollTop + listElement.clientHeight);
       if (distanceFromBottom > 200) {
@@ -182,7 +224,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             ? (e) => {
                 e.preventDefault();
                 e.stopPropagation();
-                const files = extractFilesFromDataTransfer(e.dataTransfer);
+                const files = readIncomingFiles(e.dataTransfer);
                 if (files.length > 0) {
                   onFilesDropped(files);
                 }
@@ -190,7 +232,18 @@ export const MessageList: React.FC<MessageListProps> = ({
             : undefined
         }
       >
-        <WelcomeMessage />
+        {/*
+          An empty list has two causes that look identical from here: this
+          chat has no messages, or the load that would have fetched them
+          failed. Greeting the user for the second is the more alarming
+          mistake — it says their conversation is gone when it is intact on
+          disk — so the failure is reported rather than papered over.
+        */}
+        {emptyPaneReason === "load-failed" ? (
+          <HistoryUnavailable onRetry={onRetryHistory} />
+        ) : (
+          <WelcomeMessage />
+        )}
       </div>
     );
   }
@@ -215,7 +268,7 @@ export const MessageList: React.FC<MessageListProps> = ({
           ? (e) => {
               e.preventDefault();
               e.stopPropagation();
-              const files = extractFilesFromDataTransfer(e.dataTransfer);
+              const files = readIncomingFiles(e.dataTransfer);
               if (files.length > 0) {
                 onFilesDropped(files);
               }
@@ -223,20 +276,62 @@ export const MessageList: React.FC<MessageListProps> = ({
           : undefined
       }
     >
-      {isLoadingMore && (
-        <div className="loading-older-indicator">
-          <div className="loading-dots">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <span style={{ marginLeft: '8px', fontSize: '13px', color: 'var(--text-tertiary, #888)' }}>
-            Loading older messages...
-          </span>
+      {nearHistoryStart && hasMoreMessages && onLoadOlder && (
+        <div className="history-pagination" data-testid="history-pagination">
+          {isLoadingMore ? (
+            <div className="loading-older-indicator">
+              <div className="loading-dots" aria-hidden="true">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span>Loading full history…</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="load-full-history-button"
+              onClick={onLoadOlder}
+              data-testid="load-full-history"
+              aria-label={
+                earlierMessageCount !== undefined && earlierMessageCount > 0
+                  ? `Load ${earlierMessageCount} earlier ${earlierMessageCount === 1 ? "message" : "messages"}`
+                  : "Load earlier messages"
+              }
+            >
+              <svg
+                className="load-full-history-icon"
+                viewBox="0 0 16 16"
+                width="16"
+                height="16"
+                fill="none"
+                aria-hidden="true"
+              >
+                <path
+                  d="M4.5 9.5 8 6l3.5 3.5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+              <span>Earlier</span>
+              {earlierMessageCount !== undefined && earlierMessageCount > 0 && (
+                <span className="load-full-history-count" aria-hidden="true">
+                  {earlierMessageCount.toLocaleString()}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       )}
       {filteredMessages.map((message) => (
-        <MessageItem key={message.id} chatId={chatId} message={message} />
+        <MessageItem
+          key={message.id}
+          chatId={chatId}
+          message={message}
+          delegationFollowUps={message.delegationFollowUps}
+        />
       ))}
       {activeRequest && (
         <div className="message-item">
@@ -261,8 +356,8 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isLoading && (
-        <div className="loading-indicator">
+      {showHistoryLoadingIndicator && (
+        <div className="loading-indicator" data-testid="chat-history-loading-indicator">
           <div className="loading-dots">
             <span></span>
             <span></span>
@@ -270,7 +365,61 @@ export const MessageList: React.FC<MessageListProps> = ({
           </div>
         </div>
       )}
-      {isSending && !filteredMessages.some((m) => m.isStreaming) && (
+      {isWaitingForAgentSlot &&
+        isSending &&
+        !hasStreamingAssistantMessage && (
+        <div className="message-item">
+          <div className="message-avatar-container">
+            <div className="message-avatar-assistant">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 105 124"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                className="message-avatar-icon"
+              >
+                <path
+                  d="M27.9998 101.5C-11.5 158 6.99988 51 43.4008 60.5002C99.2884 75.0861 115.18 20.7781 83.6804 8.27816C40.2693 -8.94844 51.9998 65 27.9998 101.5Z"
+                  stroke="url(#papr-gradient-waiting)"
+                  strokeWidth="10"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <defs>
+                  <linearGradient
+                    id="papr-gradient-waiting"
+                    x1="17.2207"
+                    y1="89.4214"
+                    x2="68.8959"
+                    y2="35.8394"
+                    gradientUnits="userSpaceOnUse"
+                  >
+                    <stop stopColor="#0060E0" />
+                    <stop offset="0.6" stopColor="#00ACFA" />
+                    <stop offset="1" stopColor="#0BCDFF" />
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+          </div>
+          <div className="message-content">
+            <div className="agent-waiting-indicator">
+              <span className="agent-waiting-indicator__label">
+                Waiting for agent slot…
+              </span>
+              <div className="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {isSending &&
+        !isWaitingForAgentSlot &&
+        !hasStreamingAssistantMessage && (
         <div className="message-item">
           <div className="message-avatar-container">
             <div className="message-avatar-assistant">
@@ -307,13 +456,7 @@ export const MessageList: React.FC<MessageListProps> = ({
             </div>
           </div>
           <div className="message-content">
-            <div className="agent-loading-indicator">
-              <div className="loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-            </div>
+            <AgentLoadingDots />
           </div>
         </div>
       )}

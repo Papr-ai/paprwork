@@ -1,14 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  AppRevisionHub,
-  resetAppRevisionHubForTests,
-} from "../src/gateway/services/appRuntime/AppRevisionHub.js";
-import {
   invalidateRepoCacheForPublishedApp,
   resetCloudAppHostCachesForTests,
 } from "../src/gateway/services/appRuntime/cloudAppHostCache.js";
 import {
   parsePublishedAppRoute,
+  resolvePublishRouteForNotify,
 } from "../src/gateway/services/cloudSync/notifyCloudAppRevision.js";
 
 describe("parsePublishedAppRoute", () => {
@@ -27,24 +24,25 @@ describe("parsePublishedAppRoute", () => {
   });
 });
 
-describe("AppRevisionHub", () => {
-  afterEach(() => {
-    resetAppRevisionHubForTests();
+describe("resolvePublishRouteForNotify", () => {
+  it("prefers share URL over slug fallback", () => {
+    expect(
+      resolvePublishRouteForNotify({
+        shareUrl: "https://apps.papr.ai/ns-a/my-app/",
+        slug: "other-slug",
+        namespaceId: "ns-b",
+      }),
+    ).toEqual({ namespaceId: "ns-a", slug: "my-app" });
   });
 
-  it("delivers revision events to subscribers", () => {
-    const hub = new AppRevisionHub();
-    const seen: string[] = [];
-    hub.subscribe((event) => {
-      if (event.namespaceId === "ns-1" && event.slug === "app") {
-        seen.push(event.revision);
-      }
-    });
-
-    hub.publish({ namespaceId: "ns-1", slug: "app", revision: "abc:1111" });
-    hub.publish({ namespaceId: "ns-2", slug: "other", revision: "def:2222" });
-
-    expect(seen).toEqual(["abc:1111"]);
+  it("falls back to slug and active namespace", () => {
+    expect(
+      resolvePublishRouteForNotify({
+        shareUrl: null,
+        slug: "lead-prospector",
+        namespaceId: "85ZIB7mD1V",
+      }),
+    ).toEqual({ namespaceId: "85ZIB7mD1V", slug: "lead-prospector" });
   });
 });
 

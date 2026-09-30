@@ -6,6 +6,8 @@
  */
 
 import { useState, useCallback, useEffect, useRef } from "react";
+import { useChatStore } from "../stores/chatStore";
+import { isPairedChatActivelyStreaming } from "../utils/appTabMerge";
 
 /** Wait for multi-file edit bursts to settle before reloading. */
 const RELOAD_DEBOUNCE_MS = 2000;
@@ -20,6 +22,7 @@ export function useApp(appId: string | null) {
   const [reloadKey, setReloadKey] = useState(0);
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastReloadAt = useRef(0);
+  const pendingReloadWhileStreaming = useRef(false);
 
   const runReload = useCallback(() => {
     const now = Date.now();
@@ -55,6 +58,20 @@ export function useApp(appId: string | null) {
     reloadTimer.current = setTimeout(runReload, RELOAD_DEBOUNCE_MS);
   }, [runReload]);
 
+  const requestReloadFromFileChange = useCallback(() => {
+    if (!appId) return;
+
+    if (isPairedChatActivelyStreaming(appId)) {
+      pendingReloadWhileStreaming.current = true;
+      console.log(
+        `[useApp] Deferring reload for ${appId} — paired chat still streaming`,
+      );
+      return;
+    }
+
+    triggerReload();
+  }, [appId, triggerReload]);
+
   // Watch for app file changes
   useEffect(() => {
     if (!appId) return;
@@ -66,7 +83,7 @@ export function useApp(appId: string | null) {
 
       if (data.type === "app:file-changed" && data.data?.appId === appId) {
         console.log(`[useApp] File changed detected for app: ${appId}`);
-        triggerReload();
+        requestReloadFromFileChange();
       }
     };
 
@@ -78,6 +95,24 @@ export function useApp(appId: string | null) {
         clearTimeout(reloadTimer.current);
       }
     };
+  }, [appId, requestReloadFromFileChange]);
+
+  // Flush one deferred reload when the paired chat finishes streaming.
+  useEffect(() => {
+    if (!appId) return;
+
+    const unsubscribe = useChatStore.subscribe(() => {
+      if (!pendingReloadWhileStreaming.current) return;
+      if (isPairedChatActivelyStreaming(appId)) return;
+
+      pendingReloadWhileStreaming.current = false;
+      console.log(
+        `[useApp] Paired chat finished — flushing deferred reload for ${appId}`,
+      );
+      triggerReload();
+    });
+
+    return unsubscribe;
   }, [appId, triggerReload]);
 
   return {

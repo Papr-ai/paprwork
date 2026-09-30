@@ -25,6 +25,8 @@ export interface JobEventsSseOptions {
     req: Request,
   ) => Promise<JobStatusPollResult | null>;
   pollIntervalMs?: number;
+  /** Desktop-only: one-shot Turso pull when client subscribes to dbIds (mini-app SSE). */
+  onDbIdsSubscribe?: (dbIds: string[]) => void;
 }
 
 function parseIdList(raw: unknown): string[] {
@@ -79,6 +81,10 @@ export function registerJobEventsSseRoutes(
     res.flushHeaders();
 
     res.write(": connected\n\n");
+
+    if (dbIds.length > 0 && options.onDbIdsSubscribe) {
+      options.onDbIdsSubscribe(dbIds);
+    }
 
     const unsubscribe = options.hub.subscribe((event) => {
       if (!matchesFilter(event, jobIds, dbIds)) {

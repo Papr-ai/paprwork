@@ -91,7 +91,7 @@ export interface ElectronAPI {
   // OAuth API
   oauth: {
     openai: {
-      startOAuth: () => Promise<{
+      startOAuth: (options?: { source?: "settings" | "onboarding" | "unknown" }) => Promise<{
         success: boolean;
         url?: string;
         error?: string;
@@ -104,13 +104,22 @@ export interface ElectronAPI {
         error?: string;
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
+      getUsageLimits: () => Promise<
+        | {
+            success: true;
+            data: import("../../src/core/services/codexOAuthUsage").CodexUsageLimitsSnapshot;
+          }
+        | { success: false; error: string; httpStatus?: number }
+      >;
     };
     claude: {
-      startOAuth: () => Promise<{
+      startOAuth: (options?: { source?: "settings" | "onboarding" | "unknown" }) => Promise<{
         success: boolean;
         url?: string;
         error?: string;
         source?: string;
+        terminalOpened?: boolean;
+        fallback?: string;
       }>;
       getStatus: () => Promise<{
         connected: boolean;
@@ -121,8 +130,48 @@ export interface ElectronAPI {
       }>;
       disconnect: () => Promise<{ success: boolean; error?: string }>;
       getToken: () => Promise<{ success: boolean; token?: string; error?: string }>;
+      getUsageLimits: () => Promise<
+        | {
+            success: true;
+            data: import("../../src/core/services/claudeOAuthUsage").ClaudeUsageLimitsSnapshot;
+          }
+        | { success: false; error: string; httpStatus?: number }
+      >;
+      trySyncFromStorage: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<{
+        success: boolean;
+        reason?: "not_found" | "error";
+        error?: string;
+      }>;
+      onboardingRunCheck: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<
+        | { connected: true }
+        | { connected: false; okMessage: string; skipInstallStep: boolean }
+        | { connected: false; error: string }
+      >;
+      onboardingInstallCli: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<
+        | { success: true; okMessage: string }
+        | { success: false; error: string }
+      >;
+      getSetupTokenShellCommand: () => Promise<
+        { success: true; command: string } | { success: false; error: string }
+      >;
+      openSetupTokenTerminal: (options?: {
+        source?: "settings" | "onboarding" | "unknown";
+      }) => Promise<
+        | { success: true; command: string }
+        | { success: false; error: string; command?: string }
+      >;
     };
-    pasteToken: (provider: string, token: string) => Promise<{ success: boolean; error?: string }>;
+    pasteToken: (
+      provider: string,
+      token: string,
+      options?: { source?: "settings" | "onboarding" | "unknown" },
+    ) => Promise<{ success: boolean; error?: string }>;
     onAuthStatus?: (callback: (data: { provider: string; status: string; error?: string }) => void) => (() => void) | undefined;
   };
 
@@ -145,6 +194,25 @@ export interface ElectronAPI {
       success: boolean;
       error?: string;
     }>;
+    /** Verify a manual authentication code (fallback when callback fails) */
+    verifyManualCode: (code: string) => Promise<{
+      success: boolean;
+      error?: string;
+    }>;
+    /**
+     * Server-side onboarding progress (Parse _User). Authoritative over
+     * localStorage — `state` is undefined when signed out or unreachable.
+     */
+    getOnboardingState: () => Promise<{
+      success: boolean;
+      state?: { completed: boolean; completedAt?: string; step?: string };
+      error?: string;
+    }>;
+    /** Record a checkpoint (`step`) or completion. Soft-fails by design. */
+    setOnboardingState: (update: {
+      step?: string;
+      completed?: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
     getProfile: () => Promise<{
       success: boolean;
       profile?: {
@@ -158,6 +226,47 @@ export interface ElectronAPI {
         activeNamespaceName?: string;
         workspaceId?: string;
         workspaceName?: string;
+        planName?: string;
+      };
+      error?: string;
+    }>;
+    refreshProfile: () => Promise<{
+      success: boolean;
+      profile?: {
+        userId: string;
+        email: string;
+        displayName?: string;
+        profileImage?: string;
+        authenticatedAt: string;
+        organizationId?: string;
+        activeNamespaceId?: string;
+        activeNamespaceName?: string;
+        workspaceId?: string;
+        workspaceName?: string;
+        planName?: string;
+      };
+      error?: string;
+    }>;
+    syncProfile: (input: {
+      name?: string;
+      email?: string;
+      imageUrl?: string;
+    }) => Promise<{
+      success: boolean;
+      profileImageUrl?: string;
+      syncedImageUrl?: string;
+      error?: string;
+    }>;
+    getActiveWorkspace: () => Promise<{
+      success: boolean;
+      pointer?: {
+        organizationId: string;
+        organizationName?: string;
+        namespaceId: string;
+        namespaceName?: string;
+        paprHome: string;
+        userDataPath: string;
+        activatedAt?: string;
       };
       error?: string;
     }>;
@@ -165,9 +274,31 @@ export interface ElectronAPI {
     removeLoginSuccessListener: (callback: (data: { email: string; name?: string; userId?: string }) => void) => void;
     onLoginError: (callback: (data: { error: string }) => void) => void;
     removeLoginErrorListener: (callback: (data: { error: string }) => void) => void;
+    onSetupRequired: (callback: (data: {
+      orgName: string;
+      namespaceName: string;
+      needsOrg: boolean;
+      needsNamespace: boolean;
+    }) => void) => void;
+    removeSetupRequiredListener: (callback: (data: {
+      orgName: string;
+      namespaceName: string;
+      needsOrg: boolean;
+      needsNamespace: boolean;
+    }) => void) => void;
+    completeOrgSetup: (input: {
+      orgName?: string;
+      namespaceName?: string;
+    }) => Promise<{
+      success: boolean;
+      email?: string;
+      name?: string;
+      userId?: string;
+      error?: string;
+    }>;
     onLogoutSuccess: (callback: () => void) => void;
     removeLogoutSuccessListener: (callback: () => void) => void;
-    listNamespaces: (options?: { organizationId?: string; forceRefresh?: boolean }) => Promise<{
+    listNamespaces: (options?: { organizationId?: string; forceRefresh?: boolean; peek?: boolean }) => Promise<{
       success: boolean;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
       activeNamespaceId?: string;
@@ -175,7 +306,30 @@ export interface ElectronAPI {
       fromCache?: boolean;
       error?: string;
     }>;
-    switchNamespace: (namespaceId: string, namespaceName: string) => Promise<{
+    listAllNamespaces: (options?: {
+      forceRefresh?: boolean;
+      /** When set, only namespaces for orgs in this workspace are returned. */
+      workspaceId?: string;
+    }) => Promise<{
+      success: boolean;
+      groups?: Array<{
+        workspaceId: string;
+        organizationId: string;
+        organizationName: string;
+        namespaces: Array<{ id: string; name: string; environmentType?: string }>;
+      }>;
+      activeOrganizationId?: string;
+      activeNamespaceId?: string;
+      /** True when at least one org's namespaces could not be loaded. */
+      partial?: boolean;
+      error?: string;
+    }>;
+    switchNamespace: (
+      namespaceId: string,
+      namespaceName: string,
+      /** Org this namespace belongs to; defaults to the profile's current org. */
+      organizationId?: string,
+    ) => Promise<{
       success: boolean;
       apiKey?: string;
       error?: string;
@@ -196,7 +350,16 @@ export interface ElectronAPI {
       activeOrganizationId?: string;
       error?: string;
     }>;
-    switchOrganization: (organizationId: string, organizationName: string) => Promise<{
+    switchOrganization: (
+      organizationId: string,
+      organizationName: string,
+      options?: {
+        /** Land on this namespace instead of the org's default. */
+        preferredNamespaceId?: string;
+        /** Which of the workspace's orgs that namespace belongs to. */
+        preferredOrganizationId?: string;
+      },
+    ) => Promise<{
       success: boolean;
       organizationId?: string;
       parseOrganizationId?: string;
@@ -223,12 +386,28 @@ export interface ElectronAPI {
       namespaceName?: string;
       namespaces?: Array<{ id: string; name: string; environmentType?: string }>;
     }) => void) => void;
+    onWorkspaceSwitchStarting: (callback: (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName?: string;
+      namespaceId: string;
+      namespaceName?: string;
+    }) => void) => void;
+    removeWorkspaceSwitchStartingListener: (callback: (data: {
+      organizationId: string;
+      parseOrganizationId?: string;
+      organizationName?: string;
+      namespaceId: string;
+      namespaceName?: string;
+    }) => void) => void;
     onWorkspaceCacheUpdated: (callback: () => void) => void;
     removeWorkspaceCacheUpdatedListener: (callback: () => void) => void;
     listWorkspaceMembers: () => Promise<{
       success: boolean;
       workspaceId?: string;
       workspaceName?: string;
+      currentUserId?: string;
+      currentUserRole?: string;
       members?: Array<{
         objectId: string;
         user: {
@@ -247,7 +426,55 @@ export interface ElectronAPI {
       inviteLink?: string;
       error?: string;
     }>;
+    updateWorkspaceMemberRole: (input: {
+      userId: string;
+      currentRole: string;
+      newRole: "owner" | "admin" | "member";
+    }) => Promise<{ success: boolean; error?: string }>;
     openWorkspaceTeam: () => Promise<{ success: boolean; error?: string }>;
+    getPlanSummary: (options?: { force?: boolean }) => Promise<{
+      success: boolean;
+      summary?: import("../../src/core/types/paprBilling").PaprPlanSummary;
+      error?: string;
+    }>;
+    openBillingPortal: (
+      input?:
+        | "billing"
+        | "subscriptions"
+        | "invoices"
+        | {
+            section?: "billing" | "subscriptions" | "invoices";
+            stripeCustomerId?: string;
+          },
+    ) => Promise<{ success: boolean; error?: string }>;
+    openUsageDashboard: () => Promise<{ success: boolean; error?: string }>;
+    startCheckout: (input: {
+      tier: "starter" | "growth";
+      billingCycle: "monthly" | "yearly";
+    }) => Promise<{ success: boolean; error?: string }>;
+    subscribeDeveloperPlan: () => Promise<{
+      success: boolean;
+      created?: boolean;
+      alreadyActive?: boolean;
+      summary?: import("../../src/core/types/paprBilling").PaprPlanSummary;
+      error?: string;
+    }>;
+    setMeteredBilling: (
+      enabled: boolean,
+    ) => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
+  };
+
+  cloudPreview: {
+    seedSession: (input: {
+      namespaceId: string;
+      slug: string;
+      shareToken?: string;
+    }) => Promise<{
+      success: boolean;
+      cached?: boolean;
+      cookieCount?: number;
+      error?: string;
+    }>;
   };
 
   // Ollama API - Auto-install and manage local AI models
@@ -308,6 +535,39 @@ export interface ElectronAPI {
     ) => Promise<{ success: boolean; enabled: boolean }>;
   };
 
+  replicaE2e: {
+    list: () => Promise<{
+      tests: Array<{
+        id: string;
+        name: string;
+        npmScript: string;
+        description: string;
+        requiresAuth: boolean;
+      }>;
+      available: boolean;
+      runningTestId: string | null;
+    }>;
+    run: (testId: string) => Promise<{
+      testId: string;
+      exitCode: number | null;
+      stdout: string;
+      stderr: string;
+      durationMs: number;
+      cancelled: boolean;
+    }>;
+    cancel: () => Promise<{ cancelled: boolean; testId?: string }>;
+  };
+
+  providerAuth: {
+    getPreference: (
+      provider: "openai" | "anthropic",
+    ) => Promise<{ preference: "oauth" | "apiKey" }>;
+    setPreference: (
+      provider: "openai" | "anthropic",
+      preference: "oauth" | "apiKey",
+    ) => Promise<{ success: boolean; preference: "oauth" | "apiKey" }>;
+  };
+
   chatAttachments: {
     save: (input: {
       chatId: string;
@@ -315,6 +575,69 @@ export interface ElectronAPI {
       mimeType: string;
       dataBase64: string;
     }) => Promise<{ success: boolean; filePath?: string; error?: string }>;
+    readPreview: (input: {
+      filePath: string;
+      mimeType?: string;
+    }) => Promise<{
+      success: boolean;
+      dataUrl?: string;
+      fileUrl?: string;
+      error?: string;
+    }>;
+  };
+
+  /**
+   * Electron 32 removed File.path; webUtils is the documented replacement.
+   * Returns "" for a File with no disk backing (a pasted blob) rather than
+   * throwing, so callers can treat "" as "copy it instead".
+   */
+  files: {
+    getPathForFile: (file: File) => string;
+  };
+
+  agentPreview: {
+    show: (webviewId?: string) => Promise<{
+      success: boolean;
+      webviewId?: string;
+      url?: string;
+      title?: string;
+      error?: string;
+    }>;
+    isActive: (webviewId?: string) => Promise<{ active: boolean }>;
+    captureThumbnail: (webviewId?: string) => Promise<{
+      success: boolean;
+      screenshot?: string;
+      webviewId?: string;
+      error?: string;
+    }>;
+  };
+
+  platformBrowser?: {
+    setBounds: (payload: {
+      platformId: string;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      visible: boolean;
+    }) => Promise<{ success: boolean; error?: string }>;
+    openLogin: (platformId: string) => Promise<{
+      success: boolean;
+      data?: { platformId: string; url: string };
+      error?: string;
+    }>;
+    getState: (platformId: string) => Promise<{
+      success: boolean;
+      data?: { url: string; title: string };
+      error?: string;
+    }>;
+    reload: (platformId: string) => Promise<{ success: boolean; error?: string }>;
+    onUrlChanged: (
+      callback: (data: { platformId: string; url: string; title: string }) => void,
+    ) => () => void;
+    onRedirectLoop: (
+      callback: (data: { platformId: string; url: string }) => void,
+    ) => () => void;
   };
 
   // App metadata

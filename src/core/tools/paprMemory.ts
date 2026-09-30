@@ -7,6 +7,8 @@ import {
   buildAddPolicy,
   buildSearchPolicy,
 } from "../../gateway/utils/paprMemoryPolicy.js";
+import { buildAgentMemoryAddPolicy } from "../../gateway/utils/workspaceContextSchema.js";
+import { asToonOrRows } from "../utils/toonRows.js";
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import {
@@ -14,7 +16,54 @@ import {
   resolveConversationId,
 } from "./chatScope.js";
 import { getCurrentChatId } from "./context.js";
+import {
+  markSearchOutcomeSubmitted,
+  recordSearchOutcome,
+  type RetrievedCandidate,
+} from "../utils/searchOutcomeFeedback.js";
+import {
+  armDisablesReranking,
+  decideRetrievalProbeArm,
+} from "../utils/retrievalProbe.js";
+import {
+  analyzeResultSetShape,
+  describeResultSetShape,
+} from "../utils/resultSetShape.js";
 import { getPaprClient, handlePaprToolError, isPaprNotFoundError } from "./paprClient.js";
+import { assertValidWikiGraphQLSelection } from "../../gateway/services/wikiGraphqlUtils.js";
+import {
+  buildGraphReadOrderNote,
+  listSchemasForGraphRead,
+} from "../utils/memoryGraphSchemaRead.js";
+
+const memoryReadAclToolFields = {
+  readAcl: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Optional read ACL principals. Use external_user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
+        "When set, overrides the chat Team/Org scope for read access. Writer always keeps write ACL.",
+    ),
+  shareWithUserIds: z
+    .array(z.string().min(1))
+    .optional()
+    .describe(
+      "Parse objectIds (same as external_user_id / list_namespace_users.externalUserId) to grant read access. " +
+        "Converted to external_user:{id} ACL principals automatically.",
+    ),
+  shareWithTeam: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true with explicit ACL fields, also grant namespace read ACL for the active namespace.",
+    ),
+  shareWithOrganization: z
+    .boolean()
+    .optional()
+    .describe(
+      "When true with explicit ACL fields, also grant organization read ACL for the active org.",
+    ),
+};
 
 const addMemorySchema = z
   .object({
@@ -39,32 +88,31 @@ const addMemorySchema = z
     jobId: z.string().optional(),
     chatId: z.string().optional(),
     workspaceId: z.string().optional(),
-    readAcl: z
-      .array(z.string().min(1))
+    topics: z
+      .array(z.string())
       .optional()
       .describe(
-        "Optional read ACL principals. Use external_user:{Parse objectId}, namespace:{namespaceId}, or organization:{orgId}. " +
-          "When set, overrides the chat Team/Org scope for read access. Writer always keeps write ACL.",
+        "Topic tags for this memory, e.g. ['app:Meetings Manager', 'app-card', 'storage'].",
       ),
-    shareWithUserIds: z
-      .array(z.string().min(1))
+    hierarchicalStructures: z
+      .string()
       .optional()
       .describe(
-        "Parse objectIds (same as external_user_id / list_namespace_users.externalUserId) to grant read access. " +
-          "Converted to external_user:{id} ACL principals automatically.",
+        "Hierarchical path for this memory, e.g. 'apps/Meetings Manager/Storage'.",
       ),
-    shareWithTeam: z
-      .boolean()
+    customMetadata: z
+      .record(
+        z.string(),
+        z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]),
+      )
       .optional()
       .describe(
-        "When true with explicit ACL fields, also grant namespace read ACL for the active namespace.",
+        "Exact-match filterable fields — the write side of search_agent_memory's customMetadataFilters. " +
+          "Flat values only (string | number | boolean | string[]); the API rejects nested objects. " +
+          "Example: { content_type: 'app_card', app_id: '…', section: 'Storage' }. " +
+          "Attribution keys (sourceAgentId, sourceAgentName, runId, jobId, chatId, workspaceId) are set by the tool and override caller values.",
       ),
-    shareWithOrganization: z
-      .boolean()
-      .optional()
-      .describe(
-        "When true with explicit ACL fields, also grant organization read ACL for the active org.",
-      ),
+    ...memoryReadAclToolFields,
     signalDomain: z
       .string()
       .optional()
@@ -130,13 +178,18 @@ const searchMemorySchema = z
   maxMemories: z
     .number()
     .int()
-    .min(10)
+    // Floor raised 10 -> 15 to match the memory API's own guidance
+    // ("use max_memories: 15-20 for comprehensive memory coverage").
+    // Recall is also the cheap side of the trade here: the reranker reorders
+    // whatever it is given, so a candidate never retrieved cannot be recovered
+    // downstream, whereas a surplus candidate is merely ranked low.
+    .min(15)
     .max(30)
     .optional()
     .describe(
-      "Number of memories to return (min 10, max 30). Default 20. " +
+      "Number of memories to return (min 15, max 30). Default 20. " +
       "Use 25-30 for architecture/concept queries where breadth matters. " +
-      "Use 10-15 for narrow lookups where you know exactly what you want.",
+      "Use 15-20 for narrow lookups where you know exactly what you want.",
     ),
   category: z
     .enum([
@@ -306,9 +359,17 @@ export interface SearchAgentMemoryToolResult {
   searchId: string | null;
   memoryCount: number;
   nodeCount: number;
-  data: SearchResponse;
+  /** Raw SDK payload — a TOON string when response_format="toon". */
+  data: SearchResponse | string;
   /** Agent-visible reminder — include literal searchId for submit_memory_feedback */
   _memoryFeedbackReminder: string;
+  /**
+   * Present ONLY when the result set is degenerate (mostly near-duplicates, or
+   * a repeated memory id). Omitted on healthy searches so the field itself is
+   * the signal — an agent that sees it should narrow filters or fall back to
+   * grep rather than reading ranks that carry no new information.
+   */
+  _retrievalQuality?: string;
 }
 
 function buildMemoryFeedbackReminder(
@@ -326,19 +387,284 @@ function buildMemoryFeedbackReminder(
     );
   }
 
+  // Citations are derived from your answer at turn end, so the agent no longer
+  // needs to report "these were useful" — that is measured. What CANNOT be
+  // derived is a judgement about results you did not use: whether they were
+  // off-topic, stale, or wrong. Mixed results are the highest-information case
+  // for a contrastive objective, so they are explicitly requested here rather
+  // than skipped (the old "skip when mixed" rule is what produced 26 thumbs_up
+  // and zero negatives in the entire feedback log).
   return (
-    `After evaluating these results, if retrieval was clearly helpful or clearly irrelevant, call:\n` +
-    `submit_memory_feedback({ searchId: "${searchId}", feedbackType: "thumbs_up" | "thumbs_down" | "memory_relevance", citedMemoryIds: ["<memory-id-from-results>"] })\n` +
-    `Skip feedback when results were mediocre or mixed. Wrong memory content → delete_memory or add_agent_memory.`
+    `searchId="${searchId}" — cited memories are derived automatically from your answer; you do NOT need to report which ones helped.\n` +
+    `Do submit feedback when you can judge something the derivation cannot:\n` +
+    `• MIXED results (some on-target, some off) — the most valuable case, do not skip it\n` +
+    `• Results that looked relevant but were stale, wrong, or duplicated\n` +
+    `• Nothing usable despite a non-empty result set\n` +
+    `submit_memory_feedback({ searchId: "${searchId}", feedbackType: "memory_relevance" | "thumbs_down" | "correction", feedbackScore: 1-5, feedbackText: "<what was off>" })\n` +
+    `Wrong memory content → delete_memory or add_agent_memory.`
   );
 }
 
+/**
+ * TOON responses arrive as a plain string in `data` (not a SearchResult object), so
+ * `response.data?.memories` and `response.search_id` are both undefined. Recover the
+ * counters from the TOON envelope: `memories[#25]:` / `nodes[#3]:` / `search_id: <uuid>`.
+ */
+function parseToonEnvelope(toon: string): {
+  searchId: string | null;
+  memoryCount: number;
+  nodeCount: number;
+} {
+  const countOf = (key: string): number => {
+    const match = toon.match(new RegExp(`${key}\\[#(\\d+)\\]`));
+    return match ? Number.parseInt(match[1]!, 10) : 0;
+  };
+  const idMatch = toon.match(/^\s*search_id:\s*"?([0-9a-fA-F-]{36})"?/m);
+
+  return {
+    searchId: idMatch?.[1] ?? null,
+    memoryCount: countOf("memories"),
+    nodeCount: countOf("nodes"),
+  };
+}
+
+/**
+ * Split one TOON row on commas, respecting double-quoted fields.
+ * Memory content routinely contains commas, so a naive split shifts every
+ * column after the first one and silently mismatches ids to content.
+ */
+function splitToonRow(row: string): string[] {
+  const cells: string[] = [];
+  let current = "";
+  let inQuotes = false;
+
+  for (let i = 0; i < row.length; i += 1) {
+    const ch = row[i];
+    if (ch === '"') {
+      if (inQuotes && row[i + 1] === '"') {
+        current += '"';
+        i += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (ch === "," && !inQuotes) {
+      cells.push(current);
+      current = "";
+    } else {
+      current += ch;
+    }
+  }
+  cells.push(current);
+  return cells.map((c) => c.trim());
+}
+
+/**
+ * Recover `{ id, content, rank }` per retrieved memory, for citation
+ * derivation at turn end.
+ *
+ * Returns `null` when the payload cannot be parsed — the caller MUST treat
+ * that as "unknown", never as "nothing was retrieved". Grading an unparsed
+ * response as zero-citations would emit a false negative label for every
+ * successful search.
+ */
+export function extractRetrievedCandidates(
+  response: SearchResponse | string,
+): RetrievedCandidate[] | null {
+  // Structured path.
+  if (typeof response !== "string") {
+    const memories = response.data?.memories;
+    if (Array.isArray(memories)) {
+      return memories.map((m, index) => ({
+        id: String((m as { id?: unknown })?.id ?? ""),
+        content: String((m as { content?: unknown })?.content ?? ""),
+        rank: index,
+      }));
+    }
+  }
+
+  const toon =
+    typeof response === "string"
+      ? response
+      : typeof response.data === "string"
+        ? (response.data as unknown as string)
+        : null;
+  if (toon === null) return null;
+
+  // Tabular TOON: `memories[#N]{id,content,...}:` then indented rows.
+  const tabular = parseTabularMemories(toon);
+  if (tabular !== null) return tabular;
+
+  // List TOON: `memories[#N]:` then `- id: …` / `content: …` blocks.
+  // This is what the server actually returns for memory search; the tabular
+  // form above is used by other endpoints. Supporting only the tabular shape
+  // silently disabled citation derivation on every real search.
+  return parseListMemories(toon);
+}
+
+function parseTabularMemories(toon: string): RetrievedCandidate[] | null {
+  const header = toon.match(/memories\[#(\d+)\]\{([^}]*)\}\s*:/);
+  if (!header) return null;
+
+  const fields = header[2]!.split(",").map((f) => f.trim());
+  const idIndex = fields.indexOf("id");
+  const contentIndex = fields.indexOf("content");
+  if (idIndex === -1 || contentIndex === -1) return null;
+
+  const afterHeader = toon.slice(header.index! + header[0].length);
+  const candidates: RetrievedCandidate[] = [];
+  const expected = Number.parseInt(header[1]!, 10);
+
+  for (const line of afterHeader.split("\n")) {
+    if (candidates.length >= expected) break;
+    // Rows are indented under the header; a non-indented line ends the table.
+    if (!/^\s+\S/.test(line)) {
+      if (line.trim() === "") continue;
+      break;
+    }
+    const cells = splitToonRow(line.trim());
+    if (cells.length < fields.length) continue;
+    const id = cells[idIndex] ?? "";
+    if (!id) continue;
+    candidates.push({
+      id,
+      content: cells[contentIndex] ?? "",
+      rank: candidates.length,
+    });
+  }
+
+  return candidates.length > 0 ? candidates : null;
+}
+
+/** Unquote a TOON scalar, resolving the escapes the server emits. */
+function parseToonScalar(raw: string): string {
+  const text = raw.trim();
+  if (!text.startsWith('"')) return text;
+
+  let out = "";
+  for (let i = 1; i < text.length; i += 1) {
+    const ch = text[i]!;
+    if (ch === "\\") {
+      const next = text[i + 1];
+      if (next === '"' || next === "\\") {
+        out += next;
+        i += 1;
+      } else if (next === "n") {
+        out += "\n";
+        i += 1;
+      } else if (next === "t") {
+        out += "\t";
+        i += 1;
+      } else {
+        out += ch;
+      }
+      continue;
+    }
+    if (ch === '"') break;
+    out += ch;
+  }
+  return out;
+}
+
+function parseListMemories(toon: string): RetrievedCandidate[] | null {
+  // `memories[#N]:` with NO `{...}` field header — negative lookahead keeps
+  // this from stealing the tabular shape.
+  const header = toon.match(/^([ \t]*)memories\[#(\d+)\][ \t]*:(?!\{)/m);
+  if (!header) return null;
+
+  const headerIndent = header[1]!.length;
+  const expected = Number.parseInt(header[2]!, 10);
+  const afterHeader = toon.slice(header.index! + header[0].length);
+
+  const candidates: RetrievedCandidate[] = [];
+  let currentId: string | null = null;
+  let currentContent = "";
+
+  const flush = (): void => {
+    if (currentId) {
+      candidates.push({
+        id: currentId,
+        content: currentContent,
+        rank: candidates.length,
+      });
+    }
+    currentId = null;
+    currentContent = "";
+  };
+
+  for (const line of afterHeader.split("\n")) {
+    if (line.trim() === "") continue;
+    // A line at or left of the header's indent ends the block (`nodes[#20]:`,
+    // `search_id: …`). Without this the node section would leak in as memories.
+    const indent = line.length - line.trimStart().length;
+    if (indent <= headerIndent) break;
+
+    const itemStart = line.match(/^[ \t]*-[ \t]+id[ \t]*:[ \t]*(.*)$/);
+    if (itemStart) {
+      flush();
+      if (candidates.length >= expected) break;
+      currentId = parseToonScalar(itemStart[1]!);
+      continue;
+    }
+
+    // Only the FIRST content key of an item counts. Nested blocks
+    // (customMetadata, acl) can repeat key names at deeper indent.
+    if (currentId && !currentContent) {
+      const contentField = line.match(/^[ \t]*content[ \t]*:[ \t]*(.*)$/);
+      if (contentField) currentContent = parseToonScalar(contentField[1]!);
+    }
+  }
+  flush();
+
+  return candidates.length > 0 ? candidates.slice(0, expected) : null;
+}
+
 export function formatSearchMemoryResponse(
-  response: SearchResponse,
+  response: SearchResponse | string,
+  headers?: Headers | Record<string, string>,
 ): SearchAgentMemoryToolResult {
-  const memoryCount = response.data?.memories?.length ?? 0;
-  const nodeCount = response.data?.nodes?.length ?? 0;
-  const searchId = response.search_id ?? null;
+  const structured: SearchResponse =
+    typeof response === "string" ? {} : response;
+  let memoryCount = structured.data?.memories?.length ?? 0;
+  let nodeCount = structured.data?.nodes?.length ?? 0;
+  let searchId = structured.search_id ?? null;
+
+  // Preferred path: server sets X-Search-Id / X-Memory-Count / X-Node-Count on TOON responses.
+  if (headers) {
+    const get = (name: string): string | null =>
+      headers instanceof Headers
+        ? headers.get(name)
+        : (headers[name] ?? headers[name.toLowerCase()] ?? null);
+
+    const headerSearchId = get("X-Search-Id");
+    if (!searchId && headerSearchId) searchId = headerSearchId;
+
+    const headerMemoryCount = get("X-Memory-Count");
+    if (memoryCount === 0 && headerMemoryCount) {
+      memoryCount = Number.parseInt(headerMemoryCount, 10) || 0;
+    }
+
+    const headerNodeCount = get("X-Node-Count");
+    if (nodeCount === 0 && headerNodeCount) {
+      nodeCount = Number.parseInt(headerNodeCount, 10) || 0;
+    }
+  }
+
+  // TOON responses are text/plain, so the SDK hands back the raw string as the whole
+  // response body (not { data: SearchResult }). Recover counters from the TOON envelope.
+  // Also handles a { data: "<toon>" } shape defensively.
+  const toonBody =
+    typeof response === "string"
+      ? response
+      : typeof structured.data === "string"
+        ? (structured.data as unknown as string)
+        : null;
+
+  if (toonBody !== null) {
+    const parsed = parseToonEnvelope(toonBody);
+    if (!searchId) searchId = parsed.searchId;
+    if (memoryCount === 0) memoryCount = parsed.memoryCount;
+    if (nodeCount === 0) nodeCount = parsed.nodeCount;
+  }
 
   return {
     success: true,
@@ -362,7 +688,15 @@ export async function submitEmptySearchFeedback(
       feedbackData: {
         feedbackSource: "inline",
         feedbackType: "memory_relevance",
-        feedbackText: "Search returned zero memories for the query.",
+        // Machine-authored, despite feedbackSource "inline". The Parse enum has
+        // no value for "auto, submitted by the client", so the marker lives in
+        // the text: without it the corpus cannot separate THIS row from a row
+        // an agent wrote by calling submit_memory_feedback, and 36 of the 44
+        // rows in UserFeedbackLog are "inline" with no way to tell which is
+        // which. A source field that conflates machine and agent authorship is
+        // the same defect as a class called UserFeedbackLog that is 82% not
+        // user feedback.
+        feedbackText: "auto=empty_search_v1 verdict=no_results retrieved=0 cited=0",
         feedbackScore: 1,
       },
     });
@@ -452,17 +786,25 @@ export const addAgentMemoryTool = createTool({
   description:
     "Store a structured memory item in PAPR memory. IMPORTANT: When using category='context', you MUST provide role ('user' or 'assistant'). " +
     "For attendee-only sharing, call list_namespace_users first, match emails to externalUserId, then pass shareWithUserIds or readAcl with external_user:{objectId} principals. " +
-    "Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id.",
+    "Use external_user_id semantics (Parse objectId) — NOT Papr internal user_id. " +
+    "Pass customMetadata to write exact-match filterable fields (the write side of search_agent_memory's customMetadataFilters) — required for indexed conventions like App Cards.",
   inputSchema: addMemorySchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { buildPaprMemoryWriteScope } = await import(
+      const { buildPaprMemoryWriteScope, withMemoryScopeMetadata } = await import(
         "../../gateway/utils/memoryScopeResolver.js"
       );
+      const { spreadMemoryScopeUserIdentity } = await import(
+        "../../core/utils/paprMemoryUserIdentity.js"
+      );
 
-      // Build customMetadata for fields not in the MemoryMetadata spec
-      const customMetadata: Record<string, string> = {};
+      // Build customMetadata for fields not in the MemoryMetadata spec.
+      // Caller-supplied keys land first so agent attribution always wins.
+      const customMetadata: Record<
+        string,
+        string | number | boolean | string[]
+      > = { ...args.customMetadata };
       if (args.sourceAgentId) customMetadata.sourceAgentId = args.sourceAgentId;
       if (args.sourceAgentName)
         customMetadata.sourceAgentName = args.sourceAgentName;
@@ -474,52 +816,39 @@ export const addAgentMemoryTool = createTool({
       if (resolvedChatId) customMetadata.chatId = resolvedChatId;
       if (args.workspaceId) customMetadata.workspaceId = args.workspaceId;
 
-      const addPolicy = buildAddPolicy({
+      const addPolicy = await buildAgentMemoryAddPolicy({
         signalDomain: args.signalDomain,
       });
 
-      const { getMemoryScopeContext } = await import(
+      const { resolveExplicitReadAclFromToolArgs } = await import(
         "../../gateway/utils/memoryScopeResolver.js"
       );
-      const scopeCtx = getMemoryScopeContext();
-
-      const explicitReadAcl =
-        args.readAcl?.length ||
-        args.shareWithUserIds?.length ||
-        args.shareWithTeam ||
-        args.shareWithOrganization
-          ? {
-              readAcl: args.readAcl,
-              shareWithUserIds: args.shareWithUserIds,
-              shareWithNamespaceId: args.shareWithTeam
-                ? scopeCtx.namespaceId
-                : undefined,
-              shareWithOrganizationId: args.shareWithOrganization
-                ? scopeCtx.organizationId
-                : undefined,
-            }
-          : undefined;
 
       const memoryScope = await buildPaprMemoryWriteScope({
         chatId: resolvedChatId,
         addPolicy,
-        explicitReadAcl,
+        explicitReadAcl: resolveExplicitReadAclFromToolArgs(args),
       });
 
       const response = await client.memory.add({
         content: args.content,
-        ...(memoryScope.external_user_id
-          ? { external_user_id: memoryScope.external_user_id }
-          : {}),
+        ...spreadMemoryScopeUserIdentity(memoryScope),
         ...(memoryScope.namespace_id
           ? { namespace_id: memoryScope.namespace_id }
           : {}),
         ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
-        metadata: {
-          role: args.role,
-          category: args.category,
-          ...(Object.keys(customMetadata).length > 0 ? { customMetadata } : {}),
-        },
+        metadata: withMemoryScopeMetadata(
+          {
+            role: args.role,
+            category: args.category,
+            ...(args.topics?.length ? { topics: args.topics } : {}),
+            ...(args.hierarchicalStructures
+              ? { hierarchical_structures: args.hierarchicalStructures }
+              : {}),
+            ...(Object.keys(customMetadata).length > 0 ? { customMetadata } : {}),
+          },
+          memoryScope,
+        ),
       });
       return { success: true, data: response };
     } catch (error) {
@@ -541,7 +870,7 @@ export const listNamespaceUsersTool = createTool({
   id: "list_namespace_users",
   description:
     "List Papr users in the active workspace/namespace team. Returns Parse objectIds as externalUserId " +
-    "and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory ACL. " +
+    "and ready-to-use memoryReadPrincipal values (external_user:{objectId}) for add_agent_memory and create_entities ACL. " +
     "Call before sharing memories with specific attendees.",
   inputSchema: listNamespaceUsersSchema,
   execute: async (args) => {
@@ -594,7 +923,7 @@ export const searchAgentMemoryTool = createTool({
         return formatMemoryByIdResponse(args.memoryId, response);
       }
 
-      const { buildPaprMemorySearchScope } = await import(
+      const { paprMemorySearchScopeSpread } = await import(
         "../../gateway/utils/memoryScopeResolver.js"
       );
       const customMetadata: Record<string, string | number | boolean | string[]> = {
@@ -654,40 +983,97 @@ export const searchAgentMemoryTool = createTool({
         defaultDomain: isCodeSearch ? "code" : undefined,
       });
 
-      const memorySearchScope = await buildPaprMemorySearchScope({
+      const memorySearchSpread = await paprMemorySearchScopeSpread({
         chatId: scopeChatId,
       });
 
+      // Randomised-exposure holdout (A13). Assigned BEFORE the request so the
+      // arm cannot depend on anything about the results — that independence is
+      // the entire source of the propensity. Never overrides an explicit
+      // rerankingProvider: silently ignoring a caller's argument would make the
+      // tool misreport what it did.
+      const probeArm = decideRetrievalProbeArm({
+        callerChoseProvider: args.rerankingProvider !== undefined,
+      });
+
       // Pass reranking config directly from agent's chosen provider/model
-      const chosenProvider = args.rerankingProvider ?? "cohere";
+      const chosenProvider = armDisablesReranking(probeArm)
+        ? "none"
+        : (args.rerankingProvider ?? "cohere");
       const chosenModel = args.rerankingModel ?? (chosenProvider === "cohere" ? "rerank-v3.5" : undefined);
 
-      const response = await client.memory.search({
-        query: args.query!,
-        ...(memorySearchScope.external_user_id
-          ? { external_user_id: memorySearchScope.external_user_id }
-          : {}),
-        ...(memorySearchScope.search_acl
-          ? { search_acl: memorySearchScope.search_acl }
-          : {}),
-        max_memories: args.maxMemories ?? 20,
-        max_nodes: 20,
-        enable_agentic_graph: true,
-        reranking_config: {
-          reranking_enabled: chosenProvider !== "none",
-          reranking_provider: chosenProvider,
-          ...(chosenModel ? { reranking_model: chosenModel } : {}),
-          ...(args.rerankingDomainId ? { domain_id: args.rerankingDomainId } : {}),
-        },
-        response_format: "toon",
-        ...(searchPolicy ? { policy: searchPolicy } : {}),
-        ...(Object.keys(searchMetadata).length > 0
-          ? { metadata: searchMetadata }
-          : {}),
-      });
-      const formatted = formatSearchMemoryResponse(response);
-      if (formatted.searchId !== null && formatted.memoryCount === 0) {
-        void submitEmptySearchFeedback(client, formatted.searchId);
+      // withResponse() exposes the raw Response so we can read the server's
+      // X-Search-Id / X-Memory-Count / X-Node-Count headers. That is more robust
+      // than regex-parsing the TOON body, which stays as a fallback for servers
+      // that predate those headers.
+      const { data: response, response: httpResponse } = await client.memory
+        .search({
+          query: args.query!,
+          ...memorySearchSpread,
+          max_memories: args.maxMemories ?? 20,
+          max_nodes: 20,
+          enable_agentic_graph: true,
+          reranking_config: {
+            reranking_enabled: chosenProvider !== "none",
+            reranking_provider: chosenProvider,
+            ...(chosenModel ? { reranking_model: chosenModel } : {}),
+            ...(args.rerankingDomainId
+              ? { domain_id: args.rerankingDomainId }
+              : {}),
+          },
+          response_format: "toon",
+          ...(searchPolicy ? { policy: searchPolicy } : {}),
+          ...(Object.keys(searchMetadata).length > 0
+            ? { metadata: searchMetadata }
+            : {}),
+        })
+        .withResponse();
+      const formatted = formatSearchMemoryResponse(
+        response,
+        httpResponse.headers,
+      );
+      // Only auto-submit low-relevance feedback when the server genuinely returned
+      // nothing. memoryCount is now recovered from the TOON envelope, so a parse
+      // failure must NOT be mistaken for a zero-result search — that would train
+      // the ranker down on every successful query.
+      const isGenuinelyEmpty =
+        formatted.memoryCount === 0 && formatted.nodeCount === 0;
+
+      // Extracted once: the same candidate list feeds turn-end citation
+      // derivation AND the degeneracy check surfaced to the agent below.
+      // `null` means the payload could not be parsed — recorded as
+      // candidatesKnown:false so it is never graded as "nothing was cited".
+      const candidates = extractRetrievedCandidates(response);
+
+      // Warn on duplicate floods / id fan-out regardless of whether a searchId
+      // came back — the agent needs this even when feedback cannot be filed.
+      if (candidates && candidates.length > 0) {
+        const warning = describeResultSetShape(
+          analyzeResultSetShape(candidates),
+        );
+        if (warning) formatted._retrievalQuality = warning;
+      }
+
+      if (formatted.searchId !== null) {
+        // No explicit run key: it is inherited from the AsyncLocalStorage tool
+        // context (chat id, or `job:{jobId}:{runId}` for job runs). Passing one
+        // here would be guessing at which run we are inside.
+        recordSearchOutcome({
+          searchId: formatted.searchId,
+          memoryCount: formatted.memoryCount,
+          nodeCount: formatted.nodeCount,
+          candidatesKnown: candidates !== null,
+          candidates: candidates ?? [],
+          ...(probeArm ? { probeArm } : {}),
+        });
+
+        if (isGenuinelyEmpty) {
+          // Empty searches are graded inline (nothing to cite, so waiting for
+          // turn end buys nothing). Claim the id so the flush cannot submit a
+          // second row for the same retrieval.
+          void submitEmptySearchFeedback(client, formatted.searchId);
+          markSearchOutcomeSubmitted(formatted.searchId);
+        }
       }
       return formatted;
     } catch (error) {
@@ -734,16 +1120,7 @@ export const registerSchemaTool = createTool({
           : `Schema shell created. Use update or pass node_types to add entity types. Schema ID: ${schemaId}`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "Papr Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid Papr API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -752,6 +1129,7 @@ export const listSchemasTool = createTool({
   id: "list_schemas",
   description:
     "List KNOWLEDGE GRAPH schemas (user-created entity/relationship schemas). Returns schemas with node types and relationships. " +
+    "WorkspaceContext is the primary schema for wiki/sleep reads — query its GraphQL types first. " +
     "Use get_schema to fetch full details (node types, relationships, properties) for a specific schema. " +
     "⚠️ NOTE: For signal domains (vector/transform policy), use list_signal_domains instead.",
   inputSchema: listSchemasSchema,
@@ -780,21 +1158,12 @@ export const listSchemasTool = createTool({
         success: true, 
         data: {
           count: summary.length,
-          schemas: summary,
+          schemas: asToonOrRows("schemas", summary),
           note: "Use get_schema(schemaId) to fetch full details for a specific schema",
         }
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -812,16 +1181,7 @@ export const getSchemaTool = createTool({
       const response = await client.schemas.retrieve(args.schemaId);
       return { success: true, data: response };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -850,16 +1210,7 @@ export const updateSchemaTool = createTool({
         message: `Schema ${schemaId} updated successfully`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -956,13 +1307,16 @@ export const introspectMemoryGraphTool = createTool({
   id: "introspect_memory_graph",
   description:
     "Discover the PAPR Memory knowledge graph schema via GraphQL introspection. " +
-    "Returns available types, fields, and relationships. Call this BEFORE query_memory_graph " +
-    "to understand the schema structure. Omit typeName for an overview, or provide a specific " +
+    "Returns schema read order (WorkspaceContext first, then other active schemas), available types, fields, and relationships. " +
+    "Call this BEFORE query_memory_graph to understand the schema structure. Omit typeName for an overview, or provide a specific " +
     "type name for detailed field info.",
   inputSchema: introspectMemoryGraphSchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
+      const schemasForRead = await listSchemasForGraphRead(client);
+      const readOrderNote = buildGraphReadOrderNote(schemasForRead);
+
       const response = (await client.graphql.query({
         body: { query: INTROSPECTION_QUERY },
       })) as { data?: { __schema?: { queryType?: { name: string }; mutationType?: { name: string } | null; types?: GraphQLIntrospectionType[] } } };
@@ -993,6 +1347,10 @@ export const introspectMemoryGraphTool = createTool({
         return {
           success: true,
           data: {
+            readOrder: {
+              note: readOrderNote,
+              schemas: schemasForRead,
+            },
             type: target.name,
             kind: target.kind,
             description: target.description,
@@ -1022,6 +1380,10 @@ export const introspectMemoryGraphTool = createTool({
       return {
         success: true,
         data: {
+          readOrder: {
+            note: readOrderNote,
+            schemas: schemasForRead,
+          },
           queryType: schema.queryType?.name,
           mutationType: schema.mutationType?.name,
           typeCount: userTypes.length,
@@ -1029,16 +1391,7 @@ export const introspectMemoryGraphTool = createTool({
         },
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1046,6 +1399,111 @@ export const introspectMemoryGraphTool = createTool({
 // Delete memory schema
 const deleteMemorySchema = z.object({
   memoryId: z.string().min(1).describe("The memory ID to delete"),
+});
+
+const updateMemorySchema = z.object({
+  memoryId: z.string().min(1).describe("The memory ID to update (from search results or add response)"),
+  content: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Replacement content. Omit to leave the existing content unchanged."),
+  metadata: z
+    .record(z.string(), z.any())
+    .optional()
+    .describe(
+      "Metadata fields to update, e.g. { topics: ['fundraising'], hierarchical_structures: 'business/finance' }.",
+    ),
+});
+
+const addMemoryBatchSchema = z.object({
+  memories: z
+    .array(
+      z.object({
+        content: z.string().min(1).describe("Memory content"),
+        category: z
+          .enum(["preference", "task", "goal", "fact", "context", "skills", "learning"])
+          .optional()
+          .describe("Memory category. 'preference' is user-only; 'skills'/'learning' are assistant-only."),
+        role: z
+          .enum(["user", "assistant"])
+          .optional()
+          .describe("REQUIRED when category is set — the server 422s on category without role."),
+        topics: z.array(z.string()).optional().describe("Topic tags for this item"),
+        customMetadata: z
+          .record(
+            z.string(),
+            z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]),
+          )
+          .optional()
+          .describe(
+            "Exact-match filterable fields for THIS item — the write side of search_agent_memory's " +
+              "customMetadataFilters, same as add_agent_memory's customMetadata. " +
+              "Flat values only (string | number | boolean | string[]); the API rejects nested objects. " +
+              "Example: { content_type: 'app_card', app_id: '…', section: 'Storage' }. " +
+              "chatId is set by the tool and overrides caller values.",
+          ),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .describe("Memory items to write in one request (max 50)."),
+  skipBackgroundProcessing: z
+    .boolean()
+    .optional()
+    .describe("Skip async graph/embedding enrichment for faster writes. Default false."),
+  batchSize: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .optional()
+    .describe("Server-side chunk size for processing."),
+});
+
+const getBatchStatusSchema = z.object({
+  batchId: z.string().min(1).describe("batch_id returned by add_agent_memory_batch"),
+});
+
+const submitMemoryFeedbackBatchSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        searchId: z.string().min(1).describe("searchId from a prior search_agent_memory response"),
+        feedbackType: z
+          .enum([
+            "thumbs_up",
+            "thumbs_down",
+            "rating",
+            "correction",
+            "report",
+            "copy_action",
+            "save_action",
+            "create_document",
+            "memory_relevance",
+            "answer_quality",
+          ])
+          .describe("Type of feedback for this search"),
+        feedbackScore: z.number().min(1).max(5).optional().describe("1-5 score for rating/memory_relevance"),
+        feedbackText: z.string().optional().describe("Explanation, especially for correction/report"),
+        citedMemoryIds: z.array(z.string()).optional().describe("Memory IDs that were useful or irrelevant"),
+        citedNodeIds: z.array(z.string()).optional().describe("Graph node IDs cited, if any"),
+        feedbackSource: z
+          .enum(["inline", "post_query", "session_end", "memory_citation", "answer_panel"])
+          .optional()
+          .describe("Where the feedback originated. Default: inline."),
+      }),
+    )
+    .min(1)
+    .max(50)
+    .describe("Feedback items to submit in one request (max 50)."),
+});
+
+const getMemoryFeedbackSchema = z.object({
+  feedbackId: z
+    .string()
+    .min(1)
+    .describe("feedback_id returned by submit_memory_feedback"),
 });
 
 const submitMemoryFeedbackSchema = z.object({
@@ -1119,6 +1577,13 @@ const createEntitiesSchema = z.object({
   nodes: z.array(manualNodeSchema).min(1).describe("Exact nodes to create with manual specifications"),
   relationships: z.array(manualRelationshipSchema).optional().describe("Exact relationships to create between nodes"),
   schemaId: z.string().optional().describe("Schema ID that defines the node and relationship types"),
+  chatId: z
+    .string()
+    .optional()
+    .describe(
+      `Optional chat ID for default Team/Org scope when ACL fields are omitted. Use "${CURRENT_CHAT_SCOPE}" for the active chat.`,
+    ),
+  ...memoryReadAclToolFields,
 });
 
 export const queryMemoryGraphTool = createTool({
@@ -1130,6 +1595,32 @@ export const queryMemoryGraphTool = createTool({
   inputSchema: queryMemoryGraphSchema,
   execute: async (args) => {
     try {
+      const normalizedQuery = args.query.trim();
+      if (/^\s*mutation\b/i.test(normalizedQuery)) {
+        return {
+          success: false,
+          error: "query_memory_graph is read-only — mutations are not allowed",
+        };
+      }
+
+      const innerSelection = normalizedQuery
+        .replace(/^query\s+\w*\s*/i, "")
+        .trim()
+        .replace(/^\{/, "")
+        .replace(/\}$/, "")
+        .trim();
+      try {
+        assertValidWikiGraphQLSelection(innerSelection);
+      } catch (validationError) {
+        return {
+          success: false,
+          error:
+            validationError instanceof Error
+              ? validationError.message
+              : "Invalid GraphQL query",
+        };
+      }
+
       const client = await getPaprClient();
       const response = await client.graphql.query({
         body: {
@@ -1152,16 +1643,7 @@ export const queryMemoryGraphTool = createTool({
       }
       return { success: true, data: typed.data ?? response };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1181,16 +1663,190 @@ export const deleteMemoryTool = createTool({
         message: `Memory ${args.memoryId} deleted successfully`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const updateMemoryTool = createTool({
+  id: "update_memory",
+  description:
+    "Update an existing memory item in place by ID — corrects a fact WITHOUT creating a duplicate. " +
+    "Prefer this over add_agent_memory when a stored value changed (e.g. a revised total, status, or owner); " +
+    "re-adding creates near-duplicate memories that degrade retrieval ranking. " +
+    "Use delete_memory only when the memory should no longer exist at all.",
+  inputSchema: updateMemorySchema,
+  execute: async (args) => {
+    try {
+      if (args.content === undefined && args.metadata === undefined) {
         throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
+          "update_memory requires at least one of `content` or `metadata`.",
         );
       }
-      throw error;
+      const client = await getPaprClient();
+      const response = await client.memory.update(args.memoryId, {
+        ...(args.content !== undefined ? { content: args.content } : {}),
+        ...(args.metadata !== undefined
+          ? { metadata: args.metadata as Record<string, unknown> }
+          : {}),
+      } as Parameters<typeof client.memory.update>[1]);
+
+      return {
+        success: true,
+        memoryId: args.memoryId,
+        data: response,
+        message: `Memory ${args.memoryId} updated in place (no duplicate created)`,
+      };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const addAgentMemoryBatchTool = createTool({
+  id: "add_agent_memory_batch",
+  description:
+    "Write multiple memory items in ONE request. Use whenever you are storing 3+ related items " +
+    "(entity backfills, a set of tasks, imported records) — far cheaper than looping add_agent_memory. " +
+    "Applies the same WorkspaceContext graph schema and ACL scope as add_agent_memory. " +
+    "Each item takes its own customMetadata, so multi-section conventions like App Cards " +
+    "stay filterable by content_type/app_id when written in one call. " +
+    "Returns a batch_id; poll get_memory_batch_status to confirm all writes landed.",
+  inputSchema: addMemoryBatchSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const { buildPaprMemoryWriteScope } = await import(
+        "../../gateway/utils/memoryScopeResolver.js"
+      );
+      const { spreadMemoryScopeUserIdentity } = await import(
+        "../../core/utils/paprMemoryUserIdentity.js"
+      );
+
+      // Batch items inherit the chat's default Team/Org scope. For per-user ACLs,
+      // use add_agent_memory (which accepts shareWithUserIds / readAcl) instead.
+      const resolvedChatId = resolveConversationId(getCurrentChatId() ?? undefined);
+      const addPolicy = await buildAgentMemoryAddPolicy({});
+      const memoryScope = await buildPaprMemoryWriteScope({
+        chatId: resolvedChatId,
+        addPolicy,
+      });
+
+      const response = await client.memory.addBatch({
+        memories: args.memories.map((m) => {
+          // Caller keys land first so tool attribution always wins — same
+          // precedence as add_agent_memory's single-write path. Without this
+          // merge, batched App Card sections reach memory but lose the keys
+          // customMetadataFilters matches on, with no error anywhere.
+          const customMetadata: Record<
+            string,
+            string | number | boolean | string[]
+          > = { ...m.customMetadata };
+          if (resolvedChatId) customMetadata.chatId = resolvedChatId;
+          return {
+            content: m.content,
+            metadata: {
+              ...(m.role ? { role: m.role } : {}),
+              ...(m.category ? { category: m.category } : {}),
+              ...(m.topics ? { topics: m.topics } : {}),
+              ...(Object.keys(customMetadata).length ? { customMetadata } : {}),
+            },
+          };
+        }) as Parameters<typeof client.memory.addBatch>[0]["memories"],
+        ...(args.skipBackgroundProcessing !== undefined
+          ? { skip_background_processing: args.skipBackgroundProcessing }
+          : {}),
+        ...(args.batchSize !== undefined ? { batch_size: args.batchSize } : {}),
+        ...spreadMemoryScopeUserIdentity(memoryScope),
+        ...(memoryScope.namespace_id
+          ? { namespace_id: memoryScope.namespace_id }
+          : {}),
+        ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
+      } as Parameters<typeof client.memory.addBatch>[0]);
+
+      const raw = response as unknown as Record<string, unknown>;
+      return {
+        success: true,
+        requested: args.memories.length,
+        batchId: (raw.batch_id as string | undefined) ?? null,
+        data: response,
+        _statusReminder:
+          "Writes are processed asynchronously. If a later search cannot find these items, " +
+          "call get_memory_batch_status with the returned batchId before assuming the write failed.",
+      };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const getMemoryBatchStatusTool = createTool({
+  id: "get_memory_batch_status",
+  description:
+    "Check processing status of an add_agent_memory_batch write. Memory writes are asynchronous " +
+    "(embedding + graph extraction + Parse persistence), so use this to distinguish a SLOW write " +
+    "from a FAILED one before retrying or reporting an error.",
+  inputSchema: getBatchStatusSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const response = await client.memory.retrieveBatchStatus(args.batchId);
+      return { success: true, batchId: args.batchId, data: response };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const submitMemoryFeedbackBatchTool = createTool({
+  id: "submit_memory_feedback_batch",
+  description:
+    "Submit retrieval feedback for MULTIPLE searches in one request. Use at the end of a session " +
+    "when several searches are being rated together, instead of calling submit_memory_feedback repeatedly.",
+  inputSchema: submitMemoryFeedbackBatchSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const { paprUserScope } = await import("../../gateway/utils/paprUserId.js");
+      const scope = paprUserScope();
+
+      const response = await client.feedback.submitBatch({
+        feedback_items: args.items.map((item) => ({
+          search_id: item.searchId,
+          ...scope,
+          feedbackData: {
+            feedbackSource: item.feedbackSource ?? "inline",
+            feedbackType: item.feedbackType,
+            ...(item.citedMemoryIds ? { citedMemoryIds: item.citedMemoryIds } : {}),
+            ...(item.citedNodeIds ? { citedNodeIds: item.citedNodeIds } : {}),
+            ...(item.feedbackText ? { feedbackText: item.feedbackText } : {}),
+            ...(item.feedbackScore !== undefined
+              ? { feedbackScore: item.feedbackScore }
+              : {}),
+          },
+        })) as Parameters<typeof client.feedback.submitBatch>[0]["feedback_items"],
+      });
+
+      return { success: true, submitted: args.items.length, data: response };
+    } catch (error) {
+      handlePaprToolError(error);
+    }
+  },
+});
+
+export const getMemoryFeedbackTool = createTool({
+  id: "get_memory_feedback",
+  description:
+    "Fetch a previously submitted feedback record by feedback_id. Use to verify feedback was " +
+    "persisted server-side, or to inspect what was recorded for a given search.",
+  inputSchema: getMemoryFeedbackSchema,
+  execute: async (args) => {
+    try {
+      const client = await getPaprClient();
+      const response = await client.feedback.getByID(args.feedbackId);
+      return { success: true, feedbackId: args.feedbackId, data: response };
+    } catch (error) {
+      handlePaprToolError(error);
     }
   },
 });
@@ -1199,7 +1855,8 @@ export const submitMemoryFeedbackTool = createTool({
   id: "submit_memory_feedback",
   description:
     "Submit retrieval-quality feedback to Papr Memory after evaluating search_agent_memory results. " +
-    "Use the searchId from that search response. Only submit when results were clearly helpful or clearly irrelevant — not on every search. " +
+    "Use the searchId from that search response. Cited memories are derived automatically from your answer at turn end, so do NOT submit just to report that results helped. " +
+    "DO submit when results were MIXED (some on-target, some off) — that is the highest-value signal and must not be skipped — or when results looked relevant but were stale, wrong, or unusable. " +
     "For wrong memory content, prefer delete_memory or add_agent_memory instead of correction feedback alone.",
   inputSchema: submitMemoryFeedbackSchema,
   execute: async (args) => {
@@ -1250,16 +1907,7 @@ export const deleteSchemaTool = createTool({
         message: `Schema ${args.schemaId} archived successfully`
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1269,13 +1917,24 @@ export const createEntitiesAndRelationshipsTool = createTool({
   description:
     "Create entities (nodes) and relationships in the knowledge graph with exact specifications. " +
     "Use this for structured data imports, API integrations, or when you need complete control over graph structure. " +
-    "Nodes and relationships must conform to types defined in your registered schema.",
+    "Nodes and relationships must conform to types defined in your registered schema. " +
+    "Supports the same read ACL options as add_agent_memory (readAcl, shareWithUserIds, shareWithTeam, shareWithOrganization). " +
+    "Call list_namespace_users before sharing with specific users.",
   inputSchema: createEntitiesSchema,
   execute: async (args) => {
     try {
       const client = await getPaprClient();
-      const { buildPaprMemoryWriteScope } = await import(
-        "../../gateway/utils/memoryScopeResolver.js"
+      const {
+        buildPaprMemoryWriteScope,
+        resolveExplicitReadAclFromToolArgs,
+        withMemoryScopeMetadata,
+      } = await import("../../gateway/utils/memoryScopeResolver.js");
+      const { spreadMemoryScopeUserIdentity } = await import(
+        "../../core/utils/paprMemoryUserIdentity.js"
+      );
+
+      const resolvedChatId = resolveConversationId(
+        args.chatId ?? getCurrentChatId() ?? undefined,
       );
       
       // Build manual graph generation structure
@@ -1303,36 +1962,28 @@ export const createEntitiesAndRelationshipsTool = createTool({
       });
 
       const memoryScope = await buildPaprMemoryWriteScope({
+        chatId: resolvedChatId,
         addPolicy: manualPolicy,
+        explicitReadAcl: resolveExplicitReadAclFromToolArgs(args),
       });
 
       const response = await client.memory.add({
         content: args.content,
-        ...(memoryScope.external_user_id
-          ? { external_user_id: memoryScope.external_user_id }
-          : {}),
+        ...spreadMemoryScopeUserIdentity(memoryScope),
         ...(memoryScope.namespace_id
           ? { namespace_id: memoryScope.namespace_id }
           : {}),
         ...(memoryScope.policy ? { policy: memoryScope.policy } : {}),
+        metadata: withMemoryScopeMetadata({}, memoryScope),
       });
       
       return { 
         success: true, 
         data: response,
-        message: `Created ${args.nodes.length} entities${args.relationships ? ` and ${args.relationships.length} relationships` : ''}`
+        message: `Created ${args.nodes.length} entities${args.relationships ? ` and ${args.relationships.length} relationships` : ""}`,
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features.",
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct.",
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
@@ -1373,25 +2024,21 @@ export const listSignalDomainsTool = createTool({
         }
       };
     } catch (error) {
-      if (error instanceof Papr.RateLimitError || error instanceof Papr.PermissionDeniedError) {
-        throw new Error(
-          "PAPR Memory quota exceeded. Please upgrade your account at https://platform.papr.ai/settings to continue using memory features."
-        );
-      } else if (error instanceof Papr.AuthenticationError) {
-        throw new Error(
-          "Invalid PAPR API key. Please check your Settings and ensure your API key is correct."
-        );
-      }
-      throw error;
+      handlePaprToolError(error);
     }
   },
 });
 
 export const paprMemoryTools = [
   addAgentMemoryTool,
+  addAgentMemoryBatchTool,
+  getMemoryBatchStatusTool,
+  updateMemoryTool,
   listNamespaceUsersTool,
   searchAgentMemoryTool,
   submitMemoryFeedbackTool,
+  submitMemoryFeedbackBatchTool,
+  getMemoryFeedbackTool,
   registerSchemaTool,
   updateSchemaTool,
   listSchemasTool,

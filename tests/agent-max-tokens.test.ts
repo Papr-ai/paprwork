@@ -99,6 +99,7 @@ describe("agent finish reasons", () => {
   test("warns on finish reason: length (token limit reached)", async () => {
     const chunks = [
       { type: "text-delta", text: "This response was cut off mid-sen" },
+      { type: "finish-step", finishReason: "length" },
       { type: "finish", finishReason: "length" },
     ];
 
@@ -244,6 +245,7 @@ describe("agent token limit behavior", () => {
     const truncatedResponse = "This response was truncated mid-se";
     const chunks = [
       { type: "text-delta", text: truncatedResponse },
+      { type: "finish-step", finishReason: "length" },
       { type: "finish", finishReason: "length" },
     ];
 
@@ -373,6 +375,7 @@ describe("agent sequence building with token limits", () => {
         output: "file contents",
       },
       { type: "text-delta", text: "The file cont" }, // Truncated
+      { type: "finish-step", finishReason: "length" },
       { type: "finish", finishReason: "length" },
     ];
 

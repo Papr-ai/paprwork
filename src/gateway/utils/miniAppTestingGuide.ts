@@ -16,6 +16,7 @@ export const MINI_APP_TESTING_DECISION_TREE = `Mini-app testing — pick the rig
 
 validate_app automatically launches a preview and fails on console errors. Iframe errors while the user tests are forwarded to GET /api/apps/{appId}/runtime-logs.
 Preview workflow after edits (optional visual): webview_launch_app → page_wait_for({ target: 'mini_app', time: 2 }) → webview_snapshot.
+Use previewTarget: 'local' (default) for local files/DB; previewTarget: 'published' to test Web preview (cloud bundle + ACL — same as app tab Web toggle).
 webview_execute is ONLY for one-shot DOM reads (element count, window.__paprBoot, getElementById text). Scripts must return a value or result is undefined.`;
 
 export function formatMiniAppTestingGuide(): string {

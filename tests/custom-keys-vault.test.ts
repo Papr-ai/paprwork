@@ -16,7 +16,15 @@ describe("customKeysVault", () => {
     ).toBe(SHARED_ORG_ID);
   });
 
-  it("defaults organization-scoped keys to the active org", () => {
+  it("defaults unset org scope to the shared (all orgs) vault", () => {
+    expect(
+      resolveIntegrationKeyOrganizationId({
+        activeOrganizationId: "org-a",
+      }),
+    ).toBe(SHARED_ORG_ID);
+  });
+
+  it("defaults organization-scoped keys to the active org when explicit", () => {
     expect(
       resolveIntegrationKeyOrganizationId({
         orgScope: "organization",
@@ -49,5 +57,6 @@ describe("customKeysVault", () => {
     expect(normalizeIntegrationKeyVaultAudience(null)).toBe("user");
     expect(normalizeIntegrationKeyVaultAudience("namespace")).toBe("namespace");
     expect(normalizeIntegrationKeyVaultAudience("org")).toBe("org");
+    expect(normalizeIntegrationKeyVaultAudience("members")).toBe("members");
   });
 });

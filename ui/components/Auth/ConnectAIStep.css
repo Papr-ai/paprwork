@@ -1,0 +1,5 @@
+/* Claude onboarding stepper lives in onboardingTheme.css (.claude-stepper*) */
+
+.connect-ai--claude-stepper .onboarding-lede {
+  margin-bottom: 22px;
+}

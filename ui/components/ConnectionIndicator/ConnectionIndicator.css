@@ -1,22 +1,47 @@
 .connection-indicator {
+  position: fixed;
+  bottom: 148px;
+  right: 16px;
+  z-index: 9998;
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 6px;
-  padding: 6px 10px;
-  border-radius: 6px;
-  font-size: 12px;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 13px;
   font-weight: 500;
-  backdrop-filter: blur(10px);
-  transition: all 0.3s ease;
-  flex-shrink: 0;
-  white-space: nowrap;
+  box-shadow: var(--popover-shadow, 0 4px 24px rgba(0, 0, 0, 0.12));
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  max-width: 320px;
+  animation: connection-indicator-slide-in 0.3s ease-out;
+}
+
+@keyframes connection-indicator-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .connection-indicator--reconnecting {
   background: rgba(255, 193, 7, 0.15);
   border: 1px solid rgba(255, 193, 7, 0.4);
   color: #f57c00;
+}
+
+.connection-indicator--degraded {
+  background: rgba(33, 150, 243, 0.12);
+  border: 1px solid rgba(33, 150, 243, 0.35);
+  color: #1565c0;
+}
+
+.connection-indicator--degraded .connection-indicator__dot {
+  background: #1565c0;
+  animation: pulse 1.5s ease-in-out infinite;
 }
 
 .connection-indicator--disconnected {

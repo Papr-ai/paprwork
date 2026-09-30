@@ -10,7 +10,7 @@ export interface ToolCall {
   id: string;
   toolName: string;
   args?: Record<string, unknown>;
-  status: "calling" | "success" | "error" | "interrupted";
+  status: "calling" | "success" | "warning" | "error" | "interrupted";
   result?: string;
   error?: string;
 }
@@ -43,6 +43,7 @@ export interface AgentConfig extends Omit<CoreAgentConfig, "model"> {
 
 // Streaming types
 export type StreamChunkType =
+  | "stream-start"
   | "text-delta"
   | "reasoning-delta"
   | "tool-call"
@@ -51,6 +52,10 @@ export type StreamChunkType =
   | "tool-error"
   | "error"
   | "done";
+
+export interface StreamStartPayload {
+  messageId: string;
+}
 
 export interface StreamChunk<T = unknown> {
   type: StreamChunkType;

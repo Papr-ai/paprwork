@@ -10,10 +10,17 @@ export interface CloudAppMetadataFile {
   description: string;
   icon?: string;
   updatedAt: string;
+  /** Papr user id of the app owner (My Apps scope). */
+  ownerUserId?: string;
+  /** Workspace this app belongs to (My Apps scope). */
+  organizationId?: string;
+  namespaceId?: string;
   /** Embedded sub-agent chat (public fields only). */
   agentChat?: PublicAppAgentChatConfig;
   /** Hidden subagent job for cloud app-agent SSE turns. */
   agentChatJobId?: string;
+  /** Topic tags for Community / Team catalog (published as catalogTags). */
+  tags?: string[];
 }
 
 export const DEFAULT_CLOUD_APP_DESCRIPTION =
@@ -44,8 +51,14 @@ export function parseCloudAppMetadataFile(raw: string): CloudAppMetadataFile | n
         parsed.description?.trim() ||
         buildDefaultCloudAppDescription(parsed.title.trim()),
       ...(parsed.icon ? { icon: parsed.icon } : {}),
+      ...(parsed.ownerUserId ? { ownerUserId: parsed.ownerUserId.trim() } : {}),
+      ...(parsed.organizationId ? { organizationId: parsed.organizationId.trim() } : {}),
+      ...(parsed.namespaceId ? { namespaceId: parsed.namespaceId.trim() } : {}),
       ...(parsed.agentChat ? { agentChat: parsed.agentChat } : {}),
       ...(parsed.agentChatJobId ? { agentChatJobId: parsed.agentChatJobId } : {}),
+      ...(Array.isArray(parsed.tags) && parsed.tags.length > 0
+        ? { tags: parsed.tags.map((tag) => String(tag).trim()).filter(Boolean) }
+        : {}),
       updatedAt: parsed.updatedAt ?? new Date().toISOString(),
     };
   } catch {

@@ -1,0 +1,715 @@
+/**
+ * Post-install bootstrap for cloud/community mini-apps:
+ * resolve linked DB paths, apply git migrations locally, optional Turso row pull.
+ */
+
+import { openDiagnosticDatabase } from "./databaseDiagnostics/sqlite.js";
+
+import { existsSync, statSync } from "fs";
+import fs from "fs/promises";
+import Database from "better-sqlite3";
+import path from "path";
+import {
+  getPaprAppsRoot,
+  getPaprDataDir,
+  getPaprJobsRoot,
+} from "../../core/utils/paprRoot.js";
+import { getDatabaseRegistryService } from "./DatabaseRegistryService.js";
+import {
+  parseDataSourcesFile,
+  type AppDataSource,
+} from "./appDataSources.js";
+import { resolveLinkedSourceDbPath } from "./portableDataSources.js";
+import {
+  applyDatabaseMigrations,
+  applyRegistryDatabaseMigrations,
+} from "./jobs/databaseMigrations.js";
+import type { PullResult } from "./tursoSyncBridgeCore.js";
+import type { SyncSummary } from "./TursoSyncBridge.js";
+import type { InstallDbPolicy } from "./cloudInstallDbPolicy.js";
+import type { DatabasesRegistryFile } from "./DatabaseRegistryService.js";
+import { retryWhileReplicaBusy } from "./tursoReplica/replicaBusyRetry.js";
+
+function isLocalDbReadable(dbPath: string): boolean {
+  try {
+    return existsSync(dbPath) && statSync(dbPath).size > 0;
+  } catch {
+    return false;
+  }
+}
+
+export type TursoPullOutcome =
+  | "pulled"
+  | "empty_remote"
+  | "skipped"
+  | "unavailable"
+  | "failed";
+
+export interface LinkedDbBootstrapResult {
+  alias: string;
+  dbId?: string;
+  jobId?: string;
+  localPath: string;
+  migrationsApplied: string[];
+  tursoPull: TursoPullOutcome;
+  userTableCount: number;
+  writable: boolean;
+  warnings: string[];
+  errors: string[];
+}
+
+export interface InstallBootstrapResult {
+  appId: string;
+  linkedDbs: LinkedDbBootstrapResult[];
+  /** Local schema exists and DB files are writable. */
+  ready: boolean;
+  /** Schema OK but no user tables yet — run linked seed job. */
+  needsSeed: boolean;
+  errors: string[];
+  warnings: string[];
+}
+
+function countUserTables(dbPath: string): number {
+  if (!existsSync(dbPath)) {
+    return 0;
+  }
+  let db: Database.Database | null = null;
+  try {
+    db = openDiagnosticDatabase(Database, "services/cloudAppInstallBootstrap", dbPath, { readonly: true });
+    const rows = db
+      .prepare(
+        `SELECT name FROM sqlite_master
+         WHERE type = 'table'
+           AND name NOT LIKE 'sqlite_%'
+           AND name NOT LIKE '_papr_%'
+           AND name NOT IN ('schema_migrations', 'job_runs', 'job_events')`,
+      )
+      .all() as Array<{ name: string }>;
+    return rows.length;
+  } catch {
+    return 0;
+  } finally {
+    db?.close();
+  }
+}
+
+/** Health check for a cloud-direct source; null when the source is not cloud-direct. */
+async function probeCloudDirectSource(
+  source: AppDataSource,
+  localPath: string,
+): Promise<{ reachable: boolean; userTableCount: number } | null> {
+  const { isCloudDirectSource, cloudDirectQuery } = await import(
+    "./cloudDirect/cloudDirectDb.js"
+  );
+  const probe = { ...source, dbPath: localPath };
+  if (!isCloudDirectSource(probe)) {
+    return null;
+  }
+  try {
+    const result = await cloudDirectQuery(
+      probe,
+      `SELECT name FROM sqlite_master
+       WHERE type = 'table'
+         AND name NOT LIKE 'sqlite_%'
+         AND name NOT LIKE '_papr_%'
+         AND name NOT LIKE 'turso_%'
+         AND name NOT IN ('schema_migrations', 'job_runs', 'job_events')`,
+    );
+    return { reachable: true, userTableCount: result.count };
+  } catch {
+    return { reachable: false, userTableCount: 0 };
+  }
+}
+
+function mapTursoPullOutcome(
+  summary: SyncSummary | null,
+  syncKey: string,
+  pullResults: Map<string, PullResult | undefined>,
+): TursoPullOutcome {
+  if (!summary) {
+    return "unavailable";
+  }
+  const direct = pullResults.get(syncKey);
+  if (direct?.status === "pulled") {
+    return "pulled";
+  }
+  if (direct?.status === "skipped") {
+    if (direct.reason === "no_remote_tables" || direct.reason === "no_syncable_remote_tables") {
+      return "empty_remote";
+    }
+    return "skipped";
+  }
+  const result = summary.results.find((entry) => entry.jobId === syncKey);
+  if (result?.error) {
+    return "failed";
+  }
+  if (result?.pull?.status === "pulled") {
+    return "pulled";
+  }
+  if (
+    result?.pull?.status === "skipped" &&
+    (result.pull.reason === "no_remote_tables" ||
+      result.pull.reason === "no_syncable_remote_tables")
+  ) {
+    return "empty_remote";
+  }
+  if (result?.pull?.status === "skipped") {
+    return "skipped";
+  }
+  return "skipped";
+}
+
+async function applyMigrationsForSource(
+  source: AppDataSource,
+  localPath: string,
+  options?: { crossWorkspace?: boolean },
+): Promise<string[]> {
+  const label = `cloud-install-migration:${source.alias ?? localPath}`;
+  return retryWhileReplicaBusy(async () => {
+    // Only a cross-workspace copy bypasses the engine: the registry singleton
+    // belongs to the *current* workspace, not the target one. Every other
+    // install (fork included) migrates through the engine its record names —
+    // forcing forks onto better-sqlite3 is what broke LinkedIn Outreach.
+    const migrationOptions = options?.crossWorkspace
+      ? { bypassReplicaEngine: true as const }
+      : undefined;
+    if (source.dbId && !source.jobId) {
+      return applyRegistryDatabaseMigrations(localPath, migrationOptions);
+    }
+    if (source.jobId) {
+      const jobDir = path.join(getPaprJobsRoot(), source.jobId);
+      return applyDatabaseMigrations(jobDir, localPath, migrationOptions);
+    }
+    return applyRegistryDatabaseMigrations(localPath, migrationOptions);
+  }, label);
+}
+
+async function resolveBootstrapLocalPath(
+  source: AppDataSource,
+  options?: {
+    paprHome?: string;
+    registry?: DatabasesRegistryFile;
+  },
+): Promise<string | null> {
+  const jobsRoot = options?.paprHome
+    ? path.join(options.paprHome, "Jobs")
+    : getPaprJobsRoot();
+  const dataDir = options?.paprHome
+    ? path.join(options.paprHome, "data")
+    : undefined;
+  const registryRecord =
+    source.dbId && options?.registry
+      ? options.registry.databases[source.dbId]
+      : undefined;
+  const localPath = await resolveLinkedSourceDbPath({
+    dbPath: source.dbPath,
+    dbId: source.dbId,
+    jobId: source.jobId,
+    jobsRoot,
+    registryLabel: registryRecord?.label ?? source.alias,
+    dataDir,
+    registryRecord,
+  });
+  return localPath?.trim() ? localPath : null;
+}
+
+async function bootstrapLinkedSource(
+  source: AppDataSource,
+  tursoSummary: SyncSummary | null,
+  pullResults: Map<string, PullResult | undefined>,
+  options?: {
+    tursoPullOnly?: boolean;
+    skipMigrations?: boolean;
+    migrationsApplied?: string[];
+    localOnly?: boolean;
+    paprHome?: string;
+    registry?: DatabasesRegistryFile;
+  },
+): Promise<LinkedDbBootstrapResult> {
+  const warnings: string[] = [];
+  const errors: string[] = [];
+
+  const localPath = await resolveBootstrapLocalPath(source, options);
+
+  if (!localPath) {
+    errors.push(
+      `Could not resolve local path for alias "${source.alias}"` +
+        (source.dbId ? ` (dbId ${source.dbId})` : "") +
+        (source.jobId ? ` (jobId ${source.jobId})` : "") +
+        ". Registry entry or linked-databases.json may be missing.",
+    );
+    return {
+      alias: source.alias,
+      dbId: source.dbId,
+      jobId: source.jobId,
+      localPath: "",
+      migrationsApplied: [],
+      tursoPull: "skipped",
+      userTableCount: 0,
+      writable: false,
+      warnings,
+      errors,
+    };
+  }
+
+  let migrationsApplied: string[] = options?.migrationsApplied ?? [];
+  if (!options?.tursoPullOnly && !options?.skipMigrations) {
+    try {
+      migrationsApplied = await applyMigrationsForSource(source, localPath, {
+        crossWorkspace: Boolean(options?.paprHome?.trim()),
+      });
+    } catch (error) {
+      errors.push(
+        `Migration failed for "${source.alias}" at ${localPath}: ${(error as Error).message}`,
+      );
+    }
+  }
+
+  const syncKey = source.dbId ?? source.jobId ?? localPath;
+  const tursoPull: TursoPullOutcome = options?.localOnly
+    ? "skipped"
+    : mapTursoPullOutcome(tursoSummary, syncKey, pullResults);
+
+  if (options?.localOnly) {
+    /* Community fork: local schema only until the user publishes and syncs. */
+  } else if (tursoPull === "unavailable") {
+    warnings.push(
+      `Turso pull skipped for "${source.alias}" (cloud sync off, not logged in, or bridge unavailable). Local schema from git migrations was applied when present.`,
+    );
+  } else if (tursoPull === "empty_remote") {
+    warnings.push(
+      `Turso database for "${source.alias}" is empty — expected for a fresh fork. Run the linked setup job to seed rows if the app needs starter data.`,
+    );
+  } else if (tursoPull === "failed") {
+    warnings.push(
+      `Turso pull failed for "${source.alias}". Local schema may still work; try Sync now in the publish bar.`,
+    );
+  }
+
+  // Plan A replica files: never open with better-sqlite3 (even readonly) on pull-only track sync.
+  // Cloud-direct has no local file: ask the primary instead.
+  const cloudDirect = await probeCloudDirectSource(source, localPath);
+  const userTableCount = cloudDirect
+    ? cloudDirect.userTableCount
+    : options?.tursoPullOnly
+      ? -1
+      : countUserTables(localPath);
+  const writable = cloudDirect ? cloudDirect.reachable : isLocalDbReadable(localPath);
+
+  if (!writable && errors.length === 0) {
+    errors.push(
+      `Database "${source.alias}" is not reachable after setup (${localPath}).`,
+    );
+  }
+
+  if (writable && userTableCount === 0 && errors.length === 0 && !options?.tursoPullOnly) {
+    warnings.push(
+      `Database "${source.alias}" has no user tables yet. Run the linked job on this device or seed via the app setup flow.`,
+    );
+  }
+
+  return {
+    alias: source.alias,
+    dbId: source.dbId,
+    jobId: source.jobId,
+    localPath,
+    migrationsApplied,
+    tursoPull,
+    userTableCount,
+    writable,
+    warnings,
+    errors,
+  };
+}
+
+async function readAppDataSources(
+  appId: string,
+  paprHome?: string,
+): Promise<AppDataSource[]> {
+  const appsRoot = paprHome
+    ? path.join(paprHome, "apps")
+    : getPaprAppsRoot();
+  const configPath = path.join(appsRoot, appId, "data-sources.json");
+  try {
+    const raw = await fs.readFile(configPath, "utf8");
+    return parseDataSourcesFile(raw).sources;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+async function readRegistryFromPaprHome(
+  paprHome: string,
+): Promise<DatabasesRegistryFile> {
+  const registryPath = path.join(paprHome, "data", "databases.json");
+  try {
+    const raw = await fs.readFile(registryPath, "utf8");
+    return JSON.parse(raw) as DatabasesRegistryFile;
+  } catch {
+    return { version: 1, databases: {} };
+  }
+}
+
+/** Re-pull publisher Turso for track-mode apps with shared database policy. */
+export async function pullTrackSharedAppDatabase(
+  appId: string,
+): Promise<InstallBootstrapResult> {
+  return bootstrapInstalledAppDatabases(appId, { tursoPullOnly: true });
+}
+
+export interface BootstrapInstalledAppOptions {
+  tursoPullOnly?: boolean;
+  installDbPolicy?: InstallDbPolicy;
+  /**
+   * Fork or community collaborate: apply local schema only; defer Turso until
+   * the user publishes/syncs. Team track (private or shared) runs Turso bootstrap.
+   */
+  deferTursoUntilPublish?: boolean;
+  /**
+   * Apply pending migrations under this workspace (cross-namespace copy).
+   * Skips Turso sync — target namespace credentials are not active during copy.
+   */
+  paprHome?: string;
+}
+
+function shouldSkipTursoDuringBootstrap(
+  options?: BootstrapInstalledAppOptions,
+): boolean {
+  return (
+    Boolean(options?.deferTursoUntilPublish && options.tursoPullOnly !== true) ||
+    Boolean(options?.paprHome?.trim())
+  );
+}
+
+function shouldRunMigrationsBeforeTurso(
+  options?: BootstrapInstalledAppOptions,
+): boolean {
+  if (options?.tursoPullOnly || shouldSkipTursoDuringBootstrap(options)) {
+    return false;
+  }
+  // Shared team database: pull remote rows first, then apply forward-only migrations.
+  if (options?.installDbPolicy === "shared_primary") {
+    return false;
+  }
+  return true;
+}
+
+/** Apply migrations + optional Turso pull for one installed app. */
+export async function bootstrapInstalledAppDatabases(
+  appId: string,
+  options?: BootstrapInstalledAppOptions,
+): Promise<InstallBootstrapResult> {
+  const paprHome = options?.paprHome?.trim();
+  const sources = await readAppDataSources(appId, paprHome);
+  const linkedDbs: LinkedDbBootstrapResult[] = [];
+  const errors: string[] = [];
+  const warnings: string[] = [];
+  const localOnly = shouldSkipTursoDuringBootstrap(options);
+  const registry = paprHome
+    ? await readRegistryFromPaprHome(paprHome)
+    : undefined;
+  const workspaceOpts = paprHome
+    ? { paprHome, registry }
+    : undefined;
+
+  if (sources.length === 0) {
+    return {
+      appId,
+      linkedDbs: [],
+      ready: true,
+      needsSeed: false,
+      errors: [],
+      warnings: [],
+    };
+  }
+
+  let tursoSummary: SyncSummary | null = null;
+  const pullResults = new Map<string, PullResult | undefined>();
+  const migrationsByAlias = new Map<string, string[]>();
+  const runMigrationsBeforeTurso = shouldRunMigrationsBeforeTurso(options);
+
+  if (runMigrationsBeforeTurso) {
+    for (const source of sources) {
+      if (source.type !== "sqlite") {
+        continue;
+      }
+      if (!source.dbId && !source.jobId) {
+        continue;
+      }
+      const localPath = await resolveBootstrapLocalPath(source, workspaceOpts);
+      if (!localPath) {
+        continue;
+      }
+      try {
+        const applied = await applyMigrationsForSource(source, localPath);
+        migrationsByAlias.set(source.alias, applied);
+      } catch (error) {
+        errors.push(
+          `Migration failed for "${source.alias}" at ${localPath}: ${(error as Error).message}`,
+        );
+      }
+    }
+  }
+
+  if (!localOnly) {
+    try {
+      const { ensureTursoSyncBridge, syncTursoAfterAppInstall } = await import(
+        "./TursoSyncBridge.js"
+      );
+      ensureTursoSyncBridge();
+      if (options?.tursoPullOnly) {
+        const bridge = ensureTursoSyncBridge();
+        tursoSummary = await bridge.pullAppLinkedSources(appId, { force: true });
+      } else {
+        tursoSummary = await syncTursoAfterAppInstall(appId);
+      }
+      for (const entry of tursoSummary.results) {
+        pullResults.set(entry.jobId, entry.pull);
+      }
+    } catch (error) {
+      warnings.push(
+        `Turso bootstrap skipped: ${(error as Error).message.slice(0, 160)}`,
+      );
+    }
+  }
+
+  for (const source of sources) {
+    if (source.type !== "sqlite") {
+      continue;
+    }
+    if (!source.dbId && !source.jobId) {
+      warnings.push(
+        `Skipped source "${source.alias}" — no dbId or jobId (not portable).`,
+      );
+      continue;
+    }
+    const result = await bootstrapLinkedSource(
+      source,
+      tursoSummary,
+      pullResults,
+      {
+        ...options,
+        localOnly,
+        ...workspaceOpts,
+        skipMigrations: runMigrationsBeforeTurso,
+        migrationsApplied: migrationsByAlias.get(source.alias),
+      },
+    );
+    linkedDbs.push(result);
+    errors.push(...result.errors);
+    warnings.push(...result.warnings);
+  }
+
+  const ready =
+    linkedDbs.length > 0 &&
+    linkedDbs.every((db) => db.writable && db.errors.length === 0);
+  const needsSeed =
+    ready && linkedDbs.some((db) => db.userTableCount === 0);
+
+  if (localOnly) {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.attempted > 0) {
+        console.log(
+          `[CloudInstall] Fork portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Fork portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
+  } else if (!options?.tursoPullOnly) {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.attempted > 0) {
+        console.log(
+          `[CloudInstall] Portable replica bootstrap: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} succeeded`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Portable replica bootstrap skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
+  } else {
+    try {
+      const { rebootstrapPendingPortableReplicas } = await import(
+        "./tursoReplica/portableReplicaBootstrap.js"
+      );
+      const replicaBootstrap = await rebootstrapPendingPortableReplicas();
+      if (replicaBootstrap.succeeded > 0) {
+        console.log(
+          `[CloudTrackSync] Shared DB pull: ${replicaBootstrap.succeeded}/${replicaBootstrap.attempted} replica(s) refreshed`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Shared DB replica pull skipped: ${(error as Error).message.slice(0, 120)}`,
+      );
+    }
+  }
+
+  return {
+    appId,
+    linkedDbs,
+    ready,
+    needsSeed,
+    errors,
+    warnings,
+  };
+}
+
+/** After cross-namespace copy: apply pending migrations in the target workspace. */
+export async function bootstrapCopiedAppDatabasesInWorkspace(
+  appId: string,
+  paprHome: string,
+): Promise<InstallBootstrapResult> {
+  return bootstrapInstalledAppDatabases(appId, {
+    installDbPolicy: "fork_empty",
+    deferTursoUntilPublish: true,
+    paprHome: path.resolve(paprHome),
+  });
+}
+
+/** Whether install should return agentSetupMessage instead of failing the HTTP request. */
+export function shouldOfferInstallAgentSetup(
+  bootstrap: Pick<
+    InstallBootstrapResult,
+    "errors" | "ready" | "needsSeed" | "warnings"
+  >,
+  installDbPolicy: InstallDbPolicy,
+): boolean {
+  if (bootstrap.errors.length > 0) {
+    return true;
+  }
+  if (installDbPolicy === "fork_empty") {
+    return !bootstrap.ready;
+  }
+  return (
+    !bootstrap.ready || bootstrap.needsSeed || bootstrap.warnings.length > 0
+  );
+}
+
+/** Real workspace paths (org/namespace aware) — never a hard-coded ~/Papr. */
+function resolveSetupPromptPaths(): {
+  registry: string;
+  databasesDir: string;
+  jobsDir: string;
+  dataSources: string;
+} {
+  const dataDir = getPaprDataDir();
+  return {
+    registry: path.join(dataDir, "databases.json"),
+    databasesDir: path.join(dataDir, "databases"),
+    jobsDir: getPaprJobsRoot(),
+    dataSources: path.join(getPaprAppsRoot(), "{appId}", "data-sources.json"),
+  };
+}
+
+function storageModeForPrompt(db: LinkedDbBootstrapResult): {
+  label: string;
+  instruction: string;
+} {
+  let syncMode: string | undefined;
+  try {
+    const record = db.dbId ? getDatabaseRegistryService().getById(db.dbId) : undefined;
+    syncMode = record?.syncMode;
+  } catch {
+    syncMode = undefined;
+  }
+  if (syncMode === "cloud-direct") {
+    return {
+      label: "cloud-direct",
+      instruction:
+        "Lives only in Papr Cloud (no local file by design — this device has no sync engine). " +
+        "A missing local file is expected; check reachability/sign-in instead.",
+    };
+  }
+  if (syncMode === "replica") {
+    return {
+      label: "replica",
+      instruction:
+        "Synced replica managed by the sync engine — use papr_db tools only, never raw sqlite.",
+    };
+  }
+  return {
+    label: "local",
+    instruction: "Local SQLite file.",
+  };
+}
+
+/** Agent prompt when install bootstrap is incomplete or needs manual follow-up. */
+export function buildCloudInstallAgentSetupMessage(input: {
+  appTitle: string;
+  appId: string;
+  sourceSlug?: string;
+  bootstrap: InstallBootstrapResult;
+  linkedJobIds?: string[];
+}): string {
+  const hasErrors = input.bootstrap.errors.length > 0;
+  const lines: string[] = [
+    hasErrors
+      ? `The app "${input.appTitle}" (appId: ${input.appId}` +
+        (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
+        `) was copied locally, but a database migration failed during setup. The user should not see raw SQLite errors — fix the migration and verify the app.`
+      : `The community app "${input.appTitle}" (appId: ${input.appId}` +
+        (input.sourceSlug ? `, slug: ${input.sourceSlug}` : "") +
+        `) was installed but database setup needs attention.`,
+    "",
+    "Please finish database setup so the app's reads AND writes work.",
+    "",
+  ];
+  const paths = resolveSetupPromptPaths();
+
+  if (input.linkedJobIds && input.linkedJobIds.length > 0) {
+    lines.push(
+      `Linked job IDs from install: ${input.linkedJobIds.join(", ")}.`,
+      "",
+    );
+  }
+
+  if (input.bootstrap.errors.length > 0) {
+    lines.push("**Errors:**");
+    for (const err of input.bootstrap.errors) {
+      lines.push(`- ${err}`);
+    }
+    lines.push("");
+  }
+
+  if (input.bootstrap.linkedDbs.length > 0) {
+    lines.push("**Linked databases:**");
+    for (const db of input.bootstrap.linkedDbs) {
+      const mode = storageModeForPrompt(db);
+      lines.push(
+        `- alias "${db.alias}"${db.dbId ? ` (dbId ${db.dbId})` : ""}: storage=${mode.label}, ` +
+          `path=${db.localPath || "(unresolved)"}, ` +
+          `migrations=[${db.migrationsApplied.join(", ") || "none"}], ` +
+          `tables=${db.userTableCount}, reachable=${db.writable}`,
+      );
+      lines.push(`  ${mode.instruction}`);
+    }
+    lines.push("");
+  }
+
+  lines.push(
+    "**Do this:**",
+    `1. Read ${paths.dataSources.replace("{appId}", input.appId)} and the registry at ${paths.registry} — fill an empty dbPath from the registry entry's localPath.`,
+    `2. Apply pending migrations with the papr_db migration tools (they pick the right engine per database). Migration files live in ${paths.databasesDir}/{slug}/migrations/ (job databases: ${paths.jobsDir}/{jobId}/migrations/). Do not open replica or cloud-direct databases with sqlite3 or better-sqlite3.`,
+    "3. Never hard-code a user id in SQL — use {{papr.owner_user_id}}; it is filled in with the database owner when the migration runs.",
+    "4. If a linked seed/setup job exists and the database is empty, run it once.",
+    "5. Verify POST /api/db/write succeeds for this app before telling the user setup is complete, then open the app tab.",
+    "Do not paste API keys or database tokens into chat or files — credentials are fetched by the platform.",
+  );
+
+  return lines.join("\n");
+}

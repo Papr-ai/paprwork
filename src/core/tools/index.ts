@@ -22,9 +22,13 @@ import { recipeTools } from "./recipes.js";
 import { keyManagementTools } from "./keyManagement.js";
 import { chatHistoryTools } from "./chatHistory.js";
 import { connectorsTools } from "./connectors.js";
+import { connectPlatformTool } from "./platformConnect.js";
 import { codeIndexTools } from "./codeIndex.js";
 import { cloudPublishTools } from "./cloudPublish.js";
 import { cloudInstallTools } from "./cloudInstall.js";
+import { cloudObservabilityTools } from "./cloudObservability.js";
+import { cloudPullTools } from "./cloudPull.js";
+import { mediaGenerationTools } from "./generateMedia.js";
 import { appAgentChatTools } from "./appAgentChat.js";
 import { editFileTool } from "./editFile.js";
 import { editAppFileTool, editJobFileTool } from "./appJobs.js";
@@ -34,11 +38,18 @@ import {
   deleteDatabaseTool,
 } from "./databases.js";
 import { wikiGraphTools } from "./wikiGraph.js";
+import { paprWorkspaceTools } from "./paprWorkspace.js";
+import { platformFeedbackTools } from "./platformFeedback.js";
+import { paprDbTools } from "./paprDb.js";
+import { paprApiReferenceTools } from "./paprApiReference.js";
+import { jevTools } from "./jevDecide.js";
+import { architectTriageTools } from "./architectTriage.js";
 
 export const databaseTools = [
   createDatabaseTool,
   attachDatabaseTool,
   deleteDatabaseTool,
+  ...paprDbTools,
 ];
 
 /**
@@ -53,6 +64,7 @@ export const allTools = [
   ...documentTools,
   ...paprMemoryTools,
   ...paprDocumentMemoryTools,
+  ...paprWorkspaceTools,
   ...wikiGraphTools,
   ...skillsTools,
   ...appJobsTools,
@@ -60,15 +72,23 @@ export const allTools = [
   ...jobFolderTools,
   ...webviewTools,
   ...delegationTools,
+  ...architectTriageTools,
   ...planningTools,
   ...keyManagementTools,
   ...recipeTools,
   ...chatHistoryTools,
   ...connectorsTools,
+  connectPlatformTool,
   ...codeIndexTools,
   ...cloudPublishTools,
   ...cloudInstallTools,
+  ...cloudObservabilityTools,
+  ...cloudPullTools,
+  ...mediaGenerationTools,
+  ...jevTools,
   ...appAgentChatTools,
+  ...platformFeedbackTools,
+  ...paprApiReferenceTools,
 ];
 
 /**
@@ -85,19 +105,30 @@ export const toolsByCategory = {
   filesystem: [...filesystemTools, editFileTool],
   browser: browserTools,
   webview: webviewTools,
-  papr: [...paprMemoryTools, ...paprDocumentMemoryTools, ...wikiGraphTools],
+  papr: [
+    ...paprMemoryTools,
+    ...paprDocumentMemoryTools,
+    ...paprWorkspaceTools,
+    ...wikiGraphTools,
+    ...paprApiReferenceTools,
+  ],
   documents: documentTools,
   skills: skillsTools,
   automation: [...appJobsTools, ...databaseTools, ...appAgentChatTools],
-  delegation: delegationTools,
+  delegation: [...delegationTools, ...architectTriageTools],
   planning: planningTools,
   keyManagement: keyManagementTools,
   recipes: recipeTools,
   chatHistory: chatHistoryTools,
-  connectors: connectorsTools,
+  connectors: [...connectorsTools, connectPlatformTool],
   codeIndex: codeIndexTools,
   cloudPublish: cloudPublishTools,
   cloudInstall: cloudInstallTools,
+  cloudObservability: cloudObservabilityTools,
+  cloudPull: cloudPullTools,
+  mediaGeneration: mediaGenerationTools,
+  jev: jevTools,
+  platformFeedback: platformFeedbackTools,
 } as const;
 
 /**
@@ -128,6 +159,7 @@ export {
   writeFileTool,
   listDirectoryTool,
   searchFilesTool,
+  searchAppFilesTool,
   filesystemTools,
 } from "./filesystem.js";
 export { editFileTool } from "./editFile.js";
@@ -143,11 +175,19 @@ export {
   listDelegationRunsTool,
 } from "./delegation.js";
 export { documentTools } from "./documents.js";
-export { 
-  paprMemoryTools,
+export {
+  paprWorkspaceTools,
+  getPaprWorkspaceTool,
+} from "./paprWorkspace.js";
+export {
   addAgentMemoryTool,
+  addAgentMemoryBatchTool,
+  getMemoryBatchStatusTool,
+  updateMemoryTool,
   searchAgentMemoryTool,
   submitMemoryFeedbackTool,
+  submitMemoryFeedbackBatchTool,
+  getMemoryFeedbackTool,
   registerSchemaTool,
   updateSchemaTool,
   listSchemasTool,
@@ -166,6 +206,7 @@ export {
   parsePdfTool,
 } from "./paprDocumentMemory.js";
 export { skillsTools } from "./skills.js";
+export { getPaprApiReferenceTool, paprApiReferenceTools } from "./paprApiReference.js";
 export {
   appJobsTools,
   createAppTool,
@@ -198,10 +239,67 @@ export {
 export {
   cloudInstallTools,
   installCloudAppTool,
+  checkCloudAppContributionsTool,
+  submitCloudAppPrTool,
+  listCloudAppPrsTool,
+  resolveCloudAppPrTool,
   submitCloudAppChangeTool,
   listCloudAppChangesTool,
   resolveCloudAppChangeTool,
 } from "./cloudInstall.js";
+export {
+  cloudAppPrReviewTools,
+  getCloudAppPrReviewTool,
+  readCloudAppPrFileTool,
+  cloudAppChangeReviewTools,
+  getCloudAppChangeReviewTool,
+  readCloudAppChangeFileTool,
+} from "./cloudAppChangeReview.js";
+export {
+  CLOUD_APP_PR_TOOL_IDS,
+  CLOUD_APP_PR_OWNER_WORKFLOW,
+  CLOUD_APP_PR_DEFERRED_FIND_QUERY,
+  resolveCloudAppPrToolAlias,
+} from "./cloudAppPrToolIds.js";
+
+export {
+  cloudObservabilityTools,
+  getCloudSyncStatusTool,
+  pushCloudSyncTool,
+  resetWriterBaselineAndPublishTool,
+  queryCloudTursoTool,
+  inspectCloudRepoTool,
+} from "./cloudObservability.js";
+
+export {
+  mediaGenerationTools,
+  generateMediaTool,
+  listMediaModelsTool,
+} from "./generateMedia.js";
+
+export { jevDecideTool, jevTools } from "./jevDecide.js";
+export {
+  evaluateJev,
+  resolveJevApiKey,
+  JEV_KEY_NAME,
+  JEV_DEFAULT_MODEL,
+  JEV_DEFAULT_ENDPOINT,
+} from "./jevClient.js";
+export {
+  evaluateJevWithAuth,
+  resolveJevAuth,
+  JEV_PROXY_PATH,
+} from "./jevAuth.js";
+export {
+  assertJevInputWithinGuardrails,
+  JEV_MAX_STATE_CHARS,
+  JEV_MAX_QUESTIONS,
+} from "./jevGuardrails.js";
+export type {
+  JevQuestion,
+  JevEvaluateResult,
+  JevEvaluateInput,
+} from "./jevClient.js";
 
 export { appAgentChatTools, enableAppAgentChatTool } from "./appAgentChat.js";
 
@@ -216,6 +314,7 @@ export { planningTools, createPlanTool, updatePlanTool, deletePlanTool } from ".
 export { writeRecipeTool, readRecipeTool, evaluateRunTool, listEvaluationsTool } from "./recipes.js";
 export { chatHistoryTools, getFullToolResultTool } from "./chatHistory.js";
 export { connectorsTools, provisionServiceTool } from "./connectors.js";
+export { connectPlatformTool } from "./platformConnect.js";
 export {
   codeIndexTools,
   getProjectCodeOverviewTool,

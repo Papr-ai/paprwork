@@ -2,15 +2,62 @@
  * Electron-side workspace activation — writes pointer + notifies gateway.
  */
 
+import { ipcMain } from "electron";
 import {
   ensureWorkspaceLayout,
-  migrateLegacyFlatPaprLayout,
   applyActiveWorkspaceEnv,
   readActiveWorkspacePointer,
   type ActiveWorkspacePointer,
 } from "../../core/utils/paprWorkspace.js";
+import {
+  paprApiKeyMatchesNamespaceBound,
+  parsePaprApiKeyScope,
+  requirePaprApiKeyForWorkspaceSwitch,
+  WorkspaceSwitchApiKeyError,
+} from "../../core/utils/paprApiKey.js";
 
 const DEFAULT_GATEWAY_PORT = 18789;
+const WORKSPACE_SWITCH_FETCH_TIMEOUT_MS = 8_000;
+const WORKSPACE_SWITCH_FETCH_RETRIES = 3;
+const PAPR_API_KEY_POST_TIMEOUT_MS = 5_000;
+
+let restartGatewayAfterWorkspaceSwitch: (() => Promise<void>) | null = null;
+
+/** Set by Electron main — restarts gateway when switch POST fails but local pointer saved. */
+export function setGatewayRestartAfterWorkspaceSwitch(
+  handler: (() => Promise<void>) | null,
+): void {
+  restartGatewayAfterWorkspaceSwitch = handler;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function postWorkspaceSwitchRequest(
+  port: number,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < WORKSPACE_SWITCH_FETCH_RETRIES; attempt++) {
+    if (attempt > 0) {
+      await sleep(400 * attempt);
+    }
+    try {
+      return await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(WORKSPACE_SWITCH_FETCH_TIMEOUT_MS),
+      });
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Gateway unreachable");
+}
 
 export interface ActivatePaprWorkspaceInput {
   organizationId: string;
@@ -18,6 +65,10 @@ export interface ActivatePaprWorkspaceInput {
   organizationName?: string;
   namespaceName?: string;
   paprApiKey?: string;
+  /** Skip misplaced-target relocation (post-consent reload). */
+  skipLegacyMigration?: boolean;
+  /** Repair hardcoded paths after consent migration (gateway runs before watchers). */
+  runPostMigrationPathRepair?: boolean;
 }
 
 export interface ActivatePaprWorkspaceResult {
@@ -38,16 +89,6 @@ export async function activatePaprWorkspaceLocally(
 ): Promise<ActivatePaprWorkspaceResult> {
   try {
     const pointer = await ensureWorkspaceLayout(input);
-    const migrated = await migrateLegacyFlatPaprLayout({
-      organizationId: input.organizationId,
-      namespaceId: input.namespaceId,
-      targetPaprHome: pointer.paprHome,
-    });
-    if (migrated) {
-      console.log(
-        `[PaprWorkspace] Migrated legacy Papr data to ${pointer.paprHome}: ${migrated.movedPaths.join(", ")}`,
-      );
-    }
     applyActiveWorkspaceEnv(pointer);
     return { success: true, pointer };
   } catch (error) {
@@ -61,29 +102,41 @@ export async function activatePaprWorkspaceLocally(
 export async function notifyGatewayWorkspaceSwitch(
   input: ActivatePaprWorkspaceInput,
 ): Promise<ActivatePaprWorkspaceResult> {
-  const local = await activatePaprWorkspaceLocally(input);
-  if (!local.success || !local.pointer) {
-    return local;
+  let paprApiKey: string;
+  try {
+    paprApiKey = requirePaprApiKeyForWorkspaceSwitch(
+      input.paprApiKey,
+      input.organizationId,
+      input.namespaceId,
+    );
+  } catch (error) {
+    return {
+      success: false,
+      error:
+        error instanceof WorkspaceSwitchApiKeyError
+          ? error.message
+          : error instanceof Error
+            ? error.message
+            : "Invalid Papr API key for workspace switch",
+    };
   }
 
   const port = getGatewayPort();
+  const requestBody = {
+    organizationId: input.organizationId,
+    namespaceId: input.namespaceId,
+    organizationName: input.organizationName,
+    namespaceName: input.namespaceName,
+    paprApiKey,
+    skipLegacyMigration: input.skipLegacyMigration === true,
+    runPostMigrationPathRepair: input.runPostMigrationPathRepair === true,
+  };
   try {
-    const response = await fetch(`http://127.0.0.1:${port}/api/workspace/switch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        organizationId: input.organizationId,
-        namespaceId: input.namespaceId,
-        organizationName: input.organizationName,
-        namespaceName: input.namespaceName,
-        paprApiKey: input.paprApiKey,
-      }),
-    });
+    const response = await postWorkspaceSwitchRequest(port, requestBody);
     if (!response.ok) {
       const text = await response.text();
       return {
         success: false,
-        pointer: local.pointer,
         error: `Gateway workspace switch failed (${response.status}): ${text.slice(0, 200)}`,
       };
     }
@@ -91,25 +144,150 @@ export async function notifyGatewayWorkspaceSwitch(
       success?: boolean;
       pointer?: ActiveWorkspacePointer;
       error?: string;
+      status?: "switching" | "ready";
     };
     if (payload.success === false) {
       return {
         success: false,
-        pointer: local.pointer,
         error: payload.error ?? "Gateway workspace switch rejected",
       };
+    }
+    const local = await activatePaprWorkspaceLocally({
+      ...input,
+      paprApiKey,
+    });
+    if (!local.success || !local.pointer) {
+      return {
+        success: false,
+        error: local.error ?? "Local workspace activation failed after gateway switch",
+      };
+    }
+    if (payload.status === "switching") {
+      console.log(
+        "[PaprWorkspace] Gateway accepted workspace switch (background reinit in progress)",
+      );
     }
     return {
       success: true,
       pointer: payload.pointer ?? local.pointer,
     };
   } catch (error) {
-    // Gateway may still be starting — local pointer is written for next spawn.
+    const message =
+      error instanceof Error ? error.message : "Gateway unreachable";
+
+    if (restartGatewayAfterWorkspaceSwitch) {
+      console.warn(
+        "[PaprWorkspace] Gateway switch POST failed — restarting gateway and retrying:",
+        message,
+      );
+      try {
+        await restartGatewayAfterWorkspaceSwitch();
+        const retryResponse = await postWorkspaceSwitchRequest(port, requestBody);
+        if (!retryResponse.ok) {
+          const text = await retryResponse.text();
+          return {
+            success: false,
+            error: `Gateway workspace switch failed after restart (${retryResponse.status}): ${text.slice(0, 200)}`,
+          };
+        }
+        const payload = (await retryResponse.json()) as {
+          success?: boolean;
+          pointer?: ActiveWorkspacePointer;
+          error?: string;
+        };
+        if (payload.success === false) {
+          return {
+            success: false,
+            error: payload.error ?? "Gateway workspace switch rejected after restart",
+          };
+        }
+        const local = await activatePaprWorkspaceLocally({
+          ...input,
+          paprApiKey,
+        });
+        if (!local.success || !local.pointer) {
+          return {
+            success: false,
+            error:
+              local.error ??
+              "Local workspace activation failed after gateway switch",
+          };
+        }
+        return {
+          success: true,
+          pointer: payload.pointer ?? local.pointer,
+        };
+      } catch (restartError) {
+        const restartMessage =
+          restartError instanceof Error
+            ? restartError.message
+            : String(restartError);
+        console.warn(
+          "[PaprWorkspace] Gateway restart/retry after switch failed:",
+          restartMessage,
+        );
+        return {
+          success: false,
+          error: `Gateway workspace switch failed: ${message} (restart: ${restartMessage})`,
+        };
+      }
+    }
+
     console.warn(
-      "[PaprWorkspace] Gateway switch notification failed (local pointer saved):",
+      "[PaprWorkspace] Gateway switch notification failed (workspace unchanged):",
+      message,
+    );
+    return {
+      success: false,
+      error: `Gateway workspace switch failed: ${message}`,
+    };
+  }
+}
+
+/** Push an updated Papr API key to the gateway without a full workspace reload. */
+export async function notifyGatewayPaprApiKeyUpdate(
+  apiKey: string,
+): Promise<void> {
+  const pointer = readActiveWorkspacePointer();
+  if (
+    pointer &&
+    !paprApiKeyMatchesNamespaceBound(
+      apiKey,
+      pointer.organizationId,
+      pointer.namespaceId,
+    )
+  ) {
+    const scope = parsePaprApiKeyScope(apiKey.trim());
+    console.warn(
+      scope
+        ? `[PaprWorkspace] Skipping gateway Papr API key update — key namespace ${scope.namespaceId} != active ${pointer.namespaceId}`
+        : "[PaprWorkspace] Skipping gateway Papr API key update — rejected by namespace binding",
+    );
+    return;
+  }
+
+  const port = getGatewayPort();
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${port}/api/workspace/papr-api-key`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ paprApiKey: apiKey }),
+        signal: AbortSignal.timeout(PAPR_API_KEY_POST_TIMEOUT_MS),
+      },
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      console.warn(
+        `[PaprWorkspace] Gateway Papr API key update failed (${response.status}): ${text.slice(0, 120)}`,
+      );
+    }
+  } catch (error) {
+    console.warn(
+      "[PaprWorkspace] Gateway Papr API key update failed:",
       error instanceof Error ? error.message : error,
     );
-    return { success: true, pointer: local.pointer };
   }
 }
 
@@ -124,4 +302,18 @@ export function readGatewayWorkspaceEnv(): Record<string, string> {
     PAPR_ORG_ID: pointer.organizationId,
     PAPR_NAMESPACE_ID: pointer.namespaceId,
   };
+}
+
+export function registerPaprWorkspaceHandlers(): void {
+  ipcMain.handle("papr:get-active-workspace", async () => {
+    try {
+      const pointer = readActiveWorkspacePointer();
+      return { success: true, pointer: pointer ?? undefined };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : "Failed to read workspace",
+      };
+    }
+  });
 }

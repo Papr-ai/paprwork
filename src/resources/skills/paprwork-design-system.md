@@ -25,6 +25,27 @@ Blends:
 - Measure success with 1-2 metrics.
 - **No emojis** in UI text, labels, buttons, headings, or tab icons — use SVG icons and plain text only (`validate_app` enforces `no-emojis`).
 
+
+## Design Directive (read first, apply to every screen)
+
+Less is more. Minimalist, modern, simple. Focus on ONE job-to-be-done. Steve Jobs meets Elon Musk: taste plus first-principles — delete every element that does not serve the job, then simplify what remains. Use cognitive-neuroscience UX research to make the app instantly intuitive in **empty and filled states**, **dark and light mode**, **small and large screens**.
+
+| Research principle | Rule |
+|---|---|
+| Hick's law (choices add decision time) | One screen = one job, one primary action |
+| Fitts's law + visual salience | Primary action findable in <2s: largest, highest contrast, in the F/Z scan path |
+| Working memory ~4 chunks (Cowan) | Max 3 sections per screen; group; progressive disclosure |
+| Recognition over recall | Visible labels + icons, no hidden gestures, no jargon |
+| Pre-attentive processing | One accent color, size, position to point at what matters — never decoration |
+| Doherty threshold (<400ms) | Feedback within 100ms of every action; skeletons, not full-page spinners |
+
+**Design the 4-state matrix before writing code:**
+- **Empty** = onboarding. One sentence of value, one CTA to first success, optional sample data. Never a blank table.
+- **Filled** = scannable. Key number first, sensible default sort, details on demand.
+- **Dark + light** = both via `prefers-color-scheme` and Liquid Glass tokens; WCAG AA on glass in both.
+- **390px + 1440px** = mobile-first single column, 44px targets, content max-width on wide screens, zero horizontal overflow.
+- Motion 150-250ms, transform/opacity only, honor `prefers-reduced-motion`.
+
 ---
 
 ## Layer 1: Visual Foundations
@@ -353,14 +374,14 @@ Mini-apps that read or write data through `/api/db/query`, `/api/db/write`, or `
 
 **Before writing any persistence code:**
 
-1. **Create or choose a database**
-   - Job-owned scratch: `create_job` with `appIds` (auto-links job `data.db` to the app)
-   - Shared / standalone: `create_database` then `attach_database` or `link_app_data_source({ appId, dbId })`
-2. **Set primary** — first link becomes primary; use `setPrimary: true` when attaching a registry DB
+1. **Create and attach a database**
+   - `create_database({ name: "..." })` → `attach_database({ appId, dbId, alias: "billing" })`
+   - Jobs that fill the DB: `create_job({ writeDbIds: [dbId], ... })`
+2. **Name the DB in app code** — pass `sourceId: alias` on every `/api/db/query` (SELECT) and `/api/db/write` (INSERT/UPDATE/DELETE)
 3. **Use the right env in jobs**
-   - `APP_DB` / `$APP_DB` — mini-app tables (what users see; same file as primary linked source)
-   - `JOB_DB` / `$JOB_DB` — job scratch only (`job_runs`, temp ETL). When job DB is primary, **same file** as `$APP_DB`, different role.
-4. **Then build UI** — query via `/api/db/*` or the mini-app SDK; never hardcode absolute `dbPath` in browser code
+   - `PAPR_DB_{ALIAS}` — registry DB paths from `writeDbIds`
+   - `$JOB_DB` — job scratch only (`job_runs`, temp ETL), never auto-linked to apps
+4. **Then build UI** — query via `/api/db/*`; never hardcode absolute `dbPath` in browser code
 
 **Anti-pattern:** Building tables/views in the mini-app before `data-sources.json` exists → runtime 404 / "no database linked".
 
@@ -374,6 +395,8 @@ Mini-apps that read or write data through `/api/db/query`, `/api/db/write`, or `
 - [ ] Tap targets >= 44px
 - [ ] Primary action obvious within 2 seconds
 - [ ] Loading/empty/error states exist
+- [ ] Empty state has one value sentence + one CTA to first success
+- [ ] Checked at 390px and 1440px in both dark and light
 - [ ] One concept per card
 - [ ] Keyboard navigation works
 - [ ] Contrast ratios meet WCAG AA

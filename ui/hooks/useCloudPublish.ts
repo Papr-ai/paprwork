@@ -12,22 +12,38 @@ import {
 } from "../utils/cloudShareLink";
 import {
   audienceModelToPublishPrefs,
-  sharingToAudienceModel,
+  peopleAudienceUsesExternalGate,
+  publishPrefsToAudienceModel,
   type CodeAccess,
   type ShareAudienceModel,
 } from "../utils/shareAudienceModel";
 import {
+  audienceModelNeedsInitialCodeUpload,
+  isCloudAppLive,
+  sharingChangeIsAclOnly,
+} from "../utils/cloudPublishRouting";
+import {
+  CloudPublishBlockedError,
   fetchCloudPublishState,
   patchCloudPublishPrefs,
   publishCloudApp,
   unpublishCloudApp,
+  type CloudPublishPrefs,
   type CloudPublishState,
 } from "../utils/cloudPublishApi";
+import type { CloudUploadModePref } from "../utils/appUploadMode";
+import { uploadModeFromToggle } from "../utils/appUploadMode";
 import type { CloudCompatibilityReport } from "../../src/core/types/cloudAppCompatibility";
 import {
   readCachedCloudPublishState,
   writeCachedCloudPublishState,
 } from "../utils/cloudPublishCache";
+import {
+  buildDesktopCloudPreviewUrl,
+  isDesktopElectron,
+} from "../utils/cloudDesktopPreview";
+import { copyTextToClipboard } from "../utils/copyToClipboard";
+import { handleCloudPublishError } from "../utils/cloudPublishError";
 
 export interface CloudPublishViewModel {
   loading: boolean;
@@ -35,6 +51,7 @@ export interface CloudPublishViewModel {
   refreshing: boolean;
   busy: boolean;
   error: string | null;
+  errorDetail: string | null;
   toast: string | null;
   enabled: boolean;
   live: boolean;
@@ -44,12 +61,16 @@ export interface CloudPublishViewModel {
   shareUrl: string | null;
   loginUrl: string | null;
   externalLinkUrl: string | null;
-  /** Best URL to load the live cloud app (iframe or browser). */
+  /** Public apps.papr.ai URL (for display, copy, open in browser). */
+  publishedWebUrl: string | null;
+  /** Iframe src for Web preview (gateway proxy on desktop, direct URL elsewhere). */
   publishedPreviewUrl: string | null;
   slug: string | null;
   statusLabel: string;
   appsHost: string;
   compatibility: CloudCompatibilityReport | null;
+  uploadMode: CloudUploadModePref;
+  autoUploadSaving: boolean;
 }
 
 function resolveSharing(state: CloudPublishState | null): {
@@ -78,6 +99,7 @@ function buildViewModel(
   refreshing: boolean,
   busy: boolean,
   error: string | null,
+  errorDetail: string | null,
   toast: string | null,
 ): CloudPublishViewModel {
   const sharing = resolveSharing(state);
@@ -113,11 +135,18 @@ function buildViewModel(
   const codeLabel = sharing.codeAccess === "install" ? "Code install" : null;
   const statusParts = [loginLabel, linkLabel, codeLabel].filter(Boolean);
 
+  const publishedWebUrl =
+    baseUrl && state?.enabled === true
+      ? (externalLinkUrl ?? loginUrl ?? shareLink ?? baseUrl)
+      : null;
+
   const publishedPreviewUrl = (() => {
-    if (!baseUrl || state?.enabled !== true) return null;
-    // When an invite link is enabled, always preview with the full ?t= URL.
-    if (externalLinkUrl) return externalLinkUrl;
-    return loginUrl ?? shareLink ?? baseUrl;
+    if (!publishedWebUrl) return null;
+    if (isDesktopElectron()) {
+      const proxied = buildDesktopCloudPreviewUrl(publishedWebUrl);
+      if (proxied) return proxied;
+    }
+    return publishedWebUrl;
   })();
 
   return {
@@ -125,6 +154,7 @@ function buildViewModel(
     refreshing,
     busy,
     error,
+    errorDetail,
     toast,
     enabled: state?.enabled === true,
     live: state?.enabled === true && !!state.shareUrl,
@@ -134,12 +164,48 @@ function buildViewModel(
     shareUrl: baseUrl,
     loginUrl,
     externalLinkUrl,
+    publishedWebUrl,
     publishedPreviewUrl,
     slug: state?.slug ?? null,
     statusLabel:
       statusParts.length > 0 ? statusParts.join(" · ") : "Not shared",
     appsHost: "apps.papr.ai",
     compatibility: state?.compatibility ?? null,
+    uploadMode: (state?.prefs?.uploadMode ?? "inherit") as CloudUploadModePref,
+    autoUploadSaving: false,
+  };
+}
+
+function publishStateMatchesApp(
+  targetAppId: string,
+  state: CloudPublishState | null,
+): boolean {
+  if (!state) {
+    return true;
+  }
+  return !state.appId || state.appId === targetAppId;
+}
+
+function mergePatchIntoPublishState(
+  prev: CloudPublishState | null,
+  prefs: CloudPublishPrefs,
+  config: CloudPublishState | null,
+): CloudPublishState | null {
+  if (config) {
+    return {
+      ...config,
+      prefs: { ...config.prefs, ...prefs },
+    };
+  }
+  if (!prev) {
+    return null;
+  }
+  return {
+    ...prev,
+    prefs: { ...prev.prefs, ...prefs },
+    ...(prefs.loginAccess !== undefined ? { loginAccess: prefs.loginAccess } : {}),
+    ...(prefs.externalLink !== undefined ? { externalLink: prefs.externalLink } : {}),
+    ...(prefs.codeAccess !== undefined ? { codeAccess: prefs.codeAccess } : {}),
   };
 }
 
@@ -149,38 +215,98 @@ export function useCloudPublish(appId: string, appTitle?: string) {
   const [loading, setLoading] = useState(cachedOnMount === null);
   const [refreshing, setRefreshing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [autoUploadSaving, setAutoUploadSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorDetail, setErrorDetail] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const hasDisplayedStateRef = useRef(cachedOnMount !== null);
+  const appIdRef = useRef(appId);
+  const fetchGenerationRef = useRef(0);
 
-  const applyPublishState = useCallback((next: CloudPublishState | null) => {
-    setState(next);
-    hasDisplayedStateRef.current = next !== null;
-    writeCachedCloudPublishState(appId, next);
-  }, [appId]);
+  appIdRef.current = appId;
+
+  const applyPublishState = useCallback(
+    (targetAppId: string, next: CloudPublishState | null) => {
+      if (targetAppId !== appIdRef.current) {
+        return;
+      }
+      if (!publishStateMatchesApp(targetAppId, next)) {
+        return;
+      }
+      setState(next);
+      hasDisplayedStateRef.current = next !== null;
+      writeCachedCloudPublishState(targetAppId, next);
+    },
+    [],
+  );
+
+  const applyPublishError = useCallback((err: unknown) => {
+    const handled = handleCloudPublishError(err);
+    setErrorDetail(handled.detailMessage);
+    setError(handled.barMessage);
+  }, []);
+
+  const clearPublishError = useCallback(() => {
+    setError(null);
+    setErrorDetail(null);
+  }, []);
+
+  const setSimpleError = useCallback((message: string) => {
+    setError(message);
+    setErrorDetail(message);
+  }, []);
 
   const refresh = useCallback(async () => {
+    const targetAppId = appIdRef.current;
+    const generation = ++fetchGenerationRef.current;
+
     try {
-      setError(null);
+      clearPublishError();
       if (hasDisplayedStateRef.current) {
         setRefreshing(true);
       } else {
         setLoading(true);
       }
 
-      const next = await fetchCloudPublishState(appId);
-      applyPublishState(next);
+      const next = await fetchCloudPublishState(targetAppId);
+      if (
+        generation !== fetchGenerationRef.current ||
+        targetAppId !== appIdRef.current
+      ) {
+        return;
+      }
+      if (!publishStateMatchesApp(targetAppId, next)) {
+        return;
+      }
+      applyPublishState(targetAppId, next);
     } catch (err) {
-      setError((err as Error).message.slice(0, 160));
+      if (
+        generation !== fetchGenerationRef.current ||
+        targetAppId !== appIdRef.current
+      ) {
+        return;
+      }
+      applyPublishError(err);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (
+        generation === fetchGenerationRef.current &&
+        targetAppId === appIdRef.current
+      ) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [appId, applyPublishState]);
+  }, [applyPublishError, applyPublishState, clearPublishError]);
 
   useEffect(() => {
+    fetchGenerationRef.current += 1;
+
+    setBusy(false);
+    clearPublishError();
+    setToast(null);
+
     const cached = readCachedCloudPublishState(appId);
-    if (cached) {
+    if (cached && publishStateMatchesApp(appId, cached)) {
       setState(cached);
       hasDisplayedStateRef.current = true;
       setLoading(false);
@@ -204,89 +330,156 @@ export function useCloudPublish(appId: string, appTitle?: string) {
       options?: { acknowledgeDesktopOnly?: boolean },
     ) => {
       setBusy(true);
-      setError(null);
+      clearPublishError();
       try {
         const { sharing, codeAccess } = audienceModelToPublishPrefs(model);
-        const needsCloudPublish =
-          model.permission !== "edit" || model.audience !== "private";
+        const requireSignIn =
+          model.audience === "public"
+            ? model.requireSignIn === true
+            : model.audience === "link"
+              ? model.requireSignIn !== false
+              : model.audience === "people" &&
+                  peopleAudienceUsesExternalGate(model)
+                ? true
+                : undefined;
 
-        if (needsCloudPublish) {
-          const result = await publishCloudApp(appId, {
+        const peopleAllowlist =
+          model.audience === "people"
+            ? {
+                allowedUserIds: model.allowedUserIds ?? [],
+                allowedEmails: model.allowedEmails ?? [],
+                allowedEmailDomains: model.allowedEmailDomains ?? [],
+              }
+            : {
+                allowedUserIds: [],
+                allowedEmails: [],
+                allowedEmailDomains: [],
+              };
+
+        const targetAppId = appIdRef.current;
+        const live = isCloudAppLive(state);
+
+        if (sharingChangeIsAclOnly(live)) {
+          const { prefs, config } = await patchCloudPublishPrefs(targetAppId, {
             ...sharing,
             codeAccess,
+            requireSignIn,
+            perUserIsolation: model.perUserIsolation,
+            ...peopleAllowlist,
+          });
+          if (targetAppId !== appIdRef.current) {
+            return;
+          }
+          const next = mergePatchIntoPublishState(state, prefs, config);
+          if (next) {
+            applyPublishState(targetAppId, next);
+          }
+        } else if (audienceModelNeedsInitialCodeUpload(model, live)) {
+          const result = await publishCloudApp(targetAppId, {
+            ...sharing,
+            codeAccess,
+            requireSignIn,
+            perUserIsolation: model.perUserIsolation,
+            ...peopleAllowlist,
             acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
           });
-          applyPublishState(result);
+          applyPublishState(targetAppId, result);
         } else {
-          const prefs = await patchCloudPublishPrefs(appId, { codeAccess: "off" });
-          setState((prev) => {
-            if (!prev) return prev;
-            const next = {
-              ...prev,
-              prefs: { ...prev.prefs, ...prefs, codeAccess: "off" },
-            };
-            writeCachedCloudPublishState(appId, next);
-            return next;
+          const { prefs, config } = await patchCloudPublishPrefs(targetAppId, {
+            ...sharing,
+            codeAccess,
+            requireSignIn,
+            perUserIsolation: model.perUserIsolation,
+            ...peopleAllowlist,
           });
+          if (targetAppId !== appIdRef.current) {
+            return;
+          }
+          const next = mergePatchIntoPublishState(state, prefs, config);
+          if (next) {
+            applyPublishState(targetAppId, next);
+          }
         }
         setToast(`${appTitle ?? "App"} sharing updated`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
-        setError((err as Error).message.slice(0, 160));
+        if (err instanceof CloudPublishBlockedError) {
+          clearPublishError();
+          throw err;
+        }
+        applyPublishError(err);
       } finally {
         setBusy(false);
       }
     },
-    [appId, appTitle, applyPublishState],
+    [appTitle, applyPublishError, applyPublishState, clearPublishError, state],
   );
 
   const publish = useCallback(
     async (options?: { acknowledgeDesktopOnly?: boolean }) => {
       setBusy(true);
-      setError(null);
+      clearPublishError();
       try {
+        const targetAppId = appIdRef.current;
         const sharing = resolveSharing(state);
-        const result = await publishCloudApp(appId, {
+        const allowedUserIds = state?.prefs?.allowedUserIds;
+        const result = await publishCloudApp(targetAppId, {
           ...sharing,
+          // Keep a "specific people" allowlist on re-publish; dropping it here
+          // widened the app to the whole workspace (or left it private).
+          ...(allowedUserIds?.length ? { allowedUserIds } : {}),
           acknowledgeDesktopOnly: options?.acknowledgeDesktopOnly,
         });
-        applyPublishState(result);
+        applyPublishState(targetAppId, result);
         setToast(`${appTitle ?? "App"} published to ${result.shareUrl ?? "cloud"}`);
         window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
       } catch (err) {
-        setError((err as Error).message.slice(0, 160));
+        if (err instanceof CloudPublishBlockedError) {
+          clearPublishError();
+          throw err;
+        }
+        applyPublishError(err);
         throw err;
       } finally {
         setBusy(false);
       }
     },
-    [appId, appTitle, state, applyPublishState],
+    [appTitle, applyPublishError, applyPublishState, clearPublishError, state],
   );
 
   const unpublish = useCallback(async () => {
     setBusy(true);
-    setError(null);
+    clearPublishError();
     try {
-      await unpublishCloudApp(appId);
-      applyPublishState(null);
+      const targetAppId = appIdRef.current;
+      await unpublishCloudApp(targetAppId);
+      applyPublishState(targetAppId, null);
       setToast(`${appTitle ?? "App"} unpublished`);
       window.dispatchEvent(new CustomEvent("papr-community-catalog-refresh"));
     } catch (err) {
-      setError((err as Error).message.slice(0, 160));
+      applyPublishError(err);
     } finally {
       setBusy(false);
     }
-  }, [appId, appTitle, applyPublishState]);
+  }, [appTitle, applyPublishError, applyPublishState, clearPublishError]);
 
   const copyLink = useCallback(async (link: string | null) => {
     if (!link) return;
-    try {
-      await navigator.clipboard.writeText(link);
+    const copied = await copyTextToClipboard(link);
+    if (copied) {
       setToast("Link copied");
-    } catch {
-      setError("Could not copy link");
+    } else {
+      setSimpleError("Could not copy link — select the URL and press ⌘C");
     }
+  }, [setSimpleError]);
+
+  const notifyLinkCopied = useCallback(() => {
+    setToast("Link copied");
   }, []);
+
+  const notifyLinkCopyFailed = useCallback(() => {
+    setSimpleError("Could not copy link — select the URL and press ⌘C");
+  }, [setSimpleError]);
 
   const openInBrowser = useCallback(async (link: string | null) => {
     if (!link) return;
@@ -297,11 +490,53 @@ export function useCloudPublish(appId: string, appTitle?: string) {
         window.open(link, "_blank", "noopener,noreferrer");
       }
     } catch {
-      setError("Could not open link");
+      setSimpleError("Could not open link");
     }
-  }, []);
+  }, [setSimpleError]);
 
-  const viewModel = buildViewModel(state, loading, refreshing, busy, error, toast);
+  const setAutoUploadEnabled = useCallback(async (enabled: boolean) => {
+    setAutoUploadSaving(true);
+    clearPublishError();
+    try {
+      const targetAppId = appIdRef.current;
+      const uploadMode = uploadModeFromToggle(enabled);
+      const { prefs } = await patchCloudPublishPrefs(targetAppId, { uploadMode });
+      if (targetAppId !== appIdRef.current) {
+        return;
+      }
+      setState((prev) => {
+        if (!prev || !publishStateMatchesApp(targetAppId, prev)) {
+          return prev;
+        }
+        const next: CloudPublishState = {
+          ...prev,
+          prefs: { ...prev.prefs, ...prefs } as CloudPublishPrefs,
+        };
+        writeCachedCloudPublishState(targetAppId, next);
+        return next;
+      });
+      setToast(
+        enabled
+          ? "This app will upload changes automatically"
+          : "You'll publish this app manually with Publish changes",
+      );
+    } catch (err) {
+      applyPublishError(err);
+    } finally {
+      setAutoUploadSaving(false);
+    }
+  }, [applyPublishError, clearPublishError]);
+
+  const viewModel = buildViewModel(
+    state,
+    loading,
+    refreshing,
+    busy,
+    error,
+    errorDetail,
+    toast,
+  );
+  viewModel.autoUploadSaving = autoUploadSaving;
 
   return {
     ...viewModel,
@@ -310,11 +545,32 @@ export function useCloudPublish(appId: string, appTitle?: string) {
     publish,
     unpublish,
     copyLink,
+    notifyLinkCopied,
+    notifyLinkCopyFailed,
     openInBrowser,
-    shareModel: sharingToAudienceModel(
+    setAutoUploadEnabled,
+    clearError: clearPublishError,
+    reportError: setSimpleError,
+    shareModel: publishPrefsToAudienceModel(
       viewModel.loginAccess,
       viewModel.externalLink,
       viewModel.codeAccess,
+      {
+        requireSignIn: state?.prefs?.requireSignIn,
+        perUserIsolation: state?.prefs?.perUserIsolation,
+        allowedUserIds: state?.prefs?.allowedUserIds,
+        allowedEmails: state?.prefs?.allowedEmails,
+        allowedEmailDomains: state?.prefs?.allowedEmailDomains,
+      },
     ),
+    sharePrefs: {
+      requireSignIn: state?.prefs?.requireSignIn,
+      perUserIsolation: state?.prefs?.perUserIsolation,
+      // Without this the saved allowlist never reaches the Share sheet, so a
+      // "specific people" app reads back as plain "anyone in my workspace".
+      allowedUserIds: state?.prefs?.allowedUserIds,
+      allowedEmails: state?.prefs?.allowedEmails,
+      allowedEmailDomains: state?.prefs?.allowedEmailDomains,
+    },
   };
 }

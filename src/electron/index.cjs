@@ -5,18 +5,68 @@
  * CommonJS format - Electron's require() is more reliable than ESM
  */
 
-// Load environment variables from .env.local FIRST (before any other imports)
+// Load environment FIRST (before any other imports). `.env.local` is read
+// before `.env` because dotenv never overwrites an already-set variable, so
+// the first file to define a key wins. Omitting `.env` left dev builds without
+// keys that only live there (PAPR_TURSO_REPLICA_SYNC), which silently ran the
+// legacy sync engine against already-cutover replica databases.
 require("dotenv").config({ path: require("path").join(__dirname, "../../.env.local") });
+require("dotenv").config({ path: require("path").join(__dirname, "../../.env") });
 
-const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme } = require("electron");
+const { app, BrowserWindow, Menu, shell, dialog, ipcMain, powerMonitor, nativeTheme, session } = require("electron");
 const { spawn, execSync } = require("child_process");
 const path = require("path");
 const http = require("http");
 const { autoUpdater } = require("electron-updater");
+const {
+  registerGeolocationPermissionHandlers,
+} = require("./geolocationPermission.cjs");
+const { registerCloudPreviewSessionIPC } = require("./ipc/cloudPreviewSession.cjs");
+const {
+  registerPlatformBrowserIPC,
+  handlePlatformBrowserRequest,
+  isRequestPlatformBrowserMessage,
+} = require("./ipc/platformBrowser.cjs");
 
 // Set app name for macOS Keychain (must be before any safeStorage usage)
 // This determines the keychain entry name: "Papr Work Safe Storage"
 app.setName("Papr Work");
+
+// Real Chrome owns port 9222 for platform jobs + agent automation.
+// Enable embedded Electron CDP only when explicitly requested (PAPR_PLATFORM_EMBEDDED_CDP=1).
+if (process.env.PAPR_PLATFORM_EMBEDDED_CDP === "1") {
+  const platformCdpPort = process.env.PAPR_PLATFORM_CDP_PORT || "9222";
+  app.commandLine.appendSwitch("remote-debugging-port", platformCdpPort);
+  console.log(
+    `[Electron] Embedded platform CDP enabled at http://127.0.0.1:${platformCdpPort}`,
+  );
+}
+
+// Mini-app process isolation (docs/MINI_APP_PROCESS_ISOLATION.md).
+//
+// A website can only *ask* for an origin-keyed process via the
+// Origin-Agent-Cluster header — Chromium is free to decline. We ship the
+// browser, so we can turn the hint into a guarantee. Without this an app's
+// JavaScript runs on the chat UI's main thread and one busy app freezes the
+// whole window.
+//
+// host-resolver-rules is not optional cosmetics: Chromium resolves
+// *.localhost to loopback itself, but Windows' OS resolver historically does
+// not, so mapping it here keeps behaviour identical across platforms instead
+// of depending on whichever resolver answers first.
+if (process.env.PAPR_MINI_APP_ISOLATION === "1") {
+  app.commandLine.appendSwitch(
+    "enable-features",
+    "OriginKeyedProcessesByDefault",
+  );
+  app.commandLine.appendSwitch(
+    "host-resolver-rules",
+    "MAP *.localhost 127.0.0.1",
+  );
+  console.log(
+    "[Electron] Mini-app process isolation enabled (per-app *.localhost origins)",
+  );
+}
 
 // Import ESM modules dynamically
 let CustomKeysStorage;
@@ -31,15 +81,23 @@ let requestPermissionFromGateway;
 let initializeOllamaIPC;
 let cleanupOllama;
 let initializeTelemetryIPC;
+let initializeReplicaE2eTestsIPC;
 let initializeChatAttachmentsIPC;
 let TelemetryClientClass;
 let isTelemetrySendingEnabledFn;
 let telemetryClientInstance = null;
 let initializePaprLoginIPC;
+let ensureActiveNamespaceApiKey;
+let ensureActiveWorkspaceReconciled;
+let resolveActivePaprApiKey;
+let setGatewayRestartAfterWorkspaceSwitch;
 let cleanupPaprLogin;
 let handlePaprAuthCallback;
+let trackPaprLoginDeepLinkQueued;
+let trackPaprLoginDeepLinkFlushStarted;
 let syncProfileToGatewaySettings;
 let migrateOrgVaultIsolation;
+let migrateIntegrationKeysToSharedDefault;
 
 
 /**
@@ -97,6 +155,8 @@ async function loadESMModules() {
   KeyPermissionsStorage = storageModule.KeyPermissionsStorage;
   SettingsStorage = storageModule.SettingsStorage;
   migrateOrgVaultIsolation = storageModule.migrateOrgVaultIsolation;
+  migrateIntegrationKeysToSharedDefault =
+    storageModule.migrateIntegrationKeysToSharedDefault;
 
   const customKeysIpcModule =
     await importWithRetry("../../dist/electron/electron/ipc/customKeys.js");
@@ -119,9 +179,19 @@ async function loadESMModules() {
   const paprLoginIpcModule =
     await importWithRetry("../../dist/electron/electron/ipc/paprLogin.js");
   initializePaprLoginIPC = paprLoginIpcModule.initializePaprLoginIPC;
+  ensureActiveNamespaceApiKey = paprLoginIpcModule.ensureActiveNamespaceApiKey;
+  ensureActiveWorkspaceReconciled = paprLoginIpcModule.ensureActiveWorkspaceReconciled;
+  resolveActivePaprApiKey = paprLoginIpcModule.resolveActivePaprApiKey;
   cleanupPaprLogin = paprLoginIpcModule.cleanupPaprLogin;
   handlePaprAuthCallback = paprLoginIpcModule.handlePaprAuthCallback;
+  trackPaprLoginDeepLinkQueued = paprLoginIpcModule.trackPaprLoginDeepLinkQueued;
+  trackPaprLoginDeepLinkFlushStarted = paprLoginIpcModule.trackPaprLoginDeepLinkFlushStarted;
   syncProfileToGatewaySettings = paprLoginIpcModule.syncProfileToGatewaySettings;
+
+  const paprWorkspaceIpcModule =
+    await importWithRetry("../../dist/electron/electron/ipc/paprWorkspace.js");
+  setGatewayRestartAfterWorkspaceSwitch =
+    paprWorkspaceIpcModule.setGatewayRestartAfterWorkspaceSwitch;
 
   // Import Ollama IPC module
   const ollamaIpcModule =
@@ -139,6 +209,11 @@ async function loadESMModules() {
   );
   initializeTelemetryIPC = telemetryIpcModule.initializeTelemetryIPC;
 
+  const replicaE2eIpcModule = await importWithRetry(
+    "../../dist/electron/electron/ipc/replicaE2eTests.js"
+  );
+  initializeReplicaE2eTestsIPC = replicaE2eIpcModule.initializeReplicaE2eTestsIPC;
+
   const chatAttachmentsIpcModule = await importWithRetry(
     "../../dist/electron/electron/ipc/chatAttachments.js"
   );
@@ -149,6 +224,7 @@ async function loadESMModules() {
   );
   TelemetryClientClass = telemetryClientModule.TelemetryClient;
   isTelemetrySendingEnabledFn = telemetryClientModule.isTelemetrySendingEnabled;
+  console.log("[Electron] Startup: ESM modules loaded");
 }
 
 // Configuration
@@ -157,6 +233,8 @@ const GATEWAY_PORT = parseInt(process.env.GATEWAY_PORT || "18789", 10);
 const IS_PRODUCTION = process.env.NODE_ENV === "production" || require("path").dirname(__dirname).includes("app.asar");
 
 let mainWindow = null;
+/** False until Papr/custom-keys IPC is registered in whenReady (macOS activate can fire earlier). */
+let electronStartupReady = false;
 let isQuitting = false;
 let isInstallingUpdate = false;
 let gatewayProcess = null;
@@ -189,6 +267,23 @@ function registerWebviewNetworkDispatch(session) {
   });
 }
 
+function wrapWebviewUserScript(script) {
+  const trimmed = typeof script === "string" ? script.trim() : "";
+  return `(function() {
+    try {
+      var __paprResult = (function() {
+        ${trimmed}
+      })();
+      return { __paprExecOk: true, value: __paprResult };
+    } catch (e) {
+      return {
+        __paprExecOk: false,
+        error: (e && e.message) ? e.message : String(e),
+      };
+    }
+  })()`;
+}
+
 // executeJavaScript can hang indefinitely when the renderer is busy or
 // frozen — which made snapshot/execute tools time out with no diagnosis.
 // Bound every call and surface a labeled "renderer unresponsive" error.
@@ -208,6 +303,80 @@ function execJsWithTimeout(win, script, timeoutMs = 8000, label = "script") {
       ),
     ),
   ]);
+}
+
+async function captureWebviewScreenshot(win, maxWidth = 640) {
+  const image = await win.webContents.capturePage();
+  const size = image.getSize();
+  if (size.width <= 0 || size.height <= 0) {
+    return null;
+  }
+  const scale = size.width > maxWidth ? maxWidth / size.width : 1;
+  const resized =
+    scale < 1
+      ? image.resize({
+          width: Math.round(size.width * scale),
+          height: Math.round(size.height * scale),
+        })
+      : image;
+  return `data:image/png;base64,${resized.toPNG().toString("base64")}`;
+}
+
+function resolveWebviewSessionId(webviewId) {
+  const id =
+    typeof webviewId === "string" && webviewId.length > 0
+      ? webviewId
+      : defaultWebviewId;
+  if (!id || !webviewSessions.has(id)) {
+    return null;
+  }
+  const entry = webviewSessions.get(id);
+  const win = entry?.window;
+  if (!win || win.isDestroyed()) {
+    return null;
+  }
+  return { id, win };
+}
+
+function showWebviewSession(webviewId) {
+  const resolved = resolveWebviewSessionId(webviewId);
+  if (!resolved) {
+    return { success: false, error: "no_active_session" };
+  }
+  const { id, win } = resolved;
+  if (!win.isVisible()) {
+    win.show();
+  }
+  if (win.isMinimized()) {
+    win.restore();
+  }
+  win.focus();
+  return {
+    success: true,
+    webviewId: id,
+    url: win.webContents.getURL(),
+    title: win.webContents.getTitle(),
+  };
+}
+
+function isWebviewSessionActive(webviewId) {
+  return resolveWebviewSessionId(webviewId) !== null;
+}
+
+async function captureWebviewThumbnail(webviewId) {
+  const resolved = resolveWebviewSessionId(webviewId);
+  if (!resolved) {
+    return { success: false, error: "no_active_session" };
+  }
+  try {
+    const screenshot = await captureWebviewScreenshot(resolved.win);
+    if (!screenshot) {
+      return { success: false, error: "capture_failed" };
+    }
+    return { success: true, screenshot, webviewId: resolved.id };
+  } catch {
+    return { success: false, error: "capture_failed" };
+  }
 }
 
 function isRequestKeysMessage(message) {
@@ -255,6 +424,8 @@ async function handleWebviewTestRequest(request) {
           url: entry.window.webContents.getURL(),
           title: entry.window.webContents.getTitle(),
           createdAt: entry.createdAt,
+          appId: entry.appId,
+          previewTarget: entry.previewTarget,
         })),
         defaultWebviewId,
       },
@@ -282,8 +453,13 @@ async function handleWebviewTestRequest(request) {
     const id = `webview-${Date.now()}-${++webviewCounter}`;
     const width = Number(payload.width) || 1280;
     const height = Number(payload.height) || 720;
-    const visible = Boolean(payload.visible);
-    const url = `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
+    const visible = false;
+    const previewTarget =
+      payload.previewTarget === "published" ? "published" : "local";
+    const url =
+      typeof payload.url === "string" && payload.url.length > 0
+        ? payload.url
+        : `http://${gatewayHost}:${gatewayPort}/apps/${appId}/index.html`;
 
     const win = new BrowserWindow({
       width,
@@ -314,6 +490,12 @@ async function handleWebviewTestRequest(request) {
       consoleLogs: [],
       networkLogs: [],
       createdAt: new Date().toISOString(),
+      appId,
+      previewTarget,
+      publishedWebUrl:
+        typeof payload.publishedWebUrl === "string"
+          ? payload.publishedWebUrl
+          : undefined,
     };
     webviewSessions.set(id, entry);
     if (!defaultWebviewId) {
@@ -378,14 +560,27 @@ async function handleWebviewTestRequest(request) {
         loadError = err && err.message ? err.message : String(err);
       }
     }
+    let screenshot = null;
+    if (loadStatus === "loaded") {
+      try {
+        screenshot = await captureWebviewScreenshot(win);
+      } catch {
+        screenshot = null;
+      }
+    }
     return {
       success: true,
       data: {
         webviewId: id,
         url,
+        previewTarget,
+        ...(previewTarget === "published" && entry.publishedWebUrl
+          ? { publishedWebUrl: entry.publishedWebUrl }
+          : {}),
         title: win.webContents.getTitle(),
         status: loadStatus,
         ...(loadError ? { loadError } : {}),
+        ...(screenshot ? { screenshot } : {}),
         ...(loadStatus !== "loaded"
           ? {
               hint:
@@ -410,6 +605,7 @@ async function handleWebviewTestRequest(request) {
   if (action === "snapshot") {
     const maxHtmlChars = Number(payload.maxHtmlChars) || 80000;
     const maxTextChars = Number(payload.maxTextChars) || 12000;
+    const includeScreenshot = Boolean(payload.includeScreenshot);
     const html = await execJsWithTimeout(
       win,
       "document.documentElement.outerHTML",
@@ -461,6 +657,14 @@ async function handleWebviewTestRequest(request) {
         userWouldSeeBlankUi: brokenHidden.length > 0 || (overlays.length > 0 && main && !main.innerText.trim()),
       };
     })()`, 8000, "snapshot(visualState)");
+    let screenshot = null;
+    if (includeScreenshot) {
+      try {
+        screenshot = await captureWebviewScreenshot(win);
+      } catch {
+        screenshot = null;
+      }
+    }
     return {
       success: true,
       data: {
@@ -470,6 +674,7 @@ async function handleWebviewTestRequest(request) {
         html: typeof html === "string" ? html.slice(0, maxHtmlChars) : "",
         text: typeof text === "string" ? text.slice(0, maxTextChars) : "",
         visualState,
+        ...(screenshot ? { screenshot } : {}),
       },
     };
   }
@@ -479,15 +684,35 @@ async function handleWebviewTestRequest(request) {
     if (typeof script !== "string" || script.length === 0) {
       return { success: false, error: "script is required for execute" };
     }
-    const result = await execJsWithTimeout(win, script, 15000, "execute");
-    return {
-      success: true,
-      data: {
-        webviewId: id,
-        url: win.webContents.getURL(),
-        result,
-      },
-    };
+    try {
+      const raw = await execJsWithTimeout(
+        win,
+        wrapWebviewUserScript(script),
+        15000,
+        "execute",
+      );
+      if (raw && typeof raw === "object" && raw.__paprExecOk === false) {
+        return {
+          success: false,
+          error: raw.error || "Script failed in preview session",
+        };
+      }
+      const result =
+        raw && typeof raw === "object" && raw.__paprExecOk === true
+          ? raw.value
+          : raw;
+      return {
+        success: true,
+        data: {
+          webviewId: id,
+          url: win.webContents.getURL(),
+          result,
+        },
+      };
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err);
+      return { success: false, error: message };
+    }
   }
 
   if (action === "get_console") {
@@ -630,6 +855,14 @@ async function waitForGatewayFullyReady(
 }
 
 async function createMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (!mainWindow.isVisible()) {
+      mainWindow.show();
+    }
+    mainWindow.focus();
+    return;
+  }
+
   const preloadPath = path.join(__dirname, "preload.cjs");
   console.log(`[Electron] Preload script path: ${preloadPath}`);
 
@@ -791,9 +1024,31 @@ async function createMainWindow() {
     }
   });
 
-  mainWindow.loadURL(uiUrl).catch((err) => {
-    console.error("[Electron] loadURL failed:", err);
-  });
+  // Load UI with retry logic — in dev mode, Vite may not be ready yet
+  // when concurrently spawns both processes in parallel.
+  const loadUIWithRetry = async (attempt = 1, maxAttempts = 30) => {
+    try {
+      await mainWindow.loadURL(uiUrl);
+      console.log(`[Electron] UI loaded successfully on attempt ${attempt}`);
+    } catch (err) {
+      const isConnectionError =
+        err?.code === "ERR_FAILED" ||
+        err?.code === "ERR_CONNECTION_REFUSED" ||
+        err?.errno === -2 ||
+        err?.errno === -102;
+
+      if (isConnectionError && attempt < maxAttempts) {
+        const delayMs = Math.min(500 * attempt, 2000);
+        console.log(
+          `[Electron] UI not ready yet (${err?.code || "unknown"}), retrying in ${delayMs}ms (attempt ${attempt}/${maxAttempts})...`,
+        );
+        setTimeout(() => loadUIWithRetry(attempt + 1, maxAttempts), delayMs);
+      } else {
+        console.error("[Electron] loadURL failed:", err);
+      }
+    }
+  };
+  loadUIWithRetry();
 
   // Track page load timing
   mainWindow.webContents.on('did-start-loading', () => {
@@ -863,6 +1118,10 @@ async function createMainWindow() {
 // ---------------------------------------------------------------------------
 
 function readActiveWorkspacePointerOrgId() {
+  return readActiveWorkspacePointer()?.organizationId;
+}
+
+function readActiveWorkspacePointer() {
   try {
     const fs = require("fs");
     const pathMod = require("path");
@@ -876,12 +1135,55 @@ function readActiveWorkspacePointerOrgId() {
       return undefined;
     }
     const pointer = JSON.parse(fs.readFileSync(pointerPath, "utf-8"));
-    return typeof pointer?.organizationId === "string"
-      ? pointer.organizationId
-      : undefined;
+    if (
+      typeof pointer?.organizationId !== "string" ||
+      typeof pointer?.namespaceId !== "string"
+    ) {
+      return undefined;
+    }
+    return pointer;
   } catch {
     return undefined;
   }
+}
+
+function paprApiKeyMatchesNamespaceBound(apiKey, organizationId, namespaceId) {
+  const trimmed = apiKey.trim();
+  const prefix = `sk-org-${organizationId}-namespace-${namespaceId}-`;
+  if (trimmed.startsWith(prefix)) {
+    return true;
+  }
+  const match = trimmed.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+  if (!match) {
+    // Legacy keys omit embedded namespace — trust vault slot / GraphQL binding.
+    return true;
+  }
+  return match[2] === namespaceId;
+}
+
+function paprApiKeyMatchesActiveWorkspace(apiKey) {
+  const trimmed = apiKey.trim();
+  const match = trimmed.match(/^sk-org-([^-]+)-namespace-([^-]+)(?:-.+)?$/);
+  if (!match) {
+    return false;
+  }
+
+  const orgId = process.env.PAPR_ORG_ID?.trim();
+  const namespaceId = process.env.PAPR_NAMESPACE_ID?.trim();
+  if (orgId && namespaceId) {
+    return paprApiKeyMatchesNamespaceBound(apiKey, orgId, namespaceId);
+  }
+
+  const pointer = readActiveWorkspacePointer();
+  if (!pointer) {
+    return true;
+  }
+
+  return paprApiKeyMatchesNamespaceBound(
+    apiKey,
+    pointer.organizationId,
+    pointer.namespaceId,
+  );
 }
 
 // Pure logic functions — imported from separate file for unit testing
@@ -892,7 +1194,11 @@ const {
   getNotificationType,
   shouldKillProcess,
   parseHealthResponse,
+  getHealthObservation,
   shouldKillUnhealthyGateway,
+  parseGatewaySyncBusyState,
+  isGatewaySyncBusyGraceActive,
+  selectOrphanPidsToKill,
   isValidTransition,
 } = require("./supervisor-logic.cjs");
 
@@ -902,8 +1208,10 @@ class GatewayProcessSupervisor {
     this.gatewayArgs = options.gatewayArgs ?? [];
     this.electronNodePath = options.electronNodePath;
     this.gatewayEnv = options.gatewayEnv;
+    this.readActiveWorkspaceEnv = options.readActiveWorkspaceEnv ?? null;
     this.port = options.port;
     this.customKeysStorage = options.customKeysStorage;
+    this.settingsStorage = options.settingsStorage ?? null;
     this.getActiveOrganizationId = options.getActiveOrganizationId;
 
     // State
@@ -915,6 +1223,9 @@ class GatewayProcessSupervisor {
     this.healthFailures = 0;
     this.hasEverBeenHealthy = false;
     this.gatewayReadyNotified = false;
+    // Last status pushed to the renderer, so a renderer that reloaded after the
+    // push can ask for it. Every notification here is one-shot and latched.
+    this.lastStatus = null;
     this.backoffTimer = null;
     this.isStopping = false;
 
@@ -924,7 +1235,8 @@ class GatewayProcessSupervisor {
     this.CIRCUIT_BREAKER_MAX = 5;
     this.CIRCUIT_BREAKER_WINDOW_MS = 5 * 60 * 1000;
     this.HEALTH_INTERVAL_MS = 10000;
-    this.HEALTH_FAILURE_THRESHOLD = 5;
+    this.HEALTH_FAILURE_THRESHOLD = 8;
+    this.HEALTH_REQUEST_TIMEOUT_MS = 30000;
     this.SILENT_RESTART_THRESHOLD = 2;
     this.BANNER_RESTART_THRESHOLD = 4;
   }
@@ -997,65 +1309,105 @@ class GatewayProcessSupervisor {
     this._transitionTo("stopped");
   }
 
+  /** PIDs we must never SIGKILL while clearing the port. */
+  _protectedPids() {
+    return [process.pid, process.ppid, this.process?.pid].filter(Boolean);
+  }
+
+  /** Listening PIDs on the gateway port. Listeners only — a client socket is not an orphan. */
+  _findPortListeners() {
+    try {
+      if (process.platform === "win32") {
+        const output = execSync(`netstat -ano | findstr :${this.port}`, {
+          encoding: "utf8",
+          timeout: 5000,
+        });
+        // findstr matches any state; keep only LISTENING rows.
+        const listening = output
+          .split(/\r?\n/)
+          .map((line) => line.match(/LISTENING\s+(\d+)/))
+          .filter(Boolean)
+          .map((match) => match[1])
+          .join("\n");
+        return selectOrphanPidsToKill(listening, this._protectedPids());
+      }
+      const output = execSync(`lsof -ti:${this.port} -sTCP:LISTEN`, {
+        encoding: "utf8",
+        timeout: 5000,
+      });
+      return selectOrphanPidsToKill(output, this._protectedPids());
+    } catch {
+      // Non-zero exit means nothing matched — that is the healthy case.
+      return [];
+    }
+  }
+
   _killOrphans() {
     try {
       console.log("[Supervisor] Checking for orphaned Gateway processes...");
-      
-      if (process.platform === "win32") {
-        // Windows: Use netstat to find PIDs listening on the port
+
+      const pids = this._findPortListeners();
+      if (pids.length === 0) {
+        return;
+      }
+
+      console.log(
+        `[Supervisor] Found ${pids.length} orphaned listener(s) on port ${this.port}: ${pids.join(", ")}`,
+      );
+
+      for (const pid of pids) {
         try {
-          const output = execSync(`netstat -ano | findstr :${this.port}`, {
-            encoding: "utf8",
-            timeout: 5000,
-          });
-          
-          const lines = output.trim().split("\n");
-          for (const line of lines) {
-            const match = line.match(/LISTENING\s+(\d+)/);
-            if (match) {
-              const pid = match[1];
-              console.log(`[Supervisor] Found orphaned process ${pid} on port ${this.port}`);
-              execSync(`taskkill /PID ${pid} /F`, { timeout: 5000 });
-              // Brief delay for cleanup
-              const start = Date.now();
-              while (Date.now() - start < 500) {
-                // Busy wait
-              }
-              console.log("[Supervisor] Orphaned process killed");
-            }
+          if (process.platform === "win32") {
+            execSync(`taskkill /PID ${pid} /F`, { timeout: 5000 });
+          } else {
+            execSync(`kill -9 ${pid}`, { timeout: 5000 });
           }
-        } catch (e) {
-          // No process on port or command failed — good
-        }
-      } else {
-        // Unix (macOS, Linux): Use lsof
-        try {
-          const output = execSync(`lsof -ti:${this.port}`, { encoding: "utf8" }).trim();
-          if (output) {
-            // Split by newline to handle multiple PIDs
-            const pids = output.split('\n').filter(p => p.trim());
-            console.log(`[Supervisor] Found ${pids.length} orphaned process(es) on port ${this.port}: ${pids.join(', ')}`);
-            
-            // Kill each PID individually
-            for (const pid of pids) {
-              try {
-                execSync(`kill -9 ${pid.trim()}`);
-                console.log(`[Supervisor] Killed orphaned process ${pid}`);
-              } catch (killErr) {
-                console.warn(`[Supervisor] Failed to kill PID ${pid}:`, killErr.message);
-              }
-            }
-            
-            execSync("sleep 0.5");
-            console.log("[Supervisor] Orphaned processes cleanup complete");
-          }
-        } catch (e) {
-          // No process on port — good
+          console.log(`[Supervisor] Killed orphaned process ${pid}`);
+        } catch (killErr) {
+          console.warn(`[Supervisor] Failed to kill PID ${pid}:`, killErr.message);
         }
       }
+
+      // Spawning before the port is actually released just trades a self-kill for
+      // an EADDRINUSE crash loop, so confirm it drained before returning.
+      const freed = this._waitForPortFree();
+      console.log(
+        freed
+          ? "[Supervisor] Orphaned processes cleanup complete"
+          : `[Supervisor] Port ${this.port} still held after cleanup — spawning anyway`,
+      );
     } catch (error) {
       console.warn("[Supervisor] Cleanup warning:", error.message);
     }
+  }
+
+  /** Poll until no listener holds the port. Bounded so startup can never hang here. */
+  _waitForPortFree(timeoutMs = 2000, intervalMs = 150) {
+    const deadline = Date.now() + timeoutMs;
+    for (;;) {
+      if (this._findPortListeners().length === 0) {
+        return true;
+      }
+      if (Date.now() + intervalMs >= deadline) {
+        return false;
+      }
+      // _killOrphans is synchronous and runs before spawn, so block the thread
+      // rather than spinning it — SIGKILL'd sockets usually drain in one tick.
+      Atomics.wait(
+        new Int32Array(new SharedArrayBuffer(4)),
+        0,
+        0,
+        intervalMs,
+      );
+    }
+  }
+
+  _resolveSpawnEnv() {
+    const workspaceEnv =
+      typeof this.readActiveWorkspaceEnv === "function"
+        ? this.readActiveWorkspaceEnv()
+        : {};
+    return { ...this.gatewayEnv, ...workspaceEnv };
   }
 
   _spawnProcess() {
@@ -1064,12 +1416,14 @@ class GatewayProcessSupervisor {
       `[Supervisor] Gateway spawn: ${this.electronNodePath} ${this.gatewayScript} ${this.gatewayArgs.join(" ")}`.trim(),
     );
 
+    const spawnEnv = this._resolveSpawnEnv();
+
     this.process = spawn(
       this.electronNodePath,
       [this.gatewayScript, ...this.gatewayArgs],
       {
       stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: this.gatewayEnv,
+      env: spawnEnv,
       },
     );
 
@@ -1093,26 +1447,97 @@ class GatewayProcessSupervisor {
   _setupIpcHandlers() {
     const proc = this.process;
     const storage = this.customKeysStorage;
+    const settings = this.settingsStorage;
 
     proc.on("message", async (msg) => {
       // Guard: if process was replaced during async handling, skip
       if (proc !== this.process) return;
 
       if (isRequestKeysMessage(msg)) {
+        // Paired with the gateway's "Slow key IPC: Nms round trip" line. Together
+        // they localise a stall: a long round trip against a short handler means
+        // the message sat in this process's queue rather than being slow to serve,
+        // i.e. main's event loop was blocked by something else entirely.
+        const handlerStartedAt = Date.now();
         console.log("[Electron] Gateway requested keys:", msg.keys);
 
         const resolvedKeys = {};
         for (const keyName of msg.keys || []) {
           try {
+            if (keyName === "PAPR_API_KEY" && resolveActivePaprApiKey) {
+              let value = await resolveActivePaprApiKey(storage);
+              if (
+                !value &&
+                ensureActiveNamespaceApiKey &&
+                settings
+              ) {
+                console.log(
+                  "[Electron] PAPR_API_KEY missing for active workspace — syncing namespace key…",
+                );
+                value = await ensureActiveNamespaceApiKey(storage, settings);
+              }
+              if (value) {
+                const pointer = readActiveWorkspacePointer();
+                const boundOk =
+                  !pointer ||
+                  paprApiKeyMatchesNamespaceBound(
+                    value,
+                    pointer.organizationId,
+                    pointer.namespaceId,
+                  );
+                if (boundOk) {
+                  resolvedKeys[keyName] = value;
+                  console.log(`[Electron]   ✓ Resolved ${keyName}`);
+                } else {
+                  console.warn(
+                    "[Electron]   ✗ PAPR_API_KEY resolved with wrong namespace scope — omitting",
+                  );
+                }
+              } else {
+                const envFallback = process.env[keyName];
+                if (
+                  envFallback &&
+                  paprApiKeyMatchesActiveWorkspace(envFallback)
+                ) {
+                  resolvedKeys[keyName] = envFallback;
+                  console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+                } else if (envFallback) {
+                  console.warn(
+                    "[Electron]   ✗ Ignoring PAPR_API_KEY env fallback — wrong namespace for active workspace",
+                  );
+                } else {
+                  console.log(`[Electron]   ✗ Key ${keyName} not found`);
+                }
+              }
+              continue;
+            }
+
             const value = await storage.getKeyByName(keyName);
             if (value !== null) {
-              resolvedKeys[keyName] = value;
-              console.log(`[Electron]   ✓ Resolved ${keyName}`);
+              if (
+                keyName === "PAPR_API_KEY" &&
+                !paprApiKeyMatchesActiveWorkspace(value)
+              ) {
+                console.warn(
+                  "[Electron]   ✗ PAPR_API_KEY in keychain is for a different namespace — omitting until sync completes",
+                );
+              } else {
+                resolvedKeys[keyName] = value;
+                console.log(`[Electron]   ✓ Resolved ${keyName}`);
+              }
             } else {
               const envFallback = process.env[keyName];
-              if (envFallback) {
+              if (
+                envFallback &&
+                (keyName !== "PAPR_API_KEY" ||
+                  paprApiKeyMatchesActiveWorkspace(envFallback))
+              ) {
                 resolvedKeys[keyName] = envFallback;
                 console.log(`[Electron]   ✓ Resolved ${keyName} from env fallback`);
+              } else if (envFallback && keyName === "PAPR_API_KEY") {
+                console.warn(
+                  "[Electron]   ✗ Ignoring PAPR_API_KEY env fallback — wrong namespace for active workspace",
+                );
               } else {
                 console.log(`[Electron]   ✗ Key ${keyName} not found`);
               }
@@ -1130,8 +1555,18 @@ class GatewayProcessSupervisor {
           const oauthStorage = getOAuthTokenStorage();
 
           if (oauthStorage) {
+            // The gateway prefers OAuth whenever a token is present, so honouring
+            // an "API key" choice means withholding the token here. Sending it and
+            // filtering downstream would silently lose to that precedence.
+            const prefersApiKey = (provider) =>
+              settings?.getProviderAuthPreference?.(provider) === "apiKey";
+
             const openaiToken = oauthStorage.getTokenByProvider("openai");
-            if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
+            if (prefersApiKey("openai")) {
+              console.log(
+                "[Electron]   ↷ OpenAI OAuth withheld — user chose API key",
+              );
+            } else if (openaiToken && !oauthStorage.isTokenExpired(openaiToken)) {
               oauthTokens.openai = {
                 accessToken: openaiToken.accessToken,
                 expiresAt: openaiToken.expiresAt,
@@ -1140,7 +1575,11 @@ class GatewayProcessSupervisor {
             }
 
             const claudeToken = oauthStorage.getTokenByProvider("anthropic");
-            if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
+            if (prefersApiKey("anthropic")) {
+              console.log(
+                "[Electron]   ↷ Claude OAuth withheld — user chose API key",
+              );
+            } else if (claudeToken && !oauthStorage.isTokenExpired(claudeToken)) {
               console.log(`[Electron]   Claude OAuth token details: length=${claudeToken.accessToken.length}, prefix=${claudeToken.accessToken.substring(0, 30)}...`);
               oauthTokens.anthropic = {
                 accessToken: claudeToken.accessToken,
@@ -1157,6 +1596,13 @@ class GatewayProcessSupervisor {
           }
         } catch (error) {
           console.error("[Electron] Failed to load OAuth tokens:", error);
+        }
+
+        const handlerMs = Date.now() - handlerStartedAt;
+        if (handlerMs >= 250) {
+          console.warn(
+            `[Electron] Slow key resolution: handled in ${handlerMs}ms`,
+          );
         }
 
         if (proc === this.process) {
@@ -1196,6 +1642,28 @@ class GatewayProcessSupervisor {
               type: "WEBVIEW_TEST_RESPONSE",
               requestId: msg.requestId,
               response: { success: false, error: error instanceof Error ? error.message : String(error) },
+            });
+          }
+        }
+      } else if (isRequestPlatformBrowserMessage(msg)) {
+        try {
+          const response = await handlePlatformBrowserRequest(msg.request);
+          if (proc === this.process) {
+            proc.send({
+              type: "PLATFORM_BROWSER_RESPONSE",
+              requestId: msg.requestId,
+              response,
+            });
+          }
+        } catch (error) {
+          if (proc === this.process) {
+            proc.send({
+              type: "PLATFORM_BROWSER_RESPONSE",
+              requestId: msg.requestId,
+              response: {
+                success: false,
+                error: error instanceof Error ? error.message : String(error),
+              },
             });
           }
         }
@@ -1248,6 +1716,57 @@ class GatewayProcessSupervisor {
         } catch (error) {
           console.error("[Electron] custom-keys:delete error:", error);
           if (proc === this.process) proc.send({ type: "CUSTOM_KEYS_RESPONSE", requestId: msg.requestId, error: error instanceof Error ? error.message : String(error) });
+        }
+      } else if (msg.type === "CUSTOM_KEYS_SYNC_SHARED") {
+        try {
+          const organizationId = this.getActiveOrganizationId?.()?.trim();
+          if (organizationId && storage?.ensureOrganizationVault) {
+            await storage.ensureOrganizationVault(organizationId);
+          }
+          const result = await storage.syncSharedMirrors(msg.keys ?? []);
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              result,
+            });
+          }
+        } catch (error) {
+          console.error("[Electron] custom-keys:sync-shared error:", error);
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }
+      } else if (msg.type === "CUSTOM_KEYS_RECONCILE_SHARE") {
+        try {
+          const organizationId = this.getActiveOrganizationId?.()?.trim();
+          if (organizationId && storage?.ensureOrganizationVault) {
+            await storage.ensureOrganizationVault(organizationId);
+          }
+          const reconcileResult = await storage.reconcileShareSyncResult({
+            conflicts: msg.conflicts ?? [],
+            syncedNames: msg.syncedNames ?? [],
+          });
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              reconcileResult,
+            });
+          }
+        } catch (error) {
+          console.error("[Electron] custom-keys:reconcile-share error:", error);
+          if (proc === this.process) {
+            proc.send({
+              type: "CUSTOM_KEYS_RESPONSE",
+              requestId: msg.requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
       }
     });
@@ -1322,24 +1841,94 @@ class GatewayProcessSupervisor {
     this._sendStatusToRenderer("running", "Gateway reconnected");
   }
 
+  /** Restart gateway after workspace pointer change (Electron-side recovery). */
+  async restartForWorkspaceSwitch() {
+    if (this.isStopping) {
+      return;
+    }
+    console.log("[Supervisor] Restarting gateway for workspace switch recovery...");
+    this._stopHealthCheck();
+    if (this.process && !this.process.killed) {
+      try {
+        this.process.kill("SIGTERM");
+      } catch {
+        // Process may already be exiting
+      }
+      await new Promise((resolve) => {
+        let attempts = 0;
+        const timer = setInterval(() => {
+          attempts++;
+          if (!this.process || this.process.killed || attempts >= 30) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 100);
+      });
+      this.process = null;
+      gatewayProcess = null;
+    }
+    await this._performRestart();
+  }
+
+  _readSyncBusyGraceHealth() {
+    try {
+      const fs = require("fs");
+      const env =
+        typeof this.readActiveWorkspaceEnv === "function"
+          ? this.readActiveWorkspaceEnv()
+          : null;
+      const paprHome = env?.PAPR_HOME;
+      if (!paprHome) {
+        return null;
+      }
+      const busyPath = path.join(
+        paprHome,
+        "data",
+        ".gateway-sync-busy.json",
+      );
+      if (!fs.existsSync(busyPath)) {
+        return null;
+      }
+      const state = parseGatewaySyncBusyState(
+        fs.readFileSync(busyPath, "utf8"),
+      );
+      if (!isGatewaySyncBusyGraceActive(state)) {
+        return null;
+      }
+      return { alive: true, ready: false, syncBusy: true };
+    } catch {
+      return null;
+    }
+  }
+
   _startHealthCheck() {
     this.healthFailures = 0;
     this._stopHealthCheck();
     this.healthCheckTimer = setInterval(() => {
+      const observedProcess = this.process;
+      let settled = false;
+      const report = (health, requestOutcome = "response") => {
+        if (settled || this.process !== observedProcess) return;
+        settled = true;
+        this._onHealthCheckResult(health, requestOutcome);
+      };
       const req = http.get(`http://localhost:${this.port}/health`, (res) => {
         let body = "";
         res.on("data", (d) => (body += d));
         res.on("end", () => {
           const health = parseHealthResponse(body);
-          this._onHealthCheckResult(health);
+          report(health);
         });
       });
-      req.on("error", () =>
-        this._onHealthCheckResult({ alive: false, ready: false }),
-      );
-      req.setTimeout(5000, () => {
+      req.on("error", () => {
+        const busyGrace = this._readSyncBusyGraceHealth();
+        report(busyGrace ?? { alive: false, ready: false }, "error");
+      });
+      req.setTimeout(this.HEALTH_REQUEST_TIMEOUT_MS, () => {
+        const busyGrace = this._readSyncBusyGraceHealth();
+        // Record the timeout before destroy emits a secondary socket error.
+        report(busyGrace ?? { alive: false, ready: false }, "timeout");
         req.destroy();
-        this._onHealthCheckResult({ alive: false, ready: false });
       });
     }, this.HEALTH_INTERVAL_MS);
   }
@@ -1351,7 +1940,17 @@ class GatewayProcessSupervisor {
     }
   }
 
-  _onHealthCheckResult(health) {
+  _onHealthCheckResult(health, requestOutcome = "response") {
+    const observation = getHealthObservation(health, requestOutcome, this.lastDiagnosticHealthFailed);
+    if (observation) {
+      const event = {
+        id: `${this.process?.pid}:${Date.now()}:${++this.healthObservationSequence || (this.healthObservationSequence = 1)}`,
+        timestamp: new Date().toISOString(), ...observation,
+        gatewayPid: this.process?.pid,
+      };
+      if (this.process?.connected) this.process.send({ type: "HEALTH_OBSERVATION", event }, () => {});
+    }
+    this.lastDiagnosticHealthFailed = observation?.status === "failed";
     if (health.ready) {
       this.hasEverBeenHealthy = true;
       if (!this.gatewayReadyNotified) {
@@ -1375,8 +1974,18 @@ class GatewayProcessSupervisor {
         this.process.kill("SIGKILL");
         // _onProcessExit will handle restart scheduling
       }
+    } else if (health.syncBusy && requestOutcome !== "response") {
+      console.log(
+        `[Supervisor] Health request ${requestOutcome === "timeout" ? "timed out" : "failed"} during sync — restart grace active`,
+      );
     } else if (!health.alive && this.hasEverBeenHealthy) {
-      console.warn(`[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})`);
+      const lagSuffix =
+        typeof health.eventLoopLagMs === "number"
+          ? `, last eventLoopLagMs=${health.eventLoopLagMs}`
+          : "";
+      console.warn(
+        `[Supervisor] Health check failed (${this.healthFailures}/${this.HEALTH_FAILURE_THRESHOLD})${lagSuffix}`,
+      );
     } else if (health.alive && !health.ready) {
       console.log("[Supervisor] Gateway still starting (services loading)...");
     }
@@ -1428,9 +2037,17 @@ class GatewayProcessSupervisor {
   }
 
   _sendStatusToRenderer(status, message) {
+    // Recorded before the send, and regardless of whether a window is there to
+    // receive it: the case this exists for is a renderer that was not listening.
+    this.lastStatus = { status, message };
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send("gateway:status", { status, message });
     }
+  }
+
+  /** The last status pushed, for a renderer that missed the push. */
+  getLastStatus() {
+    return this.lastStatus;
   }
 
   _waitForReady(maxAttempts = 240, intervalMs = 500) {
@@ -1446,7 +2063,14 @@ class GatewayProcessSupervisor {
           return;
         }
         attempts++;
-        const req = http.get(`http://localhost:${this.port}/health`, (res) => {
+        const observedProcess = this.process;
+      let settled = false;
+      const report = (health) => {
+        if (settled || this.process !== observedProcess) return;
+        settled = true;
+        this._onHealthCheckResult(health);
+      };
+      const req = http.get(`http://localhost:${this.port}/health`, (res) => {
           let body = "";
           res.on("data", (d) => (body += d));
           res.on("end", () => {
@@ -1568,6 +2192,42 @@ function formatUpdateError(rawMessage) {
   return { error: message };
 }
 
+/**
+ * Synchronously kill Gateway before ShipIt swaps the app bundle.
+ * Graceful async cleanup races ShipIt; skipping cleanup leaves native module
+ * file locks inside the .app and the update never installs or relaunches.
+ */
+function fastKillChildProcessesForUpdate() {
+  if (!supervisor) {
+    return;
+  }
+
+  supervisor.isStopping = true;
+  supervisor._stopHealthCheck();
+  if (supervisor.backoffTimer) {
+    clearTimeout(supervisor.backoffTimer);
+    supervisor.backoffTimer = null;
+  }
+
+  const proc = supervisor.getProcess();
+  if (proc && !proc.killed) {
+    console.log("[AutoUpdater] SIGKILL Gateway before update (PID:", proc.pid, ")");
+    try {
+      proc.kill("SIGKILL");
+    } catch (error) {
+      console.warn("[AutoUpdater] Gateway SIGKILL failed:", error.message);
+    }
+  }
+
+  supervisor.process = null;
+  gatewayProcess = null;
+  if (setGatewayProcess) {
+    setGatewayProcess(null);
+  }
+
+  supervisor._killOrphans();
+}
+
 function setupAutoUpdater() {
   autoUpdater.autoDownload = true;
   // Only install when the user explicitly clicks "Restart to update".
@@ -1610,7 +2270,14 @@ function setupAutoUpdater() {
     console.log("[AutoUpdater] User requested install, quitting and installing...");
     isInstallingUpdate = true;
     isQuitting = true;
-    autoUpdater.quitAndInstall(false, true);
+
+    fastKillChildProcessesForUpdate();
+
+    // quitAndInstall must perform the quit itself. Pre-destroying windows on macOS
+    // hides the UI while the process stays alive in the dock, which can block ShipIt.
+    setTimeout(() => {
+      autoUpdater.quitAndInstall(false, true);
+    }, 300);
   });
 
   // IPC: renderer can manually trigger a check
@@ -1800,18 +2467,81 @@ let settingsStorage;
 
 /** Deep links received before auth IPC is ready (macOS open-url can fire pre-ready). */
 const pendingDeepLinks = [];
+/** True after Gateway + main window are ready — auth callbacks need both. */
+let authDeepLinksReady = false;
+
+function handlePaprChatDeepLink(url) {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname !== "chat" || parsed.pathname !== "/open") {
+      return false;
+    }
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      return false;
+    }
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+    mainWindow.webContents.send("chat:open", {
+      message: parsed.searchParams.get("message") || "",
+      model: null,
+      provider: null,
+      mode: "main",
+      appId: null,
+      subAgentId: null,
+    });
+    console.log("[Electron] Opened chat from deep link");
+    return true;
+  } catch (err) {
+    console.error("[Electron] Chat deep link failed:", err);
+    return false;
+  }
+}
 
 async function flushPendingDeepLinks() {
-  if (!handlePaprAuthCallback || !customKeysStorage || !settingsStorage) {
+  if (pendingDeepLinks.length === 0) {
     return;
   }
-  while (pendingDeepLinks.length > 0) {
-    const url = pendingDeepLinks.shift();
-    try {
-      await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
-    } catch (err) {
-      console.error("[Electron] Deep link handler failed:", err);
+
+  let index = 0;
+  while (index < pendingDeepLinks.length) {
+    const url = pendingDeepLinks[index];
+
+    if (url.startsWith("papr://auth/callback")) {
+      if (
+        !authDeepLinksReady ||
+        !handlePaprAuthCallback ||
+        !customKeysStorage ||
+        !settingsStorage
+      ) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      if (trackPaprLoginDeepLinkFlushStarted) {
+        trackPaprLoginDeepLinkFlushStarted(pendingDeepLinks.length + 1);
+      }
+      console.log("[Electron] Flushing auth deep link");
+      try {
+        await handlePaprAuthCallback(url, customKeysStorage, settingsStorage);
+      } catch (err) {
+        console.error("[Electron] Auth deep link handler failed:", err);
+      }
+      continue;
     }
+
+    if (url.startsWith("papr://chat/")) {
+      if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+      }
+      pendingDeepLinks.splice(index, 1);
+      console.log("[Electron] Flushing chat deep link");
+      handlePaprChatDeepLink(url);
+      continue;
+    }
+
+    console.warn("[Electron] Unknown deep link, dropping:", url.split("?")[0]);
+    pendingDeepLinks.splice(index, 1);
   }
 }
 
@@ -1819,8 +2549,17 @@ function queueDeepLink(url) {
   if (typeof url !== "string" || !url.startsWith("papr://")) {
     return;
   }
-  console.log("[Electron] Queued deep link:", url);
+  console.log("[Electron] Queued deep link:", url.split("?")[0], {
+    authDeepLinksReady,
+    pending: pendingDeepLinks.length + 1,
+  });
   pendingDeepLinks.push(url);
+  if (trackPaprLoginDeepLinkQueued) {
+    trackPaprLoginDeepLinkQueued({
+      deepLinkReady: authDeepLinksReady,
+      pendingCount: pendingDeepLinks.length,
+    });
+  }
   void flushPendingDeepLinks();
 }
 
@@ -1864,6 +2603,44 @@ app.whenReady().then(async () => {
   console.log("[Electron] Start time:", new Date(appStartTime).toISOString());
   console.log("[Electron] ===========================================");
 
+  // Media permissions for locally-hosted mini-apps.
+  //
+  // Electron denies getUserMedia by default when no handler is registered, so
+  // every mini-app saw "Permission denied" no matter what macOS had granted.
+  // That made a live microphone meter impossible to build, and the Meetings
+  // app recorded silence with nothing in the UI able to detect it.
+  //
+  // Scoped to the local gateway origin: remote content still gets denied, and
+  // macOS TCC remains the outer gate — this only stops Electron from refusing
+  // before the OS is ever asked.
+  {
+    const { session } = require("electron");
+    const LOCAL_APP_ORIGIN = "http://localhost:18789";
+    const MEDIA_PERMISSIONS = new Set(["media", "audioCapture", "videoCapture"]);
+
+    const isLocalApp = (url) => typeof url === "string" && url.startsWith(LOCAL_APP_ORIGIN);
+
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+      // Write-only clipboard (navigator.clipboard.writeText). Denying it broke
+      // every "Copy" button in the renderer, e.g. the Claude setup command.
+      if (permission === "clipboard-sanitized-write") return callback(true);
+      if (!MEDIA_PERMISSIONS.has(permission)) return callback(false);
+      const url = details?.requestingUrl || webContents?.getURL?.() || "";
+      const allowed = isLocalApp(url);
+      if (!allowed) console.warn("[Electron] Denied", permission, "for", url);
+      callback(allowed);
+    });
+
+    // permissions.query() consults this separately; without it a mini-app reads
+    // state "denied" and can show a misleading "check System Settings" message
+    // before it has even tried.
+    session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+      if (permission === "clipboard-sanitized-write") return true;
+      if (!MEDIA_PERMISSIONS.has(permission)) return false;
+      return isLocalApp(requestingOrigin);
+    });
+  }
+
   // Register custom URL protocol for papr:// deep links
   if (process.defaultApp) {
     if (process.argv.length >= 2) {
@@ -1881,6 +2658,7 @@ app.whenReady().then(async () => {
   await loadESMModules();
 
   // Initialize storage and IPC (use outer scope variables for second-instance handler)
+  console.log("[Electron] Startup: opening key storage (Keychain)…");
   customKeysStorage = new CustomKeysStorage();
   keyPermissionsStorage = new KeyPermissionsStorage();
   settingsStorage = new SettingsStorage(undefined, {
@@ -1888,6 +2666,7 @@ app.whenReady().then(async () => {
   });
 
   await customKeysStorage.initialize();
+  console.log("[Electron] Startup: key storage ready");
   const paprProfileForKeys = settingsStorage.getPaprProfile();
   if (migrateOrgVaultIsolation) {
     const migrationResult = await migrateOrgVaultIsolation(
@@ -1901,13 +2680,42 @@ app.whenReady().then(async () => {
       );
     }
   }
+  if (migrateIntegrationKeysToSharedDefault) {
+    const sharedMigration = await migrateIntegrationKeysToSharedDefault(
+      path.join(app.getPath("userData"), "data"),
+    );
+    if (sharedMigration.ran) {
+      console.log(
+        "[Electron] Integration keys shared-default migration complete:",
+        sharedMigration,
+      );
+      await customKeysStorage.initialize();
+    }
+  }
   if (paprProfileForKeys?.organizationId) {
     await customKeysStorage.setActiveOrganization(paprProfileForKeys.organizationId);
   }
+  console.log("[Electron] Startup: org key migrations complete");
   // Note: KeyPermissionsStorage and SettingsStorage auto-initialize via electron-store
+
+  // Register Papr IPC before any slow network (namespace API key, OAuth). macOS
+  // "activate" can open the window while those await; handlers must exist first.
+  initializePaprLoginIPC(customKeysStorage, settingsStorage, {
+    trackLoginEvent: (eventName, properties) => {
+      if (telemetryClientInstance) {
+        telemetryClientInstance.trackFireAndForget(eventName, properties);
+      }
+    },
+  });
+  electronStartupReady = true;
+  console.log("[Electron] Startup: Papr login IPC registered");
 
   if (initializeTelemetryIPC) {
     initializeTelemetryIPC(settingsStorage);
+  }
+
+  if (initializeReplicaE2eTestsIPC) {
+    initializeReplicaE2eTestsIPC();
   }
 
   if (initializeChatAttachmentsIPC) {
@@ -1915,6 +2723,80 @@ app.whenReady().then(async () => {
   }
 
   ipcMain.handle("app:get-version", () => app.getVersion());
+
+  // Gateway status is pushed once and latched, so a renderer that reloaded after
+  // the push has no way to learn it. Let it ask instead of infer.
+  ipcMain.handle("gateway:get-status", () => supervisor?.getLastStatus() ?? null);
+
+  ipcMain.handle("agent-preview:show", (_event, webviewId) =>
+    showWebviewSession(webviewId),
+  );
+  ipcMain.handle("agent-preview:is-active", (_event, webviewId) => ({
+    active: isWebviewSessionActive(webviewId),
+  }));
+  ipcMain.handle("agent-preview:capture-thumbnail", async (_event, webviewId) =>
+    captureWebviewThumbnail(webviewId),
+  );
+
+  registerPlatformBrowserIPC(ipcMain, () => mainWindow);
+
+  // Which credential to use when a provider has both OAuth and an API key.
+  // Lives in main because main decides which tokens the gateway ever sees.
+  ipcMain.handle("provider-auth:get-preference", (_event, provider) => {
+    if (provider !== "openai" && provider !== "anthropic") {
+      throw new TypeError(`Unsupported provider: ${provider}`);
+    }
+    return { preference: settingsStorage.getProviderAuthPreference(provider) };
+  });
+
+  ipcMain.handle(
+    "provider-auth:set-preference",
+    (_event, provider, preference) => {
+      if (provider !== "openai" && provider !== "anthropic") {
+        throw new TypeError(`Unsupported provider: ${provider}`);
+      }
+      if (preference !== "oauth" && preference !== "apiKey") {
+        throw new TypeError(`Unsupported preference: ${preference}`);
+      }
+      settingsStorage.setProviderAuthPreference(provider, preference);
+      // The gateway caches keys and OAuth tokens per provider, so drop the stale
+      // entry or it keeps using the credential the user just switched away from.
+      if (supervisor?.getProcess() && !supervisor.getProcess().killed) {
+        try {
+          supervisor.getProcess().send({
+            type: "INVALIDATE_KEY_CACHE",
+            keyName:
+              provider === "anthropic"
+                ? "ANTHROPIC_API_KEY"
+                : "OPENAI_API_KEY",
+          });
+        } catch (error) {
+          console.warn(
+            "[Electron] Could not invalidate gateway key cache:",
+            error.message,
+          );
+        }
+      }
+      return { success: true, preference };
+    },
+  );
+
+  // Reconcile workspace pointer + API key before any writes to namespace-scoped paths
+  if (ensureActiveWorkspaceReconciled) {
+    try {
+      const workspaceReconcileStartedAt = Date.now();
+      console.log("[Electron] Startup: reconciling workspace pointer…");
+      await ensureActiveWorkspaceReconciled(settingsStorage);
+      console.log(
+        `[Electron] Startup: workspace reconcile finished (${Date.now() - workspaceReconcileStartedAt}ms)`,
+      );
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup workspace reconciliation failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
 
   // Backfill gateway settings with Papr user id before telemetry + gateway spawn
   const paprProfile = settingsStorage.getPaprProfile();
@@ -1924,7 +2806,9 @@ app.whenReady().then(async () => {
       paprProfile.userId,
       paprProfile.displayName,
       paprProfile.profileImage,
-      paprProfile.activeNamespaceName,
+      paprProfile.organizationId,
+      paprProfile.workspaceId,
+      paprProfile.workspaceName,
     );
   }
 
@@ -1937,6 +2821,18 @@ app.whenReady().then(async () => {
       getAnonymousInstallId: () =>
         settingsStorage.getOrCreateTelemetryInstallId(),
       getPaprUserId: () => settingsStorage.getPaprProfile()?.userId ?? "",
+      // Without these, every Electron-side lifecycle event (app_started,
+      // app_quit, system_suspend/resume) lands unattributed, which makes
+      // org-level MAU, retention, and the install→activation funnel
+      // impossible to compute per customer. Read per event, not cached: the
+      // user can switch workspace without restarting the app.
+      getNamespaceId: () => readActiveWorkspacePointer()?.namespaceId ?? "",
+      getOrganizationId: () =>
+        readActiveWorkspacePointer()?.organizationId ??
+        settingsStorage.getPaprProfile()?.organizationId ??
+        "",
+      getOrganizationName: () =>
+        readActiveWorkspacePointer()?.organizationName ?? "",
       getIsPackaged: () => app.isPackaged,
       appVersion: app.getVersion(),
     });
@@ -1950,24 +2846,16 @@ app.whenReady().then(async () => {
   });
 
   // Initialize OAuth IPC handlers (pass customKeysStorage for syncing)
-  await initializeOAuthIPC(customKeysStorage);
-
-  // Initialize Papr Login IPC handlers
-  initializePaprLoginIPC(customKeysStorage, settingsStorage, {
-    trackLoginEvent: (eventName, properties) => {
+  console.log("[Electron] Startup: initializing OAuth IPC…");
+  await initializeOAuthIPC(customKeysStorage, {
+    trackOAuthEvent: (eventName, properties) => {
       if (telemetryClientInstance) {
         telemetryClientInstance.trackFireAndForget(eventName, properties);
       }
     },
   });
 
-  // Process deep links queued during startup (Windows cold start + early macOS open-url)
-  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
-  if (coldStartUrl) {
-    queueDeepLink(coldStartUrl);
-  }
-  await flushPendingDeepLinks();
-
+  registerCloudPreviewSessionIPC(ipcMain, session);
 
   // Check Python installation on Windows (for non-technical users)
   if (process.platform === 'win32') {
@@ -1989,11 +2877,13 @@ app.whenReady().then(async () => {
       if (!pointer?.paprHome || !pointer?.userDataPath) {
         return {};
       }
+      const workspaceId = settingsStorage.getPaprProfile()?.workspaceId?.trim();
       return {
         PAPR_HOME: pointer.paprHome,
         PAPR_USER_DATA: pointer.userDataPath,
         PAPR_ORG_ID: pointer.organizationId,
         PAPR_NAMESPACE_ID: pointer.namespaceId,
+        ...(workspaceId ? { PAPR_WORKSPACE_ID: workspaceId } : {}),
       };
     } catch {
       return {};
@@ -2013,6 +2903,79 @@ app.whenReady().then(async () => {
 
   const activeWorkspaceEnv = readActiveWorkspaceEnv();
   const workspaceSettingsPath = readWorkspaceSettingsPath();
+
+  function readPackagedGatewayEnv() {
+    if (!app.isPackaged) {
+      return {};
+    }
+
+    /** @type {Record<string, string>} */
+    let baked = {};
+    try {
+      const envPath = path.join(process.resourcesPath, "packaged-gateway-env.json");
+      if (require("fs").existsSync(envPath)) {
+        const parsed = JSON.parse(require("fs").readFileSync(envPath, "utf-8"));
+        if (typeof parsed === "object" && parsed !== null) {
+          baked = parsed;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[Electron] Failed to load packaged gateway env:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    /** @type {Record<string, string>} */
+    let defaults = {};
+    try {
+      const defaultsPath = path.join(
+        process.resourcesPath,
+        "packaged-gateway-env.defaults.json",
+      );
+      if (require("fs").existsSync(defaultsPath)) {
+        const parsed = JSON.parse(require("fs").readFileSync(defaultsPath, "utf-8"));
+        if (typeof parsed === "object" && parsed !== null) {
+          defaults = parsed;
+        }
+      }
+    } catch (err) {
+      console.warn(
+        "[Electron] Failed to load packaged gateway defaults:",
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+
+    const keys = [
+      "PAPR_APP_REPO_WRITER_URL",
+      "PAPR_CLOUD_APP_HOST_KEY",
+      "PAPR_MEMORY_SERVER_URL",
+      "PAPR_TURSO_REPLICA_SYNC",
+      "PAPR_TURSO_REPLICA_SYNC_ALLOW_PRODUCTION",
+    ];
+    /** @type {Record<string, string>} */
+    const merged = { ...defaults };
+    for (const key of keys) {
+      const value = baked[key];
+      if (typeof value === "string" && value.trim()) {
+        merged[key] = value.trim();
+      }
+    }
+
+    const usedDefaults = keys.filter(
+      (key) => merged[key] && !(typeof baked[key] === "string" && baked[key].trim()),
+    );
+    if (usedDefaults.length > 0) {
+      console.warn(
+        "[Electron] Packaged gateway env incomplete — using defaults for:",
+        usedDefaults.join(", "),
+      );
+    }
+
+    return merged;
+  }
+
+  const packagedGatewayEnv = readPackagedGatewayEnv();
 
   // Build gateway environment (telemetry flags align with main-process resolution)
   const gatewayTelemetryOn =
@@ -2056,7 +3019,24 @@ app.whenReady().then(async () => {
       settingsStorage.getPaprProfile()?.userId ?? "",
     PAPRWORK_APP_VERSION: app.getVersion(),
     PAPRWORK_IS_PACKAGED: app.isPackaged ? "true" : "false",
+    // Packaged app has no .env.local — keep in sync with DEFAULT_AGENT_STREAM_MAX_CONCURRENT.
+    AGENT_STREAM_MAX_CONCURRENT:
+      process.env.AGENT_STREAM_MAX_CONCURRENT ?? "6",
   };
+  for (const [key, value] of Object.entries(packagedGatewayEnv)) {
+    if (typeof value === "string" && value.trim() && !gatewayEnv[key]) {
+      gatewayEnv[key] = value.trim();
+    }
+  }
+  if (
+    gatewayEnv.PAPR_API_KEY &&
+    !paprApiKeyMatchesActiveWorkspace(gatewayEnv.PAPR_API_KEY)
+  ) {
+    console.warn(
+      "[Electron] Stripping stale PAPR_API_KEY from gateway env — wrong namespace for active workspace",
+    );
+    delete gatewayEnv.PAPR_API_KEY;
+  }
   if (IS_PRODUCTION) {
     const asarUnpacked = path.join(__dirname, "../..").replace("app.asar", "app.asar.unpacked");
     const esbuildBinName = process.platform === "win32" ? "esbuild.exe" : "esbuild";
@@ -2086,15 +3066,59 @@ app.whenReady().then(async () => {
     gatewayArgs,
     electronNodePath: process.execPath,
     gatewayEnv,
+    readActiveWorkspaceEnv,
     port: GATEWAY_PORT,
     customKeysStorage,
+    settingsStorage,
     getActiveOrganizationId: () =>
       readActiveWorkspacePointerOrgId() ||
       settingsStorage.getPaprProfile()?.organizationId,
   });
 
+  if (setGatewayRestartAfterWorkspaceSwitch) {
+    setGatewayRestartAfterWorkspaceSwitch(() => supervisor.restartForWorkspaceSwitch());
+  }
+
+  registerGeolocationPermissionHandlers({
+    getMainWindow: () => mainWindow,
+    settingsStorage,
+  });
+
+  console.log("[Electron] Startup: spawning gateway…");
   await supervisor.start();
+
+  if (ensureActiveNamespaceApiKey) {
+    try {
+      const namespaceKeySyncStartedAt = Date.now();
+      console.log(
+        "[Electron] Startup: syncing namespace API key from Parse (gateway ready)…",
+      );
+      await ensureActiveNamespaceApiKey(customKeysStorage, settingsStorage, {
+        refreshFromParse: true,
+      });
+      console.log(
+        `[Electron] Startup: namespace API key sync finished (${Date.now() - namespaceKeySyncStartedAt}ms)`,
+      );
+    } catch (error) {
+      console.warn(
+        "[Electron] Startup namespace API key sync failed:",
+        error instanceof Error ? error.message : error,
+      );
+    }
+  }
+
+  console.log("[Electron] Startup: opening main window…");
   await createMainWindow();
+  authDeepLinksReady = true;
+  console.log("[Electron] Startup: complete");
+
+  // Process auth deep links after Gateway + window are ready (callback needs both)
+  const coldStartUrl = process.argv.find((arg) => arg.startsWith("papr://"));
+  if (coldStartUrl) {
+    queueDeepLink(coldStartUrl);
+  }
+  await flushPendingDeepLinks();
+
   setupAutoUpdater();
 
   // Initialize permissions IPC after window is created
@@ -2196,6 +3220,15 @@ app.on("window-all-closed", () => {
 });
 
 app.on("activate", async () => {
+  if (isInstallingUpdate) {
+    console.log("[Electron] Ignoring dock activate during update install");
+    return;
+  }
+
+  if (!electronStartupReady) {
+    return;
+  }
+
   // macOS: Re-create window when dock icon clicked and no windows open
   if (mainWindow === null) {
     await createMainWindow();
@@ -2207,8 +3240,9 @@ app.on("activate", async () => {
 app.on("before-quit", async (event) => {
   // ShipIt needs an immediate quit — async cleanup races the bundle swap.
   if (isInstallingUpdate) {
-    console.log("[Electron] Installing update — fast quit (skipping cleanup)");
+    console.log("[Electron] Installing update — fast quit (skipping async cleanup)");
     isQuitting = true;
+    fastKillChildProcessesForUpdate();
     return;
   }
 
@@ -2242,7 +3276,6 @@ app.on("before-quit", async (event) => {
       console.log("[Electron] Cleaning up OAuth servers...");
       cleanupOAuthServers();
     }
-    
     // Cleanup Papr login callback server
     if (cleanupPaprLogin) {
       console.log("[Electron] Cleaning up Papr login server...");
@@ -2286,7 +3319,8 @@ app.on("will-quit", (event) => {
   console.log("[Electron] App will quit - final cleanup");
 
   if (isInstallingUpdate) {
-    console.log("[Electron] Installing update — skipping Gateway force-kill");
+    console.log("[Electron] Installing update — final Gateway kill for ShipIt");
+    fastKillChildProcessesForUpdate();
     return;
   }
   

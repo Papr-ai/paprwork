@@ -7,6 +7,10 @@ import { reinitializeWorkspaceServices } from "../workspaceSwitchService.js";
 
 export async function reinitializeWorkspaceServicesForCloudRun(input: {
   paprApiKey: string;
+  userDataPath?: string;
 }): Promise<void> {
-  await reinitializeWorkspaceServices({ paprApiKey: input.paprApiKey });
+  await reinitializeWorkspaceServices({
+    paprApiKey: input.paprApiKey,
+    userDataPath: input.userDataPath,
+  });
 }

@@ -31,9 +31,23 @@ import App from "./App";
 import { seedDemoTabs } from "./src/lib/demoSeedTabs";
 // Web-demo only: let the landing page force dark mode inside this iframe
 import { initDemoForceTheme } from "./src/lib/demoForceTheme";
+import { startRendererPerformanceReporting } from "./utils/rendererPerformance";
+import { installMiniAppPreviewWakeResync } from "./utils/previewIframeLifecycle";
 
 seedDemoTabs();
 initDemoForceTheme();
+
+// The web demo has no local gateway — skip perf reporting there.
+if (import.meta.env.VITE_DEMO_MODE !== "1") {
+  const stopRendererPerformance = startRendererPerformanceReporting(
+    `http://${import.meta.env.VITE_GATEWAY_HOST || "localhost"}:${import.meta.env.VITE_GATEWAY_PORT || "18789"}/api/debug/renderer-performance`,
+  );
+  const stopMiniAppPreviewWakeResync = installMiniAppPreviewWakeResync();
+  if (import.meta.hot) {
+    import.meta.hot.dispose(stopRendererPerformance);
+    import.meta.hot.dispose(stopMiniAppPreviewWakeResync);
+  }
+}
 
 console.log('[React] Entry point reached - starting React initialization');
 const reactStartTime = performance.now();

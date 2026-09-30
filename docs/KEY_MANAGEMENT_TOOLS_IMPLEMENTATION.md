@@ -9,7 +9,7 @@
 
 User added a custom API key (`PAPRWORK_PUBLICREPOS`) in Settings UI, but the agent:
 1. Didn't check if the key exists using `list_keys`
-2. Searched random file locations (`~/Papr/secrets.json`, papr.db, etc.)
+2. Searched random file locations (`$PAPR_HOME/secrets.json`, papr.db, etc.)
 3. Told user "token doesn't seem to be persisted anywhere"
 
 **Root Cause:** The key management tools (`list_keys`, `get_key`, `set_key`, `delete_key`) were **mentioned in the system prompt** but **never implemented**!

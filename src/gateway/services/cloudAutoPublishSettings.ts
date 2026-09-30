@@ -1,5 +1,5 @@
 /**
- * Global preference for automatic cloud mini-app publishing (default ON).
+ * Global preference for automatic cloud mini-app publishing (default OFF).
  */
 
 import * as fs from "fs";
@@ -13,7 +13,7 @@ export function defaultCloudSettingsPath(): string {
 function readAutoPublishDisabled(settingsPath: string): boolean {
   try {
     if (!fs.existsSync(settingsPath)) {
-      return false;
+      return true;
     }
     const data = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as {
       preferences?: { cloudAutoPublishEnabled?: boolean };

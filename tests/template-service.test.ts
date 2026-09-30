@@ -3,6 +3,7 @@ import path from "path";
 import { promises as fs } from "fs";
 import { afterEach, describe, expect, test } from "vitest";
 import { TemplateService } from "../src/gateway/services/TemplateService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const tmpRoots: string[] = [];
 
@@ -23,6 +24,9 @@ async function setup(): Promise<{
 }
 
 describe("TemplateService", () => {
+  // Keeps fixtures out of the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("template-service");
+
   test("creates pipeline template with app + python job + sqlite scaffold", async () => {
     const { templateService } = await setup();
     const result = await templateService.createPipelineTemplate({

@@ -1,7 +1,9 @@
-import { spawn, execSync } from "child_process";
+import { runSetupCommand } from "../../../../core/utils/runSetupCommand.js";
+import { spawn } from "child_process";
 import { existsSync } from "fs";
 import path from "path";
 import type { JobType } from "../types.js";
+import { runtimeParamsForJobEnv } from "../../../utils/normalizeRuntimeParams.js";
 import type {
   ExecutorLaunchParams,
   ExecutorLaunchResult,
@@ -9,9 +11,13 @@ import type {
 } from "./IJobExecutor.js";
 import { getShellCommand, wrapCommandWithVenv, getVenvPaths } from "../../../../core/utils/platform.js";
 import {
-  jobAppDatabaseEnv,
-  requireJobAppDatabase,
+  jobWriteDatabaseEnv,
+  requireJobWriteTargets,
 } from "../../jobAppDatabase.js";
+import { STANDALONE_APP_ID } from "../appIds.js";
+import { jobSdkEnv } from "../jobSdkEnv.js";
+import { leaseJobDbProxyEnv } from "../jobDbProxyEnv.js";
+import { ensurePlatformCdpEnvForJob, jobNeedsPlatformCdp } from "../../../utils/platformCdpBridge.js";
 
 export class CommandJobExecutor implements IJobExecutor {
   private supportedTypes: Set<JobType>;
@@ -43,47 +49,112 @@ export class CommandJobExecutor implements IJobExecutor {
     }
     // ─────────────────────────────────────────────────────────────────────────
 
+    params.signal?.throwIfAborted();
+
     // Wrap command with venv activation for Python jobs
     let finalCommand =
       params.job.type === "python"
         ? this.wrapWithVenv(command, params.jobDir)
         : command;
 
-    // ── Substitute custom API keys (${KEY_NAME} syntax) ───────────────────────
-    // Jobs bypass the bash tool, so we need to substitute keys here
-    // For "ask" keys, requests permission before substituting
+    // ── Resolve custom API keys ───────────────────────────────────────────────
+    // SECURITY: Jobs receive secrets as child-process env vars only.
+    // Secrets are never substituted into the command string.
     let sanitizationValues: string[] = [];
+    const keyEnvVars: Record<string, string> = {};
     try {
-      const result = await this.substituteCustomKeys(finalCommand, params);
+      const result = await this.resolveCustomKeys(finalCommand, params);
       finalCommand = result.command;
       sanitizationValues = result.sanitizationValues;
-      // Do NOT inject customKeys into env - that's a security risk!
+      // Inject resolved keys as env vars to child process
+      Object.assign(keyEnvVars, result.keyEnvVars);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to substitute API keys: ${message}`);
+      throw new Error(`Failed to resolve API keys: ${message}`);
     }
     // ─────────────────────────────────────────────────────────────────────────
+
+    let platformCdpEnv: Record<string, string> = {};
+    if (jobNeedsPlatformCdp(params.job)) {
+      try {
+        platformCdpEnv = await ensurePlatformCdpEnvForJob(params.job);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`Platform browser CDP setup failed: ${message}`);
+      }
+    }
 
     const jobDbPath = path.join(params.jobDir, "data", "data.db");
     const [shellPath, shellArgs] = getShellCommand(finalCommand);
 
-    const appDbContext = await requireJobAppDatabase(params.job.appIds);
+    const writeTargets = await requireJobWriteTargets(params.job);
+    const linkedAppId = (params.job.appIds ?? []).find(
+      (id) => id !== STANDALONE_APP_ID,
+    );
 
-    // Ensure we use the correct Node version (nvm's Node v24, not system Node)
-    // This prevents native module version mismatches with better-sqlite3
-    // Uses getNvmEnv() which handles both Unix and Windows properly
+    const nvmEnv = this.getNvmEnv();
+
+    // Replica-managed databases: hand the job proxy credentials so papr_db
+    // writes through the gateway instead of opening a raw write handle, which
+    // would truncate the WAL and wedge the sync engine.
+    const dbProxy = leaseJobDbProxyEnv(writeTargets, linkedAppId);
+
     const env: NodeJS.ProcessEnv = {
-      ...this.getNvmEnv(),
+      ...nvmEnv,
       JOB_DIR: params.jobDir,
       JOB_DB: jobDbPath,
-      ...(appDbContext ? jobAppDatabaseEnv(appDbContext) : {}),
-      ...(params.runtimeParams ?? {}),
+      // `from papr_files import add` without vendoring the helper per job.
+      ...jobSdkEnv(nvmEnv.PYTHONPATH ?? process.env.PYTHONPATH),
+      ...(writeTargets.length > 0
+        ? jobWriteDatabaseEnv(writeTargets, linkedAppId)
+        : {}),
+      ...dbProxy.env,
+      ...platformCdpEnv,
+      ...(runtimeParamsForJobEnv(params.runtimeParams)),
+      ...keyEnvVars,
     };
     
-    const proc = spawn(shellPath, shellArgs, {
-      cwd: params.jobDir,
+    // ── Plan A: block sqlite3 writes to registry DB paths ─────────────────────
+    const { detectReplicaRegistrySqliteBlock } = await import(
+      "../../../../core/utils/replicaBashSqliteGuard.js"
+    );
+    const { detectReplicaJobScriptSqliteBlock } = await import(
+      "../../../../core/utils/replicaJobScriptGuard.js"
+    );
+    const guardCtx = {
       env,
-    });
+      jobDb: jobDbPath,
+      appDb: writeTargets[0]?.dbPath,
+    };
+    const replicaBlock =
+      detectReplicaRegistrySqliteBlock(finalCommand, guardCtx) ??
+      detectReplicaJobScriptSqliteBlock(finalCommand, params.jobDir, guardCtx);
+    if (replicaBlock) {
+      throw new Error(replicaBlock.message);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    // spawn() throws SYNCHRONOUSLY for EBADF/EMFILE on macOS (posix_spawn
+    // file-action setup fails before a child exists). Release the DB proxy
+    // lease ourselves — the "error" listener below is never attached.
+    let proc: ReturnType<typeof spawn>;
+    try {
+      params.signal?.throwIfAborted();
+      proc = spawn(shellPath, shellArgs, {
+        cwd: params.jobDir,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (spawnError) {
+      dbProxy.release();
+      throw spawnError;
+    }
+
+    // Revoke the proxy session with the process rather than on a timer, so a
+    // finished job cannot keep writing. "close" (not "exit") waits for stdio,
+    // and both listeners are needed because a spawn failure emits only "error".
+    proc.once("close", dbProxy.release);
+    proc.once("error", dbProxy.release);
 
     return {
       mode: "process",
@@ -94,23 +165,25 @@ export class CommandJobExecutor implements IJobExecutor {
   }
 
   /**
-   * Substitute custom API keys in command (${KEY_NAME} syntax).
-   * Loads keys from both environment AND CustomKeysStorage.
-   * For keys with permission "ask", requests user approval before substituting.
+   * Resolve custom API keys referenced in the command template.
+   * Keys are returned as env vars for child process injection.
+   * For keys with permission "ask", requests user approval before injection.
    *
-   * SECURITY: Keys are ONLY substituted in command string, NOT injected into env.
+   * SECURITY: Keys are injected as env vars to the child process.
+   * They are NEVER substituted into the command string.
    *
-   * @returns Object with substituted command
+   * @returns Object with sanitized command and key env vars
    * @throws Error if permission denied for an "ask" key
    */
-  private async substituteCustomKeys(
+  private async resolveCustomKeys(
     command: string,
     params: ExecutorLaunchParams,
-  ): Promise<{ command: string; sanitizationValues: string[] }> {
+  ): Promise<{ command: string; keyEnvVars: Record<string, string>; sanitizationValues: string[] }> {
     const customKeys: Record<string, string> = {};
     const job = params.job;
+    const requiredKeys = new Set(job.requiredKeys ?? []);
 
-    // 1. Add keys from environment
+    // 1. Add keys from environment only when explicitly required or referenced
     const commonKeyVars = [
       "OPENAI_API_KEY",
       "ANTHROPIC_API_KEY",
@@ -120,6 +193,7 @@ export class CommandJobExecutor implements IJobExecutor {
       "GITLAB_TOKEN",
     ];
     for (const varName of commonKeyVars) {
+      if (!requiredKeys.has(varName) && !command.includes(`\${${varName}}`)) continue;
       const value = process.env[varName];
       if (value) customKeys[varName] = value;
     }
@@ -133,7 +207,7 @@ export class CommandJobExecutor implements IJobExecutor {
       const storedKeys = await service.listKeys();
 
       for (const keyMeta of storedKeys) {
-        if (!command.includes(`\${${keyMeta.name}}`)) continue;
+        if (!requiredKeys.has(keyMeta.name) && !command.includes(`\${${keyMeta.name}}`)) continue;
 
         const value = await service.getKeyByName(keyMeta.name);
         if (!value) continue;
@@ -179,20 +253,36 @@ export class CommandJobExecutor implements IJobExecutor {
       );
     }
 
-    // 4. Substitute ${KEY_NAME} with actual values
-    let result = command;
-    if (command.includes("${")) {
-      for (const [name, value] of Object.entries(customKeys)) {
-        if (value && value.length > 0) {
-          const regex = new RegExp(`\\$\\{${this.escapeRegex(name)}\\}`, "g");
-          result = result.replace(regex, value);
-        }
+    for (const keyName of requiredKeys) {
+      if (!customKeys[keyName]) {
+        throw new Error(
+          `Required API key "${keyName}" is missing. Add it in Settings → API Keys → Custom API Keys.`,
+        );
       }
     }
+
+    // 4. Strip ${KEY_NAME} placeholders — keys are injected via env vars
+    // The command seen by the agent/logs shows placeholders, never values
+    let result = command;
+    if (command.includes("${")) {
+      for (const name of Object.keys(customKeys)) {
+        // Remove --flag "${KEY_NAME}" arg pairs
+        const flagRe = new RegExp(
+          `\\s+--[a-z][-a-z]*\\s+["']?\\$\\{${this.escapeRegex(name)}\\}["']?`, "g",
+        );
+        if (flagRe.test(result)) {
+          result = result.replace(flagRe, "");
+        } else {
+          const re = new RegExp(`["']?\\$\\{${this.escapeRegex(name)}\\}["']?`, "g");
+          result = result.replace(re, "");
+        }
+      }
+      result = result.replace(/  +/g, " ").trim();
+    }
     const sanitizationValues = Object.values(customKeys).filter(
-      (value) => value.length > 0,
+      (v) => v && v.length > 0,
     );
-    return { command: result, sanitizationValues };
+    return { command: result, keyEnvVars: customKeys, sanitizationValues };
   }
 
   /**
@@ -220,19 +310,23 @@ export class CommandJobExecutor implements IJobExecutor {
     if (!existsSync(venvDir)) {
       await params.appendLog("Creating Python virtual environment...");
       try {
-        const pythonCmd = await this.getPythonCommand();
+        const pythonCmd = await this.getPythonCommand(params.signal);
         
         // Check if Python is actually available
-        const testResult = execSync(`${pythonCmd} --version 2>&1`, {
+        const testResult = (await runSetupCommand(`${pythonCmd} --version 2>&1`, {
+          diagnosticName: "python-check",
+          signal: params.signal,
           timeout: 5000,
           encoding: 'utf8',
           env: this.getNvmEnv(),
-        }).trim();
+        })).trim();
         
         await params.appendLog(`Using Python: ${testResult}`);
         
-        execSync(`${pythonCmd} -m venv .venv`, {
+        await runSetupCommand(`${pythonCmd} -m venv .venv`, {
+            diagnosticName: "python-venv",
           cwd: params.jobDir,
+          signal: params.signal,
           timeout: 30_000,
           env: this.getNvmEnv(),
         });
@@ -267,10 +361,12 @@ export class CommandJobExecutor implements IJobExecutor {
         await params.appendLog("Installing Python requirements...");
         try {
           const { pip } = getVenvPaths(venvDir);
-          const pipOutput = execSync(
-            `${pip} install -r requirements.txt 2>&1`,
+          const pipOutput = await runSetupCommand(
+            `"${pip}" install -r requirements.txt 2>&1`,
             {
+              diagnosticName: "pip-install",
               cwd: params.jobDir,
+              signal: params.signal,
               timeout: 120_000, // 2 min timeout for pip
               encoding: "utf8",
               env: this.getNvmEnv(),
@@ -326,8 +422,10 @@ export class CommandJobExecutor implements IJobExecutor {
     if (existsSync(packageJson) && !existsSync(nodeModules)) {
       await params.appendLog("Installing Node dependencies...");
       try {
-        execSync("npm install --production 2>&1", {
+        await runSetupCommand("npm install --production 2>&1", {
+            diagnosticName: "npm-install",
           cwd: params.jobDir,
+          signal: params.signal,
           timeout: 120_000,
           encoding: "utf8",
           env: this.getNvmEnv(),
@@ -360,19 +458,18 @@ export class CommandJobExecutor implements IJobExecutor {
    * - Windows: 'python' (modern installations alias python3 as python)
    * - Unix: 'python3' (explicit version to avoid Python 2)
    */
-  private async getPythonCommand(): Promise<string> {
+  private async getPythonCommand(signal?: AbortSignal): Promise<string> {
     if (process.platform === "win32") {
       // On Windows, check if Python exists, auto-install if missing
       try {
-        const { execSync } = await import('child_process');
         // Try 'python' first (most common)
         try {
-          execSync('python --version', { timeout: 5000, stdio: 'pipe' });
+          await runSetupCommand('python --version', { timeout: 5000, stdio: 'pipe', signal });
           return "python";
         } catch {
           // Try 'py' launcher
           try {
-            execSync('py --version', { timeout: 5000, stdio: 'pipe' });
+            await runSetupCommand('py --version', { timeout: 5000, stdio: 'pipe', signal });
             return "py -3";
           } catch {
             // Python not found - return 'python' and let the error handling deal with it

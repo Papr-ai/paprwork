@@ -1,7 +1,9 @@
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
 import Database from "better-sqlite3";
 import * as fs from "fs";
 import * as path from "path";
 import { resolvePaprUserDataPath } from "../../../core/utils/paprWorkspace.js";
+import { MAX_INLINE_PAYLOAD_BYTES } from "./messagePayloadStore.js";
 
 const CHARS_PER_TOKEN = 4;
 /** Rough chars/line when we only have lines_of_code from index metadata */
@@ -224,21 +226,25 @@ function savingsFromHits(hits: MemorySearchHit[]): number {
 function openCodeIndexDb(): Database.Database | null {
   const dbPath = path.join(resolvePaprUserDataPath(), "code-index.db");
   if (!fs.existsSync(dbPath)) return null;
-  return new Database(dbPath, { readonly: true });
+  return openDiagnosticDatabase(Database, "services/storage/memorySearchSavings", dbPath, { readonly: true });
 }
 
 export function computeMemorySearchSavings(
   db: Database.Database,
+  sinceIso?: string,
 ): MemorySearchSavingsResult {
   const codeIndexDb = openCodeIndexDb();
 
   try {
-    const rows = db
-      .prepare(
-        `SELECT tool_calls FROM messages
+    const rows = sinceIso
+      ? (db
+          .prepare(
+            `SELECT tool_calls FROM messages
          WHERE role = 'assistant'
            AND tool_calls IS NOT NULL
            AND tool_calls != ''
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}
+           AND timestamp >= ?
            AND (
              tool_calls LIKE '%"search_agent_memory"%'
              OR tool_calls LIKE '%"search_memory"%'
@@ -246,8 +252,24 @@ export function computeMemorySearchSavings(
            )
          ORDER BY timestamp DESC
          LIMIT 500`,
-      )
-      .all() as Array<{ tool_calls: string }>;
+          )
+          .all(sinceIso) as Array<{ tool_calls: string }>)
+      : (db
+          .prepare(
+            `SELECT tool_calls FROM messages
+         WHERE role = 'assistant'
+           AND tool_calls IS NOT NULL
+           AND tool_calls != ''
+           AND LENGTH(tool_calls) <= ${MAX_INLINE_PAYLOAD_BYTES}
+           AND (
+             tool_calls LIKE '%"search_agent_memory"%'
+             OR tool_calls LIKE '%"search_memory"%'
+             OR tool_calls LIKE '%Memory Search Results (Semantic)%'
+           )
+         ORDER BY timestamp DESC
+         LIMIT 500`,
+          )
+          .all() as Array<{ tool_calls: string }>);
 
     let memorySearchCount = 0;
     let hybridBashCount = 0;

@@ -123,7 +123,7 @@ async saveMessage(chatId: string, message: StoredMessage): Promise<void> {
 
 **Design Decision:** We store tool **names** and **status** in metadata, but not full args/results to avoid bloating PAPR Memory. Full details remain in:
 - Local SQLite (instant access)
-- `~/Papr/Chats/*.txt` (human-readable, searchable with bash/grep)
+- `$PAPR_HOME/Chats/*.txt` (human-readable, searchable with bash/grep)
 
 ---
 
@@ -284,7 +284,7 @@ await papr.memory.search({
 ## Future Enhancements
 
 ### Phase 2: Chat Title in Metadata
-Currently, chat titles are only in local SQLite and `~/Papr/Chats/*.txt`. Could add:
+Currently, chat titles are only in local SQLite and `$PAPR_HOME/Chats/*.txt`. Could add:
 ```typescript
 metadata: {
   chatTitle: 'Debugging memory sync',
@@ -379,7 +379,7 @@ If issues arise, revert is simple:
 ## Questions & Answers
 
 **Q: Why not store full tool args/results in PAPR metadata?**  
-A: Tool results can be very large (file contents, bash output). Storing in metadata would bloat PAPR Memory. Full details are in local SQLite and `~/Papr/Chats/*.txt`.
+A: Tool results can be very large (file contents, bash output). Storing in metadata would bloat PAPR Memory. Full details are in local SQLite and `$PAPR_HOME/Chats/*.txt`.
 
 **Q: Why separate `source_agent_id` and `source_agent_name`?**  
 A: ID is machine-readable (e.g., "research-specialist"), Name is human-readable (e.g., "Research Specialist"). Matches SubAgent job metadata pattern.

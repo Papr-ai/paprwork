@@ -21,7 +21,7 @@ interface UpdateSkillPayload {
 }
 
 interface InstallCatalogSkillPayload {
-  source: "clawhub" | "skills.sh";
+  source: "clawhub" | "skills.sh" | "gtmskills.com" | "gtm-skills.com";
   catalogId: string;
 }
 

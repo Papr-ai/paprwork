@@ -7,6 +7,16 @@ export interface FetchChatHistoryOptions {
   skip?: number;
 }
 
+export function getRemainingHistoryBatchSize(input: {
+  loadedMessageCount: number;
+  knownMessageCount?: number;
+  minimumBatchSize?: number;
+}): number {
+  const minimum = input.minimumBatchSize ?? 20;
+  if (input.knownMessageCount === undefined) return minimum;
+  return Math.max(minimum, input.knownMessageCount - input.loadedMessageCount);
+}
+
 export async function fetchChatHistory(
   chatId: string,
   options: FetchChatHistoryOptions = {}

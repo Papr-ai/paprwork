@@ -6,6 +6,12 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { ValidationIssue } from "../services/AppService.js";
 import type { RequiredKeySpec } from "../../core/types/bundles.js";
+import type { AppBackendManifest } from "../../core/types/appBackend.js";
+import {
+  isPlatformInjectedEnvKey,
+  VERIFIED_CALLER_EMAIL_ENV,
+  VERIFIED_CALLER_USER_ID_ENV,
+} from "../../core/utils/platformInjectedEnvKeys.js";
 import {
   collectBackendManifestKeyNames,
   parseAppBackendManifest,
@@ -44,6 +50,13 @@ const IGNORED_BACKEND_ENV_NAMES = new Set([
   "PAPR_DB_MODE",
   "PAPR_DB_URL",
   "PAPR_DB_AUTH_TOKEN",
+  "PAPR_DB_PROXY_URL",
+  "PAPR_DB_PROXY_TOKEN",
+  "PAPR_GATEWAY_URL",
+  "PAPR_ACTIVE_SOURCE_ID",
+  "PAPR_LINKED_DB_ALIASES",
+  VERIFIED_CALLER_USER_ID_ENV,
+  VERIFIED_CALLER_EMAIL_ENV,
 ]);
 
 const ENV_VAR_REFERENCE_PATTERNS: RegExp[] = [
@@ -59,6 +72,153 @@ function isFrontendSource(relativePath: string): boolean {
     return false;
   }
   return /\.(ts|tsx|js|jsx|html)$/.test(relativePath);
+}
+
+const BACKEND_STDIN_PATTERN = /\bsys\.stdin\b|json\.load\s*\(\s*sys\.stdin\s*\)/;
+
+const BACKEND_RAW_SQLITE3_PATTERN =
+  /\bimport\s+sqlite3\b|(?:^|[^\w])sqlite3\.connect\s*\(/m;
+
+const BACKEND_LASTROWID_PATTERN =
+  /\b(?:cursor|cur)\.lastrowid\b|\.lastrowid\b(?!\s*=)/;
+
+const BACKEND_FETCH_PATTERN =
+  /fetch\s*\(\s*[`'"]\/api\/app\/backend\/[^`'"]+[`'"]/g;
+
+/** Literal object passed to JSON.stringify in a backend fetch (single-level). */
+const BACKEND_FETCH_BODY_LITERAL =
+  /JSON\.stringify\s*\(\s*(\{[^{}]*\})\s*\)/;
+
+function stripLineCommentsForLint(content: string): string {
+  return content
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (
+        trimmed.startsWith("//") ||
+        trimmed.startsWith("*") ||
+        trimmed.startsWith("/*") ||
+        trimmed.startsWith("#")
+      ) {
+        return "";
+      }
+      const slash = line.indexOf("//");
+      return slash >= 0 ? line.slice(0, slash) : line;
+    })
+    .join("\n");
+}
+
+/** Blank full-line Python comments (# …) so lint rules only see executable code. */
+export function stripPythonCommentLines(source: string): string {
+  return source
+    .split("\n")
+    .map((line) => (line.trimStart().startsWith("#") ? "" : line))
+    .join("\n");
+}
+
+export function checkBackendHandlerPatterns(
+  handlerRelativePath: string,
+  handlerSource: string,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const file = `${BACKEND_FOLDER}/${handlerRelativePath}`;
+  // Lint code, not guidance: the scaffolded ping.py warns "Never sqlite3.connect(APP_DB)"
+  // in a comment, which used to fail every new app's build.
+  handlerSource = stripPythonCommentLines(handlerSource);
+
+  if (BACKEND_STDIN_PATTERN.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "error",
+      message:
+        "Backend handlers cannot read sys.stdin — the gateway injects params via PAPR_ACTION_PARAMS. " +
+        'Use: params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}")) (Python) or ' +
+        'JSON.parse(process.env.PAPR_ACTION_PARAMS ?? "{}") (Node/TS).',
+      rule: "backend-no-stdin",
+    });
+  }
+
+  if (/\bAPP_DB_PATH\b/.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "error",
+      message:
+        'APP_DB_PATH is not a platform env var. Use from papr_db import connect; con = connect("alias") ' +
+        "(or connect() for the active linked DB). See backend/papr_db.py scaffold.",
+      rule: "backend-no-app-db-path",
+    });
+  }
+
+  if (BACKEND_RAW_SQLITE3_PATTERN.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "error",
+      message:
+        "Do not import sqlite3 or call sqlite3.connect() in backend handlers — cloud runs with " +
+        "PAPR_DB_MODE=turso (no local APP_DB file). Use from papr_db import connect; con = connect() " +
+        'or connect("alias").',
+      rule: "backend-no-raw-sqlite3",
+    });
+  }
+
+  if (BACKEND_LASTROWID_PATTERN.test(handlerSource)) {
+    issues.push({
+      file,
+      severity: "warning",
+      message:
+        "Avoid cursor.lastrowid in backend handlers — use write(con, sql, params).last_insert_rowid " +
+        "or INSERT … RETURNING with query(). Cloud and desktop both route through the Papr DB contract.",
+      rule: "backend-no-lastrowid",
+    });
+  }
+
+  return issues;
+}
+
+/**
+ * Warn when frontend fetch('/api/app/backend/...') sends a literal body without params:.
+ * Skips JSON.stringify(variable) — cannot analyze runtime shapes safely.
+ */
+export function checkMiniAppBackendFetchPatterns(
+  fileContents: Map<string, string>,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+
+  for (const [filename, content] of fileContents.entries()) {
+    if (!isFrontendSource(filename)) {
+      continue;
+    }
+
+    const code = stripLineCommentsForLint(content);
+    BACKEND_FETCH_PATTERN.lastIndex = 0;
+
+    for (const match of code.matchAll(BACKEND_FETCH_PATTERN)) {
+      const start = match.index ?? 0;
+      const slice = code.slice(start, start + 900);
+      const bodyMatch = BACKEND_FETCH_BODY_LITERAL.exec(slice);
+      if (!bodyMatch) {
+        continue;
+      }
+      const literal = bodyMatch[1] ?? "";
+      if (/\bparams\s*:/.test(literal)) {
+        continue;
+      }
+
+      issues.push({
+        file: filename,
+        severity: "warning",
+        message:
+          "POST /api/app/backend/:action expects { params: { ... } } in the JSON body " +
+          "(gateway maps params → PAPR_ACTION_PARAMS). Wrap handler args: " +
+          'JSON.stringify({ params: { key: value } }). Parse the response: ' +
+          "const { stdout, exitCode, stderr } = await res.json(); JSON.parse(stdout).",
+        rule: "backend-fetch-params-wrapper",
+      });
+      break;
+    }
+  }
+
+  return issues;
 }
 
 export function checkMiniAppBashPatterns(
@@ -95,11 +255,35 @@ export function checkMiniAppBashPatterns(
   return issues;
 }
 
-function extractVaultEnvReferences(handlerSource: string): Set<string> {
+/** Strip comments so scaffold examples do not trigger vault-key lint. */
+export function stripCommentsForVaultEnvScan(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .split("\n")
+    .map((line) => {
+      const trimmed = line.trim();
+      if (trimmed.startsWith("#")) {
+        return "";
+      }
+      const hashIdx = line.indexOf("#");
+      if (hashIdx !== -1) {
+        return line.slice(0, hashIdx);
+      }
+      const slashIdx = line.indexOf("//");
+      if (slashIdx !== -1) {
+        return line.slice(0, slashIdx);
+      }
+      return line;
+    })
+    .join("\n");
+}
+
+export function extractVaultEnvReferences(handlerSource: string): Set<string> {
   const names = new Set<string>();
+  const scanSource = stripCommentsForVaultEnvScan(handlerSource);
   for (const pattern of ENV_VAR_REFERENCE_PATTERNS) {
     pattern.lastIndex = 0;
-    for (const match of handlerSource.matchAll(pattern)) {
+    for (const match of scanSource.matchAll(pattern)) {
       const name = match[1];
       if (
         !name ||
@@ -148,6 +332,29 @@ function checkBackendVaultKeyDeclarations(
   ];
 }
 
+function checkManifestPlatformInjectedKeys(
+  manifest: AppBackendManifest,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  for (const [actionName, spec] of Object.entries(manifest.actions)) {
+    for (const key of spec.keys ?? []) {
+      if (!isPlatformInjectedEnvKey(key)) {
+        continue;
+      }
+      issues.push({
+        file: `${BACKEND_FOLDER}/manifest.json`,
+        severity: "warning",
+        message:
+          `Action "${actionName}" lists "${key.trim()}" in "keys", but ${key.trim()} is ` +
+          "server-injected when the caller is signed in — not a Settings vault key. " +
+          'Remove it from "keys"; handlers read os.environ / process.env directly.',
+        rule: "backend-keys-platform-injected",
+      });
+    }
+  }
+  return issues;
+}
+
 function checkBackendKeysInRequirements(
   backendKeyNames: readonly string[],
   requirements: RequiredKeySpec[],
@@ -189,6 +396,7 @@ export async function checkBackendManifestIntegrity(
 
   try {
     const manifest = parseAppBackendManifest(JSON.parse(manifestRaw) as unknown);
+    issues.push(...checkManifestPlatformInjectedKeys(manifest));
     const backendKeys = collectBackendManifestKeyNames(manifest);
     let requirementsFile: RequiredKeySpec[] = [];
     try {
@@ -212,6 +420,7 @@ export async function checkBackendManifestIntegrity(
         await fs.access(handlerPath);
         const handlerSource = await fs.readFile(handlerPath, "utf8");
         issues.push(
+          ...checkBackendHandlerPatterns(spec.handler, handlerSource),
           ...checkBackendVaultKeyDeclarations(
             actionName,
             spec.handler,
@@ -283,8 +492,14 @@ export async function checkOrphanBackendHandlers(
     return issues;
   }
 
+  /** Shared DB helpers copied by scaffold — not HTTP action handlers. */
+  const backendHelperModules = new Set(["papr_db.py", "db_helper.py"]);
+
   for (const entry of entries) {
     if (!entry.endsWith(".py") || entry.startsWith("__")) {
+      continue;
+    }
+    if (backendHelperModules.has(entry)) {
       continue;
     }
     const normalized = entry.replace(/\\/g, "/");

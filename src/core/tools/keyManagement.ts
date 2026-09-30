@@ -85,7 +85,7 @@ export const listKeysTool = createTool({
 export const getKeyTool = createTool({
   id: "get_key",
   description:
-    "Get the value of a specific custom API key by name. Use this to check if a required key exists. If the key doesn't exist, guide the user to add it in Settings → API Keys → Custom API Keys.",
+    "Check whether a custom API key exists without exposing its value. If the key does not exist, guide the user to add it in Settings → API Keys → Custom API Keys.",
   inputSchema: z.object({
     name: z
       .string()
@@ -117,7 +117,7 @@ export const getKeyTool = createTool({
           name: args.name,
           exists: true,
           valueLength: value.length,
-          message: `Key '${args.name}' exists and is ${value.length} characters long. Use \${${args.name}} in bash commands to reference it.`,
+          message: `Key '${args.name}' exists and is ${value.length} characters long. For jobs, declare requiredKeys: ['${args.name}'] and read it from the process environment. Do not print it or pass it as a CLI argument.`,
         },
         duration: performance.now() - startTime,
         timestamp: new Date().toISOString(),

@@ -2,7 +2,8 @@ import {
   isInterruptedToolResult,
   resolveToolCallStatus,
 } from "../../src/core/utils/interruptedToolResult";
-import type { ChatMessage } from "../types/chat";
+import type { ChatMessage, MessageAttachment } from "../types/chat";
+import { normalizeLoadedMessage } from "./normalizeHistoryTools";
 
 /** Synthetic user messages injected by SubAgentResponseTrigger - shown only in MiniChatCard, not main chat */
 function isSyntheticSubAgentMessage(msg: unknown): boolean {
@@ -20,20 +21,26 @@ function isSyntheticSubAgentMessage(msg: unknown): boolean {
   );
 }
 
-/** Filter out synthetic sub-agent exchange (user + assistant response) - shown only in MiniChatCard */
+/** Hide synthetic trigger user rows; assistant summaries fold onto the delegate message. */
 function filterSyntheticSubAgentExchange(history: unknown[]): unknown[] {
   const result: unknown[] = [];
   for (let i = 0; i < history.length; i++) {
     const msg = history[i];
     if (isSyntheticSubAgentMessage(msg)) {
-      // Skip synthetic user message and the immediately following assistant response
-      const next = history[i + 1];
-      const nextIsAssistant =
-        typeof next === "object" &&
-        next !== null &&
-        (next as Record<string, unknown>).role === "assistant";
-      if (nextIsAssistant) i++; // Skip next too
       continue;
+    }
+    if (
+      typeof msg === "object" &&
+      msg !== null &&
+      (msg as Record<string, unknown>).role === "assistant"
+    ) {
+      const content =
+        typeof (msg as Record<string, unknown>).content === "string"
+          ? ((msg as Record<string, unknown>).content as string)
+          : "";
+      if (/^Agent job Delegation: .+ finished with no textual output\.$/.test(content.trim())) {
+        continue;
+      }
     }
     result.push(msg);
   }
@@ -129,7 +136,37 @@ export function mapHistoryMessages(
       ? candidate.sequence
       : undefined;
 
-    return {
+    const attachmentsRaw = Array.isArray(candidate.attachments)
+      ? candidate.attachments
+      : undefined;
+    const attachments: MessageAttachment[] | undefined =
+      attachmentsRaw && attachmentsRaw.length > 0
+        ? attachmentsRaw.map((raw, attachmentIndex) => {
+            const item =
+              typeof raw === "object" && raw !== null
+                ? (raw as Record<string, unknown>)
+                : {};
+            const kind = item.kind;
+            const normalizedKind: MessageAttachment["kind"] =
+              kind === "document" || kind === "app" || kind === "file"
+                ? kind
+                : "file";
+            return {
+              id:
+                typeof item.id === "string"
+                  ? item.id
+                  : `attachment-${timestampSeed}-${index}-${attachmentIndex}`,
+              name: typeof item.name === "string" ? item.name : "Attachment",
+              kind: normalizedKind,
+              mimeType:
+                typeof item.mimeType === "string" ? item.mimeType : undefined,
+              filePath:
+                typeof item.filePath === "string" ? item.filePath : undefined,
+            };
+          })
+        : undefined;
+
+    return normalizeLoadedMessage({
       id:
         typeof candidate.id === "string"
           ? candidate.id
@@ -139,6 +176,21 @@ export function mapHistoryMessages(
       reasoning,
       toolCalls,
       sequence: sequenceRaw, // Include sequence for interleaved rendering
-    };
+      // Which model actually answered. This is the durable record of what a
+      // chat was running on, so reopening it can restore that model instead of
+      // inheriting whatever was last picked in some other chat.
+      ...(typeof candidate.model === "string" && candidate.model
+        ? { model: candidate.model }
+        : {}),
+      // Persisted by the gateway when a turn never finished. Carrying it through
+      // keeps an interrupted turn labelled as such after a reload, instead of
+      // reappearing as a finished answer.
+      ...(candidate.incomplete === true ? { interrupted: true } : {}),
+      ...(attachments && attachments.length > 0 ? { attachments } : {}),
+      ...(typeof candidate.delegation_finish_for === "string" &&
+      candidate.delegation_finish_for
+        ? { delegationFinishFor: candidate.delegation_finish_for }
+        : {}),
+    });
   });
 }

@@ -8,15 +8,138 @@ import type { CustomKeysStorage } from "../../core/storage/CustomKeysStorage.js"
 import { OpenAIOAuthService } from "../../core/services/OpenAIOAuthService.js";
 import { ClaudeOAuthService } from "../../core/services/ClaudeOAuthService.js";
 import { ClaudeSetupTokenService } from "../../core/services/ClaudeSetupTokenService.js";
+import { getClaudeCLIManager } from "../services/ClaudeCLIManager.js";
 import { OAuthCallbackServer } from "../../core/services/OAuthCallbackServer.js";
 import { invalidateKeyCache } from "./customKeys.js";
-import { sanitizeOAuthAccessToken } from "../../core/utils/oauthTokenSanitize.js";
+import {
+  extractChatGptAccountIdFromOAuthToken,
+  sanitizeOAuthAccessToken,
+} from "../../core/utils/oauthTokenSanitize.js";
+import {
+  claudeAccessTokenIsLive,
+  claudeCredentialsToTokenLifetime,
+  isUsableRefreshToken,
+  type ClaudeCliCredentials,
+} from "../../core/services/claudeCliCredentials.js";
+import {
+  isInvalidGrantError,
+  RefreshRejectionLedger,
+} from "../../core/services/oauthRefreshRejection.js";
+import {
+  getOAuthCompletedEventName,
+  getOAuthFailedEventName,
+  getOAuthStepEventName,
+  logOAuthProviderStep,
+  type OAuthProviderId,
+  type OAuthProviderStep,
+} from "../../core/telemetry/oauthProviderSteps.js";
+import { fetchClaudeSubscriptionUsageFromCandidates } from "../../core/services/claudeOAuthUsage.js";
+import { buildClaudeUsageTokenCandidates } from "../../core/services/claudeUsageLimitCandidates.js";
+import { fetchCodexSubscriptionUsage } from "../../core/services/codexOAuthUsage.js";
+import {
+  dedupeAccessTokens,
+  readClaudeAuthStatusFromCli,
+} from "../../core/services/claudeCodeUsageSource.js";
+
+type OAuthTelemetryTracker = (
+  eventName: string,
+  properties?: Record<string, unknown>,
+) => void;
+
+type OAuthStartTelemetryOptions = {
+  source?: string;
+};
+
+/**
+ * A pasted `claude setup-token` carries no expiry of its own, and Anthropic
+ * issues those for about a year. Consulted only when the source told us
+ * nothing: credentials read from Claude Code's own storage bring a real
+ * expiresAt, and assuming a year for those is what let an access token that
+ * had already died keep reporting itself as connected.
+ */
+const SETUP_TOKEN_ASSUMED_TTL_SECONDS = 365 * 24 * 60 * 60;
+
+function resolveOAuthTelemetrySource(source?: string): string {
+  if (source === "onboarding" || source === "settings") {
+    return source;
+  }
+  return "unknown";
+}
 
 let oauthTokenStorage: OAuthTokenStorage | null = null;
 let customKeysStorage: CustomKeysStorage | null = null;
 let openaiOAuthService: OpenAIOAuthService | null = null;
 let claudeSetupTokenService: ClaudeSetupTokenService | null = null;
 let claudeOAuthService: ClaudeOAuthService | null = null;
+let trackOAuthEvent: OAuthTelemetryTracker | undefined;
+const oauthFlowStartedAt = new Map<OAuthProviderId, number>();
+const refreshRejections = new RefreshRejectionLedger();
+
+function trackOAuthStep(
+  provider: OAuthProviderId,
+  step: OAuthProviderStep,
+  properties?: Record<string, unknown>,
+): void {
+  const payload: Record<string, unknown> = { step, ...properties };
+  if (step === "connected" || step === "connect_failed") {
+    const startedAt = oauthFlowStartedAt.get(provider);
+    if (startedAt !== undefined) {
+      payload.duration_ms = Date.now() - startedAt;
+      oauthFlowStartedAt.delete(provider);
+    }
+  }
+  logOAuthProviderStep(provider, step, payload);
+  trackOAuthEvent?.(getOAuthStepEventName(provider), payload);
+}
+
+function trackOAuthCompleted(
+  provider: OAuthProviderId,
+  properties?: Record<string, unknown>,
+): void {
+  trackOAuthEvent?.(getOAuthCompletedEventName(provider), properties);
+  trackOAuthEvent?.("paprwork_provider_configured", {
+    provider,
+    method: "oauth",
+    ...properties,
+  });
+}
+
+function trackOAuthFailed(
+  provider: OAuthProviderId,
+  error: string,
+  properties?: Record<string, unknown>,
+): void {
+  trackOAuthStep(provider, "connect_failed", { error, ...properties });
+  trackOAuthEvent?.(getOAuthFailedEventName(provider), { error, ...properties });
+}
+
+async function persistOAuthConnection(
+  provider: OAuthProviderId,
+  tokenInput: {
+    provider: OAuthProviderId;
+    accessToken: string;
+    refreshToken: string;
+    expiresIn: number;
+    accountId?: string;
+  },
+  options?: {
+    flow_source?: "keychain" | "browser" | "terminal" | "paste";
+    source?: string;
+    stage?: "start" | "callback" | "paste" | "provisioning";
+  },
+): Promise<void> {
+  await oauthTokenStorage!.storeToken(tokenInput);
+  // A new token is worth one fresh look at the CLI's credentials.
+  cliAdoptionAttempted.delete(provider);
+  trackOAuthStep(provider, "token_stored", options);
+
+  await syncOAuthTokenToApiKeys(provider, tokenInput.accessToken);
+  trackOAuthStep(provider, "key_synced", options);
+
+  trackOAuthStep(provider, "connected", options);
+  trackOAuthCompleted(provider, options);
+  sendOAuthStatus(provider, "connected");
+}
 
 // Active callback servers (OpenAI and Claude PKCE flows)
 const activeServers = new Map<string, OAuthCallbackServer>();
@@ -49,6 +172,15 @@ const REFRESH_CHECK_INTERVAL = 2 * 60 * 1000; // Check every 2 minutes
 const REFRESH_BUFFER = 15 * 60; // Refresh 15 minutes before expiry
 
 /**
+ * Providers whose stored token we have already tried to upgrade from the CLI's
+ * own credentials this session.
+ *
+ * Cleared whenever the stored token changes, since a fresh sign-in is exactly
+ * the event that makes another look worthwhile.
+ */
+const cliAdoptionAttempted = new Set<"openai" | "anthropic">();
+
+/**
  * Sync OAuth token to CustomKeysStorage as an API key
  * This makes the OAuth token available to jobs, bash, and agents
  */
@@ -71,48 +203,32 @@ async function syncOAuthTokenToApiKeys(
       : "Claude Pro/Max OAuth Token (Auto-managed)";
 
   try {
-    // Check if key already exists
     const existingKeyMetadata =
       await customKeysStorage.getKeyMetadataByName(keyName);
 
-    if (existingKeyMetadata) {
-      // Update existing key with new token
-      const updatedKey = {
-        ...existingKeyMetadata,
-        description,
-        permission: "always" as const,
-        encryptedValue: (customKeysStorage as any).encryptValue(cleanToken),
-        updatedAt: new Date().toISOString(),
-        source: "oauth" as const,
-        managedBy: "oauth" as const,
-        oauthProvider: provider,
-      };
+    const oauthKeyFields = {
+      description,
+      permission: "always" as const,
+      source: "oauth" as const,
+      managedBy: "oauth" as const,
+      oauthProvider: provider,
+    };
 
-      (customKeysStorage as any).keys.set(existingKeyMetadata.id, updatedKey);
-      await (customKeysStorage as any).saveKeys();
-      invalidateKeyCache(keyName);
+    if (existingKeyMetadata) {
+      await customKeysStorage.updateKey(existingKeyMetadata.id, {
+        value: cleanToken,
+        ...oauthKeyFields,
+      });
+      invalidateKeyCache(keyName, true);
       console.log(`[OAuth IPC] Updated ${keyName} with OAuth token`);
     } else {
-      // Create new key
-      const id = `key-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const now = new Date().toISOString();
-
-      const newKey = {
-        id,
+      await customKeysStorage.addKey({
         name: keyName,
-        description,
-        permission: "always" as const,
-        encryptedValue: (customKeysStorage as any).encryptValue(cleanToken),
-        createdAt: now,
-        updatedAt: now,
-        source: "oauth" as const,
-        managedBy: "oauth" as const,
-        oauthProvider: provider,
-      };
-
-      (customKeysStorage as any).keys.set(id, newKey);
-      await (customKeysStorage as any).saveKeys();
-      invalidateKeyCache(keyName);
+        value: cleanToken,
+        orgScope: "all",
+        ...oauthKeyFields,
+      });
+      invalidateKeyCache(keyName, true);
       console.log(`[OAuth IPC] Created ${keyName} with OAuth token`);
     }
   } catch (error) {
@@ -127,13 +243,14 @@ async function syncOAuthTokenToApiKeys(
 async function removeOAuthManagedApiKey(
   provider: "openai" | "anthropic",
 ): Promise<void> {
-  if (!customKeysStorage) {
-    console.error("[OAuth IPC] CustomKeysStorage not initialized");
-    return;
-  }
-
   const keyName =
     provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+
+  if (!customKeysStorage) {
+    console.error("[OAuth IPC] CustomKeysStorage not initialized");
+    invalidateKeyCache(keyName, true);
+    return;
+  }
 
   try {
     const existingKeyMetadata =
@@ -152,9 +269,159 @@ async function removeOAuthManagedApiKey(
         );
       }
     }
+    // Token was removed from OAuthTokenStorage even when a user-owned key remains.
+    // Gateway must drop oauthTokenCache + bump authEpoch or stale OAuth wins on next turn.
+    invalidateKeyCache(keyName, true);
   } catch (error) {
     console.error(`[OAuth IPC] Failed to remove ${keyName}:`, error);
+    invalidateKeyCache(keyName, true);
   }
+}
+
+/**
+ * Replace our stored Claude token with a fresh read of Claude Code's own
+ * credentials. Claude Code keeps its access token renewed, so adopting its
+ * record recovers both a redeemable refresh token and a truthful expiry.
+ *
+ * Returns whether anything was adopted.
+ */
+/**
+ * Whether the stored token can actually mint a new access token.
+ *
+ * Well-formedness is necessary but not sufficient: a grant the provider has
+ * already answered `invalid_grant` to renews nothing, however valid it looks.
+ * Reporting it as renewable is what let the card stay reassuring while every
+ * refresh was being refused.
+ */
+function tokenCanRenew(
+  provider: "openai" | "anthropic",
+  token: { refreshToken: string; accessToken: string },
+): boolean {
+  if (!isUsableRefreshToken(token.refreshToken, token.accessToken)) return false;
+  return !refreshRejections.isRejected(provider, token.refreshToken);
+}
+
+/**
+ * Decide whether Claude Code's stored credentials can be adopted instead of
+ * sending the user to a terminal, renewing them first when only the access
+ * token has lapsed. Returns null when a real sign-in is required.
+ *
+ * Pressing Sign in states an intent the short-circuit has to honour. Adopting
+ * a credential that cannot authenticate reports success, skips the terminal,
+ * and returns the user to the card they pressed the button to escape — which
+ * reads, correctly, as the button doing nothing.
+ */
+async function resolveAdoptableClaudeCredentials(
+  credentials: ClaudeCliCredentials,
+): Promise<ClaudeCliCredentials | null> {
+  // Live access token: adopt as-is, no network round trip.
+  if (claudeAccessTokenIsLive(credentials)) return credentials;
+
+  const refreshToken = credentials.refreshToken;
+  if (
+    !refreshToken ||
+    !isUsableRefreshToken(refreshToken, credentials.accessToken) ||
+    !claudeOAuthService
+  ) {
+    return null;
+  }
+
+  // A grant the provider has already refused will be refused again.
+  if (refreshRejections.isRejected("anthropic", refreshToken)) return null;
+
+  // Only the access token has lapsed, which is the ordinary state of a Claude
+  // Code login left idle for a few hours. Renewing keeps that case off the
+  // terminal path — but the credential is adopted on the refresh *succeeding*,
+  // never on a refresh token merely being present.
+  try {
+    const renewed = await claudeOAuthService.refreshToken(refreshToken);
+    return {
+      accessToken: renewed.accessToken,
+      refreshToken: renewed.refreshToken,
+      expiresAt: Date.now() + renewed.expiresIn * 1000,
+    };
+  } catch (error) {
+    if (isInvalidGrantError(error)) {
+      refreshRejections.record("anthropic", refreshToken);
+    }
+    console.warn(
+      "[OAuth IPC] Claude Code credentials could not be renewed — continuing to sign-in:",
+      (error as Error).message,
+    );
+    return null;
+  }
+}
+
+async function adoptClaudeCredentialsFromCLIStorage(
+  tokenId: string,
+  options?: { mustOutliveMs?: number },
+): Promise<boolean> {
+  if (!oauthTokenStorage || !claudeSetupTokenService) return false;
+
+  const credentials =
+    await claudeSetupTokenService.readCredentialsFromCLIStorage({
+      logProbe: true,
+    });
+  if (!credentials) {
+    console.warn(
+      "[OAuth IPC] Claude token cannot be refreshed and Claude Code has no credentials to adopt — reconnect required",
+    );
+    return false;
+  }
+
+  if (!isUsableRefreshToken(credentials.refreshToken, credentials.accessToken)) {
+    // A setup-token has no refresh token to adopt, so there is nothing to
+    // improve. Leave the stored record alone.
+    return false;
+  }
+
+  const describeExpiry = (ms: number | undefined): string =>
+    ms === undefined ? "unknown" : new Date(ms).toISOString();
+
+  // Adoption overwrites a credential the user may have just entered by hand, so
+  // it has to be an upgrade. Claude Code's stored copy is only authoritative
+  // while it is current; once its access token has lapsed, adopting it swaps a
+  // working token for a dead one and — because the replacement is expired on
+  // arrival — arms the very next refresh tick to do it again.
+  if (!claudeAccessTokenIsLive(credentials)) {
+    // Lead with whose token is fine. The earlier wording opened with "access
+    // token expired" and a date, which reads as an alarm about the token the
+    // user is actually using — and the reassuring half was at the end.
+    console.warn(
+      `[OAuth IPC] Keeping your stored Claude token, which is unaffected. ` +
+        `Claude Code's own copy is stale (its access token lapsed ` +
+        `${describeExpiry(credentials.expiresAt)}), so there is no live ` +
+        `credential to adopt from it. Sign in to Claude Code again if you want ` +
+        `it usable as a refresh source.`,
+    );
+    return false;
+  }
+
+  if (
+    options?.mustOutliveMs !== undefined &&
+    credentials.expiresAt !== undefined &&
+    credentials.expiresAt <= options.mustOutliveMs
+  ) {
+    console.warn(
+      `[OAuth IPC] Not adopting Claude Code credentials: they expire ` +
+        `${describeExpiry(credentials.expiresAt)}, no later than the stored ` +
+        `token (${describeExpiry(options.mustOutliveMs)}).`,
+    );
+    return false;
+  }
+
+  const lifetime = claudeCredentialsToTokenLifetime(credentials, {
+    fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+  });
+
+  await oauthTokenStorage.updateToken(tokenId, lifetime);
+  await syncOAuthTokenToApiKeys("anthropic", lifetime.accessToken);
+
+  console.log(
+    `[OAuth IPC] Adopted Claude Code credentials (expires ` +
+      `${describeExpiry(credentials.expiresAt)}, refreshable)`,
+  );
+  return true;
 }
 
 /**
@@ -175,9 +442,56 @@ async function refreshTokenIfNeeded(
       return false;
     }
 
-    // Check if token needs refresh (within buffer time)
-    if (!oauthTokenStorage.isTokenExpired(token, REFRESH_BUFFER / 60)) {
-      // Token is still valid, no refresh needed
+    const needsRefreshSoon = oauthTokenStorage.isTokenExpired(
+      token,
+      REFRESH_BUFFER / 60,
+    );
+
+    const canRedeemRefreshToken = isUsableRefreshToken(
+      token.refreshToken,
+      token.accessToken,
+    );
+
+    // Tokens stored by older builds echoed the access token into the refresh
+    // slot alongside an invented year-long expiry, so they can neither be
+    // refreshed nor ever look expired. Re-reading Claude Code's own storage
+    // replaces that copy with the real refresh token and expiry.
+    //
+    // The check cannot be moved below the expiry test — such a token never
+    // looks expired, so this is the only path that ever repairs it. What it can
+    // stop being is constant: the repair matters before the token lapses, not
+    // sixty times an hour while it is still good for a year. Attempting it once
+    // per session (and whenever expiry actually approaches) keeps the repair
+    // and drops the Keychain read, and with it a warning about Claude Code's
+    // stale copy that fired on a timer while nothing was wrong.
+    if (provider === "anthropic" && !canRedeemRefreshToken) {
+      if (!needsRefreshSoon && cliAdoptionAttempted.has(provider)) {
+        return false;
+      }
+      cliAdoptionAttempted.add(provider);
+      return await adoptClaudeCredentialsFromCLIStorage(token.id);
+    }
+
+    if (!needsRefreshSoon) {
+      // Token is still valid, no refresh needed.
+      return false;
+    }
+
+    if (!canRedeemRefreshToken) {
+      // A refresh grant only accepts a refresh token; sending the access token
+      // would 400. Nothing to do but let the UI ask for a reconnect.
+      console.warn(
+        `[OAuth IPC] ${provider} token expired but no usable refresh token is stored — reconnect required`,
+      );
+      return false;
+    }
+
+    // A grant the server already answered `invalid_grant` to will be refused
+    // identically every time, so re-posting it each tick only produces noise.
+    if (refreshRejections.isRejected(provider, token.refreshToken)) {
+      console.warn(
+        `[OAuth IPC] ${provider} refresh token was already rejected by the provider — reconnect required`,
+      );
       return false;
     }
 
@@ -213,7 +527,55 @@ async function refreshTokenIfNeeded(
     return true;
   } catch (error) {
     console.error(`[OAuth IPC] Failed to refresh ${provider} token:`, error);
-    // TODO: Notify user about refresh failure
+
+    // Only an explicit `invalid_grant` condemns the token; a Cloudflare
+    // challenge or a network fault says nothing about it and stays retryable.
+    if (isInvalidGrantError(error)) {
+      const rejectedToken =
+        oauthTokenStorage?.getTokenByProvider(provider)?.refreshToken;
+      if (rejectedToken) refreshRejections.record(provider, rejectedToken);
+    }
+
+    // Claude Code keeps its own access token renewed and is the authority for
+    // these credentials, so a failed refresh of our copy is recoverable: adopt
+    // its current record instead. Previously this path just returned, leaving
+    // the stored token expired with nothing that would ever renew it.
+    //
+    // The stored expiry is passed as the bar to beat. We only reach here after
+    // a refresh was rejected, so Claude Code's copy is a candidate, not an
+    // authority — adopting one that dies sooner than what we already hold is a
+    // downgrade, and adopting an already-dead one is what overwrote tokens the
+    // user had just entered by hand.
+    if (provider === "anthropic" && oauthTokenStorage) {
+      const token = oauthTokenStorage.getTokenByProvider(provider);
+      if (token) {
+        const storedExpiresAtMs = Date.parse(token.expiresAt);
+        const baseline: { mustOutliveMs?: number } = Number.isNaN(
+          storedExpiresAtMs,
+        )
+          ? {}
+          : { mustOutliveMs: storedExpiresAtMs };
+        try {
+          if (await adoptClaudeCredentialsFromCLIStorage(token.id, baseline)) {
+            console.log(
+              "[OAuth IPC] Recovered from failed refresh by adopting Claude Code credentials",
+            );
+            return true;
+          }
+        } catch (adoptError) {
+          console.error(
+            "[OAuth IPC] Adopting Claude Code credentials also failed:",
+            adoptError,
+          );
+        }
+      }
+    }
+
+    sendOAuthStatus(
+      provider,
+      "error",
+      error instanceof Error ? error.message : "Token refresh failed",
+    );
     return false;
   }
 }
@@ -265,8 +627,14 @@ function stopRefreshTimer(): void {
 /**
  * Initialize OAuth IPC handlers
  */
-export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
+export async function initializeOAuthIPC(
+  keysStorage: CustomKeysStorage,
+  options?: {
+    trackOAuthEvent?: OAuthTelemetryTracker;
+  },
+) {
   console.log("[OAuth IPC] Initializing...");
+  trackOAuthEvent = options?.trackOAuthEvent;
 
   // Store reference to CustomKeysStorage for syncing
   customKeysStorage = keysStorage;
@@ -279,10 +647,25 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   claudeSetupTokenService = new ClaudeSetupTokenService();
   claudeOAuthService = new ClaudeOAuthService();
 
+  const claudeCliManager = getClaudeCLIManager();
+  claudeCliManager.setProgressCallback((progress) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send("claude-cli:download-progress", progress);
+      }
+    }
+  });
+  claudeSetupTokenService.setClaudeCliProvider(claudeCliManager);
+
   // OpenAI OAuth handlers
-  ipcMain.handle("auth:openai:start-oauth", async () => {
+  ipcMain.handle(
+    "auth:openai:start-oauth",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
     try {
       console.log("[OAuth IPC] Starting OpenAI OAuth flow");
+      oauthFlowStartedAt.set("openai", Date.now());
+      trackOAuthStep("openai", "flow_started", { source: telemetrySource });
 
       // Stop any existing server
       const existingServer = activeServers.get("openai");
@@ -310,8 +693,16 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
             const state = params.get("state");
             const flow = activeFlows.get("openai");
 
+            trackOAuthStep("openai", "callback_received", {
+              has_code: Boolean(code),
+              has_state: Boolean(state),
+            });
+
             if (!code || !state || !flow) {
               console.error("[OAuth IPC] Missing code, state, or flow data");
+              trackOAuthFailed("openai", "Missing code, state, or flow data", {
+                stage: "callback",
+              });
               return;
             }
 
@@ -322,36 +713,40 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
               state,
               flow.pkce.state,
             );
+            trackOAuthStep("openai", "token_exchanged");
 
-            // Store tokens in OAuthTokenStorage
-            await oauthTokenStorage!.storeToken(tokenInput);
-
-            // Sync token to CustomKeysStorage (makes it available as OPENAI_API_KEY)
-            await syncOAuthTokenToApiKeys("openai", tokenInput.accessToken);
+            await persistOAuthConnection("openai", tokenInput, {
+              flow_source: "browser",
+            });
 
             console.log("[OAuth IPC] OpenAI OAuth flow completed successfully");
             activeFlows.delete("openai");
-            sendOAuthStatus("openai", "connected");
           } catch (error) {
             console.error("[OAuth IPC] OpenAI callback error:", error);
             activeFlows.delete("openai");
-            sendOAuthStatus("openai", "error", (error as Error).message);
+            const message = error instanceof Error ? error.message : "Callback failed";
+            trackOAuthFailed("openai", message, { stage: "callback" });
+            sendOAuthStatus("openai", "error", message);
           }
         },
       });
 
       await server.start();
       activeServers.set("openai", server);
+      trackOAuthStep("openai", "callback_server_started");
 
       // Open browser to authorization URL
       await shell.openExternal(url);
+      trackOAuthStep("openai", "browser_opened");
 
       return { success: true, url };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start OpenAI OAuth:", error);
+      const message = error instanceof Error ? error.message : "Start OAuth failed";
+      trackOAuthFailed("openai", message, { stage: "start" });
       return {
         success: false,
-        error: (error as Error).message,
+        error: message,
       };
     }
   });
@@ -371,6 +766,12 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         accountId: token.accountId,
         expiresAt: token.expiresAt,
         isExpired,
+        // An expired token that can still be refreshed renews itself on the
+        // next request, so the card must not raise an alarm about it. Only one
+        // that has expired with no way back needs the user. Without this the
+        // UI cannot tell those apart, so it has to either cry wolf or, as it
+        // did, stay green while every request was being refused.
+        canRenew: tokenCanRenew("openai", token),
       };
     } catch (error) {
       console.error("[OAuth IPC] Failed to get OpenAI status:", error);
@@ -378,11 +779,46 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
+  /**
+   * ChatGPT plan usage, so the cost panel can tell "included" from "billed on
+   * top" on the OpenAI route as well as the Anthropic one. Without it a
+   * subscription login has no utilization signal at all, and the panel has to
+   * assume — which it did, by hardcoding "Included" for anyone on ChatGPT
+   * regardless of how far past their windows they were.
+   */
+  ipcMain.handle("auth:openai:get-usage-limits", async () => {
+    try {
+      await refreshTokenIfNeeded("openai");
+      const token = oauthTokenStorage!.getTokenByProvider("openai");
+      if (!token?.accessToken) {
+        return {
+          success: false,
+          error: "Connect your ChatGPT subscription first.",
+        };
+      }
+      // `accountId` has only been persisted since account-scoping was added,
+      // so a token stored before that carries it in the JWT and nowhere else.
+      // Without it the backend answers for the personal workspace, which is
+      // the wrong allowance for anyone on a team plan.
+      return await fetchCodexSubscriptionUsage(token.accessToken, {
+        accountId:
+          token.accountId ??
+          extractChatGptAccountIdFromOAuthToken(token.accessToken),
+      });
+    } catch (error) {
+      console.error("[OAuth IPC] Failed to fetch ChatGPT usage:", error);
+      return { success: false, error: (error as Error).message };
+    }
+  });
+
   ipcMain.handle("auth:openai:disconnect", async () => {
     try {
+      trackOAuthStep("openai", "disconnected");
       // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("openai");
       activeFlows.delete("openai");
+      refreshRejections.clear("openai");
+      cliAdoptionAttempted.delete("openai");
 
       // Remove OAuth-managed API key from CustomKeysStorage
       await removeOAuthManagedApiKey("openai");
@@ -409,23 +845,221 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
   // Flow: (1) check existing credentials, (2) ensure CLI installed, (3) open
   // a real terminal window with the command, (4) UI shows paste field for
   // user to copy token from terminal and paste it.
-  ipcMain.handle("auth:claude:start-oauth", async () => {
+
+  async function openClaudeSetupTokenTerminal(): Promise<boolean> {
+    const { exec: execCb } = await import("child_process");
+    const { promisify } = await import("util");
+    const execAsync = promisify(execCb);
+    try {
+      await claudeSetupTokenService!.installClaudeCLI();
+      const scriptPath = await claudeSetupTokenService!.writeSetupTokenLauncherScript();
+      const setupCmd = await claudeSetupTokenService!.getSetupTokenShellCommand();
+
+      if (process.platform === "darwin") {
+        const escapedForAppleScript = scriptPath.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+        await execAsync(
+          `osascript -e 'tell application "Terminal" to do script "bash " & quoted form of "${escapedForAppleScript}"' -e 'tell application "Terminal" to activate'`,
+        );
+        return true;
+      }
+      if (process.platform === "win32") {
+        await execAsync(`start cmd.exe /k "${setupCmd.replace(/"/g, '\\"')}"`);
+        return true;
+      }
+      await execAsync(
+        `x-terminal-emulator -e "bash \\"${scriptPath.replace(/"/g, '\\"')}\\"" 2>/dev/null || gnome-terminal -- bash -c "bash \\"${scriptPath.replace(/"/g, '\\"')}\\"; exec bash" 2>/dev/null || xterm -e "bash \\"${scriptPath.replace(/"/g, '\\"')}\\"" 2>/dev/null`,
+      );
+      return true;
+    } catch (termErr) {
+      console.error("[OAuth IPC] Failed to open terminal:", termErr);
+      return false;
+    }
+  }
+
+  ipcMain.handle(
+    "auth:claude:onboarding-run-check",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+        const existingCredentials =
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+            logProbe: true,
+          });
+        const adoptableCredentials = existingCredentials
+          ? await resolveAdoptableClaudeCredentials(existingCredentials)
+          : null;
+
+        if (adoptableCredentials) {
+          trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
+          const tokenInput = {
+            provider: "anthropic" as const,
+            ...claudeCredentialsToTokenLifetime(adoptableCredentials, {
+              fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+            }),
+          };
+          await persistOAuthConnection("anthropic", tokenInput, {
+            flow_source: "keychain",
+            source: telemetrySource,
+          });
+          return { connected: true as const };
+        }
+
+        const staleCredentials = Boolean(existingCredentials);
+
+        const cli = await claudeSetupTokenService!.getClaudeCliCheck();
+        const onPath = await claudeSetupTokenService!.getClaudeCliOnPathCheck();
+
+        let okMessage: string;
+        if (onPath.installed && onPath.version) {
+          okMessage = staleCredentials
+            ? `Found Claude Code ${onPath.version} on your PATH. We will sign in fresh in the next step.`
+            : `Found Claude Code ${onPath.version} on your PATH. Nothing stale to clean up.`;
+        } else if (cli.installed) {
+          okMessage = staleCredentials
+            ? "Papr has a downloaded Claude Code copy (not on PATH yet). Next step prepares it, then we sign in."
+            : "Papr has a downloaded Claude Code copy. Next step prepares it before sign-in.";
+        } else if (staleCredentials) {
+          okMessage =
+            "No install found. We will install Claude Code, then sign in again.";
+        } else {
+          okMessage = "No install found. Nothing stale to clean up.";
+        }
+
+        return {
+          connected: false as const,
+          okMessage,
+          skipInstallStep: onPath.installed,
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Check failed";
+        return { connected: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "auth:claude:onboarding-install-cli",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+        trackOAuthStep("anthropic", "cli_install_started", { source: telemetrySource });
+        const installResult = await claudeSetupTokenService!.installClaudeCLI();
+        if (!installResult.success) {
+          trackOAuthStep("anthropic", "cli_install_failed", {
+            source: telemetrySource,
+            error: installResult.error,
+          });
+          return { success: false as const, error: installResult.error ?? "Install failed" };
+        }
+        const cli = await claudeSetupTokenService!.getClaudeCliCheck();
+        const onPath = await claudeSetupTokenService!.getClaudeCliOnPathCheck();
+        let okMessage: string;
+        if (onPath.installed && onPath.version) {
+          okMessage = `Claude Code ${onPath.version} is on your PATH.`;
+        } else if (cli.version) {
+          okMessage = `Prepared Claude Code ${cli.version} for Papr. Sign-in uses Papr's copy — \`claude\` on PATH is optional.`;
+        } else {
+          okMessage = "Prepared Claude Code for Papr.";
+        }
+        return { success: true as const, okMessage };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Install failed";
+        return { success: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle("auth:claude:get-setup-token-shell-command", async () => {
+    try {
+      await claudeSetupTokenService!.installClaudeCLI();
+      const command = await claudeSetupTokenService!.getSetupTokenShellCommand();
+      return { success: true as const, command };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Command unavailable";
+      return { success: false as const, error: message };
+    }
+  });
+
+  ipcMain.handle(
+    "auth:claude:open-setup-token-terminal",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+        const terminalOpened = await openClaudeSetupTokenTerminal();
+        trackOAuthStep("anthropic", "terminal_opened", {
+          source: telemetrySource,
+          terminal_opened: terminalOpened,
+        });
+        const command = await claudeSetupTokenService!.getSetupTokenShellCommand();
+        if (!terminalOpened) {
+          return {
+            success: false as const,
+            error: "Could not open Terminal. Run the command below yourself.",
+            command,
+          };
+        }
+        return { success: true as const, command };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Terminal failed";
+        return { success: false as const, error: message };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    "auth:claude:start-oauth",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
     try {
       console.log("[OAuth IPC] Starting Claude OAuth flow");
+      oauthFlowStartedAt.set("anthropic", Date.now());
+      trackOAuthStep("anthropic", "flow_started", { source: telemetrySource });
 
-      // Step 0: Check for existing token in Keychain / credential files
-      const existingToken = await claudeSetupTokenService!.readTokenFromCLIStorage();
-      if (existingToken) {
-        console.log("[OAuth IPC] Found existing Claude token in CLI storage");
+      // Step 0: Check for existing token in Keychain / credential files.
+      // Finding credentials is not the same as their working, so they are only
+      // adopted once they demonstrably authenticate — live, or successfully
+      // renewed. Anything else falls through to the real sign-in below.
+      const existingCredentials =
+        await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+          logProbe: true,
+        });
+      const adoptableCredentials = existingCredentials
+        ? await resolveAdoptableClaudeCredentials(existingCredentials)
+        : null;
+
+      if (existingCredentials && !adoptableCredentials) {
+        console.log(
+          "[OAuth IPC] Claude CLI credentials cannot authenticate (expired " +
+            `${
+              existingCredentials.expiresAt === undefined
+                ? "unknown"
+                : new Date(existingCredentials.expiresAt).toISOString()
+            }, not renewable) — continuing to sign-in instead of adopting them`,
+        );
+      }
+
+      if (adoptableCredentials) {
+        console.log("[OAuth IPC] Found existing Claude credentials in CLI storage");
+        trackOAuthStep("anthropic", "keychain_token_found", { source: telemetrySource });
         const tokenInput = {
           provider: "anthropic" as const,
-          accessToken: existingToken,
-          refreshToken: existingToken,
-          expiresIn: 365 * 24 * 60 * 60,
+          ...claudeCredentialsToTokenLifetime(adoptableCredentials, {
+            fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+          }),
         };
-        await oauthTokenStorage!.storeToken(tokenInput);
-        await syncOAuthTokenToApiKeys("anthropic", existingToken);
-        sendOAuthStatus("anthropic", "connected");
+        await persistOAuthConnection("anthropic", tokenInput, {
+          flow_source: "keychain",
+          source: telemetrySource,
+        });
         return { success: true, source: "keychain" };
       }
 
@@ -433,54 +1067,42 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       const isInstalled = await claudeSetupTokenService!.isClaudeCLIInstalled();
       if (!isInstalled) {
         console.log("[OAuth IPC] Claude CLI not found, installing...");
+        trackOAuthStep("anthropic", "cli_install_started", { source: telemetrySource });
         const installResult = await claudeSetupTokenService!.installClaudeCLI();
         if (!installResult.success) {
           console.error("[OAuth IPC] Failed to install Claude CLI:", installResult.error);
-          sendOAuthStatus(
-            "anthropic",
-            "error",
-            "Could not install Claude CLI. Use Manual Setup instead.",
-          );
+          const message = "Could not install Claude CLI. Use Manual Setup instead.";
+          trackOAuthStep("anthropic", "cli_install_failed", {
+            source: telemetrySource,
+            error: installResult.error,
+          });
+          trackOAuthFailed("anthropic", message, { stage: "start", source: telemetrySource });
+          sendOAuthStatus("anthropic", "error", message);
           return { success: false, error: "CLI install failed", fallback: "manual" };
         }
         console.log("[OAuth IPC] Claude CLI installed");
       }
 
-      // Step 2: Open a real terminal window with `claude setup-token`
-      // The CLI needs an interactive TTY, so we open the user's terminal app.
-      // After sign-in, the CLI prints the token -- the user copies it and pastes
-      // it into our UI (the paste field is shown immediately).
       console.log("[OAuth IPC] Opening terminal with claude setup-token...");
-      const { exec: execCb } = await import("child_process");
+      const terminalOpened = await openClaudeSetupTokenTerminal();
+      trackOAuthStep("anthropic", "terminal_opened", {
+        source: telemetrySource,
+        terminal_opened: terminalOpened,
+      });
 
-      let terminalOpened = false;
-      try {
-        if (process.platform === "darwin") {
-          execCb(`osascript -e 'tell application "Terminal" to do script "claude setup-token"' -e 'tell application "Terminal" to activate'`);
-          terminalOpened = true;
-        } else if (process.platform === "win32") {
-          execCb(`start cmd.exe /k "claude setup-token"`);
-          terminalOpened = true;
-        } else {
-          execCb(`x-terminal-emulator -e "claude setup-token" 2>/dev/null || gnome-terminal -- bash -c "claude setup-token; exec bash" 2>/dev/null || xterm -e "claude setup-token" 2>/dev/null`);
-          terminalOpened = true;
-        }
-      } catch (termErr) {
-        console.error("[OAuth IPC] Failed to open terminal:", termErr);
-      }
-
-      // Return immediately -- UI will show the paste field for the user
-      // to copy/paste the token from the terminal
       return { success: true, source: "terminal-opened", terminalOpened };
     } catch (error) {
       console.error("[OAuth IPC] Failed to start Claude OAuth:", error);
-      sendOAuthStatus("anthropic", "error", (error as Error).message);
+      const message = error instanceof Error ? error.message : "Start OAuth failed";
+      trackOAuthFailed("anthropic", message, { stage: "start", source: telemetrySource });
+      sendOAuthStatus("anthropic", "error", message);
       return {
         success: false,
-        error: (error as Error).message,
+        error: message,
       };
     }
-  });
+  },
+  );
 
   ipcMain.handle("auth:claude:get-status", async () => {
     try {
@@ -497,6 +1119,12 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         accountId: token.accountId,
         expiresAt: token.expiresAt,
         isExpired,
+        // An expired token that can still be refreshed renews itself on the
+        // next request, so the card must not raise an alarm about it. Only one
+        // that has expired with no way back needs the user. Without this the
+        // UI cannot tell those apart, so it has to either cry wolf or, as it
+        // did, stay green while every request was being refused.
+        canRenew: tokenCanRenew("anthropic", token),
       };
     } catch (error) {
       console.error("[OAuth IPC] Failed to get Claude status:", error);
@@ -517,11 +1145,64 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
+  ipcMain.handle("auth:claude:get-usage-limits", async () => {
+    try {
+      await refreshTokenIfNeeded("anthropic");
+      const paprToken = oauthTokenStorage!.getTokenByProvider("anthropic");
+      const paprAccessToken = paprToken?.accessToken;
+
+      let cliAccessToken: string | undefined;
+      if (!paprAccessToken && claudeSetupTokenService) {
+        const raw =
+          await claudeSetupTokenService.readCredentialsFromCLIStorage();
+        if (raw) {
+          const usable =
+            (await resolveAdoptableClaudeCredentials(raw)) ??
+            (claudeAccessTokenIsLive(raw) ? raw : null);
+          cliAccessToken = usable?.accessToken;
+        }
+      }
+
+      const unique = dedupeAccessTokens(
+        buildClaudeUsageTokenCandidates(paprAccessToken, cliAccessToken),
+      );
+
+      if (unique.length === 0) {
+        const authStatus = await readClaudeAuthStatusFromCli();
+        const hint =
+          authStatus?.loggedIn === true
+            ? "Claude CLI is signed in but no usable token was found — run claude auth login again."
+            : "Connect Claude subscription first, or sign in with claude auth login in Terminal.";
+        return { success: false, error: hint, authStatus };
+      }
+
+      const authStatus =
+        paprAccessToken === undefined
+          ? await readClaudeAuthStatusFromCli()
+          : null;
+
+      return await fetchClaudeSubscriptionUsageFromCandidates(unique, {
+        orgUuidHint: authStatus?.orgId ?? undefined,
+        subscriptionType: authStatus?.subscriptionType,
+        orgName: authStatus?.orgName,
+      });
+    } catch (error) {
+      console.error("[OAuth IPC] Failed to fetch Claude usage:", error);
+      return {
+        success: false,
+        error: (error as Error).message,
+      };
+    }
+  });
+
   ipcMain.handle("auth:claude:disconnect", async () => {
     try {
+      trackOAuthStep("anthropic", "disconnected");
       // Remove OAuth token from OAuthTokenStorage
       await oauthTokenStorage!.deleteTokenByProvider("anthropic");
       activeFlows.delete("anthropic");
+      refreshRejections.clear("anthropic");
+      cliAdoptionAttempted.delete("anthropic");
 
       // Remove OAuth-managed API key from CustomKeysStorage
       await removeOAuthManagedApiKey("anthropic");
@@ -543,13 +1224,73 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
     }
   });
 
+  ipcMain.handle(
+    "auth:claude:try-sync-from-storage",
+    async (_event, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
+      try {
+        const credentials =
+          await claudeSetupTokenService!.readCredentialsFromCLIStorage({
+            logProbe: true,
+          });
+        if (!credentials) {
+          return { success: false, reason: "not_found" as const };
+        }
+
+        // This polls while the user completes sign-in in the terminal, so the
+        // stale credential that sign-in is meant to replace is still on disk
+        // for most of that window. What we are waiting for is a freshly minted
+        // token, and those are live by definition — so liveness is the test.
+        // Accepting a merely renewable credential here would let the very first
+        // poll adopt the stale one and report success before the user has
+        // typed anything, which is the same false success Connect used to give.
+        if (!claudeAccessTokenIsLive(credentials)) {
+          return { success: false, reason: "not_found" as const };
+        }
+
+        if (!oauthFlowStartedAt.has("anthropic")) {
+          oauthFlowStartedAt.set("anthropic", Date.now());
+        }
+
+        const tokenInput = {
+          provider: "anthropic" as const,
+          ...claudeCredentialsToTokenLifetime(credentials, {
+            fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS,
+          }),
+        };
+
+        await persistOAuthConnection("anthropic", tokenInput, {
+          flow_source: "keychain",
+          source: telemetrySource,
+        });
+
+        return { success: true };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Sync failed";
+        return { success: false, reason: "error" as const, error: message };
+      }
+    },
+  );
+
   // Claude OAuth: Paste token (alternative to full OAuth flow)
-  ipcMain.handle("auth:claude:paste-token", async (_event, token: string) => {
+  ipcMain.handle(
+    "auth:claude:paste-token",
+    async (_event, token: string, options?: OAuthStartTelemetryOptions) => {
+      const telemetrySource = resolveOAuthTelemetrySource(options?.source);
     try {
       console.log("[OAuth IPC] Pasting Claude OAuth token");
+      if (!oauthFlowStartedAt.has("anthropic")) {
+        oauthFlowStartedAt.set("anthropic", Date.now());
+      }
+      trackOAuthStep("anthropic", "paste_token_submitted", {
+        source: telemetrySource,
+        stage: "paste",
+        flow_source: "paste",
+      });
 
       // Validate token format (Claude OAuth tokens start with sk-ant-oat)
       if (!token || typeof token !== "string") {
+        trackOAuthFailed("anthropic", "Token is required", { stage: "paste" });
         return {
           success: false,
           error: "Token is required",
@@ -559,6 +1300,7 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
       const cleanedToken = sanitizeOAuthAccessToken("anthropic", token);
 
       if (!cleanedToken.startsWith("sk-ant-oat")) {
+        trackOAuthFailed("anthropic", "Invalid token format", { stage: "paste" });
         return {
           success: false,
           error:
@@ -566,26 +1308,33 @@ export async function initializeOAuthIPC(keysStorage: CustomKeysStorage) {
         };
       }
 
-      // Store as OAuth token (1 year expiry)
+      // A pasted setup-token arrives on its own: no refresh token, no expiry.
+      // claudeCredentialsToTokenLifetime echoes the access token into the
+      // refresh slot to satisfy storeToken, and isUsableRefreshToken keeps the
+      // refresh path from trying to redeem it.
       const tokenInput = {
         provider: "anthropic" as const,
-        accessToken: cleanedToken,
-        refreshToken: cleanedToken, // OAuth tokens are self-contained
-        expiresIn: 365 * 24 * 60 * 60, // 1 year in seconds
+        ...claudeCredentialsToTokenLifetime(
+          { accessToken: cleanedToken },
+          { fallbackTtlSeconds: SETUP_TOKEN_ASSUMED_TTL_SECONDS },
+        ),
       };
 
-      await oauthTokenStorage!.storeToken(tokenInput);
-
-      // Sync to CustomKeysStorage (makes it available as ANTHROPIC_API_KEY for jobs/bash)
-      await syncOAuthTokenToApiKeys("anthropic", cleanedToken);
+      await persistOAuthConnection("anthropic", tokenInput, {
+        flow_source: "paste",
+        stage: "paste",
+        source: telemetrySource,
+      });
 
       console.log("[OAuth IPC] Claude OAuth token stored successfully");
       return { success: true };
     } catch (error) {
       console.error("[OAuth IPC] Failed to paste Claude token:", error);
+      const message = error instanceof Error ? error.message : "Paste token failed";
+      trackOAuthFailed("anthropic", message, { stage: "paste" });
       return {
         success: false,
-        error: (error as Error).message,
+        error: message,
       };
     }
   });
@@ -643,6 +1392,8 @@ export function getOAuthTokenStorage(): OAuthTokenStorage | null {
  * Cleanup on app quit
  */
 export function cleanupOAuthServers(): void {
+  trackOAuthEvent = undefined;
+  oauthFlowStartedAt.clear();
   // Stop refresh timer
   stopRefreshTimer();
 

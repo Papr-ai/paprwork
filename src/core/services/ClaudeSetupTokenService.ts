@@ -6,6 +6,14 @@
 
 import { spawn, exec } from "child_process";
 import { promisify } from "util";
+import fs from "fs/promises";
+import path from "path";
+import os from "os";
+import {
+  parseClaudeCliCredentials,
+  type ClaudeCliCredentials,
+} from "./claudeCliCredentials.js";
+import type { ClaudeCliInstallProvider } from "./claudeCliProvider.js";
 
 const execAsync = promisify(exec);
 
@@ -64,94 +72,268 @@ export interface TokenGenerationResult {
   requiresInstall?: boolean;
 }
 
+export interface ClaudeCliCheckResult {
+  installed: boolean;
+  version?: string;
+}
+
+export interface SetupTokenSpawnSpec {
+  command: string;
+  args: string[];
+  shell?: boolean;
+  extraEnv?: Record<string, string>;
+}
+
 export class ClaudeSetupTokenService {
+  private cliProvider: ClaudeCliInstallProvider | null = null;
+
+  /** Injected from Electron main (ClaudeCLIManager). */
+  setClaudeCliProvider(provider: ClaudeCliInstallProvider): void {
+    this.cliProvider = provider;
+  }
+
   /**
    * Check if Claude Code CLI is installed
    */
   async isClaudeCLIInstalled(): Promise<boolean> {
+    const check = await this.getClaudeCliCheck();
+    return check.installed;
+  }
+
+  /** Global `claude`, cached on-demand CLI, or nothing. */
+  async getClaudeCliCheck(): Promise<ClaudeCliCheckResult> {
+    const pathCheck = await this.getClaudeCliCheckOnPath();
+    if (pathCheck.installed) {
+      return pathCheck;
+    }
+
+    if (this.cliProvider) {
+      try {
+        const available = await this.cliProvider.isAvailable();
+        if (!available) {
+          return { installed: false };
+        }
+        const version = await this.cliProvider.getVersion();
+        return version ? { installed: true, version } : { installed: true };
+      } catch {
+        return { installed: false };
+      }
+    }
+
+    return { installed: false };
+  }
+
+  /** Global `claude` on PATH only — not Papr's cached download. */
+  async getClaudeCliOnPathCheck(): Promise<ClaudeCliCheckResult> {
+    return this.getClaudeCliCheckOnPath();
+  }
+
+  private async getClaudeCliCheckOnPath(): Promise<ClaudeCliCheckResult> {
     try {
       const whichCmd = process.platform === "win32" ? "where claude" : "which claude";
       await execAsync(whichCmd, { env: getShellEnv() });
-      return true;
+      try {
+        const { stdout } = await execAsync("claude --version", { env: getShellEnv() });
+        const version = stdout.trim().split(/\r?\n/)[0]?.trim();
+        return version ? { installed: true, version } : { installed: true };
+      } catch {
+        return { installed: true };
+      }
     } catch {
-      return false;
+      return { installed: false };
     }
   }
 
   /**
-   * Install Claude Code CLI using curl (works without npm/brew)
+   * Install Claude Code CLI — prefers HTTPS tarball via injected provider (no npm).
    */
   async installClaudeCLI(): Promise<{ success: boolean; error?: string }> {
+    if (this.cliProvider) {
+      try {
+        console.log(
+          "[ClaudeSetupToken] Installing Claude Code CLI via on-demand download...",
+        );
+        await this.cliProvider.ensureCLI();
+        const check = await this.getClaudeCliCheck();
+        if (!check.installed) {
+          return {
+            success: false,
+            error:
+              "Download finished but Claude CLI could not be verified. Check your network and try again.",
+          };
+        }
+        console.log("[ClaudeSetupToken] Claude Code CLI ready (global or cached)");
+        return { success: true };
+      } catch (error) {
+        console.error("[ClaudeSetupToken] On-demand install failed:", error);
+        return {
+          success: false,
+          error: (error as Error).message,
+        };
+      }
+    }
+
+    return this.installClaudeCLIViaCurlInstaller();
+  }
+
+  /** Fallback when no Electron provider (e.g. scripts); never uses npm. */
+  private async installClaudeCLIViaCurlInstaller(): Promise<{
+    success: boolean;
+    error?: string;
+  }> {
+    if (process.platform === "win32") {
+      return {
+        success: false,
+        error:
+          "Automatic install requires the Paprwork app. Use Settings → AI Models → Claude manual steps, or run: irm https://claude.ai/install.ps1 | iex",
+      };
+    }
+
     try {
       console.log("[ClaudeSetupToken] Installing Claude Code CLI via curl...");
-
-      // Use curl-based installer (works for non-technical users without npm/brew)
       const installScript = "curl -fsSL https://claude.ai/install.sh | bash";
-      
-      try {
-        const { stdout, stderr } = await execAsync(installScript, {
-          timeout: 120000, // 2 minutes timeout
-          env: getShellEnv(),
-          shell: "/bin/bash", // Ensure bash is used for piping
-        });
+      const { stdout, stderr } = await execAsync(installScript, {
+        timeout: 120000,
+        env: getShellEnv(),
+        shell: "/bin/bash",
+      });
 
-        console.log("[ClaudeSetupToken] Curl installation output:", stdout);
-
-        if (stderr && !stderr.toLowerCase().includes("downloading")) {
-          console.error("[ClaudeSetupToken] Installation stderr:", stderr);
-        }
-
-        // Move from /tmp to permanent location
-        console.log("[ClaudeSetupToken] Moving CLI to /usr/local/bin...");
-        const moveCmd = "sudo mv /tmp/claude /usr/local/bin/claude && sudo chmod +x /usr/local/bin/claude";
-        
-        try {
-          await execAsync(moveCmd, {
-            timeout: 30000,
-            env: getShellEnv(),
-          });
-        } catch (moveError) {
-          console.warn("[ClaudeSetupToken] Could not move CLI (may need sudo):", (moveError as Error).message);
-          // Continue anyway - CLI might be in /tmp/claude which could work temporarily
-        }
-
-      } catch (curlError) {
-        console.warn("[ClaudeSetupToken] Curl install failed, trying npm fallback...");
-        
-        // Fallback to npm install for users who have it
-        const { stdout, stderr } = await execAsync(
-          "npm install -g @anthropic-ai/claude-code",
-          {
-            timeout: 120000,
-            env: getShellEnv(),
-          },
-        );
-
-        console.log("[ClaudeSetupToken] NPM installation output:", stdout);
-
-        if (stderr && !stderr.includes("npm warn")) {
-          console.error("[ClaudeSetupToken] NPM installation stderr:", stderr);
-        }
+      console.log("[ClaudeSetupToken] Curl installation output:", stdout);
+      if (stderr && !stderr.toLowerCase().includes("downloading")) {
+        console.error("[ClaudeSetupToken] Installation stderr:", stderr);
       }
 
-      // Verify installation
+      const moveCmd =
+        "sudo mv /tmp/claude /usr/local/bin/claude && sudo chmod +x /usr/local/bin/claude";
+      try {
+        await execAsync(moveCmd, { timeout: 30000, env: getShellEnv() });
+      } catch (moveError) {
+        console.warn(
+          "[ClaudeSetupToken] Could not move CLI (may need sudo):",
+          (moveError as Error).message,
+        );
+      }
+
       const installed = await this.isClaudeCLIInstalled();
       if (!installed) {
         return {
           success: false,
-          error: "Installation completed but CLI not found in PATH. Try running: source ~/.zshrc",
+          error:
+            "Installer finished but `claude` was not found on PATH. Try opening a new terminal or use Manual Setup in Settings.",
         };
       }
 
-      console.log("[ClaudeSetupToken] Claude Code CLI installed successfully");
       return { success: true };
     } catch (error) {
-      console.error("[ClaudeSetupToken] Failed to install CLI:", error);
+      console.error("[ClaudeSetupToken] Curl install failed:", error);
       return {
         success: false,
         error: (error as Error).message,
       };
     }
+  }
+
+  /**
+   * Writes a launcher script with login-shell PATH so Terminal can run setup-token
+   * even when `claude` is not on PATH (Papr's cached CLI + node).
+   */
+  async writeSetupTokenLauncherScript(): Promise<string> {
+    const spec = await this.resolveSetupTokenSpawn();
+    const env = getShellEnv();
+    const scriptPath = path.join(
+      os.tmpdir(),
+      `paprwork-claude-setup-token-${process.pid}.sh`,
+    );
+
+    const pathExport = (env.PATH ?? "").replace(/"/g, '\\"');
+    const extraEnvLines = spec.extraEnv
+      ? Object.entries(spec.extraEnv)
+          .map(([key, value]) => `export ${key}="${String(value).replace(/"/g, '\\"')}"`)
+          .join("\n")
+      : "";
+
+    const commandLine = await this.getSetupTokenShellCommand();
+
+    const script = `#!/bin/bash
+export PATH="${pathExport}"
+${extraEnvLines}
+echo "Papr Work — Claude sign-in"
+echo "Running: ${commandLine.replace(/"/g, '\\"')}"
+echo ""
+${spec.shell ? commandLine : `${this.shellQuote(spec.command)} ${spec.args.map((a) => this.shellQuote(a)).join(" ")}`}
+echo ""
+echo "Copy the full sk-ant-oat01-… line above, then paste it into Papr Work."
+`;
+
+    await fs.writeFile(scriptPath, script, { mode: 0o755 });
+    return scriptPath;
+  }
+
+  private shellQuote(value: string): string {
+    if (process.platform === "win32") {
+      return `"${value.replace(/"/g, '\\"')}"`;
+    }
+    return `'${value.replace(/'/g, `'\\''`)}'`;
+  }
+
+  /** Shell command for `claude setup-token` (PATH binary or cached cli.js). */
+  async getSetupTokenShellCommand(): Promise<string> {
+    const spec = await this.resolveSetupTokenSpawn();
+    if (spec.shell && spec.command === "claude") {
+      return "claude setup-token";
+    }
+    const argsPart = spec.args
+      .map((arg) => {
+        if (process.platform === "win32") {
+          return `"${arg.replace(/"/g, '\\"')}"`;
+        }
+        return `'${arg.replace(/'/g, `'\\''`)}'`;
+      })
+      .join(" ");
+    return `${spec.command} ${argsPart}`.trim();
+  }
+
+  private async resolveNodeExecutable(): Promise<{
+    command: string;
+    extraEnv?: Record<string, string>;
+  }> {
+    try {
+      const whichCmd = process.platform === "win32" ? "where node" : "which node";
+      const { stdout } = await execAsync(whichCmd, { env: getShellEnv(), timeout: 5000 });
+      const nodePath = stdout.trim().split(/\r?\n/)[0]?.trim();
+      if (nodePath) {
+        return { command: nodePath };
+      }
+    } catch {
+      // fall through
+    }
+    return {
+      command: process.execPath,
+      extraEnv: { ELECTRON_RUN_AS_NODE: "1" },
+    };
+  }
+
+  async resolveSetupTokenSpawn(): Promise<SetupTokenSpawnSpec> {
+    const onPath = await this.getClaudeCliCheckOnPath();
+    if (onPath.installed) {
+      return { command: "claude", args: ["setup-token"], shell: true };
+    }
+
+    if (!this.cliProvider) {
+      throw new Error("Claude Code CLI not installed. Install it first.");
+    }
+
+    const cliPath = await this.cliProvider.ensureCLI();
+    if (cliPath.endsWith(".js")) {
+      const node = await this.resolveNodeExecutable();
+      return {
+        command: node.command,
+        args: [cliPath, "setup-token"],
+        extraEnv: node.extraEnv,
+      };
+    }
+
+    return { command: cliPath, args: ["setup-token"] };
   }
 
   /**
@@ -161,8 +343,10 @@ export class ClaudeSetupTokenService {
    */
   async generateToken(): Promise<TokenGenerationResult> {
     try {
-      const isInstalled = await this.isClaudeCLIInstalled();
-      if (!isInstalled) {
+      let spawnSpec: SetupTokenSpawnSpec;
+      try {
+        spawnSpec = await this.resolveSetupTokenSpawn();
+      } catch {
         return {
           success: false,
           requiresInstall: true,
@@ -180,10 +364,13 @@ export class ClaudeSetupTokenService {
           resolve(result);
         };
 
-        const child = spawn("claude", ["setup-token"], {
-          shell: true,
+        const child = spawn(spawnSpec.command, spawnSpec.args, {
+          shell: spawnSpec.shell ?? false,
           stdio: ["pipe", "pipe", "pipe"],
-          env: getShellEnv(),
+          env: {
+            ...getShellEnv(),
+            ...spawnSpec.extraEnv,
+          },
         });
 
         let stdout = "";
@@ -348,12 +535,31 @@ export class ClaudeSetupTokenService {
    * - Linux: ~/.claude/.credentials.json
    */
   async readTokenFromCLIStorage(): Promise<string | null> {
+    const credentials = await this.readCredentialsFromCLIStorage();
+    return credentials?.accessToken ?? null;
+  }
+
+  /**
+   * Read Claude Code's full credential record, not just the access token.
+   *
+   * The refresh token and expiry live alongside the access token in the same
+   * blob. Callers that persist the token need all three: without the refresh
+   * token the copy cannot be renewed, and without the real expiry nothing
+   * knows when to try.
+   */
+  async readCredentialsFromCLIStorage(options?: {
+    /** Log Keychain/file probe attempts (connect & repair flows). Off by default. */
+    logProbe?: boolean;
+  }): Promise<ClaudeCliCredentials | null> {
+    const logProbe = options?.logProbe === true;
     try {
       // Try platform-specific credential storage first
       if (process.platform === "darwin") {
         // macOS: Try Keychain
         try {
-          console.log("[ClaudeSetupToken] Trying to read from macOS Keychain...");
+          if (logProbe) {
+            console.log("[ClaudeSetupToken] Trying to read from macOS Keychain...");
+          }
           const { exec: execCallback } = await import("child_process");
           const { promisify } = await import("util");
           const exec = promisify(execCallback);
@@ -362,23 +568,30 @@ export class ClaudeSetupTokenService {
             "security find-generic-password -s 'Claude Code-credentials' -w",
             { timeout: 5000 }
           );
-          
-          const credentialsJson = stdout.trim();
-          if (credentialsJson) {
-            const credentials = JSON.parse(credentialsJson);
-            const rawToken =
-              credentials?.claudeAiOauth?.accessToken ||
-              credentials?.accessToken;
-            if (rawToken && typeof rawToken === 'string') {
-              const token = rawToken.replace(/\s+/g, "");
-              console.log("[ClaudeSetupToken] Found token in Keychain (length: " + token.length + ")");
-              return token;
-            }
+
+          const credentials = parseClaudeCliCredentials(stdout);
+          if (credentials) {
+            console.log(
+              "[ClaudeSetupToken] Found credentials in Keychain " +
+                `(length: ${credentials.accessToken.length}, ` +
+                `refreshToken: ${credentials.refreshToken ? "yes" : "no"}, ` +
+                `expiresAt: ${
+                  credentials.expiresAt
+                    ? new Date(credentials.expiresAt).toISOString()
+                    : "unknown"
+                })`,
+            );
+            return credentials;
           }
         } catch (keychainError) {
-          console.log("[ClaudeSetupToken] Could not read from Keychain:", (keychainError as Error).message);
+          if (logProbe) {
+            console.log(
+              "[ClaudeSetupToken] Could not read from Keychain:",
+              (keychainError as Error).message,
+            );
+          }
         }
-      } else if (process.platform === "win32") {
+      } else if (process.platform === "win32" && logProbe) {
         // Windows: Skip Credential Manager for now (complex), go straight to file
         console.log("[ClaudeSetupToken] Windows: Checking file-based storage...");
       }
@@ -390,32 +603,41 @@ export class ClaudeSetupTokenService {
       
       try {
         const content = await fs.readFile(credPath, "utf-8");
-        const credentials = JSON.parse(content);
-        
-        if (credentials.accessToken) {
-          console.log("[ClaudeSetupToken] Found token in ~/.claude/.credentials.json");
-          return String(credentials.accessToken).replace(/\s+/g, "");
+        // This file nests under claudeAiOauth like the Keychain entry does.
+        // Reading only a root-level accessToken missed it entirely, which is
+        // why the non-macOS paths never found a token.
+        const credentials = parseClaudeCliCredentials(content);
+
+        if (credentials) {
+          console.log("[ClaudeSetupToken] Found credentials in ~/.claude/.credentials.json");
+          return credentials;
         }
       } catch (fileError) {
-        console.log("[ClaudeSetupToken] Could not read from ~/.claude/.credentials.json:", (fileError as Error).message);
+        if (logProbe) {
+          console.log(
+            "[ClaudeSetupToken] Could not read from ~/.claude/.credentials.json:",
+            (fileError as Error).message,
+          );
+        }
       }
 
       // Try ~/.claude.json as last resort
       const tokenPath = `${homeDir}/.claude.json`;
       try {
         const content = await fs.readFile(tokenPath, "utf-8");
-        const config = JSON.parse(content);
+        const credentials = parseClaudeCliCredentials(content);
 
-        if (config.oauthAccount?.accessToken) {
-          console.log("[ClaudeSetupToken] Found token in ~/.claude.json");
-          return String(config.oauthAccount.accessToken).replace(/\s+/g, "");
-        }
-
-        if (config.accessToken) {
-          return String(config.accessToken).replace(/\s+/g, "");
+        if (credentials) {
+          console.log("[ClaudeSetupToken] Found credentials in ~/.claude.json");
+          return credentials;
         }
       } catch (jsonError) {
-        console.log("[ClaudeSetupToken] Could not read from ~/.claude.json:", (jsonError as Error).message);
+        if (logProbe) {
+          console.log(
+            "[ClaudeSetupToken] Could not read from ~/.claude.json:",
+            (jsonError as Error).message,
+          );
+        }
       }
 
       return null;

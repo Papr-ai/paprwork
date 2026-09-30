@@ -2,47 +2,36 @@
  * OAuthSection - OAuth authentication UI for OpenAI and Claude
  */
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useEffect, useCallback, useRef } from "react";
 import { useOAuth } from "../../hooks/useOAuth";
 import { useCustomKeys } from "../../hooks/useCustomKeys";
+import { PROVIDER_AUTH_CHANGED_EVENT } from "../../hooks/useAuthStatus";
+import type { OAuthProviderSource } from "../../../src/core/telemetry/oauthProviderSteps";
+import { trackOAuthProviderStep } from "../../lib/oauthProviderTelemetry";
+import { getOnboardingState } from "../../utils/onboardingState";
+import { cleanClaudeOAuthToken } from "../../utils/claudeOAuthToken";
+import { useProviderAuthStore } from "../../stores/providerAuthStore";
+import { deriveProviderConnectionState } from "../../utils/providerConnectionState";
+import { ClaudeGuidedSetupModal } from "./ClaudeGuidedSetupModal";
+import { SubscriptionPlanUsagePanel } from "./SubscriptionPlanUsagePanel";
+import { useChat } from "../../hooks/useChat";
+import { useTabs } from "../../hooks/useTabs";
+import { startClaudeManualAgentChat } from "../../utils/startClaudeManualAgentChat";
 import "./SettingsView.css";
+import "./ClaudeManualConnectionPanel.css";
 
-type OSPlatform = "mac" | "windows" | "linux";
-
-function detectOS(): OSPlatform {
-  const ua = navigator.userAgent.toLowerCase();
-  if (ua.includes("mac") || ua.includes("darwin")) return "mac";
-  if (ua.includes("win")) return "windows";
-  return "linux";
+function resolveOAuthSource(): OAuthProviderSource {
+  const { phase } = getOnboardingState();
+  if (
+    phase === "welcome" ||
+    phase === "connect_papr" ||
+    phase === "connect_model" ||
+    phase === "choose_intent"
+  ) {
+    return "onboarding";
+  }
+  return "settings";
 }
-
-const OS_TERMINAL_INFO: Record<OSPlatform, { name: string; howToOpen: string }> = {
-  mac: {
-    name: "Terminal",
-    howToOpen: "Press Cmd + Space, type \"Terminal\", and press Enter",
-  },
-  windows: {
-    name: "PowerShell",
-    howToOpen: "Press Win key, type \"PowerShell\", and click to open",
-  },
-  linux: {
-    name: "Terminal",
-    howToOpen: "Press Ctrl + Alt + T to open a terminal window",
-  },
-};
-
-// Curl-based installer (works for non-technical users without npm/brew)
-const CLAUDE_CLI_INSTALL_STEPS = {
-  download: "curl -fsSL https://claude.ai/install.sh | bash",
-  move: "sudo mv /tmp/claude /usr/local/bin/claude && sudo chmod +x /usr/local/bin/claude",
-  verify: "claude --version",
-  refresh: "source ~/.zshrc || source ~/.bashrc",
-  // Fallback for users with npm
-  npm: "npm install -g @anthropic-ai/claude-code",
-};
-
-/** Whether the paste field was triggered by the automated terminal flow */
-type PasteMode = "idle" | "terminal" | "manual";
 
 interface OAuthSectionProps {
   provider: "openai" | "anthropic";
@@ -59,14 +48,28 @@ export function OAuthSection({
   apiKeyName,
   apiKeyHint,
 }: OAuthSectionProps) {
-  const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider);
+  const oauthSource = useMemo(resolveOAuthSource, []);
+  const { status, loading, startOAuthLogin, disconnect } = useOAuth(provider, {
+    source: oauthSource,
+  });
+  // A turn that failed on a 401 is the only proof we get that a token the
+  // provider still lists as valid has stopped working. Without it the card can
+  // only report what we stored, which is why it kept counting down while every
+  // request was being refused.
+  const authRejected = useProviderAuthStore(
+    state => state.rejections[provider] !== undefined,
+  );
+  const clearAuthRejection = useProviderAuthStore(state => state.clearRejection);
+  // Persisted in the main process: it decides which credential the gateway ever
+  // sees, so this is the mode the agent actually runs on, not just which form shows.
   const [useApiKey, setUseApiKey] = useState(false);
-  const [showPasteToken, setShowPasteToken] = useState(false);
-  const [pasteMode, setPasteMode] = useState<PasteMode>("idle");
-  const [prevTimedOut, setPrevTimedOut] = useState(false);
-  const [pastedToken, setPastedToken] = useState("");
-  const [pasting, setPasting] = useState(false);
-  const [showManualInstructions, setShowManualInstructions] = useState(false);
+  const [authPrefLoaded, setAuthPrefLoaded] = useState(false);
+  const [guidedSetupOpen, setGuidedSetupOpen] = useState(false);
+  const [guidedSetupKey, setGuidedSetupKey] = useState(0);
+  const guidedAutoOpenKeyRef = useRef<string | null>(null);
+  const [launchingAgent, setLaunchingAgent] = useState(false);
+  const { createChat } = useChat();
+  const { createTab, switchToTab } = useTabs();
   const [showToken, setShowToken] = useState(false);
   const [currentToken, setCurrentToken] = useState("");
   const [loadingToken, setLoadingToken] = useState(false);
@@ -75,13 +78,78 @@ export function OAuthSection({
   const [savingToken, setSavingToken] = useState(false);
   const [apiKeyValue, setApiKeyValue] = useState("");
   const [savingApiKey, setSavingApiKey] = useState(false);
-  const [copiedCommand, setCopiedCommand] = useState(false);
-  const [copiedInstall, setCopiedInstall] = useState(false);
   const [apiKeySaved, setApiKeySaved] = useState(false);
   const [apiKeyError, setApiKeyError] = useState("");
   const { keys, addKey, updateKey, getKeyValue, deleteKey } = useCustomKeys();
-  const os = useMemo(detectOS, []);
-  const termInfo = OS_TERMINAL_INFO[os];
+
+  // A key row synced from the OAuth token is not a platform key, so it is not
+  // something requests can fall back to — only a key the user supplied is.
+  const platformApiKeyConfigured = useMemo(() => {
+    const stored = keys.find(k => k.name === apiKeyName);
+    return stored !== undefined && stored.managedBy !== "oauth";
+  }, [keys, apiKeyName]);
+
+  const connectionState = useMemo(
+    () =>
+      deriveProviderConnectionState({
+        mode: useApiKey ? "apiKey" : "oauth",
+        platformApiKeyConfigured,
+        status,
+        authRejected,
+      }),
+    [useApiKey, platformApiKeyConfigured, status, authRejected],
+  );
+
+  const needsReconnect = connectionState.kind === "needs_signin";
+
+  const handleClaudeConnected = () => {
+    window.location.reload();
+  };
+
+  const openGuidedSetup = useCallback(() => {
+    setGuidedSetupKey((current) => current + 1);
+    setGuidedSetupOpen(true);
+  }, []);
+
+  const handleStartOAuthLogin = async () => {
+    if (provider === "anthropic") {
+      guidedAutoOpenKeyRef.current = null;
+    }
+    await startOAuthLogin();
+  };
+
+  const closeGuidedSetup = () => {
+    setGuidedSetupOpen(false);
+  };
+
+  const handleOpenManualSetup = () => {
+    trackOAuthProviderStep(provider, "manual_steps_clicked", {
+      source: oauthSource,
+    });
+    openGuidedSetup();
+  };
+
+  const handleAskAgent = async () => {
+    if (provider !== "anthropic") return;
+    setLaunchingAgent(true);
+    trackOAuthProviderStep(provider, "manual_agent_clicked", {
+      source: oauthSource,
+      model: "gemini-3.8-flash",
+    });
+
+    try {
+      const started = await startClaudeManualAgentChat(
+        createChat,
+        createTab,
+        switchToTab,
+      );
+      if (started) {
+        setGuidedSetupOpen(false);
+      }
+    } finally {
+      setLaunchingAgent(false);
+    }
+  };
 
   const handleViewToken = async () => {
     if (showToken) {
@@ -108,18 +176,16 @@ export function OAuthSection({
   };
 
   const handleSaveEditedToken = async () => {
-    const cleaned = editedToken
-      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
-      .replace(/\x1b\][^\x07]*\x07/g, "")
-      .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")
-      .replace(/[^a-zA-Z0-9_-]/g, "");
+    const cleaned = cleanClaudeOAuthToken(editedToken);
     if (!cleaned.startsWith("sk-ant-oat")) {
       alert("Invalid token format. Claude OAuth tokens should start with sk-ant-oat01-");
       return;
     }
     setSavingToken(true);
     try {
-      const result = await window.electronAPI.oauth.pasteToken(provider, cleaned);
+      const result = await window.electronAPI.oauth.pasteToken(provider, cleaned, {
+        source: oauthSource,
+      });
       if (result.success) {
         setCurrentToken(cleaned);
         setEditingToken(false);
@@ -136,65 +202,78 @@ export function OAuthSection({
     }
   };
 
-  const handlePasteToken = async () => {
-    // Aggressively clean: strip ANSI escape codes, all whitespace (including \n, \r),
-    // and any non-token characters. Valid token chars are [a-zA-Z0-9_-].
-    const cleanedToken = pastedToken
-      .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")  // ANSI SGR sequences
-      .replace(/\x1b\][^\x07]*\x07/g, "")      // ANSI OSC sequences
-      .replace(/[\s\u00A0\u200B\u200C\u200D\uFEFF]/g, "")  // All whitespace + zero-width chars
-      .replace(/[^a-zA-Z0-9_-]/g, "");          // Keep only valid token chars
-    if (!cleanedToken) return;
-    
-    if (!cleanedToken.startsWith("sk-ant-oat")) {
-      alert("Invalid token format. Claude OAuth tokens should start with sk-ant-oat01-");
+  // Open the same guided stepper modal when Connect opens Terminal or does not finish.
+  useEffect(() => {
+    if (provider !== "anthropic") {
       return;
     }
-    
-    setPasting(true);
-    try {
-      const result = await window.electronAPI.oauth.pasteToken(provider, cleanedToken);
-      if (result.success) {
-        setPastedToken("");
-        setShowPasteToken(false);
-        alert("Token saved successfully! Refreshing...");
-        window.location.reload();
-      } else {
-        alert(`Failed to save token: ${result.error}`);
+    if (status.connected) {
+      guidedAutoOpenKeyRef.current = null;
+      setGuidedSetupOpen(false);
+      return;
+    }
+    const autoKey =
+      status.showPasteField === true
+        ? "terminal-opened"
+        : status.timedOut
+          ? "timed-out"
+          : status.error && !status.connected
+            ? `error:${status.error}`
+            : null;
+    if (!autoKey || guidedAutoOpenKeyRef.current === autoKey) {
+      return;
+    }
+    guidedAutoOpenKeyRef.current = autoKey;
+    openGuidedSetup();
+  }, [
+    provider,
+    status.connected,
+    status.showPasteField,
+    status.timedOut,
+    status.error,
+    openGuidedSetup,
+  ]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result =
+          await window.electronAPI?.providerAuth?.getPreference(provider);
+        if (!cancelled && result?.preference === "apiKey") {
+          setUseApiKey(true);
+        }
+      } catch (error) {
+        console.error("Failed to load provider auth preference:", error);
+      } finally {
+        if (!cancelled) setAuthPrefLoaded(true);
       }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [provider]);
+
+  const handleToggleAuthMode = async () => {
+    const next = !useApiKey;
+    setUseApiKey(next);
+    // The rejection we recorded belongs to the credential being switched away
+    // from, so keeping it would report the outgoing credential's failure
+    // against the incoming one — the switch would look like it changed nothing.
+    clearAuthRejection(provider);
+    try {
+      await window.electronAPI?.providerAuth?.setPreference(
+        provider,
+        next ? "apiKey" : "oauth",
+      );
+      // Chat derives its billing readout from this, and Settings can be open
+      // beside a live chat — so tell the app rather than wait for a remount.
+      window.dispatchEvent(new Event(PROVIDER_AUTH_CHANGED_EVENT));
     } catch (error) {
-      alert(`Error: ${error}`);
-    } finally {
-      setPasting(false);
+      console.error("Failed to save provider auth preference:", error);
+      setUseApiKey(!next);
     }
   };
-
-  const handleCopy = (text: string, setter: (v: boolean) => void) => {
-    navigator.clipboard.writeText(text);
-    setter(true);
-    setTimeout(() => setter(false), 2000);
-  };
-
-  // Auto-show paste field when terminal was opened or sign-in fails/times out
-  React.useEffect(() => {
-    if (provider !== "anthropic") return;
-    // Terminal was opened -- show inline paste field
-    if (status.showPasteField && pasteMode === "idle") {
-      setShowPasteToken(true);
-      setPasteMode("terminal");
-    }
-    // Error/timeout fallback
-    const shouldShow = status.timedOut || (status.error && !status.connected);
-    if (shouldShow && !prevTimedOut) {
-      setShowPasteToken(true);
-      if (pasteMode === "idle") setPasteMode("terminal");
-      setPrevTimedOut(true);
-    }
-    if (!status.timedOut && !status.error && prevTimedOut) {
-      setPrevTimedOut(false);
-    }
-  }, [status.timedOut, status.error, status.connected, status.showPasteField, provider]);
-
 
   // Check if API key already exists when switching to API key mode
   React.useEffect(() => {
@@ -241,28 +320,40 @@ export function OAuthSection({
     }
   };
 
-  const formatExpiry = (expiresAt?: string) => {
-    if (!expiresAt) return "";
-    const date = new Date(expiresAt);
-    const now = new Date();
-    const diffMs = date.getTime() - now.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
+  // Both remediations retire the recorded rejection: whatever happens next, the
+  // 401 we saw no longer describes the credential now stored.
+  const handleReconnect = async () => {
+    clearAuthRejection(provider);
+    await handleStartOAuthLogin();
+  };
 
-    if (diffMins < 0) return "Expired";
-    if (diffMins < 60) return `Expires in ${diffMins}m`;
-    const diffHours = Math.floor(diffMins / 60);
-    if (diffHours < 24) return `Expires in ${diffHours}h`;
-    const diffDays = Math.floor(diffHours / 24);
-    return `Expires in ${diffDays}d`;
+  const handleDisconnect = async () => {
+    clearAuthRejection(provider);
+    await disconnect();
   };
 
   return (
     <div className="oauth-card">
       <div className="oauth-card__header">
         <h3>{title}</h3>
-        {status.connected && (
+        {/* In API key mode the OAuth token is deliberately unused, so showing it
+            as connected is what made the switch look like it hadn't applied. */}
+        {/* One badge, from one derived state. Rendering "stored" and "usable"
+            as separate green signals is what let the card say Connected while
+            the token was expired. */}
+        {connectionState.kind === "api_key_mode" && connectionState.configured && (
+          <span className="oauth-badge oauth-badge--connected">
+            ✓ Using API key
+          </span>
+        )}
+        {connectionState.kind === "connected" && (
           <span className="oauth-badge oauth-badge--connected">
             ✓ Connected
+          </span>
+        )}
+        {connectionState.kind === "needs_signin" && (
+          <span className="oauth-badge oauth-badge--attention">
+            Sign-in expired
           </span>
         )}
       </div>
@@ -279,18 +370,44 @@ export function OAuthSection({
                   </span>
                 </div>
               )}
-              {status.expiresAt && (
-                <div className="oauth-detail">
-                  <span className="oauth-detail-label">Token:</span>
-                  <span className="oauth-detail-value">
-                    {formatExpiry(status.expiresAt)}
-                  </span>
+              {connectionState.kind === "connected" && (
+                <SubscriptionPlanUsagePanel provider={provider} />
+              )}
+              {/* No expiry countdown while healthy. It is not actionable, and
+                  as the only marker of a dead token it was missed — the badge
+                  beside it said Connected, in green, and won. */}
+              {connectionState.kind === "needs_signin" && (
+                <div className="oauth-state-notice" aria-live="polite">
+                  <p className="oauth-state-notice__headline">
+                    {connectionState.reason === "rejected"
+                      ? `${subscriptionName} rejected this sign-in.`
+                      : `Your ${subscriptionName} sign-in expired and cannot renew itself.`}
+                  </p>
+                  {/* Name the account actually being spent from. Staying quiet
+                      here is how a subscription at 11% usage came to report
+                      that its limits were exhausted: the cap belonged to the
+                      API key that had quietly taken over. */}
+                  <p className="oauth-state-notice__detail">
+                    {connectionState.fallsBackToApiKey
+                      ? `${title} is running on your API key, which is billed separately from your subscription.`
+                      : `${title} requests will fail until you sign in again.`}
+                  </p>
                 </div>
+              )}
+              {needsReconnect && (
+                <button
+                  className="settings-btn settings-btn--primary"
+                  onClick={handleReconnect}
+                  disabled={loading}
+                  style={{ width: "100%", marginBottom: "8px" }}
+                >
+                  {loading ? "Opening sign-in..." : "Sign in again"}
+                </button>
               )}
               <div style={{ display: "flex", gap: "8px" }}>
                 <button
                   className="settings-btn settings-btn--secondary"
-                  onClick={disconnect}
+                  onClick={handleDisconnect}
                   disabled={loading}
                   style={{ flex: 1 }}
                 >
@@ -393,224 +510,91 @@ export function OAuthSection({
                 Use your {subscriptionName} subscription
               </p>
               
-              {provider === "anthropic" && !showPasteToken && (
-                <div style={{ marginBottom: "12px" }}>
-                  <p style={{ fontSize: "13px", color: "var(--color-text-secondary, #666)", marginBottom: "8px" }}>
-                    Use your Claude Pro/Max subscription. Click Connect to sign in — we'll check for an existing token, install the CLI if needed, and open a terminal for you.
-                  </p>
-                </div>
-              )}
-              
-              {status.error && !status.connected && !showPasteToken && (
-                <div style={{ padding: "8px 12px", background: "#fff3cd", borderRadius: "6px", fontSize: "13px", color: "#856404", marginBottom: "8px" }}>
-                  {status.error}
-                </div>
-              )}
-              
-              {!showPasteToken && (
+              {provider === "anthropic" && !guidedSetupOpen && (
+                  <div style={{ marginBottom: "12px" }}>
+                    <p
+                      style={{
+                        fontSize: "13px",
+                        color: "var(--color-text-secondary, #666)",
+                        marginBottom: "8px",
+                        lineHeight: 1.45,
+                      }}
+                    >
+                      <strong>Connect</strong> works automatically if Claude Code is
+                      already installed — otherwise we open a step-by-step guide to
+                      install, sign in, and paste your token. Use{" "}
+                      <strong>Ask an agent</strong> if you want help in chat.
+                    </p>
+                  </div>
+                )}
+
+              {status.error &&
+                !status.connected &&
+                !guidedSetupOpen && (
+                  <div
+                    style={{
+                      padding: "8px 12px",
+                      background: "#fff3cd",
+                      borderRadius: "6px",
+                      fontSize: "13px",
+                      color: "#856404",
+                      marginBottom: "8px",
+                    }}
+                  >
+                    {status.error}
+                  </div>
+                )}
+
+              {!guidedSetupOpen && (
                 <div style={{ display: "flex", gap: "8px", flexDirection: "column" }}>
                   <button
                     className="settings-btn settings-btn--primary"
-                    onClick={startOAuthLogin}
-                    disabled={loading}
+                    onClick={() => void handleStartOAuthLogin()}
+                    disabled={loading || launchingAgent}
                     style={{ width: "100%" }}
                   >
-                    {loading ? "Connecting..." : status.error && !status.connected ? "Try Again" : `Connect ${title}`}
+                    {loading
+                      ? "Connecting..."
+                      : status.error && !status.connected
+                        ? "Try Connect again"
+                        : `Connect ${title}`}
                   </button>
-                  
+
                   {provider === "anthropic" && (
-                    <button
-                      className="settings-btn settings-btn--secondary"
-                      onClick={() => { setShowPasteToken(true); setPasteMode("manual"); }}
-                      style={{ width: "100%" }}
-                    >
-                      Manual Setup
-                    </button>
+                    <>
+                      <button
+                        className="settings-btn settings-btn--secondary"
+                        onClick={() => void handleAskAgent()}
+                        disabled={loading || launchingAgent}
+                        style={{ width: "100%" }}
+                      >
+                        {launchingAgent ? "Opening agent..." : "Ask an agent"}
+                      </button>
+                      <button
+                        className="settings-btn settings-btn--secondary"
+                        onClick={handleOpenManualSetup}
+                        disabled={loading || launchingAgent}
+                        style={{ width: "100%" }}
+                      >
+                        Step-by-step setup
+                      </button>
+                    </>
                   )}
                 </div>
               )}
-              
-              {/* Inline paste section -- shown after Connect opens terminal, or via Manual Setup */}
-              {showPasteToken && provider === "anthropic" && (
-                <div className="token-paste-section">
-                  {/* Context message depending on how we got here */}
-                  {pasteMode === "terminal" && (
-                    <div className="token-paste-section__info">
-                      <span className="token-paste-section__icon">✓</span>
-                      <div>
-                        <p className="token-paste-section__title">Terminal opened with <code>claude setup-token</code></p>
-                        <p className="token-paste-section__hint">
-                          Complete the sign-in in your browser, then copy the token from the terminal (starts with <code>sk-ant-oat01-</code>) and paste it below.
-                        </p>
-                      </div>
-                    </div>
-                  )}
-                  
-                  {pasteMode === "manual" && (
-                    <div className="token-paste-section__info">
-                      <span className="token-paste-section__icon">📋</span>
-                      <div>
-                        <p className="token-paste-section__title">Manual Setup</p>
-                        <p className="token-paste-section__hint">
-                          Run <code>claude setup-token</code> in your terminal, complete the browser sign-in, then paste the token below.
-                        </p>
-                      </div>
-                    </div>
-                  )}
 
-                  {/* Paste field */}
-                  <textarea
-                    className="token-modal__textarea"
-                    value={pastedToken}
-                    onChange={(e) => setPastedToken(e.target.value)}
-                    placeholder="Paste your token here (starts with sk-ant-oat01-...)"
-                    autoFocus
-                  />
-                  {pastedToken && /[\s\n\r]/.test(pastedToken) && (
-                    <p className="token-modal__space-notice">
-                      Whitespace/line breaks detected — they'll be removed automatically.
-                    </p>
-                  )}
-                  <button
-                    className="settings-btn settings-btn--primary"
-                    onClick={handlePasteToken}
-                    disabled={!pastedToken.trim() || pasting}
-                    style={{ width: "100%", marginTop: "8px" }}
-                  >
-                    {pasting ? "Saving..." : "Save Token"}
-                  </button>
-
-                  {/* Expandable manual instructions */}
-                  <button
-                    className="token-paste-section__expand-btn"
-                    onClick={() => setShowManualInstructions(!showManualInstructions)}
-                  >
-                    {showManualInstructions ? "Hide" : "Show"} full instructions
-                    <span style={{ marginLeft: "4px" }}>{showManualInstructions ? "▲" : "▼"}</span>
-                  </button>
-
-                  {showManualInstructions && (
-                    <div className="token-paste-section__manual">
-                      <div className="token-modal__step">
-                        <div className="token-modal__step-number">1</div>
-                        <div className="token-modal__step-content">
-                          <p className="token-modal__step-title">Open {termInfo.name}</p>
-                          <p className="token-modal__step-hint">{termInfo.howToOpen}</p>
-                        </div>
-                      </div>
-
-                      <div className="token-modal__step">
-                        <div className="token-modal__step-number">2</div>
-                        <div className="token-modal__step-content">
-                          <p className="token-modal__step-title">Run this command</p>
-                          <div className="token-modal__command-row">
-                            <code className="token-modal__command">claude setup-token</code>
-                            <button
-                              className="token-modal__copy-btn"
-                              onClick={() => handleCopy("claude setup-token", setCopiedCommand)}
-                            >
-                              {copiedCommand ? "Copied!" : "Copy"}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="token-modal__step">
-                        <div className="token-modal__step-number">3</div>
-                        <div className="token-modal__step-content">
-                          <p className="token-modal__step-title">Sign in and copy the token</p>
-                          <p className="token-modal__step-hint">
-                            Your browser will open. Sign in with your Claude account. The terminal will print a token starting with <code>sk-ant-oat01-</code>. Copy it and paste it in the field above.
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="token-modal__tip">
-                        <strong>Don't have Claude Code CLI?</strong>
-                        <p>Install it first (no npm or Homebrew required), then follow the steps above:</p>
-                        
-                        <div style={{ marginTop: "12px", marginBottom: "8px" }}>
-                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 1: Download and install</p>
-                          <div className="token-modal__command-row">
-                            <code className="token-modal__command">{CLAUDE_CLI_INSTALL_STEPS.download}</code>
-                            <button
-                              className="token-modal__copy-btn"
-                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.download, setCopiedInstall)}
-                            >
-                              {copiedInstall ? "Copied!" : "Copy"}
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{ marginBottom: "8px" }}>
-                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 2: Move to permanent location</p>
-                          <div className="token-modal__command-row">
-                            <code className="token-modal__command" style={{ fontSize: "10px" }}>{CLAUDE_CLI_INSTALL_STEPS.move}</code>
-                            <button
-                              className="token-modal__copy-btn"
-                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.move, (v) => {})}
-                            >
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{ marginBottom: "8px" }}>
-                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 3: Verify installation</p>
-                          <div className="token-modal__command-row">
-                            <code className="token-modal__command">{CLAUDE_CLI_INSTALL_STEPS.verify}</code>
-                            <button
-                              className="token-modal__copy-btn"
-                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.verify, (v) => {})}
-                            >
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-
-                        <div style={{ marginBottom: "12px" }}>
-                          <p style={{ fontSize: "12px", fontWeight: "500", marginBottom: "6px" }}>Step 4: Refresh your shell</p>
-                          <div className="token-modal__command-row">
-                            <code className="token-modal__command">{CLAUDE_CLI_INSTALL_STEPS.refresh}</code>
-                            <button
-                              className="token-modal__copy-btn"
-                              onClick={() => handleCopy(CLAUDE_CLI_INSTALL_STEPS.refresh, (v) => {})}
-                            >
-                              Copy
-                            </button>
-                          </div>
-                        </div>
-
-                        <p style={{ fontSize: "11px", color: "var(--color-text-secondary, #666)", marginTop: "12px" }}>
-                          <strong>Have npm?</strong> You can also use: <code style={{ fontSize: "10px" }}>{CLAUDE_CLI_INSTALL_STEPS.npm}</code>
-                        </p>
-
-                        <a
-                          href="#"
-                          className="token-modal__link"
-                          onClick={(e) => {
-                            e.preventDefault();
-                            window.electronAPI.system.invoke(
-                              "shell.openExternal",
-                              "https://docs.anthropic.com/en/docs/claude-code/getting-started",
-                            );
-                          }}
-                        >
-                          Full installation guide &rarr;
-                        </a>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Cancel button */}
-                  <button
-                    className="settings-btn settings-btn--secondary"
-                    onClick={() => { setShowPasteToken(false); setPasteMode("idle"); setShowManualInstructions(false); setPastedToken(""); }}
-                    style={{ width: "100%", marginTop: "4px" }}
-                  >
-                    Cancel
-                  </button>
-                </div>
+              {guidedSetupOpen && provider === "anthropic" && (
+                <p
+                  style={{
+                    fontSize: "13px",
+                    color: "var(--color-text-secondary, #666)",
+                    margin: 0,
+                    lineHeight: 1.45,
+                  }}
+                >
+                  The guided setup is open — close it to use Connect again, or finish
+                  the steps in the modal.
+                </p>
               )}
             </>
           )}
@@ -690,7 +674,8 @@ export function OAuthSection({
         </span>
         <button
           className="oauth-toggle-switch"
-          onClick={() => setUseApiKey(!useApiKey)}
+          onClick={() => void handleToggleAuthMode()}
+          disabled={!authPrefLoaded}
           aria-label="Toggle between OAuth and API Key"
         >
           <span className={`oauth-toggle-slider ${useApiKey ? 'right' : 'left'}`} />
@@ -700,8 +685,22 @@ export function OAuthSection({
         </span>
       </div>
 
-      {status.error && (
+      {status.error && !guidedSetupOpen && (
         <div className="oauth-error">Error: {status.error}</div>
+      )}
+
+      {provider === "anthropic" && (
+        <ClaudeGuidedSetupModal
+          open={guidedSetupOpen}
+          sessionKey={guidedSetupKey}
+          oauthSource={oauthSource}
+          onClose={closeGuidedSetup}
+          onConnected={handleClaudeConnected}
+          onAskAgent={() => {
+            closeGuidedSetup();
+            void handleAskAgent();
+          }}
+        />
       )}
     </div>
   );

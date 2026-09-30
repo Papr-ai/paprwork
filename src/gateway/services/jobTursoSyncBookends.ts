@@ -1,0 +1,225 @@
+/**
+ * Desktop job Turso bookends — pull remote rows before run, push writeDbIds after.
+ *
+ * Web mini-apps write to Turso via /api/db/*. Desktop jobs read/write local SQLite.
+ * Without a pre-run pull, agent jobs miss web-created rows; without post-run push
+ * keyed by writeDbIds, registry DBs never sync (push by job UUID skips db-* sources).
+ */
+
+import type { JobRecord } from "./jobs/types.js";
+import { resolveJobWriteTargets } from "./jobAppDatabase.js";
+import { findLinkedSourceForJob } from "./tursoLinkedSources.js";
+import { getTursoSyncBridge } from "./TursoSyncBridge.js";
+import { ensureLocalDbChangeLogReady } from "./tursoSyncBridgeCore.js";
+import { getSyncCoordinator } from "./cloudSync/SyncCoordinator.js";
+import { linkedSourceAsAppDataSource } from "./tursoLinkedSources.js";
+import type { TursoLinkedSource } from "./tursoLinkedSources.js";
+import { shouldUseTursoReplicaForSource } from "./tursoReplica/tursoReplicaRouting.js";
+import { releaseReplicaHandleForJob } from "./tursoReplica/replicaDbJobQuiesce.js";
+import { isReplicaCheckpointWalError } from "./tursoReplica/tursoReplicaCheckpointRecovery.js";
+import { resolveTursoDatabaseNameForSource } from "./DatabaseRegistryService.js";
+import { getPaprUserId } from "../utils/paprUserId.js";
+
+async function pullJobReplicaWithCheckpointRecovery(
+  syncKey: string,
+  linked: TursoLinkedSource,
+  bridge: NonNullable<ReturnType<typeof getTursoSyncBridge>>,
+  appendLog?: (line: string) => Promise<void>,
+): Promise<Awaited<ReturnType<typeof bridge.pullJob>>> {
+  let result = await bridge.pullJob(syncKey, undefined, {});
+  if (
+    result.status !== "failed" ||
+    !result.error ||
+    !isReplicaCheckpointWalError(result.error)
+  ) {
+    return result;
+  }
+
+  const appSource = linkedSourceAsAppDataSource(linked);
+  const { recoverReplicaAfterCheckpointError } = await import(
+    "./tursoReplica/tursoReplicaRouting.js"
+  );
+  const tursoDatabase = resolveTursoDatabaseNameForSource(
+    appSource,
+    getPaprUserId(),
+  );
+  if (!tursoDatabase) {
+    return result;
+  }
+  await appendLog?.(
+    `[Turso] WAL/checkpoint error on pre-run pull for ${syncKey} — repairing sidecars and retrying once`,
+  );
+  const recovered = await recoverReplicaAfterCheckpointError(
+    appSource,
+    tursoDatabase,
+  );
+  if (!recovered) {
+    return result;
+  }
+  result = await bridge.pullJob(syncKey, undefined, { forceReconnect: true });
+  return result;
+}
+
+export function resolveJobTursoSyncKeys(
+  job: Pick<JobRecord, "id" | "writeDbIds">,
+): string[] {
+  const keys = new Set<string>();
+  for (const dbId of job.writeDbIds ?? []) {
+    const trimmed = dbId.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+  if (keys.size === 0) {
+    keys.add(job.id);
+  }
+  return [...keys];
+}
+
+/** Includes legacy app primary registry dbId when writeDbIds is empty. */
+export async function resolveJobTursoSyncKeysAsync(
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
+): Promise<string[]> {
+  const keys = new Set<string>();
+  for (const dbId of job.writeDbIds ?? []) {
+    const trimmed = dbId.trim();
+    if (trimmed) {
+      keys.add(trimmed);
+    }
+  }
+
+  if (keys.size === 0) {
+    try {
+      const targets = await resolveJobWriteTargets(job);
+      for (const target of targets) {
+        keys.add(target.dbId);
+      }
+    } catch {
+      // Registry missing — fall back to job id below.
+    }
+  }
+
+  // Legacy: Turso sync keyed by job UUID targets Jobs/{id}/data/data.db scratch.
+  // Prefer writeDbIds / registry targets — scratch stays local-only (see jobScratchDatabasePath).
+  if (keys.size === 0) {
+    keys.add(job.id);
+  }
+
+  return [...keys];
+}
+
+/** Sync keys for Turso bookends — never include job UUID when registry writeDbIds are set. */
+export function resolveJobTursoSyncKeysForBookends(
+  job: Pick<JobRecord, "id" | "writeDbIds">,
+  resolvedKeys: readonly string[],
+): string[] {
+  const explicitDbIds = (job.writeDbIds ?? [])
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+  if (explicitDbIds.length > 0) {
+    return [...new Set(explicitDbIds)];
+  }
+  return [...resolvedKeys];
+}
+
+export async function pullJobTursoBeforeRun(
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds" | "name">,
+  appendLog?: (line: string) => Promise<void>,
+): Promise<void> {
+  const bridge = getTursoSyncBridge();
+  if (!bridge) {
+    return;
+  }
+
+  const syncKeys = resolveJobTursoSyncKeysForBookends(
+    job,
+    await resolveJobTursoSyncKeysAsync(job),
+  );
+  const sources = await bridge.listLinkedSources();
+
+  for (const syncKey of syncKeys) {
+    const linked = findLinkedSourceForJob(sources, syncKey);
+    if (!linked) {
+      await appendLog?.(
+        `[Turso] No linked app database for ${syncKey} — skip pre-run pull`,
+      );
+      continue;
+    }
+
+    try {
+      const appSource = linkedSourceAsAppDataSource(linked);
+      const isReplica = shouldUseTursoReplicaForSource(appSource);
+
+      // Legacy (non-replica) sources still hand jobs a raw file path, so the
+      // handle must be released for them. Replica sources must NOT release:
+      // jobs now read read-only and write through the gateway (papr_db), and
+      // the gateway needs this handle to serve them. Closing it made every
+      // job-issued write hang until "replica operation timed out after
+      // 30000ms", then wedged the sidecar on reopen.
+      if (!isReplica) {
+        await releaseReplicaHandleForJob(linked.dbPath);
+      } else {
+        await appendLog?.(
+          `[Turso] Replica handle retained — jobs write via gateway (${syncKey})`,
+        );
+      }
+      const result = await pullJobReplicaWithCheckpointRecovery(
+        syncKey,
+        linked,
+        bridge,
+        appendLog,
+      );
+
+      if (result.status === "pulled") {
+        if (!isReplica) {
+          ensureLocalDbChangeLogReady(linked.dbPath);
+        }
+        await appendLog?.(
+          `[Turso] Pulled remote DB before run (${syncKey})`,
+        );
+      } else {
+        await appendLog?.(
+          `[Turso] Pre-run pull skipped for ${syncKey}: ${result.reason ?? result.status}`,
+        );
+      }
+    } catch (error) {
+      const message = (error as Error).message.slice(0, 160);
+      await appendLog?.(`[Turso] Pre-run pull failed for ${syncKey}: ${message}`);
+      console.warn(
+        `[JobTursoBookends] Pre-run pull failed for ${syncKey}:`,
+        message,
+      );
+    }
+  }
+}
+
+export async function scheduleJobTursoPushAfterRun(
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
+): Promise<void> {
+  const bridge = getTursoSyncBridge();
+  const syncKeys = resolveJobTursoSyncKeysForBookends(
+    job,
+    await resolveJobTursoSyncKeysAsync(job),
+  );
+  const coordinator = getSyncCoordinator();
+  const sources = bridge ? await bridge.listLinkedSources(true) : [];
+
+  for (const syncKey of syncKeys) {
+    if (coordinator) {
+      const linked = findLinkedSourceForJob(sources, syncKey);
+      if (linked) {
+        coordinator.markDbDirty(syncKey, linked.dbPath, "completion");
+        continue;
+      }
+    }
+    const { scheduleTursoPushForJob } = await import("./tursoPushScheduler.js");
+    scheduleTursoPushForJob(syncKey, "completion", "completion");
+  }
+}
+
+/** Debounced push after job completion — uses writeDbIds sync keys when set. */
+export async function pushJobTursoIfEnabled(
+  job: Pick<JobRecord, "id" | "writeDbIds" | "appIds">,
+): Promise<void> {
+  await scheduleJobTursoPushAfterRun(job);
+}

@@ -2,27 +2,14 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import { runBrowserWait } from "./browser.js";
 import { runWebviewWait } from "./webview.js";
-import { hasRecentWebviewPreviewActivity } from "./webviewActivity.js";
-
-async function hasActiveWebviewSessions(): Promise<boolean> {
-  try {
-    const { requestWebviewTest } =
-      await import("../../gateway/utils/webviewTestBridge.js");
-    const response = await requestWebviewTest({ action: "list", payload: {} });
-    if (!response.success || response.data === undefined) {
-      return false;
-    }
-    const data = response.data as { sessions?: unknown[] };
-    return Array.isArray(data.sessions) && data.sessions.length > 0;
-  } catch {
-    return false;
-  }
-}
+import {
+  hasActiveWebviewSessions,
+  syncWebviewPreviewActivityLatch,
+} from "./webviewSessionGuard.js";
 
 async function shouldRouteToMiniAppPreview(): Promise<boolean> {
-  return (
-    hasRecentWebviewPreviewActivity() || (await hasActiveWebviewSessions())
-  );
+  await syncWebviewPreviewActivityLatch();
+  return await hasActiveWebviewSessions();
 }
 
 const waitParamsSchema = z.object({
@@ -85,8 +72,11 @@ export const pageWaitForTool = createTool({
   description:
     "Wait for page content. Pick target based on what you are testing:\n" +
     "• target='mini_app' — AFTER webview_launch_app when verifying a Papr mini-app preview\n" +
-    "• target='browser' — AFTER browser_navigate when testing external sites\n" +
-    "Examples: page_wait_for({ target: 'mini_app', time: 2 }); page_wait_for({ target: 'browser', text: 'Sign in' })",
+    "• target='browser' — AFTER browser_navigate or prepare_browser (Papr Chrome, headless Playwright, or embedded Electron fallback)\n" +
+    "EMBEDDED ELECTRON FALLBACK ONLY (when Google Chrome is not installed): use ONLY time — page_wait_for({ target: 'browser', time: 3 }). " +
+    "text/textGone/selector require Playwright and FAIL on the embedded fallback — use browser_snapshot then browser_click instead.\n" +
+    "On Papr Chrome and headless Playwright, text/selector waits work normally.\n" +
+    "Examples: page_wait_for({ target: 'mini_app', time: 2 }); page_wait_for({ target: 'browser', time: 4 })",
   inputSchema: pageWaitSchema,
   execute: async (input) => {
     const parsed = pageWaitSchema.safeParse(unwrapInput(input));

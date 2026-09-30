@@ -1,0 +1,414 @@
+/**
+ * Replay SQL migrations onto Turso — cloud gets schema from manifest/SQL, not job runs.
+ *
+ * Local: applyDatabaseMigrations() on registry DBs + job scratch DBs.
+ * Cloud: pending migrations replayed during Turso push (Upload now / debounced sync).
+ */
+
+import { openDiagnosticDatabase } from "../databaseDiagnostics/sqlite.js";
+
+import type { Client, InValue, Transaction } from "@libsql/client";
+import {
+  applyMigrationInTx,
+  type MigrationTx,
+  type MigrationTxStatement,
+} from "./migrationAtomicApply.js";
+import Database from "better-sqlite3";
+import { promises as fs } from "fs";
+import path from "path";
+import type { JobMigrationSchemaOp } from "../../../core/types/jobMigrations.js";
+import { quoteIdent } from "../tursoSyncBridgeCore.js";
+import { dropRemoteTableSyncTriggers } from "../tursoSyncLog.js";
+import { applyDatabaseMigrations } from "./databaseMigrations.js";
+import {
+  loadJobMigrationManifest,
+  manifestEntryById,
+  readMigrationSql,
+} from "./jobMigrationManifest.js";
+import {
+  alignMigrationLedgers,
+  ensureRemoteSchemaMigrationsTable,
+  migrationSatisfiedOnRemote,
+  remoteTableExists,
+  REMOTE_SCHEMA_MIGRATIONS_TABLE,
+} from "./jobMigrationLedgerSync.js";
+import {
+  isDuplicateColumnError,
+  parseAddColumnStatement,
+  splitSqlStatements,
+} from "./migrationSqlHelpers.js";
+import { shouldSkipMigrationForRemoteLedger } from "./migrationLedgerPolicy.js";
+import { listAppliedMigrationIdsReadOnly } from "./schemaMigrationsLedger.js";
+
+// Kept in sync with schemaDriftHeal.ts / shipSchemaMigrationLog.ts, which each
+// declare their own copy rather than sharing one constant.
+const SCHEMA_DRIFT_HEAL_PREFIX = "__schema_drift_heal__";
+
+export {
+  REMOTE_SCHEMA_MIGRATIONS_TABLE,
+  ensureRemoteSchemaMigrationsTable,
+} from "./jobMigrationLedgerSync.js";
+export { resolveMigrationRootFromDbPath, jobDirFromDataDbPath } from "./databaseMigrations.js";
+
+async function listRemoteAppliedMigrationIds(remote: Client): Promise<Set<string>> {
+  await ensureRemoteSchemaMigrationsTable(remote);
+  const result = await remote.execute(
+    `SELECT id FROM ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)}`,
+  );
+  return new Set(
+    result.rows.map((row) => String(row.id ?? "")).filter((id) => id.length > 0),
+  );
+}
+
+async function remoteTableHasColumn(
+  remote: Client,
+  tableName: string,
+  columnName: string,
+): Promise<boolean> {
+  const result = await remote.execute(`PRAGMA table_info(${quoteIdent(tableName)})`);
+  return result.rows.some((row) => String(row.name ?? "") === columnName);
+}
+
+async function executeRemoteSqlIdempotent(
+  remote: Client,
+  statement: string,
+): Promise<void> {
+  const addColumn = parseAddColumnStatement(statement);
+  if (addColumn) {
+    if (!(await remoteTableExists(remote, addColumn.table))) {
+      return;
+    }
+    if (await remoteTableHasColumn(remote, addColumn.table, addColumn.column)) {
+      return;
+    }
+  }
+
+  try {
+    await remote.execute(statement);
+  } catch (error) {
+    if (isDuplicateColumnError(error)) {
+      return;
+    }
+    throw error;
+  }
+}
+
+export async function applySchemaOpToRemote(
+  remote: Client,
+  op: JobMigrationSchemaOp,
+): Promise<void> {
+  switch (op.kind) {
+    case "add_column":
+      if (!(await remoteTableExists(remote, op.table))) {
+        return;
+      }
+      if (await remoteTableHasColumn(remote, op.table, op.column)) {
+        return;
+      }
+      await dropRemoteTableSyncTriggers(remote, op.table);
+      try {
+        await remote.execute({
+          sql:
+            `ALTER TABLE ${quoteIdent(op.table)} ADD COLUMN ${quoteIdent(op.column)} ${op.type.trim() || "TEXT"}`,
+          args: [],
+        });
+      } catch (error) {
+        if (!isDuplicateColumnError(error)) {
+          throw error;
+        }
+      }
+      return;
+    case "drop_column":
+      if (!(await remoteTableExists(remote, op.table))) {
+        return;
+      }
+      if (!(await remoteTableHasColumn(remote, op.table, op.column))) {
+        return; // already dropped
+      }
+      await dropRemoteTableSyncTriggers(remote, op.table);
+      await remote.execute({
+        sql:
+          `ALTER TABLE ${quoteIdent(op.table)} DROP COLUMN ${quoteIdent(op.column)}`,
+        args: [],
+      });
+      return;
+    case "rename_column":
+      if (!(await remoteTableExists(remote, op.table))) {
+        return;
+      }
+      if (
+        (await remoteTableHasColumn(remote, op.table, op.to)) &&
+        !(await remoteTableHasColumn(remote, op.table, op.from))
+      ) {
+        return; // already renamed
+      }
+      await dropRemoteTableSyncTriggers(remote, op.table);
+      await remote.execute({
+        sql:
+          `ALTER TABLE ${quoteIdent(op.table)} RENAME COLUMN ${quoteIdent(op.from)} TO ${quoteIdent(op.to)}`,
+        args: [],
+      });
+      return;
+    case "sql":
+      await executeRemoteSqlIdempotent(remote, op.statement);
+      return;
+  }
+}
+
+interface ApplyToRemoteOptions {
+  /** Write this ledger id in the same transaction as the migration (SQL path). */
+  recordAs?: string;
+  /** Out: true when the ledger row was written atomically with the SQL. */
+  recorded?: boolean;
+}
+
+async function applyMigrationToRemote(
+  remote: Client,
+  migrationRoot: string,
+  migrationId: string,
+  options: ApplyToRemoteOptions = {},
+): Promise<void> {
+  const manifest = await loadJobMigrationManifest(migrationRoot);
+  const entry = manifestEntryById(manifest, migrationId);
+
+  if (entry?.ops && entry.ops.length > 0) {
+    for (const op of entry.ops) {
+      await applySchemaOpToRemote(remote, op);
+    }
+    return;
+  }
+
+  const sql = await readMigrationSql(migrationRoot, migrationId);
+  if (!sql) {
+    if (await migrationSatisfiedOnRemote(remote, migrationRoot, migrationId)) {
+      console.warn(
+        `[MigrationTurso] ${migrationId} SQL file missing but remote schema already satisfied — skipping replay`,
+      );
+      return;
+    }
+    // Schema-drift-heal migrations are synthetic: schemaDriftHeal.ts mints the
+    // id and ships its ops through the manifest, so a .sql file NEVER exists on
+    // disk for them. When the manifest entry is missing (pruned, or written on
+    // another device) this threw "Migration SQL missing", permanently blocking
+    // replica cutover — and because the databases registry uploads for the
+    // whole namespace at once, one such database failed cloud sync for EVERY
+    // app in the workspace. The ops were already applied remotely when the heal
+    // shipped, so replaying nothing is correct.
+    if (migrationId.startsWith(SCHEMA_DRIFT_HEAL_PREFIX)) {
+      console.warn(
+        `[MigrationTurso] ${migrationId} is a synthetic drift-heal id with no manifest ops — treating as no-op`,
+      );
+      return;
+    }
+    throw new Error(`Migration SQL missing for ${migrationId}`);
+  }
+  await applySqlMigrationAtomicallyOnRemote(
+    remote,
+    splitSqlStatements(sql),
+    options.recordAs ? remoteLedgerStatements(options.recordAs) : [],
+  );
+  options.recorded = Boolean(options.recordAs);
+}
+
+function remoteLedgerStatements(migrationId: string): MigrationTxStatement[] {
+  return [
+    {
+      sql:
+        `INSERT OR IGNORE INTO ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)} ` +
+        `(id, applied_at, source) VALUES (?, datetime('now'), 'database_migration')`,
+      params: [migrationId],
+    },
+  ];
+}
+
+/**
+ * One migration = one Turso transaction (statement guard + statements + ledger
+ * row). Falls back to guarded statement-by-statement execution only for
+ * clients without interactive transactions (test doubles).
+ */
+async function applySqlMigrationAtomicallyOnRemote(
+  remote: Client,
+  statements: readonly string[],
+  ledger: readonly MigrationTxStatement[],
+): Promise<void> {
+  const guardOptions = { skipAddColumnOnMissingTable: true };
+  if (typeof (remote as Partial<Client>).transaction !== "function") {
+    await applyMigrationInTx(clientAsMigrationTx(remote), statements, ledger, guardOptions);
+    return;
+  }
+  const tx = await remote.transaction("write");
+  try {
+    await applyMigrationInTx(clientAsMigrationTx(tx), statements, ledger, guardOptions);
+    await tx.commit();
+  } catch (error) {
+    try {
+      await tx.rollback();
+    } catch {
+      /* connection already closed the transaction */
+    }
+    throw error;
+  } finally {
+    tx.close();
+  }
+}
+
+function clientAsMigrationTx(
+  exec: Pick<Client, "execute"> | Pick<Transaction, "execute">,
+): MigrationTx {
+  return {
+    async query(sql, params) {
+      const result = await exec.execute({ sql, args: (params ?? []) as InValue[] });
+      return result.rows as unknown as Record<string, unknown>[];
+    },
+    async run(sql, params) {
+      await exec.execute({ sql, args: (params ?? []) as InValue[] });
+    },
+  };
+}
+
+async function recordRemoteMigrationApplied(
+  remote: Client,
+  migrationId: string,
+): Promise<void> {
+  await remote.execute({
+    sql:
+      `INSERT OR IGNORE INTO ${quoteIdent(REMOTE_SCHEMA_MIGRATIONS_TABLE)} ` +
+      `(id, applied_at, source) VALUES (?, datetime('now'), 'database_migration')`,
+    args: [migrationId],
+  });
+}
+
+/**
+ * Apply pending local migration files, then replay to Turso anything recorded in schema_migrations.
+ */
+export async function applyPendingDatabaseMigrationsToTurso(
+  remote: Client,
+  localDbPath: string,
+  migrationRoot: string,
+  options?: { force?: boolean },
+): Promise<string[]> {
+  const { isReplicaManagedDbPath } = await import(
+    "../tursoReplica/tursoReplicaFileGuard.js"
+  );
+  if (isReplicaManagedDbPath(localDbPath)) {
+    return [];
+  }
+
+  const migrationsDir = path.join(migrationRoot, "migrations");
+  try {
+    await fs.access(migrationsDir);
+  } catch {
+    return [];
+  }
+
+  await alignMigrationLedgers(remote, localDbPath, migrationRoot, options);
+  await applyDatabaseMigrations(migrationRoot, localDbPath);
+
+  const localDb = openDiagnosticDatabase(Database, "services/jobs/jobMigrationTursoSync", localDbPath, { readonly: true });
+  let localApplied: string[];
+  try {
+    localApplied = listAppliedMigrationIdsReadOnly(localDb);
+  } finally {
+    localDb.close();
+  }
+
+  if (localApplied.length === 0) {
+    return [];
+  }
+
+  const remoteApplied = await listRemoteAppliedMigrationIds(remote);
+  const appliedNow: string[] = [];
+
+  for (const migrationId of localApplied) {
+    if (shouldSkipMigrationForRemoteLedger(migrationId)) {
+      continue;
+    }
+    if (remoteApplied.has(migrationId)) {
+      const satisfied = await migrationSatisfiedOnRemote(
+        remote,
+        migrationRoot,
+        migrationId,
+      );
+      if (satisfied) {
+        continue;
+      }
+      console.warn(
+        `[MigrationTurso] Remote ledger lists ${migrationId} but schema is incomplete — re-applying`,
+      );
+    }
+    const applyOptions: ApplyToRemoteOptions = { recordAs: migrationId };
+    await applyMigrationToRemote(remote, migrationRoot, migrationId, applyOptions);
+    if (!applyOptions.recorded) {
+      await recordRemoteMigrationApplied(remote, migrationId);
+    }
+    appliedNow.push(migrationId);
+  }
+
+  return appliedNow;
+}
+
+/** Plan A: apply one migration file directly on Turso primary (HTTP). */
+export async function applyMigrationSqlFileToTursoPrimary(
+  remote: Client,
+  migrationRoot: string,
+  migrationId: string,
+): Promise<void> {
+  await applyMigrationToRemote(remote, migrationRoot, migrationId);
+}
+
+/** Apply migration on Turso primary and record in remote schema_migrations ledger. */
+export async function applyAndRecordMigrationOnTursoPrimary(
+  remote: Client,
+  migrationRoot: string,
+  migrationId: string,
+): Promise<{ applied: boolean }> {
+  const normalizedId = migrationId.replace(/\.sql$/, "");
+  const remoteApplied = await listRemoteAppliedMigrationIds(remote);
+  if (remoteApplied.has(normalizedId)) {
+    const satisfied = await migrationSatisfiedOnRemote(
+      remote,
+      migrationRoot,
+      normalizedId,
+    );
+    if (satisfied) {
+      return { applied: false };
+    }
+  }
+  const applyOptions: ApplyToRemoteOptions = { recordAs: normalizedId };
+  await applyMigrationToRemote(remote, migrationRoot, normalizedId, applyOptions);
+  if (!applyOptions.recorded) {
+    await recordRemoteMigrationApplied(remote, normalizedId);
+  }
+  return { applied: true };
+}
+
+export async function openTursoPrimaryClient(
+  tursoDatabase: string,
+): Promise<Client> {
+  const { getTursoSyncBridge } = await import("../TursoSyncBridge.js");
+  const bridge = getTursoSyncBridge();
+  if (!bridge?.enabled) {
+    throw new Error("Turso sync bridge not available — sign in to Papr");
+  }
+  const creds = await bridge.fetchCredentials(tursoDatabase);
+  const { createClient } = await import("@libsql/client");
+  return createClient({
+    url: creds.tursoUrl,
+    authToken: creds.authToken,
+  });
+}
+
+export { executeRemoteSqlIdempotent, applyMigrationToRemote };
+
+/** @deprecated Use applyPendingDatabaseMigrationsToTurso */
+export async function applyPendingJobMigrationsToTurso(
+  remote: Client,
+  localDbPath: string,
+  migrationRoot: string,
+): Promise<string[]> {
+  return applyPendingDatabaseMigrationsToTurso(
+    remote,
+    localDbPath,
+    migrationRoot,
+  );
+}

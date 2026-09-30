@@ -4,9 +4,10 @@
  * Replaces scattered localStorage flags with a single versioned state object.
  * 
  * Flow:
- *   welcome → connect_model → choose_intent → first_value → activated → completed
+ *   welcome → connect_papr → connect_model → choose_intent → first_value → activated → completed
  * 
- * - welcome:       User sees the onboarding view for the first time
+ * - welcome:        User sees the onboarding view for the first time
+ * - connect_papr:   User signs in to Papr (memory, cloud sync, org workspaces)
  * - connect_model:  User needs to connect ChatGPT/Claude (prerequisite for good experience)
  * - choose_intent:  User picks what they want to do (finish work, build app, personalize, explore)
  * - first_value:    User's first real task is in progress (chat sent, waiting for result)
@@ -16,7 +17,10 @@
 
 export type OnboardingPhase =
   | "welcome"
+  | "connect_papr"
   | "connect_model"
+  /** Curated community app picks — the flow no longer dead-ends at connect. */
+  | "recommend"
   | "choose_intent"
   | "first_value"
   | "activated"
@@ -33,6 +37,7 @@ export interface OnboardingState {
   version: 2;
   phase: OnboardingPhase;
   intent: OnboardingIntent;
+  paprConnected: boolean;
   modelConnected: boolean;
   firstChatSent: boolean;
   firstResultCreated: boolean;
@@ -45,6 +50,7 @@ const DEFAULT_STATE: OnboardingState = {
   version: 2,
   phase: "welcome",
   intent: null,
+  paprConnected: false,
   modelConnected: false,
   firstChatSent: false,
   firstResultCreated: false,
@@ -58,7 +64,13 @@ export function getOnboardingState(): OnboardingState {
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as OnboardingState;
-      if (parsed.version === 2) return parsed;
+      if (parsed.version === 2) {
+        return {
+          ...DEFAULT_STATE,
+          ...parsed,
+          paprConnected: parsed.paprConnected ?? false,
+        };
+      }
     } catch { /* fall through to migration */ }
   }
 
@@ -137,11 +149,23 @@ export function isModelConnected(): boolean {
   return getOnboardingState().modelConnected;
 }
 
+/** Mark Papr as connected and advance phase if needed. */
+export function markPaprConnected(): OnboardingState {
+  const current = getOnboardingState();
+  if (current.phase === "connect_papr") {
+    return transitionTo("connect_model", { paprConnected: true });
+  }
+  current.paprConnected = true;
+  saveOnboardingState(current);
+  return current;
+}
+
 /** Mark a model as connected and advance phase if needed. */
 export function markModelConnected(): OnboardingState {
   const current = getOnboardingState();
   if (current.phase === "connect_model") {
-    return transitionTo("choose_intent", { modelConnected: true });
+    // Connecting a model no longer ends the flow — recommendations come next.
+    return transitionTo("recommend", { modelConnected: true });
   }
   current.modelConnected = true;
   saveOnboardingState(current);

@@ -4,7 +4,7 @@
 #
 # Runtime includes Playwright Chromium for browser_* agent tools in cloud jobs.
 
-FROM node:24-alpine AS build
+FROM node:24-bookworm-slim AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN node -e "\
@@ -18,9 +18,16 @@ RUN node -e "\
   drop(lock.packages?.['']?.dependencies); drop(lock.packages?.['']?.devDependencies);\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=optional --no-audit --no-fund
-COPY tsconfig.gateway.json tsconfig.json ./
+COPY tsconfig.gateway.json tsconfig.mini-app-sdk-node.json tsconfig.json ./
+COPY scripts/generate-papr-api-catalog.mjs scripts/generate-papr-api-catalog.mjs
+COPY scripts/build-mini-app-sdk-browser-bundles.mjs scripts/build-mini-app-sdk-browser-bundles.mjs
+COPY scripts/verify-mini-app-sdk-bundles.mjs scripts/verify-mini-app-sdk-bundles.mjs
 COPY src ./src
-RUN npm run build:gateway
+# Skip generate-papr-api-catalog (tsx loads full tool graph + libsql); catalog is committed under src/resources.
+RUN npx shx rm -rf dist/resources && npx shx mkdir -p dist && npx shx cp -r src/resources dist/ && \
+  npx tsc -p tsconfig.gateway.json && npx tsc -p tsconfig.mini-app-sdk-node.json && \
+  node scripts/build-mini-app-sdk-browser-bundles.mjs && node scripts/verify-mini-app-sdk-bundles.mjs && \
+  npx shx cp src/gateway/services/appRuntime/backendDbHelper.py dist/gateway/services/appRuntime/backendDbHelper.py
 
 # Debian slim — Playwright Chromium needs glibc + install-deps (Alpine unsupported)
 FROM node:24-bookworm-slim
@@ -46,11 +53,13 @@ RUN node -e "\
   fs.writeFileSync('package-lock.json', JSON.stringify(lock,null,2));\
 " && npm install --omit=dev --no-audit --no-fund \
   && apt-get update \
-  && apt-get install -y --no-install-recommends git ca-certificates python3 python3-pip sqlite3 \
+  && apt-get install -y --no-install-recommends git ca-certificates curl python3 python3-pip sqlite3 \
   && npx playwright install-deps chromium \
   && ./node_modules/.bin/playwright install chromium \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /app/dist ./dist
+# Agent prompts reference src/resources/agent-docs; runtime image only ships dist/.
+RUN mkdir -p /app/src && ln -sf ../dist/resources /app/src/resources
 EXPOSE 8080
 CMD ["node", "dist/gateway/cloud-agent-gateway.js"]

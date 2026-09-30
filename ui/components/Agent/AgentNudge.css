@@ -1,0 +1,214 @@
+/* ── The Lean ──────────────────────────────────────────────────────────────────
+   Timeline (1.5s, plays once): wind-up + lean 0–900ms · dot slides out 220–820ms ·
+   dot opens into the whisper 660–1100ms · words arrive 940ms. Then it holds still.
+   Geometry is for the 44px agent button (center 22,22): the dot leaves the glyph's edge and lands
+   exactly where the whisper opens (8px past the button — the same gap as the rail peeks). */
+
+/* 1. The lean — a small wind-up away, then toward you, then settle. Pivot low, like a body leaning. */
+.rail-item--nudge-in .rail-btn--agent .agent-glyph {
+  transform-origin: 50% 88%;
+  animation: nudge-lean 0.9s cubic-bezier(0.3, 0.7, 0.3, 1) both;
+}
+
+@keyframes nudge-lean {
+  0% { transform: none; }
+  18% { transform: rotate(-5deg) scale(0.93); }
+  46% { transform: translateX(2.5px) rotate(11deg) scale(1.05); }
+  66% { transform: translateX(1px) rotate(-2.5deg); }
+  84% { transform: rotate(1deg); }
+  100% { transform: none; }
+}
+
+/* Faces: the eyes turn to the whisper and stay on it while it is open (beats agentLife's inline glance). */
+.rail-item:is(.rail-item--nudge-in, .rail-item--nudge-open) .agent-glyph__eyes {
+  --agent-ex: 2.3px !important;
+  --agent-ey: -0.3px !important;
+}
+
+/* The whisper replaces the hover peek while it is up. */
+.rail-item:is(.rail-item--nudge-in, .rail-item--nudge-open, .rail-item--nudge-out) .rail-peek {
+  display: none;
+}
+
+/* 2. The dot — flat, one color (the agent's). No highlight, no shading, no glow. */
+.agent-nudge__dot {
+  position: absolute;
+  z-index: 41;
+  left: calc(50% + 10px);
+  top: 17px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  pointer-events: none;
+  background: var(--nudge-a1);
+  opacity: 0;
+}
+
+.rail-item--nudge-in .agent-nudge__dot {
+  animation: nudge-dot 0.6s cubic-bezier(0.45, 0.05, 0.25, 1) 0.22s both;
+}
+
+@keyframes nudge-dot {
+  0% { opacity: 0; transform: translateX(0) scale(0.3); }
+  16% { opacity: 1; transform: translateX(2px) scale(1); }
+  76% { opacity: 1; transform: translateX(21px) scale(1); }
+  100% { opacity: 0; transform: translateX(21px) scale(1.4); }
+}
+
+/* 3. The whisper — the rail's one glass surface (same tokens as the peeks), one sentence, one move.
+   It grows out of the dot: a circle clip from where the dot lands. */
+.agent-nudge {
+  position: absolute;
+  z-index: 41;
+  left: calc(100% + 8px);
+  top: -6px;
+  box-sizing: border-box;
+  width: 292px;
+  padding: 13px 14px 12px;
+  display: grid;
+  gap: 3px;
+  border-radius: 18px;
+  text-align: left;
+  font-family: var(--font-body);
+  background: var(--rail-card);
+  backdrop-filter: blur(22px) saturate(1.6);
+  -webkit-backdrop-filter: blur(22px) saturate(1.6);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  box-shadow: 0 18px 48px rgba(10, 16, 32, 0.16), 0 0 0 1px var(--rail-card-line);
+}
+
+.rail-item--nudge-in .agent-nudge {
+  animation: nudge-open 0.44s cubic-bezier(0.2, 0.8, 0.2, 1) 0.66s both;
+}
+
+.rail-item--nudge-out .agent-nudge {
+  animation: nudge-close 0.46s cubic-bezier(0.5, 0, 0.7, 0.4) both;
+}
+
+@keyframes nudge-open {
+  from { clip-path: circle(5px at 6px 28px); }
+  to { clip-path: circle(160% at 6px 28px); }
+}
+
+/* Pours back onto the agent, where it rests as one dot. */
+@keyframes nudge-close {
+  0% { clip-path: circle(160% at 6px 28px); }
+  70% { clip-path: circle(5px at 6px 28px); transform: none; opacity: 1; }
+  100% { clip-path: circle(5px at 6px 28px); transform: translate(-22px, -16px); opacity: 0; }
+}
+
+.rail-item--nudge-in .agent-nudge > * { animation: nudge-words 0.36s ease 0.94s both; }
+.rail-item--nudge-in .agent-nudge > :nth-child(2) { animation-delay: 0.99s; }
+.rail-item--nudge-in .agent-nudge > :nth-child(n + 3) { animation-delay: 1.05s; }
+
+@keyframes nudge-words {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+
+.agent-nudge small {
+  width: max-content;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--nudge-a1);
+}
+
+.agent-nudge p {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  letter-spacing: -0.012em;
+  color: var(--rail-ink);
+}
+
+.agent-nudge__sub {
+  font-size: 12px;
+  color: var(--rail-soft);
+}
+
+.agent-nudge footer {
+  display: flex;
+  gap: 4px;
+  margin-top: 9px;
+}
+
+.agent-nudge footer button {
+  font: 600 12.5px var(--font-body);
+  padding: 6px 11px;
+  border: none;
+  border-radius: 9px;
+  cursor: pointer;
+}
+
+.agent-nudge__go {
+  color: #fff;
+  background: var(--papr-blue-deep, #0060e0);
+}
+
+.agent-nudge__go:hover { filter: brightness(1.06); }
+
+.agent-nudge__later {
+  color: var(--rail-soft);
+  font-weight: 500 !important;
+  background: transparent;
+}
+
+.agent-nudge__later:hover {
+  color: var(--rail-ink);
+  background: var(--rail-hover);
+}
+
+.agent-nudge footer button:focus-visible {
+  outline: 2px solid rgba(0, 96, 224, 0.45);
+  outline-offset: 1px;
+}
+
+/* 4. Rest — a parked nudge is one still, flat dot on the agent (same language as the Chats badge). */
+.agent-nudge__rest {
+  position: absolute;
+  z-index: 2;
+  left: 32px;
+  top: 2px;
+  width: 9px;
+  height: 9px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  background: var(--nudge-a1);
+  box-shadow: 0 0 0 2px var(--rail-bg);
+  animation: nudge-settle 0.3s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  transition: transform 0.15s ease;
+}
+
+.agent-nudge__rest:hover { transform: scale(1.25); }
+
+@keyframes nudge-settle {
+  from { transform: scale(0); }
+  to { transform: none; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .agent-nudge {
+    border-color: rgba(255, 255, 255, 0.08);
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.5), 0 0 0 1px var(--rail-card-line);
+  }
+  /* The agent's lighter tone stays visible on the dark rail. */
+  .agent-nudge small { color: var(--nudge-a2); }
+  .agent-nudge__dot,
+  .agent-nudge__rest { background: var(--nudge-a2); }
+}
+
+/* Reduced motion: no lean, no travel. The whisper simply fades in. */
+@media (prefers-reduced-motion: reduce) {
+  .rail-item--nudge-in .rail-btn--agent .agent-glyph,
+  .rail-item--nudge-in .agent-nudge__dot {
+    animation: none;
+  }
+  .rail-item--nudge-in .agent-nudge,
+  .rail-item--nudge-in .agent-nudge > * {
+    animation: nudge-words 0.2s ease both;
+  }
+}

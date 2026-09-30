@@ -1,0 +1,797 @@
+/**
+ * Parent-side driver for the Turso sync worker.
+ *
+ * Owns one child process for the whole gateway. The child is the only process that loads
+ * `@tursodatabase/sync`; it keeps a Database handle per replica path and serves every
+ * replica operation over NDJSON.
+ *
+ * A native panic kills the child rather than the app. In-flight requests are rejected with
+ * {@link TursoSyncWorkerCrashError}; the next request spawns a fresh worker. Crash policy
+ * (sidecar reset + one retry) lives in `send()` so every caller gets it for free.
+ */
+
+import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  IDEMPOTENT_WORKER_OPS,
+  TursoSyncWorkerCrashError,
+  isTursoSyncWorkerCrash,
+  type TursoSyncWorkerLine,
+  type TursoSyncWorkerMigrateResult,
+  type TursoSyncWorkerOp,
+  type TursoSyncWorkerOpenSpec,
+  type TursoSyncWorkerPullResult,
+  type TursoSyncWorkerQueryResult,
+  type TursoSyncWorkerQueryBatchResult,
+  type TursoSyncWorkerRequest,
+  type TursoSyncWorkerResult,
+  type TursoSyncWorkerStatement,
+  type TursoSyncWorkerStatsResult,
+  type TursoSyncWorkerWriteResult,
+} from "./tursoReplicaSyncWorkerProtocol.js";
+import { resetReplicaSidecars } from "./tursoReplicaSidecarWedge.js";
+import {
+  chooseReplicaCrashRemedy,
+  type ReplicaCrashRemedy,
+} from "./replicaCrashRemedy.js";
+import { repairReplicaEngineTables } from "./replicaEngineTableGuard.js";
+import { readDurablePark, writeDurablePark } from "./replicaDurablePark.js";
+import {
+  markReplicaReadPhase,
+  setReplicaReadMeta,
+  timeReplicaReadPhase,
+} from "./replicaReadPhaseTrace.js";
+import type { TursoSyncWorkerOpTiming } from "./tursoReplicaSyncWorkerProtocol.js";
+
+const WORKER_BOOT_TIMEOUT_MS = 20_000;
+const STDERR_RING_BYTES = 4_000;
+const TIMING_RING_LINES = 400;
+/**
+ * An abort dumps a full native + JS stack across many chunks. Forward the first few for
+ * diagnosis and keep the rest in the ring buffer only, so one crash cannot flood the log.
+ */
+const STDERR_LOG_CHUNK_LIMIT = 5;
+/**
+ * Consecutive engine crashes on one replica before we stop opening it.
+ *
+ * The crash policy below resets sync sidecars and retries once, which cures a wedge
+ * whose cause is in the sidecars. A defect *inside* data.db survives that reset, so the
+ * retry panics too — and the next caller begins the same two-abort cycle, on every sync
+ * tick, indefinitely. Three strikes turns that unbounded loop into a bounded one and
+ * leaves a message that names the file instead of a stream of crash reports.
+ */
+const MAX_CONSECUTIVE_PATH_CRASHES = 3;
+
+export interface TursoSyncWorkerCommand {
+  command: string;
+  args: string[];
+}
+
+export interface SendOptions extends TursoSyncWorkerOpenSpec {
+  op: TursoSyncWorkerOp;
+  timeoutMs: number;
+  sql?: string;
+  params?: unknown[];
+  statements?: TursoSyncWorkerStatement[];
+  ledger?: TursoSyncWorkerStatement[];
+  /**
+   * Override the default crash policy (retry idempotent ops once after a sidecar reset).
+   * `never`: surface the crash immediately.
+   */
+  retryOnCrash?: "auto" | "never";
+}
+
+interface PendingRequest {
+  op: TursoSyncWorkerOp;
+  localPath: string;
+  started: boolean;
+  sentAt: number;
+  resolve: (result: TursoSyncWorkerResult) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}
+
+/** Called on every worker crash. Wire telemetry here — this is the one place crashes surface. */
+export type TursoSyncWorkerCrashListener = (error: TursoSyncWorkerCrashError) => void;
+
+function defaultWorkerCommand(): TursoSyncWorkerCommand {
+  // The gateway always runs from dist/, so the compiled worker is a sibling of this module.
+  const entry = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "tursoReplicaSyncWorkerEntry.js",
+  );
+  // process.execPath is the Electron binary; ELECTRON_RUN_AS_NODE makes it a plain Node
+  // runtime with the same ABI the native module was built against.
+  return { command: process.execPath, args: [entry] };
+}
+
+export class TursoReplicaSyncWorkerClient {
+  private child: ChildProcess | null = null;
+  private readonly ownedPaths = new Set<string>();
+  /** A live handle or in-flight open belongs to the worker, never a second SQLite engine. */
+  ownsPath(localPath: string): boolean {
+    const key = path.resolve(localPath);
+    return this.child !== null && (this.ownedPaths.has(key) ||
+      [...this.pending.values()].some(request => path.resolve(request.localPath) === key));
+  }
+  private booted: Promise<void> | null = null;
+  private stdoutBuffer = "";
+  private stderrRing = "";
+  /** Per-op timing lines from the worker (`op=… queueMs=… execMs=…`), newest last. */
+  private readonly timingRing: string[] = [];
+  private shuttingDown = false;
+  private readonly pending = new Map<string, PendingRequest>();
+  private readonly crashListeners = new Set<TursoSyncWorkerCrashListener>();
+  /** Consecutive engine crashes per replica path, cleared by a successful op. */
+  private readonly crashStreaks = new Map<string, number>();
+  /**
+   * Paths whose engine tables we have already dropped since the last healthy op, and so
+   * the evidence that a malformed table reappearing came from the remote rather than
+   * from stale local state. Cleared by a successful op, like the streak above.
+   */
+  private readonly engineTableRepairs = new Set<string>();
+  /**
+   * Parked paths and why. Separate from the streak because a defect the sidecar reset
+   * provably cannot reach is worth parking on sight rather than after three aborts.
+   */
+  private readonly parkedPaths = new Map<string, string>();
+  /** Parked on file evidence, so a relaunch honours the park instead of re-aborting. */
+  private readonly durablyParkedPaths = new Set<string>();
+  /** Paths whose on-disk park record has been read this session; it is read once. */
+  private readonly durableParksChecked = new Set<string>();
+
+  constructor(
+    private readonly resolveCommand: () => TursoSyncWorkerCommand = defaultWorkerCommand,
+  ) {}
+
+  onCrash(listener: TursoSyncWorkerCrashListener): () => void {
+    this.crashListeners.add(listener);
+    return () => this.crashListeners.delete(listener);
+  }
+
+  /** Recent worker op timings for diagnostics (see /api/debug/turso-worker-timings). */
+  getRecentTimings(): string[] {
+    return [...this.timingRing];
+  }
+
+  // ---- typed helpers -------------------------------------------------------------------
+
+  async query(
+    options: Omit<SendOptions, "op" | "statements">,
+  ): Promise<TursoSyncWorkerQueryResult> {
+    return (await this.send({ ...options, op: "query" })) as TursoSyncWorkerQueryResult;
+  }
+
+  async queryBatch(
+    options: Omit<SendOptions, "op" | "sql" | "params">,
+  ): Promise<TursoSyncWorkerQueryBatchResult> {
+    return (await this.send({
+      ...options,
+      op: "queryBatch",
+    })) as TursoSyncWorkerQueryBatchResult;
+  }
+
+  async write(
+    options: Omit<SendOptions, "op" | "sql" | "params">,
+  ): Promise<TursoSyncWorkerWriteResult> {
+    return (await this.send({ ...options, op: "write" })) as TursoSyncWorkerWriteResult;
+  }
+
+  async exec(options: Omit<SendOptions, "op" | "params" | "statements">): Promise<void> {
+    await this.send({ ...options, op: "exec" });
+  }
+
+  /** One migration, atomically (guard + statements + ledger in one transaction). */
+  async migrate(
+    options: Omit<SendOptions, "op" | "sql" | "params">,
+  ): Promise<TursoSyncWorkerMigrateResult> {
+    return (await this.send({ ...options, op: "migrate" })) as TursoSyncWorkerMigrateResult;
+  }
+
+  async sync(
+    options: Omit<SendOptions, "op" | "sql" | "params" | "statements">,
+    op: "pull" | "push" | "pullPush",
+  ): Promise<boolean> {
+    const result = (await this.send({ ...options, op })) as TursoSyncWorkerPullResult;
+    return Boolean(result.pulled);
+  }
+
+  async stats(
+    options: Omit<SendOptions, "op" | "sql" | "params" | "statements">,
+  ): Promise<number> {
+    const result = (await this.send({ ...options, op: "stats" })) as TursoSyncWorkerStatsResult;
+    return Number(result.cdcOperations ?? 0);
+  }
+
+  async connect(
+    options: Omit<SendOptions, "op" | "sql" | "params" | "statements">,
+  ): Promise<void> {
+    await this.send({ ...options, op: "connect" });
+  }
+
+  async close(localPath: string): Promise<void> {
+    if (!this.child) {
+      return;
+    }
+    await this.send({
+      op: "close",
+      localPath,
+      tursoUrl: "",
+      authToken: "",
+      bootstrapIfEmpty: false,
+      timeoutMs: 10_000,
+      retryOnCrash: "never",
+    });
+  }
+
+  // ---- core ----------------------------------------------------------------------------
+
+  /**
+   * Send one request. On a worker crash where the engine was operating on this path,
+   * apply the remedy the evidence supports — reset the path's sync sidecars (keeps
+   * data.db), or drop a malformed engine table, or park the path — then retry once if
+   * the op is idempotent. Anything else surfaces as an error to the caller. The gateway
+   * never dies here.
+   */
+  async send(options: SendOptions): Promise<TursoSyncWorkerResult> {
+    this.assertNotCrashLooping(options);
+    try {
+      const result = await this.sendOnce(options);
+      this.noteHealthy(options);
+      return result;
+    } catch (error) {
+      if (!isTursoSyncWorkerCrash(error)) {
+        throw error;
+      }
+      if (error.engineWasRunning) {
+        this.applyCrashRemedy(error);
+      }
+      const retry =
+        (options.retryOnCrash ?? "auto") === "auto" &&
+        IDEMPOTENT_WORKER_OPS.has(options.op) &&
+        !this.parkedPaths.has(options.localPath);
+      if (!retry) {
+        throw error;
+      }
+      try {
+        const result = await this.sendOnce(options);
+        this.noteHealthy(options);
+        return result;
+      } catch (retryError) {
+        // The retry can abort too — when it does, that is the signal that the remedy
+        // did not reach the cause, so it has to count against the streak. Re-running the
+        // chooser is what turns "dropped the table, aborted again" into a park: the
+        // defect coming back is the evidence that the remote is sending it.
+        if (isTursoSyncWorkerCrash(retryError) && retryError.engineWasRunning) {
+          this.applyCrashRemedy(retryError);
+        }
+        throw retryError;
+      }
+    }
+  }
+
+  /**
+   * Repair what the evidence says is broken, and count the abort.
+   *
+   * Never throws. Both remedies touch the filesystem — the reset unlinks sidecars, the
+   * repair issues a DROP — so either can fail on a contended file, and an exception here
+   * would propagate out of the caller's `catch` and *replace* the crash error. Callers
+   * classify on {@link isTursoSyncWorkerCrash} to tell "the engine aborted" from "sync
+   * returned an error", so masking it would both skip the retry and send recovery down
+   * the wrong path over a transient lock. A remedy that fails to apply is instead left
+   * to converge: the attempt is already recorded below, so the retry aborts again and
+   * the second pass parks.
+   *
+   * The close is best-effort and fire-and-forget to mirror the pre-existing path: after
+   * an abort `handleChildGone` has already nulled the child, so `close` returns without
+   * respawning and this only clears bookkeeping. A parked path stays closeable on
+   * purpose, so callers can still tear it down.
+   */
+  private applyCrashRemedy(error: TursoSyncWorkerCrashError): void {
+    const remedy = chooseReplicaCrashRemedy({
+      localPath: error.localPath,
+      repairAlreadyAttempted: this.engineTableRepairs.has(error.localPath),
+      panicSubsystem: error.panicSubsystem,
+      panicInDurableStorage: error.panicInDurableStorage,
+    });
+    const where = `${error.op} on ${error.localPath}`;
+    const tail = error.stderrTail.slice(-200);
+    void this.close(error.localPath).catch(() => undefined);
+
+    try {
+      this.applyChosenRemedy(error, remedy, where, tail);
+    } catch (remedyError) {
+      console.error(
+        `[TursoSyncWorker] Could not apply the ${remedy.kind} remedy for ` +
+          `${error.localPath} after an abort during ${error.op}: ` +
+          `${remedyError instanceof Error ? remedyError.message : String(remedyError)}. ` +
+          "The abort is still counted, so a further abort parks this database.",
+      );
+    }
+  }
+
+  private applyChosenRemedy(
+    error: TursoSyncWorkerCrashError,
+    remedy: ReplicaCrashRemedy,
+    where: string,
+    tail: string,
+  ): void {
+    switch (remedy.kind) {
+      case "reset_sidecars":
+        this.noteEngineCrash(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} — resetting sync ` +
+            `sidecars. ${tail}`,
+        );
+        resetReplicaSidecars(error.localPath, "engine_panic");
+        return;
+      case "restart_worker":
+        // Deliberately nothing but the count. The restart is already guaranteed: the
+        // process is gone and `handleChildGone` cleared `child`, `booted` and
+        // `ownedPaths`, so the next operation calls `ensureBooted()` and spawns a child
+        // with a fresh address space — which, for an in-memory accounting fault, is the
+        // whole repair. Touching a file here could only subtract. The abort is still
+        // counted, so a fault that survives a clean process parks like any other.
+        this.noteEngineCrash(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} inside ${remedy.subsystem}, ` +
+            "whose state is process-local — restarting the worker and leaving data.db " +
+            `and the sidecars untouched. ${tail}`,
+        );
+        return;
+      case "repair_engine_tables": {
+        // Deliberately no sidecar reset: the cause is a table shape inside data.db,
+        // which the reset preserves, so resetting would discard sync state for nothing.
+        this.noteEngineCrash(error.localPath);
+        this.engineTableRepairs.add(error.localPath);
+        const dropped = repairReplicaEngineTables(error.localPath);
+        console.warn(
+          `[TursoSyncWorker] Engine crashed during ${where} on a malformed engine ` +
+            `table (${remedy.defects}) — dropped ${dropped.join(", ") || "nothing"} ` +
+            `for the engine to rebuild; sidecars left intact. ${tail}`,
+        );
+        return;
+      }
+      case "park": {
+        const reason = `${remedy.reason}. Malformed: ${remedy.defects}`;
+        this.parkPath(error.localPath, reason);
+        // Unlike a streak park, this one is evidence about the file's bytes, so the same
+        // file would abort the next launch too.
+        this.durablyParkedPaths.add(error.localPath);
+        writeDurablePark(error.localPath, reason);
+        console.error(
+          `[TursoSyncWorker] Parking ${error.localPath} after an abort during ` +
+            `${error.op}: ${remedy.reason} (${remedy.defects}). Sync is paused for ` +
+            `this database; local reads and writes still work. ${tail}`,
+        );
+        return;
+      }
+    }
+  }
+
+  /**
+   * Refuse to reopen a replica that keeps aborting the worker.
+   *
+   * `close` stays reachable so callers can still tear a parked path down, and so the
+   * crash handler above can close it on its way to resetting the sidecars.
+   */
+  private assertNotCrashLooping(options: SendOptions): void {
+    if (options.op === "close") {
+      return;
+    }
+    const parked =
+      this.parkedPaths.get(options.localPath) ?? this.loadDurablePark(options.localPath);
+    if (parked) {
+      const durable = this.durablyParkedPaths.has(options.localPath);
+      throw new Error(
+        `Turso replica ${options.localPath} is parked${durable ? "" : " for this session"}: ` +
+          `${parked}. Sync is paused for this database; local reads and writes still work. ` +
+          (durable
+            ? "It stays parked across restarts until the file changes — for example a " +
+              "re-seed from cloud — or for 24 hours."
+            : "Restart the app to try again."),
+      );
+    }
+  }
+
+  /**
+   * Honour a park recorded by an earlier session, before the engine opens the file.
+   *
+   * Must run ahead of the first `sendOnce` for the path: a native abort cannot be caught,
+   * so the only way not to abort on a file known to abort is never to hand it over.
+   */
+  private loadDurablePark(localPath: string): string | undefined {
+    if (this.durableParksChecked.has(localPath)) {
+      return undefined;
+    }
+    this.durableParksChecked.add(localPath);
+    const reason = readDurablePark(localPath);
+    if (reason === null) {
+      return undefined;
+    }
+    this.parkPath(localPath, reason);
+    this.durablyParkedPaths.add(localPath);
+    console.warn(
+      `[TursoSyncWorker] ${localPath} was parked by an earlier session and has not ` +
+        `changed since, so it is not reopened: ${reason}`,
+    );
+    return reason;
+  }
+
+  private noteEngineCrash(localPath: string): void {
+    const streak = (this.crashStreaks.get(localPath) ?? 0) + 1;
+    this.crashStreaks.set(localPath, streak);
+    if (streak >= MAX_CONSECUTIVE_PATH_CRASHES) {
+      this.parkPath(
+        localPath,
+        `it aborted the sync engine ${streak} times in a row and no remedy cleared it`,
+      );
+      console.error(
+        `[TursoSyncWorker] Parking ${localPath} after ${streak} consecutive engine aborts. ` +
+          "A sidecar reset did not clear it, so the cause is inside data.db.",
+      );
+    }
+  }
+
+  private parkPath(localPath: string, reason: string): void {
+    this.parkedPaths.set(localPath, reason);
+  }
+
+  private noteHealthy(options: SendOptions): void {
+    // A `close` on a path that was never opened succeeds without the engine running at
+    // all, so it must not be able to launder a streak.
+    if (options.op === "close") {
+      return;
+    }
+    this.crashStreaks.delete(options.localPath);
+    this.engineTableRepairs.delete(options.localPath);
+  }
+
+  private async sendOnce(options: SendOptions): Promise<TursoSyncWorkerResult> {
+    await timeReplicaReadPhase("ipcWorkerBootMs", () => this.ensureBooted());
+    const child = this.child;
+    if (!child?.stdin?.writable) {
+      throw new Error("Turso sync worker is not writable");
+    }
+
+    const id = randomUUID();
+    const request: TursoSyncWorkerRequest = {
+      id,
+      op: options.op,
+      localPath: options.localPath,
+      tursoUrl: options.tursoUrl,
+      authToken: options.authToken,
+      clientName: options.clientName,
+      bootstrapIfEmpty: options.bootstrapIfEmpty,
+      sql: options.sql,
+      params: options.params,
+      statements: options.statements,
+      ledger: options.ledger,
+    };
+
+    return new Promise<TursoSyncWorkerResult>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        // A wedged engine can hang instead of aborting; drop the worker so the next
+        // request starts clean rather than queueing behind it forever.
+        this.killChild("SIGKILL");
+        reject(
+          new Error(
+            `Turso sync worker ${options.op} timed out after ${options.timeoutMs}ms ` +
+              `on ${options.localPath}`,
+          ),
+        );
+      }, options.timeoutMs);
+
+      const sentAt = performance.now();
+      this.pending.set(id, {
+        op: options.op,
+        localPath: options.localPath,
+        started: false,
+        sentAt,
+        resolve,
+        reject,
+        timer,
+      });
+
+      try {
+        child.stdin?.write(`${JSON.stringify(request)}\n`);
+      } catch (error) {
+        clearTimeout(timer);
+        this.pending.delete(id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
+  }
+
+  async shutdown(): Promise<void> {
+    this.shuttingDown = true;
+    this.rejectAllPending(new Error("Turso sync worker shutting down"));
+    this.killChild("SIGTERM");
+    this.child = null;
+    this.ownedPaths.clear();
+    this.booted = null;
+    this.shuttingDown = false;
+  }
+
+  isRunning(): boolean {
+    return this.child !== null && this.child.killed !== true;
+  }
+
+  private killChild(signal: NodeJS.Signals): void {
+    const child = this.child;
+    if (child && child.killed !== true) {
+      try {
+        child.kill(signal);
+      } catch {
+        /* already gone */
+      }
+    }
+  }
+
+  private ensureBooted(): Promise<void> {
+    if (this.booted) {
+      return this.booted;
+    }
+
+    this.booted = new Promise<void>((resolve, reject) => {
+      const { command, args } = this.resolveCommand();
+      const child = spawn(command, args, {
+        stdio: ["pipe", "pipe", "pipe"],
+        env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      });
+      this.child = child;
+      this.stdoutBuffer = "";
+      this.stderrRing = "";
+
+      let settled = false;
+      const bootTimer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.killChild("SIGKILL");
+        reject(new Error("Turso sync worker boot timed out"));
+      }, WORKER_BOOT_TIMEOUT_MS);
+
+      const onReady = (): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(bootTimer);
+        resolve();
+      };
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        this.consumeStdout(chunk.toString("utf8"), onReady);
+      });
+
+      let stderrChunksLogged = 0;
+      child.stderr?.on("data", (chunk: Buffer) => {
+        const text = chunk.toString("utf8");
+        this.stderrRing = (this.stderrRing + text).slice(-STDERR_RING_BYTES);
+        if (text.trim().length === 0) {
+          return;
+        }
+        // Timing lines are high-volume diagnostics: keep them in a ring, never count them
+        // against the stderr chunk cap that guards against a chatty crashing engine.
+        const timingLines = text
+          .split("\n")
+          .filter((l) => l.includes(" queueMs="));
+        if (timingLines.length > 0) {
+          for (const l of timingLines) {
+            this.timingRing.push(`${new Date().toISOString()} ${l.replace("[TursoSyncWorker] ", "")}`);
+          }
+          while (this.timingRing.length > TIMING_RING_LINES) {
+            this.timingRing.shift();
+          }
+          if (timingLines.length === text.trim().split("\n").length) {
+            return;
+          }
+        }
+        stderrChunksLogged += 1;
+        if (stderrChunksLogged <= STDERR_LOG_CHUNK_LIMIT) {
+          console.warn("[TursoSyncWorker]", text.trim().slice(0, 300));
+        } else if (stderrChunksLogged === STDERR_LOG_CHUNK_LIMIT + 1) {
+          console.warn(
+            "[TursoSyncWorker] further worker stderr suppressed; tail is included in the crash error",
+          );
+        }
+      });
+
+      child.on("error", (error) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(bootTimer);
+          reject(error);
+        }
+        this.handleChildGone(null, null);
+      });
+
+      child.on("close", (code, signal) => {
+        clearTimeout(bootTimer);
+        if (!settled) {
+          settled = true;
+          reject(
+            new Error(
+              `Turso sync worker exited during boot (code=${code}, signal=${signal})`,
+            ),
+          );
+        }
+        this.handleChildGone(code, signal);
+      });
+    }).catch((error: unknown) => {
+      this.child = null;
+    this.ownedPaths.clear();
+      this.booted = null;
+      throw error;
+    });
+
+    return this.booted;
+  }
+
+  private consumeStdout(text: string, onReady: () => void): void {
+    this.stdoutBuffer += text;
+    let newlineIndex = this.stdoutBuffer.indexOf("\n");
+    while (newlineIndex >= 0) {
+      const line = this.stdoutBuffer.slice(0, newlineIndex).trim();
+      this.stdoutBuffer = this.stdoutBuffer.slice(newlineIndex + 1);
+      if (line.length > 0) {
+        this.dispatchLine(line, onReady);
+      }
+      newlineIndex = this.stdoutBuffer.indexOf("\n");
+    }
+  }
+
+  private dispatchLine(line: string, onReady: () => void): void {
+    let parsed: TursoSyncWorkerLine | null = null;
+    try {
+      parsed = JSON.parse(line) as TursoSyncWorkerLine;
+    } catch {
+      // Anything the SDK prints on stdout would land here; ignore rather than desync.
+      return;
+    }
+
+    if ("ready" in parsed && parsed.ready === true) {
+      onReady();
+      return;
+    }
+
+    const id = "id" in parsed && typeof parsed.id === "string" ? parsed.id : null;
+    if (!id) {
+      return;
+    }
+    const pending = this.pending.get(id);
+    if (!pending) {
+      return;
+    }
+
+    if ("started" in parsed) {
+      pending.started = true;
+      markReplicaReadPhase(
+        "ipcToWorkerStartedMs",
+        performance.now() - pending.sentAt,
+      );
+      return;
+    }
+    if (!("ok" in parsed)) {
+      return;
+    }
+
+    clearTimeout(pending.timer);
+    this.pending.delete(id);
+    markReplicaReadPhase("ipcRoundTripMs", performance.now() - pending.sentAt);
+    if (parsed.ok === true) {
+      const opTiming = parsed.opTiming as TursoSyncWorkerOpTiming | undefined;
+      if (opTiming) {
+        markReplicaReadPhase("workerQueueMs", opTiming.queueMs);
+        markReplicaReadPhase("workerExecMs", opTiming.execMs);
+        setReplicaReadMeta({ workerOpened: opTiming.opened });
+      }
+      if (pending.op === "close") this.ownedPaths.delete(path.resolve(pending.localPath));
+      else this.ownedPaths.add(path.resolve(pending.localPath));
+      pending.resolve(parsed.result ?? {});
+    } else {
+      pending.reject(new Error(parsed.error || "Turso sync worker error"));
+    }
+  }
+
+  /**
+   * The child is gone. Anything still in flight died with it — surface that as a crash so
+   * callers can distinguish "the engine aborted" from "sync returned an error".
+   */
+  private handleChildGone(
+    code: number | null,
+    signal: NodeJS.Signals | null,
+  ): void {
+    this.child = null;
+    this.ownedPaths.clear();
+    this.booted = null;
+    this.stdoutBuffer = "";
+
+    if (this.shuttingDown || this.pending.size === 0) {
+      this.pending.clear();
+      return;
+    }
+
+    const stderr = this.stderrRing;
+    for (const [id, pending] of this.pending.entries()) {
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      const error = new TursoSyncWorkerCrashError({
+        op: pending.op,
+        localPath: pending.localPath,
+        exitCode: code,
+        signal,
+        engineWasRunning: pending.started,
+        stderr,
+      });
+      for (const listener of this.crashListeners) {
+        try {
+          listener(error);
+        } catch {
+          /* listener must not break recovery */
+        }
+      }
+      pending.reject(error);
+    }
+  }
+
+  private rejectAllPending(error: Error): void {
+    for (const [id, pending] of this.pending.entries()) {
+      clearTimeout(pending.timer);
+      this.pending.delete(id);
+      pending.reject(error);
+    }
+  }
+}
+
+let clientInstance: TursoReplicaSyncWorkerClient | null = null;
+
+/**
+ * Report a worker crash to Amplitude. This is the only place engine panics become visible
+ * in the field — before the worker split they took the gateway down silently.
+ * No paths or user data: just the op, how it died, and the panic signature.
+ */
+function reportWorkerCrash(error: TursoSyncWorkerCrashError): void {
+  void import("../gatewayTelemetry.js")
+    .then(({ getGatewayTelemetry }) =>
+      import("../../../core/telemetry/events.js").then(({ TelemetryEvents }) => {
+        getGatewayTelemetry().trackFireAndForget(TelemetryEvents.TURSO_SYNC_WORKER_CRASH, {
+          op: error.op,
+          signal: error.signal ?? "",
+          exit_code: error.exitCode ?? -1,
+          engine_was_running: error.engineWasRunning,
+          // First line of the Rust panic message, e.g. "thread '<unnamed>' panicked at ..."
+          panic_signature: extractPanicSignature(error.stderrTail),
+        });
+      }),
+    )
+    .catch(() => {
+      /* telemetry must never break recovery */
+    });
+}
+
+function extractPanicSignature(stderr: string): string {
+  const lines = stderr.split("\n").filter((l) => l.trim());
+  const line =
+    lines.find((l) => /panicked at|assertion|unwrap\(\)|index out of bounds/i.test(l)) ??
+    lines[lines.length - 1] ??
+    "";
+  return line.trim().slice(0, 200);
+}
+
+export function getTursoReplicaSyncWorkerClient(): TursoReplicaSyncWorkerClient {
+  if (!clientInstance) {
+    clientInstance = new TursoReplicaSyncWorkerClient();
+    clientInstance.onCrash(reportWorkerCrash);
+  }
+  return clientInstance;
+}
+
+export async function shutdownTursoReplicaSyncWorker(): Promise<void> {
+  if (!clientInstance) {
+    return;
+  }
+  await clientInstance.shutdown();
+  clientInstance = null;
+}

@@ -4,13 +4,14 @@
  */
 
 import type { Provider } from "../../core/types/index.js";
+import { reconcileCloudProviderAuth } from "../services/cloudAgentGateway/resolveCloudProviderAuth.js";
 import { normalizeOpenAIModelId } from "./modelNormalizer.js";
 
 export const DEFAULT_MODEL_BY_PROVIDER: Record<Provider, string> = {
   openai: "gpt-5-6-sol",
   "openai-codex": "gpt-5.3-codex",
-  anthropic: "claude-sonnet-5",
-  google: "gemini-3.5-flash",
+  anthropic: "claude-sonnet-5-5",
+  google: "gemini-3.8-flash",
   ollama: "qwen3.5:latest",
   cursor: "composer-2.5",
   zai: "glm-5.2",
@@ -42,6 +43,17 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
   } catch {
     return null;
   }
+}
+
+const JWT_EXPIRY_BUFFER_MS = 5 * 60 * 1000;
+
+/** Returns true when JWT exp claim is missing or past (with buffer). */
+export function isJwtExpired(token: string): boolean {
+  const payload = decodeJwtPayload(normalizeChatGptOAuthToken(token));
+  if (!payload) return true;
+  const exp = payload.exp;
+  if (typeof exp !== "number") return false;
+  return Date.now() >= exp * 1000 - JWT_EXPIRY_BUFFER_MS;
 }
 
 /** ChatGPT OAuth tokens must carry chatgpt_account_id for pi-ai Codex routes. */
@@ -80,6 +92,12 @@ export function resolveOpenAIKeyAuthType(
   const normalized = normalizeChatGptOAuthToken(trimmed);
   const accountId = extractChatGptAccountIdFromToken(normalized);
   if (accountId) {
+    if (isJwtExpired(normalized)) {
+      console.warn(
+        "[ResolveJobProviderModel] OpenAI OAuth token expired — skipping",
+      );
+      return null;
+    }
     return "oauth";
   }
 
@@ -232,10 +250,9 @@ export function resolveDefaultProviderFromVaultEnv(): {
     };
   }
 
-  console.warn(
-    "[ResolveJobProviderModel] No LLM keys in vault env — defaulting to openai/gpt-5-6-sol",
+  throw new Error(
+    "No usable LLM credentials in vault env for cloud agent run (check OpenAI/Anthropic/Google keys)",
   );
-  return { provider: "openai", model: DEFAULT_MODEL_BY_PROVIDER.openai };
 }
 
 function normalizeModelForProvider(provider: Provider, model: string): string {
@@ -310,4 +327,37 @@ export async function resolveCloudAgentJobSession(input: {
   );
 
   return credentials;
+}
+
+/**
+ * Cloud gateway: resolve provider/model using memory-server authOverride token.
+ * Vault env is used only for provider/model defaults — never overwrites the token.
+ */
+export async function resolveCloudAgentJobSessionFromAuthOverride(input: {
+  provider?: Provider;
+  model?: string;
+  token: string;
+  authType: "oauth" | "apiKey";
+}): Promise<CloudAgentCredentials> {
+  const resolved = await resolveJobProviderModel({
+    provider: input.provider,
+    model: input.model,
+  });
+
+  const llmAuth = reconcileCloudProviderAuth({
+    provider: resolved.provider,
+    token: input.token,
+    authType: input.authType,
+  });
+
+  console.log(
+    `[ResolveJobProviderModel] Cloud session (authOverride): ${resolved.provider}/${resolved.model} authType=${llmAuth.authType}`,
+  );
+
+  return {
+    provider: resolved.provider,
+    model: resolved.model,
+    token: llmAuth.token,
+    authType: llmAuth.authType,
+  };
 }

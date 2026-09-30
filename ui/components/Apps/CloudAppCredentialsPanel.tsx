@@ -3,8 +3,11 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import type { RequiredKeySpec } from "../../../src/core/types/bundles";
-import type { CredentialScope } from "../../../src/core/types/bundles";
+import type {
+  CredentialScope,
+  RequiredKeySpec,
+  ServiceCategory,
+} from "../../../src/core/types/bundles";
 import {
   fetchAppRequirements,
   saveAppRequirements,
@@ -14,6 +17,8 @@ interface CloudAppCredentialsPanelProps {
   appId: string;
   appTitle: string;
   busy?: boolean;
+  /** When false, keys still save to requirements.json but are not on the live catalog yet. */
+  appLive?: boolean;
   onSaved?: () => void;
 }
 
@@ -21,6 +26,7 @@ interface DraftRow {
   name: string;
   service: string;
   description: string;
+  category: ServiceCategory;
   credentialScope: CredentialScope;
 }
 
@@ -29,6 +35,7 @@ function toDraft(spec: RequiredKeySpec): DraftRow {
     name: spec.name,
     service: spec.service,
     description: spec.description ?? "",
+    category: spec.category ?? "other",
     credentialScope: spec.credentialScope === "owner" ? "owner" : "user",
   };
 }
@@ -37,7 +44,7 @@ function toSpec(row: DraftRow): RequiredKeySpec {
   return {
     name: row.name.trim(),
     service: row.service.trim() || row.name.trim(),
-    category: "other",
+    category: row.category,
     description: row.description.trim(),
     required: true,
     credentialScope: row.credentialScope,
@@ -48,10 +55,14 @@ export function CloudAppCredentialsPanel({
   appId,
   appTitle,
   busy = false,
+  appLive = true,
   onSaved,
 }: CloudAppCredentialsPanelProps) {
   const [rows, setRows] = useState<DraftRow[]>([]);
   const [detectedKeyNames, setDetectedKeyNames] = useState<string[]>([]);
+  /** Rows render read-only until you ask to edit one. A freshly added row has
+   *  no name yet, so it opens in edit mode on its own — see `editing` below. */
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -82,6 +93,7 @@ export function CloudAppCredentialsPanel({
         name: "",
         service: "",
         description: "",
+        category: "other",
         credentialScope: "user",
       },
     ]);
@@ -115,7 +127,11 @@ export function CloudAppCredentialsPanel({
     try {
       await saveAppRequirements(appId, normalized);
       setDetectedKeyNames([]);
-      setMessage("Saved. Republish to update the live app catalog.");
+      setMessage(
+        appLive
+          ? "Saved. Republish to update the live app catalog."
+          : "Saved to requirements.json. Publish on Web to apply the catalog.",
+      );
       onSaved?.();
     } catch (err) {
       setError((err as Error).message.slice(0, 160));
@@ -129,10 +145,19 @@ export function CloudAppCredentialsPanel({
   return (
     <div className="share-sheet__section share-sheet__credentials">
       <p className="share-sheet__section-title">API credentials</p>
+      {/* "Mine" is a spending decision, not a config detail — say so once here
+          rather than making people infer it from the word "owner". */}
       <p className="share-sheet__section-desc">
-        Choose which keys <strong>you</strong> provide vs keys each visitor must
-        bring for <strong>{appTitle}</strong>. User keys require Papr sign-in and
-        a setup step before the live app loads.
+        Keys set to <strong>Mine</strong> run on your account and you pay for
+        visitor usage. <strong>Theirs</strong> asks each visitor for their own —
+        that needs Papr sign-in and a setup step before the app loads.
+        {!appLive ? (
+          <>
+            {" "}
+            Edits save to <code>requirements.json</code> in your app folder; publish
+            when you are ready for them to apply on the web.
+          </>
+        ) : null}
       </p>
 
       {loading ? (
@@ -143,67 +168,117 @@ export function CloudAppCredentialsPanel({
             <p className="share-sheet__footnote">
               No keys detected yet. Declare keys in{" "}
               <code>backend/manifest.json</code> action <code>keys</code> arrays,
-              linked job commands (<code>${"{KEY_NAME}"}</code>), or add them
-              manually below.
+              linked job commands (<code>${"{KEY_NAME}"}</code>), enable embedded
+              app assistant chat, or add them manually below.
             </p>
           ) : null}
 
           {detectedKeyNames.length > 0 ? (
             <p className="share-sheet__footnote">
-              Detected from app backend and linked jobs:{" "}
+              Detected from app backend, linked jobs, and embedded chat:{" "}
               <strong>{detectedKeyNames.join(", ")}</strong>. Save credentials
               to include them in the published catalog.
             </p>
           ) : null}
 
+          {/* Display rows, not a form. Keys are reviewed far more often than
+              they are renamed — you open this step to check who pays, not to
+              retype OPENAI_API_KEY. Three text inputs per row made a settings
+              list look like a data-entry screen, so editing moved behind an
+              explicit Edit, and the default state matches the review layout. */}
           <ul className="share-sheet__cred-list">
-            {rows.map((row, index) => (
-              <li key={`${row.name}-${index}`} className="share-sheet__cred-row">
-                <div className="share-sheet__cred-fields">
-                  <input
-                    className="share-sheet__cred-input"
-                    placeholder="KEY_NAME"
-                    value={row.name}
-                    onChange={(e) => updateRow(index, { name: e.target.value.toUpperCase() })}
-                    aria-label="Key name"
-                  />
-                  <input
-                    className="share-sheet__cred-input"
-                    placeholder="Service (e.g. X / Twitter)"
-                    value={row.service}
-                    onChange={(e) => updateRow(index, { service: e.target.value })}
-                    aria-label="Service name"
-                  />
-                  <select
-                    className="share-sheet__cred-select"
-                    value={row.credentialScope}
-                    onChange={(e) =>
-                      updateRow(index, {
-                        credentialScope: e.target.value as CredentialScope,
-                      })
-                    }
-                    aria-label="Credential scope"
-                  >
-                    <option value="user">Visitor provides</option>
-                    <option value="owner">I provide (owner)</option>
-                  </select>
-                </div>
-                <input
-                  className="share-sheet__cred-input share-sheet__cred-input--wide"
-                  placeholder="Short description for setup wizard"
-                  value={row.description}
-                  onChange={(e) => updateRow(index, { description: e.target.value })}
-                  aria-label="Description"
-                />
-                <button
-                  type="button"
-                  className="share-sheet__link-btn"
-                  onClick={() => removeRow(index)}
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
+            {rows.map((row, index) => {
+              const editing = editingIndex === index || !row.name.trim();
+              return (
+                <li key={index} className="share-sheet__cred-row">
+                  {editing ? (
+                    <div className="share-sheet__cred-edit">
+                      <input
+                        className="share-sheet__cred-input"
+                        placeholder="KEY_NAME"
+                        value={row.name}
+                        onChange={(e) =>
+                          updateRow(index, { name: e.target.value.toUpperCase() })
+                        }
+                        aria-label="Key name"
+                      />
+                      <input
+                        className="share-sheet__cred-input"
+                        placeholder="Service (e.g. X / Twitter)"
+                        value={row.service}
+                        onChange={(e) => updateRow(index, { service: e.target.value })}
+                        aria-label="Service name"
+                      />
+                      <input
+                        className="share-sheet__cred-input"
+                        placeholder="What it does (shown during setup)"
+                        value={row.description}
+                        onChange={(e) =>
+                          updateRow(index, { description: e.target.value })
+                        }
+                        aria-label="Description"
+                      />
+                      <div className="share-sheet__cred-edit-actions">
+                        <button
+                          type="button"
+                          className="share-sheet__text-link"
+                          onClick={() => removeRow(index)}
+                        >
+                          Remove
+                        </button>
+                        <button
+                          type="button"
+                          className="share-sheet__text-link"
+                          disabled={!row.name.trim()}
+                          onClick={() => setEditingIndex(null)}
+                        >
+                          Done
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="share-sheet__cred-main">
+                      <span className="share-sheet__cred-id">
+                        <b>{row.name}</b>
+                        {/* Falls back to the service name: a row with no
+                            description should still say what it is for. */}
+                        <span>{row.description.trim() || row.service}</span>
+                      </span>
+                      <button
+                        type="button"
+                        className="share-sheet__cred-edit-btn"
+                        aria-label={`Edit ${row.name}`}
+                        onClick={() => setEditingIndex(index)}
+                      >
+                        Edit
+                      </button>
+                      <span
+                        className="share-sheet__scope-seg"
+                        role="group"
+                        aria-label={`Who provides ${row.name}`}
+                      >
+                        {(
+                          [
+                            ["owner", "Mine"],
+                            ["user", "Theirs"],
+                          ] as [CredentialScope, string][]
+                        ).map(([scope, label]) => (
+                          <button
+                            key={scope}
+                            type="button"
+                            className={row.credentialScope === scope ? "is-on" : ""}
+                            aria-pressed={row.credentialScope === scope}
+                            onClick={() => updateRow(index, { credentialScope: scope })}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </span>
+                    </div>
+                  )}
+                </li>
+              );
+            })}
           </ul>
 
           <div className="share-sheet__community-actions">
@@ -225,11 +300,14 @@ export function CloudAppCredentialsPanel({
             </button>
           </div>
 
+          {/* Was two sentences: a restatement of what "Theirs" already means,
+              plus a roadmap note about sandbox jobs that nobody configuring
+              keys needs. What survives is the one consequence you cannot see
+              from the toggle — visitors hit a setup step before the app. */}
           {hasUserKeys ? (
             <p className="share-sheet__footnote">
-              Live visitors with user-scoped keys will sign in, complete setup, then
-              use the app. Sandbox jobs (coming soon) inject the right keys for bash /
-              Playwright automation.
+              Visitors will be asked for their own keys the first time they open
+              the app.
             </p>
           ) : null}
         </>

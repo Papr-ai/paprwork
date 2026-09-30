@@ -30,12 +30,16 @@ describe("VaultSyncService", () => {
   });
 
   it("has pushAllKeys method that calls /api/cloud/vault/sync", () => {
-    const content = fs.readFileSync(
+    const pushContent = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/vaultSyncBackgroundPush.ts"),
+      "utf-8",
+    );
+    const vaultContent = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async pushAllKeys()");
-    expect(content).toContain("/api/cloud/vault/sync");
+    expect(vaultContent).toContain("async pushAllKeys()");
+    expect(pushContent).toContain("/api/cloud/vault/sync");
   });
 
   it("has pullKeys method that calls /api/cloud/vault/keys", () => {
@@ -43,7 +47,7 @@ describe("VaultSyncService", () => {
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async pullKeys()");
+    expect(content).toMatch(/async pullKeys\(/);
     expect(content).toContain("/api/cloud/vault/keys");
   });
 
@@ -53,20 +57,104 @@ describe("VaultSyncService", () => {
       "utf-8",
     );
     expect(content).toContain("async onKeyChanged(keyName: string)");
-    expect(content).toContain("async onKeyDeleted(keyName: string)");
+    expect(content).toContain("async onKeyDeleted(");
+    expect(content).toContain("syncKeyVaultChange");
   });
 
-  it("initialize calls pushAllKeys then pullKeys", () => {
+  it("has syncKeyVaultChange and deleteKeyByName for owner revoke", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("async syncKeyVaultChange(");
+    expect(content).toContain("async deleteKeyByName(");
+    expect(content).toContain("/api/cloud/vault/delete");
+    expect(content).not.toContain("vaultAudiencePaths");
+  });
+
+  it("initialize calls coalesced runFullSync", () => {
     const content = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
     const initBlock = content.slice(
       content.indexOf("async initialize()"),
-      content.indexOf("async pushAllKeys()"),
+      content.indexOf("async runFullSync()"),
     );
-    expect(initBlock).toContain("await this.pushAllKeys()");
-    expect(initBlock).toContain("await this.pullKeys()");
+    expect(initBlock).toContain("await this.runFullSync()");
+  });
+
+  it("coalesces push and full sync (runFullSync, enqueuePush)", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("async runFullSync()");
+    expect(content).toContain("enqueuePush()");
+    expect(content).toContain("waitForGatewayRoutesReady");
+    expect(content).toContain("scheduleDebouncedPushAll");
+  });
+
+  it("full sync waits routes once, pushes, then pulls in parallel", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    const block = content.slice(
+      content.indexOf("private async runFullSyncOnce"),
+      content.indexOf("private async ensureGatewayRoutesReady"),
+    );
+    const pushIdx = block.indexOf("vault:push");
+    const parallelIdx = block.indexOf("Promise.all");
+    expect(pushIdx).toBeGreaterThan(-1);
+    expect(parallelIdx).toBeGreaterThan(pushIdx);
+    expect(block).toContain("vault:pull-key-names");
+    expect(block).toContain("vault:pull-shared-keys");
+    expect(block).toContain("skipRoutesReady: true");
+  });
+
+  it("builds push payload with bounded parallel key reads", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain("mapWithConcurrency");
+    expect(content).toContain("VAULT_KEY_READ_CONCURRENCY");
+  });
+
+  it("has pullSharedKeys method that calls /api/cloud/vault/pull-shared", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toMatch(/async pullSharedKeys\(/);
+    expect(content).toContain("/api/cloud/vault/pull-shared");
+  });
+
+  it("pull-shared POST body uses memory server namespace_id field", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    const pullBlock = content.slice(
+      content.indexOf("async pullSharedKeys("),
+      content.indexOf("async deleteKeyByName("),
+    );
+    expect(pullBlock).toContain("namespace_id: namespaceId");
+    expect(pullBlock).not.toMatch(/mergeCloudActingUserBody\(\{\s*namespaceId\s*\}/);
+  });
+
+  it("skips shared mirrors when pushing keys to cloud", () => {
+    const vaultContent = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    const mirrorContent = fs.readFileSync(
+      path.join(SRC, "src/core/storage/sharedVaultMirror.ts"),
+      "utf-8",
+    );
+    expect(vaultContent).toContain("shouldPushKeyToCloud");
+    expect(mirrorContent).toContain('meta.vaultOrigin !== "shared"');
   });
 
   it("getState returns vault status", () => {
@@ -89,15 +177,25 @@ describe("VaultSyncService", () => {
     expect(content).toContain("No PAPR_API_KEY");
   });
 
-  it("pulls vault keys for user, namespace, and org scopes", () => {
+  it("skips unchanged keys via local fingerprint before HTTP sync", () => {
     const content = fs.readFileSync(
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("vaultPullScopes");
-    expect(content).toContain('scopes.push("namespace")');
-    expect(content).toContain('scopes.push("org")');
-    expect(content).toContain("fetchVaultKeyNamesForScope");
+    expect(content).toContain("filterVaultEntriesNeedingPush");
+    expect(content).toContain("markVaultPushFingerprints");
+    expect(content).toContain("All keys match last push");
+  });
+
+  it("pulls user-scoped vault keys only (not org/namespace catalogs)", () => {
+    const content = fs.readFileSync(
+      path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
+      "utf-8",
+    );
+    expect(content).toContain('fetchVaultKeyNamesForScope(\n        "user"');
+    expect(content).not.toContain("vaultPullScopes");
+    expect(content).not.toContain('scopes.push("namespace")');
+    expect(content).not.toContain('scopes.push("org")');
   });
 
   it("has syncForWorkspaceSwitch for org/namespace changes", () => {
@@ -105,8 +203,9 @@ describe("VaultSyncService", () => {
       path.join(SRC, "src/gateway/services/VaultSyncService.ts"),
       "utf-8",
     );
-    expect(content).toContain("async syncForWorkspaceSwitch()");
-    expect(content).toContain("Re-syncing vault for workspace switch");
+    expect(content).toContain("syncForWorkspaceSwitch(): void");
+    expect(content).toContain("Re-syncing vault for workspace switch (background)");
+    expect(content).toContain("runFullSync()");
   });
 });
 
@@ -148,12 +247,14 @@ describe("Gateway wiring", () => {
   });
 
   it("initializes vault sync alongside cloud sync", () => {
-    expect(indexContent).toContain("initializeVaultSyncService({ gatewayPort");
+    expect(indexContent).toContain("initializeVaultSyncService");
+    expect(indexContent).toContain("gatewayPort: Number(PORT)");
   });
 
   it("hooks key change listener to vault sync", () => {
     expect(indexContent).toContain("getCustomKeysService().onKeyChange");
     expect(indexContent).toContain("vaultSync.onKeyChanged");
+    expect(indexContent).toContain("scheduleDebouncedPushAll");
   });
 
   it("has /api/vault/status endpoint", () => {
@@ -166,13 +267,19 @@ describe("Gateway wiring", () => {
     expect(indexContent).toContain("vault.pushAllKeys()");
   });
 
+  it("has /api/vault/sync-key endpoint for owner delete and audience revoke", () => {
+    expect(indexContent).toContain('"/api/vault/sync-key"');
+    expect(indexContent).toContain("vault.syncKeyVaultChange");
+  });
+
   it("vault sync is inside CLOUD_SYNC_ENABLED check", () => {
     const cloudSyncIdx = indexContent.indexOf(
-      'process.env.CLOUD_SYNC_ENABLED !== "false"',
+      'if (!isCloudAgentGatewayMode() && process.env.CLOUD_SYNC_ENABLED !== "false")',
     );
     expect(cloudSyncIdx).toBeGreaterThan(-1);
-    const block = indexContent.slice(cloudSyncIdx, cloudSyncIdx + 2500);
+    const block = indexContent.slice(cloudSyncIdx, cloudSyncIdx + 6000);
     expect(block).toContain("initializeVaultSyncService");
+    expect(block).toContain("tryDeferredVaultSyncStartup");
   });
 });
 
@@ -182,11 +289,10 @@ describe("Vault API models alignment", () => {
     "utf-8",
   );
 
-  it("groups keys by vault audience scope when pushing", () => {
-    expect(vaultContent).toContain("normalizeIntegrationKeyVaultAudience");
-    expect(vaultContent).toContain("buildCloudVaultRequestBody");
-    expect(vaultContent).toContain("keyPairsByScope");
-    expect(vaultContent).toContain("cloudScope");
+  it("sends per-key shareScope when pushing", () => {
+    expect(vaultContent).toContain("mapCustomKeyMetadataToVaultEntry");
+    expect(vaultContent).toContain("shareScope");
+    expect(vaultContent).toContain("per-key shareScope");
   });
 
   it("sends keys array with name and value", () => {
@@ -199,6 +305,12 @@ describe("Vault API models alignment", () => {
     expect(vaultContent).toContain("created: string[]");
     expect(vaultContent).toContain("updated: string[]");
     expect(vaultContent).toContain("deleted: string[]");
+    expect(vaultContent).toContain("conflicts?: VaultShareConflict[]");
+  });
+
+  it("reconciles share conflicts after push", () => {
+    expect(vaultContent).toContain("reconcileShareSyncResult");
+    expect(vaultContent).toContain("result.conflicts");
   });
 
   it("VaultKeyInfo matches server model", () => {
@@ -218,5 +330,7 @@ describe("Workspace switch cloud hooks", () => {
     expect(content).toContain("invalidateCredentialsCache");
     expect(content).toContain("refreshTursoLinkedDbWatcher");
     expect(content).toContain("syncForWorkspaceSwitch");
+    expect(content).toContain("postSwitchMaintenanceUntil");
+    expect(content).toContain("deferQueueProcessingUntil");
   });
 });

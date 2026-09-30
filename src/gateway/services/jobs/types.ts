@@ -1,3 +1,5 @@
+import type { JobExecutionCapability } from "./executionCapability.js";
+
 export type JobType =
   | "shell"
   | "bash"
@@ -15,6 +17,14 @@ export type JobStatus =
   | "failed"
   | "cancelled";
 
+/** Lightweight summary for workspace-switch preflight and stop-all. */
+export interface ActiveJobSummary {
+  id: string;
+  name: string;
+  type: JobType;
+  status: JobStatus;
+}
+
 export interface JobRecord {
   id: string;
   name: string;
@@ -22,9 +32,13 @@ export interface JobRecord {
   status: JobStatus;
   /** Mini-app UUIDs this job belongs to (from list_apps). At least one required on create. */
   appIds: string[];
+  /** Registry dbIds this job may mutate (from create_database). Omit for scratch-only jobs. */
+  writeDbIds?: string[];
   /** Free-form folder label for grouping related jobs (e.g. "ingestion", "reporting"). Agent-assigned. */
   folder?: string;
   command?: string;
+  /** Custom API key names from Settings to inject as child-process env vars. */
+  requiredKeys?: string[];
   requirements?: string[];
   dependsOn?: JobDependency[];
   /** Job IDs this job calls at runtime via /api/jobs/run (for visualization only - not enforced) */
@@ -47,11 +61,18 @@ export interface JobRecord {
   provider?: string;
   /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
   model?: string;
+  /**
+   * Scheduled execution placement when cloud sync is on.
+   * Default (unset): local-preferred — desktop when awake, cloud when asleep.
+   */
+  executionCapability?: JobExecutionCapability;
   /** Execution recipe configuration — enables quality evaluation of runs */
   recipe?: RecipeConfig;
   createdAt: string;
   updatedAt: string;
   lastRunAt?: string;
+  /** Set once per runJobWithDependencies session — stale reconcile anchor (not reset on retry). */
+  runSessionStartedAt?: string;
   completedAt?: string;
   exitCode?: number;
   error?: string;
@@ -63,6 +84,8 @@ export interface JobRecord {
   nextRetryAt?: string;
   /** Captured stdout from the last completed run (capped at 32KB). Available via WebSocket and wait:true response. */
   lastOutput?: string;
+  /** Where the most recent run executed (desktop vs cloud). Runtime-only — not in git. */
+  lastRunSource?: string;
   /** When status is waiting_permission, lists the API key names awaiting user approval. */
   waitingPermissionKeys?: string[];
   /** When status is waiting_permission, high-frequency agent schedule awaiting user approval. */
@@ -76,8 +99,12 @@ export interface CreateJobInput {
   type: JobType;
   /** Mini-app UUID(s) this job belongs to. Required — use ['__standalone__'] for orphan jobs. */
   appIds: string[];
+  /** Registry dbIds this job writes to. Required when persisting data apps consume. */
+  writeDbIds?: string[];
   folder?: string;
   command?: string;
+  /** Custom API key names from Settings to inject as child-process env vars. */
+  requiredKeys?: string[];
   requirements?: string[];
   dependsOn?: JobDependency[];
   /** Job IDs this job calls at runtime via /api/jobs/run (for visualization - shows dashed arrows in graph) */
@@ -99,10 +126,13 @@ export interface CreateJobInput {
   provider?: string;
   /** Model ID for agent/subagent jobs (e.g. "gpt-5.4", "claude-sonnet-4-5"). Overrides default. */
   model?: string;
+  executionCapability?: JobExecutionCapability;
   /** Execution recipe configuration — enables quality evaluation of runs */
   recipe?: RecipeConfig;
   useCheckpointTemplate?: boolean;
 }
+
+export type { JobExecutionCapability } from "./executionCapability.js";
 
 // ─── Job Graph ────────────────────────────────────────────────────────────────
 
@@ -172,6 +202,15 @@ export interface JobScheduleState {
   lastIdempotencyKey?: string;
   /** Scheduled slot waiting for user to approve high-frequency agent schedule. */
   pendingDueAtForApproval?: string;
+  /**
+   * Runs in a row that failed for a reason retrying cannot fix (bad config, a
+   * missing database, a revoked credential). Counted so a misconfigured job
+   * stops burning a slot every interval forever; reset by a successful run.
+   */
+  consecutivePermanentFailures?: number;
+  /** Why scheduling was switched off automatically, for the UI to surface. */
+  parkedReason?: string;
+  parkedAt?: string;
 }
 
 export interface JobScheduleRiskPending {

@@ -27,7 +27,7 @@ With a contract:
 ## Data Contract: [App Name] <-> [Job Name]
 
 ### Write Model (what the job produces)
-- Database: ~/Papr/jobs/{jobId}/data.db
+- Database: $PAPR_HOME/Jobs/{jobId}/data.db
 - Tables:
   - `table_name`: columns, types, constraints
 - Indexes: which columns, matching which queries
@@ -38,9 +38,12 @@ With a contract:
 - Queries: exact SQL the app will run
 - Refresh: on app load + **push events** via `subscribeJobEvents()` (`/api/jobs/events` SSE)
 - Use `onDbChanged` to auto-refresh when any write path changes the DB (job, agent, Turso pull)
+- **`debounceMs: 200–500`** on `subscribeJobEvents` when `onDbChanged` calls heavy `loadData()` — server coalesces db-changed ~400ms; SDK debounce avoids refresh storms
 - Use `onStatusChanged` to react to job lifecycle (completed, failed, running)
 - **Never** poll `/api/db/query` on an interval — cloud apps bill Turso per row read
-- **Batch page-load queries**: if the app fires 2+ queries on mount, use one `POST /api/db/batch` with `{ appId, statements: [{ sql, params?, sourceId? }, ...] }` (max 25) → `{ results: [{ ok, rows, ... }] }`. One round trip instead of N — works local and cloud.
+- **Batch page-load reads**: use **`POST /api/db/batch`** (aliases: **`/api/db/query-batch`**, **`/api/db/read-batch`**) with `{ appId, statements: [{ sql, params?, sourceId? }, ...] }` (max 25) → `{ results: [{ ok, rows?, error? }, ...] }`. **SELECT / WITH only** — INSERT/UPDATE/DELETE in this call returns `{ ok: false, error: "Only SELECT..." }` per statement.
+- **Batch writes**: use **`POST /api/db/write-batch`** with `{ appId, statements: [...] }` → `{ atomic, results: [...] }`. Default **`atomic: false`** — partial commits possible; check every `results[i].ok`. Pass **`atomic: true`** for one transaction on the same linked database (all-or-nothing).
+- **Wrong paths return HTML locally** if you typo the URL (e.g. `/api/user/me`) — gateway serves the SPA shell. Real DB batch routes: **`/api/db/batch`**, **`/api/db/write-batch`** only (plus query-batch/read-batch aliases for reads).
 - Jobs emit live progress: `PAPR_PROGRESS {"event":"...","payload":{...}}` on stdout
 - Fallback: manual refresh button only
 
@@ -79,43 +82,94 @@ With a contract:
 
 ## Linking Apps to Data (required for cloud DB)
 
-**Job-owned (default):** `create_job({ appIds: [appId], ... })` **auto-links** the job's `data.db` and writes `data-sources.json` (synced to git). Cloud `/api/db/*` requires this file — auto-link satisfies it for the common path.
+**Standard flow:** `create_database` → `attach_database({ appId, dbId, alias })` → app uses `sourceId` on `/api/db/query` and `/api/db/write`.
 
-**Manual fallback** (re-link, standalone `dbId`, or auto-link failed):
+```javascript
+const { dbId } = await create_database({ name: "Funnel" })
+await attach_database({ appId, dbId, alias: "funnel" })
+// App: fetch('/api/db/query', { body: JSON.stringify({ appId, sourceId: 'funnel', sql, params }) })
+// App: fetch('/api/db/write', { body: JSON.stringify({ appId, sourceId: 'funnel', sql, params }) })
+```
+
+**Manual fallback** (re-link or job-owned DB):
 
 ```javascript
 link_app_data_source({
   appId: "funnel-dashboard",
   jobId: "amplitude-sync",  // OR dbId for registry DB
   alias: "funnel",
-  setPrimary: true,
   tables: ["funnel_runs"]
 })
 ```
 
-Call linking **before** implementing `/api/db/query` or `/api/db/write` if `read_app_data_sources` shows no sources. Linked databases sync to Turso automatically after cloud sync is enabled.
+Call linking **before** implementing `/api/db/*` if `read_app_data_sources` shows no sources. Linked databases sync to Turso automatically after cloud sync is enabled.
 
 ## Cloud hosting (automatic — ready)
 
 When cloud sync is enabled (default):
 
 1. App source syncs to GitHub and auto-publishes to `apps.papr.ai` (private by default)
-2. Linked job databases (via `data-sources.json` — auto-created by `create_job({ appIds })` or manual link) sync to Turso
+2. Linked databases (via `data-sources.json` from `attach_database` or `link_app_data_source`) sync to Turso
 3. App code using relative `/api/db/*` works **unchanged** on the cloud URL
 
 **No extra deploy steps** — do not add Vercel/Netlify publish, Turso credentials, or cloud URL wiring to plans.
 
 | Works on cloud | Desktop-only |
 |----------------|--------------|
-| `/api/db/schema`, `/api/db/query`, `/api/db/batch`, `/api/db/write`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
+| `/api/db/schema`, `/api/db/query`, `/api/db/batch` (aliases: `query-batch`, `read-batch`), `/api/db/write`, `/api/db/write-batch`, `/api/db/exec` | `window.paprAPI` (chat.open, shell, etc.) |
 | `/api/jobs/list`, `/api/jobs/status`, `/api/jobs/run`, `/api/jobs/events` (SSE) | `/api/jobs/create` |
-| `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`) | `/api/memory/*` (does not exist — use backend handlers) |
+| `/api/app/backend/:action` (vault keys, memory add/search via `/v1/memory`; **`PAPR_CALLER_USER_ID`** / **`PAPR_CALLER_EMAIL`** when signed in) | `/api/memory/*` (does not exist — use backend handlers) |
 
 **"Ask Agent" buttons (desktop):** Use `window.paprAPI.invoke('chat.open', { message })` — sandbox does **not** block this. Do **not** claim mini-apps cannot open chat. App code cannot call `delegate_task`; use `chat.open` for conversational flows or `/api/jobs/run` for silent background work.
 
 If an app needs job triggers or paprAPI on cloud later, tell the user those features require Paprwork desktop open, or redesign around `/api/db/*` for cloud-first flows.
 
+## Verified caller identity (backend + jobs)
+
+When handlers or jobs need to know **who invoked them** (role ACL, roster claim, per-user writes):
+
+| Env var | Set by | Use for |
+|---------|--------|---------|
+| `PAPR_CALLER_USER_ID` | Gateway / Cloud App Host (when signed in) | Roster lookup, row ACL, audit |
+| `PAPR_CALLER_EMAIL` | Same (when known) | Display / admin pickers only — prefer `userId` for binding |
+
+- **Endpoint (exact):** `POST /api/app/backend/{actionName}` — name from `backend/manifest.json`. **Not** `/api/db/*`. **Not** `/api/db/action` (404).
+- **No SQL RLS:** `papr_current_user()` does not exist. `/api/db/query` still runs any SELECT.
+- Injected on **`POST /api/app/backend/:action`** (desktop + cloud) and **`POST /api/jobs/run`**.
+- Server **overrides** client spoofing in `params` — never authorize from `params.userId`.
+- **Verify:** `POST /api/app/backend/ping` with fake `PAPR_CALLER_USER_ID` in params → `stdout.callerUserId` = real session id.
+
+```python
+user_id = os.environ.get("PAPR_CALLER_USER_ID")
+if not user_id:
+    sys.exit("Sign in required")
+```
+
 Users can disable auto-publish globally or per-app in Settings.
+
+## Load efficiency & `validate_app`
+
+Run **`validate_app({ appId })` after implementing or editing app code** (esbuild + lints + optional hidden preview). Opening the app tab in the UI does **not** replace this — the agent should validate after changes.
+
+**Contract expectations the linter enforces:**
+
+- **Initial load:** 2+ reads on mount → **`POST /api/db/batch`** (one round-trip), not many sequential `/api/db/query` calls (`mount-multi-db-query`).
+- **Live refresh:** `onDbChanged` → `loadData()` should use **`debounceMs`** on `subscribeJobEvents` or debounce/AbortController inside `loadData` (`on-db-changed-no-debounce`).
+- **Tabs:** load once, cache in memory, refresh on `onDbChanged` only — not on every tab switch (`cloud-tab-refetch-storm`).
+- **Preview (desktop):** after lint passes, hidden webview counts DB HTTP calls; warns if startup fires many queries with no batch (`preview-load-efficiency`).
+
+**Example subscribe block in the contract:**
+
+```typescript
+import { subscribeJobEvents } from '/__papr__/papr-job-events.ts';
+
+subscribeJobEvents({
+  jobIds: [JOB_ID],
+  debounceMs: 300,
+  onDbChanged: () => loadData(),
+});
+loadData(); // once on page load — batch reads inside loadData()
+```
 
 ## Required UX States
 

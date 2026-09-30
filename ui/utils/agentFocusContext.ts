@@ -5,6 +5,7 @@
 
 import type { UiAgentFocusContext } from "../../src/core/types/agentFocus";
 import type { Tab } from "../types/tabs";
+import { readCloudCatalogPreviewTabMetadata } from "../types/cloudCatalogPreviewTab";
 import { useTabStore } from "../stores/tabStore";
 import { useJobNavigationStore } from "../stores/jobNavigationStore";
 
@@ -77,17 +78,6 @@ function findActiveAppTab(
   return null;
 }
 
-function findAnyOpenAppTab(
-  state: ReturnType<typeof useTabStore.getState>,
-): Tab | null {
-  for (const tab of state.tabs) {
-    if (tab.type === "app" && tab.displayMode !== "child") {
-      return tab;
-    }
-  }
-  return null;
-}
-
 /** Resolve focus for a chat message. */
 export function resolveAgentFocusContext(
   _chatId: string,
@@ -97,8 +87,7 @@ export function resolveAgentFocusContext(
 
   const appTab =
     (chatTab ? findAppTabBesideChat(state, chatTab) : null) ??
-    findActiveAppTab(state) ??
-    findAnyOpenAppTab(state);
+    findActiveAppTab(state);
 
   const { selectedJobId, selectedJobName } = useJobNavigationStore.getState();
 
@@ -109,8 +98,10 @@ export function resolveAgentFocusContext(
   const focus: UiAgentFocusContext = {};
 
   if (appTab) {
+    const catalogPreview = readCloudCatalogPreviewTabMetadata(appTab);
+    const focusAppId = catalogPreview?.publisherAppId ?? appTab.entityId;
     focus.activeApp = {
-      appId: appTab.entityId,
+      appId: focusAppId,
       title: appTab.title,
     };
   }

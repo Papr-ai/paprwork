@@ -10,10 +10,23 @@
  */
 
 import { promises as fs } from "fs";
+import {
+  documentMetaNeedsRewrite,
+  normalizeDocumentMeta,
+} from "./documentMetaNormalize.js";
+import { markdownPreviewText } from "../../core/utils/markdownPreview.js";
 import { getPaprDocumentsDir } from "../../core/utils/paprRoot.js";
 import { watch, type FSWatcher } from "fs";
 import path from "path";
 import os from "os";
+import {
+  cancelDocumentPostSync,
+  scheduleDocumentPostSync,
+} from "./documentPostScheduler.js";
+import {
+  deleteDocumentPost,
+  setDocumentPostArchived,
+} from "./documentPostSync.js";
 // uuid no longer needed — document IDs are title-based slugs
 
 // ---------- Public Types ----------
@@ -26,6 +39,12 @@ export interface DocumentMeta {
   updatedAt: string;
   tags: string[];
   favorite: boolean;
+  /**
+   * Archived documents stay on disk and keep their memories, but stop feeding
+   * new ones (the backing Post gets `archive = true`, which parseServer's
+   * batchSavePostToMemory filters out). Undefined means not archived.
+   */
+  archived?: boolean;
   preview: string;
   wordCount: number;
   createdByAgentId?: string;
@@ -57,15 +76,14 @@ type FileChangeCallback = (docId: string) => void;
 let documentServiceInstance: DocumentService | null = null;
 
 export class DocumentService {
-  private docsRoot: string;
   private legacyJsonPath: string;
   private initialized = false;
+  private initializedDocsRoot = "";
   private watchers: Map<string, FSWatcher> = new Map();
   private fileChangeCallbacks: Set<FileChangeCallback> = new Set();
 
   constructor() {
     const homeDir = os.homedir();
-    this.docsRoot = getPaprDocumentsDir();
     this.legacyJsonPath = path.join(
       homeDir,
       ".paprwork",
@@ -74,18 +92,36 @@ export class DocumentService {
     );
   }
 
+  private get docsRoot(): string {
+    return getPaprDocumentsDir();
+  }
+
   // ===== Lifecycle =====
 
   async initialize(): Promise<void> {
-    if (this.initialized) return;
+    const docsRoot = this.docsRoot;
+    if (this.initialized && this.initializedDocsRoot === docsRoot) {
+      return;
+    }
 
-    await fs.mkdir(this.docsRoot, { recursive: true });
+    if (this.initialized && this.initializedDocsRoot !== docsRoot) {
+      console.warn(
+        `[DocumentService] Workspace path changed (${this.initializedDocsRoot} -> ${docsRoot}); reinitializing`,
+      );
+      this.close();
+      this.initialized = false;
+    }
+
+    await fs.mkdir(docsRoot, { recursive: true });
     await this.migrateLegacyIfNeeded();
+    const repaired = await this.reconcileMetaFiles();
     this.initialized = true;
+    this.initializedDocsRoot = docsRoot;
 
     const docIds = await this.listDocIds();
     console.log(
-      `[DocumentService] Initialized with ${docIds.length} documents in ${this.docsRoot}`,
+      `[DocumentService] Initialized with ${docIds.length} documents in ${docsRoot}` +
+        (repaired > 0 ? ` (${repaired} meta.json repaired)` : ""),
     );
   }
 
@@ -147,7 +183,7 @@ export class DocumentService {
       updatedAt: now,
       tags: [],
       favorite: false,
-      preview: content.slice(0, 200),
+      preview: markdownPreviewText(content),
       wordCount: wordCount(content),
       createdByAgentId,
       createdByAgentName,
@@ -158,6 +194,11 @@ export class DocumentService {
     await fs.mkdir(versionsDir, { recursive: true });
     await fs.writeFile(this.contentPath(id), content, "utf-8");
     await this.writeMeta(id, meta);
+
+    // Mirror to a Parse Post so the document reaches Papr Memory. The Parse
+    // beforeSave/afterSave hooks handle similarity gating, memory writes and
+    // PageVersion snapshots — see documentPostSync.ts.
+    scheduleDocumentPostSync({ documentId: id, title, content });
 
     console.log(`[DocumentService] Created document: ${id} - ${title}`);
     return { ...meta, content, filePath: this.contentPath(id) };
@@ -231,11 +272,21 @@ export class DocumentService {
       tags: updates.tags ?? meta.tags,
       favorite: updates.favorite ?? meta.favorite,
       updatedAt: new Date().toISOString(),
-      preview: content.slice(0, 200),
+      preview: markdownPreviewText(content),
       wordCount: wordCount(content),
     };
 
     await this.writeMeta(id, updatedMeta);
+
+    // Debounced: an editor fires this on nearly every keystroke. The 30s idle
+    // window collapses a typing burst into one request; the server's
+    // similarity gate then decides whether it is worth a memory write.
+    scheduleDocumentPostSync({
+      documentId: id,
+      title: updatedMeta.title,
+      content,
+    });
+
     console.log(`[DocumentService] Updated document: ${id}`);
     return { ...updatedMeta, content, filePath: this.contentPath(id) };
   }
@@ -243,6 +294,28 @@ export class DocumentService {
   async deleteDocument(id: string): Promise<boolean> {
     const docDir = this.docDir(id);
     try {
+      // Drop any queued sync first — pushing content for a document the user
+      // just deleted would be surprising, and the Post row would outlive it.
+      cancelDocumentPostSync(id);
+
+      // Delete means delete. The Post goes too, and parseServer cascades from
+      // there to its PostSocial rows and memories.
+      //
+      // This used to leave the Post in place because delete was the only
+      // action available, so destroying remote history on a local delete was
+      // too sharp an edge. Archive now covers "stop this feeding memory but
+      // keep it", which frees delete to mean what it says.
+      //
+      // Failure is logged, not fatal: if the user asked to delete a document,
+      // refusing to remove it locally because the network was down is worse
+      // than leaving one orphaned Post behind.
+      const postResult = await deleteDocumentPost(id);
+      if (!postResult.ok) {
+        console.warn(
+          `[DocumentService] Post delete failed for ${id} (${postResult.reason}); removing local document anyway`,
+        );
+      }
+
       await fs.rm(docDir, { recursive: true, force: true });
       this.unwatchDocument(id);
       console.log(`[DocumentService] Deleted document: ${id}`);
@@ -258,7 +331,21 @@ export class DocumentService {
 
     for (const id of ids) {
       const meta = await this.readMeta(id);
-      if (meta) metas.push(meta);
+      if (!meta) continue;
+
+      try {
+        const content = await fs.readFile(this.contentPath(id), "utf-8");
+        const preview = markdownPreviewText(content);
+        if (preview !== meta.preview) {
+          meta.preview = preview;
+          meta.wordCount = wordCount(content);
+          await this.writeMeta(id, meta);
+        }
+      } catch {
+        /* content.md may not exist yet */
+      }
+
+      metas.push(meta);
     }
 
     return metas.sort(
@@ -285,6 +372,48 @@ export class DocumentService {
     meta.favorite = !meta.favorite;
     meta.updatedAt = new Date().toISOString();
     await this.writeMeta(id, meta);
+
+    let content = "";
+    try {
+      content = await fs.readFile(this.contentPath(id), "utf-8");
+    } catch {
+      /* noop */
+    }
+
+    return { ...meta, content, filePath: this.contentPath(id) };
+  }
+
+  /**
+   * Archive or restore a document.
+   *
+   * Archiving flips `archive` on the backing Post, which is what actually
+   * stops memory writes: parseServer's batchSavePostToMemory only drains
+   * posts with `archive == false`. Memories already written are left alone —
+   * that is the whole point. Archive is the reversible action; delete is the
+   * destructive one.
+   *
+   * `updatedAt` is deliberately NOT bumped. Archiving is a lifecycle change,
+   * not an edit, and bumping it would make a restored document claim it was
+   * edited today and jump to the top of "recent".
+   */
+  async archiveDocument(
+    id: string,
+    archived: boolean = true,
+  ): Promise<Document | null> {
+    const meta = await this.readMeta(id);
+    if (!meta) return null;
+
+    // Drop any debounced sync first — pushing content for a document the user
+    // just archived is exactly the write they asked us to stop.
+    if (archived) cancelDocumentPostSync(id);
+
+    meta.archived = archived;
+    await this.writeMeta(id, meta);
+
+    // Best-effort: the local flag is what the UI reads, and
+    // setDocumentPostArchived never throws. A failed remote flip is logged
+    // there and self-heals on the next archive toggle.
+    await setDocumentPostArchived(id, archived);
 
     let content = "";
     try {
@@ -359,7 +488,7 @@ export class DocumentService {
           path.join(versionsDir, `${v.versionId}.md`),
           "utf-8",
         );
-        v.preview = content.slice(0, 200);
+        v.preview = markdownPreviewText(content);
       } catch {
         /* noop */
       }
@@ -384,7 +513,7 @@ export class DocumentService {
         versionId,
         timestamp: versionIdToTimestamp(versionId),
         reason: versionId.split("_").slice(6).join("_") || "save",
-        preview: content.slice(0, 200),
+        preview: markdownPreviewText(content),
         content,
       };
     } catch {
@@ -464,12 +593,101 @@ export class DocumentService {
   }
 
   private async readMeta(id: string): Promise<DocumentMeta | null> {
+    let parsed: unknown;
     try {
       const raw = await fs.readFile(this.metaPath(id), "utf-8");
-      return JSON.parse(raw) as DocumentMeta;
+      parsed = JSON.parse(raw);
+    } catch {
+      return this.repairMetaFromContent(id);
+    }
+
+    // Normalize rather than cast: meta.json has several writers and is not
+    // guaranteed to hold every field. Casting used to mint records with
+    // `id: undefined`, which surfaced as a React key warning in the sidebar.
+    const meta = normalizeDocumentMeta(id, parsed, {
+      fallbackTitle: slugToDisplayTitle(id),
+    });
+    return meta ?? this.repairMetaFromContent(id);
+  }
+
+  /** Build meta.json when agents wrote content.md without going through createDocument(). */
+  private async repairMetaFromContent(id: string): Promise<DocumentMeta | null> {
+    const contentPath = this.contentPath(id);
+    let content = "";
+    let fileMtime = new Date();
+
+    try {
+      content = await fs.readFile(contentPath, "utf-8");
+      const stat = await fs.stat(contentPath);
+      fileMtime = stat.mtime;
     } catch {
       return null;
     }
+
+    const titleFromContent = extractTitleFromMarkdown(content);
+    const meta: DocumentMeta = {
+      id,
+      title: titleFromContent ?? slugToDisplayTitle(id),
+      type: "document",
+      createdAt: fileMtime.toISOString(),
+      updatedAt: fileMtime.toISOString(),
+      tags: [],
+      favorite: false,
+      preview: markdownPreviewText(content),
+      wordCount: wordCount(content),
+    };
+
+    await this.writeMeta(id, meta);
+    console.log(
+      `[DocumentService] Repaired missing meta.json for ${id} (${meta.title})`,
+    );
+    return meta;
+  }
+
+  /**
+   * Heal meta.json files at startup: rebuild the ones that are missing, and
+   * rewrite the ones that exist but omit an id or type.
+   *
+   * `readMeta` already normalizes both cases for its callers, so this is not
+   * what keeps the app correct — it is what stops every read from re-deriving
+   * the same fields forever, and makes the file on disk say what the app
+   * believes.
+   */
+  private async reconcileMetaFiles(): Promise<number> {
+    const ids = await this.listDocIds();
+    let repaired = 0;
+
+    for (const id of ids) {
+      let raw: string;
+      try {
+        raw = await fs.readFile(this.metaPath(id), "utf-8");
+      } catch {
+        const meta = await this.repairMetaFromContent(id);
+        if (meta) repaired++;
+        continue;
+      }
+
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw);
+      } catch {
+        const meta = await this.repairMetaFromContent(id);
+        if (meta) repaired++;
+        continue;
+      }
+
+      if (!documentMetaNeedsRewrite(id, parsed)) continue;
+
+      const meta = normalizeDocumentMeta(id, parsed, {
+        fallbackTitle: slugToDisplayTitle(id),
+      });
+      if (!meta) continue;
+
+      await this.writeMeta(id, meta);
+      repaired++;
+    }
+
+    return repaired;
   }
 
   private async writeMeta(id: string, meta: DocumentMeta): Promise<void> {
@@ -527,7 +745,7 @@ export class DocumentService {
           updatedAt: doc.updatedAt,
           tags: doc.tags ?? [],
           favorite: doc.favorite ?? false,
-          preview: content.slice(0, 200),
+          preview: markdownPreviewText(content),
           wordCount: wordCount(content),
         };
         await this.writeMeta(doc.id, meta);
@@ -770,6 +988,25 @@ function slugify(title: string): string {
       .slice(0, 80) || // Cap length
     "untitled"
   ); // Fallback
+}
+
+/** Best-effort human title from a document folder slug. */
+function slugToDisplayTitle(slug: string): string {
+  const trimmed = slug.trim();
+  if (!trimmed) return "Untitled";
+  return trimmed
+    .split("-")
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+/** Use the first markdown H1 as title when present. */
+function extractTitleFromMarkdown(content: string): string | null {
+  const match = content.match(/^#\s+(.+)$/m);
+  if (!match?.[1]) return null;
+  const title = match[1].trim();
+  return title.length > 0 ? title : null;
 }
 
 function wordCount(text: string): number {

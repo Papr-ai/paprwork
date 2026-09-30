@@ -8,7 +8,12 @@
  *   3. Optional: cloud app host running (npm run start:cloud-app-host)
  *
  * Usage:
- *   node scripts/test-cloud-app-host-e2e.mjs [--gateway URL] [--host URL] [--app-id ID]
+ *   node scripts/test-cloud-app-host-e2e.mjs --app-id=<throwaway-uuid> [--gateway URL] [--host URL]
+ *
+ * IMPORTANT — do NOT run without --app-id:
+ *   This test POSTs a new team publish with slug `e2e-*`. Using a real production app id
+ *   creates a second catalog row (one per publisher) or overwrites YOUR publish slug.
+ *   Create a disposable mini-app for E2E, pass its id, and delete the app when done.
  *
  * Defaults:
  *   gateway: http://localhost:18789
@@ -16,7 +21,6 @@
  */
 
 import { readFileSync } from "fs";
-import { homedir } from "os";
 import { join } from "path";
 
 const args = process.argv.slice(2);
@@ -28,7 +32,10 @@ const host = (
   args.find((a) => a.startsWith("--host="))?.split("=")[1] ??
   "http://localhost:8787"
 ).replace(/\/$/, "");
-const appIdArg = args.find((a) => a.startsWith("--app-id="))?.split("=")[1];
+const appIdArg = args.find((a) => a.startsWith("--app-id="))?.split("=")[1]?.trim();
+const allowProductionApp = args.includes("--allow-production-app");
+const skipCleanup = args.includes("--skip-cleanup");
+const envThrowawayAppId = process.env.PAPR_E2E_CLOUD_APP_ID?.trim();
 
 const GREEN = "\x1b[92m";
 const RED = "\x1b[91m";
@@ -40,6 +47,8 @@ const BOLD = "\x1b[1m";
 let passed = 0;
 let failed = 0;
 let skipped = 0;
+let cleanupAppId = null;
+let publishedThisRun = false;
 
 function check(name, condition, detail = "") {
   if (condition) {
@@ -73,35 +82,65 @@ function loadEnvLocal() {
   }
 }
 
-function pickAppId() {
-  if (appIdArg) return appIdArg;
-  try {
-    const raw = readFileSync(join(homedir(), "Papr", "data", "apps.json"), "utf8");
-    const parsed = JSON.parse(raw);
-    const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
-    const first = list.find((a) => a?.id);
-    return first?.id ?? null;
-  } catch {
-    return null;
+function resolveAppId() {
+  const appId = appIdArg ?? envThrowawayAppId ?? null;
+  if (!appId) {
+    console.log(`\n${RED}${BOLD}Missing required --app-id${RESET}`);
+    console.log(
+      "This E2E publishes with slug e2e-* and must use a disposable throwaway mini-app.",
+    );
+    console.log(
+      "Using the first app in apps.json (or a production app) creates duplicate workspace catalog rows.",
+    );
+    console.log(`\nExample:\n  npm run test:cloud-app-host -- --app-id=<throwaway-uuid>`);
+    console.log(
+      "Or set PAPR_E2E_CLOUD_APP_ID in .env.local to a dedicated test app id.\n",
+    );
+    process.exit(1);
   }
+  return appId;
 }
 
-async function gatewayCloud(method, path, body = null) {
-  const url = `${gateway}/api/cloud${path}`;
-  const opts = {
-    method,
-    headers: { "Content-Type": "application/json" },
-  };
-  if (body) opts.body = JSON.stringify(body);
-  const resp = await fetch(url, opts);
-  const text = await resp.text();
-  let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    data = text;
+function loadRegisteredAppIds() {
+  const ids = new Set();
+  const candidates = [
+    join(process.cwd(), "data", "apps.json"),
+    join(process.env.HOME ?? "", "Papr", "data", "apps.json"),
+  ];
+  for (const filePath of candidates) {
+    try {
+      const raw = readFileSync(filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      const list = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      for (const app of list) {
+        if (app?.id) ids.add(String(app.id));
+      }
+    } catch {
+      /* optional */
+    }
   }
-  return { status: resp.status, data, text };
+  return ids;
+}
+
+function assertThrowawayAppId(appId) {
+  if (allowProductionApp) {
+    console.log(
+      `${YELLOW}Warning:${RESET} --allow-production-app set — skipping production guard.`,
+    );
+    return;
+  }
+
+  const registered = loadRegisteredAppIds();
+  if (!registered.has(appId)) {
+    return;
+  }
+
+  console.log(`\n${RED}${BOLD}Refusing to run E2E against a registered local app${RESET}`);
+  console.log(
+    `App ${appId} exists in apps.json. This test publishes slug e2e-* to memory and can pollute Team Apps.`,
+  );
+  console.log("Create a disposable mini-app for E2E, or pass --allow-production-app to override.\n");
+  process.exit(1);
 }
 
 async function memoryFetch(path, { method = "GET", body = null, apiKey } = {}) {
@@ -130,6 +169,33 @@ async function memoryFetch(path, { method = "GET", body = null, apiKey } = {}) {
     data = text;
   }
   return { status: resp.status, data, text };
+}
+
+async function cleanupTestPublish(appId) {
+  if (skipCleanup || !publishedThisRun || !appId) {
+    return;
+  }
+
+  console.log(`\n${BOLD}--- Cleanup (disable test publish) ---${RESET}`);
+  try {
+    const res = await memoryFetch(
+      `/v1/cloud/apps/publish/${encodeURIComponent(appId)}`,
+      { method: "DELETE" },
+    );
+    if (res.status === 200) {
+      console.log(`  ${GREEN}OK${RESET} Disabled publish for ${appId} (acting user only)`);
+      return;
+    }
+    if (res.status === 404) {
+      console.log(`  ${YELLOW}SKIP${RESET} Publish already disabled for ${appId}`);
+      return;
+    }
+    console.log(
+      `  ${YELLOW}WARN${RESET} Cleanup DELETE returned ${res.status}: ${res.text.slice(0, 160)}`,
+    );
+  } catch (error) {
+    console.log(`  ${YELLOW}WARN${RESET} Cleanup failed: ${(error).message}`);
+  }
 }
 
 async function testHostHealth() {
@@ -163,6 +229,8 @@ async function testPublishFlow(appId) {
   check("POST /v1/cloud/apps/publish → 200", publish.status === 200, publish.text.slice(0, 200));
   if (publish.status !== 200) return null;
 
+  publishedThisRun = true;
+
   check("response has visibility (not accessMode)", !!publish.data.visibility, JSON.stringify(publish.data));
   check("response has shareUrl", !!publish.data.shareUrl, JSON.stringify(publish.data));
 
@@ -170,8 +238,11 @@ async function testPublishFlow(appId) {
   check("GET publish config → 200", get.status === 200, get.text.slice(0, 200));
 
   const namespaceId = publish.data.shareUrl?.split("/").slice(-2)[0];
-  check("shareUrl contains namespace + slug", !!namespaceId && publish.data.slug === slug,
-    publish.data.shareUrl);
+  check(
+    "shareUrl contains namespace + slug",
+    !!namespaceId && publish.data.slug === slug,
+    publish.data.shareUrl,
+  );
 
   return { appId, slug, namespaceId, shareUrl: publish.data.shareUrl };
 }
@@ -242,6 +313,24 @@ async function testHostDbQuery(ctx) {
   }
 }
 
+async function gatewayCloud(method, path, body = null) {
+  const url = `${gateway}/api/cloud${path}`;
+  const opts = {
+    method,
+    headers: { "Content-Type": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const resp = await fetch(url, opts);
+  const text = await resp.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    data = text;
+  }
+  return { status: resp.status, data, text };
+}
+
 async function testGatewayPublishProxy(appId) {
   console.log(`\n${BOLD}--- Gateway publish proxy (optional) ---${RESET}`);
   try {
@@ -276,36 +365,44 @@ async function main() {
   console.log(`Host:    ${host}`);
   console.log("=".repeat(70));
 
-  const appId = pickAppId();
-  if (!appId) {
-    console.log(`\n${RED}No app ID — pass --app-id=... or add apps in ~/Papr/data/apps.json${RESET}`);
-    process.exit(1);
-  }
-  console.log(`App ID: ${appId}`);
+  cleanupAppId = resolveAppId();
+  assertThrowawayAppId(cleanupAppId);
+  console.log(`App ID: ${cleanupAppId}`);
 
   if (!process.env.PAPR_API_KEY) {
-    console.log(`${YELLOW}PAPR_API_KEY not in env — memory tests may fail. Set in .env.local or export.${RESET}`);
+    console.log(
+      `${YELLOW}PAPR_API_KEY not in env — memory tests may fail. Set in .env.local or export.${RESET}`,
+    );
   }
 
-  const hostOk = await testHostHealth();
-  const publishCtx = await testPublishFlow(appId);
-  await testAccessValidate(publishCtx);
-  if (hostOk) {
-    await testHostDbQuery(publishCtx);
+  try {
+    const hostOk = await testHostHealth();
+    const publishCtx = await testPublishFlow(cleanupAppId);
+    await testAccessValidate(publishCtx);
+    if (hostOk) {
+      await testHostDbQuery(publishCtx);
+    }
+    await testGatewayPublishProxy(cleanupAppId);
+
+    console.log(`\n${"=".repeat(70)}`);
+    const total = passed + failed + skipped;
+    console.log(
+      `Results: ${GREEN}${passed} passed${RESET}, ${RED}${failed} failed${RESET}, ${YELLOW}${skipped} skipped${RESET} / ${total}`,
+    );
+
+    if (failed > 0) process.exit(1);
+    console.log(`\n${GREEN}All runnable tests passed!${RESET}`);
+  } finally {
+    await cleanupTestPublish(cleanupAppId);
   }
-  await testGatewayPublishProxy(appId);
-
-  console.log(`\n${"=".repeat(70)}`);
-  const total = passed + failed + skipped;
-  console.log(
-    `Results: ${GREEN}${passed} passed${RESET}, ${RED}${failed} failed${RESET}, ${YELLOW}${skipped} skipped${RESET} / ${total}`,
-  );
-
-  if (failed > 0) process.exit(1);
-  console.log(`\n${GREEN}All runnable tests passed!${RESET}`);
 }
 
-main().catch((e) => {
+main().catch(async (e) => {
   console.error(`${RED}Fatal:${RESET}`, e);
+  try {
+    await cleanupTestPublish(cleanupAppId);
+  } catch {
+    /* ignore */
+  }
   process.exit(1);
 });

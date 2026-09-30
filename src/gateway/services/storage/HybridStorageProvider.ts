@@ -13,8 +13,49 @@ import type {
   StoredSummary,
   ChatMetadata,
 } from "./IStorageProvider";
+import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
 import { LocalStorageProvider } from "./LocalStorageProvider.js";
 import { PaprMemoryProvider, type PaprConfig } from "./PaprMemoryProvider.js";
+import { reportPaprQuotaError } from "../../../core/utils/paprQuota.js";
+
+/** Best-effort cloud merge — agent turns must not wait on the full SDK timeout. */
+const PAPR_LLM_MERGE_TIMEOUT_MS = 5_000;
+
+/** True when local SQLite already injected a conversation summary for the LLM path. */
+export function localLlmHistoryIncludesSummary(
+  localMessages: readonly unknown[],
+): boolean {
+  return localMessages.some(
+    (item) =>
+      typeof item === "object" &&
+      item !== null &&
+      "__summary" in (item as Record<string, unknown>),
+  );
+}
+
+async function loadPaprLlmHistoryWithTimeout(
+  load: () => Promise<unknown[]>,
+  timeoutMs: number,
+): Promise<unknown[]> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      load(),
+      new Promise<unknown[]>((resolve) => {
+        timer = setTimeout(() => {
+          console.warn(
+            `[HybridStorage] PAPR LLM merge timed out after ${timeoutMs}ms — using local only`,
+          );
+          resolve([]);
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
 
 export class HybridStorageProvider implements IStorageProvider {
   private local: LocalStorageProvider;
@@ -54,6 +95,24 @@ export class HybridStorageProvider implements IStorageProvider {
     );
   }
 
+  /** Sidecar payloads are local files, so this always goes to SQLite. */
+  readOffloadedToolResult(
+    chatId: string,
+    messageId: string,
+    toolCallId: string,
+  ): Promise<string | null> {
+    return this.local.readOffloadedToolResult(chatId, messageId, toolCallId);
+  }
+
+  /** Measurements stay local — they are not part of what syncs to memory. */
+  recordTurnMetrics(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void> {
+    return this.local.recordTurnMetrics(messageId, summary, durationMs);
+  }
+
   // ===== Message Operations =====
 
   async updateMessage(
@@ -74,6 +133,7 @@ export class HybridStorageProvider implements IStorageProvider {
     if (this.syncEnabled && !isIncomplete) {
       this.syncMessageToPapr(chatId, message).catch((err) => {
         console.error(`Failed to sync message ${message.id} to PAPR:`, err);
+        reportPaprQuotaError(err, "chat-sync");
         this.local.markSyncFailed(message.id, err.message);
       });
     }
@@ -96,6 +156,7 @@ export class HybridStorageProvider implements IStorageProvider {
     if (this.syncEnabled && !isIncomplete) {
       this.syncMessageToPapr(chatId, message).catch((err) => {
         console.error(`Failed to sync message ${message.id} to PAPR:`, err);
+        reportPaprQuotaError(err, "chat-sync");
         this.local.markSyncFailed(message.id, err.message);
       });
     }
@@ -105,17 +166,20 @@ export class HybridStorageProvider implements IStorageProvider {
     chatId: string,
     message: StoredMessage,
   ): Promise<void> {
-    try {
-      // Save to PAPR
-      await this.papr.saveMessage(chatId, message);
+    await this.papr.saveMessage(chatId, message);
 
-      // Mark as synced in local DB
-      if (message.papr_message_id) {
-        await this.local.markMessageSynced(message.id, message.papr_message_id);
-      }
-    } catch (error) {
-      throw error;
+    if (message.papr_message_id) {
+      await this.local.markMessageSynced(message.id, message.papr_message_id);
+      return;
     }
+
+    await this.local.markSyncFailed(
+      message.id,
+      "Papr messages.store succeeded but returned no objectId",
+    );
+    throw new Error(
+      `Papr store for message ${message.id} returned no objectId`,
+    );
   }
 
   async loadMessages(
@@ -158,21 +222,20 @@ export class HybridStorageProvider implements IStorageProvider {
       return localMessages;
     }
 
+    const localHasSummary = localLlmHistoryIncludesSummary(localMessages);
+
+    // Local already has summary + full history — skip cloud fetch that blocks agent
+    // turns on APIConnectionTimeoutError even though the result would be discarded.
+    if (localHasSummary) {
+      return localMessages;
+    }
+
     // If sync enabled, fetch PAPR summary and merge with local messages
     try {
-      const paprData = await this.papr.loadMessagesForLLM(chatId);
-
-      const localHasSummary = localMessages.some(
-        (item: unknown) =>
-          typeof item === "object" &&
-          item !== null &&
-          "__summary" in (item as Record<string, unknown>),
-      );
-
-      // Local summary is authoritative — avoid duplicate __summary blocks (confuses the model)
-      if (localHasSummary) {
-        return localMessages;
-      }
+      const paprData = (await loadPaprLlmHistoryWithTimeout(
+        () => this.papr.loadMessagesForLLM(chatId),
+        PAPR_LLM_MERGE_TIMEOUT_MS,
+      )) as any[];
 
       // Extract summary from PAPR (if it exists)
       const summaryItem = paprData.find((item: any) => item.__summary);
@@ -219,6 +282,7 @@ export class HybridStorageProvider implements IStorageProvider {
       // PAPR has no new data, use local only
       return localMessages;
     } catch (error) {
+      reportPaprQuotaError(error, "chat-load");
       console.warn(
         "[HybridStorage] PAPR fetch failed, using local only:",
         error,
@@ -250,6 +314,7 @@ export class HybridStorageProvider implements IStorageProvider {
 
       return null;
     } catch (error) {
+      reportPaprQuotaError(error, "chat-compress");
       console.error("PAPR compress failed, using local fallback:", error);
 
       // 3. Fallback to local LLM generation (if implemented)
@@ -343,6 +408,11 @@ export class HybridStorageProvider implements IStorageProvider {
   }> {
     // Use local stats (faster)
     return this.local.getChatStats(chatId);
+  }
+
+  /** Measurement stays local, like recordTurnMetrics — never synced. */
+  async getTurnUsage(chatId: string) {
+    return this.local.getTurnUsage(chatId);
   }
 
   async getChatCost(chatId: string): Promise<{
@@ -461,6 +531,7 @@ export class HybridStorageProvider implements IStorageProvider {
         synced++;
       } catch (error) {
         failed++;
+        reportPaprQuotaError(error, "chat-bulk-sync");
         console.error(`Failed to sync message ${message.id}:`, error);
       }
     }

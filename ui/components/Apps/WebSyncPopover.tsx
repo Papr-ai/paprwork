@@ -3,21 +3,130 @@
  */
 
 import React from "react";
+import { PaprCloudRequirementsPanel } from "../common/PaprCloudRequirementsPanel";
+import { requestPaprCloudFeature } from "../../stores/paprCloudFeatureStore";
 import type {
   AppCloudItemPhase,
   AppCloudSyncStatus,
   WebSyncVisualState,
 } from "../../utils/appCloudSyncStatus";
-
-export interface WebSyncPopoverProps {
-  status: AppCloudSyncStatus;
-  error: string | null;
+import {
+  formatLastUploadedAt,
+  webSyncShouldPullBeforePublish,
+} from "../../utils/appCloudSyncStatus";
+import {
+  buildMergeReviewAgentPrompt,
+  buildOversizedFilesAgentPrompt,
+  buildSchemaDriftAgentPrompt,
+  buildUploadFailureAgentPrompt,
+  buildWriterConflictAgentPrompt,
+  openCloudSyncAgentChat,
+  buildUpdateConflictAgentPrompt,
+} from "../../utils/openCloudSyncAgentChat";
+import type { ShareAudience } from "../../utils/shareAudienceModel";
+import {
+  loginAccessToShareAudience,
+  shareAudienceGlyphPath,
+  shareAudienceShortLabel,
+} from "../../utils/shareAudienceGlyphs";
+/** Primary push action label — Publish for owners; sync for team collaborators. */
+export function webSyncPushButtonLabel(options: {
+  appLive: boolean;
   pushing: boolean;
-  syncActionNeeded: boolean;
-  onPushNow: () => void;
+  trackCollaborator?: boolean;
+}): string {
+  if (options.trackCollaborator) {
+    return options.pushing ? "Syncing…" : "Sync code & data";
+  }
+  if (options.pushing) {
+    return "Publishing…";
+  }
+  return "Publish";
 }
 
-function rowIcon(phase: AppCloudItemPhase): string {
+/**
+ * "Ask agent" is offered whenever the app is not simply synced — anything
+ * that did not resolve on its own (stuck, pending after a publish attempt,
+ * updates the user can't merge, unknown) is something the agent can
+ * diagnose. Never shown for synced / disabled / actively publishing.
+ */
+export function webSyncShouldOfferAgent(
+  status: AppCloudSyncStatus | null,
+  options: { error?: string | null; pushing?: boolean; pulling?: boolean },
+): boolean {
+  if (options.error) return true;
+  if (!status) return false;
+  if (options.pushing || options.pulling) return false;
+  if (status.overall === "synced" || status.overall === "disabled") return false;
+  if (status.overall === "uploading") return false;
+  return true;
+}
+
+export function buildGenericSyncAgentPrompt(input: {
+  appId?: string;
+  status: AppCloudSyncStatus;
+}): string {
+  const s = input.status;
+  const parts = [
+    "Help me get my Papr mini-app fully published to the web.",
+    `Current status: ${s.chipLabel} — ${s.summaryLine}`,
+  ];
+  if (input.appId) parts.push(`App id: ${input.appId}.`);
+  if (s.codeLabel) parts.push(`App code: ${s.codeLabel}`);
+  for (const job of s.dependentJobs) {
+    if (job.phase !== "synced") parts.push(`Job "${job.label}": ${job.detail}`);
+  }
+  for (const db of s.databases) {
+    if (db.phase !== "synced" || db.rowsSyncing) {
+      parts.push(`Database "${db.alias}": ${db.detail}`);
+      if (db.lastReplicaPushError) parts.push(`  raw error: ${db.lastReplicaPushError}`);
+      if (db.cutoverBlockReason) parts.push(`  raw reason: ${db.cutoverBlockReason}`);
+    }
+  }
+  if (s.codeLastError) parts.push(`Last code error: ${s.codeLastError}`);
+  parts.push(
+    "Use get_cloud_sync_status({ appId }) and papr_db_sync_status to diagnose, fix what you can, then tell me what changed.",
+  );
+  return parts.join("\n");
+}
+
+export interface WebSyncPopoverProps {
+  status: AppCloudSyncStatus | null;
+  appId?: string;
+  loading?: boolean;
+  refreshing?: boolean;
+  error: string | null;
+  pushing: boolean;
+  pulling: boolean;
+  applyingUpdates: boolean;
+  syncActionNeeded: boolean;
+  onPushNow: () => void;
+  onBumpQueue?: () => void;
+  onPullUpdates: () => void;
+  onApplyRemoteUpdates: () => void;
+  /** Held update with conflicts: Keep mine / Take theirs. */
+  onResolveConflict?: (resolution: "take_theirs" | "keep_mine") => void;
+  /** False when the app has never been published — primary action is Publish (share + upload). */
+  appLive?: boolean;
+  /** Team track install: push writer repo + DB; team app is already live at the publisher. */
+  trackCollaborator?: boolean;
+  sourceSlug?: string;
+  /** Waiting on owner review — show proposal context, not first-time publish. */
+  proposalWaiting?: boolean;
+  onViewProposals?: () => void;
+  /** Per-app: upload to web automatically vs Publish changes only (hint copy only) */
+  autoUploadEnabled?: boolean;
+  popoverRef?: React.RefObject<HTMLDivElement | null>;
+  className?: string;
+  style?: React.CSSProperties;
+  needsStatusCheck?: boolean;
+  lastCheckedAt?: number | null;
+  onCheckStatus?: () => void;
+}
+
+function rowIcon(phase: AppCloudItemPhase, status?: string): string {
+  if (status === "failed") return "✕";
+  if (status === "updates_available") return "↓";
   switch (phase) {
     case "synced":
       return "✓";
@@ -31,96 +140,885 @@ function rowIcon(phase: AppCloudItemPhase): string {
   }
 }
 
+function summarizeRemoteCommits(summary: string): string | null {
+  const lines = summary
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean);
+  if (lines.length === 0) {
+    return null;
+  }
+  const allJobStatus = lines.every((line) =>
+    /^[0-9a-f]{7,40}\s+cloud:\s+update job .+ status$/i.test(line),
+  );
+  if (allJobStatus) {
+    return lines.length === 1
+      ? "1 cloud job status update"
+      : `${lines.length} cloud job status updates`;
+  }
+  if (lines.length === 1) {
+    const line = lines[0];
+    return line.length > 52 ? `${line.slice(0, 52)}…` : line;
+  }
+  return `${lines.length} remote commits`;
+}
+
+function shortDetail(text: string, max = 72): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= max) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, max - 1)}…`;
+}
+
+function isActivePhase(phase: AppCloudItemPhase): boolean {
+  return phase !== "synced";
+}
+
+function isDatabaseSyncBlocker(db: AppCloudSyncStatus["databases"][number]): boolean {
+  return (
+    db.schemaDrift === true ||
+    db.migrationConflict === true ||
+    db.cutoverBlocked === true
+  );
+}
+
+function databaseBlockerHint(
+  databases: AppCloudSyncStatus["databases"],
+): string | null {
+  const blocked = databases.filter(isDatabaseSyncBlocker);
+  if (blocked.length === 0) {
+    return null;
+  }
+  // Plain-language first; technical reason stays on the database row's
+  // detail / raw error fields for anyone who wants it.
+  if (blocked.some((db) => db.cutoverBlocked)) {
+    return "One of this app's databases can't publish until its structure is fixed. Ask the agent to repair it, then publish again.";
+  }
+  if (blocked.some((db) => db.migrationConflict)) {
+    return "Your local database and the web version have different structures. Ask the agent to reconcile them, then publish again.";
+  }
+  return "The database structure changed locally and isn't on the web yet. Click Publish — if that fails, ask the agent to align it.";
+}
+
+function resolveUploadFailureMessage(
+  error: string | null,
+  status: AppCloudSyncStatus | null,
+): string | null {
+  const fromHook = error?.trim();
+  if (fromHook) {
+    return fromHook;
+  }
+  if (!status) {
+    return null;
+  }
+  if (status.uploadStatus === "failed" && !status.uploadRetryPending) {
+    return (
+      status.uploadDetail?.trim() ||
+      status.uploadLabel?.trim() ||
+      "Publish failed"
+    );
+  }
+  const replicaDbError = status.databases.find(
+    (db) => db.lastReplicaPushError?.trim(),
+  )?.lastReplicaPushError;
+  if (replicaDbError?.trim()) {
+    return replicaDbError.trim();
+  }
+  return status.codeLastError?.trim() || null;
+}
+
 export function WebSyncPopover({
   status,
+  appId,
+  loading = false,
+  refreshing = false,
   error,
   pushing,
+  pulling,
+  applyingUpdates,
   syncActionNeeded,
   onPushNow,
+  onBumpQueue,
+  onPullUpdates,
+  onApplyRemoteUpdates,
+  onResolveConflict,
+  appLive = true,
+  trackCollaborator = false,
+  sourceSlug,
+  proposalWaiting = false,
+  onViewProposals,
+  autoUploadEnabled,
+  popoverRef,
+  className,
+  style,
+  needsStatusCheck = false,
+  lastCheckedAt = null,
+  onCheckStatus,
 }: WebSyncPopoverProps) {
+  const pushIfAllowed = (): void => {
+    if (!requestPaprCloudFeature("publish_share")) {
+      return;
+    }
+    onPushNow();
+  };
+  const busy = pushing || pulling || applyingUpdates || loading || refreshing;
+  const ownerFirstPublish = !appLive && !trackCollaborator;
+  const pushLabel = webSyncPushButtonLabel({ appLive, pushing, trackCollaborator });
+  const popoverTitle = trackCollaborator ? "Cloud sync" : "Web sync";
+  const popoverAriaLabel = popoverTitle;
+  const remoteReviewNeeded = status?.gitRemoteRequiresReview === true;
+  const writerConflict = status?.writerConflict === true;
+  const metadataSync = status?.gitRemoteMetadataSync === true;
+  const activelyUploading = status?.overall === "uploading";
+  const queuedForUpload = status?.uploadQueued === true;
+  const showMergeReview = remoteReviewNeeded && !metadataSync;
+  const showWriterConflict = writerConflict && !showMergeReview && !metadataSync;
+  const updateConflictFiles = status?.updateConflictFiles ?? [];
+  const showUpdateConflict =
+    updateConflictFiles.length > 0 && !showMergeReview && !metadataSync && Boolean(onResolveConflict);
+  // status is null until the first sync check resolves, and this runs above
+  // the `!status` guard below — keep it optional-chained.
+  const schemaDriftBlocked =
+    status?.hasSchemaDrift === true ||
+    (status?.publishDetail?.toLowerCase().includes("schema") ?? false);
+  const hasDatabaseBlockers =
+    status?.databases.some(isDatabaseSyncBlocker) === true;
+  const showDatabaseBlockerHelp =
+    (schemaDriftBlocked || hasDatabaseBlockers) &&
+    !showMergeReview &&
+    !showWriterConflict &&
+    !metadataSync;
+  const uploadFailureMessage = resolveUploadFailureMessage(error, status);
+  const showUploadFailureHelp =
+    Boolean(uploadFailureMessage) &&
+    !showMergeReview &&
+    !showWriterConflict &&
+    !showDatabaseBlockerHelp &&
+    !metadataSync;
+  const hasOversizedFiles = (status?.oversizedAppFilesCount ?? 0) > 0;
+  const showOversizedFilesHelp =
+    hasOversizedFiles &&
+    !showMergeReview &&
+    !showWriterConflict &&
+    !showDatabaseBlockerHelp &&
+    !showUploadFailureHelp &&
+    !metadataSync;
+  const pullBeforePublish =
+    status != null && webSyncShouldPullBeforePublish(status);
+  const popoverClassName = className
+    ? `mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked ${className}`
+    : "mini-app-publish-bar__sync-popover mini-app-publish-bar__sync-popover--stacked";
+
+  // No status yet (first open, or a check that has not resolved): show the
+  // shell with Publish changes rather than rendering nothing on click.
+  if (!status) {
+    return (
+      <div
+        ref={popoverRef}
+        className={popoverClassName}
+        style={style}
+        role="dialog"
+        aria-label={popoverAriaLabel}
+      >
+        <p className="mini-app-publish-bar__sync-popover-title">{popoverTitle}</p>
+        <PaprCloudRequirementsPanel featureId="publish_share" compact />
+        {trackCollaborator && proposalWaiting ? (
+          <div
+            className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+            role="status"
+          >
+            <p className="mini-app-publish-bar__sync-remote-banner-title">
+              Proposal waiting for review
+            </p>
+            <p className="mini-app-publish-bar__sync-remote-banner-body">
+              Code you sent to {sourceSlug ?? "the owner"} is not on the live team app until they
+              accept it. Sync here only uploads your writer copy and shared database rows.
+            </p>
+            {onViewProposals ? (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                onClick={() => onViewProposals()}
+              >
+                View your proposals
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        <p className="mini-app-publish-bar__sync-popover-summary">
+          {loading || refreshing ? "Checking…" : "Click Check status to compare local vs web."}
+        </p>
+        {onCheckStatus ? (
+          <div className="mini-app-publish-bar__sync-popover-actions">
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => onCheckStatus()}
+            >
+              {refreshing ? "Checking…" : "Check status"}
+            </button>
+          </div>
+        ) : null}
+        {uploadFailureMessage ? (
+          <p className="mini-app-publish-bar__sync-popover-error">{uploadFailureMessage}</p>
+        ) : null}
+        <div className="mini-app-publish-bar__sync-popover-actions">
+          {uploadFailureMessage ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildUploadFailureAgentPrompt({
+                    appId,
+                    error: uploadFailureMessage,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className={`mini-app-publish-bar__sync-popover-btn${
+              uploadFailureMessage
+                ? " mini-app-publish-bar__sync-popover-btn--secondary"
+                : ""
+            }`}
+            disabled={busy}
+            onClick={() => pushIfAllowed()}
+          >
+            {pushLabel}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const commitSummary =
+    showMergeReview && status.gitRemoteReviewHeadline
+      ? status.gitRemoteReviewHeadline
+      : status.gitUpdatesSummary
+        ? summarizeRemoteCommits(status.gitUpdatesSummary)
+        : null;
+  const showHeadline =
+    !showMergeReview &&
+    !metadataSync &&
+    status.summaryLine.trim().length > 0;
+  const headlineText =
+    refreshing && !activelyUploading && !queuedForUpload && !status.summaryLine.trim()
+      ? "Checking for updates…"
+      : status.summaryLine;
+
+  const statusRows: Array<{ key: string; icon: string; label: string; detail: string }> =
+    [];
+
+  if (isActivePhase(status.codePhase) || status.codeStatus === "failed") {
+    statusRows.push({
+      key: "code",
+      icon: rowIcon(status.codePhase, status.codeStatus),
+      label: "App code",
+      detail: shortDetail(status.codeLabel),
+    });
+  }
+
+  if (status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0) {
+    statusRows.push({
+      key: "oversized-files",
+      icon: "⚠",
+      label: "Large files skipped",
+      detail: shortDetail(
+        status.oversizedAppFilesMessage ??
+          `${status.oversizedAppFilesCount} file(s) over 10MB — use App Files`,
+        120,
+      ),
+    });
+  }
+
+  for (const job of status.dependentJobs) {
+    if (isActivePhase(job.phase) || job.status === "failed") {
+      statusRows.push({
+        key: job.jobId,
+        icon: rowIcon(job.phase, job.status),
+        label: job.label,
+        detail: shortDetail(job.detail),
+      });
+    }
+  }
+
+  for (const db of status.databases) {
+    if (isActivePhase(db.phase)) {
+      statusRows.push({
+        key: `${db.alias}:${db.jobId ?? "registry"}`,
+        icon: rowIcon(db.phase),
+        label: db.alias,
+        detail: shortDetail(db.detail),
+      });
+    }
+  }
+
+  if (status.hasRegistryDatabases && isActivePhase(status.registryPhase)) {
+    statusRows.push({
+      key: "registry",
+      icon: rowIcon(status.registryPhase),
+      label: "Registry",
+      detail: shortDetail(status.registryLabel),
+    });
+  }
+
+  if (status.publishStatus !== "synced") {
+    statusRows.push({
+      key: "publish",
+      icon:
+        status.publishStatus === "republishing"
+          ? "◷"
+          : status.publishStatus === "error"
+            ? "✕"
+            : "⚠",
+      label: "Web link",
+      detail: shortDetail(status.publishLabel ?? "Not ready"),
+    });
+  }
+
+  if (
+    status.uploadStatus &&
+    status.uploadStatus !== "idle" &&
+    status.uploadLabel
+  ) {
+    const uploadText = status.uploadDetail
+      ? `${status.uploadLabel} — ${status.uploadDetail}`
+      : status.uploadLabel;
+    statusRows.push({
+      key: "upload",
+      icon:
+        status.uploadStatus === "uploading"
+          ? "◷"
+          : status.uploadStatus === "failed"
+            ? "✕"
+            : status.uploadQueued
+              ? "○"
+              : "○",
+      label: status.uploadQueued ? "Queue" : "Progress",
+      detail: shortDetail(uploadText, 88),
+    });
+  }
+
   return (
     <div
-      className="mini-app-publish-bar__sync-popover"
+      ref={popoverRef}
+      className={popoverClassName}
+      style={style}
       role="dialog"
-      aria-label="Web sync details"
+      aria-label={popoverAriaLabel}
     >
-      <p className="mini-app-publish-bar__sync-popover-title">What&apos;s on the web</p>
-      <p className="mini-app-publish-bar__sync-popover-summary">{status.summaryLine}</p>
-      <ul className="mini-app-publish-bar__sync-popover-list">
-        <li>
-          <span className="mini-app-publish-bar__sync-popover-icon">
-            {rowIcon(status.codePhase)}
-          </span>
-          <span>
-            <strong>App code</strong> — {status.codeLabel}
-          </span>
-        </li>
-        {status.hasDependentJobs ? (
-          status.dependentJobs.map((job) => (
-            <li key={job.jobId}>
-              <span className="mini-app-publish-bar__sync-popover-icon">
-                {rowIcon(job.phase)}
-              </span>
-              <span>
-                <strong>{job.label}</strong> — {job.detail}
-              </span>
-            </li>
-          ))
-        ) : (
-          <li>
-            <span className="mini-app-publish-bar__sync-popover-icon">·</span>
-            <span>No linked jobs</span>
-          </li>
-        )}
-        {status.hasLinkedDatabases
-          ? status.databases.map((db) => (
-              <li key={db.jobId}>
-                <span className="mini-app-publish-bar__sync-popover-icon">
-                  {rowIcon(db.phase)}
-                </span>
+      <p className="mini-app-publish-bar__sync-popover-title">{popoverTitle}</p>
+
+      <PaprCloudRequirementsPanel featureId="publish_share" compact />
+
+      {trackCollaborator && proposalWaiting ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Proposal waiting for review
+          </p>
+          <p className="mini-app-publish-bar__sync-remote-banner-body">
+            The live team app at apps.papr.ai stays on the owner&apos;s version until they accept
+            your proposal. This panel syncs your cloud writer copy and shared database — not a new
+            standalone publish.
+          </p>
+          {onViewProposals ? (
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => onViewProposals()}
+            >
+              View your proposals
+            </button>
+          ) : null}
+        </div>
+      ) : trackCollaborator ? (
+        <p className="mini-app-publish-bar__sync-popover-hint">
+          Team app from <strong>{sourceSlug ?? "the publisher"}</strong> — use{" "}
+          <strong>Propose</strong> to send code edits for review. Use{" "}
+          <strong>{pushLabel}</strong> here to push local files and database rows to your cloud
+          writer (visitors still use the team link).
+        </p>
+      ) : null}
+
+      {showMergeReview ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--review"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Merge cloud changes before publishing
+          </p>
+          {commitSummary ? (
+            <p className="mini-app-publish-bar__sync-remote-banner-body">{commitSummary}</p>
+          ) : null}
+        </div>
+      ) : showWriterConflict ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--review"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Upload conflict — cloud repo changed
+          </p>
+          <p className="mini-app-publish-bar__sync-remote-banner-body">
+            Get updates or ask the agent to reconcile remote changes, then publish again.
+          </p>
+        </div>
+      ) : metadataSync ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Syncing cloud job status…
+          </p>
+          {commitSummary ? (
+            <p className="mini-app-publish-bar__sync-remote-banner-body">{commitSummary}</p>
+          ) : null}
+        </div>
+      ) : pullBeforePublish ? (
+        <div
+          className="mini-app-publish-bar__sync-remote-banner mini-app-publish-bar__sync-remote-banner--metadata"
+          role="status"
+        >
+          <p className="mini-app-publish-bar__sync-remote-banner-title">
+            Web has newer app code
+          </p>
+          <p className="mini-app-publish-bar__sync-remote-banner-body">
+            Get updates before publishing — like pulling on GitHub before you push.
+          </p>
+        </div>
+      ) : showHeadline ? (
+        <p className="mini-app-publish-bar__sync-popover-summary">{headlineText}</p>
+      ) : null}
+
+      {/* The two halves are different kinds of fact: your copy is watched and
+          always current, the web copy is asked every 5 minutes. Naming the
+          location of each keeps "checked" from reading as generic freshness. */}
+      <dl className="mini-app-publish-bar__sync-sides">
+        <div className="mini-app-publish-bar__sync-side">
+          <dt>{trackCollaborator ? "Your Mac (collaborator)" : "Your copy, on this Mac"}</dt>
+          <dd>
+            {status && status.overall !== "synced" && status.overall !== "disabled"
+              ? trackCollaborator
+                ? "Local changes not in cloud writer yet"
+                : "Edited since last publish"
+              : trackCollaborator
+                ? "Matches last cloud sync"
+                : "No unpublished edits"}
+          </dd>
+        </div>
+        <div className="mini-app-publish-bar__sync-side">
+          <dt>
+            {trackCollaborator
+              ? `Cloud writer + DB (${sourceSlug ?? "team"})`
+              : "Web copy, apps.papr.ai"}
+          </dt>
+          <dd>
+            {lastCheckedAt
+              ? `Checked ${formatLastUploadedAt(new Date(lastCheckedAt).toISOString()) ?? "recently"}`
+              : "Not checked yet"}
+          </dd>
+        </div>
+      </dl>
+      <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--subtle">
+        {trackCollaborator
+          ? "The team live link uses the owner's published app. This check compares your Mac to your cloud writer repo and databases."
+          : "Your copy is watched and never out of date. Only the web copy is asked, every 5 minutes."}
+      </p>
+
+      <div className="mini-app-publish-bar__sync-popover-scroll">
+        {status.codeLastError && status.codeLastError !== uploadFailureMessage ? (
+          <p className="mini-app-publish-bar__sync-popover-error">{status.codeLastError}</p>
+        ) : null}
+        {status.overall === "disabled" ? (
+          <p className="mini-app-publish-bar__sync-popover-hint">
+            Turn on cloud sync in Settings.
+          </p>
+        ) : null}
+        {!trackCollaborator &&
+        !autoUploadEnabled &&
+        status.overall !== "synced" &&
+        status.overall !== "disabled" ? (
+          <p className="mini-app-publish-bar__sync-popover-hint">
+            {appLive ? (
+              <>
+                Publishing is manual for this app — click <strong>Publish</strong> when you
+                want local changes on the web. After sharing changes, wait until this panel
+                shows synced before copying the external link.
+              </>
+            ) : (
+              <>
+                This app is not on the web yet — click <strong>Publish</strong> to publish
+                code and databases and create your link (uses your current Share settings).
+              </>
+            )}
+          </p>
+        ) : null}
+        {ownerFirstPublish &&
+        autoUploadEnabled &&
+        status.overall !== "synced" &&
+        status.overall !== "disabled" ? (
+          <p className="mini-app-publish-bar__sync-popover-hint">
+            Not on the web yet — click <strong>Publish</strong> once; later changes publish
+            automatically.
+          </p>
+        ) : null}
+        {statusRows.length > 0 ? (
+          <ul className="mini-app-publish-bar__sync-popover-list">
+            {statusRows.map((row) => (
+              <li key={row.key}>
+                <span className="mini-app-publish-bar__sync-popover-icon">{row.icon}</span>
                 <span>
-                  <strong>{db.alias}</strong> — {db.detail}
+                  <strong>{row.label}</strong> — {row.detail}
                 </span>
               </li>
-            ))
-          : null}
-      </ul>
-      {syncActionNeeded ? (
-        <p className="mini-app-publish-bar__sync-popover-hint">
-          {pushing
-            ? "Uploading this app and its linked jobs to GitHub. This usually takes under a minute."
-            : status.globallySyncing
-              ? "Sync now uploads this app and its jobs immediately — it does not wait for the background workspace queue."
-              : "Click Sync now to upload this app and its linked jobs."}
-        </p>
-      ) : (
-        <p className="mini-app-publish-bar__sync-popover-hint">
-          This app matches what&apos;s on the web — app code, linked jobs, and databases are
-          up to date.
-        </p>
-      )}
-      {status.cloudPublishing && status.overall === "synced" ? (
-        <p className="mini-app-publish-bar__sync-popover-hint">
-          Updating cloud publish config so the web app can use new backend keys. Refresh the
-          browser tab when this finishes.
-        </p>
-      ) : null}
-      {status.globallySyncing && status.overall === "synced" ? (
-        <p className="mini-app-publish-bar__sync-popover-hint">
-          Other workspace files are still syncing in the background.
-        </p>
-      ) : null}
-      {error ? <p className="mini-app-publish-bar__sync-popover-error">{error}</p> : null}
-      {syncActionNeeded || pushing ? (
-        <button
-          type="button"
-          className="mini-app-publish-bar__sync-popover-btn"
-          disabled={pushing}
-          onClick={() => void onPushNow()}
-        >
-          {pushing ? "Uploading…" : "Sync now"}
-        </button>
-      ) : null}
+            ))}
+          </ul>
+        ) : null}
+        {status.oversizedAppFilesCount && status.oversizedAppFilesCount > 0 ? (
+          <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+            Move large files to App Files (panel beside Data Sources). Git sync skips
+            files over 10MB — visitors will not see assets left in the app folder. Ask
+            agent can relocate them for you.
+          </p>
+        ) : null}
+        {uploadFailureMessage ? (
+          <p className="mini-app-publish-bar__sync-popover-error">{uploadFailureMessage}</p>
+        ) : null}
+      </div>
+
+      <div className="mini-app-publish-bar__sync-popover-actions">
+        {/* Only when the number above is actually stale. Once a status is
+            loaded this button re-runs the same call as the refresh icon on
+            the chip, so offering both made a read-only re-ask look like a
+            decision the user had to make on every open. */}
+        {onCheckStatus && needsStatusCheck ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+            disabled={busy}
+            onClick={() => onCheckStatus()}
+          >
+            {refreshing ? "Checking…" : "Check status"}
+          </button>
+        ) : null}
+        {showUpdateConflict ? (
+          <>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              {updateConflictFiles.slice(0, 3).join(", ")}
+              {updateConflictFiles.length > 3 ? ` +${updateConflictFiles.length - 3} more` : ""}
+            </p>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => onResolveConflict?.("keep_mine")}
+            >
+              Keep mine
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => {
+                if (confirm(`Replace your edits in ${updateConflictFiles.length} file(s) with the update?`)) {
+                  onResolveConflict?.("take_theirs");
+                }
+              }}
+            >
+              Take theirs
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => openCloudSyncAgentChat(buildUpdateConflictAgentPrompt({ appId, files: updateConflictFiles }))}
+            >
+              Ask agent to merge
+            </button>
+          </>
+        ) : showWriterConflict ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildWriterConflictAgentPrompt({
+                    appId,
+                    error: status.codeLastError ?? error,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync}
+              onClick={() => pushIfAllowed()}
+            >
+              {pushLabel}
+            </button>
+          </>
+        ) : showDatabaseBlockerHelp ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildSchemaDriftAgentPrompt({
+                    appId,
+                    databases: status.databases.filter(isDatabaseSyncBlocker),
+                    publishDetail: status.publishDetail,
+                    error,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync}
+              onClick={() => pushIfAllowed()}
+            >
+              {pushLabel}
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            {databaseBlockerHint(status.databases) ? (
+              <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+                {databaseBlockerHint(status.databases)}
+              </p>
+            ) : error ? (
+              <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+                Publishing did not clear the database blocker — try Ask agent to diagnose.
+              </p>
+            ) : null}
+          </>
+        ) : showMergeReview ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => void onApplyRemoteUpdates()}
+            >
+              {applyingUpdates ? "Merging…" : "Merge remote changes"}
+            </button>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildMergeReviewAgentPrompt({
+                    appId,
+                    headline: status.gitRemoteReviewHeadline,
+                    error,
+                  }),
+                );
+              }}
+            >
+              Review with agent
+            </button>
+            {error ? (
+              <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+                Merge failed — try again or use Review with agent.
+              </p>
+            ) : null}
+            {(syncActionNeeded || pushing) && (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled
+                title="Merge remote changes first"
+              >
+                {pushLabel}
+              </button>
+            )}
+          </>
+        ) : showUploadFailureHelp ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildUploadFailureAgentPrompt({
+                    appId,
+                    error: uploadFailureMessage,
+                    databases: status.databases,
+                    uploadDetail: status.uploadDetail,
+                    codeLastError: status.codeLastError,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            {(syncActionNeeded || pushing || queuedForUpload) && (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy || metadataSync}
+                onClick={() => pushIfAllowed()}
+              >
+                {pushLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              Publish didn't finish — try Publish again. If it keeps failing, ask the agent to look into it.
+            </p>
+          </>
+        ) : showOversizedFilesHelp ? (
+          <>
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn"
+              disabled={busy}
+              onClick={() => {
+                openCloudSyncAgentChat(
+                  buildOversizedFilesAgentPrompt({
+                    appId,
+                    message: status.oversizedAppFilesMessage,
+                    count: status.oversizedAppFilesCount,
+                  }),
+                );
+              }}
+            >
+              Ask agent
+            </button>
+            {(syncActionNeeded || pushing || queuedForUpload) && (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy || metadataSync}
+                onClick={() => pushIfAllowed()}
+              >
+                {pushLabel}
+              </button>
+            )}
+            <button
+              type="button"
+              className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+              disabled={busy || metadataSync || pushing}
+              onClick={() => void onPullUpdates()}
+            >
+              {pulling ? "Getting updates…" : "Get updates"}
+            </button>
+            <p className="mini-app-publish-bar__sync-popover-hint mini-app-publish-bar__sync-popover-hint--warn">
+              Large files will not reach the web — Ask agent can move them to App Files
+              or fix linked database paths.
+            </p>
+          </>
+        ) : (
+          <>
+            {(syncActionNeeded || pushing || queuedForUpload) &&
+            !pullBeforePublish ? (
+              <>
+                {queuedForUpload && onBumpQueue ? (
+                  <button
+                    type="button"
+                    className="mini-app-publish-bar__sync-popover-btn"
+                    disabled={busy || metadataSync}
+                    onClick={() => void onBumpQueue()}
+                  >
+                    Move to front
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className={`mini-app-publish-bar__sync-popover-btn${
+                    queuedForUpload && onBumpQueue
+                      ? " mini-app-publish-bar__sync-popover-btn--secondary"
+                      : ""
+                  }`}
+                  disabled={busy || metadataSync}
+                  onClick={() => pushIfAllowed()}
+                >
+                  {pushLabel}
+                </button>
+              </>
+            ) : null}
+            {/* Only when there is something to get. This merges cloud code
+                into the local folder and can raise conflicts — offering it
+                against an unchanged remote asked the user to run a git merge
+                for no reason. The error branches above still show it
+                unconditionally, because there it is part of a recovery. */}
+            {status.gitUpdatesAvailable ? (
+              <button
+                type="button"
+                className={`mini-app-publish-bar__sync-popover-btn${
+                  pullBeforePublish
+                    ? ""
+                    : " mini-app-publish-bar__sync-popover-btn--secondary"
+                }`}
+                disabled={busy || metadataSync || pushing}
+                onClick={() => void onPullUpdates()}
+              >
+                {pulling ? "Getting updates…" : "Get updates"}
+              </button>
+            ) : null}
+            {webSyncShouldOfferAgent(status, { error, pushing, pulling }) ? (
+              <button
+                type="button"
+                className="mini-app-publish-bar__sync-popover-btn mini-app-publish-bar__sync-popover-btn--secondary"
+                disabled={busy}
+                onClick={() => {
+                  openCloudSyncAgentChat(
+                    buildGenericSyncAgentPrompt({ appId, status }),
+                  );
+                }}
+              >
+                Ask agent
+              </button>
+            ) : null}
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -133,33 +1031,298 @@ interface WebSyncStatusDotProps {
   state: WebSyncVisualState;
   spinning?: boolean;
   tooltip: string;
-  popoverOpen: boolean;
-  onClick: () => void;
+  popoverOpen?: boolean;
+  interactive?: boolean;
+  onClick?: () => void;
+  /** Worst-first chip text. When present the dot renders as a labelled pill. */
+  label?: string;
+  /** Semantic colour for the pill — warn is amber, bad is red, ok is green. */
+  tone?: "ok" | "warn" | "bad" | "info" | "idle" | "busy";
+  /** Re-asks the web. Only offered when the chip is showing an age. */
+  onRefresh?: () => void;
+  /**
+   * Pull/review, carried by the chip rather than the primary slot — the label
+   * to the left already names the condition, so this is a glyph at rest and
+   * spells out `verb` on hover. Never set at the same time as onRefresh: an
+   * aged check only happens when calm, which is exactly when there is no pull.
+   */
+  action?: {
+    glyph: "down" | "open" | "up";
+    verb: string;
+    onRun: () => void;
+  };
+}
+
+/** Pull it down. */
+function WebSyncDownIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 5v13m5-5-5 5-5-5" />
+    </svg>
+  );
+}
+
+/** Send it up — the mirror of pull, used for propose-to-publisher. */
+function WebSyncUpIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M12 19V6m-5 5 5-5 5 5" />
+    </svg>
+  );
+}
+
+/** Go look at it — review is a destination, not a transfer. */
+function WebSyncOpenIcon() {
+  return (
+    <svg
+      width="13"
+      height="13"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M14 5h5v5M19 5l-8 8M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4" />
+    </svg>
+  );
+}
+
+/**
+ * Audience as a glyph on the Share button. "Public · Code install" cost about a
+ * third of the bar to state something the user only checks before sending a
+ * link — a lock/people/globe carries the same distinction at a glance, and the
+ * button's tooltip plus the Share sheet still spell it out in full.
+ */
+export function ShareAudienceIcon({
+  audience: audienceOverride,
+  loginAccess,
+  codeAccess,
+}: {
+  /** Resolved share UI audience (includes "people" when an allowlist is set). */
+  audience?: ShareAudience | null;
+  loginAccess: "private" | "team" | "public" | "none" | null;
+  /** When people can fork the source, the audience glyph carries a code badge. */
+  codeAccess?: "off" | "install" | null;
+}) {
+  const audience =
+    audienceOverride ?? loginAccessToShareAudience(loginAccess);
+  const path = shareAudienceGlyphPath(audience);
+  const audienceLabel = shareAudienceShortLabel(audience);
+  const canFork = codeAccess === "install";
+  const label = canFork
+    ? `${audienceLabel} · can copy the code`
+    : audienceLabel;
+  return (
+    <span
+      className={`mini-app-publish-bar__share-audience${
+        canFork ? " mini-app-publish-bar__share-audience--code" : ""
+      }`}
+      title={label}
+    >
+      <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden focusable="false">
+        <path
+          d={path}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      {/* Badged, not a second icon: "public AND forkable" is one fact about who
+          gets what, and the bar has no room for two glyphs side by side. */}
+      {canFork ? (
+        <span className="mini-app-publish-bar__share-code-badge" aria-hidden>
+          <svg viewBox="0 0 16 16" width="10" height="10" focusable="false">
+            <path
+              d="M6 4.5 2.5 8 6 11.5M10 4.5 13.5 8 10 11.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+        </span>
+      ) : null}
+    </span>
+  );
+}
+
+/** Circular arrow — re-ask the web, shown inside the pill next to the age. */
+function WebSyncRefreshIcon() {
+  return (
+    <svg viewBox="0 0 16 16" width="11" height="11" aria-hidden focusable="false">
+      <path
+        d="M13 8a5 5 0 1 1-1.46-3.54M13 3v3h-3"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
 }
 
 export function WebSyncStatusDot({
   state,
   spinning = false,
   tooltip,
-  popoverOpen,
+  popoverOpen = false,
+  interactive = true,
   onClick,
+  label,
+  tone,
+  onRefresh,
+  action,
 }: WebSyncStatusDotProps) {
+  const chip = Boolean(label);
+  const className = `mini-app-publish-bar__web-sync-dot mini-app-publish-bar__web-sync-dot--${state}${
+    spinning ? " mini-app-publish-bar__web-sync-dot--spinning" : ""
+  }${chip ? " mini-app-publish-bar__web-sync-dot--chip" : ""}${
+    chip && tone ? ` mini-app-publish-bar__web-sync-dot--tone-${tone}` : ""
+  }`;
+
+  // Labelled pill: one object carrying state, age, and the control that
+  // refreshes that age — so the number and its refresh never drift apart.
+  if (chip) {
+    // No title on the wrapper. It spans the dot, the label, the refresh button
+    // and the padding between them, so a tooltip there fired over dead gray
+    // area where the cursor is an arrow and nothing is clickable. The status
+    // sentence belongs to the status button only.
+    return (
+      <span className={className}>
+        <button
+          type="button"
+          className={`mini-app-publish-bar__web-sync-chip-main${
+            interactive ? "" : " mini-app-publish-bar__web-sync-chip-main--inert"
+          }`}
+          title={tooltip}
+          aria-label={`App status: ${tooltip}`}
+          aria-expanded={popoverOpen}
+          aria-haspopup="dialog"
+          // aria-disabled, not disabled: a truly disabled button fires no
+          // pointer events, so it can never show its own tooltip — which is
+          // what pushed the title onto the wrapper in the first place. The
+          // click is guarded below instead.
+          aria-disabled={!interactive}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!interactive) return;
+            onClick?.();
+          }}
+        >
+          <span className="mini-app-publish-bar__web-sync-chip-dot" aria-hidden />
+          {spinning ? <WebSyncSpinner /> : null}
+          <span className="mini-app-publish-bar__web-sync-chip-text">{label}</span>
+        </button>
+        {/* Action and refresh share one pill treatment so the chip has a
+            single kind of trailing control. They cannot collide: refresh is
+            only offered on an aged calm check, which is exactly the state
+            with no pull available. */}
+        {action ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__web-sync-chip-act"
+            aria-label={action.verb}
+            onClick={(event) => {
+              event.stopPropagation();
+              action.onRun();
+            }}
+          >
+            {action.glyph === "down" ? (
+              <WebSyncDownIcon />
+            ) : action.glyph === "up" ? (
+              <WebSyncUpIcon />
+            ) : (
+              <WebSyncOpenIcon />
+            )}
+            {/* Present at all times, collapsed to zero width rather than
+                hidden — so it animates open on approach and screen readers
+                always reach it. A native title tooltip waits ~1s and lands
+                away from the cursor, too late to help someone deciding
+                whether this is the thing to click. */}
+            <span className="mini-app-publish-bar__web-sync-chip-act-verb">
+              {action.verb}
+            </span>
+          </button>
+        ) : onRefresh ? (
+          <button
+            type="button"
+            className="mini-app-publish-bar__web-sync-chip-act"
+            aria-label="Re-check the web copy now"
+            onClick={(event) => {
+              event.stopPropagation();
+              onRefresh();
+            }}
+          >
+            <WebSyncRefreshIcon />
+            <span className="mini-app-publish-bar__web-sync-chip-act-verb">
+              Check now
+            </span>
+          </button>
+        ) : null}
+      </span>
+    );
+  }
+  const actionBadge = state === "action_required" ? (
+    <span className="mini-app-publish-bar__web-sync-dot-badge" aria-hidden>
+      !
+    </span>
+  ) : null;
+
+  if (!interactive) {
+    return (
+      <span
+        className={className}
+        title={tooltip}
+        aria-label={`App status: ${tooltip}`}
+      >
+        {spinning ? <WebSyncSpinner /> : null}
+        {actionBadge}
+      </span>
+    );
+  }
+
   return (
     <button
       type="button"
-      className={`mini-app-publish-bar__web-sync-dot mini-app-publish-bar__web-sync-dot--${state}${
-        spinning ? " mini-app-publish-bar__web-sync-dot--spinning" : ""
-      }`}
+      className={className}
       title={tooltip}
-      aria-label={`Web sync: ${tooltip}`}
+      aria-label={`App status: ${tooltip}`}
       aria-expanded={popoverOpen}
       aria-haspopup="dialog"
       onClick={(event) => {
         event.stopPropagation();
-        onClick();
+        onClick?.();
       }}
     >
       {spinning ? <WebSyncSpinner /> : null}
+      {actionBadge}
     </button>
   );
 }

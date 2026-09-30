@@ -18,6 +18,7 @@ import {
   validateJobArchitecture,
 } from "./jobs/jobArchitectureValidation.js";
 import { normalizePortableJobPrompt } from "./jobs/normalizePortableJobPrompt.js";
+import { installVerifyQuotesHelper } from "./SleepCycleService.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -26,11 +27,11 @@ export const WIKI_WRITER_JOB_NAMES = [
   "Wiki Writer",
   "wiki-writer",
 ] as const;
-export const WIKI_WRITER_PROMPT_VERSION = 3;
+export const WIKI_WRITER_PROMPT_VERSION = 11;
 
 export const WIKI_WRITER_JOB_DEFAULTS = {
   provider: "anthropic" as const,
-  model: "claude-sonnet-5",
+  model: "claude-sonnet-5-5",
   maxTurns: 80,
   memoryPolicy: "none" as const,
   schedule: {
@@ -45,6 +46,18 @@ export const WIKI_WRITER_JOB_DEFAULTS = {
 
 export function isWikiWriterJobName(name: string): boolean {
   return (WIKI_WRITER_JOB_NAMES as readonly string[]).includes(name);
+}
+
+/** Last successful Wiki Writer run time, if the job exists. */
+export async function getWikiWriterLastRunAt(): Promise<string | null> {
+  try {
+    const { getJobsService } = await import("./JobsService.js");
+    const jobs = await getJobsService().listJobs();
+    const wikiJob = jobs.find((job) => isWikiWriterJobName(job.name));
+    return wikiJob?.lastRunAt ?? wikiJob?.completedAt ?? null;
+  } catch {
+    return null;
+  }
 }
 
 function resolveTemplatesDir(): string {
@@ -75,6 +88,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 }
 
 async function readWikiWriterPrompt(): Promise<string> {
+  await installVerifyQuotesHelper();
   const templatesDir = resolveTemplatesDir();
   const templatePath = path.join(templatesDir, "WIKI_WRITER.md");
   const workspacePath = path.join(workspaceDir(), "WIKI_WRITER.md");
@@ -109,7 +123,7 @@ async function readWikiWriterPrompt(): Promise<string> {
 
   return normalizePortableJobPrompt(
     templateContent ||
-      "Maintain entity wiki pages in ~/Papr/workspace/entities/ based on daily logs and graph changes.",
+      "Maintain entity wiki pages in $PAPR_HOME/workspace/entities/ based on daily logs and graph changes.",
   );
 }
 

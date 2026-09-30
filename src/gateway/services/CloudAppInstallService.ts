@@ -2,11 +2,9 @@
  * Install cloud mini-app source into local Paprwork (fork or track).
  */
 
-import { spawn } from "node:child_process";
-import { getPaprRoot } from "../../core/utils/paprRoot.js";
+import { getPaprRoot, getPaprAppsRoot } from "../../core/utils/paprRoot.js";
 import { createHash } from "node:crypto";
 import { promises as fs } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 
 import {
@@ -19,13 +17,20 @@ import type {
   CloudAppInstallMode,
   CloudAppLineageFile,
 } from "../../core/types/cloudAppLineage.js";
+import type { InstallBootstrapResult } from "./cloudAppInstallBootstrap.js";
 import { serializeCloudAppLineageFile } from "../../core/utils/cloudAppLineage.js";
+import { applyIdRemapsToDirectory } from "../utils/applyIdRemaps.js";
 import { cloudApiFetch } from "../utils/cloudApiClient.js";
 import {
   getAppService,
   type AppFile,
   type MiniApp,
 } from "./AppService.js";
+import { cloneCloudAppSource } from "./cloudSync/cloudGitClone.js";
+import type {
+  CloudAppDependenciesFile,
+  CloudInstallHealthReport,
+} from "../../core/types/cloudAppDependencies.js";
 
 interface MemoryInstallResponse {
   mode: CloudAppInstallMode;
@@ -47,7 +52,16 @@ export interface CloudAppInstallInput {
   namespaceId: string;
   slug: string;
   mode?: CloudAppInstallMode;
+  installDbPolicy?: import("./cloudInstallDbPolicy.js").InstallDbPolicy;
   shareToken?: string;
+  /** Catalog tab scope — community (global) forbids track. */
+  catalogScope?: "global" | "namespace";
+  /** Publish visibility from catalog entry — track requires team. */
+  visibility?: string;
+  /** Name for the new app (Duplicate as my own app). Made unique locally. */
+  title?: string;
+  /** Who the source is shared with (team / people / community), for the lineage mark. */
+  sourceAudience?: "team" | "people" | "community";
 }
 
 export interface CloudAppInstallResult {
@@ -57,54 +71,16 @@ export interface CloudAppInstallResult {
   sourceAppId: string;
   sourceSlug: string;
   requirements: RequiredKeySpec[];
-}
-
-async function runCommand(
-  command: string,
-  args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number },
-): Promise<void> {
-  const timeoutMs = opts.timeoutMs ?? 120_000;
-  await new Promise<void>((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: opts.cwd,
-      env: opts.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stderr = "";
-    child.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-    });
-
-    const timer = setTimeout(() => {
-      child.kill("SIGTERM");
-      reject(new Error(`${command} timed out after ${timeoutMs}ms`));
-    }, timeoutMs);
-
-    child.on("error", (err) => {
-      clearTimeout(timer);
-      reject(err);
-    });
-
-    child.on("close", (code) => {
-      clearTimeout(timer);
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        new Error(
-          `${command} ${args.join(" ")} failed (${code ?? "unknown"}): ${stderr.trim()}`,
-        ),
-      );
-    });
-  });
-}
-
-function authCloneUrl(cloneUrl: string, token: string): string {
-  const normalized = cloneUrl.replace(/^https:\/\//, "");
-  return `https://x-access-token:${token}@${normalized}`;
+  remappedFiles: string[];
+  bootstrap: InstallBootstrapResult;
+  /** Pre-filled agent prompt when bootstrap needs follow-up. */
+  agentSetupMessage?: string;
+  copiedJobIds: string[];
+  promotedJobIds: string[];
+  skippedSparsePaths: string[];
+  dependencies: CloudAppDependenciesFile | null;
+  health: CloudInstallHealthReport;
+  installWarnings: string[];
 }
 
 async function collectAppFiles(
@@ -134,28 +110,15 @@ async function collectAppFiles(
 
 async function cloneAppSource(
   prepare: MemoryInstallResponse,
-): Promise<string> {
-  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "papr-cloud-install-"));
-  const repoDir = path.join(tempRoot, "repo");
-
-  const cloneUrl = authCloneUrl(prepare.cloneUrl, prepare.token);
-  const env = {
-    ...process.env,
-    GIT_TERMINAL_PROMPT: "0",
-  };
-
-  await runCommand(
-    "git",
-    ["clone", "--filter=blob:none", "--sparse", cloneUrl, repoDir],
-    { env, timeoutMs: 180_000 },
+): Promise<{ sourceDir: string; repoDir: string; cleanup: () => Promise<void> }> {
+  return cloneCloudAppSource(
+    {
+      cloneUrl: prepare.cloneUrl,
+      token: prepare.token,
+      repoPath: prepare.repoPath,
+    },
+    "papr-cloud-install-",
   );
-  await runCommand(
-    "git",
-    ["sparse-checkout", "set", prepare.repoPath.replace(/\\/g, "/")],
-    { cwd: repoDir, env },
-  );
-
-  return path.join(repoDir, prepare.repoPath);
 }
 
 function resolveTitle(files: AppFile[], slug: string): string {
@@ -231,73 +194,341 @@ export class CloudAppInstallService {
   }
 
   async installApp(input: CloudAppInstallInput): Promise<CloudAppInstallResult> {
-    const prepare = await this.prepareInstall(input);
-    const sourceDir = await cloneAppSource(prepare);
-    const files = await collectAppFiles(sourceDir);
+    const mode = input.mode ?? "fork";
+    const {
+      assertTrackAllowedForCatalog,
+      databasePolicyFromInstallPolicy,
+      readLinkedDbIsolations,
+      resolveInstallDbPolicy,
+    } = await import("./cloudInstallDbPolicy.js");
 
-    if (files.length === 0) {
-      throw new Error(
-        `No app files found at ${prepare.repoPath} in owner repo`,
+    assertTrackAllowedForCatalog({
+      mode,
+      catalogScope: input.catalogScope,
+      visibility: input.visibility,
+    });
+
+    const prepare = await this.prepareInstall({ ...input, mode });
+    const cloned = await cloneAppSource(prepare);
+
+    const linkedIsolations = await readLinkedDbIsolations({
+      repoPaprHome: cloned.repoDir,
+      repoAppDir: cloned.sourceDir,
+    });
+    // catalogScope matters: community collaborate tracks code but must never
+    // attach the publisher's database.
+    const installDbPolicy = resolveInstallDbPolicy(
+      mode,
+      linkedIsolations,
+      input.catalogScope,
+      input.installDbPolicy,
+    );
+    const databasePolicy = databasePolicyFromInstallPolicy(installDbPolicy);
+
+    let createdAppId: string | null = null;
+    // Fork databases created by this install — dropped (local + cloud) on rollback.
+    let forkDbIdsForRollback: string[] = [];
+
+    try {
+      const files = await collectAppFiles(cloned.sourceDir);
+
+      if (files.length === 0) {
+        throw new Error(
+          `No app files found at ${prepare.repoPath} in owner repo`,
+        );
+      }
+
+      const title = input.title?.trim() || resolveTitle(files, prepare.source.slug);
+      const description = resolveDescription(
+        files,
+        `Installed from Papr Cloud (${prepare.source.slug})`,
       );
-    }
+      const icon = resolveIcon(files);
 
-    const title = resolveTitle(files, prepare.source.slug);
-    const description = resolveDescription(
-      files,
-      `Installed from Papr Cloud (${prepare.source.slug})`,
-    );
-    const icon = resolveIcon(files);
+      const appService = getAppService();
+      const app = await appService.createApp(
+        title,
+        description,
+        files,
+        icon,
+        undefined,
+        undefined,
+        undefined,
+        // Forked/tracked from the Cloud catalog — not original builder work.
+        { creationSource: "install" },
+      );
+      createdAppId = app.id;
 
-    const appService = getAppService();
-    const app = await appService.createApp(
-      title,
-      description,
-      files,
-      icon,
-    );
+      const remaps = new Map<string, string>([[prepare.source.appId, app.id]]);
+      const appDir = path.join(getPaprAppsRoot(), app.id);
+      const { remappedFiles } = await applyIdRemapsToDirectory(appDir, remaps);
+      if (remappedFiles.length > 0) {
+        console.log(
+          `[CloudAppInstall] Remapped publisher app ID in ${remappedFiles.length} file(s) for ${app.id}`,
+        );
+      }
 
-    const lineage: CloudAppLineageFile = {
-      schemaVersion: "1.1.0",
-      lineageId: prepare.lineageId,
-      mode: prepare.mode,
-      source: prepare.source,
-      installedAt: new Date().toISOString(),
-      ...(prepare.mode === "track"
-        ? {
-            lastSyncedAt: new Date().toISOString(),
-            syncSnapshot: Object.fromEntries(
-              files.map((file) => [
-                file.filename.replace(/\\/g, "/"),
-                createHash("sha256").update(file.content, "utf8").digest("hex"),
-              ]),
+      const { installCloudAppLinkedResources, finalizePortableCloudAppResources } =
+        await import("./cloudAppLinkedResourcesInstall.js");
+      const linked = await installCloudAppLinkedResources({
+        repoDir: cloned.repoDir,
+        repoAppDir: cloned.sourceDir,
+        publisherAppId: prepare.source.appId,
+        localAppId: app.id,
+        installDbPolicy,
+        remapJobIds: prepare.mode === "fork",
+      });
+      if (linked.copiedJobIds.length > 0) {
+        console.log(
+          `[CloudAppInstall] Installed ${linked.copiedJobIds.length} linked job(s) for ${app.id}`,
+        );
+      }
+
+      await finalizePortableCloudAppResources({ cloudInstall: true });
+
+      const { hydrateAppFolderSchemaMigrationsToRegistry } = await import(
+        "./syncV3/syncPulledSchemaOwnerMigrations.js"
+      );
+      const hydratedMigrations = await hydrateAppFolderSchemaMigrationsToRegistry({
+        appId: app.id,
+      });
+      if (hydratedMigrations.copied.length > 0) {
+        console.log(
+          `[CloudAppInstall] Mirrored ${hydratedMigrations.copied.length} migration(s) from app folder into registry for ${app.id}`,
+        );
+      }
+
+      if (installDbPolicy === "shared_primary") {
+        const { registerSharedPrimaryTursoForInstalledApp } = await import(
+          "./cloudInstallTursoCredentials.js"
+        );
+        registerSharedPrimaryTursoForInstalledApp({
+          localAppId: app.id,
+          source: prepare.source,
+          registryDbIds: linked.registryDbIds,
+          shareToken: input.shareToken,
+        });
+      }
+
+      // One decision point for how each installed database is stored on this
+      // device (replica / cloud-direct / local), made before any migration runs.
+      const { provisionInstalledDatabases, resetForkDatabaseForRetry } =
+        await import("./installDatabaseProvisioning.js");
+      if (installDbPolicy === "fork_empty") {
+        forkDbIdsForRollback = [...linked.registryDbIds];
+      }
+      await provisionInstalledDatabases({
+        registryDbIds: linked.registryDbIds,
+        installDbPolicy,
+      });
+
+      const installWarnings = [...linked.health.warnings];
+      if (linked.skippedSparsePaths.length > 0) {
+        installWarnings.push(
+          `Skipped ${linked.skippedSparsePaths.length} missing repo path(s) during sparse-checkout`,
+        );
+      }
+
+      if (!linked.health.ok) {
+        const missingParts: string[] = [];
+        if (linked.health.missingJobIds.length > 0) {
+          missingParts.push(
+            `jobs: ${linked.health.missingJobIds.slice(0, 5).join(", ")}`,
+          );
+        }
+        if (linked.health.missingRequiredDbIds.length > 0) {
+          missingParts.push(
+            `databases: ${linked.health.missingRequiredDbIds.slice(0, 5).join(", ")}`,
+          );
+        }
+        throw Object.assign(
+          new Error(
+            `Install incomplete — required linked resources missing (${missingParts.join("; ")})`,
+          ),
+          {
+            code: "install_linked_resources_missing",
+            status: 422,
+            detail: JSON.stringify({
+              missingJobIds: linked.health.missingJobIds,
+              missingRequiredDbIds: linked.health.missingRequiredDbIds,
+              warnings: linked.health.warnings,
+            }).slice(0, 4000),
+          },
+        );
+      }
+
+      const {
+        bootstrapInstalledAppDatabases,
+        buildCloudInstallAgentSetupMessage,
+        shouldOfferInstallAgentSetup,
+      } = await import("./cloudAppInstallBootstrap.js");
+      const deferTursoUntilPublish =
+        mode === "fork" ||
+        (mode === "track" && input.catalogScope === "global");
+      let bootstrap = await bootstrapInstalledAppDatabases(app.id, {
+        installDbPolicy,
+        deferTursoUntilPublish,
+      });
+
+      // Fork: one clean-slate retry (drop the fresh databases, re-provision,
+      // re-migrate). A second failure fails the whole install and rolls back —
+      // never leave a half-initialized database behind for the next attempt.
+      if (bootstrap.errors.length > 0 && installDbPolicy === "fork_empty") {
+        console.warn(
+          `[CloudAppInstall] Bootstrap failed for ${app.id}, retrying once from a clean slate:`,
+          bootstrap.errors.slice(0, 3).join(" | "),
+        );
+        for (const dbId of forkDbIdsForRollback) {
+          await resetForkDatabaseForRetry(dbId);
+        }
+        bootstrap = await bootstrapInstalledAppDatabases(app.id, {
+          installDbPolicy,
+          deferTursoUntilPublish,
+        });
+        if (bootstrap.errors.length > 0) {
+          // Raw SQL/engine detail goes to the log; the user gets one plain
+          // sentence and a clean slate (rollback below removes everything).
+          console.error(
+            `[CloudAppInstall] Database setup failed twice for ${app.id}:`,
+            bootstrap.errors.join(" | "),
+          );
+          throw Object.assign(
+            new Error(
+              `Couldn't set up the database for "${app.title}". Nothing was installed — ` +
+                "please try again. If it keeps failing, the publisher may need to publish a fix.",
             ),
-          }
-        : {}),
-    };
+            {
+              code: "install_db_setup_failed",
+              status: 422,
+              // Raw engine errors for the agent setup chat — the UI never shows
+              // these to the user directly, but without them the agent has
+              // nothing to diagnose (gateway stdout is not persisted).
+              detail: bootstrap.errors.join("\n").slice(0, 4000),
+            },
+          );
+        }
+      }
 
-    const paprDir = getPaprRoot();
-    const lineagePath = path.join(paprDir, "apps", app.id, "papr-cloud-lineage.json");
-    await fs.writeFile(
-      lineagePath,
-      serializeCloudAppLineageFile(lineage),
-      "utf8",
-    );
+      if (bootstrap.errors.length > 0) {
+        console.warn(
+          `[CloudAppInstall] Bootstrap errors for ${app.id} — returning agent follow-up instead of failing install:`,
+          bootstrap.errors.slice(0, 3).join(" | "),
+        );
+      }
 
-    const requirementsFile = files.find(
-      (file) => file.filename === CLOUD_APP_REQUIREMENTS_FILENAME,
-    );
-    const requirements = requirementsFile
-      ? parseRequirementsFileContent(requirementsFile.content)
-      : readAppRequirements(paprDir, app.id);
+      const agentSetupMessage = shouldOfferInstallAgentSetup(
+        bootstrap,
+        installDbPolicy,
+      )
+        ? buildCloudInstallAgentSetupMessage({
+            appTitle: app.title,
+            appId: app.id,
+            sourceSlug: prepare.source.slug,
+            bootstrap,
+            linkedJobIds: linked.copiedJobIds,
+          })
+        : undefined;
 
-    return {
-      app,
-      lineageId: prepare.lineageId,
-      mode: prepare.mode,
-      sourceAppId: prepare.source.appId,
-      sourceSlug: prepare.source.slug,
-      requirements,
-    };
+      if (bootstrap.warnings.length > 0) {
+        console.warn(
+          `[CloudAppInstall] Bootstrap warnings for ${app.id}:`,
+          bootstrap.warnings.slice(0, 3).join(" | "),
+        );
+      }
+
+      const lineage: CloudAppLineageFile = {
+        schemaVersion: "1.2.0",
+        lineageId: prepare.lineageId,
+        mode: prepare.mode,
+        source: prepare.source,
+        databasePolicy,
+        ...(input.sourceAudience ? { sourceAudience: input.sourceAudience } : {}),
+        installedAt: new Date().toISOString(),
+        ...(prepare.mode === "track"
+          ? {
+              lastSyncedAt: new Date().toISOString(),
+              trackAutoPull: true,
+              syncSnapshot: Object.fromEntries(
+                files.map((file) => [
+                  file.filename.replace(/\\/g, "/"),
+                  createHash("sha256").update(file.content, "utf8").digest("hex"),
+                ]),
+              ),
+            }
+          : {}),
+      };
+
+      if (prepare.mode === "track") {
+        const { fetchPublishedAppRevision } = await import(
+          "./cloudSync/trackUpstreamRevision.js"
+        );
+        const upstreamRevision = await fetchPublishedAppRevision(
+          prepare.source.namespaceId,
+          prepare.source.slug,
+        );
+        if (upstreamRevision) {
+          lineage.upstreamRevision = upstreamRevision;
+        }
+      }
+
+      const paprDir = getPaprRoot();
+      const lineagePath = path.join(getPaprAppsRoot(), app.id, "papr-cloud-lineage.json");
+      await fs.writeFile(
+        lineagePath,
+        serializeCloudAppLineageFile(lineage),
+        "utf8",
+      );
+
+      const requirementsFile = files.find(
+        (file) => file.filename === CLOUD_APP_REQUIREMENTS_FILENAME,
+      );
+      const requirements = requirementsFile
+        ? parseRequirementsFileContent(requirementsFile.content)
+        : readAppRequirements(paprDir, app.id);
+
+      return {
+        app,
+        lineageId: prepare.lineageId,
+        mode: prepare.mode,
+        sourceAppId: prepare.source.appId,
+        sourceSlug: prepare.source.slug,
+        requirements,
+        remappedFiles,
+        bootstrap,
+        agentSetupMessage,
+        copiedJobIds: linked.copiedJobIds,
+        promotedJobIds: linked.promotedJobIds,
+        skippedSparsePaths: linked.skippedSparsePaths,
+        dependencies: linked.dependencies,
+        health: linked.health,
+        installWarnings,
+      };
+    } catch (error) {
+      if (createdAppId) {
+        try {
+          const appService = getAppService();
+          // confirmed: true — without it deleteApp only returns a preview and
+          // a failed install silently leaves its app, jobs and databases behind.
+          await appService.deleteApp(createdAppId, {
+            confirmed: true,
+            deleteLinkedJobs: true,
+            deleteRegistryDbIds: forkDbIdsForRollback,
+            deleteRegistryTurso: forkDbIdsForRollback.length > 0,
+          });
+          console.warn(
+            `[CloudAppInstall] Rolled back partial install for app ${createdAppId}`,
+          );
+        } catch (rollbackError) {
+          console.error(
+            `[CloudAppInstall] Rollback failed for app ${createdAppId}:`,
+            (rollbackError as Error).message,
+          );
+        }
+      }
+      throw error;
+    } finally {
+      await cloned.cleanup();
+    }
   }
 }
 

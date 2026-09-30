@@ -1,0 +1,19 @@
+.provider-brand-icon {
+  display: block;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+
+.provider-brand-icon--openai {
+  /* OpenAI mark is black */
+}
+
+@media (prefers-color-scheme: dark) {
+  .provider-brand-icon--openai:not(.provider-brand-icon--light-surface) {
+    filter: invert(1);
+  }
+}
+
+.provider-brand-icon--anthropic {
+  /* Official coral mark — no filter needed */
+}

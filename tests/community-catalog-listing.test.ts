@@ -1,0 +1,233 @@
+import { describe, expect, it, vi, beforeEach } from "vitest";
+
+import type { CommunityCatalogEntry } from "../src/core/types/communityCatalog.js";
+import {
+  isCommunityCatalogListed,
+  isCommunityBrowseListing,
+  shouldIncludeInPublicCommunity,
+} from "../src/gateway/services/CommunityCatalogService.js";
+
+const getAppPublishPrefs = vi.fn();
+
+vi.mock("../src/gateway/services/cloudPublishPrefs.js", () => ({
+  getAppPublishPrefs: (...args: unknown[]) => getAppPublishPrefs(...args),
+}));
+
+function cloudEntry(
+  overrides: Partial<CommunityCatalogEntry> = {},
+): CommunityCatalogEntry {
+  return {
+    catalogId: "cloud:app-1",
+    source: "cloud",
+    name: "Shared App",
+    description: "",
+    version: "cloud",
+    author: "You",
+    tags: [],
+    appId: "app-1",
+    namespaceId: "ns-work",
+    codeInstallable: false,
+    liveViewable: true,
+    ...overrides,
+  };
+}
+
+describe("isCommunityCatalogListed", () => {
+  it("lists true public community apps only", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        shareLinkEnabled: false,
+        sharing: { loginAccess: "public", externalLink: "off" },
+      }),
+    ).toBe(true);
+  });
+
+  it("excludes invite-link visibilities", () => {
+    expect(isCommunityCatalogListed({ visibility: "link_read" })).toBe(false);
+    expect(isCommunityCatalogListed({ visibility: "link_read_write" })).toBe(
+      false,
+    );
+  });
+
+  it("excludes public_read rows that only enable external invite links", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        shareLinkEnabled: true,
+      }),
+    ).toBe(false);
+  });
+
+  it("excludes entries whose live URL contains an invite token", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        liveUrl: "https://apps.papr.ai/ns/my-app/?t=secret",
+      }),
+    ).toBe(false);
+  });
+
+  it("excludes specific people when prefs use an allowlist", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        shareLinkEnabled: false,
+        sharing: { loginAccess: "public", externalLink: "off" },
+        requireSignIn: true,
+        allowedEmails: ["guest@acme.com"],
+      }),
+    ).toBe(false);
+  });
+
+  it("excludes memory rows marked not community-listed", () => {
+    expect(
+      isCommunityCatalogListed({
+        visibility: "public_read",
+        communityCatalogListed: false,
+      }),
+    ).toBe(false);
+  });
+
+  it("excludes link audience even when loginAccess is public", () => {
+    expect(
+      isCommunityCatalogListed({
+        sharing: { loginAccess: "public", externalLink: "read" },
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("shouldIncludeInPublicCommunity — link-only apps", () => {
+  const paprDir = "/tmp/papr-test";
+  const ownedAppIds = new Set(["app-1"]);
+
+  beforeEach(() => {
+    getAppPublishPrefs.mockReset();
+  });
+
+  it("excludes owned link-only shares from global Community Apps", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "none",
+      externalLink: "read",
+      codeAccess: "off",
+    });
+
+    const entry = cloudEntry({
+      visibility: "link_read",
+      shareLinkEnabled: true,
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+
+  it("excludes owned public+external-link shares from global Community Apps", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "public",
+      externalLink: "read",
+      codeAccess: "off",
+    });
+
+    const entry = cloudEntry({
+      visibility: "public_read",
+      shareLinkEnabled: true,
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+
+  it("excludes stale public_read memory rows when local prefs say invite link", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "public",
+      externalLink: "read",
+      accessMode: "link_read",
+      shareToken: "abc123",
+    });
+
+    const entry = cloudEntry({
+      visibility: "public_read",
+      shareLinkEnabled: false,
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+
+  it("excludes owned specific-people shares from global Community Apps", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "team",
+      externalLink: "off",
+      codeAccess: "off",
+      allowedUserIds: ["user-abc"],
+    });
+
+    const entry = cloudEntry({
+      visibility: "team",
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+
+  it("includes owned true public apps in global Community Apps", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "public",
+      externalLink: "off",
+      codeAccess: "off",
+    });
+
+    const entry = cloudEntry({
+      visibility: "public_read",
+      isOwned: true,
+    });
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      true,
+    );
+  });
+
+  it("keeps team+link apps in workspace Team Apps only", () => {
+    getAppPublishPrefs.mockReturnValue({
+      loginAccess: "team",
+      externalLink: "read",
+      codeAccess: "off",
+    });
+
+    const entry = cloudEntry({
+      visibility: "team",
+      shareLinkEnabled: true,
+      isOwned: true,
+    });
+    expect(
+      shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds, {
+        allowTeam: true,
+      }),
+    ).toBe(true);
+    expect(shouldIncludeInPublicCommunity(entry, paprDir, ownedAppIds)).toBe(
+      false,
+    );
+  });
+});
+
+describe("isCommunityBrowseListing", () => {
+  it("includes installable apps and excludes preview-only", () => {
+    expect(isCommunityBrowseListing(cloudEntry({ codeInstallable: true }))).toBe(
+      true,
+    );
+    expect(
+      isCommunityBrowseListing(
+        cloudEntry({ codeInstallable: false, liveViewable: true }),
+      ),
+    ).toBe(false);
+    expect(
+      isCommunityBrowseListing(
+        cloudEntry({ codeInstallable: false, liveViewable: false }),
+      ),
+    ).toBe(false);
+  });
+});

@@ -2,27 +2,50 @@ import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import path from "path";
 import os from "os";
 import { promises as fs } from "fs";
+import { randomUUID } from "crypto";
 import { AppService } from "../src/gateway/services/AppService.js";
+import { serializeCloudAppMetadataFile } from "../src/core/utils/cloudAppMetadata.js";
 
 describe("AppService", () => {
   let originalHome: string | undefined;
+  let originalPaprHome: string | undefined;
   let testHomeDir: string;
   let appService: AppService;
 
   beforeEach(async () => {
     originalHome = process.env.HOME;
-    testHomeDir = path.join(os.tmpdir(), `paprwork-v2-app-service-${Date.now()}`);
+    originalPaprHome = process.env.PAPR_HOME;
+    // Date.now() collides when two tests start in the same millisecond, which
+    // silently shares one workspace between them.
+    testHomeDir = path.join(
+      os.tmpdir(),
+      `paprwork-v2-app-service-${process.pid}-${randomUUID()}`,
+    );
     process.env.HOME = testHomeDir;
-    await fs.mkdir(testHomeDir, { recursive: true });
+    // HOME alone is not enough. getPaprRoot() prefers the active-workspace
+    // pointer read from the developer's REAL home, and syncs PAPR_HOME to it —
+    // so without this the suite creates apps in the user's live workspace
+    // instead of a temp dir, and listApps() returns hundreds of real apps.
+    process.env.PAPR_HOME = path.join(testHomeDir, "Papr");
+    await fs.mkdir(path.join(testHomeDir, "Papr"), { recursive: true });
     appService = new AppService();
     await appService.initialize();
   });
 
   afterEach(async () => {
+    // Stop watchers and pending timers before the temp dir goes away. Without
+    // this, the tree watcher keeps firing on deleted paths and the debounced reload
+    // broadcast outlives the test run.
+    appService.cleanup();
     if (originalHome === undefined) {
       delete process.env.HOME;
     } else {
       process.env.HOME = originalHome;
+    }
+    if (originalPaprHome === undefined) {
+      delete process.env.PAPR_HOME;
+    } else {
+      process.env.PAPR_HOME = originalPaprHome;
     }
     await fs.rm(testHomeDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
   });
@@ -52,6 +75,29 @@ describe("AppService", () => {
 
     expect(first.title).toBe("Mem0 Stargazers");
     expect(second.title).toBe("mem0 stargazers_1");
+  });
+
+  test("createApp drops invalid icons instead of blocking install", async () => {
+    const badIcon =
+      '<svg viewBox="0 0 64 64"><circle cx="32" cy="32" r="30" fill="white"/><path d="M10 32h44" stroke="black"/></svg>';
+
+    const created = await appService.createApp(
+      "Monitor",
+      "Desc",
+      [{ filename: "index.html", content: "<h1>Hi</h1>" }],
+      badIcon,
+    );
+    expect(created.icon).toBeUndefined();
+  });
+
+  test("createApp drops plain-text icons for community-style installs", async () => {
+    const created = await appService.createApp(
+      "Community App",
+      "Desc",
+      [{ filename: "index.html", content: "<h1>Hi</h1>" }],
+      "chart",
+    );
+    expect(created.icon).toBeUndefined();
   });
 
   test("createApp scaffolds backend/manifest.json and ping.py", async () => {
@@ -104,6 +150,36 @@ describe("AppService", () => {
     expect(loadedFile).toBe("v2");
   });
 
+  test("writeAppFile on metadata.json syncs registry title and description", async () => {
+    const created = await appService.createApp("GTM Foundations Audit", "Old desc", [
+      { filename: "index.html", content: "<h1>Audit</h1>" },
+    ]);
+
+    const metadata = serializeCloudAppMetadataFile({
+      appId: created.id,
+      title: "Website Audit",
+      description: "Audits website performance and SEO",
+      updatedAt: new Date().toISOString(),
+    });
+    const wrote = await appService.writeAppFile(
+      created.id,
+      "metadata.json",
+      metadata,
+    );
+
+    const app = await appService.getApp(created.id);
+    const appsJson = JSON.parse(
+      await fs.readFile(path.join(testHomeDir, "Papr", "data", "apps.json"), "utf8"),
+    ) as Array<{ id: string; title: string; description: string }>;
+
+    expect(wrote).toBe(true);
+    expect(app?.title).toBe("Website Audit");
+    expect(app?.description).toBe("Audits website performance and SEO");
+    expect(appsJson.find((entry) => entry.id === created.id)?.title).toBe(
+      "Website Audit",
+    );
+  });
+
   test("prunes index when app folder is removed outside deleteApp (e.g. bash rm)", async () => {
     const created = await appService.createApp("Orphan", "Desc", [
       { filename: "index.html", content: "<h1>x</h1>" },
@@ -121,12 +197,16 @@ describe("AppService", () => {
 
     const favorited = await appService.toggleFavorite(created.id);
     const appPath = await appService.getAppPath(created.id);
-    const deleted = await appService.deleteApp(created.id);
+    // Unconfirmed deleteApp returns a preview for the confirm modal; the UI
+    // calls again with confirmed: true to actually delete.
+    const deleted = await appService.deleteApp(created.id, { confirmed: true });
     const afterDelete = await appService.getApp(created.id);
 
     expect(favorited?.favorite).toBe(true);
     expect(appPath).toContain(created.id);
-    expect(deleted).toBe(true);
+    // deleteApp returns DeleteAppResult (it may also need to unpublish from
+    // cloud), not a bare boolean.
+    expect(deleted.deleted).toBe(true);
     expect(afterDelete).toBeNull();
   });
 
@@ -135,20 +215,20 @@ describe("AppService", () => {
       { filename: "index.html", content: "<h1>Data App</h1>" },
     ]);
 
-    const linked = await appService.linkAppDataSource(app.id, {
+    const linked =     await appService.linkAppDataSource(app.id, {
       id: "job-1:orders",
       type: "sqlite",
       jobId: "job-1",
       alias: "orders",
       dbPath: "/tmp/job-1/data.db",
       tables: ["orders", "order_items"],
-      setPrimary: true,
     });
 
     expect(linked).toHaveLength(1);
     expect(linked[0].jobId).toBe("job-1");
     const config = await appService.getDataSourcesConfig(app.id);
-    expect(config.primary).toBe("orders");
+    expect(config.sources).toHaveLength(1);
+    expect(config.primary).toBeUndefined();
     const listed = await appService.listAppDataSources(app.id);
     expect(listed[0].alias).toBe("orders");
     const appPath = await appService.getAppPath(app.id);
@@ -156,12 +236,42 @@ describe("AppService", () => {
       path.join(appPath as string, "data-sources.json"),
       "utf8",
     );
-    expect(raw).toContain('"primary": "orders"');
+    expect(raw).not.toContain('"primary"');
     const dbTs = await fs.readFile(
       path.join(appPath as string, "db.ts"),
       "utf8",
     );
-    expect(dbTs).toContain("PRIMARY_SOURCE = 'orders'");
+    expect(dbTs).toContain("sourceId: string");
+    expect(dbTs).not.toContain("DEFAULT_SOURCE");
+  });
+
+  test("allows linking multiple databases to one app", async () => {
+    const app = await appService.createApp("Multi DB", "Desc", [
+      { filename: "index.html", content: "<h1>Multi</h1>" },
+    ]);
+
+    await appService.linkAppDataSource(app.id, {
+      id: "db-a:metrics",
+      type: "sqlite",
+      dbId: "db-a",
+      alias: "metrics",
+      dbPath: "/tmp/metrics/data.db",
+      tables: [],
+    });
+
+    const linked = await appService.linkAppDataSource(app.id, {
+      id: "db-b:billing",
+      type: "sqlite",
+      dbId: "db-b",
+      alias: "billing",
+      dbPath: "/tmp/billing/data.db",
+      tables: [],
+    });
+
+    expect(linked).toHaveLength(2);
+    const config = await appService.getDataSourcesConfig(app.id);
+    expect(config.sources).toHaveLength(2);
+    expect(config.primary).toBeUndefined();
   });
 
   test("validateApp blocks /api/db/* when no data source is linked", async () => {
@@ -201,7 +311,6 @@ describe("AppService", () => {
       alias: "data",
       dbPath: "/tmp/job-1/data.db",
       tables: [],
-      setPrimary: true,
     });
 
     const result = await appService.validateApp(app.id);
@@ -272,5 +381,103 @@ describe("AppService", () => {
         (issue) => issue.rule === "max-lines" && issue.file === "app.ts",
       ),
     ).toBe(true);
+  });
+
+  test("validateApp exempts auto-injected base.css from line limit", async () => {
+    const longCss = Array.from(
+      { length: 150 },
+      (_, i) => `.token-${i} { color: #${String(i).padStart(6, "0")}; }`,
+    ).join("\n");
+    const app = await appService.createApp("Long Base CSS App", "Desc", [
+      {
+        filename: "index.html",
+        content:
+          '<!DOCTYPE html><html><head><link rel="stylesheet" href="base.css"></head><body><div id="app"></div><script type="module" src="dist/app.js"></script></body></html>',
+      },
+      { filename: "app.ts", content: "console.log('ok');" },
+      { filename: "base.css", content: longCss },
+    ]);
+    await appService.buildApp(app.id);
+    const result = await appService.validateApp(app.id);
+
+    expect(
+      result.issues.filter(
+        (issue) => issue.rule === "max-lines" && issue.file === "base.css",
+      ),
+    ).toHaveLength(0);
+  });
+
+  test("rebuildIndexIfCorrupted reads metadata.json instead of placeholder description", async () => {
+    const appId = "11111111-1111-4111-8111-111111111111";
+    const appDir = path.join(testHomeDir, "Papr", "apps", appId);
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(
+      path.join(appDir, "index.html"),
+      "<html><head><title>HTML Title Only</title></head></html>",
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(appDir, "metadata.json"),
+      JSON.stringify(
+        {
+          appId,
+          title: "Team Meetings App",
+          description: "Shared via cloud sync",
+          updatedAt: "2026-07-01T00:00:00.000Z",
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const recovered = new AppService();
+    await recovered.initialize();
+    const app = (await recovered.listApps()).find((entry) => entry.id === appId);
+
+    expect(app?.title).toBe("Team Meetings App");
+    expect(app?.description).toBe("Shared via cloud sync");
+  });
+
+  test("listApps excludes apps owned by another Papr user", async () => {
+    process.env.PAPRWORK_TELEMETRY_PAPR_USER_ID = "user-me";
+    const appId = "22222222-2222-4222-8222-222222222222";
+    const appDir = path.join(testHomeDir, "Papr", "apps", appId);
+    await fs.mkdir(appDir, { recursive: true });
+    await fs.writeFile(path.join(appDir, "index.html"), "<h1>Foreign</h1>", "utf8");
+    await fs.writeFile(
+      path.join(appDir, "metadata.json"),
+      JSON.stringify({
+        appId,
+        title: "Teammate Private App",
+        description: "Not mine",
+        ownerUserId: "user-teammate",
+        updatedAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+
+    const dataDir = path.join(testHomeDir, "Papr", "data");
+    await fs.mkdir(dataDir, { recursive: true });
+    await fs.writeFile(
+      path.join(dataDir, "apps.json"),
+      JSON.stringify([
+        {
+          id: appId,
+          title: "Teammate Private App",
+          description: "Not mine",
+          type: "app",
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        },
+      ]),
+      "utf8",
+    );
+
+    const scoped = new AppService();
+    await scoped.initialize();
+    expect((await scoped.listApps()).some((entry) => entry.id === appId)).toBe(
+      false,
+    );
   });
 });

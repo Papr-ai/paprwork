@@ -66,6 +66,30 @@ function mapStreamChunkToAppAgentEvents(
       },
     ];
   }
+  if (chunk.type === "tool-call-delta") {
+    return [
+      {
+        type: "app-agent:status",
+        data: { turnId, message: "Preparing tool call…" },
+      },
+    ];
+  }
+  if (chunk.type === "compression-start") {
+    return [
+      {
+        type: "app-agent:status",
+        data: { turnId, message: "Compressing context…" },
+      },
+    ];
+  }
+  if (chunk.type === "wrap-up-start") {
+    return [
+      {
+        type: "app-agent:status",
+        data: { turnId, message: "Summarizing progress…" },
+      },
+    ];
+  }
   if (chunk.type === "tool-result") {
     const payload = chunk.payload as ToolResultPayload;
     return [

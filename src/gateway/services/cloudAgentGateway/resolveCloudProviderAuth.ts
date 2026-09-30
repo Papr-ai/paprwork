@@ -140,3 +140,27 @@ export function reconcileCloudProviderAuth(input: {
 
   return { provider: input.provider, authType: input.authType, token };
 }
+
+/**
+ * Cloud Agent Gateway: resolve oauth vs apiKey for a vault-injected env token
+ * (sub-agent jobs, local agent jobs on cloud — no parent llmAuth / Electron IPC).
+ */
+export function resolveCloudGatewayProviderAuthFromEnvToken(input: {
+  provider: "openai" | "anthropic";
+  token: string;
+  keyMetadata?: Omit<VaultKeySourceMeta, "name">;
+}): CloudProviderAuthResolution {
+  const keyName =
+    input.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const sourceLabel = resolveVaultKeySource(
+    { name: keyName, ...input.keyMetadata },
+    input.token,
+  );
+  const initialAuthType: "oauth" | "apiKey" =
+    sourceLabel === "oauth" ? "oauth" : "apiKey";
+  return reconcileCloudProviderAuth({
+    provider: input.provider,
+    token: input.token,
+    authType: initialAuthType,
+  });
+}

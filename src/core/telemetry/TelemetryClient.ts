@@ -14,6 +14,11 @@ export interface TelemetryClientDeps {
   getAnonymousInstallId: () => string;
   /** Papr Parse objectId for identified analytics when user is logged in. */
   getPaprUserId?: () => string;
+  /** Active workspace, so events can be grouped per customer. */
+  getNamespaceId?: () => string;
+  getOrganizationId?: () => string;
+  /** Workspace display name, so reports can name the customer, not an id. */
+  getOrganizationName?: () => string;
   /** Packaged app install (false for dev / npm run dev). */
   getIsPackaged?: () => boolean;
   appVersion: string;
@@ -96,6 +101,9 @@ export class TelemetryClient {
       {
         isPackaged: this.deps.getIsPackaged?.(),
         paprAccountId: paprUserId,
+        namespaceId: this.deps.getNamespaceId?.(),
+        organizationId: this.deps.getOrganizationId?.(),
+        organizationName: this.deps.getOrganizationName?.(),
       },
     );
     const safeProps = sanitizeTelemetryProperties(merged);

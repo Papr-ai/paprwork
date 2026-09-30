@@ -4,6 +4,7 @@ import { promises as fs } from "fs";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { TranscriptionService } from "../src/gateway/services/TranscriptionService.js";
 import type { TranscriptionResult } from "../src/gateway/services/TranscriptionService.js";
+import { useIsolatedPaprWorkspace } from "./setup/isolatedWorkspace.js";
 
 const tmpRoots: string[] = [];
 
@@ -25,6 +26,10 @@ function createService(root: string): TranscriptionService {
 }
 
 describe("TranscriptionService", () => {
+  // Redirects HOME/PAPR_HOME to a temp dir so fixtures never land in
+  // the developer's real ~/Papr workspace.
+  useIsolatedPaprWorkspace("transcription-service");
+
   test("initializes and creates temp directory", async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "papr-trans-test-"));
     tmpRoots.push(root);

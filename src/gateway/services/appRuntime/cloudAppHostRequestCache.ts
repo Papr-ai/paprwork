@@ -1,16 +1,14 @@
 /**
- * Detect browser reload / revalidation requests for published app assets.
- * Normal refresh (F5) sends Cache-Control: max-age=0 — not only hard reload.
+ * Detect browser hard-reload requests for published app assets.
+ * Normal refresh (F5) sends Cache-Control: max-age=0 — that must NOT bypass
+ * server-side repo caches; revision markers bust caches after Sync now.
  */
 
 export function shouldBypassRepoFileCache(
   headers: Record<string, string | string[] | undefined>,
 ): boolean {
   const cacheControl = headerValue(headers["cache-control"]).toLowerCase();
-  if (cacheControl.includes("no-cache")) {
-    return true;
-  }
-  if (cacheControl.includes("max-age=0")) {
+  if (cacheControl.includes("no-cache") && cacheControl.includes("no-store")) {
     return true;
   }
   if (headerValue(headers["pragma"]).toLowerCase() === "no-cache") {

@@ -10,6 +10,10 @@ import type { AgentConfigInternal } from "../../core/types/agents.js";
 import type { UiAgentFocusContext } from "../../core/types/agentFocus.js";
 import type { StreamChunk } from "../../core/types/streaming.js";
 import {
+  finishStreamProfiler,
+  getStreamProfiler,
+} from "../../core/utils/streamProfiler.js";
+import {
   isExpectedStreamCancellation,
   STREAM_REPLACED_REASON,
   STREAM_STOPPED_REASON,
@@ -78,9 +82,11 @@ function wsOpen(ws: WebSocket): boolean {
   return ws.readyState === ws.OPEN;
 }
 
-function sendJson(ws: WebSocket, payload: Record<string, unknown>): void {
-  if (!wsOpen(ws)) return;
+/** Returns false when the socket is not open — the send was a no-op. */
+function sendJson(ws: WebSocket, payload: Record<string, unknown>): boolean {
+  if (!wsOpen(ws)) return false;
   ws.send(JSON.stringify(payload));
+  return true;
 }
 
 function sendChunk(
@@ -95,8 +101,8 @@ function sendComplete(
   ws: WebSocket,
   responseId: string,
   data: ActiveStream["completeData"],
-): void {
-  sendJson(ws, {
+): boolean {
+  return sendJson(ws, {
     id: responseId,
     type: "agent:complete",
     success: true,
@@ -108,8 +114,8 @@ function sendError(
   ws: WebSocket,
   responseId: string,
   data: ActiveStream["errorData"],
-): void {
-  sendJson(ws, {
+): boolean {
+  return sendJson(ws, {
     id: responseId,
     type: "agent:error",
     success: false,
@@ -129,6 +135,16 @@ export class AgentStreamRegistry {
     const requestId = this.requestIdByChatId.get(chatId);
     if (!requestId) return false;
     return this.streamsByRequestId.get(requestId)?.status === "running";
+  }
+
+  countRunningStreams(): number {
+    let count = 0;
+    for (const entry of this.streamsByRequestId.values()) {
+      if (entry.status === "running") {
+        count += 1;
+      }
+    }
+    return count;
   }
 
   addSubscriber(
@@ -180,9 +196,22 @@ export class AgentStreamRegistry {
     };
   }
 
+  /**
+   * A socket closed. Dropping it used to be silent, which meant a running turn
+   * could lose its last listener with nothing in the log to say so — and the
+   * completion then had nobody to go to. Say it, so the log shows the loss
+   * before the completion rather than only the absence of one.
+   */
   removeSubscriber(ws: WebSocket): void {
     for (const entry of this.streamsByRequestId.values()) {
-      entry.subscribers.delete(ws);
+      if (!entry.subscribers.delete(ws)) continue;
+      if (entry.status === "running" && entry.subscribers.size === 0) {
+        console.warn(
+          `[AgentStreamRegistry] Running stream ${entry.requestId} for chat ` +
+            `${entry.chatId} lost its last subscriber. The turn continues; ` +
+            `its result will be broadcast if nobody resubscribes.`,
+        );
+      }
     }
   }
 
@@ -190,6 +219,27 @@ export class AgentStreamRegistry {
    * Cancel an in-flight stream for a chat and optionally notify subscribers.
    * Silent cancel is used for user stop / replacement — not an error condition.
    */
+  /** Abort every running stream (e.g. before org/namespace workspace switch). */
+  async cancelAllRunningStreams(reason = "Workspace switch"): Promise<void> {
+    const chatIds = [...this.requestIdByChatId.keys()];
+    if (chatIds.length === 0) {
+      return;
+    }
+
+    const { getAgentService } = await import("./AgentService.js");
+    const agentService = getAgentService();
+
+    await Promise.all(
+      chatIds.map(async (chatId) => {
+        if (!this.isStreamRunning(chatId)) {
+          return;
+        }
+        await agentService.stopStreaming(chatId);
+        this.cancelStream(chatId, reason, { silent: true });
+      }),
+    );
+  }
+
   cancelStream(
     chatId: string,
     reason = STREAM_STOPPED_REASON,
@@ -234,10 +284,22 @@ export class AgentStreamRegistry {
     userMessage: string;
     config: AgentConfigInternal;
     focusContext?: UiAgentFocusContext;
+    attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[];
+    reuseAssistantMessageId?: string;
     ws: WebSocket;
   }): void {
-    const { chatId, requestId, userMessage, config, focusContext, ws } = params;
+    const {
+      chatId,
+      requestId,
+      userMessage,
+      config,
+      focusContext,
+      attachments,
+      reuseAssistantMessageId,
+      ws,
+    } = params;
 
+    let previousStreamStopped: Promise<void> = Promise.resolve();
     const existingRequestId = this.requestIdByChatId.get(chatId);
     if (existingRequestId) {
       const existing = this.streamsByRequestId.get(existingRequestId);
@@ -245,8 +307,10 @@ export class AgentStreamRegistry {
         console.warn(
           `[AgentStreamRegistry] Chat ${chatId} already streaming (${existingRequestId}), cancelling before new stream`,
         );
-        void import("./AgentService.js").then(({ getAgentService }) =>
-          getAgentService().stopStreaming(chatId),
+        // Abort the old controller before the replacement registers its own.
+        // Otherwise a delayed dynamic import can accidentally abort the new stream.
+        previousStreamStopped = import("./AgentService.js").then(
+          ({ getAgentService }) => getAgentService().stopStreaming(chatId),
         );
         this.cancelStream(chatId, STREAM_REPLACED_REASON);
       }
@@ -266,7 +330,31 @@ export class AgentStreamRegistry {
     this.streamsByRequestId.set(requestId, entry);
     this.requestIdByChatId.set(chatId, requestId);
 
-    void this.runStream(entry, userMessage, config, focusContext);
+    void previousStreamStopped
+      .then(() =>
+        this.runStream(
+          entry,
+          userMessage,
+          config,
+          focusContext,
+          attachments,
+          reuseAssistantMessageId,
+        ),
+      )
+      .catch((error) => {
+        console.error(
+          `[AgentStreamRegistry] Failed to stop previous stream for ${chatId}:`,
+          error,
+        );
+        return this.runStream(
+          entry,
+          userMessage,
+          config,
+          focusContext,
+          attachments,
+          reuseAssistantMessageId,
+        );
+      });
   }
 
   private async runStream(
@@ -274,28 +362,57 @@ export class AgentStreamRegistry {
     userMessage: string,
     config: AgentConfigInternal,
     focusContext?: UiAgentFocusContext,
+    attachments?: import("./storage/IStorageProvider.js").StoredMessageAttachment[],
+    reuseAssistantMessageId?: string,
   ): Promise<void> {
     const { getAgentService } = await import("./AgentService.js");
     const agentService = getAgentService();
     const { chatId, requestId } = entry;
 
+    // The last error the model stream actually explained. Kept so a trailing
+    // NoOutputGeneratedError cannot replace it with a description of its own
+    // side effect.
+    let reportedModelError: string | undefined;
+
+    const { withInteractiveHotPath } = await import(
+      "./gatewayInteractivePriority.js"
+    );
+
     try {
+      getStreamProfiler(chatId)?.mark("registry.runStream.start");
+
       const { runWithToolContext } = await import(
         "../../core/tools/context.js"
       );
 
-      await runWithToolContext(chatId, async () => {
+      await withInteractiveHotPath("agent:stream", async () =>
+        runWithToolContext(chatId, async () => {
         for await (const chunk of agentService.streamAgent(
           chatId,
           userMessage,
           config,
-          { focusContext },
+          {
+            focusContext,
+            attachments,
+            ...(reuseAssistantMessageId
+              ? { _reuseAssistantMessageId: reuseAssistantMessageId }
+              : {}),
+          },
         )) {
           if (entry.cancelled) break;
+          if (chunk.type === "error") {
+            const reported = (chunk.payload as { error?: unknown } | undefined)
+              ?.error;
+            if (typeof reported === "string" && reported.trim().length > 0) {
+              reportedModelError = reported;
+            }
+          }
           this.bufferChunk(entry, chunk);
           this.broadcastChunk(entry, chunk);
+          this.tryCompleteFromDoneChunk(entry, chunk);
         }
-      });
+        }),
+      );
 
       if (entry.cancelled) {
         console.log(
@@ -322,37 +439,61 @@ export class AgentStreamRegistry {
         return;
       }
 
-      const messages = await agentService.getChatHistory(chatId);
-      const finalMessage = messages[messages.length - 1];
+      if (entry.status !== "complete") {
+        const messages = await agentService.getChatHistory(chatId);
+        const finalMessage = messages[messages.length - 1];
 
-      entry.status = "complete";
-      entry.completeData = {
-        chatId,
-        done: true,
-        finalMessage,
-      };
+        entry.status = "complete";
+        entry.completeData = {
+          chatId,
+          done: true,
+          finalMessage,
+        };
 
-      this.broadcastComplete(entry);
+        this.broadcastComplete(entry);
+      }
       console.log(
         `[AgentStreamRegistry] Stream complete for chat ${chatId} (${entry.chunks.length} chunks buffered)`,
       );
     } catch (streamError) {
-      console.error(
-        `[AgentStreamRegistry] Stream error for chat ${chatId}:`,
-        streamError,
+      const { isNoOutputGeneratedError } = await import(
+        "./agent/providerErrorMessage.js"
       );
+
+      // Prefer the error we already explained. NoOutputGeneratedError only
+      // tells us the stream produced no steps, which we can already see.
+      const preferReported =
+        reportedModelError !== undefined &&
+        isNoOutputGeneratedError(streamError);
+
+      if (preferReported) {
+        console.error(
+          `[AgentStreamRegistry] Stream error for chat ${chatId}: ` +
+            `reporting the model error instead of the trailing ` +
+            `NoOutputGeneratedError: ${reportedModelError}`,
+        );
+      } else {
+        console.error(
+          `[AgentStreamRegistry] Stream error for chat ${chatId}:`,
+          streamError,
+        );
+      }
 
       entry.status = "error";
       entry.errorData = {
         chatId,
-        error:
-          streamError instanceof Error
+        error: preferReported
+          ? (reportedModelError as string)
+          : streamError instanceof Error
             ? streamError.message
             : "Stream error",
       };
 
       this.broadcastError(entry);
     } finally {
+      getStreamProfiler(chatId)?.mark("registry.runStream.end");
+      finishStreamProfiler(chatId, { requestId });
+
       // Stream reached a terminal state (complete/cancelled/error) — free
       // the replay buffer NOW instead of holding it for the 10-min TTL.
       // Late reconnects get agent:complete (finalMessage) or load history.
@@ -430,18 +571,110 @@ export class AgentStreamRegistry {
 
   private broadcastComplete(entry: ActiveStream): void {
     if (!entry.completeData) return;
+    const tracked = entry.subscribers.size;
+    let delivered = 0;
     for (const sub of entry.subscribers.values()) {
-      sendComplete(sub.ws, sub.responseId, entry.completeData);
+      if (sendComplete(sub.ws, sub.responseId, entry.completeData)) {
+        delivered += 1;
+      }
     }
     entry.subscribers.clear();
+    if (delivered === 0) {
+      this.reportUndeliveredTerminalState(
+        entry,
+        "agent:complete",
+        entry.completeData,
+        tracked,
+      );
+    }
+  }
+
+  /**
+   * The UI treats `done` as turn-complete, but streamAgent keeps running
+   * (export, summarization scheduling) before the for-await loop ends.
+   * Without an early complete, the renderer waits on agent:complete while
+   * isSending is already false — the next send blocks on the prior lock.
+   */
+  private tryCompleteFromDoneChunk(
+    entry: ActiveStream,
+    chunk: StreamChunk & { chatId: string },
+  ): void {
+    if (entry.status === "complete" || chunk.type !== "done") {
+      return;
+    }
+    const payload = (chunk as { payload?: unknown }).payload;
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    const finalMessage = (payload as { finalMessage?: unknown }).finalMessage;
+    if (!finalMessage || typeof finalMessage !== "object") {
+      return;
+    }
+    entry.status = "complete";
+    entry.completeData = {
+      chatId: entry.chatId,
+      done: true,
+      finalMessage,
+    };
+    this.broadcastComplete(entry);
   }
 
   private broadcastError(entry: ActiveStream): void {
     if (!entry.errorData) return;
+    const tracked = entry.subscribers.size;
+    let delivered = 0;
     for (const sub of entry.subscribers.values()) {
-      sendError(sub.ws, sub.responseId, entry.errorData);
+      if (sendError(sub.ws, sub.responseId, entry.errorData)) {
+        delivered += 1;
+      }
     }
     entry.subscribers.clear();
+    if (delivered === 0) {
+      this.reportUndeliveredTerminalState(
+        entry,
+        "agent:error",
+        entry.errorData,
+        tracked,
+      );
+    }
+  }
+
+  /**
+   * A finished turn that reached nobody. Two ways to get here: the subscriber
+   * list is empty (the socket closed, so `removeSubscriber` dropped it), or it
+   * is non-empty but every socket is closing — `sendJson` is a silent no-op on
+   * a socket that is not open, which is why this used to leave no trace at all
+   * and had to be diagnosed by querying the database.
+   *
+   * Log it, then fall back to a workspace broadcast keyed by chatId so any
+   * other live client — a second window, or the same client on a socket it
+   * reopened without resubscribing — can still finish the turn. Same mechanism
+   * and same payload shape SubAgentResponseTrigger already uses for completions
+   * with no requesting socket.
+   */
+  private reportUndeliveredTerminalState(
+    entry: ActiveStream,
+    type: "agent:complete" | "agent:error",
+    data: ActiveStream["completeData"] | ActiveStream["errorData"],
+    trackedSubscribers: number,
+  ): void {
+    console.warn(
+      `[AgentStreamRegistry] ${type} for chat ${entry.chatId} ` +
+        `(stream ${entry.requestId}) reached no open subscriber ` +
+        `(${trackedSubscribers} tracked, 0 open). The turn is persisted — ` +
+        `falling back to a workspace broadcast so a live client can render it.`,
+    );
+
+    void import("../websocket/index.js")
+      .then(({ broadcast }) => {
+        broadcast({ type, data });
+      })
+      .catch((error) => {
+        console.error(
+          `[AgentStreamRegistry] Broadcast fallback failed for chat ${entry.chatId}:`,
+          error,
+        );
+      });
   }
 
   private scheduleCleanup(requestId: string): void {

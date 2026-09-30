@@ -21,11 +21,11 @@ Pre-Installed Default Jobs
 │   ├── Uses: Google Workspace CLI (gws)
 │   ├── Platform: Windows, macOS, Linux
 │   ├── Auth: One-time OAuth (opens browser)
-│   └── Output: ~/Papr/jobs/{id}/data/calendar.db
+│   └── Output: $PAPR_HOME/Jobs/{id}/data/calendar.db
 │
 └── Daily Brief Generator (runs 6 AM daily)
     ├── Reads FROM: calendar.db, other job DBs
-    └── Output: ~/Papr/jobs/{id}/data/briefs.db
+    └── Output: $PAPR_HOME/Jobs/{id}/data/briefs.db
 ```
 
 ### Why Google Workspace CLI?
@@ -334,13 +334,13 @@ const todayMeetings = bash({
 for (const meeting of todayMeetings) {
   // Check if attendee has LinkedIn profile
   const linkedin = bash({
-    command: `sqlite3 ~/Papr/jobs/linkedin/data.db 
+    command: `sqlite3 $PAPR_HOME/Jobs/linkedin/data.db 
       "SELECT * FROM profiles WHERE email='${attendee.email}'"`
   });
   
   // Check if there are CRM notes
   const crm = bash({
-    command: `sqlite3 ~/Papr/jobs/crm/data.db 
+    command: `sqlite3 $PAPR_HOME/Jobs/crm/data.db 
       "SELECT * FROM contacts WHERE email='${attendee.email}'"`
   });
   

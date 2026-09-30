@@ -1,0 +1,450 @@
+.papr-plan {
+  margin-top: 0;
+  border-top: none;
+  padding-top: 0;
+}
+
+.papr-plan__header {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.papr-plan__header--compact {
+  margin-bottom: 4px;
+}
+
+.papr-plan__title-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.papr-plan__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-plan__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.papr-plan__chevron {
+  transition: transform 0.15s ease;
+}
+
+.papr-plan__chevron--open {
+  transform: rotate(90deg);
+}
+
+.papr-plan__badge {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--papr-blue-gradient);
+  box-shadow: 0 0 0 2px rgba(0, 172, 250, 0.15);
+}
+
+.papr-plan__refresh {
+  background: none;
+  border: none;
+  color: var(--accent, #0071e3);
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.papr-plan__body {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.papr-plan__placeholder,
+.papr-plan__error,
+.papr-plan__message,
+.papr-plan__hint {
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.papr-plan__error {
+  color: rgb(232, 76, 96);
+}
+
+.papr-plan__hint,
+.papr-plan__message {
+  color: var(--text-secondary);
+}
+
+.papr-plan__callout {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.papr-plan__callout-title {
+  margin: 0 0 6px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text-primary);
+}
+
+.papr-plan__callout-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+
+.papr-plan__summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.papr-plan__plan-name-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.papr-plan__plan-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-plan__status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  border: 1px solid transparent;
+}
+
+.papr-plan__status-pill[data-tone="active"] {
+  color: rgb(22, 120, 72);
+  background: rgba(52, 199, 89, 0.12);
+  border-color: rgba(52, 199, 89, 0.25);
+}
+
+.papr-plan__status-pill[data-tone="warning"] {
+  color: rgb(180, 83, 9);
+  background: rgba(245, 158, 11, 0.12);
+  border-color: rgba(245, 158, 11, 0.25);
+}
+
+.papr-plan__status-pill[data-tone="inactive"] {
+  color: rgb(185, 28, 28);
+  background: rgba(232, 76, 96, 0.1);
+  border-color: rgba(232, 76, 96, 0.25);
+}
+
+.papr-plan__plan-features,
+.papr-plan__plan-meta {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.papr-plan__alert {
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 12px;
+  line-height: 1.45;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.25);
+  color: var(--text-primary);
+}
+
+.papr-plan__alert[data-tone="exceeded"] {
+  background: rgba(232, 76, 96, 0.08);
+  border-color: rgba(232, 76, 96, 0.25);
+}
+
+.papr-plan__meter-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.papr-plan__meter-label {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.papr-plan__meter-value {
+  font-size: 12px;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.papr-plan__meter-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(127, 127, 127, 0.15);
+  overflow: hidden;
+}
+
+.papr-plan__meter-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent, #0071e3);
+  transition: width 0.2s ease;
+}
+
+.papr-plan__meter-fill[data-tone="warning"] {
+  background: rgb(245, 158, 11);
+}
+
+.papr-plan__meter-fill[data-tone="exceeded"] {
+  background: rgb(232, 76, 96);
+}
+
+.papr-plan__primary-btn,
+.papr-plan__secondary-btn,
+.papr-plan__link-btn {
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.papr-plan__primary-btn {
+  background: var(--accent, #0071e3);
+  color: white;
+  border: none;
+  padding: 6px 12px;
+}
+
+.papr-plan__secondary-btn {
+  background: transparent;
+  color: var(--accent, #0071e3);
+  border: 1px solid rgba(0, 113, 227, 0.25);
+  padding: 6px 12px;
+}
+
+.papr-plan__link-btn {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent, #0071e3);
+  padding: 0;
+}
+
+.papr-plan__upgrade {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.papr-plan__upgrade-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.papr-plan__upgrade-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.papr-plan__upgrade-note {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.papr-plan__upgrade-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.papr-plan__upgrade-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(127, 127, 127, 0.04);
+  border: 1px solid var(--border-color);
+}
+
+.papr-plan__upgrade-card--current {
+  border-color: color-mix(in srgb, var(--accent, #0071e3) 45%, var(--border-color));
+  background: color-mix(in srgb, var(--accent, #0071e3) 8%, var(--bg-secondary));
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent, #0071e3) 18%, transparent);
+}
+
+.papr-plan__upgrade-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.papr-plan__upgrade-card-badge {
+  align-self: flex-start;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent, #0071e3);
+}
+
+.papr-plan__upgrade-card-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-plan__upgrade-card-price {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.papr-plan__upgrade-card-features {
+  flex: 1;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.papr-plan__upgrade-card-btn {
+  align-self: flex-start;
+  margin-top: 4px;
+}
+
+.papr-plan__dashboard-btn {
+  align-self: flex-start;
+}
+
+.papr-plan__upgrade-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-plan__upgrade-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.papr-plan__metered {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 8px;
+  background: rgba(127, 127, 127, 0.06);
+  border: 1px solid var(--border-color);
+}
+
+.papr-plan__metered-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.papr-plan__payment-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 8px;
+  background: rgba(255, 193, 7, 0.1);
+  border: 1px solid rgba(255, 193, 7, 0.3);
+}
+
+.papr-plan__payment-banner-text {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.papr-plan__payment-banner-btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.papr-plan__metered-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.papr-plan__metered-copy {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.papr-plan__toggle-btn {
+  position: relative;
+  width: 42px;
+  height: 24px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(127, 127, 127, 0.35);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s ease;
+}
+
+.papr-plan__toggle-btn--on {
+  background: var(--accent, #0071e3);
+}
+
+.papr-plan__toggle-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.papr-plan__toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: white;
+  transition: transform 0.15s ease;
+}
+
+.papr-plan__toggle-btn--on .papr-plan__toggle-knob {
+  transform: translateX(18px);
+}

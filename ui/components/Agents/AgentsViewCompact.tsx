@@ -9,7 +9,7 @@ import "./AgentsViewCompact.css";
 // Subset of models for compact view (excludes openai-codex)
 const COMPACT_MODEL_IDS = [
   "claude-haiku-4-5",
-  "claude-sonnet-5",
+  "claude-sonnet-5-5",
   "claude-sonnet-4-6",
   "claude-opus-4-6",
   "gpt-5.4-mini",
@@ -17,7 +17,8 @@ const COMPACT_MODEL_IDS = [
   "gpt-5.4",
   "gpt-5.4-high",
   "gemini-3.1-flash-lite",
-  "gemini-3.5-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.8-flash",
 ];
 const modelOptions = CHAT_MODELS.filter((m) =>
   COMPACT_MODEL_IDS.includes(m.id),

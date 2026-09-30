@@ -1,0 +1,601 @@
+/**
+ * Route linked DB writes through Turso Sync replica when Plan A is enabled.
+ */
+
+import type { AppDataSource } from "../appDataSources.js";
+import {
+  getDatabaseRegistryService,
+  resolveTursoDatabaseNameForSource,
+  type DatabaseRecord,
+} from "../DatabaseRegistryService.js";
+import { getPaprUserId } from "../../utils/paprUserId.js";
+import { resolveTursoSuffixUserIdForSource } from "../appRuntime/tursoRuntimeIdentity.js";
+import { getTursoReplicaService } from "./TursoReplicaService.js";
+import type { TursoReplicaPushResponse, TursoReplicaWriteResult, TursoReplicaWriteOptions } from "./tursoReplicaTypes.js";
+import {
+  isTursoReplicaOnline,
+  shouldUseTursoReplicaForDb,
+} from "../../utils/tursoReplicaEnabled.js";
+import {
+  noteTursoReplicaTransportError,
+} from "../../utils/tursoReplicaConnectivity.js";
+import {
+  isReplicaOwnedRecord,
+  warnReplicaOwnedWithoutEngine,
+} from "./tursoReplicaOwnership.js";
+import {
+  checkMigrationPushConflict,
+  MIGRATION_CONFLICT_CODE,
+} from "./tursoReplicaMigrationConflict.js";
+import { drainInboundReplicaCdcIfCaughtUp } from "./tursoReplicaInboundDrain.js";
+import { isReplicaCheckpointWalError } from "./tursoReplicaCheckpointRecovery.js";
+import {
+  linkedSourceAsAppDataSource,
+  linkedSourceSyncKey,
+  resolveLinkedSourcesForTursoPush,
+  type TursoLinkedSource,
+} from "../tursoLinkedSources.js";
+import { ensureTursoSyncBridge } from "../TursoSyncBridge.js";
+import type { TursoPushScopedOptions } from "../TursoSyncBridge.js";
+import { publishDbChanged } from "../../utils/publishJobRunEvents.js";
+import { notifyCloudDbChanged } from "../cloudSync/notifyCloudDbChanged.js";
+import { computeReplicaPendingPush } from "./replicaPendingPush.js";
+
+/** One local registry save after a replica write (no cloud upload — timestamps are local-only). */
+async function noteReplicaWriteOutcome(
+  source: AppDataSource,
+  pendingPush: boolean,
+): Promise<void> {
+  if (!source.dbId) {
+    return;
+  }
+  const registry = getDatabaseRegistryService();
+  const now = new Date().toISOString();
+  if (pendingPush) {
+    await registry.updateReplicaPushState(source.dbId, {
+      lastReplicaLocalMutationAt: now,
+    });
+    return;
+  }
+  await registry.updateReplicaPushState(source.dbId, {
+    lastReplicaLocalMutationAt: now,
+    lastReplicaPushError: null,
+    lastReplicaPushAt: now,
+  });
+}
+
+async function noteReplicaPushSuccess(source: AppDataSource): Promise<void> {
+  if (!source.dbId) {
+    return;
+  }
+  const registry = getDatabaseRegistryService();
+  await registry.updateReplicaPushState(source.dbId, {
+    lastReplicaPushError: null,
+    lastReplicaPushAt: new Date().toISOString(),
+  });
+}
+
+/**
+ * Registry-backed dirty check for TursoLinkedDbWatcher (replica path).
+ *
+ * Replica files are worker-owned — the main thread must not open them to read
+ * `_papr_sync_log`. Instead we mirror legacy semantics: only act when
+ * `lastReplicaLocalMutationAt` is ahead of `lastReplicaPushAt` (or push is
+ * blocked). WAL/SHM touches without a registered mutation are ignored.
+ */
+export function isReplicaLinkedDbDirtyForWatcher(input: {
+  dbPath: string;
+  dbId?: string;
+}): boolean {
+  const registry = getDatabaseRegistryService();
+  const record: DatabaseRecord | undefined = input.dbId
+    ? registry.getById(input.dbId)
+    : registry.getByPath(input.dbPath);
+  const lastPushError = record?.lastReplicaPushError ?? null;
+  const migrationConflict =
+    lastPushError?.startsWith(`${MIGRATION_CONFLICT_CODE}:`) ?? false;
+  return computeReplicaPendingPush({
+    pendingOps: 0,
+    lastPushError,
+    migrationConflict,
+    lastReplicaPushAt: record?.lastReplicaPushAt ?? null,
+    lastReplicaLocalMutationAt: record?.lastReplicaLocalMutationAt ?? null,
+  });
+}
+
+/** SSE + cloud notify after replica sync reaches Turso primary or local pull completes. */
+export function notifyReplicaDbChanged(
+  source: AppDataSource,
+  options?: { tables?: string[] },
+): void {
+  const jobId = source.jobId?.trim();
+  const dbId = source.dbId?.trim();
+  if (!jobId && !dbId) {
+    return;
+  }
+
+  const tables = options?.tables ?? [];
+  publishDbChanged({
+    ...(jobId ? { jobId } : {}),
+    ...(dbId ? { dbId } : {}),
+    tables,
+  });
+  void notifyCloudDbChanged({
+    ...(jobId ? { jobId } : {}),
+    ...(dbId ? { dbId } : {}),
+    tables,
+  });
+}
+
+export function resolveRegistryRecordForSource(
+  source: AppDataSource,
+): DatabaseRecord | undefined {
+  const registry = getDatabaseRegistryService();
+  if (source.dbId) {
+    const byId = registry.getById(source.dbId);
+    if (byId) {
+      return byId;
+    }
+  }
+  return registry.getByPath(source.dbPath);
+}
+
+export function shouldUseTursoReplicaForSource(source: AppDataSource): boolean {
+  const record = resolveRegistryRecordForSource(source);
+  // Phase 1: registry DBs only — job scratch DBs stay on legacy CDC until cutover.
+  if (!record) {
+    return false;
+  }
+  return shouldUseTursoReplicaForDb({
+    syncMode: record.syncMode,
+  });
+}
+
+function resolveTursoDatabaseForReplicaSource(source: AppDataSource): string {
+  const record = resolveRegistryRecordForSource(source);
+  const callerUserId = getPaprUserId();
+  const suffixUserId =
+    record?.isolation === "per-user" && callerUserId
+      ? resolveTursoSuffixUserIdForSource(source, {
+          publisherUserId: callerUserId,
+          callerUserId,
+        })
+      : undefined;
+  const tursoDatabase = resolveTursoDatabaseNameForSource(source, suffixUserId);
+  if (!tursoDatabase) {
+    throw new Error(
+      `No Turso database mapped for source ${source.alias ?? source.dbPath}`,
+    );
+  }
+  return tursoDatabase;
+}
+
+/**
+ * Skip legacy CDC / workspace-log Turso push when Plan A owns this linked source.
+ *
+ * Deliberately not gated on `isTursoReplicaSyncFeatureEnabled()`. Ownership is
+ * recorded in the registry and outlives the flag, so a replica-owned database
+ * stays off the legacy path even where the replica engine cannot run. Legacy
+ * adopting it would reconcile against a remote it does not own — which is how
+ * the drift heal came to re-ship the same migrations forever.
+ */
+export function shouldSuppressLegacyTursoPush(options: {
+  syncKey: string;
+  dbPath?: string;
+  dbId?: string;
+}): boolean {
+  const registry = getDatabaseRegistryService();
+  const record =
+    (options.dbId ? registry.getById(options.dbId) : undefined) ??
+    (options.dbPath ? registry.getByPath(options.dbPath) : undefined) ??
+    registry.getById(options.syncKey);
+  // Cloud-direct: the primary is the only copy — there is nothing for legacy
+  // sync to push or pull, and it must not create a local file to push from.
+  if (record?.syncMode === "cloud-direct") {
+    return true;
+  }
+  if (!isReplicaOwnedRecord(record) || !record) {
+    return false;
+  }
+  if (!shouldUseTursoReplicaForDb({ syncMode: record.syncMode })) {
+    // Owned by an engine this process cannot run: decline rather than let
+    // legacy take over, and say so once so it is not a silent stall.
+    warnReplicaOwnedWithoutEngine(record);
+  }
+  return true;
+}
+
+export function shouldSuppressLegacyTursoPushForLinkedSource(
+  source: AppDataSource,
+): boolean {
+  return shouldSuppressLegacyTursoPush({
+    syncKey: source.dbId ?? source.dbPath,
+    dbPath: source.dbPath,
+    dbId: source.dbId,
+  });
+}
+
+export async function writeLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  sql: string,
+  params?: unknown[],
+  writeOptions?: TursoReplicaWriteOptions,
+): Promise<TursoReplicaWriteResult> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  const result = await replica.runWrite({
+    localPath: source.dbPath,
+    tursoDatabase,
+    sql,
+    params,
+    writeOptions,
+  });
+  await noteReplicaWriteOutcome(source, result.pendingPush);
+  if (!result.pendingPush) {
+    notifyReplicaDbChanged(source);
+  }
+  return result;
+}
+
+export async function writeLinkedDbBatchViaTursoReplica(
+  source: AppDataSource,
+  statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+): Promise<TursoReplicaWriteResult> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  const result = await replica.runStatements({
+    localPath: source.dbPath,
+    tursoDatabase,
+    statements,
+  });
+  await noteReplicaWriteOutcome(source, result.pendingPush);
+  if (!result.pendingPush) {
+    notifyReplicaDbChanged(source);
+  }
+  return result;
+}
+
+/** One migration, atomically, on the replica handle (see TursoReplicaService.runMigration). */
+export async function migrateLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  statements: readonly string[],
+  ledger: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  writeOptions?: TursoReplicaWriteOptions,
+): Promise<{
+  executed: string[];
+  skipped: Array<{ statement: string; reason: string }>;
+  pendingPush: boolean;
+}> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+  const result = await getTursoReplicaService().runMigration({
+    localPath: source.dbPath,
+    tursoDatabase,
+    statements,
+    ledger,
+    writeOptions,
+  });
+  await noteReplicaWriteOutcome(source, result.pendingPush);
+  if (!result.pendingPush) {
+    notifyReplicaDbChanged(source);
+  }
+  return result;
+}
+
+export async function execLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  sql: string,
+  writeOptions?: TursoReplicaWriteOptions,
+): Promise<{ pendingPush: boolean }> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  const result = await replica.runExec(
+    source.dbPath,
+    tursoDatabase,
+    sql,
+    writeOptions,
+  );
+  await noteReplicaWriteOutcome(source, result.pendingPush);
+  if (!result.pendingPush) {
+    notifyReplicaDbChanged(source);
+  }
+  return result;
+}
+
+export async function recoverReplicaAfterCheckpointError(
+  source: AppDataSource,
+  tursoDatabase: string,
+): Promise<boolean> {
+  const replica = getTursoReplicaService();
+  await replica.close(source.dbPath);
+  const { repairReplicaSidecarsOnCheckpointError } = await import(
+    "./tursoReplicaSidecarWedge.js"
+  );
+  if (repairReplicaSidecarsOnCheckpointError(source.dbPath)) {
+    console.warn(
+      `[TursoReplica] Reset sync sidecars before checkpoint recovery for ${source.dbId ?? source.dbPath}`,
+    );
+  }
+  const pulled = await replica.pull(source.dbPath, tursoDatabase);
+  const drain = await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
+  const phantomCdcCleared =
+    drain.drained ||
+    drain.skippedReason === "no_cdc" ||
+    (drain.cdcOperationsAfter ?? drain.cdcOperationsBefore ?? 1) === 0;
+
+  if (phantomCdcCleared && source.dbId) {
+    const registry = getDatabaseRegistryService();
+    await registry.updateReplicaPushState(source.dbId, {
+      lastReplicaPushError: null,
+    });
+  }
+
+  return pulled || phantomCdcCleared;
+}
+
+export async function pullLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  options?: { forceReconnect?: boolean },
+): Promise<boolean> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  if (options?.forceReconnect) {
+    await replica.close(source.dbPath);
+  }
+  const pulled = await replica.pull(source.dbPath, tursoDatabase);
+  if (isTursoReplicaOnline()) {
+    await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
+  }
+  if (pulled) {
+    notifyReplicaDbChanged(source);
+  }
+  return pulled;
+}
+
+export async function pushLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  options?: { pullBeforePush?: boolean; skipMigrationConflictCheck?: boolean },
+): Promise<TursoReplicaPushResponse> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  const pullFirst =
+    isTursoReplicaOnline() && options?.pullBeforePush !== false;
+
+  try {
+    if (pullFirst) {
+      await replica.pull(source.dbPath, tursoDatabase);
+    }
+
+    if (isTursoReplicaOnline() && !options?.skipMigrationConflictCheck) {
+      const conflict = await checkMigrationPushConflict({
+        source,
+        tursoDatabase,
+      });
+      if (conflict) {
+        if (source.dbId) {
+          const registry = getDatabaseRegistryService();
+          await registry.updateReplicaPushState(source.dbId, {
+            lastReplicaPushError: conflict.message,
+          });
+        }
+        return {
+          ok: false,
+          error: conflict.message,
+          conflictCode: MIGRATION_CONFLICT_CODE,
+          localOnlyMigrationIds: conflict.localOnlyIds,
+          cloudAheadMigrationIds: conflict.cloudAheadIds,
+        };
+      }
+    }
+
+    const result = await replica.push(source.dbPath, tursoDatabase, {
+      pullBeforePush: false,
+    });
+
+    if (result.ok) {
+      notifyReplicaDbChanged(source);
+      await drainInboundReplicaCdcIfCaughtUp({ source, tursoDatabase });
+      await noteReplicaPushSuccess(source);
+    } else if (
+      !result.ok &&
+      result.error &&
+      isReplicaCheckpointWalError(result.error)
+    ) {
+      const recovered = await recoverReplicaAfterCheckpointError(
+        source,
+        tursoDatabase,
+      );
+      if (recovered) {
+        notifyReplicaDbChanged(source);
+        return { ok: true };
+      }
+      if (source.dbId) {
+        const registry = getDatabaseRegistryService();
+        await registry.updateReplicaPushState(source.dbId, {
+          lastReplicaPushError: result.error,
+        });
+      }
+    } else if (!result.ok && source.dbId) {
+      const registry = getDatabaseRegistryService();
+      await registry.updateReplicaPushState(source.dbId, {
+        lastReplicaPushError: result.error,
+      });
+    }
+
+    return result;
+  } catch (error) {
+    noteTursoReplicaTransportError(error);
+    throw error;
+  }
+}
+
+export async function queryLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  sql: string,
+  params?: unknown[],
+  options?: { pullBeforeRead?: boolean },
+): Promise<import("../DbQueryPool.js").QueryResult> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  return replica.runQuery({
+    localPath: source.dbPath,
+    tursoDatabase,
+    sql,
+    params,
+    pullBeforeRead: options?.pullBeforeRead,
+  });
+}
+
+export async function queryBatchLinkedDbViaTursoReplica(
+  source: AppDataSource,
+  statements: ReadonlyArray<{ sql: string; params?: unknown[] }>,
+  options?: { pullBeforeRead?: boolean },
+): Promise<import("../DbQueryPool.js").QueryResult[]> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  return replica.runQueryBatch({
+    localPath: source.dbPath,
+    tursoDatabase,
+    statements,
+    pullBeforeRead: options?.pullBeforeRead,
+  });
+}
+
+export async function schemaLinkedDbViaTursoReplica(
+  source: AppDataSource,
+): Promise<import("../DbQueryPool.js").SchemaResult> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const replica = getTursoReplicaService();
+  return replica.runSchema(source.dbPath, tursoDatabase);
+}
+
+export async function syncStatusForLinkedDb(
+  source: AppDataSource,
+): Promise<import("./tursoReplicaTypes.js").TursoReplicaSyncStatus> {
+  const tursoDatabase = resolveTursoDatabaseForReplicaSource(source);
+
+  const record = resolveRegistryRecordForSource(source);
+  const replica = getTursoReplicaService();
+  return replica.syncStatus({
+    localPath: source.dbPath,
+    tursoDatabase,
+    syncMode: record?.syncMode,
+    cutoverBlocked: record?.cutoverBlocked,
+    cutoverBlockReason: record?.cutoverBlockReason ?? null,
+    lastPushError: record?.lastReplicaPushError ?? null,
+    lastReplicaPushAt: record?.lastReplicaPushAt ?? null,
+    lastReplicaLocalMutationAt: record?.lastReplicaLocalMutationAt ?? null,
+    source,
+  });
+}
+
+export interface TursoLinkedSourcePushResult {
+  syncKey: string;
+  alias: string;
+  appId: string;
+  backend: "replica" | "legacy";
+  ok: boolean;
+  error?: string;
+}
+
+export async function shouldSkipTursoPushInFlushForReplicaSource(
+  source: TursoLinkedSource,
+): Promise<boolean> {
+  const appSource = linkedSourceAsAppDataSource(source);
+  if (!shouldUseTursoReplicaForSource(appSource)) {
+    return false;
+  }
+  if (!isTursoReplicaOnline()) {
+    return false;
+  }
+  try {
+    const status = await syncStatusForLinkedDb(appSource);
+    return (
+      !status.pendingPush &&
+      !status.lastPushError &&
+      !status.migrationConflict &&
+      !status.cutoverBlocked
+    );
+  } catch {
+    return false;
+  }
+}
+
+export async function pushLinkedSourceWithReplicaRouting(
+  source: TursoLinkedSource,
+  options?: { tableNames?: string[] },
+): Promise<TursoLinkedSourcePushResult> {
+  const syncKey = linkedSourceSyncKey(source);
+  const appSource = linkedSourceAsAppDataSource(source);
+
+  if (shouldUseTursoReplicaForSource(appSource)) {
+    const result = await pushLinkedDbViaTursoReplica(appSource);
+    return {
+      syncKey,
+      alias: source.alias,
+      appId: source.appId,
+      backend: "replica",
+      ok: result.ok,
+      error: result.ok ? undefined : result.error,
+    };
+  }
+
+  const bridge = ensureTursoSyncBridge();
+  const pushResult = await bridge.pushJob(syncKey, undefined, {
+    tableNames: options?.tableNames,
+  });
+  if (pushResult.status === "failed") {
+    return {
+      syncKey,
+      alias: source.alias,
+      appId: source.appId,
+      backend: "legacy",
+      ok: false,
+      error: pushResult.error ?? "Turso push failed",
+    };
+  }
+  return {
+    syncKey,
+    alias: source.alias,
+    appId: source.appId,
+    backend: "legacy",
+    ok: true,
+  };
+}
+
+export async function pushTursoSourcesWithReplicaRouting(options: {
+  sources: readonly TursoLinkedSource[];
+  scope?: TursoPushScopedOptions;
+}): Promise<{
+  pushed: number;
+  failed: number;
+  results: TursoLinkedSourcePushResult[];
+}> {
+  const allSources = options.sources;
+  const explicitTargets = options.scope
+    ? resolveLinkedSourcesForTursoPush(allSources, options.scope)
+    : allSources;
+
+  const results: TursoLinkedSourcePushResult[] = [];
+  let pushed = 0;
+  let failed = 0;
+
+  for (const source of explicitTargets) {
+    const result = await pushLinkedSourceWithReplicaRouting(source);
+    results.push(result);
+    if (result.ok) {
+      pushed += 1;
+    } else {
+      failed += 1;
+    }
+  }
+
+  return { pushed, failed, results };
+}

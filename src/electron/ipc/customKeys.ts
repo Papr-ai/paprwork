@@ -32,7 +32,7 @@ export function setGatewayProcess(gateway: ChildProcess): void {
 /**
  * Send cache invalidation message to Gateway
  */
-export function invalidateKeyCache(keyName?: string): void {
+export function invalidateKeyCache(keyName?: string, keysChanged = false): void {
   if (gatewayProcess?.send) {
     console.log(
       `[IPC] Invalidating key cache: ${keyName || "all keys"}`,
@@ -40,6 +40,7 @@ export function invalidateKeyCache(keyName?: string): void {
     gatewayProcess.send({
       type: "INVALIDATE_KEY_CACHE",
       keyName,
+      keysChanged,
     });
   }
 }
@@ -103,7 +104,7 @@ export function initializeCustomKeysIPC(
     try {
       const result = await customKeysStorage.addKey(input);
       // Invalidate cache for this key
-      invalidateKeyCache(input.name);
+      invalidateKeyCache(input.name, true);
       return result;
     } catch (error) {
       console.error("[IPC] custom-keys:add error:", error);
@@ -125,7 +126,7 @@ export function initializeCustomKeysIPC(
 
         // Invalidate cache for this key
         if (keyName) {
-          invalidateKeyCache(keyName);
+          invalidateKeyCache(keyName, true);
         }
         return result;
       } catch (error) {
@@ -146,7 +147,7 @@ export function initializeCustomKeysIPC(
 
       // Invalidate cache for this key
       if (existingKey) {
-        invalidateKeyCache(existingKey.name);
+        invalidateKeyCache(existingKey.name, true);
       }
       return result;
     } catch (error) {

@@ -158,7 +158,7 @@ command: `python3 -c 'print("Python job executed successfully")'`  // ✅ Proper
 - Permanent errors (401, Invalid API key) classified correctly
 
 ### ✅ Run History
-- Every execution recorded in `~/Papr/data/job-runs.jsonl`
+- Every execution recorded in `$PAPR_HOME/data/job-runs.jsonl`
 - History includes `runId`, `status`, `duration`, `exitCode`, `error`, `attempt`
 - Statistics computed correctly (totalRuns, completedRuns, failedRuns, avgDuration)
 - Multiple runs accumulate properly
@@ -270,7 +270,7 @@ After restarting the app with the scheduler fix:
 ### 4. Verify Run History
 ```bash
 # Check the history file directly:
-cat ~/Papr/data/job-runs.jsonl | tail -5 | jq
+cat $PAPR_HOME/data/job-runs.jsonl | tail -5 | jq
 ```
 
 **Expected:** JSONL entries with complete metadata (runId, status, duration, timestamps, attempts).

@@ -2,13 +2,18 @@
  * Maps Paprwork cloud link prefs ↔ memory server publish API fields.
  */
 
-import type { CloudAccessMode } from "./cloudPublishPrefs.js";
+import type { CloudAccessMode, CloudPublishAppPrefs } from "./cloudPublishPrefs.js";
 import { formatShareLink } from "../../core/utils/cloudShareLink.js";
 import {
   accessModeToSharingSettings,
+  mergePublishPrefsForFields,
+  resolvePublishFieldsFromPrefs,
   sharingSettingsToPublishFields,
   type CloudSharingSettings,
+  type MemoryPublishSharingFields,
 } from "./cloudSharingSettings.js";
+import type { CatalogAutomation } from "../../core/types/catalogAutomation.js";
+import type { CodeAccess } from "../../core/utils/shareAudienceModel.js";
 
 export { formatShareLink, accessModeRequiresShareToken } from "../../core/utils/cloudShareLink.js";
 export {
@@ -16,6 +21,8 @@ export {
   sharingSettingsRequireShareToken,
   sharingSettingsToPublishFields,
   resolveSharingSettings,
+  resolvePublishFieldsFromPrefs,
+  mergePublishPrefsForFields,
   sharingSettingsSummary,
   type CloudSharingSettings,
   type CloudLoginAccess,
@@ -38,8 +45,10 @@ export interface MemoryPublishRequestFields {
   visibility: CloudAccessMode;
   linkPermission: "read" | "read_write";
   shareLinkEnabled: boolean;
+  requireSignIn?: boolean;
   codeAccess?: "off" | "install";
   catalogRequirements?: MemoryCatalogRequirementFields[];
+  catalogTags?: string[];
 }
 
 export interface MemoryPublishResponseFields {
@@ -47,12 +56,24 @@ export interface MemoryPublishResponseFields {
   slug?: string;
   visibility?: string;
   linkPermission?: string;
+  requireSignIn?: boolean;
   codeAccess?: "off" | "install";
   enabled?: boolean;
   shareUrl?: string;
   shareToken?: string;
   publishedAt?: string;
+  /** Audience "people" — enforced again on Cloud App Host. */
+  allowedUserIds?: string[];
+  allowedEmails?: string[];
+  allowedEmailDomains?: string[];
   catalogRequirements?: MemoryCatalogRequirementFields[];
+  catalogTitle?: string;
+  catalogDescription?: string;
+  catalogIcon?: string;
+  catalogTags?: string[];
+  catalogPlatform?: string[];
+  catalogRequiresDesktop?: boolean;
+  catalogAutomation?: CatalogAutomation | null;
 }
 
 const ACCESS_MODES: readonly CloudAccessMode[] = [
@@ -80,6 +101,50 @@ export function visibilityToAccessMode(visibility: string | undefined): CloudAcc
     return visibility as CloudAccessMode;
   }
   return "private";
+}
+
+export function memoryPublishResponseToSharingSettings(
+  memory: MemoryPublishResponseFields,
+): CloudSharingSettings {
+  return accessModeToSharingSettings(visibilityToAccessMode(memory.visibility));
+}
+
+/**
+ * Catalog-only sync must not rewrite community listing from memory visibility alone.
+ * Memory stores public_read for external-email "people" apps; prefs carry allowlists
+ * and the correct communityCatalogListed flag.
+ */
+export function resolvePublishFieldsWhenPreservingCloudSharing(
+  memory: MemoryPublishResponseFields,
+  prefs: CloudPublishAppPrefs,
+): MemoryPublishSharingFields & { codeAccess: CodeAccess } {
+  const fromMemory = resolvePublishFieldsFromMemory(memory);
+  const fromPrefs = resolvePublishFieldsFromPrefs(mergePublishPrefsForFields(prefs));
+  return {
+    ...fromMemory,
+    communityCatalogListed: fromPrefs.communityCatalogListed,
+    requireSignIn:
+      fromPrefs.requireSignIn !== undefined
+        ? fromPrefs.requireSignIn
+        : fromMemory.requireSignIn,
+  };
+}
+
+/** ACL fields currently live on the memory server — for code-only republish. */
+export function resolvePublishFieldsFromMemory(
+  memory: MemoryPublishResponseFields,
+): MemoryPublishSharingFields & { codeAccess: CodeAccess } {
+  const sharing = memoryPublishResponseToSharingSettings(memory);
+  const fields = sharingSettingsToPublishFields(sharing);
+  return {
+    ...fields,
+    codeAccess: memory.codeAccess ?? "off",
+    ...(memory.requireSignIn === true && fields.visibility === "public_read"
+      ? { requireSignIn: true }
+      : memory.requireSignIn === false
+        ? { requireSignIn: false }
+        : {}),
+  };
 }
 
 export function memoryPublishResponseToConfig(

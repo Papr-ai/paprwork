@@ -1,0 +1,185 @@
+/**
+ * SharePeoplePicker — search on top, current access below.
+ *
+ * Reuses the Share sheet's own type scale and tokens so the panel reads as one
+ * surface rather than a widget dropped into it.
+ */
+
+.people-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.people-picker[data-disabled] {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+/* ── Search ─────────────────────────────────────────────────────────── */
+
+.people-picker__search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px;
+  height: 34px;
+  border: 1px solid var(--border-color);
+  border-radius: 9px;
+  background: var(--glass-bg, rgba(120, 120, 128, 0.08));
+  transition: border-color 0.15s ease;
+}
+
+.people-picker__search:focus-within {
+  border-color: var(--accent);
+}
+
+.people-picker__search-icon {
+  display: grid;
+  place-items: center;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+
+.people-picker__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+}
+
+.people-picker__input::placeholder {
+  color: var(--text-tertiary);
+}
+
+/* ── Suggestions (only while typing) ────────────────────────────────── */
+
+.people-picker__menu {
+  list-style: none;
+  margin: 0;
+  padding: 4px;
+  max-height: 208px;
+  overflow-y: auto;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--popover-bg, var(--background-color));
+  box-shadow: var(--popover-shadow, 0 8px 24px rgba(0, 0, 0, 0.18));
+}
+
+.people-picker__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.people-picker__option.is-active {
+  background: var(--hover);
+}
+
+/* ── Current access list ────────────────────────────────────────────── */
+
+.people-picker__access-title {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+  margin-bottom: 6px;
+}
+
+.people-picker__access-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.people-picker__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 5px 4px;
+}
+
+/* Shared by rows and suggestions so one person looks identical in both. */
+.people-picker__person {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+  line-height: 1.3;
+}
+
+.people-picker__name {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.people-picker__sub {
+  font-size: 11.5px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.people-picker__badge {
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+  padding-right: 4px;
+}
+
+.people-picker__remove {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.people-picker__remove:hover {
+  background: var(--hover);
+  color: var(--text-primary);
+}
+
+.people-picker__empty,
+.people-picker__hint {
+  margin: 6px 0 0;
+  padding: 0 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-tertiary);
+}
+
+.people-picker__domain-icon {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--glass-bg, rgba(120, 120, 128, 0.16));
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}

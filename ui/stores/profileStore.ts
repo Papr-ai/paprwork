@@ -1,72 +1,386 @@
 /**
- * Profile Store - User profile data available across the app
+ * Profile Store - User profile + Papr workspace context for sidebar and chat
  */
 
 import { create } from "zustand";
 import { gateway } from "../src/lib/gateway";
+import { isWorkspaceSwitchReloading } from "../lib/workspaceSwitchReload";
+import {
+  clearProfileSidebarCache,
+  readProfileSidebarCache,
+  writeProfileSidebarCache,
+} from "../utils/profileSidebarCache";
+import {
+  isProfileImagePendingSync,
+  resolveDisplayProfileImage,
+} from "../utils/profileImageSyncCore.js";
+import { retryPendingProfileImageSync } from "../utils/profileImageSync.js";
+import { sameProfileFields } from "../utils/storeWriteGuards";
 
 interface ProfileState {
   name: string;
   email: string;
   imageUrl: string;
   plan: string;
+  organizationName: string;
+  namespaceName: string;
+  workspaceName: string;
   loaded: boolean;
-  loadProfile: () => Promise<void>;
+  loadProfile: (options?: {
+    force?: boolean;
+    /**
+     * Skip the refresh if one completed very recently. For background triggers
+     * (workspace cache rewrites) where staleness is cheap — never for user
+     * actions like switching org, which must be reflected immediately.
+     */
+    throttle?: boolean;
+  }) => Promise<void>;
   setProfile: (profile: {
     name?: string;
     email?: string;
     imageUrl?: string;
     plan?: string;
+    organizationName?: string;
+    namespaceName?: string;
+    workspaceName?: string;
   }) => void;
 }
 
-export const useProfileStore = create<ProfileState>((set, get) => ({
-  name: "",
-  email: "",
-  imageUrl: "",
-  plan: "Free plan",
-  loaded: false,
+const cached = readProfileSidebarCache();
 
-  loadProfile: async () => {
-    if (get().loaded) return;
+let refreshInFlight: Promise<void> | null = null;
+let profileImageRetryInFlight: Promise<void> | null = null;
+
+/** Shortest gap between background (throttled) refreshes. */
+const MIN_FORCED_REFRESH_INTERVAL_MS = 10_000;
+let lastRefreshAt = 0;
+
+function persistProfileSnapshot(state: {
+  name: string;
+  email: string;
+  imageUrl: string;
+  plan: string;
+  organizationName: string;
+  namespaceName: string;
+  workspaceName: string;
+}): void {
+  writeProfileSidebarCache(state);
+}
+
+async function fetchProfileContext(options?: {
+  bypassSwitchGuard?: boolean;
+}): Promise<{
+  name: string;
+  email: string;
+  imageUrl: string;
+  plan: string;
+  organizationName: string;
+  namespaceName: string;
+  workspaceName: string;
+  pendingImageSync?: {
+    localImageUrl: string;
+    profileImageSyncPending: boolean;
+    name: string;
+    email: string;
+  };
+}> {
+  const sidebarCache = readProfileSidebarCache();
+  if (!options?.bypassSwitchGuard && isWorkspaceSwitchReloading() && sidebarCache) {
+    return {
+      name: sidebarCache.name,
+      email: sidebarCache.email,
+      imageUrl: sidebarCache.imageUrl,
+      plan: sidebarCache.plan,
+      organizationName: sidebarCache.organizationName,
+      namespaceName: sidebarCache.namespaceName,
+      workspaceName: sidebarCache.workspaceName,
+    };
+  }
+
+  const settingsResponse = await gateway.send("settings:get");
+  const settingsData = settingsResponse.data as {
+    profile?: {
+      name?: string;
+      email?: string;
+      imageUrl?: string;
+      profileImageSyncPending?: boolean;
+    };
+  };
+
+  let name = settingsData?.profile?.name ?? "";
+  let email = settingsData?.profile?.email ?? "";
+  const localImageUrl = settingsData?.profile?.imageUrl ?? "";
+  const profileImageSyncPending =
+    settingsData?.profile?.profileImageSyncPending === true;
+  let imageUrl = localImageUrl;
+  // Keep last-known plan from sidebar cache until billing refresh succeeds.
+  let plan = sidebarCache?.plan ?? "";
+  let organizationName = "";
+  let namespaceName = "";
+  let workspaceName = "";
+
+  const loginStatus = await window.electronAPI.papr.checkLoginStatus();
+  const pendingImageSync = isProfileImagePendingSync(
+    localImageUrl,
+    profileImageSyncPending,
+  )
+    ? { localImageUrl, profileImageSyncPending, name, email }
+    : undefined;
+
+  if (!loginStatus.success || !loginStatus.isLoggedIn) {
+    return {
+      name,
+      email,
+      imageUrl,
+      plan,
+      organizationName,
+      namespaceName,
+      workspaceName,
+      pendingImageSync,
+    };
+  }
+
+  const [paprProfileResult, planResult, orgsResult, workspaceResult] =
+    await Promise.all([
+      (async () => {
+        const refreshResult = await window.electronAPI.papr.refreshProfile();
+        if (refreshResult.success && refreshResult.profile) {
+          return { success: true, profile: refreshResult.profile };
+        }
+        return window.electronAPI.papr.getProfile();
+      })(),
+      window.electronAPI.papr.getPlanSummary(),
+      window.electronAPI.papr.listOrganizations(),
+      window.electronAPI.papr.getActiveWorkspace(),
+    ]);
+
+  const paprProfile = paprProfileResult.success
+    ? paprProfileResult.profile
+    : undefined;
+  const workspacePointer =
+    workspaceResult.success && workspaceResult.pointer
+      ? workspaceResult.pointer
+      : undefined;
+
+  if (paprProfile) {
+    if (!name) name = paprProfile.displayName?.trim() || "";
+    if (!email) email = paprProfile.email || "";
+    imageUrl = resolveDisplayProfileImage(
+      localImageUrl,
+      paprProfile.profileImage ?? "",
+      profileImageSyncPending,
+    );
+    const profilePlan = paprProfile.planName?.trim();
+    if (profilePlan) {
+      plan = profilePlan;
+    }
+    workspaceName = paprProfile.workspaceName?.trim() || workspaceName;
+  }
+
+  if (planResult.success && planResult.summary?.planName) {
+    plan = planResult.summary.planName;
+  }
+
+  const activeWorkspaceId =
+    orgsResult.success && orgsResult.activeOrganizationId
+      ? orgsResult.activeOrganizationId
+      : undefined;
+  const activeNamespaceId =
+    paprProfile?.activeNamespaceId?.trim() ||
+    workspacePointer?.namespaceId?.trim() ||
+    undefined;
+
+  if (orgsResult.success && orgsResult.organizations?.length) {
+    const activeOrg =
+      orgsResult.organizations.find((org) => org.id === activeWorkspaceId) ??
+      orgsResult.organizations[0];
+    // Match Settings → Organization dropdown (`org.name` from workspaceDisplayName).
+    organizationName =
+      activeOrg.name?.trim() ||
+      activeOrg.organizationName?.trim() ||
+      activeOrg.workspaceName?.trim() ||
+      organizationName;
+    workspaceName =
+      activeOrg.workspaceName?.trim() || activeOrg.name?.trim() || workspaceName;
+  }
+
+  if (activeWorkspaceId) {
+    const namespacesResult = await window.electronAPI.papr.listAllNamespaces({
+      workspaceId: activeWorkspaceId,
+    });
+    if (namespacesResult.success && namespacesResult.groups?.length) {
+      const resolvedNamespaceId =
+        namespacesResult.activeNamespaceId?.trim() ||
+        activeNamespaceId ||
+        undefined;
+      for (const group of namespacesResult.groups) {
+        if (!resolvedNamespaceId) {
+          break;
+        }
+        const activeNs = group.namespaces.find(
+          (ns) => ns.id === resolvedNamespaceId,
+        );
+        if (activeNs?.name?.trim()) {
+          namespaceName = activeNs.name.trim();
+          if (!organizationName && group.organizationName?.trim()) {
+            organizationName = group.organizationName.trim();
+          }
+          break;
+        }
+      }
+    }
+  }
+
+  if (!namespaceName && workspacePointer?.namespaceName?.trim()) {
+    namespaceName = workspacePointer.namespaceName.trim();
+  }
+  if (!organizationName && workspacePointer?.organizationName?.trim()) {
+    organizationName = workspacePointer.organizationName.trim();
+  }
+  if (!namespaceName && paprProfile?.activeNamespaceName?.trim()) {
+    namespaceName = paprProfile.activeNamespaceName.trim();
+  }
+
+  return {
+    name,
+    email,
+    imageUrl,
+    plan,
+    organizationName,
+    namespaceName,
+    workspaceName,
+    pendingImageSync,
+  };
+}
+
+async function maybeRetryPendingProfileImageSync(
+  name: string,
+  email: string,
+  localImageUrl: string,
+  profileImageSyncPending: boolean,
+  setProfileImage: (cloudUrl: string) => void,
+): Promise<void> {
+  if (!isProfileImagePendingSync(localImageUrl, profileImageSyncPending)) {
+    return;
+  }
+  if (profileImageRetryInFlight) {
+    await profileImageRetryInFlight;
+    return;
+  }
+
+  profileImageRetryInFlight = (async () => {
     try {
-      const response = await gateway.send("settings:get");
-      const data = response.data as {
-        profile?: {
-          name?: string;
-          email?: string;
-          imageUrl?: string;
-          plan?: string;
-        };
-        subscription?: { plan?: string; name?: string };
-      };
-      if (data?.profile) {
-        set({
-          name: data.profile.name ?? "",
-          email: data.profile.email ?? "",
-          imageUrl: data.profile.imageUrl ?? "",
-          plan:
-            data.profile.plan ??
-            data.subscription?.plan ??
-            data.subscription?.name ??
-            "Free plan",
-          loaded: true,
-        });
-      } else {
-        set({ loaded: true });
+      const result = await retryPendingProfileImageSync(
+        name,
+        email,
+        localImageUrl,
+        profileImageSyncPending,
+      );
+      if (result.cloudUrl) {
+        setProfileImage(result.cloudUrl);
       }
     } catch (err) {
-      console.error("[ProfileStore] Load error:", err);
-      set({ loaded: true });
+      console.warn("[ProfileStore] Pending profile photo sync failed:", err);
+    } finally {
+      profileImageRetryInFlight = null;
     }
+  })();
+
+  await profileImageRetryInFlight;
+}
+
+export const useProfileStore = create<ProfileState>((set, get) => ({
+  name: cached?.name ?? "",
+  email: cached?.email ?? "",
+  imageUrl: cached?.imageUrl ?? "",
+  plan: cached?.plan ?? "",
+  organizationName: cached?.organizationName ?? "",
+  namespaceName: cached?.namespaceName ?? "",
+  workspaceName: cached?.workspaceName ?? "",
+  loaded: false,
+
+  loadProfile: async (options) => {
+    const force = options?.force === true;
+    if (!force && get().loaded) return;
+
+    // Join the running refresh rather than queueing another one behind it.
+    // Previously a forced call awaited the in-flight promise and then started a
+    // second pass, so N concurrent workspace events produced N full refreshes
+    // (profile + plan + workspace list) instead of one.
+    if (refreshInFlight) {
+      await refreshInFlight;
+      return;
+    }
+
+    if (
+      options?.throttle === true &&
+      Date.now() - lastRefreshAt < MIN_FORCED_REFRESH_INTERVAL_MS
+    ) {
+      return;
+    }
+
+    refreshInFlight = (async () => {
+      try {
+        const { pendingImageSync, ...snapshot } = await fetchProfileContext({
+          bypassSwitchGuard: force,
+        });
+        set({ ...snapshot, loaded: true });
+        persistProfileSnapshot(snapshot);
+
+        if (pendingImageSync) {
+          void maybeRetryPendingProfileImageSync(
+            pendingImageSync.name,
+            pendingImageSync.email,
+            pendingImageSync.localImageUrl,
+            pendingImageSync.profileImageSyncPending,
+            (cloudUrl) => {
+              const next = { ...get(), imageUrl: cloudUrl };
+              set({ imageUrl: cloudUrl });
+              persistProfileSnapshot(next);
+            },
+          );
+        }
+      } catch (err) {
+        console.error("[ProfileStore] Load error:", err);
+        set({ loaded: true });
+      } finally {
+        lastRefreshAt = Date.now();
+        refreshInFlight = null;
+      }
+    })();
+
+    await refreshInFlight;
   },
 
   setProfile: (profile) => {
-    set({
-      name: profile.name ?? get().name,
-      email: profile.email ?? get().email,
-      imageUrl: profile.imageUrl ?? get().imageUrl,
-      plan: profile.plan ?? get().plan,
-    });
+    const current = get();
+    const next = {
+      name: profile.name ?? current.name,
+      email: profile.email ?? current.email,
+      imageUrl: profile.imageUrl ?? current.imageUrl,
+      plan: profile.plan ?? current.plan,
+      organizationName: profile.organizationName ?? current.organizationName,
+      namespaceName: profile.namespaceName ?? current.namespaceName,
+      workspaceName: profile.workspaceName ?? current.workspaceName,
+    };
+    // Callers re-assert the same values routinely — the billing refresh writes
+    // `plan` on every poll. Zustand replaces the state object regardless, which
+    // re-rendered every component reading this store whole, and the localStorage
+    // write below is synchronous, so a no-op call was not a cheap one.
+    if (sameProfileFields(current, next)) {
+      return;
+    }
+    set(next);
+    persistProfileSnapshot(next);
   },
 }));
+
+export function clearCachedProfileContext(): void {
+  clearProfileSidebarCache();
+  useProfileStore.setState({
+    plan: "",
+    organizationName: "",
+    namespaceName: "",
+    workspaceName: "",
+  });
+}

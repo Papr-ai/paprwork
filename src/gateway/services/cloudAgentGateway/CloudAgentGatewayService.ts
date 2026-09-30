@@ -1,4 +1,5 @@
 import { getAgentService } from "../AgentService.js";
+import { resolveCloudAgentChatId } from "./cloudAppAgentSession.js";
 import {
   beginCloudAgentRun,
   resolveCloudAgentJobStreamInput,
@@ -10,7 +11,12 @@ import type {
   CloudAgentRunResponse,
   CloudAgentSessionBeginResponse,
 } from "./types.js";
-import { randomUUID } from "crypto";
+import {
+  beginCloudAgentOneShotStreamDedup,
+  CloudAgentRunDuplicateInFlightError,
+  getCachedCloudAgentRunResult,
+  runWithCloudAgentRunDedup,
+} from "./cloudAgentRunDedup.js";
 
 export class CloudAgentGatewayService {
   async beginAgentSession(
@@ -24,20 +30,24 @@ export class CloudAgentGatewayService {
   }
 
   async runAgentJob(request: CloudAgentRunRequest): Promise<CloudAgentRunResponse> {
-    const chatId = `job:${request.jobId}:${request.runId}`;
+    return runWithCloudAgentRunDedup(request, () => this.executeRunAgentJob(request));
+  }
+
+  private async executeRunAgentJob(
+    request: CloudAgentRunRequest,
+  ): Promise<CloudAgentRunResponse> {
+    const chatId = resolveCloudAgentChatId(request);
     try {
       const result = await withCloudAgentRunContext(request, async () => {
         const agentService = getAgentService();
         const streamInput = await resolveCloudAgentJobStreamInput(request);
-        const { session: _session, ...jobSession } = streamInput;
-        return agentService.runIsolatedJobSession(jobSession);
+        const { session: _session, appendLog, ...jobSession } = streamInput;
+        return agentService.runIsolatedJobSession({ ...jobSession, appendLog });
       });
 
-      const output = result.text.trim();
       return {
-        exitCode: output ? 0 : 1,
+        exitCode: 0,
         output: result.text,
-        error: output ? undefined : "Agent job finished with no output",
         chatId: result.chatId,
       };
     } catch (error) {
@@ -70,7 +80,42 @@ export class CloudAgentGatewayService {
   private async *streamOneShotRun(
     request: CloudAgentRunRequest,
   ): AsyncGenerator<Record<string, unknown>> {
-    const chatId = `job:${request.jobId}:${request.runId}`;
+    const cached = getCachedCloudAgentRunResult(request);
+    if (cached) {
+      console.warn(
+        `[CloudAgentGateway] Duplicate one-shot stream (cached) job=${request.jobId} chatId=${cached.chatId}`,
+      );
+      yield {
+        type: "session-meta",
+        chatId: cached.chatId,
+        provider: request.llmAuth.provider,
+        runtime: "cloud-agent-gateway",
+      };
+      yield { type: "done", exitCode: cached.exitCode, chatId: cached.chatId, deduplicated: true };
+      return;
+    }
+
+    const chatId = resolveCloudAgentChatId(request);
+
+    let streamDedup: ReturnType<typeof beginCloudAgentOneShotStreamDedup> | undefined;
+    try {
+      streamDedup = beginCloudAgentOneShotStreamDedup(request);
+    } catch (error) {
+      if (error instanceof CloudAgentRunDuplicateInFlightError) {
+        console.warn(
+          `[CloudAgentGateway] Duplicate one-shot stream job=${request.jobId} runId=${request.runId}`,
+        );
+        yield {
+          type: "error",
+          code: error.code,
+          message: error.message,
+          chatId,
+        };
+        yield { type: "done", exitCode: 0, chatId, deduplicated: true };
+        return;
+      }
+      throw error;
+    }
 
     yield {
       type: "session-meta",
@@ -80,6 +125,7 @@ export class CloudAgentGatewayService {
     };
 
     let exitCode = 0;
+    let syncError: string | undefined;
     let handle: Awaited<ReturnType<typeof beginCloudAgentRun>> | undefined;
 
     try {
@@ -90,8 +136,23 @@ export class CloudAgentGatewayService {
       yield { type: "error", message: (error as Error).message, chatId };
     } finally {
       if (handle) {
-        await handle.finish();
+        try {
+          await handle.finish();
+        } catch (error) {
+          exitCode = 1;
+          syncError = (error as Error).message;
+        }
       }
+      streamDedup?.release({
+        exitCode,
+        output: "",
+        chatId,
+        ...(syncError ? { error: syncError } : {}),
+      });
+    }
+
+    if (syncError) {
+      yield { type: "error", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };
@@ -102,7 +163,7 @@ export class CloudAgentGatewayService {
   ): AsyncGenerator<Record<string, unknown>> {
     const sessionId = request.workspaceSessionId as string;
     const cache = getCloudAgentSessionCache();
-    const chatId = `job:${request.jobId}:${request.runId}`;
+    const chatId = resolveCloudAgentChatId(request);
 
     yield {
       type: "session-meta",
@@ -114,6 +175,7 @@ export class CloudAgentGatewayService {
 
     const releaseTurn = await cache.acquireTurnLock(sessionId);
     let exitCode = 0;
+    let syncError: string | undefined;
     let handle: Awaited<ReturnType<typeof cache.acquireForTurn>> | undefined;
 
     try {
@@ -124,9 +186,18 @@ export class CloudAgentGatewayService {
       yield { type: "error", message: (error as Error).message, chatId };
     } finally {
       if (handle) {
-        await handle.finish({ deleteWorkspace: false });
+        try {
+          await handle.finish({ deleteWorkspace: false });
+        } catch (error) {
+          exitCode = 1;
+          syncError = (error as Error).message;
+        }
       }
       releaseTurn();
+    }
+
+    if (syncError) {
+      yield { type: "error", message: syncError, chatId };
     }
 
     yield { type: "done", exitCode, chatId };
@@ -138,11 +209,24 @@ export class CloudAgentGatewayService {
     let exitCode = 0;
     const agentService = getAgentService();
     const streamInput = await resolveCloudAgentJobStreamInput(request);
-    const { session: _session, ...jobSession } = streamInput;
+    const {
+      session: _session,
+      appendLog,
+      prompt: _prompt,
+      streamUserMessage,
+      chatId,
+      systemPromptOverride,
+      ...jobSession
+    } = streamInput;
 
-    for await (const chunk of agentService.streamIsolatedJobSessionForCloud(
-      jobSession,
-    )) {
+    for await (const chunk of agentService.streamIsolatedJobSessionForCloud({
+      ...jobSession,
+      prompt: streamInput.prompt,
+      chatId,
+      userMessage: streamUserMessage,
+      ...(systemPromptOverride ? { systemPromptOverride } : {}),
+      appendLog,
+    })) {
       if (chunk.type === "error") {
         exitCode = 1;
       }
@@ -167,6 +251,4 @@ export function getCloudAgentGatewayService(): CloudAgentGatewayService {
   return sharedService;
 }
 
-export function newCloudAgentRunId(): string {
-  return randomUUID().replace(/-/g, "").slice(0, 12);
-}
+export { newCloudAgentRunId } from "./cloudAgentRunId.js";

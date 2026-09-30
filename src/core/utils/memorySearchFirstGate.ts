@@ -25,6 +25,7 @@ const MEMORY_SATISFYING_TOOLS = new Set<string>([
 const EXPLORATION_REMINDER_TOOLS = new Set<string>([
   "list_directory",
   "search_files",
+  "search_app_files",
   "list_app_files",
   "list_apps",
   "list_job_files",

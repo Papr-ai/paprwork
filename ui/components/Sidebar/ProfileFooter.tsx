@@ -1,11 +1,21 @@
 /**
- * ProfileFooter - Bottom-of-sidebar identity row.
- * Avatar (→ profile section), name + subscription, and a more (…) button → Settings.
+ * ProfileFooter - Bottom-of-rail identity: avatar (→ profile) with a hover card showing
+ * name + active org/namespace, your agent (→ personalize), org logo, Edit profile and Settings.
+ * The avatar wears the org's logo as a badge so you always know which workspace you are in.
  */
 
-import React from "react";
+import { useCallback, useEffect } from "react";
+import { formatActiveWorkspaceLabel } from "../../lib/workspaceSwitchOverlay";
+import { useCloudMemoryStatusStore } from "../../stores/cloudMemoryStatusStore";
+import { UserAvatar } from "../common/UserAvatar";
 import { useProfileStore } from "../../stores/profileStore";
-import { ConnectionIndicator } from "../ConnectionIndicator/ConnectionIndicator";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { useAgentIdentity, useAgentName } from "../Agent/agentIdentityStore";
+import { RailIcons } from "./railIcons";
+import { OrgMark } from "./OrgMark";
+import { OrgSection } from "./OrgSection";
+import { defaultOrgSite, orgLogoSrc, useOrgLogos } from "./orgLogoStore";
+import { useOrgList, type OrgEntry } from "./useOrgList";
 import "./ProfileFooter.css";
 
 interface ProfileFooterProps {
@@ -13,63 +23,154 @@ interface ProfileFooterProps {
   onOpenSettings: () => void;
 }
 
-function initials(name: string): string {
-  const parts = name.trim().split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "";
-  const first = parts[0][0] ?? "";
-  const last = parts.length > 1 ? parts[parts.length - 1][0] ?? "" : "";
-  return (first + last).toUpperCase();
-}
-
 export function ProfileFooter({ onOpenProfile, onOpenSettings }: ProfileFooterProps) {
-  const { name, plan, imageUrl } = useProfileStore();
-  const displayName = name || "Your account";
-  const ini = initials(name);
+  const planAttention = useCloudMemoryStatusStore((state) => state.planAttention);
+  const planStatus = useCloudMemoryStatusStore((state) => state.status);
+  const planAttentionHint = planStatus
+    ? `${planStatus.label} — open Billing in Settings`
+    : "Billing needs attention — open Billing in Settings";
+  const {
+    name,
+    imageUrl,
+    organizationName,
+    namespaceName,
+    workspaceName,
+    email,
+    loadProfile,
+    setProfile,
+  } = useProfileStore();
+  const displayName = name.trim() || "Your account";
+  const agentName = useAgentName();
+  const openAgentSheet = useAgentIdentity((s) => s.openSheet);
+  const workspaceLabel =
+    formatActiveWorkspaceLabel({
+      organizationName,
+      namespaceName,
+      workspaceName,
+    }) ?? "";
+  const { orgs, activeId, switching, switchTo } = useOrgList();
+  // Logo is per org. Until the org list loads, fall back to the profile's org name.
+  const branding = useOrgLogos((s) => s.branding);
+  const siteFor = useCallback(
+    (org: OrgEntry) => branding[org.id]?.site ?? defaultOrgSite([org.name, org.organizationName], email),
+    [branding, email],
+  );
+  const activeOrg = orgs.find((o) => o.id === activeId);
+  const orgName = activeOrg?.name || organizationName || workspaceName || "";
+  const orgLogo = activeOrg
+    ? orgLogoSrc(branding[activeOrg.id], siteFor(activeOrg))
+    : orgLogoSrc(undefined, defaultOrgSite([organizationName, workspaceName], email));
+  const badge = orgName ? <OrgMark name={orgName} src={orgLogo} className="rail-account__badge" /> : null;
+  useEffect(() => {
+    void loadProfile();
+
+    const refresh = () => {
+      void loadProfile({ force: true });
+    };
+
+    // The workspace cache is rewritten by background Parse refreshes, and the
+    // reload this triggers is what starts those refreshes. Throttling it keeps
+    // the two from driving each other.
+    const refreshFromCacheUpdate = () => {
+      void loadProfile({ force: true, throttle: true });
+    };
+
+    const applyWorkspaceLabels = (event: Event) => {
+      const detail = (event as CustomEvent).detail as {
+        organizationName?: string;
+        namespaceName?: string;
+      };
+      if (!detail?.organizationName && !detail?.namespaceName) {
+        return;
+      }
+      setProfile({
+        organizationName: detail.organizationName,
+        namespaceName: detail.namespaceName,
+      });
+    };
+
+    window.addEventListener("papr-auth-success", refresh);
+    window.addEventListener("papr-logout-success", refresh);
+    window.addEventListener("papr-organization-changed", refresh);
+    window.addEventListener("papr-namespace-changed", refresh);
+    window.addEventListener("papr-workspace-reload", refresh);
+    window.addEventListener("papr-workspace-switch-complete", refresh);
+    window.addEventListener("papr-workspace-labels-updated", applyWorkspaceLabels);
+    window.electronAPI.papr.onLoginSuccess(refresh);
+    window.electronAPI.papr.onLogoutSuccess(refresh);
+    window.electronAPI.papr.onOrganizationChanged(refresh);
+    window.electronAPI.papr.onNamespaceChanged(refresh);
+    window.electronAPI.papr.onWorkspaceCacheUpdated(refreshFromCacheUpdate);
+
+    return () => {
+      window.removeEventListener("papr-auth-success", refresh);
+      window.removeEventListener("papr-logout-success", refresh);
+      window.removeEventListener("papr-organization-changed", refresh);
+      window.removeEventListener("papr-namespace-changed", refresh);
+      window.removeEventListener("papr-workspace-reload", refresh);
+      window.removeEventListener("papr-workspace-switch-complete", refresh);
+      window.removeEventListener("papr-workspace-labels-updated", applyWorkspaceLabels);
+      window.electronAPI.papr.removeLoginSuccessListener(refresh);
+      window.electronAPI.papr.removeLogoutSuccessListener(refresh);
+      window.electronAPI.papr.removeOrganizationChangedListener(refresh);
+      window.electronAPI.papr.removeNamespaceChangedListener(refresh);
+      window.electronAPI.papr.removeWorkspaceCacheUpdatedListener(
+        refreshFromCacheUpdate,
+      );
+    };
+  }, [loadProfile, setProfile]);
 
   return (
-    <div className="profile-footer">
+    <div className="rail-item rail-item--has-peek rail-item--peek-bottom rail-account">
       <button
-        className="profile-footer__avatar"
+        type="button"
+        className="rail-account__avatar"
         onClick={onOpenProfile}
-        aria-label="Edit profile"
-        title="Edit profile"
+        aria-label={[`Account`, orgName, planAttention ? planAttentionHint : ""].filter(Boolean).join(" — ")}
       >
-        {imageUrl ? (
-          <img src={imageUrl} alt={displayName} />
-        ) : ini ? (
-          <span className="profile-footer__initials">{ini}</span>
-        ) : (
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
-            <circle cx="12" cy="8" r="4" stroke="currentColor" strokeWidth="1.6" />
-            <path
-              d="M4 20c0-3.3 3.6-6 8-6s8 2.7 8 6"
-              stroke="currentColor"
-              strokeWidth="1.6"
-              strokeLinecap="round"
-            />
-          </svg>
-        )}
+        <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={32} />
+        {badge}
+        {planAttention ? <i className="rail-btn__badge rail-btn__badge--warn" aria-hidden="true" /> : null}
       </button>
 
-      <button className="profile-footer__id" onClick={onOpenProfile}>
-        <span className="profile-footer__name">{displayName}</span>
-        <span className="profile-footer__plan">{plan}</span>
-      </button>
+      <div className="rail-peek rail-account__card" role="menu" aria-label="Account">
+        <button type="button" className="rail-account__head" onClick={onOpenProfile} title="Edit profile">
+          <span className="rail-account__photo">
+            <UserAvatar imageUrl={imageUrl} displayName={name} alt={displayName} size={40} />
+            {badge}
+          </span>
+          <span>
+            <b>{displayName}</b>
+            {workspaceLabel ? (
+              <small>{workspaceLabel}</small>
+            ) : null}
+          </span>
+        </button>
 
-      <ConnectionIndicator />
+        <h6>Your agent</h6>
+        <button type="button" className="rail-account__row" onClick={openAgentSheet} data-agent-hover>
+          <AgentGlyph size={24} />
+          <span className="rail-account__label">{agentName}</span>
+          <em>Personalize</em>
+        </button>
 
-      <button
-        className="profile-footer__more"
-        onClick={onOpenSettings}
-        aria-label="Settings"
-        title="Settings"
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-          <circle cx="5" cy="12" r="1.6" />
-          <circle cx="12" cy="12" r="1.6" />
-          <circle cx="19" cy="12" r="1.6" />
-        </svg>
-      </button>
+        <OrgSection orgs={orgs} activeId={activeId} switching={switching} onSwitch={switchTo} siteFor={siteFor} />
+
+        {planAttention ? (
+          <p className="rail-account__attention" role="status">{planAttentionHint}</p>
+        ) : null}
+
+        <footer className="rail-peek__footer rail-account__footer">
+          <button type="button" onClick={onOpenProfile}>
+            <RailIcons.person />
+            Edit profile
+          </button>
+          <button type="button" onClick={onOpenSettings}>
+            <RailIcons.settings />
+            Settings
+          </button>
+        </footer>
+      </div>
     </div>
   );
 }

@@ -7,6 +7,13 @@ export default defineConfig({
     include: ["test/integration/**/*.{test,spec}.{js,ts}"],
     environment: "node",
     globals: true,
+    // See tests/setup/defaultTempWorkspace.ts — the five integration suites
+    // here resolved the workspace in `beforeAll` and so wrote to the real
+    // `~/Papr`; two of them (agent-tracking, gateway-storage) asserted against
+    // `os.homedir()/Papr` directly.
+    // Bundles db-query-worker.ts so LocalStorageProvider read workers can start.
+    globalSetup: ["./tests/setup/buildDbQueryWorker.ts"],
+    setupFiles: ["./tests/setup/defaultTempWorkspace.ts"],
     testTimeout: 30_000,
     hookTimeout: 30_000,
     passWithNoTests: true,

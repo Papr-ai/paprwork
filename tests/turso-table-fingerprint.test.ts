@@ -4,7 +4,12 @@ import {
   computeTableFingerprint,
   computeSyncableTableFingerprints,
   fingerprintsEqual,
+  fullSchemasMatch,
+  isPlatformManagedColumn,
+  userSchemasMatch,
+  userSchemaColumns,
 } from "../src/gateway/services/tursoTableFingerprint.js";
+import { PAPR_ROW_SYNC_COLUMNS } from "../src/core/types/jobMigrations.js";
 
 let canUseBetterSqlite = false;
 try {
@@ -62,5 +67,54 @@ describe("tursoTableFingerprint", () => {
       fingerprintsEqual({ a: "1" }, { a: "2" }),
     ).toBe(false);
     expect(fingerprintsEqual({ a: "1" }, undefined)).toBe(false);
+  });
+
+  it("isPlatformManagedColumn detects _papr_ columns", () => {
+    expect(isPlatformManagedColumn(PAPR_ROW_SYNC_COLUMNS.createdAt)).toBe(true);
+    expect(isPlatformManagedColumn("title")).toBe(false);
+  });
+
+  it("userSchemasMatch ignores platform _papr_* columns", () => {
+    const userOnly = [
+      { name: "id", type: "INTEGER", primaryKey: true },
+      { name: "title", type: "TEXT", primaryKey: false },
+    ];
+    const withPlatform = [
+      ...userOnly,
+      { name: PAPR_ROW_SYNC_COLUMNS.createdAt, type: "TEXT", primaryKey: false },
+      { name: PAPR_ROW_SYNC_COLUMNS.updatedAt, type: "TEXT", primaryKey: false },
+      { name: PAPR_ROW_SYNC_COLUMNS.rowVersion, type: "INTEGER", primaryKey: false },
+    ];
+    expect(userSchemasMatch(userOnly, withPlatform)).toBe(true);
+    expect(fullSchemasMatch(userOnly, withPlatform)).toBe(false);
+    expect(userSchemaColumns(withPlatform)).toHaveLength(2);
+  });
+
+  it("userSchemasMatch still detects user column drift", () => {
+    const left = [
+      { name: "id", type: "INTEGER", primaryKey: true },
+      { name: "title", type: "TEXT", primaryKey: false },
+    ];
+    const right = [
+      { name: "id", type: "INTEGER", primaryKey: true },
+      { name: "title", type: "TEXT", primaryKey: false },
+      { name: "contact_name", type: "TEXT", primaryKey: false },
+    ];
+    expect(userSchemasMatch(left, right)).toBe(false);
+    expect(fullSchemasMatch(left, right)).toBe(false);
+  });
+
+  it("fullSchemasMatch ignores PRAGMA column order", () => {
+    const a = [
+      { name: "id", type: "INTEGER", primaryKey: true },
+      { name: "title", type: "TEXT", primaryKey: false },
+      { name: "contact_name", type: "TEXT", primaryKey: false },
+    ];
+    const b = [
+      { name: "contact_name", type: "TEXT", primaryKey: false },
+      { name: "id", type: "INTEGER", primaryKey: true },
+      { name: "title", type: "TEXT", primaryKey: false },
+    ];
+    expect(fullSchemasMatch(a, b)).toBe(true);
   });
 });

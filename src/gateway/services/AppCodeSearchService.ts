@@ -14,10 +14,16 @@ import type {
 } from "./appWorkspaceFiles.js";
 
 export type AppCodeSearchScope = "all" | "app" | "jobs";
-export type AppCodeSearchMode = "memory" | "keyword";
+export type AppCodeSearchMode = "memory" | "keyword" | "hybrid";
 
 export const MEMORY_SEARCH_UNAVAILABLE_NOTICE =
   "Memory search unavailable. Log into Papr for semantic search.";
+
+export const MEMORY_SEARCH_TIMEOUT_NOTICE =
+  "Semantic search timed out. Showing keyword matches.";
+
+/** Papr Memory search can be slow (reranking + multi-project). */
+const MEMORY_SEARCH_TIMEOUT_MS = 45_000;
 
 export interface AppCodeSearchHit {
   memoryId: string;
@@ -46,6 +52,8 @@ export interface AppCodeSearchParams {
   /** When scope is "jobs", restrict to these job IDs (defaults to all linked jobs). */
   jobFilter?: string[];
   limit?: number;
+  /** keyword = local grep; memory = Papr only; hybrid = keyword first (caller merges). */
+  mode?: "keyword" | "memory" | "hybrid";
 }
 
 interface ParsedPath {
@@ -226,7 +234,7 @@ async function searchProject(
       query,
       ...searchScope,
       max_memories: limit,
-      max_nodes: 0,
+      max_nodes: 10,
       enable_agentic_graph: false,
       reranking_config: {
         reranking_enabled: true,
@@ -467,6 +475,69 @@ async function searchViaMemory(params: AppCodeSearchParams): Promise<AppCodeSear
   return hits;
 }
 
+function hitDedupeKey(hit: AppCodeSearchHit): string {
+  return `${hit.projectType}:${hit.projectId}:${hit.relativePath}`;
+}
+
+/** Memory hits first (by score), then keyword-only matches. */
+export function mergeAppCodeSearchHits(
+  memoryHits: AppCodeSearchHit[],
+  keywordHits: AppCodeSearchHit[],
+  limit: number,
+): AppCodeSearchHit[] {
+  const seen = new Set<string>();
+  const merged: AppCodeSearchHit[] = [];
+
+  const sortedMemory = [...memoryHits].sort(
+    (a, b) => (b.score ?? 0) - (a.score ?? 0),
+  );
+
+  for (const hit of sortedMemory) {
+    const key = hitDedupeKey(hit);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(hit);
+  }
+
+  for (const hit of keywordHits) {
+    if (merged.length >= limit) break;
+    const key = hitDedupeKey(hit);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(hit);
+  }
+
+  return merged.slice(0, limit);
+}
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  ms: number,
+  message: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function searchViaMemoryWithTimeout(
+  params: AppCodeSearchParams,
+): Promise<AppCodeSearchHit[]> {
+  return withTimeout(
+    searchViaMemory(params),
+    MEMORY_SEARCH_TIMEOUT_MS,
+    "Memory search timed out",
+  );
+}
+
 export async function searchAppCodeInMemory(
   params: AppCodeSearchParams,
 ): Promise<AppCodeSearchResult> {
@@ -475,11 +546,67 @@ export async function searchAppCodeInMemory(
     return { hits: [], query, mode: "keyword" };
   }
 
+  const mode = params.mode ?? "memory";
+  const limit = Math.min(Math.max(params.limit ?? 12, 1), 30);
+
+  if (mode === "keyword") {
+    const hits = await searchAppCodeByKeyword(params);
+    return { hits, query, mode: "keyword" };
+  }
+
+  if (mode === "hybrid") {
+    const keywordHits = await searchAppCodeByKeyword(params);
+    if (!(await isPaprMemoryAvailable())) {
+      return {
+        hits: keywordHits,
+        query,
+        mode: "hybrid",
+        notice: MEMORY_SEARCH_UNAVAILABLE_NOTICE,
+      };
+    }
+    try {
+      const memoryHits = await searchViaMemoryWithTimeout(params);
+      return {
+        hits: mergeAppCodeSearchHits(memoryHits, keywordHits, limit),
+        query,
+        mode: "hybrid",
+      };
+    } catch (error) {
+      const notice =
+        error instanceof Error && error.message.includes("timed out")
+          ? MEMORY_SEARCH_TIMEOUT_NOTICE
+          : shouldFallbackToKeyword(error)
+            ? MEMORY_SEARCH_UNAVAILABLE_NOTICE
+            : undefined;
+      if (!notice && !shouldFallbackToKeyword(error)) {
+        throw error;
+      }
+      return {
+        hits: keywordHits,
+        query,
+        mode: "hybrid",
+        notice,
+      };
+    }
+  }
+
+  // memory-only (explicit or legacy default)
   if (await isPaprMemoryAvailable()) {
     try {
-      const hits = await searchViaMemory(params);
+      const hits = await searchViaMemoryWithTimeout(params);
       return { hits, query, mode: "memory" };
     } catch (error) {
+      if (
+        error instanceof Error &&
+        error.message.includes("timed out")
+      ) {
+        return {
+          hits: [],
+          query,
+          mode: "memory",
+          notice: MEMORY_SEARCH_TIMEOUT_NOTICE,
+        };
+      }
       if (!shouldFallbackToKeyword(error)) {
         throw error;
       }

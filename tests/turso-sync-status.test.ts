@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { resolveTursoSourceStatus } from "../src/gateway/services/tursoSyncStatus.js";
+import { describe, expect, it, vi } from "vitest";
+import {
+  inspectLegacyArtifactsForStatus,
+  resolveReplicaTursoSourceStatus,
+  resolveTursoSourceStatus,
+} from "../src/gateway/services/tursoSyncStatus.js";
 import { deriveAppCloudSyncStatus } from "../ui/utils/appCloudSyncStatus";
 import type { SyncItemsResponse } from "../ui/components/Settings/CloudSyncDetails";
 
@@ -12,12 +16,58 @@ describe("resolveTursoSourceStatus", () => {
     expect(resolveTursoSourceStatus(30, 30, true, true)).toBe("pending");
   });
 
+  it("reports pending when local has more tables than remote (schema drift)", () => {
+    expect(resolveTursoSourceStatus(6, 5, true, false)).toBe("pending");
+  });
+
+  it("reports pending when local schema differs from remote columns", () => {
+    expect(resolveTursoSourceStatus(5, 5, true, false, false, true)).toBe("pending");
+  });
+
   it("reports synced when remote has tables and local is clean", () => {
     expect(resolveTursoSourceStatus(30, 30, true, false)).toBe("synced");
   });
 
   it("reports pending when local has tables but remote is empty", () => {
     expect(resolveTursoSourceStatus(5, 0, true, false)).toBe("pending");
+  });
+
+  it("reports unavailable when remote check failed under load", () => {
+    expect(resolveTursoSourceStatus(20, 0, true, false, false, false, true)).toBe(
+      "unavailable",
+    );
+  });
+});
+
+describe("resolveReplicaTursoSourceStatus", () => {
+  it("reports pending when replica has unpushed ops", () => {
+    expect(
+      resolveReplicaTursoSourceStatus(5, true, {
+        pendingPush: true,
+        migrationConflict: false,
+        cutoverBlocked: false,
+      }),
+    ).toBe("pending");
+  });
+
+  it("reports pending on migration conflict", () => {
+    expect(
+      resolveReplicaTursoSourceStatus(5, true, {
+        pendingPush: false,
+        migrationConflict: true,
+        cutoverBlocked: false,
+      }),
+    ).toBe("pending");
+  });
+
+  it("reports synced when replica is clean", () => {
+    expect(
+      resolveReplicaTursoSourceStatus(5, true, {
+        pendingPush: false,
+        migrationConflict: false,
+        cutoverBlocked: false,
+      }),
+    ).toBe("synced");
   });
 });
 
@@ -60,9 +110,69 @@ describe("deriveAppCloudSyncStatus database detail", () => {
       },
     };
     const status = deriveAppCloudSyncStatus("app-1", items, "idle");
-    expect(status.overall).toBe("needs_sync");
+    expect(status.overall).toBe("synced");
     expect(status.databases[0]?.detail).toBe(
-      "Local DB changes not on Turso yet",
+      "Data changes publishing in the background",
     );
+    expect(status.databases[0]?.rowsSyncing).toBe(true);
   });
+
+  it("blocks overall sync for replica pendingPush", () => {
+    const items: SyncItemsResponse = {
+      enabled: true,
+      github: {
+        workspace: [],
+        apps: [
+          {
+            id: "app-1",
+            kind: "app",
+            label: "Test",
+            relativePath: "apps/app-1",
+            status: "synced",
+            lastSyncAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+        jobs: [],
+        queuedPaths: [],
+        summary: { synced: 1, pending: 0, outdated: 0, failed: 0, total: 1 },
+      },
+      turso: {
+        enabled: true,
+        error: null,
+        sources: [
+          {
+            appId: "app-1",
+            jobId: "db-1",
+            alias: "main",
+            role: "primary",
+            dbPath: "/tmp/data.db",
+            status: "pending",
+            localTableCount: 10,
+            remoteTableCount: 10,
+            syncMode: "replica",
+            online: true,
+            pendingPush: true,
+            pendingOps: 3,
+          },
+        ],
+        summary: { synced: 0, pending: 1, empty: 0, unavailable: 0, quarantined: 0, total: 1 },
+      },
+    };
+    const status = deriveAppCloudSyncStatus("app-1", items, "idle");
+    expect(status.overall).toBe("needs_sync");
+    // Auto mode: rows push on their own — never tell the user to click.
+    expect(status.databases[0]?.detail).toBe(
+      "3 local changes publishing in the background",
+    );
+    expect(status.databases[0]?.rowsSyncing).toBeUndefined();
+  });
+});
+
+it("never probes replica files for legacy status, but still checks true legacy files", () => {
+ const inspect = vi.fn(() => ["turso_cdc"]);
+ expect(inspectLegacyArtifactsForStatus("replica.db", true, inspect)).toEqual({ tables: [], status: "not-applicable" });
+ expect(inspect).not.toHaveBeenCalled();
+ expect(inspectLegacyArtifactsForStatus("old.db", false, inspect)).toEqual({ tables: ["turso_cdc"], status: "checked" });
+ expect(inspect).toHaveBeenCalledWith("old.db");
+ expect(inspectLegacyArtifactsForStatus("busy.db", false, () => { throw new Error("busy"); }).status).toBe("unavailable");
 });

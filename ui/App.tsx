@@ -6,10 +6,20 @@
 import { useEffect, useState } from "react";
 import { AppLayout } from "./components/Layout/AppLayout";
 import { Sidebar } from "./components/Sidebar/Sidebar";
+import { AgentPersonalizeSheet } from "./components/Agent/AgentPersonalizeSheet";
 import { TabBar } from "./components/Tabs/TabBar";
 import { ContentArea } from "./components/Layout/ContentArea";
 import { CommandPalette } from "./components/CommandPalette/CommandPalette";
-import { AuthWall } from "./components/Auth/AuthWall";
+import { AuthFlow, type AuthFlowStage } from "./components/Auth/AuthFlow";
+import { fetchRemoteOnboarding } from "./utils/onboardingRemote";
+import {
+  getLocalAuthFlowStep,
+  isAuthFlowCompleteLocal,
+  resumeStageWhenLoggedIn,
+} from "./utils/authFlowPersistence";
+import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
+import { PlatformConnectModal } from "./components/Platforms/PlatformConnectModal";
+import { initPlatformConnectListener } from "./components/Platforms/platformConnectStore";
 import { useChat } from "./hooks/useChat";
 import { useTabs } from "./hooks/useTabs";
 import { useTabStore } from "./stores/tabStore";
@@ -18,41 +28,53 @@ import {
   initPermissionListener,
 } from "./stores/permissionStore";
 import { initJobPermissionListener } from "./stores/jobPermissionStore";
+import { initPaprQuotaListener } from "./stores/paprQuotaStore";
 import { initJobLiveLogsListener } from "./stores/jobLiveLogsStore";
 import { initSubagentJobStore } from "./stores/subagentJobStore";
-import { KeyPermissionModal } from "./components/Permissions/KeyPermissionModal";
 import { UpdateBanner } from "./components/UpdateBanner/UpdateBanner";
+import { PaprQuotaBanner } from "./components/PaprQuotaBanner/PaprQuotaBanner";
+import { ConnectionIndicator } from "./components/ConnectionIndicator/ConnectionIndicator";
 import { useAppStatePersistence } from "./hooks/useAppStatePersistence";
+import { useCloudMemoryStatus } from "./hooks/useCloudMemoryStatus";
+import { usePaprCloudFeatureContext } from "./hooks/usePaprCloudFeatureContext";
+import { CloudFeatureLockModal } from "./components/common/CloudFeatureLockModal";
 import { useChatStore } from "./stores/chatStore";
+import { writeNewChatDefaultModel } from "./utils/chatModelMemory";
 import {
   initializeAmplitudeBrowser,
   setTelemetryPaprUserId,
 } from "./lib/telemetry";
 import { gateway } from "./src/lib/gateway";
 import { ensureGatewayRecoveryRegistered } from "./lib/agentStreamRecovery";
-import { AppAgentChatOverlay } from "./components/Apps/AppAgentChatOverlay";
-import type { AppAgentChatConfig } from "../src/core/types/appAgentChat";
+import {
+  appAgentMainChatTabTitle,
+  buildAppAgentMainChatMessage,
+  findAppTabId,
+} from "./utils/openAppAgentMainChat";
 import "./styles/liquid-glass.css";
 import "./App.css";
 import { shouldShowOnboarding } from "./utils/onboardingState";
-import { reloadUiForWorkspaceSwitch } from "./lib/workspaceSwitchReload";
+import { ensureGettingStartedTab } from "./lib/ensureWorkspaceLandingTab";
+import {
+  attachWorkspaceSwitchBroadcastListener,
+  isWorkspaceSwitchReloading,
+  parseWorkspaceKeyFromSwitchEvent,
+  parseWorkspaceSwitchLabels,
+  reloadUiForWorkspaceSwitch,
+} from "./lib/workspaceSwitchReload";
+import { WorkspaceSwitchOverlay } from "./components/Layout/WorkspaceSwitchOverlay";
+import { CloudAppInstallOverlay } from "./components/Layout/CloudAppInstallOverlay";
+import { buildWorkspaceUiCacheKey } from "./lib/workspaceUiCache";
+import { useProfileStore } from "./stores/profileStore";
 
 type ChatOpenPayload = {
   message?: string;
+  welcomeMessage?: string;
   model?: string | null;
   provider?: string | null;
   mode?: "main" | "app-agent";
   appId?: string;
   subAgentId?: string;
-};
-
-type AppAgentChatSession = {
-  appId: string;
-  appTitle: string;
-  config: AppAgentChatConfig;
-  subAgentName: string;
-  subAgentIcon?: string;
-  initialMessage?: string;
 };
 
 // Check if Papr authentication is required (commercial build vs open source)
@@ -69,35 +91,65 @@ export function App() {
   // Check this FIRST before loading anything else
   const [isAuthenticated, setIsAuthenticated] = useState(!REQUIRE_PAPR_AUTH);
   const [authChecked, setAuthChecked] = useState(false);
-  const [appAgentChatSession, setAppAgentChatSession] =
-    useState<AppAgentChatSession | null>(null);
-  
+  /** Papr signed out, or signed in but pre-app connect/recommend not finished. */
+  const [needsAuthFlow, setNeedsAuthFlow] = useState(REQUIRE_PAPR_AUTH);
+  const [authFlowResume, setAuthFlowResume] = useState<
+    { initialStage: AuthFlowStage; paprSignedIn: boolean } | undefined
+  >(undefined);
   // Check authentication immediately (before loading preferences/SQLite)
   useEffect(() => {
     if (!REQUIRE_PAPR_AUTH) {
       setAuthChecked(true);
+      setNeedsAuthFlow(false);
       return;
     }
 
-    // Check if user is already authenticated
     const checkAuth = async () => {
       try {
         const result = await window.electronAPI.papr.checkLoginStatus();
-        if (result.success && result.isLoggedIn) {
-          setIsAuthenticated(true);
+        const loggedIn = Boolean(result.success && result.isLoggedIn);
+
+        if (!loggedIn) {
+          setIsAuthenticated(false);
+          setNeedsAuthFlow(true);
+          setAuthFlowResume(undefined);
+          return;
         }
+
+        const remote = await fetchRemoteOnboarding();
+        const flowComplete =
+          isAuthFlowCompleteLocal() || remote?.completed === true;
+
+        if (flowComplete) {
+          setIsAuthenticated(true);
+          setNeedsAuthFlow(false);
+          setAuthFlowResume(undefined);
+          return;
+        }
+
+        const initialStage = resumeStageWhenLoggedIn(
+          getLocalAuthFlowStep(),
+          remote?.step,
+        );
+        setIsAuthenticated(false);
+        setNeedsAuthFlow(true);
+        setAuthFlowResume({ initialStage, paprSignedIn: true });
       } catch (err) {
-        console.error('[App] Failed to check authentication:', err);
+        console.error("[App] Failed to check authentication:", err);
+        setIsAuthenticated(false);
+        setNeedsAuthFlow(true);
       } finally {
         setAuthChecked(true);
       }
     };
 
-    checkAuth();
+    void checkAuth();
   }, []);
-  
+
   // Initialize SQLite persistence for tabs/favorites (fast!)
   useAppStatePersistence();
+  useCloudMemoryStatus();
+  usePaprCloudFeatureContext();
 
   // Load UI preferences from settings BEFORE first render
   const [preferencesLoaded, setPreferencesLoaded] = useState(false);
@@ -118,9 +170,10 @@ export function App() {
         if (response.success && response.data?.uiPreferences) {
           const { lastModelId } = response.data.uiPreferences;
           
-          // Populate localStorage for fast access (model selection only)
+          // Seeds *new* chats only. Existing chats resolve their own model from
+          // their per-chat selection or their history, never from this value.
           if (lastModelId) {
-            localStorage.setItem("paprwork_last_model_id", lastModelId);
+            writeNewChatDefaultModel(lastModelId);
           }
           
           console.log('[App] UI preferences loaded from settings:', { lastModelId });
@@ -142,6 +195,11 @@ export function App() {
     ensureGatewayRecoveryRegistered();
   }, []);
 
+  // Hydrate sidebar profile from cache, then refresh Papr plan/org context in background
+  useEffect(() => {
+    void useProfileStore.getState().loadProfile();
+  }, []);
+
   // Listen for SQLite load completion
   useEffect(() => {
     const handleSqliteLoaded = () => {
@@ -160,28 +218,17 @@ export function App() {
   }, []);
 
   const { createChat } = useChat();
-  const { createTab, switchToTab } = useTabs();
+  const { createTab, switchToTab, createArtifactFromChat } = useTabs();
   const { activeRequest, claimedByChat, respond } = usePermissionStore();
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+  // The rail is always visible; clear the legacy collapsed flag from the old hide/show toggle.
+  useEffect(() => {
     try {
-      return localStorage.getItem("paprwork-sidebar-collapsed") === "true";
+      localStorage.removeItem("paprwork-sidebar-collapsed");
     } catch {
-      return false;
+      // Ignore storage errors
     }
-  });
-
-  const toggleSidebarCollapsed = () => {
-    setSidebarCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem("paprwork-sidebar-collapsed", String(next));
-      } catch {
-        // Ignore storage errors
-      }
-      return next;
-    });
-  };
+  }, []);
   
   // Create getting-started tab on first run
   useEffect(() => {
@@ -198,12 +245,10 @@ export function App() {
     const checkOnboarding = () => {
       if (!shouldShowOnboarding()) return;
 
-      const { tabs: currentTabs, createTab: openTab, switchToTab: activateTab } =
-        useTabStore.getState();
+      const { tabs: currentTabs } = useTabStore.getState();
       const existingTab = currentTabs.find((t) => t.type === "getting-started");
       if (!existingTab) {
-        const tabId = openTab("getting-started", "getting-started", "Getting Started");
-        activateTab(tabId);
+        ensureGettingStartedTab();
       }
     };
 
@@ -217,12 +262,26 @@ export function App() {
 
   // Reload chats/jobs when Papr org or namespace workspace changes
   useEffect(() => {
-    const onWorkspaceChanged = () => {
-      void reloadUiForWorkspaceSwitch();
+    attachWorkspaceSwitchBroadcastListener();
+    const onWorkspaceChanged = (event: Event) => {
+      if (isWorkspaceSwitchReloading()) {
+        return;
+      }
+      const detail = (event as CustomEvent).detail;
+      const targetWorkspaceKey = parseWorkspaceKeyFromSwitchEvent(detail);
+      const { organizationName, namespaceName } = parseWorkspaceSwitchLabels(detail);
+      void reloadUiForWorkspaceSwitch({
+        waitForGateway: true,
+        targetWorkspaceKey,
+        organizationName,
+        namespaceName,
+      });
     };
+    window.addEventListener("papr-workspace-switch-starting", onWorkspaceChanged);
     window.addEventListener("papr-namespace-changed", onWorkspaceChanged);
     window.addEventListener("papr-organization-changed", onWorkspaceChanged);
     return () => {
+      window.removeEventListener("papr-workspace-switch-starting", onWorkspaceChanged);
       window.removeEventListener("papr-namespace-changed", onWorkspaceChanged);
       window.removeEventListener("papr-organization-changed", onWorkspaceChanged);
     };
@@ -230,14 +289,67 @@ export function App() {
 
   // Reload workspace-scoped UI after Papr login (namespace may differ from boot state)
   useEffect(() => {
-    const handleLoginSuccess = () => {
-      void reloadUiForWorkspaceSwitch();
+    const handleLoginSuccess = async () => {
+      let targetWorkspaceKey: string | undefined;
+      let organizationName: string | undefined;
+      let namespaceName: string | undefined;
+      try {
+        const workspace = await window.electronAPI.papr.getActiveWorkspace();
+        if (workspace.success && workspace.pointer) {
+          targetWorkspaceKey = buildWorkspaceUiCacheKey(
+            workspace.pointer.organizationId,
+            workspace.pointer.namespaceId,
+          );
+          organizationName = workspace.pointer.organizationName;
+          namespaceName = workspace.pointer.namespaceName;
+        }
+      } catch {
+        /* noop */
+      }
+      void reloadUiForWorkspaceSwitch({
+        waitForGateway: false,
+        targetWorkspaceKey,
+        organizationName,
+        namespaceName,
+      });
     };
     window.electronAPI?.papr?.onLoginSuccess(handleLoginSuccess);
     return () => {
       window.electronAPI?.papr?.removeLoginSuccessListener(handleLoginSuccess);
     };
   }, []);
+
+  // Cold boot: reload workspace-scoped UI when already logged in (profile may differ from last session cache)
+  useEffect(() => {
+    if (!authChecked || !isAuthenticated) {
+      return;
+    }
+    let cancelled = false;
+    const reloadForColdBoot = async () => {
+      try {
+        const workspace = await window.electronAPI.papr.getActiveWorkspace();
+        if (cancelled || !workspace.success || !workspace.pointer) {
+          return;
+        }
+        const { pointer } = workspace;
+        void reloadUiForWorkspaceSwitch({
+          waitForGateway: false,
+          targetWorkspaceKey: buildWorkspaceUiCacheKey(
+            pointer.organizationId,
+            pointer.namespaceId,
+          ),
+          organizationName: pointer.organizationName,
+          namespaceName: pointer.namespaceName,
+        });
+      } catch {
+        /* noop */
+      }
+    };
+    void reloadForColdBoot();
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, isAuthenticated]);
 
   // Initialize Amplitude telemetry (events only, no session replay)
   useEffect(() => {
@@ -321,6 +433,8 @@ export function App() {
       name?: string;
       userId?: string;
     }) => {
+      void useProfileStore.getState().loadProfile({ force: true });
+
       let userId = data?.userId;
       if (!userId) {
         try {
@@ -337,6 +451,12 @@ export function App() {
 
     const handleLogoutSuccess = () => {
       setTelemetryPaprUserId(null);
+      if (REQUIRE_PAPR_AUTH) {
+        console.log("[App] Papr logout — returning to auth wall (commercial build)");
+        setIsAuthenticated(false);
+        setNeedsAuthFlow(true);
+        setAuthFlowResume(undefined);
+      }
     };
 
     paprApi.onLoginSuccess(handleLoginSuccess);
@@ -369,12 +489,21 @@ export function App() {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, []);
 
+  // Rail search button opens the same palette as Cmd+K
+  useEffect(() => {
+    const openPalette = () => setCommandPaletteOpen(true);
+    window.addEventListener("papr-open-command-palette", openPalette);
+    return () => window.removeEventListener("papr-open-command-palette", openPalette);
+  }, []);
+
   // Initialize permission listeners
   useEffect(() => {
     initPermissionListener();
     initJobPermissionListener();
+    initPaprQuotaListener();
     initJobLiveLogsListener();
     initSubagentJobStore();
+    initPlatformConnectListener();
   }, []);
 
   // Mini-apps: window.paprAPI.invoke('chat.open', ...) → main → preload → papr-chat-open
@@ -393,31 +522,58 @@ export function App() {
             const appResp = await gateway.send("app:get", { appId: detail.appId });
             const appData = appResp.data as {
               title?: string;
-              agentChat?: AppAgentChatConfig;
+              agentChat?: { welcomeMessage?: string };
             };
-            const config =
-              appData.agentChat ??
-              ({
-                enabled: true,
-                subAgentId: detail.subAgentId,
-              } satisfies AppAgentChatConfig);
 
             const agentResp = await gateway.send("subagent:get", {
               agentId: detail.subAgentId,
             });
             const agent = agentResp.data as {
               name?: string;
-              icon?: string;
             };
 
-            setAppAgentChatSession({
-              appId: detail.appId,
-              appTitle: appData.title?.trim() || "Mini-app",
-              config,
-              subAgentName: agent.name ?? detail.subAgentId,
-              subAgentIcon: agent.icon,
-              initialMessage: detail.message?.trim(),
-            });
+            const appTitle = appData.title?.trim() || "Mini-app";
+            const subAgentName = agent.name ?? detail.subAgentId;
+
+            const chatId = await createChat();
+            if (!chatId) return;
+
+            const chatTabId = createTab(
+              "chat",
+              chatId,
+              appAgentMainChatTabTitle(appTitle, subAgentName),
+            );
+
+            const appTabId = findAppTabId(
+              useTabStore.getState().tabs,
+              detail.appId,
+            );
+            if (appTabId) {
+              createArtifactFromChat(chatTabId, appTabId, { autoSwitch: false });
+            }
+
+            switchToTab(chatTabId);
+
+            const userMessage = detail.message?.trim();
+            if (userMessage) {
+              const penMessage = buildAppAgentMainChatMessage({
+                appId: detail.appId,
+                appTitle,
+                subAgentId: detail.subAgentId,
+                subAgentName,
+                userMessage,
+                welcomeMessage:
+                  detail.welcomeMessage?.trim() ||
+                  appData.agentChat?.welcomeMessage,
+              });
+              window.setTimeout(() => {
+                window.dispatchEvent(
+                  new CustomEvent("papr-onboarding-send", {
+                    detail: { message: penMessage },
+                  }),
+                );
+              }, 300);
+            }
           } catch (err) {
             console.error("[App] Failed to open app agent chat:", err);
           }
@@ -441,15 +597,46 @@ export function App() {
 
     window.addEventListener("papr-chat-open", handleChatOpen);
     return () => window.removeEventListener("papr-chat-open", handleChatOpen);
-  }, [createChat, createTab, switchToTab]);
+  }, [createChat, createTab, switchToTab, createArtifactFromChat]);
+
+  useEffect(() => {
+    const handlePlatformBrowserOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ platformId?: string; chatTabId?: string }>)
+        .detail;
+      const platformId = detail?.platformId ?? "linkedin";
+      import("./lib/openPlatformBrowserTab").then(({ openPlatformBrowserTab }) => {
+        openPlatformBrowserTab(platformId, {
+          mergeWithChatTabId: detail?.chatTabId,
+        });
+      });
+    };
+
+    window.addEventListener("papr-platform-browser-open", handlePlatformBrowserOpen);
+    return () =>
+      window.removeEventListener("papr-platform-browser-open", handlePlatformBrowserOpen);
+  }, []);
 
   // Show authentication wall IMMEDIATELY if required (before loading anything else)
   if (REQUIRE_PAPR_AUTH && !authChecked) {
-    return <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: 'var(--background-color, #1a1a2e)' }} />;
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#1a1a2e' }}>
+        <div style={{ width: 24, height: 24, border: '2px solid rgba(255,255,255,0.2)', borderTopColor: '#0080FF', borderRadius: '50%', animation: 'spin 0.8s linear infinite' }} />
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      </div>
+    );
   }
 
-  if (REQUIRE_PAPR_AUTH && !isAuthenticated) {
-    return <AuthWall onAuthenticated={() => setIsAuthenticated(true)} />;
+  if (REQUIRE_PAPR_AUTH && needsAuthFlow) {
+    return (
+      <AuthFlow
+        resume={authFlowResume}
+        onComplete={() => {
+          setIsAuthenticated(true);
+          setNeedsAuthFlow(false);
+          setAuthFlowResume(undefined);
+        }}
+      />
+    );
   }
 
   // Don't render app until preferences AND SQLite are loaded
@@ -461,36 +648,26 @@ export function App() {
 
   return (
     <>
+      <WorkspaceSwitchOverlay />
+      <CloudAppInstallOverlay />
       <AppLayout
-        sidebar={<Sidebar onToggleCollapse={toggleSidebarCollapsed} />}
-        sidebarCollapsed={sidebarCollapsed}
-        topBar={
-          <TabBar
-            sidebarCollapsed={sidebarCollapsed}
-            onToggleSidebar={toggleSidebarCollapsed}
-          />
-        }
+        sidebar={<Sidebar />}
+        topBar={<TabBar />}
         content={<ContentArea />}
       />
       {activeRequest && !claimedByChat && (
         <KeyPermissionModal request={activeRequest} onResponse={respond} />
       )}
+      <PlatformConnectModal />
       <CommandPalette
         isOpen={commandPaletteOpen}
         onClose={() => setCommandPaletteOpen(false)}
       />
+      <AgentPersonalizeSheet />
+      <PaprQuotaBanner />
+      <CloudFeatureLockModal />
+      <ConnectionIndicator />
       <UpdateBanner />
-      {appAgentChatSession && (
-        <AppAgentChatOverlay
-          appId={appAgentChatSession.appId}
-          appTitle={appAgentChatSession.appTitle}
-          config={appAgentChatSession.config}
-          subAgentName={appAgentChatSession.subAgentName}
-          subAgentIcon={appAgentChatSession.subAgentIcon}
-          initialMessage={appAgentChatSession.initialMessage}
-          onClose={() => setAppAgentChatSession(null)}
-        />
-      )}
     </>
   );
 }

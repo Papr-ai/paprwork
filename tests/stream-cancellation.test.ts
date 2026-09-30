@@ -1,21 +1,41 @@
 import { describe, expect, it } from "vitest";
 import {
   isExpectedStreamCancellation,
-  STREAM_REPLACED_REASON,
+  isRecoverableProviderStreamDrop,
+  STREAM_STOPPED_BY_USER_REASON,
 } from "../src/core/constants/streamCancellation.js";
 
-describe("streamCancellation", () => {
-  it("treats replacement and user stop as expected cancellation", () => {
-    expect(isExpectedStreamCancellation(STREAM_REPLACED_REASON)).toBe(true);
-    expect(isExpectedStreamCancellation("Stopped by user")).toBe(true);
-    expect(isExpectedStreamCancellation("aborted")).toBe(true);
-    expect(isExpectedStreamCancellation("The user aborted a request")).toBe(
+describe("isRecoverableProviderStreamDrop", () => {
+  it("treats undici terminated and socket errors as recoverable", () => {
+    expect(isRecoverableProviderStreamDrop("terminated")).toBe(true);
+    expect(isRecoverableProviderStreamDrop("socket hang up")).toBe(true);
+    expect(isRecoverableProviderStreamDrop("read ECONNRESET")).toBe(true);
+  });
+
+  it("treats pi-ai early stream end as recoverable", () => {
+    expect(
+      isRecoverableProviderStreamDrop(
+        "STREAM_ENDED_EARLY: provider closed the stream without a done/error event",
+      ),
+    ).toBe(true);
+  });
+
+  it("treats timeout strings as recoverable", () => {
+    expect(isRecoverableProviderStreamDrop("Connect Timeout Error")).toBe(true);
+    expect(isRecoverableProviderStreamDrop("Request timed out")).toBe(true);
+  });
+
+  it("does not treat user stop as recoverable", () => {
+    expect(isRecoverableProviderStreamDrop(STREAM_STOPPED_BY_USER_REASON)).toBe(
+      false,
+    );
+    expect(isExpectedStreamCancellation(STREAM_STOPPED_BY_USER_REASON)).toBe(
       true,
     );
   });
 
-  it("does not treat provider failures as expected cancellation", () => {
-    expect(isExpectedStreamCancellation("Rate limit exceeded")).toBe(false);
-    expect(isExpectedStreamCancellation("Internal Server Error")).toBe(false);
+  it("does not treat auth errors as recoverable", () => {
+    expect(isRecoverableProviderStreamDrop("Invalid API key")).toBe(false);
+    expect(isRecoverableProviderStreamDrop("authentication_error")).toBe(false);
   });
 });

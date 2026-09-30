@@ -6,19 +6,22 @@ import {
   type CloudExternalLink,
   type CloudLoginAccess,
 } from "../../utils/cloudShareLink";
+import { patchCloudPublishPrefs } from "../../utils/cloudPublishApi";
+import { isCloudAppLive } from "../../utils/cloudPublishRouting";
 import "./CloudSyncDetails.css";
 
-type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable" | "failed" | "quarantined";
+type ItemStatus = "synced" | "pending" | "outdated" | "empty" | "unavailable" | "failed" | "quarantined" | "updates_available";
 
 interface GitHubSyncItem {
   id: string;
   kind: "app" | "job" | "folder";
   label: string;
   relativePath: string;
-  status: "synced" | "pending" | "outdated" | "failed";
+  status: "synced" | "pending" | "outdated" | "failed" | "updates_available";
   lastSyncAt: string | null;
   lastError?: string | null;
   failedAt?: string | null;
+  manualUploadHold?: boolean;
 }
 
 interface GitHubSyncItemsReport {
@@ -26,11 +29,17 @@ interface GitHubSyncItemsReport {
   apps: GitHubSyncItem[];
   jobs: GitHubSyncItem[];
   queuedPaths?: string[];
+  gitUpdatesAvailable?: boolean;
+  gitUpdatesSummary?: string | null;
+  gitRemoteRequiresReview?: boolean;
+  gitRemoteMetadataSync?: boolean;
+  gitRemoteReviewHeadline?: string | null;
   summary: {
     synced: number;
     pending: number;
     outdated: number;
     failed: number;
+    updatesAvailable: number;
     total: number;
   };
 }
@@ -45,8 +54,18 @@ interface TursoSourceSyncItem {
   status: "synced" | "pending" | "empty" | "unavailable" | "quarantined";
   localTableCount: number;
   remoteTableCount: number;
+  schemaDrift?: boolean;
   quarantinedAt?: string | null;
   quarantineReason?: string | null;
+  manualUploadHold?: boolean;
+  syncMode?: "legacy" | "replica";
+  online?: boolean;
+  pendingPush?: boolean;
+  pendingOps?: number;
+  migrationConflict?: boolean;
+  lastReplicaPushError?: string | null;
+  cutoverBlocked?: boolean;
+  cutoverBlockReason?: string | null;
 }
 
 interface TursoSyncItemsReport {
@@ -113,16 +132,83 @@ interface CloudLinkSyncReport {
   };
 }
 
+export interface PublishLayerSyncReport {
+  status: "synced" | "republishing" | "not_web_ready" | "drift" | "error";
+  reason?: string;
+  detail?: string;
+}
+
+/** Live upload progress from SyncCoordinator (plain-language). */
+export interface UploadProgressReport {
+  status: "idle" | "uploading" | "waiting" | "failed";
+  label: string;
+  detail?: string;
+  appId?: string;
+  retryPending?: boolean;
+  waitingReason?: "queued" | "dirty";
+  queuePosition?: number;
+  queueDepth?: number;
+}
+
+/** Sync V3 per-app code status (writer ops + cloud repo — not namespace git). */
+export interface AppSyncV3Report {
+  protocol: "v3";
+  appId: string;
+  relativePath: string;
+  status:
+    | "synced"
+    | "pending"
+    | "uploading"
+    | "failed"
+    | "conflict"
+    | "not_uploaded";
+  phase: "synced" | "uploading" | "not_uploaded" | "changed";
+  label: string;
+  detail: string;
+  lastUploadedAt: string | null;
+  lastError?: string | null;
+  manualUploadHold?: boolean;
+  pendingWriterOps: number;
+  inflightWriterOps: number;
+  deadLetterWriterOps: number;
+  hasLocalChanges: boolean;
+  queuedForUpload: boolean;
+}
+
 export interface SyncItemsResponse {
   enabled: boolean;
   github?: GitHubSyncItemsReport | null;
   turso?: TursoSyncItemsReport | null;
+  publish?: PublishLayerSyncReport | null;
+  upload?: UploadProgressReport | null;
+  appSync?: AppSyncV3Report | null;
+  uploadError?: {
+    message: string;
+    at: string;
+    retryPending?: boolean;
+  } | null;
   cloudLinks?: CloudLinkSyncReport | null;
   appContext?: {
     appId: string;
     dependentJobIds: string[];
+    registryDbIds?: string[];
+    globalAutoUploadEnabled?: boolean;
+    /** App has an active Papr cloud share link (enabled + shareUrl). */
+    publishLive?: boolean;
+    publishedAt?: string | null;
   };
   reason?: string;
+  /** Files in the app folder over the git sync limit — use App Files panel instead. */
+  oversizedAppFiles?: {
+    paths: Array<{ path: string; sizeBytes: number; reason?: string }>;
+    message: string;
+  } | null;
+}
+
+export interface PublishLayerSyncReport {
+  status: "synced" | "republishing" | "not_web_ready" | "drift" | "error";
+  reason?: string;
+  detail?: string;
 }
 
 const LOGIN_ACCESS_LABELS: Record<CloudLoginAccess, string> = {
@@ -165,6 +251,8 @@ function statusMeta(status: ItemStatus): { color: string; label: string } {
       return { color: "#8e8e93", label: "No DB" };
     case "failed":
       return { color: "#ff3b30", label: "Failed" };
+    case "updates_available":
+      return { color: "#007aff", label: "Updates available" };
     case "quarantined":
       return { color: "#ff3b30", label: "Needs repair" };
     default:
@@ -322,23 +410,38 @@ function CloudLinkCard({
       setExternalLink(nextSharing.externalLink);
       setBusy(true);
       try {
-        const res = await fetch(
-          `http://localhost:18789/api/cloud/publish/${encodeURIComponent(item.appId)}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              loginAccess: nextSharing.loginAccess,
-              externalLink: nextSharing.externalLink,
-              autoPublish: true,
-            }),
-          },
-        );
-        const body = (await res.json()) as PublishApiResponse;
-        if (!res.ok) {
-          throw new Error(body.error ?? `Publish failed (${res.status})`);
+        const live = isCloudAppLive({
+          enabled: item.enabled,
+          shareUrl: item.shareUrl,
+        });
+        if (live) {
+          const { config } = await patchCloudPublishPrefs(item.appId, {
+            loginAccess: nextSharing.loginAccess,
+            externalLink: nextSharing.externalLink,
+          });
+          if (!config) {
+            throw new Error("Sharing update did not return publish config");
+          }
+          applyPublishResponse(config);
+        } else {
+          const res = await fetch(
+            `http://localhost:18789/api/cloud/publish/${encodeURIComponent(item.appId)}`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                loginAccess: nextSharing.loginAccess,
+                externalLink: nextSharing.externalLink,
+                autoPublish: true,
+              }),
+            },
+          );
+          const body = (await res.json()) as PublishApiResponse;
+          if (!res.ok) {
+            throw new Error(body.error ?? `Publish failed (${res.status})`);
+          }
+          applyPublishResponse(body);
         }
-        applyPublishResponse(body);
         const linkNote = sharingSettingsRequireShareToken(nextSharing)
           ? body.shareToken
             ? " External link includes access token."
@@ -404,7 +507,9 @@ function CloudLinkCard({
 
   const setAutoPublish = useCallback(
     async (autoPublish: boolean) => {
+      const previousAutoPublish = item.autoPublish;
       setBusy(true);
+      onItemUpdated(item.appId, { autoPublish });
       try {
         const res = await fetch(
           `http://localhost:18789/api/cloud/publish/${encodeURIComponent(item.appId)}/prefs`,
@@ -414,16 +519,21 @@ function CloudLinkCard({
             body: JSON.stringify({ autoPublish }),
           },
         );
+        const body = (await res.json()) as {
+          prefs?: { autoPublish?: boolean };
+          error?: string;
+        };
         if (!res.ok) {
-          const body = (await res.json()) as { error?: string };
           throw new Error(body.error ?? "Failed to update auto-publish");
         }
+        const savedAutoPublish = body.prefs?.autoPublish !== false;
+        onItemUpdated(item.appId, { autoPublish: savedAutoPublish });
         onMessage({
           type: "success",
-          text: `${item.label}: auto-publish ${autoPublish ? "on" : "off"}`,
+          text: `${item.label}: auto-publish ${savedAutoPublish ? "on" : "off"}`,
         });
-        onRefresh();
       } catch (error) {
+        onItemUpdated(item.appId, { autoPublish: previousAutoPublish });
         onMessage({
           type: "error",
           text:
@@ -435,7 +545,7 @@ function CloudLinkCard({
         setBusy(false);
       }
     },
-    [item.appId, item.label, onMessage, onRefresh],
+    [item.appId, item.autoPublish, item.label, onItemUpdated, onMessage],
   );
 
   const copyUrl = useCallback(async (link: string | null | undefined) => {
@@ -660,12 +770,16 @@ export const CloudSyncDetails: React.FC<{
   onRefresh?: () => void;
   onItemUpdated?: (appId: string, patch: Partial<CloudLinkSyncItem>) => void;
   globalAutoPublishEnabled?: boolean;
+  /** Background fetch in progress (initial load or poll). */
+  loading?: boolean;
+  /** User-triggered force refresh. */
   refreshing?: boolean;
 }> = ({
   data,
   onRefresh,
   onItemUpdated,
   globalAutoPublishEnabled = true,
+  loading = false,
   refreshing = false,
 }) => {
   const [message, setMessage] = useState<{
@@ -694,6 +808,21 @@ export const CloudSyncDetails: React.FC<{
   );
 
   if (!data?.enabled || !data.github) {
+    if (loading || refreshing) {
+      return (
+        <div className="cloud-sync-details">
+          <section className="cloud-sync-details__section cloud-sync-details__section--primary">
+            <div className="cloud-sync-details__heading">
+              <span>Published apps · updating…</span>
+            </div>
+            <div className="cloud-sync-details__empty cloud-sync-details__empty--loading">
+              Loading published apps… This can take up to a minute with many
+              apps.
+            </div>
+          </section>
+        </div>
+      );
+    }
     return null;
   }
 
@@ -705,6 +834,7 @@ export const CloudSyncDetails: React.FC<{
   const items = cloudLinks?.items ?? [];
   const liveItems = items.filter((item) => item.status === "live");
   const otherItems = items.filter((item) => item.status !== "live");
+  const updating = loading || refreshing;
 
   const failedGitHubItems = [
     ...github.workspace,
@@ -781,11 +911,13 @@ export const CloudSyncDetails: React.FC<{
 
       <section className="cloud-sync-details__section cloud-sync-details__section--primary">
         <div className="cloud-sync-details__heading">
-          <span>Published apps{refreshing ? " · refreshing…" : ""}</span>
+          <span>Published apps{updating ? " · updating…" : ""}</span>
           <span className="cloud-sync-details__summary">
             {cloudLinks
               ? `${cloudLinks.summary.live}/${cloudLinks.summary.total} live · ${appsHost}`
-              : appsHost}
+              : updating
+                ? "Loading…"
+                : appsHost}
           </span>
         </div>
 
@@ -802,8 +934,16 @@ export const CloudSyncDetails: React.FC<{
         ) : null}
 
         {items.length === 0 ? (
-          <div className="cloud-sync-details__empty">
-            No mini-apps yet. Apps appear here after workspace sync.
+          <div
+            className={
+              updating
+                ? "cloud-sync-details__empty cloud-sync-details__empty--loading"
+                : "cloud-sync-details__empty"
+            }
+          >
+            {updating
+              ? "Loading published apps… This can take up to a minute with many apps."
+              : "No mini-apps yet. Apps appear here after workspace sync."}
           </div>
         ) : (
           <>
@@ -933,7 +1073,7 @@ export const CloudSyncDetails: React.FC<{
           )}
         />
         <ItemList
-          emptyMessage="No apps in ~/Papr/apps."
+          emptyMessage="No apps in your active Papr workspace."
           items={github.apps}
           renderRow={(item) => (
             <SyncItemRow
@@ -945,7 +1085,7 @@ export const CloudSyncDetails: React.FC<{
           )}
         />
         <ItemList
-          emptyMessage="No jobs in ~/Papr/Jobs."
+          emptyMessage="No jobs in your active Papr workspace."
           items={github.jobs}
           renderRow={(item) => (
             <SyncItemRow
@@ -978,18 +1118,31 @@ export const CloudSyncDetails: React.FC<{
               label={item.alias}
               status={item.status}
               meta={
-                item.status === "quarantined"
-                  ? "Paused"
-                  : item.status === "synced"
-                    ? `${item.remoteTableCount} tables`
-                    : item.localTableCount > 0
-                      ? `${item.localTableCount} local`
-                      : item.role
+                item.migrationConflict
+                  ? "Migration conflict"
+                  : item.syncMode === "replica" && item.pendingPush
+                    ? item.online === false
+                      ? "Offline"
+                      : "Not pushed"
+                    : item.status === "quarantined"
+                      ? "Paused"
+                      : item.status === "synced"
+                        ? `${item.remoteTableCount} tables`
+                        : item.localTableCount > 0
+                          ? `${item.localTableCount} local`
+                          : item.role
               }
               detail={
-                item.status === "quarantined"
-                  ? item.quarantineReason?.slice(0, 120) ?? undefined
-                  : undefined
+                item.migrationConflict
+                  ? item.lastReplicaPushError?.slice(0, 120) ??
+                    "Migration ledger conflict — reconcile before push"
+                  : item.syncMode === "replica" && item.pendingPush
+                    ? item.online === false
+                      ? `${item.pendingOps ?? 0} change(s) waiting for network`
+                      : `${item.pendingOps ?? 0} local change(s) not pushed yet`
+                    : item.status === "quarantined"
+                      ? item.quarantineReason?.slice(0, 120) ?? undefined
+                      : undefined
               }
               action={
                 item.status === "quarantined" ? (

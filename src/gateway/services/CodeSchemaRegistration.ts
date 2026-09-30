@@ -69,6 +69,7 @@ export interface CodeSchemaConfig {
     properties?: Array<{
       name: string;
       type: string;
+      description?: string;
     }>;
     constraint?: {
       create: 'upsert' | 'lookup';
@@ -365,7 +366,7 @@ export function createCodeSchema(): CodeSchemaConfig {
         name: 'DEPENDS_ON',
         description: 'Project depends on another Project (job dependencies)',
         properties: [
-          { name: 'on_status', type: 'string' }
+          { name: 'on_status', type: 'string', description: 'Dependency status when applicable' }
         ],
         constraint: {
           create: 'upsert',
@@ -424,7 +425,7 @@ export function createCodeSchema(): CodeSchemaConfig {
         name: 'USES',
         description: 'CodeFile uses API',
         properties: [
-          { name: 'is_primary', type: 'boolean' }
+          { name: 'is_primary', type: 'boolean', description: 'Whether this is the primary API used by the file' }
         ],
         constraint: {
           create: 'upsert',

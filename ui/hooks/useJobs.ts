@@ -1,5 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { gateway } from "../src/lib/gateway";
+import type { JobCloudStatusReport, JobExecutionPlacement } from "../components/Jobs/jobCloudTypes";
+import {
+  subscribeJobsFullPolling,
+  useJobsStore,
+} from "../stores/jobsStore";
 
 export type JobType =
   | "shell"
@@ -64,6 +69,10 @@ export interface JobRecord {
     passed: boolean;
     timestamp: string;
   };
+  /** Scheduled execution placement when cloud sync is on */
+  executionCapability?: "local-only" | "local-preferred" | "cloud-preferred" | "cloud-capable";
+  /** Where the most recent run executed */
+  lastRunSource?: string;
 }
 
 export interface JobGraphAppLink {
@@ -87,88 +96,44 @@ export interface JobGraph {
   edges: JobGraphEdge[];
 }
 
-function jobsFingerprint(jobs: JobRecord[]): string {
-  return jobs
-    .map((j) => `${j.id}:${j.status}:${j.updatedAt}:${j.lastRunAt ?? ""}:${j.exitCode ?? ""}`)
-    .join("|");
-}
-
 export function useJobs() {
-  const [jobs, setJobs] = useState<JobRecord[]>([]);
-  const [graph, setGraph] = useState<JobGraph | null>(null);
-  const [graphLoaded, setGraphLoaded] = useState(false);
+  const jobs = useJobsStore((state) => state.jobs);
+  const graph = useJobsStore((state) => state.graph);
+  const graphLoaded = useJobsStore((state) => state.graphLoaded);
+  const defaultModel = useJobsStore((state) => state.defaultModel);
+  const cloudStatus = useJobsStore((state) => state.cloudStatus);
+  const loading = useJobsStore((state) => state.loading);
+  const error = useJobsStore((state) => state.error);
+  const loadJobs = useJobsStore((state) => state.loadJobs);
+  const loadGraph = useJobsStore((state) => state.loadGraph);
+  const loadCloudStatus = useJobsStore((state) => state.loadCloudStatus);
+  const updateJobPlacementStore = useJobsStore(
+    (state) => state.updateJobPlacement,
+  );
+  const setJobs = useJobsStore((state) => state.setJobs);
+
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [logsByJobId, setLogsByJobId] = useState<Record<string, string>>({});
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [defaultModel, setDefaultModel] = useState<string>("gpt-5-6-sol");
-  const fingerprintRef = useRef("");
-  const initialLoadDone = useRef(false);
+  const [updatingPlacementJobId, setUpdatingPlacementJobId] = useState<
+    string | null
+  >(null);
 
-  const loadJobs = useCallback(async (silent = false) => {
-    if (!silent) {
-      setLoading(true);
-      setError(null);
-    }
-    try {
-      const response = await gateway.send("jobs:list");
-      const incoming = (response.data as JobRecord[]) ?? [];
-      const fp = jobsFingerprint(incoming);
-      if (fp !== fingerprintRef.current) {
-        fingerprintRef.current = fp;
-        setJobs(incoming);
-      }
-      if (!silent) setError(null);
-    } catch (err) {
-      if (!silent) {
-        setError(err instanceof Error ? err.message : "Failed to load jobs");
-      }
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, []);
-
-  const loadGraph = useCallback(async () => {
-    try {
-      const response = await gateway.send("jobs:graph");
-      const payload = response.data as { graph: JobGraph | null };
-      if (payload.graph) {
-        setGraph(payload.graph);
-      }
-    } catch {
-      // graph is optional — don't surface errors
-    } finally {
-      setGraphLoaded(true);
-    }
-  }, []);
-
-  const loadDefaultModel = useCallback(async () => {
-    try {
-      const response = await gateway.send("jobs:default-model");
-      const payload = response.data as { provider: string; model: string };
-      if (payload.model) {
-        const display = payload.provider ? `${payload.provider}/${payload.model}` : payload.model;
-        setDefaultModel(display);
-      }
-    } catch {
-      // fallback already set to gpt-5.5
-    }
-  }, []);
+  useEffect(() => subscribeJobsFullPolling(), []);
 
   const createJob = useCallback(
     async (name: string, type: JobType, command?: string) => {
-      setError(null);
+      useJobsStore.setState({ error: null });
       const response = await gateway.send("jobs:create", {
         name,
         type,
         command,
       });
       const job = response.data as JobRecord;
-      setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
+      setJobs([job, ...jobs.filter((item) => item.id !== job.id)]);
       void loadGraph();
       return job;
     },
-    [loadGraph],
+    [jobs, loadGraph, setJobs],
   );
 
   const createScheduledJob = useCallback(
@@ -178,7 +143,7 @@ export function useJobs() {
       command: string | undefined,
       schedule?: JobRecord["schedule"],
     ) => {
-      setError(null);
+      useJobsStore.setState({ error: null });
       const response = await gateway.send("jobs:create", {
         name,
         type,
@@ -186,11 +151,11 @@ export function useJobs() {
         schedule,
       });
       const job = response.data as JobRecord;
-      setJobs((prev) => [job, ...prev.filter((item) => item.id !== job.id)]);
+      setJobs([job, ...jobs.filter((item) => item.id !== job.id)]);
       void loadGraph();
       return job;
     },
-    [loadGraph],
+    [jobs, loadGraph, setJobs],
   );
 
   const loadLogs = useCallback(async (jobId: string) => {
@@ -208,10 +173,10 @@ export function useJobs() {
 
   const runJob = useCallback(
     async (jobId: string, runtime: "local" | "cloud" = "local") => {
-      setError(null);
+      useJobsStore.setState({ error: null });
       const response = await gateway.send("jobs:run", { jobId, runtime });
       const updated = response.data as JobRecord;
-      setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
+      useJobsStore.getState().patchJob(jobId, updated);
       void loadLogs(jobId);
       return updated;
     },
@@ -219,75 +184,47 @@ export function useJobs() {
   );
 
   const stopJob = useCallback(async (jobId: string) => {
-    setError(null);
+    useJobsStore.setState({ error: null });
     const response = await gateway.send("jobs:stop", { jobId });
     const updated = response.data as JobRecord;
-    setJobs((prev) => prev.map((job) => (job.id === jobId ? updated : job)));
+    useJobsStore.getState().patchJob(jobId, updated);
     return updated;
   }, []);
 
-  useEffect(() => {
-    void loadJobs(false);
-    void loadGraph();
-    void loadDefaultModel();
-    initialLoadDone.current = true;
-    const timer = setInterval(() => {
-      void loadJobs(true);
-    }, 10000);
-
-    const onWorkspaceReload = () => {
-      void loadJobs(true);
-      void loadGraph();
-    };
-    window.addEventListener("papr-workspace-reload", onWorkspaceReload);
-
-    const handler = (
-      event: CustomEvent<{ type: string; data?: Record<string, unknown> }>,
-    ) => {
-      const { type, data } = event.detail ?? {};
-      if (type === "job-recipe-evaluation" && data?.jobId) {
-        const jobId = data.jobId as string;
-        setJobs((prev) =>
-          prev.map((j) => {
-            if (j.id !== jobId) return j;
-            return {
-              ...j,
-              lastEvaluation: {
-                runId: data.runId as string,
-                score: data.score as number,
-                passed: data.passed as boolean,
-                timestamp: new Date().toISOString(),
-              },
-            };
-          }),
-        );
+  const updateJobPlacement = useCallback(
+    async (jobId: string, executionCapability: JobExecutionPlacement) => {
+      setUpdatingPlacementJobId(jobId);
+      useJobsStore.setState({ error: null });
+      try {
+        return await updateJobPlacementStore(jobId, executionCapability);
+      } finally {
+        setUpdatingPlacementJobId(null);
       }
-      if (type === "jobs:status-changed" && data?.jobId) {
-        const jobId = data.jobId as string;
-        setJobs((prev) =>
-          prev.map((j) => {
-            if (j.id !== jobId) return j;
-            return {
-              ...j,
-              status: (data.status as JobStatus) ?? j.status,
-              completedAt: data.completedAt as string | undefined,
-              error: data.error as string | undefined,
-              lastOutput: data.lastOutput as string | undefined,
-              waitingPermissionKeys: data.waitingPermissionKeys as
-                | string[]
-                | undefined,
-            };
-          }),
-        );
+    },
+    [updateJobPlacementStore],
+  );
+
+  const deleteJob = useCallback(
+    async (jobId: string, deleteFiles = true, deleteTursoDb = true) => {
+      useJobsStore.setState({ error: null });
+      const response = await gateway.send("jobs:delete", {
+        jobId,
+        deleteFiles,
+        deleteTursoDb,
+      });
+      const result = response.data as {
+        deleted: boolean;
+        tursoDbDeleted?: boolean;
+      };
+      if (result.deleted) {
+        setJobs(jobs.filter((job) => job.id !== jobId));
+        void loadGraph();
+        void loadCloudStatus();
       }
-    };
-    window.addEventListener("gateway-broadcast", handler as EventListener);
-    return () => {
-      clearInterval(timer);
-      window.removeEventListener("papr-workspace-reload", onWorkspaceReload);
-      window.removeEventListener("gateway-broadcast", handler as EventListener);
-    };
-  }, [loadJobs, loadGraph]);
+      return result;
+    },
+    [jobs, loadGraph, loadCloudStatus, setJobs],
+  );
 
   return {
     jobs,
@@ -304,6 +241,11 @@ export function useJobs() {
     createScheduledJob,
     runJob,
     stopJob,
+    deleteJob,
     loadLogs,
+    cloudStatus,
+    loadCloudStatus,
+    updateJobPlacement,
+    updatingPlacementJobId,
   };
 }

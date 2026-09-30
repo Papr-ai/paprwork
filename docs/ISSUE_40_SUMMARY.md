@@ -29,7 +29,7 @@ Agent: "The only issue is the 3 jobs are stuck as 'running' in memory.
 5. this.running.delete(jobId) removes from map ✅
 6. ❌ EXCEPTION or APP KILLED here ❌
 7. Status save never completes
-8. Job stuck as "running" in ~/Papr/data/jobs.json
+8. Job stuck as "running" in $PAPR_HOME/data/jobs.json
 9. Job NOT in this.running map (already deleted)
 10. Scheduler can't run it (status = "running")
 11. User can't update it (status = "running")

@@ -220,7 +220,7 @@ console.log(formatCost(calculateCost('claude-opus-4-6', 50000, 2000)));
 ### 2. Check Database After Sending Messages
 
 ```bash
-sqlite3 ~/Papr/data/chats.db
+sqlite3 $PAPR_HOME/data/chats.db
 ```
 
 ```sql

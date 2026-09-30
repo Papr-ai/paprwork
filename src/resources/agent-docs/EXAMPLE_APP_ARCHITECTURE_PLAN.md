@@ -1,3 +1,5 @@
+> **Paths:** `$PAPR_HOME` = active org/namespace workspace (`~/Papr/orgs/{orgId}/namespaces/{nsId}/`). See `docs/PAPR_WORKSPACE_PATHS.md`. Prefer app/job tools over raw paths.
+
 # Example App Architecture Plan
 
 **Purpose:** Copy this structure when Product Architect (or the main agent) plans a mini-app + jobs system.  
@@ -45,10 +47,11 @@ User goal: *Pull Reddit RSS feeds, pick topics with an agent, enrich with web re
 │ LAYER 2 — App backend (apps/{appId}/backend/)                    │
 │   manifest.json → settings-save, migrate (schema bootstrap)    │
 │   Vault keys server-side only; NO /api/bash/run from iframe    │
+│   ACL: PAPR_CALLER_USER_ID / PAPR_CALLER_EMAIL when signed in  │
 └───────────────────────────┬─────────────────────────────────────┘
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
-│ LAYER 3 — Jobs (~/Papr/Jobs/{jobId}/)                          │
+│ LAYER 3 — Jobs ($PAPR_HOME/Jobs/{jobId}/)                          │
 │   python: RSS fetch, persist rows                                │
 │   agent: picker, enricher, writer                                │
 │   All linked via create_job({ appIds: [appId] })                 │
@@ -56,7 +59,7 @@ User goal: *Pull Reddit RSS feeds, pick topics with an agent, enrich with web re
                             │
 ┌───────────────────────────▼─────────────────────────────────────┐
 │ DATA — Primary SQLite (one file, APP_DB)                         │
-│   ~/Papr/Jobs/{primaryJobId}/data/data.db                        │
+│   $PAPR_HOME/Jobs/{primaryJobId}/data/data.db                        │
 │   Linked in data-sources.json as primary                         │
 │   App reads/writes via /api/db/*; jobs write via $APP_DB         │
 └─────────────────────────────────────────────────────────────────┘
@@ -147,7 +150,7 @@ RSS URLs (user_settings)
     → UI: /api/db/query SELECT draft
 ```
 
-**Frontend refresh:** `subscribeJobEvents({ jobIds, onDbChanged: () => loadData() })` — never poll `/api/jobs/status`.
+**Frontend refresh:** `subscribeJobEvents({ jobIds, debounceMs: 300, onDbChanged: () => loadData() })` — batch reads inside `loadData()`; never poll `/api/jobs/status`. Run `validate_app` after edits for load-efficiency warnings.
 
 #### 2.6 API endpoint map (frontend)
 
@@ -222,7 +225,7 @@ export async function getReports(classId: number, termId: number) { /* ... */ }
 // ... 12 more functions like this — all raw SQL in the browser
 ```
 
-**Problems:** SQL logic exposed in browser, no server-side validation, no transaction support, impossible to add vault keys later, `validate_app` flags `suggest-backend-handlers` warning.
+**Problems:** SQL logic exposed in browser, no server-side validation, no transaction support, impossible to add vault keys later, `validate_app` flags `suggest-backend-handlers` warning. For multi-user apps, raw `/api/db/query` also lets any signed-in user read all rows — no row ACL.
 
 **GOOD — backend handler + thin frontend:**
 ```python
@@ -231,6 +234,9 @@ import json, os, sys, sqlite3
 
 def main():
     params = json.loads(os.environ.get("PAPR_ACTION_PARAMS", "{}"))
+    user_id = os.environ.get("PAPR_CALLER_USER_ID")  # server-injected; never params["userId"]
+    if not user_id:
+        sys.exit("Sign in required")
     db_path = os.environ.get("APP_DB")
     conn = sqlite3.connect(db_path)
     action = params.get("action", "list")
@@ -249,10 +255,11 @@ if __name__ == "__main__":
 ```
 
 ```typescript
-// Frontend: one clean call per resource
+// Frontend: one clean call per resource — do NOT pass userId in params for ACL
 const res = await fetch('/api/app/backend/students', {
   method: 'POST',
-  body: JSON.stringify({ action: 'list', classId: 1 })
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ appId: APP_ID, params: { action: 'list', classId: '1' } }),
 });
 ```
 
@@ -334,6 +341,32 @@ const { summary } = await res.json();
 
 ---
 
+## Multi-user / role-scoped apps (backend ACL pattern)
+
+Use when different signed-in users see different rows (manager vs IC, roster claim, passcode onboarding).
+
+| Layer | Responsibility |
+|-------|----------------|
+| **Publish** | `link_read_write` or `team` + sign-in — who can open the app |
+| **Schema** | `papr_user_id TEXT` on roster/entity rows — who owns each row |
+| **Backend** | Read **`PAPR_CALLER_USER_ID`** from env; lookup role; return scoped rows |
+| **Frontend** | Call `/api/app/backend/:action` — never pass `userId` in `params` for auth |
+
+```python
+# backend/get-team-scores.py
+user_id = os.environ.get("PAPR_CALLER_USER_ID")
+if not user_id:
+    sys.exit("Sign in required")
+row = conn.execute("SELECT role FROM roster WHERE papr_user_id = ?", [user_id]).fetchone()
+if row[0] not in ("manager", "leader"):
+    sys.exit("Forbidden")
+# return rows scoped to this manager's team
+```
+
+**Do not:** rely on `GET /api/access` + client-side `WHERE papr_user_id = ?` via `/api/db/query` for sensitive data — any user can drop the filter in DevTools.
+
+---
+
 ## Blank template (copy for new projects)
 
 ```markdown
@@ -345,8 +378,9 @@ const { summary } = await res.json();
 ## 2. Paprwork Architecture
 ### Layers
 - Frontend (apps/{id}/): screens, /api/db/*, /api/jobs/run, subscribeJobEvents
-- Backend (backend/manifest.json): actions, vault keys — list each action OR explicitly justify skipping ("read-only dashboard, 1-2 SELECTs only")
-- Jobs (~/Papr/Jobs/): types, schedules, appIds, dependsOn+autoTrigger
+- Backend (backend/manifest.json): actions, vault keys, caller-identity needs — list each action OR explicitly justify skipping ("read-only dashboard, 1-2 SELECTs only")
+- Multi-user? If yes: roster table + `papr_user_id`, backend actions using `PAPR_CALLER_USER_ID`, publish mode (`link_read_write` / `team`)
+- Jobs ($PAPR_HOME/Jobs/): types, schedules, appIds, dependsOn+autoTrigger
 ### SQLite (APP_DB primary)
 | Table | Columns | Writer | Reader |
 ### Data flow (ASCII)

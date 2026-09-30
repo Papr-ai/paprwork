@@ -19,6 +19,7 @@ import { getSubAgentService } from "../SubAgentService.js";
 import { getAppService } from "../AppService.js";
 import { buildEmbeddedSubAgentSystemPrompt } from "./appAgentChatPrompt.js";
 import { mapGatewayStreamToAppAgentEvents } from "./mapGatewayStreamToAppAgentEvents.js";
+import { DEFAULT_SESSION_CONTEXT_LIMIT } from "../agent/contextBudget.js";
 import type { AppAgentChatSessionStore } from "./AppAgentChatSessionStore.js";
 
 export interface AppAgentChatTurnResult {
@@ -120,6 +121,9 @@ export class AppAgentChatRunService {
       apiKey: apiKey ?? "",
       authType,
       systemPrompt,
+      // No composer here to choose a cap, so budget against a measured window
+      // rather than the model's advertised 1M.
+      contextLimit: DEFAULT_SESSION_CONTEXT_LIMIT,
     };
 
     let assistantText = "";

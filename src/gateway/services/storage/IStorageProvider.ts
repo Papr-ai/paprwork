@@ -7,12 +7,29 @@
  * - HybridStorageProvider: Local cache + PAPR sync
  */
 
+import type { TurnMetricsSummary } from "../agent/turnMetrics.js";
+import type { ChatUsageTotals, TurnUsageRow } from "./turnMetricsStore.js";
+
+export type { ChatUsageTotals, TurnUsageRow };
+
+/** File/context attached to a user message (UI + history). */
+export interface StoredMessageAttachment {
+  id: string;
+  name: string;
+  kind: "file" | "document" | "app";
+  mimeType?: string;
+  filePath?: string;
+}
+
 export interface StoredMessage {
   id: string;
   chat_id: string;
   role: "user" | "assistant"; // Aligned with CoreMessage
   content: string; // Aligned with CoreMessage
   timestamp: string;
+
+  /** Context files attached when the user sent this message */
+  attachments?: StoredMessageAttachment[];
 
   // AI response metadata
   thinking?: string; // Reasoning/thinking from model
@@ -23,6 +40,16 @@ export interface StoredMessage {
     args: Record<string, any>;
     result?: string;
     status?: "pending" | "success" | "error" | "interrupted";
+    /**
+     * Set when `result` is only a preview because the full text was moved to a
+     * sidecar file. `get_full_tool_result` follows this to read the original.
+     */
+    resultOffload?: {
+      /** Sidecar location, relative to the directory holding chats.db. */
+      file: string;
+      /** Length in characters of the full result. */
+      totalChars: number;
+    };
   }>;
 
   // Sequence tracking (V1 compatibility for interleaved text/tool calls)
@@ -53,6 +80,9 @@ export interface StoredMessage {
   // Agent attribution (for SubAgents)
   source_agent_id?: string; // Override default "main-agent"
   source_agent_name?: string; // Override default "Paprwork Assistant"
+
+  /** SubAgentResponseTrigger summary tied to a delegate_task run id */
+  delegation_finish_for?: string;
 }
 
 export interface StoredSummary {
@@ -141,6 +171,32 @@ export interface IStorageProvider {
    * @param chatId - Chat session ID
    */
   loadMessagesForLLM(chatId: string): Promise<any[]>;
+
+  /**
+   * Read the full text of a tool result that was offloaded to sidecar storage.
+   * Returns null when the tool call has no offloaded result.
+   *
+   * Only providers that own local files implement this; loaded messages carry
+   * an inline preview either way.
+   */
+  readOffloadedToolResult?(
+    chatId: string,
+    messageId: string,
+    toolCallId: string,
+  ): Promise<string | null>;
+
+  /**
+   * Attach efficiency and quality measurements to a finished assistant turn.
+   *
+   * Only providers backed by the local database implement this — the metrics
+   * are numeric and are deliberately not part of the message content that syncs
+   * to a memory backend.
+   */
+  recordTurnMetrics?(
+    messageId: string,
+    summary: TurnMetricsSummary,
+    durationMs?: number,
+  ): Promise<void>;
 
   // ===== Summary Operations =====
 
@@ -234,6 +290,17 @@ export interface IStorageProvider {
     token_count: number;
     cost_total: number;
     has_summary: boolean;
+  }>;
+
+  /**
+   * Measured usage for the context meter: the last billed turn plus the
+   * chat rollup. Cheap by design — one row and one aggregate, no prompt build.
+   * @param chatId - Chat session ID
+   */
+  getTurnUsage(chatId: string): Promise<{
+    lastTurn: TurnUsageRow | null;
+    recentTurns: TurnUsageRow[];
+    totals: ChatUsageTotals;
   }>;
 
   /**
@@ -337,6 +404,26 @@ export interface IStorageProvider {
     costEfficiencyScore: number;
     dataSource: "cached" | "partial" | "live";
     pendingFootprintTurns: number;
+    periods: {
+      today: {
+        actualTokens: number;
+        hypotheticalTokensWithoutOptimizations: number;
+        tokensSaved: number;
+        efficiencyScore: number;
+      };
+      thisWeek: {
+        actualTokens: number;
+        hypotheticalTokensWithoutOptimizations: number;
+        tokensSaved: number;
+        efficiencyScore: number;
+      };
+      thisMonth: {
+        actualTokens: number;
+        hypotheticalTokensWithoutOptimizations: number;
+        tokensSaved: number;
+        efficiencyScore: number;
+      };
+    };
     breakdown: {
       chatsAnalyzed: number;
       chatsWithSummaries: number;

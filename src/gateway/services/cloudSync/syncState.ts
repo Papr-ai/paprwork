@@ -7,6 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
+import { isLocalOnlyCloudSyncArtifact, isTooLargeForGitSync } from "./gitSyncLimits.js";
 
 export const STATE_FILENAME = ".cloud-sync-state.json";
 
@@ -43,7 +44,19 @@ export const HASH_IGNORED_RELATIVE_SUFFIXES = [
   "backend/bundle.json",
   "requirements.json",
   "data/cloud-repo-head.txt",
+  ".papr-cloud-revision",
+  "linked-databases.json",
+  "__papr__/app-meta.json",
+  "__papr__/platform-catalog.json",
 ] as const;
+
+/** Generated cloud-prep files — must not re-trigger app rebuild, iframe reload, or auto flush. */
+export function isCloudPrepGitSyncArtifact(relativePath: string): boolean {
+  const normalized = relativePath.replace(/\\/g, "/");
+  return HASH_IGNORED_RELATIVE_SUFFIXES.some(
+    (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
+  );
+}
 
 /**
  * SQLite sidecars — synced via Turso, gitignored in CloudSyncService.
@@ -54,14 +67,19 @@ const SQLITE_HASH_IGNORED_SUFFIXES = [".db-shm", ".db-wal", ".db"] as const;
 export function shouldExcludePathFromContentHash(relativePath: string): boolean {
   const normalized = relativePath.replace(/\\/g, "/");
   if (
-    HASH_IGNORED_RELATIVE_SUFFIXES.some(
-      (suffix) => normalized === suffix || normalized.endsWith(`/${suffix}`),
-    )
+    normalized.endsWith("/job.runtime.json") ||
+    normalized === "data/job-runs.jsonl"
   ) {
+    return true;
+  }
+  if (isCloudPrepGitSyncArtifact(normalized)) {
     return true;
   }
 
   const baseName = path.basename(normalized);
+  if (isLocalOnlyCloudSyncArtifact(baseName)) {
+    return true;
+  }
   return SQLITE_HASH_IGNORED_SUFFIXES.some((suffix) => baseName.endsWith(suffix));
 }
 
@@ -210,6 +228,9 @@ export class SyncStateManager {
       if (shouldExcludePathFromContentHash(relativePath)) {
         return "ignored-artifact";
       }
+      if (isTooLargeForGitSync(stat.size)) {
+        return "ignored-large-file";
+      }
       return `${stat.mtimeMs}:${stat.size}`;
     } catch {
       return "missing";
@@ -245,6 +266,7 @@ export class SyncStateManager {
             }
             continue;
           }
+          if (isTooLargeForGitSync(stat.size)) continue;
           if (stat.mtimeMs > latest) latest = stat.mtimeMs;
           totalSize += stat.size;
           fileCount++;

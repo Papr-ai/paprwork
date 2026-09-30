@@ -8,16 +8,40 @@ import {
   isInterruptedToolResult,
   resolveToolCallStatus,
 } from "../../src/core/utils/interruptedToolResult";
-import { isExpectedStreamCancellation } from "../../src/core/constants/streamCancellation.js";
+import { isExpectedStreamCancellation, isRecoverableProviderStreamDrop } from "../../src/core/constants/streamCancellation.js";
 import type { AgentConfig, StreamChunk } from "../types/core";
-import type { MessageAttachment } from "../types/chat";
+import type {
+  MessageAttachment,
+  ChatMessage,
+  SequenceItem,
+} from "../types/chat";
 import { useChatStore } from "../stores/chatStore";
 import { useTabStore } from "../stores/tabStore";
+import { useProviderAuthStore } from "../stores/providerAuthStore";
+import {
+  isProviderAuthRejection,
+  providerForModelId,
+} from "../utils/providerAuthRejection";
 import { gateway, GATEWAY_DISCONNECTED_ERROR } from "../src/lib/gateway";
 import { fetchChatHistory } from "../utils/chatHistoryApi";
 import { mapHistoryMessages } from "../utils/historyMapper";
 import { resolveAgentFocusContext } from "../utils/agentFocusContext";
-import { parseAppIdFromEditFilePath } from "../utils/parseEditFileAppId";
+import {
+  AGENT_INTERRUPT_TIMEOUT_MS,
+  isSendGenerationCurrent,
+  nextSendGeneration,
+} from "../utils/agentSendLifecycle";
+import { isAppTabMergedWithChat, isPlatformTabMergedWithChat } from "../utils/appTabMerge";
+import { openPlatformBrowserTab } from "../lib/openPlatformBrowserTab";
+import { recoveryBannerSurvivesStreamEnd } from "../lib/streamRecoveryPersistence";
+import {
+  isAppAutoOpenToolName,
+  isUserOnChatTab,
+  resolveAppIdForAutoOpen,
+  shouldAutoOpenArtifactTab,
+} from "../utils/resolveAppIdForAutoOpen";
+import { buildRecoveryAgentConfigForChat } from "../utils/buildRecoveryAgentConfig";
+import { scheduleChatTitleGeneration } from "../lib/scheduleChatTitle";
 import {
   activeStreamRequests,
   appliedChunkCounts,
@@ -26,14 +50,27 @@ import {
   clearResumeRetry,
   clearStalePausedChats,
   ensureGatewayRecoveryRegistered,
+  setAgentStreamChunkHandler,
   ensureTrackedStream,
   finalizeStreamingMessages,
   HIDDEN_CONTINUE_USER_MESSAGE,
   interruptedTurnNeedsContinue,
+  isHiddenContinueUserMessage,
   isResumingStream,
   lastUserTurnNeedsContinue,
+  recordAutoContinueAttempt,
+  resetAutoContinueAttempts,
+  markAssistantTurnInterrupted,
+  shouldAutoContinueInterruptedTurn,
+  listChatsForPostReconnectStreamRecovery,
+  markPostReconnectStreamRecoveryAttempted,
+  shouldIgnoreDuplicateDoneChunk,
+  resolveChatIdForStreamRequest,
   markResuming,
+  releaseGatewayAgentStream,
+  shouldResumeWithFreshGatewayStream,
   mergeHistoryWithLocal,
+  ensureStreamingAssistantMessageRow,
   rehydrateStreamingRefsForChat,
   scheduleStreamResumeRetry,
   serverHasCompletedAssistantForStreamingTurn,
@@ -41,11 +78,31 @@ import {
   subscribeWithRetry,
   trackActiveStream,
   untrackActiveStream,
-  type StreamingRefs,
 } from "../lib/agentStreamRecovery";
+import {
+  armFirstChunkWatchdog,
+  FIRST_CHUNK_STALL_CANCEL_REASON,
+  noteStreamChunkArrived,
+  type FirstChunkStall,
+} from "../lib/agentFirstChunkWatchdog";
+import {
+  getAgentStreamingRefs,
+  resetAgentStreamingRefsForChat,
+} from "../lib/agentStreamingRefs";
 import type { ToolCall } from "../types/core";
+import {
+  finishUiStreamProfiler,
+  getUiStreamProfiler,
+  startUiStreamProfiler,
+} from "../lib/streamProfiler";
 
 const RATE_LIMIT_EXHAUSTED_ERROR_CODE = "rate_limit_exhausted";
+/**
+ * A limit that will not clear by waiting, so this deliberately does not reach
+ * for the Resume UI. Offering Resume for a spend cap that lifts in three weeks
+ * invites the user to keep pressing a button that cannot work.
+ */
+const PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE = "provider_quota_exhausted";
 const RATE_LIMIT_WAIT_TEXT_PATTERN =
   /\n\n_Rate limited — waiting \d+s before retrying…_\n\n/g;
 
@@ -65,12 +122,18 @@ export function useAgent() {
   const updateStreamingMessage = useChatStore((s) => s.updateStreamingMessage);
   const finalizeStreamingMessage = useChatStore((s) => s.finalizeStreamingMessage);
   const setSending = useChatStore((s) => s.setSending);
+  const setWaitingForAgentSlot = useChatStore((s) => s.setWaitingForAgentSlot);
   const setConnectionPaused = useChatStore((s) => s.setConnectionPaused);
+  const setFinishingWork = useChatStore((s) => s.setFinishingWork);
   const setNeedsStreamRecovery = useChatStore((s) => s.setNeedsStreamRecovery);
+  const setLastTurnOutcome = useChatStore((s) => s.setLastTurnOutcome);
   const setError = useChatStore((s) => s.setError);
   
   // Streaming state management functions
   const initStreamingState = useChatStore((s) => s.initStreamingState);
+  const reactivateAssistantMessage = useChatStore(
+    (s) => s.reactivateAssistantMessage,
+  );
   const setStreamingText = useChatStore((s) => s.setStreamingText);
   const setStreamingReasoning = useChatStore((s) => s.setStreamingReasoning);
   const replaceStreamingSequence = useChatStore((s) => s.replaceStreamingSequence);
@@ -78,37 +141,73 @@ export function useAgent() {
   const flushStreamingState = useChatStore((s) => s.flushStreamingState);
   const clearStreamingState = useChatStore((s) => s.clearStreamingState);
 
-  // ✅ FIX: Use Maps keyed by chatId to support parallel streaming
-  const streamingMessageIdRef = useRef<Map<string, string>>(new Map());
-  const streamingContentRef = useRef<Map<string, string>>(new Map());
-  const streamingReasoningRef = useRef<Map<string, string>>(new Map());
-  const toolCallsMapRef = useRef<Map<string, Map<string, ToolCall>>>(new Map());
+  const streamingRefs = getAgentStreamingRefs();
+  const streamingMessageIdRef = streamingRefs.streamingMessageIdRef;
+  const streamingContentRef = streamingRefs.streamingContentRef;
+  const streamingReasoningRef = streamingRefs.streamingReasoningRef;
+  const toolCallsMapRef = streamingRefs.toolCallsMapRef;
+  const sequenceRef = streamingRefs.sequenceRef;
+  const currentTextSegmentRef = streamingRefs.currentTextSegmentRef;
+
   const updateBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   const reasoningBatchRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
   /** Request IDs whose chunks should be ignored after interrupt/stop */
   const rejectedRequestIdsRef = useRef<Set<string>>(new Set());
   /** Serialize sendMessage per chat so interrupt + new stream don't overlap */
   const sendMessageLockRef = useRef<Map<string, Promise<void>>>(new Map());
-
-  // Sequence tracking (V1-style interleaving)
-  const sequenceRef = useRef<
-    Map<string, Array<{ type: "text" | "tool" | "thinking"; data: any }>>
-  >(new Map());
-  const currentTextSegmentRef = useRef<Map<string, string>>(new Map());
-
-  const streamingRefs: StreamingRefs = {
-    streamingMessageIdRef,
-    streamingContentRef,
-    streamingReasoningRef,
-    toolCallsMapRef,
-    sequenceRef,
-    currentTextSegmentRef,
-  };
+  /** Invalidates cleanup from preempted / superseded sendMessage runs */
+  const sendGenerationRef = useRef<Map<string, number>>(new Map());
 
   // Listen for Gateway connection changes — populated after handleStreamChunk
   const handleStreamChunkRef = useRef<
     (chunk: StreamChunk) => void
   >(() => {});
+
+  /**
+   * Terminal chat state for every `done` path, settled in one place.
+   *
+   * The `done` arm has four exits — duplicate done, stale done, backend
+   * finalMessage with no local stream data, and full finalization — and each
+   * repeated this sequence. Three of them dropped the recovery banner
+   * unconditionally, so a provider refusal (which raises the banner
+   * milliseconds before `done` arrives, and produces no local stream data of
+   * its own) had its only explanation erased on the way out.
+   */
+  const settleChatAfterStreamEnd = useCallback(
+    (chatId: string) => {
+      // Read before the clears: setConnectionPaused(false) drops
+      // needsStreamRecovery as a side effect, so a read taken afterwards
+      // always sees false and the survival check can never fire.
+      const banner = useChatStore.getState().chatStates.get(chatId);
+      const keepRecoveryBanner = recoveryBannerSurvivesStreamEnd({
+        needsStreamRecovery: banner?.needsStreamRecovery ?? false,
+        reason: banner?.streamRecoveryReason,
+      });
+
+      setSending(chatId, false);
+      setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
+      if (keepRecoveryBanner) {
+        // Re-asserted rather than left alone: setConnectionPaused above has
+        // already cleared it, so the reason and the provider's own sentence
+        // have to be put back for the banner to render.
+        setNeedsStreamRecovery(
+          chatId,
+          true,
+          banner?.streamRecoveryReason,
+          banner?.streamRecoveryDetail,
+        );
+      } else {
+        setNeedsStreamRecovery(chatId, false);
+      }
+    },
+    [
+      setConnectionPaused,
+      setFinishingWork,
+      setNeedsStreamRecovery,
+      setSending,
+    ],
+  );
 
   // Handle streaming chunks
   const handleStreamChunk = useCallback(
@@ -117,17 +216,24 @@ export function useAgent() {
 
       // Extract chatId from chunk (all chunks should have this)
       const streamChunk = chunk as unknown as Record<string, unknown>;
-      const chatId =
-        typeof streamChunk.chatId === "string" ? streamChunk.chatId : undefined;
       const requestId =
         typeof streamChunk.requestId === "string"
           ? streamChunk.requestId
           : undefined;
+      let chatId =
+        typeof streamChunk.chatId === "string" && streamChunk.chatId.length > 0
+          ? streamChunk.chatId
+          : undefined;
+      if (!chatId && requestId) {
+        chatId = resolveChatIdForStreamRequest(requestId);
+      }
 
       if (!chatId) {
         console.error("[useAgent] Chunk missing chatId:", chunk);
         return;
       }
+
+      getUiStreamProfiler(chatId)?.mark(`ui.chunk.received.${chunk.type}`);
 
       // Sub-agent trigger responses: only hide delegation chat messages, NOT main chat messages
       // When sub-agent asks main agent a question, main agent may respond in BOTH:
@@ -157,14 +263,30 @@ export function useAgent() {
         }
       }
 
+      // The turn is reaching us. Retire the first-chunk watchdog permanently —
+      // placed after the filters above so a stale or rejected chunk cannot
+      // vouch for a stream that is still silent.
+      noteStreamChunkArrived(chatId, requestId);
+
       // Ensure we have a streaming message for all chunk types
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
+      const boundStreamingId = streamingMessageIdRef.current.get(chatId);
+      if (boundStreamingId) {
+        ensureStreamingAssistantMessageRow(
+          chatId,
+          boundStreamingId,
+          streamingRefs,
+        );
+      }
       if (
         !streamingMessageIdRef.current.has(chatId) &&
+        chunk.type !== "stream-start" &&
         chunk.type !== "done" &&
         chunk.type !== "error" &&
         chunk.type !== "start-step" &&
-        chunk.type !== "step-usage"
+        chunk.type !== "step-usage" &&
+        chunk.type !== "concurrency-queued" &&
+        chunk.type !== "concurrency-acquired"
       ) {
         const messageId = `msg-${Date.now()}`;
         streamingMessageIdRef.current.set(chatId, messageId);
@@ -188,9 +310,109 @@ export function useAgent() {
           },
           chatId,
         );
+        initStreamingState(chatId, messageId);
       }
 
       switch (chunk.type) {
+        case "stream-start": {
+          const messageId = (
+            chunk.payload as { messageId?: string }
+          ).messageId?.trim();
+          if (!messageId) break;
+
+          const uiProfiler = getUiStreamProfiler(chatId);
+          const existingId = streamingMessageIdRef.current.get(chatId);
+          const chatState = useChatStore.getState().chatStates.get(chatId);
+          const existingRow = chatState?.messages.find((m) => m.id === messageId);
+
+          uiProfiler?.measureSync("ui.streamStart.handler", () => {
+            if (existingId === messageId) {
+              if (existingRow?.interrupted) {
+                reactivateAssistantMessage(chatId, messageId);
+              } else if (!existingRow) {
+                ensureStreamingAssistantMessageRow(
+                  chatId,
+                  messageId,
+                  streamingRefs,
+                );
+              }
+              return;
+            }
+
+            if (existingId) {
+              const { chatStates } = useChatStore.getState();
+              const stateForRename = chatStates.get(chatId);
+              if (stateForRename) {
+                const updatedMessages = stateForRename.messages.map((msg) =>
+                  msg.id === existingId ? { ...msg, id: messageId } : msg,
+                );
+                const newChatStates = new Map(chatStates);
+                newChatStates.set(chatId, {
+                  ...stateForRename,
+                  messages: updatedMessages,
+                });
+                useChatStore.setState({ chatStates: newChatStates });
+              }
+            } else if (existingRow) {
+              reactivateAssistantMessage(chatId, messageId);
+            } else {
+              streamingMessageIdRef.current.set(chatId, messageId);
+              streamingContentRef.current.set(chatId, "");
+              streamingReasoningRef.current.set(chatId, "");
+              toolCallsMapRef.current.set(chatId, new Map());
+              sequenceRef.current.set(chatId, []);
+              currentTextSegmentRef.current.set(chatId, "");
+
+              addMessage(
+                {
+                  id: messageId,
+                  role: "assistant",
+                  content: "",
+                  isStreaming: true,
+                  streamingContent: "",
+                  reasoning: "",
+                  streamingReasoning: "",
+                  toolCalls: [],
+                  sequence: [],
+                },
+                chatId,
+              );
+              initStreamingState(chatId, messageId);
+            }
+          });
+
+          streamingMessageIdRef.current.set(chatId, messageId);
+          const reactivated = useChatStore.getState().chatStates.get(chatId)
+            ?.messages.find((m) => m.id === messageId);
+          streamingContentRef.current.set(
+            chatId,
+            reactivated?.streamingContent ?? reactivated?.content ?? "",
+          );
+          streamingReasoningRef.current.set(
+            chatId,
+            reactivated?.streamingReasoning ?? reactivated?.reasoning ?? "",
+          );
+          if (reactivated?.sequence?.length) {
+            sequenceRef.current.set(chatId, reactivated.sequence as SequenceItem[]);
+          }
+          if (reactivated?.toolCalls?.length) {
+            const map = new Map<string, ToolCall>();
+            for (const tc of reactivated.toolCalls) {
+              map.set(tc.id, tc);
+            }
+            toolCallsMapRef.current.set(chatId, map);
+          }
+          break;
+        }
+
+        case "concurrency-queued":
+          setWaitingForAgentSlot(chatId, true);
+          break;
+
+        case "concurrency-acquired":
+          setWaitingForAgentSlot(chatId, false);
+          break;
+
         case "reasoning-delta":
           {
             // Append reasoning delta to ref (always immediate)
@@ -239,6 +461,19 @@ export function useAgent() {
 
         case "tool-call":
           {
+            const pendingTextBatch = updateBatchRef.current.get(chatId);
+            if (pendingTextBatch) {
+              clearTimeout(pendingTextBatch);
+              updateBatchRef.current.delete(chatId);
+              const flushMessageId =
+                streamingMessageIdRef.current.get(chatId);
+              const flushContent =
+                streamingContentRef.current.get(chatId);
+              if (flushMessageId && flushContent !== undefined) {
+                updateStreamingMessage(flushMessageId, flushContent, chatId);
+              }
+            }
+
             // Add or update tool call
             const payload = chunk.payload as {
               toolName: string;
@@ -485,57 +720,66 @@ export function useAgent() {
               }
 
               // === Auto-open document/app tabs when agent creates or edits them ===
+              const parsedResultForAutoOpen = (() => {
+                try {
+                  const raw =
+                    typeof payload.result === "string"
+                      ? JSON.parse(payload.result)
+                      : payload.result;
+                  return raw && typeof raw === "object"
+                    ? (raw as Record<string, unknown>)
+                    : null;
+                } catch {
+                  return null;
+                }
+              })();
+
               if (
-                !payload.error &&
-                payload.result &&
-                (existingCall.toolName === "create_document" ||
-                  existingCall.toolName === "import_document" ||
-                  existingCall.toolName === "create_app" ||
-                  existingCall.toolName === "edit_app_file" ||
-                  existingCall.toolName === "edit_file" ||
-                  existingCall.toolName === "update_app")
+                shouldAutoOpenArtifactTab({
+                  toolName: existingCall.toolName,
+                  hasError: !!payload.error,
+                  hasResult: !!payload.result,
+                  parsedResult: parsedResultForAutoOpen,
+                  args: existingCall.args,
+                })
               ) {
                 try {
+                  const parsedResult = parsedResultForAutoOpen;
+
                   let docId: string | undefined;
                   let docTitle: string | undefined;
                   let isApp = false;
 
-                  // For create/import, parse from result
                   if (
                     existingCall.toolName === "create_document" ||
-                    existingCall.toolName === "import_document" ||
-                    existingCall.toolName === "create_app"
+                    existingCall.toolName === "import_document"
                   ) {
-                    const resultData =
-                      typeof payload.result === "string"
-                        ? JSON.parse(payload.result)
-                        : payload.result;
-                    const docData = resultData?.data ?? resultData;
+                    const docData = parsedResult?.data ?? parsedResult;
                     docId = docData?.id as string | undefined;
                     docTitle = (docData?.title as string) || "Document";
-                    isApp = existingCall.toolName === "create_app";
-                  }
-
-                  // For app edits, get appId from args (legacy) or path (edit_file)
-                  if (
-                    existingCall.toolName === "edit_app_file" ||
-                    existingCall.toolName === "edit_file" ||
-                    existingCall.toolName === "update_app"
-                  ) {
-                    docId =
-                      (existingCall.args?.appId as string | undefined) ??
-                      parseAppIdFromEditFilePath(existingCall.args?.path);
+                  } else if (isAppAutoOpenToolName(existingCall.toolName)) {
+                    docId = resolveAppIdForAutoOpen({
+                      toolName: existingCall.toolName,
+                      args: existingCall.args,
+                      parsedResult,
+                    });
                     isApp = true;
 
-                    // Resolve title from existing tab if available
-                    if (docId) {
-                      const existingAppTab = useTabStore.getState().getTab(`app-${docId}`);
-                      docTitle = existingAppTab?.title || "App";
-                    } else {
-                      docTitle = "App";
-                    }
+                    const docData =
+                      parsedResult?.data && typeof parsedResult.data === "object"
+                        ? (parsedResult.data as Record<string, unknown>)
+                        : undefined;
+                    const existingAppTab = docId
+                      ? useTabStore.getState().getTab(`app-${docId}`)
+                      : undefined;
+                    docTitle =
+                      existingAppTab?.title ||
+                      (typeof docData?.title === "string" && docData.title.length > 0
+                        ? docData.title
+                        : undefined) ||
+                      "App";
 
-                    console.log("[useAgent] app edit auto-open:", {
+                    console.log("[useAgent] app auto-open:", {
                       toolName: existingCall.toolName,
                       appId: docId,
                       args: existingCall.args,
@@ -557,14 +801,24 @@ export function useAgent() {
                     const existingTab = getTab(existingTabId);
                     const chatTabId = `chat-${chatId}`;
 
-                    // Only auto-switch if user is currently on the chat tab
-                    // Otherwise, mark as pending refresh to avoid interruption
-                    const isUserOnChatTab = activeTabId === chatTabId;
-                    const autoSwitch = isUserOnChatTab;
+                    const autoSwitch = isUserOnChatTab(
+                      chatTabId,
+                      activeTabId,
+                      getTab,
+                    );
 
-                    if (existingTab) {
-                      // Tab exists - just merge with chat (refreshes the view)
-                      createArtifactFromChat(chatTabId, existingTabId, { autoSwitch });
+                    if (
+                      existingTab &&
+                      isApp &&
+                      isAppTabMergedWithChat(chatTabId, existingTabId)
+                    ) {
+                      console.log(
+                        `[useAgent] App tab already merged with chat, skipping re-open: ${existingTabId}`,
+                      );
+                    } else if (existingTab) {
+                      createArtifactFromChat(chatTabId, existingTabId, {
+                        autoSwitch,
+                      });
                       console.log(
                         `[useAgent] Refreshed existing ${tabType} tab: ${existingTabId}, autoSwitch: ${autoSwitch}`,
                       );
@@ -608,6 +862,51 @@ export function useAgent() {
                   );
                 }
               }
+
+              // Merge platform browser beside chat when prepare_browser succeeds (embedded tab only)
+              if (
+                existingCall.toolName === "connect_platform" &&
+                (existingCall.args as Record<string, unknown> | undefined)
+                  ?.action === "prepare_browser" &&
+                !payload.error &&
+                parsedResultForAutoOpen?.success !== false &&
+                parsedResultForAutoOpen?.data?.browserMode !== "real_chrome"
+              ) {
+                try {
+                  const platformArg = (
+                    existingCall.args as Record<string, unknown> | undefined
+                  )?.platform;
+                  const platformId =
+                    typeof platformArg === "string" && platformArg.trim().length > 0
+                      ? platformArg.trim()
+                      : "linkedin";
+                  const chatTabId = `chat-${chatId}`;
+                  const { activeTabId, getTab, switchToTab } =
+                    useTabStore.getState();
+                  const platformTabId = `platform-${platformId}`;
+                  const autoSwitch = isUserOnChatTab(
+                    chatTabId,
+                    activeTabId,
+                    getTab,
+                  );
+
+                  if (isPlatformTabMergedWithChat(chatTabId, platformTabId)) {
+                    if (autoSwitch) {
+                      switchToTab(chatTabId);
+                    }
+                  } else {
+                    openPlatformBrowserTab(platformId, {
+                      mergeWithChatTabId: chatTabId,
+                      autoSwitch,
+                    });
+                  }
+                } catch (platformMergeErr) {
+                  console.warn(
+                    "[useAgent] Could not merge platform browser with chat:",
+                    platformMergeErr,
+                  );
+                }
+              }
             }
           }
           break;
@@ -639,6 +938,7 @@ export function useAgent() {
               const content = streamingContentRef.current.get(chatId);
               if (streamingMessageId && content !== undefined) {
                 updateStreamingMessage(streamingMessageId, content, chatId);
+                getUiStreamProfiler(chatId)?.mark("ui.textPaint");
               }
               updateBatchRef.current.delete(chatId);
             }, 50); // Update at most every 50ms (20 FPS)
@@ -646,8 +946,21 @@ export function useAgent() {
           }
           break;
 
+        case "wrap-up-start":
+          setFinishingWork(chatId, true);
+          break;
+
         case "done":
           {
+            // A completed turn proves the credentials work again, so retire any
+            // rejection we recorded for this provider.
+            const succeededProvider = providerForModelId(
+              useChatStore.getState().getLastSelectedModel(chatId),
+            );
+            if (succeededProvider) {
+              useProviderAuthStore.getState().clearRejection(succeededProvider);
+            }
+
             // Clear any pending batch update for this chat
             const existingTimeout = updateBatchRef.current.get(chatId);
             if (existingTimeout) {
@@ -677,39 +990,28 @@ export function useAgent() {
               .chatStates.get(chatId);
 
             // agent:complete (broadcast) can deliver a second done after the stream
-            // chunk already finalized — skip to avoid duplicate assistant cards.
+            // chunk already finalized — skip only when that exact message is saved.
             if (
               finalMessageFromBackend &&
               typeof finalMessageFromBackend.id === "string" &&
-              !streamingMessageIdRef.current.has(chatId) &&
               chatStateForDone &&
-              !chatStateForDone.isSending
+              shouldIgnoreDuplicateDoneChunk({
+                finalMessageId: finalMessageFromBackend.id,
+                messages: chatStateForDone.messages,
+                hasActiveStreamingMessageId:
+                  streamingMessageIdRef.current.has(chatId),
+                isSending: chatStateForDone.isSending,
+              })
             ) {
-              const serverId = finalMessageFromBackend.id;
-              const alreadySaved = chatStateForDone.messages.some(
-                (m) => m.id === serverId && !m.isStreaming,
+              console.log(
+                `[useAgent] Ignoring duplicate done for ${chatId} (stream already finalized)`,
               );
-              const lastAssistant = [...chatStateForDone.messages]
-                .reverse()
-                .find((m) => m.role === "assistant");
-              if (
-                alreadySaved ||
-                (lastAssistant &&
-                  !lastAssistant.isStreaming &&
-                  lastAssistant.id !== serverId)
-              ) {
-                console.log(
-                  `[useAgent] Ignoring duplicate done for ${chatId} (stream already finalized)`,
-                );
-                untrackActiveStream(chatId);
-                setSending(chatId, false);
-                setConnectionPaused(chatId, false);
-                setNeedsStreamRecovery(chatId, false);
-                const { setTabStreaming: clearTabStreaming } =
-                  useTabStore.getState();
-                clearTabStreaming(`chat-${chatId}`, false);
-                break;
-              }
+              untrackActiveStream(chatId);
+              settleChatAfterStreamEnd(chatId);
+              const { setTabStreaming: clearTabStreaming } =
+                useTabStore.getState();
+              clearTabStreaming(`chat-${chatId}`, false);
+              break;
             }
 
             if (
@@ -731,9 +1033,7 @@ export function useAgent() {
               sequenceRef.current.delete(chatId);
               currentTextSegmentRef.current.delete(chatId);
               untrackActiveStream(chatId);
-              setSending(chatId, false);
-              setConnectionPaused(chatId, false);
-              setNeedsStreamRecovery(chatId, false);
+              settleChatAfterStreamEnd(chatId);
               const { setTabStreaming: clearTabStreaming } =
                 useTabStore.getState();
               clearTabStreaming(`chat-${chatId}`, false);
@@ -808,9 +1108,7 @@ export function useAgent() {
                 sequenceRef.current.delete(chatId);
                 currentTextSegmentRef.current.delete(chatId);
                 untrackActiveStream(chatId);
-                setSending(chatId, false);
-                setConnectionPaused(chatId, false);
-                setNeedsStreamRecovery(chatId, false);
+                settleChatAfterStreamEnd(chatId);
                 const { setTabStreaming } = useTabStore.getState();
                 setTabStreaming(`chat-${chatId}`, false);
                 break;
@@ -928,11 +1226,11 @@ export function useAgent() {
               sequenceRef.current.set(chatId, sequence);
             }
 
-            // Set isSending to false FIRST to prevent empty loading indicator from appearing
-            setSending(chatId, false);
-            setConnectionPaused(chatId, false);
-            setNeedsStreamRecovery(chatId, false);
-            
+            // Settles isSending first so no empty loading indicator appears,
+            // and preserves a refusal banner the error chunk raised moments
+            // ago — see settleChatAfterStreamEnd.
+            settleChatAfterStreamEnd(chatId);
+
             // Clear streaming status (blue dot) for THIS chat's tab
             const { setTabStreaming } = useTabStore.getState();
             setTabStreaming(`chat-${chatId}`, false);
@@ -1084,6 +1382,7 @@ export function useAgent() {
               }
             }
             untrackActiveStream(chatId);
+            resetAutoContinueAttempts(chatId);
           }
           break;
 
@@ -1103,14 +1402,22 @@ export function useAgent() {
               }
             }
 
-            if (payload.code === RATE_LIMIT_EXHAUSTED_ERROR_CODE) {
+            if (payload.code === PROVIDER_QUOTA_EXHAUSTED_ERROR_CODE) {
               console.warn(
-                `[useAgent] Rate limit retries exhausted for ${chatId} — showing resume UI`,
+                `[useAgent] Provider quota exhausted for ${chatId} — surfacing the limit, no resume`,
               );
               setSending(chatId, false);
+              setWaitingForAgentSlot(chatId, false);
               setConnectionPaused(chatId, false);
-              setNeedsStreamRecovery(chatId, true);
-              setError(null);
+              setFinishingWork(chatId, false);
+              // The gateway already composed a message naming the limit, the
+              // reset time and where to change it, so it is shown as-is rather
+              // than swapped for one of the generic rewrites below.
+              setError(rawError);
+              // The provider refused this turn outright. Recorded separately
+              // from the banner because a spent quota offers no Resume, so the
+              // banner state alone never carries a refusal.
+              setLastTurnOutcome(chatId, "providerRefused");
 
               const streamingMessageId =
                 streamingMessageIdRef.current.get(chatId);
@@ -1119,7 +1426,49 @@ export function useAgent() {
                   streamingContentRef.current.get(chatId) || "",
                 );
                 streamingContentRef.current.set(chatId, cleaned);
-                flushStreamingState(chatId, { isStreaming: true });
+                flushStreamingState(chatId, { isStreaming: false });
+              }
+              untrackActiveStream(chatId);
+              break;
+            }
+
+            if (payload.code === RATE_LIMIT_EXHAUSTED_ERROR_CODE) {
+              console.warn(
+                `[useAgent] Rate limit retries exhausted for ${chatId} — showing resume UI`,
+              );
+              setSending(chatId, false);
+              setWaitingForAgentSlot(chatId, false);
+              setConnectionPaused(chatId, false);
+              setFinishingWork(chatId, false);
+              // Carried into the banner rather than dropped. The gateway names
+              // which credential was refused and quotes the provider, and that
+              // is the only thing that tells a user whether switching between
+              // API key and subscription login changed anything.
+              setNeedsStreamRecovery(chatId, true, "rateLimit", rawError);
+              // Survives Stop, which clears the banner. Without it, stopping a
+              // refused turn erased the evidence of the refusal at exactly the
+              // moment the user asked us to stop retrying.
+              setLastTurnOutcome(chatId, "providerRefused");
+              // Also recorded on `error`, which is global rather than per-chat
+              // and so cannot be dropped by a write to this chat's state.
+              // Every other copy of this sentence lives in the per-chat banner,
+              // and that banner is cleared as a side effect by several callers
+              // (setConnectionPaused, cleanupStreamState, the stale sweep) — so
+              // relying on it alone is what made a refusal show nothing at all.
+              // The sibling quota branch above has always used `error` and has
+              // always been visible; this is the same refusal and gets the same
+              // treatment. ChatContainer renders whichever one it has, never
+              // both, so this does not double up on the banner.
+              setError(rawError);
+
+              const streamingMessageId =
+                streamingMessageIdRef.current.get(chatId);
+              if (streamingMessageId) {
+                const cleaned = stripRateLimitWaitDeltas(
+                  streamingContentRef.current.get(chatId) || "",
+                );
+                streamingContentRef.current.set(chatId, cleaned);
+                flushStreamingState(chatId, { isStreaming: false });
               }
               untrackActiveStream(chatId);
               break;
@@ -1134,11 +1483,18 @@ export function useAgent() {
               break;
             }
 
+            const recoverableDrop = isRecoverableProviderStreamDrop(rawError);
+
             // Extract provider-specific error messages
             let errorMsg = rawError;
 
+            // Pattern: AI SDK empty stream (often proxy/auth/model mismatch)
+            if (rawError.includes("No output generated")) {
+              errorMsg =
+                "The model returned an empty response. If you don't have your own API keys, sign in with Papr under Settings → AI Models — cloud models route through the Papr proxy. Otherwise try a different model.";
+            }
             // Pattern: Internal Server Error (500-level errors from any provider)
-            if (
+            else if (
                 rawError.includes("Internal Server Error") ||
                 rawError.includes("api_error") ||
                 rawError.includes("server error") ||
@@ -1155,10 +1511,10 @@ export function useAgent() {
                 errorMsg = `Credit balance too low for ${provider}. Please add credits or switch to a different model.`;
               }
               // Pattern: Connection terminated mid-stream (undici/Node.js "terminated" error)
-              // This happens when any provider's server closes the HTTP connection
-              // unexpectedly (usage limit hit, server-side timeout, socket reset, etc.)
-              else if (rawError === "terminated" || rawError === "socket hang up" || rawError.includes("ECONNRESET")) {
-                errorMsg = `The server closed the connection mid-stream. This usually means a usage or rate limit was hit on your subscription. Please wait a moment and try again, or switch to a different model.`;
+              // Often a server-side idle timeout on long thinking/tool-heavy turns — not always rate limits.
+              else if (recoverableDrop) {
+                errorMsg =
+                  "The connection to the AI provider was interrupted mid-response (often a timeout on long requests). Paprwork will try to resume automatically.";
               }
               // Pattern: Overloaded errors (server capacity issues)
               else if (
@@ -1194,13 +1550,20 @@ export function useAgent() {
                   "The cloud agent session expired before your message was processed. Send your message again — Paprwork will start a fresh cloud agent automatically.";
               }
               // Pattern: Invalid API key (specific patterns, not just "API key" anywhere)
-              else if (
-                rawError.includes("Invalid API key") ||
-                rawError.includes("invalid x-api-key") ||
-                rawError.includes("authentication_error") ||
-                rawError.includes("(401)")
-              ) {
+              else if (isProviderAuthRejection(rawError)) {
                 errorMsg = `Invalid API key. Please check your API key in Settings.`;
+
+                // Remember which account was rejected so the AI Models card can
+                // say "reconnect" rather than counting down a stored expiry the
+                // provider has stopped honouring.
+                const rejectedProvider = providerForModelId(
+                  useChatStore.getState().getLastSelectedModel(chatId),
+                );
+                if (rejectedProvider) {
+                  useProviderAuthStore
+                    .getState()
+                    .recordRejection(rejectedProvider, errorMsg);
+                }
               }
               // Pattern: AI SDK tool validation errors (Zod validation failures)
               else if (
@@ -1215,13 +1578,22 @@ export function useAgent() {
               console.error("[useAgent] Tool validation error (full details):", rawError);
             }
 
-            console.error("[useAgent] Received error chunk:", errorMsg);
-            console.error("[useAgent] Full chunk payload:", chunk.payload);
-            setError(errorMsg);
+            if (recoverableDrop) {
+              console.warn(
+                `[useAgent] Recoverable provider stream drop for ${chatId} — marking interrupted for auto-continue:`,
+                rawError,
+              );
+              setError(null);
+            } else {
+              console.error("[useAgent] Received error chunk:", errorMsg);
+              console.error("[useAgent] Full chunk payload:", chunk.payload);
+              setError(errorMsg);
+            }
 
             // Set isSending to false FIRST to prevent empty loading indicator from appearing
             setSending(chatId, false);
             setConnectionPaused(chatId, false);
+            setFinishingWork(chatId, false);
             
             const streamingMessageId =
               streamingMessageIdRef.current.get(chatId);
@@ -1230,6 +1602,9 @@ export function useAgent() {
               // finalizing — preserves whatever text/tools we already have.
               flushStreamingState(chatId, { isStreaming: false });
               finalizeStreamingMessage(streamingMessageId, chatId);
+              if (recoverableDrop) {
+                markAssistantTurnInterrupted(chatId, streamingMessageId);
+              }
               streamingMessageIdRef.current.delete(chatId);
               streamingContentRef.current.delete(chatId);
               streamingReasoningRef.current.delete(chatId);
@@ -1301,8 +1676,11 @@ export function useAgent() {
       updateStreamingMessage,
       finalizeStreamingMessage,
       setSending,
+      setWaitingForAgentSlot,
       setConnectionPaused,
+      setFinishingWork,
       setNeedsStreamRecovery,
+      settleChatAfterStreamEnd,
       setError,
       initStreamingState,
       setStreamingText,
@@ -1341,9 +1719,11 @@ export function useAgent() {
         untrackActiveStream(chatId);
       }
 
-      await gateway.send("agent:stop", { chatId }).catch((stopError) => {
-        console.warn("[useAgent] Failed to stop existing stream:", stopError);
-      });
+      await gateway
+        .send("agent:stop", { chatId }, { timeoutMs: AGENT_INTERRUPT_TIMEOUT_MS })
+        .catch((stopError) => {
+          console.warn("[useAgent] Failed to stop existing stream:", stopError);
+        });
 
       const existingStreamingMessageId =
         streamingMessageIdRef.current.get(chatId);
@@ -1409,6 +1789,10 @@ export function useAgent() {
         }
 
         finalizeStreamingMessage(streamingMessageId, chatId);
+
+        if (streamingMessageId) {
+          markAssistantTurnInterrupted(chatId, streamingMessageId);
+        }
       }
 
       streamingMessageIdRef.current.delete(chatId);
@@ -1421,6 +1805,7 @@ export function useAgent() {
 
       setSending(chatId, false);
       setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
       useChatStore.getState().setChatStreaming(chatId, false);
       useTabStore.getState().setTabStreaming(`chat-${chatId}`, false);
       clearStreamingState(chatId);
@@ -1442,7 +1827,9 @@ export function useAgent() {
       );
       clearResumeRetry(chatId);
       setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
       setNeedsStreamRecovery(chatId, false);
+      setError(null);
       setSending(chatId, true);
 
       const { setTabStreaming } = useTabStore.getState();
@@ -1454,8 +1841,9 @@ export function useAgent() {
         fromChunkIndex,
         (chunk) => handleStreamChunkRef.current(chunk),
       );
+      setError(null);
     },
-    [setConnectionPaused, setNeedsStreamRecovery, setSending, streamingRefs],
+    [setConnectionPaused, setNeedsStreamRecovery, setSending, setError, streamingRefs],
   );
 
   const syncStreamFromHistory = useCallback(
@@ -1464,12 +1852,14 @@ export function useAgent() {
       mode: "auto" | "resolve" = "auto",
     ): Promise<{ needsContinue: boolean }> => {
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
+      const chatMessages =
+        useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
       const streamingMessageId =
         streamingMessageIdRef.current.get(chatId) ??
-        useChatStore
-          .getState()
-          .chatStates.get(chatId)
-          ?.messages.find((m) => m.role === "assistant" && m.isStreaming)?.id;
+        chatMessages.find((m) => m.role === "assistant" && m.isStreaming)?.id ??
+        [...chatMessages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.interrupted)?.id;
       const { setTabStreaming } = useTabStore.getState();
       let shouldCleanup = true;
 
@@ -1481,9 +1871,11 @@ export function useAgent() {
         sequenceRef.current.delete(chatId);
         currentTextSegmentRef.current.delete(chatId);
         untrackActiveStream(chatId);
-        setSending(chatId, false);
-        setConnectionPaused(chatId, false);
-        setNeedsStreamRecovery(chatId, false);
+        // Same four settles as every `done` path, and for the same reason: this
+        // runs on reconnect, where finding no live stream is exactly what a
+        // refused turn looks like — so clearing unconditionally would erase the
+        // refusal we are reconnecting to explain.
+        settleChatAfterStreamEnd(chatId);
         setTabStreaming(`chat-${chatId}`, false);
         clearStreamingState(chatId);
       };
@@ -1502,9 +1894,6 @@ export function useAgent() {
             const requestId = ensureTrackedStream(chatId);
             setConnectionPaused(chatId, true);
             setNeedsStreamRecovery(chatId, false);
-            if (mode === "auto") {
-              setError("Agent still working — reconnecting to stream…");
-            }
             scheduleStreamResumeRetry(
               chatId,
               requestId,
@@ -1628,7 +2017,9 @@ export function useAgent() {
       clearStreamingState,
       resumeInterruptedStream,
       setConnectionPaused,
+      setFinishingWork,
       setNeedsStreamRecovery,
+      settleChatAfterStreamEnd,
       setError,
       setSending,
       streamingRefs,
@@ -1643,11 +2034,18 @@ export function useAgent() {
       clearResumeRetry(chatId);
       setNeedsStreamRecovery(chatId, false);
       setConnectionPaused(chatId, false);
+      setFinishingWork(chatId, false);
       setError(null);
 
       const { setTabStreaming } = useTabStore.getState();
       setTabStreaming(`chat-${chatId}`, true);
       setSending(chatId, true);
+
+      const chatMessages =
+        useChatStore.getState().chatStates.get(chatId)?.messages ?? [];
+      const reuseAssistantMessageId = [...chatMessages]
+        .reverse()
+        .find((m) => m.role === "assistant" && m.interrupted)?.id;
 
       streamingMessageIdRef.current.delete(chatId);
       streamingContentRef.current.delete(chatId);
@@ -1662,6 +2060,9 @@ export function useAgent() {
           chatId,
           message: HIDDEN_CONTINUE_USER_MESSAGE,
           config,
+          ...(reuseAssistantMessageId
+            ? { reuseAssistantMessageId }
+            : {}),
           ...(focusContext ? { focusContext } : {}),
         },
         (chunk) => handleStreamChunk(chunk as StreamChunk),
@@ -1681,12 +2082,59 @@ export function useAgent() {
 
   const retryStreamRecovery = useCallback(
     async (chatId: string, config?: AgentConfig) => {
+      const chatStateBefore = useChatStore.getState().chatStates.get(chatId);
       const wasAwaitingRecovery =
-        useChatStore.getState().chatStates.get(chatId)?.needsStreamRecovery ??
-        false;
+        chatStateBefore?.needsStreamRecovery ?? false;
+      const resumeWithFreshStream = shouldResumeWithFreshGatewayStream({
+        streamRecoveryReason: chatStateBefore?.streamRecoveryReason,
+        lastTurnOutcome: chatStateBefore?.lastTurnOutcome,
+      });
       setNeedsStreamRecovery(chatId, false);
+      // Tapping Resume is the user deciding to try again, so the refusal or
+      // stop that blocked auto-continue no longer applies.
+      setLastTurnOutcome(chatId, undefined);
+      // Cleared here rather than only on the resumable branch below: a refusal
+      // records its sentence on `error` as well as on the banner, so clearing
+      // the banner without clearing `error` would reveal the copy underneath
+      // and report the refusal a second time on the turn retrying it.
+      setError(null);
+      setWaitingForAgentSlot(chatId, false);
       clearResumeRetry(chatId);
       rehydrateStreamingRefsForChat(chatId, streamingRefs);
+
+      const releaseServerStream = async (): Promise<void> => {
+        await releaseGatewayAgentStream(chatId, {
+          onCancelRequest: (requestId) => {
+            rejectedRequestIdsRef.current.add(requestId);
+            gateway.cancelRequest(requestId);
+          },
+        });
+      };
+
+      if (resumeWithFreshStream && config) {
+        await releaseServerStream();
+        try {
+          await syncStreamFromHistory(chatId, "resolve");
+          await continueInterruptedTurn(chatId, config);
+        } catch (continueError) {
+          const message =
+            continueError instanceof Error
+              ? continueError.message
+              : String(continueError);
+          if (message === GATEWAY_DISCONNECTED_ERROR) {
+            setConnectionPaused(chatId, true);
+            setNeedsStreamRecovery(chatId, true);
+            return;
+          }
+          console.error(
+            `[useAgent] Fresh resume after provider backoff failed for ${chatId}:`,
+            continueError,
+          );
+          setError(message);
+          setNeedsStreamRecovery(chatId, true);
+        }
+        return;
+      }
 
       let requestId = activeStreamRequests.get(chatId);
       if (!requestId) {
@@ -1738,6 +2186,7 @@ export function useAgent() {
           return;
         }
         try {
+          await releaseServerStream();
           await continueInterruptedTurn(chatId, config);
         } catch (continueError) {
           const message =
@@ -1770,10 +2219,68 @@ export function useAgent() {
       resumeInterruptedStream,
       setConnectionPaused,
       setError,
+      setLastTurnOutcome,
       setNeedsStreamRecovery,
+      setWaitingForAgentSlot,
       streamingRefs,
       syncStreamFromHistory,
     ],
+  );
+
+  const retryStreamRecoveryRef = useRef(retryStreamRecovery);
+  retryStreamRecoveryRef.current = retryStreamRecovery;
+
+  /**
+   * A turn delivered no first chunk at all. Two causes, and they need different
+   * remedies, so probe rather than guess:
+   *
+   * - Socket dead (half-open: we think it is open, the server has already run
+   *   `removeSubscriber`). Closing it runs the existing reconnect + resume path,
+   *   so there is nothing more to do here.
+   * - Socket fine, but the server no longer lists us as a subscriber for this
+   *   stream. Resubscribe; `retryStreamRecovery` falls back to history if the
+   *   stream is already finished.
+   *
+   * The original promise is released first so the send lock frees and the
+   * heartbeat drops back to its strict cadence. `isSending` is deliberately
+   * left true — the answer is still coming, and recovery owns that state.
+   */
+  const handleFirstChunkStall = useCallback(
+    async (stall: FirstChunkStall, config?: AgentConfig) => {
+      const { chatId, requestId, waitedMs } = stall;
+      console.warn(
+        `[useAgent] No first chunk for ${chatId} after ${waitedMs}ms ` +
+          `(stream ${requestId}) — probing the socket before recovering`,
+      );
+
+      gateway.cancelRequest(requestId, FIRST_CHUNK_STALL_CANCEL_REASON);
+
+      const alive = await gateway.probeConnection();
+      if (!alive) {
+        // onclose → rejectActiveStreamHandlers → reconnect → resume.
+        console.warn(
+          `[useAgent] Socket was dead for ${chatId} — reconnect will resume the stream`,
+        );
+        setConnectionPaused(chatId, true);
+        return;
+      }
+
+      try {
+        await retryStreamRecoveryRef.current(chatId, config);
+      } catch (error) {
+        console.error(
+          `[useAgent] First-chunk recovery failed for ${chatId}:`,
+          error,
+        );
+        setError(
+          error instanceof Error
+            ? error.message
+            : "Lost contact with the agent. Send a new message to continue.",
+        );
+        setSending(chatId, false);
+      }
+    },
+    [setConnectionPaused, setError, setSending],
   );
 
   useEffect(() => {
@@ -1781,10 +2288,6 @@ export function useAgent() {
 
     const resumeAllActiveStreams = async () => {
       const activeStreams = [...activeStreamRequests.entries()];
-      if (activeStreams.length === 0) {
-        await clearStalePausedChats();
-        return;
-      }
 
       for (const [chatId, requestId] of activeStreams) {
         if (isResumingStream(chatId)) continue;
@@ -1816,6 +2319,26 @@ export function useAgent() {
           markResuming(chatId, false);
         }
       }
+
+      await clearStalePausedChats();
+
+      const retryStreamRecoveryFn = retryStreamRecoveryRef.current;
+      for (const chatId of listChatsForPostReconnectStreamRecovery()) {
+        const config = buildRecoveryAgentConfigForChat(chatId);
+        if (!config) continue;
+        markPostReconnectStreamRecoveryAttempted(chatId);
+        console.log(
+          `[useAgent] Auto-retrying stream recovery for ${chatId} after reconnect`,
+        );
+        try {
+          await retryStreamRecoveryFn(chatId, config);
+        } catch (error) {
+          console.warn(
+            `[useAgent] Post-reconnect stream recovery failed for ${chatId}:`,
+            error,
+          );
+        }
+      }
     };
 
     setRecoverStreamsHandler(resumeAllActiveStreams);
@@ -1825,47 +2348,12 @@ export function useAgent() {
     resumeInterruptedStream,
     syncStreamFromHistory,
     setConnectionPaused,
+    retryStreamRecovery,
   ]);
 
-  // Listen for broadcast agent chunks (e.g. auto-response to sub-agent questions)
+  // Global gateway-broadcast listener (see ensureAgentStreamBroadcastListener).
   useEffect(() => {
-    const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ type: string; data?: unknown }>)
-        .detail;
-      if (!detail?.type?.startsWith("agent:")) return;
-
-      if (detail.type === "agent:chunk" && detail.data) {
-        const chunk = detail.data as Record<string, unknown>;
-        handleStreamChunk(chunk as StreamChunk);
-      } else if (detail.type === "agent:complete" && detail.data) {
-        const data = detail.data as Record<string, unknown>;
-        const chatId = data.chatId as string | undefined;
-        if (chatId) {
-          handleStreamChunk({
-            type: "done",
-            chatId,
-            payload: { finalMessage: data.finalMessage },
-          } as StreamChunk);
-        }
-      } else if (detail.type === "agent:error" && detail.data) {
-        const data = detail.data as Record<string, unknown>;
-        const chatId = data.chatId as string | undefined;
-        const error = data.error as string | undefined;
-        if (chatId && error && isExpectedStreamCancellation(error)) {
-          return;
-        }
-        if (chatId) {
-          handleStreamChunk({
-            type: "error",
-            chatId,
-            payload: { error: error || "Stream error" },
-          } as StreamChunk);
-        }
-      }
-    };
-
-    window.addEventListener("gateway-broadcast", handler);
-    return () => window.removeEventListener("gateway-broadcast", handler);
+    setAgentStreamChunkHandler(handleStreamChunk);
   }, [handleStreamChunk]);
 
   // Send message to agent
@@ -1881,37 +2369,62 @@ export function useAgent() {
       console.log("[useAgent.sendMessage] Message:", message);
       console.log("[useAgent.sendMessage] ChatId:", chatId);
 
-      const { setTabStreaming, setTabUnread, updateTabTitle, updateTabId } =
+      const { setTabStreaming, setTabUnread, updateTabId } =
         useTabStore.getState();
 
       const isFirstMessage = chatId.startsWith("temp-");
       let finalChatId = chatId; // Will be updated if temp
       const tabId = `chat-${chatId}`;
+      const hiddenContinue = isHiddenContinueUserMessage(message);
+      const userMessageId = `msg-user-${Date.now()}`;
 
-      // Stop any in-flight stream BEFORE waiting on the prior send lock.
-      // Otherwise "Send now" on a queued message blocks until the current
-      // gateway.stream Promise finishes instead of interrupting immediately.
       const interruptIfActive = async (targetChatId: string): Promise<void> => {
-        if (hasActiveStreamWork(targetChatId)) {
-          console.log(
-            `[useAgent] Interrupting active stream for ${targetChatId}`,
-          );
-          await interruptActiveStream(targetChatId);
+        if (!hasActiveStreamWork(targetChatId)) {
+          return;
         }
+        console.log(
+          `[useAgent] Interrupting active stream for ${targetChatId}`,
+        );
+        await Promise.race([
+          interruptActiveStream(targetChatId),
+          new Promise<void>((resolve) => {
+            setTimeout(resolve, AGENT_INTERRUPT_TIMEOUT_MS);
+          }),
+        ]);
       };
-
-      await interruptIfActive(chatId);
 
       const priorSend = sendMessageLockRef.current.get(chatId);
       if (priorSend) {
-        await priorSend.catch(() => {});
+        if (hiddenContinue) {
+          await priorSend.catch(() => {});
+        } else {
+          console.warn(
+            `[useAgent] Preempting hung prior send for ${chatId} — user message takes priority`,
+          );
+          sendMessageLockRef.current.delete(chatId);
+          await interruptIfActive(chatId);
+        }
+      } else if (!hiddenContinue) {
+        await interruptIfActive(chatId);
       }
+
+      const myGeneration = nextSendGeneration(
+        sendGenerationRef.current,
+        chatId,
+      );
 
       let releaseSendLock: (() => void) | undefined;
       const sendLock = new Promise<void>((resolve) => {
         releaseSendLock = resolve;
       });
       sendMessageLockRef.current.set(chatId, sendLock);
+
+      const isSendCurrent = (targetChatId: string): boolean =>
+        isSendGenerationCurrent(
+          sendGenerationRef.current,
+          targetChatId,
+          myGeneration,
+        );
 
       console.log(
         "[useAgent.sendMessage]   - Is first message:",
@@ -1920,6 +2433,30 @@ export function useAgent() {
       console.log("=".repeat(80));
 
       try {
+        if (!hiddenContinue) {
+          resetAutoContinueAttempts(chatId);
+          setLastTurnOutcome(chatId, undefined);
+          // Retired alongside the outcome: a refusal banner now outlives the
+          // stream that raised it, so without this a real user message leaves
+          // a Resume button offering to retry the turn they just replaced.
+          // Gated on the same hidden-continue check, so an auto-continue
+          // cannot clear the banner that is meant to be blocking it.
+          setNeedsStreamRecovery(chatId, false);
+        }
+
+        setTabStreaming(tabId, true);
+        setSending(chatId, true);
+        addMessage(
+          {
+            id: userMessageId,
+            role: "user",
+            content: message,
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
+          },
+          chatId,
+        );
+        console.log("[useAgent] User message added to store (optimistic)");
+
         // V1 APPROACH: Create permanent chat BEFORE streaming if temp
         if (isFirstMessage) {
           console.log(
@@ -1956,46 +2493,35 @@ export function useAgent() {
           console.log(`[useAgent] Updated tab: ${tabId} → chat-${newChatId}`);
 
           finalChatId = newChatId; // Use permanent ID for streaming
+          sendGenerationRef.current.set(finalChatId, myGeneration);
 
           const tempLock = sendMessageLockRef.current.get(chatId);
           if (tempLock) {
             sendMessageLockRef.current.delete(chatId);
             sendMessageLockRef.current.set(finalChatId, tempLock);
           }
+
+          setSending(chatId, false);
+          setSending(finalChatId, true);
+          setTabStreaming(tabId, false);
+          setTabStreaming(`chat-${finalChatId}`, true);
+
+          scheduleChatTitleGeneration(finalChatId, message);
         }
 
         if (finalChatId !== chatId) {
           await interruptIfActive(finalChatId);
         }
 
-        // Set tab streaming status (blue dot) for THIS chat's tab
-        setTabStreaming(`chat-${finalChatId}`, true);
-
-        // Mark sending before adding the user message so loadMessages cannot
-        // wipe optimistic UI when the tab entityId switches temp → permanent.
-        setSending(finalChatId, true);
-
-        // Add user message immediately to THIS chat
-        addMessage(
-          {
-            id: `msg-user-${Date.now()}`,
-            role: "user",
-            content: message,
-            ...(attachments && attachments.length > 0 ? { attachments } : {}),
-          },
-          finalChatId,
-        );
-        console.log("[useAgent] User message added to store");
-
         // Reset streaming state for this chatId
-        streamingMessageIdRef.current.delete(finalChatId);
-        streamingContentRef.current.delete(finalChatId);
-        streamingReasoningRef.current.delete(finalChatId);
-        toolCallsMapRef.current.delete(finalChatId);
+        resetAgentStreamingRefsForChat(finalChatId);
         appliedChunkCounts.set(finalChatId, 0);
 
         setError(null);
         console.log("[useAgent] State reset, about to call gateway.stream");
+
+        startUiStreamProfiler(finalChatId);
+        getUiStreamProfiler(finalChatId)?.mark("ui.beforeGatewayStream");
 
         // Stream message via WebSocket (with permanent chatId)
         const focusContext = resolveAgentFocusContext(finalChatId);
@@ -2006,30 +2532,21 @@ export function useAgent() {
             message,
             config,
             ...(focusContext ? { focusContext } : {}),
+            ...(attachments && attachments.length > 0 ? { attachments } : {}),
           },
           (chunk) => handleStreamChunk(chunk as StreamChunk),
           (requestId) => {
             trackActiveStream(finalChatId, requestId);
+            armFirstChunkWatchdog({
+              chatId: finalChatId,
+              requestId,
+              onStall: (stall) => {
+                void handleFirstChunkStall(stall, config);
+              },
+            });
           },
         );
         console.log("[useAgent] gateway.stream completed successfully");
-
-        // Generate title after streaming (auth is guaranteed resolved)
-        if (isFirstMessage) {
-          gateway
-            .send("agent:generate-title", {
-              chatId: finalChatId,
-              message,
-            })
-            .then((titleResponse) => {
-              const title = (titleResponse.data as any)?.title || "New Chat";
-              console.log("[useAgent] Generated title:", title);
-              updateTabTitle(`chat-${finalChatId}`, title);
-            })
-            .catch((titleError) => {
-              console.error("[useAgent] Failed to generate title:", titleError);
-            });
-        }
 
         // Set tab unread status if not active (green dot)
         // The streaming status (blue dot) was already cleared by the "done" chunk
@@ -2042,6 +2559,13 @@ export function useAgent() {
         const errorMessage =
           error instanceof Error ? error.message : String(error);
         const isDisconnectError = errorMessage === GATEWAY_DISCONNECTED_ERROR;
+
+        if (!isSendCurrent(finalChatId)) {
+          console.log(
+            `[useAgent] Ignoring error from superseded send for ${finalChatId}`,
+          );
+          return;
+        }
 
         if (isDisconnectError) {
           console.log(
@@ -2072,12 +2596,20 @@ export function useAgent() {
         }
         setError(errorMessage);
         setSending(finalChatId, false);
-
-        // Clear streaming status on error for THIS chat's tab
         setTabStreaming(`chat-${finalChatId}`, false);
       } finally {
+        if (isSendCurrent(finalChatId)) {
+          finishUiStreamProfiler(finalChatId);
+        }
         releaseSendLock?.();
-        if (sendMessageLockRef.current.get(chatId) === sendLock) {
+        const lockChatId = finalChatId !== chatId ? finalChatId : chatId;
+        if (sendMessageLockRef.current.get(lockChatId) === sendLock) {
+          sendMessageLockRef.current.delete(lockChatId);
+        }
+        if (
+          finalChatId !== chatId &&
+          sendMessageLockRef.current.get(chatId) === sendLock
+        ) {
           sendMessageLockRef.current.delete(chatId);
         }
       }
@@ -2125,12 +2657,55 @@ export function useAgent() {
     [setError],
   );
 
+  const autoContinueInterruptedTurn = useCallback(
+    async (chatId: string, config: AgentConfig, messages: ChatMessage[]) => {
+      if (
+        !shouldAutoContinueInterruptedTurn({
+          chatId,
+          messages,
+          isSending:
+            useChatStore.getState().chatStates.get(chatId)?.isSending ?? false,
+          connectionPaused:
+            useChatStore.getState().chatStates.get(chatId)?.connectionPaused ??
+            false,
+          needsStreamRecovery:
+            useChatStore.getState().chatStates.get(chatId)
+              ?.needsStreamRecovery ?? false,
+          streamRecoveryReason:
+            useChatStore.getState().chatStates.get(chatId)
+              ?.streamRecoveryReason,
+          lastTurnOutcome:
+            useChatStore.getState().chatStates.get(chatId)?.lastTurnOutcome,
+          gatewayReady: gateway.isConnected(),
+        })
+      ) {
+        return;
+      }
+
+      const attempt = recordAutoContinueAttempt(chatId, messages);
+      console.log(
+        `[useAgent] Auto-continuing interrupted turn for ${chatId} (attempt ${attempt}/3) — trying stream recovery first`,
+      );
+
+      try {
+        await retryStreamRecovery(chatId, config);
+      } catch (error) {
+        console.warn(
+          `[useAgent] Auto-continue attempt ${attempt} failed for ${chatId}:`,
+          error,
+        );
+      }
+    },
+    [retryStreamRecovery],
+  );
+
   return {
     sendMessage,
     getHistory,
     clearHistory,
     interruptActiveStream,
     retryStreamRecovery,
+    autoContinueInterruptedTurn,
   };
 }
 
@@ -2146,4 +2721,9 @@ export type UseAgentReturn = {
   clearHistory: (sessionId: string) => Promise<void>;
   interruptActiveStream: (chatId: string) => Promise<void>;
   retryStreamRecovery: (chatId: string, config?: AgentConfig) => Promise<void>;
+  autoContinueInterruptedTurn: (
+    chatId: string,
+    config: AgentConfig,
+    messages: ChatMessage[],
+  ) => Promise<void>;
 };

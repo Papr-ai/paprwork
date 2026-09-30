@@ -78,9 +78,12 @@ export function verifyStringReplacement(args: {
       `occurrence ${args.occurrence} requested but only ${beforeCount} matches found`,
     );
   }
-  if (afterCount !== beforeCount - 1) {
+  // newString may legitimately contain oldString (e.g. replacing "def main():" with an expanded main())
+  const embeddedInReplacement = countOccurrences(args.newString, args.oldString);
+  const expectedAfterCount = beforeCount - 1 + embeddedInReplacement;
+  if (afterCount !== expectedAfterCount) {
     throw new Error(
-      `Edit verification failed: oldString still appears ${afterCount} times (expected ${beforeCount - 1})`,
+      `Edit verification failed: oldString still appears ${afterCount} times (expected ${expectedAfterCount})`,
     );
   }
   if (args.newString.length > 0 && !args.after.includes(args.newString)) {

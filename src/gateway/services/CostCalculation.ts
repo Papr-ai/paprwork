@@ -4,9 +4,20 @@
  * Pricing as of 2026-04-24 (per 1M tokens)
  */
 
+import { resolveStepContextTokens } from "./agent/stepContextTokens.js";
+
 export interface ModelPricing {
   input: number; // USD per 1M input tokens
   output: number; // USD per 1M output tokens
+  /**
+   * Cache-read rate as a multiple of `input`, where the model departs from the
+   * usual 0.1×. Opus 5.5 reads at 0.05× — leaving it on the default would bill
+   * cache reads at twice their real rate, and cache read is the single largest
+   * component of Anthropic spend (Issue 90), so the error would not be small.
+   */
+  cacheReadMultiplier?: number;
+  /** Cache-write rate as a multiple of `input`, where it is not the usual 1.25×. */
+  cacheWriteMultiplier?: number;
 }
 
 export interface CostBreakdown {
@@ -36,6 +47,12 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "gpt-5.6-sol-high": { input: 5.0, output: 30.0 },
   "gpt-5.6-sol-xhigh": { input: 5.0, output: 30.0 },
   "gpt-5.6": { input: 5.0, output: 30.0 },
+  // GPT-6 Astra (released September 2026). Cache read $1 and cache write
+  // $12.50 against $10 input are exactly the 0.1× / 1.25× defaults, so no
+  // override. Known gap: OpenAI charges 2× input and 1.5× output above 272K
+  // input tokens and this table has no tiering, so a turn past that threshold
+  // is under-reported. Anthropic has no such tier (see Issue 94).
+  "gpt-6-astra": { input: 10.0, output: 50.0 },
   // GPT-5.5 Series (deprecated picker IDs — treated as GPT-5.6 Sol tier)
   "gpt-5.5-low": { input: 5.0, output: 30.0 },
   "gpt-5.5": { input: 5.0, output: 30.0 },
@@ -58,22 +75,32 @@ export const MODEL_PRICING: Record<string, ModelPricing> = {
   "claude-haiku-4-5": { input: 0.8, output: 4.0 },
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
   "claude-sonnet-5": { input: 3.0, output: 15.0 },
+  "claude-sonnet-5-5": { input: 2.0, output: 10.0 },
   "claude-opus-4-6": { input: 15.0, output: 75.0 },
   "claude-opus-4-5-thinking": { input: 15.0, output: 75.0 },
   "claude-opus-4-7": { input: 5.0, output: 25.0 },
-  "claude-opus-4-8": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5
-  "claude-opus-5": { input: 5.0, output: 25.0 },
-  "claude-fable-5": { input: 10.0, output: 50.0 },
+  "claude-opus-4-8": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5-5
+  "claude-opus-5": { input: 5.0, output: 25.0 }, // deprecated — migrated to opus-5-5
+  // Opus 5.5 reads cache at $0.20/M against $4/M input — Anthropic documents it
+  // as "0.05x the base input price", half the rate every other model charges.
+  "claude-opus-5-5": { input: 4.0, output: 20.0, cacheReadMultiplier: 0.05 },
+  "claude-fable-5-1": { input: 10.0, output: 50.0 },
+  "claude-fable-5": { input: 10.0, output: 50.0 }, // deprecated — migrated to fable-5-1
 
   // Google Gemini Series (API format uses dots: gemini-2.5)
   // Source: https://ai.google.dev/gemini-api/docs/pricing
   "gemini-2.5-flash-lite": { input: 0.15, output: 0.6 },
   "gemini-2.5-flash": { input: 0.3, output: 1.2 },
   "gemini-3.1-flash-lite": { input: 0.25, output: 1.5 },
+  "gemini-3.5-flash-lite": { input: 0.3, output: 2.5 },
   "gemini-3.5-flash": { input: 1.5, output: 9.0 },
+  "gemini-3.6-flash": { input: 1.5, output: 7.5 },
+  "gemini-3.7-flash": { input: 1.5, output: 7.5 },
+  // Intro pricing through 2026-12-31; standard $1.50/$7.50 from 2027-01-01
+  "gemini-3.8-flash": { input: 0.75, output: 3.75 },
   "gemini-3.1-pro-preview": { input: 2.0, output: 12.0 },
   // Deprecated IDs — kept for cost lookup on older chats
-  "gemini-3-flash-preview": { input: 0.6, output: 2.4 },
+  "gemini-3-flash-preview": { input: 0.5, output: 3.0 },
   "gemini-3-pro-preview": { input: 2.5, output: 10.0 },
 
   // Ollama (local inference — no per-token API charge)
@@ -128,11 +155,43 @@ export const CACHE_READ_COST_MULTIPLIER = 0.1;
 export const CACHE_WRITE_COST_MULTIPLIER = 1.25;
 
 /**
+ * Input tokens that were neither read from nor written to the prompt cache.
+ *
+ * A cached token is part of the prompt, not an extra charge beside it: Anthropic,
+ * OpenAI and Google all report a prompt total that *contains* the cached portion
+ * (`@ai-sdk/anthropic` 3.x maps `inputTokens` to
+ * `input + cacheCreationTokens + cacheReadTokens`). Billing the reported total at
+ * full price and then adding the cache figures on top therefore charges the same
+ * tokens twice — which is what happened here, overstating September's Anthropic
+ * spend 5.8× and hitting well-cached turns hardest, since a cache *read* is the
+ * cheapest token there is and was being re-billed at 1.0×.
+ *
+ * The convention is detected rather than assumed, reusing
+ * {@link resolveStepContextTokens}: a comment asserting one convention is what
+ * produced the doubling, and the SDK had already changed underneath it. That
+ * helper returns the true prompt total under either convention, so subtracting
+ * the cached portion yields the uncached remainder under either one.
+ */
+function resolveUncachedPromptTokens(
+  promptTokens: number,
+  cacheRead: number,
+  cacheWrite: number,
+): number {
+  const cached = cacheRead + cacheWrite;
+  const total = resolveStepContextTokens({
+    inputTokens: promptTokens,
+    cacheReadTokens: cacheRead,
+    cacheWriteTokens: cacheWrite,
+  });
+  return Math.max(0, total - cached);
+}
+
+/**
  * Calculate USD cost with prompt-cache token breakdown.
  *
- * `promptTokens` is regular (non-cache) input from the provider.
- * Cache read/write are billed at discounted/premium rates on top.
- * When cache tokens are 0, equivalent to {@link calculateCost}.
+ * Cache reads bill at 0.1× input and writes at 1.25×; the remaining uncached
+ * input bills at 1.0×. When cache tokens are 0, equivalent to
+ * {@link calculateCost}.
  */
 export function calculateCostWithCache(
   model: string,
@@ -152,10 +211,21 @@ export function calculateCostWithCache(
   const promptTokens = Math.max(0, usage.promptTokens);
   const completionTokens = Math.max(0, usage.completionTokens);
 
+  const uncachedPromptTokens = resolveUncachedPromptTokens(
+    promptTokens,
+    cacheRead,
+    cacheWrite,
+  );
+
+  const cacheReadMultiplier =
+    pricing.cacheReadMultiplier ?? CACHE_READ_COST_MULTIPLIER;
+  const cacheWriteMultiplier =
+    pricing.cacheWriteMultiplier ?? CACHE_WRITE_COST_MULTIPLIER;
+
   const inputCost =
-    (promptTokens / 1_000_000) * pricing.input +
-    (cacheRead / 1_000_000) * pricing.input * CACHE_READ_COST_MULTIPLIER +
-    (cacheWrite / 1_000_000) * pricing.input * CACHE_WRITE_COST_MULTIPLIER;
+    (uncachedPromptTokens / 1_000_000) * pricing.input +
+    (cacheRead / 1_000_000) * pricing.input * cacheReadMultiplier +
+    (cacheWrite / 1_000_000) * pricing.input * cacheWriteMultiplier;
   const outputCost = (completionTokens / 1_000_000) * pricing.output;
 
   return inputCost + outputCost;

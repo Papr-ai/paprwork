@@ -8,10 +8,8 @@
   position: relative;
   display: flex;
   flex-direction: column;
-  /* True Liquid Glass: translucent card with blur */
-  background: rgba(255, 255, 255, 0.35);
-  backdrop-filter: blur(20px) saturate(150%);
-  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  /* Perf: no backdrop-filter — solid tint instead of blur for glass look. */
+  background: rgba(255, 255, 255, 0.55);
   border: 1px solid rgba(255, 255, 255, 0.30);
   border-radius: 18px;
   overflow: hidden;
@@ -318,6 +316,9 @@
   top: 12px;
   right: 12px;
   z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .app-card__menu-trigger {
@@ -355,7 +356,6 @@
   border-radius: 12px;
   background: var(--popover-bg, rgba(255, 255, 255, 0.96));
   box-shadow: 0 14px 40px rgba(0, 0, 0, 0.18);
-  backdrop-filter: blur(24px);
 }
 
 .app-card__menu button {
@@ -461,8 +461,6 @@
 .app-card__orb:has(.app-card__orb-icon--image) {
   background: transparent;
   background-color: transparent;
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
   border-color: transparent;
   box-shadow:
     0 12px 40px rgba(0, 0, 0, 0.08),
@@ -481,3 +479,235 @@
       0 4px 12px rgba(0, 0, 0, 0.2);
   }
 }
+
+/* ── Status line (Apps redesign) ─────────────────────────────────────────── */
+.app-card__status-line {
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  margin-top: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-card__status-line--ok { color: var(--success); }
+.app-card__status-line--live { color: var(--accent); }
+.app-card__status-line--running { color: var(--accent); }
+.app-card__status-line--fail { color: var(--error); font-weight: 550; }
+
+.app-card__footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+.app-card__footer .app-card__date { margin-top: 0; flex: 1; }
+
+.app-card__stack-chip {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border: none;
+  border-radius: 7px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.app-card__action {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+.app-card__action:hover {
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+.app-card__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.app-card__action--fail {
+  color: var(--error);
+  border-color: color-mix(in srgb, var(--error) 35%, transparent);
+  background: color-mix(in srgb, var(--error) 8%, transparent);
+}
+.app-card__action--fail:hover {
+  background: color-mix(in srgb, var(--error) 15%, transparent);
+}
+
+/* Share audience glyph — same icon and code badge as the app's share bar. */
+.app-card__share {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+.app-card__share .mini-app-publish-bar__share-audience,
+.community-card__share .mini-app-publish-bar__share-audience {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  color: inherit;
+}
+.app-card__share .mini-app-publish-bar__share-audience--code,
+.community-card__share .mini-app-publish-bar__share-audience--code {
+  margin-right: 4px;
+}
+.app-card__share .mini-app-publish-bar__share-code-badge,
+.community-card__share .mini-app-publish-bar__share-code-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  display: inline-flex;
+  padding: 1px;
+  border-radius: 50%;
+  background: var(--popover-bg, #fff);
+  color: var(--accent);
+}
+
+/* Redesign: small icon with the name beside it (not a big orb above). */
+.app-card {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr);
+  column-gap: 12px;
+  align-content: start;
+}
+.app-card .app-card__preview {
+  grid-column: 1;
+  grid-row: 1;
+  width: 40px;
+  height: 40px;
+  min-height: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+}
+.app-card .app-card__orb,
+.app-card .app-card__screenshot {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+.app-card .app-card__orb::after { display: none; }
+.app-card .app-card__orb-inner { width: 100%; height: 100%; display: grid; place-items: center; }
+.app-card .app-card__orb-icon,
+.app-card .app-card__orb-icon svg { width: 20px; height: 20px; font-size: 18px !important; }
+.app-card .app-card__orb-icon--image { width: 40px; height: 40px; }
+.app-card .app-card__content { display: contents; }
+.app-card .app-card__content > * { grid-column: 1 / -1; }
+.app-card .app-card__content > .app-card__title-row,
+.app-card .app-card__content > .app-card__title-input {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  padding-right: 36px; /* clear the ⋯ menu */
+  min-width: 0;
+}
+.app-card .app-card__description { margin-top: 10px; }
+/* Content wrapper is display:contents in the compact layout, so its padding
+   and gap live on the card grid instead. */
+.app-card {
+  padding: 16px 18px 16px;
+  row-gap: 4px;
+}
+.app-card .app-card__description { margin-top: 8px; }
+.app-card .app-card__menu-wrap { top: 14px; right: 14px; }
+/* Share glyph pinned top-right (not inline after the title, which truncated
+   it). At rest the corner shows who can see the app; on hover it gives way
+   to the ⋯ menu in the same spot. */
+.app-card .app-card__share {
+  position: absolute;
+  top: 22px;
+  right: 20px;
+  transition: opacity 140ms ease;
+}
+.app-card:hover .app-card__share,
+.app-card:focus-within .app-card__share { opacity: 0; }
+.app-card .app-card__content > .app-card__title-row { padding-right: 34px; }
+/* Share glyph stays visible; the ⋯ trigger appears just to its left on hover. */
+.app-card:hover .app-card__share,
+.app-card:focus-within .app-card__share { opacity: 1; }
+.app-card .app-card__menu-wrap { top: 14px; right: 44px; }
+.app-card__menu--portal { width: 184px; }
+
+/* Compact card v2: flex column so the footer (Opened/Updated · Open) is pinned
+   to the bottom regardless of how many lines sit above it. Icon is absolute. */
+.app-card {
+  display: flex;
+  flex-direction: column;
+}
+.app-card .app-card__preview {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+}
+.app-card .app-card__content {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+}
+.app-card .app-card__content > .app-card__title-row,
+.app-card .app-card__content > .app-card__title-input {
+  min-height: 40px;
+  margin-left: 52px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+}
+.app-card .app-card__footer { margin-top: auto; padding-top: 10px; }
+
+/* Footer tray: a tinted strip that runs edge to edge at the bottom of the card.
+   Opened/Updated on the left, one action (Open / Fix / Name it / Restore) right. */
+.app-card .app-card__footer {
+  margin: auto -18px -16px;
+  padding: 10px 14px 10px 18px;
+  min-height: 48px;
+  box-sizing: border-box;
+  border-top: 1px solid color-mix(in srgb, var(--text-primary) 7%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 3%, transparent);
+}
+.app-card .app-card__content { padding-bottom: 12px; }
+.app-card .app-card__footer .app-card__action {
+  padding: 5px 14px;
+  font-size: 12.5px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+/* Footer strip stays the card colour; a hairline divider does the separating. */
+.app-card .app-card__footer { background: transparent; }
+
+/* Fork / linked copy: a small lineage mark after the title, not a pill. */
+.app-card__lineage {
+  display: inline-flex;
+  align-items: center;
+  flex: none;
+  color: var(--text-tertiary);
+  cursor: default;
+}
+.app-card__lineage:hover { color: var(--text-secondary); }
+/* Leave room for share glyph + ⋯ so the hover menu never covers the title row. */
+.app-card .app-card__content > .app-card__title-row { padding-right: 64px; }
+
+/* Category picker inside the ⋯ menu. */
+.app-card__menu-cats {
+  display: flex;
+  flex-direction: column;
+  max-height: 260px;
+  overflow-y: auto;
+  border-top: 1px solid var(--border-color);
+  border-bottom: 1px solid var(--border-color);
+  margin: 4px 0;
+  padding: 4px 0;
+}
+.app-card__menu-cats .is-current { font-weight: 600; color: var(--accent, var(--text-primary)); }
