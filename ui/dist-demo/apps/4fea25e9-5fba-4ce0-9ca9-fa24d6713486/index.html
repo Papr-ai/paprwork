@@ -1,23 +1,10 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Leadership Sync</title>
-<style>
-:root{--fg:#0b1220;--mut:#5b6475;--card:rgba(255,255,255,.72);--line:rgba(15,23,42,.08);--acc:#0a66ff}
-@media (prefers-color-scheme:dark){:root{--fg:#eef2f8;--mut:#9aa4b5;--card:rgba(22,27,38,.72);--line:rgba(255,255,255,.08)}}
-*{box-sizing:border-box}html,body{margin:0;height:100%;font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,sans-serif;color:var(--fg);background:transparent}
-.wrap{min-height:100%;display:grid;place-items:center;padding:32px}
-.card{max-width:520px;width:100%;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:40px 32px;backdrop-filter:blur(20px)}
-.orb{width:88px;height:88px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.9),rgba(10,102,255,.08) 60%);box-shadow:inset 0 0 0 1px var(--line),0 12px 32px rgba(10,102,255,.12)}
-.orb svg,.orb img{width:52px;height:52px}
-h1{font-size:24px;margin:0 0 8px;letter-spacing:-.01em}p{color:var(--mut);margin:0 0 20px}
-.tags{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:24px}.tags span{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--mut)}
-a.btn{display:inline-block;background:var(--acc);color:#fff;text-decoration:none;padding:10px 20px;border-radius:12px;font-weight:600}
-.by{font-size:12px;color:var(--mut);margin-top:16px}
-</style></head><body><div class="wrap"><div class="card">
-<div class="orb"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/><path d="M4.93 4.93l2.12 2.12"/><path d="M16.95 16.95l2.12 2.12"/></svg></div>
-<h1>Leadership Sync</h1>
-<p>Lightweight daily leadership sync manager with per-person timers, topic queues, meeting notes, and browsable history. Customizable agenda blocks.</p>
-<div class="tags"><span>agenda</span><span>leadership</span><span>meetings</span><span>standup</span></div>
-<a class="btn" href="https://apps.papr.ai/85ZIB7mD1V/leadership-sync/" target="_blank" rel="noopener">Open with your Papr account</a>
-<div class="by">Community app by Amir Kabbara · runs on your own data in Papr Work</div>
-</div></div></body></html>
+<title>Leadership Sync — Demo</title><link rel="stylesheet" href="demo.css"></head>
+<body>
+<header><div class="brand">Leadership Sync<em>Demo workspace</em></div><a href="https://apps.papr.ai/85ZIB7mD1V/leadership-sync/" target="_blank" rel="noopener">Install in Papr Work</a></header>
+<div class="shell"><aside><div class="nav"><button class="on" data-v="today">Today’s sync</button><button data-v="history">History <span>3</span></button></div>
+<small style="display:block;margin-top:16px">Agenda</small><p class="muted" style="font-size:12px">Wins · Blockers · Asks — 3 min each</p><div class="user"><img src="/demo-media/me.jpg" alt=""><div><b>Maya Chen</b><br><small>Papr · Demo data</small></div></div></aside>
+<main id="view"></main></div>
+<div class="toast" id="toast"></div>
+<script src="demo.js"></script></body></html>

@@ -1,23 +1,11 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SEO Audit</title>
-<style>
-:root{--fg:#0b1220;--mut:#5b6475;--card:rgba(255,255,255,.72);--line:rgba(15,23,42,.08);--acc:#0a66ff}
-@media (prefers-color-scheme:dark){:root{--fg:#eef2f8;--mut:#9aa4b5;--card:rgba(22,27,38,.72);--line:rgba(255,255,255,.08)}}
-*{box-sizing:border-box}html,body{margin:0;height:100%;font:15px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,sans-serif;color:var(--fg);background:transparent}
-.wrap{min-height:100%;display:grid;place-items:center;padding:32px}
-.card{max-width:520px;width:100%;text-align:center;background:var(--card);border:1px solid var(--line);border-radius:24px;padding:40px 32px;backdrop-filter:blur(20px)}
-.orb{width:88px;height:88px;margin:0 auto 20px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 30% 25%,rgba(255,255,255,.9),rgba(10,102,255,.08) 60%);box-shadow:inset 0 0 0 1px var(--line),0 12px 32px rgba(10,102,255,.12)}
-.orb svg,.orb img{width:52px;height:52px}
-h1{font-size:24px;margin:0 0 8px;letter-spacing:-.01em}p{color:var(--mut);margin:0 0 20px}
-.tags{display:flex;gap:6px;justify-content:center;flex-wrap:wrap;margin-bottom:24px}.tags span{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid var(--line);color:var(--mut)}
-a.btn{display:inline-block;background:var(--acc);color:#fff;text-decoration:none;padding:10px 20px;border-radius:12px;font-weight:600}
-.by{font-size:12px;color:var(--mut);margin-top:16px}
-</style></head><body><div class="wrap"><div class="card">
-<div class="orb"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" fill="none"><defs><linearGradient id="seoOrb" x1="8" y1="34" x2="42" y2="14" gradientUnits="userSpaceOnUse"><stop stop-color="#00FEFE"/><stop offset="1" stop-color="#0161E0"/></linearGradient><style>.seo-o{stroke:#131417;fill:#131417}@media(prefers-color-scheme:dark){.seo-o{stroke:#fff;fill:#fff}}</style></defs><ellipse class="seo-o" cx="24" cy="24" rx="19" ry="9.5" fill="none" stroke-width="4" transform="rotate(-28 24 24)"/><circle class="seo-o" cx="24" cy="24" r="5.5" stroke="none"/><circle cx="38.6" cy="16.2" r="4" fill="url(#seoOrb)"/></svg></div>
-<h1>SEO Audit</h1>
-<p>Enter a website URL and get a streaming technical SEO audit. A headless browser crawls and renders every page for real measurements — status codes, redirect chains, canonicals, JSON-LD, image weights — then an AI analyst applies the seo-audit v2.0.1 framework to produce scored findings with evidence and a prioritized action plan.</p>
-<div class="tags"><span>audit</span><span>marketing</span><span>seo</span><span>technical-seo</span></div>
-<a class="btn" href="https://apps.papr.ai/85ZIB7mD1V/seo-audit/" target="_blank" rel="noopener">Open with your Papr account</a>
-<div class="by">Community app by Amir Kabbara · runs on your own data in Papr Work</div>
-</div></div></body></html>
+<title>SEO Audit — Demo</title><link rel="stylesheet" href="demo.css"></head>
+<body>
+<header><div class="brand">SEO Audit<em>Demo workspace</em></div><a href="https://apps.papr.ai/85ZIB7mD1V/seo-audit/" target="_blank" rel="noopener">Install in Papr Work</a></header>
+<div class="shell one"><main><div class="row"><input id="url" class="grow" value="papr.ai" aria-label="Website"><button class="primary" id="run">Run SEO audit</button></div>
+<div class="bar" style="margin:14px 0 4px"><i id="pb" style="width:100%"></i></div><small id="pt">Crawled 48 of 48 pages · rendered with a headless browser</small>
+<h2>Score</h2><div class="grid g4" id="metrics"></div><h2>Findings <span class="muted" style="font-weight:400">· click to see evidence</span></h2><div class="grid" id="findings"></div>
+<h2>Action plan</h2><div class="grid" id="plan"></div></main></div>
+<div class="toast" id="toast"></div>
+<script src="demo.js"></script></body></html>
