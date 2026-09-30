@@ -125,6 +125,63 @@ describe("JobsService spawn-failure reporting (#139)", () => {
     resolveRun({ ...svc.jobs.get("job-spawn-1")!, status: "completed" } as JobRecord);
   });
 
+  test("startJobRunForApi ignores a previous run's stale failure while the new run is queued", async () => {
+    // Prior cloud run left the record failed. The new run waits for
+    // execution capacity before runJob writes "running" — the API must not
+    // echo the old "Exit code 1" as a 503 launch failure.
+    const staleAt = new Date(Date.now() - 60_000).toISOString();
+    svc.jobs.set(
+      "job-spawn-1",
+      makeJob({ status: "failed", error: "Exit code 1", exitCode: 1, updatedAt: staleAt }),
+    );
+    vi.spyOn(svc as never, "preflightJobRun" as never).mockResolvedValue(undefined as never);
+    let resolveRun!: (v: JobRecord) => void;
+    vi.spyOn(svc, "runJob").mockImplementation(async (id: string) => {
+      await new Promise((r) => setTimeout(r, 150)); // "Waiting for execution capacity"
+      const running = {
+        ...svc.jobs.get(id)!,
+        status: "running",
+        error: undefined,
+        currentExecutionId: "run-3",
+        updatedAt: new Date().toISOString(),
+      } as JobRecord;
+      svc.jobs.set(id, running);
+      svc.agentRuns.set(id, {});
+      return new Promise<JobRecord>((res) => {
+        resolveRun = res;
+      });
+    });
+
+    const result = await svc.startJobRunForApi("job-spawn-1");
+    expect(result.status).toBe("running");
+    expect(result.error).toBeUndefined();
+    resolveRun({ ...svc.jobs.get("job-spawn-1")!, status: "completed" } as JobRecord);
+  });
+
+  test("startJobRunForApi still reports a fresh failure after a stale one", async () => {
+    const staleAt = new Date(Date.now() - 60_000).toISOString();
+    svc.jobs.set(
+      "job-spawn-1",
+      makeJob({ status: "failed", error: "Exit code 1", updatedAt: staleAt }),
+    );
+    vi.spyOn(svc as never, "preflightJobRun" as never).mockResolvedValue(undefined as never);
+    vi.spyOn(svc, "runJob").mockImplementation(async (id: string) => {
+      await new Promise((r) => setTimeout(r, 60));
+      const failed = {
+        ...svc.jobs.get(id)!,
+        status: "failed",
+        error: "Missing API key: OPENAI_API_KEY",
+        updatedAt: new Date().toISOString(),
+      } as JobRecord;
+      svc.jobs.set(id, failed);
+      return failed;
+    });
+
+    const result = await svc.startJobRunForApi("job-spawn-1");
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("OPENAI_API_KEY");
+  });
+
   test("reloadJobs clears phantom running jobs without touching live ones", async () => {
     const phantom = makeJob({ id: "phantom", status: "running", runSessionStartedAt: new Date().toISOString() });
     const live = makeJob({ id: "live", status: "running" });
