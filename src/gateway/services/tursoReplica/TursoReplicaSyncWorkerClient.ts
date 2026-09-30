@@ -215,15 +215,32 @@ export class TursoReplicaSyncWorkerClient {
     if (!this.child) {
       return;
     }
-    await this.send({
-      op: "close",
-      localPath,
-      tursoUrl: "",
-      authToken: "",
-      bootstrapIfEmpty: false,
-      timeoutMs: 10_000,
-      retryOnCrash: "never",
-    });
+    try {
+      await this.send({
+        op: "close",
+        localPath,
+        tursoUrl: "",
+        authToken: "",
+        bootstrapIfEmpty: false,
+        timeoutMs: 10_000,
+        retryOnCrash: "never",
+      });
+    } catch (error) {
+      // A worker that dies while closing has released the handle anyway: the process that
+      // held the file is gone, and handleChildGone already cleared ownedPaths. That is the
+      // whole point of close, so it succeeded. send() has already applied the crash remedy
+      // when the engine was running. Rethrowing only turned a completed release into a
+      // failure for whoever was recovering — e.g. the checkpoint repair inside a pull,
+      // which surfaced to a mini-app as a 500 on a plain SELECT.
+      if (isTursoSyncWorkerCrash(error)) {
+        console.warn(
+          `[TursoSyncWorker] Worker exited during close on ${localPath}; ` +
+            `handle is released: ${error.message}`,
+        );
+        return;
+      }
+      throw error;
+    }
   }
 
   // ---- core ----------------------------------------------------------------------------
