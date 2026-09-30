@@ -50,6 +50,8 @@ import {
   toAppsSection,
   writeAppsSection,
 } from "../../utils/appsViewTabPersistence";
+import { DEFAULT_HOME_APP_ID } from "../../constants/defaultHomeApp";
+import { switchToFocusTab } from "../../lib/ensureDefaultChatTab";
 
 export type { AppStatus };
 
@@ -280,6 +282,11 @@ export function AppsView() {
   };
 
   const handleOpen = (app: Artifact) => {
+    // Focus is its own rail destination — open it there, not as an app tab.
+    if (app.id === DEFAULT_HOME_APP_ID) {
+      switchToFocusTab();
+      return;
+    }
     const tabId = createTab(
       "app",
       app.id,

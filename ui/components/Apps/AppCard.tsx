@@ -9,6 +9,8 @@ import "./AppCard.css";
 import type { AppStatusLine } from "../../utils/appStatusLine";
 import type { ShareGlyph } from "../../utils/shareGlyph";
 import { ShareAudienceIcon } from "./WebSyncPopover";
+import { AgentGlyph } from "../Agent/AgentGlyph";
+import { DEFAULT_HOME_APP_ID } from "../../constants/defaultHomeApp";
 
 export type AppStatus = "draft" | "active" | "archived";
 
@@ -174,6 +176,10 @@ export function AppCard({
     icon.startsWith("data:image/") || icon.startsWith("http");
 
   const renderIcon = () => {
+    // Focus (the bundled Home app) wears the user's agent, same as the rail.
+    if (artifact.id === DEFAULT_HOME_APP_ID) {
+      return <AgentGlyph size={44} className="app-card__orb-icon" />;
+    }
     if (artifact.icon) {
       const trimmedIcon = artifact.icon.trim();
 

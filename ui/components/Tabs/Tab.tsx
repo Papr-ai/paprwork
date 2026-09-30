@@ -5,6 +5,7 @@
 import React, { useState, useRef } from "react";
 import { useTabs } from "../../hooks/useTabs";
 import type { Tab as TabType } from "../../stores/tabStore";
+import { DEFAULT_HOME_APP_ID } from "../../constants/defaultHomeApp";
 import { FocusTabIcon } from "./FocusTabIcon";
 import { MemoryIcon } from "../Memory/MemoryIcon";
 import "./Tab.css";
@@ -169,7 +170,7 @@ export function Tab({
 
   // Get icon for tab type
   const getIcon = () => {
-    if (tab.type === "focus") return <FocusTabIcon />;
+    if (tab.type === "focus" || (tab.type === "app" && tab.entityId === DEFAULT_HOME_APP_ID)) return <FocusTabIcon />;
     if (tab.type === "memory") return <MemoryIcon size={14} />;
     // App, document, and documents tabs: wrap icon in a mini liquid glass orb
     if (tab.type === "app" || tab.type === "document" || tab.type === "documents") {

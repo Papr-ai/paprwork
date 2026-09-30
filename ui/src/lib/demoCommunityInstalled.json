@@ -1,0 +1,56 @@
+[
+ {
+  "id": "ca1ab3b1-9fbf-4146-a55b-f090bffd566e",
+  "title": "Website Audit",
+  "description": "Enter any company website and get a full go-to-market diagnostic in minutes. An AI analyst reads the site and streams a 7-module report \u2014 value prop, ICP, personas, competitive position, market size, and a 90-day plan \u2014 with a maturity scorecard and prioritized moves.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\"><defs><linearGradient id=\"waSlice\" x1=\"10\" y1=\"36\" x2=\"46\" y2=\"25\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#00FEFE\"/><stop offset=\"1\" stop-color=\"#0161E0\"/></linearGradient><style>.wa-a{stroke:#131417}@media(prefers-color-scheme:dark){.wa-a{stroke:#fff}}</style></defs><path class=\"wa-a\" d=\"M7 43 L24 6 L41 43\" stroke-width=\"7\" stroke-linecap=\"butt\" stroke-linejoin=\"miter\" fill=\"none\"/><path d=\"M11 36 L46 26\" stroke=\"url(#waSlice)\" stroke-width=\"4.5\" stroke-linecap=\"butt\" fill=\"none\"/></svg>"
+ },
+ {
+  "id": "abcb3b60-500e-454a-b5cc-cfa90cee0e45",
+  "title": "SEO Audit",
+  "description": "Enter a website URL and get a streaming technical SEO audit. A headless browser crawls and renders every page for real measurements \u2014 status codes, redirect chains, canonicals, JSON-LD, image weights \u2014 then an AI analyst applies the seo-audit v2.0.1 framework to produce scored findings with evidence and a prioritized action plan.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\"><defs><linearGradient id=\"seoOrb\" x1=\"8\" y1=\"34\" x2=\"42\" y2=\"14\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#00FEFE\"/><stop offset=\"1\" stop-color=\"#0161E0\"/></linearGradient><style>.seo-o{stroke:#131417;fill:#131417}@media(prefers-color-scheme:dark){.seo-o{stroke:#fff;fill:#fff}}</style></defs><ellipse class=\"seo-o\" cx=\"24\" cy=\"24\" rx=\"19\" ry=\"9.5\" fill=\"none\" stroke-width=\"4\" transform=\"rotate(-28 24 24)\"/><circle class=\"seo-o\" cx=\"24\" cy=\"24\" r=\"5.5\" stroke=\"none\"/><circle cx=\"38.6\" cy=\"16.2\" r=\"4\" fill=\"url(#seoOrb)\"/></svg>"
+ },
+ {
+  "id": "8826e87f-4333-4865-8f1c-03f485d0b478",
+  "title": "Lead Prospector",
+  "description": "Signal-first lead discovery. Finds new leads and the cited evidence for why they're a lead right now \u2014 never surfaces a lead without a quoted source.",
+  "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"10.5\" cy=\"10.5\" r=\"6.5\"/><path d=\"M15.4 15.4 21 21\"/><path d=\"M7.5 10.8l1.8 2.2 2-4 1.6 3 1.6-1.6\"/></svg>"
+ },
+ {
+  "id": "cebbba9c-1d18-4ad5-abd2-9d0c700871fa",
+  "title": "Contact Enrichment",
+  "description": "Turns a lead into reachable humans. Send a lead from Lead Prospector or upload a list, and every contact comes back with a cited source URL, snippet, and an honest confidence label \u2014 verified, cited, or inferred.",
+  "icon": "<svg viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"10\" cy=\"8\" r=\"3.2\"/><path d=\"M4.2 19c0-3.1 2.6-5.2 5.8-5.2 1.2 0 2.3.3 3.2.8\"/><circle cx=\"17\" cy=\"16.5\" r=\"4.3\"/><path d=\"m20.2 19.7 1.6 1.6\"/></svg>"
+ },
+ {
+  "id": "6b0a8fa3-3a04-4b8b-a0b3-5d86f52b093f",
+  "title": "LinkedIn Outreach",
+  "description": "Run multi-step LinkedIn outreach campaigns with automated sequence sending, rate-limit safety, and human-approved replies. Uses your own Papr LinkedIn connection.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\"><defs><linearGradient id=\"loSend\" x1=\"26\" y1=\"30\" x2=\"44\" y2=\"12\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#00FEFE\"/><stop offset=\"1\" stop-color=\"#0161E0\"/></linearGradient></defs><path d=\"M9 22 v16\" stroke=\"currentColor\" stroke-width=\"4.4\" stroke-linecap=\"round\"/><circle cx=\"9\" cy=\"13.5\" r=\"2.7\" fill=\"currentColor\"/><path d=\"M20 38 v-16\" stroke=\"currentColor\" stroke-width=\"4.4\" stroke-linecap=\"round\"/><path d=\"M20 28 c0 -4.5 3 -7 6.5 -7 c3.5 0 5.5 2.5 5.5 7 v10\" stroke=\"currentColor\" stroke-width=\"4.4\" stroke-linecap=\"round\"/><path d=\"M32 18 L43 7\" stroke=\"url(#loSend)\" stroke-width=\"4\" stroke-linecap=\"round\"/><path d=\"M35 7 h8 v8\" stroke=\"url(#loSend)\" stroke-width=\"4\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>"
+ },
+ {
+  "id": "8059eb21-aaa0-41c0-8a09-d2d9076903ee",
+  "title": "Reddit Research Agent",
+  "description": "Watches Reddit for customer pain points and extracts quote-cited insights",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\"><defs><linearGradient id=\"rraSlash\" x1=\"26\" y1=\"40\" x2=\"38\" y2=\"8\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#00FEFE\"/><stop offset=\"1\" stop-color=\"#0161E0\"/></linearGradient></defs><path d=\"M11 17 v20\" stroke=\"currentColor\" stroke-width=\"4.4\" stroke-linecap=\"round\"/><path d=\"M11 24 c0 -5 4 -8 9 -8\" stroke=\"currentColor\" stroke-width=\"4.4\" stroke-linecap=\"round\"/><path d=\"M36 8 L26 40\" stroke=\"url(#rraSlash)\" stroke-width=\"4.4\" stroke-linecap=\"round\"/></svg>"
+ },
+ {
+  "id": "a3b51c4f-186a-4106-8ab3-08b9cf5ed12a",
+  "title": "Sales Deck Studio",
+  "description": "Build and grade sales pitch decks against a buyer-calibrated scorecard \u2014 slide builder, presenter mode, agent-chat drafting, and an AI scoring job that checks pain quantification, proof relevance, differentiation, and CTA specificity.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 48 48\" fill=\"none\"><defs><linearGradient id=\"sdsFold\" x1=\"33\" y1=\"7\" x2=\"43\" y2=\"17\" gradientUnits=\"userSpaceOnUse\"><stop stop-color=\"#00FEFE\"/><stop offset=\"1\" stop-color=\"#0161E0\"/></linearGradient></defs><path d=\"M20 7 h18 a3 3 0 0 1 3 3 v20\" stroke=\"currentColor\" stroke-width=\"3.4\" stroke-linecap=\"round\" fill=\"none\"/><path d=\"M13 12 h20 a3 3 0 0 1 3 3 v22\" stroke=\"currentColor\" stroke-width=\"3.4\" stroke-linecap=\"round\" fill=\"none\"/><rect x=\"6\" y=\"16\" width=\"24\" height=\"26\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"3.4\" fill=\"none\"/><path d=\"M33 7 h8 a2 2 0 0 1 2 2 v8 z\" fill=\"url(#sdsFold)\"/></svg>"
+ },
+ {
+  "id": "da7551e8-63a3-4b69-9a61-44dd8dbd9464",
+  "title": "TAM/SAM Analysis Studio",
+  "description": "Guided wizard for TAM/SAM/SOM market sizing analysis. Enter product details + free-text context, answer AI-generated follow-up questions, get a full market sizing report with ICP segments.",
+  "icon": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='1.5'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Ccircle cx='12' cy='12' r='5.5'/%3E%3Ccircle cx='12' cy='12' r='2'/%3E%3C/svg%3E"
+ },
+ {
+  "id": "4fea25e9-5fba-4ce0-9ca9-fa24d6713486",
+  "title": "Leadership Sync",
+  "description": "Lightweight daily leadership sync manager with per-person timers, topic queues, meeting notes, and browsable history. Customizable agenda blocks.",
+  "icon": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"1.5\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><circle cx=\"12\" cy=\"12\" r=\"10\"/><polyline points=\"12 6 12 12 16 14\"/><path d=\"M4.93 4.93l2.12 2.12\"/><path d=\"M16.95 16.95l2.12 2.12\"/></svg>"
+ }
+]

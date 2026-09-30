@@ -11,6 +11,8 @@ import { useWorkingChatIds } from "../Agent/agentWork";
 import type { Artifact } from "../../stores/artifactsStore";
 import type { SidebarFavorite } from "./useSidebarFavorites";
 import { relativeTime, type PeekGroup, type PeekRow } from "./RailPeek";
+import { DEFAULT_HOME_APP_ID } from "../../constants/defaultHomeApp";
+import { switchToFocusTab } from "../../lib/ensureDefaultChatTab";
 
 const RECENT_CHATS = 6;
 const RECENT_ARTIFACTS = 5;
@@ -46,8 +48,10 @@ export function useRailPeeks({ favorites, openFavorite, removeFavorite }: Args) 
   );
 
   const openArtifact = useCallback(
-    (a: Artifact & { type: "app" | "document" }) =>
-      switchToTab(createTab(a.type, a.id, a.title, a.icon ? { icon: a.icon } : {})),
+    (a: Artifact & { type: "app" | "document" }) => {
+      if (a.id === DEFAULT_HOME_APP_ID) return void switchToFocusTab();
+      switchToTab(createTab(a.type, a.id, a.title, a.icon ? { icon: a.icon } : {}));
+    },
     [createTab, switchToTab],
   );
 
