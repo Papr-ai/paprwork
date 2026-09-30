@@ -141,6 +141,27 @@ describe("TursoReplicaSyncWorkerClient", () => {
     await client.shutdown();
   });
 
+  it("treats a worker killed during close as a released handle, not an error", async () => {
+    // e.g. SIGKILL from outside (a job clearing a lock) landing mid-close. The process that
+    // held the file is gone, so the release happened; the caller must not see a crash.
+    let spawnCount = 0;
+    const client = new TursoReplicaSyncWorkerClient(() => {
+      spawnCount += 1;
+      return fakeWorker(
+        `if (req.op === "close") process.kill(process.pid, "SIGKILL"); ` +
+          `else reply({ id: req.id, ok: true, result: { pulled: true } });`,
+      )();
+    });
+    await client.sync(spec(), "pull");
+    expect(client.ownsPath(localPath)).toBe(true);
+    await expect(client.close(localPath)).resolves.toBeUndefined();
+    expect(client.ownsPath(localPath)).toBe(false);
+    // The next request respawns a healthy worker rather than being parked.
+    await expect(client.sync(spec(), "pull")).resolves.toBe(true);
+    expect(spawnCount).toBe(2);
+    await client.shutdown();
+  });
+
   it("does not retry non-idempotent ops after a crash", async () => {
     let spawnCount = 0;
     const client = new TursoReplicaSyncWorkerClient(() => {
