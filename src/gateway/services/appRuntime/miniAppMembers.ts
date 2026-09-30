@@ -8,6 +8,7 @@ import {
   WorkspaceContextResolutionError,
   type WorkspaceMember,
 } from "../../../core/utils/paprWorkspaceTeam.js";
+import { createHash } from "node:crypto";
 import { readActiveWorkspacePointer } from "../../../core/utils/paprWorkspace.js";
 import type {
   AppAccessContext,
@@ -44,13 +45,68 @@ function mapMember(member: WorkspaceMember): MiniAppWorkspaceMember {
   };
 }
 
-/** Fetch workspace members for a signed-in mini-app caller. */
-export async function listMiniAppMembers(input: {
+type MembersInput = {
   sessionToken: string;
   namespaceId?: string;
   workspaceId?: string;
   workspaceName?: string;
-}): Promise<MiniAppMembersResponse> {
+};
+
+/**
+ * The roster is a cloud round trip (workspace resolve + members, ~1–2 s) that mini-apps
+ * call on every open. It changes rarely, so serve it stale-while-revalidate: fresh for
+ * MEMBERS_FRESH_MS, then returned instantly (with one background refresh) until
+ * MEMBERS_STALE_MS. Keyed per session token so one user never sees another's roster.
+ */
+export const MEMBERS_FRESH_MS = 60_000;
+export const MEMBERS_STALE_MS = 15 * 60_000;
+type MembersEntry = { at: number; value?: MiniAppMembersResponse; inflight?: Promise<MiniAppMembersResponse> };
+const membersCache = new Map<string, MembersEntry>();
+
+export function clearMiniAppMembersCache(): void {
+  membersCache.clear();
+}
+
+function membersCacheKey(input: MembersInput): string {
+  const token = createHash("sha256").update(input.sessionToken.trim()).digest("hex").slice(0, 32);
+  return [token, input.workspaceId?.trim() ?? "", input.namespaceId?.trim() ?? "", input.workspaceName?.trim() ?? ""].join("|");
+}
+
+function refreshMembers(key: string, entry: MembersEntry, input: MembersInput, now: () => number) {
+  entry.inflight ??= fetchMiniAppMembers(input)
+    .then((value) => {
+      entry.value = value;
+      entry.at = now();
+      return value;
+    })
+    .finally(() => {
+      entry.inflight = undefined;
+      if (!entry.value) membersCache.delete(key);
+    });
+  return entry.inflight;
+}
+
+/** Workspace members for a signed-in mini-app caller (cached, see MEMBERS_FRESH_MS). */
+export async function listMiniAppMembers(
+  input: MembersInput,
+  now: () => number = Date.now,
+): Promise<MiniAppMembersResponse> {
+  if (!input.sessionToken.trim()) return fetchMiniAppMembers(input);
+  const key = membersCacheKey(input);
+  let entry = membersCache.get(key);
+  if (!entry) membersCache.set(key, (entry = { at: 0 }));
+  const age = now() - entry.at;
+  if (entry.value && age < MEMBERS_FRESH_MS) return entry.value;
+  if (entry.value && age < MEMBERS_STALE_MS) {
+    void refreshMembers(key, entry, input, now).catch(() => {
+      /* keep serving the last good roster; the next call retries */
+    });
+    return entry.value;
+  }
+  return refreshMembers(key, entry, input, now);
+}
+
+async function fetchMiniAppMembers(input: MembersInput): Promise<MiniAppMembersResponse> {
   const sessionToken = input.sessionToken.trim();
   if (!sessionToken) {
     throw new MiniAppMembersError(
