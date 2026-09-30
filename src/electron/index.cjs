@@ -21,6 +21,10 @@ const { autoUpdater } = require("electron-updater");
 const {
   registerGeolocationPermissionHandlers,
 } = require("./geolocationPermission.cjs");
+// Media/clipboard permission handlers — kept so the geolocation handler
+// (registered later, which REPLACES the session handler) can delegate to them.
+let mediaPermissionRequest = null;
+let mediaPermissionCheck = null;
 const { registerCloudPreviewSessionIPC } = require("./ipc/cloudPreviewSession.cjs");
 const {
   registerPlatformBrowserIPC,
@@ -2620,7 +2624,7 @@ app.whenReady().then(async () => {
 
     const isLocalApp = (url) => typeof url === "string" && url.startsWith(LOCAL_APP_ORIGIN);
 
-    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    mediaPermissionRequest = (webContents, permission, callback, details) => {
       // Write-only clipboard (navigator.clipboard.writeText). Denying it broke
       // every "Copy" button in the renderer, e.g. the Claude setup command.
       if (permission === "clipboard-sanitized-write") return callback(true);
@@ -2629,16 +2633,18 @@ app.whenReady().then(async () => {
       const allowed = isLocalApp(url);
       if (!allowed) console.warn("[Electron] Denied", permission, "for", url);
       callback(allowed);
-    });
+    };
+    session.defaultSession.setPermissionRequestHandler(mediaPermissionRequest);
 
     // permissions.query() consults this separately; without it a mini-app reads
     // state "denied" and can show a misleading "check System Settings" message
     // before it has even tried.
-    session.defaultSession.setPermissionCheckHandler((_webContents, permission, requestingOrigin) => {
+    mediaPermissionCheck = (_webContents, permission, requestingOrigin) => {
       if (permission === "clipboard-sanitized-write") return true;
       if (!MEDIA_PERMISSIONS.has(permission)) return false;
       return isLocalApp(requestingOrigin);
-    });
+    };
+    session.defaultSession.setPermissionCheckHandler(mediaPermissionCheck);
   }
 
   // Register custom URL protocol for papr:// deep links
@@ -3080,6 +3086,9 @@ app.whenReady().then(async () => {
   }
 
   registerGeolocationPermissionHandlers({
+    fallbackCheck: (...a) => (mediaPermissionCheck ? mediaPermissionCheck(...a) : false),
+    fallbackRequest: (wc, perm, cb, d) =>
+      mediaPermissionRequest ? mediaPermissionRequest(wc, perm, cb, d) : cb(false),
     getMainWindow: () => mainWindow,
     settingsStorage,
   });
