@@ -336,14 +336,16 @@ export class ChatSessionManager {
    * Guards against a race where the old stream's finally block runs after a new
    * stream has already stored its own AbortController in the session.
    */
-  clearStreamingStateIfOwner(chatId: string, controller: AbortController): void {
+  clearStreamingStateIfOwner(chatId: string, controller: AbortController): boolean {
     const session = this.sessions.get(chatId);
-    if (!session) return;
+    if (!session) return false;
     if (session.abortController === controller) {
       session.abortController = null;
       session.isStreaming = false;
+      return true;
     }
     // If the controller no longer matches, a new stream has taken ownership — leave it alone.
+    return false;
   }
 
   /**

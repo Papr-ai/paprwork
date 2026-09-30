@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   AgentStreamConcurrencyGate,
@@ -6,6 +9,7 @@ import {
   BACKGROUND_AGENT_STREAM_ACQUIRE_TIMEOUT_MS,
   DEFAULT_AGENT_STREAM_MAX_CONCURRENT,
   resetAgentStreamConcurrencyGateForTests,
+  yieldOrReleaseLease,
 } from "../src/gateway/services/agent/agentStreamConcurrency.js";
 
 describe("AgentStreamConcurrencyGate", () => {
@@ -166,5 +170,110 @@ describe("AgentStreamConcurrencyGate", () => {
     expect(gate.getStats().chat.activeCount).toBe(1);
     gate.release(second);
     expect(gate.getStats().chat.activeCount).toBe(0);
+  });
+});
+
+describe("yieldOrReleaseLease", () => {
+  test("releases when the consumer stops at the chunk", async () => {
+    const release = vi.fn();
+    async function* stream() {
+      yield* yieldOrReleaseLease("acquired", release);
+      yield "never reached";
+    }
+    for await (const chunk of stream()) {
+      expect(chunk).toBe("acquired");
+      break;
+    }
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  test("leaves the lease alone once the consumer resumes", async () => {
+    const release = vi.fn();
+    async function* stream() {
+      yield* yieldOrReleaseLease("acquired", release);
+      yield "next";
+    }
+    const seen: string[] = [];
+    for await (const chunk of stream()) seen.push(chunk);
+    expect(seen).toEqual(["acquired", "next"]);
+    expect(release).not.toHaveBeenCalled();
+  });
+
+  // A new chat's first message arrived twice ~500 ms apart. The replacement's stop
+  // ran before the first stream registered its abort controller, so the first still
+  // took a slot, and the registry then broke out of it at `concurrency-acquired`.
+  // The lease was held outside the try whose finally releases it, so the second
+  // stream queued behind its own chat forever with 1/6 slots in use.
+  test("a stream abandoned at concurrency-acquired does not strand its chat", async () => {
+    const gate = new AgentStreamConcurrencyGate();
+    async function* firstStream() {
+      let lease: Awaited<ReturnType<typeof gate.acquire>> | undefined;
+      const release = () => {
+        if (lease) gate.release(lease);
+        lease = undefined;
+      };
+      for await (const event of gate.acquireWithEvents("chat-new")) {
+        if (event.type !== "admitted") continue;
+        lease = event.lease;
+        yield* yieldOrReleaseLease("concurrency-acquired", release);
+      }
+      try {
+        yield "model work";
+      } finally {
+        release();
+      }
+    }
+
+    for await (const _chunk of firstStream()) break;
+
+    const replacement = await gate.acquire("chat-new");
+    expect(gate.getStats().chat.activeChatIds).toEqual(["chat-new"]);
+    gate.release(replacement);
+  });
+});
+
+describe("AgentService holds its lease only for the turn", () => {
+  const ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+  const source = fs
+    .readFileSync(path.join(ROOT, "src/gateway/services/AgentService.ts"), "utf-8")
+    .replace(/\/\*[\s\S]*?\*\//g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
+
+  function requireIndex(anchor: string, from = 0): number {
+    const index = source.indexOf(anchor, from);
+    if (index === -1) {
+      throw new Error(
+        `AgentService.ts no longer contains ${JSON.stringify(anchor)} — update the ` +
+          "anchor, never delete the invariant.",
+      );
+    }
+    return index;
+  }
+
+  test("releases before the final done chunk, not after export", () => {
+    const done = requireIndex('type: "done",\n        chatId,\n        payload: { finalMessage: assistantMsg }');
+    const release = source.lastIndexOf("releaseConcurrencyLease();", done);
+    const exportCall = requireIndex("this.chatExporter.exportChat(", done);
+    expect(release).toBeGreaterThan(requireIndex('recordTurnMetricsOnce("completed")'));
+    expect(release).toBeLessThan(done);
+    expect(exportCall).toBeGreaterThan(done);
+  });
+
+  test("guards both yields that happen before the main try", () => {
+    const acquired = requireIndex('type: "concurrency-acquired"');
+    const streamStart = requireIndex('type: "stream-start"');
+    for (const at of [acquired, streamStart]) {
+      const guard = source.lastIndexOf("yield* yieldOrReleaseLease(", at);
+      expect(guard).toBeGreaterThan(-1);
+      expect(source.slice(guard, at)).not.toContain(";");
+    }
+  });
+
+  test("gate-skipping retries release the outer lease at their done", () => {
+    for (const flag of ["_isContextCompressRetry: true,", "_isSilentRetry: true,"]) {
+      const retry = requireIndex(flag);
+      const loopBody = source.slice(retry, source.indexOf("yield chunk;", retry));
+      expect(loopBody).toContain('if (chunk.type === "done") releaseConcurrencyLease();');
+    }
   });
 });
