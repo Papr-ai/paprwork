@@ -124,6 +124,7 @@ import {
   shouldRequestWrapUpSummary,
 } from "./agent/wrapUpContinuation.js";
 import { addTurnUsage } from "./agent/turnUsageAccounting.js";
+import { yieldOrReleaseLease } from "./agent/agentStreamConcurrency.js";
 import {
   createTurnMetrics,
   recordCompactionRun,
@@ -660,6 +661,18 @@ export class AgentService {
     let concurrencyLease:
       | import("./agent/agentStreamConcurrency.js").AgentStreamConcurrencyLease
       | undefined;
+    let concurrencyGate:
+      | import("./agent/agentStreamConcurrency.js").AgentStreamConcurrencyGate
+      | undefined;
+    // Idempotent. Called when `done` goes out as well as from finally: the registry
+    // treats `done` as the end of the turn, so a lease still held past it (through
+    // export, or a hung await after it) queues this chat's next message behind
+    // itself with no timeout.
+    const releaseConcurrencyLease = (): void => {
+      if (!concurrencyLease || !concurrencyGate) return;
+      concurrencyGate.release(concurrencyLease);
+      concurrencyLease = undefined;
+    };
 
     // Register ownership before waiting so stop/replacement can abort a queued stream.
     this.sessionManager.setAbortController(chatId, abortController);
@@ -668,6 +681,7 @@ export class AgentService {
       const { getAgentStreamConcurrencyGate } =
         await import("./agent/agentStreamConcurrency.js");
       const gate = getAgentStreamConcurrencyGate();
+      concurrencyGate = gate;
       try {
         for await (const event of gate.acquireWithEvents(
           chatId,
@@ -688,17 +702,20 @@ export class AgentService {
             continue;
           }
           concurrencyLease = event.lease;
-          yield {
-            type: "concurrency-acquired",
-            chatId,
-            payload: {
-              pool: event.pool,
-              activeCount: event.activeCount,
-              maxConcurrent: event.maxConcurrent,
-              waitingCount: 0,
-            },
-            timestamp: new Date().toISOString(),
-          } as StreamChunk & { chatId: string };
+          yield* yieldOrReleaseLease(
+            {
+              type: "concurrency-acquired",
+              chatId,
+              payload: {
+                pool: event.pool,
+                activeCount: event.activeCount,
+                maxConcurrent: event.maxConcurrent,
+                waitingCount: 0,
+              },
+              timestamp: new Date().toISOString(),
+            } as StreamChunk & { chatId: string },
+            releaseConcurrencyLease,
+          );
         }
       } catch (concurrencyError) {
         const message =
@@ -790,25 +807,39 @@ export class AgentService {
     // Stable message ID shared with the UI via stream-start. Reused on
     // hidden continue, context compress retry, and silent retry so one turn
     // does not fork into duplicate assistant rows.
+    let resolvedAssistantMessage: Awaited<
+      ReturnType<AgentService["resolveStreamingAssistantMessageId"]>
+    >;
+    try {
+      resolvedAssistantMessage = await this.resolveStreamingAssistantMessageId(
+        chatId,
+        userMessage,
+        options,
+      );
+    } catch (error) {
+      // Still outside the try whose finally releases the lease.
+      releaseConcurrencyLease();
+      this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
+      throw error;
+    }
     const {
       messageId: assistantMessageId,
       checkpointInserted: checkpointRowExists,
-    } = await this.resolveStreamingAssistantMessageId(
-      chatId,
-      userMessage,
-      options,
-    );
+    } = resolvedAssistantMessage;
     getStreamProfiler(chatId)?.mark("gateway.resolveAssistantMessageId");
 
     // Tell the UI the stable row id before history load / LLM setup so turns are
     // not silent for 30s+ while Papr merge or message formatting runs.
     getStreamProfiler(chatId)?.mark("gateway.streamStart.earlyYield");
-    yield {
-      type: "stream-start",
-      chatId,
-      payload: { messageId: assistantMessageId },
-      timestamp: new Date().toISOString(),
-    } as StreamChunk & { chatId: string };
+    yield* yieldOrReleaseLease(
+      {
+        type: "stream-start",
+        chatId,
+        payload: { messageId: assistantMessageId },
+        timestamp: new Date().toISOString(),
+      } as StreamChunk & { chatId: string },
+      releaseConcurrencyLease,
+    );
 
     let checkpointInserted = checkpointRowExists;
     let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
@@ -2826,6 +2857,8 @@ export class AgentService {
             _reuseAssistantMessageId: assistantMessageId,
           },
         )) {
+          // The retry skips the gate and runs under this turn's lease.
+          if (chunk.type === "done") releaseConcurrencyLease();
           yield chunk;
         }
 
@@ -3161,6 +3194,8 @@ export class AgentService {
             _reuseAssistantMessageId: assistantMessageId,
           },
         )) {
+          // The retry skips the gate and runs under this turn's lease.
+          if (chunk.type === "done") releaseConcurrencyLease();
           yield chunk;
         }
 
@@ -3232,6 +3267,9 @@ export class AgentService {
       // 4.4. Attach turn measurements to the row that was just written, then
       // report the same numbers in aggregate.
       await recordTurnMetricsOnce("completed");
+
+      // Export and summarization below are housekeeping; the turn ends here.
+      releaseConcurrencyLease();
 
       // 4.5. Yield done chunk to signal stream completion to frontend
       // Include finalMessage so the UI finalizes with the server-assigned id.
@@ -3317,17 +3355,16 @@ export class AgentService {
       // happy path already recorded them.
       await recordTurnMetricsOnce("interrupted");
 
-      if (concurrencyLease) {
-        const { getAgentStreamConcurrencyGate } =
-          await import("./agent/agentStreamConcurrency.js");
-        getAgentStreamConcurrencyGate().release(concurrencyLease);
-      }
+      releaseConcurrencyLease();
 
       // Only clear session state if this stream still owns the abort controller.
       // If a new stream started (e.g. from the auto-send queue) it will have replaced
       // the controller already — don't clobber its state.
-      this.sessionManager.clearStreamingStateIfOwner(chatId, abortController);
-      clearInFlightToolResults(chatId);
+      // The lease is released at `done`, so the next turn can own the chat by now;
+      // it cleared the in-flight map itself when it started.
+      if (this.sessionManager.clearStreamingStateIfOwner(chatId, abortController)) {
+        clearInFlightToolResults(chatId);
+      }
       // Token-guarded for the same reason as the line above: by the time this
       // runs, the next turn may already own the chat.
       if (liveTurnToken !== null) endLiveTurn(chatId, liveTurnToken);

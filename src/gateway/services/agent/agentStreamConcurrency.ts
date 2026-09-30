@@ -56,6 +56,24 @@ export type AgentStreamQueueEvent =
       maxConcurrent: number;
     };
 
+/**
+ * Yield one chunk while holding a lease outside the try whose finally releases it.
+ * A consumer that stops iterating here (a replaced or cancelled stream breaks its
+ * for-await) never resumes the generator, so no later cleanup runs.
+ */
+export async function* yieldOrReleaseLease<T>(
+  chunk: T,
+  release: () => void,
+): AsyncGenerator<T, void> {
+  let resumed = false;
+  try {
+    yield chunk;
+    resumed = true;
+  } finally {
+    if (!resumed) release();
+  }
+}
+
 function readMaxConcurrent(): number {
   const parsed = Number.parseInt(process.env.AGENT_STREAM_MAX_CONCURRENT ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 1
