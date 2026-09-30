@@ -10,6 +10,7 @@
  * (zustand `persist` hydrates on store import), so the first paint is correct.
  */
 import { useTabStore } from "../../stores/tabStore";
+import { switchToFocusTab } from "../../lib/ensureDefaultChatTab";
 
 export function seedDemoTabs(): void {
   if (import.meta.env.VITE_DEMO_MODE !== "1") return;
@@ -34,6 +35,16 @@ export function seedDemoTabs(): void {
   }
 
   const store = useTabStore.getState();
+
+  // ?start=focus (landing page / review deep link) opens straight on Focus.
+  try {
+    if (new URLSearchParams(window.location.search).get("start") === "focus") {
+      switchToFocusTab();
+      return;
+    }
+  } catch {
+    /* no URL — fall through */
+  }
 
   // Fresh session — open a Chat tab so the demo starts in Chat.
   if (store.tabs.length === 0) {
